@@ -226,7 +226,13 @@ const
   //               global, function or parameter list) and the caller's
   //               register for that environment's hidden variable object
   //               (ADR 0134).
-  GOCCIA_FORMAT_VERSION = 91;
+  //   v91 -> v92: a direct-eval site record stores the private names
+  //               visible at the call with their class bodies' key prefixes,
+  //               and the caller's register that holds the class whose body
+  //               runs inline at the call (a computed key), or none, so that
+  //               eval code compiled at the call resolves private names as
+  //               the caller's code does (ADR 0134 Phase 3).
+  GOCCIA_FORMAT_VERSION = 92;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

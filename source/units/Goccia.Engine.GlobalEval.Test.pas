@@ -9,7 +9,11 @@ program Goccia.Engine.GlobalEval.Test;
   class it creates is a VM value; only the tree-walk evaluator creates
   AST-backed ones, which interpreter mode still does. These tests call the
   entry directly and through the Test262 host's eval; the ShadowRealm unit
-  reaches the same entry and no longer links the evaluator. }
+  reaches the same entry and no longer links the evaluator.
+
+  ADR 0134 Phase 3-strict: a direct eval at a strict call site is compiled
+  too, as a closure of the call site, so what it creates is a VM value as
+  well; a sloppy call site still runs on the tree-walk bridge. }
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
@@ -50,6 +54,7 @@ type
     procedure TestBytecodeEvalCreatesVMClasses;
     procedure TestInterpreterEvalCreatesASTFunctions;
     procedure TestBytecodeTest262HostEvalCreatesVMFunctions;
+    procedure TestBytecodeStrictDirectEvalCreatesVMValues;
     procedure TestBytecodeEvalVarIsDeletableGlobal;
     procedure TestBytecodeEvalReturnsCompletionValue;
     procedure TestBytecodeEvalReportsCompileStage;
@@ -72,6 +77,8 @@ begin
     TestInterpreterEvalCreatesASTFunctions);
   Test('Bytecode Test262 host eval creates VM functions',
     TestBytecodeTest262HostEvalCreatesVMFunctions);
+  Test('Bytecode direct eval at a strict call site creates VM values',
+    TestBytecodeStrictDirectEvalCreatesVMValues);
   Test('Bytecode global eval var is a deletable global property',
     TestBytecodeEvalVarIsDeletableGlobal);
   Test('Bytecode global eval returns the completion value',
@@ -222,6 +229,59 @@ begin
       VM_CLASS_CLASS).ToBe(True);
     Expect<Boolean>(GlobalObject.GetProperty('childEval').ClassName =
       BYTECODE_FUNCTION_CLASS).ToBe(True);
+  finally
+    Host.Free;
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TGlobalEvalTests.TestBytecodeStrictDirectEvalCreatesVMValues;
+var
+  Engine: TGocciaEngine;
+  EngineOptions: TGocciaTest262EngineOptions;
+  Executor: TGocciaExecutor;
+  Host: TGocciaTest262Host;
+  Source: TStringList;
+  GlobalObject: TGocciaObjectValue;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'function strict() { "use strict"; return eval("(function () {})"); }' +
+      LineEnding +
+    'globalThis.strictFunction = strict();' + LineEnding +
+    'globalThis.strictClass = (function () { "use strict";' +
+      ' return eval("(class {})"); })();' + LineEnding +
+    'globalThis.classBodyFunction = class { static f = eval("() => 1"); }.f;' +
+      LineEnding +
+    'globalThis.sloppyFunction = eval("(function () {})");';
+  EngineOptions := Default(TGocciaTest262EngineOptions);
+  EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
+  EngineOptions.Mode := t262emBytecode;
+  EngineOptions.SourceType := stScript;
+  EngineOptions.Capabilities := TGocciaCapabilities.None;
+  Executor := CreateTest262Executor(t262emBytecode);
+  Engine := nil;
+  Host := nil;
+  try
+    Engine := TGocciaEngine.Create('<direct-eval-test>', Source, Executor,
+      EngineOptions.Capabilities);
+    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    Host := TGocciaTest262Host.Create(EngineOptions);
+    Host.ConfigureHostEnvironment(Engine.HostEnvironment);
+    Host.Install(Engine);
+    Engine.Execute;
+    GlobalObject := TGocciaObjectValue(Engine.Realm.GlobalObject);
+    Expect<Boolean>(GlobalObject.GetProperty('strictFunction').ClassName =
+      BYTECODE_FUNCTION_CLASS).ToBe(True);
+    Expect<Boolean>(GlobalObject.GetProperty('strictClass').ClassName =
+      VM_CLASS_CLASS).ToBe(True);
+    Expect<Boolean>(GlobalObject.GetProperty('classBodyFunction').ClassName =
+      BYTECODE_FUNCTION_CLASS).ToBe(True);
+    // A sloppy call site stays on the bridge until Phase 3-sloppy.
+    Expect<Boolean>(GlobalObject.GetProperty('sloppyFunction') is
+      TGocciaFunctionValue).ToBe(True);
   finally
     Host.Free;
     Engine.Free;

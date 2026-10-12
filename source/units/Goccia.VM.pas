@@ -10,6 +10,7 @@ uses
   Math,
 
   Goccia.Arguments.Collection,
+  Goccia.AST.Node,
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
@@ -40,6 +41,16 @@ uses
 type
   TGocciaVM = class;
   TASCIIStringCodeUnit = 0..127;
+
+  { Compiles the eval code AProgram of a direct eval at a strict call site,
+    against eval site record ASite of the calling template (ADR 0134 Phase 3,
+    TGocciaCompiler.CompileDirectEval), and returns its top-level template.
+    The host keeps the compiled code for the engine's lifetime (ADR 0134,
+    decision 1). }
+  TGocciaCompileDirectEvalCallback = function(const AProgram: TGocciaProgram;
+    const ASourcePath: string;
+    const ASite: TGocciaDirectEvalEnvironment): TGocciaFunctionTemplate
+    of object;
 
   TGocciaVMStackRoot = class(TGCManagedObject)
   private
@@ -198,6 +209,7 @@ type
     FLoadModuleSource: TLoadModuleSourceCallback;
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FResolveModuleURL: TResolveModuleURLCallback;
+    FCompileDirectEval: TGocciaCompileDirectEvalCallback;
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
@@ -557,9 +569,12 @@ type
     function ExecuteDirectEval(const ASourceValue: TGocciaValue;
       const ATemplate: TGocciaFunctionTemplate;
       const ASiteIndex: Integer): TGocciaValue;
-    procedure ExecuteDirectEvalSite(const ACalleeReg: UInt16;
+    function ExecuteDirectEvalSite(const ACalleeReg: UInt16;
       const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
-      var AIP, AInstructionStartIP: Integer);
+      var AIP, AInstructionStartIP: Integer): TGocciaBytecodeClosure;
+    function PrepareCompiledDirectEval(const ASourceText: string;
+      const ATemplate: TGocciaFunctionTemplate;
+      const ASiteIndex: Integer): TGocciaBytecodeClosure;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     procedure PushFrame(const AResultRegister, AFrameIP: Integer;
       const ATemplate: TGocciaFunctionTemplate;
@@ -658,6 +673,8 @@ type
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property Realm: TGocciaRealm read FRealm write FRealm;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
+    property CompileDirectEval: TGocciaCompileDirectEvalCallback
+      read FCompileDirectEval write FCompileDirectEval;
     property LoadModuleSource: TLoadModuleSourceCallback
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
@@ -685,10 +702,11 @@ uses
   OrderedStringMap,
   TextSemantics,
   TimingUtils,
+  UnicodeStringList,
 
   Goccia.Arguments.ArrayLike,
   Goccia.Arithmetic,
-  Goccia.AST.Node,
+  Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.CapabilityAudit,
   Goccia.Constants,
@@ -705,6 +723,7 @@ uses
   Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Eval.EarlyErrors,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
   Goccia.Execution.CallSite,
@@ -15143,15 +15162,18 @@ end;
 // operand is the argument count, or, with CALL_FLAG_SPREAD in C, the register
 // of the spread arguments array.
 //
-// For %eval% this runs the eval with eval site record ASiteIndex, leaves its
-// completion value in ACalleeReg and moves AIP past the call, which does not
-// run. The call is the executing instruction while the eval runs, as it was
-// when OP_CALL ran it, so a frame, a stack trace or a handler sees the call.
-// For any other callee it changes nothing, and the call runs as an ordinary
-// call.
-procedure TGocciaVM.ExecuteDirectEvalSite(const ACalleeReg: UInt16;
+// For %eval% this runs the eval with eval site record ASiteIndex and moves
+// AIP past the call, which does not run. The call is the executing
+// instruction while the eval runs, as it was when OP_CALL ran it, so a frame,
+// a stack trace or a handler sees the call. At a strict call site the eval
+// code is compiled, and the result is its closure, which the dispatch loop
+// pushes as a frame whose completion value lands in ACalleeReg (ADR 0134
+// Phase 3). Otherwise the eval has run, its completion value is in
+// ACalleeReg, and the result is nil. For any other callee it changes
+// nothing, and the call runs as an ordinary call.
+function TGocciaVM.ExecuteDirectEvalSite(const ACalleeReg: UInt16;
   const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
-  var AIP, AInstructionStartIP: Integer);
+  var AIP, AInstructionStartIP: Integer): TGocciaBytecodeClosure;
 var
   CallInstruction: UInt32;
   CallIP: Integer;
@@ -15159,6 +15181,7 @@ var
   ArgsOperand, Flags: UInt16;
   EvalSourceValue: TGocciaValue;
 begin
+  Result := nil;
   if not ((FRegisters[ACalleeReg].Kind = grkObject) and
      (FRegisters[ACalleeReg].ObjectValue is TGocciaNativeFunctionValue) and
      TGocciaNativeFunctionValue(FRegisters[ACalleeReg].ObjectValue).DirectEvalHost and
@@ -15192,8 +15215,179 @@ begin
   end
   else if ArgsOperand > 0 then
     EvalSourceValue := GetRegister(ACalleeReg + 1);
+  // ES2026 §13.3.6.1 step 6.a: strictCaller is the call expression's
+  // strictness. A strict call's eval can inject no var into the caller, so
+  // its code compiles as a closure of the call site; a sloppy call stays on
+  // the tree-walk bridge, so each call site uses one environment model.
+  if ATemplate.GetDirectEvalEnvironment(ASiteIndex).StrictCaller and
+     Assigned(FCompileDirectEval) then
+  begin
+    // PerformEval step 2: a non-String argument is the result.
+    if EvalSourceValue is TGocciaStringLiteralValue then
+      Result := PrepareCompiledDirectEval(
+        TGocciaStringLiteralValue(EvalSourceValue).Value, ATemplate,
+        ASiteIndex)
+    else
+      SetRegister(ACalleeReg, EvalSourceValue);
+    Exit;
+  end;
   SetRegister(ACalleeReg, ExecuteDirectEval(EvalSourceValue, ATemplate,
     ASiteIndex));
+end;
+
+// ES2026 §19.2.1.1 PerformEval for a direct eval at a strict call site, up to
+// the evaluation of the body (ADR 0134 Phase 3). The call's frame is the
+// current one. Parses ASourceText as a Script with the call's private names,
+// raises the early errors of step 11 and the Script's own (§16.1.1), has the
+// host compile it against eval site record ASiteIndex of ATemplate, and
+// instantiates the code as a closure of the current frame, as OP_CLOSURE
+// instantiates an arrow function written at the call. The caller pushes it.
+//
+// Step 18 gives a strict eval a variable environment of its own, so every
+// declaration of the eval code is a local of its template
+// (EvalDeclarationInstantiation §19.2.1.3 has nothing to check against the
+// caller), and the eval code reaches the caller's bindings through the cells
+// its closure captures: a function it creates goes on reading and writing
+// them after the call has returned. Step 10's inFunction, inMethod and
+// inDerivedConstructor come from the closure the call runs in, as the bridge
+// reads them (DirectEvalLexicalClosure).
+function TGocciaVM.PrepareCompiledDirectEval(const ASourceText: string;
+  const ATemplate: TGocciaFunctionTemplate;
+  const ASiteIndex: Integer): TGocciaBytecodeClosure;
+var
+  Site: TGocciaDirectEvalEnvironment;
+  SourceName: string;
+  EvalSource: TStringList;
+  EvalOptions: TGocciaSourcePipelineOptions;
+  PipelineResult: TGocciaSourcePipelineResult;
+  PrivateNames: TStringList;
+  VarNames, FunctionNames, DeclaredVarNames: TUnicodeStringList;
+  CallerClosure: TGocciaBytecodeClosure;
+  CurrentCtorClass: TGocciaClassValue;
+  AllowNewTarget, AllowSuperProperty, AllowSuperCall: Boolean;
+  EvalTemplate: TGocciaFunctionTemplate;
+  Desc: TGocciaUpvalueDescriptor;
+  PrivateClassRegister: TGocciaRegister;
+  I: Integer;
+begin
+  Site := ATemplate.GetDirectEvalEnvironment(ASiteIndex);
+  if FCurrentModuleSourcePath <> '' then
+    SourceName := FCurrentModuleSourcePath
+  else
+    SourceName := '<bytecode-direct-eval>';
+
+  CallerClosure := DirectEvalLexicalClosure(Self);
+  AllowNewTarget := Assigned(CallerClosure) and CallerClosure.AllowsNewTarget;
+  AllowSuperProperty := Assigned(CallerClosure) and
+    Assigned(CallerClosure.HomeObject);
+  if Assigned(CallerClosure) and
+     (CallerClosure.HomeClass is TGocciaClassValue) then
+    CurrentCtorClass := TGocciaClassValue(CallerClosure.HomeClass)
+  else
+    CurrentCtorClass := nil;
+  AllowSuperCall := Assigned(FCurrentNewTarget) and
+    Assigned(CurrentCtorClass) and
+    (Assigned(CurrentCtorClass.SuperClass) or
+     Assigned(CurrentCtorClass.NativeSuperConstructor));
+
+  EvalSource := CreateECMAScriptSourceLines(ASourceText);
+  PrivateNames := TStringList.Create;
+  VarNames := TUnicodeStringList.Create;
+  FunctionNames := TUnicodeStringList.Create;
+  DeclaredVarNames := TUnicodeStringList.Create;
+  try
+    PrivateNames.CaseSensitive := True;
+    for I := 0 to High(Site.PrivateNames) do
+      if PrivateNames.IndexOf(Site.PrivateNames[I].Name) < 0 then
+        PrivateNames.Add(Site.PrivateNames[I].Name);
+    // Step 11: the source is a Script, and strict (step 12: strictCaller).
+    EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
+    EvalOptions.SourceType := stScript;
+    EvalOptions.InheritedStrictMode := True;
+    Exclude(EvalOptions.Compatibility, cfNonStrictMode);
+    PipelineResult := TGocciaSourcePipeline.Parse(EvalSource, SourceName,
+      EvalOptions, PrivateNames);
+    try
+      if HasDirectEvalTopLevelUsingDeclaration(PipelineResult.ProgramNode) then
+        ThrowSyntaxError(
+          'Using declarations are not allowed at the top level of eval');
+      ValidateEvalScriptBody(PipelineResult.ProgramNode.Body);
+      // Step 11: ContainsArguments in a class field initializer's eval.
+      if (ATemplate.RejectArgumentsInDirectEval or
+          Site.RejectArgumentsReference) and
+         EvalProgramContainsArgumentsReference(PipelineResult.ProgramNode) then
+        ThrowSyntaxError('arguments is not allowed in this eval context');
+      ValidateEvalEarlyErrors(PipelineResult.ProgramNode, True,
+        AllowNewTarget, AllowSuperProperty, AllowSuperCall);
+      ValidateEvalControlFlow(PipelineResult.ProgramNode);
+      // §16.1.1: a name both lexically and var-declared at the top level.
+      CollectGlobalEvalDeclarationNames(PipelineResult.ProgramNode,
+        VarBindingNameCollectionMode(False, False), VarNames, FunctionNames,
+        DeclaredVarNames);
+      CheckEvalLexicalDeclarationConflicts(PipelineResult.ProgramNode,
+        VarNames);
+      EvalTemplate := FCompileDirectEval(PipelineResult.ProgramNode,
+        SourceName, Site);
+    finally
+      PipelineResult.Free;
+    end;
+  finally
+    DeclaredVarNames.Free;
+    FunctionNames.Free;
+    VarNames.Free;
+    PrivateNames.Free;
+    EvalSource.Free;
+  end;
+
+  // As OP_CLOSURE instantiates an arrow function in the calling frame.
+  Result := TGocciaBytecodeClosure.Create(EvalTemplate,
+    EvalTemplate.UpvalueCount);
+  Result.GlobalScope := FGlobalScope;
+  Result.DynamicVarScope := FCurrentDynamicVarScope;
+  // §19.2.1.1 step 16: privateEnv is the running context's
+  // PrivateEnvironment, which a class body running inline at the call makes
+  // the class being defined.
+  if Site.PrivateClassRegister >= 0 then
+  begin
+    PrivateClassRegister := FRegisters[Site.PrivateClassRegister];
+    if (PrivateClassRegister.Kind = grkObject) and
+       (PrivateClassRegister.ObjectValue is TGocciaVMClassValue) then
+      Result.PrivateClass := TGocciaVMClassValue(
+        PrivateClassRegister.ObjectValue);
+  end;
+  if Assigned(FCurrentClosure) then
+  begin
+    if not Assigned(Result.PrivateClass) then
+      Result.PrivateClass := FCurrentClosure.PrivateClass;
+    Result.HomeObject := FCurrentClosure.HomeObject;
+    Result.HomeClass := FCurrentClosure.HomeClass;
+    if Assigned(FCurrentClosure.Template) and
+       FCurrentClosure.Template.IsArrow then
+      Result.AllowsNewTarget := FCurrentClosure.AllowsNewTarget
+    else
+      Result.AllowsNewTarget := Assigned(FCurrentClosure.FunctionValue) and
+        not TemplateUsesGlobalEvalEnvironment(FCurrentClosure.Template);
+  end;
+  Result.NewTarget := FCurrentNewTarget;
+  for I := 0 to EvalTemplate.UpvalueCount - 1 do
+  begin
+    Desc := EvalTemplate.GetUpvalueDescriptor(I);
+    if Desc.IsLocal then
+      Result.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
+        GetLocalCell(Desc.Index)))
+    else if Assigned(FCurrentClosure) then
+    begin
+      Result.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
+      Result.SetDynamicVarUpvalue(I,
+        ((FCurrentDynamicVarScope <> FCurrentClosure.DynamicVarScope) and
+         Assigned(FCurrentDynamicVarScope)) or
+        FCurrentClosure.IsDynamicVarUpvalue(Desc.Index));
+    end;
+  end;
+  // The function value owns the closure, and the frame keeps it reachable
+  // (TGocciaVMStackRoot.MarkClosureReferences) until the eval returns. No
+  // script can reach it.
+  TGocciaBytecodeFunctionValue.Create(Self, Result);
 end;
 
 function TGocciaVM.ExecuteDirectEval(const ASourceValue: TGocciaValue;
@@ -16055,7 +16249,8 @@ begin
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
     if (ATemplate.Name <> '<module>') and
-       (ATemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
+       (ATemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) and
+       (ATemplate.Name <> DIRECT_EVAL_TEMPLATE_NAME) then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
         ATemplate.DebugInfo.CoverageLine,

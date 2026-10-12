@@ -2537,8 +2537,18 @@
       begin
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
-        ExecuteDirectEvalSite(A, DecodeBx(Instruction), Template, Frame.IP,
-          InstructionStartIP);
+        ChildClosure := ExecuteDirectEvalSite(A, DecodeBx(Instruction),
+          Template, Frame.IP, InstructionStartIP);
+        // Eval code compiled at a strict call site runs as a frame of its
+        // own, which returns its completion value to the callee register.
+        if Assigned(ChildClosure) then
+        begin
+          PushFrame(A, Frame.IP, Template, PrevCovLine,
+            ProfileEntryTimestamp);
+          SetupNewFrame(ChildClosure, RegisterUndefined, nil, 0, True,
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+          goto LDispatchNext;
+        end;
       end;
 
       OP_CALL:

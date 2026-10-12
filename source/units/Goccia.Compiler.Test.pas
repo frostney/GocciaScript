@@ -137,6 +137,8 @@ type
     procedure TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval;
     procedure TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval;
     procedure TestDirectEvalSiteRecordNamesVarEnvironment;
+    procedure TestDirectEvalSiteRecordNamesPrivateEnvironment;
+    procedure TestDirectEvalCompilesAsClosureOfCallSite;
     procedure TestConstPropagationSkipsGlobalBackedBigInt;
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
@@ -285,6 +287,10 @@ begin
     TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval);
   Test('A direct eval site record names where the eval''s vars go',
     TestDirectEvalSiteRecordNamesVarEnvironment);
+  Test('A direct eval site record names the private environment at the call',
+    TestDirectEvalSiteRecordNamesPrivateEnvironment);
+  Test('Direct eval code compiles as a closure of its strict call site',
+    TestDirectEvalCompilesAsClosureOfCallSite);
   Test('Const propagation skips global-backed BigInt bindings',
     TestConstPropagationSkipsGlobalBackedBigInt);
   Test('Inferred numeric locals use typed arithmetic', TestInferredNumericLocalsUseTypedArithmetic);
@@ -2549,6 +2555,172 @@ begin
       .ToBe(5);
   finally
     Module.Free;
+  end;
+end;
+
+// ADR 0134 Phase 3: eval code resolves private names as the code at its call
+// does (ES2026 §19.2.1.1 PerformEval: privateEnv is the running context's
+// PrivateEnvironment). A method's eval sees its class body's names and gets
+// the class from the running closure; a computed key runs inline in the
+// enclosing function, so its record names the register of the class being
+// defined; and an `extends` expression runs in the outer PrivateEnvironment
+// (§15.7.14), so the class's own names are not visible there.
+procedure TTestCompiler.TestDirectEvalSiteRecordNamesPrivateEnvironment;
+var
+  Module: TGocciaBytecodeModule;
+  Env: TGocciaDirectEvalEnvironment;
+  Method, Inner: TGocciaFunctionTemplate;
+  I: Integer;
+
+  function NameList(const AEnv: TGocciaDirectEvalEnvironment): string;
+  var
+    I: Integer;
+  begin
+
+    Result := '';
+    for I := 0 to High(AEnv.PrivateNames) do
+    begin
+      if Result <> '' then
+        Result := Result + ',';
+      Result := Result + AEnv.PrivateNames[I].Name;
+      Expect<Boolean>((AEnv.PrivateNames[I].Prefix <> '') and
+        (AEnv.PrivateNames[I].Prefix[Length(AEnv.PrivateNames[I].Prefix)] =
+         '$')).ToBe(True);
+    end;
+  end;
+
+begin
+  Module := CompileSource('class A { #a = 1; m() { return eval("1"); } }');
+  try
+    Method := FindTemplateWithDirectEval(Module.TopLevel);
+    Expect<Boolean>(Assigned(Method)).ToBe(True);
+    Env := Method.GetDirectEvalEnvironment(0);
+    Expect<string>(NameList(Env)).ToBe('a');
+    Expect<Integer>(Env.PrivateClassRegister).ToBe(-1);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('class A { #a = 1; static [eval("\"k\"")] = 1; }');
+  try
+    Expect<Integer>(Module.TopLevel.DirectEvalEnvironmentCount).ToBe(1);
+    Env := Module.TopLevel.GetDirectEvalEnvironment(0);
+    Expect<string>(NameList(Env)).ToBe('a');
+    Expect<Boolean>(Env.PrivateClassRegister >= 0).ToBe(True);
+    Expect<Boolean>(Env.PrivateClassRegister <
+      Module.TopLevel.MaxRegisters).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  // The inner class's #b shadows nothing and the outer #a stays visible; in
+  // the inner class's heritage only #a is.
+  Module := CompileSource('class A { #a = 1; static m() { ' +
+    'class B extends (eval("0"), Object) { #b; n() { return eval("2"); } } ' +
+    '} }');
+  try
+    Method := FindTemplateWithDirectEval(Module.TopLevel);
+    Expect<Boolean>(Assigned(Method)).ToBe(True);
+    Env := Method.GetDirectEvalEnvironment(0);
+    Expect<string>(NameList(Env)).ToBe('a');
+    Expect<Integer>(Env.PrivateClassRegister).ToBe(-1);
+    Inner := nil;
+    for I := 0 to Method.FunctionCount - 1 do
+    begin
+      Inner := FindTemplateWithDirectEval(Method.GetFunction(I));
+      if Assigned(Inner) then
+        Break;
+    end;
+    Expect<Boolean>(Assigned(Inner)).ToBe(True);
+    if Assigned(Inner) then
+      Expect<string>(NameList(Inner.GetDirectEvalEnvironment(0)))
+        .ToBe('a,b');
+  finally
+    Module.Free;
+  end;
+end;
+
+// ADR 0134 Phase 3: eval code is compiled as a function nested at its call
+// site against the call's record. A binding of the calling function becomes
+// an upvalue that names the caller's register, one of an enclosing function
+// an upvalue that names the caller closure's upvalue index, and a name the
+// record does not list stays a global reference. The eval's own declarations
+// are locals of its template, which is an arrow-like strict function.
+procedure TTestCompiler.TestDirectEvalCompilesAsClosureOfCallSite;
+const
+  CALLER_SOURCE = 'const f = (a) => { let b = 2; ' +
+    'return () => { let c = 3; return eval("x"); }; };';
+  EVAL_SOURCE = 'let own = 1; a + b + c + own + typeof unlisted';
+var
+  Caller, EvalModule: TGocciaBytecodeModule;
+  Site: TGocciaFunctionTemplate;
+  Env: TGocciaDirectEvalEnvironment;
+  Binding: TGocciaDirectEvalBindingInfo;
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Compiler: TGocciaCompiler;
+  SourceLines: TStringList;
+  Template: TGocciaFunctionTemplate;
+  Descriptor: TGocciaUpvalueDescriptor;
+  I, Matched: Integer;
+begin
+  Caller := CompileSource(CALLER_SOURCE);
+  EvalModule := nil;
+  try
+    Site := FindTemplateWithDirectEval(Caller.TopLevel);
+    Expect<Boolean>(Assigned(Site)).ToBe(True);
+    if not Assigned(Site) then
+      Exit;
+    Env := Site.GetDirectEvalEnvironment(0);
+    Expect<Boolean>(Env.StrictCaller).ToBe(True);
+
+    Lexer := TGocciaLexer.Create(EVAL_SOURCE, '<eval>');
+    SourceLines := CreateTextLines(EVAL_SOURCE);
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<eval>', SourceLines);
+    ProgramNode := Parser.Parse;
+    Compiler := TGocciaCompiler.Create('<eval>');
+    try
+      EvalModule := Compiler.CompileDirectEval(ProgramNode, Env);
+    finally
+      Compiler.Free;
+      ProgramNode.Free;
+      Parser.Free;
+      SourceLines.Free;
+      Lexer.Free;
+    end;
+
+    Template := EvalModule.TopLevel;
+    Expect<string>(Template.Name).ToBe(DIRECT_EVAL_TEMPLATE_NAME);
+    Expect<Boolean>(Template.IsArrow).ToBe(True);
+    Expect<Boolean>(Template.StrictCode).ToBe(True);
+    Expect<Integer>(Template.UpvalueCount).ToBe(3);
+    Matched := 0;
+    for I := 0 to Template.UpvalueCount - 1 do
+    begin
+      Descriptor := Template.GetUpvalueDescriptor(I);
+      Expect<Boolean>(FindDirectEvalRecordEntry(Env, Descriptor.Name,
+        Binding)).ToBe(True);
+      // `c` is the arrow's own local; `a` and `b` are its upvalues.
+      if Descriptor.Name = 'c' then
+      begin
+        Expect<Integer>(Ord(Binding.Kind)).ToBe(Ord(debLocal));
+        Expect<Boolean>(Descriptor.IsLocal).ToBe(True);
+        Inc(Matched);
+      end
+      else if (Descriptor.Name = 'a') or (Descriptor.Name = 'b') then
+      begin
+        Expect<Integer>(Ord(Binding.Kind)).ToBe(Ord(debUpvalue));
+        Expect<Boolean>(Descriptor.IsLocal).ToBe(False);
+        Inc(Matched);
+      end;
+      Expect<Integer>(Descriptor.Index).ToBe(Binding.Index);
+    end;
+    Expect<Integer>(Matched).ToBe(3);
+    Expect<Integer>(CountOp(Template, OP_GET_GLOBAL)).ToBe(1);
+  finally
+    EvalModule.Free;
+    Caller.Free;
   end;
 end;
 

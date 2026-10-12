@@ -474,10 +474,12 @@ const
   EVAL_MAX_REGISTERS = 8;
   FUNCTION_VAR_OBJECT_SLOT = 6;
   PARAMETER_VAR_OBJECT_SLOT = 7;
+  PRIVATE_CLASS_REGISTER = 5;
 var
   Loaded: TGocciaBytecodeModule;
   Template: TGocciaFunctionTemplate;
   Bindings: TGocciaDirectEvalBindingArray;
+  PrivateNames: TGocciaDirectEvalPrivateNameArray;
   Env: TGocciaDirectEvalEnvironment;
   Instruction: UInt32;
   Reason: string;
@@ -494,9 +496,20 @@ begin
     False, True, False);
   Bindings[4] := DirectEvalBinding('`#with`:1', debWithUpvalue, 4, False,
     False, False, False);
+  // The outer class body's #x first; the inner one's #x shadows it.
+  SetLength(PrivateNames, 3);
+  PrivateNames[0].Name := 'x';
+  PrivateNames[0].Prefix := '0$';
+  PrivateNames[1].Name := 'y';
+  PrivateNames[1].Prefix := '0$';
+  PrivateNames[2].Name := 'x';
+  PrivateNames[2].Prefix := '1$';
 
   Template := TGocciaFunctionTemplate.Create('main');
   Template.MaxRegisters := EVAL_MAX_REGISTERS;
+  // The upvalues the record's upvalue bindings name.
+  for I := 0 to 4 do
+    Template.AddUpvalueDescriptor(False, UInt16(I), 'u' + IntToStr(I));
   // eval(x): a plain call with one argument.
   Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
   Template.EmitInstruction(EncodeABC(OP_CALL, 1, 1, 0));
@@ -511,7 +524,8 @@ begin
     FUNCTION_VAR_OBJECT_SLOT, Bindings);
   Template.AddDirectEvalEnvironment(2, True, False, devParameters,
     PARAMETER_VAR_OBJECT_SLOT, nil);
-  Template.AddDirectEvalEnvironment(4, False, True, devNone, -1, nil);
+  Template.AddDirectEvalEnvironment(4, False, True, devNone, -1, nil,
+    PRIVATE_CLASS_REGISTER, PrivateNames);
   Template.AddDirectEvalEnvironment(6, False, False, devGlobal, -1, nil);
 
   Loaded := LoadTemplateThroughBinary(Template, Reason);
@@ -533,6 +547,8 @@ begin
     Expect<Boolean>(Env.StrictCaller).ToBe(False);
     Expect<Integer>(Ord(Env.VarEnvironment)).ToBe(Ord(devFunction));
     Expect<Integer>(Env.VarObjectSlot).ToBe(FUNCTION_VAR_OBJECT_SLOT);
+    Expect<Integer>(Env.PrivateClassRegister).ToBe(-1);
+    Expect<Integer>(Length(Env.PrivateNames)).ToBe(0);
     Expect<Integer>(Length(Env.Bindings)).ToBe(Length(Bindings));
     for I := 0 to High(Bindings) do
       ExpectDirectEvalBinding(Env.Bindings[I], Bindings[I]);
@@ -550,6 +566,13 @@ begin
     Expect<Boolean>(Env.StrictCaller).ToBe(True);
     Expect<Integer>(Ord(Env.VarEnvironment)).ToBe(Ord(devNone));
     Expect<Integer>(Env.VarObjectSlot).ToBe(-1);
+    Expect<Integer>(Env.PrivateClassRegister).ToBe(PRIVATE_CLASS_REGISTER);
+    Expect<Integer>(Length(Env.PrivateNames)).ToBe(Length(PrivateNames));
+    for I := 0 to High(PrivateNames) do
+    begin
+      Expect<string>(Env.PrivateNames[I].Name).ToBe(PrivateNames[I].Name);
+      Expect<string>(Env.PrivateNames[I].Prefix).ToBe(PrivateNames[I].Prefix);
+    end;
 
     Env := Loaded.TopLevel.GetDirectEvalEnvironment(3);
     Expect<Integer>(Env.PC).ToBe(6);
@@ -570,6 +593,7 @@ const
 var
   Loaded: TGocciaBytecodeModule;
   Template: TGocciaFunctionTemplate;
+  Bindings: TGocciaDirectEvalBindingArray;
   Message: string;
 
   function Reason(const ASiteIndex: UInt16; const ACall: UInt64;
@@ -626,6 +650,43 @@ begin
   Expect<Boolean>(Pos('names register 9, outside MaxRegisters 4',
     Reason(0, EncodeABC(OP_CALL, 1, 0, 0), devParameters,
       TEST_OUT_OF_RANGE_REGISTER)) > 0).ToBe(True);
+
+  // The class being defined is read from the caller's register.
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := TEST_MAX_REGISTERS;
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
+  Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+  Template.AddDirectEvalEnvironment(0, False, True, devNone, -1, nil,
+    TEST_OUT_OF_RANGE_REGISTER);
+  Loaded := LoadTemplateThroughBinary(Template, Message);
+  Loaded.Free;
+  Expect<Boolean>(Pos('names private class register 9, outside ' +
+    'MaxRegisters 4', Message) > 0).ToBe(True);
+
+  // Eval code captures the caller registers and upvalues the record names.
+  SetLength(Bindings, 1);
+  Bindings[0] := DirectEvalBinding('local', debLocal,
+    TEST_OUT_OF_RANGE_REGISTER, False, False, False, False);
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := TEST_MAX_REGISTERS;
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
+  Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+  Template.AddDirectEvalEnvironment(0, False, True, devNone, -1, Bindings);
+  Loaded := LoadTemplateThroughBinary(Template, Message);
+  Loaded.Free;
+  Expect<Boolean>(Pos('binds ''local'' to register 9, outside ' +
+    'MaxRegisters 4', Message) > 0).ToBe(True);
+  Bindings[0] := DirectEvalBinding('outer', debUpvalue, 0, False, False,
+    False, False);
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := TEST_MAX_REGISTERS;
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
+  Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+  Template.AddDirectEvalEnvironment(0, False, True, devNone, -1, Bindings);
+  Loaded := LoadTemplateThroughBinary(Template, Message);
+  Loaded.Free;
+  Expect<Boolean>(Pos('binds ''outer'' to upvalue 0, outside the 0 ' +
+    'upvalues', Message) > 0).ToBe(True);
 
   // OP_DIRECT_EVAL as the last instruction, with no call to read.
   Template := TGocciaFunctionTemplate.Create('main');

@@ -129,6 +129,7 @@ type
     FParametersInVarEnvironment: Boolean;
     FParameterNames: array of string;
     FTemplate: TGocciaFunctionTemplate;
+    FUpvaluesSeeded: Boolean;
     procedure EnsureLocalIndex;
     procedure RecordDebugLocal(const AIndex: Integer);
     procedure RestoreLocalIndexBinding(const ARemovedName: string);
@@ -145,6 +146,16 @@ type
     function AddUpvalue(const AName: string; const AIndex: UInt16;
       const AIsLocal: Boolean; const AIsConst: Boolean = False;
       const AIsVar: Boolean = False): Integer;
+    { The calling function of a direct eval, rebuilt from its eval site
+      record (TGocciaCompiler.CompileDirectEval): declares AName at the
+      caller's register ASlot, and returns the local's index. }
+    function DeclareCallerLocal(const AName: string; const ASlot: UInt16;
+      const AIsConst, AIsVar: Boolean): Integer;
+    { Makes AName this scope's upvalue AIndex, the index the calling
+      function's closure holds it at. Once a scope has a seeded upvalue,
+      ResolveUpvalue answers from the seeded ones alone. }
+    procedure SeedUpvalue(const AIndex: UInt16; const AName: string;
+      const AIsConst, AIsVar, AIsNonStrictImmutable: Boolean);
 
     { Makes ATemplate the function whose debug info records this scope's
       locals, with the code range each one occupies its slot over. Locals
@@ -223,6 +234,9 @@ type
     function ResolvePrivatePrefixForName(const AName: string): string;
     procedure DeclarePrivateNamePrefix(const AName, APrefix: string);
     function PrivateNameMark: Integer;
+    // This scope's own private names, in declaration order.
+    function GetPrivateName(const AIndex: Integer): string;
+    function GetPrivateNamePrefix(const AIndex: Integer): string;
     procedure RestorePrivateNameMark(const AMark: Integer);
     procedure PushWithBinding(const AHiddenName: string);
     procedure PopWithBinding;
@@ -356,6 +370,7 @@ begin
   FParameterEvalVarObjectSlot := -1;
   FCompilingParameters := False;
   FParametersInVarEnvironment := False;
+  FUpvaluesSeeded := False;
   FTemplate := nil;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
   begin
@@ -505,6 +520,13 @@ var
   UpvalueIdx: Integer;
   Idx: Integer;
 begin
+  if FUpvaluesSeeded then
+  begin
+    for Idx := 0 to FUpvalueCount - 1 do
+      if FUpvalues[Idx].Name = AName then
+        Exit(Idx);
+    Exit(-1);
+  end;
   if not Assigned(FParent) then
     Exit(-1);
 
@@ -590,6 +612,44 @@ begin
   SetLength(FUpvalues[FUpvalueCount].ExportNames, 0);
   Result := FUpvalueCount;
   Inc(FUpvalueCount);
+end;
+
+function TGocciaCompilerScope.DeclareCallerLocal(const AName: string;
+  const ASlot: UInt16; const AIsConst, AIsVar: Boolean): Integer;
+var
+  NextSlot: Integer;
+begin
+  NextSlot := FNextSlot;
+  if ASlot + 1 > NextSlot then
+    NextSlot := ASlot + 1;
+  FNextSlot := ASlot;
+  DeclareLocal(AName, AIsConst);
+  FNextSlot := NextSlot;
+  if FNextSlot > FMaxSlot then
+    FMaxSlot := UInt16(FNextSlot);
+  Result := FLocalCount - 1;
+  FLocals[Result].IsVar := AIsVar;
+end;
+
+procedure TGocciaCompilerScope.SeedUpvalue(const AIndex: UInt16;
+  const AName: string; const AIsConst, AIsVar,
+  AIsNonStrictImmutable: Boolean);
+begin
+  FUpvaluesSeeded := True;
+  while FUpvalueCount <= AIndex do
+  begin
+    if FUpvalueCount >= Length(FUpvalues) then
+      SetLength(FUpvalues, FUpvalueCount * 2 + 4);
+    // A gap holds an upvalue of the caller that no name reaches.
+    FUpvalues[FUpvalueCount] := Default(TGocciaCompilerUpvalue);
+    Inc(FUpvalueCount);
+  end;
+  FUpvalues[AIndex] := Default(TGocciaCompilerUpvalue);
+  FUpvalues[AIndex].Name := AName;
+  FUpvalues[AIndex].Index := AIndex;
+  FUpvalues[AIndex].IsConst := AIsConst;
+  FUpvalues[AIndex].IsVar := AIsVar;
+  FUpvalues[AIndex].IsNonStrictImmutable := AIsNonStrictImmutable;
 end;
 
 procedure TGocciaCompilerScope.RecordDebugLocal(const AIndex: Integer);
@@ -995,6 +1055,17 @@ end;
 function TGocciaCompilerScope.PrivateNameMark: Integer;
 begin
   Result := FPrivateNameCount;
+end;
+
+function TGocciaCompilerScope.GetPrivateName(const AIndex: Integer): string;
+begin
+  Result := FPrivateNames[AIndex];
+end;
+
+function TGocciaCompilerScope.GetPrivateNamePrefix(
+  const AIndex: Integer): string;
+begin
+  Result := FPrivatePrefixes[AIndex];
 end;
 
 procedure TGocciaCompilerScope.RestorePrivateNameMark(const AMark: Integer);

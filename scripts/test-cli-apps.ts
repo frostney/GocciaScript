@@ -2024,8 +2024,9 @@ await section("Test262 Runner: eval var declarations conflict only with the call
 // The bytecode direct-eval bridge: each probe runs in both modes against the
 // result Node.js gives, ES2026 §19.2.1.1 PerformEval and §19.2.1.3
 // EvalDeclarationInstantiation (#872, ADR 0134 Phase 0).
-function expectEvalHostProbe(label: string, lines: string[], expected: string[]) {
-  for (const mode of ["interpreted", "bytecode"] as const) {
+function expectEvalHostProbe(label: string, lines: string[], expected: string[],
+  modes: readonly ("interpreted" | "bytecode")[] = ["interpreted", "bytecode"]) {
+  for (const mode of modes) {
     const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
       stdin: new TextEncoder().encode([...lines, ""].join("\n")),
       stdout: "pipe",
@@ -2253,6 +2254,159 @@ await section("Test262 Runner: an eval call site falls back to an ordinary call 
     "function decorated() { var d = (v) => v; class C { @((() => { eval('var z = 1'); return d; })()) m() {} } return typeof z; }",
     "print(decorated());",
   ], ["undefined"]);
+});
+
+// ADR 0134 Phase 3-strict: a direct eval at a strict call site compiles as a
+// closure of the call site. Expected values follow ECMA-262 2026 (tc39-mcp
+// 0.6.3, es2026 snapshot 0248456c758431e4bb8e5d26333ff1865123c9cd); Node.js
+// 24 was run only as a cross-check and agrees with every value.
+//
+// PerformEval (sec-performeval, §19.2.1.1) gives the eval code
+// NewDeclarativeEnvironment(the caller's LexicalEnvironment) and, with
+// strictCaller true, that environment as its VariableEnvironment (steps 16
+// and 18). A function the eval code creates closes over that environment
+// (OrdinaryFunctionCreate, sec-ordinaryfunctioncreate, §10.2.3), so after the
+// caller returns it still reads and writes the caller's bindings, not those of
+// whichever function is running: 1, 7 (the write reaches `v`), 8 (victim's own
+// `y` is untouched), 7. A per-iteration `let` (CreatePerIterationEnvironment,
+// §14.7.4.4) gives each eval its own `i`: 0/1/2. The eval's own `let n` lives
+// in its declarative environment, which the arrow keeps: 2.
+await section("Test262 Runner: a function a strict-site eval creates keeps its caller's bindings after the call returns...", async () => {
+  expectEvalHostProbe("strict outlived eval closure", [
+    "function reader() { 'use strict'; var v = 1; return eval('(function () { return v; })'); }",
+    "var read = reader();",
+    "function other() { var a = function () { return 'other'; }; var b = 2; return read(); }",
+    "function writer() { 'use strict'; var v = 1; var set = eval('(function (n) { v = n; return v; })'); return [set, function () { return v; }]; }",
+    "var pair = writer();",
+    "function victim(x, y) { pair[0](7); return x + ',' + y; }",
+    "function live() { 'use strict'; let x = 1; const set = eval('(n) => { x = n; return x; }'); function helper(f) { let p = 0, q = 0; return f(5); } return helper(set) + ':' + x; }",
+    "function loop() { 'use strict'; var fs = []; for (let i = 0; i < 3; i++) fs.push(eval('() => i')); return fs.map((f) => f()).join('/'); }",
+    "function own() { 'use strict'; const inc = eval('let n = 0; () => ++n'); inc(); return inc(); }",
+    "print([other(), victim(7, 8), pair[1](), live(), loop(), own()].join());",
+  ], ["1,7,8,7,5:5,0/1/2,2"]);
+});
+
+// A generator or async function keeps its environment across `yield` and
+// `await` (GeneratorYield, sec-generatoryield, §27.5.3.6; Await, await,
+// §27.7.5.3, resume the same execution context). An eval at a strict call site
+// reads and writes the function's `let` through that environment, and an
+// arrow the eval creates sees later writes: 1, 2, 3, 3, and 2 after `await`.
+await section("Test262 Runner: a strict-site eval in a generator and an async function sees the frame across yield and await...", async () => {
+  expectEvalHostProbe("strict eval across yield and await", [
+    "function* gen() { 'use strict'; let k = 1; const r = eval('() => k'); yield eval('k'); k = 2; yield r(); yield eval('k += 1; k'); yield k; }",
+    "async function af() { 'use strict'; let y = 1; await null; y = eval('y + 1'); await null; return eval('() => y')(); }",
+    "print([...gen()].join());",
+    "af().then((v) => print('async ' + v));",
+  ], ["1,2,3,3", "async 2"]);
+});
+
+// #1574: a direct eval in a static method resolves `#y` through the method's
+// PrivateEnvironment (PerformEval step 16), and `#y in C` is true when C
+// holds that Private Name (sec-relational-operators-runtime-semantics-
+// evaluation, §13.10.1, through PrivateElementFind, §7.3.26). A static
+// private field is on the class itself, so the check is true for D, false for
+// a subclass or another object, and agrees with the check written outside
+// eval.
+//
+// #1568: ClassDefinitionEvaluation (sec-runtime-semantics-
+// classdefinitionevaluation, §15.7.14) evaluates the class elements, computed
+// keys included, with the class's PrivateEnvironment, so an eval in a
+// computed key, or in an arrow created there, resolves `#s` to the class's
+// own name: 6 each time. The ClassHeritage is evaluated with the outer
+// PrivateEnvironment (the NOTE in the same clause), so an eval in `extends`
+// cannot name the class's own `#h` (AllPrivateIdentifiersValid,
+// sec-static-semantics-allprivateidentifiersvalid, §15.7.7, via §19.2.1.3
+// steps 4-7): SyntaxError; it can name an outer class's `#o`.
+//
+// The interpreter still differs on both, and #825 drops mode parity as an
+// oracle, so these run in bytecode mode.
+await section("Test262 Runner: a strict-site eval resolves private names as the code at its call does...", async () => {
+  expectEvalHostProbe("private names at strict eval sites", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "class D { static #y = 1; static direct() { return #y in this; } static evIn() { return eval('#y in this'); } static evInArg(v) { return eval('#y in v'); } static evRead() { return eval('this.#y'); } }",
+    "class Sub extends D {}",
+    "print([out(() => D.direct()), out(() => D.evIn()), out(() => D.evInArg(D)), out(() => D.evInArg({})), out(() => D.evInArg(Sub)), out(() => D.evRead())].join());",
+    "let f1, f2, f3;",
+    "class G1 { static #s = 6; static [(f1 = () => G1.#s, 'x')] = 1; }",
+    "class G2 { static #s = 6; static [(f2 = eval('() => G2.#s'), 'x')] = 1; }",
+    "class G3 { static #s = 6; static [(f3 = () => eval('G3.#s'), 'x')] = 1; }",
+    "print([out(() => f1()), out(() => f2()), out(() => f3())].join());",
+    "print(out(() => { class H extends (eval('#h in {}'), Object) { #h; } return 'none'; }), out(() => { class H2 { #o; static m() { class I extends (eval('(o) => #o in o'), Object) { #i; } return 'ok'; } } return H2.m(); }));",
+  ], ["true,true,true,false,false,1", "6,6,6", "SyntaxError ok"], ["bytecode"]);
+});
+
+// In a derived constructor `this` is uninitialized until super() returns
+// (BindThisValue, §9.1.1.3.1), and eval code reaches the constructor's this
+// binding through GetThisEnvironment (sec-getthisenvironment, §9.4.3), so
+// reading it before super() throws ReferenceError (GetThisBinding,
+// sec-function-environment-records-getthisbinding, §9.1.1.3.3 step 2) and
+// after super() is the new object. An arrow in a method nested in the
+// constructor reads the method's own this binding, which super() does not
+// touch (GetThisEnvironment skips only arrow functions' environments). The
+// interpreter returns the object early, so this runs in bytecode mode.
+await section("Test262 Runner: a strict-site eval in a derived constructor reads this as the constructor does...", async () => {
+  expectEvalHostProbe("derived constructor this", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "class P {}",
+    "class Q extends P { constructor() { const r = out(() => eval('this')); super(); this.r = r + ':' + (eval('this') === this); } }",
+    "print(new Q().r);",
+    "class M extends P { constructor() { const o = { m() { return () => eval('this'); } }; const r = o.m()() === o; super(); this.r = r; } }",
+    "print(new M().r);",
+  ], ["ReferenceError:true", "true"], ["bytecode"]);
+});
+
+// A strict call site in a function that contains a sloppy direct eval (a
+// class body, or a strict function nested in it) reads the vars that sloppy
+// eval declared in the function's VariableEnvironment (§19.2.1.3 step 16),
+// which shadow a binding of an enclosing function (GetIdentifierReference,
+// sec-getidentifierreference, §9.1.2.1): 5, 2, 3.
+await section("Test262 Runner: a strict-site eval sees the vars a sloppy eval of an enclosing function declared...", async () => {
+  expectEvalHostProbe("strict site under sloppy eval", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function F1() { eval('var dv = 5'); class K { static [eval('dv')] = 1; } return Object.keys(K)[0]; }",
+    "function F2() { var x = 1; return (function () { eval('var x = 2'); class K { static [eval('x')] = 1; } return Object.keys(K)[0]; })(); }",
+    "function F3() { eval('var y = 3'); return (function () { 'use strict'; return eval('y'); })(); }",
+    "print([out(F1), out(F2), out(F3)].join());",
+  ], ["5,2,3"]);
+});
+
+// GetIdentifierReference (sec-getidentifierreference, §9.1.2.1) walks the
+// environments from the innermost outwards, so a closure inside a function
+// that is itself inside a `with` finds the function's own binding before
+// the with object's property of the same name, and a strict-site eval in
+// such a function does too: local four times. An eval in a computed class
+// key inside a `with` (class code is strict) finds the with object's
+// property before the function's var, a `let` inside the `with` block
+// before the property, and the var when the object lacks the name: with,
+// let, var.
+await section("Test262 Runner: a closure in a function inside with reads the function's own binding first...", async () => {
+  expectEvalHostProbe("function inside with", [
+    "function arrow() { with ({ u: 'with' }) { return (function () { var u = 'local'; return (() => u)(); })(); } }",
+    "function inner() { with ({ u: 'with' }) { return (function () { let u = 'local'; return function () { return u; }(); })(); } }",
+    "function strictEval() { with ({ u: 'with' }) { return (function () { 'use strict'; var u = 'local'; return eval('u'); })(); } }",
+    "function strictEvalArrow() { with ({ u: 'with' }) { return (function () { 'use strict'; let u = 'local'; return eval('() => u')(); })(); } }",
+    "print([arrow(), inner(), strictEval(), strictEvalArrow()].join());",
+    "function key(f) { return Object.keys(f())[0]; }",
+    "function withKey() { var v = 'var'; with ({ v: 'with' }) { return key(() => class { static [eval('v')] = 1; }); } }",
+    "function letKey() { with ({ b: 'with' }) { let b = 'let'; return key(() => class { static [eval('b')] = 1; }); } }",
+    "function varKey() { var m = 'var'; with ({}) { return key(() => class { static [eval('m')] = 1; }); } }",
+    "print([withKey(), letKey(), varKey()].join());",
+  ], ["local,local,local,local", "with,let,var"]);
+});
+
+// PerformEval (sec-performeval, §19.2.1.1) step 10 takes inClassFieldInitializer
+// from GetThisEnvironment (sec-getthisenvironment, §9.4.3). Eval code has no
+// this environment of its own, so a direct eval nested in a class field
+// initializer's eval code, or in an arrow function it creates, is still in
+// that initializer, and step 11 makes `arguments` in it a SyntaxError
+// (ContainsArguments, sec-static-semantics-containsarguments, §15.7.9).
+await section("Test262 Runner: a direct eval nested in a field initializer's eval code rejects arguments...", async () => {
+  expectEvalHostProbe("nested field initializer eval", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "print(out(() => { class C { x = eval(\"eval('arguments')\"); } return new C().x; }));",
+    "print(out(() => { class C { x = eval(\"() => eval('arguments')\"); } return new C().x(); }));",
+    "print(out(() => { class C { x = eval(\"eval('1 + 1')\"); } return new C().x; }));",
+  ], ["SyntaxError", "SyntaxError", "2"]);
 });
 
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {

@@ -79,7 +79,7 @@ procedure VerifyFunctionTemplate(const ATemplate: TGocciaFunctionTemplate;
 var
   A, B, C: UInt16;
   Handler: TGocciaExceptionHandler;
-  I, PC: Integer;
+  I, J, PC: Integer;
   Instruction, Prefix: UInt32;
   JumpTarget: Int64;
   Op: UInt8;
@@ -412,6 +412,28 @@ begin
       RejectInvalidBytecode(ATemplate, 0, Format(
         'eval site record %d names register %d, outside MaxRegisters %d',
         [I, EvalEnv.VarObjectSlot, ATemplate.MaxRegisters]));
+    if EvalEnv.PrivateClassRegister >= ATemplate.MaxRegisters then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d names private class register %d, outside ' +
+        'MaxRegisters %d',
+        [I, EvalEnv.PrivateClassRegister, ATemplate.MaxRegisters]));
+    // Eval code compiled at the site captures these registers and upvalues
+    // of the calling frame.
+    for J := 0 to High(EvalEnv.Bindings) do
+      case EvalEnv.Bindings[J].Kind of
+        debLocal, debWithLocal:
+          if EvalEnv.Bindings[J].Index >= ATemplate.MaxRegisters then
+            RejectInvalidBytecode(ATemplate, 0, Format(
+              'eval site record %d binds ''%s'' to register %d, outside ' +
+              'MaxRegisters %d', [I, EvalEnv.Bindings[J].Name,
+              EvalEnv.Bindings[J].Index, ATemplate.MaxRegisters]));
+        debUpvalue, debWithUpvalue:
+          if EvalEnv.Bindings[J].Index >= ATemplate.UpvalueCount then
+            RejectInvalidBytecode(ATemplate, 0, Format(
+              'eval site record %d binds ''%s'' to upvalue %d, outside ' +
+              'the %d upvalues', [I, EvalEnv.Bindings[J].Name,
+              EvalEnv.Bindings[J].Index, ATemplate.UpvalueCount]));
+      end;
   end;
 
   for I := 0 to ATemplate.FunctionCount - 1 do
@@ -584,6 +606,16 @@ begin
       WriteUInt16(High(UInt16))
     else
       WriteUInt16(UInt16(EvalEnv.VarObjectSlot));
+    if EvalEnv.PrivateClassRegister < 0 then
+      WriteUInt16(High(UInt16))
+    else
+      WriteUInt16(UInt16(EvalEnv.PrivateClassRegister));
+    WriteUInt16(UInt16(Length(EvalEnv.PrivateNames)));
+    for J := 0 to High(EvalEnv.PrivateNames) do
+    begin
+      WriteString(EvalEnv.PrivateNames[J].Name);
+      WriteString(EvalEnv.PrivateNames[J].Prefix);
+    end;
     WriteUInt16(UInt16(Length(EvalEnv.Bindings)));
     for J := 0 to High(EvalEnv.Bindings) do
     begin
@@ -798,6 +830,8 @@ var
   EvalVarEnvironment: TGocciaDirectEvalVarEnvironment;
   EvalVarEnvironmentKind: UInt8;
   EvalVarObjectSlot: Integer;
+  EvalPrivateClassRegister: Integer;
+  EvalPrivateNames: TGocciaDirectEvalPrivateNameArray;
   EvalBindings: TGocciaDirectEvalBindingArray;
   EvalBinding: TGocciaDirectEvalBindingInfo;
   UpvalueIsLocal: Boolean;
@@ -908,6 +942,16 @@ begin
     EvalVarObjectSlot := ReadUInt16;
     if EvalVarObjectSlot = High(UInt16) then
       EvalVarObjectSlot := -1;
+    EvalPrivateClassRegister := ReadUInt16;
+    if EvalPrivateClassRegister = High(UInt16) then
+      EvalPrivateClassRegister := -1;
+    EvalBindingCount := ReadUInt16;
+    SetLength(EvalPrivateNames, EvalBindingCount);
+    for J := 0 to EvalBindingCount - 1 do
+    begin
+      EvalPrivateNames[J].Name := ReadString;
+      EvalPrivateNames[J].Prefix := ReadString;
+    end;
     EvalBindingCount := ReadUInt16;
     SetLength(EvalBindings, EvalBindingCount);
     for J := 0 to EvalBindingCount - 1 do
@@ -926,7 +970,8 @@ begin
       EvalBindings[J] := EvalBinding;
     end;
     Result.AddDirectEvalEnvironment(EvalPC, EvalRejectArgumentsReference,
-      EvalStrictCaller, EvalVarEnvironment, EvalVarObjectSlot, EvalBindings);
+      EvalStrictCaller, EvalVarEnvironment, EvalVarObjectSlot, EvalBindings,
+      EvalPrivateClassRegister, EvalPrivateNames);
   end;
 
   HandlerCount := ReadUInt16;

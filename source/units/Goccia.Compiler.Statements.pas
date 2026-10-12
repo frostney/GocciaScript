@@ -7105,7 +7105,6 @@ begin
   PrivateNameMark := ACtx.Scope.PrivateNameMark;
   OldPrivatePrefix := ACtx.Scope.PrivatePrefix;
   ACtx.Scope.PrivatePrefix := PrivPrefix;
-  RegisterClassPrivateNames(ACtx.Scope, ClassDef, PrivPrefix);
 
   // Reuse pre-declared slot if it exists at the same scope depth
   // (for function declaration upvalue resolution)
@@ -7178,6 +7177,9 @@ begin
 
   // The class heritage is evaluated in the outer private environment; the
   // rest of the body in the class's own (ES2026 §15.7.14 steps 8 and 12).
+  // The class's private names are declared only now, so that a direct eval
+  // in the heritage does not see them.
+  RegisterClassPrivateNames(ACtx.Scope, ClassDef, PrivPrefix);
   OldPrivateClassReg := ACtx.Scope.PrivateClassReg;
   ACtx.Scope.PrivateClassReg := ClassReg;
   ACtx.Scope.BeginScope;
@@ -7352,7 +7354,6 @@ begin
   PrivateNameMark := ACtx.Scope.PrivateNameMark;
   OldPrivatePrefix := ACtx.Scope.PrivatePrefix;
   ACtx.Scope.PrivatePrefix := PrivPrefix;
-  RegisterClassPrivateNames(ACtx.Scope, ClassDef, PrivPrefix);
 
   if HasNameBinding then
     NameIdx := ACtx.Template.AddConstantString(ClassDef.Name)
@@ -7423,6 +7424,9 @@ begin
 
   // The class heritage is evaluated in the outer private environment; the
   // rest of the body in the class's own (ES2026 §15.7.14 steps 8 and 12).
+  // The class's private names are declared only now, so that a direct eval
+  // in the heritage does not see them.
+  RegisterClassPrivateNames(ACtx.Scope, ClassDef, PrivPrefix);
   OldPrivateClassReg := ACtx.Scope.PrivateClassReg;
   ACtx.Scope.PrivateClassReg := ADest;
   ACtx.Scope.BeginScope;
