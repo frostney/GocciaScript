@@ -18,6 +18,10 @@ const
     count it as a function: the source has none there, and it would share a
     position with the function value it returns. }
   STATIC_FIELD_TEMPLATE_NAME = '<static field>';
+  { The top level of direct eval code compiled at its call site (ADR 0134):
+    an arrow-like function of the calling frame. Coverage does not count it
+    as a function either. }
+  DIRECT_EVAL_TEMPLATE_NAME = '<eval>';
 
 type
   TGocciaBytecodeConstantKind = (
@@ -94,6 +98,17 @@ type
 
   TGocciaDirectEvalBindingArray = array of TGocciaDirectEvalBindingInfo;
 
+  // A private name visible at a direct eval call, and the compile-time prefix
+  // of the class body that declares it, which makes its compiled key. The
+  // record lists them outermost class body first, so that a later entry of
+  // a name shadows an earlier one.
+  TGocciaDirectEvalPrivateName = record
+    Name: string;
+    Prefix: string;
+  end;
+
+  TGocciaDirectEvalPrivateNameArray = array of TGocciaDirectEvalPrivateName;
+
   // Where a direct eval call's var-scoped declarations go (ES2026 §19.2.1.1
   // PerformEval steps 16-18, ADR 0134 "The eval site record"):
   // - devNone: a strict call site, whose eval gets a variable environment of
@@ -129,6 +144,21 @@ type
     // devFunction and devParameters, -1 otherwise. Nothing reads the
     // register before Phase 3 of ADR 0134 compiles sloppy direct eval.
     VarObjectSlot: Integer;
+    // Where the eval code's private environment comes from (ES2026
+    // §19.2.1.1 PerformEval step 16: privateEnv is the running context's
+    // PrivateEnvironment). -1: the running closure's private class, as for any
+    // function created at the call. Otherwise the caller's register holding
+    // the class whose body runs inline in the calling function at the call: a
+    // computed key, which ClassDefinitionEvaluation (§15.7.14) evaluates with
+    // the class's PrivateEnvironment (ADR 0134, "Private names, super and the
+    // class body").
+    PrivateClassRegister: Integer;
+    // The private names visible at the call (privateEnv, the running
+    // context's PrivateEnvironment), which eval code may reference
+    // (§19.2.1.3 steps 4-7, AllPrivateIdentifiersValid) and compiles to their
+    // keys. A class body whose `extends` expression contains the call is not
+    // around it: the heritage runs in the outer PrivateEnvironment (§15.7.14).
+    PrivateNames: TGocciaDirectEvalPrivateNameArray;
     Bindings: TGocciaDirectEvalBindingArray;
   end;
 
@@ -380,7 +410,9 @@ type
       const ARejectArgumentsReference, AStrictCaller: Boolean;
       const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
       const AVarObjectSlot: Integer;
-      const ABindings: TGocciaDirectEvalBindingArray): Integer;
+      const ABindings: TGocciaDirectEvalBindingArray;
+      const APrivateClassRegister: Integer = -1;
+      const APrivateNames: TGocciaDirectEvalPrivateNameArray = nil): Integer;
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt16);
 
@@ -1023,7 +1055,9 @@ function TGocciaFunctionTemplate.AddDirectEvalEnvironment(const APC: UInt32;
   const ARejectArgumentsReference, AStrictCaller: Boolean;
   const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
   const AVarObjectSlot: Integer;
-  const ABindings: TGocciaDirectEvalBindingArray): Integer;
+  const ABindings: TGocciaDirectEvalBindingArray;
+  const APrivateClassRegister: Integer;
+  const APrivateNames: TGocciaDirectEvalPrivateNameArray): Integer;
 var
   I: Integer;
 begin
@@ -1040,6 +1074,10 @@ begin
     AVarEnvironment;
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].VarObjectSlot :=
     AVarObjectSlot;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PrivateClassRegister :=
+    APrivateClassRegister;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PrivateNames :=
+    Copy(APrivateNames);
   SetLength(FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings,
     Length(ABindings));
   for I := 0 to High(ABindings) do

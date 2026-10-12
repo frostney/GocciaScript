@@ -14,6 +14,11 @@ uses
   Goccia.Compiler.Scope,
   Goccia.SourceSpan;
 
+const
+  // The hidden local of a derived constructor that tells whether super() has
+  // initialized `this`.
+  DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
+
 // Compares a direct eval site record with the compiler's scope chain at its
 // call, AScope with the call's ANonStrictMode: every binding the compiler
 // resolves there, including one still in its temporal dead zone, has an entry
@@ -195,9 +200,6 @@ uses
   Goccia.Types.Enforcement,
   Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
-
-const
-  DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
 
 type
   TGocciaCompilerJumpArray = array of Integer;
@@ -764,7 +766,9 @@ begin
 
       Local := Scope.GetLocal(LocalIdx);
       WithDepth := Scope.GetWithBindingDepth(Scope.WithBindingCount - 1);
-      Exit((WithDepth >= 0) and (Local.Depth > WithDepth));
+      // A `with` of an enclosing function (depth -1) is around every local
+      // of this one, so the local is found before its object.
+      Exit((WithDepth < 0) or (Local.Depth > WithDepth));
     end;
 
     Scope := Scope.Parent;
@@ -2219,6 +2223,46 @@ begin
       [ACtx.SourcePath, ACall.Line, ACall.Column, Problem]);
 end;
 
+// The private names visible in AScope, each once with the prefix
+// ResolvePrivatePrefixForName resolves it to, the outermost class body's
+// first.
+function CaptureDirectEvalPrivateNames(
+  const AScope: TGocciaCompilerScope): TGocciaDirectEvalPrivateNameArray;
+var
+  Scopes: array of TGocciaCompilerScope;
+  Scope: TGocciaCompilerScope;
+  I, J, K, Count: Integer;
+  Name: string;
+begin
+  Result := nil;
+  Scopes := nil;
+  Scope := AScope;
+  while Assigned(Scope) do
+  begin
+    SetLength(Scopes, Length(Scopes) + 1);
+    Scopes[High(Scopes)] := Scope;
+    Scope := Scope.Parent;
+  end;
+  // A class body registers a name once per element that declares it, and an
+  // inner class body's name shadows an outer one's: the later entry wins.
+  for I := High(Scopes) downto 0 do
+    for J := 0 to Scopes[I].PrivateNameMark - 1 do
+    begin
+      Name := Scopes[I].GetPrivateName(J);
+      Count := Length(Result);
+      for K := 0 to Count - 1 do
+        if Result[K].Name = Name then
+        begin
+          Delete(Result, K, 1);
+          Break;
+        end;
+      Count := Length(Result);
+      SetLength(Result, Count + 1);
+      Result[Count].Name := Name;
+      Result[Count].Prefix := Scopes[I].GetPrivateNamePrefix(J);
+    end;
+end;
+
 // Records the eval site of a direct eval call and returns the record's index.
 function CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
   const ACall: TGocciaCallExpression; const APC: UInt32): Integer;
@@ -2339,9 +2383,14 @@ begin
       VarObjectSlot);
     VerifyDirectEvalSiteRecord(ACtx, ACall, Bindings, StrictCaller,
       VarEnvironment, VarObjectSlot);
+    // A call that runs inline in a class body, a computed key, names the
+    // register of the class being defined, whose private environment the
+    // running closure does not have (ADR 0134, "Private names, super and the
+    // class body").
     Result := ACtx.Template.AddDirectEvalEnvironment(APC,
       ACtx.Template.RejectArgumentsInDirectEval, StrictCaller,
-      VarEnvironment, VarObjectSlot, Bindings);
+      VarEnvironment, VarObjectSlot, Bindings, ACtx.Scope.PrivateClassReg,
+      CaptureDirectEvalPrivateNames(ACtx.Scope));
     ACtx.Scope.MarkDirectEvalSeen;
   finally
     Names.Free;

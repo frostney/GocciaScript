@@ -8,6 +8,7 @@ uses
   OrderedStringMap,
 
   Goccia.AST.Node,
+  Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Evaluator.Context,
@@ -36,6 +37,9 @@ type
       AImportingFilePath: string): TGocciaModule;
     function RunModule(const AModule: TGocciaCompiledModule;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function CompileDirectEvalCode(const AProgram: TGocciaProgram;
+      const ASourcePath: string;
+      const ASite: TGocciaDirectEvalEnvironment): TGocciaFunctionTemplate;
   public
     constructor Create;
     destructor Destroy; override;
@@ -116,6 +120,7 @@ begin
   FVM.LoadModuleSource := AModuleLoader.LoadModuleSourceValue;
   FVM.LoadDeferredModule := AModuleLoader.LoadDeferredModuleNamespaceValue;
   FVM.ResolveModuleURL := AModuleLoader.ResolveModuleURL;
+  FVM.CompileDirectEval := CompileDirectEvalCode;
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
 end;
 
@@ -281,6 +286,39 @@ begin
     FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
     FVM.GlobalScope := SavedGlobalScope;
   end;
+end;
+
+{ The VM's compiler for direct eval at a strict call site (ADR 0134 Phase
+  3): AProgram compiled as a function nested at the call that eval site
+  record ASite describes, with this engine's language profile. The compiled
+  module is kept for the engine's life like the Function constructor's code
+  (ADR 0134, decision 1). }
+function TGocciaBytecodeExecutor.CompileDirectEvalCode(
+  const AProgram: TGocciaProgram; const ASourcePath: string;
+  const ASite: TGocciaDirectEvalEnvironment): TGocciaFunctionTemplate;
+var
+  Compiler: TGocciaCompiler;
+  Module: TGocciaBytecodeModule;
+  Options: TGocciaCompilerOptimizationOptions;
+begin
+  Compiler := TGocciaCompiler.Create(ASourcePath);
+  try
+    Compiler.StrictTypes := FStrictTypes;
+    Compiler.NonStrictMode := FNonStrictMode;
+    Compiler.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
+    Options := Compiler.OptimizationOptions;
+    Options.PreserveCoverageShape :=
+      (TGocciaCoverageTracker.Instance <> nil) and
+      TGocciaCoverageTracker.Instance.Enabled;
+    Options.DirectEvalAvailable := RealmExposesDirectEval;
+    Compiler.OptimizationOptions := Options;
+    Module := Compiler.CompileDirectEval(AProgram, ASite);
+  finally
+    Compiler.Free;
+  end;
+  if Assigned(FRetainModule) then
+    FRetainModule(Module);
+  Result := Module.TopLevel;
 end;
 
 // Ordinary realms have no `eval`. A host that offers direct eval (the Test262
