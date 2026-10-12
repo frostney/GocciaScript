@@ -18,6 +18,13 @@ type
 
   TRetainObjectCallback = procedure(const AObject: TObject) of object;
 
+  { How far a global eval got before it raised (see
+    TGocciaEngine.EvaluateGlobalEval): gesCompile covers parsing, the static
+    early errors and compilation, gesRun the declaration instantiation and the
+    body. TC39 ShadowRealm §3.1.3 PerformShadowRealmEval throws a SyntaxError
+    for the first and a TypeError for the second. }
+  TGocciaGlobalEvalStage = (gesCompile, gesRun);
+
   TGocciaExecutor = class abstract
   private
     FCompileTimeNanoseconds: Int64;
@@ -42,6 +49,15 @@ type
       virtual; abstract;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;
+    { ES2026 §19.2.1.1 PerformEval steps 17-33 for eval code whose variable
+      environment is the realm's global environment: indirect eval and
+      ShadowRealm.prototype.evaluate. AProgram has passed the static early
+      errors. Sets AStage to gesRun once the code is compiled, before
+      EvalDeclarationInstantiation (§19.2.1.3) runs. Returns the completion
+      value. }
+    function EvaluateGlobalEval(const AProgram: TGocciaProgram;
+      const ASourcePath: string; const AStrictEval: Boolean;
+      var AStage: TGocciaGlobalEvalStage): TGocciaValue; virtual; abstract;
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaCompiledModule; virtual; abstract;
     function RunCompiledModule(

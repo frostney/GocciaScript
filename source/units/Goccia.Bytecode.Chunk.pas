@@ -233,6 +233,10 @@ type
     // direct self-call opcode carries the runtime contract, so this name is not
     // part of the serialized bytecode format.
     FClosedNumericSelfName: string;
+    // Runtime-only: the top level of eval code whose variable environment is
+    // the global one. Eval code is compiled when the eval runs and is never
+    // serialized, so this is not part of the bytecode format.
+    FGlobalEvalCode: Boolean;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
     // Runtime-only cache for immutable string constants. ECMAScript strings
@@ -389,6 +393,13 @@ type
     property SourceText: string read FSourceText write FSourceText;
     property ClosedNumericSelfName: string read FClosedNumericSelfName
       write FClosedNumericSelfName;
+    { ES2026 §19.2.1.3 EvalDeclarationInstantiation: the global var and
+      function bindings this template's global-define instructions create are
+      deletable (CreateGlobalVarBinding and CreateGlobalFunctionBinding with
+      D = true), and a var initializer assigns the binding the declaration
+      instantiation already made. }
+    property GlobalEvalCode: Boolean read FGlobalEvalCode
+      write FGlobalEvalCode;
     property TemplateSiteId: UInt64 read FTemplateSiteId;
   end;
 

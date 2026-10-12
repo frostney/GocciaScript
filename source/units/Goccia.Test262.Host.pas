@@ -68,8 +68,6 @@ uses
   Goccia.Builtins.Atomics,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Error,
-  Goccia.Evaluator,
-  Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
@@ -302,105 +300,29 @@ begin
   Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-function HasEvalTopLevelUsingDeclaration(
-  const AProgram: TGocciaProgram): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to AProgram.Body.Count - 1 do
-    if AProgram.Body[I] is TGocciaUsingDeclaration then
-      Exit(True);
-  Result := False;
-end;
-
 constructor TTest262EvalHost.Create(const AEngine: TGocciaEngine);
 begin
   inherited Create;
   FEngine := AEngine;
 end;
 
+// ES2026 §19.2.1.1.1 eval ( x ), called indirectly: PerformEval(x, false,
+// false) in this host's realm. A direct eval never reaches this function; the
+// VM evaluates it at the call site.
 function TTest262EvalHost.Eval(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  EvalOptions: TGocciaSourcePipelineOptions;
-  EvalSource: TStringList;
-  PipelineResult: TGocciaSourcePipelineResult;
-  RealmScope: TGocciaExecutionContextScope;
-  EvalScope: TGocciaScope;
-  VarScope: TGocciaScope;
-  EvalContext: TGocciaEvaluationContext;
   SourceValue: TGocciaValue;
-  SourceText: string;
-  StrictEval: Boolean;
+  Stage: TGocciaGlobalEvalStage;
 begin
   if AArgs.Length = 0 then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   SourceValue := AArgs.GetElement(0);
   if not (SourceValue is TGocciaStringLiteralValue) then
     Exit(SourceValue);
-
-  SourceText := TGocciaStringLiteralValue(SourceValue).Value;
-  EvalSource := CreateECMAScriptSourceLines(SourceText);
-  try
-    EvalOptions := TGocciaSourcePipeline.DefaultOptions;
-    EvalOptions.Preprocessors := FEngine.Preprocessors;
-    EvalOptions.Compatibility := FEngine.Compatibility;
-    EvalOptions.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
-    EvalOptions.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
-    EvalOptions.ExperimentalJSModuleSourceEnabled :=
-      FEngine.ExperimentalJSModuleSourceEnabled;
-    EvalOptions.WarningUnsupportedFeatures :=
-      FEngine.WarningUnsupportedFeatures;
-    EvalOptions.SourceType := stScript;
-    ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(EvalOptions);
-    try
-      RealmScope := FEngine.ActivateRealmExecutionContext;
-      try
-        PipelineResult := TGocciaSourcePipeline.Parse(EvalSource,
-          '<test262-realm-eval>', EvalOptions);
-        try
-          if HasEvalTopLevelUsingDeclaration(PipelineResult.ProgramNode) then
-            ThrowSyntaxError(
-              'Using declarations are not allowed at the top level of eval');
-          StrictEval := HasUseStrictDirective(PipelineResult.ProgramNode);
-          if StrictEval then
-            EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(
-              skFunction, 'StrictTest262Eval')
-          else
-            EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(
-              skBlock, 'Test262Eval');
-          EvalScope.ThisValue := FEngine.Interpreter.GlobalScope.ThisValue;
-          if Assigned(TGarbageCollector.Instance) then
-            TGarbageCollector.Instance.AddTempRoot(EvalScope);
-          try
-            EvalContext := FEngine.Interpreter.CreateEvaluationContext;
-            EvalContext.Scope := EvalScope;
-            EvalContext.CurrentFilePath := '<test262-realm-eval>';
-            EvalContext.NonStrictMode := not StrictEval;
-            if StrictEval then
-              VarScope := EvalScope
-            else
-              VarScope := FEngine.Interpreter.GlobalScope;
-            Result := EvaluateEvalProgram(PipelineResult.ProgramNode,
-              EvalContext, VarScope, EvalScope, StrictEval, False, nil, False,
-              False, False);
-          finally
-            if Assigned(TGarbageCollector.Instance) then
-              TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
-          end;
-        finally
-          PipelineResult.Free;
-        end;
-      finally
-        RealmScope.Free;
-      end;
-    finally
-      ActiveOptionsScope.Free;
-    end;
-  finally
-    EvalSource.Free;
-  end;
+  Result := FEngine.EvaluateGlobalEval(
+    TGocciaStringLiteralValue(SourceValue).Value, '<test262-realm-eval>',
+    Stage);
 end;
 
 function TTest262EvalHost.EvalScript(

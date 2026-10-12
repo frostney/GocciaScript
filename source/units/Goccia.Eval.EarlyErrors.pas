@@ -22,18 +22,35 @@ uses
 
   UnicodeStringList,
 
+  Goccia.AST.BindingPatterns,
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements;
 
 procedure AddUniqueEvalName(const ANames: TUnicodeStringList;
   const AName: string);
-procedure CollectEvalFunctionDeclarations(
-  const ANodes: TObjectList<TGocciaStatement>;
-  const ADeclarations: TObjectList<TGocciaFunctionDeclaration>);
+function EvalFunctionDeclarationFromNode(
+  const ANode: TGocciaASTNode): TGocciaFunctionDeclaration;
 procedure CollectTopLevelEvalLexicalNames(
   const ANodes: TObjectList<TGocciaStatement>;
   const ANames: TUnicodeStringList);
+
+{ The names ES2026 §19.2.1.3 EvalDeclarationInstantiation binds when the
+  variable environment is the global one. AVarNames is VarDeclaredNames of
+  the body (step 1; with AMode = vbnNonStrictScriptCompatibility it also holds
+  the block-level functions that get a var binding, B.3.2.6). AFunctionNames
+  are the names of the top-level function declarations, the last declaration
+  of a name winning (functionsToInitialize, steps 8 and 10), and
+  ADeclaredVarNames the other var names (declaredVarNames, steps 11-12), each once and in source order. }
+procedure CollectGlobalEvalDeclarationNames(const AProgram: TGocciaProgram;
+  const AMode: TGocciaVarBindingNameCollectionMode;
+  const AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+{ ES2026 §16.1.1 Static Semantics: Early Errors for ScriptBody: a duplicate
+  name among the top-level LexicallyDeclaredNames, or a name both lexically
+  declared and var-declared at the top level, is a SyntaxError. The parser
+  leaves both to the eval call. Raises TGocciaSyntaxError. }
+procedure CheckEvalLexicalDeclarationConflicts(const AProgram: TGocciaProgram;
+  const AMode: TGocciaVarBindingNameCollectionMode);
 
 procedure ValidateEvalScriptBody(const ANodes: TObjectList<TGocciaStatement>);
 function EvalProgramContainsArgumentsReference(
@@ -60,7 +77,6 @@ implementation
 uses
   SysUtils,
 
-  Goccia.AST.BindingPatterns,
   Goccia.Constants,
   Goccia.Error,
   Goccia.Error.Messages,
@@ -85,21 +101,6 @@ begin
     Result := TGocciaExportFunctionDeclaration(ANode).Declaration
   else
     Result := nil;
-end;
-
-procedure CollectEvalFunctionDeclarations(
-  const ANodes: TObjectList<TGocciaStatement>;
-  const ADeclarations: TObjectList<TGocciaFunctionDeclaration>);
-var
-  FuncDecl: TGocciaFunctionDeclaration;
-  I: Integer;
-begin
-  for I := 0 to ANodes.Count - 1 do
-  begin
-    FuncDecl := EvalFunctionDeclarationFromNode(ANodes[I]);
-    if Assigned(FuncDecl) then
-      ADeclarations.Add(FuncDecl);
-  end;
 end;
 
 procedure CollectTopLevelEvalLexicalNames(const ANodes: TObjectList<TGocciaStatement>;
@@ -1729,5 +1730,71 @@ begin
     ValidateEvalControlFlowStatement(AProgram.Body[I], False, False);
 end;
 
+procedure CollectGlobalEvalDeclarationNames(const AProgram: TGocciaProgram;
+  const AMode: TGocciaVarBindingNameCollectionMode;
+  const AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+var
+  Declaration: TGocciaFunctionDeclaration;
+  I: Integer;
+begin
+  CollectVarBindingNamesFromStatements(AProgram.Body, AVarNames, AMode);
+  for I := AProgram.Body.Count - 1 downto 0 do
+  begin
+    Declaration := EvalFunctionDeclarationFromNode(AProgram.Body[I]);
+    if Assigned(Declaration) and
+       (AFunctionNames.IndexOf(Declaration.Name) < 0) then
+      AFunctionNames.Insert(0, Declaration.Name);
+  end;
+  for I := 0 to AVarNames.Count - 1 do
+    if AFunctionNames.IndexOf(AVarNames[I]) < 0 then
+      AddUniqueEvalName(ADeclaredVarNames, AVarNames[I]);
+end;
+
+procedure CheckEvalLexicalDeclarationConflicts(const AProgram: TGocciaProgram;
+  const AMode: TGocciaVarBindingNameCollectionMode);
+var
+  LexicalNames, StatementNames, VarNames: TUnicodeStringList;
+  Statement: TObjectList<TGocciaStatement>;
+  I, J: Integer;
+
+  procedure RaiseAlreadyDeclared(const AName: string);
+  begin
+    raise TGocciaSyntaxError.Create(
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), 0, 0, '', nil,
+      SSuggestAlreadyDeclared);
+  end;
+
+begin
+  LexicalNames := TUnicodeStringList.Create;
+  StatementNames := TUnicodeStringList.Create;
+  VarNames := TUnicodeStringList.Create;
+  Statement := TObjectList<TGocciaStatement>.Create(False);
+  try
+    for I := 0 to AProgram.Body.Count - 1 do
+    begin
+      Statement.Clear;
+      Statement.Add(AProgram.Body[I]);
+      StatementNames.Clear;
+      CollectTopLevelEvalLexicalNames(Statement, StatementNames);
+      for J := 0 to StatementNames.Count - 1 do
+      begin
+        if LexicalNames.IndexOf(StatementNames[J]) >= 0 then
+          RaiseAlreadyDeclared(StatementNames[J]);
+        LexicalNames.Add(StatementNames[J]);
+      end;
+    end;
+    if LexicalNames.Count = 0 then
+      Exit;
+    CollectVarBindingNamesFromStatements(AProgram.Body, VarNames, AMode);
+    for I := 0 to LexicalNames.Count - 1 do
+      if VarNames.IndexOf(LexicalNames[I]) >= 0 then
+        RaiseAlreadyDeclared(LexicalNames[I]);
+  finally
+    Statement.Free;
+    VarNames.Free;
+    StatementNames.Free;
+    LexicalNames.Free;
+  end;
+end;
 
 end.

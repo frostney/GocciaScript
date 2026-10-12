@@ -5,11 +5,23 @@ unit Goccia.Scope.Redeclaration;
 interface
 
 uses
+  UnicodeStringList,
+
   Goccia.AST.Node,
   Goccia.Scope;
 
 procedure CheckTopLevelRedeclarations(const AProgram: TGocciaProgram;
   const AScope: TGocciaScope; const ASourcePath: string);
+
+{ ES2026 §19.2.1.3 EvalDeclarationInstantiation steps 3.a, 10 and 12 for a
+  non-strict eval whose variable environment is the global environment
+  AGlobalScope, with the name lists of CollectGlobalEvalDeclarationNames. A
+  var-declared name that a global lexical declaration has is a SyntaxError; a
+  function or a var the global object cannot take (CanDeclareGlobalFunction,
+  CanDeclareGlobalVar) is a TypeError. The checks run before any binding is
+  created (step 14), so a failed eval leaves the global object as it was. }
+procedure CheckGlobalEvalDeclarations(const AGlobalScope: TGocciaScope;
+  const AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
 
 implementation
 
@@ -18,7 +30,31 @@ uses
 
   Goccia.AST.Expressions,
   Goccia.AST.Statements,
-  Goccia.Error;
+  Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
+  Goccia.Values.ErrorHelper;
+
+procedure CheckGlobalEvalDeclarations(const AGlobalScope: TGocciaScope;
+  const AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+var
+  I: Integer;
+begin
+  for I := 0 to AVarNames.Count - 1 do
+    if AGlobalScope.HasLexicalDeclaration(AVarNames[I]) then
+      ThrowSyntaxError(
+        SysUtils.Format(SErrorIdentifierAlreadyDeclared, [AVarNames[I]]),
+        SSuggestAlreadyDeclared);
+  // Step 10 visits the declarations in reverse List order.
+  for I := AFunctionNames.Count - 1 downto 0 do
+    if not AGlobalScope.CanDeclareGlobalFunction(AFunctionNames[I]) then
+      ThrowTypeError(SysUtils.Format('Cannot declare global function ''%s''',
+        [AFunctionNames[I]]));
+  for I := 0 to ADeclaredVarNames.Count - 1 do
+    if not AGlobalScope.CanDeclareGlobalVar(ADeclaredVarNames[I]) then
+      ThrowTypeError(SysUtils.Format('Cannot declare global var ''%s''',
+        [ADeclaredVarNames[I]]));
+end;
 
 procedure CheckLexicalRedeclarationName(
   const AName: string;

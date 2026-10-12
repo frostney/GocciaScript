@@ -1018,6 +1018,23 @@ begin
   AContext.Scope.DefineVariableBinding(Name, Value, True);
 end;
 
+// The list is created and filled in this unit: a generic list class
+// specialized in one unit is not the same class as one specialized in another.
+procedure CollectEvalFunctionDeclarations(
+  const ANodes: TObjectList<TGocciaStatement>;
+  const ADeclarations: TObjectList<TGocciaFunctionDeclaration>);
+var
+  FuncDecl: TGocciaFunctionDeclaration;
+  I: Integer;
+begin
+  for I := 0 to ANodes.Count - 1 do
+  begin
+    FuncDecl := EvalFunctionDeclarationFromNode(ANodes[I]);
+    if Assigned(FuncDecl) then
+      ADeclarations.Add(FuncDecl);
+  end;
+end;
+
 procedure PredeclareTopLevelEvalLexicalBindings(
   const ANodes: TObjectList<TGocciaStatement>; const AScope: TGocciaScope);
 var

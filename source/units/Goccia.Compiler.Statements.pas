@@ -722,6 +722,20 @@ begin
   end;
 end;
 
+// Whether a declaration at the current point binds a global name rather than
+// a local: a var anywhere in a global-backed top level, and a lexical
+// declaration at its depth 0 unless the top level is eval code, whose lexical
+// declarations stay in its own environment (ES2026 §19.2.1.1 PerformEval
+// step 17).
+function TopLevelBindingIsGlobalBacked(const ACtx: TGocciaCompilationContext;
+  const AIsVar: Boolean): Boolean;
+begin
+  if AIsVar then
+    Result := ACtx.GlobalBackedTopLevel
+  else
+    Result := ACtx.GlobalBackedTopLevelLexicals and (ACtx.Scope.Depth = 0);
+end;
+
 function GlobalDefineOpcode(const AIsConst: Boolean; const AIsVar: Boolean;
   const AHasInitializer: Boolean; const AIsFunctionDeclaration: Boolean)
   : TGocciaOpCode;
@@ -884,8 +898,8 @@ begin
 
     if Info.IsPattern or Assigned(Info.Pattern) then
     begin
-      IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-        (AStmt.IsVar or (ACtx.Scope.Depth = 0));
+      IsTopLevelGlobalBacked := TopLevelBindingIsGlobalBacked(ACtx,
+        AStmt.IsVar);
 
       if AStmt.IsVar then
         CollectDestructuringVarBindings(Info.Pattern, ACtx.Scope)
@@ -939,8 +953,8 @@ begin
       IsVarRedeclaration := False;
     end;
 
-    IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-      (AStmt.IsVar or (ACtx.Scope.Depth = 0));
+    IsTopLevelGlobalBacked := TopLevelBindingIsGlobalBacked(ACtx,
+      AStmt.IsVar);
     if IsTopLevelGlobalBacked and AStmt.IsVar then
     begin
       LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
@@ -1998,6 +2012,33 @@ begin
   Result := True;
 end;
 
+// ES2026 §14.15.3 TryStatement Evaluation: a finally block that completes
+// normally leaves the completion value of the try statement as it was
+// (`return ? UpdateEmpty(C, undefined)` uses C, not F), so in eval code the
+// finally block's own expression statements must not replace it. An abrupt
+// finally block jumps past the restore and keeps its own value.
+procedure CompileFinallyBlock(const ACtx: TGocciaCompilationContext;
+  const ABlock: TGocciaBlockStatement);
+var
+  SavedCompletion: UInt16;
+begin
+  if ACtx.CompletionRegister < 0 then
+  begin
+    CompileBlockStatement(ACtx, ABlock);
+    Exit;
+  end;
+  SavedCompletion := ACtx.Scope.AllocateRegister;
+  try
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, SavedCompletion,
+      UInt16(ACtx.CompletionRegister), 0));
+    CompileBlockStatement(ACtx, ABlock);
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, UInt16(ACtx.CompletionRegister),
+      SavedCompletion, 0));
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
   const AEntry: TPendingFinallyEntry; const ACloseIterator: Boolean);
 var
@@ -2037,7 +2078,7 @@ begin
     SuspendedBindings := ACtx.Scope.SuspendBindingsDeeperThan(
       AEntry.FinallyScopeDepth);
     try
-      CompileBlockStatement(ACtx, AEntry.FinallyBlock);
+      CompileFinallyBlock(ACtx, AEntry.FinallyBlock);
     finally
       ACtx.Scope.ResumeBindings(SuspendedBindings);
     end;
@@ -2597,7 +2638,7 @@ begin
     GPendingFinally.Delete(GPendingFinally.Count - 1);
 
   if HasFinally then
-    CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+    CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
 
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
 
@@ -2652,6 +2693,11 @@ begin
         CatchBodyErrorReg);
     end;
 
+    // ES2026 §14.15.3: the catch clause's result replaces the try block's,
+    // and an empty one becomes undefined.
+    if ACtx.CompletionRegister >= 0 then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED,
+        UInt16(ACtx.CompletionRegister), 0, 0));
     CompileBlockStatement(ACtx, AStmt.CatchBlock);
 
     if HasFinally then
@@ -2669,7 +2715,7 @@ begin
     if HasFinally then
     begin
       GPendingFinally.Delete(GPendingFinally.Count - 1);
-      CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+      CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
     end;
 
     if HasFinally then
@@ -2681,7 +2727,7 @@ begin
         for I := 0 to ClosedCount - 1 do
           EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0,
             UInt16(ClosedLocals[I])));
-      CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+      CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchBodyErrorReg, 0, 0));
       PatchJumpTarget(ACtx, CatchBodySuccessJump);
       ACtx.Scope.FreeRegister;
@@ -2697,7 +2743,7 @@ begin
       if HasFinally then
         EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
       if HasFinally then
-        CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+        CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
       PatchJumpTarget(ACtx, CatchSuccessJump);
       ACtx.Scope.FreeRegister;
@@ -2710,7 +2756,7 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
       for I := 0 to ClosedCount - 1 do
         EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
-      CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+      CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchInitErrorReg, 0, 0));
       PatchJumpTarget(ACtx, CatchInitSuccessJump);
       ACtx.Scope.FreeRegister;
@@ -2719,7 +2765,7 @@ begin
   else
   begin
     if HasFinally then
-      CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+      CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
     EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
   end;
 
@@ -2727,7 +2773,7 @@ begin
   begin
     FinallyHandlerSuccessJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
     PatchJumpTarget(ACtx, FinallyHandlerJump);
-    CompileBlockStatement(ACtx, AStmt.FinallyBlock);
+    CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
     EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
     PatchJumpTarget(ACtx, FinallyHandlerSuccessJump);
   end;
@@ -4199,7 +4245,13 @@ begin
     end;
 
     try
-      if Assigned(AStmt.Init) then
+      // An expression initializer is not an ExpressionStatement: its value is
+      // never the loop's completion value (ES2026 §14.7.4.2).
+      if (ACtx.CompletionRegister >= 0) and
+         (AStmt.Init is TGocciaExpressionStatement) then
+        CompileDiscardedExpression(ACtx,
+          TGocciaExpressionStatement(AStmt.Init).Expression)
+      else if Assigned(AStmt.Init) then
         ACtx.CompileStatement(AStmt.Init);
 
       BeginLoopControl(ACtx, LoopControl);
@@ -7017,8 +7069,7 @@ begin
   ClassDef := AStmt.ClassDefinition;
   HasSuper := Assigned(ClassDef.SuperClassExpression) or
     (ClassDef.SuperClass <> '');
-  IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-    (ACtx.Scope.Depth = 0);
+  IsTopLevelGlobalBacked := TopLevelBindingIsGlobalBacked(ACtx, False);
 
   PrivPrefix := NextClassPrivatePrefix;
   PrivateNameMark := ACtx.Scope.PrivateNameMark;
@@ -7534,8 +7585,7 @@ var
   SrcReg: UInt16;
   IsTopLevelGlobalBacked: Boolean;
 begin
-  IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and
-    (AStmt.IsVar or (ACtx.Scope.Depth = 0));
+  IsTopLevelGlobalBacked := TopLevelBindingIsGlobalBacked(ACtx, AStmt.IsVar);
 
   if AStmt.IsVar then
     CollectDestructuringVarBindings(AStmt.Pattern, ACtx.Scope)
@@ -7577,7 +7627,7 @@ begin
     EnumSlot := ACtx.Scope.GetLocal(LocalIdx).Slot
   else
     EnumSlot := ACtx.Scope.DeclareLocal(AStmt.Name, False);
-  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+  if TopLevelBindingIsGlobalBacked(ACtx, False) then
   begin
     LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
     if LocalIdx >= 0 then
@@ -7613,7 +7663,7 @@ begin
   if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, EnumSlot, UInt16(EnumSlot)));
 
-  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+  if TopLevelBindingIsGlobalBacked(ACtx, False) then
     EmitGlobalDefine(ACtx, EnumSlot, AStmt.Name, False);
 end;
 

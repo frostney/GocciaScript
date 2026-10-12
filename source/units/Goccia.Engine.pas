@@ -393,6 +393,17 @@ type
     procedure RefreshGlobalThis;
     procedure SuspendRealmExecutionContext;
     function ActivateRealmExecutionContext: TGocciaExecutionContextScope;
+    { ES2026 §19.2.1.1 PerformEval for eval code whose variable environment
+      is this realm's global environment: an indirect call of the realm's
+      `eval`, and ShadowRealm.prototype.evaluate (TC39 ShadowRealm §3.1.3).
+      ASourceText is the eval's source; the caller has handled a non-String.
+      Parses it as a Script, checks the static early errors, and has the
+      executor run it in this realm: compiled and run on the VM in bytecode
+      mode (ADR 0134 Phase 2), evaluated in interpreter mode. Returns the
+      completion value. When it raises, AStage tells whether compiling or
+      running failed. }
+    function EvaluateGlobalEval(const ASourceText, ASourcePath: string;
+      out AStage: TGocciaGlobalEvalStage): TGocciaValue;
     function AddExtension(
       const AExtension: TGocciaEngineExtension): TGocciaEngineExtension;
     function FindExtension(
@@ -2250,6 +2261,67 @@ begin
     FRetainedModules.Add(Result);
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
+end;
+
+function TGocciaEngine.EvaluateGlobalEval(const ASourceText,
+  ASourcePath: string; out AStage: TGocciaGlobalEvalStage): TGocciaValue;
+var
+  Options: TGocciaSourcePipelineOptions;
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
+  ParseResult: TGocciaSourcePipelineResult;
+  RealmScope: TGocciaExecutionContextScope;
+  SourceLines: TStringList;
+  StrictEval: Boolean;
+  Mode: TGocciaVarBindingNameCollectionMode;
+begin
+  AStage := gesCompile;
+  SourceLines := CreateECMAScriptSourceLines(ASourceText);
+  try
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.SourceType := stScript;
+    Options.Preprocessors := FPreprocessors;
+    Options.Compatibility := FCompatibility;
+    Options.LabelStatementsEnabled := FLabelStatementsEnabled;
+    Options.ForInLoopsEnabled := FForInLoopsEnabled;
+    Options.ExperimentalJSModuleSourceEnabled :=
+      FExperimentalJSModuleSourceEnabled;
+    Options.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
+    try
+      RealmScope := ActivateRealmExecutionContext;
+      try
+        // §19.2.1.1 step 11: parse the source as a Script and check the early
+        // errors the eval call owns. An indirect eval is not in a function, a
+        // method or a derived constructor, so new.target, super.x and super()
+        // are SyntaxErrors.
+        ParseResult := TGocciaSourcePipeline.Parse(SourceLines, ASourcePath,
+          Options);
+        try
+          ValidateEvalScriptBody(ParseResult.ProgramNode.Body);
+          // Step 13: the eval is strict only by its own directive.
+          StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
+          ValidateEvalEarlyErrors(ParseResult.ProgramNode, StrictEval, False,
+            False, False);
+          ValidateEvalControlFlow(ParseResult.ProgramNode);
+          if (not StrictEval) and (cfNonStrictMode in FCompatibility) then
+            Mode := vbnNonStrictScriptCompatibility
+          else
+            Mode := vbnStandard;
+          CheckEvalLexicalDeclarationConflicts(ParseResult.ProgramNode, Mode);
+          Result := FExecutor.EvaluateGlobalEval(ParseResult.ProgramNode,
+            ASourcePath, StrictEval, AStage);
+        finally
+          ParseResult.Free;
+        end;
+      finally
+        RealmScope.Free;
+      end;
+    finally
+      OptionsScope.Free;
+    end;
+  finally
+    SourceLines.Free;
   end;
 end;
 

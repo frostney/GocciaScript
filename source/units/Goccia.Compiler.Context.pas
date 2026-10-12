@@ -61,6 +61,15 @@ type
     NumberBindingProofs: TNumberBindingProofMap;
     BlockFunctionVarBindings: TBlockFunctionVarBindingSet;
     GlobalBackedTopLevel: Boolean;
+    { Whether the top-level lexical declarations of a global-backed top level
+      are global bindings too. A Script's are (§16.1.7
+      GlobalDeclarationInstantiation); eval code's stay in the eval's own
+      declarative environment (§19.2.1.1 PerformEval step 17), so they are
+      locals of the eval template. }
+    GlobalBackedTopLevelLexicals: Boolean;
+    { The register that holds the completion value of eval code (§19.2.1.1
+      PerformEval steps 29-30), or -1 outside the top level of eval code. }
+    CompletionRegister: Integer;
     PreinitializedTopLevelFunctions: Boolean;
     StrictTypes: Boolean;
     CompatibilityNonStrictMode: Boolean;

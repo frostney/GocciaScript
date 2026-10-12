@@ -35,6 +35,9 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
+    function EvaluateGlobalEval(const AProgram: TGocciaProgram;
+      const ASourcePath: string; const AStrictEval: Boolean;
+      var AStage: TGocciaGlobalEvalStage): TGocciaValue; override;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue; override;
@@ -58,6 +61,7 @@ uses
   Goccia.ControlFlow,
   Goccia.Evaluator,
   Goccia.ExecutionContext,
+  Goccia.GarbageCollector,
   Goccia.Scope.Redeclaration;
 
 { TGocciaInterpreterExecutor }
@@ -90,6 +94,42 @@ function TGocciaInterpreterExecutor.ExecuteDynamicFunction(
   const AProgram: TGocciaProgram): TGocciaValue;
 begin
   Result := FInterpreter.Execute(AProgram);
+end;
+
+// ES2026 §19.2.1.1 PerformEval steps 17-33, evaluated by the interpreter: the
+// eval gets a fresh declarative environment under the global one, which is
+// also its variable environment unless the eval is strict.
+function TGocciaInterpreterExecutor.EvaluateGlobalEval(
+  const AProgram: TGocciaProgram; const ASourcePath: string;
+  const AStrictEval: Boolean;
+  var AStage: TGocciaGlobalEvalStage): TGocciaValue;
+var
+  EvalScope, VarScope: TGocciaScope;
+  EvalContext: TGocciaEvaluationContext;
+begin
+  AStage := gesRun;
+  if AStrictEval then
+    EvalScope := FGlobalScope.CreateChild(skFunction, 'StrictGlobalEval')
+  else
+    EvalScope := FGlobalScope.CreateChild(skBlock, 'GlobalEval');
+  EvalScope.ThisValue := FGlobalScope.ThisValue;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddTempRoot(EvalScope);
+  try
+    EvalContext := FInterpreter.CreateEvaluationContext;
+    EvalContext.Scope := EvalScope;
+    EvalContext.CurrentFilePath := ASourcePath;
+    EvalContext.NonStrictMode := not AStrictEval;
+    if AStrictEval then
+      VarScope := EvalScope
+    else
+      VarScope := FGlobalScope;
+    Result := EvaluateEvalProgram(AProgram, EvalContext, VarScope, EvalScope,
+      AStrictEval, False, nil, False, False, False);
+  finally
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
+  end;
 end;
 
 function TGocciaInterpreterExecutor.EvaluateModuleBody(

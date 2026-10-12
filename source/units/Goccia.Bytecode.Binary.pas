@@ -429,6 +429,10 @@ var
   EvalBinding: TGocciaDirectEvalBindingInfo;
   Handler: TGocciaExceptionHandler;
 begin
+  // Eval code is compiled when the eval runs and lives only in memory; the
+  // format has no field for TGocciaFunctionTemplate.GlobalEvalCode.
+  if AProto.GlobalEvalCode then
+    raise Exception.Create('Eval code cannot be serialized');
   WriteString(AProto.Name);
   WriteUInt16(AProto.MaxRegisters);
   WriteUInt16(AProto.ParameterCount);
