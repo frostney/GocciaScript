@@ -280,7 +280,7 @@ begin
       OP_TO_PRIMITIVE, OP_GET_LOCAL, OP_SET_LOCAL, OP_CLOSE_UPVALUE:
         RequireRegister(DecodeBx(Instruction));
 
-      OP_GET_UPVALUE, OP_SET_UPVALUE, OP_SET_UPVALUE_DYNAMIC:
+      OP_GET_UPVALUE, OP_SET_UPVALUE:
         RequireUpvalue(DecodeBx(Instruction));
 
       OP_CHECK_BINDING_INITIALIZED:
@@ -293,12 +293,6 @@ begin
           RejectInvalidBytecode(ATemplate, PC,
             Format('binding-check mode %d is not 0 or 1', [A]));
         end;
-
-      OP_RESOLVE_UPVALUE_REF:
-        RequireUpvalue(B);
-
-      OP_SET_UPVALUE_REF:
-        RequireUpvalue(C);
 
       OP_LOAD_CONST, OP_LOAD_REGEXP, OP_SET_GLOBAL_STATIC, OP_NEW_CLASS,
       OP_SET_CLASS_SOURCE_CONST, OP_DELETE_PROP_CONST,
@@ -627,6 +621,8 @@ begin
       WriteBoolean(EvalBinding.IsVarEnvironmentBinding);
       WriteBoolean(EvalBinding.IsEvalSyntheticArguments);
       WriteBoolean(EvalBinding.IsCatchParameter);
+      WriteBoolean(EvalBinding.IsOutsideVarEnvironment);
+      WriteBoolean(EvalBinding.IsCallerFunctionBinding);
     end;
   end;
 
@@ -967,6 +963,8 @@ begin
       EvalBinding.IsVarEnvironmentBinding := ReadBoolean;
       EvalBinding.IsEvalSyntheticArguments := ReadBoolean;
       EvalBinding.IsCatchParameter := ReadBoolean;
+      EvalBinding.IsOutsideVarEnvironment := ReadBoolean;
+      EvalBinding.IsCallerFunctionBinding := ReadBoolean;
       EvalBindings[J] := EvalBinding;
     end;
     Result.AddDirectEvalEnvironment(EvalPC, EvalRejectArgumentsReference,

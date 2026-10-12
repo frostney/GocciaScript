@@ -38,6 +38,21 @@ type
     IsVar: Boolean;
     // A binding of a catch clause's parameter.
     IsCatchParameter: Boolean;
+    // A binding of the calling function outside the variable environment a
+    // sloppy direct eval in its body declares vars in: a parameter, or
+    // `arguments`, of a function whose parameter list has expressions
+    // (ES2026 §10.2.11 steps 20 and 30). Set on the locals rebuilt from an
+    // eval site record; TGocciaCompilerScope.LocalOutsideVarEnvironment
+    // works it out for the function being compiled.
+    IsOutsideVarEnvironment: Boolean;
+    // Rebuilt from an eval site record: a binding of the function whose
+    // variable environment eval code declares its vars in
+    // (TGocciaDirectEvalBindingInfo.IsCallerFunctionBinding).
+    IsCallerFunctionBinding: Boolean;
+    // The local of the function's arguments object, which
+    // FunctionDeclarationInstantiation binds with the parameters (ES2026
+    // §10.2.11 step 22.f).
+    IsArgumentsObject: Boolean;
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     IsCallProvenNumeric: Boolean;
@@ -125,7 +140,11 @@ type
     FDirectEvalUsage: TGocciaDirectEvalUsage;
     FEvalVarObjectSlot: Integer;
     FParameterEvalVarObjectSlot: Integer;
+    FEvalVarObjectName: string;
+    FParameterEvalVarObjectName: string;
     FCompilingParameters: Boolean;
+    FIsSloppyEvalCode: Boolean;
+    FEvalCodeVarEnvironment: TGocciaDirectEvalVarEnvironment;
     FParametersInVarEnvironment: Boolean;
     FParameterNames: array of string;
     FTemplate: TGocciaFunctionTemplate;
@@ -245,6 +264,19 @@ type
     procedure ResumeBindings(
       const ASuspended: TGocciaCompilerSuspendedBindings);
     function GetWithBindingName(const AIndex: Integer): string;
+    { The with bindings a reference to AName compiled in this scope probes
+      before its static binding, nearest first: the `with` objects and the
+      hidden variable objects (DeclareEvalVarObjects) between the reference
+      and the binding the name resolves to, or all of them when it resolves
+      to none (ES2026 §9.1.2.1 GetIdentifierReference). A `with` object of
+      the binding's own function is between when the binding is not declared
+      inside its statement. A hidden variable object of that function is
+      between only for a binding outside the variable environment it stands
+      for: a parameter of a parameter list with expressions, for the body's
+      object, or a binding listed before it in an eval site record that the
+      scope was rebuilt from. The body's object is not in effect while the
+      parameter list compiles. }
+    function NameProbes(const AName: string): TArray<string>;
     function GetWithBindingDepth(const AIndex: Integer): Integer;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
     property PrivateClassReg: Integer read FPrivateClassReg
@@ -281,10 +313,41 @@ type
     property EvalVarObjectSlot: Integer read FEvalVarObjectSlot;
     property ParameterEvalVarObjectSlot: Integer
       read FParameterEvalVarObjectSlot;
+    // The names of those hidden locals, or ''. Each local holds its hidden
+    // variable object once an eval needs it, and is pushed as a with binding:
+    // references such a var can shadow probe it as they probe a `with`
+    // object, the parameters' after the body's.
+    property EvalVarObjectName: string read FEvalVarObjectName;
+    property ParameterEvalVarObjectName: string
+      read FParameterEvalVarObjectName;
+    // Whether local AIndex is outside the variable environment a sloppy
+    // direct eval in the function body declares its vars in, so that such a
+    // var shadows it (TGocciaCompilerLocal.IsOutsideVarEnvironment).
+    function LocalOutsideVarEnvironment(const AIndex: Integer): Boolean;
+    procedure MarkOutsideVarEnvironment(const AIndex: Integer);
+    // Marks the depth-0 local at ASlot as the arguments object's
+    // (TGocciaCompilerLocal.IsArgumentsObject).
+    procedure MarkArgumentsObjectSlot(const ASlot: UInt16);
+    // Marks local AIndex, rebuilt from an eval site record, as a binding of
+    // the caller function (IsCallerFunctionBinding), a var of its variable
+    // environment when AIsVar.
+    procedure MarkCallerFunctionBinding(const AIndex: Integer;
+      const AIsVar, AIsCatchParameter: Boolean);
+    // The number of `with` objects among the with bindings, not counting the
+    // hidden variable objects.
+    function WithObjectCount: Integer;
     // True while the parameter list is compiled, where a direct eval's vars
     // go to the parameters' environment.
     property CompilingParameters: Boolean read FCompilingParameters
       write FCompilingParameters;
+    { The top level of non-strict direct eval code, whose variable
+      environment is its caller's (ES2026 §19.2.1.1 PerformEval step 16):
+      EvalCodeVarEnvironment says which, devGlobal or devFunction, and a
+      direct eval in this code declares its vars there too. }
+    property IsSloppyEvalCode: Boolean read FIsSloppyEvalCode
+      write FIsSloppyEvalCode;
+    property EvalCodeVarEnvironment: TGocciaDirectEvalVarEnvironment
+      read FEvalCodeVarEnvironment write FEvalCodeVarEnvironment;
     // ES2026 §10.2.11 step 28: the parameter list has no expressions, so the
     // parameters are bindings of the function's variable environment, which a
     // sloppy direct eval in the body declares its vars in.
@@ -293,12 +356,10 @@ type
   end;
 
 function NextClassPrivatePrefix: string;
+// Keeps the hidden variable object names DeclareEvalVarObjects makes from
+// now on different from AName, one an eval site record already names.
+procedure ReserveEvalVarObjectName(const AName: string);
 
-const
-  // Names of the hidden locals DeclareEvalVarObjects declares. No source text
-  // can spell them, so name resolution never finds them.
-  EVAL_VAR_OBJECT_LOCAL = '`#eval-var-object`';
-  PARAMETER_EVAL_VAR_OBJECT_LOCAL = '`#eval-parameter-var-object`';
 
 implementation
 
@@ -408,6 +469,9 @@ begin
   FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := False;
   FLocals[FLocalCount].IsCatchParameter := False;
+  FLocals[FLocalCount].IsOutsideVarEnvironment := False;
+  FLocals[FLocalCount].IsCallerFunctionBinding := False;
+  FLocals[FLocalCount].IsArgumentsObject := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
@@ -465,6 +529,9 @@ begin
   FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := True;
   FLocals[FLocalCount].IsCatchParameter := False;
+  FLocals[FLocalCount].IsOutsideVarEnvironment := False;
+  FLocals[FLocalCount].IsCallerFunctionBinding := False;
+  FLocals[FLocalCount].IsArgumentsObject := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
@@ -818,16 +885,94 @@ begin
   FDirectEvalSeen := True;
 end;
 
+threadvar
+  GEvalVarObjectCounter: Integer;
+
+procedure ReserveEvalVarObjectName(const AName: string);
+var
+  Suffix: Integer;
+begin
+  if TryStrToInt(Copy(AName, LastDelimiter(':', AName) + 1, MaxInt),
+     Suffix) and (Suffix >= GEvalVarObjectCounter) then
+    GEvalVarObjectCounter := Suffix + 1;
+end;
+
 procedure TGocciaCompilerScope.DeclareEvalVarObjects(
   const AParameterListIsSimple: Boolean);
+var
+  Suffix: string;
 begin
   if not (deuSloppyDirectEval in FDirectEvalUsage) then
     Exit;
-  if FEvalVarObjectSlot < 0 then
-    FEvalVarObjectSlot := DeclareLocal(EVAL_VAR_OBJECT_LOCAL, False);
-  if (not AParameterListIsSimple) and (FParameterEvalVarObjectSlot < 0) then
-    FParameterEvalVarObjectSlot := DeclareLocal(
-      PARAMETER_EVAL_VAR_OBJECT_LOCAL, False);
+  if FEvalVarObjectSlot >= 0 then
+    Exit;
+  Suffix := IntToStr(GEvalVarObjectCounter);
+  Inc(GEvalVarObjectCounter);
+  // The parameters' environment encloses the body's, so its object is
+  // declared and probed first, and the body's is the nearer with binding.
+  if not AParameterListIsSimple then
+  begin
+    FParameterEvalVarObjectName := PARAMETER_EVAL_VAR_OBJECT_LOCAL + Suffix;
+    FParameterEvalVarObjectSlot := DeclareLocal(FParameterEvalVarObjectName,
+      False);
+    PushWithBinding(FParameterEvalVarObjectName);
+  end;
+  FEvalVarObjectName := EVAL_VAR_OBJECT_LOCAL + Suffix;
+  FEvalVarObjectSlot := DeclareLocal(FEvalVarObjectName, False);
+  PushWithBinding(FEvalVarObjectName);
+end;
+
+// With parameter expressions, the parameters and the arguments object are
+// bound in an environment outside the body's variable environment (ES2026
+// §10.2.11 steps 20, 22.f and 30). The arguments object's local is declared
+// as a var, so it is told apart by its flag; a body var named like a
+// parameter is a var of the body's environment.
+function TGocciaCompilerScope.LocalOutsideVarEnvironment(
+  const AIndex: Integer): Boolean;
+begin
+  Result := FLocals[AIndex].IsOutsideVarEnvironment or
+    ((FParameterEvalVarObjectName <> '') and
+     (FLocals[AIndex].Depth = 0) and
+     (FLocals[AIndex].IsArgumentsObject or
+      (not FLocals[AIndex].IsVar and
+       ((FLocals[AIndex].Name = 'arguments') or
+        HasParameterName(FLocals[AIndex].Name)))));
+end;
+
+procedure TGocciaCompilerScope.MarkArgumentsObjectSlot(const ASlot: UInt16);
+var
+  I: Integer;
+begin
+  for I := FLocalCount - 1 downto 0 do
+    if (FLocals[I].Depth = 0) and (FLocals[I].Slot = ASlot) then
+    begin
+      FLocals[I].IsArgumentsObject := True;
+      Exit;
+    end;
+end;
+
+procedure TGocciaCompilerScope.MarkOutsideVarEnvironment(
+  const AIndex: Integer);
+begin
+  FLocals[AIndex].IsOutsideVarEnvironment := True;
+end;
+
+procedure TGocciaCompilerScope.MarkCallerFunctionBinding(
+  const AIndex: Integer; const AIsVar, AIsCatchParameter: Boolean);
+begin
+  FLocals[AIndex].IsCallerFunctionBinding := True;
+  FLocals[AIndex].IsVar := AIsVar;
+  FLocals[AIndex].IsCatchParameter := AIsCatchParameter;
+end;
+
+function TGocciaCompilerScope.WithObjectCount: Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to FWithBindingCount - 1 do
+    if not IsEvalVarObjectName(FWithBindingNames[I]) then
+      Inc(Result);
 end;
 
 // True where a let binding or a parameter of this function may hold its
@@ -837,14 +982,15 @@ end;
 // - A closure created later in an enclosing loop. It is compiled after the
 //   read, so the read cannot see IsCaptured, yet on the next iteration the
 //   read runs after the closure has written the binding's cell.
-// - Direct eval. Code it creates keeps writing the caller's registers after
-//   the eval call has returned, from inside calls the compiler cannot see.
-//   This covers the function that contains the eval call; a host that offers
-//   direct eval at all switches the direct read off for every function (see
-//   DirectEvalAvailable in TGocciaCompilerOptimizationOptions).
+// - Direct eval. Code it creates is a closure of the calling frame and writes
+//   the caller's bindings through their cells, also after the eval call has
+//   returned (ADR 0134). The parser marks the function that contains the call
+//   before any of it is compiled, so the whole function keeps the copy; a
+//   function without one is unaffected.
 function TGocciaCompilerScope.MutableLocalsMayLeaveRegisters: Boolean;
 begin
-  Result := FLoopMayCreateClosure or FDirectEvalSeen;
+  Result := FLoopMayCreateClosure or FDirectEvalSeen or
+    (deuDirectEval in FDirectEvalUsage);
 end;
 
 procedure TGocciaCompilerScope.MarkNonStrictImmutable(const AIndex: Integer);
@@ -1144,6 +1290,68 @@ function TGocciaCompilerScope.GetWithBindingName(
   const AIndex: Integer): string;
 begin
   Result := FWithBindingNames[AIndex];
+end;
+
+function TGocciaCompilerScope.NameProbes(
+  const AName: string): TArray<string>;
+var
+  Scope: TGocciaCompilerScope;
+  LocalIdx, I, Count: Integer;
+  Found: Boolean;
+  Local: PGocciaCompilerLocal;
+  EntryName: string;
+  EntryDepth: Integer;
+
+  procedure Add(const AHiddenName: string);
+  begin
+    if Count >= Length(Result) then
+      SetLength(Result, Count * 2 + 4);
+    Result[Count] := AHiddenName;
+    Inc(Count);
+  end;
+
+begin
+  Result := nil;
+  Count := 0;
+  if (FWithBindingCount = 0) or (AName = 'this') or
+     (Pos('#with:', AName) = 1) or IsEvalVarObjectName(AName) then
+    Exit;
+  Scope := Self;
+  while Assigned(Scope) do
+  begin
+    LocalIdx := Scope.ResolveLocal(AName);
+    Found := LocalIdx >= 0;
+    if Found then
+      Local := @Scope.FLocals[LocalIdx]
+    else
+      Local := nil;
+    // A scope's own with bindings follow the ones it copied from its parent,
+    // whose depth is -1; those are visited as the parent's own.
+    for I := Scope.FWithBindingCount - 1 downto 0 do
+    begin
+      EntryDepth := Scope.FWithBindingDepths[I];
+      if EntryDepth < 0 then
+        Break;
+      EntryName := Scope.FWithBindingNames[I];
+      if IsEvalVarObjectName(EntryName) then
+      begin
+        if IsBodyEvalVarObjectName(EntryName) and Scope.FCompilingParameters
+        then
+          Continue;
+        if Found and not (Local^.Depth < EntryDepth) and
+           not (IsBodyEvalVarObjectName(EntryName) and
+                Scope.LocalOutsideVarEnvironment(LocalIdx)) then
+          Continue;
+      end
+      else if Found and (Local^.Depth > EntryDepth) then
+        Continue;
+      Add(EntryName);
+    end;
+    if Found then
+      Break;
+    Scope := Scope.FParent;
+  end;
+  SetLength(Result, Count);
 end;
 
 function TGocciaCompilerScope.GetWithBindingDepth(

@@ -2228,7 +2228,7 @@ await section("Test262 Runner: a private brand check in an eval finds the class'
 // - inParameters: during the parameter list the VariableEnvironment is the
 //   function environment outside the parameters' environment, and the body's
 //   environment is inside both (sec-functiondeclarationinstantiation, §10.2.11
-//   steps 20 and 28), so `var p` from the default is visible in the body: 4 + 4.
+//   steps 20 and 30), so `var p` from the default is visible in the body: 4 + 4.
 // Goccia.Compiler.Test checks which of these reads the compiler may fold.
 await section("Test262 Runner: an eval call site falls back to an ordinary call and keeps shadowable reads...", async () => {
   expectEvalHostProbe("eval call site", [
@@ -2407,6 +2407,157 @@ await section("Test262 Runner: a direct eval nested in a field initializer's eva
     "print(out(() => { class C { x = eval(\"() => eval('arguments')\"); } return new C().x(); }));",
     "print(out(() => { class C { x = eval(\"eval('1 + 1')\"); } return new C().x; }));",
   ], ["SyntaxError", "SyntaxError", "2"]);
+});
+
+// ADR 0134 Phase 3-sloppy: a direct eval at a non-strict call site compiles
+// as a closure of its call site too, and the vars it declares live in the
+// calling function's hidden variable object, which every reference such a var
+// can shadow probes first. Expected values follow ECMA-262 2026 (tc39-mcp
+// 0.6.3, es2026 snapshot 0248456c758431e4bb8e5d26333ff1865123c9cd); Node.js
+// 24 was run only as a cross-check and agrees with every value.
+//
+// With parameter expressions the parameters live in an environment of their
+// own and the body's vars in a new one inside it
+// (FunctionDeclarationInstantiation, sec-functiondeclarationinstantiation,
+// §10.2.11 steps 20 and 30). A sloppy eval in the body declares its var in the
+// body's VariableEnvironment (PerformEval, sec-performeval, §19.2.1.1 step 16;
+// EvalDeclarationInstantiation, sec-evaldeclarationinstantiation, §19.2.1.3),
+// where it shadows the parameter of the same name for the body (2) but not for
+// a closure created in the parameter list (1); `var arguments` likewise
+// shadows the arguments object (5).
+await section("Test262 Runner: a sloppy eval var in a body with parameter expressions shadows the parameter...", async () => {
+  expectEvalHostProbe("parameter expressions", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function withDefaults(X, y = 0) { eval('var X = 2'); return X; }",
+    "function closureInParams(X, f = () => X) { eval('var X = 2'); return [X, f(), eval('X')].join('/'); }",
+    "function argumentsShadow(a, b = 0) { eval('var arguments = 5'); return arguments; }",
+    "print([out(() => withDefaults(1)), out(() => closureInParams(1)), out(() => argumentsShadow(1))].join());",
+  ], ["2,2/1/2,5"]);
+});
+
+// The arguments object of a function with parameter expressions is bound with
+// the parameters (FunctionDeclarationInstantiation,
+// sec-functiondeclarationinstantiation, §10.2.11 step 22.f), outside the
+// body's VariableEnvironment (step 30). A sloppy eval's `var arguments` in the
+// body is a new binding of that environment (EvalDeclarationInstantiation,
+// sec-evaldeclarationinstantiation, §19.2.1.3 step 18), so the body and eval
+// code read 1 while a closure created in the parameter list still reads the
+// arguments object: object,0,1,1 and object,x,1. An arrow function has no
+// arguments object (step 16), so an eval in its parameter list declares
+// `var arguments` with no binding in between (§19.2.1.3 step 3.d), and the
+// body and a parameter closure read it: param,param; a body `var arguments`
+// is the body's own (step 30): local,param. No global is created
+// (test262 language/eval-code/direct/arrow-fn-*-declare-arguments-assign*).
+await section("Test262 Runner: a sloppy eval's var arguments leaves the parameter list's arguments object alone...", async () => {
+  expectEvalHostProbe("eval var arguments with parameter expressions", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function f(a = () => arguments) { eval('var arguments = 1'); return [typeof a(), a().length, arguments, eval('arguments')].join(); }",
+    "function f2(a = () => arguments, b) { eval('var arguments = 1'); return [typeof a(), a()[1], arguments].join(); }",
+    "print([out(() => f()), out(() => f2(undefined, 'x'))].join(' '));",
+    "const a = (p = eval(\"var arguments = 'param'\"), q = () => arguments) => [arguments, q()].join();",
+    "const a2 = (p = eval(\"var arguments = 'param'\"), q = () => arguments) => { var arguments = 'local'; return [arguments, q()].join(); };",
+    "print([out(a), out(a2), typeof globalThis.arguments].join(' '));",
+  ], ["object,0,1,1 object,x,1", "param,param local,param undefined"]);
+});
+
+// A generator or async function keeps its VariableEnvironment across `yield`
+// and `await` (GeneratorYield, sec-generatoryield, §27.5.3.6; Await, await,
+// §27.7.5.3), so a var an eval declared before the suspension is the binding
+// an eval or an arrow reads after it: 1, 2, 2 and 11. A closure created before
+// the eval resolves the name when it runs (GetIdentifierReference,
+// sec-getidentifierreference, §9.1.2.1): ReferenceError before the eval, 7
+// after it.
+await section("Test262 Runner: a sloppy eval var lives on across yield and await and reaches older closures...", async () => {
+  expectEvalHostProbe("sloppy eval across suspensions", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function* gen() { yield eval('var g1 = 1; g1'); yield eval('g1 += 1; g1'); yield (() => g1)(); }",
+    "async function af() { eval('var a1 = 1'); await null; eval('a1 += 10'); await null; return (() => a1)(); }",
+    "function before() { const f = () => late; const r1 = out(f); eval('var late = 7'); return r1 + ':' + f(); }",
+    "print([...gen()].join());",
+    "print(before());",
+    "af().then((v) => print('async ' + v));",
+  ], ["1,2,2", "ReferenceError:7", "async 11"]);
+});
+
+// A call through a binding of a declarative environment, which the hidden
+// variable object stands for, gets an undefined this value (EvaluateCall,
+// sec-evaluatecall, §13.3.6.2, takes the environment's WithBaseObject,
+// sec-declarative-environment-records-withbaseobject, §9.1.1.1.11), so a
+// strict function an eval declared sees undefined. A block-level function in
+// eval code sets the binding of the eval's VariableEnvironment, not a `with`
+// object's property of the name (§19.2.1.3, the web-compat step of B.3.2):
+// eval, with. An inner function's eval var shadows the outer function's var
+// only inside the inner function: inner, outer.
+await section("Test262 Runner: sloppy eval functions and vars bind in the caller's variable environment...", async () => {
+  expectEvalHostProbe("sloppy eval bindings", [
+    "function strictThis() { eval('function g() { \"use strict\"; return this; }'); return typeof g(); }",
+    "function withBlockFn() { function g() { return 'outer'; } var o = { g() { return 'with'; } }; with (o) { eval('{ function g() { return \"eval\"; } }'); } return g() + ',' + o.g(); }",
+    "function nestedSloppy() { var v = 'outer'; return (function () { eval('var v = \"inner\"'); return (function () { return eval('v'); })(); })() + ',' + v; }",
+    "print([strictThis(), withBlockFn(), nestedSloppy()].join(' '));",
+  ], ["undefined eval,with inner,outer"]);
+});
+
+// EvalDeclarationInstantiation (sec-evaldeclarationinstantiation, §19.2.1.3)
+// in a function. A for-in, for-of or destructuring var binds in the caller's
+// VariableEnvironment, not the global object: a,undefined and 4,5,undefined.
+// A var the caller has is that binding (steps 17-18): the body var a of a
+// function with parameter expressions starts with the parameter's value
+// (sec-functiondeclarationinstantiation, §10.2.11 step 30.e.i.4), 1, and an
+// eval's function declaration, even one in nested eval code, sets it
+// (step 17): function. A binding between the eval and the VariableEnvironment
+// makes a var of its name a SyntaxError (step 3.d), the outer function's
+// `let z` for nested eval code included, but a catch clause's parameter does
+// not (its web-compat branch): function. It leaves a block-level function
+// without a var binding (step web-compat-bindingexists), so `let g` stays 1
+// and `var f` stays undefined, while a catch parameter does not: function.
+// `var x = 2` in a catch block assigns the catch parameter
+// (sec-variable-statement-runtime-semantics-evaluation, §14.3.2.1, through
+// ResolveBinding), so the function's x stays 1 on both sides: 1,1, 2,undefined
+// and, from nested eval code, 1. A var the eval code deleted is unresolvable
+// again, so assigning it creates a global (PutValue, sec-putvalue, §6.2.5.6):
+// number,3. Inside `with`, the object's property of the name is the binding a
+// for-in var assigns (ForIn/OfBodyEvaluation,
+// sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset,
+// §14.7.5.7): a,undefined.
+await section("Test262 Runner: sloppy eval declarations reuse, skip or conflict with the caller's bindings...", async () => {
+  expectEvalHostProbe("sloppy eval declaration instantiation", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function forIn() { eval('for (var k in {a:1});'); return k + ',' + typeof globalThis.k; }",
+    "function patterns() { eval('var {d} = {d: 4}; for (var e of [5]);'); return d + ',' + e + ',' + typeof globalThis.d; }",
+    "function paramVar(a, b = 0) { var a; eval('var a'); return a; }",
+    "function nestedLet() { let z; eval(\"eval('var z')\"); return 'none'; }",
+    "function nestedFn() { var y = 1; eval(\"eval('function y(){}')\"); return typeof y; }",
+    "function letBlockFn() { let g = 1; eval('{ function g(){} }'); return g; }",
+    "function catchFn() { var y; try { throw 0; } catch (y) { eval('function y(){}'); } return typeof y; }",
+    "print([out(forIn), out(patterns), out(() => paramVar(1)), out(nestedLet), out(nestedFn), out(letBlockFn), out(catchFn)].join(' '));",
+    "function catchVar() { var x = 1; try { throw 0; } catch (x) { eval('var x = 2'); } return x + ',' + eval('x'); }",
+    "function catchOnly() { try { throw 0; } catch (x) { eval('var x = 2'); var r = x; } return r + ',' + x; }",
+    "function catchBlockFn() { var y = 1; try { throw 0; } catch (y) { eval('{ function y(){} }'); } return typeof y; }",
+    "function deleted() { eval('var q = 1; delete q; q = 3'); return typeof q + ',' + globalThis.q; }",
+    "function withForIn() { var o = {k: 0}; with (o) { eval('for (var k in {a:1});'); } return o.k + ',' + typeof k; }",
+    "function nestedCatch() { var z = 1; try { throw 0; } catch (z) { eval(\"eval('var z = 5')\"); } return z; }",
+    "function shadowedBlockFn() { var f; { let f = 1; eval('{ function f(){} }'); } return typeof f; }",
+    "print([out(catchVar), out(catchOnly), out(catchBlockFn), out(deleted), out(withForIn), out(nestedCatch), out(shadowedBlockFn)].join(' '));",
+  ], [
+    "a,undefined 4,5,undefined 1 SyntaxError function 1 function",
+    "1,1 2,undefined function number,3 a,undefined 1 undefined",
+  ], ["bytecode"]);
+});
+
+// Block Static Semantics: Early Errors (sec-block-static-semantics-early-errors,
+// §14.2.1): a block may not declare a name twice, except that non-strict code
+// may declare a function twice (B.3.2). Eval code gets its early errors before
+// it runs (PerformEval step 11). The interpreter rejects the non-strict
+// duplicate functions, so this runs in bytecode mode.
+await section("Test262 Runner: eval code's blocks reject redeclared names...", async () => {
+  expectEvalHostProbe("eval block redeclaration", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function strictDup() { return out(() => eval('\"use strict\"; { function f() {} function f() {} }')); }",
+    "function letDup() { return out(() => eval('{ let x = 42; function x() {} }')); }",
+    "function constDup() { return out(() => eval('{ const x = 42; function x() {} }')); }",
+    "function sloppyDup() { return out(() => eval('{ function f() { return 1; } function f() { return 2; } } f()')); }",
+    "print([strictDup(), letDup(), constDup(), sloppyDup()].join());",
+  ], ["SyntaxError,SyntaxError,SyntaxError,2"], ["bytecode"]);
 });
 
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {

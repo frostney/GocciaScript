@@ -100,11 +100,6 @@ type
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
     function ContainsVarEnvironmentBinding(const AName: string): Boolean; virtual;
-    // Lets a variable environment answer a deletable var definition, the
-    // kind eval code makes, with a binding it already reaches some other way.
-    function TryDefineEvalVarInPlace(const AName: string;
-      const AValue: TGocciaValue; const AHasInitializer: Boolean): Boolean;
-      virtual;
     // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3: whether a var
     // named AName that a sloppy direct eval declares is a SyntaxError because
     // of this scope's own binding. AIsVariableEnvironment: this scope is the
@@ -905,11 +900,6 @@ begin
   TargetScope := FindFunctionOrModuleScope;
   EffectiveValue := AValue;
 
-  // Only eval code defines deletable vars (ES2026 §19.2.1.3 step 17).
-  if ACanDelete and
-     TargetScope.TryDefineEvalVarInPlace(AName, AValue, AHasInitializer) then
-    Exit;
-
   // §16.1.7: var/function declarations may shadow built-in globals in
   // script source.  Only the global scope carries built-in bindings, so
   // skip the lookup for function/module-scoped vars (the common case).
@@ -968,12 +958,6 @@ begin
     TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
   end;
 
-end;
-
-function TGocciaScope.TryDefineEvalVarInPlace(const AName: string;
-  const AValue: TGocciaValue; const AHasInitializer: Boolean): Boolean;
-begin
-  Result := False;
 end;
 
 function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
@@ -1680,11 +1664,25 @@ begin
   Result := FLexicalBindings.TryGetValue(AName, Binding) and Binding.BuiltIn;
 end;
 
+// HasBinding along the chain. In the global scope a var is a property of
+// the global object, as a built-in the global object backs is: once the
+// property is deleted, the global Environment Record has no binding of the
+// name (ES2026 §9.1.1.4.1 HasBinding, through the Object Environment
+// Record's HasBinding, §9.1.1.2.1).
 function TGocciaScope.Contains(const AName: string): Boolean;
+var
+  Binding: TLexicalBinding;
+  GlobalObjectBacked: Boolean;
 begin
-  Result := ContainsOwnLexicalBinding(AName) or
-    ContainsOwnVarBinding(AName) or
-    ((FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+  GlobalObjectBacked := (FScopeKind = skGlobal) and
+    (FThisValue is TGocciaObjectValue);
+  if FLexicalBindings.TryGetValue(AName, Binding) and
+     not IsGlobalBuiltInObjectBinding(Binding) then
+    Exit(True);
+  Result := (Assigned(FVarBindings) and FVarBindings.ContainsKey(AName)) or
+    ((not GlobalObjectBacked) and Assigned(FGlobalVarNames) and
+     FGlobalVarNames.ContainsKey(AName)) or
+    (GlobalObjectBacked and
      TGocciaObjectValue(FThisValue).HasProperty(AName)) or
     (Assigned(FParent) and FParent.Contains(AName));
 end;

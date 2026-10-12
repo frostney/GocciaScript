@@ -232,7 +232,19 @@ const
   //               runs inline at the call (a computed key), or none, so that
   //               eval code compiled at the call resolves private names as
   //               the caller's code does (ADR 0134 Phase 3).
-  GOCCIA_FORMAT_VERSION = 92;
+  //   v92 -> v93: direct eval no longer runs against run-time dynamic var
+  //               scopes. Every reference a sloppy direct eval's var can
+  //               shadow probes the calling function's hidden variable object
+  //               as it probes a `with` object, and an eval site record lists
+  //               those objects among its with bindings and marks a caller
+  //               binding outside the variable environment and the bindings
+  //               of the function whose variable environment the eval
+  //               declares in; code compiled for
+  //               v92 has no such probes. OP_RESOLVE_UPVALUE_REF (221),
+  //               OP_SET_UPVALUE_REF (222) and OP_SET_UPVALUE_DYNAMIC (224),
+  //               which read and wrote through those scopes, are gone
+  //               (ADR 0134 Phase 3).
+  GOCCIA_FORMAT_VERSION = 93;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -497,10 +509,7 @@ type
     OP_PREDECLARE_GLOBAL_LET_LONG = 218,
     OP_PREDECLARE_GLOBAL_CONST_LONG = 219,
     OP_LOAD_CHAR     = 220,
-    OP_RESOLVE_UPVALUE_REF = 221,
-    OP_SET_UPVALUE_REF = 222,
     OP_SET_GLOBAL_STATIC = 223,
-    OP_SET_UPVALUE_DYNAMIC = 224,
     // Prefix for the following instruction. A/B/C contain the high byte of
     // the following instruction's A/B/C operands; the base word keeps the
     // ordinary compact encoding.
@@ -632,7 +641,7 @@ begin
     OP_GET_WITH_BINDING_STRICT, OP_SET_WITH_BINDING,
     OP_SET_WITH_BINDING_LOOSE, OP_SUPER_SET, OP_SUPER_BASE,
     OP_SUPER_SET_BASE, OP_DEFINE_STATIC_PROP_DYNAMIC,
-    OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_ADD_NUM_IMM, OP_SET_UPVALUE_REF,
+    OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_ADD_NUM_IMM,
     OP_JUMP_IF_NOT_LT,
     OP_DYNAMIC_IMPORT_OPTIONS, OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
     OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_TO_NUMBER, OP_TO_STRING,

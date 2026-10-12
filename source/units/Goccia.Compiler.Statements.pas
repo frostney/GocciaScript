@@ -752,6 +752,17 @@ begin
     Result := OP_DEFINE_GLOBAL_LET_LONG;
 end;
 
+// Non-strict eval code in a function: a function declaration, a block-level
+// one included (B.3.2.3 step b.vi), sets the binding of the caller's
+// variable environment itself (genvRec.SetMutableBinding), not one a block or
+// a `with` around the declaration or the eval call has.
+procedure EmitDirectEvalVarEnvironmentAssignment(
+  const ACtx: TGocciaCompilationContext; const AName: string;
+  const AValueReg: UInt16);
+begin
+  EmitDirectEvalVarEnvironmentStore(ACtx, AName, AValueReg);
+end;
+
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
   const ASlot: UInt16; const AName: string; const AIsConst: Boolean;
   const AIsVar: Boolean = False; const AHasInitializer: Boolean = True;
@@ -760,6 +771,17 @@ var
   NameIdx: UInt16;
   OpCode: TGocciaOpCode;
 begin
+  // ES2026 §19.2.1.3: non-strict eval code in a function has had its vars
+  // and functions declared in the caller's variable environment; the
+  // declaration only assigns the binding its name resolves to (§14.3.2.1).
+  if ACtx.DirectEvalVarsByName and AIsVar then
+  begin
+    if AIsFunctionDeclaration then
+      EmitDirectEvalVarEnvironmentAssignment(ACtx, AName, ASlot)
+    else if AHasInitializer then
+      EmitWithAssignmentOrFallback(ACtx, AName, ASlot);
+    Exit;
+  end;
   NameIdx := ACtx.Template.AddConstantString(AName);
   OpCode := GlobalDefineOpcode(AIsConst, AIsVar, AHasInitializer,
     AIsFunctionDeclaration);
@@ -861,11 +883,13 @@ begin
   end;
 end;
 
-function VarInitializerUsesWithBinding(
-  const ACtx: TGocciaCompilationContext): Boolean;
+// A var initializer assigns the binding its name resolves to where the
+// declaration is (ES2026 §14.3.2.1), which can be a `with` object's property.
+function VarInitializerUsesWithBinding(const ACtx: TGocciaCompilationContext;
+  const AName: string): Boolean;
 begin
   Result := (ACtx.Scope.WithBindingCount > 0) and
-    (ACtx.Scope.GetWithBindingDepth(ACtx.Scope.WithBindingCount - 1) >= 0);
+    (Length(ACtx.Scope.NameProbes(AName)) > 0);
 end;
 
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
@@ -885,6 +909,7 @@ var
   NameIdx: UInt16;
   ProbeMissJump, TargetMissJump, TargetEndJump: Integer;
   ProbeEndJumps: array of Integer;
+  Probes: TArray<string>;
   ProbeEndCount: Integer;
 begin
   PrepareLexicalDeclarationLocals(ACtx, AStmt);
@@ -932,7 +957,7 @@ begin
       IsVarRedeclaration := LocalIdx >= 0;
       Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
       if Info.HasInitializer and Assigned(Info.Initializer) and
-         not VarInitializerUsesWithBinding(ACtx) and
+         not VarInitializerUsesWithBinding(ACtx, Info.Name) and
          VarNameResolvesToBlockBinding(ACtx.Scope, Info.Name) then
       begin
         CompileBlockBindingVarInitializer(ACtx, Info, Slot);
@@ -966,7 +991,7 @@ begin
     HasRealInitializer := Assigned(Info.Initializer) and
                           not IsUndefinedInitializer(Info.Initializer);
     UseWithVarInitializer := AStmt.IsVar and HasInitializer and
-      VarInitializerUsesWithBinding(ACtx);
+      VarInitializerUsesWithBinding(ACtx, Info.Name);
 
     AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
 
@@ -1079,11 +1104,12 @@ begin
         NameIdx := ACtx.Template.AddConstantString(Info.Name);
         EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg, NameIdx));
         ProbeEndCount := 0;
-        SetLength(ProbeEndJumps, ACtx.Scope.WithBindingCount);
-        for LocalIdx := ACtx.Scope.WithBindingCount - 1 downto 0 do
+        Probes := ACtx.Scope.NameProbes(Info.Name);
+        SetLength(ProbeEndJumps, Length(Probes));
+        for LocalIdx := 0 to High(Probes) do
         begin
           EmitLoadHiddenWithObject(ACtx,
-            ACtx.Scope.GetWithBindingName(LocalIdx), ProbeObjReg);
+            Probes[LocalIdx], ProbeObjReg);
           EmitInstruction(ACtx, EncodeABC(OP_HAS_WITH_BINDING, CondReg,
             ProbeObjReg, KeyReg));
           ProbeMissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE,
@@ -1330,7 +1356,9 @@ begin
     Exit;
 
   Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-  if ACtx.Scope.GetLocal(VarLocalIdx).IsGlobalBacked then
+  if ACtx.DirectEvalVarsByName then
+    EmitDirectEvalVarEnvironmentAssignment(ACtx, AStmt.Name, Slot)
+  else if ACtx.Scope.GetLocal(VarLocalIdx).IsGlobalBacked then
     EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True)
   else if ACtx.Scope.GetLocal(VarLocalIdx).Slot <> Slot then
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot,

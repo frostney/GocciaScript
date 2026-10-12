@@ -137,23 +137,6 @@
       begin
         if Assigned(FCurrentClosure) then
         begin
-          // Only a dynamic var scope can redirect an upvalue read, and
-          // ResolveDynamicUpvalueScope answers nil without one. Checking here
-          // keeps the descriptor, a record holding a string, from being
-          // copied on every read.
-          if Assigned(FCurrentDynamicVarScope) then
-          begin
-            Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
-            ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
-              DecodeBx(Instruction), Desc.Name);
-            if Assigned(ResolvedDynamicVarScope) then
-            begin
-              FRegisters[A] := VMValueToRegisterFast(
-                ResolvedDynamicVarScope.GetValue(Desc.Name));
-              goto LDispatchNext;
-            end;
-          end;
-
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
@@ -182,26 +165,6 @@
         end;
       end;
 
-      OP_SET_UPVALUE_DYNAMIC:
-      begin
-        Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
-        ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
-          DecodeBx(Instruction), Desc.Name);
-        if Assigned(ResolvedDynamicVarScope) then
-          ResolvedDynamicVarScope.AssignBinding(Desc.Name,
-            RegisterToValue(FRegisters[A]))
-        else if Assigned(FCurrentClosure) then
-        begin
-          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          begin
-            if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
-            Upvalue.Cell.Value := FRegisters[A];
-          end;
-        end;
-      end;
-
       OP_CHECK_BINDING_INITIALIZED:
         if A = CHECK_BINDING_GLOBAL then
         begin
@@ -218,43 +181,6 @@
              (Upvalue.Cell.Value.Kind = grkHole) then
             ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
         end;
-
-      OP_RESOLVE_UPVALUE_REF:
-      begin
-        Desc := Template.GetUpvalueDescriptor(B);
-        ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(B, Desc.Name);
-        if Assigned(ResolvedDynamicVarScope) then
-          SetRegister(A, TGocciaResolvedEnvironmentReferenceValue.Create(
-            ResolvedDynamicVarScope, C <> 0))
-        else
-          FRegisters[A] := RegisterUndefined;
-      end;
-
-      OP_SET_UPVALUE_REF:
-      begin
-        Desc := Template.GetUpvalueDescriptor(C);
-        if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is
-             TGocciaResolvedEnvironmentReferenceValue) then
-        begin
-          ResolvedEnvironmentReference :=
-            TGocciaResolvedEnvironmentReferenceValue(
-              FRegisters[B].ObjectValue);
-          ResolvedEnvironmentReference.Scope.SetOwnMutableBinding(Desc.Name,
-            RegisterToValue(FRegisters[A]),
-            ResolvedEnvironmentReference.Strict);
-        end
-        else if Assigned(FCurrentClosure) then
-        begin
-          Upvalue := FCurrentClosure.GetUpvalue(C);
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          begin
-            if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowUninitializedUpvalue(Template, C);
-            Upvalue.Cell.Value := FRegisters[A];
-          end;
-        end;
-      end;
 
       OP_SET_GLOBAL_STATIC:
       begin
@@ -2476,7 +2402,6 @@
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
         ChildClosure.GlobalScope := FGlobalScope;
-        ChildClosure.DynamicVarScope := FCurrentDynamicVarScope;
         // ES2026 §10.2.3 OrdinaryFunctionCreate: every function captures the
         // running PrivateEnvironment, whatever kind of function it is. Class
         // element definitions then move a method into its own class body.
@@ -2504,14 +2429,7 @@
             ChildClosure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
               GetLocalCell(Desc.Index)))
           else if Assigned(FCurrentClosure) then
-          begin
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
-            ChildClosure.SetDynamicVarUpvalue(I,
-              ((FCurrentDynamicVarScope <>
-                FCurrentClosure.DynamicVarScope) and
-               Assigned(FCurrentDynamicVarScope)) or
-              FCurrentClosure.IsDynamicVarUpvalue(Desc.Index));
-          end;
         end;
         BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
         // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property
@@ -3339,18 +3257,8 @@
 
       OP_GET_GLOBAL:
       begin
-        if Assigned(FCurrentDynamicVarScope) or not Assigned(FGlobalScope) then
-        begin
-          GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-          if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-            FRegisters[A] := VMValueToRegisterFast(
-              FCurrentDynamicVarScope.GetValue(GlobalName))
-          else if Assigned(FGlobalScope) and
-                  FGlobalScope.TryGetBindingValue(GlobalName, GlobalBindingValue) then
-            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
-          else
-            FRegisters[A] := RegisterUndefined;
-        end
+        if not Assigned(FGlobalScope) then
+          FRegisters[A] := RegisterUndefined
         else
         begin
           // Per-site inline cache keyed by the name-constant index.  It serves
@@ -3437,10 +3345,7 @@
       OP_SET_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FCurrentDynamicVarScope.AssignBinding(GlobalName,
-            RegisterToValue(FRegisters[A]))
-        else if Assigned(FGlobalScope) then
+        if Assigned(FGlobalScope) then
         begin
           if not FGlobalScope.TryAssignExistingBinding(GlobalName,
             RegisterToValue(FRegisters[A])) then
@@ -3464,10 +3369,7 @@
       OP_SET_GLOBAL_LOOSE:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FCurrentDynamicVarScope.AssignBinding(GlobalName,
-            RegisterToValue(FRegisters[A]), 0, 0, True)
-        else if Assigned(FGlobalScope) then
+        if Assigned(FGlobalScope) then
         begin
           GlobalBindingValue := RegisterToValue(FRegisters[A]);
           if FGlobalScope.ContainsOwnVarBinding(GlobalName) and
@@ -3497,7 +3399,7 @@
 
       OP_HAS_GLOBAL:
       begin
-        if not Assigned(FCurrentDynamicVarScope) and Assigned(FGlobalScope) then
+        if Assigned(FGlobalScope) then
         begin
           GlobalReadCache := Template.GlobalReadCacheSlot(
             DecodeBx(Instruction));
@@ -3524,17 +3426,13 @@
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
         FRegisters[A] := RegisterBoolean(
-          HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) or
           (Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName)));
       end;
 
       OP_DELETE_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FRegisters[A] := RegisterBoolean(
-            FCurrentDynamicVarScope.DeleteBinding(GlobalName))
-        else if Assigned(FGlobalScope) then
+        if Assigned(FGlobalScope) then
           FRegisters[A] := RegisterBoolean(FGlobalScope.DeleteBinding(GlobalName))
         else
           FRegisters[A] := RegisterBoolean(True);
