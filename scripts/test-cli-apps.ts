@@ -1484,6 +1484,105 @@ await section("Test262 Runner: bytecode eval is direct eval...", async () => {
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
 });
 
+// ADR 0134 Phase 2: eval code whose variable environment is the global one
+// (indirect eval, ShadowRealm.prototype.evaluate) is compiled in bytecode mode.
+// The expected output of each probe below is what Node.js 24.21 prints for the
+// same source run as a classic script (vm.runInThisContext, ShadowRealm under
+// --experimental-shadow-realm).
+const runEvalHostProbe = (mode: string, lines: string[]) =>
+  Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+    stdin: new TextEncoder().encode([...lines, ""].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+// ES2026 §19.2.1.1 PerformEval steps 17-18: an indirect eval's lexical
+// declarations live in a new declarative environment of their own, and a
+// strict eval's vars do too.
+await section("Test262 Runner: an indirect eval's let, const and class do not outlive the call...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var geval = eval;",
+      'print(geval("let kept = 1; kept"));',
+      'print(geval("typeof kept"));',
+      'print(geval("let kept = 2; kept"));',
+      'print(geval("const c = 3; class K {} typeof K + c"));',
+      "print(typeof K);",
+      `print(geval("'use strict'; var sv = 4; sv"));`,
+      "print(typeof sv);",
+    ]);
+    const expected = ["1", "undefined", "2", "function3", "undefined", "4", "undefined"].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} indirect eval lexical probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} indirect eval lexical declarations leaked: ${proc.stdout.toString()}`);
+  }
+});
+
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation steps 17-18 create an eval's
+// global vars and functions with CreateGlobalVarBinding /
+// CreateGlobalFunctionBinding(…, true), so they are configurable and delete
+// removes them; a script's own var is not deletable.
+await section("Test262 Runner: delete removes a global var an indirect eval created...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var geval = eval;",
+      'geval("var made = 5; function madeFn() {}");',
+      "print(made);",
+      'var d = Object.getOwnPropertyDescriptor(globalThis, "made");',
+      'print(d.configurable + " " + d.enumerable + " " + d.writable);',
+      "print(delete made);",
+      "print(typeof made);",
+      'print(Object.prototype.hasOwnProperty.call(globalThis, "made"));',
+      "print(delete madeFn);",
+      "print(typeof madeFn);",
+      'print(geval("var inEval = 7; delete inEval"));',
+      "print(typeof inEval);",
+      "var scriptVar = 6;",
+      "print(delete scriptVar);",
+      "print(typeof scriptVar);",
+    ]);
+    const expected = [
+      "5", "true true true", "true", "undefined", "false", "true", "undefined",
+      "true", "undefined", "false", "number",
+    ].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} eval var delete probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} eval-created global var was not deletable: ${proc.stdout.toString()}`);
+  }
+});
+
+// TC39 ShadowRealm §3.1.3 PerformShadowRealmEval: a parse or early error is a
+// caller-realm SyntaxError (step 2); an abrupt completion of the declaration
+// instantiation or the body, a SyntaxError a nested eval throws included, is
+// a caller-realm TypeError (step 15).
+await section("Test262 Runner: ShadowRealm evaluate maps early errors to SyntaxError and abrupt bodies to TypeError...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var r = new ShadowRealm();",
+      "function kind(f) {",
+      '  try { f(); return "none"; }',
+      '  catch (e) { return e.constructor === SyntaxError ? "SyntaxError" : e.constructor === TypeError ? "TypeError" : "other"; }',
+      "}",
+      'print(kind(() => r.evaluate("let a; let a;")));',
+      'print(kind(() => r.evaluate("let b; var b;")));',
+      `print(kind(() => r.evaluate("throw new RangeError('x')")));`,
+      'print(kind(() => r.evaluate("null.x")));',
+      `print(kind(() => r.evaluate("eval('let c; let c;')")));`,
+      'print(r.evaluate("var kept = 1; kept"));',
+      'print(r.evaluate("typeof kept"));',
+    ]);
+    const expected = [
+      "SyntaxError", "SyntaxError", "TypeError", "TypeError", "TypeError", "1", "number",
+    ].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} ShadowRealm evaluate error probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} ShadowRealm evaluate mapped an error wrongly: ${proc.stdout.toString()}`);
+  }
+});
+
 console.log("Test262 Runner: rejected eval source preserves primitive singletons...");
 for (const { label, args } of [
   {

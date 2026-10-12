@@ -17,9 +17,10 @@ procedure CheckTopLevelRedeclarations(const AProgram: TGocciaProgram;
   non-strict eval whose variable environment is the global environment
   AGlobalScope, with the name lists of CollectGlobalEvalDeclarationNames. A
   var-declared name that a global lexical declaration has is a SyntaxError; a
-  function or a var the global object cannot take (CanDeclareGlobalFunction,
-  CanDeclareGlobalVar) is a TypeError. The checks run before any binding is
-  created (step 14), so a failed eval leaves the global object as it was. }
+  function or a var the global object cannot take is a TypeError (the
+  CanDeclareGlobalFunction and CanDeclareGlobalVar checks of §9.1.1.4.15 and
+  §9.1.1.4.14). The checks run before any binding is created (step 14), so a
+  failed eval leaves the global object as it was. }
 procedure CheckGlobalEvalDeclarations(const AGlobalScope: TGocciaScope;
   const AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
 

@@ -111,6 +111,7 @@ type
     FIsArrow: Boolean;
     FNonStrictCode: Boolean;
     FDirectEvalSyntheticArgumentsSlot: Integer;
+    FGlobalBackedBindingsByName: Boolean;
     FWithBindingNames: array of string;
     FWithBindingDepths: array of Integer;
     FWithBindingCount: Integer;
@@ -230,6 +231,14 @@ type
     property IsArrow: Boolean read FIsArrow write FIsArrow;
     property NonStrictCode: Boolean read FNonStrictCode write FNonStrictCode;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
+    { The top level of a non-strict global eval: its var and function
+      bindings are deletable properties of the global object (ES2026
+      §19.2.1.3 steps 17-18), so a reference to one, in the eval or in a
+      function it creates, resolves by name at run time as any reference to
+      a global does, and is a ReferenceError once the binding is deleted.
+      ResolveLocal does not return such a local. }
+    property GlobalBackedBindingsByName: Boolean
+      read FGlobalBackedBindingsByName write FGlobalBackedBindingsByName;
     property WithBindingCount: Integer read FWithBindingCount;
     property LoopDepth: Integer read FLoopDepth;
     property LoopMayCreateClosure: Boolean read FLoopMayCreateClosure;
@@ -436,7 +445,11 @@ begin
 
   for I := Newest downto 0 do
     if (FLocals[I].Name = AName) and (FLocals[I].SuspendCount = 0) then
+    begin
+      if FGlobalBackedBindingsByName and FLocals[I].IsGlobalBacked then
+        Continue;
       Exit(I);
+    end;
   Result := -1;
 end;
 

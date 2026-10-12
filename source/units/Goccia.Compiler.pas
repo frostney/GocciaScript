@@ -1593,6 +1593,7 @@ begin
   FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   FCurrentScope.AttachTemplate(FCurrentTemplate);
   FCurrentScope.DeclareLocal('__receiver', False);
+  FCurrentScope.GlobalBackedBindingsByName := FGlobalEvalVarEnvironment;
 
   try
     DiscoverProgramNumberBindings(AProgram, FCurrentScope,
