@@ -867,7 +867,7 @@ end;
 { A class field initializer and a static block run as functions of their own
   (ES2026 §15.7.10 ClassFieldDefinitionEvaluation, §15.7.11
   ClassStaticBlockDefinitionEvaluation), so a direct eval in one is not in the
-  function that contains the class. Class code is strict by ES2026 §15.7.1,
+  function that contains the class. Class code is strict by ES2026 §11.2.2,
   so the compiler needs nothing recorded for them: their direct eval calls
   are never sloppy. }
 function TGocciaParser.ParseClassFieldInitializer: TGocciaExpression;

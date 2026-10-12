@@ -6892,8 +6892,10 @@ begin
   if not HasElementDecorators and (Length(AClassDef.FDecorators) = 0) then
     Exit;
 
-  // ES2026 §15.7.1: an element decorator is part of the ClassBody, which is
-  // strict-mode code, as the parser already treats it. CompileExpression
+  // ES2026 §11.2.2: every part of a class is strict mode code, and the
+  // decorators proposal (Stage 2.7) exempts only the DecoratorList at the top
+  // level of a class, so an element decorator is strict, as the parser
+  // already treats it. CompileExpression
   // compiles from the compiler-wide flag, so both it and this context's copy
   // are cleared, as for the heritage.
   DecoratorCtx := ACtx;

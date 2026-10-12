@@ -1957,11 +1957,27 @@ await section("Test262 Runner: a private brand check in an eval finds the class'
 });
 
 // OP_DIRECT_EVAL runs `eval(...)` when the callee is %eval% and otherwise
-// leaves the call to the OP_CALL after it, an ordinary call with its own
-// `this`, spread arguments and tail position (ES2026 §13.3.6.1). An eval var
-// shadows an enclosing const for reads in the eval's function and in the
-// functions nested in it, as in Node.js; Goccia.Compiler.Test checks which of
-// those reads the compiler may fold (#872, ADR 0134 Phase 1).
+// leaves the call to the OP_CALL after it (#872, ADR 0134 Phase 1). Expected
+// values follow ECMA-262 2026 (tc39-mcp snapshot 0248456c):
+// - Call (sec-function-calls-runtime-semantics-evaluation, §13.3.6.1): a callee
+//   that is not %eval% takes EvaluateCall (sec-evaluatecall, §13.3.6.2). Its
+//   this value is the declarative environment's WithBaseObject(), undefined,
+//   which OrdinaryCallBindThis (sec-ordinarycallbindthis, §10.2.1.2) turns into
+//   the global object for a non-strict callee, so `typeof this` is "object".
+//   The spread arguments are all passed, and a tail call returns the same
+//   value. `eval(...['40 + 2'])` is a direct eval: PerformEval gets the first
+//   element of the evaluated argument list, 42.
+// - Shadowed reads: a non-strict direct eval declares `var k` in the caller's
+//   VariableEnvironment (sec-performeval, §19.2.1.1; sec-evaldeclarationinstantiation,
+//   §19.2.1.3), the function's own environment, which
+//   GetIdentifierReference (sec-getidentifierreference, §9.1.2.1) reaches before
+//   the global `const k` from the function and every closure in it: 20 and 30.
+//   plain() reaches the global binding: 10.
+// - inParameters: during the parameter list the VariableEnvironment is the
+//   function environment outside the parameters' environment, and the body's
+//   environment is inside both (sec-functiondeclarationinstantiation, §10.2.11
+//   steps 20 and 28), so `var p` from the default is visible in the body: 4 + 4.
+// Goccia.Compiler.Test checks which of these reads the compiler may fold.
 await section("Test262 Runner: an eval call site falls back to an ordinary call and keeps shadowable reads...", async () => {
   expectEvalHostProbe("eval call site", [
     "function notEval() { var eval = function (a, b) { return [typeof this, a, b].join(); }; return eval(1, ...[2]); }",
@@ -1975,8 +1991,13 @@ await section("Test262 Runner: an eval call site falls back to an ordinary call 
     "function inParameters(a = eval('var p = 4; p')) { return a + p; }",
     "print([shadows(), shadowsNested(), plain(), inParameters()].join());",
   ], ["object,1,2 3 done 42", "20,30,10,8"]);
-  // An element decorator is class-body code, strict by ES2026 §15.7.1, so its
-  // eval's var stays in the eval.
+  // All parts of a class are strict mode code (sec-strict-mode-code, §11.2.2;
+  // the note of sec-class-definitions, §15.7). The decorators proposal
+  // (Stage 2.7) adds a DecoratorList to ClassElement and leaves only the
+  // DecoratorList at the top level of a class non-strict, so an element
+  // decorator is strict: its eval is a strict direct eval whose vars go to a
+  // new environment of its own (sec-performeval, §19.2.1.1), and `z` is not
+  // declared in decorated().
   expectEvalHostProbe("eval in an element decorator", [
     "function decorated() { var d = (v) => v; class C { @((() => { eval('var z = 1'); return d; })()) m() {} } return typeof z; }",
     "print(decorated());",
