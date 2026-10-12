@@ -237,7 +237,9 @@ const
   //               shadow probes the calling function's hidden variable object
   //               as it probes a `with` object, and an eval site record lists
   //               those objects among its with bindings and marks a caller
-  //               binding outside the variable environment; code compiled for
+  //               binding outside the variable environment and the bindings
+  //               of the function whose variable environment the eval
+  //               declares in; code compiled for
   //               v92 has no such probes. OP_RESOLVE_UPVALUE_REF (221),
   //               OP_SET_UPVALUE_REF (222) and OP_SET_UPVALUE_DYNAMIC (224),
   //               which read and wrote through those scopes, are gone

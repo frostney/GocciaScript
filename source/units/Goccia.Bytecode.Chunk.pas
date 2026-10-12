@@ -104,8 +104,14 @@ type
     // A parameter, or `arguments`, of a calling function whose parameter list
     // has expressions: outside the variable environment a sloppy eval in the
     // body declares its vars in, so such a var shadows it (ES2026 §10.2.11
-    // steps 20 and 28).
+    // steps 20 and 30).
     IsOutsideVarEnvironment: Boolean;
+    // A binding of the function whose variable environment a sloppy eval at
+    // the call declares its vars in, or of eval code running in it: one of
+    // its vars, which such a var is, or a binding between the call and that
+    // environment, which such a var conflicts with (ES2026 §19.2.1.3 step
+    // 3.d). False for the bindings of enclosing functions.
+    IsCallerFunctionBinding: Boolean;
   end;
 
   TGocciaDirectEvalBindingArray = array of TGocciaDirectEvalBindingInfo;

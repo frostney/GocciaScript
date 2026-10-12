@@ -2228,7 +2228,7 @@ await section("Test262 Runner: a private brand check in an eval finds the class'
 // - inParameters: during the parameter list the VariableEnvironment is the
 //   function environment outside the parameters' environment, and the body's
 //   environment is inside both (sec-functiondeclarationinstantiation, §10.2.11
-//   steps 20 and 28), so `var p` from the default is visible in the body: 4 + 4.
+//   steps 20 and 30), so `var p` from the default is visible in the body: 4 + 4.
 // Goccia.Compiler.Test checks which of these reads the compiler may fold.
 await section("Test262 Runner: an eval call site falls back to an ordinary call and keeps shadowable reads...", async () => {
   expectEvalHostProbe("eval call site", [
@@ -2419,7 +2419,7 @@ await section("Test262 Runner: a direct eval nested in a field initializer's eva
 // With parameter expressions the parameters live in an environment of their
 // own and the body's vars in a new one inside it
 // (FunctionDeclarationInstantiation, sec-functiondeclarationinstantiation,
-// §10.2.11 steps 20 and 28). A sloppy eval in the body declares its var in the
+// §10.2.11 steps 20 and 30). A sloppy eval in the body declares its var in the
 // body's VariableEnvironment (PerformEval, sec-performeval, §19.2.1.1 step 16;
 // EvalDeclarationInstantiation, sec-evaldeclarationinstantiation, §19.2.1.3),
 // where it shadows the parameter of the same name for the body (2) but not for
@@ -2470,6 +2470,53 @@ await section("Test262 Runner: sloppy eval functions and vars bind in the caller
     "function nestedSloppy() { var v = 'outer'; return (function () { eval('var v = \"inner\"'); return (function () { return eval('v'); })(); })() + ',' + v; }",
     "print([strictThis(), withBlockFn(), nestedSloppy()].join(' '));",
   ], ["undefined eval,with inner,outer"]);
+});
+
+// EvalDeclarationInstantiation (sec-evaldeclarationinstantiation, §19.2.1.3)
+// in a function. A for-in, for-of or destructuring var binds in the caller's
+// VariableEnvironment, not the global object: a,undefined and 4,5,undefined.
+// A var the caller has is that binding (steps 17-18): the body var a of a
+// function with parameter expressions starts with the parameter's value
+// (sec-functiondeclarationinstantiation, §10.2.11 step 30.e.i.4), 1, and an
+// eval's function declaration, even one in nested eval code, sets it
+// (step 17): function. A binding between the eval and the VariableEnvironment
+// makes a var of its name a SyntaxError (step 3.d), the outer function's
+// `let z` for nested eval code included, but a catch clause's parameter does
+// not (its web-compat branch): function. It leaves a block-level function
+// without a var binding (step web-compat-bindingexists), so `let g` stays 1
+// and `var f` stays undefined, while a catch parameter does not: function.
+// `var x = 2` in a catch block assigns the catch parameter
+// (sec-variable-statement-runtime-semantics-evaluation, §14.3.2.1, through
+// ResolveBinding), so the function's x stays 1 on both sides: 1,1, 2,undefined
+// and, from nested eval code, 1. A var the eval code deleted is unresolvable
+// again, so assigning it creates a global (PutValue, sec-putvalue, §6.2.5.6):
+// number,3. Inside `with`, the object's property of the name is the binding a
+// for-in var assigns (ForIn/OfBodyEvaluation,
+// sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset,
+// §14.7.5.7): a,undefined.
+await section("Test262 Runner: sloppy eval declarations reuse, skip or conflict with the caller's bindings...", async () => {
+  expectEvalHostProbe("sloppy eval declaration instantiation", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function forIn() { eval('for (var k in {a:1});'); return k + ',' + typeof globalThis.k; }",
+    "function patterns() { eval('var {d} = {d: 4}; for (var e of [5]);'); return d + ',' + e + ',' + typeof globalThis.d; }",
+    "function paramVar(a, b = 0) { var a; eval('var a'); return a; }",
+    "function nestedLet() { let z; eval(\"eval('var z')\"); return 'none'; }",
+    "function nestedFn() { var y = 1; eval(\"eval('function y(){}')\"); return typeof y; }",
+    "function letBlockFn() { let g = 1; eval('{ function g(){} }'); return g; }",
+    "function catchFn() { var y; try { throw 0; } catch (y) { eval('function y(){}'); } return typeof y; }",
+    "print([out(forIn), out(patterns), out(() => paramVar(1)), out(nestedLet), out(nestedFn), out(letBlockFn), out(catchFn)].join(' '));",
+    "function catchVar() { var x = 1; try { throw 0; } catch (x) { eval('var x = 2'); } return x + ',' + eval('x'); }",
+    "function catchOnly() { try { throw 0; } catch (x) { eval('var x = 2'); var r = x; } return r + ',' + x; }",
+    "function catchBlockFn() { var y = 1; try { throw 0; } catch (y) { eval('{ function y(){} }'); } return typeof y; }",
+    "function deleted() { eval('var q = 1; delete q; q = 3'); return typeof q + ',' + globalThis.q; }",
+    "function withForIn() { var o = {k: 0}; with (o) { eval('for (var k in {a:1});'); } return o.k + ',' + typeof k; }",
+    "function nestedCatch() { var z = 1; try { throw 0; } catch (z) { eval(\"eval('var z = 5')\"); } return z; }",
+    "function shadowedBlockFn() { var f; { let f = 1; eval('{ function f(){} }'); } return typeof f; }",
+    "print([out(catchVar), out(catchOnly), out(catchBlockFn), out(deleted), out(withForIn), out(nestedCatch), out(shadowedBlockFn)].join(' '));",
+  ], [
+    "a,undefined 4,5,undefined 1 SyntaxError function 1 function",
+    "1,1 2,undefined function number,3 a,undefined 1 undefined",
+  ], ["bytecode"]);
 });
 
 // Block Static Semantics: Early Errors (sec-block-static-semantics-early-errors,

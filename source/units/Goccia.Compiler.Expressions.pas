@@ -163,6 +163,13 @@ procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContex
   const AAssignmentMode: Boolean);
 procedure EmitLoadHiddenWithObject(const ACtx: TGocciaCompilationContext;
   const AHiddenName: string; const ADest: UInt16);
+// Non-strict eval code in a function: sets the binding AName has in the
+// caller's variable environment from AValueReg, skipping every block and
+// `with` object around the store: the caller's var of the name, or else the
+// property of the nearest hidden variable object, which the eval declared.
+procedure EmitDirectEvalVarEnvironmentStore(
+  const ACtx: TGocciaCompilationContext; const AName: string;
+  const AValueReg: UInt16);
 procedure EmitWithAssignmentOrFallback(const ACtx: TGocciaCompilationContext;
   const AName: string; const AValueReg: UInt16);
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
@@ -1038,6 +1045,11 @@ begin
   end;
 end;
 
+threadvar
+  // Set while EmitWithAssignmentOrFallback emits its fallback store, after
+  // its probes.
+  GDirectEvalVarProbed: Boolean;
+
 procedure EmitWithAssignmentOrFallback(const ACtx: TGocciaCompilationContext;
   const AName: string; const AValueReg: UInt16);
 var
@@ -1071,7 +1083,13 @@ begin
       PatchJumpTarget(ACtx, MissJump);
     end;
 
-    EmitBindingAssignmentFromRegister(ACtx, AName, AValueReg, True);
+    // The probes are done: the fallback does not repeat them.
+    GDirectEvalVarProbed := True;
+    try
+      EmitBindingAssignmentFromRegister(ACtx, AName, AValueReg, True);
+    finally
+      GDirectEvalVarProbed := False;
+    end;
 
     for I := 0 to EndCount - 1 do
       PatchJumpTarget(ACtx, EndJumps[I]);
@@ -1796,16 +1814,31 @@ begin
   Result := ANames.IndexOf(AName) >= 0;
 end;
 
+function DirectEvalRecordHasName(const ABindings: TGocciaDirectEvalBindingArray;
+  const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(ABindings) do
+    if ABindings[I].Name = AName then
+      Exit(True);
+  Result := False;
+end;
+
 // Adds the binding AName to a direct eval site record unless the record has
 // that name already or it is a compiler-internal name eval code cannot spell.
-// True when it was added.
+// True when it was added. A catch clause's parameter does not hide the
+// bindings behind it: a sloppy eval's var of its name is a binding of the
+// variable environment, which the record then lists too (ES2026 §19.2.1.3,
+// steps 3.d and 17-18, with the web-compat exemption for a Catch clause).
 function AddDirectEvalBinding(var ABindings: TGocciaDirectEvalBindingArray;
   const ANames: TUnicodeStringList; const AName: string;
   const AKind: TGocciaDirectEvalBindingKind; const AIndex: UInt16;
   const AIsConst: Boolean; const AIsVarEnvironmentBinding: Boolean = False;
   const AIsEvalSyntheticArguments: Boolean = False;
   const AIsCatchParameter: Boolean = False;
-  const AIsOutsideVarEnvironment: Boolean = False): Boolean;
+  const AIsOutsideVarEnvironment: Boolean = False;
+  const AIsCallerFunctionBinding: Boolean = False): Boolean;
 var
   BindingIndex: Integer;
 begin
@@ -1818,7 +1851,8 @@ begin
   if DirectEvalBindingNameSeen(ANames, AName) then
     Exit;
 
-  ANames.Add(AName);
+  if not AIsCatchParameter then
+    ANames.Add(AName);
   BindingIndex := Length(ABindings);
   SetLength(ABindings, BindingIndex + 1);
   ABindings[BindingIndex].Name := AName;
@@ -1831,6 +1865,7 @@ begin
     AIsEvalSyntheticArguments;
   ABindings[BindingIndex].IsCatchParameter := AIsCatchParameter;
   ABindings[BindingIndex].IsOutsideVarEnvironment := AIsOutsideVarEnvironment;
+  ABindings[BindingIndex].IsCallerFunctionBinding := AIsCallerFunctionBinding;
   Result := True;
 end;
 
@@ -2314,7 +2349,7 @@ begin
            IsEvalSensitiveArguments or (Local.IsConst and
              Local.IsNonStrictImmutable),
            Local.IsCatchParameter,
-           ACtx.Scope.LocalOutsideVarEnvironment(LocalIdx)) then
+           ACtx.Scope.LocalOutsideVarEnvironment(LocalIdx), True) then
           ACtx.Scope.MarkCaptured(LocalIdx);
       end;
     end;
@@ -2361,13 +2396,29 @@ begin
             Local.IsConst, Local.IsVar)
         else
         begin
-          UpvalueIdx := ACtx.Scope.ResolveUpvalue(Local.Name);
+          // A binding a catch clause's parameter listed above hides
+          // (AddDirectEvalBinding) is reached by its own upvalue, which the
+          // name would not find: one of the calling scope's locals.
+          if DirectEvalRecordHasName(Bindings, Local.Name) then
+          begin
+            if ScopeCursor <> ACtx.Scope.Parent then
+              Continue;
+            ScopeCursor.MarkCaptured(LocalIdx);
+            UpvalueIdx := ACtx.Scope.AddUpvalue(Local.Name, Local.Slot, True,
+              Local.IsConst, Local.IsVar);
+          end
+          else
+            UpvalueIdx := ACtx.Scope.ResolveUpvalue(Local.Name);
           if UpvalueIdx >= 0 then
           begin
             UV := ACtx.Scope.GetUpvalue(UpvalueIdx);
+            // Eval code in a function runs in that function's variable
+            // environment, whose bindings it reaches as upvalues.
             AddDirectEvalBinding(Bindings, Names, Local.Name, debUpvalue,
               UInt16(UpvalueIdx), UV.IsConst, UV.IsVar,
-              UV.IsNonStrictImmutable);
+              UV.IsNonStrictImmutable, Local.IsCatchParameter,
+              Local.IsOutsideVarEnvironment,
+              ACtx.Scope.IsSloppyEvalCode and Local.IsCallerFunctionBinding);
           end;
         end;
       end;
@@ -3587,8 +3638,11 @@ begin
         // start with the same value and nothing could tell the two apart, so
         // the var keeps the parameter's local, and the direct register reads
         // a parameter allows.
+        // A direct eval in the body can also reach it (ADR 0134): the
+        // body's var is then a binding of its own.
         if not ParameterLocal.IsCaptured and
-           not ACtx.Scope.DirectEvalSeen then
+           not ACtx.Scope.DirectEvalSeen and
+           not (deuDirectEval in ACtx.Scope.DirectEvalUsage) then
           Continue;
         ACtx.Scope.RenameLocal(LocalIdx, '`#parameter`:' + Name);
         VarSlot := ACtx.Scope.DeclareVarLocal(Name);
@@ -3678,6 +3732,97 @@ begin
   end;
 end;
 
+// Whether AName is a var or function the top level of non-strict eval code
+// in a function declares (TGocciaCompilationContext.DirectEvalVarsByName): a
+// hoisted local of the eval's template that name resolution skips, because
+// the binding is in the caller's variable environment.
+function IsDirectEvalCodeVarName(const ACtx: TGocciaCompilationContext;
+  const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if not ACtx.DirectEvalVarsByName or (ACtx.Scope.ResolveLocal(AName) >= 0) then
+    Exit;
+  for I := 0 to ACtx.Scope.LocalCount - 1 do
+    if (ACtx.Scope.GetLocal(I).Name = AName) and
+       (ACtx.Scope.GetLocal(I).Depth = 0) and
+       ACtx.Scope.GetLocal(I).IsGlobalBacked then
+      Exit(True);
+end;
+
+procedure EmitDirectEvalVarEnvironmentStore(
+  const ACtx: TGocciaCompilationContext; const AName: string;
+  const AValueReg: UInt16);
+var
+  Caller, Scope: TGocciaCompilerScope;
+  Local: TGocciaCompilerLocal;
+  I, UpvalueIdx: Integer;
+  VarObjectName: string;
+  ObjReg, KeyReg: UInt16;
+begin
+  Caller := ACtx.Scope.Parent;
+  // A var of the caller's variable environment: the eval's var is that
+  // binding. Rebuilt from the eval site record, the caller's own locals are
+  // in Caller, and, for eval code nested in eval code, the function's in the
+  // scope of the enclosing bindings, reached through Caller's upvalues.
+  Scope := Caller;
+  while Assigned(Scope) do
+  begin
+    for I := Scope.LocalCount - 1 downto 0 do
+    begin
+      Local := Scope.GetLocal(I);
+      if (Local.Name = AName) and Local.IsCallerFunctionBinding and
+         Local.IsVar then
+      begin
+        if Scope = Caller then
+          UpvalueIdx := ACtx.Scope.AddUpvalue(AName, Local.Slot, True,
+            Local.IsConst, True)
+        else
+        begin
+          UpvalueIdx := Caller.ResolveUpvalue(AName);
+          if UpvalueIdx < 0 then
+            Break;
+          UpvalueIdx := ACtx.Scope.AddUpvalue(AName, UInt16(UpvalueIdx),
+            False, Local.IsConst, True);
+        end;
+        EmitInstruction(ACtx, EncodeABx(OP_SET_UPVALUE, AValueReg,
+          UInt16(UpvalueIdx)));
+        Exit;
+      end;
+    end;
+    Scope := Scope.Parent;
+  end;
+
+  // Otherwise the hidden variable object's property, which the eval
+  // declared: the nearest object the record lists.
+  VarObjectName := '';
+  if Assigned(Caller) then
+    for I := Caller.WithBindingCount - 1 downto 0 do
+      if IsEvalVarObjectName(Caller.GetWithBindingName(I)) then
+      begin
+        VarObjectName := Caller.GetWithBindingName(I);
+        Break;
+      end;
+  if VarObjectName = '' then
+  begin
+    EmitSetGlobalByName(ACtx, AValueReg, AName);
+    Exit;
+  end;
+  ObjReg := ACtx.Scope.AllocateRegister;
+  KeyReg := ACtx.Scope.AllocateRegister;
+  try
+    EmitLoadHiddenWithObject(ACtx, VarObjectName, ObjReg);
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg,
+      ACtx.Template.AddConstantString(AName)));
+    EmitInstruction(ACtx, EncodeABC(OP_SET_WITH_BINDING_LOOSE, ObjReg, KeyReg,
+      AValueReg));
+  finally
+    ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
 procedure EmitBindingAssignmentFromRegister(const ACtx: TGocciaCompilationContext;
   const AName: string; const AValueReg: UInt16;
   const AAssignmentMode: Boolean);
@@ -3763,6 +3908,18 @@ begin
     Exit;
   end;
 
+  // A var the eval code declares is a binding of the caller's variable
+  // environment (ES2026 §19.2.1.3), a property of its hidden variable object
+  // unless the caller had one: PutValue resolves it through the `with`
+  // objects and the variable objects, as a reference to it does
+  // (EmitWithAssignmentOrFallback), and only an unresolvable one is the
+  // global object's.
+  if not GDirectEvalVarProbed and IsDirectEvalCodeVarName(ACtx, AName) and
+     (Length(ACtx.Scope.NameProbes(AName)) > 0) then
+  begin
+    EmitWithAssignmentOrFallback(ACtx, AName, AValueReg);
+    Exit;
+  end;
   EmitSetGlobalByName(ACtx, AValueReg, AName);
 end;
 

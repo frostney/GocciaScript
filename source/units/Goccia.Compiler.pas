@@ -41,6 +41,8 @@ type
     FDirectEvalRejectArguments: Boolean;
     FDirectEvalVarsByName: Boolean;
     FDirectEvalVarEnvironment: TGocciaDirectEvalVarEnvironment;
+    // declaredVarNames of a non-strict direct eval being compiled, or nil.
+    FDirectEvalDeclaredVarNames: TUnicodeStringList;
     FCompletionRegister: Integer;
     FAsyncTopLevel: Boolean;
     FPreinitializedTopLevelFunctions: Boolean;
@@ -67,6 +69,9 @@ type
     function BuildContext: TGocciaCompilationContext;
     function NonStrictBlockFunctionVarBindingsEnabled: Boolean;
     function HoistedBlockFunctionVarBindings: TBlockFunctionVarBindingSet;
+    function DirectEvalCallerBindsBetween(const AName: string): Boolean;
+    procedure DropShadowedDirectEvalBlockFunctions(
+      const AStatements: TObjectList<TGocciaStatement>);
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -106,11 +111,16 @@ type
       - Strict eval: step 18 makes its variable environment its own, so
         every declaration is a local of the template.
       - Non-strict eval in a function: its var and function declarations are
-        bindings of the caller's variable environment, which the VM declared
+        bindings of the caller's variable environment, which the VM declares
         (§19.2.1.3), so the code reaches them by name like any reference:
         through the hidden variable object, or a caller's var binding.
       - Non-strict eval in global code: as CompileGlobalEval, with
         ADeclaredVarNames.
+      For non-strict eval, ADeclaredVarNames is declaredVarNames with the
+      block-level functions the web-compat steps give a var binding, and
+      on return it lacks those that get none: a binding between the eval
+      and its variable environment, or an early error the replacing var
+      would cause, rules them out (DropShadowedDirectEvalBlockFunctions).
       Lexical declarations are always locals. The template returns the
       completion value. It is never serialized. }
     function CompileDirectEval(const AProgram: TGocciaProgram;
@@ -1593,6 +1603,81 @@ begin
   end;
 end;
 
+// Whether a binding of the eval's caller between the eval and its variable
+// environment, other than a catch clause's parameter, binds AName (ES2026
+// §19.2.1.3, step web-compat-bindingexists). The rebuilt scopes mark the
+// bindings of the function the variable environment belongs to
+// (TGocciaCompilerLocal.IsCallerFunctionBinding); its vars are the
+// environment's own, and a parameter outside it (§10.2.11 step 20) is not
+// between.
+function TGocciaCompiler.DirectEvalCallerBindsBetween(
+  const AName: string): Boolean;
+var
+  Scope: TGocciaCompilerScope;
+  Local: TGocciaCompilerLocal;
+  I: Integer;
+begin
+  Scope := FDirectEvalCallerScope;
+  while Assigned(Scope) do
+  begin
+    for I := Scope.LocalCount - 1 downto 0 do
+    begin
+      Local := Scope.GetLocal(I);
+      if (Local.Name = AName) and Local.IsCallerFunctionBinding and
+         not Local.IsVar and not Local.IsCatchParameter and
+         not ((FDirectEvalVarEnvironment = devFunction) and
+              Local.IsOutsideVarEnvironment) then
+        Exit(True);
+    end;
+    Scope := Scope.Parent;
+  end;
+  Result := False;
+end;
+
+// ES2026 §19.2.1.3, step web-compat-insertion-point: a block-level function
+// of non-strict eval code has a var binding only when no binding between
+// the eval and its variable environment has its name. The others are
+// ordinary block-level functions, and their names leave declaredVarNames
+// unless a var declares them too.
+procedure TGocciaCompiler.DropShadowedDirectEvalBlockFunctions(
+  const AStatements: TObjectList<TGocciaStatement>);
+var
+  Declaration: TGocciaStatement;
+  Dropped: array of TGocciaStatement;
+  KeptNames, StandardVarNames: TUnicodeStringList;
+  Name: string;
+  I: Integer;
+begin
+  Dropped := nil;
+  KeptNames := TUnicodeStringList.Create;
+  StandardVarNames := TUnicodeStringList.Create;
+  try
+    for Declaration in FBlockFunctionVarBindings.Keys do
+    begin
+      Name := TGocciaFunctionDeclaration(Declaration).Name;
+      if DirectEvalCallerBindsBetween(Name) then
+      begin
+        SetLength(Dropped, Length(Dropped) + 1);
+        Dropped[High(Dropped)] := Declaration;
+      end
+      else if KeptNames.IndexOf(Name) < 0 then
+        KeptNames.Add(Name);
+    end;
+    for I := 0 to High(Dropped) do
+      FBlockFunctionVarBindings.Remove(Dropped[I]);
+    if not Assigned(FDirectEvalDeclaredVarNames) then
+      Exit;
+    CollectVarBindingNamesFromStatements(AStatements, StandardVarNames);
+    for I := FDirectEvalDeclaredVarNames.Count - 1 downto 0 do
+      if (StandardVarNames.IndexOf(FDirectEvalDeclaredVarNames[I]) < 0) and
+         (KeptNames.IndexOf(FDirectEvalDeclaredVarNames[I]) < 0) then
+        FDirectEvalDeclaredVarNames.Delete(I);
+  finally
+    StandardVarNames.Free;
+    KeptNames.Free;
+  end;
+end;
+
 function TGocciaCompiler.CompileDirectEval(const AProgram: TGocciaProgram;
   const ASite: TGocciaDirectEvalEnvironment; const AStrictEval: Boolean;
   const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
@@ -1620,9 +1705,21 @@ begin
     for I := High(ASite.Bindings) downto 0 do
     begin
       Binding := ASite.Bindings[I];
+      // A hidden variable object of the record keeps its name, so a
+      // function the eval code declares names its own differently.
+      if IsEvalVarObjectName(Binding.Name) then
+        ReserveEvalVarObjectName(Binding.Name);
       case Binding.Kind of
         debUpvalue:
+        begin
           OuterScope.DeclareLocal(Binding.Name, Binding.IsConst);
+          LocalIdx := OuterScope.LocalCount - 1;
+          if Binding.IsCallerFunctionBinding then
+            OuterScope.MarkCallerFunctionBinding(LocalIdx,
+              Binding.IsVarEnvironmentBinding, Binding.IsCatchParameter);
+          if Binding.IsOutsideVarEnvironment then
+            OuterScope.MarkOutsideVarEnvironment(LocalIdx);
+        end;
         debWithUpvalue:
         begin
           OuterScope.BeginScope;
@@ -1644,6 +1741,9 @@ begin
         begin
           LocalIdx := CallerScope.DeclareCallerLocal(Binding.Name,
             Binding.Index, Binding.IsConst, Binding.IsVarEnvironmentBinding);
+          if Binding.IsCallerFunctionBinding then
+            CallerScope.MarkCallerFunctionBinding(LocalIdx,
+              Binding.IsVarEnvironmentBinding, Binding.IsCatchParameter);
           if Binding.IsOutsideVarEnvironment then
             CallerScope.MarkOutsideVarEnvironment(LocalIdx);
         end;
@@ -1695,6 +1795,10 @@ begin
       FGlobalEvalDeclaredVarNames := ADeclaredVarNames
     else
       FGlobalEvalDeclaredVarNames := nil;
+    if AStrictEval then
+      FDirectEvalDeclaredVarNames := nil
+    else
+      FDirectEvalDeclaredVarNames := ADeclaredVarNames;
     FDirectEvalVarEnvironment := ASite.VarEnvironment;
     FEvalCode := True;
     FDirectEvalCallerScope := CallerScope;
@@ -1708,6 +1812,7 @@ begin
       FDirectEvalVarsByName := False;
       FGlobalEvalVarEnvironment := False;
       FGlobalEvalDeclaredVarNames := nil;
+      FDirectEvalDeclaredVarNames := nil;
       FEvalCode := False;
       FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
       FPreinitializedTopLevelFunctions := SavedPreinitializedTopLevelFunctions;
@@ -1774,8 +1879,12 @@ begin
     DiscoverProgramNumberBindings(AProgram, FCurrentScope,
       NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
     if NonStrictBlockFunctionVarBindingsEnabled then
+    begin
       DiscoverProgramBlockFunctionVarBindings(AProgram.Body,
         FBlockFunctionVarBindings);
+      if Assigned(FDirectEvalCallerScope) then
+        DropShadowedDirectEvalBlockFunctions(AProgram.Body);
+    end;
 
     // Hoist var declarations to module scope.
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope,

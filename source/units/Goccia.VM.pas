@@ -570,8 +570,8 @@ type
       var AIP, AInstructionStartIP: Integer): TGocciaBytecodeClosure;
     procedure InstantiateDirectEvalDeclarations(
       const ATemplate: TGocciaFunctionTemplate; const ASiteIndex: Integer;
-      const ASite: TGocciaDirectEvalEnvironment;
-      const AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+      const ASite: TGocciaDirectEvalEnvironment; const AStandardVarNames,
+      AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
     function PrepareCompiledDirectEval(const ASourceText: string;
       const ATemplate: TGocciaFunctionTemplate;
       const ASiteIndex: Integer): TGocciaBytecodeClosure;
@@ -13983,49 +13983,52 @@ begin
 end;
 
 // A binding a non-strict eval's var declaration of AName conflicts with
-// (ES2026 §19.2.1.3 step 3.d): a binding of the calling function in a
-// declarative environment between the eval and the variable environment, one
-// still in its temporal dead zone included. A catch clause's parameter is
-// exempt (the step's normative-optional web-compat branch, with B.3.4), and
-// in a function body a parameter outside the variable environment is not
-// between (§10.2.11 steps 20 and 28).
+// (ES2026 §19.2.1.3 step 3.d): a binding of the function whose variable
+// environment the eval declares in, or of eval code running in it
+// (IsCallerFunctionBinding), in a declarative environment between the eval
+// and that environment, one still in its temporal dead zone included. A
+// catch clause's parameter is exempt (the step's normative-optional
+// web-compat branch), and in a function body a parameter outside the
+// variable environment is not between (§10.2.11 steps 20 and 30).
 function DirectEvalVarConflicts(const ASite: TGocciaDirectEvalEnvironment;
   const AName: string): Boolean;
 var
   I: Integer;
 begin
   for I := 0 to High(ASite.Bindings) do
-    if ASite.Bindings[I].Name = AName then
-    begin
-      Result := (ASite.Bindings[I].Kind = debLocal) and
-        not ASite.Bindings[I].IsVarEnvironmentBinding and
-        not ASite.Bindings[I].IsCatchParameter and
-        not ((ASite.VarEnvironment = devFunction) and
-             ASite.Bindings[I].IsOutsideVarEnvironment);
-      Exit;
-    end;
+    if (ASite.Bindings[I].Name = AName) and
+       ASite.Bindings[I].IsCallerFunctionBinding and
+       not ASite.Bindings[I].IsVarEnvironmentBinding and
+       not ASite.Bindings[I].IsCatchParameter and
+       not ((ASite.VarEnvironment = devFunction) and
+            ASite.Bindings[I].IsOutsideVarEnvironment) then
+      Exit(True);
   Result := False;
 end;
 
-// Whether the caller's variable environment already binds AName: a var, a
-// function declaration, a simple parameter or `arguments` of the calling
-// function. A non-strict eval's var or function of the name is that binding.
+// Whether the caller's variable environment already binds AName (§19.2.1.3
+// steps 17-18, varEnv.HasBinding): a var, a function declaration, a simple
+// parameter or `arguments` of the function it belongs to. A non-strict
+// eval's var or function of the name is that binding.
 function DirectEvalVarIsCallerBinding(
   const ASite: TGocciaDirectEvalEnvironment; const AName: string): Boolean;
 var
   I: Integer;
 begin
   for I := 0 to High(ASite.Bindings) do
-    if ASite.Bindings[I].Name = AName then
-      Exit((ASite.Bindings[I].Kind = debLocal) and
-        ASite.Bindings[I].IsVarEnvironmentBinding);
+    if (ASite.Bindings[I].Name = AName) and
+       ASite.Bindings[I].IsCallerFunctionBinding and
+       ASite.Bindings[I].IsVarEnvironmentBinding then
+      Exit(True);
   Result := False;
 end;
 
 // ES2026 §19.2.1.3 EvalDeclarationInstantiation for a non-strict direct eval,
-// before its compiled code runs. AVarNames is VarDeclaredNames of the body,
-// AFunctionNames and ADeclaredVarNames the functions and the other vars it
-// declares. In global code the global object's checks run (steps 3.a, 10 and
+// before its compiled code runs. AStandardVarNames is VarDeclaredNames of the
+// body, and AVarNames adds the block-level functions the web-compat steps
+// consider. AFunctionNames and ADeclaredVarNames are the functions and the
+// other vars it declares, the latter with the block-level functions that get
+// a var binding. In global code the global object's checks run (steps 3.a, 10 and
 // 12) and the code defines its globals itself. In a function, the
 // variable environment is the caller's: a name it already binds is reused,
 // and every other one becomes a deletable binding, a configurable property
@@ -14034,8 +14037,8 @@ end;
 // nearest first, so its first is the one of the eval's variable environment.
 procedure TGocciaVM.InstantiateDirectEvalDeclarations(
   const ATemplate: TGocciaFunctionTemplate; const ASiteIndex: Integer;
-  const ASite: TGocciaDirectEvalEnvironment;
-  const AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+  const ASite: TGocciaDirectEvalEnvironment; const AStandardVarNames,
+  AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
 var
   I, J: Integer;
   VarObjectBinding: Integer;
@@ -14061,10 +14064,12 @@ var
   end;
 
 begin
-  // Step 3.d.
-  for I := 0 to AVarNames.Count - 1 do
-    if DirectEvalVarConflicts(ASite, AVarNames[I]) then
-      RaiseAlreadyDeclared(AVarNames[I]);
+  // Step 3.d. A block-level function is not among varNames: a binding
+  // between the eval and the variable environment leaves it without a var
+  // binding (step web-compat-bindingexists), which the compiler worked out.
+  for I := 0 to AStandardVarNames.Count - 1 do
+    if DirectEvalVarConflicts(ASite, AStandardVarNames[I]) then
+      RaiseAlreadyDeclared(AStandardVarNames[I]);
 
   if ASite.VarEnvironment = devGlobal then
   begin
@@ -14118,14 +14123,13 @@ begin
   end;
 
   // Steps 17-18: functions first, then the other vars, each a deletable
-  // binding initialized to undefined until the code assigns it.
+  // binding initialized to undefined until the code assigns it. The
+  // compiler left in ADeclaredVarNames the block-level functions the
+  // web-compat steps give a var binding.
   for I := 0 to AFunctionNames.Count - 1 do
     DeclareName(AFunctionNames[I]);
   for I := 0 to ADeclaredVarNames.Count - 1 do
     DeclareName(ADeclaredVarNames[I]);
-  // B.3.2.3 step 1.a.ii.4: the var binding of a block-level function.
-  for I := 0 to AVarNames.Count - 1 do
-    DeclareName(AVarNames[I]);
 end;
 
 // ES2026 §19.2.1.1 PerformEval for a direct eval, up to the evaluation of the
@@ -14152,7 +14156,8 @@ var
   EvalOptions: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
   PrivateNames: TStringList;
-  VarNames, FunctionNames, DeclaredVarNames: TUnicodeStringList;
+  VarNames, StandardVarNames, FunctionNames,
+  DeclaredVarNames: TUnicodeStringList;
   CallerClosure: TGocciaBytecodeClosure;
   CurrentCtorClass: TGocciaClassValue;
   AllowNewTarget, AllowSuperProperty, AllowSuperCall: Boolean;
@@ -14185,6 +14190,7 @@ begin
   EvalSource := CreateECMAScriptSourceLines(ASourceText);
   PrivateNames := TStringList.Create;
   VarNames := TUnicodeStringList.Create;
+  StandardVarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
   try
@@ -14229,14 +14235,19 @@ begin
       EvalTemplate := FCompileDirectEval(PipelineResult.ProgramNode,
         SourceName, Site, StrictEval, DeclaredVarNames);
       if not StrictEval then
-        InstantiateDirectEvalDeclarations(ATemplate, ASiteIndex, Site, VarNames,
-          FunctionNames, DeclaredVarNames);
+      begin
+        CollectVarBindingNamesFromStatements(PipelineResult.ProgramNode.Body,
+          StandardVarNames);
+        InstantiateDirectEvalDeclarations(ATemplate, ASiteIndex, Site,
+          StandardVarNames, VarNames, FunctionNames, DeclaredVarNames);
+      end;
     finally
       PipelineResult.Free;
     end;
   finally
     DeclaredVarNames.Free;
     FunctionNames.Free;
+    StandardVarNames.Free;
     VarNames.Free;
     PrivateNames.Free;
     EvalSource.Free;

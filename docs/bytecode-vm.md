@@ -432,8 +432,14 @@ for a parameter list with expressions). Every reference such a var can shadow,
 in that function, in functions nested in it and in eval code, probes the
 object the way it probes a `with` object (`TGocciaCompilerScope.NameProbes`,
 `OP_HAS_WITH_BINDING`), before its static binding; until an eval creates the
-object the probe finds nothing. A sloppy eval in a script's global code
-declares its vars as deletable globals, as indirect eval does. The verifier
+object the probe finds nothing. The record flags the bindings of the
+function whose variable environment that is, so the VM and the compiler can
+tell its vars from the bindings between the call and it: a var of such a
+binding's name is a `SyntaxError`, and a block-level function of that name
+gets no var binding. A catch clause's parameter is exempt from both, and
+does not hide the binding behind it from the record. A sloppy eval in a
+script's global code declares its vars as deletable globals, as indirect eval
+does. The verifier
 checks that `OP_DIRECT_EVAL` names an existing record and is followed by a
 call on its register, and that each record's registers and binding indexes
 are in range and match its environment.

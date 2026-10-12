@@ -463,6 +463,10 @@ begin
     AExpected.IsEvalSyntheticArguments);
   Expect<Boolean>(ABinding.IsCatchParameter).ToBe(
     AExpected.IsCatchParameter);
+  Expect<Boolean>(ABinding.IsOutsideVarEnvironment).ToBe(
+    AExpected.IsOutsideVarEnvironment);
+  Expect<Boolean>(ABinding.IsCallerFunctionBinding).ToBe(
+    AExpected.IsCallerFunctionBinding);
 end;
 
 // The loader rebuilds every field of a direct eval site record from the
@@ -496,6 +500,9 @@ begin
     False, True, False);
   Bindings[4] := DirectEvalBinding('`#with`:1', debWithUpvalue, 4, False,
     False, False, False);
+  Bindings[0].IsCallerFunctionBinding := True;
+  Bindings[1].IsOutsideVarEnvironment := True;
+  Bindings[1].IsCallerFunctionBinding := True;
   // The outer class body's #x first; the inner one's #x shadows it.
   SetLength(PrivateNames, 3);
   PrivateNames[0].Name := 'x';

@@ -41,10 +41,14 @@ type
     // A binding of the calling function outside the variable environment a
     // sloppy direct eval in its body declares vars in: a parameter, or
     // `arguments`, of a function whose parameter list has expressions
-    // (ES2026 §10.2.11 steps 20 and 28). Set on the locals rebuilt from an
+    // (ES2026 §10.2.11 steps 20 and 30). Set on the locals rebuilt from an
     // eval site record; TGocciaCompilerScope.LocalOutsideVarEnvironment
     // works it out for the function being compiled.
     IsOutsideVarEnvironment: Boolean;
+    // Rebuilt from an eval site record: a binding of the function whose
+    // variable environment eval code declares its vars in
+    // (TGocciaDirectEvalBindingInfo.IsCallerFunctionBinding).
+    IsCallerFunctionBinding: Boolean;
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     IsCallProvenNumeric: Boolean;
@@ -317,6 +321,11 @@ type
     // var shadows it (TGocciaCompilerLocal.IsOutsideVarEnvironment).
     function LocalOutsideVarEnvironment(const AIndex: Integer): Boolean;
     procedure MarkOutsideVarEnvironment(const AIndex: Integer);
+    // Marks local AIndex, rebuilt from an eval site record, as a binding of
+    // the caller function (IsCallerFunctionBinding), a var of its variable
+    // environment when AIsVar.
+    procedure MarkCallerFunctionBinding(const AIndex: Integer;
+      const AIsVar, AIsCatchParameter: Boolean);
     // The number of `with` objects among the with bindings, not counting the
     // hidden variable objects.
     function WithObjectCount: Integer;
@@ -340,6 +349,9 @@ type
   end;
 
 function NextClassPrivatePrefix: string;
+// Keeps the hidden variable object names DeclareEvalVarObjects makes from
+// now on different from AName, one an eval site record already names.
+procedure ReserveEvalVarObjectName(const AName: string);
 
 
 implementation
@@ -451,6 +463,7 @@ begin
   FLocals[FLocalCount].IsVar := False;
   FLocals[FLocalCount].IsCatchParameter := False;
   FLocals[FLocalCount].IsOutsideVarEnvironment := False;
+  FLocals[FLocalCount].IsCallerFunctionBinding := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
@@ -509,6 +522,7 @@ begin
   FLocals[FLocalCount].IsVar := True;
   FLocals[FLocalCount].IsCatchParameter := False;
   FLocals[FLocalCount].IsOutsideVarEnvironment := False;
+  FLocals[FLocalCount].IsCallerFunctionBinding := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
@@ -865,6 +879,15 @@ end;
 threadvar
   GEvalVarObjectCounter: Integer;
 
+procedure ReserveEvalVarObjectName(const AName: string);
+var
+  Suffix: Integer;
+begin
+  if TryStrToInt(Copy(AName, LastDelimiter(':', AName) + 1, MaxInt),
+     Suffix) and (Suffix >= GEvalVarObjectCounter) then
+    GEvalVarObjectCounter := Suffix + 1;
+end;
+
 procedure TGocciaCompilerScope.DeclareEvalVarObjects(
   const AParameterListIsSimple: Boolean);
 var
@@ -904,6 +927,14 @@ procedure TGocciaCompilerScope.MarkOutsideVarEnvironment(
   const AIndex: Integer);
 begin
   FLocals[AIndex].IsOutsideVarEnvironment := True;
+end;
+
+procedure TGocciaCompilerScope.MarkCallerFunctionBinding(
+  const AIndex: Integer; const AIsVar, AIsCatchParameter: Boolean);
+begin
+  FLocals[AIndex].IsCallerFunctionBinding := True;
+  FLocals[AIndex].IsVar := AIsVar;
+  FLocals[AIndex].IsCatchParameter := AIsCatchParameter;
 end;
 
 function TGocciaCompilerScope.WithObjectCount: Integer;

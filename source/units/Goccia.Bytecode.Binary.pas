@@ -622,6 +622,7 @@ begin
       WriteBoolean(EvalBinding.IsEvalSyntheticArguments);
       WriteBoolean(EvalBinding.IsCatchParameter);
       WriteBoolean(EvalBinding.IsOutsideVarEnvironment);
+      WriteBoolean(EvalBinding.IsCallerFunctionBinding);
     end;
   end;
 
@@ -963,6 +964,7 @@ begin
       EvalBinding.IsEvalSyntheticArguments := ReadBoolean;
       EvalBinding.IsCatchParameter := ReadBoolean;
       EvalBinding.IsOutsideVarEnvironment := ReadBoolean;
+      EvalBinding.IsCallerFunctionBinding := ReadBoolean;
       EvalBindings[J] := EvalBinding;
     end;
     Result.AddDirectEvalEnvironment(EvalPC, EvalRejectArgumentsReference,

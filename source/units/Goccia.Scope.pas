@@ -1664,11 +1664,25 @@ begin
   Result := FLexicalBindings.TryGetValue(AName, Binding) and Binding.BuiltIn;
 end;
 
+// HasBinding along the chain. In the global scope a var is a property of
+// the global object, as a built-in the global object backs is: once the
+// property is deleted, the global Environment Record has no binding of the
+// name (ES2026 §9.1.1.4.1 HasBinding, through the Object Environment
+// Record's HasBinding, §9.1.1.2.1).
 function TGocciaScope.Contains(const AName: string): Boolean;
+var
+  Binding: TLexicalBinding;
+  GlobalObjectBacked: Boolean;
 begin
-  Result := ContainsOwnLexicalBinding(AName) or
-    ContainsOwnVarBinding(AName) or
-    ((FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+  GlobalObjectBacked := (FScopeKind = skGlobal) and
+    (FThisValue is TGocciaObjectValue);
+  if FLexicalBindings.TryGetValue(AName, Binding) and
+     not IsGlobalBuiltInObjectBinding(Binding) then
+    Exit(True);
+  Result := (Assigned(FVarBindings) and FVarBindings.ContainsKey(AName)) or
+    ((not GlobalObjectBacked) and Assigned(FGlobalVarNames) and
+     FGlobalVarNames.ContainsKey(AName)) or
+    (GlobalObjectBacked and
      TGocciaObjectValue(FThisValue).HasProperty(AName)) or
     (Assigned(FParent) and FParent.Contains(AName));
 end;

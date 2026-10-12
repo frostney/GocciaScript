@@ -752,60 +752,15 @@ begin
     Result := OP_DEFINE_GLOBAL_LET_LONG;
 end;
 
-// Non-strict eval code in a function: sets the binding AName has in the
-// caller's variable environment, which the eval declared, from AValueReg. A
-// function declaration, a block-level one included (B.3.2.3 step b.vi), sets
-// that binding itself (genvRec.SetMutableBinding), not one a block or a
-// `with` around the declaration or the eval call has: the caller's var of
-// the name, or the property of its hidden variable object, the nearest one
-// the eval site record lists, which is the eval's variable environment.
+// Non-strict eval code in a function: a function declaration, a block-level
+// one included (B.3.2.3 step b.vi), sets the binding of the caller's
+// variable environment itself (genvRec.SetMutableBinding), not one a block or
+// a `with` around the declaration or the eval call has.
 procedure EmitDirectEvalVarEnvironmentAssignment(
   const ACtx: TGocciaCompilationContext; const AName: string;
   const AValueReg: UInt16);
-var
-  Suspended: TGocciaCompilerSuspendedBindings;
-  Caller: TGocciaCompilerScope;
-  LocalIdx, I: Integer;
-  VarObjectName: string;
-  ObjReg, KeyReg: UInt16;
 begin
-  Suspended := ACtx.Scope.SuspendBindingsDeeperThan(0);
-  try
-    Caller := ACtx.Scope.Parent;
-    VarObjectName := '';
-    LocalIdx := -1;
-    if Assigned(Caller) then
-    begin
-      LocalIdx := Caller.ResolveLocal(AName);
-      for I := Caller.WithBindingCount - 1 downto 0 do
-        if IsEvalVarObjectName(Caller.GetWithBindingName(I)) then
-        begin
-          VarObjectName := Caller.GetWithBindingName(I);
-          Break;
-        end;
-    end;
-    if ((LocalIdx >= 0) and Caller.GetLocal(LocalIdx).IsVar) or
-       (VarObjectName = '') then
-    begin
-      EmitBindingAssignmentFromRegister(ACtx, AName, AValueReg, True);
-      Exit;
-    end;
-    ObjReg := ACtx.Scope.AllocateRegister;
-    KeyReg := ACtx.Scope.AllocateRegister;
-    try
-      EmitLoadHiddenWithObject(ACtx, VarObjectName, ObjReg);
-      EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, KeyReg,
-        ACtx.Template.AddConstantString(AName)));
-      // The property exists: the eval declared it (§19.2.1.3).
-      EmitInstruction(ACtx, EncodeABC(OP_SET_WITH_BINDING_LOOSE, ObjReg,
-        KeyReg, AValueReg));
-    finally
-      ACtx.Scope.FreeRegister;
-      ACtx.Scope.FreeRegister;
-    end;
-  finally
-    ACtx.Scope.ResumeBindings(Suspended);
-  end;
+  EmitDirectEvalVarEnvironmentStore(ACtx, AName, AValueReg);
 end;
 
 procedure EmitGlobalDefine(const ACtx: TGocciaCompilationContext;
