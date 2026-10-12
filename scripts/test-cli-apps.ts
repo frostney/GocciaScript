@@ -4572,7 +4572,7 @@ await section("Loader: an unhandled promise rejection fails the run...", async (
     // with no handler once the run has nothing left to do is reported like an
     // uncaught throw. A handler that arrives before then cancels the report.
     // The runner prints an uncaught error where it prints an uncaught throw.
-    const cases: { name: string; source: string; exitCode: number; stdout: string; error: string | null }[] = [
+    const cases: { name: string; source: string; exitCode: number; stdout: string; error: string | null; module?: boolean }[] = [
       {
         name: "left unhandled",
         source: 'Promise.reject(new Error("left unhandled"));\nconsole.log("end of script");\n',
@@ -4608,9 +4608,28 @@ await section("Loader: an unhandled promise rejection fails the run...", async (
         stdout: "all member",
         error: null,
       },
+      // A module without top-level await has no evaluation promise to fail
+      // on, so the promise its last statement leaves is like any other: the
+      // interpreter used to fail the run with it, handled or not (#1612).
+      {
+        name: "handled rejection left by a module's last statement",
+        source: 'const rejected = Promise.reject(new Error("handled last"));\nrejected.catch(() => console.log("handled"));\nrejected;\n',
+        exitCode: 0,
+        stdout: "handled",
+        error: null,
+        module: true,
+      },
+      {
+        name: "older rejection than a module's last statement",
+        source: 'Promise.reject(new Error("older"));\nconsole.log("end of module");\nPromise.reject(new Error("last statement"));\n',
+        exitCode: 1,
+        stdout: "end of module",
+        error: "Error: older",
+        module: true,
+      },
     ];
     for (const testCase of cases) {
-      const file = join(tmp, "script.js");
+      const file = join(tmp, testCase.module ? "script.mjs" : "script.js");
       writeFileSync(file, testCase.source);
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], { stdout: "pipe", stderr: "pipe" });
