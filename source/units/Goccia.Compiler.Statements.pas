@@ -1178,16 +1178,15 @@ begin
       // global-backed top-level binding those cannot run inside its temporal
       // dead zone: top-level statements run in source order, and hoisted
       // function declarations, which can run earlier, are compiled before
-      // all of them. Non-strict compatibility mode keeps the named read,
-      // because a sloppy direct eval can shadow the name with a
-      // function-level var at run time. So does a coverage run: a ternary or
-      // logical expression decided by the constant would be folded and lose
-      // its branch records.
+      // all of them. A read in or under a function that contains a sloppy
+      // direct eval does not take the value, since the eval can shadow the
+      // name with a function-level var at run time (DirectEvalMayShadow). A
+      // coverage run keeps the named read: a ternary or logical expression
+      // decided by the constant would be folded and lose its branch records.
       CanTrackConstant := ACtx.OptimizationOptions.EnableConstPropagation and
         AStmt.IsConst and not AStmt.IsVar and
         not (IsTopLevelGlobalBacked and
-          (ACtx.CompatibilityNonStrictMode or
-           ACtx.OptimizationOptions.PreserveCoverageShape)) and
+          ACtx.OptimizationOptions.PreserveCoverageShape) and
         HasRealInitializer and Assigned(Info.Initializer) and
         TryEvaluateConstantExpression(ACtx, Info.Initializer, ConstantValue);
 
@@ -5429,6 +5428,7 @@ begin
   ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := AMethod.DirectEvalUsage;
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
@@ -5542,6 +5542,7 @@ begin
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := AGetter.DirectEvalUsage;
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
@@ -5622,6 +5623,7 @@ begin
   ChildTemplate.ParameterCount := Length(SetterParams);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := ASetter.DirectEvalUsage;
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   for I := 0 to High(SetterParams) do
     if SetterParams[I].IsPattern then
@@ -5715,6 +5717,7 @@ begin
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := AGetter.DirectEvalUsage;
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
@@ -5796,6 +5799,7 @@ begin
   ChildTemplate.ParameterCount := Length(SetterParams);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := ASetter.DirectEvalUsage;
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   for I := 0 to High(SetterParams) do
     if SetterParams[I].IsPattern then
@@ -5887,6 +5891,7 @@ begin
   ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := AMethod.DirectEvalUsage;
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
@@ -6930,6 +6935,7 @@ var
   HasElementDecorators: Boolean;
   ComputedKeyName: string;
   LocalIdx: Integer;
+  DecoratorCtx: TGocciaCompilationContext;
 begin
   HasElementDecorators := False;
   for I := 0 to High(AClassDef.FElements) do
@@ -6942,16 +6948,31 @@ begin
   if not HasElementDecorators and (Length(AClassDef.FDecorators) = 0) then
     Exit;
 
-  SetLength(DecoRegs, Length(AClassDef.FElements));
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    Elem := AClassDef.FElements[I];
-    SetLength(DecoRegs[I], Length(Elem.Decorators));
-    for J := 0 to High(Elem.Decorators) do
+  // ES2026 §11.2.2: every part of a class is strict mode code, and the
+  // decorators proposal (Stage 2.7) exempts only the DecoratorList at the top
+  // level of a class, so an element decorator is strict, as the parser
+  // already treats it. CompileExpression
+  // compiles from the compiler-wide flag, so both it and this context's copy
+  // are cleared, as for the heritage.
+  DecoratorCtx := ACtx;
+  DecoratorCtx.NonStrictMode := False;
+  if Assigned(ACtx.SetNonStrictMode) then
+    ACtx.SetNonStrictMode(False);
+  try
+    SetLength(DecoRegs, Length(AClassDef.FElements));
+    for I := 0 to High(AClassDef.FElements) do
     begin
-      DecoRegs[I][J] := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(Elem.Decorators[J], DecoRegs[I][J]);
+      Elem := AClassDef.FElements[I];
+      SetLength(DecoRegs[I], Length(Elem.Decorators));
+      for J := 0 to High(Elem.Decorators) do
+      begin
+        DecoRegs[I][J] := ACtx.Scope.AllocateRegister;
+        DecoratorCtx.CompileExpression(Elem.Decorators[J], DecoRegs[I][J]);
+      end;
     end;
+  finally
+    if Assigned(ACtx.SetNonStrictMode) then
+      ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
   end;
 
   SetLength(ClassDecoRegs, Length(AClassDef.FDecorators));

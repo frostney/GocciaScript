@@ -244,10 +244,7 @@ begin
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
   if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
-  begin
-    FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
     FCurrentScope.AttachTemplate(FCurrentTemplate);
-  end;
   if not Assigned(FCurrentTemplate) or
      not FTemplateDerivedConstructorThisGuards.TryGetValue(
        FCurrentTemplate, FDerivedConstructorThisGuard) then
@@ -1587,7 +1584,9 @@ begin
     HasUseStrictDirective(AProgram);
   FCurrentTemplate.GlobalEvalCode := FGlobalEvalVarEnvironment;
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
-  FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
+  // A sloppy direct eval in global code declares its vars as globals, so the
+  // top level has no hidden variable object.
+  FCurrentScope.DirectEvalUsage := AProgram.DirectEvalUsage;
   FCurrentScope.AttachTemplate(FCurrentTemplate);
   FCurrentScope.DeclareLocal('__receiver', False);
   FCurrentScope.GlobalBackedBindingsByName := FGlobalEvalVarEnvironment;

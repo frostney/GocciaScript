@@ -134,7 +134,9 @@ type
     procedure TestConstPropagationSkipsMutable;
     procedure TestConstPropagationReachesGlobalBackedReads;
     procedure TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier;
-    procedure TestConstPropagationSkipsGlobalBackedInNonStrictMode;
+    procedure TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval;
+    procedure TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval;
+    procedure TestDirectEvalSiteRecordNamesVarEnvironment;
     procedure TestConstPropagationSkipsGlobalBackedBigInt;
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
@@ -277,8 +279,12 @@ begin
     TestConstPropagationReachesGlobalBackedReads);
   Test('Const propagation skips global-backed reads compiled before the declaration',
     TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier);
-  Test('Const propagation skips global-backed bindings in non-strict mode',
-    TestConstPropagationSkipsGlobalBackedInNonStrictMode);
+  Test('Const propagation skips global-backed reads under a sloppy direct eval',
+    TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval);
+  Test('A sloppy function folds an enclosing const unless it contains a sloppy direct eval',
+    TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval);
+  Test('A direct eval site record names where the eval''s vars go',
+    TestDirectEvalSiteRecordNamesVarEnvironment);
   Test('Const propagation skips global-backed BigInt bindings',
     TestConstPropagationSkipsGlobalBackedBigInt);
   Test('Inferred numeric locals use typed arithmetic', TestInferredNumericLocalsUseTypedArithmetic);
@@ -422,11 +428,14 @@ begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   SourceLines := CreateTextLines(ASource);
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
-  if ATraditionalForLoops or AVarDeclarations then
+  if ATraditionalForLoops or AVarDeclarations or ANonStrictMode then
   begin
     ParserOptions := Parser.Options;
     ParserOptions.TraditionalForLoopsEnabled := ATraditionalForLoops;
     ParserOptions.VarDeclarationsEnabled := AVarDeclarations;
+    // The parser marks a function that contains a sloppy direct eval; the
+    // compiler relies on it when it compiles that function as sloppy code.
+    ParserOptions.NonStrictModeEnabled := ANonStrictMode;
     Parser.ApplyOptions(ParserOptions);
   end;
   ProgramNode := Parser.Parse;
@@ -1216,6 +1225,30 @@ begin
     // The call is sloppy, the record says strict.
     Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Bindings,
       True, Name, Problem)).ToBe(False);
+
+    // Where the eval's vars go. Inner has no hidden variable object until
+    // the parser's mark makes DeclareEvalVarObjects declare one.
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, True,
+      devNone, -1, Problem)).ToBe(True);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Outer, False,
+      devGlobal, -1, Problem)).ToBe(True);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, False,
+      devFunction, -1, Problem)).ToBe(False);
+    Expect<Boolean>(Pos('parser did not mark', Problem) > 0).ToBe(True);
+    Inner.DirectEvalUsage := [deuDirectEval, deuSloppyDirectEval];
+    Inner.DeclareEvalVarObjects(True);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, False,
+      devFunction, Inner.EvalVarObjectSlot, Problem)).ToBe(True);
+    // The wrong environment, register or strictness.
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, False,
+      devGlobal, -1, Problem)).ToBe(False);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, False,
+      devFunction, Inner.GetLocal(0).Slot, Problem)).ToBe(False);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, True,
+      devFunction, Inner.EvalVarObjectSlot, Problem)).ToBe(False);
+    // The hidden local is not a binding eval code can name.
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Bindings,
+      False, Name, Problem)).ToBe(True);
   finally
     Inner.Free;
     Outer.Free;
@@ -2358,16 +2391,162 @@ begin
   end;
 end;
 
-procedure TTestCompiler.TestConstPropagationSkipsGlobalBackedInNonStrictMode;
+procedure TTestCompiler.TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval;
 var
   Module: TGocciaBytecodeModule;
 begin
-  // A sloppy direct eval can shadow the name with a function-level var.
-  Module := CompileSource('const a = 2; const f = () => a; f();',
+  // A sloppy direct eval in g can shadow the name with a var of g, and in the
+  // function nested in h, a var of h. f contains none and is nested in none.
+  Module := CompileSource('const a = 2; const f = () => a;' +
+    ' const g = () => { eval("var a = 3"); return a; };' +
+    ' const h = () => { eval("0"); return () => a; };' +
+    ' f() + g() + h()();',
     False, False, True, True, True, True, False, True);
   try
     Expect<Integer>(
-      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(1);
+      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(Module.TopLevel.GetFunction(0), 2)).ToBe(True);
+    // g reads `eval` and `a` by name.
+    Expect<Integer>(
+      CountOp(Module.TopLevel.GetFunction(1), OP_GET_GLOBAL)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel.GetFunction(2).GetFunction(0),
+      OP_GET_GLOBAL)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+// ADR 0134: the parser marks the functions that contain a sloppy direct eval,
+// and only a binding read across one of them loses what the compiler knows
+// about it (DirectEvalMayShadow). Before, every non-strict function did.
+procedure TTestCompiler.TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval;
+const
+  SOURCE =
+    'const outer = () => {' +
+    '  const k = 3;' +
+    '  const plain = () => k * 2;' +
+    '  const evals = () => { eval("var k = 1"); return k * 2; };' +
+    '  const nested = () => { eval("0"); return () => k * 2; };' +
+    '  const strictEval = () => { "use strict"; eval("var k = 1");' +
+    '    return k * 2; };' +
+    '  return plain() + evals() + nested()() + strictEval();' +
+    '};';
+var
+  Module: TGocciaBytecodeModule;
+  Outer, Plain, Evals, NestedInner, StrictEval: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(SOURCE, False, False, False, True, True, True,
+    False, True);
+  try
+    Outer := Module.TopLevel.GetFunction(0);
+    Expect<Boolean>(Outer.StrictCode).ToBe(False);
+    Plain := Outer.GetFunction(0);
+    Evals := Outer.GetFunction(1);
+    NestedInner := Outer.GetFunction(2).GetFunction(0);
+    StrictEval := Outer.GetFunction(3);
+
+    // No sloppy direct eval between the read and the const: k * 2 is 6.
+    Expect<Integer>(CountOp(Plain, OP_GET_UPVALUE)).ToBe(0);
+    Expect<Integer>(CountArithmeticOps(Plain)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(Plain, 6)).ToBe(True);
+
+    // The eval can declare a var k of the reading function, or of the
+    // function the read is nested in.
+    Expect<Integer>(CountOp(Evals, OP_GET_UPVALUE)).ToBe(1);
+    Expect<Boolean>(CountArithmeticOps(Evals) > 0).ToBe(True);
+    Expect<Integer>(CountOp(NestedInner, OP_GET_UPVALUE)).ToBe(1);
+    Expect<Boolean>(CountArithmeticOps(NestedInner) > 0).ToBe(True);
+
+    // A strict eval's vars stay in the eval.
+    Expect<Integer>(CountOp(StrictEval, OP_GET_UPVALUE)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(StrictEval, 6)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+// The record of each eval site names where the eval's vars go (ES2026
+// §19.2.1.1 PerformEval) and, inside a function, the register of the hidden
+// variable object that stands for that environment. OP_DIRECT_EVAL names the
+// record and comes right before the call on the same callee register.
+procedure TTestCompiler.TestDirectEvalSiteRecordNamesVarEnvironment;
+const
+  SOURCE =
+    'eval("0");' +
+    'const f = (a, b = eval("1")) => { eval("2"); };' +
+    'const g = (a) => { eval("3"); };' +
+    'const h = () => { "use strict"; eval("4"); };';
+var
+  Module: TGocciaBytecodeModule;
+  F, G, H: TGocciaFunctionTemplate;
+  ParameterEnv, BodyEnv: TGocciaDirectEvalEnvironment;
+
+  procedure ExpectSitesPrecedeCalls(const ATemplate: TGocciaFunctionTemplate);
+  var
+    PC, Sites: Integer;
+    Instruction, Next: UInt32;
+  begin
+    Sites := 0;
+    for PC := 0 to ATemplate.CodeCount - 1 do
+    begin
+      Instruction := ATemplate.GetInstruction(PC);
+      if DecodeOp(Instruction) <> Ord(OP_DIRECT_EVAL) then
+        Continue;
+      Expect<Integer>(DecodeBx(Instruction)).ToBe(Sites);
+      Expect<Integer>(ATemplate.GetDirectEvalEnvironment(Sites).PC).ToBe(PC);
+      Next := ATemplate.GetInstruction(PC + 1);
+      Expect<Integer>(DecodeOp(Next)).ToBe(Ord(OP_CALL));
+      Expect<Integer>(DecodeA(Next)).ToBe(DecodeA(Instruction));
+      Inc(Sites);
+    end;
+    Expect<Integer>(Sites).ToBe(ATemplate.DirectEvalEnvironmentCount);
+  end;
+
+begin
+  Module := CompileSource(SOURCE, False, False, False, True, True, True,
+    False, True);
+  try
+    Expect<Integer>(Module.TopLevel.DirectEvalEnvironmentCount).ToBe(1);
+    Expect<Integer>(Ord(Module.TopLevel.GetDirectEvalEnvironment(0)
+      .VarEnvironment)).ToBe(Ord(devGlobal));
+    Expect<Integer>(
+      Module.TopLevel.GetDirectEvalEnvironment(0).VarObjectSlot).ToBe(-1);
+    ExpectSitesPrecedeCalls(Module.TopLevel);
+
+    // A parameter list with an expression has an environment of its own.
+    F := Module.TopLevel.GetFunction(0);
+    Expect<Integer>(F.DirectEvalEnvironmentCount).ToBe(2);
+    ParameterEnv := F.GetDirectEvalEnvironment(0);
+    BodyEnv := F.GetDirectEvalEnvironment(1);
+    Expect<Integer>(Ord(ParameterEnv.VarEnvironment))
+      .ToBe(Ord(devParameters));
+    Expect<Integer>(Ord(BodyEnv.VarEnvironment)).ToBe(Ord(devFunction));
+    Expect<Boolean>(ParameterEnv.VarObjectSlot >= 0).ToBe(True);
+    Expect<Boolean>(BodyEnv.VarObjectSlot >= 0).ToBe(True);
+    Expect<Boolean>(ParameterEnv.VarObjectSlot <> BodyEnv.VarObjectSlot)
+      .ToBe(True);
+    Expect<Boolean>(BodyEnv.VarObjectSlot < F.MaxRegisters).ToBe(True);
+    Expect<Boolean>(ParameterEnv.VarObjectSlot < F.MaxRegisters).ToBe(True);
+    // The hidden locals follow the parameters, so a call's arguments land
+    // in the parameters' registers as before.
+    Expect<Boolean>(BodyEnv.VarObjectSlot > 2).ToBe(True);
+    ExpectSitesPrecedeCalls(F);
+
+    // A simple parameter list shares the function's environment.
+    G := Module.TopLevel.GetFunction(1);
+    Expect<Integer>(G.DirectEvalEnvironmentCount).ToBe(1);
+    Expect<Integer>(Ord(G.GetDirectEvalEnvironment(0).VarEnvironment))
+      .ToBe(Ord(devFunction));
+    Expect<Boolean>(G.GetDirectEvalEnvironment(0).VarObjectSlot > 1)
+      .ToBe(True);
+
+    H := Module.TopLevel.GetFunction(2);
+    Expect<Integer>(Ord(H.GetDirectEvalEnvironment(0).VarEnvironment))
+      .ToBe(Ord(devNone));
+    Expect<Integer>(H.GetDirectEvalEnvironment(0).VarObjectSlot).ToBe(-1);
+
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_DIRECT_EVAL))
+      .ToBe(5);
   finally
     Module.Free;
   end;

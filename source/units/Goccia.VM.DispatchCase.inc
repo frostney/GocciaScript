@@ -2533,14 +2533,18 @@
         goto LDispatchNext;
       end;
 
+      OP_DIRECT_EVAL:
+      begin
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
+        ExecuteDirectEvalSite(A, DecodeBx(Instruction), Template, Frame.IP,
+          InstructionStartIP);
+      end;
+
       OP_CALL:
       begin
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
-        if ((C and CALL_FLAG_DIRECT_EVAL) <> 0) and
-           TryExecuteDirectEvalCall(A, B, C, Template,
-             UInt32(InstructionStartIP)) then
-          goto LDispatchNext;
         // A bytecode function is the usual callee and is neither a native nor
         // a bound function. Its class is sealed, so one exact class comparison
         // decides it: a bytecode callee skips the two `is` tests below, and
@@ -2766,12 +2770,6 @@
       begin
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
-        // ES2026 §13.3.6.1: `eval(...)` whose callee a `with` object supplied
-        // is still a direct eval when that callee is the realm's eval.
-        if ((C and CALL_FLAG_DIRECT_EVAL) <> 0) and
-           TryExecuteDirectEvalCall(A, B, C, Template,
-             UInt32(InstructionStartIP)) then
-          goto LDispatchNext;
         // See OP_CALL: an exact class comparison decides a bytecode callee.
         CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
           Assigned(FRegisters[A].ObjectValue) and

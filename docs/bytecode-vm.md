@@ -69,7 +69,7 @@ The opcode space is split into three tiers:
 - `128..166`: non-core generic arithmetic/bitwise operations
 - `167..255`: semantic helper/orchestration operations
 
-In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 214 opcodes, highest `236`):
+In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 215 opcodes, highest `237`):
 
 - core instructions cover hot execution paths such as locals, typed arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup; `99` is unused
 - the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), `OP_SET_CLASS_SOURCE_CONST` (`143`), `OP_CLASS_ADD_METHOD_DYNAMIC` (`144`), and `OP_SET_PRIVATE_CLASS` (`145`); `135` and `146..166` are unused
@@ -395,6 +395,24 @@ function references, control-flow targets, and exception-handler metadata.
 The VM retains bounds checks on instruction, constant, and function access as
 defense in depth.
 
+A direct `eval` call compiles to `OP_DIRECT_EVAL` followed by the call's
+`OP_CALL`, or `OP_CALL_METHOD` when a `with` object supplies `eval`, on the
+same callee register. `OP_DIRECT_EVAL` names the template's eval site record
+by index. When the callee is the realm's `%eval%` it runs the eval with that
+record, reading the source argument from the call's operands, and skips the
+call; otherwise it does nothing, and the call runs as an ordinary call or
+method call with its own `this`, spread arguments and tail position. The
+record is serialized with the template: the call's strictness, the caller
+bindings visible at the call, where the eval's `var` declarations go (nowhere
+for a strict call, the global environment, the calling function, or its
+parameter list) and the caller's register for the hidden variable object of
+that environment (ADR 0134). The compiler reserves those registers in each
+function the parser marked as containing a sloppy direct `eval`; nothing
+reads them yet, and the tree-walk bridge still runs the eval. The verifier
+checks that `OP_DIRECT_EVAL` names an existing record and is followed by a
+call on its register, and that each record's register is in range and matches
+its environment.
+
 A loaded file carries no proof, so the verifier makes a loaded `OP_CALL_SELF_NUM`
 memory-safe on its own. The closed numeric frame it would enter is sound only
 under the compiler's numeric-only proof, which is not serialized (ADR 0101),
@@ -483,9 +501,9 @@ The optimizer is intentionally compiler-side only:
 - it does not track mutable bindings, imports, destructuring, or function/class declarations
 - it only uses `--strict-types` for conservative algebraic simplifications where the strict type alone preserves JavaScript semantics
 
-A top-level `const` of a script or an imported module lives in the global or module environment rather than in a register, so that other code can reach it by name. Its value is propagated only to reads compiled after the declaration. Top-level statements run in source order and hoisted function declarations are compiled before all of them, so no such read can run while the binding is in its temporal dead zone; a read compiled earlier keeps `OP_GET_GLOBAL` and throws `ReferenceError` there. The binding is still declared, defined and exported, so direct `eval`, later scripts and importing modules observe it unchanged. Three cases keep the named read: non-strict compatibility mode, where a sloppy direct `eval` can shadow the name with a function-level `var` at run time; BigInt values, whose constant load rebuilds the value and costs more than the cached global read; and a coverage run, where a ternary or logical expression decided by the constant would otherwise be folded and lose its branch records.
+A top-level `const` of a script or an imported module lives in the global or module environment rather than in a register, so that other code can reach it by name. Its value is propagated only to reads compiled after the declaration. Top-level statements run in source order and hoisted function declarations are compiled before all of them, so no such read can run while the binding is in its temporal dead zone; a read compiled earlier keeps `OP_GET_GLOBAL` and throws `ReferenceError` there. The binding is still declared, defined and exported, so direct `eval`, later scripts and importing modules observe it unchanged. Three cases keep the named read: a read in or under a function that contains a sloppy direct `eval`, which can shadow the name with a function-level `var` at run time (see below); BigInt values, whose constant load rebuilds the value and costs more than the cached global read; and a coverage run, where a ternary or logical expression decided by the constant would otherwise be folded and lose its branch records.
 
-What the compiler knows about a binding of an enclosing function, the constant value of a `const` or a trusted type, reaches a nested function only when no non-strict function lies between the read and the declaration. A sloppy direct `eval` in such a function can declare a `var` of the same name, which shadows the enclosing binding at run time. Strict code, the default, is unaffected.
+What the compiler knows about a binding of an enclosing function, the constant value of a `const` or a trusted type, reaches a nested function only when no function that contains a sloppy direct `eval` lies between the read and the declaration, the reading function included (`DirectEvalMayShadow`). Such an `eval` can declare a `var` of the same name, which shadows the enclosing binding at run time. The parser marks each function whose own code, its parameter list included, calls the plain identifier `eval`, and whether one such call is in non-strict code (`TGocciaDirectEvalUsage`, ADR 0134), before the compiler compiles any of it, so the answer also covers reads compiled ahead of the call. Strict code, the default, is unaffected, and so is a non-strict function without such a call.
 
 Typed arithmetic opcodes (`OP_ADD_FLOAT`, `OP_ADD_NUM_IMM` and the rest) do not check their operands, so a binding's type hint has to hold at every read, including a read compiled before an assignment that reaches it through a loop's back edge or the join after a branch. A `const` takes the type of its initializer. A `let` without enforced type keeps a Number hint only when `Goccia.Compiler.NumericBindings`, which scans the whole function body before compiling it, proves that its initializer and every assignment to it produce a Number; an assignment never gives a binding a hint, and a `var` gets none because it can be read before its declaration runs.
 

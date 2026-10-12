@@ -94,7 +94,29 @@ type
 
   TGocciaDirectEvalBindingArray = array of TGocciaDirectEvalBindingInfo;
 
+  // Where a direct eval call's var-scoped declarations go (ES2026 §19.2.1.1
+  // PerformEval steps 16-18, ADR 0134 "The eval site record"):
+  // - devNone: a strict call site, whose eval gets a variable environment of
+  //   its own;
+  // - devGlobal: the global environment, for a sloppy call in a script's
+  //   global code;
+  // - devFunction: the calling function's variable environment, which the
+  //   function's hidden variable object stands for;
+  // - devParameters: a call in the parameter list of a sloppy function whose
+  //   parameter list has expressions, where a second hidden object stands for
+  //   the parameters' environment (§10.2.11 FunctionDeclarationInstantiation
+  //   step 20).
+  TGocciaDirectEvalVarEnvironment = (
+    devNone,
+    devGlobal,
+    devFunction,
+    devParameters
+  );
+
   TGocciaDirectEvalEnvironment = record
+    // The start of the site's OP_DIRECT_EVAL instruction. The instruction
+    // names the record by its index; the bridge compares the PC with the
+    // parameter preamble to tell a call in the parameter list.
     PC: UInt32;
     RejectArgumentsReference: Boolean;
     // IsStrict of the call expression (ES2026 §13.3.6.1 step 6.a), which is
@@ -102,6 +124,11 @@ type
     // inline in a sloppy function: a computed key, a static field initializer
     // or an `extends` expression.
     StrictCaller: Boolean;
+    VarEnvironment: TGocciaDirectEvalVarEnvironment;
+    // The caller's register that holds the hidden variable object for
+    // devFunction and devParameters, -1 otherwise. Nothing reads the
+    // register before Phase 3 of ADR 0134 compiles sloppy direct eval.
+    VarObjectSlot: Integer;
     Bindings: TGocciaDirectEvalBindingArray;
   end;
 
@@ -347,9 +374,13 @@ type
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt16;
       const AName: string = '');
-    procedure AddDirectEvalEnvironment(const APC: UInt32;
+    { Adds an eval site record and returns its index, which the site's
+      OP_DIRECT_EVAL carries in Bx. }
+    function AddDirectEvalEnvironment(const APC: UInt32;
       const ARejectArgumentsReference, AStrictCaller: Boolean;
-      const ABindings: TGocciaDirectEvalBindingArray);
+      const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
+      const AVarObjectSlot: Integer;
+      const ABindings: TGocciaDirectEvalBindingArray): Integer;
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt16);
 
@@ -366,8 +397,6 @@ type
     function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
     function GetDirectEvalEnvironment(
       const AIndex: Integer): TGocciaDirectEvalEnvironment;
-    function FindDirectEvalEnvironment(const APC: UInt32;
-      out AIndex: Integer): Boolean;
     function GetExceptionHandler(const AIndex: Integer): TGocciaExceptionHandler;
 
     property Name: string read FName write FName;
@@ -990,9 +1019,11 @@ begin
   Inc(FUpvalueCount);
 end;
 
-procedure TGocciaFunctionTemplate.AddDirectEvalEnvironment(const APC: UInt32;
+function TGocciaFunctionTemplate.AddDirectEvalEnvironment(const APC: UInt32;
   const ARejectArgumentsReference, AStrictCaller: Boolean;
-  const ABindings: TGocciaDirectEvalBindingArray);
+  const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
+  const AVarObjectSlot: Integer;
+  const ABindings: TGocciaDirectEvalBindingArray): Integer;
 var
   I: Integer;
 begin
@@ -1005,11 +1036,16 @@ begin
     ARejectArgumentsReference;
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].StrictCaller :=
     AStrictCaller;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].VarEnvironment :=
+    AVarEnvironment;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].VarObjectSlot :=
+    AVarObjectSlot;
   SetLength(FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings,
     Length(ABindings));
   for I := 0 to High(ABindings) do
     FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings[I] :=
       ABindings[I];
+  Result := FDirectEvalEnvironmentCount;
   Inc(FDirectEvalEnvironmentCount);
 end;
 
@@ -1096,21 +1132,6 @@ begin
       [AIndex, FDirectEvalEnvironmentCount - 1]);
   {$ENDIF}
   Result := FDirectEvalEnvironments[AIndex];
-end;
-
-function TGocciaFunctionTemplate.FindDirectEvalEnvironment(const APC: UInt32;
-  out AIndex: Integer): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to FDirectEvalEnvironmentCount - 1 do
-    if FDirectEvalEnvironments[I].PC = APC then
-    begin
-      AIndex := I;
-      Exit(True);
-    end;
-  AIndex := -1;
-  Result := False;
 end;
 
 function TGocciaFunctionTemplate.GetFunctionCount: Integer;

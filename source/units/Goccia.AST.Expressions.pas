@@ -386,6 +386,7 @@ type
     FReturnType: string;
     FIsAsync: Boolean;
     FSourceText: string;
+    FDirectEvalUsage: TGocciaDirectEvalUsage;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ASpan: TGocciaSourceSpan);
@@ -395,6 +396,8 @@ type
     property ReturnType: string read FReturnType write FReturnType;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property SourceText: string read FSourceText write FSourceText;
+    property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
+      write FDirectEvalUsage;
   end;
 
   TGocciaFunctionExpression = class(TGocciaExpression)
@@ -407,6 +410,7 @@ type
     FParsedInStrictMode: Boolean;
     FSourceText: string;
     FName: string;
+    FDirectEvalUsage: TGocciaDirectEvalUsage;
   public
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ASpan: TGocciaSourceSpan);
@@ -424,6 +428,8 @@ type
     property ParsedInStrictMode: Boolean read FParsedInStrictMode write FParsedInStrictMode;
     property SourceText: string read FSourceText write FSourceText;
     property Name: string read FName write FName;
+    property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
+      write FDirectEvalUsage;
   end;
 
   TGocciaObjectMethodDefinition = class(TGocciaExpression)
@@ -540,11 +546,14 @@ type
   private
     FBody: TGocciaASTNode;
     FSourceText: string;
+    FDirectEvalUsage: TGocciaDirectEvalUsage;
   public
     constructor Create(const ABody: TGocciaASTNode; const ASpan: TGocciaSourceSpan);
     function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
     property SourceText: string read FSourceText write FSourceText;
+    property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
+      write FDirectEvalUsage;
   end;
 
   // Setter method: set propertyName(value) { ... }
@@ -554,6 +563,7 @@ type
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
     FSourceText: string;
+    FDirectEvalUsage: TGocciaDirectEvalUsage;
   public
     constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ASpan: TGocciaSourceSpan); overload;
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode; const ASpan: TGocciaSourceSpan); overload;
@@ -562,6 +572,8 @@ type
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
     property SourceText: string read FSourceText write FSourceText;
+    property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
+      write FDirectEvalUsage;
   end;
 
   // Destructuring pattern base class - complete definition
