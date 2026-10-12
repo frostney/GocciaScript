@@ -3761,8 +3761,9 @@
             begin
               if IsEngineIntegrityFault(E) then
                 raise;
-              DynImportPromise.Reject(
-                CreateErrorObject(ERROR_NAME, E.Message));
+              CurrentCallExpressionLocation(DebugLine, DebugColumn);
+              DynImportPromise.Reject(CreateImportCallErrorObject(ERROR_NAME,
+                E.Message, GlobalName, DebugLine, DebugColumn));
             end;
           end;
           SetRegister(A, DynImportPromise);
@@ -3854,8 +3855,9 @@
             begin
               if IsEngineIntegrityFault(E) then
                 raise;
-              DynImportPromise.Reject(
-                CreateErrorObject(ERROR_NAME, E.Message));
+              CurrentCallExpressionLocation(DebugLine, DebugColumn);
+              DynImportPromise.Reject(CreateImportCallErrorObject(ERROR_NAME,
+                E.Message, GlobalName, DebugLine, DebugColumn));
             end;
           end;
           SetRegister(A, DynImportPromise);
