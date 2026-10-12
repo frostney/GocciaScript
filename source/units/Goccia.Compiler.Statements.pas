@@ -2013,10 +2013,12 @@ begin
 end;
 
 // ES2026 §14.15.3 TryStatement Evaluation: a finally block that completes
-// normally leaves the completion value of the try statement as it was
-// (`return ? UpdateEmpty(C, undefined)` uses C, not F), so in eval code the
-// finally block's own expression statements must not replace it. An abrupt
-// finally block jumps past the restore and keeps its own value.
+// normally leaves the completion value of the try statement as it was (F is
+// replaced by C), so in eval code the finally block's own expression
+// statements must not replace it. An abrupt finally block (a break or
+// continue) jumps past the restore, and its completion is UpdateEmpty(F,
+// undefined): the finally block's own value, or undefined, never the try
+// block's.
 procedure CompileFinallyBlock(const ACtx: TGocciaCompilationContext;
   const ABlock: TGocciaBlockStatement);
 var
@@ -2031,6 +2033,8 @@ begin
   try
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, SavedCompletion,
       UInt16(ACtx.CompletionRegister), 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED,
+      UInt16(ACtx.CompletionRegister), 0, 0));
     CompileBlockStatement(ACtx, ABlock);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, UInt16(ACtx.CompletionRegister),
       SavedCompletion, 0));

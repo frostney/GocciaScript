@@ -1921,6 +1921,11 @@ begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
       if Local.SuspendCount > 0 then
         Continue;
+      // A global eval's var or function can be deleted, so the direct eval
+      // resolves it by name through the global environment, as the eval code
+      // itself does (TGocciaCompilerScope.GlobalBackedBindingsByName).
+      if Local.IsGlobalBacked and ACtx.Scope.GlobalBackedBindingsByName then
+        Continue;
       if HiddenWithBindingName(Local.Name) then
         AddDirectEvalBinding(Bindings, Names, Local.Name, debWithLocal,
           Local.Slot, False)
@@ -1969,6 +1974,8 @@ begin
         end;
         if (Local.Name <> KEYWORD_THIS) and
            not IsDirectEvalVisibleCompilerName(Local.Name) then
+          Continue;
+        if Local.IsGlobalBacked and ScopeCursor.GlobalBackedBindingsByName then
           Continue;
         if Local.IsGlobalBacked then
           AddDirectEvalBinding(Bindings, Names, Local.Name, debGlobal, 0,

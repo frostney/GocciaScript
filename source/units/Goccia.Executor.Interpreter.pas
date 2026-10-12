@@ -37,6 +37,7 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function EvaluateGlobalEval(const AProgram: TGocciaProgram;
       const ASourcePath: string; const AStrictEval: Boolean;
+      const ADeclarations: TGocciaGlobalEvalDeclarations;
       var AStage: TGocciaGlobalEvalStage): TGocciaValue; override;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
@@ -98,10 +99,12 @@ end;
 
 // ES2026 §19.2.1.1 PerformEval steps 17-33, evaluated by the interpreter: the
 // eval gets a fresh declarative environment under the global one, which is
-// also its variable environment unless the eval is strict.
+// also its variable environment unless the eval is strict. The engine has run
+// the static checks; the evaluator makes its own declaration lists.
 function TGocciaInterpreterExecutor.EvaluateGlobalEval(
   const AProgram: TGocciaProgram; const ASourcePath: string;
   const AStrictEval: Boolean;
+  const ADeclarations: TGocciaGlobalEvalDeclarations;
   var AStage: TGocciaGlobalEvalStage): TGocciaValue;
 var
   EvalScope, VarScope: TGocciaScope;
@@ -125,7 +128,7 @@ begin
     else
       VarScope := FGlobalScope;
     Result := EvaluateEvalProgram(AProgram, EvalContext, VarScope, EvalScope,
-      AStrictEval, False, nil, False, False, False);
+      AStrictEval, False, nil, False, False, False, False, True);
   finally
     if Assigned(TGarbageCollector.Instance) then
       TGarbageCollector.Instance.RemoveTempRoot(EvalScope);

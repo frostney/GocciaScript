@@ -1553,6 +1553,34 @@ await section("Test262 Runner: delete removes a global var an indirect eval crea
   }
 });
 
+// ES2026 §14.15.3: a finally block that ends with an empty break replaces the
+// try statement's value with undefined; one that completes normally keeps it.
+// A direct eval inside the eval code resolves the eval's deleted global var by
+// name, as the eval code itself does.
+await section("Test262 Runner: an indirect eval's completion value and deleted globals reach a nested direct eval...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var geval = eval;",
+      'print(geval("1; try { 2 } finally { 3 }"));',
+      'print(geval("99; do { -99; try { 39 } finally { break; } } while (false)"));',
+      'print(geval("l: try { 5 } finally { break l; }"));',
+      'print(geval("m: try { 6 } finally { 7; break m; }"));',
+      'print(geval("n: { 8; try { 9; break n; } finally { 10 } }"));',
+      `print(geval("var d5 = 1; delete globalThis.d5; eval('typeof d5')"));`,
+      `print(geval("var d7 = 1; delete globalThis.d7; eval('d7 = 4'); globalThis.d7"));`,
+      `print(geval("var d10 = 1; delete globalThis.d10; (function () { return eval('typeof d10'); })()"));`,
+      `print(geval("function fdel() {} delete globalThis.fdel; eval('typeof fdel')"));`,
+    ]);
+    const expected = [
+      "2", "undefined", "undefined", "7", "9", "undefined", "4", "undefined", "undefined",
+    ].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} eval completion probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} eval completion or deleted-global lookup was wrong: ${proc.stdout.toString()}`);
+  }
+});
+
 // TC39 ShadowRealm §3.1.3 PerformShadowRealmEval: a parse or early error is a
 // caller-realm SyntaxError (step 2); an abrupt completion of the declaration
 // instantiation or the body, a SyntaxError a nested eval throws included, is

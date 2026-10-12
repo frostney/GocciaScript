@@ -7,7 +7,9 @@ program Goccia.Engine.GlobalEval.Test;
   ShadowRealm.prototype.evaluate) runs through TGocciaEngine.EvaluateGlobalEval.
   In bytecode mode the code is compiled and run on the VM, so a function or
   class it creates is a VM value; only the tree-walk evaluator creates
-  AST-backed ones, which interpreter mode still does. }
+  AST-backed ones, which interpreter mode still does. These tests call the
+  entry directly and through the Test262 host's eval; the ShadowRealm unit
+  reaches the same entry and no longer links the evaluator. }
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
@@ -81,6 +83,7 @@ function TGlobalEvalTests.CreateEngine(const AExecutor: TGocciaExecutor;
 begin
   Result := TGocciaEngine.Create('<global-eval-test>', ASource, AExecutor);
   Result.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
+  Result.LabelStatementsEnabled := True;
 end;
 
 function TGlobalEvalTests.EvalStage(const AEngine: TGocciaEngine;
@@ -269,6 +272,15 @@ begin
       '<global-eval-test>', Stage);
     Expect<Double>((Value as TGocciaNumberLiteralValue).Value).ToBe(4);
     Value := Engine.EvaluateGlobalEval('6; if (false) 7;',
+      '<global-eval-test>', Stage);
+    Expect<Boolean>(Value is TGocciaUndefinedLiteralValue).ToBe(True);
+    // ES2026 §14.15.3: an empty break out of a finally block makes the try
+    // statement's value undefined.
+    Value := Engine.EvaluateGlobalEval(
+      '99; b: { -99; try { 39 } finally { break b; } }',
+      '<global-eval-test>', Stage);
+    Expect<Boolean>(Value is TGocciaUndefinedLiteralValue).ToBe(True);
+    Value := Engine.EvaluateGlobalEval('l: try { 5 } finally { break l; }',
       '<global-eval-test>', Stage);
     Expect<Boolean>(Value is TGocciaUndefinedLiteralValue).ToBe(True);
   finally

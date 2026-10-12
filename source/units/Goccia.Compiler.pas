@@ -7,6 +7,8 @@ interface
 uses
   Generics.Collections,
 
+  UnicodeStringList,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -30,6 +32,7 @@ type
     FBlockFunctionVarBindings: TBlockFunctionVarBindingSet;
     FGlobalBackedTopLevel: Boolean;
     FGlobalEvalVarEnvironment: Boolean;
+    FGlobalEvalDeclaredVarNames: TUnicodeStringList;
     FEvalCode: Boolean;
     FCompletionRegister: Integer;
     FAsyncTopLevel: Boolean;
@@ -67,11 +70,13 @@ type
       EvalDeclarationInstantiation steps 17-18, CreateGlobalVarBinding and
       CreateGlobalFunctionBinding with D = true) and keeps its lexical
       declarations as locals of its own template (step 16); a strict eval keeps
-      every declaration local (§19.2.1.1 step 18: varEnv is lexEnv). The
-      host runs the declaration checks of §19.2.1.3 before the template, which
-      only binds. The template is never serialized. }
+      every declaration local (§19.2.1.1 step 18: varEnv is lexEnv).
+      ADeclaredVarNames is declaredVarNames (§19.2.1.3 steps 11-12). The host
+      runs the declaration checks of §19.2.1.3 before the template, which only
+      binds. The template is never serialized. }
     function CompileGlobalEval(const AProgram: TGocciaProgram;
-      const AStrictEval: Boolean): TGocciaBytecodeModule;
+      const AStrictEval: Boolean;
+      const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
     property FormalParameterCounts: TFormalParameterCountMap
       read FFormalParameterCounts;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
@@ -97,7 +102,6 @@ uses
   SysUtils,
 
   OrderedStringMap,
-  UnicodeStringList,
 
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
@@ -110,7 +114,6 @@ uses
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements,
-  Goccia.Eval.EarlyErrors,
   Goccia.Keywords.Reserved,
   Goccia.Modules;
 
@@ -1516,35 +1519,9 @@ begin
   end;
 end;
 
-// ES2026 §19.2.1.3 EvalDeclarationInstantiation step 18:
-// CreateGlobalVarBinding(vn, true) for each of declaredVarNames. The template
-// is marked GlobalEvalCode, so the instruction creates a deletable binding.
-procedure EmitGlobalEvalVarDeclarations(const ACtx: TGocciaCompilationContext;
-  const AProgram: TGocciaProgram; const ABlockFunctionVarBindings: Boolean);
-var
-  VarNames, FunctionNames, DeclaredVarNames: TUnicodeStringList;
-  Mode: TGocciaVarBindingNameCollectionMode;
-begin
-  if ABlockFunctionVarBindings then
-    Mode := vbnNonStrictScriptCompatibility
-  else
-    Mode := vbnStandard;
-  VarNames := TUnicodeStringList.Create;
-  FunctionNames := TUnicodeStringList.Create;
-  DeclaredVarNames := TUnicodeStringList.Create;
-  try
-    CollectGlobalEvalDeclarationNames(AProgram, Mode, VarNames, FunctionNames,
-      DeclaredVarNames);
-    EmitHoistedGlobalVarDeclarationsForNames(ACtx, DeclaredVarNames);
-  finally
-    DeclaredVarNames.Free;
-    FunctionNames.Free;
-    VarNames.Free;
-  end;
-end;
-
 function TGocciaCompiler.CompileGlobalEval(const AProgram: TGocciaProgram;
-  const AStrictEval: Boolean): TGocciaBytecodeModule;
+  const AStrictEval: Boolean;
+  const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
 var
   SavedAsyncTopLevel, SavedGlobalBackedTopLevel,
   SavedPreinitializedTopLevelFunctions: Boolean;
@@ -1556,11 +1533,13 @@ begin
   FPreinitializedTopLevelFunctions := False;
   FGlobalBackedTopLevel := not AStrictEval;
   FGlobalEvalVarEnvironment := not AStrictEval;
+  FGlobalEvalDeclaredVarNames := ADeclaredVarNames;
   FEvalCode := True;
   try
     Result := Compile(AProgram);
   finally
     FEvalCode := False;
+    FGlobalEvalDeclaredVarNames := nil;
     FGlobalEvalVarEnvironment := False;
     FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
     FPreinitializedTopLevelFunctions := SavedPreinitializedTopLevelFunctions;
@@ -1662,11 +1641,13 @@ begin
           DoCompileStatement(AProgram.Body[I]);
     end;
 
-    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 18: the var bindings
-    // follow the function bindings.
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 18:
+    // CreateGlobalVarBinding(vn, true) for each of declaredVarNames, after the
+    // function bindings. The template is marked GlobalEvalCode, so the
+    // instruction creates a deletable binding.
     if FGlobalEvalVarEnvironment then
-      EmitGlobalEvalVarDeclarations(BuildContext, AProgram,
-        NonStrictBlockFunctionVarBindingsEnabled);
+      EmitHoistedGlobalVarDeclarationsForNames(BuildContext,
+        FGlobalEvalDeclaredVarNames);
 
     RetReg := FCurrentScope.AllocateRegister;
     if FEvalCode then

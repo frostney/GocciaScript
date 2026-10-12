@@ -275,6 +275,9 @@ type
     procedure DiscardRuntimePending;
     procedure PrintSourcePipelineWarnings(
       const APipelineResult: TGocciaSourcePipelineResult);
+    { The parse options of this engine's language profile. }
+    function SourcePipelineOptions(
+      const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
@@ -2273,20 +2276,15 @@ var
   RealmScope: TGocciaExecutionContextScope;
   SourceLines: TStringList;
   StrictEval: Boolean;
-  Mode: TGocciaVarBindingNameCollectionMode;
+  Declarations: TGocciaGlobalEvalDeclarations;
 begin
   AStage := gesCompile;
+  Declarations.VarNames := TUnicodeStringList.Create;
+  Declarations.FunctionNames := TUnicodeStringList.Create;
+  Declarations.DeclaredVarNames := TUnicodeStringList.Create;
   SourceLines := CreateECMAScriptSourceLines(ASourceText);
   try
-    Options := TGocciaSourcePipeline.DefaultOptions;
-    Options.SourceType := stScript;
-    Options.Preprocessors := FPreprocessors;
-    Options.Compatibility := FCompatibility;
-    Options.LabelStatementsEnabled := FLabelStatementsEnabled;
-    Options.ForInLoopsEnabled := FForInLoopsEnabled;
-    Options.ExperimentalJSModuleSourceEnabled :=
-      FExperimentalJSModuleSourceEnabled;
-    Options.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
+    Options := SourcePipelineOptions(stScript);
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
     try
       RealmScope := ActivateRealmExecutionContext;
@@ -2304,13 +2302,15 @@ begin
           ValidateEvalEarlyErrors(ParseResult.ProgramNode, StrictEval, False,
             False, False);
           ValidateEvalControlFlow(ParseResult.ProgramNode);
-          if (not StrictEval) and (cfNonStrictMode in FCompatibility) then
-            Mode := vbnNonStrictScriptCompatibility
-          else
-            Mode := vbnStandard;
-          CheckEvalLexicalDeclarationConflicts(ParseResult.ProgramNode, Mode);
+          CollectGlobalEvalDeclarationNames(ParseResult.ProgramNode,
+            VarBindingNameCollectionMode(not StrictEval,
+              cfNonStrictMode in FCompatibility),
+            Declarations.VarNames, Declarations.FunctionNames,
+            Declarations.DeclaredVarNames);
+          CheckEvalLexicalDeclarationConflicts(ParseResult.ProgramNode,
+            Declarations.VarNames);
           Result := FExecutor.EvaluateGlobalEval(ParseResult.ProgramNode,
-            ASourcePath, StrictEval, AStage);
+            ASourcePath, StrictEval, Declarations, AStage);
         finally
           ParseResult.Free;
         end;
@@ -2322,7 +2322,24 @@ begin
     end;
   finally
     SourceLines.Free;
+    Declarations.DeclaredVarNames.Free;
+    Declarations.FunctionNames.Free;
+    Declarations.VarNames.Free;
   end;
+end;
+
+function TGocciaEngine.SourcePipelineOptions(
+  const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
+begin
+  Result := TGocciaSourcePipeline.DefaultOptions;
+  Result.Preprocessors := FPreprocessors;
+  Result.Compatibility := FCompatibility;
+  Result.LabelStatementsEnabled := FLabelStatementsEnabled;
+  Result.ForInLoopsEnabled := FForInLoopsEnabled;
+  Result.ExperimentalJSModuleSourceEnabled :=
+    FExperimentalJSModuleSourceEnabled;
+  Result.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
+  Result.SourceType := ASourceType;
 end;
 
 procedure TGocciaEngine.RetainModule(const AModule: TGocciaCompiledModule);
@@ -3072,15 +3089,7 @@ begin
   PipelineResult := nil;
 
   try
-    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-    PipelineOptions.Preprocessors := FPreprocessors;
-    PipelineOptions.Compatibility := FCompatibility;
-    PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
-    PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
-    PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-      FExperimentalJSModuleSourceEnabled;
-    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
-    PipelineOptions.SourceType := FSourceType;
+    PipelineOptions := SourcePipelineOptions(FSourceType);
     PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
       PipelineOptions);
     FLastTiming.LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;

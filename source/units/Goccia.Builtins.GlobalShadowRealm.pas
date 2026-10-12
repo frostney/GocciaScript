@@ -34,11 +34,8 @@ uses
   Math,
 
   OrderedStringMap,
-  TextSemantics,
 
   Goccia.Arguments.Collection,
-  Goccia.AST.Node,
-  Goccia.AST.Statements,
   Goccia.CapabilityAudit,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -53,7 +50,6 @@ uses
   Goccia.Modules.Loader,
   Goccia.ObjectModel,
   Goccia.Scope,
-  Goccia.SourcePipeline,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -188,9 +184,9 @@ begin
   inherited Create;
   FSource := TStringList.Create;
   // Match the parent's execution mode so bytecode-mode hosts get bytecode
-  // child realms (and interpreter hosts get interpreter child realms).
-  // evaluate() runs source through the eval evaluator regardless of mode, but
-  // the engine still needs an executor of the host's mode for bootstrapping.
+  // child realms (and interpreter hosts get interpreter child realms):
+  // evaluate() and the child's eval run through the child engine's executor
+  // (TGocciaEngine.EvaluateGlobalEval).
   if AParentEngine.Executor is TGocciaBytecodeExecutor then
     FExecutor := TGocciaBytecodeExecutor.Create
   else

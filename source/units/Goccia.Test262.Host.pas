@@ -63,8 +63,6 @@ uses
   TimingUtils,
 
   Goccia.Arguments.Collection,
-  Goccia.AST.Node,
-  Goccia.AST.Statements,
   Goccia.Builtins.Atomics,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Error,
@@ -76,7 +74,6 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
-  Goccia.Scope,
   Goccia.Scope.Redeclaration,
   Goccia.StackLimit,
   Goccia.TextFiles,

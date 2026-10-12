@@ -139,32 +139,8 @@ function EvaluateEvalProgram(const AProgram: TGocciaProgram;
   const AAllowNewTarget: Boolean = False;
   const AAllowSuperProperty: Boolean = False;
   const AAllowSuperCall: Boolean = False;
-  const ARejectArgumentsReference: Boolean = False): TGocciaValue;
-
-{ EvaluateEvalProgram split into its two phases, so a caller can distinguish a
-  pre-execution early error from a runtime abrupt completion (both are a Pascal
-  TGocciaError, differing only by phase). PrepareEvalProgram runs phase one — all
-  of the eval Script's pre-execution work: the static early-error passes (forbidden
-  module/using declarations, a forbidden `arguments` reference, and the
-  reference/assignment early errors of ValidateEvalEarlyErrors) and then
-  EvalDeclarationInstantiation. It returns the evaluation context the body runs in.
-  Every error it raises is a pre-execution error: a TGocciaSyntaxError for a static
-  early error (including a duplicate-lexical or lexical/var conflict surfaced by
-  EvalDeclarationInstantiation), or a TGocciaTypeError for a CanDeclareGlobal*
-  conflict. RunEvalProgramBody runs phase two — evaluating the body with that
-  context and returning the Script's completion value; an error it raises is a
-  runtime abrupt completion. EvaluateEvalProgram simply chains the two. }
-function PrepareEvalProgram(const AProgram: TGocciaProgram;
-  const AContext: TGocciaEvaluationContext; const AVarScope,
-  ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
-  const ARejectArgumentsVarDeclaration: Boolean;
-  const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
-  const AAllowNewTarget: Boolean = False;
-  const AAllowSuperProperty: Boolean = False;
-  const AAllowSuperCall: Boolean = False;
-  const ARejectArgumentsReference: Boolean = False): TGocciaEvaluationContext;
-function RunEvalProgramBody(const AProgram: TGocciaProgram;
-  const AEvalContext: TGocciaEvaluationContext): TGocciaValue;
+  const ARejectArgumentsReference: Boolean = False;
+  const AStaticChecksDone: Boolean = False): TGocciaValue;
 
 implementation
 
@@ -628,16 +604,6 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
     GC.CollectForMemoryPressure(AProtect);
-end;
-
-function VarBindingNameCollectionMode(
-  const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
-  TGocciaVarBindingNameCollectionMode;
-begin
-  if ANonStrictMode and ACompatibilityNonStrictMode then
-    Result := vbnNonStrictScriptCompatibility
-  else
-    Result := vbnStandard;
 end;
 
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
@@ -1117,7 +1083,8 @@ procedure EvalDeclarationInstantiation(const AProgram: TGocciaProgram;
   const AContext: TGocciaEvaluationContext; const AVarScope,
   ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
   const ARejectArgumentsVarDeclaration: Boolean;
-  const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray);
+  const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
+  const AStaticChecksDone: Boolean);
 var
   VarNames: TUnicodeStringList;
   LexNames: TUnicodeStringList;
@@ -1141,12 +1108,8 @@ var
     Result := False;
   end;
   // A duplicate lexical name, or a lexical/var conflict, is a static Script
-  // early error (ECMA-262 §16.1.1). Raise TGocciaSyntaxError directly — like
-  // RejectEvalControlFlow and the parser's redeclaration error, and unlike
-  // ThrowSyntaxError, which raises a throwable TGocciaThrowValue — so a caller
-  // distinguishing early errors from runtime abrupt completions (notably
-  // ShadowRealm.prototype.evaluate, which maps the former to a caller-realm
-  // SyntaxError and the latter to a TypeError) classifies it correctly.
+  // early error (ECMA-262 §16.1.1), raised as TGocciaSyntaxError like the
+  // parser's redeclaration error.
   procedure RaiseAlreadyDeclared(const AName: string);
   begin
     raise TGocciaSyntaxError.Create(
@@ -1165,10 +1128,15 @@ begin
     CollectVarBindingNamesFromStatements(AProgram.Body, VarNames,
       VarBindingNameCollectionMode(not AStrictEval,
         AContext.CompatibilityNonStrictMode));
-    CollectTopLevelEvalLexicalNames(AProgram.Body, LexNames);
-    for I := 0 to LexNames.Count - 1 do
-      if VarNames.IndexOf(LexNames[I]) >= 0 then
-        RaiseAlreadyDeclared(LexNames[I]);
+    // A global eval has had this check from TGocciaEngine.EvaluateGlobalEval
+    // (CheckEvalLexicalDeclarationConflicts).
+    if not AStaticChecksDone then
+    begin
+      CollectTopLevelEvalLexicalNames(AProgram.Body, LexNames);
+      for I := 0 to LexNames.Count - 1 do
+        if VarNames.IndexOf(LexNames[I]) >= 0 then
+          RaiseAlreadyDeclared(LexNames[I]);
+    end;
 
     if not AStrictEval then
     begin
@@ -1288,15 +1256,19 @@ function PrepareEvalProgram(const AProgram: TGocciaProgram;
   const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
   const AAllowNewTarget: Boolean; const AAllowSuperProperty: Boolean;
   const AAllowSuperCall: Boolean;
-  const ARejectArgumentsReference: Boolean): TGocciaEvaluationContext;
+  const ARejectArgumentsReference: Boolean;
+  const AStaticChecksDone: Boolean): TGocciaEvaluationContext;
 begin
-  ValidateEvalScriptBody(AProgram.Body);
-  if ARejectArgumentsReference and
-     EvalProgramContainsArgumentsReference(AProgram) then
-    ThrowSyntaxError('arguments is not allowed in this eval context');
-  ValidateEvalEarlyErrors(AProgram, AStrictEval, AAllowNewTarget,
-    AAllowSuperProperty, AAllowSuperCall);
-  ValidateEvalControlFlow(AProgram);
+  if not AStaticChecksDone then
+  begin
+    ValidateEvalScriptBody(AProgram.Body);
+    if ARejectArgumentsReference and
+       EvalProgramContainsArgumentsReference(AProgram) then
+      ThrowSyntaxError('arguments is not allowed in this eval context');
+    ValidateEvalEarlyErrors(AProgram, AStrictEval, AAllowNewTarget,
+      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalControlFlow(AProgram);
+  end;
   Result := AContext;
   Result.Scope := ALexicalScope;
   Result.NonStrictMode := not AStrictEval;
@@ -1307,7 +1279,8 @@ begin
   AVarScope.NonStrictMode := not AStrictEval;
 
   EvalDeclarationInstantiation(AProgram, Result, AVarScope, ALexicalScope,
-    AStrictEval, ARejectArgumentsVarDeclaration, ARejectVarDeclarationNames);
+    AStrictEval, ARejectArgumentsVarDeclaration, ARejectVarDeclarationNames,
+    AStaticChecksDone);
 end;
 
 function RunEvalProgramBody(const AProgram: TGocciaProgram;
@@ -1353,14 +1326,15 @@ function EvaluateEvalProgram(const AProgram: TGocciaProgram;
   const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
   const AAllowNewTarget: Boolean; const AAllowSuperProperty: Boolean;
   const AAllowSuperCall: Boolean;
-  const ARejectArgumentsReference: Boolean): TGocciaValue;
+  const ARejectArgumentsReference: Boolean;
+  const AStaticChecksDone: Boolean): TGocciaValue;
 var
   EvalContext: TGocciaEvaluationContext;
 begin
   EvalContext := PrepareEvalProgram(AProgram, AContext, AVarScope, ALexicalScope,
     AStrictEval, ARejectArgumentsVarDeclaration, ARejectVarDeclarationNames,
     AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall,
-    ARejectArgumentsReference);
+    ARejectArgumentsReference, AStaticChecksDone);
   Result := RunEvalProgramBody(AProgram, EvalContext);
 end;
 

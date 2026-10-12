@@ -38,7 +38,8 @@ procedure CollectTopLevelEvalLexicalNames(
 { The names ES2026 §19.2.1.3 EvalDeclarationInstantiation binds when the
   variable environment is the global one. AVarNames is VarDeclaredNames of
   the body (step 1; with AMode = vbnNonStrictScriptCompatibility it also holds
-  the block-level functions that get a var binding, B.3.2.6). AFunctionNames
+  the block-level functions that get a var binding, ES2026 B.3.2 and
+  §19.2.1.3 step 13). AFunctionNames
   are the names of the top-level function declarations, the last declaration
   of a name winning (functionsToInitialize, steps 8 and 10), and
   ADeclaredVarNames the other var names (declaredVarNames, steps 11-12), each once and in source order. }
@@ -48,9 +49,10 @@ procedure CollectGlobalEvalDeclarationNames(const AProgram: TGocciaProgram;
 { ES2026 §16.1.1 Static Semantics: Early Errors for ScriptBody: a duplicate
   name among the top-level LexicallyDeclaredNames, or a name both lexically
   declared and var-declared at the top level, is a SyntaxError. The parser
-  leaves both to the eval call. Raises TGocciaSyntaxError. }
+  leaves both to the eval call. AVarNames is VarDeclaredNames of the body, as
+  CollectGlobalEvalDeclarationNames collects it. Raises TGocciaSyntaxError. }
 procedure CheckEvalLexicalDeclarationConflicts(const AProgram: TGocciaProgram;
-  const AMode: TGocciaVarBindingNameCollectionMode);
+  const AVarNames: TUnicodeStringList);
 
 procedure ValidateEvalScriptBody(const ANodes: TObjectList<TGocciaStatement>);
 function EvalProgramContainsArgumentsReference(
@@ -1625,18 +1627,13 @@ end;
 
 { A `return`, or an unlabeled `break`/`continue` with no enclosing iteration or
   switch, is a Script early error (a SyntaxError) — eval code is never a function
-  body, loop, or switch. Goccia otherwise detects these only at runtime via
-  control-flow propagation (the fallback case in RunEvalProgramBody), which would
-  let ShadowRealm.prototype.evaluate wrap them as a caller-realm TypeError;
-  validating here, before any evaluation, keeps them SyntaxErrors. Recursion walks
+  body, loop, or switch. Validating here, before any evaluation, makes them
+  errors of the compile stage, which ShadowRealm.prototype.evaluate reports as a
+  caller-realm SyntaxError rather than wrapping as a TypeError. Recursion walks
   only statements, so it stops at function/class boundaries (which are
   expressions) — a `return`/`break`/`continue` inside a nested function is never
   flagged. Labeled break/continue are left to the parser, which validates their
-  targets and rejects undefined labels.
-
-  Raising TGocciaSyntaxError directly (rather than ThrowSyntaxError, which raises a
-  TGocciaThrowValue) matches the other eval early-error passes so the error is
-  classified as a static SyntaxError, not a runtime abrupt completion. }
+  targets and rejects undefined labels. }
 procedure RejectEvalControlFlow(const AMessage: string;
   const AStmt: TGocciaStatement);
 begin
@@ -1751,9 +1748,9 @@ begin
 end;
 
 procedure CheckEvalLexicalDeclarationConflicts(const AProgram: TGocciaProgram;
-  const AMode: TGocciaVarBindingNameCollectionMode);
+  const AVarNames: TUnicodeStringList);
 var
-  LexicalNames, StatementNames, VarNames: TUnicodeStringList;
+  LexicalNames, StatementNames: TUnicodeStringList;
   Statement: TObjectList<TGocciaStatement>;
   I, J: Integer;
 
@@ -1767,7 +1764,6 @@ var
 begin
   LexicalNames := TUnicodeStringList.Create;
   StatementNames := TUnicodeStringList.Create;
-  VarNames := TUnicodeStringList.Create;
   Statement := TObjectList<TGocciaStatement>.Create(False);
   try
     for I := 0 to AProgram.Body.Count - 1 do
@@ -1783,15 +1779,11 @@ begin
         LexicalNames.Add(StatementNames[J]);
       end;
     end;
-    if LexicalNames.Count = 0 then
-      Exit;
-    CollectVarBindingNamesFromStatements(AProgram.Body, VarNames, AMode);
     for I := 0 to LexicalNames.Count - 1 do
-      if VarNames.IndexOf(LexicalNames[I]) >= 0 then
+      if AVarNames.IndexOf(LexicalNames[I]) >= 0 then
         RaiseAlreadyDeclared(LexicalNames[I]);
   finally
     Statement.Free;
-    VarNames.Free;
     StatementNames.Free;
     LexicalNames.Free;
   end;

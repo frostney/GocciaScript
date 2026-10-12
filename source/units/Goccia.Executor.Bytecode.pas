@@ -52,6 +52,7 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function EvaluateGlobalEval(const AProgram: TGocciaProgram;
       const ASourcePath: string; const AStrictEval: Boolean;
+      const ADeclarations: TGocciaGlobalEvalDeclarations;
       var AStage: TGocciaGlobalEvalStage): TGocciaValue; override;
     procedure ClearTransientCaches; override;
 
@@ -78,12 +79,9 @@ uses
   SysUtils,
 
   TimingUtils,
-  UnicodeStringList,
 
-  Goccia.AST.BindingPatterns,
   Goccia.Compiler.ConstantValue,
   Goccia.Coverage,
-  Goccia.Eval.EarlyErrors,
   Goccia.GarbageCollector,
   Goccia.Keywords.Reserved,
   Goccia.Profiler,
@@ -238,13 +236,12 @@ end;
 function TGocciaBytecodeExecutor.EvaluateGlobalEval(
   const AProgram: TGocciaProgram; const ASourcePath: string;
   const AStrictEval: Boolean;
+  const ADeclarations: TGocciaGlobalEvalDeclarations;
   var AStage: TGocciaGlobalEvalStage): TGocciaValue;
 var
   Compiler: TGocciaCompiler;
   Module: TGocciaBytecodeModule;
   Options: TGocciaCompilerOptimizationOptions;
-  VarNames, FunctionNames, DeclaredVarNames: TUnicodeStringList;
-  Mode: TGocciaVarBindingNameCollectionMode;
   SavedGlobalScope: TGocciaScope;
 begin
   Compiler := TGocciaCompiler.Create(ASourcePath);
@@ -258,7 +255,8 @@ begin
       TGocciaCoverageTracker.Instance.Enabled;
     Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
-    Module := Compiler.CompileGlobalEval(AProgram, AStrictEval);
+    Module := Compiler.CompileGlobalEval(AProgram, AStrictEval,
+      ADeclarations.DeclaredVarNames);
   finally
     Compiler.Free;
   end;
@@ -267,25 +265,8 @@ begin
 
   AStage := gesRun;
   if not AStrictEval then
-  begin
-    if FNonStrictMode then
-      Mode := vbnNonStrictScriptCompatibility
-    else
-      Mode := vbnStandard;
-    VarNames := TUnicodeStringList.Create;
-    FunctionNames := TUnicodeStringList.Create;
-    DeclaredVarNames := TUnicodeStringList.Create;
-    try
-      CollectGlobalEvalDeclarationNames(AProgram, Mode, VarNames,
-        FunctionNames, DeclaredVarNames);
-      CheckGlobalEvalDeclarations(FGlobalScope, VarNames, FunctionNames,
-        DeclaredVarNames);
-    finally
-      DeclaredVarNames.Free;
-      FunctionNames.Free;
-      VarNames.Free;
-    end;
-  end;
+    CheckGlobalEvalDeclarations(FGlobalScope, ADeclarations.VarNames,
+      ADeclarations.FunctionNames, ADeclarations.DeclaredVarNames);
 
   SavedGlobalScope := FVM.GlobalScope;
   FVM.GlobalScope := FGlobalScope;

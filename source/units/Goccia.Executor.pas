@@ -5,6 +5,8 @@ unit Goccia.Executor;
 interface
 
 uses
+  UnicodeStringList,
+
   Goccia.AST.Node,
   Goccia.Evaluator.Context,
   Goccia.Modules.Loader,
@@ -24,6 +26,16 @@ type
     body. TC39 ShadowRealm §3.1.3 PerformShadowRealmEval throws a SyntaxError
     for the first and a TypeError for the second. }
   TGocciaGlobalEvalStage = (gesCompile, gesRun);
+
+  { The names ES2026 §19.2.1.3 EvalDeclarationInstantiation binds when a
+    non-strict eval's variable environment is the global one, collected once
+    per eval by TGocciaEngine.EvaluateGlobalEval
+    (CollectGlobalEvalDeclarationNames). }
+  TGocciaGlobalEvalDeclarations = record
+    VarNames: TUnicodeStringList;
+    FunctionNames: TUnicodeStringList;
+    DeclaredVarNames: TUnicodeStringList;
+  end;
 
   TGocciaExecutor = class abstract
   private
@@ -52,11 +64,12 @@ type
     { ES2026 §19.2.1.1 PerformEval steps 17-33 for eval code whose variable
       environment is the realm's global environment: indirect eval and
       ShadowRealm.prototype.evaluate. AProgram has passed the static early
-      errors. Sets AStage to gesRun once the code is compiled, before
-      EvalDeclarationInstantiation (§19.2.1.3) runs. Returns the completion
-      value. }
+      errors, and ADeclarations holds its declaration names. Sets AStage to
+      gesRun once the code is compiled, before EvalDeclarationInstantiation
+      (§19.2.1.3) runs. Returns the completion value. }
     function EvaluateGlobalEval(const AProgram: TGocciaProgram;
       const ASourcePath: string; const AStrictEval: Boolean;
+      const ADeclarations: TGocciaGlobalEvalDeclarations;
       var AStage: TGocciaGlobalEvalStage): TGocciaValue; virtual; abstract;
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaCompiledModule; virtual; abstract;
