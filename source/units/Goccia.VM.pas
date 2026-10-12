@@ -557,6 +557,9 @@ type
     function ExecuteDirectEval(const ASourceValue: TGocciaValue;
       const ATemplate: TGocciaFunctionTemplate; const APC: UInt32;
       const ACallerStrict: Boolean): TGocciaValue;
+    function TryExecuteDirectEvalCall(const ACalleeReg, AArgsOperand,
+      AFlags: UInt16; const ATemplate: TGocciaFunctionTemplate;
+      const APC: UInt32): Boolean;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     procedure PushFrame(const AResultRegister, AFrameIP: Integer;
       const ATemplate: TGocciaFunctionTemplate;
@@ -14838,24 +14841,6 @@ begin
   Result := False;
 end;
 
-function IsCurrentRealmEvalFunction(const ACallee: TGocciaValue;
-  const ARealm: TGocciaRealm): Boolean;
-var
-  GlobalObject: TGocciaObjectValue;
-  EvalValue: TGocciaValue;
-begin
-  Result := False;
-  if not Assigned(ARealm) or not (ARealm.GlobalObject is TGocciaObjectValue) then
-    Exit;
-
-  GlobalObject := TGocciaObjectValue(ARealm.GlobalObject);
-  if not GlobalObject.HasProperty('eval') then
-    Exit;
-
-  EvalValue := GlobalObject.GetProperty('eval');
-  Result := EvalValue = ACallee;
-end;
-
 function DirectEvalParameterPreambleVarRejectNames(
   const ATemplate: TGocciaFunctionTemplate; const AEnvironmentIndex: Integer;
   const APC: UInt32): TGocciaEvalRejectNameArray;
@@ -14906,6 +14891,40 @@ begin
       AddName(Binding.Name);
   end;
   Result := Names;
+end;
+
+// ES2026 §13.3.6.1 (Function Calls) step 6: a call the compiler flagged with
+// CALL_FLAG_DIRECT_EVAL is a direct eval when the callee is the realm's %eval%,
+// whatever the global `eval` property holds now.
+// OP_CALL and OP_CALL_METHOD share this; the second is the `eval` a `with`
+// object supplied, whose this-value direct eval does not use. The callee is in
+// register ACalleeReg, followed by its arguments, or by the spread arguments
+// array in register AArgsOperand when the flags carry CALL_FLAG_SPREAD.
+function TGocciaVM.TryExecuteDirectEvalCall(const ACalleeReg,
+  AArgsOperand, AFlags: UInt16; const ATemplate: TGocciaFunctionTemplate;
+  const APC: UInt32): Boolean;
+var
+  EvalSourceValue: TGocciaValue;
+begin
+  Result := (FRegisters[ACalleeReg].Kind = grkObject) and
+    (FRegisters[ACalleeReg].ObjectValue is TGocciaNativeFunctionValue) and
+    TGocciaNativeFunctionValue(FRegisters[ACalleeReg].ObjectValue).DirectEvalHost and
+    IsRealmEvalFunction(FRealm, FRegisters[ACalleeReg].ObjectValue);
+  if not Result then
+    Exit;
+  EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if (AFlags and CALL_FLAG_SPREAD) <> 0 then
+  begin
+    if (FRegisters[AArgsOperand].Kind = grkObject) and
+       (FRegisters[AArgsOperand].ObjectValue is TGocciaArrayValue) and
+       (TGocciaArrayValue(FRegisters[AArgsOperand].ObjectValue).Elements.Count > 0) then
+      EvalSourceValue := TGocciaArrayValue(
+        FRegisters[AArgsOperand].ObjectValue).GetProperty('0');
+  end
+  else if AArgsOperand > 0 then
+    EvalSourceValue := GetRegister(ACalleeReg + 1);
+  SetRegister(ACalleeReg, ExecuteDirectEval(EvalSourceValue, ATemplate, APC,
+    ATemplate.StrictCode));
 end;
 
 function TGocciaVM.ExecuteDirectEval(const ASourceValue: TGocciaValue;
@@ -16020,7 +16039,7 @@ var
   Template: TGocciaFunctionTemplate;
   Constant: PGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
-  LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
+  LeftValue, RightValue, TargetValue, PropKeyValue: TGocciaValue;
   NumericValue: Double;
   // The operands of a typed arithmetic or comparison opcode when one is not a
   // number, converted out of line by RegistersToDoubles.
