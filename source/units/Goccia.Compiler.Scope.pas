@@ -157,6 +157,11 @@ type
       const ADepth: Integer);
     destructor Destroy; override;
 
+    { Sizes the locals table for ACount locals when nothing is declared
+      yet. Every slot of the table is initialized and finalized whether a
+      local fills it or not, so a scope that knows it holds fewer locals
+      than the first growth step allocates skips that work. }
+    procedure ReserveLocals(const ACount: Integer);
     function DeclareLocal(const AName: string;
       const AIsConst: Boolean): UInt16;
     function DeclareVarLocal(const AName: string): UInt16;
@@ -450,6 +455,12 @@ destructor TGocciaCompilerScope.Destroy;
 begin
   FLocalIndex.Free;
   inherited;
+end;
+
+procedure TGocciaCompilerScope.ReserveLocals(const ACount: Integer);
+begin
+  if (FLocalCount = 0) and (Length(FLocals) = 0) and (ACount > 0) then
+    SetLength(FLocals, ACount);
 end;
 
 function TGocciaCompilerScope.DeclareLocal(const AName: string;
