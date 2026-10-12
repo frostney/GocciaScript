@@ -73,6 +73,9 @@ type
     PreinitializedTopLevelFunctions: Boolean;
     StrictTypes: Boolean;
     CompatibilityNonStrictMode: Boolean;
+    { The compiler-wide flag that lets code be non-strict at all, which a
+      strict class body clears for its duration and then restores. }
+    NonStrictCodeEnabled: Boolean;
     ArgumentsObjectEnabled: Boolean;
     NonStrictMode: Boolean;
     DerivedConstructorThisGuard: Boolean;

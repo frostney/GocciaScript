@@ -1581,6 +1581,58 @@ await section("Test262 Runner: an indirect eval's completion value and deleted g
   }
 });
 
+// ES2026 §19.2.1.1 step 13: eval code is strict only by its own directive. A
+// test262 module test runs in an engine without the non-strict compatibility
+// profile, and a directive-free indirect eval there is still non-strict: an
+// assignment to an undeclared name creates a global, as in Node.js 24.21 (the
+// same body run as an ES module) and in the interpreter on main.
+await section("Test262 Runner: a directive-free indirect eval is non-strict in a strict-only engine...", async () => {
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(harness, "doneprintHandle.js"), "");
+    writeFileSync(join(tests, "indirect-eval-sloppy.js"), [
+      "/*---",
+      "flags: [module]",
+      "---*/",
+      '(0, eval)("implicitFromEval = 1");',
+      "if (globalThis.implicitFromEval !== 1)",
+      '  throw new Error("implicit global: " + typeof globalThis.implicitFromEval);',
+      'if ((0, eval)("var fromEval = 2; fromEval") !== 2 || globalThis.fromEval !== 2)',
+      '  throw new Error("eval var did not reach the global object");',
+      "var strictThrew = false;",
+      `try { (0, eval)("'use strict'; strictImplicit = 3"); } catch (e) { strictThrew = e instanceof ReferenceError; }`,
+      'if (!strictThrew) throw new Error("strict eval created a global");',
+      "",
+    ].join("\n"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const out = join(tmp, `sloppy-${mode}.json`);
+      const proc = Bun.spawnSync(
+        [
+          TEST262RUNNER,
+          "--suite-dir", suite,
+          "--categories", "language",
+          `--mode=${mode}`,
+          "--jobs=1",
+          "--output", out,
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+      );
+      const report = JSON.parse(readFileSync(out, "utf8"));
+      if (proc.exitCode !== 0 || report.summary.passed !== 1)
+        throw new Error(`${mode}: a directive-free indirect eval should be non-strict, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 // TC39 ShadowRealm §3.1.3 PerformShadowRealmEval: a parse or early error is a
 // caller-realm SyntaxError (step 2); an abrupt completion of the declaration
 // instantiation or the body, a SyntaxError a nested eval throws included, is

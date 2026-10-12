@@ -39,6 +39,10 @@ type
     FPreinitializedTopLevelFunctions: Boolean;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
+    // The engine's non-strict compatibility profile (Annex B block-function
+    // var bindings). It equals FNonStrictMode except while a directive-free
+    // eval compiles: that code is non-strict whatever the profile is.
+    FCompatibilityNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
     FLabelReentryStatement: TGocciaStatement;
     FLoopReentryStatement: TGocciaStatement;
@@ -70,7 +74,12 @@ type
       EvalDeclarationInstantiation steps 17-18, CreateGlobalVarBinding and
       CreateGlobalFunctionBinding with D = true) and keeps its lexical
       declarations as locals of its own template (step 16); a strict eval keeps
-      every declaration local (§19.2.1.1 step 18: varEnv is lexEnv).
+      every declaration local (§19.2.1.1 step 18: varEnv is lexEnv). The eval
+      code is strict only by its own directive, also in an engine whose
+      profile is strict (no non-strict compatibility): a directive-free eval
+      is non-strict code there too, as the interpreter evaluates it. The
+      profile still decides the Annex B block-function var bindings and,
+      in the parser, which syntax is accepted.
       ADeclaredVarNames is declaredVarNames (§19.2.1.3 steps 11-12). The host
       runs the declaration checks of §19.2.1.3 before the template, which only
       binds. The template is never serialized. }
@@ -179,7 +188,9 @@ begin
   Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
-  Result.CompatibilityNonStrictMode := FNonStrictMode;
+  Result.CompatibilityNonStrictMode := FNonStrictMode and
+    FCompatibilityNonStrictMode;
+  Result.NonStrictCodeEnabled := FNonStrictMode;
   Result.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
@@ -194,8 +205,8 @@ end;
 
 function TGocciaCompiler.NonStrictBlockFunctionVarBindingsEnabled: Boolean;
 begin
-  Result := FNonStrictMode and Assigned(FCurrentTemplate) and
-    not FCurrentTemplate.StrictCode;
+  Result := FNonStrictMode and FCompatibilityNonStrictMode and
+    Assigned(FCurrentTemplate) and not FCurrentTemplate.StrictCode;
 end;
 
 // The block-level function declarations whose var binding the body being
@@ -1524,9 +1535,13 @@ function TGocciaCompiler.CompileGlobalEval(const AProgram: TGocciaProgram;
   const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
 var
   SavedAsyncTopLevel, SavedGlobalBackedTopLevel,
-  SavedPreinitializedTopLevelFunctions: Boolean;
+  SavedPreinitializedTopLevelFunctions, SavedNonStrictMode: Boolean;
 begin
   SavedAsyncTopLevel := FAsyncTopLevel;
+  SavedNonStrictMode := FNonStrictMode;
+  // ES2026 §19.2.1.1 step 13: strictEval is ScriptIsStrict of the eval code.
+  FCompatibilityNonStrictMode := FNonStrictMode;
+  FNonStrictMode := not AStrictEval;
   SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
   SavedPreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions;
   FAsyncTopLevel := False;
@@ -1544,6 +1559,7 @@ begin
     FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
     FPreinitializedTopLevelFunctions := SavedPreinitializedTopLevelFunctions;
     FAsyncTopLevel := SavedAsyncTopLevel;
+    FNonStrictMode := SavedNonStrictMode;
   end;
 end;
 
@@ -1560,6 +1576,8 @@ begin
   FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
   FBlockFunctionVarBindings.Clear;
+  if not FEvalCode then
+    FCompatibilityNonStrictMode := FNonStrictMode;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;

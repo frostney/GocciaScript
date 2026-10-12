@@ -6220,7 +6220,7 @@ begin
         ACtx.CompileExpression(Elem.ComputedKeyExpression, KeyReg);
       finally
         if Assigned(ACtx.SetNonStrictMode) then
-          ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
+          ACtx.SetNonStrictMode(ACtx.NonStrictCodeEnabled);
       end;
       EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
     end
@@ -6471,7 +6471,7 @@ begin
         EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   finally
     if Assigned(ACtx.SetNonStrictMode) then
-      ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
+      ACtx.SetNonStrictMode(ACtx.NonStrictCodeEnabled);
     ACtx.Template.RejectArgumentsInDirectEval :=
       OldRejectArgumentsInDirectEval;
   end;
@@ -6566,7 +6566,7 @@ begin
     EmitInstruction(ChildCtx, EncodeABC(OP_RETURN, ValReg, 0, 0));
   finally
     if Assigned(ACtx.SetNonStrictMode) then
-      ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
+      ACtx.SetNonStrictMode(ACtx.NonStrictCodeEnabled);
   end;
 
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;

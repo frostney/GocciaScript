@@ -54,6 +54,10 @@ type
     procedure TestBytecodeEvalReturnsCompletionValue;
     procedure TestBytecodeEvalReportsCompileStage;
     procedure TestBytecodeEvalReportsRunStage;
+    procedure AssertDirectiveFreeEvalIsNonStrict(
+      const AExecutor: TGocciaExecutor);
+    procedure TestBytecodeEvalIsNonStrictInStrictEngine;
+    procedure TestInterpreterEvalIsNonStrictInStrictEngine;
   public
     procedure SetupTests; override;
   end;
@@ -76,6 +80,10 @@ begin
     TestBytecodeEvalReportsCompileStage);
   Test('Bytecode global eval reports a run-stage failure',
     TestBytecodeEvalReportsRunStage);
+  Test('Bytecode directive-free global eval is non-strict in a strict engine',
+    TestBytecodeEvalIsNonStrictInStrictEngine);
+  Test('Interpreter directive-free global eval is non-strict in a strict ' +
+    'engine', TestInterpreterEvalIsNonStrictInStrictEngine);
 end;
 
 function TGlobalEvalTests.CreateEngine(const AExecutor: TGocciaExecutor;
@@ -331,6 +339,58 @@ begin
     Engine.Free;
     Executor.Free;
     Source.Free;
+  end;
+end;
+
+// ES2026 §19.2.1.1 step 13: eval code is strict only by its own directive,
+// also in an engine without the non-strict compatibility profile.
+procedure TGlobalEvalTests.AssertDirectiveFreeEvalIsNonStrict(
+  const AExecutor: TGocciaExecutor);
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<global-eval-test>', Source, AExecutor);
+    Engine.Compatibility := [cfASI, cfVar, cfFunction];
+    Value := Engine.EvaluateGlobalEval(
+      'implicitFromEval = 1; typeof implicitFromEval', '<global-eval-test>',
+      Stage);
+    Expect<string>((Value as TGocciaStringLiteralValue).Value).ToBe(
+      'number');
+    Expect<Boolean>(EvalStage(Engine,
+      '"use strict"; strictImplicit = 1') = gesRun).ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TGlobalEvalTests.TestBytecodeEvalIsNonStrictInStrictEngine;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertDirectiveFreeEvalIsNonStrict(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TGlobalEvalTests.TestInterpreterEvalIsNonStrictInStrictEngine;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertDirectiveFreeEvalIsNonStrict(Executor);
+  finally
+    Executor.Free;
   end;
 end;
 

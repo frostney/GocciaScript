@@ -3229,7 +3229,7 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, VarSlot, 0, 0));
     end;
 
-    if ACtx.NonStrictMode then
+    if ACtx.NonStrictMode and ACtx.CompatibilityNonStrictMode then
     begin
       DiscoverBlockFunctionVarBindings(Block, ACtx.Scope,
         ACtx.BlockFunctionVarBindings, BlockFunctionNames);
