@@ -192,6 +192,69 @@ describe("suspended continuations under garbage collection", () => {
       expect(values).toEqual(["a", "b", "c"]);
     });
 
+  test("a then getter that collects at a first and a later await is safe",
+    async () => {
+      // The first await suspends into a continuation nothing else holds yet;
+      // later awaits reuse it. Each reads `then` while it is being attached.
+      const collectingThenable = (label) => ({
+        label,
+        get then() {
+          collect();
+          return undefined;
+        },
+      });
+      const labels = await callAndDrop(async () => {
+        const local = { seen: [] };
+        const first = await collectingThenable("first");
+        local.seen.push(first.label);
+        const second = await collectingThenable("second");
+        collect();
+        local.seen.push(second.label);
+        return local.seen;
+      });
+      expect(labels).toEqual(["first", "second"]);
+    });
+
+  test("a then getter that collects inside for-await over an array is safe",
+    async () => {
+      const item = (tag) => ({
+        tag,
+        get then() {
+          collect();
+          return undefined;
+        },
+      });
+      const tags = await callAndDrop(async () => {
+        const seen = [];
+        for await (const value of [item("a"), item("b"), item("c")]) {
+          seen.push(value.tag);
+        }
+        return seen;
+      });
+      expect(tags).toEqual(["a", "b", "c"]);
+    });
+
+  test("a then getter that collects at an async generator's await is safe",
+    async () => {
+      const iterator = callAndDrop(() =>
+        ({
+          async *values() {
+            const got = await {
+              get then() {
+                collect();
+                return undefined;
+              },
+              value: 1,
+            };
+            yield got.value;
+            yield (await { value: 2, get then() { collect(); } }).value;
+          },
+        }).values());
+      const values = [];
+      for await (const value of iterator) values.push(value);
+      expect(values).toEqual([1, 2]);
+    });
+
   test("a sync generator resumes after collections between its yields", () => {
     const iterator = callAndDrop(() =>
       ({

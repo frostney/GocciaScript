@@ -3214,11 +3214,14 @@
           begin
             // The generator object is this body's continuation.
           end
-          else if Assigned(AwaitContinuation) and
+          else if Assigned(EntryGenerator) and
+                  (AwaitContinuation = EntryGenerator) and
+                  (FFrameStackCount <= InitialFrameStackCount) and
                   (AwaitContinuation.FClosure = FCurrentClosure) then
-            // A body resumed from an earlier await runs on that await's
-            // continuation, whose cloned closure no other activation shares;
-            // it suspends into the same continuation again, with the same
+            // This activation is the one an earlier await suspended: this
+            // native entry was started by resuming that continuation, and
+            // the await is in the entry's own frame, not a nested call's. It
+            // suspends into the same continuation again, with the same
             // arguments, rather than into a fresh copy per await.
             AwaitContinuation.FThisValue := GetLocalRegister(0)
           else
@@ -3231,12 +3234,8 @@
             AwaitContinuation.CaptureContinuation(Frame, SavedHandlerCount,
               PrevCovLine, A, Frame.IP);
             AwaitContinuation.FState := bgsSuspendedYield;
-            AwaitPromise := PromiseResolveIntrinsic(GetRegister(B));
-            AwaitContinuation.PrepareAwaitHandlers(FCurrentAsyncPromise,
+            AttachAwaitContinuation(Self, AwaitContinuation, GetRegister(B),
               Template.IsGenerator);
-            AwaitPromise.InvokeThenWithoutResult(
-              AwaitContinuation.FAwaitOnFulfilled,
-              AwaitContinuation.FAwaitOnRejected);
             // A caller that asked for it learns of the suspension from the
             // flag, and the entry returns through the same teardown an
             // exception would take, without one.

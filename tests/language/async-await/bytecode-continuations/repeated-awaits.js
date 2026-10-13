@@ -61,6 +61,99 @@ describe("repeated awaits", () => {
     expect(await counter.add(1, 2, 3)).toBe(15);
   });
 
+  test("a self-call made after a resumption keeps each depth's frame",
+    async () => {
+      // The outer activation has already resumed once when it calls itself,
+      // and every inner activation awaits before and after its own self-call.
+      const log = [];
+      const descend = async (n) => {
+        await null;
+        const mark = "d" + n;
+        if (n === 0) {
+          await Promise.resolve();
+          log.push(mark);
+          return 0;
+        }
+        const below = await descend(n - 1);
+        await null;
+        log.push(mark);
+        return below + n;
+      };
+      expect(await descend(4)).toBe(10);
+      expect(log).toEqual(["d0", "d1", "d2", "d3", "d4"]);
+    });
+
+  test("a recursive async method keeps its receiver at every depth",
+    async () => {
+      const tree = {
+        base: 100,
+        async sum(n) {
+          await null;
+          const seen = this.base;
+          if (n === 0) {
+            await null;
+            return seen;
+          }
+          const below = await this.sum(n - 1);
+          await null;
+          return below + n + (this.base - seen);
+        },
+      };
+      expect(await tree.sum(4)).toBe(110);
+    });
+
+  test("mutually recursive async functions resume their own frames",
+    async () => {
+      const even = async (n) => {
+        await null;
+        if (n === 0) return true;
+        const result = await odd(n - 1);
+        await null;
+        return result;
+      };
+      const odd = async (n) => {
+        await null;
+        if (n === 0) return false;
+        const result = await even(n - 1);
+        await null;
+        return result;
+      };
+      expect([await even(6), await even(7)]).toEqual([true, false]);
+    });
+
+  test("an activation started before its caller resumes keeps its own state",
+    async () => {
+      const visit = async (n, seen) => {
+        await null;
+        const local = [n];
+        const pending = n > 0 ? visit(n - 1, seen) : Promise.resolve();
+        await null;
+        local.push("after");
+        seen.push(n + ":" + local.join("/"));
+        await pending;
+        return seen;
+      };
+      expect(await visit(3, [])).toEqual(["3:3/after", "2:2/after",
+        "1:1/after", "0:0/after"]);
+    });
+
+  test("a recursive async generator resumes each level", async () => {
+    const source = {
+      async *levels(n) {
+        await null;
+        yield "g" + n;
+        if (n > 0) {
+          for await (const value of source.levels(n - 1)) yield value;
+        }
+        await null;
+        yield "end" + n;
+      },
+    };
+    const values = [];
+    for await (const value of source.levels(2)) values.push(value);
+    expect(values).toEqual(["g2", "g1", "g0", "end0", "end1", "end2"]);
+  });
+
   test("nested async calls resume in spec order", async () => {
     const log = [];
     const ticks = ticker(log, 10);

@@ -4772,6 +4772,40 @@ begin
     FPromise.MarkReferences;
 end;
 
+// OP_AWAIT in an async function or async generator, once the frame is
+// captured into AContinuation (ES2026 §27.7.5.3 Await, steps 2-8): resolve
+// the awaited value to a promise and attach the continuation's two reactions,
+// with no derived promise (step 7).
+//
+// PromiseResolve reads the value's `constructor` or `then`, which can run a
+// getter or a Proxy trap, and that guest code reaches the VM's memory-pressure
+// checkpoint or calls Goccia.gc(). For an async function's first await,
+// AContinuation is a generator object created for this await, which nothing
+// else holds until the reactions are attached. So it, the promise and the
+// reactions are rooted for the whole step (issue #1625).
+procedure AttachAwaitContinuation(const AVM: TGocciaVM;
+  const AContinuation: TGocciaBytecodeGeneratorObjectValue;
+  const AValue: TGocciaValue; const AIsGenerator: Boolean);
+var
+  Roots: TGocciaActiveRootFrame;
+  AwaitPromise: TGocciaPromiseValue;
+begin
+  Roots.Initialize;
+  try
+    Roots.Add(AContinuation);
+    AwaitPromise := AVM.PromiseResolveIntrinsic(AValue);
+    Roots.Add(AwaitPromise);
+    AContinuation.PrepareAwaitHandlers(AVM.FCurrentAsyncPromise,
+      AIsGenerator);
+    Roots.Add(AContinuation.FAwaitOnFulfilled);
+    Roots.Add(AContinuation.FAwaitOnRejected);
+    AwaitPromise.InvokeThenWithoutResult(AContinuation.FAwaitOnFulfilled,
+      AContinuation.FAwaitOnRejected);
+  finally
+    Roots.Clear;
+  end;
+end;
+
 { TGocciaVMDynamicImportStartValue }
 
 constructor TGocciaVMDynamicImportStartValue.Create(const AVM: TGocciaVM;
