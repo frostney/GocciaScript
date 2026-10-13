@@ -370,6 +370,11 @@ type
     // back to the runtime-type-name form of the "is not a function" message.
     FCallSites: array of TGocciaCallSiteEntry;
     FCallSiteCount: Integer;
+    // Runtime-only code cache of each direct eval site, indexed like the eval
+    // site records and created by the VM on the site's first eval (ADR 0134
+    // Phase 4). A TGocciaDirectEvalCodeCache, typed as TObject to keep the VM
+    // out of this unit; owned here. Not serialised to .gbc.
+    FDirectEvalCodeCaches: array of TObject;
     function PropertyReadSlot(const AConstIndex: Integer): Integer;
     function PropertyWriteSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
@@ -452,6 +457,11 @@ type
     function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
     function GetDirectEvalEnvironment(
       const AIndex: Integer): TGocciaDirectEvalEnvironment;
+    { The code cache of eval site record AIndex, or nil before the site's
+      first eval. SetDirectEvalCodeCache hands the template ownership. }
+    function GetDirectEvalCodeCache(const AIndex: Integer): TObject;
+    procedure SetDirectEvalCodeCache(const AIndex: Integer;
+      const ACache: TObject);
     function GetExceptionHandler(const AIndex: Integer): TGocciaExceptionHandler;
 
     property Name: string read FName write FName;
@@ -612,6 +622,8 @@ begin
   end;
   for I := 0 to FRegExpProgramCacheCount - 1 do
     FRegExpProgramCaches[I].Free;
+  for I := 0 to High(FDirectEvalCodeCaches) do
+    FDirectEvalCodeCaches[I].Free;
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
@@ -1217,6 +1229,27 @@ begin
       [AIndex, FDirectEvalEnvironmentCount - 1]);
   {$ENDIF}
   Result := FDirectEvalEnvironments[AIndex];
+end;
+
+function TGocciaFunctionTemplate.GetDirectEvalCodeCache(
+  const AIndex: Integer): TObject;
+begin
+  if (AIndex < 0) or (AIndex >= Length(FDirectEvalCodeCaches)) then
+    Exit(nil);
+  Result := FDirectEvalCodeCaches[AIndex];
+end;
+
+procedure TGocciaFunctionTemplate.SetDirectEvalCodeCache(
+  const AIndex: Integer; const ACache: TObject);
+begin
+  if (AIndex < 0) or (AIndex >= FDirectEvalEnvironmentCount) then
+    raise ERangeError.CreateFmt(
+      'SetDirectEvalCodeCache: index %d out of range 0..%d',
+      [AIndex, FDirectEvalEnvironmentCount - 1]);
+  if Length(FDirectEvalCodeCaches) < FDirectEvalEnvironmentCount then
+    SetLength(FDirectEvalCodeCaches, FDirectEvalEnvironmentCount);
+  FDirectEvalCodeCaches[AIndex].Free;
+  FDirectEvalCodeCaches[AIndex] := ACache;
 end;
 
 function TGocciaFunctionTemplate.GetFunctionCount: Integer;
