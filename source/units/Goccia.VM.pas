@@ -10882,6 +10882,19 @@ begin
       NormalizeBytecodePrivateKey(AKey, APrivateBrandToken);
 end;
 
+// ES2026 §7.3.26 PrivateElementFind: a static private method or accessor is
+// a private element of the class itself (§15.7.14 step 31), kept apart from
+// the class's static private fields. ARuntimeKey is the brand-qualified key
+// BytecodePrivateRuntimeKey builds.
+function HasBytecodeStaticPrivateMethodOrAccessor(const AObject: TGocciaValue;
+  const ARuntimeKey: string): Boolean;
+begin
+  Result := (AObject is TGocciaClassValue) and
+    (TGocciaClassValue(AObject).HasOwnPrivateStaticMethod(ARuntimeKey) or
+     TGocciaClassValue(AObject).HasOwnPrivateGetter(ARuntimeKey) or
+     TGocciaClassValue(AObject).HasOwnPrivateSetter(ARuntimeKey));
+end;
+
 // ES2026 §9.2.1.2 ResolvePrivateIdentifier: walk the running function's
 // private environments outward to the class body that declares AKey. The
 // compiled key names the class body, so only the matching evaluation of it
@@ -13566,6 +13579,9 @@ begin
         if IsBytecodePrivateKey(KeyStr) then
         begin
           PrivateBrandToken := ResolveBytecodePrivateBrandToken(KeyStr, AObject);
+          if HasBytecodeStaticPrivateMethodOrAccessor(AObject,
+             BytecodePrivateRuntimeKey(KeyStr, PrivateBrandToken)) then
+            Exit(TGocciaBooleanLiteralValue.TrueValue);
           if TryGetRawPrivateValue(AObject,
              BytecodePrivateBrandKey(KeyStr, PrivateBrandToken), Prop) then
             Exit(TGocciaBooleanLiteralValue.TrueValue);
