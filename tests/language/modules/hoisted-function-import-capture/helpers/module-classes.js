@@ -150,11 +150,12 @@ export class Factory {
   }
 }
 
-// A class *created inside* a hoisted function declaration: in bytecode mode
-// the declaration runs in the tree-walk evaluator, so this class records its
-// instance elements as AST expressions rather than as compiled initializers.
-// Extending it from the entry file is what puts an evaluator-built superclass
-// under a compiled one.
+// A class *created inside* a hoisted function declaration, which the module
+// instantiates while it is linked, before its body runs. Bytecode mode once
+// ran such a declaration in the tree-walk evaluator, so this class recorded
+// its instance elements as AST expressions; extending it from the entry file
+// put that superclass under a compiled one. The "evaluator" names below keep
+// that history; the class semantics they check hold in both modes.
 export function makeEvaluatorBuiltBase() {
   return class EvaluatorBuiltBase {
     label = PREFIX + "evaluator-base";

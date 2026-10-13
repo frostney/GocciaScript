@@ -541,6 +541,7 @@ uses
   Goccia.Keywords.Contextual,
   Goccia.MicrotaskQueue,
   Goccia.Platform,
+  Goccia.Scope.Declarations,
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
@@ -2360,7 +2361,6 @@ end;
 procedure RegisterEntryModuleExports(const AModule: TGocciaModule;
   const AProgram: TGocciaProgram; const AModuleScope: TGocciaScope;
   const AModuleLoader: TGocciaModuleLoader;
-  const AContext: TGocciaEvaluationContext;
   const ARegisterIndirectExports: Boolean);
 var
   ExportClassDecl: TGocciaExportClassDeclaration;
@@ -2539,16 +2539,6 @@ begin
       ExportDefaultDecl := TGocciaExportDefaultDeclaration(Stmt);
       AModule.AddExportBinding(KEYWORD_DEFAULT,
         ExportDefaultDecl.LocalName, AModuleScope);
-      if ExportDefaultDecl.IsDirectDeclaration and
-         (ExportDefaultDecl.Expression is TGocciaFunctionExpression) then
-      begin
-        Value := EvaluateFunctionExpression(TGocciaFunctionExpression(
-          ExportDefaultDecl.Expression), AContext, False);
-        if (Value is TGocciaFunctionValue) and
-           (TGocciaFunctionValue(Value).Name = '') then
-          TGocciaFunctionValue(Value).Name := KEYWORD_DEFAULT;
-        AModuleScope.ForceUpdateBinding(ExportDefaultDecl.LocalName, Value);
-      end;
     end
     else if Stmt is TGocciaExportVariableDeclaration then
     begin
@@ -2651,9 +2641,15 @@ begin
     AModuleLoader.ValidateStaticNamedImports(AProgram, AModule);
 end;
 
+{ Each request of the entry, in source order, loaded as LoadModule loads it.
+  An evaluation-phase import binds its names in the entry's environment
+  AModuleScope as soon as its module is loaded (ES2026 §16.2.1.7.3.1
+  InitializeEnvironment step 7, as the loader binds an imported module's), so
+  the entry's function declarations, which read their imports from the
+  environment, see them from then on. }
 procedure EvaluateEntryRequestedModulesInSourceOrder(
   const AProgram: TGocciaProgram; const AModuleLoader: TGocciaModuleLoader;
-  const AImportingFilePath: string;
+  const AImportingFilePath: string; const AModuleScope: TGocciaScope;
   const ARequestedModules: TGocciaModuleList);
 var
   I: Integer;
@@ -2687,6 +2683,9 @@ begin
               ImportDecl.AttributeType), AImportingFilePath);
             if Assigned(RequestedModule) and Assigned(ARequestedModules) then
               ARequestedModules.Add(RequestedModule);
+            if Assigned(RequestedModule) and Assigned(AModuleScope) then
+              BindLinkedImportDeclaration(AModuleScope, ImportDecl,
+                RequestedModule);
           end;
           icpDefer:
             AModuleLoader.LoadDeferredModuleNamespaceValueForEvaluation(
@@ -3182,19 +3181,19 @@ begin
           try
             PredeclareModuleLexicalDeclarations(PipelineResult.ProgramNode,
               ModuleScope);
-            HoistFunctionDeclarations(PipelineResult.ProgramNode.Body,
-              ModuleContext, True);
+            FExecutor.InstantiateModuleFunctions(PipelineResult.ProgramNode,
+              ModuleContext);
             if FModuleLoader.VarEnabled then
               HoistVarDeclarations(PipelineResult.ProgramNode.Body,
                 ModuleScope, ModuleContext);
             ModuleContext.ModuleEnvironmentInitialized := True;
             RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
-              ModuleScope, FModuleLoader, ModuleContext, False);
+              ModuleScope, FModuleLoader, False);
             EvaluateEntryRequestedModulesInSourceOrder(
               PipelineResult.ProgramNode, FModuleLoader, FSourcePath,
-              EntryRequestedModules);
+              ModuleScope, EntryRequestedModules);
             RegisterEntryModuleExports(EntryModule, PipelineResult.ProgramNode,
-              ModuleScope, FModuleLoader, ModuleContext, True);
+              ModuleScope, FModuleLoader, True);
             SavedVMGlobalScope := nil;
             if FExecutor is TGocciaBytecodeExecutor then
             begin
@@ -3224,8 +3223,8 @@ begin
         begin
           PredeclareModuleLexicalDeclarations(PipelineResult.ProgramNode,
             ModuleScope);
-          HoistFunctionDeclarations(PipelineResult.ProgramNode.Body,
-            ModuleContext, True);
+          FExecutor.InstantiateModuleFunctions(PipelineResult.ProgramNode,
+            ModuleContext);
           ModuleContext.ModuleEnvironmentInitialized := True;
         end;
         ExecStart := GetNanoseconds;

@@ -181,6 +181,7 @@ uses
   Goccia.Intrinsics.FunctionObjects,
   Goccia.MemoryLimit,
   Goccia.Realm,
+  Goccia.Scope.Declarations,
   Goccia.Timeout,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
