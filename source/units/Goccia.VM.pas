@@ -16514,10 +16514,11 @@ begin
   Closure := TGocciaBytecodeClosure.Create(ATemplate, ATemplate.UpvalueCount);
   Closure.GlobalScope := AModuleEnvironment;
   Closure.AllowsNewTarget := True;
-  for I := 0 to ATemplate.UpvalueCount - 1 do
-    Closure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
-      TGocciaBytecodeCell.Create(RegisterUndefined)));
   FunctionValue := TGocciaBytecodeFunctionValue.Create(Self, Closure);
+  // Cells are created after the function value that marks them: creating a
+  // cell never collects, but allocating the function value can.
+  for I := 0 to ATemplate.UpvalueCount - 1 do
+    Closure.SetUpvalue(I, TGocciaBytecodeCell.Create(RegisterUndefined));
   if ATemplate.HasOwnPrototype then
   begin
     GC := TGarbageCollector.Instance;
