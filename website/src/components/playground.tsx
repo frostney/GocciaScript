@@ -33,7 +33,13 @@ import { formatMemorySegments, type MemoryJson } from "@/lib/format-memory";
 import { GITHUB_REPO_URL } from "@/lib/github";
 import { validateGocciaToolInput } from "@/lib/goccia-tool-schema";
 import { loadCode, saveCode } from "@/lib/playground-storage";
-import { decodeShare, encodeShare } from "@/lib/share";
+import {
+  decodeShare,
+  effectiveMode,
+  encodeShare,
+  isModeSelectable,
+  type PlaygroundModeSupport,
+} from "@/lib/share";
 import {
   DEFAULT_EXECUTION_MODE,
   type ExecutionMode,
@@ -439,7 +445,7 @@ type PlaygroundProps = {
    *  selected version's runner advertises `--mode`; the server makes the same
    *  check before it sends the flag. An unknown tag (a locally built engine)
    *  counts as supporting it. */
-  modeSupport?: Record<string, { loader: boolean; testRunner: boolean }>;
+  modeSupport?: PlaygroundModeSupport;
 };
 
 export function Playground({
@@ -483,9 +489,7 @@ export function Playground({
   const [compatVar, setCompatVar] = useState(false);
   const [compatFunction, setCompatFunction] = useState(false);
   const [runner, setRunner] = useState<Runner>(example.runner ?? "execute");
-  const modeSelectable =
-    modeSupport?.[version]?.[runner === "test" ? "testRunner" : "loader"] ??
-    true;
+  const modeSelectable = isModeSelectable(modeSupport, version, runner);
   const [examplesOpen, setExamplesOpen] = useState(true);
   const [hoveredExampleId, setHoveredExampleId] = useState<string | null>(null);
   const [paneCols, setPaneCols] = useState<[number, number]>([1, 1]);
@@ -538,23 +542,30 @@ export function Playground({
       const payload = decodeShare(shareParam);
       if (payload?.code) {
         setCode(payload.code);
-        if (payload.mode === "interpreted" || payload.mode === "bytecode") {
-          setBackend(payload.mode);
-        }
         if (typeof payload.asi === "boolean") setAsi(payload.asi);
-        if (payload.runner === "execute" || payload.runner === "test") {
-          setRunner(payload.runner);
-        }
+        const sharedRunner =
+          payload.runner === "execute" || payload.runner === "test"
+            ? payload.runner
+            : runner;
+        setRunner(sharedRunner);
         if (typeof payload.compatVar === "boolean") {
           setCompatVar(payload.compatVar);
         }
         if (typeof payload.compatFunction === "boolean") {
           setCompatFunction(payload.compatFunction);
         }
-        if (payload.version) {
-          const matched = matchVendoredVersion(versions, payload.version);
-          if (matched) setVersion(matched);
-        }
+        const sharedVersion =
+          (payload.version
+            ? matchVendoredVersion(versions, payload.version)
+            : null) ?? version;
+        setVersion(sharedVersion);
+        // Restore the mode only where the shared version's binary takes
+        // `--mode`; otherwise the link's mode is not one it can run.
+        const sharedMode = effectiveMode(
+          payload.mode,
+          isModeSelectable(modeSupport, sharedVersion, sharedRunner),
+        );
+        if (sharedMode) setBackend(sharedMode);
         hydratedRef.current = true;
         return;
       }
@@ -621,7 +632,7 @@ export function Playground({
     try {
       const payload = validateGocciaToolInput({
         code,
-        mode: backend,
+        mode: effectiveMode(backend, modeSelectable),
         asi,
         compatVar,
         compatFunction,
@@ -804,7 +815,7 @@ export function Playground({
       "share",
       encodeShare({
         code,
-        mode: backend,
+        mode: effectiveMode(backend, modeSelectable),
         runner,
         asi,
         compatVar,
@@ -813,7 +824,16 @@ export function Playground({
       }),
     );
     return url.toString();
-  }, [code, backend, runner, asi, compatVar, compatFunction, version]);
+  }, [
+    code,
+    backend,
+    modeSelectable,
+    runner,
+    asi,
+    compatVar,
+    compatFunction,
+    version,
+  ]);
 
   const share = useCallback(async () => {
     const link = buildShareLink();

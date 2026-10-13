@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { decodeShare, encodeShare, type SharePayload } from "@/lib/share";
+import {
+  decodeShare,
+  effectiveMode,
+  encodeShare,
+  isModeSelectable,
+  type PlaygroundModeSupport,
+  type SharePayload,
+} from "@/lib/share";
 
 /** Encode an arbitrary value as base64url-wrapped JSON, matching what
  *  `encodeShare` produces. Used by tests that need to inject malformed
@@ -74,5 +81,64 @@ describe("share encoding", () => {
       compatFunction: undefined,
       version: undefined,
     });
+  });
+});
+
+describe("playground execution mode", () => {
+  const support: PlaygroundModeSupport = {
+    "v0.14.0": { loader: true, testRunner: true },
+    "v0.6.1": { loader: false, testRunner: false },
+    "v0.9.0": { loader: true, testRunner: false },
+  };
+
+  test("a version is mode-selectable per runner, and an unknown one is", () => {
+    expect(isModeSelectable(support, "v0.14.0", "execute")).toBe(true);
+    expect(isModeSelectable(support, "v0.6.1", "execute")).toBe(false);
+    expect(isModeSelectable(support, "v0.9.0", "execute")).toBe(true);
+    expect(isModeSelectable(support, "v0.9.0", "test")).toBe(false);
+    expect(isModeSelectable(support, "local-build", "test")).toBe(true);
+    expect(isModeSelectable(undefined, "v0.6.1", "execute")).toBe(true);
+  });
+
+  test("a selectable version carries the selected mode", () => {
+    expect(effectiveMode("interpreted", true)).toBe("interpreted");
+    expect(effectiveMode("bytecode", true)).toBe("bytecode");
+  });
+
+  test("a hidden backend carries no mode, whatever it holds", () => {
+    expect(effectiveMode("interpreted", false)).toBeUndefined();
+    expect(effectiveMode("bytecode", false)).toBeUndefined();
+  });
+
+  test("an unknown or missing mode carries none", () => {
+    expect(effectiveMode("jit", true)).toBeUndefined();
+    expect(effectiveMode(undefined, true)).toBeUndefined();
+  });
+
+  test("a share link for a version without --mode records no mode", () => {
+    const encoded = encodeShare({
+      code: "1;",
+      mode: effectiveMode("interpreted", false),
+      version: "v0.6.1",
+    });
+    expect(decodeShare(encoded)?.mode).toBeUndefined();
+  });
+
+  test("hydrating a link restores its mode only where the version takes --mode", () => {
+    const decoded = decodeShare(
+      encodeShare({ code: "1;", mode: "interpreted", version: "v0.6.1" }),
+    );
+    expect(
+      effectiveMode(
+        decoded?.mode,
+        isModeSelectable(support, "v0.6.1", "execute"),
+      ),
+    ).toBeUndefined();
+    expect(
+      effectiveMode(
+        decoded?.mode,
+        isModeSelectable(support, "v0.14.0", "execute"),
+      ),
+    ).toBe("interpreted");
   });
 });
