@@ -1182,6 +1182,11 @@ const
   GLOBAL_READ_OBJECT_BINDING_NONE = 0;
   GLOBAL_READ_OBJECT_BINDING_VAR = 1;
   GLOBAL_READ_OBJECT_BINDING_BUILTIN = 2;
+  // ObjectValue is the scope's TGocciaModuleImportBinding for the name and
+  // Version the stamp of the scope's lexical map when it was read. The map
+  // is re-stamped whenever an import binding of it is created or replaced,
+  // so a current stamp means the cached binding is still the scope's.
+  GLOBAL_READ_OBJECT_BINDING_IMPORT = 3;
 
 function VMGlobalObjectBindingCacheStillPrecedes(
   const AScope: TGocciaScope; const ACache: PGocciaGlobalReadCacheEntry): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -15202,6 +15207,8 @@ var
   GlobalBindingValue: TGocciaValue;
   GlobalBindingEntryIndex: Integer;
   GlobalBindingVersion: Cardinal;
+  GlobalImportBinding: TGocciaModuleImportBinding;
+  GlobalImportVersion: Cardinal;
   GlobalReadCache: PGocciaGlobalReadCacheEntry;
   DebugLine, DebugColumn: Integer;
   PropertyReadCache: PGocciaPropertyReadCacheEntry;
