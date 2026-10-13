@@ -4587,7 +4587,7 @@ begin
 end;
 
 // OP_AWAIT in an async function or async generator, once the frame is
-// captured into AContinuation (ES2026 §27.7.5.3 Await, steps 2-9): resolve
+// captured into AContinuation (ES2026 §27.7.5.3 Await, steps 2-8): resolve
 // the awaited value to a promise and attach the two continuation reactions.
 //
 // PromiseResolve reads the value's `then`, which can run a getter or a Proxy
