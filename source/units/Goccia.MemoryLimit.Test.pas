@@ -29,7 +29,8 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.Shape;
+  Goccia.Values.Shape,
+  Goccia.VM.Upvalue;
 
 type
   { A managed value that reports its own sweep. Recycle, not Destroy: the sweep
@@ -245,6 +246,15 @@ type
     function CollectNow(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure TestClosedNumericRecursionCollectsUnderPressure;
+    { Guest-callable natives for the captured-binding tests: each collects and
+      then answers the bytes the native heap, or the collector, holds. }
+    function NativeHeapAfterCollect(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ManagedBytesAfterCollect(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RunBytecodeMeasurement(const AName, ASourceText: string): Double;
+    procedure TestCapturedBindingIsFreedWithItsClosure;
+    procedure TestCapturedBindingCountsAgainstTheLimit;
   protected
     procedure BeforeEach; override;
   public
@@ -454,6 +464,10 @@ begin
   Test('Ordinary script errors stay catchable', TestScriptErrorsStayCatchable);
   Test('A closed numeric recursion collects past stale register slots',
     TestClosedNumericRecursionCollectsUnderPressure);
+  Test('A captured binding is freed with the last closure that holds it ' +
+    '(#1618)', TestCapturedBindingIsFreedWithItsClosure);
+  Test('A captured binding counts against the memory limit (#1618)',
+    TestCapturedBindingCountsAgainstTheLimit);
   Test('Script try/catch cannot swallow an engine-integrity fault',
     TestSyncCatchCannotSwallowIntegrityFault);
   Test('A guest iterator return() cannot swallow a refusal while closing',
@@ -1804,6 +1818,100 @@ begin
     Executor.Free;
     Source.Free;
   end;
+end;
+
+function TMemoryLimitTests.NativeHeapAfterCollect(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGarbageCollector.Instance.Collect;
+  Result := TGocciaNumberLiteralValue.Create(GetHeapStatus.TotalAllocated);
+end;
+
+function TMemoryLimitTests.ManagedBytesAfterCollect(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGarbageCollector.Instance.Collect;
+  Result := TGocciaNumberLiteralValue.Create(
+    TGarbageCollector.Instance.BytesAllocated);
+end;
+
+function TMemoryLimitTests.RunBytecodeMeasurement(const AName,
+  ASourceText: string): Double;
+var
+  Source: TStringList;
+  Executor: TGocciaExecutor;
+  Engine: TGocciaEngine;
+begin
+  Source := TStringList.Create;
+  Source.Text := ASourceText;
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create(AName, Source, Executor);
+  try
+    Engine.InjectGlobal('__nativeHeap',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(NativeHeapAfterCollect,
+        '__nativeHeap', 0));
+    Engine.InjectGlobal('__managedBytes',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        ManagedBytesAfterCollect, '__managedBytes', 0));
+    Result := Engine.Execute.Result.ToNumberLiteral.Value;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestCapturedBindingIsFreedWithItsClosure;
+const
+  { Every call below opens a cell for `a` and drops the closure that captured
+    it. Before #1618 the bytecode VM allocated that cell (and an upvalue box
+    around it) on the native heap and never freed either, so the four runs
+    left about 4 * 20000 * 64 bytes behind. The bound leaves room for heap
+    bookkeeping noise and is a small fraction of that. }
+  MAX_GROWTH_BYTES = 256 * 1024;
+  SourceText =
+    'const f = (a) => (() => a + 1)();' + sLineBreak +
+    'const keys = [...Array(20000).keys()];' + sLineBreak +
+    'const run = () => keys.reduce((sum, i) => sum + f(i), 0);' + sLineBreak +
+    'run();' + sLineBreak +
+    'const before = __nativeHeap();' + sLineBreak +
+    'run(); run(); run(); run();' + sLineBreak +
+    '__nativeHeap() - before;';
+var
+  Growth: Double;
+begin
+  Growth := RunBytecodeMeasurement('captured-binding-freed.js', SourceText);
+  Expect<Boolean>(Growth < MAX_GROWTH_BYTES).ToBe(True);
+end;
+
+procedure TMemoryLimitTests.TestCapturedBindingCountsAgainstTheLimit;
+const
+  CLOSURES = 2000;
+  { The two arrays hold the same number of closures from the same kind of
+    call; only the second captures a binding, so the collector's total grows
+    by one cell per closure more for it, give or take the few bytes in which
+    the rest of the two runs differ. Before #1618 the cells were native memory
+    the collector did not count, and the difference was 0. }
+  SLACK_BYTES = 1024;
+  SourceText =
+    'const keys = [...Array(2000).keys()];' + sLineBreak +
+    'const start = __managedBytes();' + sLineBreak +
+    'const plain = keys.map((i) => () => 1);' + sLineBreak +
+    'const afterPlain = __managedBytes();' + sLineBreak +
+    'const capturing = keys.map((i) => () => i);' + sLineBreak +
+    'const afterCapturing = __managedBytes();' + sLineBreak +
+    'plain.length + capturing.length === 4000' + sLineBreak +
+    '  ? (afterCapturing - afterPlain) - (afterPlain - start)' + sLineBreak +
+    '  : -1;';
+var
+  ExtraBytes: Double;
+begin
+  ExtraBytes := RunBytecodeMeasurement('captured-binding-charged.js',
+    SourceText);
+  Expect<Boolean>(ExtraBytes >=
+    CLOSURES * TGocciaBytecodeCell.InstanceSize - SLACK_BYTES).ToBe(True);
 end;
 
 procedure TMemoryLimitTests.TestSyncCatchCannotSwallowIntegrityFault;
