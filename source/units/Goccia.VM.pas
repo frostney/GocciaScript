@@ -449,6 +449,11 @@ type
       const ALimit: Integer = -1): TGocciaArrayValue;
     function TryIterableToArray(const AIterable: TGocciaValue;
       out AArray: TGocciaArrayValue): Boolean;
+    // Appends what spreading ASource yields to the elements of ATarget,
+    // an array literal under construction (ES2026 §13.2.4.1
+    // ArrayAccumulation, SpreadElement).
+    procedure SpreadIterableIntoArray(const ATarget: TGocciaArrayValue;
+      const ASource: TGocciaValue);
     procedure SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
       const ASource: TGocciaValue);
     function ObjectRestValue(const ASource: TGocciaValue;
@@ -9682,6 +9687,50 @@ begin
     if ArrayRooted then
       GC.RemoveTempRoot(Result);
   end;
+end;
+
+procedure TGocciaVM.SpreadIterableIntoArray(const ATarget: TGocciaArrayValue;
+  const ASource: TGocciaValue);
+var
+  SourceArray, Spread: TGocciaArrayValue;
+  Target, SourceElements: TGocciaElementList;
+  Needed, I: Integer;
+begin
+  Target := ATarget.Elements;
+  if ArrayUsesIntrinsicIteration(ASource) then
+  begin
+    // With the intrinsic iterator in place, every IteratorStepValue of
+    // ArrayAccumulation yields ? Get(array, ToString(index)) while index is
+    // below the array's live length (§23.1.5.2.1), so read those values
+    // directly.  The count is re-read each step because a getter reached
+    // through a hole may grow or shrink the source, as it would mid-iteration.
+    SourceArray := TGocciaArrayValue(ASource);
+    SourceElements := SourceArray.Elements;
+    Needed := Target.Count + SourceElements.Count;
+    if Needed > Target.Capacity then
+      Target.Capacity := Max(Needed, Target.Capacity * 2);
+    I := 0;
+    while I < SourceElements.Count do
+    begin
+      if GThreadPolls.Any <> 0 then
+      begin
+        CheckExecutionTimeout;
+        CheckInstructionLimit;
+      end;
+      Target.Add(ArrayIteratorValueAt(SourceArray, I));
+      Inc(I);
+    end;
+    Exit;
+  end;
+
+  // Any other source runs the full iterator protocol.  The values it yields
+  // are plain values in a fresh dense array, so they are copied as they are.
+  Spread := IterableToArray(ASource);
+  Needed := Target.Count + Spread.Elements.Count;
+  if Needed > Target.Capacity then
+    Target.Capacity := Max(Needed, Target.Capacity * 2);
+  for I := 0 to Spread.Elements.Count - 1 do
+    Target.Add(Spread.Elements[I]);
 end;
 
 function TGocciaVM.TryIterableToArray(const AIterable: TGocciaValue;

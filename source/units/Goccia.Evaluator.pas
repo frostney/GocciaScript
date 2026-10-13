@@ -201,6 +201,7 @@ uses
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.GeneratorValue,
+  Goccia.Values.Iterator.Concrete,
   Goccia.Values.IteratorSupport,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
@@ -1404,19 +1405,21 @@ var
   SpreadArray: TGocciaArrayValue;
   Iterator: TGocciaIteratorValue;
   IterResult: TGocciaObjectValue;
-  Value: TGocciaValue;
   J: Integer;
 begin
-  if ASpreadValue is TGocciaArrayValue then
+  // ES2026 §13.2.4.1 ArrayAccumulation (SpreadElement) and §13.3.8.1
+  // ArgumentListEvaluation both iterate with GetIterator.  While the array
+  // iteration intrinsics are untouched, the values that yields are the
+  // array's elements read in index order, so read them directly; otherwise
+  // run the protocol, which observes a replaced iterator.
+  if ArrayUsesIntrinsicIteration(ASpreadValue) then
   begin
     SpreadArray := TGocciaArrayValue(ASpreadValue);
-    for J := 0 to SpreadArray.Elements.Count - 1 do
+    J := 0;
+    while J < SpreadArray.Elements.Count do
     begin
-      Value := SpreadArray.GetProperty(IntegerToString(J));
-      if not Assigned(Value) then
-        ATarget.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
-      else
-        ATarget.Add(Value);
+      ATarget.Add(ArrayIteratorValueAt(SpreadArray, J));
+      Inc(J);
     end;
   end
   else
