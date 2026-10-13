@@ -99,7 +99,7 @@ procedure TRollbackModuleRuntimeExtension.Attach(
   const ARuntime: TGocciaRuntimeCore);
 begin
   inherited;
-  FPreviousProbeValue := ARuntime.Engine.Interpreter.GlobalScope.GetValue(
+  FPreviousProbeValue := ARuntime.Engine.GlobalScope.GetValue(
     ROLLBACK_PROBE_NAME);
   ARuntime.Engine.RegisterGlobal(ROLLBACK_PROBE_NAME,
     TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -437,7 +437,7 @@ begin
         Expect<string>(Extensions[I]).ToBe(BaselineExtensions[I]);
       Expect<Boolean>(not Assigned(Runtime.FindRuntimeExtension(
         TRollbackModuleRuntimeExtension))).ToBe(True);
-      ProbeValue := Engine.Interpreter.GlobalScope.GetValue(
+      ProbeValue := Engine.GlobalScope.GetValue(
         ROLLBACK_PROBE_NAME);
       Expect<Boolean>(ProbeValue =
         TGocciaBooleanLiteralValue.TrueValue).ToBe(True);

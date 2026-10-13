@@ -60,16 +60,16 @@ begin
   // EventTarget must exist before AbortSignal so the signal's prototype and
   // constructor can be linked into the EventTarget chain (WHATWG DOM §3.2).
   FBuiltinEventTarget := TGocciaGlobalEventTarget.Create('EventTarget',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError);
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_EVENT_TARGET);
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_EVENT);
   FBuiltinAbort := TGocciaGlobalAbort.Create('Abort',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
     FBuiltinEventTarget.EventTargetConstructor);
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_CONTROLLER);
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_SIGNAL);
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit,
     Runtime.Engine.EmitCapabilityAuditAt, EngineMaxResponseBytes,
     Runtime.Engine.Realm);
@@ -87,7 +87,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectPrototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(Runtime.Engine.Interpreter.GlobalScope, TypeDef,
+  RegisterTypeDefinition(Runtime.Engine.GlobalScope, TypeDef,
     Runtime.SpeciesGetter, RuntimeConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_RESPONSE;
@@ -98,7 +98,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectPrototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(Runtime.Engine.Interpreter.GlobalScope, TypeDef,
+  RegisterTypeDefinition(Runtime.Engine.GlobalScope, TypeDef,
     Runtime.SpeciesGetter, RuntimeConstructor);
 end;
 

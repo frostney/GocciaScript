@@ -13,7 +13,15 @@ unit Goccia.Values.DateData;
 
   The shim registers its WeakMap for the current realm when it is first
   evaluated. Until then no Date can exist in that realm, so every query answers
-  False without a lookup. }
+  False without a lookup.
+
+  A Date of another realm has the slot too: `new Date(otherRealmDate)`
+  copies its time value (ES2026 §21.4.2.1 Date step 4.b), and each
+  Date.prototype method accepts it (RequireInternalSlot(dateObject,
+  [[DateValue]]), as in §21.4.4.10 getTime). Each realm that registered a
+  store is kept in a per-thread list until the realm is destroyed, so a query
+  falls back to the other realms' stores, and the shim reaches them through
+  the two functions CreateForeignDateValueFunctions makes. }
 
 interface
 
@@ -42,20 +50,150 @@ function TryGetDateValue(const AObject: TGocciaObjectValue;
   shim has been evaluated, which any existing Date guarantees; nil before. }
 function CreateDateObject(const ATimeValue: Double): TGocciaObjectValue;
 
+{ The Date shim's view of the other realms' [[DateValue]] slots:
+  AGetter(obj) is obj's time value in the store of the realm that holds it,
+  or undefined; ASetter(obj, value) stores value there and answers true, or
+  answers false when no realm's store holds obj. }
+procedure CreateForeignDateValueFunctions(out AGetter, ASetter: TGocciaValue);
+
 implementation
 
 uses
   Math,
 
+  Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Realm,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.WeakMapValue;
+
+type
+  { Owned by a realm that registered a Date store: its destruction, with the
+    realm's, takes the realm off the thread's list. }
+  TGocciaDateRealmRegistration = class
+  private
+    FRealm: TGocciaRealm;
+  public
+    constructor Create(const ARealm: TGocciaRealm);
+    destructor Destroy; override;
+  end;
+
+  TGocciaForeignDateValueHost = class
+  public
+    function GetValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function SetValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
 
 var
   GDateValueStoreSlot: TGocciaRealmSlotId;
   GDateConstructorSlot: TGocciaRealmSlotId;
+  GDateRegistrationSlot: TGocciaRealmOwnedSlotId;
+  GForeignDateValueHost: TGocciaForeignDateValueHost;
+
+threadvar
+  { The live realms of this thread that registered a Date store. }
+  GDateRealms: array of TGocciaRealm;
+
+constructor TGocciaDateRealmRegistration.Create(const ARealm: TGocciaRealm);
+begin
+  inherited Create;
+  FRealm := ARealm;
+  SetLength(GDateRealms, Length(GDateRealms) + 1);
+  GDateRealms[High(GDateRealms)] := ARealm;
+end;
+
+destructor TGocciaDateRealmRegistration.Destroy;
+var
+  I, J: Integer;
+begin
+  for I := 0 to High(GDateRealms) do
+    if GDateRealms[I] = FRealm then
+    begin
+      for J := I to High(GDateRealms) - 1 do
+        GDateRealms[J] := GDateRealms[J + 1];
+      SetLength(GDateRealms, Length(GDateRealms) - 1);
+      Break;
+    end;
+  inherited;
+end;
+
+function RealmDateValueStore(
+  const ARealm: TGocciaRealm): TGocciaWeakMapValue; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Store: TObject;
+begin
+  Store := ARealm.GetSlot(GDateValueStoreSlot);
+  if Store is TGocciaWeakMapValue then
+    Result := TGocciaWeakMapValue(Store)
+  else
+    Result := nil;
+end;
+
+{ The store, of any realm on this thread, that holds AObject's
+  [[DateValue]], the current realm's first; nil when AObject is not a Date. }
+function FindDateValueStore(const AObject: TGocciaValue): TGocciaWeakMapValue;
+var
+  I: Integer;
+  Realm: TGocciaRealm;
+begin
+  Realm := CurrentRealm;
+  if Assigned(Realm) then
+  begin
+    Result := RealmDateValueStore(Realm);
+    if Assigned(Result) and Result.HasEntry(AObject) then
+      Exit;
+  end;
+  for I := 0 to High(GDateRealms) do
+    if GDateRealms[I] <> Realm then
+    begin
+      Result := RealmDateValueStore(GDateRealms[I]);
+      if Assigned(Result) and Result.HasEntry(AObject) then
+        Exit;
+    end;
+  Result := nil;
+end;
+
+function TGocciaForeignDateValueHost.GetValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Store: TGocciaWeakMapValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if (AArgs.Length = 0) or not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    Exit;
+  Store := FindDateValueStore(AArgs.GetElement(0));
+  if Assigned(Store) then
+    Store.TryGetEntry(AArgs.GetElement(0), Result);
+end;
+
+function TGocciaForeignDateValueHost.SetValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Store: TGocciaWeakMapValue;
+begin
+  Result := TGocciaBooleanLiteralValue.FalseValue;
+  if (AArgs.Length < 2) or not (AArgs.GetElement(0) is TGocciaObjectValue) then
+    Exit;
+  Store := FindDateValueStore(AArgs.GetElement(0));
+  if not Assigned(Store) then
+    Exit;
+  Store.SetEntry(AArgs.GetElement(0), AArgs.GetElement(1));
+  Result := TGocciaBooleanLiteralValue.TrueValue;
+end;
+
+procedure CreateForeignDateValueFunctions(out AGetter, ASetter: TGocciaValue);
+begin
+  AGetter := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    GForeignDateValueHost.GetValue, '__GocciaForeignDateValue', 1);
+  ASetter := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    GForeignDateValueHost.SetValue, '__GocciaSetForeignDateValue', 2);
+end;
 
 function CurrentDateValueStore: TGocciaWeakMapValue; {$IFDEF FPC}inline;{$ENDIF}
 var
@@ -72,7 +210,12 @@ end;
 procedure RegisterDateValueStore(const AStore: TGocciaValue);
 begin
   if (CurrentRealm <> nil) and (AStore is TGocciaWeakMapValue) then
+  begin
     CurrentRealm.SetSlot(GDateValueStoreSlot, AStore);
+    if not Assigned(CurrentRealm.GetOwnedSlot(GDateRegistrationSlot)) then
+      CurrentRealm.SetOwnedSlot(GDateRegistrationSlot,
+        TGocciaDateRealmRegistration.Create(CurrentRealm));
+  end;
 end;
 
 procedure RegisterDateConstructor(const AConstructor: TGocciaValue);
@@ -82,11 +225,9 @@ begin
 end;
 
 function HasDateValue(const AObject: TGocciaObjectValue): Boolean;
-var
-  Store: TGocciaWeakMapValue;
 begin
-  Store := CurrentDateValueStore;
-  Result := Assigned(Store) and Store.HasEntry(AObject);
+  Result := (Length(GDateRealms) > 0) and
+    Assigned(FindDateValueStore(AObject));
 end;
 
 function TryGetDateValue(const AObject: TGocciaObjectValue;
@@ -96,7 +237,9 @@ var
   Slot: TGocciaValue;
 begin
   ATimeValue := NaN;
-  Store := CurrentDateValueStore;
+  if Length(GDateRealms) = 0 then
+    Exit(False);
+  Store := FindDateValueStore(AObject);
   Result := Assigned(Store) and Store.TryGetEntry(AObject, Slot) and
     (Slot is TGocciaNumberLiteralValue);
   if Result then
@@ -141,5 +284,10 @@ end;
 initialization
   GDateValueStoreSlot := RegisterRealmSlot('%DateValueStore%');
   GDateConstructorSlot := RegisterRealmSlot('%DateConstructor%');
+  GDateRegistrationSlot := RegisterRealmOwnedSlot('%DateRealmRegistration%');
+  GForeignDateValueHost := TGocciaForeignDateValueHost.Create;
+
+finalization
+  GForeignDateValueHost.Free;
 
 end.

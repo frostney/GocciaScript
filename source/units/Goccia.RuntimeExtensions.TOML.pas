@@ -61,7 +61,7 @@ function TGocciaTOMLRuntimeExtension.MaterializeTOML: TGocciaValue;
 begin
   if not Assigned(FBuiltinTOML) then
     FBuiltinTOML := TGocciaTOMLBuiltin.Create('TOML',
-      Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError, False);
+      Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinTOML.BuiltinObject;
 end;
 

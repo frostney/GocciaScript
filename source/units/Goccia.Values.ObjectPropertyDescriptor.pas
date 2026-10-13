@@ -12,6 +12,8 @@ uses
 
 type
   TGocciaLazyPropertyFactory = function: TGocciaValue of object;
+  TGocciaLazyAccessorFactory = procedure(out AGetter,
+    ASetter: TGocciaValue) of object;
 
   // Flags store resolved descriptor attribute values; Fields store which
   // descriptor keys were explicitly present in a partial descriptor.
@@ -82,14 +84,25 @@ type
     property Value: TGocciaValue read FValue write FValue;
   end;
 
+  { A property whose value is built on first use. Stored in a property map
+    it is a placeholder, replaced by the descriptor it materializes into. A
+    lazy accessor (CreateAccessor) materializes into an accessor descriptor:
+    only the owning object can do that (MaterializeOwnLazyProperty), and
+    Materialize then yields undefined. }
   TGocciaLazyPropertyDescriptorData = class(TGocciaPropertyDescriptorData)
   private
     FFactory: TGocciaLazyPropertyFactory;
+    FAccessorFactory: TGocciaLazyAccessorFactory;
     FMaterialized: Boolean;
   public
     constructor Create(const AFactory: TGocciaLazyPropertyFactory;
       const AFlags: TPropertyFlags);
+    constructor CreateAccessor(const AFactory: TGocciaLazyAccessorFactory;
+      const AFlags: TPropertyFlags);
     function Materialize: TGocciaValue;
+    function IsAccessor: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    { The accessor's descriptor; the caller owns it. }
+    function MaterializeAccessor: TGocciaPropertyDescriptor;
   end;
 
   // Standalone (non-method) lazy factory.
@@ -249,11 +262,37 @@ begin
   FMaterialized := False;
 end;
 
+constructor TGocciaLazyPropertyDescriptorData.CreateAccessor(
+  const AFactory: TGocciaLazyAccessorFactory; const AFlags: TPropertyFlags);
+begin
+  inherited Create(TGocciaUndefinedLiteralValue.UndefinedValue,
+    AFlags - [pfWritable]);
+  FAccessorFactory := AFactory;
+  FMaterialized := False;
+end;
+
+function TGocciaLazyPropertyDescriptorData.IsAccessor: Boolean;
+begin
+  Result := TMethod(FAccessorFactory).Code <> nil;
+end;
+
+function TGocciaLazyPropertyDescriptorData.MaterializeAccessor:
+  TGocciaPropertyDescriptor;
+var
+  Getter, Setter: TGocciaValue;
+begin
+  FAccessorFactory(Getter, Setter);
+  FMaterialized := True;
+  Result := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, Flags);
+end;
+
 function TGocciaLazyPropertyDescriptorData.Materialize: TGocciaValue;
 begin
   if not FMaterialized then
   begin
-    if TMethod(FFactory).Code <> nil then
+    if IsAccessor then
+      Value := TGocciaUndefinedLiteralValue.UndefinedValue
+    else if TMethod(FFactory).Code <> nil then
       Value := FFactory()
     else
       Value := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -336,7 +375,11 @@ end;
 function ClonePropertyDescriptor(
   const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
 begin
-  if ADescriptor is TGocciaLazyPropertyDescriptorData then
+  if (ADescriptor is TGocciaLazyPropertyDescriptorData) and
+     TGocciaLazyPropertyDescriptorData(ADescriptor).IsAccessor then
+    Result := TGocciaLazyPropertyDescriptorData(ADescriptor)
+      .MaterializeAccessor
+  else if ADescriptor is TGocciaLazyPropertyDescriptorData then
     Result := TGocciaPropertyDescriptorData.CreatePartial(
       TGocciaLazyPropertyDescriptorData(ADescriptor).Materialize,
       ADescriptor.Flags,

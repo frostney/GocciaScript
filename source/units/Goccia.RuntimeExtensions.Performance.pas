@@ -28,9 +28,9 @@ procedure TGocciaPerformanceRuntimeExtension.Attach(
 begin
   inherited Attach(ARuntime);
   FBuiltinPerformance := TGocciaPerformance.Create('performance',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.HostEnvironment);
-  Runtime.Engine.Interpreter.GlobalScope.DefineLexicalBinding(
+  Runtime.Engine.GlobalScope.DefineLexicalBinding(
     CONSTRUCTOR_PERFORMANCE, TGocciaPerformance.CreateInterfaceObject,
     dtConst, True);
 end;

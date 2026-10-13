@@ -110,7 +110,7 @@ begin
       Engine.StrictTypes := True;
       Expect<Boolean>(Engine.StrictTypes).ToBe(True);
       Expect<Boolean>(Engine.Interpreter.StrictTypesEnabled).ToBe(True);
-      Expect<Boolean>(Engine.Interpreter.GlobalScope.StrictTypes).ToBe(True);
+      Expect<Boolean>(Engine.GlobalScope.StrictTypes).ToBe(True);
     finally
       Engine.Free;
       Source.Free;
@@ -155,7 +155,7 @@ begin
       { Simulate a closure whose lexical scope was created before the
         setter ran: a child of the global scope captures the
         then-current StrictTypes (False) into its own FStrictTypes. }
-      Child := Engine.Interpreter.GlobalScope.CreateChild(skBlock,
+      Child := Engine.GlobalScope.CreateChild(skBlock,
         'embedder-block');
       Expect<Boolean>(Child.StrictTypes).ToBe(False);
 
@@ -195,7 +195,7 @@ begin
   try
     Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
     try
-      Scope := Engine.Interpreter.GlobalScope;
+      Scope := Engine.GlobalScope;
 
       { Set up a binding with a recorded sltFloat type hint while
         strict-types is on. }

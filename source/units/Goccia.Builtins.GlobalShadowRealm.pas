@@ -384,7 +384,7 @@ begin
 
     // globalThis.ShadowRealm: standard built-in property attributes
     // { [[W]]: true, [[E]]: false, [[C]]: true } via the exported binding.
-    FEngine.Interpreter.GlobalScope.DefineLexicalBinding(
+    FEngine.GlobalScope.DefineLexicalBinding(
       CONSTRUCTOR_SHADOW_REALM, FConstructor, dtConst, True);
     FEngine.RefreshGlobalThis;
   finally

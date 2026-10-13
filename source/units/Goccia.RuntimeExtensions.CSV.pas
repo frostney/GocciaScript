@@ -52,7 +52,7 @@ function TGocciaCSVRuntimeExtension.MaterializeCSV: TGocciaValue;
 begin
   if not Assigned(FBuiltinCSV) then
     FBuiltinCSV := TGocciaCSVBuiltin.Create('CSV',
-      Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError, False);
+      Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinCSV.BuiltinObject;
 end;
 

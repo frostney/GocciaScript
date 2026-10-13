@@ -103,7 +103,7 @@ procedure TGocciaTestingLibraryRuntimeExtension.EnsureTestAssertions;
 begin
   if not Assigned(FBuiltinTestAssertions) then
     FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions',
-      Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
+      Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
       FSnapshotHost, FSnapshotUpdateMode, FSnapshotFormatter, FInjectGlobals);
 end;
 

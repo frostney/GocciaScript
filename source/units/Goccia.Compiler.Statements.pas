@@ -7156,7 +7156,10 @@ begin
     ACtx.Scope.MarkGlobalBacked(ClassLocalIdx);
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
   EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ClassReg, NameIdx));
-  KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
+  if ACtx.HideSourceText then
+    KeyIdx := ACtx.Template.AddConstantString('')
+  else
+    KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
   EmitInstruction(ACtx, EncodeABx(OP_SET_CLASS_SOURCE_CONST, ClassReg, KeyIdx));
 
   HasInnerNameBinding := ClassDef.Name <> '';
@@ -7403,7 +7406,10 @@ begin
   if (not HasNameBinding) and (AInferredNameKeyReg >= 0) then
     EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ADest,
       UInt16(AInferredNameKeyReg), FUNCTION_NAME_PREFIX_NONE));
-  KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
+  if ACtx.HideSourceText then
+    KeyIdx := ACtx.Template.AddConstantString('')
+  else
+    KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
   EmitInstruction(ACtx, EncodeABx(OP_SET_CLASS_SOURCE_CONST, ADest, KeyIdx));
 
   // ES2026 §15.7.14: Named class expressions bind the name in an inner

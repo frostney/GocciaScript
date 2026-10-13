@@ -16,6 +16,7 @@ uses
   Goccia.Executor,
   Goccia.Modules,
   Goccia.Modules.Loader,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives,
   Goccia.VM;
@@ -37,6 +38,9 @@ type
       AImportingFilePath: string): TGocciaModule;
     function RunModule(const AModule: TGocciaCompiledModule;
       const AThisValue: TGocciaValue): TGocciaValue;
+    procedure InstantiateCompiledModuleFunctions(
+      const AModule: TGocciaBytecodeModule; const AScope: TGocciaScope;
+      const ARealm: TGocciaRealm);
     function CompileDirectEvalCode(const AProgram: TGocciaProgram;
       const ASourcePath: string; const ASite: TGocciaDirectEvalEnvironment;
       const AStrictEval: Boolean;
@@ -57,6 +61,8 @@ type
       var AContext: TGocciaEvaluationContext); override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
+    procedure EvaluateShim(const AProgram: TGocciaProgram;
+      const AScope: TGocciaScope; const AFileName: string); override;
     function EvaluateGlobalEval(const AProgram: TGocciaProgram;
       const ASourcePath: string; const AStrictEval: Boolean;
       const ADeclarations: TGocciaGlobalEvalDeclarations;
@@ -92,8 +98,8 @@ uses
   Goccia.GarbageCollector,
   Goccia.Keywords.Reserved,
   Goccia.Profiler,
-  Goccia.Realm,
   Goccia.Scope.BindingMap,
+  Goccia.Scope.Declarations,
   Goccia.Scope.Redeclaration,
   Goccia.Values.PromiseValue;
 
@@ -141,12 +147,7 @@ procedure TGocciaBytecodeExecutor.InstantiateModuleFunctions(
 var
   BytecodeModule: TGocciaBytecodeModule;
   Compiler: TGocciaCompiler;
-  GC: TGarbageCollector;
-  I: Integer;
   Options: TGocciaCompilerOptimizationOptions;
-  SavedRealm: TGocciaRealm;
-  Template: TGocciaFunctionTemplate;
-  Value: TGocciaValue;
 begin
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
@@ -173,27 +174,42 @@ begin
   if Assigned(FRetainModule) then
     FRetainModule(BytecodeModule);
   AContext.CompiledModule := BytecodeModule;
+  InstantiateCompiledModuleFunctions(BytecodeModule, AContext.Scope,
+    AContext.Realm);
+end;
 
+{ Create each top-level function declaration of AModule, compiled for
+  linking, from its template in the module environment AScope. }
+procedure TGocciaBytecodeExecutor.InstantiateCompiledModuleFunctions(
+  const AModule: TGocciaBytecodeModule; const AScope: TGocciaScope;
+  const ARealm: TGocciaRealm);
+var
+  GC: TGarbageCollector;
+  I: Integer;
+  SavedRealm: TGocciaRealm;
+  Template: TGocciaFunctionTemplate;
+  Value: TGocciaValue;
+begin
   GC := TGarbageCollector.Instance;
   SavedRealm := FVM.Realm;
-  if Assigned(AContext.Realm) then
-    FVM.Realm := AContext.Realm;
+  if Assigned(ARealm) then
+    FVM.Realm := ARealm;
   try
-    for I := 0 to BytecodeModule.TopLevel.FunctionCount - 1 do
+    for I := 0 to AModule.TopLevel.FunctionCount - 1 do
     begin
-      Template := BytecodeModule.TopLevel.GetFunction(I);
+      Template := AModule.TopLevel.GetFunction(I);
       if Template.ModuleEnvironmentBinding = '' then
         Continue;
-      Value := FVM.InstantiateModuleFunction(Template, AContext.Scope);
+      Value := FVM.InstantiateModuleFunction(Template, AScope);
       if Assigned(GC) then
         GC.AddTempRoot(Value);
       try
-        if AContext.Scope.ContainsOwnLexicalBinding(
+        if AScope.ContainsOwnLexicalBinding(
            Template.ModuleEnvironmentBinding) then
-          AContext.Scope.ForceUpdateBinding(Template.ModuleEnvironmentBinding,
+          AScope.ForceUpdateBinding(Template.ModuleEnvironmentBinding,
             Value)
         else
-          AContext.Scope.DefineLexicalBinding(
+          AScope.DefineLexicalBinding(
             Template.ModuleEnvironmentBinding, Value, dtLet);
       finally
         if Assigned(GC) then
@@ -202,6 +218,69 @@ begin
     end;
   finally
     FVM.Realm := SavedRealm;
+  end;
+end;
+
+{ A bootstrap shim runs as compiled bytecode, so every function it creates is
+  a VM closure (#873, #911). The shim is a module: it is compiled the way the
+  loader compiles one while linking it, with its top-level bindings read by
+  name from its module environment AScope, where Goccia.Shims reads the
+  export back. The language profile is the shim's own, not the engine's: a
+  shim is strict module code that may use `arguments` (AScope enables it),
+  and it is never compiled with strict types or for coverage. Its functions
+  hide their source text, as built-in functions do, and the coverage tracker
+  ignores AFileName. The shim can be materialized while the VM is running
+  user code (a lazy global read), so the VM state the module run changes is
+  restored afterwards, as EvaluateModuleBody does. }
+procedure TGocciaBytecodeExecutor.EvaluateShim(const AProgram: TGocciaProgram;
+  const AScope: TGocciaScope; const AFileName: string);
+var
+  BytecodeModule: TGocciaBytecodeModule;
+  Compiler: TGocciaCompiler;
+  GC: TGarbageCollector;
+  SavedGlobalBackedTopLevel: Boolean;
+  SavedGlobalScope: TGocciaScope;
+  SavedRealm: TGocciaRealm;
+  SavedRuntimeModule: TGocciaModule;
+begin
+  if TGocciaCoverageTracker.Instance <> nil then
+    TGocciaCoverageTracker.Instance.ExcludeFile(AFileName);
+  Compiler := TGocciaCompiler.Create(AFileName);
+  try
+    Compiler.GlobalBackedTopLevel := True;
+    Compiler.PreinitializedTopLevelFunctions := True;
+    Compiler.ArgumentsObjectEnabled := AScope.EffectiveArgumentsObjectEnabled;
+    Compiler.HideSourceText := True;
+    BytecodeModule := Compiler.Compile(AProgram);
+  finally
+    Compiler.Free;
+  end;
+  if Assigned(FRetainModule) then
+    FRetainModule(BytecodeModule);
+
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.AddTempRoot(AScope);
+  SavedGlobalScope := FVM.GlobalScope;
+  SavedRealm := FVM.Realm;
+  SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
+  SavedRuntimeModule := FVM.CurrentRuntimeModule;
+  try
+    PredeclareModuleLexicalDeclarations(AProgram, AScope);
+    InstantiateCompiledModuleFunctions(BytecodeModule, AScope, FRealm);
+    FVM.GlobalScope := AScope;
+    FVM.GlobalBackedTopLevel := False;
+    FVM.CurrentRuntimeModule := nil;
+    if Assigned(FRealm) then
+      FVM.Realm := FRealm;
+    FVM.ExecuteImportedModule(BytecodeModule);
+  finally
+    FVM.GlobalScope := SavedGlobalScope;
+    FVM.Realm := SavedRealm;
+    FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    FVM.CurrentRuntimeModule := SavedRuntimeModule;
+    if Assigned(GC) then
+      GC.RemoveTempRoot(AScope);
   end;
 end;
 

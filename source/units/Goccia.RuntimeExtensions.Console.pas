@@ -26,7 +26,7 @@ procedure TGocciaConsoleRuntimeExtension.Attach(
 begin
   inherited Attach(ARuntime);
   FBuiltinConsole := TGocciaConsole.Create('console',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError);
 end;
 
 procedure TGocciaConsoleRuntimeExtension.Detach;

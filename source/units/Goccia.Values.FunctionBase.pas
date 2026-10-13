@@ -1406,6 +1406,7 @@ end;
 function TGocciaFunctionSharedPrototype.FunctionToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   FuncName, SrcText: string;
+  NameDescriptor: TGocciaPropertyDescriptor;
 begin
   if not AThisValue.IsCallable then
     ThrowTypeError('Function.prototype.toString requires that ''this'' be a Function');
@@ -1434,7 +1435,24 @@ begin
   if AThisValue is TGocciaBoundFunctionValue then
     FuncName := ''
   else if AThisValue is TGocciaFunctionBase then
-    FuncName := TGocciaFunctionBase(AThisValue).GetFunctionName
+  begin
+    FuncName := TGocciaFunctionBase(AThisValue).GetFunctionName;
+    // A function compiled from engine source (a bootstrap shim) keeps no
+    // source text. A method of it with a computed key, such as
+    // Date.prototype[Symbol.toPrimitive], has no name until SetFunctionName
+    // gives it one as an own data property (ES2026 §10.2.9), which is the
+    // name its NativeFunction text shows.
+    if FuncName = '' then
+    begin
+      NameDescriptor := TGocciaFunctionBase(AThisValue)
+        .GetOwnPropertyDescriptor(PROP_NAME);
+      if (NameDescriptor is TGocciaPropertyDescriptorData) and
+         (TGocciaPropertyDescriptorData(NameDescriptor).Value is
+          TGocciaStringLiteralValue) then
+        FuncName := TGocciaStringLiteralValue(
+          TGocciaPropertyDescriptorData(NameDescriptor).Value).Value;
+    end;
+  end
   else if AThisValue is TGocciaClassValue then
     FuncName := TGocciaClassValue(AThisValue).Name
   else

@@ -3068,6 +3068,10 @@ var
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
+    // A lazy placeholder (a member of a built-in prototype that a shim
+    // provides, such as Number.prototype.toLocaleString) is built first.
+    if Descriptor.ClassType = TGocciaLazyPropertyDescriptorData then
+      Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
     if Descriptor is TGocciaPropertyDescriptorData then
       Result := TGocciaPropertyDescriptorData(Descriptor).Value
     else if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -3103,6 +3107,8 @@ var
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
+    if Descriptor.ClassType = TGocciaLazyPropertyDescriptorData then
+      Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       if not TGocciaPropertyDescriptorData(Descriptor).Writable then
