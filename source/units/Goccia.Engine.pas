@@ -326,6 +326,10 @@ type
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaCompiledModule;
     procedure RetainModule(const AModule: TGocciaCompiledModule);
+    { How many compiled modules the engine keeps for its lifetime: the
+      programs it compiled, and the code of the Function constructor and of
+      eval (ADR 0134, decision 1). }
+    function RetainedModuleCount: Integer;
     function RunModule(
       const AModule: TGocciaCompiledModule): TGocciaValue;
     function RunModuleInScope(const AModule: TGocciaCompiledModule;
@@ -2346,6 +2350,11 @@ end;
 procedure TGocciaEngine.RetainModule(const AModule: TGocciaCompiledModule);
 begin
   FRetainedModules.Add(AModule);
+end;
+
+function TGocciaEngine.RetainedModuleCount: Integer;
+begin
+  Result := FRetainedModules.Count;
 end;
 
 procedure RegisterEntryModuleExports(const AModule: TGocciaModule;
