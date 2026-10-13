@@ -54,9 +54,9 @@ run only `status`, with every exact `PR=SHA`.
 4. Review every initial member once for its exact head. Serialize triggers when
    the active provider has account-wide, repository-wide, or other shared
    limits. For CodeRabbit, read `status` for every member, then `run` one
-   member at a time, bottom-up. During waits, use foreground transition
-   commands and passively await them. Do not wake the model merely to report
-   unchanged state.
+   member at a time, bottom-up. During waits, run transition commands under
+   [`delivery-wait`'s running rules](../../delivery-wait/SKILL.md#running-a-wait).
+   Do not wake the model merely to report unchanged state.
 5. Inspect every inline thread, exact-head review body, and top-level
    finding surface. Record each finding's impact, gain, and if-not-done facts
    and apply the repository's finding policy as the [PR workflow](pr.md)

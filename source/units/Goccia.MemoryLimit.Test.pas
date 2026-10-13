@@ -29,7 +29,8 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.Shape;
+  Goccia.Values.Shape,
+  Goccia.VM.Upvalue;
 
 type
   { A managed value that reports its own sweep. Recycle, not Destroy: the sweep
@@ -245,6 +246,23 @@ type
     function CollectNow(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure TestClosedNumericRecursionCollectsUnderPressure;
+    { Guest-callable natives for the captured-binding tests: each collects and
+      then answers the bytes the native heap, or the collector, holds. }
+    function NativeHeapAfterCollect(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ManagedBytesAfterCollect(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RunBytecodeMeasurement(const AName, ASourceText: string): Double;
+    procedure TestCapturedBindingIsFreedWithItsClosure;
+    procedure TestCapturedBindingCountsAgainstTheLimit;
+    { Guest-callable native for the charged-refusal test: collects, then sets
+      the budget to the live heap plus room for the gated element storage the
+      script asks for next and a margin its element objects overrun. }
+    function ArmChargedRefusalBudget(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ChargedRefusalName(const AExecutor: TGocciaExecutor;
+      const AName: string): string;
+    procedure TestFittingGatedStorageLeavesTheChargedRefusal;
   protected
     procedure BeforeEach; override;
   public
@@ -313,6 +331,17 @@ const
     rather than the append fast path (an append at exactly the element count
     never reaches the gate at all). }
   ELEMENT_CANARY_STRIDE = 2;
+
+  { The charged-refusal test builds an array-like Array.from result of this
+    many elements. Its element storage is sized up front — one gated request
+    of this many pointers — and each element is an object charged as it is
+    built. CHARGED_REFUSAL_MARGIN_BYTES is the room left over the live heap
+    once that request fits: far more than the few allocations between arming
+    the budget and reaching the gate, and far less than the element objects,
+    so the run is refused by a charged allocation partway through. }
+  CHARGED_REFUSAL_ELEMENTS = 20000;
+  CHARGED_REFUSAL_MARGIN_BYTES = 64 * 1024;
+  CHARGED_REFUSAL_ARM_GLOBAL_NAME = '__armChargedRefusalBudget';
 
   { Name of the native the sandbox tests reach through an options getter. }
   SANDBOX_FAULT_GLOBAL_NAME = '__gocciaRaiseSandboxFault';
@@ -454,6 +483,13 @@ begin
   Test('Ordinary script errors stay catchable', TestScriptErrorsStayCatchable);
   Test('A closed numeric recursion collects past stale register slots',
     TestClosedNumericRecursionCollectsUnderPressure);
+  Test('A captured binding is freed with the last closure that holds it ' +
+    '(#1618)', TestCapturedBindingIsFreedWithItsClosure);
+  Test('A captured binding counts against the memory limit (#1618)',
+    TestCapturedBindingCountsAgainstTheLimit);
+  Test('Element storage that fits the gate leaves the refusal to a charged ' +
+    'allocation, as a catchable RangeError',
+    TestFittingGatedStorageLeavesTheChargedRefusal);
   Test('Script try/catch cannot swallow an engine-integrity fault',
     TestSyncCatchCannotSwallowIntegrityFault);
   Test('A guest iterator return() cannot swallow a refusal while closing',
@@ -1804,6 +1840,165 @@ begin
     Executor.Free;
     Source.Free;
   end;
+end;
+
+function TMemoryLimitTests.NativeHeapAfterCollect(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGarbageCollector.Instance.Collect;
+  Result := TGocciaNumberLiteralValue.Create(GetHeapStatus.TotalAllocated);
+end;
+
+function TMemoryLimitTests.ManagedBytesAfterCollect(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGarbageCollector.Instance.Collect;
+  Result := TGocciaNumberLiteralValue.Create(
+    TGarbageCollector.Instance.BytesAllocated);
+end;
+
+function TMemoryLimitTests.RunBytecodeMeasurement(const AName,
+  ASourceText: string): Double;
+var
+  Source: TStringList;
+  Executor: TGocciaExecutor;
+  Engine: TGocciaEngine;
+begin
+  Source := TStringList.Create;
+  Source.Text := ASourceText;
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create(AName, Source, Executor);
+  try
+    Engine.InjectGlobal('__nativeHeap',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(NativeHeapAfterCollect,
+        '__nativeHeap', 0));
+    Engine.InjectGlobal('__managedBytes',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        ManagedBytesAfterCollect, '__managedBytes', 0));
+    Result := Engine.Execute.Result.ToNumberLiteral.Value;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestCapturedBindingIsFreedWithItsClosure;
+const
+  { Every call below opens a cell for `a` and drops the closure that captured
+    it. Before #1618 the bytecode VM allocated that cell (and an upvalue box
+    around it) on the native heap and never freed either, so the four runs
+    left about 4 * 20000 * 64 bytes behind. The bound leaves room for heap
+    bookkeeping noise and is a small fraction of that. }
+  MAX_GROWTH_BYTES = 256 * 1024;
+  SourceText =
+    'const f = (a) => (() => a + 1)();' + sLineBreak +
+    'const keys = [...Array(20000).keys()];' + sLineBreak +
+    'const run = () => keys.reduce((sum, i) => sum + f(i), 0);' + sLineBreak +
+    'run();' + sLineBreak +
+    'const before = __nativeHeap();' + sLineBreak +
+    'run(); run(); run(); run();' + sLineBreak +
+    '__nativeHeap() - before;';
+var
+  Growth: Double;
+begin
+  Growth := RunBytecodeMeasurement('captured-binding-freed.js', SourceText);
+  Expect<Boolean>(Growth < MAX_GROWTH_BYTES).ToBe(True);
+end;
+
+procedure TMemoryLimitTests.TestCapturedBindingCountsAgainstTheLimit;
+const
+  CLOSURES = 2000;
+  { The two arrays hold the same number of closures from the same kind of
+    call; only the second captures a binding, so the collector's total grows
+    by one cell per closure more for it, give or take the few bytes in which
+    the rest of the two runs differ. Before #1618 the cells were native memory
+    the collector did not count, and the difference was 0. }
+  SLACK_BYTES = 1024;
+  SourceText =
+    'const keys = [...Array(2000).keys()];' + sLineBreak +
+    'const start = __managedBytes();' + sLineBreak +
+    'const plain = keys.map((i) => () => 1);' + sLineBreak +
+    'const afterPlain = __managedBytes();' + sLineBreak +
+    'const capturing = keys.map((i) => () => i);' + sLineBreak +
+    'const afterCapturing = __managedBytes();' + sLineBreak +
+    'plain.length + capturing.length === 4000' + sLineBreak +
+    '  ? (afterCapturing - afterPlain) - (afterPlain - start)' + sLineBreak +
+    '  : -1;';
+var
+  ExtraBytes: Double;
+begin
+  ExtraBytes := RunBytecodeMeasurement('captured-binding-charged.js',
+    SourceText);
+  Expect<Boolean>(ExtraBytes >=
+    CLOSURES * TGocciaBytecodeCell.InstanceSize - SLACK_BYTES).ToBe(True);
+end;
+
+function TMemoryLimitTests.ArmChargedRefusalBudget(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GC.MaxBytes := GC.BytesAllocated +
+    Int64(CHARGED_REFUSAL_ELEMENTS) * SizeOf(Pointer) +
+    CHARGED_REFUSAL_MARGIN_BYTES;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TMemoryLimitTests.ChargedRefusalName(
+  const AExecutor: TGocciaExecutor; const AName: string): string;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  PreviousMaxBytes: Int64;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    CHARGED_REFUSAL_ARM_GLOBAL_NAME + '();' + sLineBreak +
+    'let refusal = "none";' + sLineBreak +
+    'try {' + sLineBreak +
+    '  Array.from({ length: ' + IntToStr(CHARGED_REFUSAL_ELEMENTS) +
+    ' }, (_, i) => ({ x: i }));' + sLineBreak +
+    '} catch (e) {' + sLineBreak +
+    '  refusal = e.name;' + sLineBreak +
+    '}' + sLineBreak +
+    'refusal;';
+  Engine := TGocciaEngine.Create(AName, Source, AExecutor);
+  PreviousMaxBytes := TGarbageCollector.Instance.MaxBytes;
+  try
+    Engine.InjectGlobal(CHARGED_REFUSAL_ARM_GLOBAL_NAME,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        ArmChargedRefusalBudget, CHARGED_REFUSAL_ARM_GLOBAL_NAME, 0));
+    Result := Engine.Execute.Result.ToStringLiteral.Value;
+  finally
+    TGarbageCollector.Instance.MaxBytes := PreviousMaxBytes;
+    Engine.Free;
+    AExecutor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestFittingGatedStorageLeavesTheChargedRefusal;
+begin
+  { Array.from over an array-like asks the element-storage gate for all of its
+    slots before it builds a single element, then charges each element object
+    as it goes. With the budget set over the live heap rather than at a fixed
+    number, that storage always fits, so the refusal has to come from a charged
+    allocation: a RangeError the script catches, not the opaque
+    TGocciaMemoryLimitError, which would escape Execute and fail this test.
+    `--max-memory (OOM triggers RangeError)` in scripts/test-cli.ts runs the
+    same script through the CLI; with a fixed 200000-byte ceiling it sat a few
+    hundred bytes from the gate's line, and #1622's eight extra bytes per class
+    value pushed development builds across it. }
+  Expect<string>(ChargedRefusalName(TGocciaInterpreterExecutor.Create,
+    'charged-refusal-interpreted.js')).ToBe('RangeError');
+  Expect<string>(ChargedRefusalName(TGocciaBytecodeExecutor.Create,
+    'charged-refusal-bytecode.js')).ToBe('RangeError');
 end;
 
 procedure TMemoryLimitTests.TestSyncCatchCannotSwallowIntegrityFault;

@@ -138,11 +138,11 @@
         if Assigned(FCurrentClosure) then
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          if Assigned(Upvalue) then
           begin
-            if Upvalue.Cell.Value.Kind = grkHole then
+            if Upvalue.Value.Kind = grkHole then
               ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
-            SetRegisterRaw(A, Upvalue.Cell.Value)
+            SetRegisterRaw(A, Upvalue.Value)
           end
           else
             FRegisters[A] := RegisterUndefined;
@@ -156,11 +156,11 @@
         if Assigned(FCurrentClosure) then
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          if Assigned(Upvalue) then
           begin
-            if Upvalue.Cell.Value.Kind = grkHole then
+            if Upvalue.Value.Kind = grkHole then
               ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
-            Upvalue.Cell.Value := FRegisters[A];
+            Upvalue.Value := FRegisters[A];
           end;
         end;
       end;
@@ -177,8 +177,7 @@
         else if Assigned(FCurrentClosure) then
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) and
-             (Upvalue.Cell.Value.Kind = grkHole) then
+          if Assigned(Upvalue) and (Upvalue.Value.Kind = grkHole) then
             ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
         end;
 
@@ -2426,8 +2425,7 @@
         begin
           Desc := ChildTemplate.GetUpvalueDescriptor(I);
           if Desc.IsLocal then
-            ChildClosure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
-              GetLocalCell(Desc.Index)))
+            ChildClosure.SetUpvalue(I, GetLocalCell(Desc.Index))
           else if Assigned(FCurrentClosure) then
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
         end;

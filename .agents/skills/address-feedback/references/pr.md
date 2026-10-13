@@ -37,12 +37,13 @@ Read [pr-readiness.md](pr-readiness.md) before deciding that
 a PR is ready, pending, blocked, or merged.
 
 Use `scripts/review_wait.py` for review inspection, deterministic waiting,
-inline replies, and thread resolution. Invoke it with `--json`; the harness must
-passively await a running command rather than wake a model to report unchanged
-state. The repository policy defaults to
-`.github/delivery/review-automations.json` and may be overridden explicitly.
-Use a caller-owned `--state` path below `.agent/waits/`, which the repository
-must gitignore.
+inline replies, and thread resolution. Invoke it with `--json` and run its
+waits under
+[`delivery-wait`'s running rules](../../delivery-wait/SKILL.md#running-a-wait),
+which keep a wait armed without waking a model to report unchanged state. The
+repository policy defaults to `.github/delivery/review-automations.json` and may
+be overridden explicitly. Use a caller-owned `--state` path below
+`.agent/waits/`, which the repository must gitignore.
 
 ## Active review automation
 
@@ -127,11 +128,11 @@ errored, missing, or head-ambiguous verdict is pending rather than passed.
    exception in the PR-specific boundaries permits it. In normal mode, a
    passive helper `wait` may await the retriggered verdict; then return the
    result contract without merging. In `automatic-merge` mode, launch the
-   helper's foreground `wait` operation with the exact head, repository policy,
+   helper's `wait` operation with the exact head, repository policy,
    `--state` path, and safely derived deadline.
    Resume this workflow only when the command returns a meaningful transition.
    Never guess a timer, quota, provider policy, or retry count. If the host
-   cannot passively await a subprocess, return `pending` with that unsupported
+   cannot passively await a command, return `pending` with that unsupported
    capability instead of using model heartbeats.
 10. Stop without merging for a material product decision, unrelated failure,
    unsafe or divergent PR, unavailable terminal external dependency, or
@@ -141,7 +142,7 @@ errored, missing, or head-ambiguous verdict is pending rather than passed.
     `git-workflow`'s
     [default-branch health](../../git-workflow/SKILL.md#default-branch-health)
     gate passes. Await a pending default-branch run with `delivery-wait`'s
-    foreground `workflow-terminal` wait, then recheck. If the branch is still
+    `workflow-terminal` wait, then recheck. If the branch is still
     not green or the host cannot wait, return `ready` and unmerged with the
     default branch's state as the blocker. After the merge, sync the local
     default branch, remove only

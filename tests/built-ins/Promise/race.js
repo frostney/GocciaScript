@@ -137,3 +137,30 @@ describe.runIf(typeof Goccia !== "undefined")("Promise.race under explicit GC", 
     });
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("Promise.race across a collection", () => {
+  test("rejects with the resolve error after the iterator's return() collects", async () => {
+    let returned = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next: () => ({ value: 1, done: false }),
+          return() {
+            returned++;
+            Goccia.gc();
+            return {};
+          },
+        };
+      },
+    };
+    class ThrowingResolve extends Promise {
+      static resolve() {
+        throw new TypeError("resolve failed " + [1, 2].join("-"));
+      }
+    }
+    const promise = ThrowingResolve.race(iterable);
+    Goccia.gc();
+    await expect(promise).rejects.toThrow("resolve failed 1-2");
+    expect(returned).toBe(1);
+  });
+});
