@@ -969,7 +969,7 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
 
     const whileSrc = join(tmp, "use-while.js");
     writeFileSync(whileSrc, "let s = 0;\nlet i = 1;\nwhile (i <= 5) { s = s + i; i++; }\ns;\n");
-    const whileOut = await $`${BARE} --print ${whileSrc} --compat-while-loops 2>&1`.text();
+    const whileOut = await $`${BARE} --print ${whileSrc} --mode=interpreted --compat-while-loops 2>&1`.text();
     if (whileOut.trim() !== "15") throw new Error(`Bare --compat-while-loops expected 15, got: ${whileOut}`);
 
     const whileBcOut = await $`${RUNNER} --print ${whileSrc} --mode=bytecode --compat-while-loops 2>&1`.text();

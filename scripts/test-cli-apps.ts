@@ -8371,7 +8371,7 @@ await section("Runner sandbox mode: a thrown stack cannot read a host file into 
       },
     ]);
     for (const [label, extraArgs] of [
-      ["interpreter", []],
+      ["interpreter", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
@@ -8437,7 +8437,7 @@ await section("Runner sandbox mode: a nested isolated child cannot read the pare
       },
     ]);
     for (const [label, extraArgs] of [
-      ["interpreter", []],
+      ["interpreter", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
@@ -8482,7 +8482,7 @@ await section("Runner sandbox mode: a legitimate error in the child's own module
       },
     ]);
     for (const [label, extraArgs] of [
-      ["interpreter", []],
+      ["interpreter", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
@@ -8538,7 +8538,7 @@ await section("Runner sandbox mode: a nested child's genuine module source is wi
       },
     ]);
     for (const [label, extraArgs] of [
-      ["interpreter", []],
+      ["interpreter", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
@@ -8595,7 +8595,7 @@ await section("Runner sandbox mode: fs callback APIs and promises defer filesyst
       "exists:true",
     ].join("\n");
     for (const [label, extraArgs] of [
-      ["interpreter", []],
+      ["interpreter", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
@@ -8711,7 +8711,7 @@ await section("Runner sandbox mode: fs callback overloads use Node-shaped result
       "promise-mkdir:/promise",
     ].join("\n");
     for (const [label, extraArgs] of [
-      ["interpreter", []],
+      ["interpreter", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
@@ -9150,7 +9150,7 @@ await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metada
     ]);
 
     for (const [label, extraArgs] of [
-      ["interpreter", []],
+      ["interpreter", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
@@ -9266,7 +9266,7 @@ await section("Runner sandbox mode: fs errors are Node-shaped in every execution
       "rename|true|true|Error|ENOENT|true|rename|/missing.txt|string|ENOENT: no such file or directory, rename '/missing.txt' -> '/destination.txt'",
     ];
     for (const [label, extraArgs] of [
-      ["interpreter", []],
+      ["interpreter", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
@@ -12334,7 +12334,7 @@ await section("Loader: goccia:test is importable and injects no globals...", asy
     );
 
     for (const [label, extraArgs] of [
-      ["interpreted", []],
+      ["interpreted", ["--mode=interpreted"]],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync([RUNNER, file, ...extraArgs], {

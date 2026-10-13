@@ -18,7 +18,7 @@ function assertSyntaxErrorInBothModes(
   args: readonly string[] = [],
   opts?: { timeout?: number; messageIncludes?: string; line?: number },
 ): void {
-  assertSyntaxError(source, desc, [...args], opts);
+  assertSyntaxError(source, desc, [...args, "--mode=interpreted"], opts);
   assertSyntaxError(
     source,
     `${desc} (bytecode)`,
@@ -87,7 +87,7 @@ console.log("Malformed literal class accessors...");
     ["class C { set 1; }\n", "numeric-named setter declaration"],
     ["class C { set class = 1; }\n", "keyword-named setter field"],
   ] as const) {
-    assertSyntaxError(source, desc);
+    assertSyntaxError(source, desc, ["--mode=interpreted"]);
     assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
   }
 }
@@ -102,7 +102,7 @@ console.log("Accessor properties are invalid destructuring assignment targets...
     ["let obj = {}; ({ get ['x']() { return 1; } } = obj);\n", "computed getter destructuring target"],
     ["let obj = {}; ({ set ['x'](value) {} } = obj);\n", "computed setter destructuring target"],
   ] as const) {
-    assertSyntaxError(source, desc);
+    assertSyntaxError(source, desc, ["--mode=interpreted"]);
     assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
   }
 }
@@ -165,7 +165,7 @@ console.log("Function parameter-list early errors...");
   ] as const;
 
   for (const { desc, source, args } of cases) {
-    assertSyntaxError(source, desc, [...args]);
+    assertSyntaxError(source, desc, [...args, "--mode=interpreted"]);
     assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
   }
 }
@@ -483,7 +483,10 @@ console.log("Annex B labelled-function early errors...");
 console.log("Strict-mode legacy octal literal rejection...");
 {
   const source = '"use strict";\n01;\n';
-  assertSyntaxError(source, "legacy octal literal in strict code", ["--compat-non-strict-mode"]);
+  assertSyntaxError(source, "legacy octal literal in strict code", [
+    "--compat-non-strict-mode",
+    "--mode=interpreted",
+  ]);
   assertSyntaxError(source, "legacy octal literal in strict bytecode", [
     "--compat-non-strict-mode",
     "--mode=bytecode",
