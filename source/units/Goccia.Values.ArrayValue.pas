@@ -116,6 +116,11 @@ type
   function DefaultCompare(
     {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: TGocciaValue): Integer;
   function GetSharedArrayPrototypeForRealm(const ARealm: TGocciaRealm): TGocciaObjectValue;
+  // %Array.prototype.values% of ARealm: the function Array.prototype.values and
+  // Array.prototype[Symbol.iterator] hold when the realm is created, whatever
+  // script has since stored there.  nil before the realm's Array.prototype
+  // exists.
+  function GetIntrinsicArrayValuesForRealm(const ARealm: TGocciaRealm): TGocciaValue;
 
 implementation
 
@@ -160,6 +165,7 @@ uses
 var
   GArrayPrototypeSlot: TGocciaRealmSlotId;
   GArrayMethodHostSlot: TGocciaRealmSlotId;
+  GArrayValuesSlot: TGocciaRealmSlotId;
 
 function GetSharedArrayPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -173,6 +179,14 @@ function GetSharedArrayPrototypeForRealm(const ARealm: TGocciaRealm): TGocciaObj
 begin
   if Assigned(ARealm) then
     Result := TGocciaObjectValue(ARealm.GetSlot(GArrayPrototypeSlot))
+  else
+    Result := nil;
+end;
+
+function GetIntrinsicArrayValuesForRealm(const ARealm: TGocciaRealm): TGocciaValue;
+begin
+  if Assigned(ARealm) then
+    Result := TGocciaValue(ARealm.GetSlot(GArrayValuesSlot))
   else
     Result := nil;
 end;
@@ -1192,6 +1206,10 @@ begin
   end;
   RegisterMemberDefinitions(SharedPrototype, PrototypeMembers);
   ValuesMethod := SharedPrototype.GetProperty('values');
+  // ES2026 §23.1.3.40: the initial value of Array.prototype[%Symbol.iterator%]
+  // is %Array.prototype.values%.  Remember that intrinsic so iteration can
+  // tell an untouched array protocol from one script has replaced.
+  CurrentRealm.SetSlot(GArrayValuesSlot, ValuesMethod);
   SharedPrototype.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownIterator,
     TGocciaPropertyDescriptorData.Create(ValuesMethod, [pfConfigurable, pfWritable]));
@@ -4797,5 +4815,6 @@ end;
 initialization
   GArrayPrototypeSlot := RegisterRealmSlot('Array.prototype');
   GArrayMethodHostSlot := RegisterRealmSlot('Array.prototype.methodHost');
+  GArrayValuesSlot := RegisterRealmSlot('%Array.prototype.values%');
 
 end.

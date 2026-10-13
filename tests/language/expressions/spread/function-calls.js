@@ -36,3 +36,33 @@ test("a built-in called inside another built-in's callback keeps its own argumen
     [4, 5].reduce((sum, value) => sum + Math.max(value, Math.abs(-10)), 0),
   ).toBe(20);
 });
+
+test("call spread uses a replaced Array.prototype[Symbol.iterator]", () => {
+  const original = Array.prototype[Symbol.iterator];
+  const collect = (...args) => args;
+  Array.prototype[Symbol.iterator] = ({
+    *values() {
+      yield "replaced";
+    },
+  }).values;
+  let spread;
+  try {
+    spread = collect(...[1, 2, 3]);
+  } finally {
+    Array.prototype[Symbol.iterator] = original;
+  }
+  expect(spread).toEqual(["replaced"]);
+  expect(collect(...[1, 2, 3])).toEqual([1, 2, 3]);
+});
+
+test("call spread reads a hole through the prototype chain", () => {
+  const collect = (...args) => args;
+  Array.prototype[1] = "inherited";
+  let spread;
+  try {
+    spread = collect(...[1, , 3]);
+  } finally {
+    delete Array.prototype[1];
+  }
+  expect(spread).toEqual([1, "inherited", 3]);
+});

@@ -106,7 +106,7 @@ Current instruction families:
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
 
 - accessor definition uses constant-key and dynamic-key instructions plus getter/setter and static/instance flags
-- collection helpers use a shared opcode (`OP_COLLECTION_OP`) for object spread, object rest, and iterable-to-array spread
+- collection helpers use a shared opcode (`OP_COLLECTION_OP`) for object spread, object rest, and iterable-to-array spread; spreading an Array reads its elements directly only while `ArrayUsesIntrinsicIteration` (`Goccia.Values.Iterator.Concrete`) confirms that `Array.prototype[Symbol.iterator]` and `%ArrayIteratorPrototype%.next` are still the realm's intrinsics and the array has no iterator of its own, and otherwise runs the full iterator protocol
 - validation uses a shared opcode for require-object and require-iterable checks
 - generator metadata is serialized and a single `OP_YIELD` drives generator suspension; `yield*` uses the same opcode with delegation bookkeeping rather than a second opcode
 - bytecode generators suspend by snapshotting the VM continuation at `OP_YIELD` (instruction pointer, live registers, local cells, handler state, and GC-visible references) and resume from that snapshot instead of replaying from function entry

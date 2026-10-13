@@ -4020,15 +4020,13 @@
             end;
 
           COLLECTION_OP_SPREAD_ITERABLE_INTO_ARRAY:
-            begin
-              DoneValue := IterableToArray(RegisterToValue(FRegisters[C]));
-              if (FRegisters[A].Kind = grkObject) and
-                 (FRegisters[A].ObjectValue is TGocciaArrayValue) and
-                 (DoneValue is TGocciaArrayValue) then
-	                for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
-	                  TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
-	                    TGocciaArrayValue(DoneValue).GetProperty(IntegerToString(I)));
-            end;
+            if (FRegisters[A].Kind = grkObject) and
+               (FRegisters[A].ObjectValue is TGocciaArrayValue) then
+              SpreadIterableIntoArray(
+                TGocciaArrayValue(FRegisters[A].ObjectValue),
+                RegisterToValue(FRegisters[C]))
+            else
+              IterableToArray(RegisterToValue(FRegisters[C]));
 
           COLLECTION_OP_TRY_ITERABLE_TO_ARRAY:
             begin
