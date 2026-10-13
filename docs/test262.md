@@ -202,7 +202,7 @@ artifact names.
 | Async positive    | captured output contains `Test262:AsyncTestComplete`                 | `Test262:AsyncTestFailure:<name>: <msg>`, no marker, or a throw before `$DONE` |
 | Negative runtime  | captured output contains `Test262:NegativeTestError:<expected-type>` | `Test262:NegativeTestNoError` or another error type                       |
 | Top-level negative runtime | escaped throw has the expected error type                   | no throw or another error type                                           |
-| Negative parse    | parsing or linking throws as expected                                | source executes cleanly                                                  |
+| Negative parse    | parsing or linking raises `negative.type` before evaluation          | clean run, `$DONOTEVALUATE` reached, wrong type, or a JS-level throw     |
 
 Async markers are emitted by stock test262 `doneprintHandle.js` via
 `$DONE`; the runner captures `print` output in the worker and scans it for
@@ -250,15 +250,17 @@ try {
 }
 ```
 
-Top-level global-code runtime negatives that expect `SyntaxError` use the
-positive template shape instead:
+Top-level global-code runtime negatives that expect `SyntaxError`, and every
+`module`-flagged runtime negative (top-level `import`/`export` cannot sit inside
+`try`), use the positive template shape instead:
 
 ```text
 {harness_source}
 {body}
 ```
 
-The runner then checks the escaped engine error type directly.
+The runner then checks the escaped error's `constructor.name` (read from data
+properties only, so no user getter runs) against `negative.type`.
 
 The error-class identification uses `e.constructor.name`, matching the
 spec-visible constructor/prototype path. If this cannot identify the
@@ -274,16 +276,26 @@ avoids collisions with test-body bindings.
 ### Negative parse
 
 ```text
+function $DONOTEVALUATE() { print("Test262:DoNotEvaluateReached"); throw "Test262: This statement should not be evaluated."; }
 {body}
 ```
 
-Body alone (with the `"use strict";` prefix for `onlyStrict` tests). The
-runner executes it in process and records whether parsing, linking, or
-execution raised. Any raised error passes the test;
-the error type is not compared. A body that completes cleanly fails with
-`expected parse error, body executed cleanly`. Module-flagged negative
-tests of every phase use this template too, because top-level `import`
-cannot sit inside the negative-runtime `try` wrapper.
+Used for `negative.phase` `parse` and `resolution` (and `early`, should it
+reappear). No harness is included, but the stock `$DONOTEVALUATE` stub is
+prepended (after the `"use strict";` prefix for `onlyStrict` tests; `raw` tests
+get the body byte-for-byte). The test passes only when all of these hold:
+
+1. execution raised;
+2. `$DONOTEVALUATE` was not reached (`Test262:DoNotEvaluateReached` is absent);
+3. the error name equals `negative.type`;
+4. the error was raised before evaluation, i.e. as a host-level
+   `TGocciaSyntaxError` from the parser, early-error checks, or module
+   linking. A `SyntaxError` thrown as a JS value during evaluation does not
+   count.
+
+An engine that misses an early error therefore runs the body, reaches
+`$DONOTEVALUATE()`, and fails with `body was evaluated ($DONOTEVALUATE
+reached)` instead of passing on the resulting throw (see #1571).
 
 ## Failure classification
 
