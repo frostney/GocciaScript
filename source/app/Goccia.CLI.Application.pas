@@ -1590,6 +1590,8 @@ begin
       AEngine.ModuleLoader.StrictTypesEnabled;
     ManifestLoader.EvaluateModuleBody :=
       AEngine.ModuleLoader.EvaluateModuleBody;
+    ManifestLoader.InstantiateModuleFunctions :=
+      AEngine.ModuleLoader.InstantiateModuleFunctions;
     ManifestLoader.BindRuntime(AEngine.Interpreter.GlobalScope,
       AEngine.ThrowError);
 

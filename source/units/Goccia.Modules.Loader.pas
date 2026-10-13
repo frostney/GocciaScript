@@ -13,6 +13,7 @@ uses
   OrderedStringMap,
 
   Goccia.AST.Node,
+  Goccia.AST.Statements,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Diagnostics.SourceRegistry,
@@ -37,6 +38,15 @@ type
   TGocciaModuleBodyEvaluator = function(const AProgram: TGocciaProgram;
     const AContext: TGocciaEvaluationContext;
     out AProgramConsumed: Boolean): TGocciaValue of object;
+  { ES2026 §16.2.1.7.3.1 InitializeEnvironment, for the function
+    declarations of a module-form program: bind every top-level function
+    declaration of AProgram, an `export default function` included, to a
+    function object in AContext.Scope, the module environment, before any
+    module body runs. The executor creates the functions as it runs code, so
+    the bytecode executor compiles the program here and leaves it in
+    AContext.CompiledModule for its module body evaluator. }
+  TGocciaModuleFunctionInstantiator = procedure(const AProgram: TGocciaProgram;
+    var AContext: TGocciaEvaluationContext) of object;
   { Reads a resolved module's content the way the loader reads its own
     modules: virtual modules from the registry, and provider-package files
     verified against their pins (verify on load). The caller owns the result. }
@@ -74,6 +84,7 @@ type
     FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
+    FInstantiateModuleFunctions: TGocciaModuleFunctionInstantiator;
     FEntryFileName: string;
     FDeferredModuleNamespaces: TOrderedStringMap<TGocciaValue>;
     FEvaluatingModules: TOrderedStringMap<Boolean>;
@@ -289,6 +300,8 @@ type
       read FContentProvider;
     property EvaluateModuleBody: TGocciaModuleBodyEvaluator
       read FEvaluateModuleBody write FEvaluateModuleBody;
+    property InstantiateModuleFunctions: TGocciaModuleFunctionInstantiator
+      read FInstantiateModuleFunctions write FInstantiateModuleFunctions;
     property GlobalModules: TOrderedStringMap<TGocciaModule>
       read FGlobalModules;
     property Preprocessors: TGocciaPreprocessors
@@ -331,6 +344,15 @@ type
       read FDiagnosticScope;
   end;
 
+{ ES2026 §16.2.1.7.3.1 InitializeEnvironment step 7, for one evaluation-phase
+  import declaration whose requested module is ARequestedModule: each named
+  import becomes an indirect binding to the module's export
+  (CreateImportBinding), and a namespace import an immutable binding to the
+  module's namespace object. }
+procedure BindLinkedImportDeclaration(const AEnvironment: TGocciaScope;
+  const AImportDecl: TGocciaImportDeclaration;
+  const ARequestedModule: TGocciaModule);
+
 implementation
 
 uses
@@ -341,11 +363,9 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.BindingPatterns,
   Goccia.AST.Expressions,
-  Goccia.AST.Statements,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator,
   Goccia.Execution.CallSite,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
@@ -356,6 +376,7 @@ uses
   Goccia.Packages.Address,
   Goccia.Packages.Store,
   Goccia.Realm,
+  Goccia.Scope.Declarations,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -367,6 +388,27 @@ uses
 
 const
   MODULE_SOURCE_SENTINEL = '<module source>';
+
+procedure BindLinkedImportDeclaration(const AEnvironment: TGocciaScope;
+  const AImportDecl: TGocciaImportDeclaration;
+  const ARequestedModule: TGocciaModule);
+var
+  ImportPair: TStringStringMap.TKeyValuePair;
+  NamespaceObject: TGocciaValue;
+begin
+  for ImportPair in AImportDecl.Imports do
+    AEnvironment.CreateImportBinding(ImportPair.Key, ARequestedModule,
+      ImportPair.Value);
+  if AImportDecl.NamespaceName = '' then
+    Exit;
+  NamespaceObject := ARequestedModule.GetNamespaceObject;
+  if AEnvironment.ContainsOwnLexicalBinding(AImportDecl.NamespaceName) then
+    AEnvironment.ForceUpdateBinding(AImportDecl.NamespaceName,
+      NamespaceObject)
+  else
+    AEnvironment.DefineLexicalBinding(AImportDecl.NamespaceName,
+      NamespaceObject, dtConst);
+end;
 
 type
   { A quiet resolution (import.meta.resolve) reached a candidate the engine
@@ -2273,9 +2315,7 @@ var
   procedure LinkRequestedModulesInSourceOrder;
   var
     ImportDecl: TGocciaImportDeclaration;
-    ImportPair: TStringStringMap.TKeyValuePair;
     J: Integer;
-    NamespaceObject: TGocciaValue;
     PreviousCallSite: TGocciaCallSite;
     RequestedModule: TGocciaModule;
   begin
@@ -2304,20 +2344,8 @@ var
                    FLoadingModules.ContainsKey(RequestedModule.Path) then
                   Module.AsyncCycleRoot := RequestedModule;
                 RequestedModules.Add(RequestedModule);
-                for ImportPair in ImportDecl.Imports do
-                  ModuleScope.CreateImportBinding(ImportPair.Key,
-                    RequestedModule, ImportPair.Value);
-                if ImportDecl.NamespaceName <> '' then
-                begin
-                  NamespaceObject := RequestedModule.GetNamespaceObject;
-                  if ModuleScope.ContainsOwnLexicalBinding(
-                     ImportDecl.NamespaceName) then
-                    ModuleScope.ForceUpdateBinding(ImportDecl.NamespaceName,
-                      NamespaceObject)
-                  else
-                    ModuleScope.DefineLexicalBinding(ImportDecl.NamespaceName,
-                      NamespaceObject, dtConst);
-                end;
+                BindLinkedImportDeclaration(ModuleScope, ImportDecl,
+                  RequestedModule);
               end;
             end;
             icpDefer:
@@ -2417,16 +2445,6 @@ var
           ExportDefaultDecl := TGocciaExportDefaultDeclaration(Stmt);
           Module.AddExportBinding(KEYWORD_DEFAULT,
             ExportDefaultDecl.LocalName, ModuleScope);
-          if ExportDefaultDecl.IsDirectDeclaration and
-             (ExportDefaultDecl.Expression is TGocciaFunctionExpression) then
-          begin
-            Value := EvaluateFunctionExpression(TGocciaFunctionExpression(
-              ExportDefaultDecl.Expression), Context, False);
-            if (Value is TGocciaFunctionValue) and
-               (TGocciaFunctionValue(Value).Name = '') then
-              TGocciaFunctionValue(Value).Name := KEYWORD_DEFAULT;
-            ModuleScope.ForceUpdateBinding(ExportDefaultDecl.LocalName, Value);
-          end;
         end
         else if Stmt is TGocciaExportVariableDeclaration then
         begin
@@ -2739,6 +2757,7 @@ begin
           ModuleScope.NonStrictMode := False;
           ModuleScope.ArgumentsObjectEnabled :=
             cfArgumentsObject in FCompatibility;
+          Context := Default(TGocciaEvaluationContext);
           Context.Realm := CurrentRealm;
           Context.Scope := ModuleScope;
           Context.OnError := FOnError;
@@ -2755,7 +2774,11 @@ begin
           Context.DisposalTracker := nil;
 
           PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
-          HoistFunctionDeclarations(ProgramNode.Body, Context, True);
+          if not Assigned(FInstantiateModuleFunctions) then
+            raise EInvalidOperation.Create(
+              'The module loader has no function instantiator; attach an ' +
+              'executor before loading modules');
+          FInstantiateModuleFunctions(ProgramNode, Context);
           if GetVarEnabled then
             HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
           Context.ModuleEnvironmentInitialized := True;

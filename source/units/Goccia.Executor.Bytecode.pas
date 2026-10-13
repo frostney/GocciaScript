@@ -53,6 +53,8 @@ type
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue; override;
+    procedure InstantiateModuleFunctions(const AProgram: TGocciaProgram;
+      var AContext: TGocciaEvaluationContext); override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function EvaluateGlobalEval(const AProgram: TGocciaProgram;
@@ -123,32 +125,35 @@ begin
   FVM.ResolveModuleURL := AModuleLoader.ResolveModuleURL;
   FVM.CompileDirectEval := CompileDirectEvalCode;
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
+  AModuleLoader.InstantiateModuleFunctions := InstantiateModuleFunctions;
 end;
 
-function TGocciaBytecodeExecutor.EvaluateModuleBody(
-  const AProgram: TGocciaProgram;
-  const AContext: TGocciaEvaluationContext;
-  out AProgramConsumed: Boolean): TGocciaValue;
+{ ES2026 §16.2.1.7.3.1 InitializeEnvironment, the function declarations of a
+  module: compile the whole module now, while it is linked, and instantiate
+  each top-level function declaration from its compiled template in the
+  module environment, so the functions exist, as compiled closures, before
+  any module body runs (a module in an import cycle can call them first).
+  The body is compiled with them and kept in AContext.CompiledModule for
+  EvaluateModuleBody, which reads each function from the environment instead
+  of creating it again. }
+procedure TGocciaBytecodeExecutor.InstantiateModuleFunctions(
+  const AProgram: TGocciaProgram; var AContext: TGocciaEvaluationContext);
 var
-  Compiler: TGocciaCompiler;
   BytecodeModule: TGocciaBytecodeModule;
-  SavedGlobalScope: TGocciaScope;
-  SavedRealm: TGocciaRealm;
-  SavedGlobalBackedTopLevel: Boolean;
-  SavedLoadDeferredModule: TLoadDeferredModuleCallback;
-  SavedLoadModule: TLoadModuleCallback;
-  SavedLoadModuleSource: TLoadModuleSourceCallback;
-  SavedRuntimeModule: TGocciaModule;
-  SavedResolveModuleURL: TResolveModuleURLCallback;
+  Compiler: TGocciaCompiler;
+  GC: TGarbageCollector;
+  I: Integer;
   Options: TGocciaCompilerOptimizationOptions;
+  SavedRealm: TGocciaRealm;
+  Template: TGocciaFunctionTemplate;
+  Value: TGocciaValue;
 begin
-  AProgramConsumed := False;
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
-    // ES2026 §16.2.1.7.3.1 InitializeEnvironment: module declarations
-    // live in the linked Module Environment Record. Keep bytecode top-level
-    // locals backed by that preinitialized scope so hoisted function objects
-    // created during linking observe later let/const initialization and writes.
+    // The module's top-level bindings live in its Module Environment
+    // Record, so the module body and its functions read them there by name:
+    // a function instantiated now observes the body's later let/const
+    // initialization and writes.
     Compiler.GlobalBackedTopLevel := True;
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
     Compiler.PreinitializedTopLevelFunctions := True;
@@ -167,6 +172,67 @@ begin
   end;
   if Assigned(FRetainModule) then
     FRetainModule(BytecodeModule);
+  AContext.CompiledModule := BytecodeModule;
+
+  GC := TGarbageCollector.Instance;
+  SavedRealm := FVM.Realm;
+  if Assigned(AContext.Realm) then
+    FVM.Realm := AContext.Realm;
+  try
+    for I := 0 to BytecodeModule.TopLevel.FunctionCount - 1 do
+    begin
+      Template := BytecodeModule.TopLevel.GetFunction(I);
+      if Template.ModuleEnvironmentBinding = '' then
+        Continue;
+      Value := FVM.InstantiateModuleFunction(Template, AContext.Scope);
+      if Assigned(GC) then
+        GC.AddTempRoot(Value);
+      try
+        if AContext.Scope.ContainsOwnLexicalBinding(
+           Template.ModuleEnvironmentBinding) then
+          AContext.Scope.ForceUpdateBinding(Template.ModuleEnvironmentBinding,
+            Value)
+        else
+          AContext.Scope.DefineLexicalBinding(
+            Template.ModuleEnvironmentBinding, Value, dtLet);
+      finally
+        if Assigned(GC) then
+          GC.RemoveTempRoot(Value);
+      end;
+    end;
+  finally
+    FVM.Realm := SavedRealm;
+  end;
+end;
+
+function TGocciaBytecodeExecutor.EvaluateModuleBody(
+  const AProgram: TGocciaProgram;
+  const AContext: TGocciaEvaluationContext;
+  out AProgramConsumed: Boolean): TGocciaValue;
+var
+  BytecodeModule: TGocciaBytecodeModule;
+  InstantiationContext: TGocciaEvaluationContext;
+  SavedGlobalScope: TGocciaScope;
+  SavedRealm: TGocciaRealm;
+  SavedGlobalBackedTopLevel: Boolean;
+  SavedLoadDeferredModule: TLoadDeferredModuleCallback;
+  SavedLoadModule: TLoadModuleCallback;
+  SavedLoadModuleSource: TLoadModuleSourceCallback;
+  SavedRuntimeModule: TGocciaModule;
+  SavedResolveModuleURL: TResolveModuleURLCallback;
+begin
+  AProgramConsumed := False;
+  if AContext.CompiledModule is TGocciaBytecodeModule then
+    BytecodeModule := TGocciaBytecodeModule(AContext.CompiledModule)
+  else
+  begin
+    { A module environment no executor initialized gets its functions now,
+      before its body runs. }
+    InstantiationContext := AContext;
+    InstantiateModuleFunctions(AProgram, InstantiationContext);
+    BytecodeModule := TGocciaBytecodeModule(
+      InstantiationContext.CompiledModule);
+  end;
   SavedGlobalScope := FVM.GlobalScope;
   SavedRealm := FVM.Realm;
   SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;

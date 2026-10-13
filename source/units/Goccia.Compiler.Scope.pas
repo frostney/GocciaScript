@@ -129,6 +129,7 @@ type
     FIsArrow: Boolean;
     FDirectEvalSyntheticArgumentsSlot: Integer;
     FGlobalBackedBindingsByName: Boolean;
+    FImportUpvaluesByName: Boolean;
     FWithBindingNames: array of string;
     FWithBindingDepths: array of Integer;
     FWithBindingCount: Integer;
@@ -296,6 +297,15 @@ type
       ResolveLocal does not return such a local. }
     property GlobalBackedBindingsByName: Boolean
       read FGlobalBackedBindingsByName write FGlobalBackedBindingsByName;
+    { The scope of a function created while its module is linked (a
+      top-level function declaration, ES2026 §16.2.1.7.3.1
+      InitializeEnvironment). It exists before the module body has run, so
+      it cannot capture the body's registers: an import binding of the
+      module, which the body keeps in a register, is captured as a
+      global-backed upvalue and read by name from the module environment,
+      as every other top-level binding of a linked module is. }
+    property ImportUpvaluesByName: Boolean
+      read FImportUpvaluesByName write FImportUpvaluesByName;
     property WithBindingCount: Integer read FWithBindingCount;
     property LoopDepth: Integer read FLoopDepth;
     property LoopMayCreateClosure: Boolean read FLoopMayCreateClosure;
@@ -626,6 +636,11 @@ begin
     FUpvalues[Idx].ImportExportName := FParent.FLocals[LocalIdx].ImportExportName;
     FUpvalues[Idx].ExportNames := Copy(FParent.FLocals[LocalIdx].ExportNames);
     FUpvalues[Idx].ExportNameCount := FParent.FLocals[LocalIdx].ExportNameCount;
+    if FImportUpvaluesByName and FUpvalues[Idx].IsImportBinding then
+    begin
+      FUpvalues[Idx].IsImportBinding := False;
+      FUpvalues[Idx].IsGlobalBacked := True;
+    end;
     Exit(Idx);
   end;
 

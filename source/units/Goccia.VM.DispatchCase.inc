@@ -138,11 +138,11 @@
         if Assigned(FCurrentClosure) then
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          if Assigned(Upvalue) then
           begin
-            if Upvalue.Cell.Value.Kind = grkHole then
+            if Upvalue.Value.Kind = grkHole then
               ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
-            SetRegisterRaw(A, Upvalue.Cell.Value)
+            SetRegisterRaw(A, Upvalue.Value)
           end
           else
             FRegisters[A] := RegisterUndefined;
@@ -156,11 +156,11 @@
         if Assigned(FCurrentClosure) then
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
+          if Assigned(Upvalue) then
           begin
-            if Upvalue.Cell.Value.Kind = grkHole then
+            if Upvalue.Value.Kind = grkHole then
               ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
-            Upvalue.Cell.Value := FRegisters[A];
+            Upvalue.Value := FRegisters[A];
           end;
         end;
       end;
@@ -177,8 +177,7 @@
         else if Assigned(FCurrentClosure) then
         begin
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) and
-             (Upvalue.Cell.Value.Kind = grkHole) then
+          if Assigned(Upvalue) and (Upvalue.Value.Kind = grkHole) then
             ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
         end;
 
@@ -2426,8 +2425,7 @@
         begin
           Desc := ChildTemplate.GetUpvalueDescriptor(I);
           if Desc.IsLocal then
-            ChildClosure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
-              GetLocalCell(Desc.Index)))
+            ChildClosure.SetUpvalue(I, GetLocalCell(Desc.Index))
           else if Assigned(FCurrentClosure) then
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
         end;
@@ -3267,6 +3265,17 @@
              FGlobalScope.TryGetLexicalValueAt(GlobalReadCache^.EntryIndex,
                GlobalReadCache^.Version, GlobalBindingValue) then
             FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          // A module environment's import binding, read by a function the
+          // module created while it was linked: resolve it through the cached
+          // binding, skipping the scope's name lookups.
+          else if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (GlobalReadCache^.ObjectBindingKind =
+               GLOBAL_READ_OBJECT_BINDING_IMPORT) and
+             FGlobalScope.LexicalEntryVersionIs(GlobalReadCache^.Version) and
+             TGocciaModuleImportBinding(GlobalReadCache^.ObjectValue)
+               .TryGetValue(GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
           else if Assigned(GlobalReadCache) and
              (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
              (FGlobalScope.ThisValue is TGocciaObjectValue) and
@@ -3290,11 +3299,20 @@
                 GLOBAL_READ_OBJECT_BINDING_NONE;
               if FGlobalScope.TryGetBindingValueFillCache(GlobalName,
                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
-                GlobalBindingValue) then
+                GlobalBindingValue, GlobalImportBinding,
+                GlobalImportVersion) then
               begin
                 GlobalBindingEntryIndex := GlobalReadCache^.EntryIndex;
                 GlobalBindingVersion := GlobalReadCache^.Version;
-                if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+                if Assigned(GlobalImportBinding) then
+                begin
+                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
+                  GlobalReadCache^.ObjectValue := Pointer(GlobalImportBinding);
+                  GlobalReadCache^.ObjectBindingKind :=
+                    GLOBAL_READ_OBJECT_BINDING_IMPORT;
+                  GlobalReadCache^.Version := GlobalImportVersion;
+                end
+                else if (FGlobalScope.ThisValue is TGocciaObjectValue) and
                    ((not FGlobalScope.ContainsOwnLexicalBinding(GlobalName) and
                      FGlobalScope.ContainsOwnVarBinding(GlobalName)) or
                     (FGlobalScope.IsBuiltInBinding(GlobalName) and
