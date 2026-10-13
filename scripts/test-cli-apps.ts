@@ -2101,6 +2101,75 @@ await section("Test262 Runner: a function eval creates keeps its caller's bindin
   ], ["1,7,8,7,5:5,2,0/1/2,2,1,2,set,33"]);
 });
 
+// ADR 0134 Phase 4: a direct eval site keeps the code it compiled for a
+// source, so these evaluate the same source at one site again. Only the code
+// is shared: ES2026 §19.2.1.3 EvalDeclarationInstantiation runs at every
+// evaluation, with fresh bindings and closures, and its run-time checks see
+// the state of that evaluation.
+await section("Test262 Runner: evaluating the same source at an eval site again gets fresh bindings...", async () => {
+  expectEvalHostProbe("repeated source", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function counter() { return eval('var n = 0; (function () { return ++n; })'); }",
+    "var ca = counter(), cb = counter(); ca(); ca();",
+    "function mk(v) { return eval('let y = v; () => y'); }",
+    "function strictMk(v) { 'use strict'; return eval('var y = v; () => y'); }",
+    "function hidden() { var r = []; for (var i = 0; i < 3; i++) r.push(eval(\"var t = (typeof t === 'number') ? t + 1 : 0; t\")); return r.join('/'); }",
+    "function sloppyLeak() { eval('var leak = 1'); return typeof leak; }",
+    "function strictLeak() { 'use strict'; eval('var leak = 1'); return typeof leak; }",
+    "function fn() { return eval('(function f() { return 1; })'); }",
+    "var f1 = fn(), f2 = fn();",
+    "function conflict() { try { eval('var cv = 1'); let cv; return 'none'; } catch (e) { return e.name; } }",
+    "function bad() { return eval('let = ;'); }",
+    "print([ca() + '/' + cb(), mk(1)() + '/' + mk(2)(), strictMk(3)() + '/' + strictMk(4)(), hidden() + ' ' + hidden(),",
+    "  sloppyLeak() + sloppyLeak() + '/' + strictLeak() + strictLeak(), f1 === f2, f1.prototype === f2.prototype,",
+    "  conflict() + '/' + conflict(), out(bad) + '/' + out(bad)].join());",
+  ], ["3/1,1/2,3/4,0/1/2 0/1/2,numbernumber/undefinedundefined,false,false,SyntaxError/SyntaxError,SyntaxError/SyntaxError"]);
+});
+
+await section("Test262 Runner: an eval site keeps apart the sources it evaluates and the sites that evaluate one source...", async () => {
+  expectEvalHostProbe("sources and sites", [
+    "function run(src) { var v = 10; return eval(src); }",
+    "var srcs = ['v + 1', 'v * 2', 'var w = v; w - 1', 'v + 1'];",
+    "var rs = []; for (var i = 0; i < 8; i++) rs.push(run(srcs[i % 4]));",
+    "function p() { var v = 'p'; return eval('v'); }",
+    "function q() { var v = 'q'; return eval('v'); }",
+    "function two() { var a = 'A'; var x; { let a = 'B'; x = eval('a'); } return eval('a') + x; }",
+    "function derive(base) { return class extends base { constructor() { var r; try { r = eval(\"super(); 'ok'\"); } catch (e) { r = e.name; } return { r: r }; } }; }",
+    "function nt() { return eval('typeof new.target'); }",
+    "print([rs.join('/'), p() + q() + p() + q() + two() + two(),",
+    "  new (derive(Object))().r + '/' + new (derive(Object))().r,",
+    "  nt() + '/' + typeof new nt() + '/' + nt()].join());",
+  ], ["11/20/9/11/11/20/9/11,pqpqABAB,ok/ok,undefined/object/undefined"]);
+});
+
+// ES2026 §13.2.8.4 GetTemplateObject keys a template object on its Parse
+// Node, and each eval parses its source into new ones (test262
+// language/expressions/tagged-template/cache-eval-inner-function.js).
+await section("Test262 Runner: each evaluation of an eval site gets its own template objects...", async () => {
+  expectEvalHostProbe("tagged template", [
+    "function tag(t) { return t; }",
+    "var objs = []; for (var i = 0; i < 2; i++) objs.push(eval('tag`x`'));",
+    "var inner = [];",
+    "for (var a = 0; a < 2; a++) eval('(function () { for (var b = 0; b < 2; b++) inner.push(tag`${a}${b}`); })()');",
+    "print([objs[0] === objs[1], inner[0] === inner[1], inner[1] === inner[2], inner[2] === inner[3]].join());",
+  ], ["false,true,false,true"]);
+});
+
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation checks the global object at
+// each evaluation (CanDeclareGlobalFunction), so a site whose source declared
+// a function once throws a TypeError once the global property has become
+// non-configurable and non-writable.
+await section("Test262 Runner: an eval site in global code checks the global object at each evaluation...", async () => {
+  expectEvalHostProbe("global checks", [
+    "var r = [];",
+    "for (var i = 0; i < 3; i++) {",
+    "  if (i === 1) Object.defineProperty(globalThis, 'gfn', { value: 1, configurable: false, writable: false, enumerable: false });",
+    "  try { r.push(eval('function gfn() { return 2; } typeof gfn')); } catch (e) { r.push(e.name); }",
+    "}",
+    "print(r.join('/'));",
+  ], ["function/TypeError/TypeError"]);
+});
+
 await section("Test262 Runner: an eval var named like a parameter is the parameter...", async () => {
   expectEvalHostProbe("parameter var", [
     "function simple(x) { eval('var x = 2'); return x; }",

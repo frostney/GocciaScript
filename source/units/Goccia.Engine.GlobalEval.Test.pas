@@ -14,7 +14,11 @@ program Goccia.Engine.GlobalEval.Test;
   ADR 0134 Phase 3: a direct eval is compiled too, as a closure of the call
   site, so what it creates is a VM value as well, at a strict call site and
   at a sloppy one. The VM no longer reaches the tree-walk evaluator for eval
-  code. }
+  code.
+
+  ADR 0134 Phase 4: each direct eval site keeps the code it compiled, keyed on
+  the source text, so evaluating the same source at the site again compiles
+  nothing and the engine keeps no further module alive. }
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
@@ -56,6 +60,9 @@ type
     procedure TestInterpreterEvalCreatesASTFunctions;
     procedure TestBytecodeTest262HostEvalCreatesVMFunctions;
     procedure TestBytecodeStrictDirectEvalCreatesVMValues;
+    function DirectEvalRetainedModules(const ASource: string;
+      const ACalls: Integer): Integer;
+    procedure TestBytecodeDirectEvalReusesCodePerSite;
     procedure TestBytecodeEvalVarIsDeletableGlobal;
     procedure TestBytecodeEvalReturnsCompletionValue;
     procedure TestBytecodeEvalReportsCompileStage;
@@ -80,6 +87,8 @@ begin
     TestBytecodeTest262HostEvalCreatesVMFunctions);
   Test('Bytecode direct eval creates VM values at strict and sloppy sites',
     TestBytecodeStrictDirectEvalCreatesVMValues);
+  Test('Bytecode direct eval reuses the code a site compiled for a source',
+    TestBytecodeDirectEvalReusesCodePerSite);
   Test('Bytecode global eval var is a deletable global property',
     TestBytecodeEvalVarIsDeletableGlobal);
   Test('Bytecode global eval returns the completion value',
@@ -294,6 +303,85 @@ begin
     Executor.Free;
     Source.Free;
   end;
+end;
+
+// The modules the engine keeps after a script defines its functions with
+// ASource and calls `run(i)` ACalls times.
+function TGlobalEvalTests.DirectEvalRetainedModules(const ASource: string;
+  const ACalls: Integer): Integer;
+var
+  Engine: TGocciaEngine;
+  EngineOptions: TGocciaTest262EngineOptions;
+  Executor: TGocciaExecutor;
+  Host: TGocciaTest262Host;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  Source.Text := ASource + LineEnding +
+    'for (var i = 0; i < ' + IntToStr(ACalls) + '; i++) run(i);';
+  EngineOptions := Default(TGocciaTest262EngineOptions);
+  EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode,
+    cfTraditionalFor];
+  EngineOptions.Mode := t262emBytecode;
+  EngineOptions.SourceType := stScript;
+  EngineOptions.Capabilities := TGocciaCapabilities.None;
+  Executor := CreateTest262Executor(t262emBytecode);
+  Engine := nil;
+  Host := nil;
+  try
+    Engine := TGocciaEngine.Create('<direct-eval-cache-test>', Source,
+      Executor, EngineOptions.Capabilities);
+    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    Host := TGocciaTest262Host.Create(EngineOptions);
+    Host.ConfigureHostEnvironment(Engine.HostEnvironment);
+    Host.Install(Engine);
+    Engine.Execute;
+    Result := Engine.RetainedModuleCount;
+  finally
+    Host.Free;
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TGlobalEvalTests.TestBytecodeDirectEvalReusesCodePerSite;
+const
+  CALLS = 40;
+  SLOPPY_SITE = 'var x = 1; function run() { return eval("x + 1"); }';
+  STRICT_SITE = '"use strict"; var x = 1;' +
+    ' function run() { return eval("var y = x; y + 1"); }';
+  SLOPPY_VAR_SITE = 'function run() { eval("var v = 1"); return v; }';
+  CLOSURE_SITE = 'function run(i) {' +
+    ' return eval("(function () { return i; })")(); }';
+  GLOBAL_SITE = 'function run() {} for (var j = 0; j < 40; j++)' +
+    ' eval("var g = j");';
+  // Four sources at one site, and one source at two sites.
+  DISTINCT_SITE = 'var srcs = ["1", "2", "3", "4"];' +
+    ' function run(i) { return eval(srcs[i % 4]); }';
+  TWO_SITES = 'function a() { return eval("1"); }' +
+    ' function b() { return eval("1"); } function run() { a(); b(); }';
+  // GetTemplateObject keys a template object on its Parse Node, and each
+  // eval parses a new one: such code is compiled at every evaluation.
+  TAGGED_TEMPLATE_SITE = 'function tag(t) { return t; }' +
+    ' function run() { return eval("tag`x`"); }';
+begin
+  Expect<Integer>(DirectEvalRetainedModules(SLOPPY_SITE, CALLS)).ToBe(
+    DirectEvalRetainedModules(SLOPPY_SITE, 1));
+  Expect<Integer>(DirectEvalRetainedModules(STRICT_SITE, CALLS)).ToBe(
+    DirectEvalRetainedModules(STRICT_SITE, 1));
+  Expect<Integer>(DirectEvalRetainedModules(SLOPPY_VAR_SITE, CALLS)).ToBe(
+    DirectEvalRetainedModules(SLOPPY_VAR_SITE, 1));
+  Expect<Integer>(DirectEvalRetainedModules(CLOSURE_SITE, CALLS)).ToBe(
+    DirectEvalRetainedModules(CLOSURE_SITE, 1));
+  Expect<Integer>(DirectEvalRetainedModules(GLOBAL_SITE, 0)).ToBe(
+    DirectEvalRetainedModules(SLOPPY_SITE, 0) + 1);
+  Expect<Integer>(DirectEvalRetainedModules(DISTINCT_SITE, CALLS)).ToBe(
+    DirectEvalRetainedModules(DISTINCT_SITE, 1) + 3);
+  Expect<Integer>(DirectEvalRetainedModules(TWO_SITES, CALLS)).ToBe(
+    DirectEvalRetainedModules(TWO_SITES, 0) + 2);
+  Expect<Integer>(DirectEvalRetainedModules(TAGGED_TEMPLATE_SITE, CALLS)).ToBe(
+    DirectEvalRetainedModules(TAGGED_TEMPLATE_SITE, 1) + CALLS - 1);
 end;
 
 procedure TGlobalEvalTests.TestBytecodeEvalVarIsDeletableGlobal;

@@ -36,6 +36,7 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.VM.CallFrame,
   Goccia.VM.Closure,
+  Goccia.VM.DirectEvalCodeCache,
   Goccia.VM.Exception,
   Goccia.VM.Registers,
   Goccia.VM.Upvalue;
@@ -572,6 +573,10 @@ type
       const ATemplate: TGocciaFunctionTemplate; const ASiteIndex: Integer;
       const ASite: TGocciaDirectEvalEnvironment; const AStandardVarNames,
       AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+    function CompileDirectEvalCode(const ASourceText: string;
+      const ATemplate: TGocciaFunctionTemplate;
+      const ASite: TGocciaDirectEvalEnvironment;
+      const AContext: TGocciaDirectEvalCodeContext): TGocciaDirectEvalCode;
     function PrepareCompiledDirectEval(const ASourceText: string;
       const ATemplate: TGocciaFunctionTemplate;
       const ASiteIndex: Integer): TGocciaBytecodeClosure;
@@ -14090,6 +14095,11 @@ begin
        ASite.PC) then
     RaiseAlreadyDeclared(IDENTIFIER_ARGUMENTS);
 
+  // Eval code that declares no var or function needs no variable object, and
+  // a reference probes a missing one as an empty one.
+  if (AFunctionNames.Count = 0) and (ADeclaredVarNames.Count = 0) then
+    Exit;
+
   VarObjectBinding := -1;
   for I := 0 to High(ASite.Bindings) do
     if IsEvalVarObjectName(ASite.Bindings[I].Name) then
@@ -14132,61 +14142,29 @@ begin
     DeclareName(ADeclaredVarNames[I]);
 end;
 
-// ES2026 §19.2.1.1 PerformEval for a direct eval, up to the evaluation of the
-// body (ADR 0134 Phase 3). The call's frame is the current one. Parses
-// ASourceText as a Script with the call's private names, raises the early
-// errors of step 11 and the Script's own (§16.1.1), instantiates a non-strict
-// eval's declarations (InstantiateDirectEvalDeclarations), has the host
-// compile it against eval site record ASiteIndex of ATemplate, and
-// instantiates the code as a closure of the current frame, as OP_CLOSURE
-// instantiates an arrow function written at the call. The caller pushes it.
-//
-// The eval code reaches the caller's bindings through the cells its closure
-// captures, so a function it creates goes on reading and writing them after
-// the call has returned. A strict eval's declarations are locals of its
-// template (step 18). Step 10's inFunction, inMethod and inDerivedConstructor
-// come from the closure the call runs in (DirectEvalLexicalClosure).
-function TGocciaVM.PrepareCompiledDirectEval(const ASourceText: string;
+// ES2026 §19.2.1.1 PerformEval steps 11-13 and the compilation of the eval
+// code for a direct eval (ADR 0134 Phase 3), against eval site record ASite
+// of ATemplate. Parses ASourceText as a Script with the call's private names,
+// raises the early errors of step 11 and the Script's own (§16.1.1), has the
+// host compile it, and returns the code with the declaration names its
+// EvalDeclarationInstantiation needs. AContext holds what besides the source
+// and the site decides all of this (TGocciaDirectEvalCodeContext); the caller
+// keys its cache on it. The caller owns the result.
+function TGocciaVM.CompileDirectEvalCode(const ASourceText: string;
   const ATemplate: TGocciaFunctionTemplate;
-  const ASiteIndex: Integer): TGocciaBytecodeClosure;
+  const ASite: TGocciaDirectEvalEnvironment;
+  const AContext: TGocciaDirectEvalCodeContext): TGocciaDirectEvalCode;
 var
-  Site: TGocciaDirectEvalEnvironment;
-  SourceName: string;
   EvalSource: TStringList;
   EvalOptions: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
   PrivateNames: TStringList;
   VarNames, StandardVarNames, FunctionNames,
   DeclaredVarNames: TUnicodeStringList;
-  CallerClosure: TGocciaBytecodeClosure;
-  CurrentCtorClass: TGocciaClassValue;
-  AllowNewTarget, AllowSuperProperty, AllowSuperCall: Boolean;
   CompatibilityNonStrictMode, StrictEval: Boolean;
   EvalTemplate: TGocciaFunctionTemplate;
-  Desc: TGocciaUpvalueDescriptor;
-  PrivateClassRegister: TGocciaRegister;
   I: Integer;
 begin
-  Site := ATemplate.GetDirectEvalEnvironment(ASiteIndex);
-  if FCurrentModuleSourcePath <> '' then
-    SourceName := FCurrentModuleSourcePath
-  else
-    SourceName := '<bytecode-direct-eval>';
-
-  CallerClosure := DirectEvalLexicalClosure(Self);
-  AllowNewTarget := Assigned(CallerClosure) and CallerClosure.AllowsNewTarget;
-  AllowSuperProperty := Assigned(CallerClosure) and
-    Assigned(CallerClosure.HomeObject);
-  if Assigned(CallerClosure) and
-     (CallerClosure.HomeClass is TGocciaClassValue) then
-    CurrentCtorClass := TGocciaClassValue(CallerClosure.HomeClass)
-  else
-    CurrentCtorClass := nil;
-  AllowSuperCall := Assigned(FCurrentNewTarget) and
-    Assigned(CurrentCtorClass) and
-    (Assigned(CurrentCtorClass.SuperClass) or
-     Assigned(CurrentCtorClass.NativeSuperConstructor));
-
   EvalSource := CreateECMAScriptSourceLines(ASourceText);
   PrivateNames := TStringList.Create;
   VarNames := TUnicodeStringList.Create;
@@ -14195,22 +14173,22 @@ begin
   DeclaredVarNames := TUnicodeStringList.Create;
   try
     PrivateNames.CaseSensitive := True;
-    for I := 0 to High(Site.PrivateNames) do
-      if PrivateNames.IndexOf(Site.PrivateNames[I].Name) < 0 then
-        PrivateNames.Add(Site.PrivateNames[I].Name);
+    for I := 0 to High(ASite.PrivateNames) do
+      if PrivateNames.IndexOf(ASite.PrivateNames[I].Name) < 0 then
+        PrivateNames.Add(ASite.PrivateNames[I].Name);
     // Step 11: the source is a Script, strict when its call is (step 12:
     // strictCaller).
-    EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
+    EvalOptions := AContext.ParseOptions;
     CompatibilityNonStrictMode := cfNonStrictMode in EvalOptions.Compatibility;
     EvalOptions.SourceType := stScript;
-    EvalOptions.InheritedStrictMode := Site.StrictCaller;
-    if Site.StrictCaller then
+    EvalOptions.InheritedStrictMode := ASite.StrictCaller;
+    if ASite.StrictCaller then
       Exclude(EvalOptions.Compatibility, cfNonStrictMode);
-    PipelineResult := TGocciaSourcePipeline.Parse(EvalSource, SourceName,
-      EvalOptions, PrivateNames);
+    PipelineResult := TGocciaSourcePipeline.Parse(EvalSource,
+      AContext.SourceName, EvalOptions, PrivateNames);
     try
       // Steps 12-13.
-      StrictEval := Site.StrictCaller or
+      StrictEval := ASite.StrictCaller or
         HasUseStrictDirective(PipelineResult.ProgramNode);
       if HasDirectEvalTopLevelUsingDeclaration(PipelineResult.ProgramNode) then
         ThrowSyntaxError(
@@ -14218,11 +14196,12 @@ begin
       ValidateEvalScriptBody(PipelineResult.ProgramNode.Body);
       // Step 11: ContainsArguments in a class field initializer's eval.
       if (ATemplate.RejectArgumentsInDirectEval or
-          Site.RejectArgumentsReference) and
+          ASite.RejectArgumentsReference) and
          EvalProgramContainsArgumentsReference(PipelineResult.ProgramNode) then
         ThrowSyntaxError('arguments is not allowed in this eval context');
       ValidateEvalEarlyErrors(PipelineResult.ProgramNode, StrictEval,
-        AllowNewTarget, AllowSuperProperty, AllowSuperCall);
+        AContext.AllowNewTarget, AContext.AllowSuperProperty,
+        AContext.AllowSuperCall);
       ValidateEvalControlFlow(PipelineResult.ProgramNode);
       ValidateEvalBlockDeclarations(PipelineResult.ProgramNode, StrictEval);
       CollectGlobalEvalDeclarationNames(PipelineResult.ProgramNode,
@@ -14232,14 +14211,25 @@ begin
       // §16.1.1: a name both lexically and var-declared at the top level.
       CheckEvalLexicalDeclarationConflicts(PipelineResult.ProgramNode,
         VarNames);
+      // The compiler leaves in DeclaredVarNames the block-level functions
+      // the web-compat steps of §19.2.1.3 give a var binding.
       EvalTemplate := FCompileDirectEval(PipelineResult.ProgramNode,
-        SourceName, Site, StrictEval, DeclaredVarNames);
-      if not StrictEval then
+        AContext.SourceName, ASite, StrictEval, DeclaredVarNames);
+      // A strict eval's declarations are locals of its template (step 18).
+      if StrictEval then
+        Result := TGocciaDirectEvalCode.Create(AContext, EvalTemplate, True,
+          nil, nil, nil, nil)
+      else
       begin
         CollectVarBindingNamesFromStatements(PipelineResult.ProgramNode.Body,
           StandardVarNames);
-        InstantiateDirectEvalDeclarations(ATemplate, ASiteIndex, Site,
+        Result := TGocciaDirectEvalCode.Create(AContext, EvalTemplate, False,
           StandardVarNames, VarNames, FunctionNames, DeclaredVarNames);
+        // The code owns the name lists now.
+        StandardVarNames := nil;
+        VarNames := nil;
+        FunctionNames := nil;
+        DeclaredVarNames := nil;
       end;
     finally
       PipelineResult.Free;
@@ -14251,6 +14241,95 @@ begin
     VarNames.Free;
     PrivateNames.Free;
     EvalSource.Free;
+  end;
+end;
+
+// ES2026 §19.2.1.1 PerformEval for a direct eval, up to the evaluation of the
+// body (ADR 0134 Phase 3). The call's frame is the current one. Gets the eval
+// code compiled at the call (CompileDirectEvalCode), instantiates a
+// non-strict eval's declarations (InstantiateDirectEvalDeclarations), and
+// instantiates the code as a closure of the current frame, as OP_CLOSURE
+// instantiates an arrow function written at the call. The caller pushes it.
+//
+// Each eval site keeps the code it compiled, keyed on the source text and
+// the context it was compiled in (ADR 0134 Phase 4), so evaluating the same
+// source at the site again compiles nothing and keeps no further code alive
+// for the engine's lifetime. Only the template is shared: every evaluation
+// instantiates its declarations and creates its closure, so its bindings and
+// the functions it creates are its own.
+//
+// The eval code reaches the caller's bindings through the cells its closure
+// captures, so a function it creates goes on reading and writing them after
+// the call has returned. A strict eval's declarations are locals of its
+// template (step 18). Step 10's inFunction, inMethod and inDerivedConstructor
+// come from the closure the call runs in (DirectEvalLexicalClosure).
+function TGocciaVM.PrepareCompiledDirectEval(const ASourceText: string;
+  const ATemplate: TGocciaFunctionTemplate;
+  const ASiteIndex: Integer): TGocciaBytecodeClosure;
+var
+  Site: TGocciaDirectEvalEnvironment;
+  Context: TGocciaDirectEvalCodeContext;
+  CodeCache: TGocciaDirectEvalCodeCache;
+  Code, UncachedCode: TGocciaDirectEvalCode;
+  CallerClosure: TGocciaBytecodeClosure;
+  CurrentCtorClass: TGocciaClassValue;
+  EvalTemplate: TGocciaFunctionTemplate;
+  Desc: TGocciaUpvalueDescriptor;
+  PrivateClassRegister: TGocciaRegister;
+  I: Integer;
+begin
+  Site := ATemplate.GetDirectEvalEnvironment(ASiteIndex);
+  if FCurrentModuleSourcePath <> '' then
+    Context.SourceName := FCurrentModuleSourcePath
+  else
+    Context.SourceName := '<bytecode-direct-eval>';
+  Context.ParseOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
+
+  CallerClosure := DirectEvalLexicalClosure(Self);
+  Context.AllowNewTarget := Assigned(CallerClosure) and
+    CallerClosure.AllowsNewTarget;
+  Context.AllowSuperProperty := Assigned(CallerClosure) and
+    Assigned(CallerClosure.HomeObject);
+  if Assigned(CallerClosure) and
+     (CallerClosure.HomeClass is TGocciaClassValue) then
+    CurrentCtorClass := TGocciaClassValue(CallerClosure.HomeClass)
+  else
+    CurrentCtorClass := nil;
+  Context.AllowSuperCall := Assigned(FCurrentNewTarget) and
+    Assigned(CurrentCtorClass) and
+    (Assigned(CurrentCtorClass.SuperClass) or
+     Assigned(CurrentCtorClass.NativeSuperConstructor));
+
+  CodeCache := TGocciaDirectEvalCodeCache(
+    ATemplate.GetDirectEvalCodeCache(ASiteIndex));
+  if Assigned(CodeCache) then
+    Code := CodeCache.Find(ASourceText, Context)
+  else
+    Code := nil;
+  UncachedCode := nil;
+  if not Assigned(Code) then
+  begin
+    Code := CompileDirectEvalCode(ASourceText, ATemplate, Site, Context);
+    if IsDirectEvalCodeCacheable(Code.Template) then
+    begin
+      if not Assigned(CodeCache) then
+      begin
+        CodeCache := TGocciaDirectEvalCodeCache.Create;
+        ATemplate.SetDirectEvalCodeCache(ASiteIndex, CodeCache);
+      end;
+      CodeCache.Add(ASourceText, Code);
+    end
+    else
+      UncachedCode := Code;
+  end;
+  try
+    EvalTemplate := Code.Template;
+    if not Code.StrictEval then
+      InstantiateDirectEvalDeclarations(ATemplate, ASiteIndex, Site,
+        Code.StandardVarNames, Code.VarNames, Code.FunctionNames,
+        Code.DeclaredVarNames);
+  finally
+    UncachedCode.Free;
   end;
 
   // As OP_CLOSURE instantiates an arrow function in the calling frame.
