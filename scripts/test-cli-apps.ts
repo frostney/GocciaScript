@@ -8288,6 +8288,40 @@ await section("REPL: bytecode evaluation...", async () => {
   if (!out.includes("4")) throw new Error(`Bytecode 2+2 should produce 4, got: ${out}`);
 });
 
+await section("REPL: an uncaught bytecode throw prints its location, code frame and suggestion...", async () => {
+  // A guest throw escapes the VM as EGocciaBytecodeThrow; the REPL renders it
+  // like the runner does rather than as a bare `Error: <message>` line.
+  const src = 'null.x\nthrow new TypeError("boom")\n';
+  for (const [label, args] of [
+    ["default", []],
+    ["bytecode", ["--mode=bytecode"]],
+  ] as const) {
+    const proc = Bun.spawnSync([REPL, ...args], {
+      stdin: new TextEncoder().encode(src),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = normalizeLineEndings(`${proc.stdout.toString()}${proc.stderr.toString()}`);
+    const lines = out.split("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`REPL (${label}) uncaught-throw session failed: ${out}`);
+    if (out.includes("Error: TypeError"))
+      throw new Error(`REPL (${label}) should not print a bare "Error: <message>" line for a guest throw, got: ${out}`);
+    for (const expected of [
+      "TypeError: Cannot read properties of null (reading 'x')",
+      "  Suggestion: check that the value is not null or undefined before accessing properties",
+      "  --> REPL:1:6",
+      "   1 | null.x",
+      "TypeError: boom",
+      "  --> REPL:1:7",
+      '   1 | throw new TypeError("boom")',
+    ]) {
+      if (!lines.some((line) => line.endsWith(expected)))
+        throw new Error(`REPL (${label}) uncaught throw should print ${JSON.stringify(expected)}, got: ${out}`);
+    }
+  }
+});
+
 await section("REPL: repeated tagged template execution (interpreted + bytecode)...", async () => {
   const src = [
     "globalThis.tag = (strings) => { globalThis.firstTemplate = strings; return strings[0]; }; tag`first`;",
