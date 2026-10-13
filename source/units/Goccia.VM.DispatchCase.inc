@@ -3202,14 +3202,8 @@
             AwaitContinuation.CaptureContinuation(Frame, SavedHandlerCount,
               PrevCovLine, A, Frame.IP);
             AwaitContinuation.FState := bgsSuspendedYield;
-            AwaitPromise := PromiseResolveIntrinsic(GetRegister(B));
-            AwaitPromise.InvokeThen(
-              TGocciaVMAsyncAwaitContinuationValue.Create(Self,
-                AwaitContinuation, FCurrentAsyncPromise, bgrkNext,
-                Template.IsGenerator),
-              TGocciaVMAsyncAwaitContinuationValue.Create(Self,
-                AwaitContinuation, FCurrentAsyncPromise, bgrkThrow,
-                Template.IsGenerator));
+            AttachAwaitContinuation(Self, AwaitContinuation, GetRegister(B),
+              Template.IsGenerator);
             raise EGocciaBytecodeAsyncSuspend.Create('');
           end;
         end;

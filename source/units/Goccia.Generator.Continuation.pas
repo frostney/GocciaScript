@@ -821,6 +821,7 @@ function TGocciaGeneratorContinuation.AwaitExpressionValue(
 var
   AwaitedValue: TGocciaValue;
   Promise: TGocciaPromiseValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if FHasPendingValue and (FSuspendedAwait = AAwaitExpression) then
   begin
@@ -839,8 +840,18 @@ begin
     Promise := TGocciaPromiseValue(AwaitedValue)
   else
   begin
-    Promise := TGocciaPromiseValue.Create;
-    Promise.Resolve(AwaitedValue);
+    // Resolve reads the value's `then`, which can run a getter that collects.
+    // Until the suspension carries it out, nothing else holds the new promise
+    // or the awaited value (issue #1625).
+    Roots.Initialize;
+    try
+      Roots.Add(AwaitedValue);
+      Promise := TGocciaPromiseValue.Create;
+      Roots.Add(Promise);
+      Promise.Resolve(AwaitedValue);
+    finally
+      Roots.Clear;
+    end;
   end;
 
   FSuspendedAwait := AAwaitExpression;
