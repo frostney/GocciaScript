@@ -36,6 +36,7 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.VM.CallFrame,
   Goccia.VM.Closure,
+  Goccia.VM.DirectEvalCodeCache,
   Goccia.VM.Exception,
   Goccia.VM.Registers,
   Goccia.VM.Upvalue;
@@ -448,6 +449,11 @@ type
       const ALimit: Integer = -1): TGocciaArrayValue;
     function TryIterableToArray(const AIterable: TGocciaValue;
       out AArray: TGocciaArrayValue): Boolean;
+    // Appends what spreading ASource yields to the elements of ATarget,
+    // an array literal under construction (ES2026 §13.2.4.1
+    // ArrayAccumulation, SpreadElement).
+    procedure SpreadIterableIntoArray(const ATarget: TGocciaArrayValue;
+      const ASource: TGocciaValue);
     procedure SpreadObjectIntoValue(const ATarget: TGocciaObjectValue;
       const ASource: TGocciaValue);
     function ObjectRestValue(const ASource: TGocciaValue;
@@ -534,6 +540,10 @@ type
     procedure SetSuperPropertyBaseValueByKey(const ABaseValue, AThisValue,
       AKey, AValue: TGocciaValue);
     function LexicalBytecodePrivateClass(const AKey: string): TGocciaClassValue;
+    function ResolveBytecodePrivateBrandKey(const AKey: string;
+      const AObject: TGocciaValue): string;
+    function ResolveBytecodePrivateRuntimeKey(const AKey: string;
+      const AObject: TGocciaValue): string;
     function ResolveBytecodePrivateBrandToken(const AKey: string;
       const AObject: TGocciaValue): string;
     function CurrentBytecodePrivateAccessClass(
@@ -550,6 +560,9 @@ type
       const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue);
     procedure SetIndexValueLoose(const AObject: TGocciaValue;
       const AKey: TGocciaRegister; const AValue: TGocciaValue);
+    function TryGetRawPrivateFieldValue(const AObject: TGocciaValue;
+      const AKey: string; var ABrandKey: string;
+      out AValue: TGocciaValue): Boolean;
     function TryGetRawPrivateValue(const AObject: TGocciaValue; const AKey: string;
       out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateValue(const AObject: TGocciaValue; const AKey: string;
@@ -572,6 +585,10 @@ type
       const ATemplate: TGocciaFunctionTemplate; const ASiteIndex: Integer;
       const ASite: TGocciaDirectEvalEnvironment; const AStandardVarNames,
       AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+    function CompileDirectEvalCode(const ASourceText: string;
+      const ATemplate: TGocciaFunctionTemplate;
+      const ASite: TGocciaDirectEvalEnvironment;
+      const AContext: TGocciaDirectEvalCodeContext): TGocciaDirectEvalCode;
     function PrepareCompiledDirectEval(const ASourceText: string;
       const ATemplate: TGocciaFunctionTemplate;
       const ASiteIndex: Integer): TGocciaBytecodeClosure;
@@ -775,6 +792,10 @@ const
   // First character of both prefixes above.
   BYTECODE_PRIVATE_KEY_LEAD = '#';
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
+  // Compiled private keys a class remembers having resolved; see
+  // TGocciaVMClassValue.FPrivateKeyCache.
+  PRIVATE_KEY_CACHE_INLINE = 4;
+  PRIVATE_KEY_CACHE_CAPACITY = 16;
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
   // How far TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast looks
@@ -1016,6 +1037,9 @@ function NormalizeBytecodePrivateKey(const AName,
 function BytecodePrivateRuntimeKey(const AName,
   APrivateBrandToken: string): string; forward;
 function BytecodePrivateSourceName(const AName: string): string; forward;
+function BytecodePrivateSourceNameEquals(const AKey,
+  AName: string): Boolean; forward;
+function BytecodePrivateSourceNameStart(const AKey: string): Integer; forward;
 function BytecodePrivateBrandKey(const AKey,
   APrivateBrandToken: string): string; forward;
 function BytecodePrivateTokenForKey(const AKey,
@@ -2426,9 +2450,42 @@ type
     procedure MarkReferences; override;
   end;
 
+  // What StampBytecodePrivateBrands stamps for a class: each private name
+  // and its brand key, built for one PrivateNamesVersion of the class.
+  TGocciaPrivateStampPlan = record
+    Version: Cardinal;
+    Names: TArray<string>;
+    BrandKeys: TArray<string>;
+    HasSharedBrandKeys: Boolean;
+  end;
+
+  // A compiled private key this class declares, and the brand and runtime
+  // keys derived from it once asked.
+  TGocciaPrivateKeyCacheEntry = record
+    Key: string;
+    BrandKey: string;
+    RuntimeKey: string;
+  end;
+  PGocciaPrivateKeyCacheEntry = ^TGocciaPrivateKeyCacheEntry;
+
   TGocciaVMClassValue = class(TGocciaClassValue)
   private
     FVM: TGocciaVM;
+    FPrivateStampPlan: TGocciaPrivateStampPlan;
+    FPrivateStampPlanBuilt: Boolean;
+    // Compiled keys this class is known to declare, matched by string
+    // identity: each access passes the key string of its template's constant
+    // pool. Holding the string keeps its buffer from being reused, so an
+    // identical pointer is the identical key. A key is never undeclared, so
+    // an entry never goes stale.
+    // Holds up to PRIVATE_KEY_CACHE_CAPACITY entries, then replaces them in
+    // turn. The first PRIVATE_KEY_CACHE_INLINE live in the class value; the
+    // rest are allocated when a class first needs them.
+    FPrivateKeyCache: array[0..PRIVATE_KEY_CACHE_INLINE - 1] of
+      TGocciaPrivateKeyCacheEntry;
+    FPrivateKeyCacheOverflow: array of TGocciaPrivateKeyCacheEntry;
+    FPrivateKeyCacheCount: Integer;
+    FPrivateKeyCacheNext: Integer;
     FConstructorValue: TGocciaValue;
     FNativeInstanceNewTarget: TGocciaValue;
     // The class whose body encloses this class's definition, or nil at the
@@ -2438,6 +2495,10 @@ type
     // Compiled keys of private static elements, which the class declares
     // under a per-evaluation runtime key instead of the compiled one.
     FRuntimeKeyedPrivateKeys: array of string;
+    function CachedPrivateKeyIndex(const AKey: string): Integer;
+    function PrivateKeyCacheEntry(
+      const AIndex: Integer): PGocciaPrivateKeyCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
+    function RememberPrivateKey(const AKey: string): Integer;
     function CreateNativeInstanceWithNewTarget(
       const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue): TGocciaObjectValue;
@@ -2461,8 +2522,15 @@ type
     procedure SetVMConstructor(const AValue: TGocciaValue);
     procedure MarkReferences; override;
     procedure AddRuntimeKeyedPrivateKey(const ACompiledKey: string);
-    function DeclaresCompiledPrivateKey(const ACompiledKey,
-      ASourceName: string): Boolean;
+    function PrivateStampPlan: TGocciaPrivateStampPlan;
+    // The brand key for ACompiledKey, which this class declares.
+    function PrivateBrandKeyFor(const ACompiledKey: string): string;
+    // BytecodePrivateRuntimeKey of ACompiledKey, which this class declares,
+    // under this class's brand token.
+    function PrivateRuntimeKeyFor(const ACompiledKey: string): string;
+    function DeclaresCompiledPrivateKey(const ACompiledKey: string): Boolean;
+    function DeclaresCompiledPrivateKeyUncached(
+      const ACompiledKey: string): Boolean;
     property OuterPrivateClass: TGocciaClassValue read FOuterPrivateClass
       write FOuterPrivateClass;
   end;
@@ -7661,16 +7729,117 @@ end;
 // Whether this class body declares the private name that ACompiledKey
 // names. The compiled key carries the class body's compile-time prefix, so a
 // same-named private name of another class body does not match.
-function TGocciaVMClassValue.DeclaresCompiledPrivateKey(const ACompiledKey,
-  ASourceName: string): Boolean;
+function TGocciaVMClassValue.CachedPrivateKeyIndex(
+  const AKey: string): Integer;
 var
+  I: Integer;
+begin
+  if Pointer(AKey) = nil then
+    Exit(-1);
+  for I := 0 to FPrivateKeyCacheCount - 1 do
+    if I < PRIVATE_KEY_CACHE_INLINE then
+    begin
+      if Pointer(FPrivateKeyCache[I].Key) = Pointer(AKey) then
+        Exit(I);
+    end
+    else if Pointer(FPrivateKeyCacheOverflow[
+              I - PRIVATE_KEY_CACHE_INLINE].Key) = Pointer(AKey) then
+      Exit(I);
+  Result := -1;
+end;
+
+function TGocciaVMClassValue.PrivateKeyCacheEntry(
+  const AIndex: Integer): PGocciaPrivateKeyCacheEntry;
+begin
+  if AIndex < PRIVATE_KEY_CACHE_INLINE then
+    Result := @FPrivateKeyCache[AIndex]
+  else
+    Result := @FPrivateKeyCacheOverflow[AIndex - PRIVATE_KEY_CACHE_INLINE];
+end;
+
+function TGocciaVMClassValue.RememberPrivateKey(const AKey: string): Integer;
+var
+  Entry: PGocciaPrivateKeyCacheEntry;
+begin
+  if FPrivateKeyCacheCount < PRIVATE_KEY_CACHE_CAPACITY then
+  begin
+    Result := FPrivateKeyCacheCount;
+    if Result = PRIVATE_KEY_CACHE_INLINE then
+      SetLength(FPrivateKeyCacheOverflow,
+        PRIVATE_KEY_CACHE_CAPACITY - PRIVATE_KEY_CACHE_INLINE);
+    Inc(FPrivateKeyCacheCount);
+  end
+  else
+  begin
+    Result := FPrivateKeyCacheNext;
+    FPrivateKeyCacheNext := (Result + 1) mod PRIVATE_KEY_CACHE_CAPACITY;
+  end;
+  Entry := PrivateKeyCacheEntry(Result);
+  Entry^.Key := AKey;
+  Entry^.BrandKey := '';
+  Entry^.RuntimeKey := '';
+end;
+
+function TGocciaVMClassValue.PrivateBrandKeyFor(
+  const ACompiledKey: string): string;
+var
+  Index: Integer;
+  Entry: PGocciaPrivateKeyCacheEntry;
+begin
+  Index := CachedPrivateKeyIndex(ACompiledKey);
+  if Index < 0 then
+    Exit(BytecodePrivateBrandKey(ACompiledKey, PrivateBrandToken));
+  Entry := PrivateKeyCacheEntry(Index);
+  if Entry^.BrandKey = '' then
+    Entry^.BrandKey := BytecodePrivateBrandKey(ACompiledKey,
+      PrivateBrandToken);
+  Result := Entry^.BrandKey;
+end;
+
+function TGocciaVMClassValue.PrivateRuntimeKeyFor(
+  const ACompiledKey: string): string;
+var
+  Index: Integer;
+  Entry: PGocciaPrivateKeyCacheEntry;
+begin
+  Index := CachedPrivateKeyIndex(ACompiledKey);
+  if Index < 0 then
+    Exit(BytecodePrivateRuntimeKey(ACompiledKey, PrivateBrandToken));
+  Entry := PrivateKeyCacheEntry(Index);
+  if Entry^.RuntimeKey = '' then
+    Entry^.RuntimeKey := BytecodePrivateRuntimeKey(ACompiledKey,
+      PrivateBrandToken);
+  Result := Entry^.RuntimeKey;
+end;
+
+function TGocciaVMClassValue.DeclaresCompiledPrivateKey(
+  const ACompiledKey: string): Boolean;
+begin
+  if CachedPrivateKeyIndex(ACompiledKey) >= 0 then
+    Exit(True);
+  Result := DeclaresCompiledPrivateKeyUncached(ACompiledKey);
+  if Result and (Pointer(ACompiledKey) <> nil) then
+    RememberPrivateKey(ACompiledKey);
+end;
+
+function TGocciaVMClassValue.DeclaresCompiledPrivateKeyUncached(
+  const ACompiledKey: string): Boolean;
+var
+  DeclaredName: string;
   DeclaredKey: string;
   I: Integer;
 begin
-  if not ResolveDeclaredPrivateKey(ASourceName, DeclaredKey) then
-    Exit(False);
-  if DeclaredKey = ACompiledKey then
-    Exit(True);
+  // The class declares ACompiledKey when the private name the key stands for
+  // resolves to it. Look the key up directly, which builds no string; the
+  // name-keyed lookup is needed only when another name declared it first.
+  if TryGetDeclaredPrivateKeyName(ACompiledKey, DeclaredName) then
+  begin
+    if BytecodePrivateSourceNameEquals(ACompiledKey, DeclaredName) then
+      Exit(True);
+    if ResolveDeclaredPrivateKey(BytecodePrivateSourceName(ACompiledKey),
+         DeclaredKey) and (DeclaredKey = ACompiledKey) then
+      Exit(True);
+  end;
   for I := 0 to High(FRuntimeKeyedPrivateKeys) do
     if FRuntimeKeyedPrivateKeys[I] = ACompiledKey then
       Exit(True);
@@ -9820,6 +9989,50 @@ begin
   end;
 end;
 
+procedure TGocciaVM.SpreadIterableIntoArray(const ATarget: TGocciaArrayValue;
+  const ASource: TGocciaValue);
+var
+  SourceArray, Spread: TGocciaArrayValue;
+  Target, SourceElements: TGocciaElementList;
+  Needed, I: Integer;
+begin
+  Target := ATarget.Elements;
+  if ArrayUsesIntrinsicIteration(ASource) then
+  begin
+    // With the intrinsic iterator in place, every IteratorStepValue of
+    // ArrayAccumulation yields ? Get(array, ToString(index)) while index is
+    // below the array's live length (§23.1.5.2.1), so read those values
+    // directly.  The count is re-read each step because a getter reached
+    // through a hole may grow or shrink the source, as it would mid-iteration.
+    SourceArray := TGocciaArrayValue(ASource);
+    SourceElements := SourceArray.Elements;
+    Needed := Target.Count + SourceElements.Count;
+    if Needed > Target.Capacity then
+      Target.Capacity := Max(Needed, Target.Capacity * 2);
+    I := 0;
+    while I < SourceElements.Count do
+    begin
+      if GThreadPolls.Any <> 0 then
+      begin
+        CheckExecutionTimeout;
+        CheckInstructionLimit;
+      end;
+      Target.Add(ArrayIteratorValueAt(SourceArray, I));
+      Inc(I);
+    end;
+    Exit;
+  end;
+
+  // Any other source runs the full iterator protocol.  The values it yields
+  // are plain values in a fresh dense array, so they are copied as they are.
+  Spread := IterableToArray(ASource);
+  Needed := Target.Count + Spread.Elements.Count;
+  if Needed > Target.Capacity then
+    Target.Capacity := Max(Needed, Target.Capacity * 2);
+  for I := 0 to Spread.Elements.Count - 1 do
+    Target.Add(Spread.Elements[I]);
+end;
+
 function TGocciaVM.TryIterableToArray(const AIterable: TGocciaValue;
   out AArray: TGocciaArrayValue): Boolean;
 var
@@ -10897,6 +11110,32 @@ begin
       Length(APrefix) * SizeOf(Char));
 end;
 
+// Position of the first AChar in AKey, or 0. Pos(':', S) on a UnicodeString
+// resolves to the AnsiChar overload, which converts the character through the
+// widestring manager (iconv) on every call.
+function PrivateKeyCharPos(const AChar: Char; const AKey: string): Integer;
+var
+  I: Integer;
+begin
+  for I := 1 to Length(AKey) do
+    if AKey[I] = AChar then
+      Exit(I);
+  Result := 0;
+end;
+
+// Index of AValue in AList by exact code-unit comparison. TList.IndexOf uses
+// the default UnicodeString comparer, which collates through the locale.
+function PrivateNameIndex(const AList: TUnicodeStringList;
+  const AValue: string): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to AList.Count - 1 do
+    if AList[I] = AValue then
+      Exit(I);
+  Result := -1;
+end;
+
 function IsBytecodePrivateKey(const AKey: string): Boolean;
 begin
   Result := KeyExtendsPrefix(AKey, BYTECODE_PRIVATE_SLOT_PREFIX);
@@ -10917,19 +11156,65 @@ begin
   if IsBytecodePrivateBrandKey(AKey) then
   begin
     KeyBody := Copy(AKey, Length(BYTECODE_PRIVATE_BRAND_PREFIX) + 1, MaxInt);
-    DelimiterPos := Pos(':', KeyBody);
+    DelimiterPos := PrivateKeyCharPos(':', KeyBody);
     if DelimiterPos > 1 then
       Result := Copy(KeyBody, 1, DelimiterPos - 1);
   end
   else if IsBytecodePrivateKey(AKey) then
   begin
     KeyBody := Copy(AKey, Length(BYTECODE_PRIVATE_SLOT_PREFIX) + 1, MaxInt);
-    DelimiterPos := Pos(':', KeyBody);
+    DelimiterPos := PrivateKeyCharPos(':', KeyBody);
     if DelimiterPos > 1 then
       Result := Copy(KeyBody, 1, DelimiterPos - 1)
-    else if (KeyBody <> '') and (Pos('$', KeyBody) = 0) then
+    else if (KeyBody <> '') and (PrivateKeyCharPos('$', KeyBody) = 0) then
       Result := KeyBody;
   end;
+end;
+
+// Where the private name that BytecodePrivateSourceName returns for AKey
+// starts in AKey, or 0 when that name is empty. Reads the key in place.
+function BytecodePrivateSourceNameStart(const AKey: string): Integer;
+var
+  BodyStart: Integer;
+  I: Integer;
+begin
+  Result := 1;
+  if IsBytecodePrivateKey(AKey) then
+  begin
+    BodyStart := Length(BYTECODE_PRIVATE_SLOT_PREFIX) + 1;
+    Result := BodyStart;
+    // The name follows the first '$' or, when there is none, the first ':'.
+    for I := BodyStart to Length(AKey) do
+      if AKey[I] = '$' then
+      begin
+        Result := I + 1;
+        Break;
+      end;
+    if Result = BodyStart then
+      for I := BodyStart to Length(AKey) do
+        if AKey[I] = ':' then
+        begin
+          Result := I + 1;
+          Break;
+        end;
+  end;
+  if (Result <= Length(AKey)) and (AKey[Result] = '#') then
+    Inc(Result);
+  if Result > Length(AKey) then
+    Result := 0;
+end;
+
+// BytecodePrivateSourceName(AKey) = AName, without building the source name.
+function BytecodePrivateSourceNameEquals(const AKey, AName: string): Boolean;
+var
+  NameStart: Integer;
+begin
+  NameStart := BytecodePrivateSourceNameStart(AKey);
+  if NameStart = 0 then
+    Exit(AName = '');
+  Result := (Length(AKey) - NameStart + 1 = Length(AName)) and
+    CompareMem(@AKey[NameStart], Pointer(AName),
+      Length(AName) * SizeOf(Char));
 end;
 
 function BytecodePrivateSourceName(const AName: string): string;
@@ -10941,12 +11226,12 @@ begin
   if IsBytecodePrivateKey(Result) then
   begin
     Body := Copy(Result, Length(BYTECODE_PRIVATE_SLOT_PREFIX) + 1, MaxInt);
-    DelimiterPos := Pos('$', Body);
+    DelimiterPos := PrivateKeyCharPos('$', Body);
     if DelimiterPos > 0 then
       Result := Copy(Body, DelimiterPos + 1, MaxInt)
     else
     begin
-      DelimiterPos := Pos(':', Body);
+      DelimiterPos := PrivateKeyCharPos(':', Body);
       if DelimiterPos > 0 then
         Result := Copy(Body, DelimiterPos + 1, MaxInt)
       else
@@ -11030,7 +11315,6 @@ end;
 function TGocciaVM.LexicalBytecodePrivateClass(
   const AKey: string): TGocciaClassValue;
 var
-  SourceName: string;
   Candidate: TGocciaObjectValue;
 begin
   Result := nil;
@@ -11039,16 +11323,46 @@ begin
   Candidate := FCurrentClosure.PrivateClass;
   if not Assigned(Candidate) then
     Exit;
-  SourceName := BytecodePrivateSourceName(AKey);
-  if SourceName = '' then
+  // Fast path: the innermost class already resolved this key string.
+  if (Candidate is TGocciaVMClassValue) and
+     (TGocciaVMClassValue(Candidate).CachedPrivateKeyIndex(AKey) >= 0) then
+    Exit(TGocciaVMClassValue(Candidate));
+  if BytecodePrivateSourceNameStart(AKey) = 0 then
     Exit;
   while Candidate is TGocciaVMClassValue do
   begin
-    if TGocciaVMClassValue(Candidate).DeclaresCompiledPrivateKey(AKey,
-         SourceName) then
+    if TGocciaVMClassValue(Candidate).DeclaresCompiledPrivateKey(AKey) then
       Exit(TGocciaVMClassValue(Candidate));
     Candidate := TGocciaVMClassValue(Candidate).OuterPrivateClass;
   end;
+end;
+
+// BytecodePrivateBrandKey(AKey, ResolveBytecodePrivateBrandToken(AKey,
+// AObject)), reusing the brand key the lexically resolved class keeps.
+function TGocciaVM.ResolveBytecodePrivateBrandKey(const AKey: string;
+  const AObject: TGocciaValue): string;
+var
+  LexicalClass: TGocciaClassValue;
+begin
+  LexicalClass := LexicalBytecodePrivateClass(AKey);
+  if LexicalClass is TGocciaVMClassValue then
+    Exit(TGocciaVMClassValue(LexicalClass).PrivateBrandKeyFor(AKey));
+  Result := BytecodePrivateBrandKey(AKey,
+    ResolveBytecodePrivateBrandToken(AKey, AObject));
+end;
+
+// BytecodePrivateRuntimeKey(AKey, ResolveBytecodePrivateBrandToken(AKey,
+// AObject)), reusing the runtime key the lexically resolved class keeps.
+function TGocciaVM.ResolveBytecodePrivateRuntimeKey(const AKey: string;
+  const AObject: TGocciaValue): string;
+var
+  LexicalClass: TGocciaClassValue;
+begin
+  LexicalClass := LexicalBytecodePrivateClass(AKey);
+  if LexicalClass is TGocciaVMClassValue then
+    Exit(TGocciaVMClassValue(LexicalClass).PrivateRuntimeKeyFor(AKey));
+  Result := BytecodePrivateRuntimeKey(AKey,
+    ResolveBytecodePrivateBrandToken(AKey, AObject));
 end;
 
 function TGocciaVM.ResolveBytecodePrivateBrandToken(const AKey: string;
@@ -11190,6 +11504,19 @@ begin
     ADescriptor);
 end;
 
+// The descriptor AObject holds under the private storage key AKey: its raw
+// entry, or what an exotic object reports for the key. An ordinary object or
+// class instance reports only its raw entries, so a miss there is final and
+// the second lookup is skipped.
+function PrivateKeyOwnDescriptor(const AObject: TGocciaObjectValue;
+  const AKey: string): TGocciaPropertyDescriptor;
+begin
+  if (not TryGetRawObjectPrivateDescriptor(AObject, AKey, Result)) and
+     (AObject.ClassType <> TGocciaObjectValue) and
+     (AObject.ClassType <> TGocciaInstanceValue) then
+    Result := AObject.GetOwnPropertyDescriptor(AKey);
+end;
+
 procedure DefineRawObjectPrivateProperty(const AObject: TGocciaObjectValue;
   const AKey: string; const AValue: TGocciaValue;
   const AFlags: TPropertyFlags);
@@ -11226,19 +11553,86 @@ begin
       TGocciaBooleanLiteralValue.TrueValue, []);
 end;
 
+// The private names a construction stamps on its receiver and the brand key
+// of each. Depends only on the class's private-name set and brand token.
+function BuildPrivateStampPlan(
+  const AClassValue: TGocciaClassValue): TGocciaPrivateStampPlan;
+var
+  Names: TArray<string>;
+  Count: Integer;
+  PrototypeNames: TArray<string>;
+  PrivateBrandToken: string;
+  I, J: Integer;
+begin
+  Result.Version := AClassValue.PrivateNamesVersion;
+  Result.HasSharedBrandKeys := False;
+  Names := nil;
+  Count := 0;
+  AClassValue.CollectOwnPrivateNames(Names, Count);
+  // An ordinary object lists no private storage key among its own property
+  // names (TGocciaObjectValue.GetOwnPropertyKeys skips them), so only a
+  // prototype of another kind is asked.
+  if Assigned(AClassValue.Prototype) and
+     (AClassValue.Prototype.ClassType <> TGocciaObjectValue) then
+  begin
+    PrototypeNames := AClassValue.Prototype.GetOwnPropertyNames;
+    for I := 0 to High(PrototypeNames) do
+      if IsBytecodePrivateKey(PrototypeNames[I]) then
+      begin
+        J := 0;
+        while (J < Count) and (Names[J] <> PrototypeNames[I]) do
+          Inc(J);
+        if J = Count then
+        begin
+          if Count = Length(Names) then
+            SetLength(Names, Count + 4);
+          Names[Count] := PrototypeNames[I];
+          Inc(Count);
+        end;
+      end;
+  end;
+  SetLength(Names, Count);
+  Result.Names := Names;
+  SetLength(Result.BrandKeys, Count);
+  for I := 0 to Count - 1 do
+  begin
+    PrivateBrandToken := BytecodePrivateTokenForKey(Names[I],
+      AClassValue.PrivateBrandToken);
+    Result.BrandKeys[I] := BytecodePrivateBrandKey(
+      NormalizeBytecodePrivateKey(Names[I], PrivateBrandToken),
+      PrivateBrandToken);
+    for J := 0 to I - 1 do
+      if Result.BrandKeys[J] = Result.BrandKeys[I] then
+        Result.HasSharedBrandKeys := True;
+  end;
+end;
+
+function TGocciaVMClassValue.PrivateStampPlan: TGocciaPrivateStampPlan;
+begin
+  // The plan follows the private-name set, and a prototype that is not an
+  // ordinary object can change the names it lists at any time.
+  if (not FPrivateStampPlanBuilt) or
+     (FPrivateStampPlan.Version <> PrivateNamesVersion) or
+     (Assigned(Prototype) and (Prototype.ClassType <> TGocciaObjectValue)) then
+  begin
+    FPrivateStampPlan := BuildPrivateStampPlan(Self);
+    FPrivateStampPlanBuilt := True;
+  end;
+  Result := FPrivateStampPlan;
+end;
+
 procedure TGocciaVM.StampBytecodePrivateBrands(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
   const APreserveExistingPrivateSlots: Boolean);
 var
-  Names: TStringList;
-  PrototypeNames: TArray<string>;
-  PrototypeName: string;
+  Plan: TGocciaPrivateStampPlan;
+  Names: TArray<string>;
   PrivateBrandToken: string;
   BrandKey: string;
   ExistingValue: TGocciaValue;
   PrototypeDescriptor: TGocciaPropertyDescriptor;
   ReceiverObject: TGocciaObjectValue;
-  SeenBrandKeys: TStringList;
+  SeenBrandKeys: TUnicodeStringList;
   SourcePrivateName: string;
   IsPrivateFieldBrand: Boolean;
   I: Integer;
@@ -11249,36 +11643,29 @@ begin
 
   ReceiverObject := TGocciaObjectValue(AInstance);
 
-  Names := TStringList.Create;
-  SeenBrandKeys := TStringList.Create;
+  if AClassValue is TGocciaVMClassValue then
+    Plan := TGocciaVMClassValue(AClassValue).PrivateStampPlan
+  else
+    Plan := BuildPrivateStampPlan(AClassValue);
+  Names := Plan.Names;
+
+  SeenBrandKeys := nil;
   try
-    Names.CaseSensitive := True;
-    Names.Sorted := False;
-    Names.Duplicates := dupIgnore;
-    SeenBrandKeys.CaseSensitive := True;
-    SeenBrandKeys.Sorted := False;
-    SeenBrandKeys.Duplicates := dupIgnore;
-    AClassValue.AppendOwnPrivateNames(Names);
-    if Assigned(AClassValue.Prototype) then
-    begin
-      PrototypeNames := AClassValue.Prototype.GetOwnPropertyNames;
-      for PrototypeName in PrototypeNames do
-        if IsBytecodePrivateKey(PrototypeName) and
-           (Names.IndexOf(PrototypeName) < 0) then
-          Names.Add(PrototypeName);
-    end;
-    if (Names.Count > 0) and not ReceiverObject.Extensible then
+    if (Length(Names) > 0) and not ReceiverObject.Extensible then
       ThrowTypeError('Cannot add private elements to a non-extensible object',
         SSuggestObjectNotExtensible);
-    for I := 0 to Names.Count - 1 do
+    for I := 0 to High(Names) do
     begin
-      PrivateBrandToken := BytecodePrivateTokenForKey(Names[I],
-        AClassValue.PrivateBrandToken);
-      BrandKey := BytecodePrivateBrandKey(
-        NormalizeBytecodePrivateKey(Names[I], PrivateBrandToken),
-        PrivateBrandToken);
-      if SeenBrandKeys.IndexOf(BrandKey) >= 0 then
-        Continue;
+      BrandKey := Plan.BrandKeys[I];
+      // Two names can share a brand key only when the plan says so; then
+      // the first of them that stamps the receiver claims it.
+      if Plan.HasSharedBrandKeys then
+      begin
+        if not Assigned(SeenBrandKeys) then
+          SeenBrandKeys := TUnicodeStringList.Create;
+        if PrivateNameIndex(SeenBrandKeys, BrandKey) >= 0 then
+          Continue;
+      end;
       if TryGetRawObjectPrivateDescriptor(ReceiverObject, Names[I],
          PrototypeDescriptor) and
          not HasBytecodePrivateInitializersApplied(AInstance, AClassValue) then
@@ -11305,18 +11692,20 @@ begin
              Assigned(TGocciaVMClassValue(AClassValue).FConstructorValue) then
             Continue;
         end;
+        PrivateBrandToken := BytecodePrivateTokenForKey(Names[I],
+          AClassValue.PrivateBrandToken);
         SourcePrivateName := NormalizeBytecodePrivateKey(Names[I],
           PrivateBrandToken);
         if IsBytecodePrivateKey(SourcePrivateName) then
         begin
           SourcePrivateName := Copy(SourcePrivateName,
             Length(BYTECODE_PRIVATE_SLOT_PREFIX) + 1, MaxInt);
-          if Pos('$', SourcePrivateName) > 0 then
+          if PrivateKeyCharPos('$', SourcePrivateName) > 0 then
             SourcePrivateName := Copy(SourcePrivateName,
-              Pos('$', SourcePrivateName) + 1, MaxInt)
-          else if Pos(':', SourcePrivateName) > 0 then
+              PrivateKeyCharPos('$', SourcePrivateName) + 1, MaxInt)
+          else if PrivateKeyCharPos(':', SourcePrivateName) > 0 then
             SourcePrivateName := Copy(SourcePrivateName,
-              Pos(':', SourcePrivateName) + 1, MaxInt);
+              PrivateKeyCharPos(':', SourcePrivateName) + 1, MaxInt);
         end;
         IsPrivateFieldBrand :=
           (AClassValue.PrivateInstancePropertyDefs.Count > 0) or
@@ -11336,7 +11725,8 @@ begin
         ThrowTypeError('Cannot initialize private elements twice',
           SSuggestPrivateFieldAccess);
       end;
-      SeenBrandKeys.Add(BrandKey);
+      if Assigned(SeenBrandKeys) then
+        SeenBrandKeys.Add(BrandKey);
       SetRawPrivateValue(AInstance, BrandKey,
         TGocciaBooleanLiteralValue.TrueValue);
 
@@ -11361,7 +11751,6 @@ begin
     end;
   finally
     SeenBrandKeys.Free;
-    Names.Free;
   end;
 end;
 
@@ -13094,7 +13483,7 @@ var
   Current: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   PrivateName: string;
-  PrivateBrandToken: string;
+  BrandKey: string;
   BrandValue: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
@@ -13112,13 +13501,9 @@ begin
 
   if IsBytecodePrivateKey(AKey) then
   begin
-    PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
-    if AObject is TGocciaClassValue then
-      PrivateName := BytecodePrivateRuntimeKey(AKey, PrivateBrandToken)
-    else
-      PrivateName := NormalizeBytecodePrivateKey(AKey, PrivateBrandToken);
     if AObject is TGocciaClassValue then
     begin
+      PrivateName := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
       begin
         EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -13147,12 +13532,11 @@ begin
       Current := TGocciaObjectValue(AObject);
       while Assigned(Current) do
       begin
-        if not TryGetRawObjectPrivateDescriptor(Current, AKey, Descriptor) then
-          Descriptor := Current.GetOwnPropertyDescriptor(AKey);
+        Descriptor := PrivateKeyOwnDescriptor(Current, AKey);
         if Descriptor is TGocciaPropertyDescriptorAccessor then
         begin
           if not TryGetRawPrivateValue(
-            AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+            AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
             BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
               SErrorPrivateFieldInaccessible);
@@ -13173,7 +13557,7 @@ begin
         if Descriptor is TGocciaPropertyDescriptorData then
         begin
           if not TryGetRawPrivateValue(
-            AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+            AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
             BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
               SErrorPrivateFieldInaccessible);
@@ -13183,7 +13567,8 @@ begin
       end;
     end;
 
-    if TryGetRawPrivateValue(AObject, AKey, Result) then
+    BrandKey := '';
+    if TryGetRawPrivateFieldValue(AObject, AKey, BrandKey, Result) then
       Exit;
     ThrowBytecodePrivateTypeError(AKey,
       SErrorPrivateFieldInaccessible);
@@ -13355,7 +13740,7 @@ var
   SetterArgs: TGocciaArgumentsCollection;
   PrivateName: string;
   BoxedValue: TGocciaObjectValue;
-  PrivateBrandToken: string;
+  BrandKey: string;
   ExistingValue: TGocciaValue;
 begin
   if AObject is TGocciaNullLiteralValue then
@@ -13368,13 +13753,9 @@ begin
       SSuggestCheckNullBeforeAccess);
   if IsBytecodePrivateKey(AKey) then
   begin
-    PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
-    if AObject is TGocciaClassValue then
-      PrivateName := BytecodePrivateRuntimeKey(AKey, PrivateBrandToken)
-    else
-      PrivateName := NormalizeBytecodePrivateKey(AKey, PrivateBrandToken);
     if AObject is TGocciaClassValue then
     begin
+      PrivateName := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
       if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
       begin
         SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
@@ -13408,13 +13789,12 @@ begin
       Current := TGocciaObjectValue(AObject);
       while Assigned(Current) do
       begin
-        if not TryGetRawObjectPrivateDescriptor(Current, AKey, Descriptor) then
-          Descriptor := Current.GetOwnPropertyDescriptor(AKey);
+        Descriptor := PrivateKeyOwnDescriptor(Current, AKey);
         if (Descriptor is TGocciaPropertyDescriptorAccessor) and
            Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
         begin
           if not TryGetRawPrivateValue(
-            AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+            AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
             ExistingValue) then
             ThrowBytecodePrivateTypeError(AKey,
               SErrorPrivateFieldInaccessible);
@@ -13435,7 +13815,7 @@ begin
           if not Descriptor.Writable then
           begin
             if TryGetRawPrivateValue(AObject,
-               BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+               ResolveBytecodePrivateBrandKey(AKey, AObject),
                ExistingValue) then
               ThrowBytecodePrivateTypeError(AKey,
                 SErrorPrivateMethodNotWritable);
@@ -13450,7 +13830,8 @@ begin
         Current := Current.Prototype;
       end;
     end;
-    if TryGetRawPrivateValue(AObject, AKey, ExistingValue) then
+    BrandKey := '';
+    if TryGetRawPrivateFieldValue(AObject, AKey, BrandKey, ExistingValue) then
     begin
       if (AObject = FPrivateInitializerReceiver) and
          FPrivateInitializerPreserveExisting then
@@ -13464,7 +13845,7 @@ begin
       if (AObject is TGocciaObjectValue) and
          (Descriptor is TGocciaPropertyDescriptorData) and
          TryGetRawPrivateValue(AObject,
-           BytecodePrivateBrandKey(AKey, PrivateBrandToken), ExistingValue) then
+           ResolveBytecodePrivateBrandKey(AKey, AObject), ExistingValue) then
         ThrowBytecodePrivateTypeError(AKey, SErrorPrivateMethodNotWritable);
       ThrowBytecodePrivateTypeError(AKey,
         SErrorPrivateFieldInaccessible);
@@ -13588,8 +13969,18 @@ end;
 function TGocciaVM.TryGetRawPrivateValue(const AObject: TGocciaValue;
   const AKey: string; out AValue: TGocciaValue): Boolean;
 var
+  BrandKey: string;
+begin
+  BrandKey := '';
+  Result := TryGetRawPrivateFieldValue(AObject, AKey, BrandKey, AValue);
+end;
+
+// TryGetRawPrivateValue that takes the brand key for AKey when the caller
+// already resolved it, and otherwise resolves it into ABrandKey.
+function TGocciaVM.TryGetRawPrivateFieldValue(const AObject: TGocciaValue;
+  const AKey: string; var ABrandKey: string; out AValue: TGocciaValue): Boolean;
+var
   BrandDescriptor: TGocciaPropertyDescriptor;
-  PrivateBrandToken: string;
   BrandValue: TGocciaValue;
   Descriptor: TGocciaPropertyDescriptor;
   InstanceValue: TGocciaInstanceValue;
@@ -13604,19 +13995,19 @@ begin
     InstanceValue := TGocciaInstanceValue(AObject);
     if InstanceValue.TryGetRawPrivateProperty(AKey, AValue) then
     begin
-      PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
-      Result := IsBytecodePrivateBrandKey(AKey) or
-        InstanceValue.TryGetRawPrivateProperty(
-          BytecodePrivateBrandKey(AKey, PrivateBrandToken), BrandValue);
+      if IsBytecodePrivateBrandKey(AKey) then
+        Exit(True);
+      if ABrandKey = '' then
+        ABrandKey := ResolveBytecodePrivateBrandKey(AKey, AObject);
+      Result := InstanceValue.TryGetRawPrivateProperty(ABrandKey, BrandValue);
     end;
     Exit;
   end;
 
   if AObject is TGocciaClassValue then
   begin
-    PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
     if TGocciaClassValue(AObject).PrivateStaticProperties.TryGetValue(
-      BytecodePrivateRuntimeKey(AKey, PrivateBrandToken), AValue) then
+      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue) then
       Result := True;
     Exit;
   end;
@@ -13625,9 +14016,10 @@ begin
   begin
     if not IsBytecodePrivateBrandKey(AKey) then
     begin
-      PrivateBrandToken := ResolveBytecodePrivateBrandToken(AKey, AObject);
+      if ABrandKey = '' then
+        ABrandKey := ResolveBytecodePrivateBrandKey(AKey, AObject);
       TryGetRawObjectPrivateDescriptor(TGocciaObjectValue(AObject),
-        BytecodePrivateBrandKey(AKey, PrivateBrandToken), BrandDescriptor);
+        ABrandKey, BrandDescriptor);
       if not (BrandDescriptor is TGocciaPropertyDescriptorData) then
         Exit;
     end;
@@ -13654,8 +14046,7 @@ begin
   if AObject is TGocciaClassValue then
   begin
     TGocciaClassValue(AObject).AddPrivateStaticProperty(
-      BytecodePrivateRuntimeKey(AKey,
-        ResolveBytecodePrivateBrandToken(AKey, AObject)), AValue);
+      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue);
     Exit;
   end;
 
@@ -13675,7 +14066,7 @@ var
   KeyStr: string;
   Prop: TGocciaValue;
   ResolvedKey: TGocciaValue;
-  PrivateBrandToken: string;
+  BrandKey: string;
 begin
   // ES2026 §13.10.1 RelationalExpression : RelationalExpression in
   // ShiftExpression, step 5: a right-hand side that is not an Object throws.
@@ -13702,16 +14093,18 @@ begin
       KeyStr := TGocciaStringLiteralValue(AKey).Value;
       if IsBytecodePrivateKey(KeyStr) or IsBytecodePrivateBrandKey(KeyStr) then
       begin
-        if TryGetRawPrivateValue(AObject, KeyStr, Prop) then
+        BrandKey := '';
+        if TryGetRawPrivateFieldValue(AObject, KeyStr, BrandKey, Prop) then
           Exit(TGocciaBooleanLiteralValue.TrueValue);
         if IsBytecodePrivateKey(KeyStr) then
         begin
-          PrivateBrandToken := ResolveBytecodePrivateBrandToken(KeyStr, AObject);
-          if HasBytecodeStaticPrivateMethodOrAccessor(AObject,
-             BytecodePrivateRuntimeKey(KeyStr, PrivateBrandToken)) then
+          if (AObject is TGocciaClassValue) and
+             HasBytecodeStaticPrivateMethodOrAccessor(AObject,
+               ResolveBytecodePrivateRuntimeKey(KeyStr, AObject)) then
             Exit(TGocciaBooleanLiteralValue.TrueValue);
-          if TryGetRawPrivateValue(AObject,
-             BytecodePrivateBrandKey(KeyStr, PrivateBrandToken), Prop) then
+          if BrandKey = '' then
+            BrandKey := ResolveBytecodePrivateBrandKey(KeyStr, AObject);
+          if TryGetRawPrivateValue(AObject, BrandKey, Prop) then
             Exit(TGocciaBooleanLiteralValue.TrueValue);
         end;
         Exit(TGocciaBooleanLiteralValue.FalseValue);
@@ -14247,6 +14640,11 @@ begin
        ASite.PC) then
     RaiseAlreadyDeclared(IDENTIFIER_ARGUMENTS);
 
+  // Eval code that declares no var or function needs no variable object, and
+  // a reference probes a missing one as an empty one.
+  if (AFunctionNames.Count = 0) and (ADeclaredVarNames.Count = 0) then
+    Exit;
+
   VarObjectBinding := -1;
   for I := 0 to High(ASite.Bindings) do
     if IsEvalVarObjectName(ASite.Bindings[I].Name) then
@@ -14289,61 +14687,29 @@ begin
     DeclareName(ADeclaredVarNames[I]);
 end;
 
-// ES2026 §19.2.1.1 PerformEval for a direct eval, up to the evaluation of the
-// body (ADR 0134 Phase 3). The call's frame is the current one. Parses
-// ASourceText as a Script with the call's private names, raises the early
-// errors of step 11 and the Script's own (§16.1.1), instantiates a non-strict
-// eval's declarations (InstantiateDirectEvalDeclarations), has the host
-// compile it against eval site record ASiteIndex of ATemplate, and
-// instantiates the code as a closure of the current frame, as OP_CLOSURE
-// instantiates an arrow function written at the call. The caller pushes it.
-//
-// The eval code reaches the caller's bindings through the cells its closure
-// captures, so a function it creates goes on reading and writing them after
-// the call has returned. A strict eval's declarations are locals of its
-// template (step 18). Step 10's inFunction, inMethod and inDerivedConstructor
-// come from the closure the call runs in (DirectEvalLexicalClosure).
-function TGocciaVM.PrepareCompiledDirectEval(const ASourceText: string;
+// ES2026 §19.2.1.1 PerformEval steps 11-13 and the compilation of the eval
+// code for a direct eval (ADR 0134 Phase 3), against eval site record ASite
+// of ATemplate. Parses ASourceText as a Script with the call's private names,
+// raises the early errors of step 11 and the Script's own (§16.1.1), has the
+// host compile it, and returns the code with the declaration names its
+// EvalDeclarationInstantiation needs. AContext holds what besides the source
+// and the site decides all of this (TGocciaDirectEvalCodeContext); the caller
+// keys its cache on it. The caller owns the result.
+function TGocciaVM.CompileDirectEvalCode(const ASourceText: string;
   const ATemplate: TGocciaFunctionTemplate;
-  const ASiteIndex: Integer): TGocciaBytecodeClosure;
+  const ASite: TGocciaDirectEvalEnvironment;
+  const AContext: TGocciaDirectEvalCodeContext): TGocciaDirectEvalCode;
 var
-  Site: TGocciaDirectEvalEnvironment;
-  SourceName: string;
   EvalSource: TStringList;
   EvalOptions: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
   PrivateNames: TStringList;
   VarNames, StandardVarNames, FunctionNames,
   DeclaredVarNames: TUnicodeStringList;
-  CallerClosure: TGocciaBytecodeClosure;
-  CurrentCtorClass: TGocciaClassValue;
-  AllowNewTarget, AllowSuperProperty, AllowSuperCall: Boolean;
   CompatibilityNonStrictMode, StrictEval: Boolean;
   EvalTemplate: TGocciaFunctionTemplate;
-  Desc: TGocciaUpvalueDescriptor;
-  PrivateClassRegister: TGocciaRegister;
   I: Integer;
 begin
-  Site := ATemplate.GetDirectEvalEnvironment(ASiteIndex);
-  if FCurrentModuleSourcePath <> '' then
-    SourceName := FCurrentModuleSourcePath
-  else
-    SourceName := '<bytecode-direct-eval>';
-
-  CallerClosure := DirectEvalLexicalClosure(Self);
-  AllowNewTarget := Assigned(CallerClosure) and CallerClosure.AllowsNewTarget;
-  AllowSuperProperty := Assigned(CallerClosure) and
-    Assigned(CallerClosure.HomeObject);
-  if Assigned(CallerClosure) and
-     (CallerClosure.HomeClass is TGocciaClassValue) then
-    CurrentCtorClass := TGocciaClassValue(CallerClosure.HomeClass)
-  else
-    CurrentCtorClass := nil;
-  AllowSuperCall := Assigned(FCurrentNewTarget) and
-    Assigned(CurrentCtorClass) and
-    (Assigned(CurrentCtorClass.SuperClass) or
-     Assigned(CurrentCtorClass.NativeSuperConstructor));
-
   EvalSource := CreateECMAScriptSourceLines(ASourceText);
   PrivateNames := TStringList.Create;
   VarNames := TUnicodeStringList.Create;
@@ -14352,22 +14718,22 @@ begin
   DeclaredVarNames := TUnicodeStringList.Create;
   try
     PrivateNames.CaseSensitive := True;
-    for I := 0 to High(Site.PrivateNames) do
-      if PrivateNames.IndexOf(Site.PrivateNames[I].Name) < 0 then
-        PrivateNames.Add(Site.PrivateNames[I].Name);
+    for I := 0 to High(ASite.PrivateNames) do
+      if PrivateNames.IndexOf(ASite.PrivateNames[I].Name) < 0 then
+        PrivateNames.Add(ASite.PrivateNames[I].Name);
     // Step 11: the source is a Script, strict when its call is (step 12:
     // strictCaller).
-    EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
+    EvalOptions := AContext.ParseOptions;
     CompatibilityNonStrictMode := cfNonStrictMode in EvalOptions.Compatibility;
     EvalOptions.SourceType := stScript;
-    EvalOptions.InheritedStrictMode := Site.StrictCaller;
-    if Site.StrictCaller then
+    EvalOptions.InheritedStrictMode := ASite.StrictCaller;
+    if ASite.StrictCaller then
       Exclude(EvalOptions.Compatibility, cfNonStrictMode);
-    PipelineResult := TGocciaSourcePipeline.Parse(EvalSource, SourceName,
-      EvalOptions, PrivateNames);
+    PipelineResult := TGocciaSourcePipeline.Parse(EvalSource,
+      AContext.SourceName, EvalOptions, PrivateNames);
     try
       // Steps 12-13.
-      StrictEval := Site.StrictCaller or
+      StrictEval := ASite.StrictCaller or
         HasUseStrictDirective(PipelineResult.ProgramNode);
       if HasDirectEvalTopLevelUsingDeclaration(PipelineResult.ProgramNode) then
         ThrowSyntaxError(
@@ -14375,11 +14741,12 @@ begin
       ValidateEvalScriptBody(PipelineResult.ProgramNode.Body);
       // Step 11: ContainsArguments in a class field initializer's eval.
       if (ATemplate.RejectArgumentsInDirectEval or
-          Site.RejectArgumentsReference) and
+          ASite.RejectArgumentsReference) and
          EvalProgramContainsArgumentsReference(PipelineResult.ProgramNode) then
         ThrowSyntaxError('arguments is not allowed in this eval context');
       ValidateEvalEarlyErrors(PipelineResult.ProgramNode, StrictEval,
-        AllowNewTarget, AllowSuperProperty, AllowSuperCall);
+        AContext.AllowNewTarget, AContext.AllowSuperProperty,
+        AContext.AllowSuperCall);
       ValidateEvalControlFlow(PipelineResult.ProgramNode);
       ValidateEvalBlockDeclarations(PipelineResult.ProgramNode, StrictEval);
       CollectGlobalEvalDeclarationNames(PipelineResult.ProgramNode,
@@ -14389,14 +14756,25 @@ begin
       // §16.1.1: a name both lexically and var-declared at the top level.
       CheckEvalLexicalDeclarationConflicts(PipelineResult.ProgramNode,
         VarNames);
+      // The compiler leaves in DeclaredVarNames the block-level functions
+      // the web-compat steps of §19.2.1.3 give a var binding.
       EvalTemplate := FCompileDirectEval(PipelineResult.ProgramNode,
-        SourceName, Site, StrictEval, DeclaredVarNames);
-      if not StrictEval then
+        AContext.SourceName, ASite, StrictEval, DeclaredVarNames);
+      // A strict eval's declarations are locals of its template (step 18).
+      if StrictEval then
+        Result := TGocciaDirectEvalCode.Create(AContext, EvalTemplate, True,
+          nil, nil, nil, nil)
+      else
       begin
         CollectVarBindingNamesFromStatements(PipelineResult.ProgramNode.Body,
           StandardVarNames);
-        InstantiateDirectEvalDeclarations(ATemplate, ASiteIndex, Site,
+        Result := TGocciaDirectEvalCode.Create(AContext, EvalTemplate, False,
           StandardVarNames, VarNames, FunctionNames, DeclaredVarNames);
+        // The code owns the name lists now.
+        StandardVarNames := nil;
+        VarNames := nil;
+        FunctionNames := nil;
+        DeclaredVarNames := nil;
       end;
     finally
       PipelineResult.Free;
@@ -14408,6 +14786,96 @@ begin
     VarNames.Free;
     PrivateNames.Free;
     EvalSource.Free;
+  end;
+end;
+
+// ES2026 §19.2.1.1 PerformEval for a direct eval, up to the evaluation of the
+// body (ADR 0134 Phase 3). The call's frame is the current one. Gets the eval
+// code compiled at the call (CompileDirectEvalCode), instantiates a
+// non-strict eval's declarations (InstantiateDirectEvalDeclarations), and
+// instantiates the code as a closure of the current frame, as OP_CLOSURE
+// instantiates an arrow function written at the call. The caller pushes it.
+//
+// Each eval site keeps the code it compiled, keyed on the source text and
+// the context it was compiled in (ADR 0134 Phase 4), so evaluating the same
+// source at the site again compiles nothing and keeps no further code alive
+// for the engine's lifetime. Only the template is shared: every evaluation
+// instantiates its declarations and creates its closure, so its bindings and
+// the functions it creates are its own.
+//
+// The eval code reaches the caller's bindings through the cells its closure
+// captures, so a function it creates goes on reading and writing them after
+// the call has returned. A strict eval's declarations are locals of its
+// template (step 18). Step 10's inFunction, inMethod and inDerivedConstructor
+// come from the closure the call runs in (DirectEvalLexicalClosure).
+function TGocciaVM.PrepareCompiledDirectEval(const ASourceText: string;
+  const ATemplate: TGocciaFunctionTemplate;
+  const ASiteIndex: Integer): TGocciaBytecodeClosure;
+var
+  Site: TGocciaDirectEvalEnvironment;
+  Context: TGocciaDirectEvalCodeContext;
+  CodeCache: TGocciaDirectEvalCodeCache;
+  Code, UncachedCode: TGocciaDirectEvalCode;
+  CallerClosure: TGocciaBytecodeClosure;
+  CurrentCtorClass: TGocciaClassValue;
+  EvalTemplate: TGocciaFunctionTemplate;
+  Desc: TGocciaUpvalueDescriptor;
+  PrivateClassRegister: TGocciaRegister;
+  I: Integer;
+begin
+  Site := ATemplate.GetDirectEvalEnvironment(ASiteIndex);
+  if FCurrentModuleSourcePath <> '' then
+    Context.SourceName := FCurrentModuleSourcePath
+  else
+    Context.SourceName := '<bytecode-direct-eval>';
+  Context.ParseOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
+
+  CallerClosure := DirectEvalLexicalClosure(Self);
+  Context.AllowNewTarget := Assigned(CallerClosure) and
+    CallerClosure.AllowsNewTarget;
+  Context.AllowSuperProperty := Assigned(CallerClosure) and
+    Assigned(CallerClosure.HomeObject);
+  if Assigned(CallerClosure) and
+     (CallerClosure.HomeClass is TGocciaClassValue) then
+    CurrentCtorClass := TGocciaClassValue(CallerClosure.HomeClass)
+  else
+    CurrentCtorClass := nil;
+  Context.AllowSuperCall := Assigned(FCurrentNewTarget) and
+    Assigned(CurrentCtorClass) and
+    (Assigned(CurrentCtorClass.SuperClass) or
+     Assigned(CurrentCtorClass.NativeSuperConstructor));
+
+  CodeCache := TGocciaDirectEvalCodeCache(
+    ATemplate.GetDirectEvalCodeCache(ASiteIndex));
+  if Assigned(CodeCache) then
+    Code := CodeCache.Find(ASourceText, Context)
+  else
+    Code := nil;
+  UncachedCode := nil;
+  if not Assigned(Code) then
+  begin
+    Code := CompileDirectEvalCode(ASourceText, ATemplate, Site, Context);
+    UncachedCode := Code;
+    if IsDirectEvalCodeCacheable(Code.Template) then
+    begin
+      if not Assigned(CodeCache) then
+      begin
+        CodeCache := TGocciaDirectEvalCodeCache.Create;
+        ATemplate.SetDirectEvalCodeCache(ASiteIndex, CodeCache);
+      end;
+      // A full cache keeps what it has (DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES).
+      if CodeCache.TryAdd(ASourceText, Code) then
+        UncachedCode := nil;
+    end;
+  end;
+  try
+    EvalTemplate := Code.Template;
+    if not Code.StrictEval then
+      InstantiateDirectEvalDeclarations(ATemplate, ASiteIndex, Site,
+        Code.StandardVarNames, Code.VarNames, Code.FunctionNames,
+        Code.DeclaredVarNames);
+  finally
+    UncachedCode.Free;
   end;
 
   // As OP_CLOSURE instantiates an arrow function in the calling frame.

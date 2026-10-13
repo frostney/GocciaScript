@@ -44,6 +44,7 @@ Public bytecode artifacts use the `.gbc` extension.
 | Debug metadata | `Goccia.Bytecode.Debug.pas` |
 | VM execution | `Goccia.VM.pas` |
 | Frames / closures / upvalues | `Goccia.VM.CallFrame.pas`, `Goccia.VM.Closure.pas`, `Goccia.VM.Upvalue.pas` |
+| Direct eval code cache | `Goccia.VM.DirectEvalCodeCache.pas` |
 | Bytecode executor | `Goccia.Executor.Bytecode.pas` (`TGocciaBytecodeExecutor`) |
 | Numeric proof / lowering | `Goccia.Compiler.NumericProof.pas`, `Goccia.Compiler.NumericBindings.pas`, `Goccia.Compiler.Expressions.pas` |
 | Opcode name lookup | `Goccia.Bytecode.OpCodeNames.pas` |
@@ -105,7 +106,7 @@ Current instruction families:
 Some opcode families intentionally use flags or mode operands instead of one opcode per syntax form. For example:
 
 - accessor definition uses constant-key and dynamic-key instructions plus getter/setter and static/instance flags
-- collection helpers use a shared opcode (`OP_COLLECTION_OP`) for object spread, object rest, and iterable-to-array spread
+- collection helpers use a shared opcode (`OP_COLLECTION_OP`) for object spread, object rest, and iterable-to-array spread; spreading an Array reads its elements directly only while `ArrayUsesIntrinsicIteration` (`Goccia.Values.Iterator.Concrete`) confirms that `Array.prototype[Symbol.iterator]` and `%ArrayIteratorPrototype%.next` are still the realm's intrinsics and the array has no iterator of its own, and otherwise runs the full iterator protocol
 - validation uses a shared opcode for require-object and require-iterable checks
 - generator metadata is serialized and a single `OP_YIELD` drives generator suspension; `yield*` uses the same opcode with delegation bookkeeping rather than a second opcode
 - bytecode generators suspend by snapshotting the VM continuation at `OP_YIELD` (instruction pointer, live registers, local cells, handler state, and GC-visible references) and resume from that snapshot instead of replaying from function entry
@@ -422,8 +423,20 @@ nested there, so its upvalue descriptors name the caller's cells and `this`,
 The VM instantiates the template as `OP_CLOSURE` instantiates an arrow in the
 calling frame and pushes it as a frame whose return value, the eval's
 completion value, lands in the callee register. The compiled code is kept for
-the engine's lifetime. A strict eval's declarations are locals of its own
-template. A sloppy eval in a function declares its vars and functions in the
+the engine's lifetime, and each eval site caches it per source text
+(`Goccia.VM.DirectEvalCodeCache`, ADR 0134 Phase 4), so evaluating a source
+the site has already compiled parses and compiles nothing and keeps no new
+code alive. A cache entry also records what else decides the compiled code:
+the source name, the parse options, and whether `new.target`, `super.x` and
+`super()` are allowed where the call runs. A site caches at most 64 entries
+(`DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES`, as JavaScriptCore's
+`DirectEvalCodeCache`); past that it keeps serving them and compiles any
+other source at each evaluation. Only the template is shared; every
+evaluation instantiates its declarations and creates its own closure. Code
+containing a tagged template is not cached, because each evaluation needs its
+own template objects (ES2026 §13.2.8.4 GetTemplateObject keys them on the
+Parse Node, and each eval parses new ones). A strict eval's declarations are
+locals of its own template. A sloppy eval in a function declares its vars and functions in the
 caller's variable environment before its code runs: a var of the caller with
 the name is reused, and any other becomes a configurable property of the
 function's hidden variable object, a null-prototype object that the first

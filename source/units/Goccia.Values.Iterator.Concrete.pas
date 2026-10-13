@@ -113,6 +113,26 @@ type
 
 function EnsureArrayIteratorPrototype: TGocciaObjectValue;
 
+// True when iterating AArray through GetIterator (ES2026 §7.4.4) would run
+// only the realm's intrinsics: AArray is an Array whose prototype is the
+// realm's Array.prototype, it has no own %Symbol.iterator%,
+// Array.prototype[%Symbol.iterator%] still holds %Array.prototype.values%,
+// and %ArrayIteratorPrototype%.next is still the intrinsic.  The checks read
+// own data descriptors only, so they never run a getter or other script.
+// When this holds, the values that iteration yields are exactly
+// ArrayIteratorValueAt(AArray, I) for I from 0 while I is below the live
+// element count, and a caller may read them directly instead of creating
+// the iterator (ES2026 §23.1.5.1 CreateArrayIterator, §23.1.5.2.1
+// %ArrayIteratorPrototype%.next).
+function ArrayUsesIntrinsicIteration(const AArray: TGocciaValue): Boolean;
+
+// ES2026 §23.1.5.2.1 %ArrayIteratorPrototype%.next step 14.b for an array-like
+// source: ? Get(array, ToString(index)).  A dense element is returned without
+// building the index name; a hole or an index past the dense elements reads
+// through the prototype chain, so inherited values and getters are observed.
+function ArrayIteratorValueAt(const ASource: TGocciaValue;
+  const AIndex: Integer): TGocciaValue;
+
 implementation
 
 uses
@@ -120,6 +140,7 @@ uses
 
   TextSemantics,
 
+  Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -127,13 +148,16 @@ uses
   Goccia.Values.HeadersValue,
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SetValue,
+  Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.TypedArrayValue,
   Goccia.Values.URLSearchParamsValue;
 
 var
   GArrayIteratorPrototypeSlot: TGocciaRealmSlotId;
+  GArrayIteratorNextSlot: TGocciaRealmSlotId;
   GStringIteratorPrototypeSlot: TGocciaRealmSlotId;
   GMapIteratorPrototypeSlot: TGocciaRealmSlotId;
   GSetIteratorPrototypeSlot: TGocciaRealmSlotId;
@@ -156,9 +180,71 @@ end;
 { TGocciaArrayIteratorValue }
 
 function EnsureArrayIteratorPrototype: TGocciaObjectValue;
+var
+  NextDescriptor: TGocciaPropertyDescriptor;
 begin
+  if CurrentRealm = nil then
+    Exit(nil);
+  Result := TGocciaObjectValue(CurrentRealm.GetSlot(GArrayIteratorPrototypeSlot));
+  if Assigned(Result) then
+    Exit;
   Result := TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
     GArrayIteratorPrototypeSlot, 'Array Iterator');
+  // Script reaches %ArrayIteratorPrototype% only through an array iterator,
+  // which cannot exist before this point, so the 'next' the prototype holds
+  // now is the intrinsic.  ArrayUsesIntrinsicIteration compares against it.
+  if Assigned(Result) then
+  begin
+    NextDescriptor := Result.GetOwnPropertyDescriptor(PROP_NEXT);
+    if NextDescriptor is TGocciaPropertyDescriptorData then
+      CurrentRealm.SetSlot(GArrayIteratorNextSlot,
+        TGocciaPropertyDescriptorData(NextDescriptor).Value);
+  end;
+end;
+
+function ArrayUsesIntrinsicIteration(const AArray: TGocciaValue): Boolean;
+var
+  Realm: TGocciaRealm;
+  ArrayPrototype, IteratorPrototype: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  Intrinsic: TGocciaValue;
+begin
+  Result := False;
+  if not (AArray is TGocciaArrayValue) then
+    Exit;
+  Realm := CurrentRealm;
+  if Realm = nil then
+    Exit;
+
+  // GetIterator step: GetMethod(obj, %Symbol.iterator%) must resolve to the
+  // own data property of the realm's Array.prototype.
+  ArrayPrototype := GetSharedArrayPrototypeForRealm(Realm);
+  if not Assigned(ArrayPrototype) or
+     (TGocciaArrayValue(AArray).Prototype <> ArrayPrototype) or
+     TGocciaArrayValue(AArray).HasSymbolProperty(
+       TGocciaSymbolValue.WellKnownIterator) then
+    Exit;
+  Intrinsic := GetIntrinsicArrayValuesForRealm(Realm);
+  Descriptor := ArrayPrototype.GetOwnSymbolPropertyDescriptor(
+    TGocciaSymbolValue.WellKnownIterator);
+  if not Assigned(Intrinsic) or
+     not (Descriptor is TGocciaPropertyDescriptorData) or
+     (TGocciaPropertyDescriptorData(Descriptor).Value <> Intrinsic) then
+    Exit;
+
+  // GetIteratorFromMethod step: Get(iterator, "next") on a fresh array
+  // iterator resolves to the own data property of %ArrayIteratorPrototype%.
+  // Until the first array iterator exists that prototype does not either,
+  // and script has had no way to reach it.
+  IteratorPrototype := TGocciaObjectValue(
+    Realm.GetSlot(GArrayIteratorPrototypeSlot));
+  if not Assigned(IteratorPrototype) then
+    Exit(True);
+  Intrinsic := TGocciaValue(Realm.GetSlot(GArrayIteratorNextSlot));
+  Descriptor := IteratorPrototype.GetOwnPropertyDescriptor(PROP_NEXT);
+  Result := Assigned(Intrinsic) and
+    (Descriptor is TGocciaPropertyDescriptorData) and
+    (TGocciaPropertyDescriptorData(Descriptor).Value = Intrinsic);
 end;
 
 constructor TGocciaArrayIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
@@ -197,13 +283,14 @@ end;
 function GetArrayIteratorElementByName(const ASource: TGocciaValue;
   const AIndex: Integer): TGocciaValue;
 begin
-  // ES2026 §23.1.5.2.1 step 15.b: Let elementValue be ? Get(array, elementKey).
+  // ES2026 §23.1.5.2.1 step 14.b: Let elementValue be ? Get(array, elementKey).
   Result := TGocciaObjectValue(ASource).GetProperty(IntToStr(AIndex));
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function GetArrayIteratorElement(const ASource: TGocciaValue; const AIndex: Integer): TGocciaValue;
+function ArrayIteratorValueAt(const ASource: TGocciaValue;
+  const AIndex: Integer): TGocciaValue;
 var
   Elements: TGocciaElementList;
 begin
@@ -248,7 +335,7 @@ begin
   case FKind of
     akValues:
     begin
-      Element := GetArrayIteratorElement(FSource, FIndex);
+      Element := ArrayIteratorValueAt(FSource, FIndex);
       Result := CreateIteratorResult(Element, False);
     end;
     akKeys:
@@ -257,7 +344,7 @@ begin
     begin
       EntryArray := TGocciaArrayValue.Create;
       EntryArray.Elements.Add(TGocciaNumberLiteralValue.Create(FIndex));
-      Element := GetArrayIteratorElement(FSource, FIndex);
+      Element := ArrayIteratorValueAt(FSource, FIndex);
       EntryArray.Elements.Add(Element);
       Result := CreateIteratorResult(EntryArray, False);
     end;
@@ -292,7 +379,7 @@ begin
   case FKind of
     akValues:
     begin
-      Element := GetArrayIteratorElement(FSource, FIndex);
+      Element := ArrayIteratorValueAt(FSource, FIndex);
       Result := Element;
     end;
     akKeys:
@@ -301,7 +388,7 @@ begin
     begin
       EntryArray := TGocciaArrayValue.Create;
       EntryArray.Elements.Add(TGocciaNumberLiteralValue.Create(FIndex));
-      Element := GetArrayIteratorElement(FSource, FIndex);
+      Element := ArrayIteratorValueAt(FSource, FIndex);
       EntryArray.Elements.Add(Element);
       Result := EntryArray;
     end;
@@ -928,6 +1015,7 @@ end;
 
 initialization
   GArrayIteratorPrototypeSlot := RegisterRealmSlot('ArrayIterator.prototype');
+  GArrayIteratorNextSlot := RegisterRealmSlot('%ArrayIteratorPrototype%.next');
   GStringIteratorPrototypeSlot := RegisterRealmSlot('StringIterator.prototype');
   GMapIteratorPrototypeSlot := RegisterRealmSlot('MapIterator.prototype');
   GSetIteratorPrototypeSlot := RegisterRealmSlot('SetIterator.prototype');
