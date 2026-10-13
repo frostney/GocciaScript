@@ -91,6 +91,13 @@ type
 
     procedure RegisterNativeMethod(const AMethod: TGocciaValue);
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
+    // ES2026 §10.1.6.3 ValidateAndApplyPropertyDescriptor step 2 for an
+    // object the caller has just created: an extensible ordinary object with
+    // no own property AName, where AName is not an array index. The property
+    // is created with AValue and AFlags directly, without the validation a
+    // defined property needs.
+    procedure DefineFreshDataProperty(const AName: string;
+      const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
@@ -1901,6 +1908,12 @@ begin
     OldDescriptor.Free;
   FProperties.Add(TGocciaNativeFunctionValue(AMethod).Name,
     TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]));
+end;
+
+procedure TGocciaObjectValue.DefineFreshDataProperty(const AName: string;
+  const AValue: TGocciaValue; const AFlags: TPropertyFlags);
+begin
+  FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue, AFlags));
 end;
 
 procedure TGocciaObjectValue.RegisterConstant(const AName: string; const AValue: TGocciaValue);

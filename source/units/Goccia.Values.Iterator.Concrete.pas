@@ -21,6 +21,8 @@ type
     constructor Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
+    function DirectNextValue(const AValue: TGocciaValue;
+      out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
     procedure MarkReferences; override;
   end;
@@ -261,6 +263,14 @@ begin
     end;
   end;
   Inc(FIndex);
+end;
+
+// ES2026 §23.1.5.2.1 %ArrayIteratorPrototype%.next ( ) takes no argument, so
+// a value passed to it (yield* forwards one) changes nothing.
+function TGocciaArrayIteratorValue.DirectNextValue(const AValue: TGocciaValue;
+  out ADone: Boolean): TGocciaValue;
+begin
+  Result := DirectNext(ADone);
 end;
 
 function TGocciaArrayIteratorValue.DirectNext(out ADone: Boolean): TGocciaValue;

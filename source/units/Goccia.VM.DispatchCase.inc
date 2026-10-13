@@ -3112,6 +3112,27 @@
           SetRegister(A, CreateIteratorResult(IterResult, DoneFlag));
         end
         else if (FRegisters[C].Kind = grkObject) and
+                (FRegisters[C].ObjectValue is TGocciaVMAsyncFromSyncIteratorValue) then
+          // GetIteratorValue's own CreateAsyncFromSyncIterator result: no code
+          // can reach it to replace its next, so the step is called directly.
+          SetRegister(A, TGocciaVMAsyncFromSyncIteratorValue(
+            FRegisters[C].ObjectValue).NextStep(False, nil))
+        else if (FRegisters[C].Kind = grkObject) and
+                (FRegisters[C].ObjectValue is TGocciaVMAsyncIteratorRecordValue) then
+        begin
+          // GetIteratorValue's own record of an async iterator: its next is
+          // the captured [[NextMethod]], called on [[Iterator]] with no
+          // argument (ES2026 §14.7.5.7 ForIn/OfBodyEvaluation step 6.a).
+          CallArgs := AcquireArguments;
+          try
+            IterResult := TGocciaVMAsyncIteratorRecordValue(
+              FRegisters[C].ObjectValue).Next(CallArgs, nil);
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+          SetRegister(A, IterResult);
+        end
+        else if (FRegisters[C].Kind = grkObject) and
                 (FRegisters[C].ObjectValue is TGocciaObjectValue) then
         begin
           IterResult := FRegisters[C].ObjectValue;
@@ -3188,14 +3209,22 @@
         if Assigned(FCurrentAsyncPromise) and Assigned(Template) and
            Template.IsAsync then
         begin
-          if Template.IsGenerator and Assigned(GActiveBytecodeGenerator) then
-            AwaitContinuation := GActiveBytecodeGenerator
-          else if not Template.IsGenerator then
+          AwaitContinuation := GActiveBytecodeGenerator;
+          if Template.IsGenerator then
+          begin
+            // The generator object is this body's continuation.
+          end
+          else if Assigned(AwaitContinuation) and
+                  (AwaitContinuation.FClosure = FCurrentClosure) then
+            // A body resumed from an earlier await runs on that await's
+            // continuation, whose cloned closure no other activation shares;
+            // it suspends into the same continuation again, with the same
+            // arguments, rather than into a fresh copy per await.
+            AwaitContinuation.FThisValue := GetLocalRegister(0)
+          else
             AwaitContinuation := TGocciaBytecodeGeneratorObjectValue.CreateRegisters(
               Self, FCurrentClosure, GetLocalRegister(0),
-              CurrentArgumentsSnapshot, False)
-          else
-            AwaitContinuation := nil;
+              CurrentArgumentsSnapshot, False);
 
           if Assigned(AwaitContinuation) then
           begin
@@ -3203,13 +3232,22 @@
               PrevCovLine, A, Frame.IP);
             AwaitContinuation.FState := bgsSuspendedYield;
             AwaitPromise := PromiseResolveIntrinsic(GetRegister(B));
-            AwaitPromise.InvokeThen(
-              TGocciaVMAsyncAwaitContinuationValue.Create(Self,
-                AwaitContinuation, FCurrentAsyncPromise, bgrkNext,
-                Template.IsGenerator),
-              TGocciaVMAsyncAwaitContinuationValue.Create(Self,
-                AwaitContinuation, FCurrentAsyncPromise, bgrkThrow,
-                Template.IsGenerator));
+            AwaitContinuation.PrepareAwaitHandlers(FCurrentAsyncPromise,
+              Template.IsGenerator);
+            AwaitPromise.InvokeThenWithoutResult(
+              AwaitContinuation.FAwaitOnFulfilled,
+              AwaitContinuation.FAwaitOnRejected);
+            // A caller that asked for it learns of the suspension from the
+            // flag, and the entry returns through the same teardown an
+            // exception would take, without one.
+            if Assigned(ASuspendedByReturn) and
+               (FFrameStackCount <= InitialFrameStackCount) and
+               (FClosedNumericFrameStackCount <=
+                InitialClosedNumericFrameCount) then
+            begin
+              ASuspendedByReturn^ := True;
+              Exit(RegisterUndefined);
+            end;
             raise EGocciaBytecodeAsyncSuspend.Create('');
           end;
         end;

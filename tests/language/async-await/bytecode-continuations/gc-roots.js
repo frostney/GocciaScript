@@ -136,6 +136,62 @@ describe("suspended continuations under garbage collection", () => {
       expect(await pending).toBe("class");
     });
 
+  test("a frame that suspends at different depths survives collections",
+    async () => {
+      // The continuation keeps its storage between suspensions; what it holds
+      // must follow the frame as the frame grows and shrinks.
+      const total = await callAndDrop(async () => {
+        const outer = { value: 1 };
+        await Promise.resolve();
+        collect();
+        let inner = 0;
+        {
+          const a = { value: 2 };
+          const b = { value: 3 };
+          const c = { value: 4 };
+          await Promise.resolve();
+          collect();
+          inner = a.value + b.value + c.value;
+        }
+        await Promise.resolve();
+        collect();
+        return outer.value + inner;
+      });
+      expect(total).toBe(10);
+    });
+
+  test("a for-await loop over an array survives collections between steps",
+    async () => {
+      const values = await callAndDrop(async () => {
+        const seen = [];
+        const thenable = { then: (resolve) => resolve({ tag: "thenable" }) };
+        for await (const item of [{ tag: "a" }, Promise.resolve({ tag: "b" }),
+          thenable, "c"]) {
+          collect();
+          seen.push(typeof item === "string" ? item : item.tag);
+        }
+        return seen;
+      });
+      expect(values).toEqual(["a", "b", "thenable", "c"]);
+    });
+
+  test("yield* over an array in an async generator survives collections",
+    async () => {
+      const iterator = callAndDrop(() =>
+        ({
+          async *items() {
+            yield* [{ tag: "a" }, Promise.resolve({ tag: "b" }), { tag: "c" }];
+          },
+        }).items());
+      collect();
+      const values = [];
+      for await (const item of iterator) {
+        collect();
+        values.push(item.tag);
+      }
+      expect(values).toEqual(["a", "b", "c"]);
+    });
+
   test("a sync generator resumes after collections between its yields", () => {
     const iterator = callAndDrop(() =>
       ({

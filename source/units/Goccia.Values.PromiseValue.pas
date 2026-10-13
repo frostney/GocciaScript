@@ -106,6 +106,8 @@ type
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
     function InvokeThen(const AOnFulfilled, AOnRejected: TGocciaValue): TGocciaPromiseValue;
+    procedure InvokeThenWithoutResult(const AOnFulfilled,
+      AOnRejected: TGocciaValue);
     function InvokeFinally(const AOnFinally: TGocciaValue): TGocciaPromiseValue;
 
     property State: TGocciaPromiseState read FState;
@@ -121,6 +123,16 @@ function GetPromiseIntrinsicPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
 function PromiseResolveIntrinsic(
   const AValue: TGocciaValue): TGocciaPromiseValue;
+
+{ PerformPromiseThen(PromiseResolve(%Promise%, AValue), AOnFulfilled,
+  undefined, NewPromiseCapability(%Promise%)) for an AValue that is not an
+  Object, returning the capability's promise. Such a value fulfills the
+  resolved promise at once (ES2026 §27.2.1.3 CreateResolvingFunctions step
+  2.e), so the reaction job is enqueued straight away (§27.2.5.4.1
+  PerformPromiseThen step 10.c) without materialising the intermediate
+  promise, which no code can reach. }
+function InvokeThenOnPrimitive(const AValue,
+  AOnFulfilled: TGocciaValue): TGocciaPromiseValue;
 
 { Settles ATarget from ASource's outcome: fulfilled with AFulfillmentValue once
   ASource is fulfilled, rejected with ASource's reason once it is rejected.
@@ -976,19 +988,20 @@ begin
     Reject(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
-{ Public helper — core then logic without TGocciaArgumentsCollection overhead }
-
-function PerformPromiseThen(const APromise: TGocciaPromiseValue;
-  const AOnFulfilled, AOnRejected: TGocciaValue;
-  const ACapability: TPromiseCapability): TGocciaValue;
+{ ES2026 §27.2.5.4.1 PerformPromiseThen steps 3-12, with the reaction's
+  result target already chosen. AResultTarget is what the reaction job settles
+  with the handler's outcome: a TGocciaPromiseReactionCapability for a
+  capability whose resolving functions may be user-visible, a
+  TGocciaPromiseValue for an intrinsic promise whose resolving functions no
+  code can reach (the job settles it directly, ExecuteTask), or nil for
+  resultCapability undefined. }
+procedure AddPromiseReaction(const APromise: TGocciaPromiseValue;
+  const AOnFulfilled, AOnRejected, AResultTarget: TGocciaValue);
 var
-  CapabilityHost: TGocciaPromiseReactionCapability;
   Reaction: TGocciaPromiseReaction;
   Task: TGocciaMicrotask;
   Queue: TGocciaMicrotaskQueue;
 begin
-  CapabilityHost := TGocciaPromiseReactionCapability.Create(
-    ACapability.Promise, ACapability.Resolve, ACapability.Reject);
   Queue := TGocciaMicrotaskQueue.Instance;
   // ES2026 §27.2.5.4.1 steps 11.c and 12.
   APromise.MarkHandled;
@@ -998,7 +1011,7 @@ begin
     begin
       Reaction.OnFulfilled := AOnFulfilled;
       Reaction.OnRejected := AOnRejected;
-      Reaction.ResultPromise := CapabilityHost;
+      Reaction.ResultPromise := AResultTarget;
       Reaction.Context := CurrentAsyncContext;
       if Assigned(Queue) then
         Reaction.Scope := Queue.CurrentScope
@@ -1012,7 +1025,7 @@ begin
     begin
       Task.Handler := AOnFulfilled;
       Task.Value := APromise.FResult;
-      Task.ResultPromise := CapabilityHost;
+      Task.ResultPromise := AResultTarget;
       Task.ReactionType := prtFulfill;
       if Assigned(Queue) then
         Queue.Enqueue(Task);
@@ -1021,30 +1034,62 @@ begin
     begin
       Task.Handler := AOnRejected;
       Task.Value := APromise.FResult;
-      Task.ResultPromise := CapabilityHost;
+      Task.ResultPromise := AResultTarget;
       Task.ReactionType := prtReject;
       if Assigned(Queue) then
         Queue.Enqueue(Task);
     end;
   end;
+end;
 
+{ Public helper — core then logic without TGocciaArgumentsCollection overhead }
+
+function PerformPromiseThen(const APromise: TGocciaPromiseValue;
+  const AOnFulfilled, AOnRejected: TGocciaValue;
+  const ACapability: TPromiseCapability): TGocciaValue;
+begin
+  AddPromiseReaction(APromise, AOnFulfilled, AOnRejected,
+    TGocciaPromiseReactionCapability.Create(ACapability.Promise,
+      ACapability.Resolve, ACapability.Reject));
   Result := ACapability.Promise;
 end;
 
+{ PerformPromiseThen(promise, onFulfilled, onRejected,
+  NewPromiseCapability(%Promise%)) for the engine's own callers. The
+  capability's resolving functions never leave the engine, so the reaction
+  settles the derived promise directly instead of through two function
+  objects; the settlement is the one those functions would perform. }
 function TGocciaPromiseValue.InvokeThen(
   const AOnFulfilled, AOnRejected: TGocciaValue): TGocciaPromiseValue;
-var
-  Capability: TPromiseCapability;
-  ChildPromise: TGocciaPromiseValue;
 begin
-  ChildPromise := TGocciaPromiseValue.Create;
-  Capability.Promise := ChildPromise;
-  Capability.Resolve := CreateAnonymousPromiseBuiltinFunction(
-    ChildPromise.DoResolve, ChildPromise, 1);
-  Capability.Reject := CreateAnonymousPromiseBuiltinFunction(
-    ChildPromise.DoReject, ChildPromise, 1);
-  Result := TGocciaPromiseValue(PerformPromiseThen(Self, AOnFulfilled,
-    AOnRejected, Capability));
+  Result := TGocciaPromiseValue.Create;
+  AddPromiseReaction(Self, AOnFulfilled, AOnRejected, Result);
+end;
+
+{ PerformPromiseThen(promise, onFulfilled, onRejected) with resultCapability
+  undefined, as ES2026 §27.7.5.3 Await step 7 performs it: no derived promise
+  exists, so the handlers' outcome goes nowhere. }
+procedure TGocciaPromiseValue.InvokeThenWithoutResult(
+  const AOnFulfilled, AOnRejected: TGocciaValue);
+begin
+  AddPromiseReaction(Self, AOnFulfilled, AOnRejected, nil);
+end;
+
+function InvokeThenOnPrimitive(const AValue,
+  AOnFulfilled: TGocciaValue): TGocciaPromiseValue;
+var
+  Task: TGocciaMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Result := TGocciaPromiseValue.Create;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if not Assigned(Queue) then
+    Exit;
+  Task.Handler := AOnFulfilled;
+  Task.Value := AValue;
+  Task.ResultPromise := Result;
+  Task.ReactionType := prtFulfill;
+  Queue.Enqueue(Task);
 end;
 
 { Public helper — core finally logic without TGocciaArgumentsCollection overhead }

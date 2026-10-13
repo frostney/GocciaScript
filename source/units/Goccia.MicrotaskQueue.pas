@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.AsyncContext,
+  Goccia.Realm,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -21,6 +22,25 @@ type
     function Run(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure CaptureRoots(const AContainer: TGocciaObjectValue); virtual;
+  end;
+
+  { A promise reaction handler the engine builds for its own PerformPromiseThen
+    calls: Await's continuation, the async-from-sync iterator's unwrap and
+    closeIterator. No script can reach one, so the reaction job (ES2026
+    §27.2.2.1 NewPromiseReactionJob step 1.e) calls it directly with the
+    argument instead of through [[Call]] and an arguments list. The job keeps
+    the handler and the argument queued as roots while it runs. }
+  TGocciaPromiseReactionHandler = class(TGocciaObjectValue)
+  protected
+    { The realm the job runs the handler in, as a built-in function's
+      [[Realm]] would set it (ES2026 §27.2.2.1 steps 1.e and 3); nil runs it
+      in whatever realm is current. }
+    FRealm: TGocciaRealm;
+  public
+    constructor Create;
+    function HandleReaction(const AArgument: TGocciaValue): TGocciaValue;
+      virtual; abstract;
+    function Run(const AArgument: TGocciaValue): TGocciaValue;
   end;
 
   TGocciaMicrotask = record
@@ -180,6 +200,27 @@ uses
 
 threadvar
   MicrotaskQueueThreadInstance: TGocciaMicrotaskQueue;
+
+constructor TGocciaPromiseReactionHandler.Create;
+begin
+  inherited Create(nil);
+end;
+
+function TGocciaPromiseReactionHandler.Run(
+  const AArgument: TGocciaValue): TGocciaValue;
+var
+  PreviousRealm: TGocciaRealm;
+begin
+  PreviousRealm := CurrentRealm;
+  if not Assigned(FRealm) or (FRealm = PreviousRealm) then
+    Exit(HandleReaction(AArgument));
+  SetCurrentRealm(FRealm);
+  try
+    Result := HandleReaction(AArgument);
+  finally
+    SetCurrentRealm(PreviousRealm);
+  end;
+end;
 
 type
   TThenableResolvingFunctions = class(TGocciaObjectValue)
@@ -633,13 +674,22 @@ begin
     Exit;
   end;
 
-  if Assigned(ATask.Handler) and ATask.Handler.IsCallable then
+  if Assigned(ATask.Handler) and
+     ((ATask.Handler is TGocciaPromiseReactionHandler) or
+      ATask.Handler.IsCallable) then
   begin
-    CallArgs := TGocciaArgumentsCollection.Create([ATask.Value]);
+    CallArgs := nil;
     try
       try
-        HandlerResult := DispatchCall(ATask.Handler, CallArgs,
-          TGocciaUndefinedLiteralValue.UndefinedValue);
+        if ATask.Handler is TGocciaPromiseReactionHandler then
+          HandlerResult := TGocciaPromiseReactionHandler(ATask.Handler).
+            Run(ATask.Value)
+        else
+        begin
+          CallArgs := TGocciaArgumentsCollection.Create([ATask.Value]);
+          HandlerResult := DispatchCall(ATask.Handler, CallArgs,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+        end;
         ResolveResult(HandlerResult);
       except
         on E: EGocciaBytecodeThrow do

@@ -470,11 +470,18 @@ begin
     if ResultWasRooted then
       GC.AddTempRoot(Result);
     try
-      Result.DefineProperty(PROP_VALUE, TGocciaPropertyDescriptorData.Create(AValue, [pfEnumerable, pfConfigurable, pfWritable]));
+      // ES2026 §7.4.16 CreateIteratorResultObject steps 2-3 on the object
+      // just created: CreateDataPropertyOrThrow cannot fail there.
+      Result.DefineFreshDataProperty(PROP_VALUE, AValue,
+        [pfEnumerable, pfConfigurable, pfWritable]);
       if ADone then
-        Result.DefineProperty(PROP_DONE, TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.TrueValue, [pfEnumerable, pfConfigurable, pfWritable]))
+        Result.DefineFreshDataProperty(PROP_DONE,
+          TGocciaBooleanLiteralValue.TrueValue,
+          [pfEnumerable, pfConfigurable, pfWritable])
       else
-        Result.DefineProperty(PROP_DONE, TGocciaPropertyDescriptorData.Create(TGocciaBooleanLiteralValue.FalseValue, [pfEnumerable, pfConfigurable, pfWritable]));
+        Result.DefineFreshDataProperty(PROP_DONE,
+          TGocciaBooleanLiteralValue.FalseValue,
+          [pfEnumerable, pfConfigurable, pfWritable]);
     finally
       if ResultWasRooted then
         GC.RemoveTempRoot(Result);
