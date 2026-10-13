@@ -131,6 +131,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.Realm,
+  Goccia.Scope.Declarations,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,

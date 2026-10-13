@@ -2,10 +2,10 @@
 // forms, in an imported module and in the entry file.
 //
 // A module's top-level function declarations are created while the module is
-// linked, not compiled with the rest of the module body, so in bytecode mode a
-// declaration body and an arrow body next to it reach the same class through
-// different machinery. The entry file has no such split, which is why every
-// probe is run on both sides of the import.
+// linked, before its body runs, while an arrow next to them is created by the
+// body, so a declaration body and an arrow body reach the same class from
+// closures made at different times. The entry file has no link step of its
+// own, which is why every probe is run on both sides of the import.
 import {
   Counted,
   Factory,

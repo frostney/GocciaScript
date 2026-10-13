@@ -669,6 +669,14 @@ type
       const AThisValue: TGocciaValue = nil): TGocciaValue;
     function ExecuteImportedModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
+    { ES2026 §16.2.1.7.3.1 InitializeEnvironment step for a function
+      declaration of a module: InstantiateFunctionObject of ATemplate, a
+      template whose ModuleEnvironmentBinding is set, with AModuleEnvironment
+      as its environment. Runs while the module is linked, outside any frame
+      of its body. }
+    function InstantiateModuleFunction(
+      const ATemplate: TGocciaFunctionTemplate;
+      const AModuleEnvironment: TGocciaScope): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property Realm: TGocciaRealm read FRealm write FRealm;
@@ -15991,6 +15999,51 @@ end;
   imported from a top level keeps the whole limit; one evaluated k calls deep
   keeps the limit less those k calls. With no frame below, the top level is the
   outermost frame, which FFrameDepth already counts as no call. }
+{ As OP_CLOSURE creates a function declared in a function body, with no
+  frame to capture from: the compiler reads every binding a module function
+  declaration reaches outside itself by name from its module environment
+  (TGocciaCompilerScope.ImportUpvaluesByName), so its upvalues, each a
+  global-backed binding of the module's top level, are never read and get
+  cells of their own. }
+function TGocciaVM.InstantiateModuleFunction(
+  const ATemplate: TGocciaFunctionTemplate;
+  const AModuleEnvironment: TGocciaScope): TGocciaValue;
+var
+  Closure: TGocciaBytecodeClosure;
+  FunctionValue: TGocciaBytecodeFunctionValue;
+  GC: TGarbageCollector;
+  I: Integer;
+begin
+  if (TGocciaCoverageTracker.Instance <> nil) and
+     TGocciaCoverageTracker.Instance.Enabled and
+     Assigned(ATemplate.DebugInfo) and
+     (ATemplate.DebugInfo.LineMapCount > 0) then
+    TGocciaCoverageTracker.Instance.RegisterFunction(
+      ATemplate.DebugInfo.SourceFile, ATemplate.Name,
+      ATemplate.DebugInfo.CoverageLine, ATemplate.DebugInfo.CoverageColumn);
+  Closure := TGocciaBytecodeClosure.Create(ATemplate, ATemplate.UpvalueCount);
+  Closure.GlobalScope := AModuleEnvironment;
+  Closure.AllowsNewTarget := True;
+  for I := 0 to ATemplate.UpvalueCount - 1 do
+    Closure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
+      TGocciaBytecodeCell.Create(RegisterUndefined)));
+  FunctionValue := TGocciaBytecodeFunctionValue.Create(Self, Closure);
+  if ATemplate.HasOwnPrototype then
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.AddTempRoot(FunctionValue);
+    try
+      InstallFunctionPrototype(FunctionValue,
+        BytecodeFunctionIntrinsicKind(ATemplate));
+    finally
+      if Assigned(GC) then
+        GC.RemoveTempRoot(FunctionValue);
+    end;
+  end;
+  Result := FunctionValue;
+end;
+
 function TGocciaVM.ExecuteImportedModule(
   const AModule: TGocciaBytecodeModule): TGocciaValue;
 var

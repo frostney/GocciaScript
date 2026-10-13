@@ -9,7 +9,7 @@
 - **Shared source pipeline** — Preprocessors, lexer, parser, warning data, source maps, and AST artifacts are shared between execution modes
 - **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
-- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not call the interpreter or evaluator (it shares only the `Goccia.Evaluator.Context` record type); the VM it drives still calls the tree-walk evaluator for a module's top-level function declarations, and to construct classes that path built. See [Bytecode VM § Overview](bytecode-vm.md#overview)
+- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not call the interpreter or evaluator (it shares only the `Goccia.Evaluator.Context` record type); the VM it drives still calls the tree-walk evaluator to construct classes that evaluator-run code, such as the bootstrap shims, built. See [Bytecode VM § Overview](bytecode-vm.md#overview)
 
 ## Overview
 
@@ -119,7 +119,7 @@ TGocciaExecutor (abstract — Goccia.Executor.pas)
 └── TGocciaBytecodeExecutor (Goccia.Executor.Bytecode.pas)
       Compiles to bytecode and runs on TGocciaVM
       Executor unit does not call the evaluator; the VM still calls Goccia.Evaluator
-      for evaluator-built module functions and classes
+      for classes evaluator-run code built
 ```
 
 The engine always creates a `TGocciaInterpreter` for bootstrapping (global scope creation, built-in registration, shim loading). The executor receives the bootstrapped global scope and module loader via `Initialize`, then handles all program and module body execution independently.

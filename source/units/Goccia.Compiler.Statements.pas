@@ -1256,8 +1256,7 @@ var
   Slot: UInt16;
   LocalIdx, FuncCount: Integer;
   InferredTemplate: TGocciaFunctionTemplate;
-  IsBlockScoped, IsTopLevelGlobalBacked, IsPreinitializedTopLevel,
-  UsePreinitializedBinding: Boolean;
+  IsBlockScoped, IsTopLevelGlobalBacked: Boolean;
   NameIdx: UInt16;
 begin
   IsBlockScoped := ACtx.Scope.Depth > 0;
@@ -1283,20 +1282,14 @@ begin
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
   end;
 
-  UsePreinitializedBinding := False;
-  IsPreinitializedTopLevel := ACtx.PreinitializedTopLevelFunctions and
-    not IsBlockScoped;
-
-  if IsPreinitializedTopLevel then
+  // A top-level declaration of a module the loader links is instantiated
+  // from its compiled template while the module is linked (ES2026
+  // §16.2.1.7.3.1 InitializeEnvironment), so the body only reads the
+  // function its environment already holds.
+  if ACtx.PreinitializedTopLevelFunctions and not IsBlockScoped then
   begin
-    LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.Name, Slot);
-    UsePreinitializedBinding := (LocalIdx >= 0) and
-      ((ACtx.Scope.GetLocal(LocalIdx).ExportNameCount > 0) or
-      (AStmt.Name = 'assert'));
-  end;
-
-  if UsePreinitializedBinding then
-  begin
+    CompileModuleFunctionDeclarationTemplate(ACtx, AStmt.FunctionExpression,
+      AStmt.Name, AStmt.Name);
     NameIdx := ACtx.Template.AddConstantString(AStmt.Name);
     EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, Slot, NameIdx));
   end
@@ -1311,11 +1304,6 @@ begin
         ACtx.Template.FunctionCount - 1);
       if InferredTemplate.Name = '<function>' then
         InferredTemplate.Name := AStmt.Name;
-    end;
-    if IsPreinitializedTopLevel and IsTopLevelGlobalBacked then
-    begin
-      NameIdx := ACtx.Template.AddConstantString(AStmt.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_SET_GLOBAL, Slot, NameIdx));
     end;
   end;
 
@@ -4643,6 +4631,14 @@ begin
   // scope (the next REPL input) resolves them.
   InitializesGlobalBindings := ACtx.GlobalBackedTopLevel and
     (ACtx.Scope.Depth = 0) and not ACtx.PreinitializedTopLevelFunctions;
+  // Linking binds a module's evaluation-phase imports in its environment;
+  // a source-phase or deferred import is bound when its declaration runs,
+  // as the interpreter binds it. The module's function declarations, which
+  // exist before the body, read their imports from that environment by name
+  // (TGocciaCompilerScope.ImportUpvaluesByName).
+  if ACtx.PreinitializedTopLevelFunctions and (ACtx.Scope.Depth = 0) and
+     (AStmt.Phase <> icpEvaluation) then
+    InitializesGlobalBindings := True;
 
   if HasNamespace then
   begin
@@ -4798,6 +4794,16 @@ begin
   FuncCount := ACtx.Template.FunctionCount;
   if UsePreinitializedBinding then
   begin
+    // ES2026 §16.2.1.7.3.1 InitializeEnvironment instantiates the function
+    // of `export default function` while the module is linked; an anonymous
+    // one is named "default".
+    if IsNamedDefaultFunction then
+      CompileModuleFunctionDeclarationTemplate(ACtx,
+        TGocciaFunctionExpression(AStmt.Expression), BindingName, BindingName)
+    else
+      CompileModuleFunctionDeclarationTemplate(ACtx,
+        TGocciaFunctionExpression(AStmt.Expression), BindingName,
+        KEYWORD_DEFAULT);
     NameIdx := ACtx.Template.AddConstantString(BindingName);
     EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, Slot, NameIdx));
   end

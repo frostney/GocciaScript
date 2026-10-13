@@ -329,6 +329,11 @@ type
     // the global one. Eval code is compiled when the eval runs and is never
     // serialized, so this is not part of the bytecode format.
     FGlobalEvalCode: Boolean;
+    // Runtime-only: the module environment binding a top-level function
+    // declaration of a loader-linked module initializes when the module is
+    // linked. Such modules are compiled in process and never serialized, so
+    // this is not part of the bytecode format.
+    FModuleEnvironmentBinding: string;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
     // Runtime-only cache for immutable string constants. ECMAScript strings
@@ -496,6 +501,14 @@ type
       instantiation already made. }
     property GlobalEvalCode: Boolean read FGlobalEvalCode
       write FGlobalEvalCode;
+    { Set on a function declaration at the top level of a module compiled
+      for linking (TGocciaCompiler.PreinitializedTopLevelFunctions): the
+      name of the module environment binding that the function object
+      initializes when the module environment is initialized (ES2026
+      §16.2.1.7.3.1 InitializeEnvironment), before the module body runs.
+      Empty for every other template. }
+    property ModuleEnvironmentBinding: string read FModuleEnvironmentBinding
+      write FModuleEnvironmentBinding;
     property TemplateSiteId: UInt64 read FTemplateSiteId;
   end;
 
