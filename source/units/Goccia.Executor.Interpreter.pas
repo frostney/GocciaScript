@@ -42,6 +42,8 @@ type
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue; override;
+    procedure InstantiateModuleFunctions(const AProgram: TGocciaProgram;
+      var AContext: TGocciaEvaluationContext); override;
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaCompiledModule; override;
     function RunCompiledModule(
@@ -79,6 +81,13 @@ procedure TGocciaInterpreterExecutor.Initialize(
 begin
   inherited;
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
+  AModuleLoader.InstantiateModuleFunctions := InstantiateModuleFunctions;
+end;
+
+procedure TGocciaInterpreterExecutor.InstantiateModuleFunctions(
+  const AProgram: TGocciaProgram; var AContext: TGocciaEvaluationContext);
+begin
+  FInterpreter.InstantiateModuleFunctions(AProgram, AContext);
 end;
 
 function TGocciaInterpreterExecutor.ExecuteProgram(

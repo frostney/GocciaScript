@@ -66,6 +66,8 @@ type
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue;
+    procedure InstantiateModuleFunctions(const AProgram: TGocciaProgram;
+      var AContext: TGocciaEvaluationContext);
     constructor Create(const AFileName: string; const ASourceLines: TStringList); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
       const AModuleLoader: TGocciaModuleLoader); overload;
@@ -108,6 +110,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.AST.Expressions,
   Goccia.AST.Statements,
   Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
@@ -116,10 +119,13 @@ uses
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.InstructionLimit,
+  Goccia.Keywords.Reserved,
   Goccia.MemoryLimit,
+  Goccia.Scope.Declarations,
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.PromiseValue,
   Goccia.VM.Exception;
@@ -347,6 +353,7 @@ begin
   end;
   FModuleLoader.BindRuntime(FGlobalScope, ThrowError);
   FModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
+  FModuleLoader.InstantiateModuleFunctions := InstantiateModuleFunctions;
   FGlobalScope.LoadModule := LoadModule;
   FGlobalScope.LoadModuleSource := LoadModuleSourceValue;
   FGlobalScope.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
@@ -356,7 +363,10 @@ end;
 destructor TGocciaInterpreter.Destroy;
 begin
   if Assigned(FModuleLoader) and (not FOwnsModuleLoader) then
+  begin
     FModuleLoader.EvaluateModuleBody := nil;
+    FModuleLoader.InstantiateModuleFunctions := nil;
+  end;
 
   if (TGarbageCollector.Instance = nil) then
     FGlobalScope.Free;
@@ -531,6 +541,35 @@ begin
     raise Exception.Create(
       'TGocciaInterpreter resolver is owned by the module loader. ' +
       'Create the interpreter with a configured TGocciaModuleLoader instead.');
+end;
+
+// ES2026 §16.2.1.7.3.1 InitializeEnvironment, the lexically declared
+// functions: each top-level function declaration, and an `export default
+// function` (named "default" when anonymous), becomes a function object of
+// the module environment before any module body runs.
+procedure TGocciaInterpreter.InstantiateModuleFunctions(
+  const AProgram: TGocciaProgram; var AContext: TGocciaEvaluationContext);
+var
+  ExportDefaultDecl: TGocciaExportDefaultDeclaration;
+  I: Integer;
+  Value: TGocciaValue;
+begin
+  HoistFunctionDeclarations(AProgram.Body, AContext, True);
+  for I := 0 to AProgram.Body.Count - 1 do
+  begin
+    if not (AProgram.Body[I] is TGocciaExportDefaultDeclaration) then
+      Continue;
+    ExportDefaultDecl := TGocciaExportDefaultDeclaration(AProgram.Body[I]);
+    if not (ExportDefaultDecl.IsDirectDeclaration and
+       (ExportDefaultDecl.Expression is TGocciaFunctionExpression)) then
+      Continue;
+    Value := EvaluateFunctionExpression(TGocciaFunctionExpression(
+      ExportDefaultDecl.Expression), AContext, False);
+    if (Value is TGocciaFunctionValue) and
+       (TGocciaFunctionValue(Value).Name = '') then
+      TGocciaFunctionValue(Value).Name := KEYWORD_DEFAULT;
+    AContext.Scope.ForceUpdateBinding(ExportDefaultDecl.LocalName, Value);
+  end;
 end;
 
 function TGocciaInterpreter.EvaluateModuleBody(
