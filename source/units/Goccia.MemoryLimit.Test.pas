@@ -255,6 +255,14 @@ type
     function RunBytecodeMeasurement(const AName, ASourceText: string): Double;
     procedure TestCapturedBindingIsFreedWithItsClosure;
     procedure TestCapturedBindingCountsAgainstTheLimit;
+    { Guest-callable native for the charged-refusal test: collects, then sets
+      the budget to the live heap plus room for the gated element storage the
+      script asks for next and a margin its element objects overrun. }
+    function ArmChargedRefusalBudget(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ChargedRefusalName(const AExecutor: TGocciaExecutor;
+      const AName: string): string;
+    procedure TestFittingGatedStorageLeavesTheChargedRefusal;
   protected
     procedure BeforeEach; override;
   public
@@ -323,6 +331,17 @@ const
     rather than the append fast path (an append at exactly the element count
     never reaches the gate at all). }
   ELEMENT_CANARY_STRIDE = 2;
+
+  { The charged-refusal test builds an array-like Array.from result of this
+    many elements. Its element storage is sized up front — one gated request
+    of this many pointers — and each element is an object charged as it is
+    built. CHARGED_REFUSAL_MARGIN_BYTES is the room left over the live heap
+    once that request fits: far more than the few allocations between arming
+    the budget and reaching the gate, and far less than the element objects,
+    so the run is refused by a charged allocation partway through. }
+  CHARGED_REFUSAL_ELEMENTS = 20000;
+  CHARGED_REFUSAL_MARGIN_BYTES = 64 * 1024;
+  CHARGED_REFUSAL_ARM_GLOBAL_NAME = '__armChargedRefusalBudget';
 
   { Name of the native the sandbox tests reach through an options getter. }
   SANDBOX_FAULT_GLOBAL_NAME = '__gocciaRaiseSandboxFault';
@@ -468,6 +487,9 @@ begin
     '(#1618)', TestCapturedBindingIsFreedWithItsClosure);
   Test('A captured binding counts against the memory limit (#1618)',
     TestCapturedBindingCountsAgainstTheLimit);
+  Test('Element storage that fits the gate leaves the refusal to a charged ' +
+    'allocation, as a catchable RangeError',
+    TestFittingGatedStorageLeavesTheChargedRefusal);
   Test('Script try/catch cannot swallow an engine-integrity fault',
     TestSyncCatchCannotSwallowIntegrityFault);
   Test('A guest iterator return() cannot swallow a refusal while closing',
@@ -1912,6 +1934,71 @@ begin
     SourceText);
   Expect<Boolean>(ExtraBytes >=
     CLOSURES * TGocciaBytecodeCell.InstanceSize - SLACK_BYTES).ToBe(True);
+end;
+
+function TMemoryLimitTests.ArmChargedRefusalBudget(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GC.MaxBytes := GC.BytesAllocated +
+    Int64(CHARGED_REFUSAL_ELEMENTS) * SizeOf(Pointer) +
+    CHARGED_REFUSAL_MARGIN_BYTES;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TMemoryLimitTests.ChargedRefusalName(
+  const AExecutor: TGocciaExecutor; const AName: string): string;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  PreviousMaxBytes: Int64;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    CHARGED_REFUSAL_ARM_GLOBAL_NAME + '();' + sLineBreak +
+    'let refusal = "none";' + sLineBreak +
+    'try {' + sLineBreak +
+    '  Array.from({ length: ' + IntToStr(CHARGED_REFUSAL_ELEMENTS) +
+    ' }, (_, i) => ({ x: i }));' + sLineBreak +
+    '} catch (e) {' + sLineBreak +
+    '  refusal = e.name;' + sLineBreak +
+    '}' + sLineBreak +
+    'refusal;';
+  Engine := TGocciaEngine.Create(AName, Source, AExecutor);
+  PreviousMaxBytes := TGarbageCollector.Instance.MaxBytes;
+  try
+    Engine.InjectGlobal(CHARGED_REFUSAL_ARM_GLOBAL_NAME,
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(
+        ArmChargedRefusalBudget, CHARGED_REFUSAL_ARM_GLOBAL_NAME, 0));
+    Result := Engine.Execute.Result.ToStringLiteral.Value;
+  finally
+    TGarbageCollector.Instance.MaxBytes := PreviousMaxBytes;
+    Engine.Free;
+    AExecutor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TMemoryLimitTests.TestFittingGatedStorageLeavesTheChargedRefusal;
+begin
+  { Array.from over an array-like asks the element-storage gate for all of its
+    slots before it builds a single element, then charges each element object
+    as it goes. With the budget set over the live heap rather than at a fixed
+    number, that storage always fits, so the refusal has to come from a charged
+    allocation: a RangeError the script catches, not the opaque
+    TGocciaMemoryLimitError, which would escape Execute and fail this test.
+    `--max-memory (OOM triggers RangeError)` in scripts/test-cli.ts runs the
+    same script through the CLI; with a fixed 200000-byte ceiling it sat a few
+    hundred bytes from the gate's line, and #1622's eight extra bytes per class
+    value pushed development builds across it. }
+  Expect<string>(ChargedRefusalName(TGocciaInterpreterExecutor.Create,
+    'charged-refusal-interpreted.js')).ToBe('RangeError');
+  Expect<string>(ChargedRefusalName(TGocciaBytecodeExecutor.Create,
+    'charged-refusal-bytecode.js')).ToBe('RangeError');
 end;
 
 procedure TMemoryLimitTests.TestSyncCatchCannotSwallowIntegrityFault;

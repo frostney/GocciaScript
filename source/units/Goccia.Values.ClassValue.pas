@@ -69,9 +69,6 @@ type
     // The reverse of FDeclaredPrivateNames: each internal key mapped to the
     // name that first declared it. Created on the first keyed declaration.
     FDeclaredPrivateKeyNames: TStringStringMap;
-    // Advances whenever this class gains a private name, so a cache derived
-    // from the private-name set can tell it is stale.
-    FPrivateNamesVersion: Cardinal;
     FNativeSuperConstructor: TGocciaObjectValue;
     FPrivateBrandToken: string;
     FMethodInitializers: array of TGocciaValue;
@@ -85,6 +82,13 @@ type
     // GetAllPropertyNames gives the class's original name and length.
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
+    // Advances whenever this class gains a private name, so a cache derived
+    // from the private-name set can tell it is stale. Declared beside the two
+    // flags above so it occupies their alignment padding: every class value
+    // the engine builds carries this field, and `--max-memory` charges each
+    // one its InstanceSize, so a field placed between two pointers would grow
+    // every class value by a full pointer width for four bytes of state.
+    FPrivateNamesVersion: Cardinal;
     FSourceText: string;
     // ES2026 §15.7.14 ClassDefinitionEvaluation steps 1-2 and §15.7.10
     // ClassFieldDefinitionEvaluation step 2b: the class environment that was
