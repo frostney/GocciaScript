@@ -84,10 +84,14 @@ type
     FLengthDeleted: Boolean;
     // Advances whenever this class gains a private name, so a cache derived
     // from the private-name set can tell it is stale. Declared beside the two
-    // flags above so it occupies their alignment padding: every class value
-    // the engine builds carries this field, and `--max-memory` charges each
-    // one its InstanceSize, so a field placed between two pointers would grow
-    // every class value by a full pointer width for four bytes of state.
+    // flags above so that on 64-bit targets it occupies their alignment
+    // padding: every class value the engine builds carries this field, and
+    // `--max-memory` charges each one its InstanceSize, so a field placed
+    // between two pointers would grow every class value by a full pointer
+    // width for four bytes of state. On 32-bit targets the flags leave only
+    // two bytes of padding, so the field costs four bytes there wherever it
+    // goes; a 16-bit counter would fit but could wrap and revalidate a stale
+    // cache.
     FPrivateNamesVersion: Cardinal;
     FSourceText: string;
     // ES2026 §15.7.14 ClassDefinitionEvaluation steps 1-2 and §15.7.10
