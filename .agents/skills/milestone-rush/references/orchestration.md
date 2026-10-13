@@ -91,5 +91,7 @@ GitHub state and the host's passive wait primitive for worker completion. These
 are transition sources for the inner and outer workflow loops, not separate
 orchestrators. Wake the coordinator only on changed, terminal, or exceptional
 state; use an exact known timestamp for time-based wakes. If the host cannot
-passively await the foreground command, report the capability as unsupported.
+passively await the command under
+[`delivery-wait`'s running rules](../../delivery-wait/SKILL.md#running-a-wait),
+report the capability as unsupported.
 Never substitute repeated model inferences for waiting.
