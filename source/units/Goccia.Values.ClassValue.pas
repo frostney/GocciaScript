@@ -8,7 +8,6 @@ uses
   Classes,
 
   OrderedStringMap,
-  UnicodeStringList,
 
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
@@ -152,8 +151,11 @@ type
     function TryGetDeclaredPrivateKeyName(const AInternalKey: string;
       out AName: string): Boolean;
     property PrivateNamesVersion: Cardinal read FPrivateNamesVersion;
-    procedure AppendOwnPrivateNames(const ANames: TStrings); overload;
-    procedure AppendOwnPrivateNames(const ANames: TUnicodeStringList); overload;
+    procedure AppendOwnPrivateNames(const ANames: TStrings);
+    // The names AppendOwnPrivateNames lists, appended to ANames[0..ACount-1]
+    // without duplicates. ANames may be longer than ACount.
+    procedure CollectOwnPrivateNames(var ANames: TArray<string>;
+      var ACount: Integer);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
     function NativeInstanceDefaultPrototype: TGocciaObjectValue; virtual;
     function SupportsRealmIntrinsicPrototypeFallback: Boolean; virtual;
@@ -1734,81 +1736,74 @@ end;
 
 procedure TGocciaClassValue.AppendOwnPrivateNames(const ANames: TStrings);
 var
-  Names: TUnicodeStringList;
-  Name: string;
+  Names: TArray<string>;
+  Count, I: Integer;
 begin
   if not Assigned(ANames) then
     Exit;
-  Names := TUnicodeStringList.Create;
-  try
-    AppendOwnPrivateNames(Names);
-    for Name in Names do
-      if ANames.IndexOf(Name) < 0 then
-        ANames.Add(Name);
-  finally
-    Names.Free;
-  end;
+  Names := nil;
+  Count := 0;
+  CollectOwnPrivateNames(Names, Count);
+  for I := 0 to Count - 1 do
+    if ANames.IndexOf(Names[I]) < 0 then
+      ANames.Add(Names[I]);
 end;
 
-// Appends AName unless ANames already holds it, compared by code units:
-// TList.IndexOf would collate through the locale.
-procedure AddUniquePrivateName(const ANames: TUnicodeStringList;
+// Appends AName to ANames[0..ACount-1] unless it is already there, compared
+// by code units.
+procedure AddUniquePrivateName(var ANames: TArray<string>; var ACount: Integer;
   const AName: string);
 var
   I: Integer;
 begin
-  for I := 0 to ANames.Count - 1 do
+  for I := 0 to ACount - 1 do
     if ANames[I] = AName then
       Exit;
-  ANames.Add(AName);
+  if ACount = Length(ANames) then
+  begin
+    if ACount = 0 then
+      SetLength(ANames, 4)
+    else
+      SetLength(ANames, ACount * 2);
+  end;
+  ANames[ACount] := AName;
+  Inc(ACount);
 end;
 
-procedure TGocciaClassValue.AppendOwnPrivateNames(
-  const ANames: TUnicodeStringList);
+procedure AddUniquePrivateNames(var ANames: TArray<string>;
+  var ACount: Integer; const AKeys: array of string);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AKeys) do
+    AddUniquePrivateName(ANames, ACount, AKeys[I]);
+end;
+
+procedure TGocciaClassValue.CollectOwnPrivateNames(
+  var ANames: TArray<string>; var ACount: Integer);
 var
   DeclaredPair: TStringStringMap.TKeyValuePair;
-  DeclaredKey: string;
-  PropertyPair: TGocciaExpressionMap.TKeyValuePair;
-  StaticPair: TGocciaValueMap.TKeyValuePair;
-  MethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
-  FuncPair: TOrderedStringMap<TGocciaFunctionBase>.TKeyValuePair;
 begin
-  if not Assigned(ANames) then
-    Exit;
-
-  // Skipping an empty map skips setting up its enumerator.
+  // Each map is read only when it has entries: setting up an enumerator
+  // costs more than the few names a class usually declares.
   if FDeclaredPrivateNames.CountFast > 0 then
     for DeclaredPair in FDeclaredPrivateNames do
-    begin
-      DeclaredKey := DeclaredPair.Value;
-      if DeclaredKey = '' then
-        DeclaredKey := DeclaredPair.Key;
-      AddUniquePrivateName(ANames, DeclaredKey);
-    end;
-
+      if DeclaredPair.Value <> '' then
+        AddUniquePrivateName(ANames, ACount, DeclaredPair.Value)
+      else
+        AddUniquePrivateName(ANames, ACount, DeclaredPair.Key);
   if FPrivateInstancePropertyDefs.CountFast > 0 then
-    for PropertyPair in FPrivateInstancePropertyDefs do
-      AddUniquePrivateName(ANames, PropertyPair.Key);
-
+    AddUniquePrivateNames(ANames, ACount, FPrivateInstancePropertyDefs.Keys);
   if FPrivateStaticProperties.CountFast > 0 then
-    for StaticPair in FPrivateStaticProperties do
-      AddUniquePrivateName(ANames, StaticPair.Key);
-
+    AddUniquePrivateNames(ANames, ACount, FPrivateStaticProperties.Keys);
   if FPrivateStaticMethods.CountFast > 0 then
-    for StaticPair in FPrivateStaticMethods do
-      AddUniquePrivateName(ANames, StaticPair.Key);
-
+    AddUniquePrivateNames(ANames, ACount, FPrivateStaticMethods.Keys);
   if FPrivateMethods.CountFast > 0 then
-    for MethodPair in FPrivateMethods do
-      AddUniquePrivateName(ANames, MethodPair.Key);
-
+    AddUniquePrivateNames(ANames, ACount, FPrivateMethods.Keys);
   if FPrivateGetters.CountFast > 0 then
-    for FuncPair in FPrivateGetters do
-      AddUniquePrivateName(ANames, FuncPair.Key);
-
+    AddUniquePrivateNames(ANames, ACount, FPrivateGetters.Keys);
   if FPrivateSetters.CountFast > 0 then
-    for FuncPair in FPrivateSetters do
-      AddUniquePrivateName(ANames, FuncPair.Key);
+    AddUniquePrivateNames(ANames, ACount, FPrivateSetters.Keys);
 end;
 
 function TGocciaClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;

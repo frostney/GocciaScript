@@ -536,6 +536,8 @@ type
     function LexicalBytecodePrivateClass(const AKey: string): TGocciaClassValue;
     function ResolveBytecodePrivateBrandKey(const AKey: string;
       const AObject: TGocciaValue): string;
+    function ResolveBytecodePrivateRuntimeKey(const AKey: string;
+      const AObject: TGocciaValue): string;
     function ResolveBytecodePrivateBrandToken(const AKey: string;
       const AObject: TGocciaValue): string;
     function CurrentBytecodePrivateAccessClass(
@@ -779,6 +781,10 @@ const
   // First character of both prefixes above.
   BYTECODE_PRIVATE_KEY_LEAD = '#';
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
+  // Compiled private keys a class remembers having resolved; see
+  // TGocciaVMClassValue.FPrivateKeyCache.
+  PRIVATE_KEY_CACHE_INLINE = 4;
+  PRIVATE_KEY_CACHE_CAPACITY = 16;
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
   // How far TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast looks
@@ -2426,11 +2432,14 @@ type
     HasSharedBrandKeys: Boolean;
   end;
 
-  // A compiled private key this class declares, and its brand key once asked.
+  // A compiled private key this class declares, and the brand and runtime
+  // keys derived from it once asked.
   TGocciaPrivateKeyCacheEntry = record
     Key: string;
     BrandKey: string;
+    RuntimeKey: string;
   end;
+  PGocciaPrivateKeyCacheEntry = ^TGocciaPrivateKeyCacheEntry;
 
   TGocciaVMClassValue = class(TGocciaClassValue)
   private
@@ -2442,7 +2451,13 @@ type
     // pool. Holding the string keeps its buffer from being reused, so an
     // identical pointer is the identical key. A key is never undeclared, so
     // an entry never goes stale.
-    FPrivateKeyCache: array[0..3] of TGocciaPrivateKeyCacheEntry;
+    // Holds up to PRIVATE_KEY_CACHE_CAPACITY entries, then replaces them in
+    // turn. The first PRIVATE_KEY_CACHE_INLINE live in the class value; the
+    // rest are allocated when a class first needs them.
+    FPrivateKeyCache: array[0..PRIVATE_KEY_CACHE_INLINE - 1] of
+      TGocciaPrivateKeyCacheEntry;
+    FPrivateKeyCacheOverflow: array of TGocciaPrivateKeyCacheEntry;
+    FPrivateKeyCacheCount: Integer;
     FPrivateKeyCacheNext: Integer;
     FConstructorValue: TGocciaValue;
     FNativeInstanceNewTarget: TGocciaValue;
@@ -2453,7 +2468,9 @@ type
     // Compiled keys of private static elements, which the class declares
     // under a per-evaluation runtime key instead of the compiled one.
     FRuntimeKeyedPrivateKeys: array of string;
-    function CachedPrivateKeyIndex(const AKey: string): Integer; {$IFDEF FPC}inline;{$ENDIF}
+    function CachedPrivateKeyIndex(const AKey: string): Integer;
+    function PrivateKeyCacheEntry(
+      const AIndex: Integer): PGocciaPrivateKeyCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
     function RememberPrivateKey(const AKey: string): Integer;
     function CreateNativeInstanceWithNewTarget(
       const AArguments: TGocciaArgumentsCollection;
@@ -2481,6 +2498,9 @@ type
     function PrivateStampPlan: TGocciaPrivateStampPlan;
     // The brand key for ACompiledKey, which this class declares.
     function PrivateBrandKeyFor(const ACompiledKey: string): string;
+    // BytecodePrivateRuntimeKey of ACompiledKey, which this class declares,
+    // under this class's brand token.
+    function PrivateRuntimeKeyFor(const ACompiledKey: string): string;
     function DeclaresCompiledPrivateKey(const ACompiledKey: string): Boolean;
     function DeclaresCompiledPrivateKeyUncached(
       const ACompiledKey: string): Boolean;
@@ -7563,33 +7583,82 @@ function TGocciaVMClassValue.CachedPrivateKeyIndex(
 var
   I: Integer;
 begin
-  if Pointer(AKey) <> nil then
-    for I := 0 to High(FPrivateKeyCache) do
+  if Pointer(AKey) = nil then
+    Exit(-1);
+  for I := 0 to FPrivateKeyCacheCount - 1 do
+    if I < PRIVATE_KEY_CACHE_INLINE then
+    begin
       if Pointer(FPrivateKeyCache[I].Key) = Pointer(AKey) then
         Exit(I);
+    end
+    else if Pointer(FPrivateKeyCacheOverflow[
+              I - PRIVATE_KEY_CACHE_INLINE].Key) = Pointer(AKey) then
+      Exit(I);
   Result := -1;
 end;
 
-function TGocciaVMClassValue.RememberPrivateKey(const AKey: string): Integer;
+function TGocciaVMClassValue.PrivateKeyCacheEntry(
+  const AIndex: Integer): PGocciaPrivateKeyCacheEntry;
 begin
-  Result := FPrivateKeyCacheNext;
-  FPrivateKeyCache[Result].Key := AKey;
-  FPrivateKeyCache[Result].BrandKey := '';
-  FPrivateKeyCacheNext := (Result + 1) mod Length(FPrivateKeyCache);
+  if AIndex < PRIVATE_KEY_CACHE_INLINE then
+    Result := @FPrivateKeyCache[AIndex]
+  else
+    Result := @FPrivateKeyCacheOverflow[AIndex - PRIVATE_KEY_CACHE_INLINE];
+end;
+
+function TGocciaVMClassValue.RememberPrivateKey(const AKey: string): Integer;
+var
+  Entry: PGocciaPrivateKeyCacheEntry;
+begin
+  if FPrivateKeyCacheCount < PRIVATE_KEY_CACHE_CAPACITY then
+  begin
+    Result := FPrivateKeyCacheCount;
+    if Result = PRIVATE_KEY_CACHE_INLINE then
+      SetLength(FPrivateKeyCacheOverflow,
+        PRIVATE_KEY_CACHE_CAPACITY - PRIVATE_KEY_CACHE_INLINE);
+    Inc(FPrivateKeyCacheCount);
+  end
+  else
+  begin
+    Result := FPrivateKeyCacheNext;
+    FPrivateKeyCacheNext := (Result + 1) mod PRIVATE_KEY_CACHE_CAPACITY;
+  end;
+  Entry := PrivateKeyCacheEntry(Result);
+  Entry^.Key := AKey;
+  Entry^.BrandKey := '';
+  Entry^.RuntimeKey := '';
 end;
 
 function TGocciaVMClassValue.PrivateBrandKeyFor(
   const ACompiledKey: string): string;
 var
   Index: Integer;
+  Entry: PGocciaPrivateKeyCacheEntry;
 begin
   Index := CachedPrivateKeyIndex(ACompiledKey);
   if Index < 0 then
     Exit(BytecodePrivateBrandKey(ACompiledKey, PrivateBrandToken));
-  if FPrivateKeyCache[Index].BrandKey = '' then
-    FPrivateKeyCache[Index].BrandKey := BytecodePrivateBrandKey(ACompiledKey,
+  Entry := PrivateKeyCacheEntry(Index);
+  if Entry^.BrandKey = '' then
+    Entry^.BrandKey := BytecodePrivateBrandKey(ACompiledKey,
       PrivateBrandToken);
-  Result := FPrivateKeyCache[Index].BrandKey;
+  Result := Entry^.BrandKey;
+end;
+
+function TGocciaVMClassValue.PrivateRuntimeKeyFor(
+  const ACompiledKey: string): string;
+var
+  Index: Integer;
+  Entry: PGocciaPrivateKeyCacheEntry;
+begin
+  Index := CachedPrivateKeyIndex(ACompiledKey);
+  if Index < 0 then
+    Exit(BytecodePrivateRuntimeKey(ACompiledKey, PrivateBrandToken));
+  Entry := PrivateKeyCacheEntry(Index);
+  if Entry^.RuntimeKey = '' then
+    Entry^.RuntimeKey := BytecodePrivateRuntimeKey(ACompiledKey,
+      PrivateBrandToken);
+  Result := Entry^.RuntimeKey;
 end;
 
 function TGocciaVMClassValue.DeclaresCompiledPrivateKey(
@@ -11074,6 +11143,20 @@ begin
     ResolveBytecodePrivateBrandToken(AKey, AObject));
 end;
 
+// BytecodePrivateRuntimeKey(AKey, ResolveBytecodePrivateBrandToken(AKey,
+// AObject)), reusing the runtime key the lexically resolved class keeps.
+function TGocciaVM.ResolveBytecodePrivateRuntimeKey(const AKey: string;
+  const AObject: TGocciaValue): string;
+var
+  LexicalClass: TGocciaClassValue;
+begin
+  LexicalClass := LexicalBytecodePrivateClass(AKey);
+  if LexicalClass is TGocciaVMClassValue then
+    Exit(TGocciaVMClassValue(LexicalClass).PrivateRuntimeKeyFor(AKey));
+  Result := BytecodePrivateRuntimeKey(AKey,
+    ResolveBytecodePrivateBrandToken(AKey, AObject));
+end;
+
 function TGocciaVM.ResolveBytecodePrivateBrandToken(const AKey: string;
   const AObject: TGocciaValue): string;
 var
@@ -11213,6 +11296,19 @@ begin
     ADescriptor);
 end;
 
+// The descriptor AObject holds under the private storage key AKey: its raw
+// entry, or what an exotic object reports for the key. An ordinary object or
+// class instance reports only its raw entries, so a miss there is final and
+// the second lookup is skipped.
+function PrivateKeyOwnDescriptor(const AObject: TGocciaObjectValue;
+  const AKey: string): TGocciaPropertyDescriptor;
+begin
+  if (not TryGetRawObjectPrivateDescriptor(AObject, AKey, Result)) and
+     (AObject.ClassType <> TGocciaObjectValue) and
+     (AObject.ClassType <> TGocciaInstanceValue) then
+    Result := AObject.GetOwnPropertyDescriptor(AKey);
+end;
+
 procedure DefineRawObjectPrivateProperty(const AObject: TGocciaObjectValue;
   const AKey: string; const AValue: TGocciaValue;
   const AFlags: TPropertyFlags);
@@ -11254,45 +11350,52 @@ end;
 function BuildPrivateStampPlan(
   const AClassValue: TGocciaClassValue): TGocciaPrivateStampPlan;
 var
-  Names: TUnicodeStringList;
+  Names: TArray<string>;
+  Count: Integer;
   PrototypeNames: TArray<string>;
-  PrototypeName: string;
   PrivateBrandToken: string;
   I, J: Integer;
 begin
   Result.Version := AClassValue.PrivateNamesVersion;
   Result.HasSharedBrandKeys := False;
-  Names := TUnicodeStringList.Create;
-  try
-    AClassValue.AppendOwnPrivateNames(Names);
-    // An ordinary object lists no private storage key among its own property
-    // names (TGocciaObjectValue.GetOwnPropertyKeys skips them), so only a
-    // prototype of another kind is asked.
-    if Assigned(AClassValue.Prototype) and
-       (AClassValue.Prototype.ClassType <> TGocciaObjectValue) then
-    begin
-      PrototypeNames := AClassValue.Prototype.GetOwnPropertyNames;
-      for PrototypeName in PrototypeNames do
-        if IsBytecodePrivateKey(PrototypeName) and
-           (PrivateNameIndex(Names, PrototypeName) < 0) then
-          Names.Add(PrototypeName);
-    end;
-    SetLength(Result.Names, Names.Count);
-    SetLength(Result.BrandKeys, Names.Count);
-    for I := 0 to Names.Count - 1 do
-    begin
-      Result.Names[I] := Names[I];
-      PrivateBrandToken := BytecodePrivateTokenForKey(Names[I],
-        AClassValue.PrivateBrandToken);
-      Result.BrandKeys[I] := BytecodePrivateBrandKey(
-        NormalizeBytecodePrivateKey(Names[I], PrivateBrandToken),
-        PrivateBrandToken);
-      for J := 0 to I - 1 do
-        if Result.BrandKeys[J] = Result.BrandKeys[I] then
-          Result.HasSharedBrandKeys := True;
-    end;
-  finally
-    Names.Free;
+  Names := nil;
+  Count := 0;
+  AClassValue.CollectOwnPrivateNames(Names, Count);
+  // An ordinary object lists no private storage key among its own property
+  // names (TGocciaObjectValue.GetOwnPropertyKeys skips them), so only a
+  // prototype of another kind is asked.
+  if Assigned(AClassValue.Prototype) and
+     (AClassValue.Prototype.ClassType <> TGocciaObjectValue) then
+  begin
+    PrototypeNames := AClassValue.Prototype.GetOwnPropertyNames;
+    for I := 0 to High(PrototypeNames) do
+      if IsBytecodePrivateKey(PrototypeNames[I]) then
+      begin
+        J := 0;
+        while (J < Count) and (Names[J] <> PrototypeNames[I]) do
+          Inc(J);
+        if J = Count then
+        begin
+          if Count = Length(Names) then
+            SetLength(Names, Count + 4);
+          Names[Count] := PrototypeNames[I];
+          Inc(Count);
+        end;
+      end;
+  end;
+  SetLength(Names, Count);
+  Result.Names := Names;
+  SetLength(Result.BrandKeys, Count);
+  for I := 0 to Count - 1 do
+  begin
+    PrivateBrandToken := BytecodePrivateTokenForKey(Names[I],
+      AClassValue.PrivateBrandToken);
+    Result.BrandKeys[I] := BytecodePrivateBrandKey(
+      NormalizeBytecodePrivateKey(Names[I], PrivateBrandToken),
+      PrivateBrandToken);
+    for J := 0 to I - 1 do
+      if Result.BrandKeys[J] = Result.BrandKeys[I] then
+        Result.HasSharedBrandKeys := True;
   end;
 end;
 
@@ -13192,8 +13295,7 @@ begin
   begin
     if AObject is TGocciaClassValue then
     begin
-      PrivateName := BytecodePrivateRuntimeKey(AKey,
-        ResolveBytecodePrivateBrandToken(AKey, AObject));
+      PrivateName := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
       begin
         EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -13222,8 +13324,7 @@ begin
       Current := TGocciaObjectValue(AObject);
       while Assigned(Current) do
       begin
-        if not TryGetRawObjectPrivateDescriptor(Current, AKey, Descriptor) then
-          Descriptor := Current.GetOwnPropertyDescriptor(AKey);
+        Descriptor := PrivateKeyOwnDescriptor(Current, AKey);
         if Descriptor is TGocciaPropertyDescriptorAccessor then
         begin
           if not TryGetRawPrivateValue(
@@ -13446,8 +13547,7 @@ begin
   begin
     if AObject is TGocciaClassValue then
     begin
-      PrivateName := BytecodePrivateRuntimeKey(AKey,
-        ResolveBytecodePrivateBrandToken(AKey, AObject));
+      PrivateName := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
       if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
       begin
         SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
@@ -13481,8 +13581,7 @@ begin
       Current := TGocciaObjectValue(AObject);
       while Assigned(Current) do
       begin
-        if not TryGetRawObjectPrivateDescriptor(Current, AKey, Descriptor) then
-          Descriptor := Current.GetOwnPropertyDescriptor(AKey);
+        Descriptor := PrivateKeyOwnDescriptor(Current, AKey);
         if (Descriptor is TGocciaPropertyDescriptorAccessor) and
            Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
         begin
@@ -13700,8 +13799,7 @@ begin
   if AObject is TGocciaClassValue then
   begin
     if TGocciaClassValue(AObject).PrivateStaticProperties.TryGetValue(
-      BytecodePrivateRuntimeKey(AKey,
-        ResolveBytecodePrivateBrandToken(AKey, AObject)), AValue) then
+      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue) then
       Result := True;
     Exit;
   end;
@@ -13740,8 +13838,7 @@ begin
   if AObject is TGocciaClassValue then
   begin
     TGocciaClassValue(AObject).AddPrivateStaticProperty(
-      BytecodePrivateRuntimeKey(AKey,
-        ResolveBytecodePrivateBrandToken(AKey, AObject)), AValue);
+      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue);
     Exit;
   end;
 
