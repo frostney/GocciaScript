@@ -76,7 +76,7 @@ See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for
 
 - **`EvaluateStatements`** — Evaluates a list of AST nodes in sequence, returning `TGocciaControlFlow`. Exits early when `Result.Kind <> cfkNormal` to propagate `return` and `break` signals. `TGocciaThrowValue` exceptions propagate naturally without interception.
 
-- **`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Unified spread expansion for arrays, strings, sets, and maps. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject`.
+- **`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Unified spread expansion for arrays, strings, sets, and maps. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject`. An Array's elements are read directly only under the same `ArrayUsesIntrinsicIteration` guard the bytecode VM uses; a replaced or own iterator runs the iterator protocol.
 
 ## Design Rationale
 

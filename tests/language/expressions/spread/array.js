@@ -78,3 +78,135 @@ test("spread with empty arrays are being flattened", () => {
   const arr2 = [...[1, 2, 3], ...[]];
   expect(arr2).toEqual([1, 2, 3]);
 });
+
+test("spread reads a hole through the prototype chain", () => {
+  const sparse = [1, , 3];
+  Array.prototype[1] = "inherited";
+  let inherited;
+  try {
+    inherited = [...sparse];
+  } finally {
+    delete Array.prototype[1];
+  }
+  expect(inherited).toEqual([1, "inherited", 3]);
+  const copy = [...sparse];
+  expect(copy.length).toBe(3);
+  expect(1 in copy).toBe(true);
+  expect(copy[1]).toBe(undefined);
+});
+
+test("spread sees a source that a hole getter grows or shrinks", () => {
+  const growing = [1, , 3];
+  Object.defineProperty(Array.prototype, "1", {
+    get() {
+      growing.push(4);
+      return "grew";
+    },
+    configurable: true,
+  });
+  let grown;
+  try {
+    grown = [...growing];
+  } finally {
+    delete Array.prototype[1];
+  }
+  expect(grown).toEqual([1, "grew", 3, 4]);
+
+  const shrinking = [1, , 3, 4];
+  Object.defineProperty(Array.prototype, "1", {
+    get() {
+      shrinking.length = 2;
+      return "shrank";
+    },
+    configurable: true,
+  });
+  let shrunk;
+  try {
+    shrunk = [...shrinking];
+  } finally {
+    delete Array.prototype[1];
+  }
+  expect(shrunk).toEqual([1, "shrank"]);
+});
+
+test("spread calls an own index getter of the source", () => {
+  const source = [1, 2, 3];
+  let reads = 0;
+  Object.defineProperty(source, "1", {
+    get() {
+      reads++;
+      return "got";
+    },
+  });
+  expect([...source]).toEqual([1, "got", 3]);
+  expect(reads).toBe(1);
+});
+
+test("spread uses a replaced Array.prototype[Symbol.iterator]", () => {
+  const original = Array.prototype[Symbol.iterator];
+  Array.prototype[Symbol.iterator] = ({
+    *values() {
+      yield "replaced";
+    },
+  }).values;
+  let replaced;
+  try {
+    replaced = [...[1, 2, 3]];
+  } finally {
+    Array.prototype[Symbol.iterator] = original;
+  }
+  expect(replaced).toEqual(["replaced"]);
+  expect([...[1, 2, 3]]).toEqual([1, 2, 3]);
+});
+
+test("spread reads an accessor Array.prototype[Symbol.iterator] once per spread", () => {
+  const original = Array.prototype[Symbol.iterator];
+  let gets = 0;
+  Object.defineProperty(Array.prototype, Symbol.iterator, {
+    get() {
+      gets++;
+      return original;
+    },
+    configurable: true,
+  });
+  let spread;
+  let getsDuringSpread;
+  try {
+    spread = [...[1, 2], ...[3]];
+    getsDuringSpread = gets;
+  } finally {
+    Object.defineProperty(Array.prototype, Symbol.iterator, {
+      value: original,
+      writable: true,
+      configurable: true,
+    });
+  }
+  expect(spread).toEqual([1, 2, 3]);
+  expect(getsDuringSpread).toBe(2);
+});
+
+test("spread uses an own Symbol.iterator of the source array", () => {
+  const source = [1, 2, 3];
+  source[Symbol.iterator] = ({
+    *values() {
+      yield "own";
+    },
+  }).values;
+  expect([...source]).toEqual(["own"]);
+});
+
+test("spread uses the iterator of a replaced array prototype", () => {
+  const source = [1, 2, 3];
+  Object.setPrototypeOf(source, {
+    *[Symbol.iterator]() {
+      yield "proto";
+    },
+  });
+  expect([...source]).toEqual(["proto"]);
+});
+
+test("spread of an Array subclass instance yields its elements", () => {
+  class Numbers extends Array {}
+  const numbers = Numbers.from([1, 2, 3]);
+  expect([...numbers]).toEqual([1, 2, 3]);
+});
