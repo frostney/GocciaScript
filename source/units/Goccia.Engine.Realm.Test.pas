@@ -26,6 +26,7 @@ uses
   Goccia.Runtime,
   Goccia.RuntimeExtensions.URL,
   Goccia.Scope,
+  Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
@@ -77,10 +78,13 @@ type
       const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
     function UnhandledRejectionMessage(const AExecutor: TGocciaExecutor;
       const ASource: string;
-      const AMode: TGocciaUnhandledRejectionMode): string;
+      const AMode: TGocciaUnhandledRejectionMode;
+      const ASourceType: TGocciaSourceType = stScript): string;
     function TakeRejectionProbe(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure AssertUnhandledRejectionModesWithExecutor(
+      const AExecutor: TGocciaExecutor);
+    procedure AssertModuleRejectionsWithExecutor(
       const AExecutor: TGocciaExecutor);
     procedure RecordRejection(const APromise: TGocciaValue;
       const AReason: TGocciaValue);
@@ -108,6 +112,8 @@ type
     procedure TestBytecodeNestedExecuteLeavesOuterJobs;
     procedure TestInterpreterExecuteRaisesUnhandledRejection;
     procedure TestBytecodeExecuteRaisesUnhandledRejection;
+    procedure TestInterpreterModuleLastValueIsNotItsFailure;
+    procedure TestBytecodeModuleLastValueIsNotItsFailure;
     procedure TestInterpreterUnhandledRejectionHook;
     procedure TestBytecodeUnhandledRejectionHook;
     procedure TestEachEngineGetsADistinctRealm;
@@ -157,6 +163,12 @@ begin
   Test('Bytecode Execute raises an unhandled rejection unless told to ' +
     'ignore it',
     TestBytecodeExecuteRaisesUnhandledRejection);
+  Test('Interpreter Execute does not fail a module with the rejected ' +
+    'promise its last statement leaves',
+    TestInterpreterModuleLastValueIsNotItsFailure);
+  Test('Bytecode Execute does not fail a module with the rejected ' +
+    'promise its last statement leaves',
+    TestBytecodeModuleLastValueIsNotItsFailure);
   Test('Interpreter reports each unhandled rejection to the hook',
     TestInterpreterUnhandledRejectionHook);
   Test('Bytecode reports each unhandled rejection to the hook',
@@ -808,7 +820,8 @@ end;
   promise left rejected, or '' when the run returned normally. }
 function TTestEngineRealm.UnhandledRejectionMessage(
   const AExecutor: TGocciaExecutor; const ASource: string;
-  const AMode: TGocciaUnhandledRejectionMode): string;
+  const AMode: TGocciaUnhandledRejectionMode;
+  const ASourceType: TGocciaSourceType): string;
 var
   Engine: TGocciaEngine;
   Source: TStringList;
@@ -819,6 +832,7 @@ begin
   Engine := nil;
   try
     Engine := TGocciaEngine.Create('<unhandled-rejection>', Source, AExecutor);
+    Engine.SourceType := ASourceType;
     Engine.UnhandledRejections := AMode;
     Engine.InjectGlobal('takeRejection',
       TGocciaNativeFunctionValue.CreateWithoutPrototype(TakeRejectionProbe,
@@ -873,6 +887,59 @@ begin
   // One run's rejection is not the next run's.
   Expect<string>(UnhandledRejectionMessage(AExecutor, '1 + 1;',
     urThrow)).ToBe('');
+end;
+
+{ A module has no completion value a host can wait on unless it uses
+  top-level await, so the value its last statement leaves is guest data. Execute
+  used to fail the run with it whenever it was a rejected promise: a rejection
+  the guest had handled failed the run, and an unhandled one was reported ahead
+  of an older unhandled one. }
+procedure TTestEngineRealm.AssertModuleRejectionsWithExecutor(
+  const AExecutor: TGocciaExecutor);
+const
+  HANDLED_LAST =
+    'const rejected = Promise.reject(new Error("handled"));' +
+    'rejected.catch(() => {});' +
+    'rejected;';
+  OLDER_FIRST =
+    'Promise.reject(new Error("older"));' +
+    'Promise.reject(new Error("last statement"));';
+  TOP_LEVEL_AWAIT_THROW =
+    'await 0;' +
+    'throw new Error("after await");';
+begin
+  Expect<string>(UnhandledRejectionMessage(AExecutor, HANDLED_LAST,
+    urThrow, stModule)).ToBe('');
+  Expect<string>(UnhandledRejectionMessage(AExecutor, OLDER_FIRST,
+    urThrow, stModule)).ToBe('older');
+  // The evaluation promise of a module with top-level await is the module's
+  // own, and still fails the run.
+  Expect<string>(UnhandledRejectionMessage(AExecutor, TOP_LEVEL_AWAIT_THROW,
+    urThrow, stModule)).ToBe('after await');
+end;
+
+procedure TTestEngineRealm.TestInterpreterModuleLastValueIsNotItsFailure;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertModuleRejectionsWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeModuleLastValueIsNotItsFailure;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertModuleRejectionsWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
 end;
 
 procedure TTestEngineRealm.TestInterpreterExecuteRaisesUnhandledRejection;
