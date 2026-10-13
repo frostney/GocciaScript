@@ -2375,7 +2375,15 @@ await section("Test262 Runner: a strict-site eval in a generator and an async fu
 // evaluation, §13.10.1, through PrivateElementFind, §7.3.26). A static
 // private field is on the class itself, so the check is true for D, false for
 // a subclass or another object, and agrees with the check written outside
-// eval.
+// eval. So is a static private method or accessor:
+// ClassDefinitionEvaluation (sec-runtime-semantics-classdefinitionevaluation,
+// §15.7.14 step 31) adds each one to the class with PrivateMethodOrAccessorAdd.
+// The checks for #m, #g and #s are therefore true for the class that
+// declares them, in and out of eval and in an arrow inside eval, and false
+// for a subclass, a plain object and a second evaluation of the same class
+// body (a new Private Name, §15.7.14 step 6). An instance method or accessor
+// is on the instances, not the class, and private reads in eval reach the
+// static ones: m, g.
 //
 // #1568: ClassDefinitionEvaluation (sec-runtime-semantics-
 // classdefinitionevaluation, §15.7.14) evaluates the class elements, computed
@@ -2395,13 +2403,25 @@ await section("Test262 Runner: a strict-site eval resolves private names as the 
     "class D { static #y = 1; static direct() { return #y in this; } static evIn() { return eval('#y in this'); } static evInArg(v) { return eval('#y in v'); } static evRead() { return eval('this.#y'); } }",
     "class Sub extends D {}",
     "print([out(() => D.direct()), out(() => D.evIn()), out(() => D.evInArg(D)), out(() => D.evInArg({})), out(() => D.evInArg(Sub)), out(() => D.evRead())].join());",
+    "const mk = () => class K { static #m() { return 'm'; } static get #g() { return 'g'; } static set #s(v) {} static direct(v) { return [#m in v, #g in v, #s in v].join('/'); } static ev(v) { return eval('[#m in v, #g in v, #s in v].join(\"/\")'); } static arrow(v) { return eval('(() => [#m in v, #g in v, #s in v].join(\"/\"))()'); } static reads() { return eval('this.#m() + this.#g'); } };",
+    "const A = mk(), B = mk();",
+    "class SubA extends A {}",
+    "print(['direct', 'ev', 'arrow'].map((k) => [A, SubA, B, {}].map((v) => out(() => A[k](v))).join(' ')).join(), out(() => A.reads()));",
+    "class I { #m() {} get #g() { return 1; } static direct(v) { return [#m in v, #g in v].join('/'); } static ev(v) { return eval('[#m in v, #g in v].join(\"/\")'); } }",
+    "print([out(() => I.direct(I)), out(() => I.ev(I)), out(() => I.direct(new I())), out(() => I.ev(new I()))].join());",
     "let f1, f2, f3;",
     "class G1 { static #s = 6; static [(f1 = () => G1.#s, 'x')] = 1; }",
     "class G2 { static #s = 6; static [(f2 = eval('() => G2.#s'), 'x')] = 1; }",
     "class G3 { static #s = 6; static [(f3 = () => eval('G3.#s'), 'x')] = 1; }",
     "print([out(() => f1()), out(() => f2()), out(() => f3())].join());",
     "print(out(() => { class H extends (eval('#h in {}'), Object) { #h; } return 'none'; }), out(() => { class H2 { #o; static m() { class I extends (eval('(o) => #o in o'), Object) { #i; } return 'ok'; } } return H2.m(); }));",
-  ], ["true,true,true,false,false,1", "6,6,6", "SyntaxError ok"], ["bytecode"]);
+  ], [
+    "true,true,true,false,false,1",
+    "true/true/true false/false/false false/false/false false/false/false,true/true/true false/false/false false/false/false false/false/false,true/true/true false/false/false false/false/false false/false/false mg",
+    "false/false,false/false,true/true,true/true",
+    "6,6,6",
+    "SyntaxError ok",
+  ], ["bytecode"]);
 });
 
 // In a derived constructor `this` is uninitialized until super() returns
