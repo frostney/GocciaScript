@@ -2564,7 +2564,7 @@ procedure TGocciaVMStackRoot.MarkClosureReferences(
   const AClosure: TGocciaBytecodeClosure);
 var
   I: Integer;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
 begin
   if not Assigned(AClosure) then
     Exit;
@@ -2586,8 +2586,8 @@ begin
   for I := 0 to AClosure.UpvalueCount - 1 do
   begin
     Upvalue := AClosure.GetUpvalue(I);
-    if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-      MarkRegisterReferences(Upvalue.Cell.Value);
+    if Assigned(Upvalue) then
+      Upvalue.MarkReferences;
   end;
 end;
 
@@ -2620,7 +2620,7 @@ var
       RangeLimit := Length(FVM.FLocalCellStack);
     for J := ABase to RangeLimit - 1 do
       if Assigned(FVM.FLocalCellStack[J]) then
-        MarkRegisterReferences(FVM.FLocalCellStack[J].Value);
+        FVM.FLocalCellStack[J].MarkReferences;
   end;
 
   procedure MarkArgumentRange(const ABase, ACount: Integer);
@@ -2681,7 +2681,7 @@ begin
     Limit := Length(FVM.FLocalCellStack);
   for I := 0 to Limit - 1 do
     if Assigned(FVM.FLocalCellStack[I]) then
-      MarkRegisterReferences(FVM.FLocalCellStack[I].Value);
+      FVM.FLocalCellStack[I].MarkReferences;
 
   for I := 0 to FVM.FFrameStackCount - 1 do
   begin
@@ -4781,7 +4781,7 @@ end;
 procedure TGocciaBytecodeGeneratorObjectValue.MarkReferences;
 var
   I: Integer;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
 begin
   // Marking the function value below closes a reference cycle back to this
   // generator (a generator reachable from its own function's upvalues), so the
@@ -4811,8 +4811,8 @@ begin
     for I := 0 to FClosure.UpvalueCount - 1 do
     begin
       Upvalue := FClosure.GetUpvalue(I);
-      if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-        MarkRegisterReferences(Upvalue.Cell.Value);
+      if Assigned(Upvalue) then
+        Upvalue.MarkReferences;
     end;
   end;
   MarkRegisterReferences(FThisValue);
@@ -4823,7 +4823,7 @@ begin
     MarkRegisterReferences(FContinuationRegisters[I]);
   for I := 0 to High(FContinuationLocalCells) do
     if Assigned(FContinuationLocalCells[I]) then
-      MarkRegisterReferences(FContinuationLocalCells[I].Value);
+      FContinuationLocalCells[I].MarkReferences;
   if Assigned(FDelegateIteratorValue) then
     FDelegateIteratorValue.MarkReferences;
   if Assigned(FDelegateIterator) then
@@ -5939,7 +5939,7 @@ var
     CurrentVM: TGocciaVM;
     I: Integer;
     Desc: TGocciaUpvalueDescriptor;
-    Upvalue: TGocciaBytecodeUpvalue;
+    Upvalue: TGocciaBytecodeCell;
   begin
     if (AReceiver is TGocciaObjectValue) and
        (FCurrentCtorClass is TGocciaVMClassValue) then
@@ -5959,8 +5959,8 @@ var
           if Desc.Name = DERIVED_THIS_INITIALIZED_LOCAL then
           begin
             Upvalue := CurrentVM.FCurrentClosure.GetUpvalue(I);
-            if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-              Upvalue.Cell.Value := ValueToRegister(
+            if Assigned(Upvalue) then
+              Upvalue.Value := ValueToRegister(
                 TGocciaBooleanLiteralValue.TrueValue);
           end;
         end;
@@ -7745,7 +7745,7 @@ end;
 procedure TGocciaBytecodeFunctionValue.MarkReferences;
 var
   I: Integer;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
 begin
   if GCMarked then Exit;
   inherited;
@@ -7769,8 +7769,8 @@ begin
   for I := 0 to FClosure.UpvalueCount - 1 do
   begin
     Upvalue := FClosure.GetUpvalue(I);
-    if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-      MarkRegisterReferences(Upvalue.Cell.Value);
+    if Assigned(Upvalue) then
+      Upvalue.MarkReferences;
   end;
 end;
 
@@ -14466,7 +14466,7 @@ var
   VarObjectBinding: Integer;
   VarObject: TGocciaValue;
   VarObjectValue: TGocciaObjectValue;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
   RejectNames: TGocciaEvalRejectNameArray;
 
   procedure RaiseAlreadyDeclared(const AName: string);
@@ -14534,7 +14534,7 @@ begin
   else
   begin
     Upvalue := FCurrentClosure.GetUpvalue(ASite.Bindings[VarObjectBinding].Index);
-    VarObject := RegisterToValue(Upvalue.Cell.Value);
+    VarObject := RegisterToValue(Upvalue.Value);
   end;
   if VarObject is TGocciaObjectValue then
     VarObjectValue := TGocciaObjectValue(VarObject)
@@ -14544,7 +14544,7 @@ begin
     // (ADR 0134, "Where eval declarations go").
     VarObjectValue := TGocciaObjectValue.Create(nil);
     if Assigned(Upvalue) then
-      Upvalue.Cell.Value := VMValueToRegisterFast(VarObjectValue)
+      Upvalue.Value := VMValueToRegisterFast(VarObjectValue)
     else
       SetRegister(ASite.Bindings[VarObjectBinding].Index, VarObjectValue);
   end;
@@ -14783,8 +14783,7 @@ begin
   begin
     Desc := EvalTemplate.GetUpvalueDescriptor(I);
     if Desc.IsLocal then
-      Result.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
-        GetLocalCell(Desc.Index)))
+      Result.SetUpvalue(I, GetLocalCell(Desc.Index))
     else if Assigned(FCurrentClosure) then
       Result.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
   end;
@@ -15700,7 +15699,7 @@ var
   ProtoReadCache: PGocciaProtoReadCacheEntry;
   AttributeType: string;
   SpecifierString: string;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
   ChildClosure: TGocciaBytecodeClosure;
   Desc: TGocciaUpvalueDescriptor;
   Handler: TGocciaBytecodeHandlerEntry;
@@ -16515,10 +16514,11 @@ begin
   Closure := TGocciaBytecodeClosure.Create(ATemplate, ATemplate.UpvalueCount);
   Closure.GlobalScope := AModuleEnvironment;
   Closure.AllowsNewTarget := True;
-  for I := 0 to ATemplate.UpvalueCount - 1 do
-    Closure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
-      TGocciaBytecodeCell.Create(RegisterUndefined)));
   FunctionValue := TGocciaBytecodeFunctionValue.Create(Self, Closure);
+  // Cells are created after the function value that marks them: creating a
+  // cell never collects, but allocating the function value can.
+  for I := 0 to ATemplate.UpvalueCount - 1 do
+    Closure.SetUpvalue(I, TGocciaBytecodeCell.Create(RegisterUndefined));
   if ATemplate.HasOwnPrototype then
   begin
     GC := TGarbageCollector.Instance;
