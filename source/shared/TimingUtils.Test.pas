@@ -30,6 +30,7 @@ type
     procedure TestFormatDurationBelowSecondThreshold;
     procedure TestFormatDurationAtSecondThreshold;
     procedure TestFormatDurationLargeValue;
+    procedure TestFormatDurationMatchesFormat;
   public
     procedure SetupTests; override;
   end;
@@ -56,6 +57,27 @@ begin
   Test('FormatDuration below second threshold stays in ms', TestFormatDurationBelowSecondThreshold);
   Test('FormatDuration at second threshold (10s)', TestFormatDurationAtSecondThreshold);
   Test('FormatDuration with large value (60s)', TestFormatDurationLargeValue);
+  Test('FormatDuration writes what Format writes for the same Double',
+    TestFormatDurationMatchesFormat);
+end;
+
+// The Format-based formatting FormatDuration reproduces without Format,
+// with the same Double arithmetic.
+function ReferenceFormatDuration(const ANanoseconds: Int64): string;
+var
+  Us, Ms, S: Double;
+begin
+  Us := ANanoseconds / 1000.0;
+  Ms := Us / 1000.0;
+  S := Ms / 1000.0;
+  if S >= 10.0 then
+    Result := SysUtils.Format('%.2fs', [S])
+  else if Ms >= 0.5 then
+    Result := SysUtils.Format('%.2fms', [Ms])
+  else if Us >= 0.5 then
+    Result := SysUtils.Format('%.2f' + #$00B5 + 's', [Us])
+  else
+    Result := SysUtils.Format('%dns', [ANanoseconds]);
 end;
 
 procedure TTimingUtilsTests.TestGetNanosecondsIsPositive;
@@ -246,6 +268,45 @@ begin
   S := FormatDuration(Int64(60000000000));
   Expect<Boolean>(Pos('s', S) > 0).ToBe(True);
   Expect<Boolean>(Pos('60.00s', S) > 0).ToBe(True);
+end;
+
+procedure TTimingUtilsTests.TestFormatDurationMatchesFormat;
+const
+  // Unit boundaries, values either side of a rounding tie in each unit, and
+  // ties themselves, which FormatDuration hands to Format.
+  SAMPLES: array[0..37] of Int64 = (
+    -1500, -1, 0, 1, 499, 500, 501, 504, 505, 506, 994, 995, 996, 1004, 1005,
+    9995, 99995, 499994, 499995, 499999, 500000, 504999, 505000, 505001,
+    1004999, 1005000, 1005001, 9995000, 9999994999, 9999995000, 9999999999,
+    10000000000, 10004999999, 10005000000, 10005000001, 99999995000000,
+    100000000000000, 123456789012345678);
+var
+  I: Integer;
+  Value: Int64;
+  Mismatches: Integer;
+begin
+  Mismatches := 0;
+  for I := Low(SAMPLES) to High(SAMPLES) do
+    if FormatDuration(SAMPLES[I]) <> ReferenceFormatDuration(SAMPLES[I]) then
+      Inc(Mismatches);
+  // A deterministic sweep across every unit.
+  Value := 1;
+  while Value < Int64(200000000000000) do
+  begin
+    if FormatDuration(Value) <> ReferenceFormatDuration(Value) then
+      Inc(Mismatches);
+    Value := Value * 3 + 7;
+  end;
+  // Every value through the microsecond unit and into milliseconds, where the
+  // unit values carry the precision of the 1000.0 constants.
+  for I := 0 to 1100000 do
+    if FormatDuration(I) <> ReferenceFormatDuration(I) then
+      Inc(Mismatches);
+  for I := 0 to 20000 do
+    if FormatDuration(Int64(I) * 49999) <>
+       ReferenceFormatDuration(Int64(I) * 49999) then
+      Inc(Mismatches);
+  Expect<Integer>(Mismatches).ToBe(0);
 end;
 
 begin

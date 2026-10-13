@@ -307,6 +307,32 @@ begin
   FBaseResolverExtensions := FEngine.Resolver.GetExtensions;
 end;
 
+// SameText's answer for two extensions: equal ignoring the case of ASCII
+// letters. SameText takes AnsiStrings, so calling it here converted both
+// extensions through the codepage manager on every comparison, which made
+// this loop a sixth of an empty script's boot.
+function SameExtensionText(const ALeft, ARight: string): Boolean;
+var
+  I, LeftCode, RightCode: Integer;
+begin
+  Result := Length(ALeft) = Length(ARight);
+  if not Result then
+    Exit;
+  for I := 1 to Length(ALeft) do
+  begin
+    LeftCode := Ord(ALeft[I]);
+    RightCode := Ord(ARight[I]);
+    if LeftCode = RightCode then
+      Continue;
+    if (LeftCode >= Ord('A')) and (LeftCode <= Ord('Z')) then
+      Inc(LeftCode, 32);
+    if (RightCode >= Ord('A')) and (RightCode <= Ord('Z')) then
+      Inc(RightCode, 32);
+    if LeftCode <> RightCode then
+      Exit(False);
+  end;
+end;
+
 procedure TGocciaRuntimeCore.AddResolverExtension(
   var AExtensions: TModuleResolverExtensionArray; var ACount: Integer;
   const AExtension: string);
@@ -314,7 +340,7 @@ var
   I: Integer;
 begin
   for I := 0 to ACount - 1 do
-    if SameText(AExtensions[I], AExtension) then
+    if SameExtensionText(AExtensions[I], AExtension) then
       Exit;
 
   if ACount >= Length(AExtensions) then

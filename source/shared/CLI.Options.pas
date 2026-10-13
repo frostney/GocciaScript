@@ -282,6 +282,8 @@ type
     FOrdinal: Integer;
     FPrefixLength: Integer;
     function JoinStrippedNames(const ASeparator: string): string;
+    function StrippedNameMatches(const AEnumName: AnsiString;
+      const AValue: string): Boolean;
   public
     constructor Create(const ALongName, AHelpText: string; const AGroup: string = '';
       const APrefixLength: Integer = 2);
@@ -811,21 +813,41 @@ begin
   end;
 end;
 
+{ Whether AEnumName without its prefix equals AValue, ignoring the case of
+  ASCII letters as LowerCase does. Enum names are ASCII identifiers, so
+  comparing code units directly gives LowerCase's answer without converting
+  each name through the codepage manager. }
+function TEnumOption<T>.StrippedNameMatches(const AEnumName: AnsiString;
+  const AValue: string): Boolean;
+var
+  I, NameCode, ValueCode: Integer;
+begin
+  Result := Length(AEnumName) - FPrefixLength = Length(AValue);
+  if not Result then
+    Exit;
+  for I := 1 to Length(AValue) do
+  begin
+    NameCode := Ord(AEnumName[FPrefixLength + I]);
+    ValueCode := Ord(AValue[I]);
+    if (NameCode >= Ord('A')) and (NameCode <= Ord('Z')) then
+      Inc(NameCode, 32);
+    if (ValueCode >= Ord('A')) and (ValueCode <= Ord('Z')) then
+      Inc(ValueCode, 32);
+    if NameCode <> ValueCode then
+      Exit(False);
+  end;
+end;
+
 procedure TEnumOption<T>.Apply(const AValue: string);
 var
   TypeData: PTypeData;
   I: Integer;
-  EnumName: string;
-  LowerValue: string;
 begin
   TypeData := GetTypeData(TypeInfo(T));
-  LowerValue := LowerCase(AValue);
 
   for I := TypeData^.MinValue to TypeData^.MaxValue do
   begin
-    EnumName := GetEnumName(TypeInfo(T), I);
-    if LowerCase(Copy(EnumName, FPrefixLength + 1,
-       Length(EnumName) - FPrefixLength)) = LowerValue then
+    if StrippedNameMatches(GetEnumName(TypeInfo(T), I), AValue) then
     begin
       FOrdinal := I;
       FPresent := True;
