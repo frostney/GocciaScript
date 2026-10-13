@@ -145,3 +145,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0133 — A module roots the values it holds directly](0133-modules-root-their-value-exports.md)
 - [0134 — Direct eval compiles to a closure of its call site, and a sloppy eval's new vars live in a hidden variable object of the calling function](0134-direct-eval-compiles-as-a-closure-of-its-call-site.md)
 - [0135 — A call and a failed property read are located where V8 locates them](0135-calls-and-property-reads-are-located-where-v8-locates-them.md)
+- [0136 — A module's function declarations are compiled while it is linked, and read its imports by name](0136-module-function-declarations-are-compiled-while-linking.md)
