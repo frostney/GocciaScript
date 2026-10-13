@@ -107,7 +107,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaRunner
 printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
 ```
 
-`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`.
+`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`. The timing banner's `Total` (and `timing.total_ns` in JSON) is end to end in both execution modes: from before the engine is created to the end of the run, so it includes engine boot as well as the lex, parse, compile, and execute phases listed beside it.
 
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
 
@@ -159,14 +159,17 @@ Useful test-runner forms:
 ./build/GocciaTestRunner -P tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
 ```
 
-### Bytecode Mode
+### Execution Mode
 
-All execution tools support `--mode=bytecode` to compile and run via the Goccia bytecode VM instead of the tree-walk interpreter. `--profile` (see [Profiling](profiling.md)) and `--coverage` (see [Testing — Coverage](testing.md#coverage)) select bytecode on their own and ignore `--mode`.
+Every execution tool compiles and runs source in the Goccia bytecode VM by default. `--mode=interpreted` (or `"mode": "interpreted"` in a config file) selects the tree-walk interpreter instead, until the interpreter is removed; `--mode=bytecode` names the default explicitly. `--profile` (see [Profiling](profiling.md)) and `--coverage` (see [Testing — Coverage](testing.md#coverage)) select bytecode on their own and ignore `--mode`.
 
 ```bash
-# Execute via bytecode VM
-./build/GocciaRunner example.js --mode=bytecode
-printf "const x = 2 + 2; x;" | ./build/GocciaRunner --mode=bytecode --print
+# Execute via bytecode VM (the default)
+./build/GocciaRunner example.js
+printf "const x = 2 + 2; x;" | ./build/GocciaRunner --print
+
+# Execute via the tree-walk interpreter
+./build/GocciaRunner example.js --mode=interpreted
 
 # Load and execute a pre-compiled .gbc file
 ./build/GocciaRunner output.gbc
@@ -248,9 +251,6 @@ printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner 
 
 # Write .map source map alongside execution
 ./build/GocciaRunner example.jsx --source-map --mode=bytecode
-
-# Run tests via bytecode VM
-./build/GocciaTestRunner -P tests --mode=bytecode
 
 # Control parallel worker threads (default: CPU count; --jobs=1 forces sequential)
 ./build/GocciaRunner example.js --jobs=4

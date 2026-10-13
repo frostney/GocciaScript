@@ -39,7 +39,8 @@ uses
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.Primitives,
-  Goccia.Version;
+  Goccia.Version,
+  Goccia.VM.Exception;
 
 const
   REPL_FILE_NAME = 'REPL';
@@ -145,7 +146,7 @@ begin
     Exit;
   end;
 
-  IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
+  IsBytecodeMode := EngineOptions.ExecutionMode = emBytecode;
 
   { The working directory's config governs the session: refuse before the
     prompt when its permission requests are not trusted. }
@@ -243,6 +244,11 @@ begin
                   REPL_FILE_NAME, Source, IsColorTerminal,
                   Eng.ModuleLoader.DiagnosticScope.Principal,
                   TGocciaThrowValue(E).Suggestion))
+              else if E is EGocciaBytecodeThrow then
+                WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+                  REPL_FILE_NAME, Source, IsColorTerminal,
+                  Eng.ModuleLoader.DiagnosticScope.Principal,
+                  EGocciaBytecodeThrow(E).Suggestion))
               else
                 WriteLn('Error: ', E.Message);
             end;

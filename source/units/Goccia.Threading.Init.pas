@@ -16,7 +16,7 @@ interface
 uses
   Goccia.Capabilities,
   Goccia.Engine,
-  Goccia.Executor.Interpreter;
+  Goccia.Executor.Bytecode;
 
 type
   TGocciaEngineInitializer = procedure(const AEngine: TGocciaEngine) of object;
@@ -65,14 +65,16 @@ procedure EnsureSharedPrototypesInitialized(
 var
   Source: TStringList;
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
 begin
   Source := TStringList.Create;
   try
     // Create a minimal engine. The constructor registers all built-in
     // types, which triggers lazy shared prototype initialisation for
-    // every value type (Array, Object, Map, Set, Promise, etc.).
-    Executor := TGocciaInterpreterExecutor.Create;
+    // every value type (Array, Object, Map, Set, Promise, etc.). The engine
+    // builds its interpreter in every mode, so a bytecode executor warms the
+    // shared state of both executors.
+    Executor := TGocciaBytecodeExecutor.Create;
     try
       Engine := TGocciaEngine.Create('<thread-init>', Source, Executor,
         ACapabilities);

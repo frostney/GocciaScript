@@ -61,7 +61,7 @@ function collect(bytecode: boolean): Record<string, FileCoverage> {
       "--coverage-format=json",
       `--coverage-output=${outPath}`,
       "--no-progress",
-      ...(bytecode ? ["--mode=bytecode"] : []),
+      bytecode ? "--mode=bytecode" : "--mode=interpreted",
     ],
     { stdout: "pipe", stderr: "pipe" },
   );

@@ -899,7 +899,11 @@ var
   Executor: TGocciaInterpreterExecutor;
   ScriptResult: TGocciaScriptResult;
   SourceMap: TGocciaSourceMap;
+  StartTime, ExecEnd: Int64;
 begin
+  { Total is end to end in every mode: from before the engine is created to
+    the end of the run, so it includes engine boot. }
+  StartTime := GetNanoseconds;
   Executor := TGocciaInterpreterExecutor.Create;
   try
     Engine := CreateEngine(AFileName, ASource, Executor);
@@ -926,6 +930,7 @@ begin
           SourceMap.Free;
         end;
       end;
+      ExecEnd := GetNanoseconds;
     finally
       Engine.Free;
     end;
@@ -938,7 +943,7 @@ begin
   Result.Timing.ParseTimeNanoseconds := ScriptResult.ParseTimeNanoseconds;
   Result.Timing.CompileTimeNanoseconds := 0;
   Result.Timing.ExecuteTimeNanoseconds := ScriptResult.ExecuteTimeNanoseconds;
-  Result.Timing.TotalTimeNanoseconds := ScriptResult.TotalTimeNanoseconds;
+  Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
 end;
 
 function TRunnerApp.RunBytecodeModule(const AEngine: TGocciaEngine;
@@ -1089,7 +1094,7 @@ begin
        FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
        FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end
-  else if EngineOptions.Mode.Matches(emBytecode) then
+  else if EngineOptions.ExecutionMode = emBytecode then
   begin
     WriteLn('Running script (bytecode): ', AFileName);
     // Concatenated and encoded here rather than formatted: Format converts
@@ -1161,7 +1166,7 @@ begin
       if Extension = EXT_GBC then
         Report := ExecuteBytecodeFromFile(AFileName, Capture)
       else
-        case EngineOptions.Mode.ValueOr(emInterpreted) of
+        case EngineOptions.ExecutionMode of
           emInterpreted: Report := ExecuteInterpreted(ASource, AFileName, Capture);
           emBytecode:    Report := ExecuteBytecodeFromSource(ASource, AFileName, Capture);
         end;
@@ -1247,7 +1252,7 @@ begin
       if Extension = EXT_GBC then
         Report := ExecuteBytecodeFromFile(AFileName, Capture)
       else
-        case EngineOptions.Mode.ValueOr(emInterpreted) of
+        case EngineOptions.ExecutionMode of
           emInterpreted: Report := ExecuteInterpreted(ASource, AFileName, Capture);
           emBytecode:    Report := ExecuteBytecodeFromSource(ASource, AFileName, Capture);
         end;
@@ -1871,7 +1876,7 @@ begin
   Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes);
   FSandboxHost := Host;
   try
-    Host.Bytecode := EngineOptions.Mode.Matches(emBytecode);
+    Host.Bytecode := EngineOptions.ExecutionMode = emBytecode;
     Host.TimeoutMilliseconds := EngineOptions.Timeout.Milliseconds(0);
     Host.MaxInstructions := EngineOptions.MaxInstructions.ValueOr(0);
     Host.ImportMapPath := EngineOptions.ImportMap.ValueOr('');

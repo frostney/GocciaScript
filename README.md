@@ -222,11 +222,12 @@ resource limits.
 
 ### Run via Bytecode
 
-GocciaScript includes bytecode execution, and `GocciaBundler` compiles source to
-the public `.gbc` artifact.
+Scripts, tests, benchmarks, and the REPL run in the bytecode VM by default
+(`--mode=interpreted` selects the tree-walk interpreter until it is removed), and
+`GocciaBundler` compiles source to the public `.gbc` artifact.
 
 ```bash
-./build/GocciaRunner example.js --mode=bytecode
+./build/GocciaRunner example.js
 ./build/GocciaBundler example.js
 ./build/GocciaRunner example.gbc
 ```

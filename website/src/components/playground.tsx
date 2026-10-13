@@ -33,9 +33,19 @@ import { formatMemorySegments, type MemoryJson } from "@/lib/format-memory";
 import { GITHUB_REPO_URL } from "@/lib/github";
 import { validateGocciaToolInput } from "@/lib/goccia-tool-schema";
 import { loadCode, saveCode } from "@/lib/playground-storage";
-import { decodeShare, encodeShare } from "@/lib/share";
+import {
+  decodeShare,
+  effectiveMode,
+  encodeShare,
+  isModeSelectable,
+  type PlaygroundModeSupport,
+} from "@/lib/share";
+import {
+  DEFAULT_EXECUTION_MODE,
+  type ExecutionMode,
+} from "@/lib/vendor-manifest";
 
-type Backend = "interpreted" | "bytecode";
+type Backend = ExecutionMode;
 type Runner = "execute" | "test";
 
 const MIN_PLAYGROUND_PANE_SIZE = 0.65;
@@ -430,6 +440,12 @@ type PlaygroundProps = {
    *  0.13, `GocciaRunner` from 0.14.0), so the banner names the binary the API
    *  spawns. Display-only. */
   runnerNames?: Record<string, { loader: string; testRunner: string }>;
+  /** Per-runner-kind `--mode` support for each version tag, probed from the
+   *  binaries' help text. The execution-mode toggle is shown only when the
+   *  selected version's runner advertises `--mode`; the server makes the same
+   *  check before it sends the flag. An unknown tag (a locally built engine)
+   *  counts as supporting it. */
+  modeSupport?: PlaygroundModeSupport;
 };
 
 export function Playground({
@@ -437,6 +453,7 @@ export function Playground({
   defaultVersion,
   asiFlags,
   runnerNames,
+  modeSupport,
 }: PlaygroundProps) {
   const params = useSearchParams();
 
@@ -464,7 +481,7 @@ export function Playground({
   const [code, setCode] = useState(example.code);
   const [output, setOutput] = useState<OutputLine[]>([]);
   const [running, setRunning] = useState(false);
-  const [backend, setBackend] = useState<Backend>("interpreted");
+  const [backend, setBackend] = useState<Backend>(DEFAULT_EXECUTION_MODE);
   const [version, setVersion] = useState<string>(
     () => defaultVersion ?? versions[0],
   );
@@ -472,6 +489,7 @@ export function Playground({
   const [compatVar, setCompatVar] = useState(false);
   const [compatFunction, setCompatFunction] = useState(false);
   const [runner, setRunner] = useState<Runner>(example.runner ?? "execute");
+  const modeSelectable = isModeSelectable(modeSupport, version, runner);
   const [examplesOpen, setExamplesOpen] = useState(true);
   const [hoveredExampleId, setHoveredExampleId] = useState<string | null>(null);
   const [paneCols, setPaneCols] = useState<[number, number]>([1, 1]);
@@ -524,23 +542,30 @@ export function Playground({
       const payload = decodeShare(shareParam);
       if (payload?.code) {
         setCode(payload.code);
-        if (payload.mode === "interpreted" || payload.mode === "bytecode") {
-          setBackend(payload.mode);
-        }
         if (typeof payload.asi === "boolean") setAsi(payload.asi);
-        if (payload.runner === "execute" || payload.runner === "test") {
-          setRunner(payload.runner);
-        }
+        const sharedRunner =
+          payload.runner === "execute" || payload.runner === "test"
+            ? payload.runner
+            : runner;
+        setRunner(sharedRunner);
         if (typeof payload.compatVar === "boolean") {
           setCompatVar(payload.compatVar);
         }
         if (typeof payload.compatFunction === "boolean") {
           setCompatFunction(payload.compatFunction);
         }
-        if (payload.version) {
-          const matched = matchVendoredVersion(versions, payload.version);
-          if (matched) setVersion(matched);
-        }
+        const sharedVersion =
+          (payload.version
+            ? matchVendoredVersion(versions, payload.version)
+            : null) ?? version;
+        setVersion(sharedVersion);
+        // Restore the mode only where the shared version's binary takes
+        // `--mode`; otherwise the link's mode is not one it can run.
+        const sharedMode = effectiveMode(
+          payload.mode,
+          isModeSelectable(modeSupport, sharedVersion, sharedRunner),
+        );
+        if (sharedMode) setBackend(sharedMode);
         hydratedRef.current = true;
         return;
       }
@@ -597,15 +622,17 @@ export function Playground({
       runner === "test"
         ? (runnerNames?.[version]?.testRunner ?? "GocciaTestRunner")
         : (runnerNames?.[version]?.loader ?? "GocciaRunner");
-    const runnerBanner = `${binary} --mode=${
-      backend === "bytecode" ? "bytecode" : "interpreted"
-    }${flagText ? ` ${flagText}` : ""} ${version}`;
+    // A binary without `--mode` gets no mode flag, so the banner names none.
+    const modeText = modeSelectable ? ` --mode=${backend}` : "";
+    const runnerBanner = `${binary}${modeText}${
+      flagText ? ` ${flagText}` : ""
+    } ${version}`;
     setOutput([{ kind: "meta", text: runnerBanner }]);
 
     try {
       const payload = validateGocciaToolInput({
         code,
-        mode: backend,
+        mode: effectiveMode(backend, modeSelectable),
         asi,
         compatVar,
         compatFunction,
@@ -778,6 +805,7 @@ export function Playground({
     compatFunction,
     asiFlags,
     runnerNames,
+    modeSelectable,
   ]);
 
   const buildShareLink = useCallback(() => {
@@ -787,7 +815,7 @@ export function Playground({
       "share",
       encodeShare({
         code,
-        mode: backend,
+        mode: effectiveMode(backend, modeSelectable),
         runner,
         asi,
         compatVar,
@@ -796,7 +824,16 @@ export function Playground({
       }),
     );
     return url.toString();
-  }, [code, backend, runner, asi, compatVar, compatFunction, version]);
+  }, [
+    code,
+    backend,
+    modeSelectable,
+    runner,
+    asi,
+    compatVar,
+    compatFunction,
+    version,
+  ]);
 
   const share = useCallback(async () => {
     const link = buildShareLink();
@@ -818,7 +855,9 @@ export function Playground({
       "",
       "| Setting | Value |",
       "|---|---|",
-      `| Backend | \`${backend}\` |`,
+      `| Backend | ${
+        modeSelectable ? `\`${backend}\`` : "engine default (no `--mode`)"
+      } |`,
       `| Runner | \`${runner}\` |`,
       `| Version | \`${version}\` |`,
       `| ASI | ${onOff(asi)} |`,
@@ -843,6 +882,7 @@ export function Playground({
   }, [
     buildShareLink,
     backend,
+    modeSelectable,
     runner,
     version,
     asi,
@@ -1073,17 +1113,21 @@ export function Playground({
           />
         </div>
 
-        <SegmentedControl
-          className="pg-segmented"
-          id={backendId}
-          label="Execution mode"
-          value={backend}
-          onChange={(value) => setBackend(value as Backend)}
-          size="sm"
-        >
-          <SegmentedControlItem value="interpreted" label="Interpreter" />
-          <SegmentedControlItem value="bytecode" label="Bytecode" />
-        </SegmentedControl>
+        {/* Only versions whose runner advertises `--mode` can switch backend;
+            for the rest the toggle is hidden and no mode flag is sent. */}
+        {modeSelectable ? (
+          <SegmentedControl
+            className="pg-segmented"
+            id={backendId}
+            label="Execution mode"
+            value={backend}
+            onChange={(value) => setBackend(value as Backend)}
+            size="sm"
+          >
+            <SegmentedControlItem value="interpreted" label="Interpreter" />
+            <SegmentedControlItem value="bytecode" label="Bytecode" />
+          </SegmentedControl>
+        ) : null}
 
         <fieldset className="pg-flags">
           <legend className="pg-toolbar-label">Flags</legend>

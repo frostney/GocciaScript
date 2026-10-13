@@ -45,7 +45,7 @@ uses
   Goccia.CLI.Permissions,
   Goccia.Engine,
   Goccia.Error,
-  Goccia.Executor.Interpreter,
+  Goccia.Executor.Bytecode,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.Runtime,
@@ -248,14 +248,14 @@ begin
   end;
 end;
 
-{ Runs one script through the canonical harness path. Mirrors
-  GocciaTestRunner.RunGocciaScriptInterpreted minus timeouts (the
-  external harness owns wall-clock discipline) and minus the worker
-  machinery. }
+{ Runs one script through the canonical harness path, in bytecode mode
+  (GocciaTestRunner's default). Mirrors GocciaTestRunner's per-file run
+  minus timeouts (the external harness owns wall-clock discipline) and
+  minus the worker machinery. }
 function RunOneFile(const AFileName: string): TFileVerdict;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Core: TGocciaRuntimeCore;
   FileConfig: TConfigEntryArray;
@@ -285,13 +285,16 @@ begin
 
       Request := ReadFileRequest(FileConfig, FileConfigPath);
 
-      Executor := TGocciaInterpreterExecutor.Create;
+      Executor := TGocciaBytecodeExecutor.Create;
       try
         Engine := TGocciaEngine.Create(AFileName, Source, Executor,
           ResolveCapabilities(nil, Request, True, WASM_HONORED_CAPABILITIES,
             GetCurrentDir));
         try
           Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
+          { As GocciaTestRunner configures its bytecode executor. }
+          Executor.GlobalBackedTopLevel :=
+            Engine.SourceType = Goccia.Engine.stScript;
           ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);
           Engine.Compatibility := Compatibility;
           Engine.StrictTypes :=

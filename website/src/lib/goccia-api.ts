@@ -25,6 +25,8 @@ import {
   responseCacheSet,
 } from "@/lib/response-cache";
 import {
+  DEFAULT_EXECUTION_MODE,
+  type ExecutionMode,
   findVersion,
   hostFilesystemBoundaryFlag,
   isFlagSupported,
@@ -51,7 +53,7 @@ const ALLOWED_CHILD_ENV = [
 
 type GocciaRequestBody = {
   code: string;
-  mode?: "interpreted" | "bytecode";
+  mode?: ExecutionMode;
   // Keep this public request field as `asi` while the playground targets
   // released GocciaScript versions whose website API used the short name.
   // Do not rename it to `compatAsi` until version support no longer needs it.
@@ -137,7 +139,7 @@ function runtimeTelemetryProperties(
   codeBytes?: number,
 ): Record<string, unknown> {
   return {
-    mode: body.mode === "bytecode" ? "bytecode" : "interpreted",
+    mode: body.mode ?? DEFAULT_EXECUTION_MODE,
     asi,
     compatVar,
     compatFunction,
@@ -862,8 +864,7 @@ async function runHandler(
   // cache entry. Different versions get isolated entries — switching the
   // dropdown to nightly or v0.6.1 always re-spawns until that version's
   // cache fills.
-  const mode: "interpreted" | "bytecode" =
-    body.mode === "bytecode" ? "bytecode" : "interpreted";
+  const mode: ExecutionMode = body.mode ?? DEFAULT_EXECUTION_MODE;
   const cacheKey = responseCacheKey({
     kind: config.kind,
     code,

@@ -206,8 +206,8 @@ jobs:
       - name: Run suite under heaptrc
         id: heaptrc
         run: |
-          modeflag=""
-          if [ "${{ matrix.mode }}" = "bytecode" ]; then modeflag="--mode=bytecode"; fi
+          modeflag="--mode=bytecode"
+          if [ "${{ matrix.mode }}" = "interpreter" ]; then modeflag="--mode=interpreted"; fi
           # HEAPTRC halt-on-error would abort mid-suite; capture and inspect
           # the summary instead so a leak reports alongside the test results.
           ./build/GocciaTestRunnerHeaptrc -P tests $modeflag 2> build/heaptrc-${{ matrix.mode }}.log
@@ -221,8 +221,8 @@ jobs:
         # A full suite run under memcheck is slow; --error-exitcode makes any
         # invalid access fail the job rather than scroll past.
         run: |
-          modeflag=""
-          if [ "${{ matrix.mode }}" = "bytecode" ]; then modeflag="--mode=bytecode"; fi
+          modeflag="--mode=bytecode"
+          if [ "${{ matrix.mode }}" = "interpreter" ]; then modeflag="--mode=interpreted"; fi
           valgrind \
             --tool=memcheck \
             --error-exitcode=42 \

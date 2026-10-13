@@ -412,6 +412,7 @@ type
     function FindExtension(
       const AClass: TGocciaEngineExtensionClass): TGocciaEngineExtension;
 
+    { One-shot helpers that run the source in a bytecode executor of their own. }
     class function RunScript(const ASource: string; const AFileName: string = 'inline.goccia'): TGocciaScriptResult; overload;
     class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult; overload;
 
@@ -3401,12 +3402,15 @@ class function TGocciaEngine.RunScriptFromStringList(
   const ASource: TStringList; const AFileName: string): TGocciaScriptResult;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create(AFileName, ASource, Executor);
     try
+      { Script source keeps its top-level bindings on the global object;
+        a module file name (.mjs) gives module source, which does not. }
+      Executor.GlobalBackedTopLevel := Engine.SourceType = stScript;
       Result := Engine.Execute;
     finally
       Engine.Free;

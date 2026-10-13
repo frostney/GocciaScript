@@ -305,10 +305,10 @@ so the full JavaScript suite can run the folder-configured FFI tests locally.
 ### Run All Tests
 
 ```bash
-# Interpreter mode (default)
-./build/GocciaTestRunner tests
+# Interpreter mode
+./build/GocciaTestRunner tests --mode=interpreted
 
-# Bytecode mode
+# Bytecode mode (the default)
 ./build/GocciaTestRunner tests --mode=bytecode
 ```
 

@@ -31,6 +31,7 @@ import {
   type ToolFlow,
   type ToolFlowKey,
 } from "@/lib/tool-call-comparison";
+import { DEFAULT_EXECUTION_MODE } from "@/lib/vendor-manifest";
 
 /** When ready to surface the SDK integration snippet, flip to true.
  *  Hidden until the runtime is mature enough to expose a stable
@@ -371,7 +372,7 @@ type SandboxProps = {
 };
 
 export function Sandbox({
-  apiCommand = "GocciaRunner --compat-asi --timeout=5000",
+  apiCommand = "GocciaRunner --compat-asi --timeout=5000 --mode=bytecode",
 }: SandboxProps) {
   // The globals are not passed as a flag: `buildScript` inlines them ahead of
   // the user script, which reaches the engine on stdin.
@@ -498,11 +499,10 @@ export function Sandbox({
       const res = await fetch("/api/execute", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // `mode: "interpreted"` matches the route's accepted values
-        // (`"interpreted" | "bytecode"`) — see `/api/execute/route.ts`.
+        // The demo runs the default backend, which `apiCommand` names.
         body: JSON.stringify({
           code: fullCode,
-          mode: "interpreted",
+          mode: DEFAULT_EXECUTION_MODE,
           asi: true,
         }),
       });

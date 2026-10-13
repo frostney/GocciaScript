@@ -1,7 +1,9 @@
 import {
+  type ExecutionMode,
   hostFilesystemBoundaryFlag,
   isFlagSupported,
   resolveAsiFlag,
+  supportsModeFlag,
   type VendorFeatureSet,
 } from "@/lib/vendor-manifest";
 
@@ -12,7 +14,7 @@ export const STACK_SIZE = 2_000;
 export const ALLOWED_HOSTS = ["icanhazdadjoke.com"];
 
 export type EngineArgsOptions = {
-  mode?: "interpreted" | "bytecode";
+  mode?: ExecutionMode;
   asi: boolean;
   compatVar: boolean;
   compatFunction: boolean;
@@ -72,11 +74,12 @@ export function buildEngineArgs(
   // doesn't recognize them, and that's the desired UX (the user toggled it).
   if (options.compatVar) args.push("--compat-var");
   if (options.compatFunction) args.push("--compat-function");
-  if (
-    options.mode === "bytecode" &&
-    isFlagSupported(features, "--mode", kind)
-  ) {
-    args.push("--mode=bytecode");
+  // Name the backend explicitly for both values: released engines default to
+  // the interpreter and newer ones to bytecode (#871), so leaving the flag
+  // off would make the result depend on the binary's own default. A binary
+  // that doesn't advertise `--mode` gets no mode flag at all.
+  if (options.mode && supportsModeFlag(features, kind)) {
+    args.push(`--mode=${options.mode}`);
   }
   return args;
 }

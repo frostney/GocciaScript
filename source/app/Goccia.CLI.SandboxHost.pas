@@ -95,6 +95,8 @@ type
 
     property Context: TGocciaSandboxContext read FContext;
     property Inputs: TSandboxHostInputs read FInputs;
+    { Runs guest scripts in the bytecode VM; True unless the host turns it off
+      for interpreted mode. }
     property Bytecode: Boolean read FBytecode write FBytecode;
     property TimeoutMilliseconds: Integer read FTimeoutMilliseconds
       write FTimeoutMilliseconds;
@@ -328,6 +330,7 @@ begin
   FInputs := TSandboxHostInputs.Create(FContext.Fs);
   FAliases := TStringList.Create;
   FRootCapabilities := TGocciaCapabilities.None;
+  FBytecode := True;
 end;
 
 destructor TGocciaSandboxHost.Destroy;

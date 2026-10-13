@@ -78,6 +78,10 @@ type
     procedure TestFailedEntryRethrowsItsErrorExecuteInterpreted;
     procedure TestFailedEntryRethrowsItsErrorExecuteBytecode;
     procedure TestFailedEntryRethrowsItsErrorBytecodeRun;
+    procedure CheckEntryModuleImportAfterExecute(
+      const AExecutor: TGocciaExecutor; const ATag: string);
+    procedure TestEntryModuleImportAfterExecuteInterpreted;
+    procedure TestEntryModuleImportAfterExecuteBytecode;
   public
     procedure SetupTests; override;
   end;
@@ -150,6 +154,10 @@ begin
   Test('an import of an entry whose run threw rethrows its error ' +
     '(compiled bytecode run)',
     TestFailedEntryRethrowsItsErrorBytecodeRun);
+  Test('importing the entry module after Execute reuses it (interpreted)',
+    TestEntryModuleImportAfterExecuteInterpreted);
+  Test('importing the entry module after Execute reuses it (bytecode)',
+    TestEntryModuleImportAfterExecuteBytecode);
 end;
 
 function TRuntimeTests.CreateEmptySource: TStringList;
@@ -800,6 +808,63 @@ procedure TRuntimeTests.TestFailedEntryRethrowsItsErrorBytecodeRun;
 begin
   CheckFailedEntryRethrowsItsError(TGocciaBytecodeExecutor.Create, True,
     'bytecode-run');
+end;
+
+{ A host that calls into the engine after Execute (a test runner running its
+  registered tests) can reach an import of the entry's own path. The entry is
+  already evaluated: the import must hand back that module, not take it for a
+  changed file and run its body again. In bytecode mode the second run wrote
+  its exports into the finished run's module scope and crashed. }
+procedure TRuntimeTests.CheckEntryModuleImportAfterExecute(
+  const AExecutor: TGocciaExecutor; const ATag: string);
+var
+  Engine: TGocciaEngine;
+  EntryPath: string;
+  ExportValue: TGocciaValue;
+  GlobalObject: TGocciaObjectValue;
+  Module: TGocciaModule;
+  Source: TStringList;
+begin
+  EntryPath := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-entry-import-after-execute-' + ATag + '.mjs';
+  Source := TStringList.Create;
+  Source.Add('globalThis.entryRuns = (globalThis.entryRuns ?? 0) + 1;');
+  Source.Add('export const answer = 42;');
+  WriteUTF8FileText(EntryPath, Source.Text);
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create(EntryPath, Source, AExecutor,
+      TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
+    { The host filesystem provider, which knows the file's age. }
+    AttachRuntime(Engine);
+    if AExecutor is TGocciaBytecodeExecutor then
+      TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel := False;
+    Engine.Execute;
+
+    Module := Engine.ModuleLoader.LoadModule(EntryPath, EntryPath);
+    Expect<Boolean>(Module.TryGetExportValue('answer', ExportValue)).ToBe(True);
+    Expect<Double>(ExportValue.ToNumberLiteral.Value).ToBe(42);
+    GlobalObject := TGocciaObjectValue(Engine.Realm.GlobalObject);
+    Expect<Double>(GlobalObject.GetProperty('entryRuns').ToNumberLiteral.Value)
+      .ToBe(1);
+  finally
+    Engine.Free;
+    AExecutor.Free;
+    Source.Free;
+    DeleteFile(EntryPath);
+  end;
+end;
+
+procedure TRuntimeTests.TestEntryModuleImportAfterExecuteInterpreted;
+begin
+  CheckEntryModuleImportAfterExecute(TGocciaInterpreterExecutor.Create,
+    'interpreted');
+end;
+
+procedure TRuntimeTests.TestEntryModuleImportAfterExecuteBytecode;
+begin
+  CheckEntryModuleImportAfterExecute(TGocciaBytecodeExecutor.Create,
+    'bytecode');
 end;
 
 begin

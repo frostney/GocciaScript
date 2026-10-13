@@ -118,7 +118,7 @@ begin
   WriteLn(AOut, '  --strict-types                Enforce type annotations at runtime');
   WriteLn(AOut, '  --warning-unsupported-features');
   WriteLn(AOut, '                                Warn and recover for unsupported/default-disabled syntax');
-  WriteLn(AOut, '  --mode=interpreted|bytecode   Execution mode (default: interpreted)');
+  WriteLn(AOut, '  --mode=interpreted|bytecode   Execution mode (default: bytecode)');
   WriteLn(AOut, '  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
   WriteLn(AOut, '  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn(AOut, '  --unsafe-function-constructor Enable dynamic Function constructor');
@@ -295,7 +295,7 @@ begin
   AOptions.UnsafeShadowRealm := False;
   AOptions.Deterministic := False;
   AOptions.Print := False;
-  AOptions.Mode := bemInterpreted;
+  AOptions.Mode := bemBytecode;
   AOptions.SourceType := stScript;
   AOptions.SourceTypeExplicit := False;
   AOptions.FileName := STDIN_PATH_MARKER;

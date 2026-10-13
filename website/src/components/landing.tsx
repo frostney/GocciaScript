@@ -533,7 +533,7 @@ console.log("total:", total);`;
       label: "Compiler & VM",
       small: "register bytecode → .gbc",
       overview:
-        "Default execution is a tree-walk evaluator over the AST. With --mode=bytecode the compiler lowers the AST to a register-based bytecode and the VM executes that — same object model, same scope chain, just a different backend.",
+        "By default the compiler lowers the AST to a register-based bytecode and the VM executes that. With --mode=interpreted a tree-walk evaluator runs the AST directly — same object model, same scope chain, just a different backend.",
       docId: "bytecode-vm",
       docLabel: "Bytecode VM",
     },

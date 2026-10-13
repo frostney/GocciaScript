@@ -3,9 +3,11 @@ import { Sandbox } from "@/components/sandbox";
 import { TIMEOUT_MS } from "@/lib/engine-args";
 import {
   binaryNames,
+  DEFAULT_EXECUTION_MODE,
   findVersion,
   resolveAsiFlag,
   resolvePublicDefaultVersion,
+  supportsModeFlag,
 } from "@/lib/vendor-manifest";
 import { getVendorManifest } from "@/lib/vendor-manifest-server";
 
@@ -35,7 +37,10 @@ export default function SandboxPage() {
   const entry = findVersion(manifest, resolvePublicDefaultVersion(manifest));
   const binary = entry ? binaryNames(entry).loader : "GocciaRunner";
   const asiFlag = resolveAsiFlag(entry?.features, "loader");
-  const apiCommand = [binary, asiFlag, `--timeout=${TIMEOUT_MS}`]
+  const modeFlag = supportsModeFlag(entry?.features, "loader")
+    ? `--mode=${DEFAULT_EXECUTION_MODE}`
+    : null;
+  const apiCommand = [binary, asiFlag, `--timeout=${TIMEOUT_MS}`, modeFlag]
     .filter(Boolean)
     .join(" ");
   return <Sandbox apiCommand={apiCommand} />;

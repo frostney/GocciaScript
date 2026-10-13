@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  DEFAULT_EXECUTION_MODE,
+  type ExecutionMode,
+} from "@/lib/vendor-manifest";
 
 export const MAX_GOCCIA_CODE_BYTES = 8 * 1024;
 /** Upper bound on `version` so the wire-size envelope stays predictable.
@@ -9,6 +13,7 @@ const MAX_JSON_ESCAPE_BYTES_PER_CODE_BYTE = "\\uFFFF".length;
 const REQUEST_ENVELOPE_BYTES = new TextEncoder().encode(
   JSON.stringify({
     code: "",
+    // The longest accepted mode value, so the envelope stays worst-case.
     mode: "interpreted",
     asi: true,
     compatVar: false,
@@ -25,7 +30,7 @@ export const MAX_GOCCIA_TOOL_REQUEST_BYTES =
 
 export type GocciaToolPayload = {
   code: string;
-  mode: "interpreted" | "bytecode";
+  mode: ExecutionMode;
   asi: boolean;
   compatVar: boolean;
   compatFunction: boolean;
@@ -56,7 +61,7 @@ export const gocciaToolInputZodSchema = z
       .refine((code) => utf8ByteLength(code) <= MAX_GOCCIA_CODE_BYTES, {
         message: `code exceeds ${MAX_GOCCIA_CODE_BYTES} bytes`,
       }),
-    mode: z.enum(["interpreted", "bytecode"]).default("interpreted"),
+    mode: z.enum(["interpreted", "bytecode"]).default(DEFAULT_EXECUTION_MODE),
     asi: z.boolean().default(true),
     compatVar: z.boolean().default(false),
     compatFunction: z.boolean().default(false),
@@ -116,8 +121,8 @@ export function gocciaRunInputSchema() {
         type: "string",
         enum: ["interpreted", "bytecode"],
         description:
-          "Execution backend. Use bytecode to match --mode=bytecode.",
-        default: "interpreted",
+          "Execution backend, passed as --mode=<value> to binaries that advertise --mode; binaries that do not run their built-in default. Defaults to bytecode.",
+        default: DEFAULT_EXECUTION_MODE,
       },
       asi: {
         type: "boolean",

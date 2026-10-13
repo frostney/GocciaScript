@@ -224,7 +224,7 @@ const scratch = mkdtemp("goccia-differential-");
 
 /** Runs one file under goccia and reads back its JSON result envelope. */
 function gocciaResults(path: string, bytecode: boolean, extraFlags: string[] = []): Run {
-  const mode = bytecode ? ["--mode=bytecode"] : [];
+  const mode = [bytecode ? "--mode=bytecode" : "--mode=interpreted"];
   const outPath = join(scratch, `${basename(path)}${bytecode ? ".bc" : ".it"}.json`);
   const proc = Bun.spawnSync([GOCCIA_BIN, path, `--output=${outPath}`, ...GFLAGS, ...extraFlags, ...mode], {
     stdout: "pipe",

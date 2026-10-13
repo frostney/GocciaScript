@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Four runtimes per file** — every differential suite under `scripts/differential/` runs under `GocciaTestRunner`, `GocciaTestRunner --mode=bytecode`, and whichever external runtimes its classification names
+- **Four runtimes per file** — every differential suite under `scripts/differential/` runs under `GocciaTestRunner --mode=interpreted`, `GocciaTestRunner --mode=bytecode`, and whichever external runtimes its classification names
 - **Two oracles, different jobs** — vitest decides testing-API semantics (matchers, hooks, accounting) because being an exact Vitest drop-in *is* the product; bun decides ECMAScript semantics, and is advisory everywhere else
 - **Names *and* counts** — two runtimes can fail the same number of different tests, and can agree on which tests fail while running different numbers of them, so every comparison checks both
 - **A timeout is a divergence** — a hang is a finding, never an infrastructure error
