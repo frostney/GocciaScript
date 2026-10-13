@@ -44,7 +44,7 @@ member.
 
 Use `scripts/stack_state.py inspect --expect <snapshot>` to distinguish an
 unchanged stack, an append-only member, and invalidating topology or head drift.
-Use its foreground `wait` operation only when stack change itself is the awaited
+Use its `wait` operation only when stack change itself is the awaited
 transition.
 
 The helper resolves the base branch's current commit independently: the native

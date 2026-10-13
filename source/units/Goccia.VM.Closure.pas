@@ -15,7 +15,11 @@ type
   TGocciaBytecodeClosure = class
   private
     FTemplate: TGocciaFunctionTemplate;
-    FUpvalues: array of TGocciaBytecodeUpvalue;
+    // The cells this closure captured, shared with the frame that opened
+    // them and with every other closure that captured the same binding. The
+    // collector owns them (TGocciaBytecodeCell), so the closure only marks
+    // them and never frees one.
+    FUpvalues: array of TGocciaBytecodeCell;
     FHomeObject: TGocciaObjectValue;
     FHomeClass: TGocciaObjectValue;
     // The class whose private names the closure's code resolves first: the
@@ -32,8 +36,8 @@ type
       const AUpvalueCount: Integer = 0);
     destructor Destroy; override;
     function Clone: TGocciaBytecodeClosure;
-    procedure SetUpvalue(const AIndex: Integer; const AUpvalue: TGocciaBytecodeUpvalue);
-    function GetUpvalue(const AIndex: Integer): TGocciaBytecodeUpvalue;
+    procedure SetUpvalue(const AIndex: Integer; const AUpvalue: TGocciaBytecodeCell);
+    function GetUpvalue(const AIndex: Integer): TGocciaBytecodeCell;
     function GetUpvalueCount: Integer;
     property Template: TGocciaFunctionTemplate read FTemplate;
     property UpvalueCount: Integer read GetUpvalueCount;
@@ -86,7 +90,7 @@ begin
 end;
 
 procedure TGocciaBytecodeClosure.SetUpvalue(const AIndex: Integer;
-  const AUpvalue: TGocciaBytecodeUpvalue);
+  const AUpvalue: TGocciaBytecodeCell);
 begin
   if (AIndex < 0) or (AIndex >= Length(FUpvalues)) then
     Exit;
@@ -94,7 +98,7 @@ begin
 end;
 
 function TGocciaBytecodeClosure.GetUpvalue(
-  const AIndex: Integer): TGocciaBytecodeUpvalue;
+  const AIndex: Integer): TGocciaBytecodeCell;
 begin
   if (AIndex >= 0) and (AIndex < Length(FUpvalues)) then
     Result := FUpvalues[AIndex]

@@ -10,7 +10,7 @@ license: Unlicense OR MIT
 compatibility: >-
   Requires authenticated GitHub access, git worktrees, the internal
   `delivery-wait` skill, and a host that supports subagents and passive
-  foreground-process waiting; implementation, review, and validation use the
+  command waiting; implementation, review, and validation use the
   project's installed workflow skills and declared gates.
 metadata:
   agents-role: entry-point
@@ -138,9 +138,11 @@ Normalize every material lifecycle, decision, wait, gate, usage, retry, rework,
 and integration transition, then pass it to the event-ledger `ingest` command.
 Host adapters own translation from native events; never add provider transcript
 parsers to this skill. Inner delivery and review loops launch the bundled
-deterministic foreground waits; the outer milestone loop passively awaits
-worker or command completion as the orchestration reference's event-driven
-waits describe and reconciles its checkpoint after each returned transition.
+deterministic waits under
+[`delivery-wait`'s running rules](../delivery-wait/SKILL.md#running-a-wait);
+the outer milestone loop passively awaits worker or command completion as the
+orchestration reference's event-driven waits describe and reconciles its
+checkpoint after each returned transition.
 Unsupported passive waiting required by repository policy blocks spawning.
 
 ## Blockers and completion
