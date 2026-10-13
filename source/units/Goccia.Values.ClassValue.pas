@@ -8,6 +8,7 @@ uses
   Classes,
 
   OrderedStringMap,
+  UnicodeStringList,
 
   Goccia.Arguments.Collection,
   Goccia.AST.Expressions,
@@ -61,8 +62,17 @@ type
     FPrivateGetters: TOrderedStringMap<TGocciaFunctionBase>;
     FPrivateSetters: TOrderedStringMap<TGocciaFunctionBase>;
     FCreationRealm: TGocciaRealm;
-    FDeclaredPrivateNames: TStringList;
-    FDeclaredPrivateKeys: TStringList;
+    // Each declared private name, in declaration order, mapped to its
+    // internal storage key ('' when it was declared without one). Native
+    // strings: a TStringList converts every entry through the ANSI widestring
+    // manager, which put iconv on every bytecode private access.
+    FDeclaredPrivateNames: TStringStringMap;
+    // The reverse of FDeclaredPrivateNames: each internal key mapped to the
+    // name that first declared it. Created on the first keyed declaration.
+    FDeclaredPrivateKeyNames: TStringStringMap;
+    // Advances whenever this class gains a private name, so a cache derived
+    // from the private-name set can tell it is stale.
+    FPrivateNamesVersion: Cardinal;
     FNativeSuperConstructor: TGocciaObjectValue;
     FPrivateBrandToken: string;
     FMethodInitializers: array of TGocciaValue;
@@ -138,7 +148,12 @@ type
       const AInternalKey: string = '');
     function ResolveDeclaredPrivateKey(const AName: string;
       out AInternalKey: string): Boolean;
-    procedure AppendOwnPrivateNames(const ANames: TStrings);
+    // The name AInternalKey was first declared under by DeclarePrivateName.
+    function TryGetDeclaredPrivateKeyName(const AInternalKey: string;
+      out AName: string): Boolean;
+    property PrivateNamesVersion: Cardinal read FPrivateNamesVersion;
+    procedure AppendOwnPrivateNames(const ANames: TStrings); overload;
+    procedure AppendOwnPrivateNames(const ANames: TUnicodeStringList); overload;
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
     function NativeInstanceDefaultPrototype: TGocciaObjectValue; virtual;
     function SupportsRealmIntrinsicPrototypeFallback: Boolean; virtual;
@@ -1012,30 +1027,6 @@ begin
   Result := True;
 end;
 
-function TryGetNameValueExact(const AList: TStringList; const AName: string;
-  out AValue: string): Boolean;
-var
-  I, Sep: Integer;
-  Entry: string;
-begin
-  AValue := '';
-  if not Assigned(AList) then
-    Exit(False);
-
-  for I := 0 to AList.Count - 1 do
-  begin
-    Entry := AList[I];
-    Sep := Pos(AList.NameValueSeparator, Entry);
-    if (Sep > 0) and (Copy(Entry, 1, Sep - 1) = AName) then
-    begin
-      AValue := Copy(Entry, Sep + 1, MaxInt);
-      Exit(True);
-    end;
-  end;
-
-  Result := False;
-end;
-
 constructor TGocciaClassValue.Create(const AName: string; const ASuperClass: TGocciaClassValue);
 begin
   inherited Create;
@@ -1058,13 +1049,7 @@ begin
   FPrivateMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FPrivateGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FPrivateSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
-  FDeclaredPrivateNames := TStringList.Create;
-  FDeclaredPrivateNames.CaseSensitive := True;
-  FDeclaredPrivateNames.Sorted := False;
-  FDeclaredPrivateNames.Duplicates := dupIgnore;
-  FDeclaredPrivateKeys := TStringList.Create;
-  FDeclaredPrivateKeys.CaseSensitive := True;
-  FDeclaredPrivateKeys.Sorted := False;
+  FDeclaredPrivateNames := TStringStringMap.Create;
   FNativeSuperConstructor := nil;
   FClassPrototype := TGocciaObjectValue.Create;
   FConstructorMethod := nil;
@@ -1094,7 +1079,7 @@ begin
   FPrivateGetters.Free;
   FPrivateSetters.Free;
   FDeclaredPrivateNames.Free;
-  FDeclaredPrivateKeys.Free;
+  FDeclaredPrivateKeyNames.Free;
   // Don't free FClassPrototype - it's GC-managed
   inherited;
 end;
@@ -1317,11 +1302,13 @@ end;
 procedure TGocciaClassValue.AddPrivateGetter(const AName: string; const AGetter: TGocciaFunctionBase);
 begin
   FPrivateGetters.AddOrSetValue(AName, AGetter);
+  Inc(FPrivateNamesVersion);
 end;
 
 procedure TGocciaClassValue.AddPrivateSetter(const AName: string; const ASetter: TGocciaFunctionBase);
 begin
   FPrivateSetters.AddOrSetValue(AName, ASetter);
+  Inc(FPrivateNamesVersion);
 end;
 
 function TGocciaClassValue.HasPrivateGetter(const AName: string): Boolean;
@@ -1362,7 +1349,7 @@ end;
 
 function TGocciaClassValue.HasOwnPrivateName(const AName: string): Boolean;
 begin
-  Result := (FDeclaredPrivateNames.IndexOf(AName) >= 0) or
+  Result := FDeclaredPrivateNames.ContainsKey(AName) or
     FPrivateInstancePropertyDefs.ContainsKey(AName) or
     FPrivateStaticProperties.ContainsKey(AName) or
     FPrivateStaticMethods.ContainsKey(AName) or
@@ -1664,27 +1651,36 @@ procedure TGocciaClassValue.AddPrivateInstanceProperty(const AName: string; cons
 begin
   DeclarePrivateName(AName);
   FPrivateInstancePropertyDefs.Add(AName, AExpression);
+  Inc(FPrivateNamesVersion);
 end;
 
 procedure TGocciaClassValue.AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
 begin
   DeclarePrivateName(AName);
-  if (not FPrivateStaticProperties.ContainsKey(AName)) and not Extensible then
-    ThrowTypeError('Cannot add private elements to a non-extensible object',
-      SSuggestObjectNotExtensible);
-  FPrivateStaticProperties.AddOrSetValue(AName, AValue);
+  if FPrivateStaticProperties.ContainsKey(AName) then
+    FPrivateStaticProperties.AddOrSetValue(AName, AValue)
+  else
+  begin
+    if not Extensible then
+      ThrowTypeError('Cannot add private elements to a non-extensible object',
+        SSuggestObjectNotExtensible);
+    FPrivateStaticProperties.Add(AName, AValue);
+    Inc(FPrivateNamesVersion);
+  end;
 end;
 
 procedure TGocciaClassValue.AddPrivateStaticMethod(const AName: string; const AValue: TGocciaValue);
 begin
   DeclarePrivateName(AName);
   FPrivateStaticMethods.AddOrSetValue(AName, AValue);
+  Inc(FPrivateNamesVersion);
 end;
 
 procedure TGocciaClassValue.AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
 begin
   DeclarePrivateName(AName);
   FPrivateMethods.AddOrSetValue(AName, AMethod);
+  Inc(FPrivateNamesVersion);
 end;
 
 function TGocciaClassValue.GetPrivateMethod(const AName: string): TGocciaMethodValue;
@@ -1700,27 +1696,77 @@ var
 begin
   if AName = '' then
     Exit;
-  if FDeclaredPrivateNames.IndexOf(AName) < 0 then
-    FDeclaredPrivateNames.Add(AName);
-  if AInternalKey <> '' then
+  // The first internal key declared for a name wins.
+  if FDeclaredPrivateNames.TryGetValue(AName, ExistingInternalKey) then
   begin
-    if not TryGetNameValueExact(FDeclaredPrivateKeys, AName,
-      ExistingInternalKey) then
-      FDeclaredPrivateKeys.Add(AName + FDeclaredPrivateKeys.NameValueSeparator +
-        AInternalKey);
-  end;
+    if (ExistingInternalKey <> '') or (AInternalKey = '') then
+      Exit;
+    FDeclaredPrivateNames.AddOrSetValue(AName, AInternalKey);
+  end
+  else
+    FDeclaredPrivateNames.Add(AName, AInternalKey);
+  Inc(FPrivateNamesVersion);
+  if AInternalKey = '' then
+    Exit;
+  if not Assigned(FDeclaredPrivateKeyNames) then
+    FDeclaredPrivateKeyNames := TStringStringMap.Create;
+  if not FDeclaredPrivateKeyNames.ContainsKey(AInternalKey) then
+    FDeclaredPrivateKeyNames.Add(AInternalKey, AName);
+end;
+
+function TGocciaClassValue.TryGetDeclaredPrivateKeyName(
+  const AInternalKey: string; out AName: string): Boolean;
+begin
+  Result := Assigned(FDeclaredPrivateKeyNames) and
+    FDeclaredPrivateKeyNames.TryGetValue(AInternalKey, AName);
+  if not Result then
+    AName := '';
 end;
 
 function TGocciaClassValue.ResolveDeclaredPrivateKey(const AName: string;
   out AInternalKey: string): Boolean;
 begin
-  Result := TryGetNameValueExact(FDeclaredPrivateKeys, AName, AInternalKey);
+  Result := FDeclaredPrivateNames.TryGetValue(AName, AInternalKey) and
+    (AInternalKey <> '');
+  if not Result then
+    AInternalKey := '';
 end;
 
 procedure TGocciaClassValue.AppendOwnPrivateNames(const ANames: TStrings);
 var
+  Names: TUnicodeStringList;
+  Name: string;
+begin
+  if not Assigned(ANames) then
+    Exit;
+  Names := TUnicodeStringList.Create;
+  try
+    AppendOwnPrivateNames(Names);
+    for Name in Names do
+      if ANames.IndexOf(Name) < 0 then
+        ANames.Add(Name);
+  finally
+    Names.Free;
+  end;
+end;
+
+// Appends AName unless ANames already holds it, compared by code units:
+// TList.IndexOf would collate through the locale.
+procedure AddUniquePrivateName(const ANames: TUnicodeStringList;
+  const AName: string);
+var
   I: Integer;
-  DeclaredName: string;
+begin
+  for I := 0 to ANames.Count - 1 do
+    if ANames[I] = AName then
+      Exit;
+  ANames.Add(AName);
+end;
+
+procedure TGocciaClassValue.AppendOwnPrivateNames(
+  const ANames: TUnicodeStringList);
+var
+  DeclaredPair: TStringStringMap.TKeyValuePair;
   DeclaredKey: string;
   PropertyPair: TGocciaExpressionMap.TKeyValuePair;
   StaticPair: TGocciaValueMap.TKeyValuePair;
@@ -1730,39 +1776,39 @@ begin
   if not Assigned(ANames) then
     Exit;
 
-  for I := 0 to FDeclaredPrivateNames.Count - 1 do
-  begin
-    DeclaredName := FDeclaredPrivateNames[I];
-    if not TryGetNameValueExact(FDeclaredPrivateKeys, DeclaredName,
-      DeclaredKey) then
-      DeclaredKey := DeclaredName;
-    if ANames.IndexOf(DeclaredKey) < 0 then
-      ANames.Add(DeclaredKey);
-  end;
+  // Skipping an empty map skips setting up its enumerator.
+  if FDeclaredPrivateNames.CountFast > 0 then
+    for DeclaredPair in FDeclaredPrivateNames do
+    begin
+      DeclaredKey := DeclaredPair.Value;
+      if DeclaredKey = '' then
+        DeclaredKey := DeclaredPair.Key;
+      AddUniquePrivateName(ANames, DeclaredKey);
+    end;
 
-  for PropertyPair in FPrivateInstancePropertyDefs do
-    if ANames.IndexOf(PropertyPair.Key) < 0 then
-      ANames.Add(PropertyPair.Key);
+  if FPrivateInstancePropertyDefs.CountFast > 0 then
+    for PropertyPair in FPrivateInstancePropertyDefs do
+      AddUniquePrivateName(ANames, PropertyPair.Key);
 
-  for StaticPair in FPrivateStaticProperties do
-    if ANames.IndexOf(StaticPair.Key) < 0 then
-      ANames.Add(StaticPair.Key);
+  if FPrivateStaticProperties.CountFast > 0 then
+    for StaticPair in FPrivateStaticProperties do
+      AddUniquePrivateName(ANames, StaticPair.Key);
 
-  for StaticPair in FPrivateStaticMethods do
-    if ANames.IndexOf(StaticPair.Key) < 0 then
-      ANames.Add(StaticPair.Key);
+  if FPrivateStaticMethods.CountFast > 0 then
+    for StaticPair in FPrivateStaticMethods do
+      AddUniquePrivateName(ANames, StaticPair.Key);
 
-  for MethodPair in FPrivateMethods do
-    if ANames.IndexOf(MethodPair.Key) < 0 then
-      ANames.Add(MethodPair.Key);
+  if FPrivateMethods.CountFast > 0 then
+    for MethodPair in FPrivateMethods do
+      AddUniquePrivateName(ANames, MethodPair.Key);
 
-  for FuncPair in FPrivateGetters do
-    if ANames.IndexOf(FuncPair.Key) < 0 then
-      ANames.Add(FuncPair.Key);
+  if FPrivateGetters.CountFast > 0 then
+    for FuncPair in FPrivateGetters do
+      AddUniquePrivateName(ANames, FuncPair.Key);
 
-  for FuncPair in FPrivateSetters do
-    if ANames.IndexOf(FuncPair.Key) < 0 then
-      ANames.Add(FuncPair.Key);
+  if FPrivateSetters.CountFast > 0 then
+    for FuncPair in FPrivateSetters do
+      AddUniquePrivateName(ANames, FuncPair.Key);
 end;
 
 function TGocciaClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
