@@ -9,7 +9,7 @@
 - **Shared source pipeline** — Preprocessors, lexer, parser, warning data, source maps, and AST artifacts are shared between execution modes
 - **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
-- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not call the interpreter or evaluator (it shares only the `Goccia.Evaluator.Context` record type); the VM it drives still calls the tree-walk evaluator to construct classes that evaluator-run code, such as the bootstrap shims, built. See [Bytecode VM § Overview](bytecode-vm.md#overview)
+- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not call the interpreter or evaluator (it shares only the `Goccia.Evaluator.Context` record type), and an engine with a bytecode executor builds no interpreter. The VM still links the tree-walk evaluator to construct a class the evaluator built, which only the interpreter executor creates, until the interpreter is removed. See [Bytecode VM § Overview](bytecode-vm.md#overview)
 
 ## Overview
 
@@ -118,11 +118,11 @@ TGocciaExecutor (abstract — Goccia.Executor.pas)
 │     Wraps TGocciaInterpreter for tree-walk execution
 └── TGocciaBytecodeExecutor (Goccia.Executor.Bytecode.pas)
       Compiles to bytecode and runs on TGocciaVM
-      Executor unit does not call the evaluator; the VM still calls Goccia.Evaluator
-      for classes evaluator-run code built
+      Executor unit does not call the evaluator; the VM still links Goccia.Evaluator
+      for classes the evaluator built
 ```
 
-The engine always creates a `TGocciaInterpreter` for bootstrapping (global scope creation, built-in registration, shim loading). The executor receives the bootstrapped global scope and module loader via `Initialize`, then handles all program and module body execution independently.
+The engine bootstraps the realm itself: it creates the global scope (`TGocciaEngine.GlobalScope`), binds it to the module loader and registers the built-ins. It creates a `TGocciaInterpreter`, which shares that global scope, only for a `TGocciaInterpreterExecutor`; with a bytecode executor `Engine.Interpreter` is nil. The executor receives the global scope and module loader via `Initialize`, then handles all program and module body execution, and loads the bootstrap shims when they are first used (`TGocciaExecutor.EvaluateShim`, see [Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)).
 
 Callers must pass an explicit executor to the engine constructor — there is no implicit default. The engine never frees the executor; the caller (or a wrapping layer such as `TGocciaRuntime`) owns it and frees it after the engine.
 
