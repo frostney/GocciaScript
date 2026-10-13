@@ -1097,21 +1097,38 @@ begin
   else if EngineOptions.ExecutionMode = emBytecode then
   begin
     WriteLn('Running script (bytecode): ', AFileName);
-    WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
-      [FormatDuration(AReport.Timing.LexTimeNanoseconds),
-       FormatDuration(AReport.Timing.ParseTimeNanoseconds),
-       FormatDuration(AReport.Timing.CompileTimeNanoseconds),
-       FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
-       FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
+    // Concatenated and encoded here rather than formatted: Format converts
+    // every field to the system codepage and back, and WriteLn converts the
+    // line, each through the codepage manager. On UTF-8 the bytes are the
+    // same.
+    if DefaultSystemCodePage = CP_UTF8 then
+      WriteLn(UTF8Encode('  Lex: ' + FormatDuration(AReport.Timing.LexTimeNanoseconds) +
+        ' | Parse: ' + FormatDuration(AReport.Timing.ParseTimeNanoseconds) +
+        ' | Compile: ' + FormatDuration(AReport.Timing.CompileTimeNanoseconds) +
+        ' | Execute: ' + FormatDuration(AReport.Timing.ExecuteTimeNanoseconds) +
+        ' | Total: ' + FormatDuration(AReport.Timing.TotalTimeNanoseconds)))
+    else
+      WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+        [FormatDuration(AReport.Timing.LexTimeNanoseconds),
+         FormatDuration(AReport.Timing.ParseTimeNanoseconds),
+         FormatDuration(AReport.Timing.CompileTimeNanoseconds),
+         FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
+         FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end
   else
   begin
     WriteLn('Running script (interpreted): ', AFileName);
-    WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
-      [FormatDuration(AReport.Timing.LexTimeNanoseconds),
-       FormatDuration(AReport.Timing.ParseTimeNanoseconds),
-       FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
-       FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
+    if DefaultSystemCodePage = CP_UTF8 then
+      WriteLn(UTF8Encode('  Lex: ' + FormatDuration(AReport.Timing.LexTimeNanoseconds) +
+        ' | Parse: ' + FormatDuration(AReport.Timing.ParseTimeNanoseconds) +
+        ' | Execute: ' + FormatDuration(AReport.Timing.ExecuteTimeNanoseconds) +
+        ' | Total: ' + FormatDuration(AReport.Timing.TotalTimeNanoseconds)))
+    else
+      WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
+        [FormatDuration(AReport.Timing.LexTimeNanoseconds),
+         FormatDuration(AReport.Timing.ParseTimeNanoseconds),
+         FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
+         FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end;
 
   { Mirrors `node -p` / `bun --print` / `deno eval -p`: silent by default,

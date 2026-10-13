@@ -1831,9 +1831,27 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       "const sync = chunk.values.length + badChunk.values.length +",
       "  (badChunk.error === null ? 0 : 1) + Object.keys(revived).length +",
       "  nested.length + replaced.length;",
-      "Promise.allSettled(Array.from({ length: 500 }, (_, i) =>",
-      '  i % 2 === 0 ? Promise.resolve("v" + i) : Promise.reject(new Error("e" + i)),',
-      ")).then((rs) => {",
+      // The inputs that reject carry a handler from the moment they exist.
+      // Without one, the sweep's verdict depended on where the ceiling
+      // landed, not on whether it surfaced as a RangeError. A refused
+      // allocation inside allSettled's iteration is a catchable RangeError
+      // (a charged allocation, docs/errors.md), so PerformPromiseAllSettled
+      // ends abruptly and allSettled rejects with it (ES2026 §27.2.4.2 step
+      // 8.b, IfAbruptRejectPromise). The inputs past that point never get
+      // allSettled's handlers, and the runner fails a run with its oldest
+      // unhandled rejection, which was one of those guest Errors ("Error:
+      // e401" in bytecode at 1.5 MiB), older than the RangeError. The
+      // interpreter hid this only because it failed a module with a rejected
+      // promise left as the last statement's value (#1612); both modes now
+      // report the oldest unhandled rejection. allSettled still subscribes to every
+      // input it reaches, so its rejected entries are still built.
+      "const ignore = () => {};",
+      "Promise.allSettled(Array.from({ length: 500 }, (_, i) => {",
+      '  if (i % 2 === 0) return Promise.resolve("v" + i);',
+      '  const rejected = Promise.reject(new Error("e" + i));',
+      "  rejected.catch(ignore);",
+      "  return rejected;",
+      "})).then((rs) => {",
       "  console.log('total', sync + rs.length +",
       '    rs.filter((r) => r.status === "fulfilled").length +',
       '    rs.filter((r) => r.status === "rejected").length);',
@@ -1842,35 +1860,44 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     ].join("\n");
     const wave2Path = join(tmp, "sweep-wave2.mjs");
     writeFileSync(wave2Path, wave2Src);
-    for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608, 67_108_864]) {
-      const proc = Bun.spawnSync([RUNNER, `--max-memory=${maxMemory}`, wave2Path], {
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: 120_000,
-      });
-      const out = proc.stdout.toString() + proc.stderr.toString();
-      // Budget-text fatal = the uncatchable growth gate refusing, as above.
-      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
-        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} crashed: ${out}`);
-      if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
-        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
-      if (proc.exitCode === 0 && !out.includes("total 5793"))
-        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} completed with wrong total: ${out}`);
-    }
+    // Both modes, named explicitly: the allocation profile differs between
+    // them, so the ceiling lands in different builders, and each mode has to
+    // show the refusal as a RangeError on its own.
+    for (const mode of ["interpreted", "bytecode"]) {
+      let rangeErrorRefusals = 0;
+      for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608, 67_108_864]) {
+        const proc = Bun.spawnSync([RUNNER, `--mode=${mode}`, `--max-memory=${maxMemory}`, wave2Path], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 120_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        // Budget-text fatal = the uncatchable growth gate refusing, as above.
+        if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+          throw new Error(`Wave-2 builder sweep (${mode}) at --max-memory=${maxMemory} crashed: ${out}`);
+        if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+          throw new Error(`Wave-2 builder sweep (${mode}) at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
+        if (proc.exitCode === 0 && !out.includes("total 5793"))
+          throw new Error(`Wave-2 builder sweep (${mode}) at --max-memory=${maxMemory} completed with wrong total: ${out}`);
+        if (proc.exitCode !== 0 && out.includes("RangeError")) rangeErrorRefusals++;
+      }
+      // The counterpart of the headroom run below: a sweep in which nothing is
+      // refused says nothing about how a refusal surfaces.
+      if (rangeErrorRefusals === 0)
+        throw new Error(`Wave-2 builder sweep (${mode}) never refused with a RangeError, so it proved nothing about the ceiling`);
 
-    // As above, one guaranteed-success run so an all-refusals sweep cannot pass
-    // vacuously.
-    {
-      const proc = Bun.spawnSync([RUNNER, "--max-memory=134217728", wave2Path], {
+      // As above, one guaranteed-success run so an all-refusals sweep cannot
+      // pass vacuously.
+      const proc = Bun.spawnSync([RUNNER, `--mode=${mode}`, "--max-memory=134217728", wave2Path], {
         stdout: "pipe",
         stderr: "pipe",
         timeout: 120_000,
       });
       const out = proc.stdout.toString() + proc.stderr.toString();
       if (proc.exitCode !== 0)
-        throw new Error(`Wave-2 builder sweep headroom run should exit 0, got ${proc.exitCode}: ${out}`);
+        throw new Error(`Wave-2 builder sweep (${mode}) headroom run should exit 0, got ${proc.exitCode}: ${out}`);
       if (!out.includes("total 5793"))
-        throw new Error(`Wave-2 builder sweep headroom run should report total 5793: ${out}`);
+        throw new Error(`Wave-2 builder sweep (${mode}) headroom run should report total 5793: ${out}`);
     }
 
     // A ceiling sweep only lands in the collecting window by luck: the pressure

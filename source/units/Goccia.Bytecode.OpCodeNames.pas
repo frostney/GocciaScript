@@ -229,6 +229,7 @@ begin
     OP_CHECK_BINDING_INITIALIZED:      Result := 'OP_CHECK_BINDING_INITIALIZED';
     OP_THROW_UNDEFINED_VARIABLE:       Result := 'OP_THROW_UNDEFINED_VARIABLE';
     OP_DIRECT_EVAL:                    Result := 'OP_DIRECT_EVAL';
+    OP_GET_GLOBAL_DECLARED:            Result := 'OP_GET_GLOBAL_DECLARED';
   else
     if AOp = OP_CALL_SELF then
       Result := 'OP_CALL_SELF'

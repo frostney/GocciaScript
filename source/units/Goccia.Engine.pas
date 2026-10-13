@@ -3057,6 +3057,7 @@ var
   ModuleContext: TGocciaEvaluationContext;
   ModuleResult: TGocciaValue;
   ModuleProgramConsumed: Boolean;
+  EntryHasTopLevelAwait: Boolean;
   EntryModule: TGocciaModule;
   EntryModuleEvaluationStarted: Boolean;
   EntryRequestedModules: TGocciaModuleList;
@@ -3220,6 +3221,8 @@ begin
         end;
         ExecStart := GetNanoseconds;
         ModuleResult := nil;
+        { Read before evaluating: the executor may take the program node. }
+        EntryHasTopLevelAwait := PipelineResult.ProgramNode.HasTopLevelAwait;
         GC := TGarbageCollector.Instance;
         if Assigned(GC) then
           GC.AddTempRoot(ModuleScope);
@@ -3245,7 +3248,16 @@ begin
               end;
               try
                 WaitForRuntimeIdle;
-                if ModuleResult is TGocciaPromiseValue then
+                { Only a module with top-level await returns its evaluation
+                  promise here. Any other module returns the completion value
+                  of its last statement, which is guest data: a rejected
+                  promise there is the guest's, handled or not, and failing
+                  the run with it reported a handled rejection, or a later one
+                  ahead of the oldest unhandled one. Those reach
+                  RaiseUnhandledRejection below, as they do in bytecode
+                  (RunModuleForSourceType). }
+                if EntryHasTopLevelAwait and
+                   (ModuleResult is TGocciaPromiseValue) then
                 begin
                   EntryPromise := TGocciaPromiseValue(ModuleResult);
                   if EntryPromise.State = gpsRejected then

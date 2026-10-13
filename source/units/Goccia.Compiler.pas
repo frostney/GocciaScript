@@ -65,6 +65,8 @@ type
     procedure DoSwapState(const ATemplate: TGocciaFunctionTemplate;
       const AScope: TGocciaCompilerScope);
     procedure DoSetDerivedConstructorThisGuard(const AGuard: Boolean);
+    procedure RecordDerivedConstructorThisGuard(
+      const ATemplate: TGocciaFunctionTemplate; const AGuard: Boolean);
     procedure DoSetNonStrictMode(const AEnabled: Boolean);
     function BuildContext: TGocciaCompilationContext;
     function NonStrictBlockFunctionVarBindingsEnabled: Boolean;
@@ -167,6 +169,10 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.Modules;
 
+const
+  // The first growth step of a compiler scope's locals table.
+  MODULE_LOCALS_RESERVE_LIMIT = 8;
+
 // The statements whose completion is UpdateEmpty(…, undefined): their value
 // is undefined unless their body leaves one.
 function StatementResetsCompletionValue(const AStmt: TGocciaStatement): Boolean;
@@ -185,11 +191,11 @@ begin
   inherited Create;
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
-  FNumericParameterProofs := TNumericParameterProofMap.Create;
+  // FNumericParameterProofs and FTemplateDerivedConstructorThisGuards are
+  // created when a function body or a function template first needs them,
+  // so compiling a script with no functions skips both dictionaries.
   FNumberBindingProofs := TNumberBindingProofMap.Create;
   FBlockFunctionVarBindings := TBlockFunctionVarBindingSet.Create;
-  FTemplateDerivedConstructorThisGuards :=
-    TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
   FModule := nil;
   FCurrentTemplate := nil;
@@ -268,8 +274,16 @@ procedure TGocciaCompiler.DoSetDerivedConstructorThisGuard(
 begin
   FDerivedConstructorThisGuard := AGuard;
   if Assigned(FCurrentTemplate) then
-    FTemplateDerivedConstructorThisGuards.AddOrSetValue(
-      FCurrentTemplate, AGuard);
+    RecordDerivedConstructorThisGuard(FCurrentTemplate, AGuard);
+end;
+
+procedure TGocciaCompiler.RecordDerivedConstructorThisGuard(
+  const ATemplate: TGocciaFunctionTemplate; const AGuard: Boolean);
+begin
+  if not Assigned(FTemplateDerivedConstructorThisGuards) then
+    FTemplateDerivedConstructorThisGuards :=
+      TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
+  FTemplateDerivedConstructorThisGuards.AddOrSetValue(ATemplate, AGuard);
 end;
 
 procedure TGocciaCompiler.DoSetNonStrictMode(const AEnabled: Boolean);
@@ -282,13 +296,14 @@ procedure TGocciaCompiler.DoSwapState(
   const AScope: TGocciaCompilerScope);
 begin
   if Assigned(FCurrentTemplate) then
-    FTemplateDerivedConstructorThisGuards.AddOrSetValue(
-      FCurrentTemplate, FDerivedConstructorThisGuard);
+    RecordDerivedConstructorThisGuard(FCurrentTemplate,
+      FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
   if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
     FCurrentScope.AttachTemplate(FCurrentTemplate);
   if not Assigned(FCurrentTemplate) or
+     not Assigned(FTemplateDerivedConstructorThisGuards) or
      not FTemplateDerivedConstructorThisGuards.TryGetValue(
        FCurrentTemplate, FDerivedConstructorThisGuard) then
     FDerivedConstructorThisGuard := False;
@@ -933,6 +948,8 @@ begin
     begin
       Block := TGocciaBlockStatement(ABody);
 
+      if not Assigned(FNumericParameterProofs) then
+        FNumericParameterProofs := TNumericParameterProofMap.Create;
       DiscoverClosedCallNumericProof(Block, FNumericParameterProofs);
       DiscoverNumberBindings(Block, FCurrentScope,
         NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
@@ -1835,7 +1852,8 @@ var
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
 begin
-  FNumericParameterProofs.Clear;
+  if Assigned(FNumericParameterProofs) then
+    FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
   FBlockFunctionVarBindings.Clear;
   if not FEvalCode then
@@ -1872,6 +1890,13 @@ begin
   // top level has no hidden variable object.
   FCurrentScope.DirectEvalUsage := AProgram.DirectEvalUsage;
   FCurrentScope.AttachTemplate(FCurrentTemplate);
+  // The receiver and, before the table first grows, about one local per
+  // top-level statement: a short script then initializes and finalizes only
+  // the locals it can declare rather than the first growth step's eight.
+  if AProgram.Body.Count < MODULE_LOCALS_RESERVE_LIMIT then
+    FCurrentScope.ReserveLocals(AProgram.Body.Count + 1)
+  else
+    FCurrentScope.ReserveLocals(MODULE_LOCALS_RESERVE_LIMIT);
   FCurrentScope.DeclareLocal('__receiver', False);
   FCurrentScope.GlobalBackedBindingsByName := FGlobalEvalVarEnvironment;
 
