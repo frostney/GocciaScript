@@ -41,6 +41,7 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Error,
   Goccia.Values.Primitives,
+  Goccia.VM.DirectEvalCodeCache,
   Goccia.VM.Exception;
 
 const
@@ -365,6 +366,11 @@ const
   // eval parses a new one: such code is compiled at every evaluation.
   TAGGED_TEMPLATE_SITE = 'function tag(t) { return t; }' +
     ' function run() { return eval("tag`x`"); }';
+  // More sources at one site than its cache holds, each evaluated twice.
+  CAPPED_SOURCES = 100;
+  CAPPED_SITE = 'var srcs = []; for (var k = 0; k < 100; k++)' +
+    ' srcs.push("x + " + k); var x = 1;' +
+    ' function run(i) { return eval(srcs[i % 100]); }';
 begin
   Expect<Integer>(DirectEvalRetainedModules(SLOPPY_SITE, CALLS)).ToBe(
     DirectEvalRetainedModules(SLOPPY_SITE, 1));
@@ -382,6 +388,11 @@ begin
     DirectEvalRetainedModules(TWO_SITES, 0) + 2);
   Expect<Integer>(DirectEvalRetainedModules(TAGGED_TEMPLATE_SITE, CALLS)).ToBe(
     DirectEvalRetainedModules(TAGGED_TEMPLATE_SITE, 1) + CALLS - 1);
+  // The site caches the first DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES sources:
+  // the second round compiles only the others again.
+  Expect<Integer>(DirectEvalRetainedModules(CAPPED_SITE,
+    2 * CAPPED_SOURCES)).ToBe(DirectEvalRetainedModules(CAPPED_SITE, 0) +
+    CAPPED_SOURCES + CAPPED_SOURCES - DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES);
 end;
 
 procedure TGlobalEvalTests.TestBytecodeEvalVarIsDeletableGlobal;

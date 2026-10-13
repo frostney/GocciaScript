@@ -19,6 +19,16 @@ unit Goccia.VM.DirectEvalCodeCache;
   declarations (ES2026 §19.2.1.3 EvalDeclarationInstantiation) and creates a
   fresh closure of the calling frame, with fresh bindings and functions.
 
+  A site keeps at most DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES entries, as
+  JavaScriptCore's DirectEvalCodeCache does (maxCacheEntries = 64). Past
+  that, the site caches nothing more: its cached sources keep being served,
+  and any other source is compiled at each evaluation, its code kept for the
+  engine's lifetime as ADR 0134 decision 1 accepts. A site that builds a new
+  source at each evaluation, `eval("x + " + i)`, so stops adding to the cache
+  what it already adds as retained code. There is no limit on the length of
+  a cached source: the engine keeps uncached code alive, so skipping a long
+  source would keep a new copy of it at each evaluation.
+
   The cache holds no reference the GC traces: the templates belong to modules
   the engine retains, and the name lists and keys are Pascal strings. A cache
   belongs to the function template whose site it serves, and function
@@ -32,6 +42,10 @@ uses
 
   Goccia.Bytecode.Chunk,
   Goccia.SourcePipeline;
+
+const
+  { The most entries one direct eval site's code cache holds. }
+  DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES = 64;
 
 type
   { Everything besides the source text and the eval site record that decides
@@ -86,14 +100,20 @@ type
   TGocciaDirectEvalCodeCache = class
   private
     FEntries: TOrderedStringMap<TGocciaDirectEvalCode>;
+    FCount: Integer;
   public
     constructor Create;
     destructor Destroy; override;
 
     function Find(const ASourceText: string;
       const AContext: TGocciaDirectEvalCodeContext): TGocciaDirectEvalCode;
-    { Takes ownership of ACode, which must not be cached yet. }
-    procedure Add(const ASourceText: string; const ACode: TGocciaDirectEvalCode);
+    { Caches ACode, which must not be cached yet, and takes ownership of it,
+      unless the cache is full. False when full: the caller keeps ACode. }
+    function TryAdd(const ASourceText: string;
+      const ACode: TGocciaDirectEvalCode): Boolean;
+
+    { The entries cached, each context of a source counted. }
+    property Count: Integer read FCount;
   end;
 
 { Whether code compiled for direct eval can serve a later evaluation of the
@@ -174,6 +194,7 @@ constructor TGocciaDirectEvalCodeCache.Create;
 begin
   inherited Create;
   FEntries := TOrderedStringMap<TGocciaDirectEvalCode>.Create;
+  FCount := 0;
 end;
 
 destructor TGocciaDirectEvalCodeCache.Destroy;
@@ -196,14 +217,18 @@ begin
     Result := Result.FNext;
 end;
 
-procedure TGocciaDirectEvalCodeCache.Add(const ASourceText: string;
-  const ACode: TGocciaDirectEvalCode);
+function TGocciaDirectEvalCodeCache.TryAdd(const ASourceText: string;
+  const ACode: TGocciaDirectEvalCode): Boolean;
 var
   Head: TGocciaDirectEvalCode;
 begin
+  if FCount >= DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES then
+    Exit(False);
   if FEntries.TryGetValue(ASourceText, Head) then
     ACode.FNext := Head;
   FEntries.AddOrSetValue(ASourceText, ACode);
+  Inc(FCount);
+  Result := True;
 end;
 
 end.

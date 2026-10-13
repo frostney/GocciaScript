@@ -427,7 +427,10 @@ the engine's lifetime, and each eval site caches it per source text
 the site has already compiled parses and compiles nothing and keeps no new
 code alive. A cache entry also records what else decides the compiled code:
 the source name, the parse options, and whether `new.target`, `super.x` and
-`super()` are allowed where the call runs. Only the template is shared; every
+`super()` are allowed where the call runs. A site caches at most 64 entries
+(`DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES`, as JavaScriptCore's
+`DirectEvalCodeCache`); past that it keeps serving them and compiles any
+other source at each evaluation. Only the template is shared; every
 evaluation instantiates its declarations and creates its own closure. Code
 containing a tagged template is not cached, because each evaluation needs its
 own template objects (ES2026 §13.2.8.4 GetTemplateObject keys them on the

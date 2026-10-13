@@ -14326,6 +14326,7 @@ begin
   if not Assigned(Code) then
   begin
     Code := CompileDirectEvalCode(ASourceText, ATemplate, Site, Context);
+    UncachedCode := Code;
     if IsDirectEvalCodeCacheable(Code.Template) then
     begin
       if not Assigned(CodeCache) then
@@ -14333,10 +14334,10 @@ begin
         CodeCache := TGocciaDirectEvalCodeCache.Create;
         ATemplate.SetDirectEvalCodeCache(ASiteIndex, CodeCache);
       end;
-      CodeCache.Add(ASourceText, Code);
-    end
-    else
-      UncachedCode := Code;
+      // A full cache keeps what it has (DIRECT_EVAL_CODE_CACHE_MAX_ENTRIES).
+      if CodeCache.TryAdd(ASourceText, Code) then
+        UncachedCode := nil;
+    end;
   end;
   try
     EvalTemplate := Code.Template;
