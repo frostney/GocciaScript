@@ -3310,6 +3310,17 @@
              FGlobalScope.TryGetLexicalValueAt(GlobalReadCache^.EntryIndex,
                GlobalReadCache^.Version, GlobalBindingValue) then
             FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          // A module environment's import binding, read by a function the
+          // module created while it was linked: resolve it through the cached
+          // binding, skipping the scope's name lookups.
+          else if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (GlobalReadCache^.ObjectBindingKind =
+               GLOBAL_READ_OBJECT_BINDING_IMPORT) and
+             FGlobalScope.LexicalEntryVersionIs(GlobalReadCache^.Version) and
+             TGocciaModuleImportBinding(GlobalReadCache^.ObjectValue)
+               .TryGetValue(GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
           else if Assigned(GlobalReadCache) and
              (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
              (FGlobalScope.ThisValue is TGocciaObjectValue) and
@@ -3333,11 +3344,20 @@
                 GLOBAL_READ_OBJECT_BINDING_NONE;
               if FGlobalScope.TryGetBindingValueFillCache(GlobalName,
                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
-                GlobalBindingValue) then
+                GlobalBindingValue, GlobalImportBinding,
+                GlobalImportVersion) then
               begin
                 GlobalBindingEntryIndex := GlobalReadCache^.EntryIndex;
                 GlobalBindingVersion := GlobalReadCache^.Version;
-                if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+                if Assigned(GlobalImportBinding) then
+                begin
+                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
+                  GlobalReadCache^.ObjectValue := Pointer(GlobalImportBinding);
+                  GlobalReadCache^.ObjectBindingKind :=
+                    GLOBAL_READ_OBJECT_BINDING_IMPORT;
+                  GlobalReadCache^.Version := GlobalImportVersion;
+                end
+                else if (FGlobalScope.ThisValue is TGocciaObjectValue) and
                    ((not FGlobalScope.ContainsOwnLexicalBinding(GlobalName) and
                      FGlobalScope.ContainsOwnVarBinding(GlobalName)) or
                     (FGlobalScope.IsBuiltInBinding(GlobalName) and

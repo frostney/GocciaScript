@@ -59,6 +59,12 @@ type
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue;
       virtual; abstract;
+    { ES2026 §16.2.1.7.3.1 InitializeEnvironment, the function declarations
+      of a module-form program: bind each to a function object in
+      AContext.Scope before any module body runs
+      (TGocciaModuleFunctionInstantiator). }
+    procedure InstantiateModuleFunctions(const AProgram: TGocciaProgram;
+      var AContext: TGocciaEvaluationContext); virtual; abstract;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;
     { ES2026 §19.2.1.1 PerformEval steps 17-33 for eval code whose variable

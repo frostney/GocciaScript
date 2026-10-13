@@ -164,7 +164,18 @@ type
     // parent chain — those resolutions are not cacheable.
     function TryGetBindingValueFillCache(const AName: string;
       out AEntryIndex: Integer; out AVersion: Cardinal;
-      out AValue: TGocciaValue): Boolean;
+      out AValue: TGocciaValue): Boolean; overload;
+    // As above, and when the name is an own import binding, AImportBinding is
+    // that binding and AImportVersion the binding map's entry version, which
+    // stays current until an import binding of the map is created again
+    // (CreateImportBinding re-stamps it). Otherwise AImportBinding is nil.
+    function TryGetBindingValueFillCache(const AName: string;
+      out AEntryIndex: Integer; out AVersion: Cardinal;
+      out AValue: TGocciaValue;
+      out AImportBinding: TGocciaModuleImportBinding;
+      out AImportVersion: Cardinal): Boolean; overload;
+    // Whether AVersion is the current entry version of the own lexical map.
+    function LexicalEntryVersionIs(const AVersion: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     // Single source of truth for assignment resolution (TDZ, const, and
     // strict-type errors still raise); returns False when the name is
     // unbound anywhere on the chain and never creates a binding.
@@ -1528,8 +1539,28 @@ function TGocciaScope.TryGetBindingValueFillCache(const AName: string;
   out AEntryIndex: Integer; out AVersion: Cardinal;
   out AValue: TGocciaValue): Boolean;
 var
+  ImportBinding: TGocciaModuleImportBinding;
+  ImportVersion: Cardinal;
+begin
+  Result := TryGetBindingValueFillCache(AName, AEntryIndex, AVersion, AValue,
+    ImportBinding, ImportVersion);
+end;
+
+function TGocciaScope.LexicalEntryVersionIs(const AVersion: Cardinal): Boolean;
+begin
+  Result := AVersion = FLexicalBindings.EntryVersion;
+end;
+
+function TGocciaScope.TryGetBindingValueFillCache(const AName: string;
+  out AEntryIndex: Integer; out AVersion: Cardinal;
+  out AValue: TGocciaValue;
+  out AImportBinding: TGocciaModuleImportBinding;
+  out AImportVersion: Cardinal): Boolean;
+var
   LexicalBinding: TLexicalBinding;
 begin
+  AImportBinding := nil;
+  AImportVersion := 0;
   if FLexicalBindings.TryGetEntryIndex(AName, AEntryIndex) then
   begin
     AVersion := FLexicalBindings.EntryVersion;
@@ -1551,12 +1582,16 @@ begin
     end;
     // An import binding resolves through its exporting module on every
     // read, so its entry index is withheld and the read stays uncached.
-    if Assigned(FImportBindings) and FImportBindings.ContainsKey(AName) then
+    if Assigned(FImportBindings) and
+       FImportBindings.TryGetValue(AName, AImportBinding) then
     begin
+      AImportVersion := AVersion;
       AEntryIndex := -1;
       AVersion := 0;
+      if not AImportBinding.TryGetValue(AValue) then
+        RaiseUndefinedVariable(AName, 0, 0);
+      Exit(True);
     end;
-    ResolveImportBindingValue(AName, LexicalBinding);
     AValue := LexicalBinding.Value;
     Exit(True);
   end;

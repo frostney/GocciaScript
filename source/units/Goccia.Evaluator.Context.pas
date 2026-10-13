@@ -34,6 +34,12 @@ type
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
     CurrentModule: TGocciaModule;
     ModuleEnvironmentInitialized: Boolean;
+    { The module body an executor compiled while it instantiated the
+      module's function declarations (TGocciaModuleFunctionInstantiator),
+      which evaluating the body then runs; nil when nothing was compiled.
+      A TGocciaBytecodeModule, typed as TObject to keep the bytecode units
+      out of this one. }
+    CompiledModule: TObject;
   end;
 
 implementation
