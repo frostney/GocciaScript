@@ -424,7 +424,7 @@ begin
     FEnvironment.MarkReferences;
   for I := 0 to High(FMappings) do
     if Assigned(FMappings[I].ParameterCell) then
-      MarkRegisterReferences(FMappings[I].ParameterCell.Value);
+      FMappings[I].ParameterCell.MarkReferences;
 end;
 
 function CreateUnmappedArgumentsObject(
