@@ -122,7 +122,7 @@ TGocciaExecutor (abstract — Goccia.Executor.pas)
       for classes the evaluator built
 ```
 
-The engine bootstraps the realm itself: it creates the global scope (`TGocciaEngine.GlobalScope`), binds it to the module loader and registers the built-ins. It creates a `TGocciaInterpreter`, which shares that global scope, only for a `TGocciaInterpreterExecutor`; with a bytecode executor `Engine.Interpreter` is nil. The executor receives the global scope and module loader via `Initialize`, then handles all program and module body execution, and loads the bootstrap shims when they are first used (`TGocciaExecutor.EvaluateShim`, see [Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)).
+The engine bootstraps the realm itself: it creates the global scope (`Engine.GlobalScope`), binds it to the module loader and registers the built-ins. It creates a `TGocciaInterpreter`, which shares that global scope, only for a `TGocciaInterpreterExecutor`; with a bytecode executor `Engine.Interpreter` is nil. The executor receives the global scope and module loader via `Initialize`, then handles all program and module body execution, and loads the bootstrap shims when they are first used (`TGocciaExecutor.EvaluateShim`, see [Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)).
 
 Callers must pass an explicit executor to the engine constructor — there is no implicit default. The engine never frees the executor; the caller (or a wrapping layer such as `TGocciaRuntime`) owns it and frees it after the engine.
 
