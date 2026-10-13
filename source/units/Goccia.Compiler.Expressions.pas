@@ -112,6 +112,10 @@ procedure CompileFunctionExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaFunctionExpression; const ADest: UInt16;
   const ATemplateName: string = '<function>';
   const ABindOwnName: Boolean = True);
+function CompileModuleFunctionDeclarationTemplate(
+  const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaFunctionExpression; const ABindingName,
+  ATemplateName: string): TGocciaFunctionTemplate;
 procedure CompileExpressionWithInferredName(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; const ADest: UInt16;
   const AInferredName: string);
@@ -6952,36 +6956,24 @@ begin
     ACtx.Scope.FreeRegister;
 end;
 
-procedure CompileFunctionExpression(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaFunctionExpression; const ADest: UInt16;
-  const ATemplateName: string; const ABindOwnName: Boolean);
+// Compiles AExpr into a child template of ACtx.Template and returns its index
+// in that template's function table. AHasNameBinding: the caller declared
+// the expression's own name in a scope it opened around the call.
+function BuildFunctionTemplate(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaFunctionExpression; const ATemplateName: string;
+  const AHasNameBinding, AModuleLinkTime: Boolean): UInt16;
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
-  FuncIdx: UInt16;
   FormalCount: Integer;
   I: Integer;
   ArgumentsSlot: Integer;
-  HasNameBinding: Boolean;
-  NameSlot: UInt16;
-  ClosedLocals: TArray<UInt16>;
-  ClosedCount: Integer;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
-
-  // ES2026 §15.2.5: Named function expressions bind the name in an inner
-  // block scope visible inside the body via upvalue capture
-  HasNameBinding := ABindOwnName and (AExpr.Name <> '');
-  if HasNameBinding then
-  begin
-    OldScope.BeginScope;
-    NameSlot := OldScope.DeclareLocal(AExpr.Name, True);
-    OldScope.MarkNonStrictImmutable(OldScope.ResolveLocal(AExpr.Name));
-  end;
 
   ChildTemplate := TGocciaFunctionTemplate.Create(ATemplateName);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
@@ -6993,9 +6985,10 @@ begin
     ChildBodyIsStrictCode(ACtx, AExpr.Body);
   ChildTemplate.StrictThis := ChildTemplate.StrictCode;
   ChildTemplate.SourceText := AExpr.SourceText;
-  if HasNameBinding then
+  if AHasNameBinding then
     ChildTemplate.Name := AExpr.Name;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+  ChildScope.ImportUpvaluesByName := AModuleLinkTime;
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AExpr.Parameters);
@@ -7058,16 +7051,53 @@ begin
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
     for I := 0 to ChildScope.UpvalueCount - 1 do
+    begin
+      // A function created while its module is linked has no module body
+      // frame to capture: every binding it reaches outside itself is read by
+      // name from the module environment (ImportUpvaluesByName).
+      if AModuleLinkTime and not ChildScope.GetUpvalue(I).IsGlobalBacked then
+        raise Exception.CreateFmt(
+          'Compiler error: module function declaration captures "%s" ' +
+          'from the module body', [ChildScope.GetUpvalue(I).Name]);
       ChildTemplate.AddUpvalueDescriptor(
         ChildScope.GetUpvalue(I).IsLocal,
         ChildScope.GetUpvalue(I).Index,
         ChildScope.GetUpvalue(I).Name);
+    end;
   finally
     ACtx.SwapState(OldTemplate, OldScope);
     ChildScope.Free;
   end;
 
-  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  Result := OldTemplate.AddFunction(ChildTemplate);
+end;
+
+procedure CompileFunctionExpression(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaFunctionExpression; const ADest: UInt16;
+  const ATemplateName: string; const ABindOwnName: Boolean);
+var
+  OldScope: TGocciaCompilerScope;
+  FuncIdx: UInt16;
+  I: Integer;
+  HasNameBinding: Boolean;
+  NameSlot: UInt16;
+  ClosedLocals: TArray<UInt16>;
+  ClosedCount: Integer;
+begin
+  OldScope := ACtx.Scope;
+
+  // ES2026 §15.2.5: Named function expressions bind the name in an inner
+  // block scope visible inside the body via upvalue capture
+  HasNameBinding := ABindOwnName and (AExpr.Name <> '');
+  if HasNameBinding then
+  begin
+    OldScope.BeginScope;
+    NameSlot := OldScope.DeclareLocal(AExpr.Name, True);
+    OldScope.MarkNonStrictImmutable(OldScope.ResolveLocal(AExpr.Name));
+  end;
+
+  FuncIdx := BuildFunctionTemplate(ACtx, AExpr, ATemplateName,
+    HasNameBinding, False);
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, ADest, FuncIdx));
 
   if HasNameBinding then
@@ -7077,6 +7107,23 @@ begin
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   end;
+end;
+
+// ES2026 §16.2.1.7.3.1 InitializeEnvironment, step for a function declaration
+// of a module the loader links: InstantiateFunctionObject runs before the
+// module body, so the declaration compiles to a template that the executor
+// instantiates while linking (TGocciaFunctionTemplate.ModuleEnvironmentBinding)
+// rather than to an OP_CLOSURE of the module body.
+function CompileModuleFunctionDeclarationTemplate(
+  const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaFunctionExpression; const ABindingName,
+  ATemplateName: string): TGocciaFunctionTemplate;
+var
+  FuncIdx: UInt16;
+begin
+  FuncIdx := BuildFunctionTemplate(ACtx, AExpr, ATemplateName, False, True);
+  Result := ACtx.Template.GetFunction(FuncIdx);
+  Result.ModuleEnvironmentBinding := ABindingName;
 end;
 
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
