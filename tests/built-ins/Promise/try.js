@@ -22,3 +22,36 @@ describe("Promise.try", () => {
     });
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("Promise.try across a collection", () => {
+  test("settles its promise when the callback collects and returns", async () => {
+    const value = await Promise.try((a, b) => {
+      Goccia.gc();
+      return a + b;
+    }, 20, 22);
+    expect(value).toBe(42);
+  });
+
+  test("rejects its promise when the callback collects and throws", async () => {
+    const promise = Promise.try(() => {
+      Goccia.gc();
+      throw new TypeError("boom");
+    });
+    Goccia.gc();
+    await expect(promise).rejects.toThrow("boom");
+  });
+
+  test("settles a subclass promise when the constructor collects", async () => {
+    class CollectingPromise extends Promise {
+      constructor(executor) {
+        Goccia.gc();
+        super(executor);
+      }
+    }
+    const value = await CollectingPromise.try(() => {
+      Goccia.gc();
+      return "done";
+    });
+    expect(value).toBe("done");
+  });
+});

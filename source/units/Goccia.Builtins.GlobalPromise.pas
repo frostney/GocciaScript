@@ -2047,18 +2047,28 @@ function TGocciaGlobalPromise.PromiseWithResolvers(const AArgs: TGocciaArguments
 var
   Capability: TPromiseCapability;
   ResultObj: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  { Step 2: Let promiseCapability = NewPromiseCapability(C) }
-  Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  { The capability is held only here until the result object stores it, and
+    each store can reach the collecting growth gate (issue #1628). }
+  Roots.Initialize;
+  try
+    { Step 2: Let promiseCapability = NewPromiseCapability(C) }
+    Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+    RootCapability(Roots, Capability);
 
-  { Steps 3-6: Create result object with promise, resolve, reject properties }
-  ResultObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  ResultObj.CreateDataPropertyOrThrow('promise', Capability.Promise);
-  ResultObj.CreateDataPropertyOrThrow('resolve', Capability.Resolve);
-  ResultObj.CreateDataPropertyOrThrow('reject', Capability.Reject);
+    { Steps 3-6: Create result object with promise, resolve, reject properties }
+    ResultObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(ResultObj);
+    ResultObj.CreateDataPropertyOrThrow('promise', Capability.Promise);
+    ResultObj.CreateDataPropertyOrThrow('resolve', Capability.Resolve);
+    ResultObj.CreateDataPropertyOrThrow('reject', Capability.Reject);
 
-  { Step 7: Return obj }
-  Result := ResultObj;
+    { Step 7: Return obj }
+    Result := ResultObj;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { Promise.try ( callbackfn, ...args ) — §27.2.4.9 (ES2025+)
@@ -2079,9 +2089,15 @@ var
   CallbackArgs: TGocciaArgumentsCollection;
   CallbackArgCount: Integer;
   I: Integer;
+  Roots: TGocciaActiveRootFrame;
 begin
+  { The callback is guest code, and until it returns only this frame holds the
+    capability it settles (issue #1628). }
+  Roots.Initialize;
+  try
   { Step 3: Let promiseCapability = NewPromiseCapability(C) }
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
+  RootCapability(Roots, Capability);
 
   { Step 4: Let status = Call(callbackfn, undefined, args) }
   Callback := AArgs.GetElement(0);
@@ -2100,6 +2116,7 @@ begin
     finally
       CallbackArgs.Free;
     end;
+    Roots.Add(CallbackResult);
     { Step 6: Normal completion — Call(resolve, status.[[Value]]) }
     CallPromiseCapability(Capability.Resolve, CallbackResult);
   except
@@ -2125,6 +2142,9 @@ begin
 
   { Step 7: Return promiseCapability.[[Promise]] }
   Result := Capability.Promise;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 end.
