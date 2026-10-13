@@ -25,6 +25,7 @@ type
   public
     constructor Create(const AValue: TGocciaRegister);
     procedure AfterConstruction; override;
+    procedure BeforeDestruction; override;
     procedure MarkReferences; override;
     property Value: TGocciaRegister read FValue write FValue;
   end;
@@ -51,6 +52,16 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
     GC.RegisterObject(Self);
+end;
+
+// The sweep takes a cell off the collector's list (GCIndex -1) before it frees
+// it, and no cell is ever pinned or rooted, so a swept cell has nothing left to
+// unregister from. Skipping the collector lookup then matters because a
+// closure-heavy loop frees one cell per capturing call.
+procedure TGocciaBytecodeCell.BeforeDestruction;
+begin
+  if GCIndex >= 0 then
+    inherited;
 end;
 
 procedure TGocciaBytecodeCell.MarkReferences;
