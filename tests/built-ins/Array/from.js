@@ -167,3 +167,45 @@ describe("Array.from non-finite array-like lengths", () => {
     expect(Array.from({ length: -Infinity }).length).toBe(0);
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("Array.from across a collection", () => {
+  const collectingOnReturn = () => ({
+    [Symbol.iterator]() {
+      return {
+        next: () => ({ value: 1, done: false }),
+        return() {
+          Goccia.gc();
+          return {};
+        },
+      };
+    },
+  });
+
+  test("rethrows the mapFn error after return() collects", () => {
+    let caught = null;
+    try {
+      Array.from(collectingOnReturn(), () => {
+        throw new RangeError("from mapFn " + [1, 2].join("-"));
+      });
+    } catch (error) {
+      Goccia.gc();
+      caught = error;
+    }
+    expect(caught instanceof RangeError).toBe(true);
+    expect(caught.message).toBe("from mapFn 1-2");
+  });
+
+  test("rethrows a thrown plain object after return() collects", () => {
+    const thrown = { reason: ["kept"] };
+    let caught = null;
+    try {
+      Array.from(collectingOnReturn(), () => {
+        throw { reason: thrown.reason };
+      });
+    } catch (error) {
+      Goccia.gc();
+      caught = error;
+    }
+    expect(caught.reason[0]).toBe("kept");
+  });
+});
