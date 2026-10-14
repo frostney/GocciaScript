@@ -798,6 +798,7 @@ The **test262 conformance comment** posts a non-blocking summary using the [`act
 - An **Areas closest to 100%** table listing the three test262 directories (keyed by the first two path components, e.g. `built-ins/Math`, `language/expressions`) with the highest pass rate, filtered to areas with **at least 25 attempted tests** and **below 100%**.
 - When a `main` baseline is cached, **Δ vs main** columns show absolute count delta and percentage-point delta. Deltas below ±0.05pp render as `±0pp` to keep the table readable.
 - A collapsible **Per-test deltas** section listing newly-passing, newly-failing, newly-timed-out, and no-longer-timed-out test IDs.
+- A **grading-contract note** when the cached baseline's `run.gradingContract` differs from the run's. PASS → FAIL transitions are then listed but do not fail the gate, because the runner's grading moved them, not the engine; see [test262.md](test262.md#updating-the-contract).
 
 The website compatibility dashboard at `/compatibility` reads main-branch test262 reports from Vercel Blob at request time with CDN caching. Main CI publishes future dashboard points directly, and `cd website && bun run backfill-test262` can seed historical days from retained artifacts or fresh historical reruns. Website builds do not download artifact ZIPs or bake test262 data into the deployment. This keeps the public pass-rate timeline and group coverage tables tied to generated CI data rather than hand-maintained percentages.
 

@@ -202,7 +202,7 @@ artifact names.
 | Async positive    | captured output contains `Test262:AsyncTestComplete`                 | `Test262:AsyncTestFailure:<name>: <msg>`, no marker, or a throw before `$DONE` |
 | Negative runtime  | captured output contains `Test262:NegativeTestError:<expected-type>` | `Test262:NegativeTestNoError` or another error type                       |
 | Top-level negative runtime | escaped throw has the expected error type                   | no throw or another error type                                           |
-| Negative parse    | parsing or linking raises `negative.type` before evaluation          | clean run, `$DONOTEVALUATE` reached, wrong type, or a JS-level throw     |
+| Negative parse / resolution | parsing, early errors, or linking raise `negative.type` before evaluation | clean run, `$DONOTEVALUATE` reached, a JS-level throw, or another error type |
 
 Async markers are emitted by stock test262 `doneprintHandle.js` via
 `$DONE`; the runner captures `print` output in the worker and scans it for
@@ -219,11 +219,13 @@ semantics under test.
 
 All four template kinds are produced by `TTest262App.BuildSource` in
 `GocciaTest262Runner`. Bodies for positive sync, positive async,
-empty, and script-scope tests are all `harness + body` — identical
-shape, no special wrapping. Tests flagged `onlyStrict` receive a
-`"use strict"` directive prefix before the harness so the runtime uses
-strict directive semantics while the runner can still enable
-compatibility-gated parser support for Script tests.
+empty, script-scope, and negative parse/resolution tests are all
+`harness + body` — identical shape, no special wrapping. Tests flagged
+`onlyStrict` receive a `"use strict"` directive prefix before the harness so
+the runtime uses strict directive semantics while the runner can still enable
+compatibility-gated parser support for Script tests. Tests flagged `raw` run
+their file exactly as written: no harness, no prefix, frontmatter kept. Each
+test runs once; `noStrict` and unflagged Script tests run without the prefix.
 
 ### Positive (sync, async, empty, script-scope)
 
@@ -276,26 +278,34 @@ avoids collisions with test-body bindings.
 ### Negative parse
 
 ```text
-function $DONOTEVALUATE() { print("Test262:DoNotEvaluateReached"); throw "Test262: This statement should not be evaluated."; }
+{harness_source}
 {body}
 ```
 
 Used for `negative.phase` `parse` and `resolution` (and `early`, should it
-reappear). No harness is included, but the stock `$DONOTEVALUATE` stub is
-prepended (after the `"use strict";` prefix for `onlyStrict` tests; `raw` tests
-get the body byte-for-byte). The test passes only when all of these hold:
+reappear). The source is the positive template: like every other non-raw test,
+the body gets the stock harness, as the test262 interpretation rules require,
+so `sta.js` defines `$DONOTEVALUATE()`. Each non-raw parse or resolution test
+calls it as its first statement. `raw` tests get no harness and no
+`"use strict";` prefix, and keep their original source, frontmatter included;
+the evaluated ones throw the same string literal themselves. The test passes
+only when all of these hold:
 
 1. execution raised;
-2. `$DONOTEVALUATE` was not reached (`Test262:DoNotEvaluateReached` is absent);
-3. the error name equals `negative.type`;
-4. the error was raised before evaluation, i.e. as a host-level
+2. the body was not evaluated: the escaped value is not the string
+   `$DONOTEVALUATE()` throws (`Test262: This statement should not be
+   evaluated.`);
+3. the error was raised before evaluation, as a host-level
    `TGocciaSyntaxError` from the parser, early-error checks, or module
    linking. A `SyntaxError` thrown as a JS value during evaluation does not
-   count.
+   count;
+4. the error name equals `negative.type`.
 
 An engine that misses an early error therefore runs the body, reaches
 `$DONOTEVALUATE()`, and fails with `body was evaluated ($DONOTEVALUATE
-reached)` instead of passing on the resulting throw (see #1571).
+reached)` instead of passing on the resulting throw (see #1571). Any
+`SyntaxError` raised before evaluation passes, whichever rule raised it; this
+is the same grading the test262 interpretation rules and other runners apply.
 
 ## Failure classification
 
@@ -472,9 +482,19 @@ feature-level filter.
 
 ## Updating the contract
 
-Changes to `TTest262App.BuildSource` in `GocciaTest262Runner` are
-verified by the full conformance run itself (no separate regression
-suite). After any wrapper-template change:
+The contract has a version, `GRADING_CONTRACT_VERSION` in
+`GocciaTest262Runner`, published in every report as `run.gradingContract`
+(reports without the field were graded under contract 1). Bump it when a
+grading or template change moves tests between PASS and FAIL without an engine
+change. When the cached `main` baseline was graded under a different contract,
+the PR comment still lists every PASS → FAIL transition but does not fail the
+regression gate; the next `main` run republishes the baseline under the new
+contract. Contract 2 (#1571) made negative parse and resolution tests require a
+pre-evaluation error of `negative.type`.
+
+`scripts/test-cli-apps.ts` covers the negative grading paths with a small
+synthetic suite. After any wrapper-template change, also verify against the
+full conformance run:
 
 1. Run locally, from the repository root:
 
