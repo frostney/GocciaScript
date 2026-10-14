@@ -1,0 +1,134 @@
+name: GC stress
+
+# Runs the GC-sensitive part of test262 and tests/ under the GC-stress build
+# (`./build.pas --gc-stress`): the VM runs a full collection every 8 dispatched
+# instructions, and heaptrc keeps freed blocks out of reuse. A value that only
+# a Pascal local holds while guest code runs is then freed at once, so a
+# missing GC root faults here instead of in a production run that collects at
+# the wrong moment (#1625, #1628, #1629).
+#
+# The same tests also run under an ordinary development build of the same
+# commit, and only tests that pass there but fail under stress fail the job.
+# Tests that fail in both builds are known failures, not GC findings.
+#
+# Weekly rather than per-PR: the stress build is two orders of magnitude
+# slower. A failing scheduled or default-branch run opens or updates one
+# tracking issue; a run on any other branch only prints what it would file.
+#
+# Reproducing a finding locally is documented in
+# docs/contributing/tooling.md#gc-stress-build.
+
+on:
+  schedule:
+    # Sundays 04:41 UTC: clear of fuzz.yml (03:00 daily), nightly.yml (:23
+    # every three hours) and the Monday bump jobs, and off the hour, where
+    # GitHub delays or drops scheduled runs.
+    - cron: '41 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gc-stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      # Open or comment on the tracking issue.
+      issues: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          no-cache: true
+
+      - name: Install FPC
+        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+
+      - name: Read test262 pin
+        id: test262-pin
+        run: |
+          sha="$(tr -d '[:space:]' < scripts/test262-suite-sha.txt)"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid test262 pin in scripts/test262-suite-sha.txt"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout test262 suite
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: tc39/test262
+          # The same pin as ci.yml and pr.yml, so a stress-only failure is
+          # never a test that changed upstream.
+          ref: ${{ steps.test262-pin.outputs.sha }}
+          path: test262-suite
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build ordinary runners
+        run: ./build.pas testrunner test262runner
+
+      - name: Build GC-stress runners
+        # Separate unit caches under build/compiled/gc-stress and binaries in
+        # build/gc-stress, so the two builds never share compiled units.
+        run: ./build.pas --gc-stress testrunner test262runner
+
+      - name: Run both builds and compare
+        id: stress
+        # --jobs=4 matches the 4 vCPUs of ubuntu-latest for public
+        # repositories. scripts/gc-stress.ts exits 1 for stress-only failures
+        # and 2 when a run could not be completed; the result is recorded so
+        # the report and upload steps still run, and the last step fails.
+        run: |
+          set +e
+          bun scripts/gc-stress.ts \
+            --suite-dir=test262-suite \
+            --out-dir=build/gc-stress-report \
+            --jobs=4
+          status=$?
+          set -e
+          case "$status" in
+            0) result=pass ;;
+            1) result=stress-only ;;
+            *) result=error ;;
+          esac
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          if [ -f build/gc-stress-report/report.md ]; then
+            cat build/gc-stress-report/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gc-stress-report
+          path: build/gc-stress-report/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Open or update the tracking issue
+        if: steps.stress.outputs.result == 'stress-only'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Files only from the upstream repository's scheduled runs and its
+          # default branch. Any other run is a dry run (see the script).
+          FILE_ISSUE: ${{ github.repository == 'frostney/GocciaScript' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+        run: bash ./.github/scripts/report-gc-stress.sh build/gc-stress-report/report.md
+
+      - name: Fail on stress-only failures
+        if: steps.stress.outputs.result != 'pass'
+        run: |
+          if [ "${{ steps.stress.outputs.result }}" = "stress-only" ]; then
+            echo "::error::Tests pass in an ordinary build but fail under the GC-stress build; see the job summary."
+          else
+            echo "::error::The GC-stress comparison could not be completed; see the 'Run both builds and compare' step."
+          fi
+          exit 1
