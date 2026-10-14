@@ -61,8 +61,7 @@ accepted sizes:
   --max-fetch-bytes=1MiB
 ```
 
-A response over the ceiling rejects with `TypeError`. Both checks and the
-ceiling apply identically in interpreter and bytecode modes.
+A response over the ceiling rejects with `TypeError`.
 
 The capability set and the ceiling belong to one engine: embedders fix the set
 at engine construction and set `FetchMaxResponseBytes` on the engine. Each

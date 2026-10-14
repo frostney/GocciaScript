@@ -335,6 +335,6 @@ You now have a working understanding of GocciaScript. Here's where to go from he
 - **[Built-in Objects](built-ins.md)** — Complete API reference for all built-in objects (Array, String, Map, Set, Promise, Temporal, etc.)
 - **[`examples/`](../examples/)** — More example programs: classes, promises, and unsupported feature demos
 - **[Architecture](architecture.md)** — Pipelines and main layers
-- **[Interpreter](interpreter.md)** and **[Bytecode VM](bytecode-vm.md)** — Tree-walk vs bytecode execution modes
+- **[Bytecode VM](bytecode-vm.md)** — How the compiler and VM run your code
 - **[Core patterns](core-patterns.md)** — Recurring implementation patterns
 - **[GocciaScript Context](../CONTEXT.md)** — Canonical project terminology

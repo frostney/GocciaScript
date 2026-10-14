@@ -440,7 +440,7 @@ Default categories: `built-ins, harness, intl402, language, staging`
 There is no eligibility filter. Every discovered test runs. Tests
 that depend on missing features fail with a real diagnostic, not an
 invisible skip. On POSIX, each worker process owns exactly one test, so its
-heap, roots, queues, executor, engine, and realm cannot leak into the next case.
+heap, roots, queues, VM, engine, and realm cannot leak into the next case.
 Process exit also returns allocator-retained storage to the operating system.
 Cooperative timeouts (`--timeout`, default `20s`), per-test memory ceilings
 (`--max-memory`, a size such as `512MiB`), and the native worker watchdog bound

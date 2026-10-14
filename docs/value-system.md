@@ -62,8 +62,6 @@ classDiagram
     TGocciaInstanceValue <|-- TGocciaBooleanObjectValue
     TGocciaObjectValue <|-- TGocciaSymbolObjectValue
 
-    TGocciaFunctionValue <|-- TGocciaMethodValue
-
     class TGocciaValue {
         <<abstract>>
     }
@@ -91,11 +89,8 @@ classDiagram
     class TGocciaPromiseValue {
         Promise (pending/fulfilled/rejected)
     }
-    class TGocciaFunctionValue {
-        (x) => x + 1
-    }
-    class TGocciaMethodValue {
-        class methods (with super)
+    class TGocciaBytecodeFunctionValue {
+        (x) => x + 1, methods, generators
     }
     class TGocciaClassValue {
         class Foo { }
@@ -212,7 +207,7 @@ The base `TGocciaValue` provides default implementations: `GetProperty` returns 
 | `TGocciaInstanceValue` | Checks instance, then prototype (invokes getters) | Checks for setters, then sets directly |
 | Primitives (including `TGocciaStringLiteralValue`) | Returns `nil` — property access on a primitive boxes it to its wrapper object first | No-op |
 
-The evaluator accesses properties uniformly via `Value.GetProperty(Name)` and `Value.SetProperty(Name, NewValue)` — no type checking or interface querying needed at the call site.
+The VM and the built-ins access properties uniformly via `Value.GetProperty(Name)` and `Value.SetProperty(Name, NewValue)` — no type checking or interface querying needed at the call site.
 
 ## Primitives
 
@@ -254,7 +249,7 @@ Special number singletons (class functions on `TGocciaNumberLiteralValue`): `NaN
 
 ### Number Prototype (`TGocciaNumberObjectValue`)
 
-When methods are called on number primitives (e.g., `(42).toFixed(2)`), the evaluator auto-boxes the number into a `TGocciaNumberObjectValue`. All number object instances within an engine share a single per-engine prototype singleton, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and following the same pattern as strings, arrays, sets, and maps.
+When methods are called on number primitives (e.g., `(42).toFixed(2)`), the number is auto-boxed into a `TGocciaNumberObjectValue`. All number object instances within an engine share a single per-engine prototype singleton, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and following the same pattern as strings, arrays, sets, and maps.
 
 | Method | Description |
 |--------|-------------|
@@ -275,7 +270,7 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
-String primitives get `.length`, `.charAt()`, `.includes()` and the other methods from the realm's single `String.prototype`, as a `TGocciaStringObjectValue` boxed from them would (the class `new String()` also produces). A named read in bytecode mode does not create that box: `TryGetStringPrimitiveProperty` answers from the string's own characters and length, then from `String.prototype` with the primitive as the receiver. Computed reads and the interpreter still box. Every built-in prototype is per engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type:
+String primitives get `.length`, `.charAt()`, `.includes()` and the other methods from the realm's single `String.prototype`, as a `TGocciaStringObjectValue` boxed from them would (the class `new String()` also produces). A named read does not create that box: `TryGetStringPrimitiveProperty` answers from the string's own characters and length, then from `String.prototype` with the primitive as the receiver. Computed reads still box. Every built-in prototype is per engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type:
 
 - **Owned slot with `TGocciaSharedPrototype`** — `Set`, `Map`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `TypedArray` and the weak collections. The helper creates the prototype and pins it and its method host in its constructor; the realm frees the helper on tear-down, which unpins both.
 - **Raw slots** — `Array`, `Number`, `Symbol` and `Iterator` keep the prototype in one slot and the method host in another (`GArrayMethodHostSlot`, `GNumberMethodHostSlot`, `GSymbolMethodHostSlot`, …); for `Array` and `Number` both slots hold the same instance. `String.prototype` (`GStringPrototypeSlot`) and `Function.prototype` (`GFunctionPrototypeSlot`, a `TGocciaFunctionSharedPrototype`) are their own method hosts in a single slot. `SetSlot` pins; realm tear-down unpins.
@@ -756,6 +751,6 @@ See [Errors](errors.md) for the complete list of error types and user-facing dis
 
 JavaScript error objects are represented as `TGocciaObjectValue` instances with `name`, `message`, and `stack` string properties. Error constructors (`new TypeError(...)`, `new RangeError(...)`, etc.) create these objects via `CreateErrorObject` in `Goccia.Values.ErrorHelper.pas`.
 
-Throwing is implemented via `TGocciaThrowValue`, a Pascal `Exception` subclass that wraps any `TGocciaValue` (the thrown value). The evaluator catches `TGocciaThrowValue` and extracts the wrapped value for `catch` blocks.
+Throwing is implemented via `TGocciaThrowValue`, a Pascal `Exception` subclass that wraps any `TGocciaValue` (the thrown value). The VM catches `TGocciaThrowValue` and hands the wrapped value to the `catch` handler ([Architecture § Error Handling Strategy](architecture.md#error-handling-strategy)).
 
 `TGocciaError` is a separate Pascal `Exception` subclass (not a `TGocciaValue`) used for internal Pascal-side exceptions: early parser/lexer errors (`TGocciaSyntaxError` and its subclass `TGocciaLexerError`) and runtime engine errors (`TGocciaRuntimeError`). These are internal Pascal exceptions, not JavaScript error objects. The subclass relationship mirrors the ES spec: all early errors (lexer and parser) are `SyntaxError`.
