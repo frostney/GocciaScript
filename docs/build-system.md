@@ -11,7 +11,7 @@
 ## Executive Summary
 
 - **Self-hosted build** — `./build.pas` is a FreePascal script via `instantfpc`; no Make/CMake/npm required
-- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked)
+- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked), plus the `--gc-stress` development variant
 - **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
 - **Explicit clean recovery** — `./build.pas --clean <target>` clears stale FPC artifacts before diagnosing misleading compiler/resource failures
@@ -33,7 +33,7 @@ Delphi 12 contributors build the Win32 and Win64 native application matrix from 
 
 ### Build Modes
 
-The build script supports two modes via `--dev` (default) and `--prod` flags:
+The build script supports two modes via `--dev` (default) and `--prod` flags. `--gc-stress` is a development build that collects every 8 VM instructions; see [Tooling — GC-stress build](contributing/tooling.md#gc-stress-build).
 
 ```bash
 ./build.pas runner              # Dev build (default)
@@ -44,6 +44,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod              # Production build of all components
 ./build.pas --clean --prod      # Clean, then production build of all components
 ./build.pas --prod runner repl  # Production build of specific components
+./build.pas --gc-stress testrunner  # GC-stress build, written to build/gc-stress/
 ```
 
 ### Build Everything
@@ -93,11 +94,7 @@ the replacement: 0.14 renamed `GocciaScriptLoader` to `GocciaRunner` and merged
 
 Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean before selected targets.
 
-Use the explicit clean form after a branch switch, merge, PR sync, generated resource
-update, or unexplained FPC/resource compiler error. FPC 3.2.2 can report stale
-compiled state as misleading messages such as `Compilation raised exception
-internally` or `Error while compiling resources`; retry with `--clean` first,
-then diagnose the reported source line only if the same target still fails.
+Use the explicit clean form after a branch switch, merge, PR sync, generated resource update, or unexplained FPC/resource compiler error. FPC 3.2.2 can report stale compiled state as misleading messages such as `Compilation raised exception internally` or `Error while compiling resources`; retry with `--clean` first, then diagnose the reported source line only if the same target still fails.
 
 ### Compile and Run
 
@@ -607,17 +604,19 @@ These path flags are shared by both build modes. Mode-specific flags are added b
 
 ### Build Mode Flags
 
-| Flag | Development (`--dev`) | Production (`--prod`) |
-|------|----------------------|----------------------|
-| Optimization | `-O-` (disabled) | `-O4` (aggressive) |
-| Debug info | `-gw -godwarfsets` (DWARF) | — (none) |
-| Line info | `-gl` (debug line numbers) | — |
-| Stack checking | `-Ct` | — |
-| Range checking | `-Cr` | — |
-| Assertions | `-Sa` | — |
-| Strip symbols | — | `-Xs` |
-| Smart linking | — | `-CX -XX` |
-| Define | — | `-dPRODUCTION` |
+| Flag | Development (`--dev`) | Production (`--prod`) | GC stress (`--gc-stress`) |
+|------|----------------------|----------------------|---------------------------|
+| Optimization | `-O-` (disabled) | `-O4` (aggressive) | as `--dev` |
+| Debug info | `-gw -godwarfsets` (DWARF) | — (none) | as `--dev` |
+| Line info | `-gl` (debug line numbers) | — | as `--dev` |
+| Stack checking | `-Ct` | — | as `--dev` |
+| Range checking | `-Cr` | — | as `--dev` |
+| Assertions | `-Sa` | — | as `--dev` |
+| Strip symbols | — | `-Xs` | — |
+| Smart linking | — | `-CX -XX` | — |
+| Heap tracing | — | — | `-gh` (heaptrc) |
+| Define | — | `-dPRODUCTION` | `-dGOCCIA_GC_STRESS` |
+| Output | `build/` | `build/` | `build/gc-stress/`, units under `build/compiled/gc-stress/` |
 
 ### `Shared.inc` and `Goccia.inc`
 
@@ -651,7 +650,7 @@ The build script is a FreePascal program that runs via the `instantfpc` shebang:
 It:
 
 1. Creates the `build/` directory if it doesn't exist.
-2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`).
+2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`), and `--gc-stress`, which adds the GC-stress flags to a development build and moves its unit caches and binaries.
 3. Parses remaining arguments to determine which components to build.
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
 5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
@@ -735,7 +734,7 @@ RegExp embeds this generated UCD resource by default through `source/units/Gocci
 
 ## CI/CD
 
-GitHub Actions CI is split into two workflow files, plus `nightly.yml`, which checks every three hours whether a newer commit has passed `ci.yml` on `main` and publishes it as the nightly prerelease if so:
+GitHub Actions CI is split into two workflow files, plus `nightly.yml`, which checks every three hours whether a newer commit has passed `ci.yml` on `main` and publishes it as the nightly prerelease if so. The scheduled `fuzz.yml` and `gc-stress.yml` runs are described in [Tooling](contributing/tooling.md#fuzzing-and-memory-safety).
 
 ### `ci.yml` — Push to main + tags
 

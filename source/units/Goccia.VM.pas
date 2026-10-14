@@ -830,7 +830,18 @@ const
   // up the chain before it leaves the store to the general assignment path.
   LITERAL_FAST_SET_MAX_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
+  // A GC-stress build (./build.pas --gc-stress, which defines GOCCIA_GC_STRESS)
+  // reaches the pressure checkpoint every 8 dispatched instructions and forces
+  // a full collection there, so a value held only in a Pascal local while guest
+  // code runs is freed at once instead of by chance. Other builds keep the
+  // ordinary interval and collect only under memory pressure.
+  {$IFDEF GOCCIA_GC_STRESS}
+  MEMORY_PRESSURE_CHECK_INTERVAL = 7;
+  MEMORY_PRESSURE_CHECK_FORCES_COLLECTION = True;
+  {$ELSE}
   MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
+  MEMORY_PRESSURE_CHECK_FORCES_COLLECTION = False;
+  {$ENDIF}
   // Initial capacities of the VM stacks. Growth past them is charged to the
   // collector, and a stack never shrinks below them (ADR 0130).
   // The register, local-cell and argument arenas and the frame stack start
@@ -16493,7 +16504,8 @@ LDispatchCase:
         if FMemoryPressureCheckCountdown = 0 then
         begin
           if Assigned(GC) then
-            GC.CollectForMemoryPressure(nil);
+            GC.CollectForMemoryPressure(nil,
+              MEMORY_PRESSURE_CHECK_FORCES_COLLECTION);
           FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
           if FStackChargePending then
             SettleStackGrowth
