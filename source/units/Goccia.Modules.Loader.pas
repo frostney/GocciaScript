@@ -18,7 +18,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Error.ThrowErrorCallback,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,

@@ -9,7 +9,7 @@ uses
   Generics.Collections,
 
   Goccia.ControlFlow,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.SourceSpan,
   Goccia.Values.Primitives;
 

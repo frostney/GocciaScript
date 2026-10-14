@@ -12,7 +12,7 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Executor,
   Goccia.Modules,
   Goccia.Modules.Loader,

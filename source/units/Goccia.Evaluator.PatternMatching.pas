@@ -7,7 +7,7 @@ interface
 uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Values.Primitives;
 
 function EvaluateIsExpression(const AExpression: TGocciaIsExpression;

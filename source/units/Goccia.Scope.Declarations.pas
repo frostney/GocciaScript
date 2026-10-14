@@ -16,7 +16,7 @@ uses
 
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Scope,
   Goccia.Scope.BindingMap;
 
