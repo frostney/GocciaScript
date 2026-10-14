@@ -3237,12 +3237,12 @@
             // A caller that asked for it learns of the suspension from the
             // flag, and the entry returns through the same teardown an
             // exception would take, without one.
-            if Assigned(ASuspendedByReturn) and
+            if Assigned(ASuspension) and
                (FFrameStackCount <= InitialFrameStackCount) and
                (FClosedNumericFrameStackCount <=
                 InitialClosedNumericFrameCount) then
             begin
-              ASuspendedByReturn^ := True;
+              ASuspension^.Kind := bskAwait;
               Exit(RegisterUndefined);
             end;
             raise EGocciaBytecodeAsyncSuspend.Create('');
@@ -3253,16 +3253,37 @@
 
       OP_YIELD:
       begin
-        if Assigned(GActiveBytecodeGenerator) then
+        AwaitContinuation := GActiveBytecodeGenerator;
+        if Assigned(AwaitContinuation) then
         begin
           if (C and 1) <> 0 then
-            GActiveBytecodeGenerator.HandleYieldDelegate(
+            AwaitContinuation.HandleYieldDelegate(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
               InstructionStartIP)
           else
-            GActiveBytecodeGenerator.HandleYield(
+            AwaitContinuation.HandleYield(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
               Frame.IP);
+          if AwaitContinuation.FYieldPending then
+          begin
+            // The body yielded. A resumption that asked for it learns of the
+            // suspension from ASuspension, and the entry returns through the
+            // same teardown an exception would take, without one.
+            AwaitContinuation.FYieldPending := False;
+            if Assigned(ASuspension) and
+               (FFrameStackCount <= InitialFrameStackCount) and
+               (FClosedNumericFrameStackCount <=
+                InitialClosedNumericFrameCount) then
+            begin
+              ASuspension^.Kind := bskYield;
+              ASuspension^.YieldValue := AwaitContinuation.FPendingYieldValue;
+              ASuspension^.YieldIndex := AwaitContinuation.FPendingYieldIndex;
+              Exit(RegisterUndefined);
+            end;
+            raise EGocciaBytecodeYield.Create(
+              AwaitContinuation.FPendingYieldValue,
+              AwaitContinuation.FPendingYieldIndex);
+          end;
         end
         else if A <> B then
           FRegisters[B] := FRegisters[A];

@@ -176,6 +176,19 @@ type
     Bytes: Int64;
   end;
 
+  // How a native entry's body suspended, for a caller that asked to be told
+  // instead of catching EGocciaBytecodeAsyncSuspend or EGocciaBytecodeYield:
+  // the entry returns through its ordinary teardown with Kind set. Raising
+  // and unwinding a Pascal exception per await or yield is slow everywhere
+  // and very slow on i386-win32.
+  TGocciaBytecodeSuspendKind = (bskNone, bskAwait, bskYield);
+  TGocciaBytecodeSuspension = record
+    Kind: TGocciaBytecodeSuspendKind;
+    YieldValue: TGocciaRegister;
+    YieldIndex: Integer;
+  end;
+  PGocciaBytecodeSuspension = ^TGocciaBytecodeSuspension;
+
   TGocciaVM = class
   private
     FRegisterStack: TGocciaRegisterArray;
@@ -650,19 +663,25 @@ type
       const APushExecutionContext: Boolean;
       const AStopAtIP: Integer = -1;
       const AStopGenerator: TObject = nil;
-      const ASuspendedByReturn: PBoolean = nil): TGocciaRegister;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
+    // ASuspension, when given, is passed to the entry: an await of an async
+    // body then suspends it by return rather than by raising.
     function ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister;
-      const APushExecutionContext: Boolean = True): TGocciaRegister;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
     function ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
       const AThisValue, AArg0: TGocciaRegister;
-      const APushExecutionContext: Boolean = True): TGocciaRegister;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
     function ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
       const AThisValue, AArg0, AArg1: TGocciaRegister;
-      const APushExecutionContext: Boolean = True): TGocciaRegister;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
     function ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
       const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister;
-      const APushExecutionContext: Boolean = True): TGocciaRegister;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
     function ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister;
       const AArguments: TGocciaRegisterArray;
@@ -670,7 +689,8 @@ type
     function ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
-      const APushExecutionContext: Boolean = True): TGocciaValue;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaValue;
     function ExecuteClosureWithHeapArguments(
       const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
@@ -2328,10 +2348,18 @@ type
     // the same promise reuses one pair.
     FAwaitOnFulfilled: TGocciaVMAsyncAwaitContinuationValue;
     FAwaitOnRejected: TGocciaVMAsyncAwaitContinuationValue;
+    // Set by HandleYield and HandleYieldDelegate when the body yields; the
+    // OP_YIELD that called them suspends the entry with it.
+    FYieldPending: Boolean;
+    FPendingYieldValue: TGocciaRegister;
+    FPendingYieldIndex: Integer;
+    procedure SignalYield(const AValue: TGocciaRegister;
+      const AYieldIndex: Integer);
     procedure PrepareAwaitHandlers(const APromise: TGocciaPromiseValue;
       const AAsyncGeneratorResult: Boolean);
-    // ASuspended, when given, is set instead of EGocciaBytecodeAsyncSuspend
-    // being raised when the body suspends at an await.
+    // A yield suspends the body without an exception. ASuspended, when
+    // given, is set instead of EGocciaBytecodeAsyncSuspend being raised when
+    // the body suspends at an await.
     function ResumeRaw(const AKind: TGocciaBytecodeGeneratorResumeKind;
       const AValue: TGocciaValue; out ADone: Boolean;
       const ASuspended: PBoolean = nil): TGocciaValue;
@@ -4142,7 +4170,15 @@ begin
   ClearDelegateState;
   CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
     AResumeRegister, AContinuationIP);
-  raise EGocciaBytecodeYield.Create(AValue, 0);
+  SignalYield(AValue, 0);
+end;
+
+procedure TGocciaBytecodeGeneratorObjectValue.SignalYield(
+  const AValue: TGocciaRegister; const AYieldIndex: Integer);
+begin
+  FYieldPending := True;
+  FPendingYieldValue := AValue;
+  FPendingYieldIndex := AYieldIndex;
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.HandleYieldDelegate(
@@ -4327,9 +4363,10 @@ begin
             YieldedValue := NextResult;
           CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
             AResumeRegister, AContinuationIP);
-          raise EGocciaBytecodeYield.Create(
+          SignalYield(
             VMValueToRegisterFast(YieldedValue),
             Ord(not IsAsyncGeneratorClosure));
+          Exit;
         end;
         YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
         if not Assigned(YieldedValue) then
@@ -4412,8 +4449,9 @@ begin
           YieldedValue := NextResult;
         CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
           AResumeRegister, AContinuationIP);
-        raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue),
+        SignalYield(VMValueToRegisterFast(YieldedValue),
           Ord(not IsAsyncGeneratorClosure));
+        Exit;
       end;
       ClearDelegateState;
       raise EGocciaBytecodeThrow.Create(RegisterToValue(FResumeValue));
@@ -4483,8 +4521,9 @@ begin
 
       CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
         AResumeRegister, AContinuationIP);
-      raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue),
+      SignalYield(VMValueToRegisterFast(YieldedValue),
         Ord(not IsAsyncGeneratorClosure));
+      Exit;
     end;
   except
     on E: EGocciaBytecodeYield do
@@ -4505,6 +4544,7 @@ var
   PreviousState: TGocciaBytecodeGeneratorState;
   HadContinuation: Boolean;
   ReturnRegister: TGocciaRegister;
+  Suspension: TGocciaBytecodeSuspension;
 begin
   FLastResumeResultIsIteratorResult := False;
   if FState = bgsCompleted then
@@ -4550,27 +4590,35 @@ begin
   GActiveBytecodeGenerator := Self;
   try
     try
-      if Assigned(ASuspended) then
+      // ExecuteClosureRegisters' polls, then the entry told to report a
+      // suspension through Suspension instead of raising.
+      if GThreadPolls.Any <> 0 then
       begin
-        // ExecuteClosureRegisters' polls, then the entry told to report an
-        // await's suspension through ASuspended.
-        if GThreadPolls.Any <> 0 then
+        CheckExecutionTimeout;
+        CheckInstructionLimit;
+      end;
+      Suspension.Kind := bskNone;
+      ReturnRegister := FVM.ExecuteClosureRegistersInternal(FClosure,
+        FThisValue, PGocciaRegister(FArguments), Length(FArguments), True,
+        -1, nil, @Suspension);
+      case Suspension.Kind of
+        bskYield:
         begin
-          CheckExecutionTimeout;
-          CheckInstructionLimit;
+          // As for EGocciaBytecodeYield below.
+          FState := bgsSuspendedYield;
+          ADone := False;
+          FLastResumeResultIsIteratorResult := Suspension.YieldIndex <> 0;
+          Exit(RegisterToValue(Suspension.YieldValue));
         end;
-        ReturnRegister := FVM.ExecuteClosureRegistersInternal(FClosure,
-          FThisValue, PGocciaRegister(FArguments), Length(FArguments), True,
-          -1, nil, ASuspended);
-        if ASuspended^ then
+        bskAwait:
         begin
+          if not Assigned(ASuspended) then
+            raise EGocciaBytecodeAsyncSuspend.Create('');
+          ASuspended^ := True;
           ADone := False;
           Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
         end;
-      end
-      else
-        ReturnRegister := FVM.ExecuteClosureRegisters(FClosure, FThisValue,
-          FArguments);
+      end;
       FState := bgsCompleted;
       ClearDelegateState;
       ADone := True;
@@ -4979,6 +5027,8 @@ begin
   end;
   MarkRegisterReferences(FThisValue);
   MarkRegisterReferences(FResumeValue);
+  if FYieldPending then
+    MarkRegisterReferences(FPendingYieldValue);
   if Assigned(FAwaitOnFulfilled) then
     FAwaitOnFulfilled.MarkReferences;
   if Assigned(FAwaitOnRejected) then
@@ -5706,6 +5756,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5736,7 +5788,14 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(FVM.ExecuteClosure(FClosure, EffectiveThis, AArguments));
+            // An await suspends the body by return (ASuspension) rather than
+            // by EGocciaBytecodeAsyncSuspend, which a large argument list
+            // still takes.
+            Suspension.Kind := bskNone;
+            ResultValue := FVM.ExecuteClosure(FClosure, EffectiveThis,
+              AArguments, True, @Suspension);
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -5800,6 +5859,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5830,8 +5891,11 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
-              VMValueToRegisterFast(EffectiveThis))));
+            Suspension.Kind := bskNone;
+            ResultValue := RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
+              VMValueToRegisterFast(EffectiveThis), True, @Suspension));
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -5865,6 +5929,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5897,8 +5963,11 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
-              VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0))));
+            Suspension.Kind := bskNone;
+            ResultValue := RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
+              VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0), True, @Suspension));
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -5932,6 +6001,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5966,9 +6037,12 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
+            Suspension.Kind := bskNone;
+            ResultValue := RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
               VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
-              VMValueToRegisterFast(AArg1))));
+              VMValueToRegisterFast(AArg1), True, @Suspension));
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -6003,6 +6077,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -6037,9 +6113,12 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
+            Suspension.Kind := bskNone;
+            ResultValue := RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
               VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
-              VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+              VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2), True, @Suspension));
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -14990,35 +15069,42 @@ end;
 
 function TGocciaVM.ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister;
-  const APushExecutionContext: Boolean): TGocciaRegister;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 begin
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, nil, 0,
-    APushExecutionContext);
+    APushExecutionContext, -1, nil,
+    ASuspension);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0: TGocciaRegister;
-  const APushExecutionContext: Boolean): TGocciaRegister;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 begin
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, @AArg0, 1,
-    APushExecutionContext);
+    APushExecutionContext, -1, nil,
+    ASuspension);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0, AArg1: TGocciaRegister;
-  const APushExecutionContext: Boolean): TGocciaRegister;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 var
   Arguments: array[0..1] of TGocciaRegister;
 begin
   Arguments[0] := AArg0;
   Arguments[1] := AArg1;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    @Arguments[0], 2, APushExecutionContext);
+    @Arguments[0], 2, APushExecutionContext, -1, nil,
+    ASuspension);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister;
-  const APushExecutionContext: Boolean): TGocciaRegister;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 var
   Arguments: array[0..2] of TGocciaRegister;
 begin
@@ -15026,7 +15112,8 @@ begin
   Arguments[1] := AArg1;
   Arguments[2] := AArg2;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    @Arguments[0], 3, APushExecutionContext);
+    @Arguments[0], 3, APushExecutionContext, -1, nil,
+    ASuspension);
 end;
 
 procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
@@ -15825,7 +15912,7 @@ function TGocciaVM.ExecuteClosureRegistersInternal(
   const AArguments: PGocciaRegister; const AArgCount: Integer;
   const APushExecutionContext: Boolean; const AStopAtIP: Integer;
   const AStopGenerator: TObject;
-  const ASuspendedByReturn: PBoolean): TGocciaRegister;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 label
   LGetPropConstShared,
   LProdLoopHead,
@@ -16541,7 +16628,8 @@ end;
   stages them on the heap. }
 function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection;
-  const APushExecutionContext: Boolean): TGocciaValue;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaValue;
 var
   StackArguments: array[0..MAX_STACK_STAGED_ARGUMENT_COUNT - 1] of
     TGocciaRegister;
@@ -16560,7 +16648,7 @@ begin
   end;
   Result := RegisterToValue(ExecuteClosureRegistersInternal(AClosure,
     VMValueToRegisterFast(AThisValue), @StackArguments[0], ArgumentCount,
-    APushExecutionContext));
+    APushExecutionContext, -1, nil, ASuspension));
 end;
 
 function TGocciaVM.ExecuteClosureWithHeapArguments(
