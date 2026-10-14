@@ -466,7 +466,7 @@ TC39 Stage 2.7 decorators ([proposal-decorators](https://github.com/tc39/proposa
 - Auto-accessors (`@decorator accessor prop = value;`)
 - Private elements (`@decorator #method() {}`)
 
-**Decorator context object properties:** `kind`, `name`, `access` (with `get`/`set`), `static`, `private`, `addInitializer`, `metadata`.
+**Decorator context object properties:** `kind`, `name`, `access` (with `get`/`set`; a private method's has `get` and `has`, which check the class's brand and return the decorated method), `static`, `private`, `addInitializer`, `metadata`.
 
 **Decorator expressions:** Identifiers (`@log`), member access (`@decorators.log`), call expressions (`@factory(arg)`), and parenthesized expressions (`@(expr)`).
 
