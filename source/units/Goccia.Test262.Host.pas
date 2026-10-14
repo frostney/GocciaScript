@@ -361,7 +361,7 @@ begin
           '<test262-eval-script>', ScriptOptions);
         try
           CheckTopLevelRedeclarations(PipelineResult.ProgramNode,
-            FEngine.Interpreter.GlobalScope, '<test262-eval-script>');
+            FEngine.GlobalScope, '<test262-eval-script>');
           Result := FEngine.ExecuteProgram(PipelineResult.ProgramNode);
         finally
           PipelineResult.Free;

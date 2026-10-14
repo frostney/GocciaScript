@@ -119,3 +119,44 @@ test("async-from-sync return preserves an absent value argument", async () => {
 
   expect(returnArgumentsLength).toBe(0);
 });
+
+test("async-from-sync next forwards the value yield* sends to the sync iterator", async () => {
+  const received = [];
+  const sync = {
+    [Symbol.iterator]() {
+      return this;
+    },
+    next(...args) {
+      received.push(args.length === 0 ? "absent" : args[0]);
+      return { value: received.length, done: received.length > 2 };
+    },
+  };
+  const generator = ({
+    async *delegate() {
+      return yield* sync;
+    },
+  }).delegate();
+
+  expect(await generator.next("first")).toEqual({ value: 1, done: false });
+  expect(await generator.next("second")).toEqual({ value: 2, done: false });
+  expect(await generator.next("third")).toEqual({ value: 3, done: true });
+  // The first step's argument is the undefined yield* starts with; the
+  // values next sends after that reach the sync iterator.
+  expect(received.slice(1)).toEqual(["second", "third"]);
+});
+
+test("yield* over an array ignores the value next sends", async () => {
+  const generator = ({
+    async *delegate() {
+      return yield* [10, Promise.resolve(20), 30];
+    },
+  }).delegate();
+
+  expect(await generator.next("ignored")).toEqual({ value: 10, done: false });
+  expect(await generator.next("ignored")).toEqual({ value: 20, done: false });
+  expect(await generator.next("ignored")).toEqual({ value: 30, done: false });
+  expect(await generator.next("ignored")).toEqual({
+    value: undefined,
+    done: true,
+  });
+});

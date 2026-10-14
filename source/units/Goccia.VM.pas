@@ -176,6 +176,19 @@ type
     Bytes: Int64;
   end;
 
+  // How a native entry's body suspended, for a caller that asked to be told
+  // instead of catching EGocciaBytecodeAsyncSuspend or EGocciaBytecodeYield:
+  // the entry returns through its ordinary teardown with Kind set. Raising
+  // and unwinding a Pascal exception per await or yield is slow everywhere
+  // and very slow on i386-win32.
+  TGocciaBytecodeSuspendKind = (bskNone, bskAwait, bskYield);
+  TGocciaBytecodeSuspension = record
+    Kind: TGocciaBytecodeSuspendKind;
+    YieldValue: TGocciaRegister;
+    YieldIndex: Integer;
+  end;
+  PGocciaBytecodeSuspension = ^TGocciaBytecodeSuspension;
+
   TGocciaVM = class
   private
     FRegisterStack: TGocciaRegisterArray;
@@ -649,19 +662,26 @@ type
       const AArgCount: Integer;
       const APushExecutionContext: Boolean;
       const AStopAtIP: Integer = -1;
-      const AStopGenerator: TObject = nil): TGocciaRegister;
+      const AStopGenerator: TObject = nil;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
+    // ASuspension, when given, is passed to the entry: an await of an async
+    // body then suspends it by return rather than by raising.
     function ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister;
-      const APushExecutionContext: Boolean = True): TGocciaRegister;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
     function ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
       const AThisValue, AArg0: TGocciaRegister;
-      const APushExecutionContext: Boolean = True): TGocciaRegister;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
     function ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
       const AThisValue, AArg0, AArg1: TGocciaRegister;
-      const APushExecutionContext: Boolean = True): TGocciaRegister;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
     function ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
       const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister;
-      const APushExecutionContext: Boolean = True): TGocciaRegister;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaRegister;
     function ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister;
       const AArguments: TGocciaRegisterArray;
@@ -669,7 +689,8 @@ type
     function ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
-      const APushExecutionContext: Boolean = True): TGocciaValue;
+      const APushExecutionContext: Boolean = True;
+      const ASuspension: PGocciaBytecodeSuspension = nil): TGocciaValue;
     function ExecuteClosureWithHeapArguments(
       const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
@@ -2222,24 +2243,21 @@ type
     procedure MarkReferences; override;
   end;
 
-  TGocciaVMAsyncAwaitContinuationValue = class(TGocciaFunctionBase)
+  TGocciaVMAsyncAwaitContinuationValue = class(TGocciaPromiseReactionHandler)
   private
     FVM: TGocciaVM;
     FContinuation: TGocciaBytecodeGeneratorObjectValue;
     FPromise: TGocciaPromiseValue;
     FResumeKind: TGocciaBytecodeGeneratorResumeKind;
     FAsyncGeneratorResult: Boolean;
-  protected
-    function GetFunctionLength: Integer; override;
-    function GetFunctionName: string; override;
   public
     constructor Create(const AVM: TGocciaVM;
       const AContinuation: TGocciaBytecodeGeneratorObjectValue;
       const APromise: TGocciaPromiseValue;
       const AResumeKind: TGocciaBytecodeGeneratorResumeKind;
       const AAsyncGeneratorResult: Boolean = False);
-    function Call(const AArguments: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue; override;
+    function HandleReaction(const AArgument: TGocciaValue): TGocciaValue;
+      override;
     procedure MarkReferences; override;
   end;
 
@@ -2299,8 +2317,15 @@ type
     FReturnResumeValueAwaited: Boolean;
     FHasContinuation: Boolean;
     FContinuationIP: Integer;
+    // The suspended frame's registers and local cells occupy the first
+    // FContinuationRegisterCount and FContinuationLocalCellCount entries.
+    // The arrays keep their storage across a resume, so a body that suspends
+    // repeatedly copies its frame without reallocating; the counts are zero
+    // while nothing is suspended.
     FContinuationRegisters: TGocciaRegisterArray;
+    FContinuationRegisterCount: Integer;
     FContinuationLocalCells: TGocciaBytecodeCellArray;
+    FContinuationLocalCellCount: Integer;
     FContinuationHandlers: TGocciaBytecodeHandlerEntryArray;
     // The largest suspended frame this generator has held, charged to the
     // collector and released when it finishes or is destroyed (ADR 0130).
@@ -2316,8 +2341,28 @@ type
     FDelegateNextMethod: TGocciaValue;
     FIgnoreNextResume: Boolean;
     FLastResumeResultIsIteratorResult: Boolean;
+    // The onFulfilled and onRejected closures an await in this body hands to
+    // PerformPromiseThen (ES2026 §27.7.5.3 Await steps 3-7). They capture only
+    // this continuation and the promise its completion settles, and no code
+    // but the reaction job reaches them, so a body that awaits repeatedly for
+    // the same promise reuses one pair.
+    FAwaitOnFulfilled: TGocciaVMAsyncAwaitContinuationValue;
+    FAwaitOnRejected: TGocciaVMAsyncAwaitContinuationValue;
+    // Set by HandleYield and HandleYieldDelegate when the body yields; the
+    // OP_YIELD that called them suspends the entry with it.
+    FYieldPending: Boolean;
+    FPendingYieldValue: TGocciaRegister;
+    FPendingYieldIndex: Integer;
+    procedure SignalYield(const AValue: TGocciaRegister;
+      const AYieldIndex: Integer);
+    procedure PrepareAwaitHandlers(const APromise: TGocciaPromiseValue;
+      const AAsyncGeneratorResult: Boolean);
+    // A yield suspends the body without an exception. ASuspended, when
+    // given, is set instead of EGocciaBytecodeAsyncSuspend being raised when
+    // the body suspends at an await.
     function ResumeRaw(const AKind: TGocciaBytecodeGeneratorResumeKind;
-      const AValue: TGocciaValue; out ADone: Boolean): TGocciaValue;
+      const AValue: TGocciaValue; out ADone: Boolean;
+      const ASuspended: PBoolean = nil): TGocciaValue;
     function WrapResumeResult(const AValue: TGocciaValue;
       const ADone: Boolean): TGocciaObjectValue;
     procedure CaptureContinuation(const AFrame: TGocciaVMCallFrame;
@@ -2367,7 +2412,7 @@ type
   private
     FInner: TGocciaBytecodeGeneratorObjectValue;
     { Async-generator request queue. DUPLICATED: TGocciaAsyncGeneratorObjectValue
-      in Goccia.Values.GeneratorValue
+      in Goccia.Evaluator.Generators
       carries the same queue with the same discipline for the other executor,
       and the two must stay in step — a change to one is a bug in the other
       until it is made there too.
@@ -2564,7 +2609,7 @@ procedure TGocciaVMStackRoot.MarkClosureReferences(
   const AClosure: TGocciaBytecodeClosure);
 var
   I: Integer;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
 begin
   if not Assigned(AClosure) then
     Exit;
@@ -2586,8 +2631,8 @@ begin
   for I := 0 to AClosure.UpvalueCount - 1 do
   begin
     Upvalue := AClosure.GetUpvalue(I);
-    if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-      MarkRegisterReferences(Upvalue.Cell.Value);
+    if Assigned(Upvalue) then
+      Upvalue.MarkReferences;
   end;
 end;
 
@@ -2620,7 +2665,7 @@ var
       RangeLimit := Length(FVM.FLocalCellStack);
     for J := ABase to RangeLimit - 1 do
       if Assigned(FVM.FLocalCellStack[J]) then
-        MarkRegisterReferences(FVM.FLocalCellStack[J].Value);
+        FVM.FLocalCellStack[J].MarkReferences;
   end;
 
   procedure MarkArgumentRange(const ABase, ACount: Integer);
@@ -2681,7 +2726,7 @@ begin
     Limit := Length(FVM.FLocalCellStack);
   for I := 0 to Limit - 1 do
     if Assigned(FVM.FLocalCellStack[I]) then
-      MarkRegisterReferences(FVM.FLocalCellStack[I].Value);
+      FVM.FLocalCellStack[I].MarkReferences;
 
   for I := 0 to FVM.FFrameStackCount - 1 do
   begin
@@ -3122,39 +3167,59 @@ type
     FVM: TGocciaVM;
     FIteratorValue: TGocciaValue;
     FNextMethod: TGocciaValue;
+    // The unwrap and closeIterator closures of
+    // AsyncFromSyncIteratorContinuation capture only done and this iterator,
+    // and no code but the reaction jobs can reach them, so each variant is
+    // built once per iterator rather than once per step.
+    FUnwrapNotDone: TGocciaPromiseReactionHandler;
+    FUnwrapDone: TGocciaPromiseReactionHandler;
+    FCloseIterator: TGocciaPromiseReactionHandler;
+    FMethodsInstalled: Boolean;
+    procedure InstallMethods;
     function PromiseResolve(const AValue: TGocciaValue): TGocciaValue;
     function PromiseReject(const AValue: TGocciaValue): TGocciaValue;
     procedure ClearIteratorState;
     procedure CloseIteratorAfterRejectedValue;
+    function UnwrapFunction(const ADone: Boolean): TGocciaPromiseReactionHandler;
+    function CloseIteratorFunction: TGocciaPromiseReactionHandler;
     function AsyncFromSyncIteratorContinuation(const AValue: TGocciaValue;
       const ADone, ACloseOnRejection: Boolean): TGocciaValue;
     function AwaitIteratorValue(const AValue: TGocciaValue;
       const ADone, ACloseOnRejection: Boolean): TGocciaValue;
+    function NextStep(const AHasValue: Boolean;
+      const AValue: TGocciaValue): TGocciaValue;
     function Next(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ReturnValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ThrowValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AVM: TGocciaVM; const AIteratorValue,
       ANextMethod: TGocciaValue);
+    function GetPropertyWithContext(const AName: string;
+      const AThisContext: TGocciaValue): TGocciaValue; override;
+    function GetOwnPropertyDescriptor(
+      const AName: string): TGocciaPropertyDescriptor; override;
     procedure MarkReferences; override;
   end;
 
-  TGocciaVMAsyncFromSyncFulfillValue = class(TGocciaObjectValue)
+  // ES2026 §27.1.5.4 AsyncFromSyncIteratorContinuation step 9: unwrap.
+  TGocciaVMAsyncFromSyncFulfillValue = class(TGocciaPromiseReactionHandler)
   private
     FDone: Boolean;
   public
     constructor Create(const ADone: Boolean);
-    function Invoke(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+    function HandleReaction(const AArgument: TGocciaValue): TGocciaValue;
+      override;
   end;
 
-  TGocciaVMAsyncFromSyncRejectValue = class(TGocciaObjectValue)
+  // ES2026 §27.1.5.4 AsyncFromSyncIteratorContinuation step 13.a:
+  // closeIterator.
+  TGocciaVMAsyncFromSyncRejectValue = class(TGocciaPromiseReactionHandler)
   private
     FIterator: TGocciaVMAsyncFromSyncIteratorValue;
   public
     constructor Create(const AIterator: TGocciaVMAsyncFromSyncIteratorValue);
-    function Invoke(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
+    function HandleReaction(const AArgument: TGocciaValue): TGocciaValue;
+      override;
     procedure MarkReferences; override;
   end;
 
@@ -3314,9 +3379,33 @@ begin
   FVM := AVM;
   FIteratorValue := AIteratorValue;
   FNextMethod := ANextMethod;
+end;
+
+// The next, return and throw methods, built when engine code first reads one.
+// for-await and yield* step the iterator through NextStep without reading
+// next, so a loop that runs to completion never builds them.
+procedure TGocciaVMAsyncFromSyncIteratorValue.InstallMethods;
+begin
+  if FMethodsInstalled then
+    Exit;
+  FMethodsInstalled := True;
   AssignProperty(PROP_NEXT, TGocciaNativeFunctionValue.Create(Next, PROP_NEXT, 1));
   AssignProperty(PROP_RETURN, TGocciaNativeFunctionValue.Create(ReturnValue, PROP_RETURN, 1));
   AssignProperty(PROP_THROW, TGocciaNativeFunctionValue.Create(ThrowValue, PROP_THROW, 1));
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.GetPropertyWithContext(
+  const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
+  InstallMethods;
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.GetOwnPropertyDescriptor(
+  const AName: string): TGocciaPropertyDescriptor;
+begin
+  InstallMethods;
+  Result := inherited GetOwnPropertyDescriptor(AName);
 end;
 
 procedure TGocciaVMAsyncFromSyncIteratorValue.ClearIteratorState;
@@ -3369,12 +3458,14 @@ function TGocciaVMAsyncFromSyncIteratorValue.AsyncFromSyncIteratorContinuation(
   const AValue: TGocciaValue; const ADone,
   ACloseOnRejection: Boolean): TGocciaValue;
 var
-  FulfillHandler: TGocciaVMAsyncFromSyncFulfillValue;
-  FulfillFunction: TGocciaNativeFunctionValue;
-  RejectHandler: TGocciaVMAsyncFromSyncRejectValue;
-  RejectFunction: TGocciaNativeFunctionValue;
+  RejectFunction: TGocciaPromiseReactionHandler;
   ValueWrapper: TGocciaPromiseValue;
 begin
+  // A value that is not an Object cannot make PromiseResolve abrupt, and the
+  // wrapper it resolves is fulfilled at once, so onRejected is never used.
+  if Assigned(FVM) and not (AValue is TGocciaObjectValue) then
+    Exit(InvokeThenOnPrimitive(AValue, UnwrapFunction(ADone)));
+
   try
     ValueWrapper := TGocciaPromiseValue(PromiseResolve(AValue));
   except
@@ -3386,21 +3477,35 @@ begin
     raise;
   end;
 
-  FulfillHandler := TGocciaVMAsyncFromSyncFulfillValue.Create(ADone);
-  FulfillFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    FulfillHandler.Invoke, 'async-from-sync-fulfill', 1);
-  FulfillFunction.CapturedRoot := FulfillHandler;
-
   RejectFunction := nil;
   if ACloseOnRejection and not ADone then
-  begin
-    RejectHandler := TGocciaVMAsyncFromSyncRejectValue.Create(Self);
-    RejectFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      RejectHandler.Invoke, 'async-from-sync-reject', 1);
-    RejectFunction.CapturedRoot := RejectHandler;
-  end;
+    RejectFunction := CloseIteratorFunction;
 
-  Result := ValueWrapper.InvokeThen(FulfillFunction, RejectFunction);
+  Result := ValueWrapper.InvokeThen(UnwrapFunction(ADone), RejectFunction);
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.UnwrapFunction(
+  const ADone: Boolean): TGocciaPromiseReactionHandler;
+begin
+  if ADone then
+    Result := FUnwrapDone
+  else
+    Result := FUnwrapNotDone;
+  if Assigned(Result) then
+    Exit;
+  Result := TGocciaVMAsyncFromSyncFulfillValue.Create(ADone);
+  if ADone then
+    FUnwrapDone := Result
+  else
+    FUnwrapNotDone := Result;
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.CloseIteratorFunction:
+  TGocciaPromiseReactionHandler;
+begin
+  if not Assigned(FCloseIterator) then
+    FCloseIterator := TGocciaVMAsyncFromSyncRejectValue.Create(Self);
+  Result := FCloseIterator;
 end;
 
 function TGocciaVMAsyncFromSyncIteratorValue.AwaitIteratorValue(
@@ -3418,42 +3523,30 @@ end;
 constructor TGocciaVMAsyncFromSyncFulfillValue.Create(const ADone: Boolean);
 begin
   inherited Create;
+  FRealm := CurrentRealm;
   FDone := ADone;
 end;
 
-function TGocciaVMAsyncFromSyncFulfillValue.Invoke(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Value: TGocciaValue;
+function TGocciaVMAsyncFromSyncFulfillValue.HandleReaction(
+  const AArgument: TGocciaValue): TGocciaValue;
 begin
-  if Assigned(AArgs) and (AArgs.Length > 0) then
-    Value := AArgs.GetElement(0)
-  else
-    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-  Result := CreateIteratorResult(Value, FDone);
+  Result := CreateIteratorResult(AArgument, FDone);
 end;
 
 constructor TGocciaVMAsyncFromSyncRejectValue.Create(
   const AIterator: TGocciaVMAsyncFromSyncIteratorValue);
 begin
   inherited Create;
+  FRealm := CurrentRealm;
   FIterator := AIterator;
 end;
 
-function TGocciaVMAsyncFromSyncRejectValue.Invoke(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  Reason: TGocciaValue;
+function TGocciaVMAsyncFromSyncRejectValue.HandleReaction(
+  const AArgument: TGocciaValue): TGocciaValue;
 begin
   if Assigned(FIterator) then
     FIterator.CloseIteratorAfterRejectedValue;
-  if Assigned(AArgs) and (AArgs.Length > 0) then
-    Reason := AArgs.GetElement(0)
-  else
-    Reason := TGocciaUndefinedLiteralValue.UndefinedValue;
-  raise TGocciaThrowValue.Create(Reason);
+  raise TGocciaThrowValue.Create(AArgument);
 end;
 
 procedure TGocciaVMAsyncFromSyncRejectValue.MarkReferences;
@@ -3499,8 +3592,10 @@ begin
   Result := Promise;
 end;
 
-function TGocciaVMAsyncFromSyncIteratorValue.Next(
-  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+// ES2026 §27.1.5.2.1 %AsyncFromSyncIteratorPrototype%.next ( [ value ] ).
+// AHasValue tells whether value was present.
+function TGocciaVMAsyncFromSyncIteratorValue.NextStep(const AHasValue: Boolean;
+  const AValue: TGocciaValue): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
   Done: Boolean;
@@ -3515,9 +3610,9 @@ begin
 
     if FIteratorValue is TGocciaIteratorValue then
     begin
-      if AArgs.Length > 0 then
+      if AHasValue then
         Value := TGocciaIteratorValue(FIteratorValue).DirectNextValue(
-          AArgs.GetElement(0), Done)
+          AValue, Done)
       else
         Value := TGocciaIteratorValue(FIteratorValue).DirectNext(Done);
       if Done then
@@ -3525,8 +3620,8 @@ begin
       Exit(AsyncFromSyncIteratorContinuation(Value, Done, True));
     end;
 
-    if AArgs.Length > 0 then
-      CallArgs := TGocciaArgumentsCollection.Create([AArgs.GetElement(0)])
+    if AHasValue then
+      CallArgs := TGocciaArgumentsCollection.Create([AValue])
     else
       CallArgs := TGocciaArgumentsCollection.Create;
     try
@@ -3575,6 +3670,15 @@ begin
       Result := PromiseReject(CreateErrorObject(ERROR_NAME, E.Message));
     end;
   end;
+end;
+
+function TGocciaVMAsyncFromSyncIteratorValue.Next(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArgs.Length > 0 then
+    Result := NextStep(True, AArgs.GetElement(0))
+  else
+    Result := NextStep(False, nil);
 end;
 
 function TGocciaVMAsyncFromSyncIteratorValue.ReturnValue(
@@ -3785,6 +3889,12 @@ begin
     FIteratorValue.MarkReferences;
   if Assigned(FNextMethod) then
     FNextMethod.MarkReferences;
+  if Assigned(FUnwrapNotDone) then
+    FUnwrapNotDone.MarkReferences;
+  if Assigned(FUnwrapDone) then
+    FUnwrapDone.MarkReferences;
+  if Assigned(FCloseIterator) then
+    FCloseIterator.MarkReferences;
 end;
 
 function VMArgumentOrUndefined(const AArgs: TGocciaArgumentsCollection): TGocciaValue;
@@ -3959,13 +4069,17 @@ begin
   FContinuationPrevCovLine := APrevCovLine;
   FResumeRegister := AResumeRegister;
 
-  SetLength(FContinuationRegisters, LiveRegisterCount);
-  for I := 0 to High(FContinuationRegisters) do
+  if Length(FContinuationRegisters) < LiveRegisterCount then
+    SetLength(FContinuationRegisters, LiveRegisterCount);
+  for I := 0 to LiveRegisterCount - 1 do
     FContinuationRegisters[I] := FVM.FRegisters[I];
+  FContinuationRegisterCount := LiveRegisterCount;
 
-  SetLength(FContinuationLocalCells, LiveLocalCellCount);
-  for I := 0 to High(FContinuationLocalCells) do
+  if Length(FContinuationLocalCells) < LiveLocalCellCount then
+    SetLength(FContinuationLocalCells, LiveLocalCellCount);
+  for I := 0 to LiveLocalCellCount - 1 do
     FContinuationLocalCells[I] := FVM.FLocalCells[I];
+  FContinuationLocalCellCount := LiveLocalCellCount;
 
   FVM.FHandlerStack.CopyFrom(AHandlerBaseCount, FContinuationHandlers);
 end;
@@ -3992,13 +4106,13 @@ begin
   // Growing the VM's stacks can throw the memory budget's RangeError (ADR
   // 0130). The continuation is consumed only after the last of them, so a
   // resume refused here leaves it whole and ResumeRaw can suspend it again.
-  FVM.EnsureRegisterCapacity(Length(FContinuationRegisters));
-  for I := 0 to High(FContinuationRegisters) do
+  FVM.EnsureRegisterCapacity(FContinuationRegisterCount);
+  for I := 0 to FContinuationRegisterCount - 1 do
     FVM.FRegisters[I] := FContinuationRegisters[I];
-  FVM.EnsureLocalCapacity(Length(FContinuationLocalCells));
-  for I := 0 to High(FContinuationLocalCells) do
+  FVM.EnsureLocalCapacity(FContinuationLocalCellCount);
+  for I := 0 to FContinuationLocalCellCount - 1 do
     FVM.FLocalCells[I] := FContinuationLocalCells[I];
-  FVM.NoteLocalCells(Length(FContinuationLocalCells));
+  FVM.NoteLocalCells(FContinuationLocalCellCount);
 
   while FVM.FHandlerStack.Count > AHandlerBaseCount do
     FVM.FHandlerStack.Pop;
@@ -4011,8 +4125,8 @@ begin
   FHasContinuation := False;
   AFrame.IP := FContinuationIP;
   APrevCovLine := FContinuationPrevCovLine;
-  SetLength(FContinuationRegisters, 0);
-  SetLength(FContinuationLocalCells, 0);
+  FContinuationRegisterCount := 0;
+  FContinuationLocalCellCount := 0;
   SetLength(FContinuationHandlers, 0);
 end;
 
@@ -4025,6 +4139,19 @@ begin
     FContinuationChargeCollector.ReleaseExternalBytes(
       FContinuationChargedBytes);
   FContinuationChargedBytes := 0;
+end;
+
+procedure TGocciaBytecodeGeneratorObjectValue.PrepareAwaitHandlers(
+  const APromise: TGocciaPromiseValue; const AAsyncGeneratorResult: Boolean);
+begin
+  if Assigned(FAwaitOnFulfilled) and
+     (FAwaitOnFulfilled.FPromise = APromise) and
+     (FAwaitOnFulfilled.FAsyncGeneratorResult = AAsyncGeneratorResult) then
+    Exit;
+  FAwaitOnFulfilled := TGocciaVMAsyncAwaitContinuationValue.Create(FVM, Self,
+    APromise, bgrkNext, AAsyncGeneratorResult);
+  FAwaitOnRejected := TGocciaVMAsyncAwaitContinuationValue.Create(FVM, Self,
+    APromise, bgrkThrow, AAsyncGeneratorResult);
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.ClearDelegateState;
@@ -4043,7 +4170,15 @@ begin
   ClearDelegateState;
   CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
     AResumeRegister, AContinuationIP);
-  raise EGocciaBytecodeYield.Create(AValue, 0);
+  SignalYield(AValue, 0);
+end;
+
+procedure TGocciaBytecodeGeneratorObjectValue.SignalYield(
+  const AValue: TGocciaRegister; const AYieldIndex: Integer);
+begin
+  FYieldPending := True;
+  FPendingYieldValue := AValue;
+  FPendingYieldIndex := AYieldIndex;
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.HandleYieldDelegate(
@@ -4146,7 +4281,9 @@ begin
       FDelegateNextMethod := nil;
       if IteratorValue is TGocciaIteratorValue then
         FDelegateIterator := TGocciaIteratorValue(IteratorValue)
-      else if IteratorValue is TGocciaObjectValue then
+      else if (IteratorValue is TGocciaObjectValue) and
+              not (IteratorValue is TGocciaVMAsyncFromSyncIteratorValue) then
+        // The async-from-sync iterator is stepped through NextStep below.
         FDelegateNextMethod := IteratorValue.GetProperty(PROP_NEXT);
       FDelegateActive := True;
     end;
@@ -4226,9 +4363,10 @@ begin
             YieldedValue := NextResult;
           CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
             AResumeRegister, AContinuationIP);
-          raise EGocciaBytecodeYield.Create(
+          SignalYield(
             VMValueToRegisterFast(YieldedValue),
             Ord(not IsAsyncGeneratorClosure));
+          Exit;
         end;
         YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
         if not Assigned(YieldedValue) then
@@ -4311,8 +4449,9 @@ begin
           YieldedValue := NextResult;
         CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
           AResumeRegister, AContinuationIP);
-        raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue),
+        SignalYield(VMValueToRegisterFast(YieldedValue),
           Ord(not IsAsyncGeneratorClosure));
+        Exit;
       end;
       ClearDelegateState;
       raise EGocciaBytecodeThrow.Create(RegisterToValue(FResumeValue));
@@ -4328,6 +4467,18 @@ begin
       if Assigned(FDelegateIterator) then
       begin
         NextResult := FDelegateIterator.AdvanceNextResultValue(NextArgument);
+        if not (NextResult is TGocciaObjectValue) then
+          ClearDelegateAndThrowTypeErrorWithSuggestion(
+            Format(SErrorIteratorResultNotObject,
+            [NextResult.ToStringLiteral.Value]), SSuggestIteratorResultObject);
+      end
+      else if FDelegateIteratorValue is TGocciaVMAsyncFromSyncIteratorValue then
+      begin
+        // GetIteratorValue's own CreateAsyncFromSyncIterator result: no code
+        // can reach it to replace its next, so the step is called directly.
+        NextResult := AwaitDelegateResult(
+          TGocciaVMAsyncFromSyncIteratorValue(FDelegateIteratorValue).NextStep(
+            True, NextArgument));
         if not (NextResult is TGocciaObjectValue) then
           ClearDelegateAndThrowTypeErrorWithSuggestion(
             Format(SErrorIteratorResultNotObject,
@@ -4370,8 +4521,9 @@ begin
 
       CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
         AResumeRegister, AContinuationIP);
-      raise EGocciaBytecodeYield.Create(VMValueToRegisterFast(YieldedValue),
+      SignalYield(VMValueToRegisterFast(YieldedValue),
         Ord(not IsAsyncGeneratorClosure));
+      Exit;
     end;
   except
     on E: EGocciaBytecodeYield do
@@ -4386,12 +4538,13 @@ end;
 
 function TGocciaBytecodeGeneratorObjectValue.ResumeRaw(
   const AKind: TGocciaBytecodeGeneratorResumeKind; const AValue: TGocciaValue;
-  out ADone: Boolean): TGocciaValue;
+  out ADone: Boolean; const ASuspended: PBoolean): TGocciaValue;
 var
   PreviousGenerator: TGocciaBytecodeGeneratorObjectValue;
   PreviousState: TGocciaBytecodeGeneratorState;
   HadContinuation: Boolean;
   ReturnRegister: TGocciaRegister;
+  Suspension: TGocciaBytecodeSuspension;
 begin
   FLastResumeResultIsIteratorResult := False;
   if FState = bgsCompleted then
@@ -4437,7 +4590,35 @@ begin
   GActiveBytecodeGenerator := Self;
   try
     try
-      ReturnRegister := FVM.ExecuteClosureRegisters(FClosure, FThisValue, FArguments);
+      // ExecuteClosureRegisters' polls, then the entry told to report a
+      // suspension through Suspension instead of raising.
+      if GThreadPolls.Any <> 0 then
+      begin
+        CheckExecutionTimeout;
+        CheckInstructionLimit;
+      end;
+      Suspension.Kind := bskNone;
+      ReturnRegister := FVM.ExecuteClosureRegistersInternal(FClosure,
+        FThisValue, PGocciaRegister(FArguments), Length(FArguments), True,
+        -1, nil, @Suspension);
+      case Suspension.Kind of
+        bskYield:
+        begin
+          // As for EGocciaBytecodeYield below.
+          FState := bgsSuspendedYield;
+          ADone := False;
+          FLastResumeResultIsIteratorResult := Suspension.YieldIndex <> 0;
+          Exit(RegisterToValue(Suspension.YieldValue));
+        end;
+        bskAwait:
+        begin
+          if not Assigned(ASuspended) then
+            raise EGocciaBytecodeAsyncSuspend.Create('');
+          ASuspended^ := True;
+          ADone := False;
+          Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+        end;
+      end;
       FState := bgsCompleted;
       ClearDelegateState;
       ADone := True;
@@ -4599,35 +4780,30 @@ begin
   FAsyncGeneratorResult := AAsyncGeneratorResult;
 end;
 
-function TGocciaVMAsyncAwaitContinuationValue.GetFunctionLength: Integer;
-begin
-  Result := 1;
-end;
-
-function TGocciaVMAsyncAwaitContinuationValue.GetFunctionName: string;
-begin
-  Result := 'async-await-continuation';
-end;
-
-function TGocciaVMAsyncAwaitContinuationValue.Call(
-  const AArguments: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
+function TGocciaVMAsyncAwaitContinuationValue.HandleReaction(
+  const AArgument: TGocciaValue): TGocciaValue;
 var
   Done: Boolean;
   PreviousAsyncPromise: TGocciaPromiseValue;
   ResumeValue: TGocciaValue;
   ResultValue: TGocciaValue;
+  Suspended: Boolean;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not Assigned(FContinuation) or not Assigned(FPromise) then
     Exit;
 
-  ResumeValue := VMArgumentOrUndefined(AArguments);
+  ResumeValue := AArgument;
+  Suspended := False;
   PreviousAsyncPromise := FVM.FCurrentAsyncPromise;
   FVM.FCurrentAsyncPromise := FPromise;
   try
     try
-      ResultValue := FContinuation.ResumeRaw(FResumeKind, ResumeValue, Done);
+      ResultValue := FContinuation.ResumeRaw(FResumeKind, ResumeValue, Done,
+        @Suspended);
+      // The body awaited again: its next await's reaction resumes it.
+      if Suspended then
+        Exit;
       if FAsyncGeneratorResult and (FResumeKind = bgrkReturn) then
         FPromise.Resolve(CreateIteratorResult(ResultValue, Done))
       else if FAsyncGeneratorResult then
@@ -4655,6 +4831,40 @@ begin
     FContinuation.MarkReferences;
   if Assigned(FPromise) then
     FPromise.MarkReferences;
+end;
+
+// OP_AWAIT in an async function or async generator, once the frame is
+// captured into AContinuation (ES2026 §27.7.5.3 Await, steps 2-8): resolve
+// the awaited value to a promise and attach the continuation's two reactions,
+// with no derived promise (step 7).
+//
+// PromiseResolve reads the value's `constructor` or `then`, which can run a
+// getter or a Proxy trap, and that guest code reaches the VM's memory-pressure
+// checkpoint or calls Goccia.gc(). For an async function's first await,
+// AContinuation is a generator object created for this await, which nothing
+// else holds until the reactions are attached. So it, the promise and the
+// reactions are rooted for the whole step (issue #1625).
+procedure AttachAwaitContinuation(const AVM: TGocciaVM;
+  const AContinuation: TGocciaBytecodeGeneratorObjectValue;
+  const AValue: TGocciaValue; const AIsGenerator: Boolean);
+var
+  Roots: TGocciaActiveRootFrame;
+  AwaitPromise: TGocciaPromiseValue;
+begin
+  Roots.Initialize;
+  try
+    Roots.Add(AContinuation);
+    AwaitPromise := AVM.PromiseResolveIntrinsic(AValue);
+    Roots.Add(AwaitPromise);
+    AContinuation.PrepareAwaitHandlers(AVM.FCurrentAsyncPromise,
+      AIsGenerator);
+    Roots.Add(AContinuation.FAwaitOnFulfilled);
+    Roots.Add(AContinuation.FAwaitOnRejected);
+    AwaitPromise.InvokeThenWithoutResult(AContinuation.FAwaitOnFulfilled,
+      AContinuation.FAwaitOnRejected);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { TGocciaVMDynamicImportStartValue }
@@ -4781,7 +4991,7 @@ end;
 procedure TGocciaBytecodeGeneratorObjectValue.MarkReferences;
 var
   I: Integer;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
 begin
   // Marking the function value below closes a reference cycle back to this
   // generator (a generator reachable from its own function's upvalues), so the
@@ -4811,19 +5021,25 @@ begin
     for I := 0 to FClosure.UpvalueCount - 1 do
     begin
       Upvalue := FClosure.GetUpvalue(I);
-      if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-        MarkRegisterReferences(Upvalue.Cell.Value);
+      if Assigned(Upvalue) then
+        Upvalue.MarkReferences;
     end;
   end;
   MarkRegisterReferences(FThisValue);
   MarkRegisterReferences(FResumeValue);
+  if FYieldPending then
+    MarkRegisterReferences(FPendingYieldValue);
+  if Assigned(FAwaitOnFulfilled) then
+    FAwaitOnFulfilled.MarkReferences;
+  if Assigned(FAwaitOnRejected) then
+    FAwaitOnRejected.MarkReferences;
   for I := 0 to High(FArguments) do
     MarkRegisterReferences(FArguments[I]);
-  for I := 0 to High(FContinuationRegisters) do
+  for I := 0 to FContinuationRegisterCount - 1 do
     MarkRegisterReferences(FContinuationRegisters[I]);
-  for I := 0 to High(FContinuationLocalCells) do
+  for I := 0 to FContinuationLocalCellCount - 1 do
     if Assigned(FContinuationLocalCells[I]) then
-      MarkRegisterReferences(FContinuationLocalCells[I].Value);
+      FContinuationLocalCells[I].MarkReferences;
   if Assigned(FDelegateIteratorValue) then
     FDelegateIteratorValue.MarkReferences;
   if Assigned(FDelegateIterator) then
@@ -5083,9 +5299,11 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   Done: Boolean;
   IsRooted: Boolean;
+  Suspended: Boolean;
   UnwrappedValue: TGocciaValue;
   Value: TGocciaValue;
 begin
+  Suspended := False;
   IsRooted := (TGarbageCollector.Instance <> nil);
   if IsRooted then
     TGarbageCollector.Instance.AddTempRoot(ARequest.Promise);
@@ -5129,7 +5347,14 @@ begin
               end;
             end;
 
-            Value := FInner.ResumeRaw(ARequest.Kind, ARequest.Value, Done);
+            Value := FInner.ResumeRaw(ARequest.Kind, ARequest.Value, Done,
+              @Suspended);
+            if Suspended then
+            begin
+              // As for EGocciaBytecodeAsyncSuspend below.
+              ContinueWhenPromiseSettles(ARequest.Promise);
+              Exit;
+            end;
             try
               if Done then
               begin
@@ -5531,6 +5756,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5561,7 +5788,14 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(FVM.ExecuteClosure(FClosure, EffectiveThis, AArguments));
+            // An await suspends the body by return (ASuspension) rather than
+            // by EGocciaBytecodeAsyncSuspend, which a large argument list
+            // still takes.
+            Suspension.Kind := bskNone;
+            ResultValue := FVM.ExecuteClosure(FClosure, EffectiveThis,
+              AArguments, True, @Suspension);
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -5625,6 +5859,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5655,8 +5891,11 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
-              VMValueToRegisterFast(EffectiveThis))));
+            Suspension.Kind := bskNone;
+            ResultValue := RegisterToValue(FVM.ExecuteClosureRegisters0(FClosure,
+              VMValueToRegisterFast(EffectiveThis), True, @Suspension));
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -5690,6 +5929,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5722,8 +5963,11 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
-              VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0))));
+            Suspension.Kind := bskNone;
+            ResultValue := RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
+              VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0), True, @Suspension));
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -5757,6 +6001,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5791,9 +6037,12 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
+            Suspension.Kind := bskNone;
+            ResultValue := RegisterToValue(FVM.ExecuteClosureRegisters2(FClosure,
               VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
-              VMValueToRegisterFast(AArg1))));
+              VMValueToRegisterFast(AArg1), True, @Suspension));
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -5828,6 +6077,8 @@ var
   PreviousAsyncPromise: TGocciaPromiseValue;
   EffectiveThis: TGocciaValue;
   PromiseRoot: TGocciaTempRoot;
+  Suspension: TGocciaBytecodeSuspension;
+  ResultValue: TGocciaValue;
 begin
   if FStrictThis then
     EffectiveThis := AThisValue
@@ -5862,9 +6113,12 @@ begin
         FVM.FCurrentAsyncPromise := Promise;
         try
           try
-            Promise.Resolve(RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
+            Suspension.Kind := bskNone;
+            ResultValue := RegisterToValue(FVM.ExecuteClosureRegisters3(FClosure,
               VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0),
-              VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2))));
+              VMValueToRegisterFast(AArg1), VMValueToRegisterFast(AArg2), True, @Suspension));
+            if Suspension.Kind = bskNone then
+              Promise.Resolve(ResultValue);
           except
             on E: EGocciaBytecodeAsyncSuspend do
             begin
@@ -5939,7 +6193,7 @@ var
     CurrentVM: TGocciaVM;
     I: Integer;
     Desc: TGocciaUpvalueDescriptor;
-    Upvalue: TGocciaBytecodeUpvalue;
+    Upvalue: TGocciaBytecodeCell;
   begin
     if (AReceiver is TGocciaObjectValue) and
        (FCurrentCtorClass is TGocciaVMClassValue) then
@@ -5959,8 +6213,8 @@ var
           if Desc.Name = DERIVED_THIS_INITIALIZED_LOCAL then
           begin
             Upvalue := CurrentVM.FCurrentClosure.GetUpvalue(I);
-            if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-              Upvalue.Cell.Value := ValueToRegister(
+            if Assigned(Upvalue) then
+              Upvalue.Value := ValueToRegister(
                 TGocciaBooleanLiteralValue.TrueValue);
           end;
         end;
@@ -7745,7 +7999,7 @@ end;
 procedure TGocciaBytecodeFunctionValue.MarkReferences;
 var
   I: Integer;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
 begin
   if GCMarked then Exit;
   inherited;
@@ -7769,8 +8023,8 @@ begin
   for I := 0 to FClosure.UpvalueCount - 1 do
   begin
     Upvalue := FClosure.GetUpvalue(I);
-    if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-      MarkRegisterReferences(Upvalue.Cell.Value);
+    if Assigned(Upvalue) then
+      Upvalue.MarkReferences;
   end;
 end;
 
@@ -14466,7 +14720,7 @@ var
   VarObjectBinding: Integer;
   VarObject: TGocciaValue;
   VarObjectValue: TGocciaObjectValue;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
   RejectNames: TGocciaEvalRejectNameArray;
 
   procedure RaiseAlreadyDeclared(const AName: string);
@@ -14534,7 +14788,7 @@ begin
   else
   begin
     Upvalue := FCurrentClosure.GetUpvalue(ASite.Bindings[VarObjectBinding].Index);
-    VarObject := RegisterToValue(Upvalue.Cell.Value);
+    VarObject := RegisterToValue(Upvalue.Value);
   end;
   if VarObject is TGocciaObjectValue then
     VarObjectValue := TGocciaObjectValue(VarObject)
@@ -14544,7 +14798,7 @@ begin
     // (ADR 0134, "Where eval declarations go").
     VarObjectValue := TGocciaObjectValue.Create(nil);
     if Assigned(Upvalue) then
-      Upvalue.Cell.Value := VMValueToRegisterFast(VarObjectValue)
+      Upvalue.Value := VMValueToRegisterFast(VarObjectValue)
     else
       SetRegister(ASite.Bindings[VarObjectBinding].Index, VarObjectValue);
   end;
@@ -14783,8 +15037,7 @@ begin
   begin
     Desc := EvalTemplate.GetUpvalueDescriptor(I);
     if Desc.IsLocal then
-      Result.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
-        GetLocalCell(Desc.Index)))
+      Result.SetUpvalue(I, GetLocalCell(Desc.Index))
     else if Assigned(FCurrentClosure) then
       Result.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
   end;
@@ -14816,35 +15069,42 @@ end;
 
 function TGocciaVM.ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister;
-  const APushExecutionContext: Boolean): TGocciaRegister;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 begin
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, nil, 0,
-    APushExecutionContext);
+    APushExecutionContext, -1, nil,
+    ASuspension);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0: TGocciaRegister;
-  const APushExecutionContext: Boolean): TGocciaRegister;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 begin
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, @AArg0, 1,
-    APushExecutionContext);
+    APushExecutionContext, -1, nil,
+    ASuspension);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0, AArg1: TGocciaRegister;
-  const APushExecutionContext: Boolean): TGocciaRegister;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 var
   Arguments: array[0..1] of TGocciaRegister;
 begin
   Arguments[0] := AArg0;
   Arguments[1] := AArg1;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    @Arguments[0], 2, APushExecutionContext);
+    @Arguments[0], 2, APushExecutionContext, -1, nil,
+    ASuspension);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister;
-  const APushExecutionContext: Boolean): TGocciaRegister;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 var
   Arguments: array[0..2] of TGocciaRegister;
 begin
@@ -14852,7 +15112,8 @@ begin
   Arguments[1] := AArg1;
   Arguments[2] := AArg2;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    @Arguments[0], 3, APushExecutionContext);
+    @Arguments[0], 3, APushExecutionContext, -1, nil,
+    ASuspension);
 end;
 
 procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
@@ -15650,7 +15911,8 @@ function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
   const AArguments: PGocciaRegister; const AArgCount: Integer;
   const APushExecutionContext: Boolean; const AStopAtIP: Integer;
-  const AStopGenerator: TObject): TGocciaRegister;
+  const AStopGenerator: TObject;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
 label
   LGetPropConstShared,
   LProdLoopHead,
@@ -15700,7 +15962,7 @@ var
   ProtoReadCache: PGocciaProtoReadCacheEntry;
   AttributeType: string;
   SpecifierString: string;
-  Upvalue: TGocciaBytecodeUpvalue;
+  Upvalue: TGocciaBytecodeCell;
   ChildClosure: TGocciaBytecodeClosure;
   Desc: TGocciaUpvalueDescriptor;
   Handler: TGocciaBytecodeHandlerEntry;
@@ -16111,7 +16373,7 @@ begin
                 begin
                   GActiveBytecodeGenerator.FReturnResumeValueAwaited := True;
                   GActiveBytecodeGenerator.FState := bgsSuspendedYield;
-                  AwaitPromise.InvokeThen(
+                  AwaitPromise.InvokeThenWithoutResult(
                     TGocciaVMAsyncAwaitContinuationValue.Create(Self,
                       GActiveBytecodeGenerator, FCurrentAsyncPromise, bgrkReturn,
                       True),
@@ -16366,7 +16628,8 @@ end;
   stages them on the heap. }
 function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection;
-  const APushExecutionContext: Boolean): TGocciaValue;
+  const APushExecutionContext: Boolean;
+  const ASuspension: PGocciaBytecodeSuspension): TGocciaValue;
 var
   StackArguments: array[0..MAX_STACK_STAGED_ARGUMENT_COUNT - 1] of
     TGocciaRegister;
@@ -16385,7 +16648,7 @@ begin
   end;
   Result := RegisterToValue(ExecuteClosureRegistersInternal(AClosure,
     VMValueToRegisterFast(AThisValue), @StackArguments[0], ArgumentCount,
-    APushExecutionContext));
+    APushExecutionContext, -1, nil, ASuspension));
 end;
 
 function TGocciaVM.ExecuteClosureWithHeapArguments(
@@ -16515,10 +16778,11 @@ begin
   Closure := TGocciaBytecodeClosure.Create(ATemplate, ATemplate.UpvalueCount);
   Closure.GlobalScope := AModuleEnvironment;
   Closure.AllowsNewTarget := True;
-  for I := 0 to ATemplate.UpvalueCount - 1 do
-    Closure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
-      TGocciaBytecodeCell.Create(RegisterUndefined)));
   FunctionValue := TGocciaBytecodeFunctionValue.Create(Self, Closure);
+  // Cells are created after the function value that marks them: creating a
+  // cell never collects, but allocating the function value can.
+  for I := 0 to ATemplate.UpvalueCount - 1 do
+    Closure.SetUpvalue(I, TGocciaBytecodeCell.Create(RegisterUndefined));
   if ATemplate.HasOwnPrototype then
   begin
     GC := TGarbageCollector.Instance;

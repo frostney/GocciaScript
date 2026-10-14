@@ -4,10 +4,14 @@
   released — the functions a shim defines point into it, and
   TGocciaProgram.Free frees only the program node — so each engine leaked a
   full shim AST: about 1.1 MB per engine that uses Date on 64-bit, 0.93 MB of
-  it the Date shim and 0.18 MB the seven eager Object.prototype shims. The
-  test runner builds one engine per file and the testing library loads the
-  Date shim in every one, which helped run a 32-bit process out of address
-  space. }
+  it the Date shim and 0.18 MB the seven Object.prototype shims that then ran
+  at boot. The test runner builds one engine per file and the testing library
+  loads the Date shim in every one, which helped run a 32-bit process out of
+  address space.
+
+  Also pins how shims load (#873, #911): no shim loads at boot, and with a
+  bytecode executor a shim is compiled, so its functions are VM closures and
+  the engine builds no interpreter. }
 
 program Goccia.Shims.Test;
 
@@ -24,14 +28,15 @@ uses
   Goccia.AST.Node,
   Goccia.AST.Statements,
   Goccia.Engine,
-  Goccia.Evaluator,
-  Goccia.Evaluator.Context,
+  Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.Shims,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Values.FunctionValue,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -50,6 +55,11 @@ type
     procedure TestEnginesStillLoadShimsAfterTheCacheIsReleased;
     procedure TestCacheReleaseIsRegistered;
     procedure TestASharedProgramKeepsItsTemplateObjectsInEachRealm;
+    procedure TestABytecodeEngineBuildsNoInterpreter;
+    procedure TestBootLoadsNoShim;
+    procedure TestBytecodeShimFunctionsAreCompiled;
+    procedure TestInterpretedShimFunctionsTreeWalk;
+    procedure TestToStringOfANamelessFunctionLeavesNothingBehind;
   end;
 
 procedure TTestShims.SetupTests;
@@ -64,6 +74,16 @@ begin
     TestCacheReleaseIsRegistered);
   Test('a program evaluated in one engine after another keeps its template objects in each realm',
     TestASharedProgramKeepsItsTemplateObjectsInEachRealm);
+  Test('an engine with a bytecode executor builds no interpreter',
+    TestABytecodeEngineBuildsNoInterpreter);
+  Test('booting an engine loads no shim',
+    TestBootLoadsNoShim);
+  Test('with a bytecode executor the shims define VM closures',
+    TestBytecodeShimFunctionsAreCompiled);
+  Test('with an interpreter executor the shims define tree-walk functions',
+    TestInterpretedShimFunctionsTreeWalk);
+  Test('Function.prototype.toString of a nameless built-in leaves nothing behind',
+    TestToStringOfANamelessFunctionLeavesNothingBehind);
 end;
 
 function TTestShims.RunNumber(const ASource: string): Double;
@@ -128,10 +148,12 @@ procedure TTestShims.TestEnginesStillLoadShimsAfterTheCacheIsReleased;
 var
   Cached: Integer;
 begin
+  { Start from an empty cache: earlier tests on this thread loaded shims. }
+  ReleaseShimProgramCache;
   Expect<Double>(RunNumber('new Date(86400000).getUTCDate();')).ToBe(2);
-  { The seven eager Object.prototype shims and Date. }
+  { Only Date: no other shim provides anything the script touched. }
   Cached := CachedShimProgramCount;
-  Expect<Integer>(Cached).ToBe(8);
+  Expect<Integer>(Cached).ToBe(1);
   ReleaseShimProgramCache;
   Expect<Integer>(CachedShimProgramCount).ToBe(0);
   Expect<Double>(RunNumber('new Date(86400000).getUTCDate();')).ToBe(2);
@@ -155,17 +177,14 @@ var
   Engine: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
-  Context: TGocciaEvaluationContext;
-  I: Integer;
 begin
   Source := TStringList.Create;
   Executor := TGocciaInterpreterExecutor.Create;
   Engine := nil;
   try
     Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
-    Context := CreateShimEvaluationContext(Engine.Interpreter, 'test');
-    for I := 0 to AProgram.Body.Count - 1 do
-      EvaluateStatement(AProgram.Body[I], Context);
+    Executor.EvaluateShim(AProgram,
+      CreateShimScope(Engine.GlobalScope, 'test'), '<shims-test-template>');
     Result := Engine.Realm.TemplateMapCount;
   finally
     Engine.Free;
@@ -214,6 +233,120 @@ begin
   finally
     ProgramNode.Free;
   end;
+end;
+
+procedure TTestShims.TestABytecodeEngineBuildsNoInterpreter;
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaBytecodeExecutor;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
+    Expect<Boolean>(Assigned(Engine.Interpreter)).ToBe(False);
+    Expect<Boolean>(Assigned(Engine.GlobalScope)).ToBe(True);
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestShims.TestBootLoadsNoShim;
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaBytecodeExecutor;
+  Source: TStringList;
+begin
+  ReleaseShimProgramCache;
+  Source := TStringList.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
+    Expect<Integer>(CachedShimProgramCount).ToBe(0);
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestShims.TestBytecodeShimFunctionsAreCompiled;
+var
+  DateConstructor: TGocciaValue;
+  Engine: TGocciaEngine;
+  Executor: TGocciaBytecodeExecutor;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
+    DateConstructor := GetDateIntrinsic(Engine.Executor);
+    { The VM's closure class is private to Goccia.VM. }
+    Expect<string>(DateConstructor.ClassName)
+      .ToBe('TGocciaBytecodeFunctionValue');
+    Expect<string>(TGocciaObjectValue(DateConstructor)
+      .GetProperty('parse').ClassName).ToBe('TGocciaBytecodeFunctionValue');
+    Expect<string>(TGocciaObjectValue.SharedObjectPrototype
+      .GetProperty('__lookupGetter__').ClassName)
+      .ToBe('TGocciaBytecodeFunctionValue');
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestShims.TestInterpretedShimFunctionsTreeWalk;
+var
+  DateConstructor: TGocciaValue;
+  Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
+    Expect<Boolean>(Assigned(Engine.Interpreter)).ToBe(True);
+    DateConstructor := GetDateIntrinsic(Engine.Executor);
+    Expect<Boolean>(DateConstructor is TGocciaFunctionValue).ToBe(True);
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestShims.TestToStringOfANamelessFunctionLeavesNothingBehind;
+const
+  { 20,000 calls: a descriptor left behind per call would be about 1 MB. }
+  MAX_GROWTH_BYTES = 256 * 1024;
+  SOURCE =
+    'const compare = new Intl.Collator().compare;' +
+    'const toString = Function.prototype.toString;' +
+    'for (const _ of Array.from({ length: 20000 })) toString.call(compare);' +
+    'toString.call(compare);';
+var
+  Before, After: Int64;
+begin
+  { The native-code text of a function without a name of its own falls back
+    to an own `name` data property (a shim's computed-key method). A
+    synthesized name has no entry, and asking for its descriptor would
+    allocate one per call that nothing frees. An Intl.Collator's bound
+    compare function is such a nameless built-in. }
+  Expect<string>(RunString(SOURCE)).ToBe('function () { [native code] }');
+  Before := LiveHeapBytes;
+  Expect<string>(RunString(SOURCE)).ToBe('function () { [native code] }');
+  After := LiveHeapBytes;
+  Expect<Boolean>(After - Before < MAX_GROWTH_BYTES).ToBe(True);
 end;
 
 begin

@@ -62,7 +62,7 @@ function TGocciaYAMLRuntimeExtension.MaterializeYAML: TGocciaValue;
 begin
   if not Assigned(FBuiltinYAML) then
     FBuiltinYAML := TGocciaYAMLBuiltin.Create('YAML',
-      Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError, False);
+      Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinYAML.BuiltinObject;
 end;
 

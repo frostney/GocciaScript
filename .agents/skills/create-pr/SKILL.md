@@ -144,7 +144,8 @@ readiness. Recording a walkthrough does not replace behavior testing.
     development loop. Revalidate affected requirements, then use `/update-pr`
     for the same PR and verify its new head. Continue until all verified
     requirement gaps are resolved.
-12. Invoke `delivery-wait`'s foreground `wait checks-terminal` operation with
+12. Invoke `delivery-wait`'s `wait checks-terminal` operation, under its
+    [running rules](../delivery-wait/SKILL.md#running-a-wait), with
     the repository, PR number, exact head, `--all-workflows`, absolute deadline
     and `--json`. `--all-workflows` waits for every GitHub Actions run and job
     on the head, including jobs that later stages add. Add one `--check` per

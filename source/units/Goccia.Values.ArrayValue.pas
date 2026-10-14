@@ -141,7 +141,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.Generator.Continuation,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -256,20 +255,15 @@ function InvokeArrayCallback(const ACallback: TGocciaValue;
   const ATypedCallback: TGocciaFunctionBase;
   const ACallArgs: TGocciaArgumentsCollection;
   const AThisArg: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
-var
-  PreviousContinuation: TGocciaGeneratorContinuation;
 begin
   // The builtin's live arguments root the callback and receiver; ACallArgs
   // roots its own slots. Nested dispatch cannot reuse either collection.
-  PreviousContinuation := SuspendCurrentGeneratorContinuation;
-  try
-    if Assigned(ATypedCallback) then
-      Result := ATypedCallback.Call(ACallArgs, AThisArg)
-    else
-      Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
-  finally
-    RestoreCurrentGeneratorContinuation(PreviousContinuation);
-  end;
+  // An interpreter callback sets aside the caller's generator continuation
+  // itself (Goccia.Evaluator.Calls), so this unit does not touch it.
+  if Assigned(ATypedCallback) then
+    Result := ATypedCallback.Call(ACallArgs, AThisArg)
+  else
+    Result := InvokeCallable(ACallback, ACallArgs, AThisArg);
 end;
 
 
@@ -947,7 +941,6 @@ function CallCompareFunc(const ACompareFunc: TGocciaValue; const ACallArgs: TGoc
   const A, B: TGocciaValue; const AThisValue: TGocciaValue): Double;
 var
   CompResult: TGocciaNumberLiteralValue;
-  PreviousContinuation: TGocciaGeneratorContinuation;
   CompareRoot, AValueRoot, BValueRoot, ThisRoot: TGocciaTempRoot;
 begin
   if A is TGocciaUndefinedLiteralValue then
@@ -969,14 +962,9 @@ begin
   AddTempRootIfNeeded(AValueRoot, A);
   AddTempRootIfNeeded(BValueRoot, B);
   AddTempRootIfNeeded(ThisRoot, AThisValue);
-  PreviousContinuation := SuspendCurrentGeneratorContinuation;
   try
-    try
-      CompResult := InvokeCallable(ACompareFunc, ACallArgs,
-        TGocciaUndefinedLiteralValue.UndefinedValue).ToNumberLiteral;
-    finally
-      RestoreCurrentGeneratorContinuation(PreviousContinuation);
-    end;
+    CompResult := InvokeCallable(ACompareFunc, ACallArgs,
+      TGocciaUndefinedLiteralValue.UndefinedValue).ToNumberLiteral;
   finally
     RemoveTempRootIfNeeded(ThisRoot);
     RemoveTempRootIfNeeded(BValueRoot);

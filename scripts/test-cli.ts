@@ -1576,10 +1576,29 @@ console.log("--max-memory (override)...");
 
 console.log("--max-memory (OOM triggers RangeError)...");
 for (const mode of ["interpreted", "bytecode"]) {
-  const res = await $`echo 'Array.from({length:5000},(_,i)=>({x:i}));' | ${RUNNER} --max-memory=200000 --compat-asi --mode=${mode} 2>&1`.nothrow();
+  // Array.from over an array-like first sizes the result's element storage
+  // for all 5000 slots, a gated growth point that ends the run with the opaque
+  // memory-budget error when it does not fit, and only then charges each
+  // element object as it is built. The budget therefore has to clear the live
+  // heap plus that storage, or the gate refuses before any charged allocation
+  // can. A fixed ceiling sat within a few hundred bytes of that line, so a
+  // small growth in what the engine keeps alive at startup turned the RangeError
+  // into the fatal error on development builds; the ceiling is set from the
+  // measured live heap instead.
+  const ELEMENTS = 5000;
+  const POINTER_BYTES = 8;
+  const MARGIN_BYTES = 64 * 1024;
+  const probe = await $`echo 'Goccia.gc(); console.log(Goccia.gc.bytesAllocated);' | ${RUNNER} --compat-asi --mode=${mode} 2>/dev/null`.quiet().nothrow();
+  const liveBytes = Number.parseInt(probe.text().trim().split("\n")[0], 10);
+  if (probe.exitCode !== 0 || !Number.isFinite(liveBytes) || liveBytes <= 0) {
+    throw new Error(`Could not measure the live heap (${mode}): exit ${probe.exitCode}, ${probe.text()}`);
+  }
+  const maxMemory = liveBytes + ELEMENTS * POINTER_BYTES + MARGIN_BYTES;
+  const res = await $`echo ${`Array.from({length:${ELEMENTS}},(_,i)=>({x:i}));`} | ${RUNNER} --max-memory=${maxMemory} --compat-asi --mode=${mode} 2>&1`.quiet().nothrow();
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode} (${mode})`);
-  if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError (${mode})`);
+  if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError (${mode}): ${out}`);
+  if (out.includes("memory budget")) throw new Error(`OOM should be refused by a charged allocation, not the growth gate (${mode}): ${out}`);
 }
 
 console.log("--max-memory (peak resident memory stays near the ceiling)...");

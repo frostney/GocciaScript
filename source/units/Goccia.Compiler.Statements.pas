@@ -3368,6 +3368,19 @@ begin
     GPendingFinally := TList<TPendingFinallyEntry>.Create;
   BeginLoopControl(ACtx, LoopControl);
   try
+    LoopStart := CurrentCodePosition(ACtx);
+    MismatchJump := -1;
+
+    // ES2026 §14.7.5.7 ForIn/OfBodyEvaluation steps 6.a-6.f: an abrupt
+    // completion from next(), its Await, the Object check, done or value
+    // propagates without closing the iterator, so these run outside the
+    // close handler.
+    EmitInstruction(ACtx, EncodeABC(OP_ASYNC_ITER_NEXT, ValueReg, 0, IterReg));
+    EmitInstruction(ACtx, EncodeABC(OP_AWAIT, ValueReg, ValueReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_UNPACK, ValueReg, DoneReg, ValueReg));
+    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
+
+    // Steps 6.i.iv and 6.l.iv: only an abrupt binding or body closes it.
     HandlerJump := -1;
     if NeedsIteratorClose then
     begin
@@ -3380,14 +3393,6 @@ begin
       GPendingFinally.Add(PendingEntry);
       GContinueFinallyBase := GPendingFinally.Count;
     end;
-
-    LoopStart := CurrentCodePosition(ACtx);
-    MismatchJump := -1;
-
-    EmitInstruction(ACtx, EncodeABC(OP_ASYNC_ITER_NEXT, ValueReg, 0, IterReg));
-    EmitInstruction(ACtx, EncodeABC(OP_AWAIT, ValueReg, ValueReg, 0));
-    EmitInstruction(ACtx, EncodeABC(OP_ITER_UNPACK, ValueReg, DoneReg, ValueReg));
-    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, DoneReg);
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
@@ -3430,6 +3435,12 @@ begin
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
+    if NeedsIteratorClose then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      GPendingFinally.Delete(GPendingFinally.Count - 1);
+    end;
+
     EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
     if NeedsIteratorClose then
@@ -3440,11 +3451,6 @@ begin
     end;
 
     PatchJumpTarget(ACtx, ExitJump);
-    if NeedsIteratorClose then
-    begin
-      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-      GPendingFinally.Delete(GPendingFinally.Count - 1);
-    end;
 
     PatchJumpList(ACtx, LoopControl.BreakJumps);
   finally
@@ -7156,7 +7162,10 @@ begin
     ACtx.Scope.MarkGlobalBacked(ClassLocalIdx);
   NameIdx := ACtx.Template.AddConstantString(ClassDef.Name);
   EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ClassReg, NameIdx));
-  KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
+  if ACtx.HideSourceText then
+    KeyIdx := ACtx.Template.AddConstantString('')
+  else
+    KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
   EmitInstruction(ACtx, EncodeABx(OP_SET_CLASS_SOURCE_CONST, ClassReg, KeyIdx));
 
   HasInnerNameBinding := ClassDef.Name <> '';
@@ -7403,7 +7412,10 @@ begin
   if (not HasNameBinding) and (AInferredNameKeyReg >= 0) then
     EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ADest,
       UInt16(AInferredNameKeyReg), FUNCTION_NAME_PREFIX_NONE));
-  KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
+  if ACtx.HideSourceText then
+    KeyIdx := ACtx.Template.AddConstantString('')
+  else
+    KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
   EmitInstruction(ACtx, EncodeABx(OP_SET_CLASS_SOURCE_CONST, ADest, KeyIdx));
 
   // ES2026 §15.7.14: Named class expressions bind the name in an inner

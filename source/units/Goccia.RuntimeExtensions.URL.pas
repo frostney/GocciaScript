@@ -56,9 +56,9 @@ var
 begin
   inherited Attach(ARuntime);
   FBuiltinURL := TGocciaGlobalURL.Create(CONSTRUCTOR_URL,
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError);
   FBuiltinURLSearchParams := TGocciaGlobalURLSearchParams.Create(
-    CONSTRUCTOR_URL_SEARCH_PARAMS, Runtime.Engine.Interpreter.GlobalScope,
+    CONSTRUCTOR_URL_SEARCH_PARAMS, Runtime.Engine.GlobalScope,
     Runtime.Engine.ThrowError);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
@@ -74,7 +74,7 @@ begin
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinURL);
   TypeDef.PrototypeParent := ObjectPrototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(Runtime.Engine.Interpreter.GlobalScope, TypeDef,
+  RegisterTypeDefinition(Runtime.Engine.GlobalScope, TypeDef,
     Runtime.SpeciesGetter, RuntimeConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_URL_SEARCH_PARAMS;
@@ -85,7 +85,7 @@ begin
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinURLSearchParams);
   TypeDef.PrototypeParent := ObjectPrototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(Runtime.Engine.Interpreter.GlobalScope, TypeDef,
+  RegisterTypeDefinition(Runtime.Engine.GlobalScope, TypeDef,
     Runtime.SpeciesGetter, RuntimeConstructor);
 end;
 

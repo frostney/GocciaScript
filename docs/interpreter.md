@@ -74,6 +74,8 @@ See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for
 
 ### Shared evaluator helpers
 
+- **Function and generator call paths** — `Goccia.Evaluator.Calls` runs an AST-backed function's body (parameter binding, hoisting, the statement loop, async functions), and `Goccia.Evaluator.Generators` holds the interpreter's generator objects and creates them when a generator function is called. Both register with the value units (`RegisterFunctionCallPaths`, `RegisterGeneratorObjectFactory`) when linked, so `Goccia.Values.FunctionValue` and `Goccia.Values.GeneratorValue` do not use the evaluator. See [Value System](value-system.md#functions).
+
 - **`EvaluateStatements`** — Evaluates a list of AST nodes in sequence, returning `TGocciaControlFlow`. Exits early when `Result.Kind <> cfkNormal` to propagate `return` and `break` signals. `TGocciaThrowValue` exceptions propagate naturally without interception.
 
 - **`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Unified spread expansion for arrays, strings, sets, and maps. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject`. An Array's elements are read directly only under the same `ArrayUsesIntrinsicIteration` guard the bytecode VM uses; a replaced or own iterator runs the iterator protocol.

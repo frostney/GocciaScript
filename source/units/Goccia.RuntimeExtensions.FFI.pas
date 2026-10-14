@@ -51,7 +51,7 @@ begin
       'capability.');
   inherited Attach(ARuntime);
   FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI,
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit);
   if Assigned(Runtime.Engine.Resolver) then
   begin

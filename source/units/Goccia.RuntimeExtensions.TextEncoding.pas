@@ -55,7 +55,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectPrototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(Runtime.Engine.Interpreter.GlobalScope, TypeDef,
+  RegisterTypeDefinition(Runtime.Engine.GlobalScope, TypeDef,
     Runtime.SpeciesGetter, RuntimeConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_TEXT_DECODER;
@@ -66,7 +66,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectPrototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(Runtime.Engine.Interpreter.GlobalScope, TypeDef,
+  RegisterTypeDefinition(Runtime.Engine.GlobalScope, TypeDef,
     Runtime.SpeciesGetter, RuntimeConstructor);
 end;
 

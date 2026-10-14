@@ -53,7 +53,7 @@ function TGocciaJSONLRuntimeExtension.MaterializeJSONL: TGocciaValue;
 begin
   if not Assigned(FBuiltinJSONL) then
     FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL',
-      Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError, False);
+      Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinJSONL.BuiltinObject;
 end;
 

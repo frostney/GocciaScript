@@ -67,6 +67,15 @@ type
       var AContext: TGocciaEvaluationContext); virtual; abstract;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; virtual; abstract;
+    { Run a bootstrap shim's module program (Goccia.Shims) in AScope, the
+      shim's own module environment under the global scope. The shim's
+      top-level bindings, its export included, are left in AScope. A shim is
+      engine code, not user source: its functions show no source text and
+      record no coverage, and AFileName names it in stack frames. AProgram is
+      shared by every engine on the thread, so evaluation must not change
+      it. }
+    procedure EvaluateShim(const AProgram: TGocciaProgram;
+      const AScope: TGocciaScope; const AFileName: string); virtual; abstract;
     { ES2026 §19.2.1.1 PerformEval steps 17-33 for eval code whose variable
       environment is the realm's global environment: indirect eval and
       ShadowRealm.prototype.evaluate. AProgram has passed the static early
@@ -91,6 +100,7 @@ type
     property ExecuteTimeNanoseconds: Int64 read FExecuteTimeNanoseconds
       write FExecuteTimeNanoseconds;
     property Realm: TGocciaRealm read FRealm;
+    property GlobalScope: TGocciaScope read FGlobalScope;
     property RetainModuleCallback: TRetainObjectCallback
       read FRetainModule write FRetainModule;
   end;

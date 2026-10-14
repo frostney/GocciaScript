@@ -90,9 +90,11 @@ reply or resolution happened. GitHub does not make these multi-request
 operations atomic; retain any returned receipt and refresh the affected evidence.
 
 The helper is a transition source for this workflow loop, not another
-orchestrator. Its foreground wait stays silent while unchanged and returns only
+orchestrator. Its wait stays silent while unchanged and returns only
 when review becomes ready, evidence changes materially, the expected head is
 invalidated, the deadline arrives, or an operational failure needs attention.
+Run it, and the CodeRabbit adapter's `run`, under
+[`delivery-wait`'s running rules](../../delivery-wait/SKILL.md#running-a-wait).
 
 ## Provider-neutral retry time
 

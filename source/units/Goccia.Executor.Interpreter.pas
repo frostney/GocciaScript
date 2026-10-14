@@ -35,6 +35,8 @@ type
       const AProgram: TGocciaProgram): TGocciaValue; override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
+    procedure EvaluateShim(const AProgram: TGocciaProgram;
+      const AScope: TGocciaScope; const AFileName: string); override;
     function EvaluateGlobalEval(const AProgram: TGocciaProgram;
       const ASourcePath: string; const AStrictEval: Boolean;
       const ADeclarations: TGocciaGlobalEvalDeclarations;
@@ -104,6 +106,34 @@ function TGocciaInterpreterExecutor.ExecuteDynamicFunction(
   const AProgram: TGocciaProgram): TGocciaValue;
 begin
   Result := FInterpreter.Execute(AProgram);
+end;
+
+{ Tree-walk the shim's statements in AScope. A cached shim program is
+  evaluated into every engine on the thread. That is sound because evaluation
+  writes nothing into the AST: what the shim creates lives in AScope and in
+  the context's realm. The one node that can cache a runtime value on itself
+  is a tagged template, and the evaluator caches its template object on the
+  node only when the context has no realm. CreateEvaluationContext always
+  sets the interpreter's realm, so the template object goes into that realm's
+  template map, as ES2026 §13.2.8.3 GetTemplateObject requires.
+  Goccia.Shims.Test pins this. }
+procedure TGocciaInterpreterExecutor.EvaluateShim(
+  const AProgram: TGocciaProgram; const AScope: TGocciaScope;
+  const AFileName: string);
+var
+  Context: TGocciaEvaluationContext;
+  I: Integer;
+begin
+  Context := FInterpreter.CreateEvaluationContext;
+  Context.Scope := AScope;
+  // The shim's own name locates its frames, as its compiled code does.
+  Context.CurrentFilePath := AFileName;
+  // Shims are engine implementation details, not user source. Keep their
+  // generated locations out of the caller's line/branch/function report.
+  Context.CoverageEnabled := False;
+  Context.HideFunctionSourceText := True;
+  for I := 0 to AProgram.Body.Count - 1 do
+    EvaluateStatement(AProgram.Body[I], Context);
 end;
 
 // ES2026 §19.2.1.1 PerformEval steps 17-33, evaluated by the interpreter: the

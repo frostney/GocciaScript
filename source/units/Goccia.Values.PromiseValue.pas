@@ -106,6 +106,8 @@ type
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
     function InvokeThen(const AOnFulfilled, AOnRejected: TGocciaValue): TGocciaPromiseValue;
+    procedure InvokeThenWithoutResult(const AOnFulfilled,
+      AOnRejected: TGocciaValue);
     function InvokeFinally(const AOnFinally: TGocciaValue): TGocciaPromiseValue;
 
     property State: TGocciaPromiseState read FState;
@@ -121,6 +123,16 @@ function GetPromiseIntrinsicPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
 function PromiseResolveIntrinsic(
   const AValue: TGocciaValue): TGocciaPromiseValue;
+
+{ PerformPromiseThen(PromiseResolve(%Promise%, AValue), AOnFulfilled,
+  undefined, NewPromiseCapability(%Promise%)) for an AValue that is not an
+  Object, returning the capability's promise. Such a value fulfills the
+  resolved promise at once (ES2026 §27.2.1.3 CreateResolvingFunctions step
+  2.e), so the reaction job is enqueued straight away (§27.2.5.4.1
+  PerformPromiseThen step 10.c) without materialising the intermediate
+  promise, which no code can reach. }
+function InvokeThenOnPrimitive(const AValue,
+  AOnFulfilled: TGocciaValue): TGocciaPromiseValue;
 
 { Settles ATarget from ASource's outcome: fulfilled with AFulfillmentValue once
   ASource is fulfilled, rejected with ASource's reason once it is rejected.
@@ -379,6 +391,7 @@ var
   ValueConstructor: TGocciaValue;
   Capability: TPromiseCapability;
   ResolveArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (AConstructor is TGocciaObjectValue) then
     ThrowTypeError(SErrorValueNotConstructor, SSuggestNotConstructorType);
@@ -391,54 +404,91 @@ begin
       Exit(AValue);
   end;
 
-  Capability := NewPromiseCapability(AConstructor);
-  ResolveArgs := TGocciaArgumentsCollection.Create([AValue]);
+  // Constructing C and calling its resolve run guest code for a subclass, and
+  // only this frame holds AValue and the capability meanwhile (issue #1628).
+  Roots.Initialize;
   try
-    DispatchCall(Capability.Resolve, ResolveArgs,
-      TGocciaUndefinedLiteralValue.UndefinedValue);
+    Roots.Add(AValue);
+    Capability := NewPromiseCapability(AConstructor);
+    Roots.Add(Capability.Promise);
+    Roots.Add(Capability.Resolve);
+    Roots.Add(Capability.Reject);
+    ResolveArgs := TGocciaArgumentsCollection.Create([AValue]);
+    try
+      DispatchCall(Capability.Resolve, ResolveArgs,
+        TGocciaUndefinedLiteralValue.UndefinedValue);
+    finally
+      ResolveArgs.Free;
+    end;
+    Result := Capability.Promise;
   finally
-    ResolveArgs.Free;
+    Roots.Clear;
   end;
-  Result := Capability.Promise;
 end;
 
+// Invoke(receiver, "then", « onFulfilled, onRejected »). Reading `then` can
+// run a getter, and the call runs `then` itself; the receiver, the handlers
+// and the method are held only by the native caller across both, so they are
+// rooted here for every caller (issue #1628).
 function InvokeThenMethod(const AReceiver, AOnFulfilled,
   AOnRejected: TGocciaValue): TGocciaValue;
 var
   ReceiverObject: TGocciaObjectValue;
   ThenMethod: TGocciaValue;
   ThenArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
-  ReceiverObject := ToObject(AReceiver);
-  ThenMethod := ReceiverObject.GetPropertyWithContext(PROP_THEN, AReceiver);
-  if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
-    ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
-
-  ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled, AOnRejected]);
+  Roots.Initialize;
   try
-    Result := DispatchCall(ThenMethod, ThenArgs, AReceiver);
+    Roots.Add(AReceiver);
+    Roots.Add(AOnFulfilled);
+    Roots.Add(AOnRejected);
+    ReceiverObject := ToObject(AReceiver);
+    Roots.Add(ReceiverObject);
+    ThenMethod := ReceiverObject.GetPropertyWithContext(PROP_THEN, AReceiver);
+    if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
+      ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
+    Roots.Add(ThenMethod);
+
+    ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled, AOnRejected]);
+    try
+      Result := DispatchCall(ThenMethod, ThenArgs, AReceiver);
+    finally
+      ThenArgs.Free;
+    end;
   finally
-    ThenArgs.Free;
+    Roots.Clear;
   end;
 end;
 
+// As InvokeThenMethod, with one handler.
 function InvokeThenMethodOneArg(const AReceiver,
   AOnFulfilled: TGocciaValue): TGocciaValue;
 var
   ReceiverObject: TGocciaObjectValue;
   ThenMethod: TGocciaValue;
   ThenArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
-  ReceiverObject := ToObject(AReceiver);
-  ThenMethod := ReceiverObject.GetPropertyWithContext(PROP_THEN, AReceiver);
-  if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
-    ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
-
-  ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled]);
+  Roots.Initialize;
   try
-    Result := DispatchCall(ThenMethod, ThenArgs, AReceiver);
+    Roots.Add(AReceiver);
+    Roots.Add(AOnFulfilled);
+    ReceiverObject := ToObject(AReceiver);
+    Roots.Add(ReceiverObject);
+    ThenMethod := ReceiverObject.GetPropertyWithContext(PROP_THEN, AReceiver);
+    if not Assigned(ThenMethod) or not ThenMethod.IsCallable then
+      ThrowTypeError(SErrorThenNotFunction, SSuggestPromiseThisType);
+    Roots.Add(ThenMethod);
+
+    ThenArgs := TGocciaArgumentsCollection.Create([AOnFulfilled]);
+    try
+      Result := DispatchCall(ThenMethod, ThenArgs, AReceiver);
+    finally
+      ThenArgs.Free;
+    end;
   finally
-    ThenArgs.Free;
+    Roots.Clear;
   end;
 end;
 
@@ -534,6 +584,7 @@ var
   CallbackPromise: TGocciaValue;
   Passthrough: TGocciaFinallyPassthrough;
   PassthroughFn: TGocciaNativeFunctionValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   OriginalValue := AArgs.GetElement(0);
 
@@ -545,12 +596,24 @@ begin
     CallArgs.Free;
   end;
 
-  CallbackPromise := PromiseResolveForConstructor(FConstructor,
-    CallbackResult);
-  Passthrough := TGocciaFinallyPassthrough.Create(OriginalValue, FIsFulfill);
-  PassthroughFn := CreateAnonymousPromiseBuiltinFunction(Passthrough.Invoke,
-    Passthrough, 0);
-  Result := InvokeThenMethodOneArg(CallbackPromise, PassthroughFn);
+  // PromiseResolve(C, result) constructs C and `then` constructs the species,
+  // both guest code for a subclass, while only this frame holds the callback's
+  // result, the promise made from it and the passthrough (issue #1628).
+  Roots.Initialize;
+  try
+    Roots.Add(CallbackResult);
+    CallbackPromise := PromiseResolveForConstructor(FConstructor,
+      CallbackResult);
+    Roots.Add(CallbackPromise);
+    Passthrough := TGocciaFinallyPassthrough.Create(OriginalValue, FIsFulfill);
+    Roots.Add(Passthrough);
+    PassthroughFn := CreateAnonymousPromiseBuiltinFunction(Passthrough.Invoke,
+      Passthrough, 0);
+    Roots.Add(PassthroughFn);
+    Result := InvokeThenMethodOneArg(CallbackPromise, PassthroughFn);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure TGocciaPromiseFinallyWrapper.MarkReferences;
@@ -976,19 +1039,20 @@ begin
     Reject(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
-{ Public helper — core then logic without TGocciaArgumentsCollection overhead }
-
-function PerformPromiseThen(const APromise: TGocciaPromiseValue;
-  const AOnFulfilled, AOnRejected: TGocciaValue;
-  const ACapability: TPromiseCapability): TGocciaValue;
+{ ES2026 §27.2.5.4.1 PerformPromiseThen steps 3-12, with the reaction's
+  result target already chosen. AResultTarget is what the reaction job settles
+  with the handler's outcome: a TGocciaPromiseReactionCapability for a
+  capability whose resolving functions may be user-visible, a
+  TGocciaPromiseValue for an intrinsic promise whose resolving functions no
+  code can reach (the job settles it directly, ExecuteTask), or nil for
+  resultCapability undefined. }
+procedure AddPromiseReaction(const APromise: TGocciaPromiseValue;
+  const AOnFulfilled, AOnRejected, AResultTarget: TGocciaValue);
 var
-  CapabilityHost: TGocciaPromiseReactionCapability;
   Reaction: TGocciaPromiseReaction;
   Task: TGocciaMicrotask;
   Queue: TGocciaMicrotaskQueue;
 begin
-  CapabilityHost := TGocciaPromiseReactionCapability.Create(
-    ACapability.Promise, ACapability.Resolve, ACapability.Reject);
   Queue := TGocciaMicrotaskQueue.Instance;
   // ES2026 §27.2.5.4.1 steps 11.c and 12.
   APromise.MarkHandled;
@@ -998,7 +1062,7 @@ begin
     begin
       Reaction.OnFulfilled := AOnFulfilled;
       Reaction.OnRejected := AOnRejected;
-      Reaction.ResultPromise := CapabilityHost;
+      Reaction.ResultPromise := AResultTarget;
       Reaction.Context := CurrentAsyncContext;
       if Assigned(Queue) then
         Reaction.Scope := Queue.CurrentScope
@@ -1012,7 +1076,7 @@ begin
     begin
       Task.Handler := AOnFulfilled;
       Task.Value := APromise.FResult;
-      Task.ResultPromise := CapabilityHost;
+      Task.ResultPromise := AResultTarget;
       Task.ReactionType := prtFulfill;
       if Assigned(Queue) then
         Queue.Enqueue(Task);
@@ -1021,30 +1085,62 @@ begin
     begin
       Task.Handler := AOnRejected;
       Task.Value := APromise.FResult;
-      Task.ResultPromise := CapabilityHost;
+      Task.ResultPromise := AResultTarget;
       Task.ReactionType := prtReject;
       if Assigned(Queue) then
         Queue.Enqueue(Task);
     end;
   end;
+end;
 
+{ Public helper — core then logic without TGocciaArgumentsCollection overhead }
+
+function PerformPromiseThen(const APromise: TGocciaPromiseValue;
+  const AOnFulfilled, AOnRejected: TGocciaValue;
+  const ACapability: TPromiseCapability): TGocciaValue;
+begin
+  AddPromiseReaction(APromise, AOnFulfilled, AOnRejected,
+    TGocciaPromiseReactionCapability.Create(ACapability.Promise,
+      ACapability.Resolve, ACapability.Reject));
   Result := ACapability.Promise;
 end;
 
+{ PerformPromiseThen(promise, onFulfilled, onRejected,
+  NewPromiseCapability(%Promise%)) for the engine's own callers. The
+  capability's resolving functions never leave the engine, so the reaction
+  settles the derived promise directly instead of through two function
+  objects; the settlement is the one those functions would perform. }
 function TGocciaPromiseValue.InvokeThen(
   const AOnFulfilled, AOnRejected: TGocciaValue): TGocciaPromiseValue;
-var
-  Capability: TPromiseCapability;
-  ChildPromise: TGocciaPromiseValue;
 begin
-  ChildPromise := TGocciaPromiseValue.Create;
-  Capability.Promise := ChildPromise;
-  Capability.Resolve := CreateAnonymousPromiseBuiltinFunction(
-    ChildPromise.DoResolve, ChildPromise, 1);
-  Capability.Reject := CreateAnonymousPromiseBuiltinFunction(
-    ChildPromise.DoReject, ChildPromise, 1);
-  Result := TGocciaPromiseValue(PerformPromiseThen(Self, AOnFulfilled,
-    AOnRejected, Capability));
+  Result := TGocciaPromiseValue.Create;
+  AddPromiseReaction(Self, AOnFulfilled, AOnRejected, Result);
+end;
+
+{ PerformPromiseThen(promise, onFulfilled, onRejected) with resultCapability
+  undefined, as ES2026 §27.7.5.3 Await step 7 performs it: no derived promise
+  exists, so the handlers' outcome goes nowhere. }
+procedure TGocciaPromiseValue.InvokeThenWithoutResult(
+  const AOnFulfilled, AOnRejected: TGocciaValue);
+begin
+  AddPromiseReaction(Self, AOnFulfilled, AOnRejected, nil);
+end;
+
+function InvokeThenOnPrimitive(const AValue,
+  AOnFulfilled: TGocciaValue): TGocciaPromiseValue;
+var
+  Task: TGocciaMicrotask;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Result := TGocciaPromiseValue.Create;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if not Assigned(Queue) then
+    Exit;
+  Task.Handler := AOnFulfilled;
+  Task.Value := AValue;
+  Task.ResultPromise := Result;
+  Task.ReactionType := prtFulfill;
+  Queue.Enqueue(Task);
 end;
 
 { Public helper — core finally logic without TGocciaArgumentsCollection overhead }
@@ -1055,20 +1151,35 @@ var
   ConstructorValue: TGocciaValue;
   WrapFulfilled, WrapRejected: TGocciaPromiseFinallyWrapper;
   WrapFulfilledFn, WrapRejectedFn: TGocciaNativeFunctionValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not Assigned(AOnFinally) or not AOnFinally.IsCallable then
     Exit(InvokeThen(nil, nil));
 
-  ConstructorValue := PromiseSpeciesConstructor(Self);
-  WrapFulfilled := TGocciaPromiseFinallyWrapper.Create(AOnFinally,
-    ConstructorValue, True);
-  WrapRejected := TGocciaPromiseFinallyWrapper.Create(AOnFinally,
-    ConstructorValue, False);
-  WrapFulfilledFn := CreateAnonymousPromiseBuiltinFunction(
-    WrapFulfilled.Invoke, WrapFulfilled, 1);
-  WrapRejectedFn := CreateAnonymousPromiseBuiltinFunction(
-    WrapRejected.Invoke, WrapRejected, 1);
-  Result := InvokeThen(WrapFulfilledFn, WrapRejectedFn);
+  // The species lookup can run a getter that returns a constructor nothing
+  // else holds; the wrappers carry it until `then` stores them (issue #1628).
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    Roots.Add(AOnFinally);
+    ConstructorValue := PromiseSpeciesConstructor(Self);
+    Roots.Add(ConstructorValue);
+    WrapFulfilled := TGocciaPromiseFinallyWrapper.Create(AOnFinally,
+      ConstructorValue, True);
+    Roots.Add(WrapFulfilled);
+    WrapRejected := TGocciaPromiseFinallyWrapper.Create(AOnFinally,
+      ConstructorValue, False);
+    Roots.Add(WrapRejected);
+    WrapFulfilledFn := CreateAnonymousPromiseBuiltinFunction(
+      WrapFulfilled.Invoke, WrapFulfilled, 1);
+    Roots.Add(WrapFulfilledFn);
+    WrapRejectedFn := CreateAnonymousPromiseBuiltinFunction(
+      WrapRejected.Invoke, WrapRejected, 1);
+    Roots.Add(WrapRejectedFn);
+    Result := InvokeThen(WrapFulfilledFn, WrapRejectedFn);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { Prototype methods }
@@ -1080,22 +1191,32 @@ var
   OnFulfilled, OnRejected: TGocciaValue;
   ConstructorValue: TGocciaValue;
   Capability: TPromiseCapability;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (AThisValue is TGocciaPromiseValue) then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseThenNonPromise, SSuggestPromiseThisType);
 
   P := TGocciaPromiseValue(AThisValue);
-  ConstructorValue := PromiseSpeciesConstructor(P);
-  Capability := NewPromiseCapability(ConstructorValue);
+  // The species lookup and the construction of the species are guest code for
+  // a subclass, and the constructor they use may be held by nothing else.
+  Roots.Initialize;
+  try
+    Roots.Add(P);
+    ConstructorValue := PromiseSpeciesConstructor(P);
+    Roots.Add(ConstructorValue);
+    Capability := NewPromiseCapability(ConstructorValue);
 
-  OnFulfilled := nil;
-  OnRejected := nil;
-  if (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable then
-    OnFulfilled := AArgs.GetElement(0);
-  if (AArgs.Length > 1) and AArgs.GetElement(1).IsCallable then
-    OnRejected := AArgs.GetElement(1);
+    OnFulfilled := nil;
+    OnRejected := nil;
+    if (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable then
+      OnFulfilled := AArgs.GetElement(0);
+    if (AArgs.Length > 1) and AArgs.GetElement(1).IsCallable then
+      OnRejected := AArgs.GetElement(1);
 
-  Result := PerformPromiseThen(P, OnFulfilled, OnRejected, Capability);
+    Result := PerformPromiseThen(P, OnFulfilled, OnRejected, Capability);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaPromiseValue.PromiseCatch(const AArgs: TGocciaArgumentsCollection;
@@ -1122,30 +1243,43 @@ var
   ConstructorValue: TGocciaValue;
   ThenFinally, CatchFinally: TGocciaValue;
   WrapFulfilled, WrapRejected: TGocciaPromiseFinallyWrapper;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (AThisValue is TGocciaObjectValue) then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorPromiseFinallyNonPromise, SSuggestPromiseThisType);
 
-  ConstructorValue := PromiseSpeciesConstructor(TGocciaObjectValue(AThisValue));
-  OnFinally := AArgs.GetElement(0);
-  if Assigned(OnFinally) and OnFinally.IsCallable then
-  begin
-    WrapFulfilled := TGocciaPromiseFinallyWrapper.Create(OnFinally,
-      ConstructorValue, True);
-    WrapRejected := TGocciaPromiseFinallyWrapper.Create(OnFinally,
-      ConstructorValue, False);
-    ThenFinally := CreateAnonymousPromiseBuiltinFunction(
-      WrapFulfilled.Invoke, WrapFulfilled, 1);
-    CatchFinally := CreateAnonymousPromiseBuiltinFunction(
-      WrapRejected.Invoke, WrapRejected, 1);
-  end
-  else
-  begin
-    ThenFinally := OnFinally;
-    CatchFinally := OnFinally;
-  end;
+  // As InvokeFinally: the species may be held by nothing else, and the
+  // wrappers carry it until `then` stores them (issue #1628).
+  Roots.Initialize;
+  try
+    ConstructorValue := PromiseSpeciesConstructor(TGocciaObjectValue(AThisValue));
+    Roots.Add(ConstructorValue);
+    OnFinally := AArgs.GetElement(0);
+    if Assigned(OnFinally) and OnFinally.IsCallable then
+    begin
+      WrapFulfilled := TGocciaPromiseFinallyWrapper.Create(OnFinally,
+        ConstructorValue, True);
+      Roots.Add(WrapFulfilled);
+      WrapRejected := TGocciaPromiseFinallyWrapper.Create(OnFinally,
+        ConstructorValue, False);
+      Roots.Add(WrapRejected);
+      ThenFinally := CreateAnonymousPromiseBuiltinFunction(
+        WrapFulfilled.Invoke, WrapFulfilled, 1);
+      Roots.Add(ThenFinally);
+      CatchFinally := CreateAnonymousPromiseBuiltinFunction(
+        WrapRejected.Invoke, WrapRejected, 1);
+      Roots.Add(CatchFinally);
+    end
+    else
+    begin
+      ThenFinally := OnFinally;
+      CatchFinally := OnFinally;
+    end;
 
-  Result := InvokeThenMethod(AThisValue, ThenFinally, CatchFinally);
+    Result := InvokeThenMethod(AThisValue, ThenFinally, CatchFinally);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaPromiseValue.GetProperty(const AName: string): TGocciaValue;

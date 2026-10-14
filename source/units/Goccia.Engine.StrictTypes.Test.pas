@@ -110,7 +110,7 @@ begin
       Engine.StrictTypes := True;
       Expect<Boolean>(Engine.StrictTypes).ToBe(True);
       Expect<Boolean>(Engine.Interpreter.StrictTypesEnabled).ToBe(True);
-      Expect<Boolean>(Engine.Interpreter.GlobalScope.StrictTypes).ToBe(True);
+      Expect<Boolean>(Engine.GlobalScope.StrictTypes).ToBe(True);
     finally
       Engine.Free;
       Source.Free;
@@ -155,7 +155,7 @@ begin
       { Simulate a closure whose lexical scope was created before the
         setter ran: a child of the global scope captures the
         then-current StrictTypes (False) into its own FStrictTypes. }
-      Child := Engine.Interpreter.GlobalScope.CreateChild(skBlock,
+      Child := Engine.GlobalScope.CreateChild(skBlock,
         'embedder-block');
       Expect<Boolean>(Child.StrictTypes).ToBe(False);
 
@@ -166,8 +166,8 @@ begin
 
       { EffectiveStrictTypes walks to the root, so closures
         created before the setter still observe the live value -- this
-        is what TGocciaFunctionValue.ExecuteBody and its generator
-        counterparts read when seeding the call context. }
+        is what the interpreter's call paths in Goccia.Evaluator.Calls and
+        Goccia.Evaluator.Generators read when seeding the call context. }
       Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(True);
 
       { Flipping it back also flows through. }
@@ -195,7 +195,7 @@ begin
   try
     Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
     try
-      Scope := Engine.Interpreter.GlobalScope;
+      Scope := Engine.GlobalScope;
 
       { Set up a binding with a recorded sltFloat type hint while
         strict-types is on. }

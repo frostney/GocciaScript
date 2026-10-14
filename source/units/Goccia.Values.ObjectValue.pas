@@ -23,8 +23,6 @@ type
   TGocciaObjectValue = class(TGocciaValue)
   private
     procedure SetRegExpData(const AValue: TObject);
-    function MaterializeOwnLazyProperty(const AName: string;
-      const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
     procedure MaterializeAllLazyStringProperties;
     procedure EnsureSymbolStorage; {$IFDEF FPC}inline;{$ENDIF}
     function StoreLazyPropertyDescriptor(const AName: string;
@@ -44,6 +42,10 @@ type
     FHasRegExpData: Boolean;
     FRegExpData: TObject;
     procedure NoteIndexedOwnProperty(const AName: string);
+    { Replace ADescriptor, AName's entry in FProperties, by what it
+      materializes into when it is a lazy placeholder, and return the entry. }
+    function MaterializeOwnLazyProperty(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
     // ES2026 §10.1.8.1 OrdinaryGet step 2: the lookup once this object has no
     // own property AName. For a subclass that reads its own properties itself.
     function GetPropertyFromPrototype(const AName: string;
@@ -91,6 +93,13 @@ type
 
     procedure RegisterNativeMethod(const AMethod: TGocciaValue);
     procedure RegisterConstant(const AName: string; const AValue: TGocciaValue);
+    // ES2026 §10.1.6.3 ValidateAndApplyPropertyDescriptor step 2 for an
+    // object the caller has just created: an extensible ordinary object with
+    // no own property AName, where AName is not an array index. The property
+    // is created with AValue and AFlags directly, without the validation a
+    // defined property needs.
+    procedure DefineFreshDataProperty(const AName: string;
+      const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
@@ -293,7 +302,6 @@ uses
   Goccia.Values.DateData,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ProxyValue,
@@ -879,7 +887,6 @@ function TGocciaObjectValue.MaterializeOwnLazyProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
 var
   LazyDescriptor: TGocciaLazyPropertyDescriptorData;
-  MaterializedDescriptor: TGocciaPropertyDescriptorData;
   Value: TGocciaValue;
 begin
   Result := ADescriptor;
@@ -887,12 +894,16 @@ begin
     Exit;
 
   LazyDescriptor := TGocciaLazyPropertyDescriptorData(ADescriptor);
-  Value := LazyDescriptor.Materialize;
-  MaterializedDescriptor := TGocciaPropertyDescriptorData.Create(
-    Value, LazyDescriptor.Flags);
-  FProperties.Add(AName, MaterializedDescriptor);
+  if LazyDescriptor.IsAccessor then
+    Result := LazyDescriptor.MaterializeAccessor
+  else
+  begin
+    Value := LazyDescriptor.Materialize;
+    Result := TGocciaPropertyDescriptorData.Create(Value,
+      LazyDescriptor.Flags);
+  end;
+  FProperties.Add(AName, Result);
   LazyDescriptor.Free;
-  Result := MaterializedDescriptor;
 end;
 
 procedure TGocciaObjectValue.MaterializeAllLazyStringProperties;
@@ -1901,6 +1912,12 @@ begin
     OldDescriptor.Free;
   FProperties.Add(TGocciaNativeFunctionValue(AMethod).Name,
     TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]));
+end;
+
+procedure TGocciaObjectValue.DefineFreshDataProperty(const AName: string;
+  const AValue: TGocciaValue; const AFlags: TPropertyFlags);
+begin
+  FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue, AFlags));
 end;
 
 procedure TGocciaObjectValue.RegisterConstant(const AName: string; const AValue: TGocciaValue);
