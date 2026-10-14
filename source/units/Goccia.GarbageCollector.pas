@@ -72,7 +72,13 @@ type
     property GCIndex: Integer read FGCIndex write FGCIndex;
   end;
 
-  TGCManagedObjectList = TObjectList<TGCManagedObject>;
+  TGCManagedObjectList = class(TObjectList<TGCManagedObject>)
+  public
+    // Every value allocation registers here. The collector's list owns
+    // nothing and has no OnNotify handler, so an append within capacity skips
+    // the generic Add's capacity bookkeeping and virtual Notify dispatch.
+    function Append(const AObject: TGCManagedObject): Integer; inline;
+  end;
   // Backing store for the active-root stack only. A bare array rather than
   // TGCManagedObjectList because that stack is pushed and popped once per
   // rooted evaluator temporary: TObjectList pays a virtual Notify dispatch per
@@ -661,6 +667,20 @@ begin
   FCount := 0;
 end;
 
+{ TGCManagedObjectList }
+
+function TGCManagedObjectList.Append(const AObject: TGCManagedObject): Integer;
+begin
+  Result := FLength;
+  if Result < Length(FItems) then
+  begin
+    FItems[Result] := AObject;
+    FLength := Result + 1;
+  end
+  else
+    Result := Add(AObject);
+end;
+
 { TGarbageCollector }
 
 class function TGarbageCollector.Instance: TGarbageCollector;
@@ -767,8 +787,7 @@ begin
   // The list and the allocation counter are owner-thread-confined; the byte
   // totals race a cross-thread ReleaseExternalBytes and take the accounting
   // lock — see FAccountingLock for the full confinement and ordering rules.
-  AObject.GCIndex := FManagedObjects.Count;
-  FManagedObjects.Add(AObject);
+  AObject.GCIndex := FManagedObjects.Append(AObject);
   Inc(FAllocationsSinceLastGC);
   Dec(FHeapSampleCountdown);
   if FHeapSampleCountdown <= 0 then
