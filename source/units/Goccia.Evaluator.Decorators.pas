@@ -6,16 +6,41 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
+  Goccia.Values.NativeFunction,
   Goccia.Values.NativeFunctionCallback,
   Goccia.Values.Primitives;
 
 type
-  TGocciaInitializerCollector = class
+  { The list of extra initializers a class's decorators of one placement add
+    through context.addInitializer (decorators proposal,
+    CreateAddInitializerFunction's _initializers_). Managed by the collector:
+    each addInitializer function made for it keeps it alive, so a decorator
+    that keeps its context can still reach it after the class is defined. }
+  TGocciaInitializerCollector = class(TGCManagedObject)
   private
     FInitializers: array of TGocciaValue;
   public
-    function AddInitializer(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    procedure AfterConstruction; override;
+    procedure Add(const AInitializer: TGocciaValue);
     function GetInitializers: TArray<TGocciaValue>;
+    procedure MarkReferences; override;
+  end;
+
+  { The addInitializer function of one decorator's context object
+    (decorators proposal, CreateAddInitializerFunction). It holds that
+    decorator's decorationState: Finish sets [[Finished]] once the decorator
+    has returned, after which a call throws a TypeError. }
+  TGocciaAddInitializerFunction = class(TGocciaNativeFunctionValue)
+  private
+    FCollector: TGocciaInitializerCollector;
+    FFinished: Boolean;
+    function AddInitializer(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const ACollector: TGocciaInitializerCollector);
+    procedure Finish;
+    procedure MarkReferences; override;
   end;
 
   TGocciaAccessGetter = class
@@ -42,20 +67,31 @@ type
 implementation
 
 uses
+  Goccia.Constants.PropertyNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Values.ClassValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
 { TGocciaInitializerCollector }
 
-function TGocciaInitializerCollector.AddInitializer(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+procedure TGocciaInitializerCollector.AfterConstruction;
+var
+  GC: TGarbageCollector;
 begin
-  if (AArgs.Length > 0) and AArgs.GetElement(0).IsCallable then
-  begin
-    SetLength(FInitializers, Length(FInitializers) + 1);
-    FInitializers[High(FInitializers)] := AArgs.GetElement(0);
-  end;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  inherited;
+  GCIndex := -1;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.RegisterObject(Self);
+end;
+
+procedure TGocciaInitializerCollector.Add(const AInitializer: TGocciaValue);
+begin
+  SetLength(FInitializers, Length(FInitializers) + 1);
+  FInitializers[High(FInitializers)] := AInitializer;
 end;
 
 function TGocciaInitializerCollector.GetInitializers: TArray<TGocciaValue>;
@@ -65,6 +101,63 @@ begin
   SetLength(Result, Length(FInitializers));
   for I := 0 to High(FInitializers) do
     Result[I] := FInitializers[I];
+end;
+
+procedure TGocciaInitializerCollector.MarkReferences;
+var
+  I: Integer;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  for I := 0 to High(FInitializers) do
+    if Assigned(FInitializers[I]) then
+      FInitializers[I].MarkReferences;
+end;
+
+{ TGocciaAddInitializerFunction }
+
+constructor TGocciaAddInitializerFunction.Create(
+  const ACollector: TGocciaInitializerCollector);
+begin
+  inherited CreateWithoutPrototype(AddInitializer, PROP_ADD_INITIALIZER, 1);
+  FCollector := ACollector;
+  FFinished := False;
+end;
+
+// Decorators proposal, CreateAddInitializerFunction, the closure's steps 1-4.
+function TGocciaAddInitializerFunction.AddInitializer(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Initializer: TGocciaValue;
+begin
+  if FFinished then
+    ThrowTypeError(SErrorAddInitializerAfterDecoration,
+      SSuggestAddInitializerDuringDecoration);
+  if AArgs.Length > 0 then
+    Initializer := AArgs.GetElement(0)
+  else
+    Initializer := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Initializer.IsCallable then
+    ThrowTypeError(SErrorAddInitializerNotCallable,
+      SSuggestAddInitializerFunction);
+  FCollector.Add(Initializer);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaAddInitializerFunction.Finish;
+begin
+  FFinished := True;
+end;
+
+procedure TGocciaAddInitializerFunction.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FCollector) then
+    FCollector.MarkReferences;
 end;
 
 { TGocciaAccessGetter }

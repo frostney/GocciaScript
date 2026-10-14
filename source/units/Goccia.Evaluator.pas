@@ -7088,6 +7088,7 @@ var
   NewGetter, NewSetter, NewInit: TGocciaValue;
   ExistingGetterValue, ExistingSetterValue: TGocciaValue;
   MethodCollector, FieldCollector, StaticFieldCollector, ClassCollector: TGocciaInitializerCollector;
+  AddInitializerFunction: TGocciaAddInitializerFunction;
   OriginalClassValue: TGocciaClassValue;
   AccessGetterHelper: TGocciaAccessGetter;
   AccessSetterHelper: TGocciaAccessSetter;
@@ -7891,10 +7892,17 @@ begin
       MetadataObject := TGocciaObjectValue.Create;
     TGarbageCollector.Instance.AddTempRoot(MetadataObject);
 
+    // The collectors are managed by the garbage collector: they stay rooted
+    // while the class is decorated, and afterwards only the addInitializer
+    // functions of decorator contexts a decorator kept still reach them.
     MethodCollector := TGocciaInitializerCollector.Create;
+    TGarbageCollector.Instance.AddTempRoot(MethodCollector);
     FieldCollector := TGocciaInitializerCollector.Create;
+    TGarbageCollector.Instance.AddTempRoot(FieldCollector);
     StaticFieldCollector := TGocciaInitializerCollector.Create;
+    TGarbageCollector.Instance.AddTempRoot(StaticFieldCollector);
     ClassCollector := TGocciaInitializerCollector.Create;
+    TGarbageCollector.Instance.AddTempRoot(ClassCollector);
     try
 
     // Phase 1: Evaluate all decorator expressions in source order
@@ -8049,16 +8057,18 @@ begin
 
         // addInitializer - use appropriate collector based on element kind
         if Elem.IsStatic then
-          ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(StaticFieldCollector.AddInitializer, PROP_ADD_INITIALIZER, 1))
+          AddInitializerFunction := TGocciaAddInitializerFunction.Create(StaticFieldCollector)
         else if Elem.Kind in [cekField, cekAccessor] then
-          ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(FieldCollector.AddInitializer, PROP_ADD_INITIALIZER, 1))
+          AddInitializerFunction := TGocciaAddInitializerFunction.Create(FieldCollector)
         else
-          ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(MethodCollector.AddInitializer, PROP_ADD_INITIALIZER, 1));
+          AddInitializerFunction := TGocciaAddInitializerFunction.Create(MethodCollector);
+        ContextObject.AssignProperty(PROP_ADD_INITIALIZER, AddInitializerFunction);
 
-        // Call the decorator
+        // Call the decorator. Each branch calls AddInitializerFunction.Finish
+        // once the decorator has returned (ApplyDecoratorsToElementDefinition
+        // step 5.k); the decorator can delete addInitializer from its context,
+        // so the function stays rooted until then.
+        TGarbageCollector.Instance.AddTempRoot(AddInitializerFunction);
         DecoratorArgs := TGocciaArgumentsCollection.Create;
         try
           case Elem.Kind of
@@ -8073,6 +8083,7 @@ begin
               DecoratorArgs.Add(ContextObject);
 
               DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              AddInitializerFunction.Finish;
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8107,6 +8118,7 @@ begin
               DecoratorArgs.Add(ContextObject);
 
               DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              AddInitializerFunction.Finish;
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8150,6 +8162,7 @@ begin
               DecoratorArgs.Add(ContextObject);
 
               DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              AddInitializerFunction.Finish;
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8180,6 +8193,7 @@ begin
               DecoratorArgs.Add(ContextObject);
 
               DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              AddInitializerFunction.Finish;
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8210,6 +8224,7 @@ begin
               DecoratorArgs.Add(ContextObject);
 
               DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              AddInitializerFunction.Finish;
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8236,6 +8251,7 @@ begin
           end;
         finally
           DecoratorArgs.Free;
+          TGarbageCollector.Instance.RemoveTempRoot(AddInitializerFunction);
         end;
       end;
     end;
@@ -8261,12 +8277,15 @@ begin
       else
         ContextObject.AssignProperty(PROP_NAME, TGocciaUndefinedLiteralValue.UndefinedValue);
       ContextObject.AssignProperty(PROP_METADATA, MetadataObject);
-      ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(ClassCollector.AddInitializer, PROP_ADD_INITIALIZER, 1));
+      AddInitializerFunction := TGocciaAddInitializerFunction.Create(ClassCollector);
+      ContextObject.AssignProperty(PROP_ADD_INITIALIZER, AddInitializerFunction);
 
+      TGarbageCollector.Instance.AddTempRoot(AddInitializerFunction);
       DecoratorArgs := TGocciaArgumentsCollection.Create([ClassValue, ContextObject]);
       try
         DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        // ApplyDecoratorsToClassDefinition step 1.f.
+        AddInitializerFunction.Finish;
 
         if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
         begin
@@ -8276,6 +8295,7 @@ begin
         end;
       finally
         DecoratorArgs.Free;
+        TGarbageCollector.Instance.RemoveTempRoot(AddInitializerFunction);
       end;
     end;
 
@@ -8296,7 +8316,7 @@ begin
     begin
       InitArgs := TGocciaArgumentsCollection.Create;
       try
-        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassValue);
+        DispatchCall(InitializerResults[I], InitArgs, ClassValue);
       finally
         InitArgs.Free;
       end;
@@ -8308,7 +8328,7 @@ begin
     begin
       InitArgs := TGocciaArgumentsCollection.Create;
       try
-        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassValue);
+        DispatchCall(InitializerResults[I], InitArgs, ClassValue);
       finally
         InitArgs.Free;
       end;
@@ -8316,10 +8336,10 @@ begin
 
     finally
       TGarbageCollector.Instance.RemoveTempRoot(MetadataObject);
-      MethodCollector.Free;
-      FieldCollector.Free;
-      StaticFieldCollector.Free;
-      ClassCollector.Free;
+      TGarbageCollector.Instance.RemoveTempRoot(MethodCollector);
+      TGarbageCollector.Instance.RemoveTempRoot(FieldCollector);
+      TGarbageCollector.Instance.RemoveTempRoot(StaticFieldCollector);
+      TGarbageCollector.Instance.RemoveTempRoot(ClassCollector);
     end;
   end;
 

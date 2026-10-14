@@ -77,6 +77,8 @@ resourcestring
 
   // Type errors — classes, decorators, private fields
   SErrorDecoratorMustBeFunction = 'Decorator must be a function';
+  SErrorAddInitializerAfterDecoration = 'Cannot add initializers after decoration has completed';
+  SErrorAddInitializerNotCallable = 'Initializer must be a function';
   SErrorPrivateGetterMissing = 'Private accessor #%s was defined without a getter';
   SErrorPrivateSetterMissing = 'Private accessor #%s was defined without a setter';
   SErrorPrivateFieldInaccessible = 'Private field #%s is not accessible';
