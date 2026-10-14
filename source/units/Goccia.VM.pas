@@ -16436,10 +16436,16 @@ LProdLoopHead:
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
 
-        WideA := 0;
-        WideB := 0;
-        WideC := 0;
-        if DecodeOp(Instruction) = Ord(OP_WIDE) then
+        // Every instruction passes through here; only an OP_WIDE prefix pays
+        // for the high operand bytes.
+        Op := DecodeOp(Instruction);
+        if Op <> Ord(OP_WIDE) then
+        begin
+          A := DecodeA(Instruction);
+          B := DecodeB(Instruction);
+          C := DecodeC(Instruction);
+        end
+        else
         begin
           WideA := UInt16(DecodeA(Instruction)) shl 8;
           WideB := UInt16(DecodeB(Instruction)) shl 8;
@@ -16448,12 +16454,11 @@ LProdLoopHead:
             raise Exception.Create('Truncated OP_WIDE bytecode prefix');
           Instruction := Template.GetInstructionUnchecked(Frame.IP);
           Inc(Frame.IP);
+          Op := DecodeOp(Instruction);
+          A := WideA or DecodeA(Instruction);
+          B := WideB or DecodeB(Instruction);
+          C := WideC or DecodeC(Instruction);
         end;
-
-        Op := DecodeOp(Instruction);
-        A := WideA or DecodeA(Instruction);
-        B := WideB or DecodeB(Instruction);
-        C := WideC or DecodeC(Instruction);
         goto LDispatchCase;
 
 LInstrumentedLoopHead:
