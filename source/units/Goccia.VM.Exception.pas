@@ -50,10 +50,14 @@ type
     FThrownValue: TGocciaValue;
     FSuggestion: string;
     FSuggestionIsHostOnly: Boolean;
+    // See HoldThrownValue in Goccia.Values.Error: the exception roots the
+    // value it carries for as long as it exists.
+    FRootSlot: Integer;
   public
     constructor Create(const AThrownValue: TGocciaValue;
       const ASuggestion: string = '';
       const ASuggestionIsHostOnly: Boolean = False);
+    destructor Destroy; override;
     property ThrownValue: TGocciaValue read FThrownValue;
     { The engine-authored "Suggestion:" line of the diagnostic, carried across
       the VM unwind so a throw that escapes to a host runner renders the same
@@ -201,6 +205,8 @@ begin
   // properties when available, otherwise a static placeholder. Never invoke
   // user toString()/valueOf() here: exceptions that JS later catches must
   // not observe stringification (ES2026 §14.14 ThrowStatement).
+  // Held first: reading name and message below can run a getter.
+  FRootSlot := HoldThrownValue(Self, AThrownValue);
   MessageText := 'Goccia VM throw';
   if Assigned(AThrownValue) and (AThrownValue is TGocciaObjectValue) then
   begin
@@ -216,6 +222,12 @@ begin
   FThrownValue := AThrownValue;
   FSuggestion := ASuggestion;
   FSuggestionIsHostOnly := ASuggestionIsHostOnly;
+end;
+
+destructor EGocciaBytecodeThrow.Destroy;
+begin
+  ReleaseThrownValue(Self, FRootSlot);
+  inherited;
 end;
 
 end.

@@ -101,3 +101,50 @@ test("finally returning fulfilled promise preserves rejection reason", () => {
       expect(e).toBe("original");
     });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("finally across a collection", () => {
+  test("settles on a subclass whose constructor collects", async () => {
+    class CollectingPromise extends Promise {
+      constructor(executor) {
+        Goccia.gc();
+        super(executor);
+      }
+    }
+    const value = await CollectingPromise.resolve(5).finally(() => {
+      Goccia.gc();
+    });
+    expect(value).toBe(5);
+  });
+
+  test("keeps the rejection on a subclass whose constructor collects", async () => {
+    class CollectingPromise extends Promise {
+      constructor(executor) {
+        Goccia.gc();
+        super(executor);
+      }
+    }
+    const promise = CollectingPromise.reject(new RangeError("kept")).finally(() => {
+      Goccia.gc();
+    });
+    await expect(promise).rejects.toThrow("kept");
+  });
+
+  test("uses a species constructor that nothing else holds", async () => {
+    const makeSpecies = () =>
+      class FreshPromise extends Promise {
+        constructor(executor) {
+          Goccia.gc();
+          super(executor);
+        }
+      };
+    class SpeciesPromise extends Promise {
+      static get [Symbol.species]() {
+        return makeSpecies();
+      }
+    }
+    const value = await SpeciesPromise.resolve(7)
+      .then((v) => v + 1)
+      .finally(() => Goccia.gc());
+    expect(value).toBe(8);
+  });
+});
