@@ -57,7 +57,9 @@ export const TEST262_CATEGORIES = [
 // The tests/ paths the stress run covers. Closures are tested under
 // tests/language/functions.
 export const TEST_PATHS = [
+  "tests/built-ins/Iterator",
   "tests/built-ins/Promise",
+  "tests/language/arguments",
   "tests/language/async-await",
   "tests/language/async-generators",
   "tests/language/functions",
