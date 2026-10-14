@@ -339,7 +339,8 @@ type
     // when the live set has crossed the reserve below the ceiling. AForce
     // skips that heuristic and always collects; it exists for the last-resort
     // site in TryReserveExternalBytes, which must not refuse a reservation
-    // before a collection has actually been attempted.
+    // before a collection has actually been attempted, and for the VM's
+    // checkpoint in a GC-stress build (GOCCIA_GC_STRESS).
     procedure CollectForMemoryPressure(const AProtect: TGCManagedObject;
       const AForce: Boolean = False);
 
