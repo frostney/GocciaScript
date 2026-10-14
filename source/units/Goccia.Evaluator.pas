@@ -8316,7 +8316,7 @@ begin
     begin
       InitArgs := TGocciaArgumentsCollection.Create;
       try
-        DispatchCall(InitializerResults[I], InitArgs, ClassValue);
+        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassValue);
       finally
         InitArgs.Free;
       end;
@@ -8328,7 +8328,7 @@ begin
     begin
       InitArgs := TGocciaArgumentsCollection.Create;
       try
-        DispatchCall(InitializerResults[I], InitArgs, ClassValue);
+        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassValue);
       finally
         InitArgs.Free;
       end;

@@ -27,6 +27,20 @@ type
     procedure MarkReferences; override;
   end;
 
+  { An initializer addInitializer accepted that is callable but not a
+    function object: a callable Proxy, or a class (calling which throws a
+    TypeError). A class runs its initializers as function objects, so this
+    stands in for the value and performs Call(value, receiver) on it. Script
+    never sees it. }
+  TGocciaCallableInitializer = class(TGocciaNativeFunctionValue)
+  private
+    FTarget: TGocciaValue;
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const ATarget: TGocciaValue);
+  end;
+
   { The addInitializer function of one decorator's context object
     (decorators proposal, CreateAddInitializerFunction). It holds that
     decorator's decorationState: Finish sets [[Finished]] once the decorator
@@ -72,6 +86,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
@@ -115,6 +130,22 @@ begin
       FInitializers[I].MarkReferences;
 end;
 
+{ TGocciaCallableInitializer }
+
+constructor TGocciaCallableInitializer.Create(const ATarget: TGocciaValue);
+begin
+  inherited CreateWithoutPrototype(Invoke, '', 0);
+  FTarget := ATarget;
+  CapturedRoot := ATarget;
+end;
+
+function TGocciaCallableInitializer.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := DispatchCall(FTarget, AArgs, AThisValue);
+end;
+
 { TGocciaAddInitializerFunction }
 
 constructor TGocciaAddInitializerFunction.Create(
@@ -142,7 +173,10 @@ begin
   if not Initializer.IsCallable then
     ThrowTypeError(SErrorAddInitializerNotCallable,
       SSuggestAddInitializerFunction);
-  FCollector.Add(Initializer);
+  if Initializer is TGocciaFunctionBase then
+    FCollector.Add(Initializer)
+  else
+    FCollector.Add(TGocciaCallableInitializer.Create(Initializer));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

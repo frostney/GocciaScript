@@ -1539,7 +1539,7 @@ begin
   begin
     Args := TGocciaArgumentsCollection.Create;
     try
-      DispatchCall(FMethodInitializers[Idx], Args, AInstance);
+      TGocciaFunctionBase(FMethodInitializers[Idx]).Call(Args, AInstance);
     finally
       Args.Free;
     end;
@@ -1555,7 +1555,7 @@ begin
   begin
     Args := TGocciaArgumentsCollection.Create;
     try
-      DispatchCall(FFieldInitializers[Idx], Args, AInstance);
+      TGocciaFunctionBase(FFieldInitializers[Idx]).Call(Args, AInstance);
     finally
       Args.Free;
     end;

@@ -330,6 +330,19 @@ describe("addInitializer argument", () => {
     expect(calls).toEqual(["called"]);
   });
 
+  test("accepts a class, which throws a TypeError when the initializer runs", () => {
+    const dec = (value, context) => {
+      context.addInitializer(class Initializer {});
+    };
+
+    class C { @dec m() {} }
+
+    expect(() => new C()).toThrow(TypeError);
+    expect(() => {
+      @dec class D {}
+    }).toThrow(TypeError);
+  });
+
   test("accepts a Proxy with an apply trap and calls it with the class as this", () => {
     let receiver;
     const initializer = new Proxy(() => {}, {

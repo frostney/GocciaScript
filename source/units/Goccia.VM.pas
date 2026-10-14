@@ -13359,7 +13359,7 @@ begin
   begin
     InitArgs := AcquireArguments;
     try
-      DispatchCall(InitializerResults[I], InitArgs, ClassVal);
+      TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
     finally
       ReleaseArguments(InitArgs);
     end;
@@ -13370,7 +13370,7 @@ begin
   begin
     InitArgs := AcquireArguments;
     try
-      DispatchCall(InitializerResults[I], InitArgs, ClassVal);
+      TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
     finally
       ReleaseArguments(InitArgs);
     end;
