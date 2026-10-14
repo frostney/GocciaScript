@@ -961,20 +961,53 @@ end;
 function StructuredCloneValue(const AValue: TGocciaValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaValue; forward;
 
-{ Registers a clone against its original and keeps it alive for the rest of the
-  walk.
+type
+  { Roots both sides of every memory-map entry for the length of one
+    structuredClone call.
 
-  AMemory is a plain hash map the collector cannot see, so a half-built clone is
-  otherwise referenced only by a native local — and the walk re-enters user code
-  at every accessor property, which is a GC safe point. Rooting on registration
-  pairs with the sweep in StructuredCloneCallback, which drops the root for every
-  memory entry once the clone finishes or throws. }
+    The map is a plain hash map the collector cannot see, and the walk re-enters
+    guest code at every accessor property, which is a GC safe point. A
+    half-built clone is otherwise referenced only by a native local. An original
+    can be referenced by nothing else at all: a getter's result is owned by the
+    getter's caller and nothing more, and once its clone returns the collector
+    could free it while its address is still a key. A later allocation at that
+    address would then find the earlier clone (issue #1575). A root source
+    rather than temp roots, because temp roots are a set: an original that is
+    already a temp root of an outer holder would be unrooted for that holder by
+    the release sweep. }
+  TGocciaStructuredCloneRoots = class(TGCRootSource)
+  private
+    FMemory: THashMap<TGocciaValue, TGocciaValue>;
+  public
+    constructor Create(const AMemory: THashMap<TGocciaValue, TGocciaValue>);
+    procedure MarkRootReferences; override;
+  end;
+
+constructor TGocciaStructuredCloneRoots.Create(
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>);
+begin
+  inherited Create;
+  FMemory := AMemory;
+end;
+
+procedure TGocciaStructuredCloneRoots.MarkRootReferences;
+var
+  Entry: THashMap<TGocciaValue, TGocciaValue>.TKeyValuePair;
+begin
+  for Entry in FMemory do
+  begin
+    Entry.Key.MarkReferences;
+    Entry.Value.MarkReferences;
+  end;
+end;
+
+{ Registers a clone against its original. Both stay alive for the rest of the
+  walk through the TGocciaStructuredCloneRoots that StructuredCloneCallback
+  holds over AMemory. }
 procedure RegisterClone(const AOriginal, AClone: TGocciaValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>);
 begin
   AMemory.Add(AOriginal, AClone);
-  if TGarbageCollector.Instance <> nil then
-    TGarbageCollector.Instance.AddTempRoot(AClone);
 end;
 
 { Flags every deserialized property carries. StructuredDeserialize installs each
@@ -1123,8 +1156,18 @@ var
   ErrorName: string;
   NameValue: TGocciaValue;
   Prototype: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  NameValue := AError.GetProperty(PROP_NAME);
+  { The name is read before the error is registered in AMemory, and reading it
+    can run a getter. A dense array element or a Set item is otherwise held only
+    by its container, which that getter can empty. }
+  Roots.Initialize;
+  try
+    Roots.Add(AError);
+    NameValue := AError.GetProperty(PROP_NAME);
+  finally
+    Roots.Clear;
+  end;
   if NameValue is TGocciaStringLiteralValue then
     ErrorName := SerializedErrorName(TGocciaStringLiteralValue(NameValue).Value)
   else
@@ -1208,7 +1251,8 @@ function CloneMap(const AMap: TGocciaMapValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaMapValue;
 var
   Cursor: Integer;
-  Key, Value: TGocciaValue;
+  Key, Value, ClonedKey, ClonedValue: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := TGocciaMapValue.Create;
   RegisterClone(AMap, Result, AMemory);
@@ -1216,13 +1260,26 @@ begin
   // StructuredCloneValue can run user getters that mutate AMap; retain it so
   // compaction cannot renumber entries mid-walk and invalidate Cursor.
   Cursor := 0;
+  Roots.Initialize;
   AMap.RetainIterator;
   try
     while AMap.NextEntry(Cursor, Key, Value) do
-      Result.SetEntry(
-        StructuredCloneValue(Key, AMemory),
-        StructuredCloneValue(Value, AMemory));
+    begin
+      // A getter reached while cloning the key can delete this entry, leaving
+      // the value, and later the key, reachable only from these locals. A
+      // primitive key clones to itself, so the cloned key is rooted too. The
+      // key is serialized before the value, as StructuredSerializeInternal
+      // orders them.
+      Roots.Add(Key);
+      Roots.Add(Value);
+      ClonedKey := StructuredCloneValue(Key, AMemory);
+      Roots.Add(ClonedKey);
+      ClonedValue := StructuredCloneValue(Value, AMemory);
+      Result.SetEntry(ClonedKey, ClonedValue);
+      Roots.Clear;
+    end;
   finally
+    Roots.Clear;
     AMap.ReleaseIterator;
   end;
 end;
@@ -1560,18 +1617,20 @@ end;
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Memory: THashMap<TGocciaValue, TGocciaValue>;
-  MemoryEntry: THashMap<TGocciaValue, TGocciaValue>.TKeyValuePair;
+  Roots: TGocciaStructuredCloneRoots;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorStructuredCloneArgRequired, SSuggestObjectArgType);
 
   Memory := THashMap<TGocciaValue, TGocciaValue>.Create;
   try
-    Result := StructuredCloneValue(AArgs.GetElement(0), Memory);
+    Roots := TGocciaStructuredCloneRoots.Create(Memory);
+    try
+      Result := StructuredCloneValue(AArgs.GetElement(0), Memory);
+    finally
+      Roots.Free;
+    end;
   finally
-    if (TGarbageCollector.Instance <> nil) then
-      for MemoryEntry in Memory do
-        TGarbageCollector.Instance.RemoveTempRoot(MemoryEntry.Value);
     Memory.Free;
   end;
 end;
