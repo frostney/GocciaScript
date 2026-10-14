@@ -797,7 +797,7 @@ begin
     'Warn and recover for unsupported/default-disabled syntax instead of failing parsing',
     'Engine');
   FStrictTypes := TFlagOption.Create('strict-types',
-    'Enforce type annotations at runtime (interpreter and bytecode)', 'Engine');
+    'Enforce type annotations at runtime', 'Engine');
   FExperimentalAST := TFlagOption.Create('experimental-ast',
     'Enable the experimental goccia:ast parse module', 'Runtime');
   FInspectDepth := TIntegerOption.Create('inspect-depth',
