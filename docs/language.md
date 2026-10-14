@@ -447,6 +447,7 @@ Current gaps from full ECMAScript RegExp semantics:
 
 - The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
 - The `v` flag (Unicode sets) supports set notation: nested classes, intersection (`&&`), subtraction (`--`), string literals (`\q{…}`), and properties of strings such as `\p{RGI_Emoji}`.
+- Groups, lookarounds and nested `v`-flag classes may nest 1,023 levels deep (1,024 with the pattern itself); a deeper pattern is a `SyntaxError` (`Invalid regular expression: nesting exceeds the supported limit of 1024 levels`). See [Nesting Depth](#nesting-depth).
 - A match attempt stops with an `Error` at either of two engine limits: 100 steps per subject code unit, at least 10,000,000 (`Maximum regular expression step count exceeded`), or 10,000,000 backtrack entries (`Maximum regular expression backtrack stack size exceeded`). A greedy loop over one character, class or dot (`a*`, `.*`, `[a-z]+`) keeps one entry for its whole run; loops over wider bodies such as `(?:ab)*`, and any loop inside a lookbehind, keep one per iteration. See [ADR 0128](adr/0128-regexp-vm-resource-limits.md).
 
 ## TC39 Proposal Details
@@ -903,6 +904,12 @@ Number.isNaN(value);
 parseInt("10", 10);
 isNaN("abc"); // true, because the global form coerces
 ```
+
+### Nesting Depth
+
+**Limited to 1,024 levels.** ECMA-262 sets no limit on how deeply source nests, but parsing and compiling nested source recurses on the native stack, so every engine has one. GocciaScript counts a level for each nested statement; each expression in an operand position (an array element, a property value, a call argument, a template substitution, a parenthesized expression, an arrow body, a conditional branch, an assignment's right-hand side); each prefix operator, `new`, `**` operand, `extends` clause and binding pattern; and each link of an operator, member or call chain (`a + b + c`, `a.b().c`), because the compiler walks such a chain as deep as it is long. Lists do not count: the statements of a block, array elements, call arguments and comma-separated expressions can be as long as memory allows. Past the limit the parser reports `SyntaxError: Nesting exceeds the supported limit of 1024 levels`, in both execution modes and in the bundler and test runner, where a deep enough program used to crash the process. Real code stays far below it: across about 800 large npm files, bundles included, the deepest nesting is about 175 levels and the longest chain about 215 links.
+
+Source parsed, or a pattern compiled, where the native stack is already deep, such as `ShadowRealm.prototype.evaluate` or `new RegExp` at the bottom of a deep recursion, can run out of stack before 1,024 levels. It then fails with `SyntaxError: Nesting is too deep for the native stack that is left` instead of overflowing. Regular expression patterns share the limit; see [Regular Expressions](#regular-expressions) and [Embedding — Call Stack Depth Limit](embedding.md#call-stack-depth-limit).
 
 ## Strictness Guarantees
 

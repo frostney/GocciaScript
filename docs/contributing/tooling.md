@@ -380,6 +380,10 @@ Each run ends in one of these outcomes:
 | `crash` | Killed by a signal such as `SIGSEGV`, or an FPC runtime error | Yes |
 | `unexpected` | Any other ending, including a wrong answer after a caught error | Yes |
 
+A probe that means something in one execution mode only lists that mode and
+is skipped in the others: `regexp-groups-low-stack` recurses through native
+re-entries of the bytecode VM, which the interpreter does not have.
+
 Probes are labelled by how their cost grows with depth. Linear probes default
 to depths 1,000 and 30,000 (`--depths`); quadratic and exponential ones run at
 small depths (`--quadratic-depths`, `--exponential-depths`). A few probes fix

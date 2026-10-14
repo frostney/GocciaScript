@@ -127,6 +127,8 @@ interface Probe {
   summary: string;
   /** Fixed depths that replace the growth class defaults (e.g. a repeat count). */
   depths?: number[];
+  /** The only execution modes the probe means anything in; others are skipped. */
+  modes?: string[];
   body: (depth: number) => string;
 }
 
@@ -326,6 +328,45 @@ const CATALOG: Probe[] = [
     summary: "RegExp with DEPTH nested groups",
     body: (d) => `report(() => new RegExp("(".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
   },
+  {
+    id: "regexp-noncapturing",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested non-capturing groups",
+    body: (d) => `report(() => new RegExp("(?:".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
+    id: "regexp-lookaheads",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested lookaheads; matching recurses once per lookaround",
+    body: (d) => `report(() => new RegExp("(?=".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
+    id: "regexp-lookbehinds",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested lookbehinds",
+    body: (d) => `report(() => new RegExp("(?<=".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
+    id: "regexp-class-sets",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested character classes under the v flag",
+    body: (d) => `report(() => new RegExp("[".repeat(${d}) + "a" + "]".repeat(${d}), "v").test("a"));\n`,
+  },
+  {
+    id: "regexp-groups-low-stack",
+    growth: "linear",
+    // The callbacks are native re-entries of the bytecode VM, each on a
+    // fresh native frame, so the recursion ends where the native stack does.
+    // The tree-walk interpreter overflows the native stack on such a
+    // recursion by itself, before any pattern is compiled.
+    modes: ["bytecode"],
+    summary: "RegExp with DEPTH nested groups, compiled at the bottom of a recursion through Array.prototype.map callbacks that used up the native stack (bytecode only)",
+    body: (d) =>
+      `let compiled = "none";\n` +
+      `const down = () => { try { return [0].map(down)[0]; } catch (e) { if (compiled === "none") { try { compiled = String(new RegExp("(".repeat(${d}) + "a" + ")".repeat(${d})).test("a")); } catch (inner) { compiled = describeError(inner); } } return 0; } };\n` +
+      `report(() => { down(); return compiled; });\n` +
+      `check(sanity, SANITY);\n`,
+  },
   // Parser probes: the nesting is in the program text, so a parse-time error
   // ends the run before any report() and is classified from the runner's
   // own diagnostic.
@@ -388,6 +429,72 @@ const CATALOG: Probe[] = [
     growth: "linear",
     summary: "Parse and evaluate a DEPTH-term left-associative + chain",
     body: (d) => `report(() => 1${" + 1".repeat(d)});\n`,
+  },
+  {
+    id: "parse-logical-chain",
+    growth: "linear",
+    summary: "Parse and evaluate a DEPTH-term && chain",
+    body: (d) => `report(() => true${" && true".repeat(d)});\n`,
+  },
+  {
+    id: "parse-member-chain",
+    growth: "linear",
+    summary: "Parse a DEPTH-long member chain o.o.o...",
+    body: (d) => `const o = {};\no.o = o;\nreport(() => typeof o${".o".repeat(d)});\n`,
+  },
+  {
+    id: "parse-call-chain",
+    growth: "linear",
+    summary: "Parse a DEPTH-long call chain f()()()...",
+    body: (d) => `const f = () => f;\nreport(() => typeof f${"()".repeat(d)});\n`,
+  },
+  {
+    id: "parse-exponent",
+    growth: "linear",
+    summary: "Parse a DEPTH-term right-associative ** chain",
+    body: (d) => `report(() => ${"1 ** ".repeat(d)}1);\n`,
+  },
+  {
+    id: "parse-assignment-chain",
+    growth: "linear",
+    summary: "Parse a DEPTH-long right-associative assignment chain a = a = ...",
+    body: (d) => `let a = 0;\nreport(() => ${"a = ".repeat(d)}1);\n`,
+  },
+  {
+    id: "parse-arrow-chain",
+    growth: "linear",
+    summary: "Parse DEPTH nested unparenthesized arrow functions x => x => ...",
+    body: (d) => `report(() => typeof (${"x => ".repeat(d)}1));\n`,
+  },
+  {
+    id: "parse-new-chain",
+    growth: "linear",
+    summary: "Parse DEPTH chained new operators",
+    body: (d) => `class C { constructor() { return C; } }\nreport(() => typeof ${"new ".repeat(d)}C);\n`,
+  },
+  {
+    id: "parse-else-if",
+    growth: "linear",
+    summary: "Parse a DEPTH-long else-if chain",
+    body: (d) => `report(() => { ${"if (false) {} else ".repeat(d)}{} return 1; });\n`,
+  },
+  {
+    id: "parse-binding-pattern",
+    growth: "linear",
+    summary: "Parse a DEPTH-deep array binding pattern",
+    body: (d) => `report(() => { const ${"[".repeat(d)}x${"]".repeat(d)} = ${"[".repeat(d)}1${"]".repeat(d)}; return x; });\n`,
+  },
+  {
+    id: "parse-class-heritage",
+    growth: "linear",
+    summary: "Parse DEPTH nested class expressions in extends clauses",
+    body: (d) => `report(() => typeof ${"class extends ".repeat(d)}Object${" {}".repeat(d)});\n`,
+  },
+  {
+    id: "parse-regexp-literal",
+    growth: "linear",
+    summary: "Compile a regular expression literal with DEPTH nested groups",
+    body: (d) => `report(() => /${"(".repeat(d)}a${")".repeat(d)}/.test("a"));\n`,
   },
 ];
 
@@ -982,6 +1089,7 @@ interface Job {
   depth: number;
   source: string;
   shape?: string;
+  modes?: string[];
   replay: (mode: string) => string;
 }
 
@@ -1070,6 +1178,7 @@ const main = async (): Promise<void> => {
           growth: probe.growth,
           depth,
           source: probe.body(depth),
+          modes: probe.modes,
           replay: (mode) => replayCommand([`--probe=${probe.id}`, `--depth=${depth}`], mode),
         });
       }
@@ -1136,6 +1245,7 @@ const main = async (): Promise<void> => {
       writeFileSync(file, source);
       if (job.shape) console.log(`${job.id}  ${job.shape}`);
       for (const mode of modes) {
+        if (job.modes !== undefined && !job.modes.includes(mode)) continue;
         const result = await runProgram(launcher, options, file, mode);
         counts.set(result.outcome, (counts.get(result.outcome) ?? 0) + 1);
         console.log(

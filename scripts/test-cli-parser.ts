@@ -1258,4 +1258,74 @@ console.log("Parenthesized ternary consequent...");
     }
 }
 
+// -- Nesting limit (#1500, #1501) ------------------------------------------------
+//
+// The parser, the bytecode compiler and the RegExp compiler are recursive
+// descent, and the production build has no stack check of its own: source or
+// a pattern nested deeply enough used to kill the process with SIGSEGV. Past
+// 1,024 levels the parser now reports a SyntaxError, in both modes, through
+// the ordinary error envelope. The JS suite covers each construct through
+// ShadowRealm.prototype.evaluate (tests/language/nesting-limit); these cases
+// check the top-level script path that no JS test can reach.
+
+console.log("Nesting limit...");
+{
+  const NESTING = "Nesting exceeds the supported limit of 1024 levels";
+  const deep = 30000;
+  const shapes: Array<[string, string]> = [
+    ["arrays", `console.log(${"[".repeat(deep)}${"]".repeat(deep)}.length);\n`],
+    ["objects", `console.log(typeof ${"{ o: ".repeat(deep)}1${" }".repeat(deep)});\n`],
+    ["calls", `const id = (v) => v;\nconsole.log(${"id(".repeat(deep)}1${")".repeat(deep)});\n`],
+    ["templates", `console.log(${"`${".repeat(deep)}1${"}`".repeat(deep)});\n`],
+    ["blocks", `${"{ ".repeat(deep)}${"} ".repeat(deep)}\n`],
+    ["unary operators", `console.log(${"!".repeat(deep)}true);\n`],
+    ["conditionals", `console.log(${"true ? ".repeat(deep)}1${" : 0".repeat(deep)});\n`],
+    ["an addition chain", `console.log(1${" + 1".repeat(deep)});\n`],
+    ["a call chain", `const f = () => f;\nconsole.log(typeof f${"()".repeat(deep)});\n`],
+  ];
+  for (const [desc, source] of shapes)
+    assertSyntaxErrorInBothModes(source, `${desc} nested ${deep} deep`, [], {
+      messageIncludes: NESTING,
+      line: desc === "calls" || desc === "a call chain" ? 2 : 1,
+    });
+
+  // Just below the limit the same shapes run.
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+    const res = runLoaderJson(`console.log(${"[".repeat(1000)}${"]".repeat(1000)}.length);\n`, modeArgs);
+    if (res.exitCode !== 0)
+      throw new Error(`1,000 nested arrays (${modeArgs[0]}) should run, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "1\n")
+      throw new Error(`1,000 nested arrays (${modeArgs[0]}) printed ${JSON.stringify(res.json.output)}`);
+  }
+
+  // A regular expression literal compiles its pattern when it is evaluated.
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+    const { exitCode, json } = runLoaderJson(`/${"(".repeat(deep)}a${")".repeat(deep)}/.test("a");\n`, modeArgs);
+    if (exitCode !== 1 || json.error?.type !== "SyntaxError" ||
+        !String(json.error?.message).includes("nesting exceeds the supported limit of 1024 levels"))
+      throw new Error(`deep regular expression literal (${modeArgs[0]}) should be a SyntaxError, got exit ${exitCode} ${JSON.stringify(json.error)}`);
+  }
+
+  // Source parsed, and a pattern compiled, at the bottom of a recursion that
+  // has used up the native stack: the Array.prototype.map callbacks are native
+  // re-entries of the bytecode VM. The limit then comes from the stack that is
+  // left, still as a SyntaxError the script can catch. The tree-walk
+  // interpreter overflows the native stack on this recursion by itself.
+  const lowStack = (expression: string): string =>
+    "let result = \"none\";\n" +
+    "const down = () => { try { return [0].map(down)[0]; } catch (e) { if (result === \"none\") { " +
+    `try { result = String(${expression}); } catch (inner) { result = inner.constructor.name + ": " + inner.message; } ` +
+    "} return 0; } };\ndown();\nconsole.log(result);\n";
+  const lowStackCases: Array<[string, string, readonly string[]]> = [
+    ["new RegExp", `new RegExp("(".repeat(1000) + "a" + ")".repeat(1000)).test("a")`, []],
+    ["ShadowRealm.prototype.evaluate", `new ShadowRealm().evaluate("[".repeat(1000) + "]".repeat(1000) + ".length")`, ["--unsafe-shadowrealm"]],
+  ];
+  for (const [desc, expression, args] of lowStackCases) {
+    const res = runLoaderJson(lowStack(expression), [...args, "--mode=bytecode"], { timeout: 60000 });
+    const printed = normalizeLineEndings(res.json.output);
+    if (res.exitCode !== 0 || !/^(true|1|SyntaxError: .*native stack.*)\n$/.test(printed))
+      throw new Error(`${desc} on a nearly exhausted native stack should finish or throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+  }
+}
+
 console.log("\nAll test-cli-parser.ts tests passed.");
