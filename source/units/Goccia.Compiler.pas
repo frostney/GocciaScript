@@ -338,7 +338,7 @@ begin
     ANode.Line, ANode.Column, FSourcePath, nil, SSuggestNestingLimitExceeded);
 end;
 
-// The parser bounds how deeply a tree nests (Goccia.NestingLimit), so a walk
+// The parser bounds how tall a tree is (Goccia.NestingLimit), so a walk
 // over one fits the stack of a thread that starts it near the top. A compile
 // can also start deep in the native stack, inside native re-entries of the
 // VM: ShadowRealm.prototype.evaluate or eval called from a getter that

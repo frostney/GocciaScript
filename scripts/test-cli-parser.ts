@@ -1263,14 +1263,16 @@ console.log("Parenthesized ternary consequent...");
 // The parser, the bytecode compiler and the RegExp compiler are recursive
 // descent, and the production build has no stack check of its own: source or
 // a pattern nested deeply enough used to kill the process with SIGSEGV. Past
-// 1,024 levels the parser now reports a SyntaxError, in both modes, through
-// the ordinary error envelope. The JS suite covers each construct through
+// 1,024 levels of nesting, or a syntax tree taller than 4,096 levels counting
+// each link of an operator or call chain, the parser now reports a
+// SyntaxError, in both modes, through the ordinary error envelope. The JS suite covers each construct through
 // ShadowRealm.prototype.evaluate (tests/language/nesting-limit); these cases
 // check the top-level script path that no JS test can reach.
 
 console.log("Nesting limit...");
 {
   const NESTING = "Nesting exceeds the supported limit of 1024 levels";
+  const HEIGHT = "counting each link of operator and call chains, exceeds the supported limit of 4096 levels";
   const deep = 30000;
   const shapes: Array<[string, string]> = [
     ["arrays", `console.log(${"[".repeat(deep)}${"]".repeat(deep)}.length);\n`],
@@ -1285,18 +1287,26 @@ console.log("Nesting limit...");
   ];
   for (const [desc, source] of shapes)
     assertSyntaxErrorInBothModes(source, `${desc} nested ${deep} deep`, [], {
-      messageIncludes: NESTING,
+      messageIncludes: desc.startsWith("an addition") || desc.startsWith("a call") ? HEIGHT : NESTING,
       line: desc === "calls" || desc === "a call chain" ? 2 : 1,
     });
 
-  // Just below the limit the same shapes run.
-  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-    const res = runLoaderJson(`console.log(${"[".repeat(1000)}${"]".repeat(1000)}.length);\n`, modeArgs);
-    if (res.exitCode !== 0)
-      throw new Error(`1,000 nested arrays (${modeArgs[0]}) should run, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
-    if (normalizeLineEndings(res.json.output) !== "1\n")
-      throw new Error(`1,000 nested arrays (${modeArgs[0]}) printed ${JSON.stringify(res.json.output)}`);
-  }
+  // Below the limits the same shapes run: nested arrays, and a chain of
+  // 2,000 method calls, the shape of the Unicode tables in Babel's bundle.
+  const belowLimit: Array<[string, string, string]> = [
+    ["1,000 nested arrays", `console.log(${"[".repeat(1000)}${"]".repeat(1000)}.length);\n`, "1\n"],
+    ["2,000 chained method calls",
+      `const set = { n: 0, addRange(a, b) { this.n += b - a; return this; } };\n` +
+      `console.log(set${".addRange(1, 2)".repeat(2000)}.n);\n`, "2000\n"],
+  ];
+  for (const [desc, source, expected] of belowLimit)
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const res = runLoaderJson(source, modeArgs);
+      if (res.exitCode !== 0)
+        throw new Error(`${desc} (${modeArgs[0]}) should run, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+      if (normalizeLineEndings(res.json.output) !== expected)
+        throw new Error(`${desc} (${modeArgs[0]}) printed ${JSON.stringify(res.json.output)}`);
+    }
 
   // A regular expression literal compiles its pattern when it is evaluated.
   for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {

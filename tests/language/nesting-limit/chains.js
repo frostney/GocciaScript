@@ -1,18 +1,19 @@
 /*---
-description: Operator, member and call chains longer than the supported depth are a catchable SyntaxError
+description: Operator, member and call chains taller than the supported tree height are a catchable SyntaxError
 features: [ShadowRealm, Goccia]
 ---*/
 
 // The parser reads `a + b + c` and `a.b().c` in a loop, but the tree it
-// builds is as deep as the chain is long, and the compiler walks that tree
-// recursively. Each link of such a chain counts as a level of nesting, so a
-// chain may have about 1,024 links. A 30,000-term chain used to crash the
-// development build, and the interpreter in the production build.
-const LIMIT_MESSAGE = "Nesting exceeds the supported limit of 1024 levels";
+// builds is as tall as the chain is long, and the compiler, the evaluator and
+// the code that frees the tree walk it recursively. The syntax tree of a
+// statement may be 4,096 levels tall, counting each level of nesting and each
+// link of a chain. A 30,000-term chain used to crash the development build,
+// and the interpreter in the production build.
+const LIMIT_MESSAGE = "exceeds the supported limit of 4096 levels";
 const DEEP = 30000;
 const realm = new ShadowRealm();
 
-const expectNestingError = (source) => {
+const expectHeightError = (source) => {
   let error;
   try {
     realm.evaluate(source);
@@ -37,28 +38,45 @@ const chains = {
 
 describe("chain length limit", () => {
   for (const [name, [source, expected]] of Object.entries(chains)) {
-    test(`a ${name} chain of 1,000 links evaluates`, () => {
-      expect(realm.evaluate(source(1000))).toBe(expected(1000));
+    test(`a ${name} chain of 4,000 links evaluates`, () => {
+      expect(realm.evaluate(source(4000))).toBe(expected(4000));
     });
 
     test(`a ${name} chain of ${DEEP} links is a SyntaxError`, () => {
-      expectNestingError(source(DEEP));
+      expectHeightError(source(DEEP));
     });
   }
 
+  test("a chain of 2,000 method calls evaluates", () => {
+    // The shape of regenerate's Unicode tables, which Babel bundles: a call
+    // is two links, the member access and the call.
+    const ranges = `const set = { n: 0, addRange(a, b) { this.n += b - a; return this; } }; ` +
+      `set${".addRange(1, 2)".repeat(2000)}.n`;
+    expect(realm.evaluate(ranges)).toBe(2000);
+  });
+
   test("an argument or computed key does not nest inside its chain", () => {
-    // Nested calls cost one level each, not two.
     const calls = `const id = (v) => v; ${"id(".repeat(1000)}1${")".repeat(1000)}`;
     expect(realm.evaluate(calls)).toBe(1);
     const keys = `const a = [0]; ${"a[".repeat(1000)}0${"]".repeat(1000)}`;
     expect(realm.evaluate(keys)).toBe(0);
   });
 
-  test("nesting inside a chain counts the links before it", () => {
+  test("a chain and the nesting inside it add up", () => {
     const nestedAfter = (links, nesting) =>
       `1${" + 1".repeat(links)} + ${"[".repeat(nesting)}${"]".repeat(nesting)}.length`;
-    expect(realm.evaluate(nestedAfter(500, 500))).toBe(502);
-    expectNestingError(nestedAfter(600, 600));
+    expect(realm.evaluate(nestedAfter(2500, 1000))).toBe(2502);
+    expectHeightError(nestedAfter(3500, 1000));
+  });
+
+  test("links that follow a nested chain count toward its height", () => {
+    // Each level is a call whose argument is the level below, followed by
+    // links: the tree is as tall as all the levels' links together, though
+    // no single chain is long.
+    const levels = (count, links) =>
+      `const o = {}; o.p = o; const g = (v) => v; ${"g(".repeat(count)}o${`)${".p".repeat(links)}`.repeat(count)} === o`;
+    expect(realm.evaluate(levels(60, 60))).toBe(true);
+    expectHeightError(levels(100, 100));
   });
 
   test("lists do not count: sequences, arguments, elements and statements", () => {
@@ -66,5 +84,10 @@ describe("chain length limit", () => {
     expect(realm.evaluate(`[${"1, ".repeat(DEEP)}1].length`)).toBe(DEEP + 1);
     expect(realm.evaluate(`const f = (...a) => a.length; f(${"1, ".repeat(DEEP)}1)`)).toBe(DEEP + 1);
     expect(realm.evaluate(`let n = 0;${" n += 1;".repeat(DEEP)} n`)).toBe(DEEP);
+  });
+
+  test("the engine keeps working after the error", () => {
+    expectHeightError(chains.addition[0](DEEP));
+    expect(realm.evaluate(chains.addition[0](10))).toBe(11);
   });
 });

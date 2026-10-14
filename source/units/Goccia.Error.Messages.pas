@@ -553,6 +553,9 @@ resourcestring
   // stack left allows (both SyntaxErrors).
   SErrorNestingLimitExceeded = 'Nesting exceeds the supported limit of %d levels';
   SErrorNestingStackExhausted = 'Nesting is too deep for the native stack that is left';
+  // An expression or statement whose syntax tree, counting each link of its
+  // operator, member and call chains, is taller than MAX_TREE_HEIGHT.
+  SErrorTreeHeightExceeded = 'Nesting, counting each link of operator and call chains, exceeds the supported limit of %d levels';
 
   // Module loading errors
   // Names no module address on purpose: the only address available where this

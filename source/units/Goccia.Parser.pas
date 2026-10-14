@@ -17,11 +17,18 @@ uses
   Goccia.AST.Statements,
   Goccia.Lexer,
   Goccia.Modules,
+  Goccia.NestingLimit,
   Goccia.SourceSpan,
   Goccia.Token,
   Goccia.Values.Primitives;
 
 type
+  // A level of nesting open in the parser; see TGocciaParser.LeaveNesting.
+  TGocciaNestingFrame = record
+    Links: Integer;
+    ChildHeight: Integer;
+  end;
+
   TGocciaParserWarning = record
     Message: string;
     Suggestion: string;
@@ -129,6 +136,10 @@ type
     // Levels of nesting open at the current token; see EnterNesting and
     // Goccia.NestingLimit.
     FNestingDepth: Integer;
+    // One per open level of nesting, FNestingFrames[0] for the top level:
+    // the chain links parsed directly in the level, and the greatest height
+    // of the levels it has closed (see LeaveNesting).
+    FNestingFrames: array[0..MAX_NESTING_DEPTH] of TGocciaNestingFrame;
     // ADR 0134 static detection: what the function being parsed contains
     // so far (TGocciaDirectEvalUsage).
     FDirectEvalUsage: TGocciaDirectEvalUsage;
@@ -136,16 +147,19 @@ type
     // Open one level of nesting, or raise the SyntaxError for nesting past
     // MAX_NESTING_DEPTH. Every recursive production enters one before it
     // recurses and leaves it after; a raise abandons the parse, and the
-    // public entry points start the count at zero.
+    // public entry points start the count at zero. LeaveNesting also bounds
+    // the height of the tree the level built, by MAX_TREE_HEIGHT.
     procedure EnterNesting; {$IFDEF FPC}inline;{$ENDIF}
     procedure LeaveNesting; {$IFDEF FPC}inline;{$ENDIF}
+    procedure ResetNesting;
     procedure RaiseNestingLimitExceeded;
+    procedure RaiseTreeHeightExceeded;
     function NestedUnary: TGocciaExpression;
     // A link of a chain the parser builds in a loop (`a + b + c`,
-    // `a.b().c`): the tree is as deep as the chain is long, so each link
-    // counts as a level until the whole chain is parsed.
-    procedure EnterChainLink(var ALinks: Integer); {$IFDEF FPC}inline;{$ENDIF}
-    procedure LeaveChainLinks(const ALinks: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    // `a.b().c`, `p as x as y`). The loop does not recurse, but the tree it
+    // builds is as tall as the chain is long, and every later pass walks it
+    // recursively, so the link counts toward the height of the open level.
+    procedure CountChainLink; {$IFDEF FPC}inline;{$ENDIF}
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure AddUnsupportedFeatureWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -461,7 +475,6 @@ uses
   Goccia.FileExtensions,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
-  Goccia.NestingLimit,
   Goccia.Scope.BindingMap,
   Goccia.Values.BigIntValue;
 
@@ -755,27 +768,57 @@ begin
     FSourceLines, SSuggestNestingLimitExceeded);
 end;
 
+procedure TGocciaParser.RaiseTreeHeightExceeded;
+begin
+  raise TGocciaSyntaxError.Create(
+    Format(SErrorTreeHeightExceeded, [MAX_TREE_HEIGHT]), Peek.Line,
+    Peek.Column, FFileName, FSourceLines, SSuggestNestingLimitExceeded);
+end;
+
+procedure TGocciaParser.ResetNesting;
+begin
+  FNestingDepth := 0;
+  FNestingFrames[0].Links := 0;
+  FNestingFrames[0].ChildHeight := 0;
+end;
+
 procedure TGocciaParser.EnterNesting;
 begin
   Inc(FNestingDepth);
   if NestingDepthExceeded(FNestingDepth) then
     RaiseNestingLimitExceeded;
+  FNestingFrames[FNestingDepth].Links := 0;
+  FNestingFrames[FNestingDepth].ChildHeight := 0;
 end;
 
+// The height of the tree a level builds, counted bottom up: the tallest
+// level it closed, plus every chain link parsed directly in it, plus one for
+// the level. A path down from the level's node passes through some of its
+// links and then into at most one of the levels it closed, so this holds
+// however a chain continues after a nested level (`f(g(x).y.z).w`), which a
+// count of the links open at the current token would miss. Links of sibling
+// chains (`a.b + c.d`) are all counted, so the count can be above the real
+// height. A level can also add a few nodes of its own (an object literal and
+// its property, a class and its method); MAX_NESTING_DEPTH bounds how many
+// levels there are, and the limits are measured on such shapes.
 procedure TGocciaParser.LeaveNesting;
+var
+  Height: Integer;
 begin
+  Height := FNestingFrames[FNestingDepth].ChildHeight +
+    FNestingFrames[FNestingDepth].Links + 1;
   Dec(FNestingDepth);
+  if Height > FNestingFrames[FNestingDepth].ChildHeight then
+  begin
+    FNestingFrames[FNestingDepth].ChildHeight := Height;
+    if Height > MAX_TREE_HEIGHT then
+      RaiseTreeHeightExceeded;
+  end;
 end;
 
-procedure TGocciaParser.EnterChainLink(var ALinks: Integer);
+procedure TGocciaParser.CountChainLink;
 begin
-  Inc(ALinks);
-  EnterNesting;
-end;
-
-procedure TGocciaParser.LeaveChainLinks(const ALinks: Integer);
-begin
-  Dec(FNestingDepth, ALinks);
+  Inc(FNestingFrames[FNestingDepth].Links);
 end;
 
 // The operand of a prefix operator: `!!!x` recurses once per operator.
@@ -1057,7 +1100,7 @@ function TGocciaParser.ParseExpressionWithPrivateNames(const ADeclaredNames: TSt
 var
   I: Integer;
 begin
-  FNestingDepth := 0;
+  ResetNesting;
   PushPrivateClassContext;
   try
     if Assigned(ADeclaredNames) then
@@ -1090,7 +1133,7 @@ end;
 
 function TGocciaParser.ParseExpressionUnchecked: TGocciaExpression;
 begin
-  FNestingDepth := 0;
+  ResetNesting;
   Inc(FSkipPrivateNameValidation);
   try
     Result := Expression;
@@ -1891,11 +1934,9 @@ end;
 
 function TGocciaParser.LogicalOr: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  Links := 0;
   Result := NullishCoalescing;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttOr do
   begin
@@ -1912,18 +1953,15 @@ begin
         Op.Line, Op.Column, FFileName, FSourceLines);
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Right,
       Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.NullishCoalescing: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  Links := 0;
   Result := LogicalAnd;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttNullishCoalescing do
   begin
@@ -1940,36 +1978,30 @@ begin
         Op.Line, Op.Column, FFileName, FSourceLines);
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Right,
       Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.LogicalAnd: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
 begin
-  Links := 0;
   Result := BitwiseOr;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttAnd do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       BitwiseOr, Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.Equality: TGocciaExpression;
 var
-  Links: Integer;
   DiscardedLeft: TGocciaExpression;
   Op: TGocciaToken;
   Right: TGocciaExpression;
 begin
-  Links := 0;
   Result := Comparison;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttEqual, gttNotEqual, gttLooseEqual, gttLooseNotEqual] do
   begin
@@ -2003,14 +2035,12 @@ begin
     else
       Result := TGocciaBinaryExpression.Create(
         Result, Op.TokenType, Right, Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.Comparison: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
   Pattern: TGocciaMatchPattern;
   TypeAnnotation: string;
@@ -2025,11 +2055,10 @@ var
       Op := Previous;
       Pattern := ParseMatchPattern;
       Result := TGocciaIsExpression.Create(Result, Pattern, Op.Span);
-      EnterChainLink(Links);
+      CountChainLink;
     end;
   end;
 begin
-  Links := 0;
   if Check(gttHash) then
   begin
     if not FAllowInExpression then
@@ -2061,7 +2090,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Shift,
       Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
 
   ParseIsExpressions;
@@ -2096,41 +2125,34 @@ begin
   end;
 
   ParseIsExpressions;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.Addition: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
 begin
-  Links := 0;
   Result := Multiplication;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttPlus, gttMinus] do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       Multiplication, Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.Multiplication: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
 begin
-  Links := 0;
   Result := Exponentiation;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttStar, gttSlash, gttPercent] do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       Exponentiation, Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.Exponentiation: TGocciaExpression;
@@ -2383,14 +2405,12 @@ end;
 
 function TGocciaParser.Call: TGocciaExpression;
 var
-  Links: Integer;
   Arguments: TObjectList<TGocciaExpression>;
   Arg: TGocciaExpression;
   Token: TGocciaToken;
   Line, Column: Integer;
   CurrentType: TGocciaTokenType;
 begin
-  Links := 0;
   Result := Primary;
 
   while True do
@@ -2426,14 +2446,14 @@ begin
             Arguments.Free;
             raise;
           end;
-          EnterChainLink(Links);
+          CountChainLink;
         end;
       gttDot, gttOptionalChaining, gttHash, gttLeftBracket:
         begin
           // A link counts once its operands are parsed: an argument or a
           // computed key is a sibling of the callee, not nested in its chain.
           Result := ParseMemberAccessSegment(Result, True);
-          EnterChainLink(Links);
+          CountChainLink;
         end;
       gttNot:
         begin
@@ -2490,7 +2510,7 @@ begin
           Line := Token.Line;
           Column := Token.Column;
           Result := ParseTaggedTemplate(Result, Token, Line, Column);
-          EnterChainLink(Links);
+          CountChainLink;
         end;
       gttLess:
         begin
@@ -2504,7 +2524,6 @@ begin
       Break;
     end;
   end;
-  LeaveChainLinks(Links);
 end;
 
 // Validate that all characters in a string are hexadecimal digits.
@@ -2868,7 +2887,6 @@ var
   IsGenerator: Boolean;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
   OuterDirectEvalUsage, ArrowDirectEvalUsage: TGocciaDirectEvalUsage;
-  NewCalleeLinks: Integer;
 begin
   case Peek.TokenType of
     gttTrue:
@@ -3015,11 +3033,10 @@ begin
         // member chain is as deep as it is long.
         EnterNesting;
         Expr := Primary;
-        NewCalleeLinks := 0;
         while Check(gttDot) or Check(gttLeftBracket) do
         begin
           Expr := ParseMemberAccessSegment(Expr, False);
-          EnterChainLink(NewCalleeLinks);
+          CountChainLink;
         end;
         TryCollectNewExpressionTypeArguments;
         if Check(gttOptionalChaining) then
@@ -3030,9 +3047,8 @@ begin
         begin
           Token := Advance;
           Expr := ParseTaggedTemplate(Expr, Token, Token.Line, Token.Column);
-          EnterChainLink(NewCalleeLinks);
+          CountChainLink;
         end;
-        LeaveChainLinks(NewCalleeLinks);
         LeaveNesting;
         // Parse constructor arguments if present
         if Match(gttLeftParen) then
@@ -3593,6 +3609,7 @@ begin
         SSuggestProvideVariableName).Lexeme;
       Result := TGocciaAsMatchPattern.Create(Result, Name, DeclarationType,
         Token.Span);
+      CountChainLink;
     end
     else if Match(gttIf) then
     begin
@@ -3606,6 +3623,7 @@ begin
       Patterns.Add(Result);
       Patterns.Add(Guard);
       Result := TGocciaAndMatchPattern.Create(Patterns, Result.Span);
+      CountChainLink;
     end
     else
       Break;
@@ -3820,9 +3838,7 @@ var
   Token: TGocciaToken;
   PropertyName: string;
   KeyExpression: TGocciaExpression;
-  Links: Integer;
 begin
-  Links := 0;
   Result := Primary;
   while True do
   begin
@@ -3838,7 +3854,7 @@ begin
         RecordPrivateNameReference(PropertyName, Previous.Line, Previous.Column);
         Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName,
           Token.Span);
-        EnterChainLink(Links);
+        CountChainLink;
         Continue;
       end;
 
@@ -3863,9 +3879,8 @@ begin
     end
     else
       Break;
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 procedure TGocciaParser.CollectMatchPatternBindings(
@@ -7124,9 +7139,7 @@ var
   PropertyName: string;
   Line, Column: Integer;
   CalleeEnd: TGocciaToken;
-  Links: Integer;
 begin
-  Links := 0;
   if Match(gttLeftParen) then
   begin
     Result := Expression;
@@ -7195,9 +7208,8 @@ begin
     else
       Break;
     // A link counts once its arguments are parsed, as in Call.
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.ParseDecorators: TGocciaDecoratorList;
@@ -8559,7 +8571,7 @@ var
   OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   // A parse that raised leaves its nesting open; this one starts at zero.
-  FNestingDepth := 0;
+  ResetNesting;
   SavedStrictModeActive := FStrictModeActive;
   SavedStrictModeSourceActive := FStrictModeSourceActive;
   OuterDirectEvalUsage := EnterDirectEvalScope;
@@ -9394,70 +9406,58 @@ end;
 
 function TGocciaParser.BitwiseOr: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
 begin
-  Links := 0;
   Result := BitwiseXor;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttBitwiseOr do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       BitwiseXor, Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.BitwiseXor: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
 begin
-  Links := 0;
   Result := BitwiseAnd;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttBitwiseXor do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       BitwiseAnd, Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.BitwiseAnd: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
 begin
-  Links := 0;
   Result := Equality;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttBitwiseAnd do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       Equality, Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.Shift: TGocciaExpression;
 var
-  Links: Integer;
   Op: TGocciaToken;
 begin
-  Links := 0;
   Result := Addition;
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttLeftShift, gttRightShift, gttUnsignedRightShift] do
   begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       Addition, Op.Span);
-    EnterChainLink(Links);
+    CountChainLink;
   end;
-  LeaveChainLinks(Links);
 end;
 
 function TGocciaParser.ConvertNumberLiteral(const ALexeme: string): Double;
