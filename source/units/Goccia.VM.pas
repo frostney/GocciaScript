@@ -2367,7 +2367,7 @@ type
   private
     FInner: TGocciaBytecodeGeneratorObjectValue;
     { Async-generator request queue. DUPLICATED: TGocciaAsyncGeneratorObjectValue
-      in Goccia.Values.GeneratorValue
+      in Goccia.Evaluator.Generators
       carries the same queue with the same discipline for the other executor,
       and the two must stay in step — a change to one is a bug in the other
       until it is made there too.

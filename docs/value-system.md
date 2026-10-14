@@ -511,7 +511,7 @@ The base runtime type for user-defined functions. Uses call-site `this` binding 
 - **Body** — List of AST statements.
 - **Closure** — Reference to the scope where the function was defined.
 - **`BindThis` (virtual)** — Determines how `this` is resolved during a call. The base implementation uses call-site `this`.
-- **`ExecuteBody` (protected)** — Shared call machinery: binds `this` via `BindThis`, binds parameters, executes body, handles return values. Called by `Call`.
+- **`ExecuteBody` (protected)** — Hands the call to the interpreter's call path: binding `this` via `BindThis`, binding parameters, running the body and producing the return value live in `Goccia.Evaluator.Calls`, which registers itself with `RegisterFunctionCallPaths` when linked. `Goccia.Values.FunctionValue` does not use the evaluator. Called by `Call`.
 - **`length` property** — Returns the number of formal parameters before the first default/rest parameter (ECMAScript spec).
 - **`name` property** — Returns the function name. For anonymous arrow functions assigned to variables (`const add = () => {}`), the evaluator infers the name from the variable declaration.
 
@@ -544,7 +544,9 @@ Generator functions and methods extend the source-defined function value hierarc
 | `TGocciaGeneratorMethodValue` | `TGocciaMethodValue` | `TGocciaGeneratorObjectValue` |
 | `TGocciaAsyncGeneratorMethodValue` | `TGocciaGeneratorMethodValue` | `TGocciaAsyncGeneratorObjectValue` |
 
-Generator objects hold a resumable `TGocciaGeneratorContinuation`. Sync generators expose `next`, `return`, `throw`, and `[Symbol.iterator]`; async generators expose the async iterator protocol and return Promises from `next`, `return`, and `throw`.
+`Goccia.Values.GeneratorValue` holds what both executors share: these function classes, the generator object base classes, and the `next`/`return`/`throw` methods on the generator prototypes. The interpreter's generator objects live in `Goccia.Evaluator.Generators`, which creates them through `RegisterGeneratorObjectFactory`; the VM's are in `Goccia.VM`.
+
+Interpreter generator objects hold a resumable `TGocciaGeneratorContinuation`. Sync generators expose `next`, `return`, `throw`, and `[Symbol.iterator]`; async generators expose the async iterator protocol and return Promises from `next`, `return`, and `throw`.
 
 ### `this` Binding
 

@@ -166,8 +166,8 @@ begin
 
       { EffectiveStrictTypes walks to the root, so closures
         created before the setter still observe the live value -- this
-        is what TGocciaFunctionValue.ExecuteBody and its generator
-        counterparts read when seeding the call context. }
+        is what the interpreter's call paths in Goccia.Evaluator.Calls and
+        Goccia.Evaluator.Generators read when seeding the call context. }
       Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(True);
 
       { Flipping it back also flows through. }
