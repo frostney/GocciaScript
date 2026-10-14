@@ -16,7 +16,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.ModuleResolver,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -75,12 +74,10 @@ type
     procedure TestMalformedUTF8ModuleRejectsDynamicImport;
     procedure CheckFailedEntryRethrowsItsError(const AExecutor: TGocciaExecutor;
       const ACompileAndRun: Boolean; const ATag: string);
-    procedure TestFailedEntryRethrowsItsErrorExecuteInterpreted;
     procedure TestFailedEntryRethrowsItsErrorExecuteBytecode;
     procedure TestFailedEntryRethrowsItsErrorBytecodeRun;
     procedure CheckEntryModuleImportAfterExecute(
       const AExecutor: TGocciaExecutor; const ATag: string);
-    procedure TestEntryModuleImportAfterExecuteInterpreted;
     procedure TestEntryModuleImportAfterExecuteBytecode;
   public
     procedure SetupTests; override;
@@ -146,16 +143,11 @@ begin
     'without the host path',
     TestMalformedUTF8ModuleRejectsDynamicImport);
   Test('an import of an entry whose run threw rethrows its error ' +
-    '(Execute, interpreted)',
-    TestFailedEntryRethrowsItsErrorExecuteInterpreted);
-  Test('an import of an entry whose run threw rethrows its error ' +
     '(Execute, bytecode)',
     TestFailedEntryRethrowsItsErrorExecuteBytecode);
   Test('an import of an entry whose run threw rethrows its error ' +
     '(compiled bytecode run)',
     TestFailedEntryRethrowsItsErrorBytecodeRun);
-  Test('importing the entry module after Execute reuses it (interpreted)',
-    TestEntryModuleImportAfterExecuteInterpreted);
   Test('importing the entry module after Execute reuses it (bytecode)',
     TestEntryModuleImportAfterExecuteBytecode);
 end;
@@ -198,13 +190,13 @@ end;
 procedure TRuntimeTests.TestEngineRejectsNilExtension;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   HasExpectedMessage: Boolean;
   RaisedExpected: Boolean;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<extension-test>', Source, Executor);
     try
@@ -236,13 +228,13 @@ end;
 procedure TRuntimeTests.TestGlobalModuleProviderUnregisterClearsLoadedModule;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   LoadedModule: TGocciaModule;
   RaisedExpected: Boolean;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   FProvidedGlobalModule := nil;
   try
@@ -283,12 +275,12 @@ end;
 procedure TRuntimeTests.TestGlobalModuleProviderReplacementClearsLoadedModule;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   LoadedModule: TGocciaModule;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   FProvidedGlobalModule := nil;
   FReplacementGlobalModule := nil;
@@ -329,12 +321,12 @@ procedure TRuntimeTests.TestRuntimeConstructorAcceptsExistingEngine;
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
     Runtime := nil;
@@ -362,14 +354,14 @@ end;
 procedure TRuntimeTests.TestRuntimeInstallIsIdempotent;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   FirstExtension: TGocciaRuntimeExtension;
   Runtime: TGocciaRuntime;
   SecondExtension: TGocciaRuntimeExtension;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
     Runtime := nil;
@@ -393,7 +385,7 @@ procedure TRuntimeTests.TestRuntimeInstallRollsBackResolverExtensions;
 var
   BaselineExtensions: TModuleResolverExtensionArray;
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Extensions: TModuleResolverExtensionArray;
   I: Integer;
   ProbeValue: TGocciaValue;
@@ -403,7 +395,7 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
     Runtime := nil;
@@ -454,13 +446,13 @@ end;
 procedure TRuntimeTests.TestRuntimePreservesResolverExtensions;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Extensions: TModuleResolverExtensionArray;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
     Runtime := nil;
@@ -489,7 +481,7 @@ procedure TRuntimeTests.TestRuntimeModuleLoaderFallsBackToPreviousLoader;
 var
   CachedModule: TGocciaModule;
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   LoadedModule: TGocciaModule;
   ModuleLoader: TGocciaModuleLoader;
   Resolver: TCustomRuntimeModuleResolver;
@@ -503,7 +495,7 @@ begin
   Runtime := nil;
   LoadedModule := nil;
   FCustomRuntimeLoaderCalled := False;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Resolver := TCustomRuntimeModuleResolver.Create;
     ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>', Resolver);
@@ -551,7 +543,7 @@ const
   BAD_BYTES: array[0..3] of Byte = (Ord('a'), Ord('b'), Ord('c'), $FF);
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   ModuleLoader: TGocciaModuleLoader;
   ContentProvider: TGocciaFileSystemModuleContentProvider;
   Source: TStringList;
@@ -576,7 +568,7 @@ begin
   end;
 
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   ModuleLoader := nil;
   ContentProvider := nil;
@@ -624,7 +616,7 @@ const
   BAD_BYTES: array[0..3] of Byte = (Ord('a'), Ord('b'), Ord('c'), $FF);
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   ModuleLoader: TGocciaModuleLoader;
   ContentProvider: TGocciaFileSystemModuleContentProvider;
   Source: TStringList;
@@ -668,7 +660,7 @@ begin
   Source.Add('  },');
   Source.Add(');');
 
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   ModuleLoader := nil;
   ContentProvider := nil;
@@ -792,12 +784,6 @@ begin
   end;
 end;
 
-procedure TRuntimeTests.TestFailedEntryRethrowsItsErrorExecuteInterpreted;
-begin
-  CheckFailedEntryRethrowsItsError(TGocciaInterpreterExecutor.Create, False,
-    'execute-interpreted');
-end;
-
 procedure TRuntimeTests.TestFailedEntryRethrowsItsErrorExecuteBytecode;
 begin
   CheckFailedEntryRethrowsItsError(TGocciaBytecodeExecutor.Create, False,
@@ -813,8 +799,8 @@ end;
 { A host that calls into the engine after Execute (a test runner running its
   registered tests) can reach an import of the entry's own path. The entry is
   already evaluated: the import must hand back that module, not take it for a
-  changed file and run its body again. In bytecode mode the second run wrote
-  its exports into the finished run's module scope and crashed. }
+  changed file and run its body again. A second run once wrote its exports
+  into the finished run's module scope and crashed. }
 procedure TRuntimeTests.CheckEntryModuleImportAfterExecute(
   const AExecutor: TGocciaExecutor; const ATag: string);
 var
@@ -853,12 +839,6 @@ begin
     Source.Free;
     DeleteFile(EntryPath);
   end;
-end;
-
-procedure TRuntimeTests.TestEntryModuleImportAfterExecuteInterpreted;
-begin
-  CheckEntryModuleImportAfterExecute(TGocciaInterpreterExecutor.Create,
-    'interpreted');
 end;
 
 procedure TRuntimeTests.TestEntryModuleImportAfterExecuteBytecode;

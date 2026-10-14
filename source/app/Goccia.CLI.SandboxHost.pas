@@ -607,8 +607,8 @@ begin
       end;
       { The same guest throw, as the bytecode VM delivers it. Without this
         branch a bytecode run reported an uncaught throw as a host fault and
-        printed the bare message where the interpreter printed the frame —
-        the guest picking both the classification and the format. }
+        printed the bare message instead of the frame — the guest picking
+        both the classification and the format. }
       on E: EGocciaBytecodeThrow do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,

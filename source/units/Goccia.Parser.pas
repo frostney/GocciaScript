@@ -412,7 +412,6 @@ type
     function Parse: TGocciaProgram;
     function ParseUnchecked: TGocciaProgram;
     function ParseWithPrivateNames(const ADeclaredNames: TStrings): TGocciaProgram;
-    function ParseExpressionWithPrivateNames(const ADeclaredNames: TStrings): TGocciaExpression;
     function ParseExpressionUnchecked: TGocciaExpression;
     function Expression: TGocciaExpression;
     function AtEnd: Boolean;
@@ -984,23 +983,6 @@ end;
 function TGocciaParser.GetWarning(const AIndex: Integer): TGocciaParserWarning;
 begin
   Result := FWarnings[AIndex];
-end;
-
-function TGocciaParser.ParseExpressionWithPrivateNames(const ADeclaredNames: TStrings): TGocciaExpression;
-var
-  I: Integer;
-begin
-  PushPrivateClassContext;
-  try
-    if Assigned(ADeclaredNames) then
-      for I := 0 to ADeclaredNames.Count - 1 do
-        DeclarePrivateName(ADeclaredNames[I]);
-
-    Result := Expression;
-    ValidateCurrentPrivateClassContext;
-  finally
-    PopPrivateClassContext;
-  end;
 end;
 
 function TGocciaParser.ParseWithPrivateNames(const ADeclaredNames: TStrings): TGocciaProgram;
@@ -3582,7 +3564,7 @@ begin
       RestPattern, HasRestWildcard, ExpressionNode.Span));
   end;
 
-  Result := TGocciaValueMatchPattern.Create(ExpressionNode, False,
+  Result := TGocciaValueMatchPattern.Create(ExpressionNode,
     ExpressionNode.Span);
 end;
 
@@ -3689,7 +3671,7 @@ begin
     else
       Pattern := TGocciaValueMatchPattern.Create(
         TGocciaIdentifierExpression.Create(Key, Previous.Span),
-        False, Previous.Span);
+        Previous.Span);
 
     Properties.Add(TGocciaObjectMatchProperty.Create(Key, Pattern, IsComputed,
       KeyExpression));

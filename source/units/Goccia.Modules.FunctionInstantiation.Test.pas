@@ -1,9 +1,8 @@
 program Goccia.Modules.FunctionInstantiation.Test;
 
 { A module's top-level function declarations are instantiated while the module
-  is linked (ES2026 §16.2.1.7.3.1 InitializeEnvironment). In bytecode mode
-  they are compiled closures of the VM, never AST-backed functions the
-  tree-walk evaluator would run; the interpreter remains the control. }
+  is linked (ES2026 §16.2.1.7.3.1 InitializeEnvironment). They are compiled
+  closures of the VM. }
 
 {$I Goccia.inc}
 
@@ -18,14 +17,12 @@ uses
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
   Goccia.TestSetup,
   Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue,
   Goccia.Values.Primitives;
 
 type
@@ -50,16 +47,14 @@ type
 
   TModuleFunctionInstantiationTests = class(TTestSuite)
   private
-    procedure AssertImportedModuleFunctions(const AExecutor: TGocciaExecutor;
-      const AExpectBytecode: Boolean);
+    procedure AssertImportedModuleFunctions(const AExecutor: TGocciaExecutor);
     procedure AssertEntryModuleFunctionReadsImport(
       const AExecutor: TGocciaExecutor);
   public
     procedure SetupTests; override;
 
     procedure TestBytecodeModuleFunctionsAreCompiled;
-    procedure TestInterpreterModuleFunctionsAreTreeWalked;
-    procedure TestEntryModuleFunctionReadsImportInBothModes;
+    procedure TestEntryModuleFunctionReadsImport;
   end;
 
 const
@@ -147,14 +142,12 @@ procedure TModuleFunctionInstantiationTests.SetupTests;
 begin
   Test('Bytecode mode instantiates module function declarations as compiled closures',
     TestBytecodeModuleFunctionsAreCompiled);
-  Test('Interpreted mode instantiates module function declarations as AST functions',
-    TestInterpreterModuleFunctionsAreTreeWalked);
-  Test('An entry module function declaration reads its imports in both modes',
-    TestEntryModuleFunctionReadsImportInBothModes);
+  Test('An entry module function declaration reads its imports',
+    TestEntryModuleFunctionReadsImport);
 end;
 
 procedure TModuleFunctionInstantiationTests.AssertImportedModuleFunctions(
-  const AExecutor: TGocciaExecutor; const AExpectBytecode: Boolean);
+  const AExecutor: TGocciaExecutor);
 const
   FUNCTION_EXPORTS: array[0..3] of string = ('exported', 'default',
     'asyncFn', 'generatorFn');
@@ -190,9 +183,7 @@ begin
           Expect<Boolean>(Module.TryGetExportValue(ExportName,
             ExportValue)).ToBe(True);
           Expect<Boolean>(ExportValue.ClassName = BYTECODE_FUNCTION_CLASS)
-            .ToBe(AExpectBytecode);
-          Expect<Boolean>(ExportValue is TGocciaFunctionValue)
-            .ToBe(not AExpectBytecode);
+            .ToBe(True);
         end;
 
         { A declaration nobody exports is instantiated the same way. }
@@ -200,7 +191,7 @@ begin
           ExportValue)).ToBe(True);
         Internal := CallWithoutArguments(ExportValue);
         Expect<Boolean>(Internal.ClassName = BYTECODE_FUNCTION_CLASS)
-          .ToBe(AExpectBytecode);
+          .ToBe(True);
         Expect<string>(CallWithoutArguments(Internal).ToStringLiteral.Value)
           .ToBe('internal:dep');
 
@@ -227,19 +218,7 @@ var
 begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
-    AssertImportedModuleFunctions(Executor, True);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TModuleFunctionInstantiationTests.TestInterpreterModuleFunctionsAreTreeWalked;
-var
-  Executor: TGocciaExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertImportedModuleFunctions(Executor, False);
+    AssertImportedModuleFunctions(Executor);
   finally
     Executor.Free;
   end;
@@ -293,17 +272,10 @@ begin
   end;
 end;
 
-procedure TModuleFunctionInstantiationTests.TestEntryModuleFunctionReadsImportInBothModes;
+procedure TModuleFunctionInstantiationTests.TestEntryModuleFunctionReadsImport;
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertEntryModuleFunctionReadsImport(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertEntryModuleFunctionReadsImport(Executor);

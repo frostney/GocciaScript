@@ -41,11 +41,9 @@ uses
   Goccia.Constants,
   Goccia.Diagnostics.SourceRegistry,
   Goccia.EvaluationContext,
-  Goccia.Evaluator,
   Goccia.ExecutionContext,
   Goccia.Executor,
   Goccia.HostEnvironment,
-  Goccia.Interpreter,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
@@ -154,10 +152,8 @@ type
     const DefaultWarningUnsupportedFeatures = False;
     const DefaultSourceType: TGocciaSourceType = stScript;
   private
-    { The realm's global environment. The engine owns it; an interpreter, made
-      only for an interpreter executor, shares it. }
+    { The realm's global environment. The engine owns it. }
     FGlobalScope: TGocciaGlobalScope;
-    FInterpreter: TGocciaInterpreter;
     FSourcePath: string;
     FModuleLoader: TGocciaModuleLoader;
     FOwnsModuleLoader: Boolean;
@@ -291,8 +287,8 @@ type
     procedure InjectModulesFromValue(const AValue: TGocciaValue;
       const ABaseAddress, AProvenance: string);
   public
-    { Callers always provide an explicit executor — no implicit interpreter
-      fallback. Pair an executor with the engine that owns it; the engine
+    { Callers always provide an explicit executor — there is no implicit
+      default. Pair an executor with the engine that owns it; the engine
       does not free executors. }
     constructor Create(const AFileName: string;
       const ASourceLines: TStringList;
@@ -412,9 +408,8 @@ type
       `eval`, and ShadowRealm.prototype.evaluate (TC39 ShadowRealm §3.1.3).
       ASourceText is the eval's source; the caller has handled a non-String.
       Parses it as a Script, checks the static early errors, and has the
-      executor run it in this realm: compiled and run on the VM in bytecode
-      mode (ADR 0134 Phase 2), evaluated in interpreter mode. Returns the
-      completion value. When it raises, AStage tells whether compiling or
+      executor compile it and run it on the VM in this realm (ADR 0134
+      Phase 2). Returns the completion value. When it raises, AStage tells whether compiling or
       running failed. }
     function EvaluateGlobalEval(const ASourceText, ASourcePath: string;
       out AStage: TGocciaGlobalEvalStage): TGocciaValue;
@@ -430,9 +425,6 @@ type
     property Executor: TGocciaExecutor read FExecutor;
     { The realm's global environment. }
     property GlobalScope: TGocciaGlobalScope read FGlobalScope;
-    { The tree-walk interpreter, made only when the engine runs an
-      interpreter executor; nil with a bytecode executor. }
-    property Interpreter: TGocciaInterpreter read FInterpreter;
     property Resolver: TGocciaModuleResolver read GetResolver;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
     property ModuleResolver: TGocciaModuleResolver read GetModuleResolver;
@@ -544,7 +536,6 @@ uses
   Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
@@ -563,7 +554,6 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FinalizationRegistryValue,
-  Goccia.Values.FunctionValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
@@ -1044,8 +1034,8 @@ var
   Members: TGocciaShimPrototypeMembers;
   Target: TGocciaObjectValue;
 begin
-  // No shim runs at boot. Each is compiled (or, in interpreted mode,
-  // evaluated) the first time a name it provides is touched: the heaviest
+  // No shim runs at boot. Each is compiled and run the first time a name it
+  // provides is touched: the heaviest
   // shim (Date, ~671 source lines) is then never parsed for scripts that
   // don't use it, and empty-script boot pays for none of them.
   for I := 0 to DefaultShimCount - 1 do
@@ -1101,9 +1091,6 @@ begin
   Result.LoadDeferredModule := FModuleLoader.LoadDeferredModuleNamespaceValue;
   Result.ResolveModuleURL := FModuleLoader.ResolveModuleURL;
   Result.CurrentFilePath := FSourcePath;
-  Result.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil) and
-    TGocciaCoverageTracker.Instance.Enabled;
-  Result.StrictTypes := FStrictTypes;
   Result.NonStrictMode := cfNonStrictMode in FCompatibility;
   Result.CompatibilityNonStrictMode := cfNonStrictMode in FCompatibility;
 end;
@@ -1173,16 +1160,6 @@ begin
     FModuleLoader.LoadDeferredModuleNamespaceValue;
   FGlobalScope.ResolveModuleURL := FModuleLoader.ResolveModuleURL;
   FModuleLoader.JSXEnabled := ppJSX in FPreprocessors;
-  // Only an interpreter executor runs the tree-walk interpreter, which
-  // shares the engine's global environment.
-  FInterpreter := nil;
-  if FExecutor is TGocciaInterpreterExecutor then
-  begin
-    FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
-      FModuleLoader, FGlobalScope);
-    FInterpreter.Realm := FRealm;
-    FInterpreter.JSXEnabled := ppJSX in FPreprocessors;
-  end;
   FRealm.GlobalEnv := FGlobalScope;
   FRealm.LoadedModules := FModuleLoader;
   FLabelStatementsEnabled := False;
@@ -1210,13 +1187,9 @@ begin
   PinSingletons;
   RegisterBuiltIns;
 
-  // The executor was provided by the caller via the constructor.  When the
-  // caller chose interpreter mode, bind the interpreter into it now so its
-  // tree-walk methods can dispatch.
+  // The executor was provided by the caller via the constructor.
   FRetainedModules := Contnrs.TObjectList.Create(True);
 
-  if FExecutor is TGocciaInterpreterExecutor then
-    TGocciaInterpreterExecutor(FExecutor).Interpreter := FInterpreter;
   FExecutor.RetainModuleCallback := DoRetainModule;
   FExecutor.Initialize(FGlobalScope, FModuleLoader, AFileName);
   // A shim loads through the executor, so the executor is set up first.
@@ -1399,15 +1372,13 @@ begin
     FLastSourceMap.Free;
     FInjectedGlobals.Free;
     FShims.Free;
-    FInterpreter.Free;
     if TGarbageCollector.Instance = nil then
       FGlobalScope.Free;
     if FOwnsModuleLoader then
       FModuleLoader.Free;
 
-    // Drop the realm only after every built-in (and the interpreter, which
-    // holds the global scope) has been freed - those owners may still touch
-    // prototype objects during teardown.  Freeing the realm unpins the
+    // Drop the realm only after every built-in has been freed - those owners
+    // may still touch prototype objects during teardown.  Freeing the realm unpins the
     // intrinsic prototype graph so the GC can collect it before the next
     // engine on this worker thread starts up.
     if Assigned(FRealm) then
@@ -2987,8 +2958,9 @@ var
   SavedRuntimeModule: TGocciaModule;
   VM: TGocciaVM;
 begin
-  // Bytecode execution entry (the interpreter path uses Execute). Bind
-  // code-frame capture to this engine's own scope for the run, as Execute does.
+  // Entry for an already compiled module (Execute parses and compiles the
+  // engine's source itself). Bind code-frame capture to this engine's own
+  // scope for the run, as Execute does.
   PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
     FModuleLoader.DiagnosticScope);
   try
@@ -3622,8 +3594,6 @@ end;
 procedure TGocciaEngine.SetStrictTypes(const AValue: Boolean);
 begin
   FStrictTypes := AValue;
-  if Assigned(FInterpreter) then
-    FInterpreter.StrictTypesEnabled := AValue;
   if Assigned(FModuleLoader) then
     FModuleLoader.StrictTypesEnabled := AValue;
   if Assigned(FGlobalScope) then
@@ -3635,8 +3605,6 @@ end;
 procedure TGocciaEngine.SetPreprocessors(const AValue: TGocciaPreprocessors);
 begin
   FPreprocessors := AValue;
-  if Assigned(FInterpreter) then
-    FInterpreter.JSXEnabled := ppJSX in AValue;
   FModuleLoader.JSXEnabled := ppJSX in AValue;
 end;
 
@@ -3647,18 +3615,6 @@ begin
   FForInLoopsEnabled := cfForIn in AValue;
   FExperimentalJSModuleSourceEnabled :=
     cfExperimentalJSModuleSource in AValue;
-  if Assigned(FInterpreter) then
-  begin
-    FInterpreter.ASIEnabled := cfASI in AValue;
-    FInterpreter.VarEnabled := cfVar in AValue;
-    FInterpreter.FunctionEnabled := cfFunction in AValue;
-    FInterpreter.TraditionalForLoopsEnabled := cfTraditionalFor in AValue;
-    FInterpreter.WhileLoopsEnabled := cfWhileLoops in AValue;
-    FInterpreter.LooseEqualityEnabled := cfLooseEquality in AValue;
-    FInterpreter.NonStrictModeEnabled := cfNonStrictMode in AValue;
-    FInterpreter.ArgumentsObjectEnabled :=
-      cfArgumentsObject in AValue;
-  end;
   FGlobalScope.NonStrictMode := cfNonStrictMode in AValue;
   FGlobalScope.ArgumentsObjectEnabled := cfArgumentsObject in AValue;
   if Assigned(FModuleLoader) then
@@ -4322,9 +4278,6 @@ begin
 
     ResultValue := FExecutor.ExecuteDynamicFunction(ProgramNode);
     Result := TGocciaFunctionBase(ResultValue);
-    // ES2026 §20.2.1.1.1: the function's name is 'anonymous'
-    if Result is TGocciaFunctionValue then
-      TGocciaFunctionValue(Result).Name := 'anonymous';
     // ES2026 §15.2.2.4: Function-constructor bodies are non-strict
     // unless the parsed body contains a Use Strict Directive (§11.2.2).
     if not BodyParseResult.HasUseStrictDirective then

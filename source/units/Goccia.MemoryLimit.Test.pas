@@ -15,7 +15,6 @@ uses
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.MemoryLimit,
   Goccia.Runtime,
@@ -961,7 +960,7 @@ end;
   at least once, and answers how many were stored. Each value is created and
   handed straight to DefineProperty, so between the two it exists only in a
   Pascal local and in a descriptor no map holds yet — the native-unrooted shape,
-  and the one no evaluator-side frame can cover.
+  and the one no VM frame can cover.
 
   A loop rather than a fixed property count because how many entries it takes to
   clear GATED_GROWTH_MIN_BYTES depends on SizeOf(TEntry), which differs by
@@ -1071,7 +1070,7 @@ begin
   { No caller-side root anywhere: the object exists only in this bare Pascal
     local. That is the shape the gate's owner push exists for — a native
     builder part-way through populating an object it has not handed to anyone
-    yet, so nothing in the engine can see it and no evaluator frame covers it.
+    yet, so nothing in the engine can see it and no VM frame covers it.
     The test above roots the object itself, which leaves the owner push
     unexercised; here it is the only thing standing between the collection and
     both the object and every canary already in its map. }
@@ -1211,9 +1210,8 @@ begin
       would read exactly like canaries the gate protected.
 
       Never-handed-out is the shape that answers the question. A value returned
-      to a caller and then dropped survives for an unrelated reason — the
-      interpreter's own pressure checkpoints protect the current expression
-      result — so it would prove nothing about the store. }
+      to a caller and then dropped can survive for an unrelated reason, so it
+      would prove nothing about the store. }
     Control := TControlValue.Create;
     Expect<Boolean>(Assigned(Control)).ToBe(True);
 
@@ -1291,13 +1289,13 @@ end;
 { Stores ACount canary values into ATarget at a stride that leaves a hole
   behind every write, and answers how many it stored. Each value is created and
   handed straight to SetElement, so between the two it exists only in a Pascal
-  local — the native-unrooted shape, and the one no evaluator-side frame covers.
+  local — the native-unrooted shape, and the one no VM frame covers.
 
   A strided index rather than a sequential one because an append at exactly the
   element count takes the list's Add fast path and never reaches the gate.
 
   Every other store goes through SetProperty with a stringified index — the
-  route the evaluator's property store takes into an array — so the SetProperty
+  generic property-store route into an array — so the SetProperty
   extension arm's pending-value threading is pinned by the same canaries as
   SetElement's, not merely argued equivalent to it. (AssignProperty is the
   wrong vehicle here: for a not-yet-existing index it funnels into
@@ -1590,9 +1588,6 @@ begin
     had the catch block absorbed the refusal, the script would have run to
     completion and Execute would have returned normally. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create,
-    'memory-limit-sync-interpreted.js', TGocciaMemoryLimitError)).ToBe(True);
-  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'memory-limit-sync-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
@@ -1614,9 +1609,6 @@ begin
     async function body used to be converted into a spurious access
     violation, which the guest could then catch as an ordinary Error. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create,
-    'memory-limit-async-interpreted.js', TGocciaMemoryLimitError)).ToBe(True);
-  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'memory-limit-async-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
@@ -1632,9 +1624,6 @@ const
     '} catch (e) {}';
 begin
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create,
-    'memory-limit-executor-interpreted.js', TGocciaMemoryLimitError)).ToBe(True);
-  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'memory-limit-executor-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
@@ -1643,10 +1632,9 @@ procedure TMemoryLimitTests.TestAsyncGeneratorReturnCannotSwallowRefusal;
 const
   { `for await ... break` runs the async generator's `.return()`, which
     executes the body's `finally` as guest code. The refusal raised there
-    reaches the generator resume handler on the return path. Before the fix
-    that handler had no limit arm: the interpreter folded the ceiling into a
-    catchable rejection (guest caught it and kept running) while the VM was
-    fatal — a swallow AND a mode divergence. Both executors must now be fatal. }
+    reaches the generator resume handler on the return path, which must stay
+    fatal rather than fold the ceiling into a catchable rejection the guest
+    could catch and keep running past. }
   SourceText =
     'const obj = { async *g() {' + sLineBreak +
     '  try { yield 1; } finally { ' + OVER_BUDGET_SOURCE_TAIL + ' }' +
@@ -1659,9 +1647,6 @@ const
     '};' + sLineBreak +
     'main();';
 begin
-  Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create,
-    'memory-limit-async-generator-interpreted.js', TGocciaMemoryLimitError)).ToBe(True);
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'memory-limit-async-generator-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
@@ -1680,7 +1665,7 @@ const
     Completion Record, so suppressing it there is not the spec's instruction,
     it is a hole — and precisely the shape the ceiling contract exists to
     forbid, since a guest could refuse allocations for free by growing inside
-    a return() reached from a throwing loop body. Both executors must let it
+    a return() reached from a throwing loop body. The engine must let it
     through. }
   SourceText =
     'const iterable = {' + sLineBreak +
@@ -1695,10 +1680,6 @@ const
     '  for (const v of iterable) { throw new Error("body"); }' + sLineBreak +
     '} catch (e) {}';
 begin
-  Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create,
-    'memory-limit-iterator-close-interpreted.js',
-    TGocciaMemoryLimitError)).ToBe(True);
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'memory-limit-iterator-close-bytecode.js',
@@ -1717,9 +1698,6 @@ const
 begin
   { The counterweight to the guards above: the same budget must not turn an
     ordinary in-language error into a host-level failure. }
-  Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create,
-    'memory-limit-script-error-interpreted.js', TGocciaMemoryLimitError)).ToBe(False);
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'memory-limit-script-error-bytecode.js', TGocciaMemoryLimitError)).ToBe(False);
@@ -1995,8 +1973,6 @@ begin
     same script through the CLI; with a fixed 200000-byte ceiling it sat a few
     hundred bytes from the gate's line, and #1622's eight extra bytes per class
     value pushed development builds across it. }
-  Expect<string>(ChargedRefusalName(TGocciaInterpreterExecutor.Create,
-    'charged-refusal-interpreted.js')).ToBe('RangeError');
   Expect<string>(ChargedRefusalName(TGocciaBytecodeExecutor.Create,
     'charged-refusal-bytecode.js')).ToBe('RangeError');
 end;
@@ -2011,20 +1987,15 @@ const
     '}';
 begin
   { An engine-integrity fault is not a JavaScript error and must not become
-    one. The interpreter used to fold every unlisted Pascal exception into a
-    catchable Error object, which turned a use-after-free — the shape an
-    unrooted evaluator temporary produces under memory pressure — into
-    `catch (e)` and let the script keep running on corrupted state. Both
-    executors must now unwind to the host.
+    one. Folding an unlisted Pascal exception into a catchable Error object
+    would turn a use-after-free — the shape an unrooted temporary produces
+    under memory pressure — into `catch (e)` and let the script keep running
+    on corrupted state. The engine must unwind to the host.
 
     The escaping EObjectCheck is the load-bearing assertion; the witness is the
     other half of the same question, and it distinguishes the two ways this can
     fail — a fault that never reached the host because the guest caught it,
     versus one that never fired at all. }
-  Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create,
-    'integrity-fault-sync-interpreted.js', EObjectCheck)).ToBe(True);
-  Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'integrity-fault-sync-bytecode.js', EObjectCheck)).ToBe(True);
@@ -2053,10 +2024,6 @@ begin
     observes, so a host-side flag is the only way the swallow can report
     itself. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create,
-    'integrity-fault-async-interpreted.js', EObjectCheck)).ToBe(True);
-  Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
-  Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'integrity-fault-async-bytecode.js', EObjectCheck)).ToBe(True);
   Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
@@ -2069,14 +2036,7 @@ begin
     Pascal exception into a rejection, so the budget stopped being a ceiling the
     moment a script wrapped its filesystem calls in try/catch. }
   Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
-    TGocciaInterpreterExecutor.Create, 'sandbox-refusal-job-interpreted.js',
-    TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
-  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
     TGocciaBytecodeExecutor.Create, 'sandbox-refusal-job-bytecode.js',
-    TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
-  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
-    TGocciaInterpreterExecutor.Create,
-    'sandbox-refusal-argument-interpreted.js',
     TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
   Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
     TGocciaBytecodeExecutor.Create, 'sandbox-refusal-argument-bytecode.js',
@@ -2089,14 +2049,7 @@ begin
     sandbox boundary must not become a rejected promise the guest catches and
     carries on from. }
   Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
-    TGocciaInterpreterExecutor.Create, 'sandbox-integrity-job-interpreted.js',
-    EObjectCheck, EObjectCheck)).ToBe(True);
-  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
     TGocciaBytecodeExecutor.Create, 'sandbox-integrity-job-bytecode.js',
-    EObjectCheck, EObjectCheck)).ToBe(True);
-  Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
-    TGocciaInterpreterExecutor.Create,
-    'sandbox-integrity-argument-interpreted.js',
     EObjectCheck, EObjectCheck)).ToBe(True);
   Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
     TGocciaBytecodeExecutor.Create, 'sandbox-integrity-argument-bytecode.js',
@@ -2127,9 +2080,6 @@ begin
     against Exception rather than a specific class makes any escape at all a
     failure. }
   Expect<Boolean>(SandboxFaultEscapesScript(SourceText,
-    TGocciaInterpreterExecutor.Create, 'sandbox-catchable-interpreted.js',
-    Exception, nil)).ToBe(False);
-  Expect<Boolean>(SandboxFaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create, 'sandbox-catchable-bytecode.js',
     Exception, nil)).ToBe(False);
 end;
@@ -2156,9 +2106,6 @@ begin
     stated once, in Goccia.UncatchableFault.pas, rather than per boundary. }
   FInstallFailingAuditSink := True;
   try
-    Expect<Boolean>(FaultEscapesScript(SourceText,
-      TGocciaInterpreterExecutor.Create, 'response-json-audit-interpreted.js',
-      EGocciaCapabilityAuditDeliveryError)).ToBe(True);
     Expect<Boolean>(FaultEscapesScript(SourceText,
       TGocciaBytecodeExecutor.Create, 'response-json-audit-bytecode.js',
       EGocciaCapabilityAuditDeliveryError)).ToBe(True);

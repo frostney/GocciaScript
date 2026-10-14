@@ -46,8 +46,9 @@ const
   // A level costs more native stack when its trap is a native function
   // reached through a bound function or a Proxy (`Reflect.apply.bind(null)`,
   // `new Proxy(Reflect.apply, {})`): in a production build on Linux x86-64,
-  // interpreted, under the deepest recursion the default --max-stack allows,
-  // such a nest ran out of native stack after about 2,130 levels. The cap
+  // under the deepest recursion the default --max-stack allows, such a nest
+  // ran out of native stack after about 2,130 levels (measured under the
+  // since-removed tree-walk interpreter). The cap
   // stays below that. A trap wrapped in several bound functions costs more
   // again and is not covered: three already exhaust the stack there.
   MAX_PROPERTY_DELEGATION_DEPTH = 2000;

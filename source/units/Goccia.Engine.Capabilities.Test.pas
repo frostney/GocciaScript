@@ -33,7 +33,6 @@ uses
   Goccia.Executor,
   Goccia.GarbageCollector,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.FetchManager,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -83,7 +82,6 @@ type
     function OutsidePath(const AName: string): string;
     function Run(const ASource: string;
       const ACapabilities: TGocciaCapabilities;
-      const ABytecode: Boolean = False;
       const AShadowRealm: Boolean = False;
       const AEntry: string = ''): TRunOutcome;
     function EventsOfKind(const AKind: string): Integer;
@@ -131,8 +129,8 @@ type
     procedure TestAbortAtScriptEndRecordsAbandonment;
     procedure TestAliasCandidatesAreJudged;
     procedure TestPackageProbesAreJudged;
-    procedure TestCallDenialSitesMatchAcrossExecutors;
-    procedure TestStaticImportDenialSitesMatchAcrossExecutors;
+    procedure TestCallDenialSitesAreLocated;
+    procedure TestStaticImportDenialSitesAreLocated;
     procedure TestHostModuleCodeImportsAsTheGuestLater;
     procedure TestDeferredGraphDependenciesAreJudged;
     procedure TestFFIOpenLoadsTheJudgedLibrary;
@@ -215,11 +213,11 @@ begin
     'probing', TestAliasCandidatesAreJudged);
   Test('File probes inside a granted package are judged too',
     TestPackageProbesAreJudged);
-  Test('fetch() and FFI.open() denials are located alike in both executors',
-    TestCallDenialSitesMatchAcrossExecutors);
+  Test('fetch() and FFI.open() denials are located at the call',
+    TestCallDenialSitesAreLocated);
   Test('Static import and export-from denials are located at the ' +
-    'declaration in both executors',
-    TestStaticImportDenialSitesMatchAcrossExecutors);
+    'declaration',
+    TestStaticImportDenialSitesAreLocated);
   Test('An import a host module''s code makes after enrollment is a guest ' +
     'read', TestHostModuleCodeImportsAsTheGuestLater);
   Test('import defer judges every module of the deferred graph before ' +
@@ -387,7 +385,7 @@ begin
 end;
 
 function TEngineCapabilitiesTests.Run(const ASource: string;
-  const ACapabilities: TGocciaCapabilities; const ABytecode: Boolean;
+  const ACapabilities: TGocciaCapabilities;
   const AShadowRealm: Boolean; const AEntry: string): TRunOutcome;
 var
   Source: TStringList;
@@ -399,10 +397,7 @@ begin
   Result := Default(TRunOutcome);
   Source := TStringList.Create;
   Source.Text := ASource;
-  if ABytecode then
-    Executor := TGocciaBytecodeExecutor.Create
-  else
-    Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   if AEntry <> '' then
     Engine := TGocciaEngine.Create(AEntry, Source, Executor, ACapabilities)
   else
@@ -457,11 +452,11 @@ end;
 procedure TEngineCapabilitiesTests.TestProviderFollowsReadCapability;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor);
     try
@@ -521,7 +516,7 @@ function TEngineCapabilitiesTests.ComputedImportSuggestion(
   const ASpecifier: string): string;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Caught: TGocciaValue;
 begin
@@ -529,7 +524,7 @@ begin
   Source := TStringList.Create;
   Source.Text := 'const name = "' + ASpecifier + '";' + sLineBreak +
     'import(name).catch((e) => { globalThis.caught = e; });';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
     TGocciaCapabilities.None);
   try
@@ -587,12 +582,12 @@ end;
 procedure TEngineCapabilitiesTests.TestHostLoadedModuleOutsideProjectIsExempt;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Module: TGocciaModule;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
       TGocciaCapabilities.None);
@@ -693,10 +688,10 @@ const
 var
   Outcome: TRunOutcome;
 begin
-  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, True);
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None);
   Expect<string>(Outcome.Result).ToBe('PermissionDenied|read: ./lib.js');
   Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Allow(gcRead,
-    FProject), True);
+    FProject));
   Expect<string>(Outcome.Result).ToBe('inside');
 end;
 
@@ -754,13 +749,13 @@ end;
 procedure TEngineCapabilitiesTests.TestFFIRefusesWithoutGrant;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Runtime: TGocciaRuntimeCore;
   Raised: Boolean;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor);
   try
     Runtime := AttachRuntime(Engine);
@@ -784,7 +779,7 @@ begin
   end;
 
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
     TGocciaCapabilities.None.Allow(gcFFI));
   try
@@ -802,14 +797,14 @@ end;
 procedure TEngineCapabilitiesTests.TestFFIOpenChecksLibraryScopes;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Outcome: TRunOutcome;
 begin
   Outcome := Default(TRunOutcome);
   Source := TStringList.Create;
   Source.Text := 'FFI.open("../outside/lib.so");';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
     TGocciaCapabilities.None.Allow(gcFFI, FProject));
   try
@@ -820,6 +815,8 @@ begin
     except
       on E: TGocciaThrowValue do
         CaptureThrown(E.Value, Outcome);
+      on E: EGocciaBytecodeThrow do
+        CaptureThrown(E.ThrownValue, Outcome);
     end;
   finally
     Engine.Free;
@@ -836,13 +833,13 @@ function TEngineCapabilitiesTests.OpenLibrary(const ALibrary: string;
   const ACapabilities: TGocciaCapabilities): TRunOutcome;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
 begin
   Result := Default(TRunOutcome);
   Source := TStringList.Create;
   Source.Text := 'FFI.open("' + ALibrary + '");';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
     ACapabilities);
   try
@@ -854,6 +851,11 @@ begin
       on E: TGocciaThrowValue do
       begin
         CaptureThrown(E.Value, Result);
+        Result.Suggestion := E.Suggestion;
+      end;
+      on E: EGocciaBytecodeThrow do
+      begin
+        CaptureThrown(E.ThrownValue, Result);
         Result.Suggestion := E.Suggestion;
       end;
     end;
@@ -954,7 +956,7 @@ end;
 procedure TEngineCapabilitiesTests.TestAbortedFetchStillAuditsItsHops;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
 begin
   Source := TStringList.Create;
@@ -965,7 +967,7 @@ begin
     'request.catch(() => {});' + sLineBreak +
     'controller.abort();' + sLineBreak +
     'pumpUntilAudited();';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('abort.mjs'), Source, Executor,
     TGocciaCapabilities.None.Allow(gcNet, 'localhost')
       .Allow(gcNet, NET_PRIVATE_SCOPE));
@@ -999,12 +1001,12 @@ const
   DRAIN_MS = 300;
 var
   KeeperSource, Source: TStringList;
-  KeeperExecutor, Executor: TGocciaInterpreterExecutor;
+  KeeperExecutor, Executor: TGocciaBytecodeExecutor;
   Keeper, Engine: TGocciaEngine;
   EventsAfterFree, Waited: Integer;
 begin
   KeeperSource := TStringList.Create;
-  KeeperExecutor := TGocciaInterpreterExecutor.Create;
+  KeeperExecutor := TGocciaBytecodeExecutor.Create;
   Keeper := TGocciaEngine.Create(ProjectPath('keeper.js'), KeeperSource,
     KeeperExecutor);
   try
@@ -1015,7 +1017,7 @@ begin
       'fetch("http://localhost:1/", { signal: controller.signal })' +
       '.catch(() => {});' + sLineBreak +
       'controller.abort();';
-    Executor := TGocciaInterpreterExecutor.Create;
+    Executor := TGocciaBytecodeExecutor.Create;
     Engine := TGocciaEngine.Create(ProjectPath('gone.mjs'), Source, Executor,
       TGocciaCapabilities.None.Allow(gcNet, 'localhost')
         .Allow(gcNet, NET_PRIVATE_SCOPE));
@@ -1069,7 +1071,7 @@ end;
 procedure TEngineCapabilitiesTests.TestHostLoadedModuleIsCheckedForTheGuest;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Outcome: TRunOutcome;
 begin
@@ -1078,7 +1080,7 @@ begin
   Source.Text :=
     'import { value } from "../outside/secret.js";' + sLineBreak +
     'globalThis.result = value;';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor);
   try
     AttachRuntime(Engine);
@@ -1088,6 +1090,8 @@ begin
     except
       on E: TGocciaThrowValue do
         CaptureThrown(E.Value, Outcome);
+      on E: EGocciaBytecodeThrow do
+        CaptureThrown(E.ThrownValue, Outcome);
     end;
   finally
     Engine.Free;
@@ -1122,10 +1126,10 @@ const
 var
   Outcome: TRunOutcome;
 begin
-  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, False, True);
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, True);
   Expect<string>(Outcome.Result).ToBe('rejected');
   Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Allow(gcRead, FOutside),
-    False, True);
+    True);
   Expect<string>(Outcome.Result).ToBe('outside');
 end;
 
@@ -1204,7 +1208,7 @@ const
 var
   Responder: TLoopbackResponder;
   SourceA, SourceB: TStringList;
-  ExecutorA, ExecutorB: TGocciaInterpreterExecutor;
+  ExecutorA, ExecutorB: TGocciaBytecodeExecutor;
   EngineA, EngineB: TGocciaEngine;
   PromiseA, PromiseB: TGocciaPromiseValue;
   URL: string;
@@ -1228,8 +1232,8 @@ begin
   Responder := TLoopbackResponder.Create(1);
   SourceA := TStringList.Create;
   SourceB := TStringList.Create;
-  ExecutorA := TGocciaInterpreterExecutor.Create;
-  ExecutorB := TGocciaInterpreterExecutor.Create;
+  ExecutorA := TGocciaBytecodeExecutor.Create;
+  ExecutorB := TGocciaBytecodeExecutor.Create;
   EngineA := TGocciaEngine.Create(ProjectPath('a.mjs'), SourceA, ExecutorA,
     TGocciaCapabilities.None.Allow(gcNet, 'localhost')
       .Allow(gcNet, NET_PRIVATE_SCOPE));
@@ -1327,7 +1331,7 @@ var
 begin
   Outcome := Run(SOURCE_TEXT,
     TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE),
-    False, False, ProjectPath('nested/app.mjs'));
+    False, ProjectPath('nested/app.mjs'));
   Expect<string>(Outcome.ErrorMessage).ToBe('');
   Expect<string>(Outcome.Result).ToBe('package');
   Expect<Integer>(EventsOfKind('read.file')).ToBe(0);
@@ -1336,14 +1340,14 @@ begin
   Outcome := Run(SOURCE_TEXT,
     TGocciaCapabilities.None.Allow(gcImport,
       IMPORT_NODE_MODULES_SCOPE + '=' + ProjectPath('nested')),
-    False, False, ProjectPath('nested/app.mjs'));
+    False, ProjectPath('nested/app.mjs'));
   Expect<Boolean>(Outcome.Result <> 'package').ToBe(True);
 
   { A deny still wins over the exemption. }
   Outcome := Run(SOURCE_TEXT,
     TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE)
       .Deny(gcRead, ProjectPath('node_modules/pkg/detail.js')),
-    False, False, ProjectPath('nested/app.mjs'));
+    False, ProjectPath('nested/app.mjs'));
   Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
 end;
 
@@ -1376,7 +1380,7 @@ begin
     Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
     Expect<string>(Outcome.Result).ToBe('undefined');
     Outcome := Run('import { value } from "./node_modules/evil/secret.js";' +
-      ' globalThis.result = value;', Grant, True);
+      ' globalThis.result = value;', Grant);
     Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
   finally
     DeleteFile(LinkPath);
@@ -1467,7 +1471,7 @@ begin
     .ToBe('PermissionDenied|PermissionDenied|PermissionDenied');
   WriteFile(ProjectPath('shadow.js'), 'export const value = "file";');
   try
-    Outcome := Run(SOURCE_TEXT, Denies, True);
+    Outcome := Run(SOURCE_TEXT, Denies);
     Expect<string>(Outcome.Result)
       .ToBe('PermissionDenied|PermissionDenied|PermissionDenied');
   finally
@@ -1526,7 +1530,7 @@ end;
 procedure TEngineCapabilitiesTests.TestAbortAtScriptEndRecordsAbandonment;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   EventIndex, Index: Integer;
 begin
@@ -1537,7 +1541,7 @@ begin
     ' { signal: controller.signal })' +
     '.catch(() => {});' + sLineBreak +
     'controller.abort();';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('end.mjs'), Source, Executor,
     TGocciaCapabilities.None.Allow(gcNet, 'localhost')
       .Allow(gcNet, NET_PRIVATE_SCOPE));
@@ -1621,56 +1625,45 @@ end;
 
 
 { ADR 0014: a denial raised by a native call is located at the call
-  expression's own position in both executors, as import() is: the callee's
-  name, where V8 locates the call (ADR 0135). }
-procedure TEngineCapabilitiesTests.TestCallDenialSitesMatchAcrossExecutors;
+  expression's own position, as import() is: the callee's name, where V8
+  locates the call (ADR 0135). }
+procedure TEngineCapabilitiesTests.TestCallDenialSitesAreLocated;
 const
   FETCH_SOURCE = 'const x = 1;' + sLineBreak +
     '  globalThis.result = fetch("http://example.com/");';
   FFI_SOURCE = 'const x = 1;' + sLineBreak +
     '  globalThis.result = FFI.open("../outside/lib.so");';
 var
-  Interpreted, Bytecode: TRunOutcome;
+  Outcome: TRunOutcome;
   Grant: TGocciaCapabilities;
 begin
   FInstallFetchAndFFI := True;
   Grant := TGocciaCapabilities.None.Allow(gcFFI, FProject);
-  Interpreted := Run(FETCH_SOURCE, Grant);
-  Bytecode := Run(FETCH_SOURCE, Grant, True);
-  Expect<string>(Interpreted.ErrorName).ToBe('PermissionDenied');
-  Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
-  Expect<string>(Interpreted.Location).ToBe('app.mjs:2:23');
-  Expect<string>(Bytecode.Location).ToBe(Interpreted.Location);
-  { The throw marks the denial's suggestion host-only in both executors,
-    through the VM unwind too, so guest-bound output can drop it. }
-  Expect<Boolean>(Interpreted.Suggestion <> '').ToBe(True);
-  Expect<Boolean>(Interpreted.SuggestionIsHostOnly).ToBe(True);
-  Expect<Boolean>(Bytecode.SuggestionIsHostOnly).ToBe(True);
-  Interpreted := Run(FFI_SOURCE, Grant);
-  Bytecode := Run(FFI_SOURCE, Grant, True);
-  Expect<string>(Interpreted.ErrorName).ToBe('PermissionDenied');
-  Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
-  Expect<Boolean>(Interpreted.Location <> '').ToBe(True);
-  Expect<string>(Bytecode.Location).ToBe(Interpreted.Location);
+  Outcome := Run(FETCH_SOURCE, Grant);
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.Location).ToBe('app.mjs:2:23');
+  { The throw marks the denial's suggestion host-only, through the VM
+    unwind, so guest-bound output can drop it. }
+  Expect<Boolean>(Outcome.Suggestion <> '').ToBe(True);
+  Expect<Boolean>(Outcome.SuggestionIsHostOnly).ToBe(True);
+  Outcome := Run(FFI_SOURCE, Grant);
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<Boolean>(Outcome.Location <> '').ToBe(True);
 end;
 
 
 { ADR 0014: a static import or export-from denial is located at its
-  declaration in both executors, whether the entry runs as a script or a
-  module. }
-procedure TEngineCapabilitiesTests.TestStaticImportDenialSitesMatchAcrossExecutors;
+  declaration, whether the entry runs as a script or a module. }
+procedure TEngineCapabilitiesTests.TestStaticImportDenialSitesAreLocated;
 
-  procedure ExpectLocatedAlike(const ASource, AEntry, AExpected: string;
+  procedure ExpectLocatedAt(const ASource, AEntry, AExpected: string;
     const ACapabilities: TGocciaCapabilities);
   var
-    Interpreted, Bytecode: TRunOutcome;
+    Outcome: TRunOutcome;
   begin
-    Interpreted := Run(ASource, ACapabilities, False, False, AEntry);
-    Bytecode := Run(ASource, ACapabilities, True, False, AEntry);
-    Expect<string>(Interpreted.ErrorName).ToBe('PermissionDenied');
-    Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
-    Expect<string>(Interpreted.Location).ToBe(AExpected);
-    Expect<string>(Bytecode.Location).ToBe(AExpected);
+    Outcome := Run(ASource, ACapabilities, False, AEntry);
+    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+    Expect<string>(Outcome.Location).ToBe(AExpected);
   end;
 
 const
@@ -1685,15 +1678,15 @@ var
 begin
   for Entry in [ProjectPath('app.js'), ProjectPath('app.mjs')] do
   begin
-    ExpectLocatedAlike(OUTSIDE_IMPORT, Entry,
+    ExpectLocatedAt(OUTSIDE_IMPORT, Entry,
       ExtractFileName(Entry) + ':2:1', TGocciaCapabilities.None);
-    ExpectLocatedAlike(OUTSIDE_IMPORT, Entry,
+    ExpectLocatedAt(OUTSIDE_IMPORT, Entry,
       ExtractFileName(Entry) + ':2:1', TGocciaCapabilities.None.Deny(gcRead));
-    ExpectLocatedAlike(BARE_IMPORT, Entry, ExtractFileName(Entry) + ':2:1',
+    ExpectLocatedAt(BARE_IMPORT, Entry, ExtractFileName(Entry) + ':2:1',
       TGocciaCapabilities.None.Deny(gcImport, IMPORT_NODE_MODULES_SCOPE));
   end;
   { export-from belongs to modules. }
-  ExpectLocatedAlike(OUTSIDE_REEXPORT, ProjectPath('app.mjs'), 'app.mjs:2:1',
+  ExpectLocatedAt(OUTSIDE_REEXPORT, ProjectPath('app.mjs'), 'app.mjs:2:1',
     TGocciaCapabilities.None);
 end;
 
@@ -1709,23 +1702,18 @@ const
     'readLater().then((m) => { globalThis.result = m.value; },' +
     ' (e) => { globalThis.result = e.name; });';
 var
-  Bytecode: Boolean;
   Outcome: TRunOutcome;
 begin
   FHostGlobalsModule := OutsidePath('host-globals.js');
-  for Bytecode in [False, True] do
-  begin
-    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, Bytecode);
-    Expect<string>(Outcome.ErrorMessage).ToBe('');
-    Expect<string>(Outcome.Result).ToBe('PermissionDenied');
-    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Deny(gcRead),
-      Bytecode);
-    Expect<string>(Outcome.Result).ToBe('PermissionDenied');
-    { A read grant lets the same late import through. }
-    Outcome := Run(SOURCE_TEXT,
-      TGocciaCapabilities.None.Allow(gcRead, FOutside), Bytecode);
-    Expect<string>(Outcome.Result).ToBe('outside');
-  end;
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None);
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('PermissionDenied');
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Deny(gcRead));
+  Expect<string>(Outcome.Result).ToBe('PermissionDenied');
+  { A read grant lets the same late import through. }
+  Outcome := Run(SOURCE_TEXT,
+    TGocciaCapabilities.None.Allow(gcRead, FOutside));
+  Expect<string>(Outcome.Result).ToBe('outside');
 end;
 
 
@@ -1739,23 +1727,19 @@ const
     'import defer * as ns from "./deferred-dep.js";' + sLineBreak +
     'globalThis.result = "linked";';
 var
-  Bytecode: Boolean;
   Outcome: TRunOutcome;
 begin
-  for Bytecode in [False, True] do
-  begin
-    FEvents.Clear;
-    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, Bytecode);
-    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
-    Expect<string>(Outcome.ErrorMessage).ToBe('read: ../outside/secret.js');
-    Expect<Boolean>(FEvents.IndexOf('read.file|deny|' +
-      CanonicalCapabilityPath(OutsidePath('secret.js'))) >= 0).ToBe(True);
-    { With a grant the graph links and evaluation stays deferred. }
-    Outcome := Run(SOURCE_TEXT,
-      TGocciaCapabilities.None.Allow(gcRead, FOutside), Bytecode);
-    Expect<string>(Outcome.ErrorMessage).ToBe('');
-    Expect<string>(Outcome.Result).ToBe('linked');
-  end;
+  FEvents.Clear;
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None);
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.ErrorMessage).ToBe('read: ../outside/secret.js');
+  Expect<Boolean>(FEvents.IndexOf('read.file|deny|' +
+    CanonicalCapabilityPath(OutsidePath('secret.js'))) >= 0).ToBe(True);
+  { With a grant the graph links and evaluation stays deferred. }
+  Outcome := Run(SOURCE_TEXT,
+    TGocciaCapabilities.None.Allow(gcRead, FOutside));
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('linked');
 end;
 
 
@@ -1800,7 +1784,7 @@ var
   Fixture, Good, Outside, Maps: string;
   MapsLines: TStringList;
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Outcome: TRunOutcome;
 {$ENDIF}
@@ -1825,7 +1809,7 @@ begin
   Source := TStringList.Create;
   Source.Text := 'globalThis.lib = FFI.open("' + Good + '/libfixture.so");' +
     ' globalThis.result = "opened";';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
     TGocciaCapabilities.None.Allow(gcFFI, FProject));
   GocciaFFIAfterOpenCheck := SwapJudgedLibraryDirectory;
@@ -1836,6 +1820,8 @@ begin
     except
       on E: TGocciaThrowValue do
         CaptureThrown(E.Value, Outcome);
+      on E: EGocciaBytecodeThrow do
+        CaptureThrown(E.ThrownValue, Outcome);
     end;
     MapsLines := TStringList.Create;
     try
@@ -1909,7 +1895,7 @@ var
   Base, Fixture, Good, GoodLibrary, OtherLibrary: string;
   GoodLoaded, OtherLoaded: Boolean;
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Outcome: TRunOutcome;
 {$ENDIF}
@@ -1953,7 +1939,7 @@ begin
     Source.Text := 'globalThis.lib = FFI.open("' +
       StringReplace(GPinJunction + '\libfixture.dll', '\', '\\',
         [rfReplaceAll]) + '"); globalThis.result = "opened";';
-    Executor := TGocciaInterpreterExecutor.Create;
+    Executor := TGocciaBytecodeExecutor.Create;
     Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
       TGocciaCapabilities.None.Allow(gcFFI, Base + '\proj'));
     GocciaFFIAfterOpenCheck := ProbeWindowsLibraryPin;
@@ -1963,6 +1949,8 @@ begin
     except
       on E: TGocciaThrowValue do
         CaptureThrown(E.Value, Outcome);
+      on E: EGocciaBytecodeThrow do
+        CaptureThrown(E.ThrownValue, Outcome);
     end;
     GoodLoaded := GetModuleHandleW(
       PWideChar(UnicodeString(GoodLibrary))) <> 0;

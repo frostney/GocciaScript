@@ -22,8 +22,6 @@ uses
   Goccia.Error,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
-  Goccia.Interpreter,
   Goccia.JSONL,
   Goccia.Lexer,
   Goccia.Modules,
@@ -97,8 +95,6 @@ type
       const AExecutor: TGocciaExecutor);
     procedure AssertFailedCycleKeepsLiveBindings(
       const AExecutor: TGocciaExecutor);
-    procedure AssertReloadedModuleRetargetsCachedImport(
-      const AExecutor: TGocciaExecutor);
     procedure AssertReloadedDataModuleFailureNamesSpecifier(
       const AExecutor: TGocciaExecutor; const AModeName: string;
       const AMismatches: TStringList);
@@ -118,7 +114,6 @@ type
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestFailedCycleKeepsLiveBindings;
-    procedure TestInterpreterReloadedModuleRetargetsCachedImport;
     procedure TestReloadedDataModuleFailureNamesSpecifier;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
@@ -229,8 +224,6 @@ begin
     TestEngineRetriesModuleAfterFailedLoad);
   Test('Failed module cycles keep surviving live bindings valid',
     TestFailedCycleKeepsLiveBindings);
-  Test('Interpreter reloads retarget cached import bindings',
-    TestInterpreterReloadedModuleRetargetsCachedImport);
   Test('Reloaded data module failures name the specifier, not the host path',
     TestReloadedDataModuleFailureNamesSpecifier);
   Test('Engine reports JSONL module parse line numbers',
@@ -366,7 +359,7 @@ const
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   HasLineNumber: Boolean;
   HasParseMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -378,7 +371,7 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'export const value = 42;');
     Source.Text := 'import { value } from "' + MODULE_PATH + '";' + sLineBreak +
@@ -494,13 +487,6 @@ procedure TModuleContentProviderTests.TestEngineModuleManifestDefaultsToEntryPat
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertEngineModuleManifestDefaultsToEntryPath(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertEngineModuleManifestDefaultsToEntryPath(Executor);
@@ -515,7 +501,7 @@ const
   MODULE_PATH = 'memory:/dep.js';
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   HasLineNumber: Boolean;
   HasParseMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -527,7 +513,7 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'export const value = ;');
     Source.Text := 'import { value } from "' + MODULE_PATH + '";' + sLineBreak +
@@ -650,122 +636,9 @@ procedure TModuleContentProviderTests.TestFailedCycleKeepsLiveBindings;
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertFailedCycleKeepsLiveBindings(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertFailedCycleKeepsLiveBindings(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TModuleContentProviderTests.AssertReloadedModuleRetargetsCachedImport(
-  const AExecutor: TGocciaExecutor);
-const
-  BRIDGE_PATH = 'memory:/bridge.js';
-  ENTRY_PATH = 'memory:/app.mjs';
-  IMPORTER_PATH = 'memory:/importer.js';
-  OUTER_PATH = 'memory:/outer.js';
-  SOURCE_A_PATH = 'memory:/source-a.js';
-  SOURCE_B_PATH = 'memory:/source-b.js';
-var
-  Args: TGocciaArgumentsCollection;
-  Engine: TGocciaEngine;
-  ExportValue: TGocciaValue;
-  ImporterModule: TGocciaModule;
-  ModuleLoader: TGocciaModuleLoader;
-  OuterNamespace: TGocciaModuleNamespaceObject;
-  Provider: TMemoryModuleContentProvider;
-  ReadValue: TGocciaFunctionBase;
-  Resolver: TInMemoryModuleResolver;
-  ResultValue: TGocciaValue;
-  Source: TStringList;
-begin
-  Provider := TMemoryModuleContentProvider.Create;
-  Resolver := TInMemoryModuleResolver.Create;
-  Source := TStringList.Create;
-  try
-    Provider.AddModule(SOURCE_A_PATH, 'export const first = 1;');
-    Provider.AddModule(SOURCE_B_PATH, 'export const second = 2;');
-    Provider.SetModule(BRIDGE_PATH,
-      'export { first as value } from "' + SOURCE_A_PATH + '";',
-      EncodeDate(2026, 1, 1));
-    Provider.AddModule(OUTER_PATH,
-      'export { value } from "' + BRIDGE_PATH + '";');
-    Provider.AddModule(IMPORTER_PATH,
-      'import { value } from "' + OUTER_PATH + '";' + sLineBreak +
-      'export const readValue = () => value;');
-    Source.Text := '1;';
-
-    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
-    try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader,
-        AExecutor);
-      try
-        ImporterModule := ModuleLoader.LoadModule(IMPORTER_PATH, ENTRY_PATH);
-        Expect<Boolean>(ImporterModule.TryGetExportValue('readValue',
-          ExportValue)).ToBe(True);
-        Expect<Boolean>(ExportValue is TGocciaFunctionBase).ToBe(True);
-        ReadValue := TGocciaFunctionBase(ExportValue);
-        OuterNamespace := TGocciaModuleNamespaceObject(
-          ModuleLoader.LoadModule(OUTER_PATH, IMPORTER_PATH)
-            .GetNamespaceObject);
-        Expect<Boolean>(OuterNamespace.CanResolveExport('value')).ToBe(True);
-
-        Args := TGocciaArgumentsCollection.Create;
-        try
-          ResultValue := ReadValue.Call(Args,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-          if not Assigned(ResultValue) then
-            Fail('Initial imported binding read returned no value.');
-          Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(1);
-
-          Provider.SetModule(BRIDGE_PATH,
-            'export { second as value } from "' + SOURCE_B_PATH + '";',
-            EncodeDate(2026, 1, 2));
-          ModuleLoader.LoadModule(BRIDGE_PATH, IMPORTER_PATH);
-
-          ResultValue := ReadValue.Call(Args,
-            TGocciaUndefinedLiteralValue.UndefinedValue);
-          if not Assigned(ResultValue) then
-            Fail('Reloaded imported binding read returned no value.');
-          Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(2);
-
-          Provider.SetModule(BRIDGE_PATH,
-            'export const replacement = 3;',
-            EncodeDate(2026, 1, 3));
-          ModuleLoader.LoadModule(BRIDGE_PATH, IMPORTER_PATH);
-          Expect<Boolean>(OuterNamespace.CanResolveExport('value')).ToBe(False);
-        finally
-          Args.Free;
-        end;
-      finally
-        Engine.Free;
-      end;
-    finally
-      ModuleLoader.Free;
-    end;
-  finally
-    Source.Free;
-    Resolver.Free;
-    Provider.Free;
-  end;
-end;
-
-procedure TModuleContentProviderTests
-  .TestInterpreterReloadedModuleRetargetsCachedImport;
-var
-  Executor: TGocciaExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertReloadedModuleRetargetsCachedImport(Executor);
   finally
     Executor.Free;
   end;
@@ -924,14 +797,6 @@ var
 begin
   Mismatches := TStringList.Create;
   try
-    Executor := TGocciaInterpreterExecutor.Create;
-    try
-      AssertReloadedDataModuleFailureNamesSpecifier(Executor, 'interpreted',
-        Mismatches);
-    finally
-      Executor.Free;
-    end;
-
     Executor := TGocciaBytecodeExecutor.Create;
     try
       AssertReloadedDataModuleFailureNamesSpecifier(Executor, 'bytecode',
@@ -940,8 +805,8 @@ begin
       Executor.Free;
     end;
 
-    { Every format under both executors, listed together so one run shows
-      each reload that still names a host address. }
+    { Every format, listed together so one run shows each reload that
+      still names a host address. }
     if Mismatches.Count > 0 then
       Fail('Reload failures that do not name only the specifier:' +
         sLineBreak + Mismatches.Text);
@@ -957,7 +822,7 @@ const
   MODULE_PATH = 'memory:/events.jsonl';
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   HasLineNumber: Boolean;
   HasParseMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -970,7 +835,7 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH,
       '{"id":1}' + sLineBreak +
@@ -1026,7 +891,7 @@ const
   MODULE_PATH = 'memory:/config.toml';
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   HasParseMessage: Boolean;
   HasSyntaxDetail: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -1039,7 +904,7 @@ begin
   Provider := TMemoryModuleContentProvider.Create;
   Resolver := TInMemoryModuleResolver.Create;
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Provider.AddModule(MODULE_PATH, 'value = 01');
     Source.Text := 'import { value } from "' + MODULE_PATH + '";' + sLineBreak +
@@ -1310,7 +1175,7 @@ procedure TModuleContentProviderTests.TestEngineLoadsUTF8TextAssetModule;
 var
   ContentValue: string;
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   MetadataValue: TGocciaObjectValue;
   ResultObject: TGocciaObjectValue;
   Runtime: TGocciaRuntime;
@@ -1325,7 +1190,7 @@ begin
   WriteUTF8File(TextAssetPath, ContentValue);
 
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Source.Text :=
       'import { content, metadata } from "./note.txt";' + sLineBreak +
@@ -1370,7 +1235,7 @@ end;
 procedure TModuleContentProviderTests.TestEngineNormalizesCRLFTextAssetModulesToLF;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   RawContent: string;
   Runtime: TGocciaRuntime;
   ScriptResult: TGocciaScriptResult;
@@ -1384,7 +1249,7 @@ begin
   WriteUTF8File(TextAssetPath, RawContent);
 
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Source.Text :=
       'import { content } from "./crlf-note.txt";' + sLineBreak +
@@ -1442,8 +1307,8 @@ const
 var
   EngineA: TGocciaEngine;
   EngineB: TGocciaEngine;
-  ExecutorA: TGocciaInterpreterExecutor;
-  ExecutorB: TGocciaInterpreterExecutor;
+  ExecutorA: TGocciaBytecodeExecutor;
+  ExecutorB: TGocciaBytecodeExecutor;
   RaisedExpected: Boolean;
   HasExpectedMessage: Boolean;
   ModuleLoader: TGocciaModuleLoader;
@@ -1459,8 +1324,8 @@ begin
   SourceB := TStringList.Create;
   EngineB := nil;
   RaisedExpected := False;
-  ExecutorA := TGocciaInterpreterExecutor.Create;
-  ExecutorB := TGocciaInterpreterExecutor.Create;
+  ExecutorA := TGocciaBytecodeExecutor.Create;
+  ExecutorB := TGocciaBytecodeExecutor.Create;
   try
     SourceA.Text := '1;';
     SourceB.Text := '2;';
@@ -1905,13 +1770,6 @@ procedure TModuleContentProviderTests.TestUnavailableProviderRejectsDynamicImpor
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertUnavailableProviderRejectsDynamicImport(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertUnavailableProviderRejectsDynamicImport(Executor);
@@ -1924,13 +1782,6 @@ procedure TModuleContentProviderTests.TestUnavailableProviderStaticImportThrowsE
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertUnavailableProviderStaticImportThrowsError(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertUnavailableProviderStaticImportThrowsError(Executor);
@@ -1943,13 +1794,6 @@ procedure TModuleContentProviderTests.TestConfiguredProviderFailureStaysDistinct
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertConfiguredProviderFailureStaysDistinct(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertConfiguredProviderFailureStaysDistinct(Executor);
@@ -1962,13 +1806,6 @@ procedure TModuleContentProviderTests.TestDefaultResolverRefusesResolvedModule;
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertDefaultResolverRefusesResolvedModule(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertDefaultResolverRefusesResolvedModule(Executor);
@@ -1981,13 +1818,6 @@ procedure TModuleContentProviderTests.TestDefaultResolverStaticImportFailsBefore
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertDefaultResolverStaticImportFailsBeforeProvider(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertDefaultResolverStaticImportFailsBeforeProvider(Executor);
@@ -2000,13 +1830,6 @@ procedure TModuleContentProviderTests.TestDefaultResolverDynamicImportFailsBefor
 var
   Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertDefaultResolverDynamicImportFailsBeforeProvider(Executor);
-  finally
-    Executor.Free;
-  end;
-
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertDefaultResolverDynamicImportFailsBeforeProvider(Executor);

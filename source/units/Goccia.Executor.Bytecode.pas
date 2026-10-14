@@ -382,7 +382,7 @@ end;
   EvalDeclarationInstantiation checks the global object first, then the
   template binds the eval's functions and vars and runs the body on this
   realm's VM, against the realm's global environment even when the eval was
-  called from a module body. Nothing here reaches the tree-walk evaluator. }
+  called from a module body. }
 function TGocciaBytecodeExecutor.EvaluateGlobalEval(
   const AProgram: TGocciaProgram; const ASourcePath: string;
   const AStrictEval: Boolean;

@@ -381,7 +381,6 @@ uses
   Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator,
   Goccia.Execution.CallSite,
   Goccia.FetchManager,
   Goccia.FloatingPoint,
@@ -5265,10 +5264,10 @@ var
   ResultObjRoot: TGocciaTempRoot;
 begin
   { What the file's own top level left rejected is the file's failure, raised
-    like an uncaught throw before anything is collected. The interpreted
-    runner calls this after the engine's run has already drained and raised
-    it; the bytecode runner calls it from the end of the module body, where
-    the queued jobs that could still attach a handler have yet to run. }
+    like an uncaught throw before anything is collected. The test runners
+    call this after the engine's run has already drained and raised it;
+    draining here covers a call made while queued jobs that could still
+    attach a handler have yet to run. }
   DrainMicrotasksAndFetchCompletions;
   if Assigned(TGocciaMicrotaskQueue.Instance) and
      TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection(

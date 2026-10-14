@@ -5996,8 +5996,9 @@ await section("TestRunner: a parallel worker reclaims each file's garbage before
   // Workers run with automatic collection off. Before the runner collected
   // after each file, every object a worker allocated stayed live until the
   // worker exited, so a run held the garbage of all its files at once. With
-  // the shims parsed once per thread, that alone raised the interpreted
-  // suite's peak from 0.70 GB to 1.27 GB resident on four 64-bit workers. The
+  // the shims parsed once per thread, that alone raised the suite's peak
+  // (measured when it still ran on the since-removed interpreter) from
+  // 0.70 GB to 1.27 GB resident on four 64-bit workers. The
   // peak live GC heap is the observable: summed over the workers, it must not
   // grow with the number of files each worker runs.
   const tmp = makeTmp();

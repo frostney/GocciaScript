@@ -61,8 +61,8 @@ type
     property ThrownValue: TGocciaValue read FThrownValue;
     { The engine-authored "Suggestion:" line of the diagnostic, carried across
       the VM unwind so a throw that escapes to a host runner renders the same
-      hint the tree-walk evaluator's TGocciaThrowValue would. Empty for a
-      user-authored `throw`. }
+      hint a native TGocciaThrowValue would. Empty for a user-authored
+      `throw`. }
     property Suggestion: string read FSuggestion;
     { See TGocciaThrowValue.SuggestionIsHostOnly. }
     property SuggestionIsHostOnly: Boolean read FSuggestionIsHostOnly;
@@ -75,10 +75,10 @@ type
 // TGocciaThrowValue and does nothing for any other exception.
 procedure ReraiseBytecodeThrow(const AException: Exception);
 
-// A JS throw that crosses an executor boundary arrives as a Pascal exception
+// A JS throw that crosses a native boundary arrives as a Pascal exception
 // carrying the guest's completion value: EGocciaBytecodeThrow (a compiled
-// callee's throw leaving the VM) or TGocciaThrowValue (the tree-walk
-// evaluator's throw). Both bind the thrown value itself — ES2026 §14.15.3 —
+// callee's throw leaving the VM) or TGocciaThrowValue (a throw raised by
+// native code). Both bind the thrown value itself — ES2026 §14.15.3 —
 // not a fresh Error synthesized from the Pascal message. This is the single
 // place that knows the boundary-exception class list, so every
 // exception→value/rejection/mark site can route through it: a new boundary

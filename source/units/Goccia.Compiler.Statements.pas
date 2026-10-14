@@ -997,7 +997,7 @@ begin
 
     // Under strict types a hint is enforced on every assignment, so a
     // reassignable binding takes one only from the initializer forms
-    // InferLocalType names, the rule the interpreter applies. The wider
+    // InferLocalType names. The wider
     // inference is not kept as an unenforced hint there: typed opcodes do not
     // check their operands, and the binding may hold another type by then.
     if (AnnotationType <> sltUntyped) and ACtx.StrictTypes then
@@ -4632,8 +4632,8 @@ begin
   InitializesGlobalBindings := ACtx.GlobalBackedTopLevel and
     (ACtx.Scope.Depth = 0) and not ACtx.PreinitializedTopLevelFunctions;
   // Linking binds a module's evaluation-phase imports in its environment;
-  // a source-phase or deferred import is bound when its declaration runs,
-  // as the interpreter binds it. The module's function declarations, which
+  // a source-phase or deferred import is bound when its declaration runs.
+  // The module's function declarations, which
   // exist before the body, read their imports from that environment by name
   // (TGocciaCompilerScope.ImportUpvaluesByName).
   if ACtx.PreinitializedTopLevelFunctions and (ACtx.Scope.Depth = 0) and

@@ -983,7 +983,7 @@ begin
   FProperties := TGocciaShapedPropertyMap.Create(APropertyCapacity);
   // Rooting for the property-store path lives on the map, at the growth gate:
   // that is the one point in a store that can collect, and the map is the only
-  // thing every entry path — evaluator, native builder, class field, spread —
+  // thing every entry path — VM store, native builder, class field, spread —
   // passes through. The map needs a way back to the value that holds it so the
   // properties already stored stay reachable across a collection taken there.
   TGocciaShapedPropertyMap(FProperties).Owner := Self;

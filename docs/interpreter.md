@@ -1,6 +1,8 @@
 # Interpreter
 
-*Tree-walk execution over the AST: `Goccia.Interpreter` and `Goccia.Evaluator.*`, sharing the same value model as bytecode mode but not the same control path.*
+> **Removed.** The tree-walk interpreter was removed in [#875](https://github.com/frostney/GocciaScript/issues/875); bytecode is the only executor (see [Bytecode VM](bytecode-vm.md)). This page is historical and is kept only until the documentation layer of #875 removes it.
+
+*Tree-walk execution over the AST: the interpreter and evaluator units, sharing the same value model as bytecode mode but not the same control path.*
 
 ## Executive Summary
 
@@ -22,7 +24,7 @@ Bytecode mode branches after the parser to the compiler and VM instead; both pat
 
 ## Evaluator model (interpreter mode)
 
-`Goccia.Interpreter` drives module loading and top-level execution; `Goccia.Evaluator.*` implements expression and statement evaluation over the AST. Bytecode mode uses `Goccia.Compiler*` / `Goccia.VM*` instead, but the same `TGocciaValue`, scopes, and built-ins.
+The interpreter unit drove module loading and top-level execution; the evaluator units implemented expression and statement evaluation over the AST. Bytecode mode uses `Goccia.Compiler*` / `Goccia.VM*` instead, but the same `TGocciaValue`, scopes, and built-ins.
 
 ### Evaluation context and purity
 
@@ -57,7 +59,7 @@ This keeps evaluator functions pure — all dependencies are explicit parameters
 
 ### VMT dispatch on AST nodes
 
-Expression and statement evaluation use **VMT dispatch** on AST nodes: `TGocciaExpression.Evaluate` and `TGocciaStatement.Execute` are abstract virtual methods; each AST subclass overrides the appropriate entry point. The wrappers in `Goccia.Evaluator.pas` record coverage when enabled, then delegate:
+Expression and statement evaluation use **VMT dispatch** on AST nodes: the expression's `Evaluate` and the statement's `Execute` were abstract virtual methods on the AST base classes; each AST subclass overrode the appropriate entry point. The wrappers in the evaluator unit recorded coverage when enabled, then delegate:
 
 ```pascal
 function EvaluateExpression(const AExpression: TGocciaExpression;
@@ -74,9 +76,9 @@ See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for
 
 ### Shared evaluator helpers
 
-- **Function and generator call paths** — `Goccia.Evaluator.Calls` runs an AST-backed function's body (parameter binding, hoisting, the statement loop, async functions), and `Goccia.Evaluator.Generators` holds the interpreter's generator objects and creates them when a generator function is called. Both register with the value units (`RegisterFunctionCallPaths`, `RegisterGeneratorObjectFactory`) when linked, so `Goccia.Values.FunctionValue` and `Goccia.Values.GeneratorValue` do not use the evaluator. See [Value System](value-system.md#functions).
+- **Function and generator call paths** — the evaluator's calls unit ran an AST-backed function's body (parameter binding, hoisting, the statement loop, async functions), and its generators unit held the interpreter's generator objects and created them when a generator function was called. Both registered with the value units (`RegisterFunctionCallPaths`, `RegisterGeneratorObjectFactory`) when linked, so the function-value unit and `Goccia.Values.GeneratorValue` did not use the evaluator. See [Value System](value-system.md#functions).
 
-- **`EvaluateStatements`** — Evaluates a list of AST nodes in sequence, returning `TGocciaControlFlow`. Exits early when `Result.Kind <> cfkNormal` to propagate `return` and `break` signals. `TGocciaThrowValue` exceptions propagate naturally without interception.
+- **`EvaluateStatements`** — Evaluates a list of AST nodes in sequence, returning the interpreter's control-flow record. Exits early when `Result.Kind <> cfkNormal` to propagate `return` and `break` signals. `TGocciaThrowValue` exceptions propagate naturally without interception.
 
 - **`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Unified spread expansion for arrays, strings, sets, and maps. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject`. An Array's elements are read directly only under the same `ArrayUsesIntrinsicIteration` guard the bytecode VM uses; a replaced or own iterator runs the iterator protocol.
 
@@ -84,14 +86,14 @@ See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for
 
 ### Pure Evaluator Functions
 
-The evaluator (`Goccia.Evaluator.pas`) is designed around pure functions — given the same AST node and evaluation context, the evaluator always produces the same result with no side effects.
+The evaluator unit was designed around pure functions — given the same AST node and evaluation context, the evaluator always produces the same result with no side effects.
 
 **Why this matters:**
 
 - **Testability** — Pure functions are trivially testable in isolation.
 - **Reasoning** — No hidden state mutations make the evaluation logic easier to understand and debug.
 - **Parallelism potential** — Pure evaluation is inherently safe for concurrent execution.
-- **Composability** — Evaluator helper units (`Goccia.Arithmetic` for arithmetic, bitwise, equality, and relational operators; `Goccia.Evaluator.TypeOperations` for `typeof`, `instanceof`, and `in`; `Goccia.Evaluator.Assignment`; …) compose cleanly because they don't share mutable state.
+- **Composability** — Evaluator helper units (`Goccia.Arithmetic` for arithmetic, bitwise, equality, and relational operators; the evaluator's type-operations unit for `typeof`, `instanceof`, and `in`; its assignment unit; …) compose cleanly because they don't share mutable state.
 - **ECMAScript conformance** — `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) is a standalone abstract operation (trying `valueOf` then `toString` on objects) used by the `+` operator and available to any module. `Goccia.Arithmetic` computes `%` as a floating-point remainder (not integer modulo) with NaN/Infinity propagation, and implements the relational operators through the `IsLessThan` abstract operation with type coercion.
 
 State changes (variable bindings, object mutations) happen through the scope and value objects passed in the `TGocciaEvaluationContext`, not through evaluator-internal state.
@@ -104,7 +106,7 @@ State changes (variable bindings, object mutations) happen through the scope and
 
 Scopes form a tree with parent pointers, implementing lexical scoping:
 
-- **`CreateChild` factory method** — Plain block, module, and function scopes come from `CreateChild(AScopeKind, ACustomLabel, ACapacity)`, which creates a `TGocciaScope` with this scope as parent and copies its `this` value. Specialized scopes are constructed directly with their parent — for example `TGocciaCallScope.Create(FClosure, FName, Length(FParameters) + 2)` for a function call, and `TGocciaCatchScope`, `TGocciaClassInitScope`, `TGocciaFunctionNameScope`, and `TGocciaWithScope` during evaluation. Either way the `TGocciaScope` constructor links the parent and inherits its `OnError` callback, module callbacks, and strict-types and non-strict flags. The optional capacity pre-sizes the binding dictionary (function calls pass their parameter count).
+- **`CreateChild` factory method** — Plain block, module, and function scopes come from `CreateChild(AScopeKind, ACustomLabel, ACapacity)`, which creates a `TGocciaScope` with this scope as parent and copies its `this` value. Specialized scopes are constructed directly with their parent — for example the call scope (created with the closure, the function name and `Length(FParameters) + 2` slots) for a function call, and the catch, class-init, function-name and `with` scopes during evaluation. Either way the `TGocciaScope` constructor links the parent and inherits its `OnError` callback, module callbacks, and strict-types and non-strict flags. The optional capacity pre-sizes the binding dictionary (function calls pass their parameter count).
 - **`OnError` on scopes** — Each scope carries a reference to the error handler callback, inherited from its parent. This allows closures and callbacks to always find the correct error handler without global state.
 - **Temporal Dead Zone** — `let`/`const` bindings are registered before initialization, enforcing TDZ semantics (accessing before `=` throws `ReferenceError`).
 - **Module scope isolation** — Modules execute in `skModule` scopes (children of the global scope), preventing module-internal variables from leaking into the global scope.
@@ -133,11 +135,11 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 - **YAML tags and directives** — `%YAML` and `%TAG` directives are parsed at the document preamble, tag handles are expanded per document (including the primary `!` handle), and the standard tags `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!timestamp`, and `!!binary` perform explicit coercion, validation, or shape checks. Tagged values preserve metadata through lightweight wrappers that expose `.tagName` and `.value`, while still delegating normal behavior to the wrapped runtime value. The parser now keeps directives tied to the document preamble instead of silently treating mid-document directives as implicit stream splits.
 - **YAML complex keys** — Explicit key syntax (`? key`) is supported, including omitted explicit values and zero-indented sequence values, and non-scalar keys are canonicalized into stable JSON-like strings when inserted into `TGocciaObjectValue`. Anchored mapping keys also parse now instead of being rejected. This is a deliberate runtime adaptation: it preserves the ability to parse complex YAML keys without changing GocciaScript's core string-keyed object model.
 - **YAML compatibility target** — The project goal for YAML is full YAML 1.2 compatibility plus Bun-compatible user-facing parsing semantics where that does not conflict with GocciaScript's module model. The implementation is intentionally landing in increments rather than claiming full conformance before the parser reaches it. As a concrete snapshot, a parse-validity rerun on 2026-08-19 (engine `0508da44`) against `yaml-test-suite` commit `6ad3d2c62885d82fc349026c136ef560838fdf3d` matched the expected parse/fail result for 336 of 402 cases (83.6%), with 38 false accepts, 28 false rejects, and no timeouts. The latest reruns removed the previously observed parser hangs and improved multiline quoted scalars, flow mappings, document-marker handling, and trailing-content cases materially, but the main remaining gap clusters are still invalid documents that are accepted, remaining tab edge cases, some tag/property composition cases, a small trailing-content cluster, and a small number of remaining flow cases.
-- **Specialized scope hierarchy** — `TGocciaGlobalScope` (root), `TGocciaCallScope` (function calls), `TGocciaArrowCallScope` (arrow function calls), `TGocciaMethodCallScope` (class method calls with `SuperClass`/`OwningClass`), `TGocciaClassInitScope` (instance property initialization), `TGocciaCatchScope` (catch parameter scoping), and `TGocciaWithScope` (object environment records for `with`). Each specialized scope overrides virtual methods (`GetThisValue`, `GetOwningClass`, `GetSuperClass`, `IsFunctionBoundary`) to participate in VMT-based chain-walking.
-- **VMT-based chain-walking** — `FindOwningClass`, `FindSuperClass`, and `FindNewTarget` walk the parent chain calling the corresponding virtual `Get*` method on each scope, stopping at the first non-`nil` result or when `IsFunctionBoundary` returns `True` (ordinary functions do not inherit `super`, `new.target`, or owning class). `TGocciaArrowCallScope` overrides `IsFunctionBoundary` to return `False`, keeping arrow functions transparent to these walks.
+- **Specialized scope hierarchy** — `TGocciaGlobalScope` (root), the call scope (function calls), the arrow call scope (arrow function calls), the method call scope (class method calls with `SuperClass`/`OwningClass`), the class-init scope (instance property initialization), the catch scope (catch parameter scoping), and the `with` scope (object environment records for `with`). Each specialized scope overrides virtual methods (`GetThisValue`, `GetOwningClass`, `GetSuperClass`, `IsFunctionBoundary`) to participate in VMT-based chain-walking.
+- **VMT-based chain-walking** — `FindOwningClass`, `FindSuperClass`, and `FindNewTarget` walk the parent chain calling the corresponding virtual `Get*` method on each scope, stopping at the first non-`nil` result or when `IsFunctionBoundary` returns `True` (ordinary functions do not inherit `super`, `new.target`, or owning class). The arrow call scope overrode `IsFunctionBoundary` to return `False`, keeping arrow functions transparent to these walks.
 - **Unified identifier resolution** — `ResolveIdentifier(Name)` on `TGocciaScope` handles `this` (via `FindThisValue`) and keyword constants (via `Goccia.Keywords.Reserved`) before falling back to the standard scope chain walk, avoiding scattered special-case checks in the evaluator. `ResolveIdentifierReference(Name, Value, ThisValue)` is used for identifier-call sites so `with`-provided methods receive the object environment as `this` while normal lexical/global calls still receive `undefined`.
 - **Compatibility call bindings** — With `--compat-arguments-object` enabled, ordinary functions, shorthand methods, accessors, and generators create an `arguments` object in their call scope unless a parameter list already binds `arguments`; arrow call scopes deliberately skip it so `arguments` remains lexical. `--compat-non-strict-mode` does not enable the object by itself. Strict functions, modules, and non-simple parameter lists create unmapped objects; sloppy simple parameter lists create mapped arguments exotic objects whose indexed properties alias parameter bindings until the mapping is broken by deletion or descriptor changes. Ordinary function calls also coerce nullish `this` to `globalThis` only with script source `--compat-non-strict-mode`; arrows keep lexical `this`.
-- **`with` object environments** — With `--compat-non-strict-mode` enabled for script source, `TGocciaWithScope` wraps the object produced by `ToObject`, checks `HasProperty`, honors `Symbol.unscopables`, and forwards reads/writes to that object before falling back to the parent scope. Writes use receiver-aware object assignment; a failed object `[[Set]]` raises `TypeError` by default and is ignored in non-strict compatibility mode. The scope is GC-managed rather than stack-owned because closures created inside the `with` body can retain it after the body exits.
+- **`with` object environments** — With `--compat-non-strict-mode` enabled for script source, the `with` scope wrapped the object produced by `ToObject`, checks `HasProperty`, honors `Symbol.unscopables`, and forwards reads/writes to that object before falling back to the parent scope. Writes use receiver-aware object assignment; a failed object `[[Set]]` raises `TypeError` by default and is ignored in non-strict compatibility mode. The scope is GC-managed rather than stack-owned because closures created inside the `with` body can retain it after the body exits.
 - **Non-strict assignment and `delete`** — With `--compat-non-strict-mode` enabled for script source, failed ordinary object/global writes are ignored while assignment expressions still return the assigned value. `delete identifier` uses scope `DeleteBinding` semantics (`false` for declared bindings, deletes configurable global object properties, `true` for unresolvable names), and property deletion returns `false` for non-configurable properties instead of raising the strict-mode `TypeError`.
 
 ### Error Handling Strategy
@@ -148,11 +150,11 @@ GocciaScript uses a layered error approach (see [Errors](errors.md) for the full
 2. **Runtime errors** use a callback pattern (`OnError` in `TGocciaEvaluationContext`) — this keeps evaluator functions pure.
 3. **JavaScript-level errors** use `TGocciaThrowValue` for `throw` statements and `try/catch` — these flow through the evaluator's return path.
 4. **`try-finally` without `catch`** — The evaluator wraps the Pascal `try...except` in a Pascal `try...finally` to guarantee the JS `finally` block runs before exceptions propagate, even when no `catch` clause exists.
-5. **`break` and `return`** — Use `TGocciaControlFlow` result records (`cfkBreak`, `cfkReturn`) instead of Pascal exceptions. Statement-level evaluator functions return `TGocciaControlFlow`, and callers check `Result.Kind` to propagate signals. This eliminates `FPC_SETJMP` overhead from the interpreter's hot path (function calls, loop iterations, switch statements). `EvaluateSwitch` checks `CF.Kind = cfkBreak` after each case statement to implement JavaScript's fall-through-until-break semantics.
+5. **`break` and `return`** — Use the interpreter's control-flow result records (`cfkBreak`, `cfkReturn`) instead of Pascal exceptions. Statement-level evaluator functions returned that record, and callers check `Result.Kind` to propagate signals. This eliminates `FPC_SETJMP` overhead from the interpreter's hot path (function calls, loop iterations, switch statements). `EvaluateSwitch` checks `CF.Kind = cfkBreak` after each case statement to implement JavaScript's fall-through-until-break semantics.
 
 **Centralized error construction** — `Goccia.Values.ErrorHelper.pas` provides `ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`, and `CreateErrorObject` helpers. All error throw sites across the codebase use these helpers instead of manually building error objects, reducing duplication and ensuring consistent error formatting.
 
-**Why not exceptions everywhere?** Pascal exceptions disrupt the pure-function model of the evaluator. The callback pattern allows the evaluator to signal errors without unwinding the call stack, making control flow explicit. `TGocciaThrowValue` is the only exception used for non-local exits — it propagates naturally through the call stack to `EvaluateTry` (JS `try...catch`) or the top-level handler. `return` and `break` use lightweight `TGocciaControlFlow` records instead of exceptions, avoiding `setjmp`/`longjmp` overhead on every function call and loop iteration.
+**Why not exceptions everywhere?** Pascal exceptions disrupt the pure-function model of the evaluator. The callback pattern allows the evaluator to signal errors without unwinding the call stack, making control flow explicit. `TGocciaThrowValue` is the only exception used for non-local exits — it propagates naturally through the call stack to `EvaluateTry` (JS `try...catch`) or the top-level handler. `return` and `break` used the lightweight control-flow records instead of exceptions, avoiding `setjmp`/`longjmp` overhead on every function call and loop iteration.
 
 ### Synchronous Microtask Queue
 
