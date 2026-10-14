@@ -698,7 +698,7 @@ begin
   end;
 end;
 
-// ES2026 §20.1.2.7 Object.getOwnPropertyDescriptors(O)
+// ES2026 §20.1.2.9 Object.getOwnPropertyDescriptors(O)
 //
 // One TGocciaActiveRootFrame holds the result object and, for a Proxy, every
 // key the ownKeys trap returned (issue #1655). Each [[GetOwnProperty]] can run
