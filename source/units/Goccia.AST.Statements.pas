@@ -14,7 +14,7 @@ uses
   Goccia.AST.Node,
   Goccia.Bytecode.Chunk,
   Goccia.ControlFlow,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Modules,
   Goccia.SourceSpan,
   Goccia.Values.Primitives;

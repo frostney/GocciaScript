@@ -1,4 +1,10 @@
-unit Goccia.Evaluator.Context;
+unit Goccia.EvaluationContext;
+
+{ The host-side evaluation record (realm, scope, module-loading callbacks,
+  source flags) that the engine, the executors, the module loader and
+  declaration instantiation pass to each other. It is not the ECMA-262
+  execution context; that is TGocciaExecutionContext in
+  Goccia.ExecutionContext. }
 
 {$I Goccia.inc}
 

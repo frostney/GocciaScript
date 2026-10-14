@@ -6,7 +6,7 @@ interface
 
 uses
   Goccia.AST.Node,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Executor,
   Goccia.Interpreter,
   Goccia.Modules,

@@ -26,7 +26,7 @@ Bytecode mode branches after the parser to the compiler and VM instead; both pat
 
 ### Evaluation context and purity
 
-The evaluator threads state through a `TGocciaEvaluationContext` record rather than using instance variables or globals (`Goccia.Evaluator.Context`):
+The evaluator threads state through a `TGocciaEvaluationContext` record rather than using instance variables or globals (`Goccia.EvaluationContext`, shared with the bytecode executor and the module loader):
 
 ```pascal
 TGocciaEvaluationContext = record

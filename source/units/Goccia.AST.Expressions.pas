@@ -14,7 +14,7 @@ uses
 
   Goccia.AST.Node,
   Goccia.Error.CallDiagnostics,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Modules,
   Goccia.Scope.BindingMap,
   Goccia.SourceSpan,
