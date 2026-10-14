@@ -20,14 +20,18 @@ describe("errors thrown by Date methods", () => {
   });
 
   test("locate the method's frame outside the calling file", () => {
+    // toISOString throws in its own body, so its frame is the innermost one.
+    // (A method such as getTime throws from a helper it calls, whose frame
+    // is innermost instead.)
     let stack = "";
     try {
-      Date.prototype.getTime.call({});
+      new Date(NaN).toISOString();
     } catch (error) {
-      expect(error instanceof TypeError).toBe(true);
+      expect(error instanceof RangeError).toBe(true);
       stack = String(error.stack);
     }
     const firstFrame = stack.split("\n").find((line) => line.trim().startsWith("at "));
+    expect(firstFrame).toContain("toISOString");
     expect(firstFrame).not.toContain("error-stack.js");
   });
 });

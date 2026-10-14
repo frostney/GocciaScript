@@ -59,6 +59,7 @@ type
     procedure TestBootLoadsNoShim;
     procedure TestBytecodeShimFunctionsAreCompiled;
     procedure TestInterpretedShimFunctionsTreeWalk;
+    procedure TestToStringOfANamelessFunctionLeavesNothingBehind;
   end;
 
 procedure TTestShims.SetupTests;
@@ -81,6 +82,8 @@ begin
     TestBytecodeShimFunctionsAreCompiled);
   Test('with an interpreter executor the shims define tree-walk functions',
     TestInterpretedShimFunctionsTreeWalk);
+  Test('Function.prototype.toString of a nameless built-in leaves nothing behind',
+    TestToStringOfANamelessFunctionLeavesNothingBehind);
 end;
 
 function TTestShims.RunNumber(const ASource: string): Double;
@@ -320,6 +323,30 @@ begin
     Executor.Free;
     Source.Free;
   end;
+end;
+
+procedure TTestShims.TestToStringOfANamelessFunctionLeavesNothingBehind;
+const
+  { 20,000 calls: a descriptor left behind per call would be about 1 MB. }
+  MAX_GROWTH_BYTES = 256 * 1024;
+  SOURCE =
+    'const compare = new Intl.Collator().compare;' +
+    'const toString = Function.prototype.toString;' +
+    'for (const _ of Array.from({ length: 20000 })) toString.call(compare);' +
+    'toString.call(compare);';
+var
+  Before, After: Int64;
+begin
+  { The native-code text of a function without a name of its own falls back
+    to an own `name` data property (a shim's computed-key method). A
+    synthesized name has no entry, and asking for its descriptor would
+    allocate one per call that nothing frees. An Intl.Collator's bound
+    compare function is such a nameless built-in. }
+  Expect<string>(RunString(SOURCE)).ToBe('function () { [native code] }');
+  Before := LiveHeapBytes;
+  Expect<string>(RunString(SOURCE)).ToBe('function () { [native code] }');
+  After := LiveHeapBytes;
+  Expect<Boolean>(After - Before < MAX_GROWTH_BYTES).ToBe(True);
 end;
 
 begin

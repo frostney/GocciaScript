@@ -1441,12 +1441,14 @@ begin
     // source text. A method of it with a computed key, such as
     // Date.prototype[Symbol.toPrimitive], has no name until SetFunctionName
     // gives it one as an own data property (ES2026 §10.2.9), which is the
-    // name its NativeFunction text shows.
+    // name its NativeFunction text shows. It is read from the property map:
+    // GetOwnPropertyDescriptor builds a new descriptor for a name the
+    // function synthesizes, which nothing here would free.
     if FuncName = '' then
     begin
-      NameDescriptor := TGocciaFunctionBase(AThisValue)
-        .GetOwnPropertyDescriptor(PROP_NAME);
-      if (NameDescriptor is TGocciaPropertyDescriptorData) and
+      if TGocciaFunctionBase(AThisValue).Properties.TryGetValue(PROP_NAME,
+           NameDescriptor) and
+         (NameDescriptor is TGocciaPropertyDescriptorData) and
          (TGocciaPropertyDescriptorData(NameDescriptor).Value is
           TGocciaStringLiteralValue) then
         FuncName := TGocciaStringLiteralValue(
