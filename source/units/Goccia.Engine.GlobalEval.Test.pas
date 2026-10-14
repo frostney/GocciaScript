@@ -219,10 +219,9 @@ begin
     'globalThis.childEval = (0, eval)("eval")("(function () {})");';
   EngineOptions := Default(TGocciaTest262EngineOptions);
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
-  EngineOptions.Mode := t262emBytecode;
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor(t262emBytecode);
+  Executor := CreateTest262Executor;
   Engine := nil;
   Host := nil;
   try
@@ -271,10 +270,9 @@ begin
       ' return eval("var v = 1; (function () { return v; })"); })();';
   EngineOptions := Default(TGocciaTest262EngineOptions);
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
-  EngineOptions.Mode := t262emBytecode;
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor(t262emBytecode);
+  Executor := CreateTest262Executor;
   Engine := nil;
   Host := nil;
   try
@@ -323,10 +321,9 @@ begin
   EngineOptions := Default(TGocciaTest262EngineOptions);
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode,
     cfTraditionalFor];
-  EngineOptions.Mode := t262emBytecode;
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor(t262emBytecode);
+  Executor := CreateTest262Executor;
   Engine := nil;
   Host := nil;
   try

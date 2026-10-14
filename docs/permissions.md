@@ -533,9 +533,9 @@ Error: 2 config files request permissions that have not been trusted:
 Nothing was run. To trust these requests (stored in /home/u/.config/goccia/trust.json):
   GocciaTestRunner --trust tests/built-ins/FFI/goccia.json --trust tests/built-ins/fetch/goccia.json
 To accept them for this run only:
-  GocciaTestRunner -P tests --mode=bytecode
+  GocciaTestRunner -P tests
 To run with command-line grants only:
-  GocciaTestRunner --ignore-config-permissions tests --mode=bytecode
+  GocciaTestRunner --ignore-config-permissions tests
 ```
 
 Paths under the working directory are shown relative to it, the suggested

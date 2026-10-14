@@ -340,7 +340,6 @@ uses
   Goccia.CLI.Help,
   Goccia.Coverage,
   Goccia.Error.Suggestions,
-  Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
@@ -1859,12 +1858,7 @@ begin
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
     Source := TStringList.Create;
-    { The module runs in the script's execution mode; bytecode unless the
-      script runs in an interpreter. }
-    if AEngine.Executor is TGocciaInterpreterExecutor then
-      Executor := TGocciaInterpreterExecutor.Create
-    else
-      Executor := TGocciaBytecodeExecutor.Create;
+    Executor := TGocciaBytecodeExecutor.Create;
     try
       Isolated := TGocciaEngine.Create(APath, Source, Executor,
         AEngine.Capabilities);

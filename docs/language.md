@@ -37,7 +37,7 @@ Annex B is not a general compatibility target before 1.0. ECMA-262 describes Ann
 | `--compat-for-in-loop` | `for...in` property enumeration | Use `Object.keys()` / `Object.entries()` with `for...of` |
 | `--compat-while-loops` | `while` and `do...while` | Use `for...of`, iterators, or array methods when possible |
 
-Runtime type enforcement (`--strict-types`) is a GocciaScript extension separate from ECMAScript compatibility. The TC39 proposal gives annotations no runtime effect by default; the extension enforces supported annotations and inferred primitive contracts in interpreter and bytecode modes. It is not a static structural checker.
+Runtime type enforcement (`--strict-types`) is a GocciaScript extension separate from ECMAScript compatibility. The TC39 proposal gives annotations no runtime effect by default; the extension enforces supported annotations and inferred primitive contracts at runtime. It is not a static structural checker.
 
 `--warning-unsupported-features` is also separate from ECMAScript compatibility. It changes parser diagnostics for disabled syntax from hard errors back into the historical warning/recovery path, but it does not enable `var`, `function`, loose equality, labels, legacy loops, `for...in`, or `with` semantics. Use the matching `--compat-*` flag when code needs those semantics.
 
@@ -104,7 +104,7 @@ class C {
 }
 ```
 
-**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason. Top-level `await` works identically in interpreter mode and bytecode mode.
+**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason.
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
 
@@ -162,7 +162,7 @@ class Counter {
 
 ### Explicit Resource Management
 
-`using` and `await using` declarations (ES2026 §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported in interpreter and bytecode mode. In interpreter mode, a `using` or `await using` declared directly in a function body currently throws `using declaration outside of a block scope`; wrap it in an explicit block inside the function, as in the sample below ([#1275](https://github.com/frostney/GocciaScript/issues/1275)). Bytecode mode accepts both forms.
+`using` and `await using` declarations (ES2026 §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported, in a block or directly in a function body.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
 - `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
@@ -523,13 +523,13 @@ Decorator metadata works as described in [Decorators](#decorators-stage-27) — 
 
 Supported — the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/)
 proposal's types-as-comments semantics by default, with the optional
-`--strict-types` runtime extension adding enforcement in both execution modes.
+`--strict-types` runtime extension adding runtime enforcement.
 See [Type Annotations](type-annotations.md) for the supported syntax, the
 extension-driven `<` disambiguation, and the unsupported forms.
 
 ### Pattern Matching (Stage 1)
 
-GocciaScript supports the Stage 1 [TC39 Pattern Matching](https://tc39.es/proposal-pattern-matching/) draft in interpreter mode and bytecode mode.
+GocciaScript supports the Stage 1 [TC39 Pattern Matching](https://tc39.es/proposal-pattern-matching/) draft.
 
 ```javascript
 const result = match (message) {
@@ -691,7 +691,7 @@ When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Eng
 
 **Implemented; disabled by the recommended profile.** Use `===` and `!==` by default. Enable `--compat-loose-equality` (CLI flag, `cfLooseEquality` in `Engine.Compatibility`, or `{"compat-loose-equality": true}` in config) when standard loose-equality semantics are required.
 
-When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal) in both interpreter and bytecode modes, including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
+When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal), including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
 
 When disabled (default), `==` and `!=` are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by making the expression evaluate to `undefined`:
 
@@ -866,7 +866,7 @@ Warning: Labeled statements are not supported in GocciaScript
 
 In warning mode, the labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
 
-When enabled, labels can target `break` and `continue` statements in interpreter and bytecode modes:
+When enabled, labels can target `break` and `continue` statements:
 
 - `break label;` exits the matching enclosing labeled statement, including labeled blocks, `switch`, `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
 - `continue label;` targets matching enclosing iteration statements only: `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.

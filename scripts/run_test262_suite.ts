@@ -62,7 +62,6 @@ interface SuiteSummary {
 interface SuiteRunMetadata {
   suiteDir: string;
   test262Sha: string | null;
-  mode: "interpreted" | "bytecode";
   categories: string[];
   jobs: number;
   timeoutMs: number;
@@ -203,7 +202,6 @@ type Test262ProfileSummary = {
   run: {
     suiteDir: string;
     test262Sha: string | null;
-    mode: "bytecode";
     categories: string[];
     jobs: number;
     timeoutMs: number;
@@ -492,7 +490,6 @@ function writeProfileMarkdown(summary: Test262ProfileSummary, outputPath: string
   const lines: string[] = [];
   lines.push("# test262 Profile Report", "");
   lines.push(`Generated: ${summary.generatedAt}`);
-  lines.push(`Mode: ${summary.run.mode}`);
   lines.push(`test262 SHA: ${summary.run.test262Sha ?? "unknown"}`);
   lines.push(`Categories: ${summary.run.categories.join(", ")}`);
   lines.push(
@@ -765,7 +762,6 @@ function mergeShardReports(paths: string[]): SuiteReport {
 
   const runSignature = JSON.stringify({
     test262Sha: first.run!.test262Sha,
-    mode: first.run!.mode,
     categories: first.run!.categories,
     jobs: first.run!.jobs,
     timeoutMs: first.run!.timeoutMs,
@@ -791,7 +787,6 @@ function mergeShardReports(paths: string[]): SuiteReport {
     }
     const signature = JSON.stringify({
       test262Sha: report.run!.test262Sha,
-      mode: report.run!.mode,
       categories: report.run!.categories,
       jobs: report.run!.jobs,
       timeoutMs: report.run!.timeoutMs,
@@ -836,9 +831,6 @@ function mergeShardReports(paths: string[]): SuiteReport {
 async function runMerge(argv: string[]): Promise<number> {
   const args = parseMergeArgs(argv);
   const report = mergeShardReports(args.reports);
-  if (args.profileDir && report.run!.mode !== "bytecode") {
-    throw new Error("--profile-dir requires bytecode shard reports");
-  }
   mkdirSync(dirname(args.output!), { recursive: true });
   writeFileSync(args.output!, JSON.stringify(report, null, 2) + "\n");
   console.log(`Merged ${args.reports.length} shards into: ${resolve(args.output!)}`);
@@ -848,7 +840,6 @@ async function runMerge(argv: string[]): Promise<number> {
     const profileSummary = buildProfileSummary(report.results, args.profileDir, {
       suiteDir: run.suiteDir,
       test262Sha: run.test262Sha,
-      mode: "bytecode",
       categories: run.categories,
       jobs: run.jobs,
       timeoutMs: run.timeoutMs,
@@ -1121,7 +1112,7 @@ function buildCommentMarkdown(
   const baselineNote = hasBaseline
     ? " Δ vs main compares against the most recent cached `main` baseline."
     : " No `main` baseline cached yet — Δ columns will appear once a `main` run completes.";
-  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
+  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
 
   return { markdown: marker + "\n" + body, regressed };
 }

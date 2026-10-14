@@ -7,7 +7,7 @@
 - **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
 - **Change workflow** — Git and pull request mechanics follow known-good-route `git-workflow`; a GocciaScript change adds spec verification, tests, and docs or ADR updates
 - **Pull request titles** — Conventional Commits, because `cliff.toml` builds the changelog from the squash-merge subject
-- **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode` ([Testing requirements](../../CONTRIBUTING.md#3-testing-requirements) explains `-P`)
+- **Verification** — Run the JavaScript suite before every push: `./build.pas testrunner` and `./build/GocciaTestRunner -P tests` ([Testing requirements](../../CONTRIBUTING.md#3-testing-requirements) explains `-P`)
 
 ## Local setup
 
@@ -95,7 +95,6 @@ stacked branch also needs a [full CI](#full-ci) run before it is marked ready.
 ```bash
 ./build.pas testrunner
 ./build/GocciaTestRunner -P tests
-./build/GocciaTestRunner -P tests --mode=bytecode
 ```
 
 [Testing requirements](../../CONTRIBUTING.md#3-testing-requirements) explains `-P`

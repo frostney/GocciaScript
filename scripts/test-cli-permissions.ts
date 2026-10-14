@@ -191,7 +191,6 @@ console.log("Removed flags exit 2 and name their replacement...");
         [["--bogus"], "Unknown argument: --bogus", 2],
         [[], "--suite-dir is required", 2],
         [[...base, "--shard-index=0"], "--shard-index and --shard-count must be provided together", 2],
-        [[...base, "--mode=interpreted", `--profile-dir=${join(tmp, "profiles")}`], "--profile-dir requires --mode=bytecode", 2],
         [[...base, "--shard-index=2", "--shard-count=2"], "--shard-index must be less than --shard-count", 1],
         [["--suite-dir", join(tmp, "missing")], "test262 test directory not found under", 1],
         // The output path is a directory, so the report cannot be written.
@@ -213,6 +212,70 @@ console.log("Removed flags exit 2 and name their replacement...");
   const help = run(RUNNER, ["--help"]);
   expectExit(help, 0, "Loader --help");
   for (const [flag] of removedFlags) expectExcludes(help.stdout, flag.split("=")[0] + " ", "Loader --help");
+}
+
+// -- Removed --mode (0.15.0) ------------------------------------------------------
+
+console.log("Removed --mode exits 2 on every binary: bytecode is the only execution mode...");
+{
+  const MODE_REMOVED =
+    "--mode was removed in GocciaScript 0.15.0; bytecode is the only execution mode, so drop the option";
+  const modeFlags = ["--mode=bytecode", "--mode=interpreted", "--mode"];
+  for (const { name, binary, args } of ENGINE_BINARIES) {
+    for (const flag of modeFlags) {
+      const result = run(binary, [flag, ...args]);
+      expectExit(result, 2, `${name} ${flag}`);
+      expectIncludes(result.stderr, `Error: ${MODE_REMOVED}`, `${name} ${flag}`);
+    }
+  }
+  // The hand-parsed binaries reject it the same way.
+  for (const flag of modeFlags) {
+    const bare = run(BARE, [flag, "missing.js"]);
+    expectExit(bare, 2, `GocciaScriptLoaderBare ${flag}`);
+    expectIncludes(bare.stderr, `Error: ${MODE_REMOVED}`, `GocciaScriptLoaderBare ${flag}`);
+    const test262 = run(TEST262RUNNER, [flag]);
+    expectExit(test262, 2, `GocciaTest262Runner ${flag}`);
+    expectIncludes(test262.stderr, `Error: ${MODE_REMOVED}`, `GocciaTest262Runner ${flag}`);
+  }
+
+  for (const binary of [RUNNER, BARE]) {
+    const help = run(binary, ["--help"]);
+    expectExit(help, 0, `${binary} --help`);
+    expectExcludes(help.stdout, "--mode", `${binary} --help`);
+  }
+
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;\n");
+    const configPath = join(tmp, "goccia.json");
+    const keyRemoved =
+      '"mode" was removed in GocciaScript 0.15.0; bytecode is the only execution mode, so drop the key';
+    for (const value of ["bytecode", "interpreted"]) {
+      writeFileSync(configPath, JSON.stringify({ mode: value }) + "\n");
+      for (const binary of [RUNNER, TESTRUNNER, BENCHRUNNER]) {
+        const result = run(binary, ["main.js"], { cwd: tmp });
+        expectExit(result, 2, `${binary} config "mode": "${value}"`);
+        expectIncludes(result.combined, `${configPath}: ${keyRemoved}`, `${binary} config "mode": "${value}"`);
+      }
+    }
+    rmSync(configPath);
+
+    // The test runner's report and its test globals no longer carry a mode.
+    writeFileSync(join(tmp, "mode.test.js"), [
+      'test("no execution-mode global", () => {',
+      '  expect(typeof __gocciaTestRunnerMode).toBe("undefined");',
+      "});",
+      "",
+    ].join("\n"));
+    const reportPath = join(tmp, "report.json");
+    const tests = run(TESTRUNNER, ["mode.test.js", "--no-progress", `--output=${reportPath}`], { cwd: tmp });
+    expectExit(tests, 0, "TestRunner without a mode global");
+    const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    if (report.passed !== 1) throw new Error(`TestRunner mode-global probe should pass 1 test, got: ${JSON.stringify(report)}`);
+    if (Object.hasOwn(report, "mode")) throw new Error(`TestRunner JSON output still has a "mode" key: ${JSON.stringify(report.mode)}`);
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- Removed and command-line-only config keys ----------------------------------
@@ -706,7 +769,7 @@ console.log("A per-file config usage error stops the run before any file execute
     writeFileSync(join(tmp, "a", "s.js"), 'console.log("A-RAN");\n');
     writeFileSync(join(tmp, "b", "s.js"), 'console.log("B-RAN");\n');
     writeFileSync(join(tmp, "b", "goccia.json"), '{"unsafe-ffi": true}\n');
-    for (const args of [["--mode=interpreted"], ["--jobs=2"], ["--mode=bytecode"]]) {
+    for (const args of [[], ["--jobs=2"]]) {
       const loader = run(RUNNER, [join("a", "s.js"), join("b", "s.js"), ...args], { cwd: tmp });
       expectExit(loader, 2, `Loader multi-file ${args.join(" ")}`);
       expectIncludes(loader.stderr, `Error: ${join(tmp, "b", "goccia.json")}: "unsafe-ffi" ${REMOVED}`, "Loader multi-file");
@@ -777,15 +840,13 @@ console.log("A config's permissions govern only files in its own directory tree.
     ].join("\n");
     writeFileSync(join(tmp, "a", "x.mjs"), probe);
     writeFileSync(join(tmp, "c", "l.mjs"), probe);
-    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const result = run(RUNNER, ["-P", join("a", "x.mjs"), join("c", "l.mjs"), ...args], { cwd: tmp });
-      // Each file's output precedes its own "Running script" line.
-      const [first, second] = result.stdout.split("Running script");
-      expectIncludes(first, "read OUTSIDE", "a/x.mjs uses a's grants");
-      expectIncludes(first, "fn allowed", "a/x.mjs uses a's unsafe key");
-      expectIncludes(second ?? "", "read PermissionDenied", "c/l.mjs gets no grants from a");
-      expectExcludes(second ?? "", "fn allowed", "c/l.mjs gets no unsafe keys from a");
-    }
+    const result = run(RUNNER, ["-P", join("a", "x.mjs"), join("c", "l.mjs")], { cwd: tmp });
+    // Each file's output precedes its own "Running script" line.
+    const [first, second] = result.stdout.split("Running script");
+    expectIncludes(first, "read OUTSIDE", "a/x.mjs uses a's grants");
+    expectIncludes(first, "fn allowed", "a/x.mjs uses a's unsafe key");
+    expectIncludes(second ?? "", "read PermissionDenied", "c/l.mjs gets no grants from a");
+    expectExcludes(second ?? "", "fn allowed", "c/l.mjs gets no unsafe keys from a");
     // An explicit --config governs every input.
     const explicit = run(RUNNER, ["-P", `--config=${join(tmp, "a", "goccia.json")}`, join("c", "l.mjs")], { cwd: tmp });
     expectIncludes(explicit.stdout, "read OUTSIDE", "explicit --config governs every input");
@@ -814,16 +875,14 @@ console.log("A file with its own config inherits no unsafe-* keys or grants from
     ].join("\n");
     for (const file of [join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs")])
       writeFileSync(join(tmp, file), probe);
-    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const result = run(RUNNER, ["-P", join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs"), ...args], { cwd: tmp });
-      const probes = result.stdout.split("\n").filter((line) => line.startsWith("probe "));
-      if (probes.length !== 3) throw new Error(`three probes expected: ${result.combined}`);
-      if (probes[0] !== "probe on function object")
-        throw new Error(`a/x.mjs should use a's config: ${probes[0]}`);
-      for (const [index, name] of [[1, "c/x.mjs"], [2, "a/sub/x.mjs"]] as const)
-        if (probes[index] !== "probe off undefined undefined")
-          throw new Error(`${name} has its own config and must inherit nothing from a/goccia.json (${args.join(" ")}): ${probes[index]}`);
-    }
+    const result = run(RUNNER, ["-P", join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs")], { cwd: tmp });
+    const probes = result.stdout.split("\n").filter((line) => line.startsWith("probe "));
+    if (probes.length !== 3) throw new Error(`three probes expected: ${result.combined}`);
+    if (probes[0] !== "probe on function object")
+      throw new Error(`a/x.mjs should use a's config: ${probes[0]}`);
+    for (const [index, name] of [[1, "c/x.mjs"], [2, "a/sub/x.mjs"]] as const)
+      if (probes[index] !== "probe off undefined undefined")
+        throw new Error(`${name} has its own config and must inherit nothing from a/goccia.json: ${probes[index]}`);
 
     // The benchmark runner resolves the same way.
     writeFileSync(join(tmp, "c", "bench.js"), [
@@ -840,18 +899,16 @@ console.log("A file with its own config inherits no unsafe-* keys or grants from
       "",
     ].join("\n"));
     writeFileSync(join(tmp, "a", "bench.js"), 'import("goccia:microbench").then(({ bench, group }) => { group("a", () => { bench("a", () => 1); }); });\n');
-    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const bench = Bun.spawnSync([resolve(BENCHRUNNER), "-P", join("a", "bench.js"), join("c", "bench.js"), "--no-progress", ...args], {
-        cwd: tmp,
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "20", GOCCIA_BENCH_ROUNDS: "1" } as Record<string, string>,
-        timeout: 60_000,
-      });
-      const text = bench.stdout.toString() + bench.stderr.toString();
-      if (bench.exitCode !== 0 || text.includes("LEAKED"))
-        throw new Error(`BenchmarkRunner c/bench.js must inherit nothing from a/goccia.json (${args.join(" ")}): exit ${bench.exitCode}\n${text}`);
-    }
+    const bench = Bun.spawnSync([resolve(BENCHRUNNER), "-P", join("a", "bench.js"), join("c", "bench.js"), "--no-progress"], {
+      cwd: tmp,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "20", GOCCIA_BENCH_ROUNDS: "1" } as Record<string, string>,
+      timeout: 60_000,
+    });
+    const text = bench.stdout.toString() + bench.stderr.toString();
+    if (bench.exitCode !== 0 || text.includes("LEAKED"))
+      throw new Error(`BenchmarkRunner c/bench.js must inherit nothing from a/goccia.json: exit ${bench.exitCode}\n${text}`);
   } finally {
     clean(tmp);
   }
@@ -1504,12 +1561,10 @@ console.log("Globals and host-environment modules a config names are guest reads
       "",
     ].join("\n"));
     writeFileSync(join(project, "goccia.json"), '{"globals": ["./gl.js"]}\n');
-    for (const mode of ["interpreted", "bytecode"]) {
-      const refused = run(RUNNER, ["main.js", `--mode=${mode}`], { cwd: project });
-      expectExit(refused, 1, `config globals module importing outside the project (${mode})`);
-      expectIncludes(refused.combined, `PermissionDenied: read: ${secret}`, `config globals module importing outside the project (${mode})`);
-      expectExcludes(refused.combined, "OUTSIDE-SECRET", `config globals module importing outside the project (${mode})`);
-    }
+    const refused = run(RUNNER, ["main.js"], { cwd: project });
+    expectExit(refused, 1, "config globals module importing outside the project");
+    expectIncludes(refused.combined, `PermissionDenied: read: ${secret}`, "config globals module importing outside the project");
+    expectExcludes(refused.combined, "OUTSIDE-SECRET", "config globals module importing outside the project");
     expectIncludes(run(RUNNER, ["main.js", readGrant], { cwd: project }).stdout, "GLOBAL OUTSIDE-SECRET", "config globals module with a read grant");
     const suite = join(project, "leak.test.js");
     writeFileSync(suite, 'test("leak", () => { expect(typeof stolen).toBe("undefined"); });\n');
@@ -1922,11 +1977,9 @@ console.log("Provider imports: import scopes, the lockfile, the cache, and --cac
     expectIncludes(refused.combined, "--allow-import=github:frostney/raylib (or github:frostney, or github)", "provider import suggestion");
 
     for (const scope of ["github", "github:frostney", "github:Frostney/Raylib"]) {
-      for (const mode of ["interpreted", "bytecode"]) {
-        const granted = run(RUNNER, [`--allow-import=${scope}`, `--mode=${mode}`, app]);
-        expectExit(granted, 0, `--allow-import=${scope} (${mode})`);
-        expectIncludes(granted.stdout, "pkg:detail", `--allow-import=${scope} (${mode})`);
-      }
+      const granted = run(RUNNER, [`--allow-import=${scope}`, app]);
+      expectExit(granted, 0, `--allow-import=${scope}`);
+      expectIncludes(granted.stdout, "pkg:detail", `--allow-import=${scope}`);
     }
 
     const other = run(RUNNER, ["--allow-import=github:someone", app]);
@@ -1970,7 +2023,7 @@ console.log("Provider imports: import scopes, the lockfile, the cache, and --cac
     expectIncludes(tampered.combined, `${KEY}: the cached bindings/lib/detail.ts does not match its pin, and --cached-only refuses the network`, "--cached-only with a tampered cache");
     expectExcludes(tampered.stdout, "evil", "--cached-only with a tampered cache");
     rmSync(detail);
-    const missing = run(RUNNER, ["--allow-import=github", "--cached-only", "--mode=bytecode", app]);
+    const missing = run(RUNNER, ["--allow-import=github", "--cached-only", app]);
     expectExit(missing, 1, "--cached-only with a missing file");
     expectIncludes(missing.combined, `${KEY} is not cached (bindings/lib/detail.ts), and --cached-only refuses the network`, "--cached-only with a missing file");
     rmSync(join(project, ".goccia"), { recursive: true });

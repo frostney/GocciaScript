@@ -48,7 +48,6 @@ type
   private
     FContext: TGocciaSandboxContext;
     FInputs: TSandboxHostInputs;
-    FBytecode: Boolean;
     FTimeoutMilliseconds: Integer;
     FMaxInstructions: Int64;
     FImportMapPath: string;
@@ -95,9 +94,6 @@ type
 
     property Context: TGocciaSandboxContext read FContext;
     property Inputs: TSandboxHostInputs read FInputs;
-    { Runs guest scripts in the bytecode VM; True unless the host turns it off
-      for interpreted mode. }
-    property Bytecode: Boolean read FBytecode write FBytecode;
     property TimeoutMilliseconds: Integer read FTimeoutMilliseconds
       write FTimeoutMilliseconds;
     property MaxInstructions: Int64 read FMaxInstructions
@@ -123,7 +119,6 @@ uses
   Goccia.Error.Detail,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
@@ -330,7 +325,6 @@ begin
   FInputs := TSandboxHostInputs.Create(FContext.Fs);
   FAliases := TStringList.Create;
   FRootCapabilities := TGocciaCapabilities.None;
-  FBytecode := True;
 end;
 
 destructor TGocciaSandboxHost.Destroy;
@@ -500,14 +494,9 @@ begin
       else
         EngineCapabilities := FRootCapabilities;
 
-      if FBytecode then
-      begin
-        BytecodeExecutor := TGocciaBytecodeExecutor.Create;
-        BytecodeExecutor.GlobalBackedTopLevel := True;
-        Executor := BytecodeExecutor;
-      end
-      else
-        Executor := TGocciaInterpreterExecutor.Create;
+      BytecodeExecutor := TGocciaBytecodeExecutor.Create;
+      BytecodeExecutor.GlobalBackedTopLevel := True;
+      Executor := BytecodeExecutor;
 
       Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor,
         EngineCapabilities);

@@ -44,7 +44,7 @@ Use `spec.search` when you do not know the clause id, `clause.get` when you do, 
 ## Quick checks
 
 ```bash
-./build.pas testrunner && ./build/GocciaTestRunner -P tests && ./build/GocciaTestRunner -P tests --mode=bytecode  # after substantive changes
+./build.pas testrunner && ./build/GocciaTestRunner -P tests  # after substantive changes
 ./build.pas bundler && ./build/GocciaBundler example.js  # build and run the bundler
 ./format.pas --check # before push / PR
 ```

@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Two execution modes** — bytecode VM (default) and tree-walk interpreter (`--mode=interpreted`), sharing the same source pipeline, runtime objects, and GC
+- **The CLI's only execution mode** — every entry point runs the bytecode VM; the tree-walk interpreter executor, which shares the same source pipeline, runtime objects, and GC, remains only for embedders until it is removed
 - **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; a module's top-level function declarations are compiled closures, created from their templates while the module is linked
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic arithmetic/bitwise and class helpers (128-145, with 146-166 unused), and semantic/helper instructions from 167 up: module and async orchestration plus later additions, including fused superinstructions
@@ -473,8 +473,8 @@ opcodes must stay below it.
 
 ## Current Status
 
-- Every entry point runs the Goccia VM by default; `--mode=interpreted` selects the tree-walk interpreter until it is removed.
-- The full JavaScript suite passes in bytecode mode.
+- Every entry point runs the Goccia VM; GocciaScript 0.15.0 removed `--mode` and the `"mode"` config key ([Build System — Execution Mode](build-system.md#execution-mode)).
+- The full JavaScript suite passes.
 - The old generic VM/runtime bridge has been removed from the active build.
 
 ## Design Rationale

@@ -174,7 +174,6 @@ combined diff:
 ./format.pas --check
 ./build.pas testrunner
 ./build/GocciaTestRunner -P tests
-./build/GocciaTestRunner -P tests --mode=bytecode
 ./build.pas --prod runner
 ```
 

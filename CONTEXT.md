@@ -217,7 +217,7 @@ A command-line program that hosts the engine or runtime for a specific workflow.
 _Avoid_: CLI frontend, source pipeline.
 
 **CLI option**:
-A named command-line control such as `--mode=bytecode`, `--output=json`, or `--print`. Use it as the umbrella term for named CLI controls, whether they take a value or not.
+A named command-line control such as `--source-type=module`, `--output=json`, or `--print`. Use it as the umbrella term for named CLI controls, whether they take a value or not.
 _Avoid_: CLI flag when the option takes a value.
 
 **CLI flag**:
@@ -559,7 +559,7 @@ Use **Runtime** for the host integration layer. Use **runtime value**, **runtime
 Use **execution mode** for the user-visible selection. Use **executor** for the implementation object that makes the mode work.
 
 **Option vs flag**:
-Use **CLI option** as the umbrella term. Use **CLI flag** only for boolean options; call value-taking controls such as `--mode=bytecode`, `--output=json`, and `--timeout=1000` options.
+Use **CLI option** as the umbrella term. Use **CLI flag** only for boolean options; call value-taking controls such as `--source-type=module`, `--output=json`, and `--timeout=1000` options.
 
 **Config key vs config value**:
 Use **config key** for the field name in a config file. Use **config value** for the assigned value and the selected setting it configures.
@@ -593,11 +593,11 @@ Domain expert: No. `fetch` is a runtime global installed by a runtime extension,
 Dev: Is this an executor bug?
 Domain expert: It depends. If interpreter mode and bytecode mode disagree, it is probably an executor issue. If both execution modes agree but the language behavior is wrong, it is an engine semantics issue.
 
-Dev: Is `--mode=bytecode` a flag?
+Dev: Is `--source-type=module` a flag?
 Domain expert: No. It is a CLI option because it takes a value. `--print` is a CLI flag because it is boolean.
 
-Dev: Is `"mode"` a config option?
-Domain expert: Call `"mode"` the config key. Call `"bytecode"` the config value.
+Dev: Is `"source-type"` a config option?
+Domain expert: Call `"source-type"` the config key. Call `"module"` the config value.
 
 Dev: Should this JSON envelope say entry files?
 Domain expert: If it reports every file a batch run processed, say input files. Use entry file only for the initial program path.

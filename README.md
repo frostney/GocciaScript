@@ -93,7 +93,7 @@ GocciaScript implements the official
 its types-as-comments runtime model. Supported annotations have no runtime
 effect by default. GocciaScript additionally provides the optional
 `--strict-types` extension, which enforces supported annotations and relevant
-inferred primitive contracts at runtime in interpreter and bytecode modes.
+inferred primitive contracts at runtime.
 
 `--strict-types` is a runtime contract extension, not a replacement for a static
 structural type checker such as `tsc`. See
@@ -217,14 +217,13 @@ printf "const x = 2 + 2; x;" | ./build/GocciaRunner --print
 By default, the runner is silent about the script's last evaluated value.
 Pass `--print` to emit it; use `--output=json` for programmatic consumers. See
 [Build System](docs/build-system.md#compile-and-run) for runner options,
-bytecode mode, JSON output, sandbox execution, import maps, config files, and
+JSON output, sandbox execution, import maps, config files, and
 resource limits.
 
 ### Run via Bytecode
 
-Scripts, tests, benchmarks, and the REPL run in the bytecode VM by default
-(`--mode=interpreted` selects the tree-walk interpreter until it is removed), and
-`GocciaBundler` compiles source to the public `.gbc` artifact.
+Scripts, tests, benchmarks, and the REPL run in the bytecode VM, the only
+execution mode, and `GocciaBundler` compiles source to the public `.gbc` artifact.
 
 ```bash
 ./build/GocciaRunner example.js
@@ -236,7 +235,7 @@ See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor archite
 
 ### Reproduce An Execution
 
-Use one fixed JavaScript-visible clock, UTC time zone, and portable random stream in either execution mode:
+Use one fixed JavaScript-visible clock, UTC time zone, and portable random stream:
 
 ```bash
 ./build/GocciaRunner example.js --deterministic
@@ -263,7 +262,6 @@ the run with `-P` (or trust the suite once per checkout with
 ```bash
 ./build.pas testrunner
 ./build/GocciaTestRunner -P tests
-./build/GocciaTestRunner -P tests --mode=bytecode
 ```
 
 The test runner supports Vitest-compatible external and inline snapshots,

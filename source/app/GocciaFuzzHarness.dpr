@@ -1,9 +1,9 @@
 program GocciaFuzzHarness;
 
-{ Coverage-blind crash harness for the lexer, parser, and both executors.
+{ Coverage-blind crash harness for the lexer, parser, compiler, and VM.
 
   Reads one source input from a file argument or stdin, then drives it
-  through lex -> parse -> interpreter -> bytecode under tight instruction,
+  through lex -> parse -> compile -> bytecode VM under tight instruction,
   timeout, memory, and stack bounds. The bounds exist so that a merely slow
   or merely large input is not reported as a crash: the harness treats every
   engine-defined limit and every JavaScript-level throw as a NORMAL outcome
@@ -39,7 +39,6 @@ uses
   Goccia.Error,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
@@ -52,6 +51,7 @@ uses
 
 const
   FUZZ_PROGRAM_NAME = 'GocciaFuzzHarness';
+  FUZZ_EXECUTOR_NAME = 'bytecode';
 
   { Bounds are deliberately tight. A fuzzer generates far more slow inputs
     than interesting ones, and every second spent on a runaway loop is a
@@ -100,8 +100,6 @@ type
     foInputRejected,
     foUnexpected
   );
-
-  TFuzzMode = (fmInterpreted, fmBytecode);
 
   { Raised instead of loading a module. Typed so the outcome ladder can tell
     "this input imported something" apart from a genuine stream fault. }
@@ -163,24 +161,15 @@ begin
   end;
 end;
 
-function ModeName(const AMode: TFuzzMode): string;
-begin
-  if AMode = fmInterpreted then
-    Result := 'interpreter'
-  else
-    Result := 'bytecode';
-end;
-
-procedure Report(const AMode: TFuzzMode; const AOutcome: TFuzzOutcome;
-  const ADetail: string);
+procedure Report(const AOutcome: TFuzzOutcome; const ADetail: string);
 begin
   if not GVerbose then
     Exit;
   if ADetail = '' then
-    WriteLn(ErrOutput, Format('[%s] %s', [ModeName(AMode),
+    WriteLn(ErrOutput, Format('[%s] %s', [FUZZ_EXECUTOR_NAME,
       OutcomeName(AOutcome)]))
   else
-    WriteLn(ErrOutput, Format('[%s] %s: %s', [ModeName(AMode),
+    WriteLn(ErrOutput, Format('[%s] %s: %s', [FUZZ_EXECUTOR_NAME,
       OutcomeName(AOutcome), ADetail]));
 end;
 
@@ -197,21 +186,13 @@ begin
     Result := Result + BackTraceStrFunc(Frames[I]) + LineEnding;
 end;
 
-function CreateExecutorForMode(const AMode: TFuzzMode): TGocciaExecutor;
-begin
-  if AMode = fmInterpreted then
-    Result := TGocciaInterpreterExecutor.Create
-  else
-    Result := TGocciaBytecodeExecutor.Create;
-end;
-
-{ Runs one source through one executor and classifies the outcome.
+{ Runs one source through the bytecode executor and classifies the outcome.
 
   The except ladder is the whole point of this harness, so it is exhaustive
   by construction: every engine-defined error type is named explicitly and
   the bare `on E: Exception` fallback is what a genuine finding looks like.
   Do not add a blanket handler above the specific ones. }
-function RunOnce(const ASource: TStringList; const AMode: TFuzzMode;
+function RunOnce(const ASource: TStringList;
   out ADetail: string): TFuzzOutcome;
 var
   Engine: TGocciaEngine;
@@ -223,7 +204,7 @@ begin
   StartInstructionLimit(FUZZ_MAX_INSTRUCTIONS);
   SetMaxStackDepth(FUZZ_STACK_DEPTH);
   try
-    Executor := CreateExecutorForMode(AMode);
+    Executor := TGocciaBytecodeExecutor.Create;
     try
       Engine := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, ASource, Executor);
       try
@@ -443,7 +424,6 @@ var
   I: Integer;
   Arg, FileName, Detail, Trace: string;
   Source: TStringList;
-  Mode: TFuzzMode;
   Outcome: TFuzzOutcome;
   Failed, SelfTestFault: Boolean;
 begin
@@ -481,7 +461,7 @@ begin
       begin
         WriteLn(ErrOutput, Format(
           '%s: unexpected fault in %s executor: %s: %s',
-          [FUZZ_PROGRAM_NAME, ModeName(fmInterpreted), E.ClassName,
+          [FUZZ_PROGRAM_NAME, FUZZ_EXECUTOR_NAME, E.ClassName,
            E.Message]));
         WriteLn(ErrOutput, BackTraceStrFunc(ExceptAddr) + LineEnding +
           CaptureBackTrace);
@@ -498,41 +478,38 @@ begin
 
   if not ReadInput(FileName, Source, Detail) then
   begin
-    Report(fmInterpreted, foInputRejected, Detail);
+    Report(foInputRejected, Detail);
     Halt(EXIT_OK);
   end;
 
   try
-    for Mode := Low(TFuzzMode) to High(TFuzzMode) do
-    begin
-      try
-        Outcome := RunOnce(Source, Mode, Detail);
-      except
-        { The finding path. Anything that escapes RunOnce's typed ladder is
-          by definition not an outcome the engine models. Keep the message
-          on stderr and the reproduction in the fuzzer's crash directory.
-          The backtrace is captured here, at the raise site, because the
-          handler below unwinds past it. Dev builds compile with -gl/-gw so
-          the frames carry file and line. }
-        on E: Exception do
-        begin
-          Outcome := foUnexpected;
-          Detail := E.ClassName + ': ' + E.Message;
-          Trace := BackTraceStrFunc(ExceptAddr) + LineEnding +
-            CaptureBackTrace;
-        end;
-      end;
-
-      if Outcome = foUnexpected then
+    try
+      Outcome := RunOnce(Source, Detail);
+    except
+      { The finding path. Anything that escapes RunOnce's typed ladder is
+        by definition not an outcome the engine models. Keep the message
+        on stderr and the reproduction in the fuzzer's crash directory.
+        The backtrace is captured here, at the raise site, because the
+        handler below unwinds past it. Dev builds compile with -gl/-gw so
+        the frames carry file and line. }
+      on E: Exception do
       begin
-        WriteLn(ErrOutput, Format('%s: unexpected fault in %s executor: %s',
-          [FUZZ_PROGRAM_NAME, ModeName(Mode), Detail]));
-        WriteLn(ErrOutput, Trace);
-        Failed := True;
-      end
-      else
-        Report(Mode, Outcome, Detail);
+        Outcome := foUnexpected;
+        Detail := E.ClassName + ': ' + E.Message;
+        Trace := BackTraceStrFunc(ExceptAddr) + LineEnding +
+          CaptureBackTrace;
+      end;
     end;
+
+    if Outcome = foUnexpected then
+    begin
+      WriteLn(ErrOutput, Format('%s: unexpected fault in %s executor: %s',
+        [FUZZ_PROGRAM_NAME, FUZZ_EXECUTOR_NAME, Detail]));
+      WriteLn(ErrOutput, Trace);
+      Failed := True;
+    end
+    else
+      Report(Outcome, Detail);
   finally
     Source.Free;
   end;
