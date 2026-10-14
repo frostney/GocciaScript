@@ -160,12 +160,16 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue;
 
+// Descriptors are created on every property definition. Their constructors
+// cannot raise, so they need no implicit exception frame.
+{$IMPLICITEXCEPTIONS OFF}
 constructor TGocciaPropertyDescriptor.Create(const AFlags: TPropertyFlags;
   const AFields: TPropertyDescriptorFields);
 begin
   FFlags := AFlags;
   FFields := AFields;
 end;
+{$IMPLICITEXCEPTIONS ON}
 
 function TGocciaPropertyDescriptor.GetEnumerable: Boolean;
 begin
@@ -224,6 +228,7 @@ begin
   // nothing to root. Subclasses override to push what they hold.
 end;
 
+{$IMPLICITEXCEPTIONS OFF}
 constructor TGocciaPropertyDescriptorData.Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 begin
   inherited Create(AFlags,
@@ -238,6 +243,7 @@ begin
   inherited Create(AFlags, AFields);
   FValue := AValue;
 end;
+{$IMPLICITEXCEPTIONS ON}
 
 procedure TGocciaPropertyDescriptorData.MarkValues;
 begin
