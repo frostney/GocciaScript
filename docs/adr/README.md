@@ -147,3 +147,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0135 — A call and a failed property read are located where V8 locates them](0135-calls-and-property-reads-are-located-where-v8-locates-them.md)
 - [0136 — A module's function declarations are compiled while it is linked, and read its imports by name](0136-module-function-declarations-are-compiled-while-linking.md)
 - [0137 — Bootstrap shims load on first use through the engine's executor, and a bytecode engine builds no interpreter](0137-bootstrap-shims-load-on-first-use-through-the-executor.md)
+- [0141 — The tracked-bytes pressure trigger backs off above a live set that sits inside the reserve](0141-tracked-pressure-trigger-backs-off.md)

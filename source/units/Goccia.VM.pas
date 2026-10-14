@@ -8339,9 +8339,10 @@ begin
 end;
 
 // How many more bytes the stacks may take now. Stacks that reached into the
-// pressure reserve would make every pressure check a full collection, each
-// marking every frame, so a deep recursion is refused at the line instead,
-// and the reserve is left for the RangeError and the handler that catches it.
+// pressure reserve would keep the collector running ever more often as the
+// headroom closes, each collection marking every frame, so a deep recursion
+// is refused at the line instead, and the reserve is left for the RangeError
+// and the handler that catches it.
 // Stacks no bigger than the reserve may still use it, up to the ceiling
 // itself, so that a program whose heap fills the ceiling can still make
 // calls.
