@@ -264,6 +264,39 @@ const CATALOG: Probe[] = [
     body: (d) => `report(() => bindChain(${d}, () => 1)());\n`,
   },
   {
+    id: "bind-chain-construct",
+    growth: "linear",
+    summary: "new on a class bound DEPTH times",
+    body: (d) => `report(() => typeof new (bindChain(${d}, class {}))());\n`,
+  },
+  {
+    id: "bind-chain-instanceof",
+    growth: "linear",
+    summary: "instanceof against a class bound DEPTH times (each level reads @@hasInstance)",
+    body: (d) => `report(() => { const C = class {}; return new C() instanceof bindChain(${d}, C); });\n`,
+  },
+  {
+    id: "proxy-bind-alternating-call",
+    growth: "linear",
+    summary: "Call a chain that alternates a Proxy and a bound function DEPTH times (#1497)",
+    body: (d) =>
+      `report(() => { let f = () => 1; for (const _ of Array.from({ length: ${d} })) { f = Function.prototype.bind.call(new Proxy(f, {}), null); } return f(); });\n`,
+  },
+  {
+    id: "proxy-bind-alternating-construct",
+    growth: "linear",
+    summary: "new on a chain that alternates a Proxy and a bound function DEPTH times (#1497)",
+    body: (d) =>
+      `report(() => { let f = class {}; for (const _ of Array.from({ length: ${d} })) { f = Function.prototype.bind.call(new Proxy(f, {}), null); } return typeof new f(); });\n`,
+  },
+  {
+    id: "class-extends-proxy-chain",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH classes that each extend a Proxy of the previous one (#1497)",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = new Proxy(C, {}); C = class extends B {}; } return typeof new C(); });\n`,
+  },
+  {
     id: "class-extends-chain",
     growth: "linear",
     summary: "Construct the most derived of DEPTH chained subclasses",

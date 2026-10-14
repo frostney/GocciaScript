@@ -1796,7 +1796,9 @@ begin
     Args.Add(AElement);
     Args.Add(AIndex);
     Args.Add(AArray);
-    Result := TGocciaFunctionBase(ACallback).Call(Args, AThisArg);
+    // The caller checked IsCallable, which a callable Proxy or a class also
+    // passes; DispatchCall reaches each through its own [[Call]].
+    Result := DispatchCall(ACallback, Args, AThisArg);
   finally
     Args.Free;
     RemoveTempRootIfNeeded(ThisRoot);

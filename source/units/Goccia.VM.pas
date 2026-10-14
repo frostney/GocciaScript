@@ -5612,7 +5612,7 @@ function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AReceiver: TGocciaValue;
   const ANewTarget: TGocciaValue = nil): TGocciaValue;
 var
-  BoundFunction: TGocciaBoundFunctionValue;
+  BoundTarget, BoundThis: TGocciaValue;
   ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
@@ -5650,17 +5650,12 @@ begin
 
   if AConstructor is TGocciaBoundFunctionValue then
   begin
-    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
-    if IsSameValue(BoundFunction, EffectiveNewTarget) then
-      EffectiveNewTarget := BoundFunction.OriginalFunction;
-    CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-      BoundFunction.BoundArgCount + AArguments.Length);
+    // ES2026 §10.4.1.2: a chain of bound functions collapses in a loop.
+    CombinedArgs := CollapseBoundFunctionChain(
+      TGocciaBoundFunctionValue(AConstructor), AArguments,
+      EffectiveNewTarget, BoundTarget, BoundThis);
     try
-      for I := 0 to BoundFunction.BoundArgCount - 1 do
-        CombinedArgs.Add(BoundFunction.GetBoundArg(I));
-      for I := 0 to AArguments.Length - 1 do
-        CombinedArgs.Add(AArguments.GetElement(I));
-      Exit(InvokeConstructableWithReceiver(BoundFunction.OriginalFunction,
+      Exit(InvokeConstructableWithReceiver(BoundTarget,
         CombinedArgs, AReceiver, EffectiveNewTarget));
     finally
       CombinedArgs.Free;
@@ -10543,7 +10538,7 @@ function TGocciaVM.ConstructValue(const AConstructor: TGocciaValue;
 var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundArgs: TGocciaArgumentsCollection;
-  BoundFunction: TGocciaBoundFunctionValue;
+  BoundTarget, BoundThis: TGocciaValue;
   ClassConstructor: TGocciaClassValue;
   ConstructorName: string;
   EvalContext: TGocciaEvaluationContext;
@@ -10638,18 +10633,13 @@ begin
 
   if AConstructor is TGocciaBoundFunctionValue then
   begin
-    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
-    if IsSameValue(BoundFunction, EffectiveNewTarget) then
-      EffectiveNewTarget := BoundFunction.OriginalFunction;
-    BoundArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-      BoundFunction.BoundArgCount + AArguments.Length);
+    // ES2026 §10.4.1.2: a chain of bound functions collapses in a loop, so
+    // only its innermost target is constructed by a native call.
+    BoundArgs := CollapseBoundFunctionChain(
+      TGocciaBoundFunctionValue(AConstructor), AArguments,
+      EffectiveNewTarget, BoundTarget, BoundThis);
     try
-      for I := 0 to BoundFunction.BoundArgCount - 1 do
-        BoundArgs.Add(BoundFunction.GetBoundArg(I));
-      for I := 0 to AArguments.Length - 1 do
-        BoundArgs.Add(AArguments.GetElement(I));
-      Result := ConstructValue(BoundFunction.OriginalFunction, BoundArgs,
-        EffectiveNewTarget);
+      Result := ConstructValue(BoundTarget, BoundArgs, EffectiveNewTarget);
     finally
       BoundArgs.Free;
     end;
@@ -10977,8 +10967,7 @@ begin
         PrivateBrandToken := BytecodePrivateTokenForKey(AName,
           TGocciaClassValue(ATarget).PrivateBrandToken);
         TGocciaClassValue(ATarget).AddPrivateGetter(
-          BytecodePrivateRuntimeKey(AName, PrivateBrandToken),
-          TGocciaFunctionBase(AGetter));
+          BytecodePrivateRuntimeKey(AName, PrivateBrandToken), AGetter);
       end
     else
       TGocciaClassValue(ATarget).AddStaticGetter(AName, TGocciaFunctionBase(AGetter));
@@ -10998,8 +10987,7 @@ begin
         PrivateBrandToken := BytecodePrivateTokenForKey(AName,
           TGocciaClassValue(ATarget).PrivateBrandToken);
         TGocciaClassValue(ATarget).AddPrivateSetter(
-          BytecodePrivateRuntimeKey(AName, PrivateBrandToken),
-          TGocciaFunctionBase(ASetter));
+          BytecodePrivateRuntimeKey(AName, PrivateBrandToken), ASetter);
       end
     else
       TGocciaClassValue(ATarget).AddStaticSetter(AName, TGocciaFunctionBase(ASetter));
@@ -12556,7 +12544,7 @@ begin
   DecoratorArgs.Add(ClassVal);
   DecoratorArgs.Add(ContextObject);
   try
-    DecoratorResult := TGocciaFunctionBase(ADecoratorFn).Call(
+    DecoratorResult := DispatchCall(ADecoratorFn,
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     ReleaseArguments(DecoratorArgs);
@@ -12999,7 +12987,7 @@ begin
   DecoratorArgs.Add(ElementValue);
   DecoratorArgs.Add(ContextObject);
   try
-    DecoratorResult := TGocciaFunctionBase(ADecoratorFn).Call(
+    DecoratorResult := DispatchCall(ADecoratorFn,
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     ReleaseArguments(DecoratorArgs);
@@ -13026,7 +13014,7 @@ begin
           ThrowTypeError(SErrorGetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsPrivate then
           TGocciaClassValue(ClassVal).AddPrivateGetter(
-            Name, TGocciaFunctionBase(DecoratorResult))
+            Name, DecoratorResult)
         else
           DefineDecoratedGetterProperty(
             IsStatic, ElementName, ElementKey, DecoratorResult);
@@ -13037,7 +13025,7 @@ begin
           ThrowTypeError(SErrorSetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsPrivate then
           TGocciaClassValue(ClassVal).AddPrivateSetter(
-            Name, TGocciaFunctionBase(DecoratorResult))
+            Name, DecoratorResult)
         else
           DefineDecoratedSetterProperty(
             IsStatic, ElementName, ElementKey, DecoratorResult);
@@ -13117,7 +13105,7 @@ begin
   begin
     InitArgs := AcquireArguments;
     try
-      TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
+      DispatchCall(InitializerResults[I], InitArgs, ClassVal);
     finally
       ReleaseArguments(InitArgs);
     end;
@@ -13128,7 +13116,7 @@ begin
   begin
     InitArgs := AcquireArguments;
     try
-      TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
+      DispatchCall(InitializerResults[I], InitArgs, ClassVal);
     finally
       ReleaseArguments(InitArgs);
     end;
@@ -13634,9 +13622,9 @@ begin
       begin
         EmptyArgs := TGocciaArgumentsCollection.Create;
         try
-          Exit(TGocciaClassValue(AObject).GetOwnPrivatePropertyGetter(
-            PrivateName).Call(
-            EmptyArgs, AObject));
+          Exit(DispatchCall(
+            TGocciaClassValue(AObject).GetOwnPrivatePropertyGetter(
+              PrivateName), EmptyArgs, AObject));
         finally
           EmptyArgs.Free;
         end;
@@ -13886,9 +13874,9 @@ begin
       begin
         SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
         try
-          TGocciaClassValue(AObject).GetOwnPrivatePropertySetter(
-            PrivateName).Call(
-            SetterArgs, AObject);
+          DispatchCall(
+            TGocciaClassValue(AObject).GetOwnPrivatePropertySetter(
+              PrivateName), SetterArgs, AObject);
         finally
           SetterArgs.Free;
         end;

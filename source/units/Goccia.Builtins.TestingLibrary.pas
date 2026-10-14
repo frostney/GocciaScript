@@ -4642,7 +4642,8 @@ begin
         try
         try
           HookFailed := False;
-          CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          CallbackResult := DispatchCall(Callback, EmptyArgs,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
 
           if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.AddTempRoot(CallbackResult);
