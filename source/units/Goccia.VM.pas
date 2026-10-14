@@ -2182,8 +2182,9 @@ type
     so a class defined and decorated while another is being decorated has
     its own session. Script never sees it. The register roots it, also
     across a generator's suspension, and a class definition that completes
-    abruptly leaves it for the collector. }
-  TGocciaVMDecoratorSession = class(TGocciaObjectValue)
+    abruptly leaves it for the collector. A bare value rather than an
+    object, so it carries no property storage. }
+  TGocciaVMDecoratorSession = class(TGocciaValue)
   public
     MetadataObject: TGocciaObjectValue;
     // Managed by the garbage collector, not by the session: the
@@ -2199,6 +2200,11 @@ type
     StaticDecoratorInitializersRun: Boolean;
     constructor Create(const AMetadataObject: TGocciaObjectValue);
     procedure MarkReferences; override;
+    function TypeName: string; override;
+    function TypeOf: string; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
   end;
 
   { context.access.get and context.access.has of a decorated private method
@@ -3140,6 +3146,31 @@ begin
   FieldCollector.MarkReferences;
   StaticFieldCollector.MarkReferences;
   ClassCollector.MarkReferences;
+end;
+
+function TGocciaVMDecoratorSession.TypeName: string;
+begin
+  Result := 'decorator session';
+end;
+
+function TGocciaVMDecoratorSession.TypeOf: string;
+begin
+  Result := UNDEFINED_TYPE_NAME;
+end;
+
+function TGocciaVMDecoratorSession.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function TGocciaVMDecoratorSession.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.NaNValue;
+end;
+
+function TGocciaVMDecoratorSession.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('');
 end;
 
 procedure RunStaticDecoratorInitializersForSession(
