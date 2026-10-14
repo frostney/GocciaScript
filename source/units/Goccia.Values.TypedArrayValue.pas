@@ -1541,6 +1541,34 @@ begin
     TGocciaArrayBufferValue(AArray.FBufferValue).Immutable;
 end;
 
+// Copies AByteCount bytes from ASource's data block at ASourceByteIndex to
+// ATarget's data block at ATargetByteIndex as one block. The copy has memmove
+// semantics: when both ranges share a data block the result is as if the
+// source bytes were cloned first, as SetTypedArrayFromTypedArray (ES2026
+// §23.2.3.25.1) clones a source on the target's buffer. Callers have validated
+// detachment and lengths; this repeats one explicit range check against the
+// current data blocks and copies nothing, answering False, when either range
+// falls outside its block, so the caller can fall back to its element-wise
+// path.
+function TryCopyTypedArrayBytes(const ASource: TGocciaTypedArrayValue;
+  const ASourceByteIndex: Integer; const ATarget: TGocciaTypedArrayValue;
+  const ATargetByteIndex, AByteCount: Integer): Boolean;
+begin
+  if AByteCount <= 0 then
+    Exit(True);
+  if IsDetachedTypedArray(ASource) or IsDetachedTypedArray(ATarget) then
+    Exit(False);
+  ASource.SyncBufferData;
+  ATarget.SyncBufferData;
+  if (ASourceByteIndex < 0) or (ATargetByteIndex < 0) or
+     (Int64(ASourceByteIndex) + AByteCount > System.Length(ASource.FBufferData)) or
+     (Int64(ATargetByteIndex) + AByteCount > System.Length(ATarget.FBufferData)) then
+    Exit(False);
+  Move(ASource.FBufferData[ASourceByteIndex],
+    ATarget.FBufferData[ATargetByteIndex], AByteCount);
+  Result := True;
+end;
+
 procedure EnsureTypedArrayAttached(const AArray: TGocciaTypedArrayValue; const AMethod: string);
 begin
   if IsTypedArrayOutOfBounds(AArray) then
@@ -1953,7 +1981,6 @@ var
   TA: TGocciaTypedArrayValue;
   Target, Start, Final, Count, Direction, From, To_, Len, CurrentLen: Integer;
   BPE: Integer;
-  TempBuf: TBytes;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.copyWithin');
   EnsureTypedArrayWritable(TA, 'TypedArray.prototype.copyWithin');
@@ -1984,11 +2011,11 @@ begin
     Exit(AThisValue);
 
   BPE := BytesPerElement(TA.FKind);
-  SetLength(TempBuf, Count * BPE);
   From := TA.FByteOffset + Start * BPE;
   To_ := TA.FByteOffset + Target * BPE;
-  Move(TA.FBufferData[From], TempBuf[0], Count * BPE);
-  Move(TempBuf[0], TA.FBufferData[To_], Count * BPE);
+  // The spec copies backwards when the target overlaps the source from above,
+  // so overlapping ranges behave as a memmove, which one block move is.
+  TryCopyTypedArrayBytes(TA, From, TA, To_, Count * BPE);
 
   Result := AThisValue;
 end;
@@ -2043,9 +2070,24 @@ begin
     CopyBytes := CopyElements * BPE;
     SourceByteIndex := TA.FByteOffset + First * BPE;
     TargetByteIndex := NewTA.FByteOffset;
-    for I := 0 to CopyBytes - 1 do
-      NewTA.FBufferData[TargetByteIndex + I] :=
-        TA.FBufferData[SourceByteIndex + I];
+    // Step 14.g.ix copies the same element type byte by byte in ascending
+    // order. A block move is the same copy unless a species result views the
+    // source's data block at a higher overlapping index, where ascending order
+    // repeats source bytes.
+    TA.SyncBufferData;
+    NewTA.SyncBufferData;
+    if (Pointer(TA.FBufferData) = Pointer(NewTA.FBufferData)) and
+       (TargetByteIndex > SourceByteIndex) and
+       (TargetByteIndex < SourceByteIndex + CopyBytes) then
+    begin
+      for I := 0 to CopyBytes - 1 do
+        NewTA.FBufferData[TargetByteIndex + I] :=
+          TA.FBufferData[SourceByteIndex + I];
+    end
+    else if not TryCopyTypedArrayBytes(TA, SourceByteIndex, NewTA,
+      TargetByteIndex, CopyBytes) then
+      for I := 0 to CopyElements - 1 do
+        NewTA.WriteValueToElement(I, TA.GetElementAsValue(First + I));
   end
   else if IsBigIntKind(TA.FKind) then
   begin
@@ -2150,6 +2192,14 @@ begin
     // ES2026 §23.2.3.25.1 step 1.b: mixed BigInt/Number content types throw
     if IsBigIntKind(TA.FKind) <> IsBigIntKind(SrcTA.FKind) then
       ThrowTypeError(SErrorBigIntTypedArrayRequiresBigInt, SSuggestBigIntTypedArrayValue);
+    // The same element type transfers the bytes unchanged. One block move is
+    // that transfer, and covers the clone of a source sharing the target's
+    // data block, since the move handles overlap.
+    if (SrcTA.FKind = TA.FKind) and
+       TryCopyTypedArrayBytes(SrcTA, SrcTA.FByteOffset, TA,
+         TA.FByteOffset + TargetOffset * TA.FElementSize,
+         SourceLen * TA.FElementSize) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
     if IsBigIntKind(TA.FKind) then
     begin
       SetLength(BigIntSnapshot, SourceLen);
@@ -3319,7 +3369,13 @@ begin
     if TGocciaTypedArrayValue.IsBigIntKind(FKind) <>
        TGocciaTypedArrayValue.IsBigIntKind(SrcTA.Kind) then
       ThrowTypeError(SErrorBigIntTypedArrayCannotMix, SSuggestBigIntTypedArrayValue);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, SrcTA.Length);
+    Len := SrcTA.Length;
+    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+    // InitializeTypedArrayFromTypedArray: the same element type clones the
+    // source bytes (CloneArrayBuffer), which one block move does.
+    if (SrcTA.Kind = FKind) and
+       TryCopyTypedArrayBytes(SrcTA, SrcTA.FByteOffset, NewTA, 0, Len * BPE) then
+      Exit(NewTA);
     if TGocciaTypedArrayValue.IsBigIntKind(FKind) then
     begin
       for I := 0 to SrcTA.Length - 1 do

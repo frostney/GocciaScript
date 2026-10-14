@@ -103,6 +103,37 @@ describe("TypedArray constructors", () => {
       expect(i32[1]).toBe(2);
       expect(i32[2]).toBe(3);
     });
+    test("copy from a same-type view keeps only the view's bytes", () => {
+      const bytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+      const words = new Uint16Array(bytes.buffer, 2, 2);
+      const copy = new Uint16Array(words);
+      expect(copy.byteOffset).toBe(0);
+      expect(copy.buffer).not.toBe(bytes.buffer);
+      expect(Array.from(new Uint8Array(copy.buffer))).toEqual([3, 4, 5, 6]);
+    });
+    test("copy from same type keeps a non-canonical NaN bit pattern", () => {
+      const bytes = [1, 0, 0, 0, 0, 0, 0xf8, 0x7f];
+      const copy = new Float64Array(new Float64Array(new Uint8Array(bytes).buffer));
+      expect(Array.from(new Uint8Array(copy.buffer))).toEqual(bytes);
+    });
+    test.each([BigInt64Array, BigUint64Array])("%s copy from same type", (TA) => {
+      const copy = new TA(new TA([1n, 2n, 3n]));
+      expect(Array.from(copy)).toEqual([1n, 2n, 3n]);
+    });
+    test("copy from a length-tracking view of a resizable buffer", () => {
+      const rab = new ArrayBuffer(4, { maxByteLength: 8 });
+      const src = new Uint8Array(rab);
+      rab.resize(6);
+      src.set([1, 2, 3, 4, 5, 6]);
+      expect(Array.from(new Uint8Array(src))).toEqual([1, 2, 3, 4, 5, 6]);
+    });
+    test("copy from a SharedArrayBuffer view", () => {
+      const shared = new Uint8Array(new SharedArrayBuffer(3));
+      shared.set([7, 8, 9]);
+      const copy = new Uint8Array(shared);
+      expect(copy.buffer instanceof ArrayBuffer).toBe(true);
+      expect(Array.from(copy)).toEqual([7, 8, 9]);
+    });
   });
 
   describe("new TypedArray(buffer [, byteOffset [, length]])", () => {
