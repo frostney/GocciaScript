@@ -14,8 +14,6 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Messages,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.ModuleResolver,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -72,12 +70,11 @@ type
     procedure TestRuntimeRunScriptFromFileLoadsFile;
     procedure TestMalformedUTF8ModuleSurfacesGuestError;
     procedure TestMalformedUTF8ModuleRejectsDynamicImport;
-    procedure CheckFailedEntryRethrowsItsError(const AExecutor: TGocciaExecutor;
-      const ACompileAndRun: Boolean; const ATag: string);
+    procedure CheckFailedEntryRethrowsItsError(const ACompileAndRun: Boolean; const ATag: string);
     procedure TestFailedEntryRethrowsItsErrorExecuteBytecode;
     procedure TestFailedEntryRethrowsItsErrorBytecodeRun;
     procedure CheckEntryModuleImportAfterExecute(
-      const AExecutor: TGocciaExecutor; const ATag: string);
+      const ATag: string);
     procedure TestEntryModuleImportAfterExecuteBytecode;
   public
     procedure SetupTests; override;
@@ -190,55 +187,47 @@ end;
 procedure TRuntimeTests.TestEngineRejectsNilExtension;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   HasExpectedMessage: Boolean;
   RaisedExpected: Boolean;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('<extension-test>', Source);
   try
-    Engine := TGocciaEngine.Create('<extension-test>', Source, Executor);
+    RaisedExpected := False;
+    HasExpectedMessage := False;
     try
-      RaisedExpected := False;
-      HasExpectedMessage := False;
-      try
-        Engine.AddExtension(nil);
-        Fail('Expected nil extension registration to raise an exception.');
-      except
-        on E: Exception do
-        begin
-          RaisedExpected := True;
-          HasExpectedMessage := Pos('extension cannot be nil', E.Message) > 0;
-          if not HasExpectedMessage then
-            Fail('Expected nil extension error message.');
-        end;
+      Engine.AddExtension(nil);
+      Fail('Expected nil extension registration to raise an exception.');
+    except
+      on E: Exception do
+      begin
+        RaisedExpected := True;
+        HasExpectedMessage := Pos('extension cannot be nil', E.Message) > 0;
+        if not HasExpectedMessage then
+          Fail('Expected nil extension error message.');
       end;
-
-      Expect<Boolean>(RaisedExpected).ToBe(True);
-    finally
-      Engine.Free;
-      Source.Free;
     end;
+
+    Expect<Boolean>(RaisedExpected).ToBe(True);
   finally
-    Executor.Free;
+    Engine.Free;
+    Source.Free;
   end;
 end;
 
 procedure TRuntimeTests.TestGlobalModuleProviderUnregisterClearsLoadedModule;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   LoadedModule: TGocciaModule;
   RaisedExpected: Boolean;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   FProvidedGlobalModule := nil;
   try
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
+    Engine := TGocciaEngine.Create('<runtime-test>', Source);
     Engine.RegisterGlobalModuleProvider('virtual:provider',
       CreateProvidedGlobalModule);
 
@@ -268,24 +257,21 @@ begin
     FProvidedGlobalModule := nil;
     Engine.Free;
     Source.Free;
-    Executor.Free;
   end;
 end;
 
 procedure TRuntimeTests.TestGlobalModuleProviderReplacementClearsLoadedModule;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   LoadedModule: TGocciaModule;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   FProvidedGlobalModule := nil;
   FReplacementGlobalModule := nil;
   try
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
+    Engine := TGocciaEngine.Create('<runtime-test>', Source);
     Engine.RegisterGlobalModuleProvider('virtual:provider',
       CreateProvidedGlobalModule);
 
@@ -313,7 +299,6 @@ begin
     FReplacementGlobalModule := nil;
     Engine.Free;
     Source.Free;
-    Executor.Free;
   end;
 end;
 
@@ -321,63 +306,51 @@ procedure TRuntimeTests.TestRuntimeConstructorAcceptsExistingEngine;
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('<runtime-test>', Source);
+  Runtime := nil;
   try
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
-    Runtime := nil;
-    try
-      Runtime := TGocciaRuntime.Create(Engine);
-      Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
-      ConsoleExtension := TGocciaConsoleRuntimeExtension(
-        Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
+    Runtime := TGocciaRuntime.Create(Engine);
+    Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
+    ConsoleExtension := TGocciaConsoleRuntimeExtension(
+      Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
 
-      Expect<Boolean>(Runtime.Engine = Engine).ToBe(True);
-      Expect<Boolean>(Assigned(ConsoleExtension)).ToBe(True);
-      Expect<Boolean>(Assigned(ConsoleExtension.BuiltinConsole)).ToBe(True);
-      Expect<Boolean>(Assigned(
-        Runtime.FindRuntimeExtension(TGocciaJSON5RuntimeExtension))).ToBe(False);
-    finally
-      Runtime.Free;
-      Engine.Free;
-      Source.Free;
-    end;
+    Expect<Boolean>(Runtime.Engine = Engine).ToBe(True);
+    Expect<Boolean>(Assigned(ConsoleExtension)).ToBe(True);
+    Expect<Boolean>(Assigned(ConsoleExtension.BuiltinConsole)).ToBe(True);
+    Expect<Boolean>(Assigned(
+      Runtime.FindRuntimeExtension(TGocciaJSON5RuntimeExtension))).ToBe(False);
   finally
-    Executor.Free;
+    Runtime.Free;
+    Engine.Free;
+    Source.Free;
   end;
 end;
 
 procedure TRuntimeTests.TestRuntimeInstallIsIdempotent;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   FirstExtension: TGocciaRuntimeExtension;
   Runtime: TGocciaRuntime;
   SecondExtension: TGocciaRuntimeExtension;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('<runtime-test>', Source);
+  Runtime := nil;
   try
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
-    Runtime := nil;
-    try
-      Runtime := TGocciaRuntime.Create(Engine);
-      FirstExtension := Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
-      SecondExtension := Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
+    Runtime := TGocciaRuntime.Create(Engine);
+    FirstExtension := Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
+    SecondExtension := Runtime.Install(TGocciaConsoleRuntimeExtension.Create);
 
-      Expect<Boolean>(FirstExtension = SecondExtension).ToBe(True);
-    finally
-      Runtime.Free;
-      Engine.Free;
-      Source.Free;
-    end;
+    Expect<Boolean>(FirstExtension = SecondExtension).ToBe(True);
   finally
-    Executor.Free;
+    Runtime.Free;
+    Engine.Free;
+    Source.Free;
   end;
 end;
 
@@ -385,7 +358,6 @@ procedure TRuntimeTests.TestRuntimeInstallRollsBackResolverExtensions;
 var
   BaselineExtensions: TModuleResolverExtensionArray;
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Extensions: TModuleResolverExtensionArray;
   I: Integer;
   ProbeValue: TGocciaValue;
@@ -395,85 +367,74 @@ var
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('<runtime-test>', Source);
+  Runtime := nil;
   try
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
-    Runtime := nil;
+    Engine.RegisterGlobal(ROLLBACK_PROBE_NAME,
+      TGocciaBooleanLiteralValue.TrueValue);
+    Engine.Resolver.SetExtensions(['.custom']);
+    Runtime := TGocciaRuntime.Create(Engine);
+    BaselineExtensions := Engine.Resolver.GetExtensions;
+
+    RaisedExpectedException := False;
+    RaisedMessage := '';
     try
-      Engine.RegisterGlobal(ROLLBACK_PROBE_NAME,
-        TGocciaBooleanLiteralValue.TrueValue);
-      Engine.Resolver.SetExtensions(['.custom']);
-      Runtime := TGocciaRuntime.Create(Engine);
-      BaselineExtensions := Engine.Resolver.GetExtensions;
-
-      RaisedExpectedException := False;
-      RaisedMessage := '';
-      try
-        Runtime.Install(TRollbackModuleRuntimeExtension.Create);
-      except
-        on E: TGocciaThrowValue do
-        begin
-          RaisedExpectedException := True;
-          if E.Value is TGocciaObjectValue then
-            RaisedMessage := TGocciaObjectValue(E.Value)
-              .GetProperty(PROP_MESSAGE).ToStringLiteral.Value;
-        end;
+      Runtime.Install(TRollbackModuleRuntimeExtension.Create);
+    except
+      on E: TGocciaThrowValue do
+      begin
+        RaisedExpectedException := True;
+        if E.Value is TGocciaObjectValue then
+          RaisedMessage := TGocciaObjectValue(E.Value)
+            .GetProperty(PROP_MESSAGE).ToStringLiteral.Value;
       end;
-      Expect<Boolean>(RaisedExpectedException).ToBe(True);
-      Expect<string>(RaisedMessage).ToBe(Format(
-        SErrorCannotAddPropertyNotExtensible, [ROLLBACK_PROBE_NAME]));
-
-      Extensions := Engine.Resolver.GetExtensions;
-      Expect<Integer>(Length(Extensions)).ToBe(Length(BaselineExtensions));
-      for I := 0 to High(Extensions) do
-        Expect<string>(Extensions[I]).ToBe(BaselineExtensions[I]);
-      Expect<Boolean>(not Assigned(Runtime.FindRuntimeExtension(
-        TRollbackModuleRuntimeExtension))).ToBe(True);
-      ProbeValue := Engine.GlobalScope.GetValue(
-        ROLLBACK_PROBE_NAME);
-      Expect<Boolean>(ProbeValue =
-        TGocciaBooleanLiteralValue.TrueValue).ToBe(True);
-    finally
-      Runtime.Free;
-      Engine.Free;
-      Source.Free;
     end;
+    Expect<Boolean>(RaisedExpectedException).ToBe(True);
+    Expect<string>(RaisedMessage).ToBe(Format(
+      SErrorCannotAddPropertyNotExtensible, [ROLLBACK_PROBE_NAME]));
+
+    Extensions := Engine.Resolver.GetExtensions;
+    Expect<Integer>(Length(Extensions)).ToBe(Length(BaselineExtensions));
+    for I := 0 to High(Extensions) do
+      Expect<string>(Extensions[I]).ToBe(BaselineExtensions[I]);
+    Expect<Boolean>(not Assigned(Runtime.FindRuntimeExtension(
+      TRollbackModuleRuntimeExtension))).ToBe(True);
+    ProbeValue := Engine.GlobalScope.GetValue(
+      ROLLBACK_PROBE_NAME);
+    Expect<Boolean>(ProbeValue =
+      TGocciaBooleanLiteralValue.TrueValue).ToBe(True);
   finally
-    Executor.Free;
+    Runtime.Free;
+    Engine.Free;
+    Source.Free;
   end;
 end;
 
 procedure TRuntimeTests.TestRuntimePreservesResolverExtensions;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Extensions: TModuleResolverExtensionArray;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('<runtime-test>', Source);
+  Runtime := nil;
   try
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, Executor);
-    Runtime := nil;
-    try
-      Engine.Resolver.SetExtensions(['.custom', '.js']);
-      Runtime := TGocciaRuntime.Create(Engine);
-      Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
-      Extensions := Engine.Resolver.GetExtensions;
+    Engine.Resolver.SetExtensions(['.custom', '.js']);
+    Runtime := TGocciaRuntime.Create(Engine);
+    Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
+    Extensions := Engine.Resolver.GetExtensions;
 
-      Expect<Boolean>(Length(Extensions) >= 4).ToBe(True);
-      Expect<string>(Extensions[0]).ToBe('.custom');
-      Expect<string>(Extensions[1]).ToBe('.js');
-      Expect<string>(Extensions[High(Extensions) - 1]).ToBe('.json5');
-      Expect<string>(Extensions[High(Extensions)]).ToBe('.jsonc');
-    finally
-      Runtime.Free;
-      Engine.Free;
-      Source.Free;
-    end;
+    Expect<Boolean>(Length(Extensions) >= 4).ToBe(True);
+    Expect<string>(Extensions[0]).ToBe('.custom');
+    Expect<string>(Extensions[1]).ToBe('.js');
+    Expect<string>(Extensions[High(Extensions) - 1]).ToBe('.json5');
+    Expect<string>(Extensions[High(Extensions)]).ToBe('.jsonc');
   finally
-    Executor.Free;
+    Runtime.Free;
+    Engine.Free;
+    Source.Free;
   end;
 end;
 
@@ -481,7 +442,6 @@ procedure TRuntimeTests.TestRuntimeModuleLoaderFallsBackToPreviousLoader;
 var
   CachedModule: TGocciaModule;
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   LoadedModule: TGocciaModule;
   ModuleLoader: TGocciaModuleLoader;
   Resolver: TCustomRuntimeModuleResolver;
@@ -495,11 +455,10 @@ begin
   Runtime := nil;
   LoadedModule := nil;
   FCustomRuntimeLoaderCalled := False;
-  Executor := TGocciaBytecodeExecutor.Create;
   try
     Resolver := TCustomRuntimeModuleResolver.Create;
     ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>', Resolver);
-    Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader, Executor);
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader);
     Engine.ModuleLoader.RuntimeModuleLoader := LoadCustomRuntimeModule;
     Runtime := TGocciaRuntime.Create(Engine);
     Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
@@ -518,7 +477,6 @@ begin
     ModuleLoader.Free;
     Resolver.Free;
     Source.Free;
-    Executor.Free;
   end;
 end;
 
@@ -543,7 +501,6 @@ const
   BAD_BYTES: array[0..3] of Byte = (Ord('a'), Ord('b'), Ord('c'), $FF);
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   ModuleLoader: TGocciaModuleLoader;
   ContentProvider: TGocciaFileSystemModuleContentProvider;
   Source: TStringList;
@@ -568,7 +525,6 @@ begin
   end;
 
   Source := CreateEmptySource;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   ModuleLoader := nil;
   ContentProvider := nil;
@@ -581,7 +537,7 @@ begin
     { The module lives outside the project, so the engine declares the read
       grant that covers it. }
     Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader,
-      Executor, TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
+      TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
     try
       Engine.ModuleLoader.LoadModule(BadPath, '<runtime-test>');
     except
@@ -606,7 +562,6 @@ begin
     ModuleLoader.Free;
     ContentProvider.Free;
     Source.Free;
-    Executor.Free;
     DeleteFile(BadPath);
   end;
 end;
@@ -616,7 +571,6 @@ const
   BAD_BYTES: array[0..3] of Byte = (Ord('a'), Ord('b'), Ord('c'), $FF);
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   ModuleLoader: TGocciaModuleLoader;
   ContentProvider: TGocciaFileSystemModuleContentProvider;
   Source: TStringList;
@@ -660,7 +614,6 @@ begin
   Source.Add('  },');
   Source.Add(');');
 
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   ModuleLoader := nil;
   ContentProvider := nil;
@@ -671,7 +624,7 @@ begin
     { A computed dynamic import of a file outside the project needs a read
       grant covering it. }
     Engine := TGocciaEngine.Create('<runtime-test>.mjs', Source, ModuleLoader,
-      Executor, TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
+      TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
 
     Engine.RegisterGlobal('__BAD_PATH',
       TGocciaStringLiteralValue.Create(BadPath));
@@ -702,7 +655,6 @@ begin
     ModuleLoader.Free;
     ContentProvider.Free;
     Source.Free;
-    Executor.Free;
     DeleteFile(BadPath);
   end;
 end;
@@ -713,7 +665,7 @@ end;
   entry is registered as a module, so the host's import of its own path after
   a failed run must do the same. }
 procedure TRuntimeTests.CheckFailedEntryRethrowsItsError(
-  const AExecutor: TGocciaExecutor; const ACompileAndRun: Boolean;
+  const ACompileAndRun: Boolean;
   const ATag: string);
 var
   Engine: TGocciaEngine;
@@ -734,12 +686,11 @@ begin
   WriteUTF8FileText(EntryPath, Source.Text);
   Engine := nil;
   try
-    Engine := TGocciaEngine.Create(EntryPath, Source, AExecutor,
+    Engine := TGocciaEngine.Create(EntryPath, Source,
       TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
     { The host filesystem provider, which knows the file's age. }
     AttachRuntime(Engine);
-    if AExecutor is TGocciaBytecodeExecutor then
-      TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel := False;
+    Engine.GlobalBackedTopLevel := False;
 
     EntryError := nil;
     try
@@ -778,7 +729,6 @@ begin
       .ToBe(1);
   finally
     Engine.Free;
-    AExecutor.Free;
     Source.Free;
     DeleteFile(EntryPath);
   end;
@@ -786,13 +736,13 @@ end;
 
 procedure TRuntimeTests.TestFailedEntryRethrowsItsErrorExecuteBytecode;
 begin
-  CheckFailedEntryRethrowsItsError(TGocciaBytecodeExecutor.Create, False,
+  CheckFailedEntryRethrowsItsError(False,
     'execute-bytecode');
 end;
 
 procedure TRuntimeTests.TestFailedEntryRethrowsItsErrorBytecodeRun;
 begin
-  CheckFailedEntryRethrowsItsError(TGocciaBytecodeExecutor.Create, True,
+  CheckFailedEntryRethrowsItsError(True,
     'bytecode-run');
 end;
 
@@ -802,7 +752,7 @@ end;
   changed file and run its body again. A second run once wrote its exports
   into the finished run's module scope and crashed. }
 procedure TRuntimeTests.CheckEntryModuleImportAfterExecute(
-  const AExecutor: TGocciaExecutor; const ATag: string);
+  const ATag: string);
 var
   Engine: TGocciaEngine;
   EntryPath: string;
@@ -819,12 +769,11 @@ begin
   WriteUTF8FileText(EntryPath, Source.Text);
   Engine := nil;
   try
-    Engine := TGocciaEngine.Create(EntryPath, Source, AExecutor,
+    Engine := TGocciaEngine.Create(EntryPath, Source,
       TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
     { The host filesystem provider, which knows the file's age. }
     AttachRuntime(Engine);
-    if AExecutor is TGocciaBytecodeExecutor then
-      TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel := False;
+    Engine.GlobalBackedTopLevel := False;
     Engine.Execute;
 
     Module := Engine.ModuleLoader.LoadModule(EntryPath, EntryPath);
@@ -835,7 +784,6 @@ begin
       .ToBe(1);
   finally
     Engine.Free;
-    AExecutor.Free;
     Source.Free;
     DeleteFile(EntryPath);
   end;
@@ -843,8 +791,7 @@ end;
 
 procedure TRuntimeTests.TestEntryModuleImportAfterExecuteBytecode;
 begin
-  CheckEntryModuleImportAfterExecute(TGocciaBytecodeExecutor.Create,
-    'bytecode');
+  CheckEntryModuleImportAfterExecute('bytecode');
 end;
 
 begin

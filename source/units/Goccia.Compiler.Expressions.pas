@@ -7111,7 +7111,7 @@ end;
 
 // ES2026 §16.2.1.7.3.1 InitializeEnvironment, step for a function declaration
 // of a module the loader links: InstantiateFunctionObject runs before the
-// module body, so the declaration compiles to a template that the executor
+// module body, so the declaration compiles to a template that the engine
 // instantiates while linking (TGocciaFunctionTemplate.ModuleEnvironmentBinding)
 // rather than to an OP_CLOSURE of the module body.
 function CompileModuleFunctionDeclarationTemplate(

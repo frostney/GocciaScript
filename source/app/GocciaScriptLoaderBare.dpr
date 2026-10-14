@@ -20,8 +20,6 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
@@ -387,7 +385,7 @@ begin
 end;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions);
+  const AOptions: TBareOptions);
 begin
   if AOptions.Deterministic then
     AEngine.HostEnvironment.UseDeterministicProfile;
@@ -402,9 +400,7 @@ begin
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
   if AOptions.UnsafeShadowRealm then
     EnableShadowRealm(AEngine);
-  if AExecutor is TGocciaBytecodeExecutor then
-    TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
-      AOptions.SourceType = stScript;
+  AEngine.GlobalBackedTopLevel := AOptions.SourceType = stScript;
 end;
 
 procedure RegisterBareGlobals(const AEngine: TGocciaEngine;
@@ -426,7 +422,6 @@ function RunBare(const AOptions: TBareOptions): Integer;
 var
   DisplayName: string;
   Engine: TGocciaEngine;
-  Executor: TGocciaExecutor;
   GC: TGarbageCollector;
   PrintHost: TBarePrintHost;
   ScriptResult: TGocciaScriptResult;
@@ -448,41 +443,36 @@ begin
     SetMaxStackDepth(AOptions.StackSize);
     PrintHost := TBarePrintHost.Create;
     try
-      Executor := TGocciaBytecodeExecutor.Create;
+      Engine := TGocciaEngine.Create(DisplayName, Source);
       try
-        Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
+        ConfigureEngine(Engine, AOptions);
+        GC := TGarbageCollector.Instance;
+        if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
+          GC.MaxBytes := AOptions.MaxMemoryBytes;
+        RegisterBareGlobals(Engine, PrintHost);
         try
-          ConfigureEngine(Engine, Executor, AOptions);
-          GC := TGarbageCollector.Instance;
-          if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
-            GC.MaxBytes := AOptions.MaxMemoryBytes;
-          RegisterBareGlobals(Engine, PrintHost);
-          try
-            ScriptResult := Engine.Execute;
-            PrintResult(ScriptResult.Result, AOptions.Print);
-          except
-            on E: EGocciaBytecodeThrow do
-            begin
-              WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
-                DisplayName, Source, IsColorTerminal,
-                Engine.ModuleLoader.DiagnosticScope.Principal,
-                E.Suggestion));
-              Result := 1;
-            end;
-            on E: TGocciaThrowValue do
-            begin
-              WriteLn(ErrOutput, FormatThrowDetail(E.Value, DisplayName,
-                Source, IsColorTerminal,
-                Engine.ModuleLoader.DiagnosticScope.Principal,
-                E.Suggestion));
-              Result := 1;
-            end;
+          ScriptResult := Engine.Execute;
+          PrintResult(ScriptResult.Result, AOptions.Print);
+        except
+          on E: EGocciaBytecodeThrow do
+          begin
+            WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
+              DisplayName, Source, IsColorTerminal,
+              Engine.ModuleLoader.DiagnosticScope.Principal,
+              E.Suggestion));
+            Result := 1;
           end;
-        finally
-          Engine.Free;
+          on E: TGocciaThrowValue do
+          begin
+            WriteLn(ErrOutput, FormatThrowDetail(E.Value, DisplayName,
+              Source, IsColorTerminal,
+              Engine.ModuleLoader.DiagnosticScope.Principal,
+              E.Suggestion));
+            Result := 1;
+          end;
         end;
       finally
-        Executor.Free;
+        Engine.Free;
       end;
     finally
       PrintHost.Free;

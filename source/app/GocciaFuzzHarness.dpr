@@ -37,8 +37,6 @@ uses
   Goccia.CLI.Stdin,
   Goccia.Engine,
   Goccia.Error,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
@@ -186,7 +184,7 @@ begin
     Result := Result + BackTraceStrFunc(Frames[I]) + LineEnding;
 end;
 
-{ Runs one source through the bytecode executor and classifies the outcome.
+{ Runs one source on an engine of its own and classifies the outcome.
 
   The except ladder is the whole point of this harness, so it is exhaustive
   by construction: every engine-defined error type is named explicitly and
@@ -196,7 +194,6 @@ function RunOnce(const ASource: TStringList;
   out ADetail: string): TFuzzOutcome;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaExecutor;
   GC: TGarbageCollector;
 begin
   ADetail := '';
@@ -204,82 +201,77 @@ begin
   StartInstructionLimit(FUZZ_MAX_INSTRUCTIONS);
   SetMaxStackDepth(FUZZ_STACK_DEPTH);
   try
-    Executor := TGocciaBytecodeExecutor.Create;
+    Engine := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, ASource);
     try
-      Engine := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, ASource, Executor);
-      try
-        { Widen the accepted grammar as far as the engine allows. The default
-          dialect rejects `var`, `while`, traditional `for`, labels, and more,
-          which would wall the fuzzer off from most of the parser. Compatibility
-          must be assigned after Create — the source pipeline runs at Execute,
-          which is also why syntax errors are classified by type below rather
-          than by which call raised them. }
-        Engine.Compatibility := FUZZ_COMPATIBILITY;
-        Engine.LabelStatementsEnabled := True;
-        Engine.ForInLoopsEnabled := True;
-        Engine.ModuleLoader.SetContentProvider(
-          TFuzzDeniedModuleContentProvider.Create, True);
+      { Widen the accepted grammar as far as the engine allows. The default
+        dialect rejects `var`, `while`, traditional `for`, labels, and more,
+        which would wall the fuzzer off from most of the parser. Compatibility
+        must be assigned after Create — the source pipeline runs at Execute,
+        which is also why syntax errors are classified by type below rather
+        than by which call raised them. }
+      Engine.Compatibility := FUZZ_COMPATIBILITY;
+      Engine.LabelStatementsEnabled := True;
+      Engine.ForInLoopsEnabled := True;
+      Engine.ModuleLoader.SetContentProvider(
+        TFuzzDeniedModuleContentProvider.Create, True);
 
-        GC := TGarbageCollector.Instance;
-        if Assigned(GC) then
-          GC.MaxBytes := FUZZ_MAX_MEMORY_BYTES;
-        try
-          Engine.Execute;
-          Result := foCompleted;
-        except
-          on E: EGocciaBytecodeThrow do
-          begin
-            Result := foScriptThrow;
-            ADetail := 'bytecode throw';
-          end;
-          on E: TGocciaThrowValue do
-          begin
-            Result := foScriptThrow;
-            ADetail := E.Message;
-          end;
-          on E: TGocciaMemoryLimitError do
-          begin
-            { The 256 MB budget is a bounded, engine-modelled outcome, not a
-              finding. TGocciaMemoryLimitError is an RTL type the input cannot
-              catch (uncatchable from script by design), so the host owns this
-              distinction here at its top-level boundary. Without this branch it
-              would escape the ladder and be misreported as an unexpected fault. }
-            Result := foMemoryLimit;
-            ADetail := E.Message;
-          end;
-          on E: TGocciaInstructionLimitError do
-          begin
-            Result := foInstructionLimit;
-            ADetail := E.Message;
-          end;
-          on E: TGocciaTimeoutError do
-          begin
-            Result := foTimeout;
-            ADetail := E.Message;
-          end;
-          on E: EFuzzModuleDenied do
-          begin
-            Result := foModuleDenied;
-            ADetail := E.Message;
-          end;
-          on E: TGocciaSyntaxError do
-          begin
-            { Covers TGocciaLexerError too — both are rejections of the input
-              text, which is the single most common fuzz outcome. }
-            Result := foParseError;
-            ADetail := E.Message;
-          end;
-          on E: TGocciaError do
-          begin
-            Result := foRuntimeError;
-            ADetail := E.Message;
-          end;
+      GC := TGarbageCollector.Instance;
+      if Assigned(GC) then
+        GC.MaxBytes := FUZZ_MAX_MEMORY_BYTES;
+      try
+        Engine.Execute;
+        Result := foCompleted;
+      except
+        on E: EGocciaBytecodeThrow do
+        begin
+          Result := foScriptThrow;
+          ADetail := 'bytecode throw';
         end;
-      finally
-        Engine.Free;
+        on E: TGocciaThrowValue do
+        begin
+          Result := foScriptThrow;
+          ADetail := E.Message;
+        end;
+        on E: TGocciaMemoryLimitError do
+        begin
+          { The 256 MB budget is a bounded, engine-modelled outcome, not a
+            finding. TGocciaMemoryLimitError is an RTL type the input cannot
+            catch (uncatchable from script by design), so the host owns this
+            distinction here at its top-level boundary. Without this branch it
+            would escape the ladder and be misreported as an unexpected fault. }
+          Result := foMemoryLimit;
+          ADetail := E.Message;
+        end;
+        on E: TGocciaInstructionLimitError do
+        begin
+          Result := foInstructionLimit;
+          ADetail := E.Message;
+        end;
+        on E: TGocciaTimeoutError do
+        begin
+          Result := foTimeout;
+          ADetail := E.Message;
+        end;
+        on E: EFuzzModuleDenied do
+        begin
+          Result := foModuleDenied;
+          ADetail := E.Message;
+        end;
+        on E: TGocciaSyntaxError do
+        begin
+          { Covers TGocciaLexerError too — both are rejections of the input
+            text, which is the single most common fuzz outcome. }
+          Result := foParseError;
+          ADetail := E.Message;
+        end;
+        on E: TGocciaError do
+        begin
+          Result := foRuntimeError;
+          ADetail := E.Message;
+        end;
       end;
     finally
-      Executor.Free;
+      Engine.Free;
     end;
   finally
     ClearInstructionLimit;

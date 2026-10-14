@@ -24,8 +24,6 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Engine,
   Goccia.Error,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.FileExtensions,
   Goccia.Packages.Address,
   Goccia.Packages.Store,
@@ -461,7 +459,6 @@ function TProviderImportTests.Run(const ASource: string;
   const ACapabilities: TGocciaCapabilities): TRunOutcome;
 var
   Source: TStringList;
-  Executor: TGocciaExecutor;
   Runtime: TGocciaRuntimeCore;
   Engine: TGocciaEngine;
   ResultValue: TGocciaValue;
@@ -469,8 +466,7 @@ begin
   Result := Default(TRunOutcome);
   Source := TStringList.Create;
   Source.Text := ASource;
-  Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
+  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source,
     ACapabilities);
   try
     Engine.CapabilityAuditSink := RecordEvent;
@@ -510,7 +506,6 @@ begin
       Result.Result := ResultValue.ToStringLiteral.Value;
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -769,7 +764,6 @@ end;
 function TProviderImportTests.DataModuleExtensions: TStringList;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaExecutor;
   I: Integer;
   Runtime: TGocciaRuntimeCore;
   Source: TStringList;
@@ -778,8 +772,7 @@ begin
   Result.Sorted := True;
   Result.Duplicates := dupIgnore;
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
+  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source,
     TGocciaCapabilities.None);
   try
     try
@@ -796,7 +789,6 @@ begin
     end;
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;

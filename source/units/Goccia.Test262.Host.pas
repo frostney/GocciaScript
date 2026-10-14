@@ -7,7 +7,6 @@ interface
 uses
   Goccia.Capabilities,
   Goccia.Engine,
-  Goccia.Executor,
   Goccia.HostEnvironment,
   Goccia.SourcePipeline;
 
@@ -39,9 +38,7 @@ type
     property Backend: TObject read FImplementation;
   end;
 
-function CreateTest262Executor: TGocciaExecutor;
 procedure ConfigureTest262Engine(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaExecutor;
   const AOptions: TGocciaTest262EngineOptions;
   const AParentEnvironment: TGocciaHostEnvironment = nil);
 function Test262SourceCanSuspendAgent(const APath: string): Boolean;
@@ -63,7 +60,6 @@ uses
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Error,
   Goccia.ExecutionContext,
-  Goccia.Executor.Bytecode,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
@@ -110,7 +106,6 @@ type
   TTest262Realm = class
   private
     FEngine: TGocciaEngine;
-    FExecutor: TGocciaExecutor;
     FEvalHost: TTest262EvalHost;
     FTest262Host: TTest262HostImplementation;
     FSource: TStringList;
@@ -199,13 +194,7 @@ type
     function LoadContent(const APath: string): TGocciaModuleContent; override;
   end;
 
-function CreateTest262Executor: TGocciaExecutor;
-begin
-  Result := TGocciaBytecodeExecutor.Create;
-end;
-
 procedure ConfigureTest262Engine(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaExecutor;
   const AOptions: TGocciaTest262EngineOptions;
   const AParentEnvironment: TGocciaHostEnvironment);
 begin
@@ -227,9 +216,7 @@ begin
   SetAtomicsAgentCanSuspend(AOptions.AgentCanSuspend);
   AEngine.ModuleLoader.SetContentProvider(
     TTest262ModuleContentProvider.Create, True);
-  if AExecutor is TGocciaBytecodeExecutor then
-    TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
-      AOptions.SourceType = stScript;
+  AEngine.GlobalBackedTopLevel := AOptions.SourceType = stScript;
 end;
 
 procedure InstallTest262EvalGlobal(const AEngine: TGocciaEngine;
@@ -376,13 +363,11 @@ var
 begin
   inherited Create;
   FSource := TStringList.Create;
-  FExecutor := CreateTest262Executor;
-  FEngine := TGocciaEngine.Create('<test262-realm>', FSource, FExecutor,
+  FEngine := TGocciaEngine.Create('<test262-realm>', FSource,
     AOptions.Capabilities);
   ChildOptions := AOptions;
   ChildOptions.SourceType := stScript;
-  ConfigureTest262Engine(FEngine, FExecutor, ChildOptions,
-    AParentEnvironment);
+  ConfigureTest262Engine(FEngine, ChildOptions, AParentEnvironment);
   FEvalHost := TTest262EvalHost.Create(FEngine);
   FTest262Host := TTest262HostImplementation.Create(ChildOptions);
   FTest262Host.ConfigureHostEnvironment(FEngine.HostEnvironment);
@@ -405,7 +390,6 @@ begin
   end;
   FTest262Host.Free;
   FEvalHost.Free;
-  FExecutor.Free;
   FSource.Free;
   inherited;
 end;
@@ -763,7 +747,6 @@ var
   AgentOptions: TGocciaTest262EngineOptions;
   Engine: TGocciaEngine;
   EvalHost: TTest262EvalHost;
-  Executor: TGocciaExecutor;
   Source: TStringList;
 begin
   InitThreadRuntime(False, FOptions.MaxMemoryBytes);
@@ -776,29 +759,23 @@ begin
         'test262_harness' + PathDelim + '$262.js')) + sLineBreak +
       FSourceText);
     try
-      Executor := CreateTest262Executor;
+      Engine := TGocciaEngine.Create('<test262-agent>', Source,
+        FOptions.Capabilities);
       try
-        Engine := TGocciaEngine.Create('<test262-agent>', Source, Executor,
-          FOptions.Capabilities);
+        AgentOptions := FOptions;
+        AgentOptions.SourceType := stScript;
+        ConfigureTest262Engine(Engine, AgentOptions, FHost.HostEnvironment);
+        EvalHost := TTest262EvalHost.Create(Engine);
         try
-          AgentOptions := FOptions;
-          AgentOptions.SourceType := stScript;
-          ConfigureTest262Engine(Engine, Executor, AgentOptions,
-            FHost.HostEnvironment);
-          EvalHost := TTest262EvalHost.Create(Engine);
-          try
-            InstallTest262HostGlobals(Engine, FHost, EvalHost);
-            Engine.SuspendRealmExecutionContext;
-            Engine.Execute;
-            WaitForAsyncAgentWork;
-          finally
-            EvalHost.Free;
-          end;
+          InstallTest262HostGlobals(Engine, FHost, EvalHost);
+          Engine.SuspendRealmExecutionContext;
+          Engine.Execute;
+          WaitForAsyncAgentWork;
         finally
-          Engine.Free;
+          EvalHost.Free;
         end;
       finally
-        Executor.Free;
+        Engine.Free;
       end;
     finally
       Source.Free;

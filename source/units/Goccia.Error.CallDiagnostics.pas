@@ -36,8 +36,8 @@ type
 
 { Longest callee text carried into a diagnostic. A callee spanning more than
   this is a multi-line chain whose text would swamp the message, so it is
-  dropped and the type-name form is used instead. The limit is shared so both
-  executors drop the same texts. }
+  dropped and the type-name form is used instead. The limit is shared so every
+  diagnostic drops the same texts. }
 const
   GOCCIA_MAX_CALLEE_TEXT_LENGTH = 96;
 

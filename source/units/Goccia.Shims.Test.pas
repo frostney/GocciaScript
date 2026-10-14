@@ -25,7 +25,6 @@ uses
 
   Goccia.AST.Node,
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.GarbageCollector,
   Goccia.Shims,
   Goccia.SourcePipeline,
@@ -69,7 +68,7 @@ begin
     TestASharedProgramKeepsItsTemplateObjectsInEachRealm);
   Test('booting an engine loads no shim',
     TestBootLoadsNoShim);
-  Test('with a bytecode executor the shims define VM closures',
+  Test('the shims define VM closures',
     TestBytecodeShimFunctionsAreCompiled);
   Test('Function.prototype.toString of a nameless built-in leaves nothing behind',
     TestToStringOfANamelessFunctionLeavesNothingBehind);
@@ -164,20 +163,17 @@ function TTestShims.TemplateObjectsInAFreshRealm(
   const AProgram: TGocciaProgram): Integer;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
-    Executor.EvaluateShim(AProgram,
+    Engine := TGocciaEngine.Create('<shims-test>', Source);
+    Engine.ShimLoader.Evaluate(AProgram,
       CreateShimScope(Engine.GlobalScope, 'test'), '<shims-test-template>');
     Result := Engine.Realm.TemplateMapCount;
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -220,19 +216,16 @@ end;
 procedure TTestShims.TestBootLoadsNoShim;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   ReleaseShimProgramCache;
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
+    Engine := TGocciaEngine.Create('<shims-test>', Source);
     Expect<Integer>(CachedShimProgramCount).ToBe(0);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -241,15 +234,13 @@ procedure TTestShims.TestBytecodeShimFunctionsAreCompiled;
 var
   DateConstructor: TGocciaValue;
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
-    DateConstructor := GetDateIntrinsic(Engine.Executor);
+    Engine := TGocciaEngine.Create('<shims-test>', Source);
+    DateConstructor := GetDateIntrinsic(Engine.ShimLoader);
     { The VM's closure class is private to Goccia.VM. }
     Expect<string>(DateConstructor.ClassName)
       .ToBe('TGocciaBytecodeFunctionValue');
@@ -260,7 +251,6 @@ begin
       .ToBe('TGocciaBytecodeFunctionValue');
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;

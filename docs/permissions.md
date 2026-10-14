@@ -301,8 +301,7 @@ Capabilities := TGocciaCapabilities.None
   .Allow(gcNet, 'api.example.com')
   .Allow(gcImport, 'node_modules=/srv/app');
 
-Engine := TGocciaEngine.Create('/srv/app/main.js', Source, Executor,
-  Capabilities);
+Engine := TGocciaEngine.Create('/srv/app/main.js', Source, Capabilities);
 Runtime := AttachRuntime(Engine);   // filesystem provider, reads checked
 InstallFFIIfGranted(Runtime);       // installs FFI only when ffi is granted
 Engine.FetchMaxResponseBytes := 1024 * 1024;

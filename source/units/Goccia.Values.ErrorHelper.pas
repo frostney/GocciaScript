@@ -14,8 +14,8 @@ uses
   and, when that module is in the engine's own source scope, the ±context
   window of its source. Bound to real frames, never to the guest-writable
   `.stack` string, so a guest-forged error object gets neither and renders no
-  code frame. Every error factory must call this so the two executors and every
-  host agree on what a genuine error's frame shows. Safe to call with no active
+  code frame. Every error factory must call this so the engine and every host
+  agree on what a genuine error's frame shows. Safe to call with no active
   call stack (records nothing). }
 procedure AttachErrorSourceProvenance(const AError: TGocciaObjectValue;
   const ASkipTop: Integer);

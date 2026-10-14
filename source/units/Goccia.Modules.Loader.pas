@@ -42,8 +42,8 @@ type
     declarations of a module-form program: bind every top-level function
     declaration of AProgram, an `export default function` included, to a
     function object in AContext.Scope, the module environment, before any
-    module body runs. The executor creates the functions as it runs code, so
-    the bytecode executor compiles the program here and leaves it in
+    module body runs. The engine creates the functions as compiled
+    closures, so it compiles the program here and leaves it in
     AContext.CompiledModule for its module body evaluator. }
   TGocciaModuleFunctionInstantiator = procedure(const AProgram: TGocciaProgram;
     var AContext: TGocciaEvaluationContext) of object;
@@ -1614,7 +1614,7 @@ procedure TGocciaModuleLoader.BindRuntime(const AGlobalScope: TGocciaGlobalScope
 begin
   if Assigned(FGlobalScope) and (FGlobalScope <> AGlobalScope) then
     raise Exception.Create(
-      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine/executor.');
+      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine.');
   FGlobalScope := AGlobalScope;
   FOnError := AOnError;
 end;
@@ -2771,8 +2771,8 @@ begin
           PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
           if not Assigned(FInstantiateModuleFunctions) then
             raise EInvalidOperation.Create(
-              'The module loader has no function instantiator; attach an ' +
-              'executor before loading modules');
+              'The module loader has no function instantiator; attach it ' +
+              'to an engine before loading modules');
           FInstantiateModuleFunctions(ProgramNode, Context);
           if GetVarEnabled then
             HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
