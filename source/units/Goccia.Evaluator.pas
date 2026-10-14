@@ -1660,7 +1660,7 @@ function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AContext: TGocciaEvaluationContext;
   const ANewTarget: TGocciaValue = nil): TGocciaValue;
 var
-  BoundFunction: TGocciaBoundFunctionValue;
+  BoundTarget, BoundThis: TGocciaValue;
   ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
@@ -1741,17 +1741,12 @@ begin
 
   if AConstructor is TGocciaBoundFunctionValue then
   begin
-    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
-    if IsSameValue(BoundFunction, EffectiveNewTarget) then
-      EffectiveNewTarget := BoundFunction.OriginalFunction;
-    CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-      BoundFunction.BoundArgCount + AArguments.Length);
+    // ES2026 §10.4.1.2: a chain of bound functions collapses in a loop.
+    CombinedArgs := CollapseBoundFunctionChain(
+      TGocciaBoundFunctionValue(AConstructor), AArguments,
+      EffectiveNewTarget, BoundTarget, BoundThis);
     try
-      for I := 0 to BoundFunction.BoundArgCount - 1 do
-        CombinedArgs.Add(BoundFunction.GetBoundArg(I));
-      for I := 0 to AArguments.Length - 1 do
-        CombinedArgs.Add(AArguments.GetElement(I));
-      Exit(InvokeConstructableWithReceiver(BoundFunction.OriginalFunction,
+      Exit(InvokeConstructableWithReceiver(BoundTarget,
         CombinedArgs, AReceiver, AContext, EffectiveNewTarget));
     finally
       CombinedArgs.Free;
@@ -6666,22 +6661,15 @@ function ConstructBoundFunction(const AConstructor: TGocciaBoundFunctionValue;
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   BoundArgs: TGocciaArgumentsCollection;
-  I: Integer;
-  Target: TGocciaValue;
+  Target, BoundThis, NoNewTarget: TGocciaValue;
 begin
-  Target := AConstructor.OriginalFunction;
-  BoundArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-    AConstructor.BoundArgCount + AArguments.Length);
+  // ES2026 §10.4.1.2: a chain of bound functions collapses in a loop, so only
+  // its innermost target, which is not a bound function, is constructed.
+  NoNewTarget := nil;
+  BoundArgs := CollapseBoundFunctionChain(AConstructor, AArguments,
+    NoNewTarget, Target, BoundThis);
   try
-    for I := 0 to AConstructor.BoundArgCount - 1 do
-      BoundArgs.Add(AConstructor.GetBoundArg(I));
-    for I := 0 to AArguments.Length - 1 do
-      BoundArgs.Add(AArguments.GetElement(I));
-
-    if Target is TGocciaBoundFunctionValue then
-      Result := ConstructBoundFunction(TGocciaBoundFunctionValue(Target),
-        BoundArgs, AContext)
-    else if Target is TGocciaProxyValue then
+    if Target is TGocciaProxyValue then
       Result := TGocciaProxyValue(Target).ConstructTrap(BoundArgs)
     else if Target is TGocciaClassValue then
     begin
