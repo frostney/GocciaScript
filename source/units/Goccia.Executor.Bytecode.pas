@@ -35,7 +35,9 @@ type
     FEntryRequestsLeft: Integer;
     procedure LinkModuleRequests(const AModule: TGocciaBytecodeModule);
     procedure AwaitEntryRequests;
-    procedure InitializeEntryExports(const AModule: TGocciaBytecodeModule;
+    procedure InitializeEntryLocalExports(const AModule: TGocciaBytecodeModule;
+      const AEntry: TGocciaModule);
+    procedure InitializeEntryLinkedExports(const AModule: TGocciaBytecodeModule;
       const AEntry: TGocciaModule);
     function LoadLinkedModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
@@ -528,21 +530,20 @@ end;
 
 { ES2026 §16.2.1.7.3.1 InitializeEnvironment for a module-source entry, the
   Module Record the engine registered as the VM's current runtime module.
-  Run after its requests are linked and before any of them evaluates, so a
-  module in a cycle with the entry resolves every name the entry exports.
-  A local export is a binding in its temporal dead zone, kept in a module
-  environment of its own (the program's top-level bindings live in VM
-  registers); the program's OP_EXPORTs initialize and update it. The other
-  kinds bind to the linked module of their request. }
-procedure TGocciaBytecodeExecutor.InitializeEntryExports(
+  The entry's local exports are bound before its requests are linked, as
+  TGocciaEngine.Execute binds them: a module in a cycle with the entry that
+  links meanwhile resolves each of them, and its `export * from` the entry
+  forwards them (§16.2.1.7.2.1 GetExportedNames), since the loader settles a
+  star export's names when the module is linked. A local export is a binding
+  in its temporal dead zone, kept in a module environment of its own (the
+  program's top-level bindings live in VM registers); the program's
+  OP_EXPORTs initialize and update it. }
+procedure TGocciaBytecodeExecutor.InitializeEntryLocalExports(
   const AModule: TGocciaBytecodeModule; const AEntry: TGocciaModule);
 var
-  Changed: Boolean;
   ExportEnvironment: TGocciaScope;
   Export_: TGocciaModuleExport;
   I: Integer;
-  SourceModule: TGocciaModule;
-  StarName: string;
 begin
   ExportEnvironment := nil;
   for I := 0 to AModule.ExportCount - 1 do
@@ -558,7 +559,20 @@ begin
   end;
   if Assigned(ExportEnvironment) then
     AEntry.SetEnvironment(ExportEnvironment);
+end;
 
+{ The entry's other exports bind to the linked module of their request, so
+  they are bound once its requests are linked and before any of them
+  evaluates. }
+procedure TGocciaBytecodeExecutor.InitializeEntryLinkedExports(
+  const AModule: TGocciaBytecodeModule; const AEntry: TGocciaModule);
+var
+  Changed: Boolean;
+  Export_: TGocciaModuleExport;
+  I: Integer;
+  SourceModule: TGocciaModule;
+  StarName: string;
+begin
   for I := 0 to AModule.ExportCount - 1 do
   begin
     Export_ := AModule.GetExport(I);
@@ -669,6 +683,7 @@ function TGocciaBytecodeExecutor.RunModule(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   GC: TGarbageCollector;
+  HasEntryExports: Boolean;
   SavedLinkedModules: TOrderedStringMap<TGocciaModule>;
   SavedLinkedReferrer: string;
   SavedLoadModule: TLoadModuleCallback;
@@ -698,10 +713,14 @@ begin
   FLinkedModules := nil;
   FEntryRequests := nil;
   try
+    HasEntryExports := Assigned(FVM.CurrentRuntimeModule) and
+      (TGocciaBytecodeModule(AModule).ExportCount > 0);
+    if HasEntryExports then
+      InitializeEntryLocalExports(TGocciaBytecodeModule(AModule),
+        FVM.CurrentRuntimeModule);
     LinkModuleRequests(TGocciaBytecodeModule(AModule));
-    if Assigned(FVM.CurrentRuntimeModule) and
-       (TGocciaBytecodeModule(AModule).ExportCount > 0) then
-      InitializeEntryExports(TGocciaBytecodeModule(AModule),
+    if HasEntryExports then
+      InitializeEntryLinkedExports(TGocciaBytecodeModule(AModule),
         FVM.CurrentRuntimeModule);
     if Assigned(FVM.CurrentRuntimeModule) and Assigned(FLinkedModules) then
     begin
