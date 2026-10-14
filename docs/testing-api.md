@@ -568,9 +568,9 @@ Three Vitest behaviors follow from that structure rather than from emulation:
 
   | Source type | Mocked module imported | Factory referencing a test-file `const` |
   |---|---|---|
-  | Module (`.mjs`, `--source-type=module`, or `source-type: module`) | statically or dynamically | `ReferenceError` — matches Vitest |
-  | Script (plain `.js`, the default) | statically | `ReferenceError` (TDZ: `Cannot access 'x' before initialization`) |
-  | Script (plain `.js`, the default) | dynamically, via `await import()` | **Resolves the variable** — looser than Vitest |
+  | Module (`.mjs`, a test file with a top-level `import` or `export`, `--source-type=module`, or `source-type: module`) | statically or dynamically | `ReferenceError` — matches Vitest |
+  | Script (`--source-type=script` or `source-type: script`) | statically | `ReferenceError` (TDZ: `Cannot access 'x' before initialization`) |
+  | Script (a `.js` test file without `import` or `export`, or an explicit script source type) | dynamically, via `await import()` | **Resolves the variable** — looser than Vitest |
 
   Under script source type the entry file's top-level `const`/`let` are backed by the global scope, so a factory that runs *after* the test body has initialized them — which only happens when the mocked module is reached by a dynamic `import()` — can see them. Do not rely on this: it is an artifact of script-mode scoping, Vitest rejects the same code, and running the suite under module source type turns it back into an error.
 - **Factories are lazy.** A factory for a module nothing imports never runs.

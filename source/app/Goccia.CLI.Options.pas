@@ -730,7 +730,7 @@ begin
   FMode := TEnumOption<TGocciaExecutionMode>.Create('mode',
     'Execution mode (default: bytecode)', 'Engine');
   FSourceType := TEnumOption<TGocciaSourceType>.Create('source-type',
-    'Source loading kind (default: script; .mjs infers module)', 'Engine');
+    'Source loading kind (default: module if the file has a top-level import or export, else script; .mjs and .mts infer module)', 'Engine');
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
     FCompatibilityFlags[Flag] := TFlagOption.Create(
       SOURCE_COMPATIBILITY_FLAGS[Flag].OptionName,

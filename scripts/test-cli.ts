@@ -1366,6 +1366,132 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
   }
 }
 
+// -- Entry source-type detection (#1626, ADR 0140) ---------------------------
+
+// With no explicit source type, an entry that has a top-level import or
+// export declaration runs as a Module and any other entry as a Script. Node.js
+// prints "y" for cyc.js and "yh" for fcyc.js.
+console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, Bundler, LoaderBare, sandbox)...");
+{
+  const tmp = mkdtemp("goccia-detect-module-");
+  try {
+    const files: Record<string, string> = {
+      "cyc.js": 'import { y } from "./d.js";\nexport const h = () => "h";\nconsole.log(y);\n',
+      "d.js": 'import { h } from "./cyc.js";\nexport const y = "y";\nexport const z = () => h();\n',
+      "fcyc.js": 'import { y2 } from "./fd.js";\nexport function h2() { return "h"; }\nconsole.log(y2);\n',
+      "fd.js": 'import { h2 } from "./fcyc.js";\nexport const y2 = "y" + h2();\n',
+      "script.js": 'var scriptVar = 1;\nconsole.log(typeof globalThis.scriptVar, this === globalThis);\n',
+      "dynamic.js":
+        'var dynamicVar = 1;\nconst m = await import("./lib.js");\nconsole.log(m.v, typeof globalThis.dynamicVar, this === globalThis);\n',
+      "lib.js": 'export const v = "lib";\n',
+      "meta.js": "console.log(typeof import.meta.url);\n",
+      "with-module.js": "with ({}) {}\nexport {};\n",
+      "with-script.js": "with ({}) {}\n",
+      "cycle.test.js":
+        'import { readEntry } from "./cycle-peer.js";\nexport const entry = "entry";\ntest("peer reads the entry", () => { expect(readEntry()).toBe("entry"); });\n',
+      "cycle-peer.js": 'import { entry } from "./cycle.test.js";\nexport const readEntry = () => entry;\n',
+      "bench-cycle.js":
+        'import { bench } from "goccia:microbench";\nimport { y } from "./bench-peer.js";\nexport const h = () => "h";\nconst read = y;\nbench("reads the peer", () => read + h());\n',
+      "bench-peer.js": 'import { h } from "./bench-cycle.js";\nexport const y = "y";\n',
+    };
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+
+    const run = (binary: string, args: string[]) => {
+      const proc = Bun.spawnSync([resolve(binary), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+      return {
+        exitCode: proc.exitCode,
+        stdout: normalizeLineEndings(proc.stdout.toString()),
+        output: normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString()),
+      };
+    };
+    const expectLine = (label: string, result: ReturnType<typeof run>, line: string) => {
+      if (result.exitCode !== 0 || !containsLine(result.stdout, line))
+        throw new Error(`${label}: expected exit 0 and the line "${line}", got exit ${result.exitCode}: ${result.output}`);
+    };
+    const expectFailure = (label: string, result: ReturnType<typeof run>, text: string) => {
+      if (result.exitCode === 0 || !result.output.includes(text))
+        throw new Error(`${label}: expected a failure mentioning ${JSON.stringify(text)}, got exit ${result.exitCode}: ${result.output}`);
+    };
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      const modeArg = `--mode=${mode}`;
+      expectLine(`detected module entry in a cycle (${mode})`, run(RUNNER, ["cyc.js", modeArg]), "y");
+      expectLine(`detected module entry's function in a cycle (${mode})`,
+        run(RUNNER, ["fcyc.js", modeArg, "--compat-function"]), "yh");
+      expectLine(`entry without module syntax stays a Script (${mode})`,
+        run(RUNNER, ["script.js", modeArg, "--compat-var"]), "number true");
+      expectLine(`entry with only dynamic import() stays a Script (${mode})`,
+        run(RUNNER, ["dynamic.js", modeArg, "--compat-var"]), "lib number true");
+      expectFailure(`import.meta alone stays a Script error (${mode})`,
+        run(RUNNER, ["meta.js", modeArg]), "import.meta is only allowed in module code");
+      // An explicit Script keeps today's behaviour: d.js's import of the entry
+      // loads a second copy of it, which reads y in its temporal dead zone.
+      expectFailure(`explicit --source-type=script keeps the Script entry (${mode})`,
+        run(RUNNER, ["cyc.js", modeArg, "--source-type=script"]), "Cannot access 'y' before initialization");
+      expectFailure(`a detected Module is strict under --compat-non-strict-mode (${mode})`,
+        run(RUNNER, ["with-module.js", modeArg, "--compat-non-strict-mode"]),
+        "'with' statements are not allowed in strict mode");
+
+      const testRun = run(TESTRUNNER, ["cycle.test.js", modeArg, "--no-progress"]);
+      if (testRun.exitCode !== 0 || !testRun.output.includes("Passed: 1"))
+        throw new Error(`TestRunner detected module test file in a cycle (${mode}): ${testRun.output}`);
+
+      const benchRun = run(BENCHRUNNER, ["bench-cycle.js", modeArg, "--no-progress"]);
+      if (benchRun.exitCode !== 0 || !benchRun.output.includes("reads the peer"))
+        throw new Error(`BenchmarkRunner detected module entry in a cycle (${mode}): ${benchRun.output}`);
+
+      const sandboxRun = run(RUNNER, ["--copy", `${tmp}=/`, "--entry=/cyc.js", modeArg]);
+      expectLine(`sandbox detected module entry in a cycle (${mode})`, sandboxRun, "y");
+    }
+
+    // Stdin has no file name, so its goal is detected too, as Node.js does.
+    const stdinRun = Bun.spawnSync([resolve(RUNNER), "--print", "-"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode("export {};\nthis === undefined;\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (stdinRun.exitCode !== 0 || !containsLine(stdinRun.stdout.toString(), "true"))
+      throw new Error(`stdin with an export should run as a Module: ${stdinRun.stdout}${stdinRun.stderr}`);
+
+    // A REPL line is not an entry file: it stays a Script, so the lines keep
+    // sharing one global environment.
+    for (const mode of ["interpreted", "bytecode"]) {
+      const repl = Bun.spawnSync([resolve(REPL), `--mode=${mode}`], {
+        cwd: tmp,
+        stdin: new TextEncoder().encode("export const replValue = 1; this === globalThis;\nreplValue + 1;\n"),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const replLines = normalizeLineEndings(repl.stdout.toString())
+        .split("\n")
+        .map((line) => line.replace(/^(> )+/, ""));
+      if (repl.exitCode !== 0 || !replLines.includes("true") || !replLines.includes("2"))
+        throw new Error(`REPL (${mode}) should run module syntax as a Script: ${repl.stdout}${repl.stderr}`);
+    }
+
+    for (const [source, expected] of [
+      ["export {};\nthis === undefined;\n", "true"],
+      ["this === undefined;\n", "false"],
+    ]) {
+      const file = join(tmp, `bare-${expected}.js`);
+      writeFileSync(file, source);
+      const bare = run(BARE, ["--print", file]);
+      if (bare.exitCode !== 0 || bare.stdout.trim() !== expected)
+        throw new Error(`LoaderBare detection for ${JSON.stringify(source)} expected ${expected}, got: ${bare.output}`);
+    }
+
+    expectFailure("Bundler: a detected Module is strict",
+      run(BUNDLER, ["with-module.js", "--compat-non-strict-mode", "--output=with-module.gbc"]),
+      "'with' statements are not allowed in strict mode");
+    const bundledScript = run(BUNDLER, ["with-script.js", "--compat-non-strict-mode", "--output=with-script.gbc"]);
+    if (bundledScript.exitCode !== 0 || !existsSync(join(tmp, "with-script.gbc")))
+      throw new Error(`Bundler should bundle a detected Script with a with statement: ${bundledScript.output}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- --timeout (Loader: infinite loop, both execution modes) --------------------
 
 console.log("--timeout (interpreted)...");
@@ -5373,15 +5499,24 @@ console.log("Entry module evaluated once...");
       await expectRun(`--source-type=module entry (${mode})`,
         ["self.js", `--mode=${mode}`, "--source-type=module"], ["self ran"]);
 
+      // No explicit source type: a .js entry with an import declaration is a
+      // Module (ADR 0140), so it gets the same single record as above.
+      await expectRun(`detected module entry importing itself (${mode})`,
+        ["self.js", `--mode=${mode}`], ["self ran"]);
+      await expectRun(`detected module entry record identity (${mode})`,
+        ["id.js", `--mode=${mode}`], ["same record: true"]);
+      await expectRun(`detected module entry in a cycle (${mode})`,
+        ["cycle-a.js", `--mode=${mode}`], ["b ran", "a ran"]);
+
       // Script source: the entry is a Script Record (§16.1.4), not a Module
       // Record, so its own path names a separate module record. That module
       // evaluates once, before the script body, and its bindings are its own.
       await expectRun(`script entry importing itself (${mode})`,
-        ["self.js", `--mode=${mode}`], ["self ran", "self ran"]);
+        ["self.js", `--mode=${mode}`, "--source-type=script"], ["self ran", "self ran"]);
       await expectRun(`script entry record identity (${mode})`,
-        ["id.js", `--mode=${mode}`], ["same record: true", "same record: false"]);
+        ["id.js", `--mode=${mode}`, "--source-type=script"], ["same record: true", "same record: false"]);
       await expectRun(`script entry in a cycle (${mode})`,
-        ["cycle-a.js", `--mode=${mode}`], ["a ran", "b ran", "a ran"]);
+        ["cycle-a.js", `--mode=${mode}`, "--source-type=script"], ["a ran", "b ran", "a ran"]);
     }
 
     // A bundled module-source entry is the .gbc file: an import of that file

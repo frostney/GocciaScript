@@ -97,6 +97,7 @@ const
 
   stScript = Goccia.SourcePipeline.stScript;
   stModule = Goccia.SourcePipeline.stModule;
+  stDetect = Goccia.SourcePipeline.stDetect;
 
 type
 
@@ -152,7 +153,9 @@ type
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
     const DefaultCompatibility: TGocciaCompatibilityFlags = [];
     const DefaultWarningUnsupportedFeatures = False;
-    const DefaultSourceType: TGocciaSourceType = stScript;
+    { ADR 0140: an entry whose file name does not name its goal is a Module
+      when it has a top-level import or export declaration. }
+    const DefaultSourceType: TGocciaSourceType = stDetect;
   private
     { The realm's global environment. The engine owns it; an interpreter, made
       only for an interpreter executor, shares it. }
@@ -475,6 +478,12 @@ type
       write SetExperimentalJSModuleSourceEnabled;
     property WarningUnsupportedFeatures: Boolean
       read FWarningUnsupportedFeatures write SetWarningUnsupportedFeatures;
+    { The entry's goal. stDetect (the default unless the file name is .mjs or
+      .mts) leaves it to the source (ADR 0140): Execute settles it for each
+      run. A host that parses the entry itself assigns the goal its parse
+      settled (TGocciaSourcePipelineResult.SourceType) before CompileModule
+      and RunModuleForSourceType, which run anything but stModule as a
+      Script. }
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
     property StrictTypes: Boolean read FStrictTypes write SetStrictTypes;
     property Shims: TStringList read FShims;
@@ -2325,6 +2334,7 @@ function TGocciaEngine.CompileModule(
   const AProgram: TGocciaProgram): TGocciaCompiledModule;
 var
   SavedArgumentsObjectEnabled: Boolean;
+  SavedGlobalBackedTopLevel: Boolean;
   SavedNonStrictMode: Boolean;
   FloatingPointState: TGocciaFloatingPointState;
 begin
@@ -2335,15 +2345,22 @@ begin
       SavedArgumentsObjectEnabled :=
         TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled;
       SavedNonStrictMode := TGocciaBytecodeExecutor(FExecutor).NonStrictMode;
+      { A host configures its executor before the parse settles a detected
+        goal, so a Module's top level is kept off the global object here. }
+      SavedGlobalBackedTopLevel :=
+        TGocciaBytecodeExecutor(FExecutor).GlobalBackedTopLevel;
       TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled :=
         cfArgumentsObject in FCompatibility;
       TGocciaBytecodeExecutor(FExecutor).NonStrictMode := False;
+      TGocciaBytecodeExecutor(FExecutor).GlobalBackedTopLevel := False;
       try
         Result := FExecutor.CompileModule(AProgram);
       finally
         TGocciaBytecodeExecutor(FExecutor).ArgumentsObjectEnabled :=
           SavedArgumentsObjectEnabled;
         TGocciaBytecodeExecutor(FExecutor).NonStrictMode := SavedNonStrictMode;
+        TGocciaBytecodeExecutor(FExecutor).GlobalBackedTopLevel :=
+          SavedGlobalBackedTopLevel;
       end;
     end
     else
@@ -2984,6 +3001,7 @@ var
   EntryModule: TGocciaModule;
   ModuleScope: TGocciaScope;
   PrevScope: TGocciaDiagnosticSourceScope;
+  SavedGlobalBackedTopLevel: Boolean;
   SavedRuntimeModule: TGocciaModule;
   VM: TGocciaVM;
 begin
@@ -3016,11 +3034,16 @@ begin
       FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
       VM := nil;
       SavedRuntimeModule := nil;
+      SavedGlobalBackedTopLevel := False;
       if FExecutor is TGocciaBytecodeExecutor then
       begin
         VM := TGocciaBytecodeExecutor(FExecutor).VM;
         SavedRuntimeModule := VM.CurrentRuntimeModule;
         VM.CurrentRuntimeModule := EntryModule;
+        { As CompileModule: the Module's top level is not global-backed. }
+        SavedGlobalBackedTopLevel :=
+          TGocciaBytecodeExecutor(FExecutor).GlobalBackedTopLevel;
+        TGocciaBytecodeExecutor(FExecutor).GlobalBackedTopLevel := False;
       end;
       FModuleLoader.BeginEvaluatingModulePath(EntryModule.Path);
       try
@@ -3038,7 +3061,11 @@ begin
       finally
         FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
         if Assigned(VM) then
+        begin
           VM.CurrentRuntimeModule := SavedRuntimeModule;
+          TGocciaBytecodeExecutor(FExecutor).GlobalBackedTopLevel :=
+            SavedGlobalBackedTopLevel;
+        end;
       end;
     end
     else
@@ -3139,6 +3166,7 @@ end;
 
 function TGocciaEngine.Execute: TGocciaScriptResult;
 var
+  RunSourceType: TGocciaSourceType;
   PipelineOptions: TGocciaSourcePipelineOptions;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   PipelineResult: TGocciaSourcePipelineResult;
@@ -3184,6 +3212,11 @@ begin
     PipelineOptions := SourcePipelineOptions(FSourceType);
     PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
       PipelineOptions);
+    { The goal this run has: FSourceType, or the one the parse settled for
+      stDetect (ADR 0140). FSourceType keeps the setting, so a long-lived
+      engine settles each Execute's source on its own. }
+    RunSourceType := PipelineResult.SourceType;
+    PipelineOptions.SourceType := RunSourceType;
     FLastTiming.LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
     FLastTiming.ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
     PrintSourcePipelineWarnings(PipelineResult);
@@ -3220,7 +3253,7 @@ begin
         MicrotaskScopeToken := MicrotaskQueue.EnterScope;
         OwnsMicrotaskScope := True;
       end;
-      if FSourceType = stModule then
+      if RunSourceType = stModule then
       begin
         // ES2026 §16.2.1.6.4: a Module Environment Record's
         // [[ThisValue]] is undefined.  Run the entry program in a
@@ -3498,9 +3531,10 @@ begin
   try
     Engine := TGocciaEngine.Create(AFileName, ASource, Executor);
     try
-      { Script source keeps its top-level bindings on the global object;
-        a module file name (.mjs) gives module source, which does not. }
-      Executor.GlobalBackedTopLevel := Engine.SourceType = stScript;
+      { Script source keeps its top-level bindings on the global object; a
+        Module (an .mjs name, or a detected one, ADR 0140) does not, which
+        Execute arranges for itself. }
+      Executor.GlobalBackedTopLevel := Engine.SourceType <> stModule;
       Result := Engine.Execute;
     finally
       Engine.Free;

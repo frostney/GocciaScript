@@ -673,10 +673,11 @@ function TGocciaRuntime.Execute: TGocciaScriptResult;
 begin
   { The runtime's own executor backs a script's top-level bindings with the
     global object, as the CLI hosts configure theirs; module source keeps
-    them in its module scope. }
+    them in its module scope. A detected entry is configured as a Script, and
+    Execute keeps one that turns out a Module off the global object. }
   if FOwnedExecutor is TGocciaBytecodeExecutor then
     TGocciaBytecodeExecutor(FOwnedExecutor).GlobalBackedTopLevel :=
-      FEngine.SourceType = stScript;
+      FEngine.SourceType <> stModule;
   Result := FEngine.Execute;
 end;
 

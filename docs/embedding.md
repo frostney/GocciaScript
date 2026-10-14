@@ -47,7 +47,7 @@ These helpers create, execute, and clean up in a single call. The `TGocciaEngine
 | `TGocciaRuntime.RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` through the runtime layer |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
-`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
+`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided; any other entry defaults to `stDetect`, which runs it as module source when it has a top-level `import` or `export` declaration and as script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md); see [Preprocessors and Compatibility](#preprocessors-and-compatibility)). File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
 
 `TGocciaEngine.Execute` remains the public "run the whole source pipeline and execute" API for embedders. Hosts that need parse artifacts without executing can call `TGocciaSourcePipeline.Parse` directly; its result object owns the AST and source map until the caller frees the result or transfers ownership with `TakeProgramNode` / `TakeSourceMap`. Hosts should use the source-pipeline entry points for module source, dynamic `Function` validation, and expression fragments rather than constructing `TGocciaParser` directly; this keeps parser policy in one place.
 
@@ -92,7 +92,7 @@ begin
 end;
 ```
 
-The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. Variables, functions, and classes defined in previous executions remain available.
+The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. Variables, functions, and classes defined in previous executions remain available. Each source above has no `import` or `export` declaration, so the default `SourceType` (`stDetect`) runs it as script source. A session whose input may contain such declarations and must keep sharing one global scope sets `Engine.SourceType := stScript`, as `GocciaREPL` does; see [Preprocessors and Compatibility](#preprocessors-and-compatibility).
 
 ### Engine Constructor and Executor Ownership
 
@@ -530,7 +530,7 @@ Runtime globals and runtime modules can be reduced by installing only concrete e
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
 | `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
-| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` and `.mts` file names infer `stModule` |
+| `SourceType` | `TGocciaSourceType` | `stDetect` | Load entry as module source when it has a top-level `import` or `export` (`stDetect`), or always as script (`stScript`) or module (`stModule`) source; `.mjs` and `.mts` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 
 ```pascal
@@ -549,16 +549,16 @@ try
     cfExperimentalJSModuleSource
   ];                                       // Enable selected source-pipeline flags
   Engine.WarningUnsupportedFeatures := True; // Optional migration mode for disabled syntax diagnostics
-  Engine.SourceType := stModule;           // Run entry as module source (top-level this is undefined; import.meta resolves)
+  Engine.SourceType := stScript;           // Always script source, as before ADR 0140; the default stDetect runs an entry with import/export as module source
   Engine.StrictTypes := True;              // Enforce type annotations in both execution modes
 finally
   Executor.Free;
 end;
 ```
 
-When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source.
+When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source, and any other entry is detected ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)): the default, `stDetect`, settles the goal in the parse the engine does anyway, so a top-level `import` or `export` declaration makes the entry module source and anything else, a dynamic `import()` or an `import.meta` reference alone included, script source. `Execute` settles the goal of each run and leaves `SourceType` at `stDetect`, so a long-lived engine settles each source on its own. An embedder that wants every entry to run as script source, the behaviour before ADR 0140, sets `Engine.SourceType := stScript`; `stModule` makes every entry module source. A host that parses the entry itself passes `Engine.SourceType` as the source type of its `TGocciaSourcePipelineOptions` and, before `CompileModule` and `RunModuleForSourceType`, assigns the goal the parse settled (`TGocciaSourcePipelineResult.SourceType`, never `stDetect`) to `Engine.SourceType`; those two run anything but `stModule` as script source. A bytecode host configures its executor before the parse, so it sets `TGocciaBytecodeExecutor.GlobalBackedTopLevel := Engine.SourceType <> stModule`, and the engine turns the flag off itself for a run that settles on module source.
 
-**Top-level binding persistence differs between source types.** With `SourceType = stScript`, the engine reuses its global scope (`Engine.GlobalScope`) across every call to `Execute`, which is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, keep `SourceType` at `stScript` (the default) or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
+**Top-level binding persistence differs between source types.** With `SourceType = stScript`, the engine reuses its global scope (`Engine.GlobalScope`) across every call to `Execute`, which is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, set `SourceType` to `stScript` (with the default `stDetect`, a source with an `import` or `export` declaration runs as module source) or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
 
 ## Injecting Custom Globals
 
