@@ -1258,4 +1258,50 @@ console.log("Parenthesized ternary consequent...");
     }
 }
 
+// -- Arrow in a ternary consequent under automatic semicolon insertion ----------
+
+console.log("Arrow in a ternary consequent under ASI...");
+{
+  // #1533: inside a conditional's consequent, `(x) : y => z` is a return-typed
+  // arrow only when its body is followed by the conditional's ':'. The probe
+  // that looks for that ':' must stop at the end of the statement when ASI
+  // ends it, or a later `name:` (a type annotation or a label) would be read
+  // as the conditional's ':'. ASI needs the compatibility flag, so these
+  // shapes cannot live in the JS suite.
+  const cases = [
+    {
+      desc: "parenthesized consequent, arrow alternate, then an annotated declaration",
+      source: "const a = 1, x = 7\nconst r = a ? (x) : c => 9\nlet z: number = 1\nconsole.log(r, z)\n",
+      output: "7 1\n",
+    },
+    {
+      desc: "object-literal arrow body with the ':' on the next line",
+      source: "const a = 0\nconst r = a\n  ? (l) => ({ a: 1 })\n  : (l) => ({ y: l })\nconsole.log(JSON.stringify(r(3)))\n",
+      output: '{"y":3}\n',
+    },
+  ] as const;
+
+  for (const { desc, source, output } of cases)
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
+      const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
+      if (res.exitCode !== 0)
+        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+      if (normalizeLineEndings(res.json.output) !== output)
+        throw new Error(`${label}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+    }
+
+  // Neither reading closes every conditional, so these stay SyntaxErrors.
+  assertSyntaxErrorInBothModes(
+    "const r = 1 ? (l) => ({ a: 1 });\n",
+    "arrow consequent with no ':' is rejected",
+    [],
+    { messageIncludes: 'Expected ":" in conditional expression' },
+  );
+  assertSyntaxErrorInBothModes(
+    "const r = 1 ? (x): number => x : 2 : 3;\n",
+    "return-typed arrow consequent with a surplus ':' is rejected",
+  );
+}
+
 console.log("\nAll test-cli-parser.ts tests passed.");
