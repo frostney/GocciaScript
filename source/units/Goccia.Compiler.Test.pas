@@ -794,12 +794,13 @@ end;
 
 // Issue #1666: the hidden `__super__` local of an anonymous class with a
 // heritage was declared in the enclosing block and its register released
-// twice, so a local declared after the block shared a register with a live
-// one.
+// twice, so a register allocated after the block was one a live local still
+// held: the returned arrow was created into `c`'s register.
 procedure TTestCompiler.TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
 var
   Module: TGocciaBytecodeModule;
   Func: TGocciaFunctionTemplate;
+  I, ClosureReg: Integer;
 
   function SlotOf(const AName: string): Integer;
   var
@@ -829,6 +830,14 @@ begin
     Expect<Boolean>(SlotOf('b') <> SlotOf('a')).ToBe(True);
     Expect<Boolean>(SlotOf('c') <> SlotOf('a')).ToBe(True);
     Expect<Boolean>(SlotOf('c') <> SlotOf('b')).ToBe(True);
+    ClosureReg := -1;
+    for I := 0 to Func.CodeCount - 1 do
+      if TGocciaOpCode(DecodeOp(Func.GetInstruction(I))) = OP_CLOSURE then
+        ClosureReg := DecodeA(Func.GetInstruction(I));
+    Expect<Boolean>(ClosureReg >= 0).ToBe(True);
+    Expect<Boolean>(ClosureReg <> SlotOf('a')).ToBe(True);
+    Expect<Boolean>(ClosureReg <> SlotOf('b')).ToBe(True);
+    Expect<Boolean>(ClosureReg <> SlotOf('c')).ToBe(True);
   finally
     Module.Free;
   end;
