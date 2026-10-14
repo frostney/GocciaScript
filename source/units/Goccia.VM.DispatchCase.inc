@@ -3293,23 +3293,30 @@
         SetupAutoAccessorValue(Template.GetConstantUnchecked(C).StringValue,
           B, RegisterToValue(FRegisters[A]));
 
+      // R[A+1] of the decorator opcodes after OP_BEGIN_DECORATORS holds the
+      // session OP_BEGIN_DECORATORS stored in R[B] for the same class.
       OP_BEGIN_DECORATORS:
-        BeginDecorators(RegisterToValue(FRegisters[A]), RegisterToValue(FRegisters[A + 1]));
+        SetRegister(B, BeginDecorators(RegisterToValue(FRegisters[A]),
+          RegisterToValue(FRegisters[A + 1])));
 
       OP_APPLY_ELEMENT_DECORATOR_CONST:
         if B <> 0 then
-          ApplyElementDecorator(RegisterToValue(FRegisters[A]),
+          ApplyElementDecorator(RegisterToValue(FRegisters[A + 1]),
+            RegisterToValue(FRegisters[A]),
             Template.GetConstantUnchecked(C).StringValue,
             RegisterToValue(FRegisters[B]))
         else
-          ApplyElementDecorator(RegisterToValue(FRegisters[A]),
+          ApplyElementDecorator(RegisterToValue(FRegisters[A + 1]),
+            RegisterToValue(FRegisters[A]),
             Template.GetConstantUnchecked(C).StringValue);
 
       OP_APPLY_CLASS_DECORATOR:
-        ApplyClassDecorator(RegisterToValue(FRegisters[A]));
+        ApplyClassDecorator(RegisterToValue(FRegisters[A + 1]),
+          RegisterToValue(FRegisters[A]));
 
       OP_FINISH_DECORATORS:
-        SetRegister(A, FinishDecorators(RegisterToValue(FRegisters[A])));
+        SetRegister(A, FinishDecorators(RegisterToValue(FRegisters[A + 1]),
+          RegisterToValue(FRegisters[A])));
 
       OP_GET_GLOBAL, OP_GET_GLOBAL_DECLARED:
       begin
