@@ -454,13 +454,20 @@ begin
   FValue := AValue;
 end;
 
+{ Marks what the binding holds without reading it: reading a local binding
+  in its temporal dead zone raises, and a collection runs whenever a module
+  body allocates, so a namespace object marked while its module is still
+  evaluating (a cycle, or any reload) would throw out of the collector. A
+  forwarded binding holds nothing of its own; its source module's roots mark
+  the value. }
 procedure TGocciaModuleExportBinding.MarkReferences;
-var
-  Value: TGocciaValue;
 begin
-  Value := GetValue;
-  if Assigned(Value) then
-    Value.MarkReferences;
+  if Assigned(FSourceModule) then
+    Exit;
+  if Assigned(FEnvironment) then
+    FEnvironment.MarkReferences
+  else if Assigned(FValue) then
+    FValue.MarkReferences;
 end;
 
 { TGocciaModuleImportBinding }

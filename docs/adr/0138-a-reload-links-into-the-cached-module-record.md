@@ -25,6 +25,13 @@ freed record was still in use:
   `AddRootObject` keeps a set, not a count (ADR 0133), so nothing rooted the
   environment the cached record now read its exports from.
 
+Every reload also evaluates a module whose namespace object is already alive
+while its exports are uninitialized. Marking a namespace object read each
+export's value, and reading a binding in its temporal dead zone raises, so a
+collection during the reload's evaluation threw a `ReferenceError` out of the
+collector. A first load in an import cycle, or a module that imports its own
+namespace, could hit the same throw.
+
 ## Decision
 
 A JavaScript module keeps one record for as long as its loader caches it. A
@@ -50,6 +57,10 @@ Nothing but the reload refers to that record, and it holds only values, so
 record before the loader frees it. The move transfers the environment's root
 rather than sharing it.
 
+Marking an export binding no longer reads it. A local binding marks its
+environment, a value binding its value, and a forwarded binding nothing, since
+its source module's roots mark what it forwards.
+
 ## Consequences
 
 - `LoadModule` returns the same record before and after any number of reloads.
@@ -69,3 +80,5 @@ rather than sharing it.
   class instances, changed exports, a module linked during a reload that
   imports the reloading module, a reload that fails to link, JSON modules, and
   the live object count across 200 reloads.
+  `tests/language/modules/namespace-collection-during-evaluation.js` collects
+  while a module that imports its own namespace is still evaluating.
