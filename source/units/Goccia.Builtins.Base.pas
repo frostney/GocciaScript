@@ -161,9 +161,10 @@ begin
     FPreviousLive.FNextLive := FNextLive
   else
   begin
-    // The list head; the thread's cleanup may have released the list.
+    // The list head. The thread's cleanup may have released the list this
+    // builtin was on, and a later one must not take over its tail.
     Roots := GBuiltinRoots;
-    if Assigned(Roots) then
+    if Assigned(Roots) and (Roots.FHead = Self) then
       Roots.FHead := FNextLive;
   end;
   if Assigned(FNextLive) then

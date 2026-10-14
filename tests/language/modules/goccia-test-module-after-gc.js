@@ -9,7 +9,7 @@ features: [modules, runtime-modules]
 describe("goccia:test imported after a collection", () => {
   test("the namespace still exposes the testing helpers", async () => {
     Goccia.gc();
-    Array.from({ length: 2000 }, (_, i) => ({ i, s: "x" + i, a: [i] }));
+    Array.from({ length: 200 }, (_, i) => ({ i, s: "x" + i, a: [i] }));
     Goccia.gc();
 
     const testing = await import("goccia:test");

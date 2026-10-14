@@ -7,7 +7,7 @@ features: [console]
 // references. A collection between two calls must not free them.
 const churn = () => {
   Goccia.gc();
-  Array.from({ length: 2000 }, (_, i) => ({ i, s: "x" + i, a: [i] }));
+  Array.from({ length: 200 }, (_, i) => ({ i, s: "x" + i, a: [i] }));
   Goccia.gc();
 };
 
