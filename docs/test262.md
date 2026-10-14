@@ -262,7 +262,7 @@ Top-level global-code runtime negatives that expect `SyntaxError`, and every
 ```
 
 The runner then checks the escaped error's `constructor.name` (read from data
-properties only, so no user getter runs) against `negative.type`.
+properties only, so no accessor getter runs) against `negative.type`.
 
 The error-class identification uses `e.constructor.name`, matching the
 spec-visible constructor/prototype path. If this cannot identify the
@@ -295,10 +295,10 @@ only when all of these hold:
 2. the body was not evaluated: the escaped value is not the string
    `$DONOTEVALUATE()` throws (`Test262: This statement should not be
    evaluated.`);
-3. the error was raised before evaluation, as a host-level
-   `TGocciaSyntaxError` from the parser, early-error checks, or module
-   linking. A `SyntaxError` thrown as a JS value during evaluation does not
-   count;
+3. the error was raised before evaluation, as a host-level engine error
+   from the parser, early-error checks, or module linking (of these, only
+   `TGocciaSyntaxError` is named `SyntaxError`). A `SyntaxError` thrown as a
+   JS value during evaluation does not count;
 4. the error name equals `negative.type`.
 
 An engine that misses an early error therefore runs the body, reaches

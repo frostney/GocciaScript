@@ -980,8 +980,8 @@ end;
 { Unwrapped negative-runtime tests are graded against negative.type, which
   names the thrown value's constructor (test262's Test262Error has no own or
   inherited "name" data property). Mirror the wrapped path's
-  e.constructor.name, reading data properties only so grading never runs
-  user getters. }
+  e.constructor.name, reading data properties only so grading never calls
+  an accessor's getter. }
 function DataPropertyValue(const AObject: TGocciaObjectValue;
   const AName: string): TGocciaValue;
 var

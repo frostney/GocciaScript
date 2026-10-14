@@ -1194,7 +1194,9 @@ await section("test262 runner: negative tests need the expected error in the exp
       ["parse-wrong-type.js", [...negative("parse", "ReferenceError"), "$DONOTEVALUATE();", "var = ;"], "FAIL", "got SyntaxError"],
       ["parse-strict.js", [...negative("parse", "SyntaxError", ["onlyStrict"]), "$DONOTEVALUATE();", "var public = 1;"], "PASS", ""],
       ["parse-raw-missed.js", [...negative("parse", "SyntaxError", ["raw"]), 'throw "Test262: This statement should not be evaluated.";', "var x = 1;"], "FAIL", "$DONOTEVALUATE reached"],
-      ["parse-module-missed.js", [...negative("parse", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "export var a;", "export { a };"], "FAIL", "$DONOTEVALUATE reached"],
+      // raw gets no harness, so $DONOTEVALUATE is not even defined.
+      ["parse-raw-no-harness.js", [...negative("parse", "SyntaxError", ["raw"]), "$DONOTEVALUATE();", "var x = 1;"], "FAIL", "ReferenceError was thrown as a JS value"],
+      ["parse-module-missed.js", [...negative("parse", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "export const a = 1;"], "FAIL", "$DONOTEVALUATE reached"],
       ["resolution-rejected.js", [...negative("resolution", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "import { missing } from './resolution_FIXTURE.js';"], "PASS", ""],
       ["runtime-module.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new TypeError("x");'], "PASS", ""],
       ["runtime-module-wrong-type.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new RangeError("x");'], "FAIL", "got RangeError"],

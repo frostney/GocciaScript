@@ -1032,7 +1032,7 @@ function buildCommentMarkdown(
 
   if (regressed) {
     body += `> 🚫 **Regression vs cached \`main\` baseline.** ${delta.newFails.length} previously-passing test(s) now fail; pass count Δ ${delta.totalPassedDelta >= 0 ? "+" : ""}${delta.totalPassedDelta}. This run blocks merge — see "Newly failing" below.\n\n`;
-  } else if (contractChanged) {
+  } else if (contractChanged && delta.newFails.length > 0) {
     body += `> ℹ️ **Grading contract changed (v${baseContract} → v${currentContract}).** The cached \`main\` baseline was graded under the previous contract, so ${delta.newFails.length} PASS → FAIL transition(s) are reported but do not block. The next \`main\` run republishes the baseline under v${currentContract}.\n\n`;
   }
   const baselineByCat = new Map<string, CategorySummary>();
