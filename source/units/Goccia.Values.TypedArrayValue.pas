@@ -1544,12 +1544,12 @@ end;
 // Copies AByteCount bytes from ASource's data block at ASourceByteIndex to
 // ATarget's data block at ATargetByteIndex as one block. The copy has memmove
 // semantics: when both ranges share a data block the result is as if the
-// source bytes were cloned first, as SetTypedArrayFromTypedArray (ES2026
-// §23.2.3.25.1) clones a source on the target's buffer. Callers have validated
-// detachment and lengths; this repeats one explicit range check against the
-// current data blocks and copies nothing, answering False, when either range
-// falls outside its block, so the caller can fall back to its element-wise
-// path.
+// source bytes were cloned first, as ES2026 §23.2.3.26.2
+// SetTypedArrayFromTypedArray step 19 clones a source on the target's buffer.
+// Callers have validated detachment and lengths; this repeats one explicit
+// range check against the current data blocks and copies nothing, answering
+// False, when either range falls outside its block, so the caller can fall
+// back to its element-wise path.
 function TryCopyTypedArrayBytes(const ASource: TGocciaTypedArrayValue;
   const ASourceByteIndex: Integer; const ATarget: TGocciaTypedArrayValue;
   const ATargetByteIndex, AByteCount: Integer): Boolean;
@@ -1975,7 +1975,7 @@ begin
   Result := AThisValue;
 end;
 
-// ES2026 §23.2.3.3 %TypedArray%.prototype.copyWithin(target, start [, end])
+// ES2026 §23.2.3.6 %TypedArray%.prototype.copyWithin(target, start [, end])
 function TGocciaTypedArrayValue.TypedArrayCopyWithin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
@@ -2070,10 +2070,10 @@ begin
     CopyBytes := CopyElements * BPE;
     SourceByteIndex := TA.FByteOffset + First * BPE;
     TargetByteIndex := NewTA.FByteOffset;
-    // Step 14.g.ix copies the same element type byte by byte in ascending
-    // order. A block move is the same copy unless a species result views the
-    // source's data block at a higher overlapping index, where ascending order
-    // repeats source bytes.
+    // ES2026 §23.2.3.27 step 14.g.ix: the same element type is copied byte by
+    // byte in ascending order. A block move is the same copy unless a species
+    // result views the source's data block at a higher overlapping index,
+    // where ascending order repeats source bytes.
     TA.SyncBufferData;
     NewTA.SyncBufferData;
     if (Pointer(TA.FBufferData) = Pointer(NewTA.FBufferData)) and
@@ -2153,7 +2153,7 @@ begin
   Result := NewTA;
 end;
 
-// ES2026 §23.2.3.25 %TypedArray%.prototype.set(source [, offset])
+// ES2026 §23.2.3.26 %TypedArray%.prototype.set(source [, offset])
 function TGocciaTypedArrayValue.TypedArraySet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, SrcTA: TGocciaTypedArrayValue;
@@ -2189,12 +2189,13 @@ begin
     if (TargetOffset > TargetLen) or
        (SourceLen > TargetLen - TargetOffset) then
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
-    // ES2026 §23.2.3.25.1 step 1.b: mixed BigInt/Number content types throw
+    // ES2026 §23.2.3.26.2 step 17: mixed BigInt/Number content types throw
     if IsBigIntKind(TA.FKind) <> IsBigIntKind(SrcTA.FKind) then
       ThrowTypeError(SErrorBigIntTypedArrayRequiresBigInt, SSuggestBigIntTypedArrayValue);
-    // The same element type transfers the bytes unchanged. One block move is
-    // that transfer, and covers the clone of a source sharing the target's
-    // data block, since the move handles overlap.
+    // ES2026 §23.2.3.26.2 SetTypedArrayFromTypedArray steps 19 and 23: the
+    // same element type transfers the bytes unchanged. One block move is that
+    // transfer, and covers the clone of a source sharing the target's data
+    // block, since the move handles overlap.
     if (SrcTA.FKind = TA.FKind) and
        TryCopyTypedArrayBytes(SrcTA, SrcTA.FByteOffset, TA,
          TA.FByteOffset + TargetOffset * TA.FElementSize,
@@ -2219,7 +2220,7 @@ begin
   end
   else
   begin
-    // ES2026 §23.2.3.25.2 SetTypedArrayFromArrayLike
+    // ES2026 §23.2.3.26.1 SetTypedArrayFromArrayLike
     SrcObj := ToObject(AArgs.GetElement(0));
     SrcLen := LengthOfArrayLike(SrcObj);
     if (TargetOffset > TargetLen) or
@@ -3371,8 +3372,9 @@ begin
       ThrowTypeError(SErrorBigIntTypedArrayCannotMix, SSuggestBigIntTypedArrayValue);
     Len := SrcTA.Length;
     NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
-    // InitializeTypedArrayFromTypedArray: the same element type clones the
-    // source bytes (CloneArrayBuffer), which one block move does.
+    // ES2026 §23.2.5.1.2 InitializeTypedArrayFromTypedArray step 11: the same
+    // element type clones the source bytes (CloneArrayBuffer), which one block
+    // move does.
     if (SrcTA.Kind = FKind) and
        TryCopyTypedArrayBytes(SrcTA, SrcTA.FByteOffset, NewTA, 0, Len * BPE) then
       Exit(NewTA);
