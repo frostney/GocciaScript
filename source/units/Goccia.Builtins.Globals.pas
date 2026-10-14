@@ -1156,18 +1156,8 @@ var
   ErrorName: string;
   NameValue: TGocciaValue;
   Prototype: TGocciaObjectValue;
-  Roots: TGocciaActiveRootFrame;
 begin
-  { The name is read before the error is registered in AMemory, and reading it
-    can run a getter. A dense array element or a Set item is otherwise held only
-    by its container, which that getter can empty. }
-  Roots.Initialize;
-  try
-    Roots.Add(AError);
-    NameValue := AError.GetProperty(PROP_NAME);
-  finally
-    Roots.Clear;
-  end;
+  NameValue := AError.GetProperty(PROP_NAME);
   if NameValue is TGocciaStringLiteralValue then
     ErrorName := SerializedErrorName(TGocciaStringLiteralValue(NameValue).Value)
   else
