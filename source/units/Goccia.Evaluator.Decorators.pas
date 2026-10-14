@@ -14,9 +14,10 @@ uses
 type
   { The list of extra initializers a class's decorators of one placement add
     through context.addInitializer (decorators proposal,
-    CreateAddInitializerFunction's _initializers_). Managed by the collector:
-    each addInitializer function made for it keeps it alive, so a decorator
-    that keeps its context can still reach it after the class is defined. }
+    CreateAddInitializerFunction's _initializers_). Managed by the garbage
+    collector: each addInitializer function made for it keeps it alive, so a
+    decorator that keeps its context can still reach it after the class is
+    defined. }
   TGocciaInitializerCollector = class(TGCManagedObject)
   private
     FInitializers: array of TGocciaValue;
@@ -30,11 +31,10 @@ type
   { An initializer addInitializer accepted that is callable but not a
     function object: a callable Proxy, or a class (calling which throws a
     TypeError). A class runs its initializers as function objects, so this
-    stands in for the value and performs Call(value, receiver) on it. Script
-    never sees it. }
+    stands in for the value, keeps it alive as its CapturedRoot, and performs
+    Call(value, receiver) on it. Script never sees it. }
   TGocciaCallableInitializer = class(TGocciaNativeFunctionValue)
   private
-    FTarget: TGocciaValue;
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   public
@@ -135,7 +135,6 @@ end;
 constructor TGocciaCallableInitializer.Create(const ATarget: TGocciaValue);
 begin
   inherited CreateWithoutPrototype(Invoke, '', 0);
-  FTarget := ATarget;
   CapturedRoot := ATarget;
 end;
 
@@ -143,7 +142,7 @@ function TGocciaCallableInitializer.Invoke(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := DispatchCall(FTarget, AArgs, AThisValue);
+  Result := DispatchCall(CapturedRoot, AArgs, AThisValue);
 end;
 
 { TGocciaAddInitializerFunction }
