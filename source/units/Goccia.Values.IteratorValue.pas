@@ -1580,35 +1580,25 @@ end;
 
 { Iterator.from() }
 
+// ES2026 §27.1.3.2.2 Iterator.from ( O )
+//
+// One TGocciaActiveRootFrame holds everything this function reads again
+// after guest code runs (issue #1655): the host object, the
+// [Symbol.iterator] method while it is called, the iterator it returns and
+// that iterator's next method. OrdinaryHasInstance walks the iterator's
+// prototype chain, which runs a Proxy's getPrototypeOf trap, and next is
+// stored in the wrapper only after that.
 function TGocciaIteratorValue.IteratorFrom(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value, IteratorConstructor, IteratorMethod, IteratorObj, NextMethod: TGocciaValue;
   IteratorHost: TGocciaObjectValue;
   IteratorReceiver: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
-  GC: TGarbageCollector;
-  HostWasRooted, MethodWasRooted, IteratorWasRooted: Boolean;
-
-  function AddRootIfNeeded(const ARootValue: TGocciaValue): Boolean;
-  begin
-    Result := Assigned(GC) and Assigned(ARootValue) and
-      not GC.IsTempRoot(ARootValue);
-    if Result then
-      GC.AddTempRoot(ARootValue);
-  end;
-
-  procedure RemoveRootIfNeeded(const ARootValue: TGocciaValue;
-    const AWasRooted: Boolean);
-  begin
-    if AWasRooted then
-      GC.RemoveTempRoot(ARootValue);
-  end;
-
+  Roots: TGocciaActiveRootFrame;
 begin
   if AArgs.Length < 1 then
     ThrowTypeError(SErrorIteratorFromRequiresArg, SSuggestIteratorFromArg);
 
-  GC := TGarbageCollector.Instance;
   Value := AArgs.GetElement(0);
 
   if Value is TGocciaObjectValue then
@@ -1626,8 +1616,9 @@ begin
     ThrowTypeError(SErrorIteratorFromRequiresIterable,
       SSuggestIteratorFromArg);
 
-  HostWasRooted := AddRootIfNeeded(IteratorHost);
+  Roots.Initialize;
   try
+    Roots.Add(IteratorHost);
     IteratorMethod := IteratorHost.GetSymbolPropertyWithReceiver(
       TGocciaSymbolValue.WellKnownIterator, IteratorReceiver);
     if Assigned(IteratorMethod) and
@@ -1637,17 +1628,13 @@ begin
       if not IteratorMethod.IsCallable then
         ThrowTypeError(Format(SErrorValueNotFunction, ['[Symbol.iterator]']),
           SSuggestIteratorProtocol);
-      MethodWasRooted := AddRootIfNeeded(IteratorMethod);
+      Roots.Add(IteratorMethod);
+      CallArgs := TGocciaArgumentsCollection.Create;
       try
-        CallArgs := TGocciaArgumentsCollection.Create;
-        try
-          IteratorObj := InvokeCallable(IteratorMethod, CallArgs,
-            IteratorReceiver);
-        finally
-          CallArgs.Free;
-        end;
+        IteratorObj := InvokeCallable(IteratorMethod, CallArgs,
+          IteratorReceiver);
       finally
-        RemoveRootIfNeeded(IteratorMethod, MethodWasRooted);
+        CallArgs.Free;
       end;
     end
     else
@@ -1656,61 +1643,69 @@ begin
     if not (IteratorObj is TGocciaObjectValue) then
       ThrowTypeError(SErrorIteratorInvalid, SSuggestIteratorProtocol);
 
-    IteratorWasRooted := AddRootIfNeeded(IteratorObj);
-    try
-      NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
-      IteratorConstructor := GetSharedIteratorConstructor;
-      if not Assigned(IteratorConstructor) then
-        IteratorConstructor := TGocciaIteratorValue.CreateGlobalObject;
-      if OrdinaryHasInstance(IteratorConstructor, IteratorObj) then
-      begin
-        Result := IteratorObj;
-        Exit;
-      end;
-      Result := TGocciaWrapForValidIteratorValue.Create(IteratorObj,
-        NextMethod);
-    finally
-      RemoveRootIfNeeded(IteratorObj, IteratorWasRooted);
-    end;
+    Roots.Add(IteratorObj);
+    NextMethod := TGocciaObjectValue(IteratorObj).GetProperty(PROP_NEXT);
+    Roots.Add(NextMethod);
+    IteratorConstructor := GetSharedIteratorConstructor;
+    if not Assigned(IteratorConstructor) then
+      IteratorConstructor := TGocciaIteratorValue.CreateGlobalObject;
+    Roots.Add(IteratorConstructor);
+    if OrdinaryHasInstance(IteratorConstructor, IteratorObj) then
+      Exit(IteratorObj);
+    Result := TGocciaWrapForValidIteratorValue.Create(IteratorObj,
+      NextMethod);
   finally
-    RemoveRootIfNeeded(IteratorHost, HostWasRooted);
+    Roots.Clear;
   end;
 end;
 
 { Iterator.concat() }
 
-// TC39 Iterator Sequencing §1 Iterator.concat ( ...items )
+// ES2026 §27.1.3.2.1 Iterator.concat ( ...items )
+//
+// Each item's [Symbol.iterator] read can run a getter, so a method an earlier
+// getter returned is held only by the Pascal Iterables array while a later
+// one runs. One TGocciaActiveRootFrame holds every method until the concat
+// iterator owns them (issue #1655). The items themselves stay reachable from
+// AArgs.
 function TGocciaIteratorValue.IteratorConcat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I: Integer;
   Item, IteratorMethod: TGocciaValue;
   Iterables: array of TGocciaConcatIterableRecord;
+  Roots: TGocciaActiveRootFrame;
 begin
   // TC39 Iterator Sequencing §1 step 1: Let iterables be a new empty List.
   SetLength(Iterables, AArgs.Length);
 
-  // TC39 Iterator Sequencing §1 step 2: For each element item of items
-  for I := 0 to AArgs.Length - 1 do
-  begin
-    Item := AArgs.GetElement(I);
-
-    if Item is TGocciaObjectValue then
+  Roots.Initialize;
+  try
+    // TC39 Iterator Sequencing §1 step 2: For each element item of items
+    for I := 0 to AArgs.Length - 1 do
     begin
-      // TC39 Iterator Sequencing §1 step 2b: Let method be GetMethod(item, @@iterator)
-      IteratorMethod := TGocciaObjectValue(Item).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
-      // TC39 Iterator Sequencing §1 step 2c: If method is undefined, throw TypeError
-      if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) or not IteratorMethod.IsCallable then
-        ThrowTypeError(SErrorIteratorConcatNotIterable, SSuggestNotIterable);
-      Iterables[I].Iterable := Item;
-      Iterables[I].IteratorMethod := IteratorMethod;
-    end
-    else
-      // TC39 Iterator Sequencing §1 step 2a: If item is not an Object, throw TypeError
-      ThrowTypeError(SErrorIteratorConcatNotIterable, SSuggestNotIterable);
-  end;
+      Item := AArgs.GetElement(I);
 
-  // TC39 Iterator Sequencing §1 steps 3-6: Create iterator from closure
-  Result := TGocciaConcatIteratorValue.Create(Iterables);
+      if Item is TGocciaObjectValue then
+      begin
+        // TC39 Iterator Sequencing §1 step 2b: Let method be GetMethod(item, @@iterator)
+        IteratorMethod := TGocciaObjectValue(Item).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+        // TC39 Iterator Sequencing §1 step 2c: If method is undefined, throw TypeError
+        if not Assigned(IteratorMethod) or (IteratorMethod is TGocciaUndefinedLiteralValue) or not IteratorMethod.IsCallable then
+          ThrowTypeError(SErrorIteratorConcatNotIterable, SSuggestNotIterable);
+        Roots.Add(IteratorMethod);
+        Iterables[I].Iterable := Item;
+        Iterables[I].IteratorMethod := IteratorMethod;
+      end
+      else
+        // TC39 Iterator Sequencing §1 step 2a: If item is not an Object, throw TypeError
+        ThrowTypeError(SErrorIteratorConcatNotIterable, SSuggestNotIterable);
+    end;
+
+    // TC39 Iterator Sequencing §1 steps 3-6: Create iterator from closure
+    Result := TGocciaConcatIteratorValue.Create(Iterables);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { Iterator.zip() }

@@ -699,6 +699,12 @@ begin
 end;
 
 // ES2026 §20.1.2.7 Object.getOwnPropertyDescriptors(O)
+//
+// One TGocciaActiveRootFrame holds the result object and, for a Proxy, every
+// key the ownKeys trap returned (issue #1655). Each [[GetOwnProperty]] can run
+// a Proxy trap, and on an ordinary object a lazily installed member (a shim
+// global on globalThis, a shim member on Object.prototype) loads its shim as
+// bytecode, which reaches the VM's memory-pressure checkpoint.
 function TGocciaGlobalObject.ObjectGetOwnPropertyDescriptors(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Obj, Descriptors: TGocciaObjectValue;
@@ -708,22 +714,25 @@ var
   OwnSymbols: TArray<TGocciaSymbolValue>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
+  Roots: TGocciaActiveRootFrame;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.getOwnPropertyDescriptors', ThrowError);
 
   // Step 1: Let obj be ? ToObject(O)
   Obj := ToObject(AArgs.GetElement(0));
-  if (TGarbageCollector.Instance <> nil) and
-     not (AArgs.GetElement(0) is TGocciaObjectValue) then
-    TGarbageCollector.Instance.AddTempRoot(Obj);
+  Roots.Initialize;
   try
+    Roots.Add(Obj);
     // Step 2: Let ownKeys be ? obj.[[OwnPropertyKeys]]()
     // Step 3: Let descriptors be OrdinaryObjectCreate(%Object.prototype%)
     Descriptors := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(Descriptors);
 
     if Obj is TGocciaProxyValue then
     begin
       PropertyKeys := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
+      for KeyValue in PropertyKeys do
+        Roots.Add(KeyValue);
       for KeyValue in PropertyKeys do
       begin
         if KeyValue is TGocciaSymbolValue then
@@ -764,9 +773,7 @@ begin
     // Step 5: Return descriptors
     Result := Descriptors;
   finally
-    if (TGarbageCollector.Instance <> nil) and
-       not (AArgs.GetElement(0) is TGocciaObjectValue) then
-      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+    Roots.Clear;
   end;
 end;
 
