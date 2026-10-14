@@ -36,7 +36,7 @@
  * completed or read.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -193,6 +193,9 @@ async function runTest262(
     `--output=${output}`,
   ];
   if (options.filter) args.push(`--filter=${options.filter}`);
+  // A report left in --out-dir by an earlier run must not stand in for this
+  // run's when the runner exits before writing one.
+  rmSync(output, { force: true });
   const child = Bun.spawn(args, { stdout: Bun.file(log), stderr: "pipe" });
   const stderr = await new Response(child.stderr).text();
   const exitCode = await child.exited;
