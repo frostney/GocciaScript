@@ -192,7 +192,7 @@ var
 begin
   GC := TGarbageCollector.Instance;
   RunTestsValue :=
-    AEngine.Interpreter.GlobalScope.GetBinding('runTests').Value;
+    AEngine.GlobalScope.GetBinding('runTests').Value;
   if not (RunTestsValue is TGocciaFunctionBase) then
     raise Exception.Create('runTests global is not callable');
 

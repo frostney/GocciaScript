@@ -7,8 +7,10 @@ unit Goccia.Shims;
   legacy APIs (e.g. atob/btoa) are shimmed on top of them here.
 
   Each shim's Source is a valid GocciaScript module with a single named export.
-  LoadShimValue evaluates the module in a child scope and returns the exported
-  value, which the engine binds into the global scope.
+  LoadShimValue evaluates the module in a child scope through the engine's
+  executor and returns the exported value, which the engine binds into the
+  global scope. The bytecode executor compiles the shim, so every function it
+  defines is a VM closure; no interpreter is involved.
 
   A default shim is parsed once per thread runtime and its program is reused by
   every engine that thread builds; see "Shimmed Legacy Globals" in
@@ -21,8 +23,8 @@ interface
 uses
   Classes,
 
-  Goccia.Evaluator.Context,
-  Goccia.Interpreter,
+  Goccia.Executor,
+  Goccia.Scope,
   Goccia.Values.Primitives;
 
 type
@@ -32,47 +34,84 @@ type
     Source: string;     // GocciaScript module source with a single named export
   end;
 
+  { Where a prototype-member shim installs its export: the realm's
+    Object.prototype, Number.prototype or Array.prototype. }
+  TGocciaShimTarget = (stObjectPrototype, stNumberPrototype,
+    stArrayPrototype);
+
+  { One property a prototype-member shim installs, lazily: Name on Target.
+    Its value is the shim's export, or the export's ExportKey property when
+    ExportKey is set. An accessor member takes the getter and setter of the
+    export's own ExportKey accessor. OnlyIfAbsent installs nothing on a
+    target that already has an own Name. }
+  TGocciaShimPrototypeMember = record
+    Target: TGocciaShimTarget;
+    Name: string;
+    ExportKey: string;
+    Accessor: Boolean;
+    OnlyIfAbsent: Boolean;
+  end;
+  TGocciaShimPrototypeMembers = array of TGocciaShimPrototypeMember;
+
   { Defers a single name-bound shim's lex/parse/evaluate until the global is
-    first touched.  Holds the interpreter and shim definition; Materialize
+    first touched.  Holds the executor and shim definition; Materialize
     matches the of-object lazy factory the engine registers on globalThis.
     The engine owns the materializer for its lifetime. }
   TGocciaShimMaterializer = class
   private
-    FInterpreter: TGocciaInterpreter;
+    FExecutor: TGocciaExecutor;
     FShimIndex: Integer;
   public
-    constructor Create(const AInterpreter: TGocciaInterpreter;
+    constructor Create(const AExecutor: TGocciaExecutor;
       const AShimIndex: Integer);
     function Materialize: TGocciaValue;
+  end;
+
+  { Defers a prototype-member shim's lex/parse/evaluate until its member is
+    first touched. Materialize and MaterializeAccessor match the factories of
+    a lazy property (TGocciaLazyPropertyDescriptorData). The engine owns the
+    materializer for its lifetime. }
+  TGocciaShimMemberMaterializer = class
+  private
+    FExecutor: TGocciaExecutor;
+    FShimIndex: Integer;
+    FExportKey: string;
+  public
+    constructor Create(const AExecutor: TGocciaExecutor;
+      const AShimIndex: Integer; const AExportKey: string);
+    function Materialize: TGocciaValue;
+    procedure MaterializeAccessor(out AGetter, ASetter: TGocciaValue);
   end;
 
 function DefaultShimCount: Integer;
 function DefaultShim(const AIndex: Integer): TGocciaShimDefinition;
 
-{ True for shims that only mutate Object.prototype and export no value, so they
-  have no global name to bind lazily and must run eagerly at boot. }
-function IsSideEffectShim(const AName: string): Boolean;
+{ The prototype members default shim AIndex installs, or none for a shim
+  bound to a global name. A prototype-member shim has no global: the engine
+  installs each member as a lazy property of its target, so the shim loads
+  only when a member is first touched. }
+function ShimPrototypeMembers(
+  const AIndex: Integer): TGocciaShimPrototypeMembers;
 
 { Populate AShims with the names of all default shims.
   Call before RegisterBuiltIns so Goccia.shims reflects the names. }
 procedure RegisterDefaultShimNames(const AShims: TStringList);
 
-{ The context a shim program is evaluated in: a fresh module scope named
-  after AName under the interpreter's global scope, the interpreter's realm,
-  and no coverage. Exposed so Goccia.Shims.Test can evaluate a program the
-  way LoadShimValue does. }
-function CreateShimEvaluationContext(const AInterpreter: TGocciaInterpreter;
-  const AName: string): TGocciaEvaluationContext;
+{ The scope a shim program is evaluated in: a fresh module environment named
+  after AName under AGlobalScope. Exposed so Goccia.Shims.Test can evaluate a
+  program the way LoadShimValue does. }
+function CreateShimScope(const AGlobalScope: TGocciaScope;
+  const AName: string): TGocciaScope;
 
-{ Evaluate default shim AShimIndex (see DefaultShim) in a child scope and
-  return its exported value. Uses the interpreter for evaluation — consistent
-  with how InjectGlobalsFromModule already works in both engine modes. }
-function LoadShimValue(const AInterpreter: TGocciaInterpreter;
+{ Evaluate default shim AShimIndex (see DefaultShim) with AExecutor, in a
+  child scope of its global scope, and return its exported value. A shim is
+  evaluated once per realm; later calls return the realm's export. }
+function LoadShimValue(const AExecutor: TGocciaExecutor;
   const AShimIndex: Integer): TGocciaValue;
 
 { Return the realm's original Date constructor without consulting the mutable
   global property.  Materializes the Date shim on first use. }
-function GetDateIntrinsic(const AInterpreter: TGocciaInterpreter): TGocciaValue;
+function GetDateIntrinsic(const AExecutor: TGocciaExecutor): TGocciaValue;
 
 { Drop the calling thread's cached shim programs. Registered with
   Goccia.ThreadCleanupRegistry, so a thread's runtime shutdown releases them;
@@ -88,12 +127,13 @@ uses
   SysUtils,
 
   Goccia.AST.Node,
-  Goccia.Evaluator,
+  Goccia.ExecutionContext,
   Goccia.Realm,
-  Goccia.Scope,
   Goccia.SourcePipeline,
   Goccia.ThreadCleanupRegistry,
-  Goccia.Values.DateData;
+  Goccia.Values.DateData,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue;
 
 const
   DATE_SHIM_NAME = 'Date';
@@ -483,8 +523,11 @@ const
         'const __GocciaDateSlots = new WeakMap();'#10 +
         'const __GocciaDateIsObject = (value: any): boolean =>'#10 +
         '  (typeof value === "object" && value !== null) || typeof value === "function";'#10 +
+        '// A Date of another realm keeps its time value in that realm''s map;'#10 +
+        '// __GocciaForeignDateValue and __GocciaSetForeignDateValue reach it.'#10 +
         'const __GocciaDateHasSlot = (date: any): boolean =>'#10 +
-        '  __GocciaDateSlots.get(date) !== undefined;'#10 +
+        '  __GocciaDateSlots.get(date) !== undefined ||'#10 +
+        '  (__GocciaDateIsObject(date) && __GocciaForeignDateValue(date) !== undefined);'#10 +
         'const __GocciaDateOrdinaryToPrimitive = (object: any, hint: string): any => {'#10 +
         '  const first: string = hint === "string" ? "toString" : "valueOf";'#10 +
         '  const second: string = hint === "string" ? "valueOf" : "toString";'#10 +
@@ -546,14 +589,18 @@ const
         '// entry reads back as undefined and doubles as the brand check. This keeps'#10 +
         '// the hot accessors to a single WeakMap lookup instead of has()+get().'#10 +
         'const __GocciaDateRequire = (date: any): void => {'#10 +
-        '  if (__GocciaDateSlots.get(date) === undefined) throw new TypeError("Date object expected");'#10 +
+        '  if (__GocciaDateSlots.get(date) === undefined && __GocciaForeignDateValue(date) === undefined)'#10 +
+        '    throw new TypeError("Date object expected");'#10 +
         '};'#10 +
         'const __GocciaDateGetSlot = (date: any): number => {'#10 +
         '  const value: any = __GocciaDateSlots.get(date);'#10 +
-        '  if (value === undefined) throw new TypeError("Date object expected");'#10 +
-        '  return value;'#10 +
+        '  if (value !== undefined) return value;'#10 +
+        '  const foreign: any = __GocciaForeignDateValue(date);'#10 +
+        '  if (foreign === undefined) throw new TypeError("Date object expected");'#10 +
+        '  return foreign;'#10 +
         '};'#10 +
         'const __GocciaDateSetSlot = (date: any, value: number): number => {'#10 +
+        '  if (__GocciaDateSlots.get(date) === undefined && __GocciaSetForeignDateValue(date, value)) return value;'#10 +
         '  __GocciaDateSlots.set(date, value);'#10 +
         '  return value;'#10 +
         '};'#10 +
@@ -572,7 +619,7 @@ const
         '    } else {'#10 +
         '      ms = makeDateEpochMilliseconds(args, Temporal.Now.timeZoneId());'#10 +
         '    }'#10 +
-        '    __GocciaDateSetSlot(this, ms);'#10 +
+        '    __GocciaDateSlots.set(this, ms);'#10 +
         '  }'#10 +
         '  static #require(date: any): void { __GocciaDateRequire(date); }'#10 +
         '  static #get(date: any): number { return __GocciaDateGetSlot(date); }'#10 +
@@ -816,7 +863,7 @@ const
         '  } else {'#10 +
         '    ms = makeDateEpochMilliseconds(args, Temporal.Now.timeZoneId());'#10 +
         '  }'#10 +
-        '  __GocciaDateSetSlot(this, ms);'#10 +
+        '  __GocciaDateSlots.set(this, ms);'#10 +
         '};'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "name", { value: "Date", configurable: true });'#10 +
         'Object.defineProperty(__GocciaDateConstructor, "length", { value: 7, configurable: true });'#10 +
@@ -829,181 +876,158 @@ const
         'Object.defineProperty(__GocciaDateClass.prototype, "constructor", { value: __GocciaDateConstructor, writable: true, configurable: true });'#10 +
         'export const Date = __GocciaDateConstructor;'
     ),
-    ( // toLocaleString for Number/Array via Intl. Installed eagerly: these
-      // prototype mutations were previously a side effect of the (now lazy)
-      // Date shim's static block, so they must not depend on Date being
-      // materialized. Intl is referenced only when a method is called, so this
-      // does not force Intl materialization at boot.
+    ( // toLocaleString for Number/Array via Intl, installed as lazy members of
+      // Number.prototype and Array.prototype (see ShimPrototypeMembers). Intl
+      // is referenced only when a method is called, so this does not force
+      // Intl materialization.
       Name: 'numberArrayToLocaleString';
       FileName: '<shim:numberArrayToLocaleString>';
       Source:
-        'export const numberArrayToLocaleString = ((numberProto: any, arrayProto: any): any => {'#10 +
-        '  const numberLocale = {'#10 +
-        '    toLocaleString(...args: any[]): string {'#10 +
-        '      const value: number = Number.prototype.valueOf.call(this);'#10 +
-        '      void Intl;'#10 +
-        '      return new __GocciaIntlNumberFormat(args[0], args[1]).format(value);'#10 +
-        '    }'#10 +
-        '  }.toLocaleString;'#10 +
-        '  const arrayLocale = {'#10 +
-        '    toLocaleString(...args: any[]): string {'#10 +
-        '      if (this === null || this === undefined) throw new TypeError("Array.prototype.toLocaleString called on null or undefined");'#10 +
-        '      const array: any = Object(this);'#10 +
-        '      const length: number = Number(array.length);'#10 +
-        '      const len: number = !Number.isFinite(length) || length <= 0 ? 0 : Math.trunc(length);'#10 +
-        '      const elementString = (index: number): string => {'#10 +
-        '        const nextElement: any = array[index];'#10 +
-        '        if (nextElement !== undefined && nextElement !== null) {'#10 +
-        '          const method: any = nextElement.toLocaleString;'#10 +
-        '          if (typeof method !== "function")'#10 +
-        '            throw new TypeError("Array.prototype.toLocaleString element toLocaleString is not a function");'#10 +
-        '          return String(method.call(nextElement, args[0], args[1]));'#10 +
-        '        }'#10 +
-        '        return "";'#10 +
-        '      };'#10 +
-        '      const build = (index: number, result: string): string => index >= len ? result : build(index + 1, result + (index > 0 ? "," : "") + elementString(index));'#10 +
-        '      return build(0, "");'#10 +
-        '    }'#10 +
-        '  }.toLocaleString;'#10 +
-        '  Object.defineProperty(numberProto, "toLocaleString", { value: numberLocale, writable: true, configurable: true });'#10 +
-        '  Object.defineProperty(arrayProto, "toLocaleString", { value: arrayLocale, writable: true, configurable: true });'#10 +
-        '  return numberLocale;'#10 +
-        '})(Number.prototype, Array.prototype);'
+        'const numberLocale = {'#10 +
+        '  toLocaleString(...args: any[]): string {'#10 +
+        '    const value: number = Number.prototype.valueOf.call(this);'#10 +
+        '    void Intl;'#10 +
+        '    return new __GocciaIntlNumberFormat(args[0], args[1]).format(value);'#10 +
+        '  }'#10 +
+        '}.toLocaleString;'#10 +
+        'const arrayLocale = {'#10 +
+        '  toLocaleString(...args: any[]): string {'#10 +
+        '    if (this === null || this === undefined) throw new TypeError("Array.prototype.toLocaleString called on null or undefined");'#10 +
+        '    const array: any = Object(this);'#10 +
+        '    const length: number = Number(array.length);'#10 +
+        '    const len: number = !Number.isFinite(length) || length <= 0 ? 0 : Math.trunc(length);'#10 +
+        '    const elementString = (index: number): string => {'#10 +
+        '      const nextElement: any = array[index];'#10 +
+        '      if (nextElement !== undefined && nextElement !== null) {'#10 +
+        '        const method: any = nextElement.toLocaleString;'#10 +
+        '        if (typeof method !== "function")'#10 +
+        '          throw new TypeError("Array.prototype.toLocaleString element toLocaleString is not a function");'#10 +
+        '        return String(method.call(nextElement, args[0], args[1]));'#10 +
+        '      }'#10 +
+        '      return "";'#10 +
+        '    };'#10 +
+        '    const build = (index: number, result: string): string => index >= len ? result : build(index + 1, result + (index > 0 ? "," : "") + elementString(index));'#10 +
+        '    return build(0, "");'#10 +
+        '  }'#10 +
+        '}.toLocaleString;'#10 +
+        'export const numberArrayToLocaleString = { number: numberLocale, array: arrayLocale };'
     ),
-    ( // ES2026 §20.1.3.2 — legacy hasOwnProperty via Object.hasOwn
+    ( // ES2026 §20.1.3.2 — legacy hasOwnProperty via Object.hasOwn, installed
+      // only on an Object.prototype that has no hasOwnProperty of its own
       Name: 'hasOwnProperty';
       FileName: '<shim:hasOwnProperty>';
       Source:
-        'export const hasOwnProperty = ((proto) => {'#10 +
-        '  if (!proto.hasOwnProperty) {'#10 +
-        '    Object.defineProperty(proto, "hasOwnProperty", {'#10 +
-        '      value(prop) { return Object.hasOwn(this, prop); },'#10 +
-        '      writable: true, enumerable: false, configurable: true'#10 +
-        '    });'#10 +
-        '  }'#10 +
-        '  return proto.hasOwnProperty;'#10 +
-        '})(Object.getPrototypeOf({}));'
+        'export const hasOwnProperty = {'#10 +
+        '  hasOwnProperty(prop) { return Object.hasOwn(this, prop); }'#10 +
+        '}.hasOwnProperty;'
     ),
-    ( // ES2026 §20.1.3.8 Object.prototype.__proto__
+    // The objects the Object.prototype member shims below define their
+    // methods on have a null prototype: Object.prototype holds the lazy
+    // placeholder of each member, which an ordinary object literal would look
+    // up, and so materialize, while the shim is still loading for it.
+    ( // ES2026 §20.1.3.8 Object.prototype.__proto__: the accessor pair of the
+      // exported object's own __proto__ property
       Name: '__proto__';
       FileName: '<shim:__proto__>';
       Source:
-        'export const __proto__ = ((objectPrototype) => {'#10 +
-        '  Object.defineProperty(objectPrototype, "__proto__", {'#10 +
-        '    get() { return Object.getPrototypeOf(this); },'#10 +
-        '    set(value) {'#10 +
-        '      if (this === null || this === undefined) throw new TypeError("Object.prototype.__proto__ called on null or undefined");'#10 +
-        '      if (value !== null && typeof value !== "object" && typeof value !== "function") return undefined;'#10 +
-        '      if (typeof this !== "object" && typeof this !== "function") return undefined;'#10 +
-        '      Object.setPrototypeOf(this, value);'#10 +
-        '      return undefined;'#10 +
-        '    },'#10 +
-        '    enumerable: false, configurable: true'#10 +
-        '  });'#10 +
-        '  const descriptor = Object.getOwnPropertyDescriptor(objectPrototype, "__proto__");'#10 +
-        '  Object.defineProperty(descriptor.get, "name", { value: "get __proto__", configurable: true });'#10 +
-        '  Object.defineProperty(descriptor.set, "name", { value: "set __proto__", configurable: true });'#10 +
-        '  return descriptor;'#10 +
-        '})(Object.getPrototypeOf({}));'
+        'export const __proto__ = {'#10 +
+        '  __proto__: null,'#10 +
+        '  get __proto__() { return Object.getPrototypeOf(this); },'#10 +
+        '  set __proto__(value) {'#10 +
+        '    if (this === null || this === undefined) throw new TypeError("Object.prototype.__proto__ called on null or undefined");'#10 +
+        '    if (value !== null && typeof value !== "object" && typeof value !== "function") return undefined;'#10 +
+        '    if (typeof this !== "object" && typeof this !== "function") return undefined;'#10 +
+        '    Object.setPrototypeOf(this, value);'#10 +
+        '    return undefined;'#10 +
+        '  }'#10 +
+        '};'
     ),
     ( // ES2026 §20.1.3.9.1 Object.prototype.__defineGetter__(P, getter)
       Name: 'defineGetter';
       FileName: '<shim:defineGetter>';
       Source:
-        'export const defineGetter = ((proto) => {'#10 +
-        '  Object.defineProperty(proto, "__defineGetter__", {'#10 +
-        '    value(prop, getter) {'#10 +
-        '      if (this === null || this === undefined) throw new TypeError("__defineGetter__ called on null or undefined");'#10 +
-        '      if (typeof getter !== "function") throw new TypeError("Object.prototype.__defineGetter__ getter must be callable");'#10 +
-        '      Object.defineProperty(Object(this), prop, { get: getter, enumerable: true, configurable: true });'#10 +
-        '      return undefined;'#10 +
-        '    },'#10 +
-        '    writable: true, enumerable: false, configurable: true'#10 +
-        '  });'#10 +
-        '  Object.defineProperty(proto.__defineGetter__, "name", { value: "__defineGetter__", configurable: true });'#10 +
-        '  Object.defineProperty(proto.__defineGetter__, "length", { value: 2, configurable: true });'#10 +
-        '  return proto.__defineGetter__;'#10 +
-        '})(Object.getPrototypeOf({}));'
+        'export const defineGetter = {'#10 +
+        '  __proto__: null,'#10 +
+        '  __defineGetter__(prop, getter) {'#10 +
+        '    if (this === null || this === undefined) throw new TypeError("__defineGetter__ called on null or undefined");'#10 +
+        '    if (typeof getter !== "function") throw new TypeError("Object.prototype.__defineGetter__ getter must be callable");'#10 +
+        '    Object.defineProperty(Object(this), prop, { get: getter, enumerable: true, configurable: true });'#10 +
+        '    return undefined;'#10 +
+        '  }'#10 +
+        '}.__defineGetter__;'
     ),
     ( // ES2026 §20.1.3.9.2 Object.prototype.__defineSetter__(P, setter)
       Name: 'defineSetter';
       FileName: '<shim:defineSetter>';
       Source:
-        'export const defineSetter = ((proto) => {'#10 +
-        '  Object.defineProperty(proto, "__defineSetter__", {'#10 +
-        '    value(prop, setter) {'#10 +
-        '      if (this === null || this === undefined) throw new TypeError("__defineSetter__ called on null or undefined");'#10 +
-        '      if (typeof setter !== "function") throw new TypeError("Object.prototype.__defineSetter__ setter must be callable");'#10 +
-        '      Object.defineProperty(Object(this), prop, { set: setter, enumerable: true, configurable: true });'#10 +
-        '      return undefined;'#10 +
-        '    },'#10 +
-        '    writable: true, enumerable: false, configurable: true'#10 +
-        '  });'#10 +
-        '  Object.defineProperty(proto.__defineSetter__, "name", { value: "__defineSetter__", configurable: true });'#10 +
-        '  Object.defineProperty(proto.__defineSetter__, "length", { value: 2, configurable: true });'#10 +
-        '  return proto.__defineSetter__;'#10 +
-        '})(Object.getPrototypeOf({}));'
+        'export const defineSetter = {'#10 +
+        '  __proto__: null,'#10 +
+        '  __defineSetter__(prop, setter) {'#10 +
+        '    if (this === null || this === undefined) throw new TypeError("__defineSetter__ called on null or undefined");'#10 +
+        '    if (typeof setter !== "function") throw new TypeError("Object.prototype.__defineSetter__ setter must be callable");'#10 +
+        '    Object.defineProperty(Object(this), prop, { set: setter, enumerable: true, configurable: true });'#10 +
+        '    return undefined;'#10 +
+        '  }'#10 +
+        '}.__defineSetter__;'
     ),
     ( // ES2026 Annex B §B.2.2.4 Object.prototype.__lookupGetter__(P)
       Name: 'lookupGetter';
       FileName: '<shim:lookupGetter>';
       Source:
-        'export const lookupGetter = ((proto) => {'#10 +
-        '  Object.defineProperty(proto, "__lookupGetter__", {'#10 +
-        '    value(prop) {'#10 +
-        '      if (this === null || this === undefined) throw new TypeError("__lookupGetter__ called on null or undefined");'#10 +
-        '      const key = Reflect.ownKeys(Object.defineProperty({}, prop, { value: undefined }))[0];'#10 +
-        '      const find = (object) => {'#10 +
-        '        if (object === null) return undefined;'#10 +
-        '        const descriptor = Object.getOwnPropertyDescriptor(object, key);'#10 +
-        '        if (descriptor !== undefined) return descriptor.get;'#10 +
-        '        return find(Object.getPrototypeOf(object));'#10 +
-        '      };'#10 +
-        '      return find(this);'#10 +
-        '    },'#10 +
-        '    writable: true, enumerable: false, configurable: true'#10 +
-        '  });'#10 +
-        '  Object.defineProperty(proto.__lookupGetter__, "name", { value: "__lookupGetter__", configurable: true });'#10 +
-        '  return proto.__lookupGetter__;'#10 +
-        '})(Object.getPrototypeOf({}));'
+        'export const lookupGetter = {'#10 +
+        '  __proto__: null,'#10 +
+        '  __lookupGetter__(prop) {'#10 +
+        '    if (this === null || this === undefined) throw new TypeError("__lookupGetter__ called on null or undefined");'#10 +
+        '    const key = Reflect.ownKeys(Object.defineProperty({}, prop, { value: undefined }))[0];'#10 +
+        '    const find = (object) => {'#10 +
+        '      if (object === null) return undefined;'#10 +
+        '      const descriptor = Object.getOwnPropertyDescriptor(object, key);'#10 +
+        '      if (descriptor !== undefined) return descriptor.get;'#10 +
+        '      return find(Object.getPrototypeOf(object));'#10 +
+        '    };'#10 +
+        '    return find(this);'#10 +
+        '  }'#10 +
+        '}.__lookupGetter__;'
     ),
     ( // ES2026 Annex B §B.2.2.5 Object.prototype.__lookupSetter__(P)
       Name: 'lookupSetter';
       FileName: '<shim:lookupSetter>';
       Source:
-        'export const lookupSetter = ((proto) => {'#10 +
-        '  Object.defineProperty(proto, "__lookupSetter__", {'#10 +
-        '    value(prop) {'#10 +
-        '      if (this === null || this === undefined) throw new TypeError("__lookupSetter__ called on null or undefined");'#10 +
-        '      const key = Reflect.ownKeys(Object.defineProperty({}, prop, { value: undefined }))[0];'#10 +
-        '      const find = (object) => {'#10 +
-        '        if (object === null) return undefined;'#10 +
-        '        const descriptor = Object.getOwnPropertyDescriptor(object, key);'#10 +
-        '        if (descriptor !== undefined) return descriptor.set;'#10 +
-        '        return find(Object.getPrototypeOf(object));'#10 +
-        '      };'#10 +
-        '      return find(this);'#10 +
-        '    },'#10 +
-        '    writable: true, enumerable: false, configurable: true'#10 +
-        '  });'#10 +
-        '  Object.defineProperty(proto.__lookupSetter__, "name", { value: "__lookupSetter__", configurable: true });'#10 +
-        '  return proto.__lookupSetter__;'#10 +
-        '})(Object.getPrototypeOf({}));'
+        'export const lookupSetter = {'#10 +
+        '  __proto__: null,'#10 +
+        '  __lookupSetter__(prop) {'#10 +
+        '    if (this === null || this === undefined) throw new TypeError("__lookupSetter__ called on null or undefined");'#10 +
+        '    const key = Reflect.ownKeys(Object.defineProperty({}, prop, { value: undefined }))[0];'#10 +
+        '    const find = (object) => {'#10 +
+        '      if (object === null) return undefined;'#10 +
+        '      const descriptor = Object.getOwnPropertyDescriptor(object, key);'#10 +
+        '      if (descriptor !== undefined) return descriptor.set;'#10 +
+        '      return find(Object.getPrototypeOf(object));'#10 +
+        '    };'#10 +
+        '    return find(this);'#10 +
+        '  }'#10 +
+        '}.__lookupSetter__;'
     )
   );
 
 var
-  GDateIntrinsicSlot: TGocciaRealmSlotId;
+  { Each default shim's export in a realm, filled when the shim is loaded. }
+  GShimExportSlots: array[Low(DEFAULT_SHIMS)..High(DEFAULT_SHIMS)] of
+    TGocciaRealmSlotId;
+
+  GShimInitIndex: Integer;
 
 threadvar
-  { One parsed program per DEFAULT_SHIMS entry, filled on first use. A parsed
-    program is never released while the thread's engines run: the functions a
-    shim defines keep pointing into its AST, and TGocciaProgram.Free releases
-    only the program node, not the statements under it. Parsing per engine
-    therefore leaked the shim ASTs of every engine: about 1.1 MB per engine
-    that uses Date on 64-bit, 0.93 MB of it the Date shim and 0.18 MB the
-    seven eager Object.prototype shims. The test runner builds one engine per
-    file, and its snapshot formatter uses Date in every one. }
+  { One parsed program per DEFAULT_SHIMS entry, filled on first use, so a
+    thread parses each shim once however many engines load it. The bytecode
+    executor compiles the program per engine; the interpreter executor
+    evaluates it, and the functions it defines then keep pointing into the
+    AST. A parsed program is therefore never released while the thread's
+    engines run, and TGocciaProgram.Free releases only the program node, not
+    the statements under it. Parsing per engine leaked the shim ASTs of every
+    engine: about 1.1 MB per engine that used Date on 64-bit. The test runner
+    builds one engine per file, and its snapshot formatter uses Date in every
+    one. }
   GShimPrograms: array of TGocciaProgram;
 
 function DefaultShimCount: Integer;
@@ -1064,110 +1088,170 @@ begin
       Inc(Result);
 end;
 
-function CreateShimEvaluationContext(const AInterpreter: TGocciaInterpreter;
-  const AName: string): TGocciaEvaluationContext;
-var
-  ModuleScope: TGocciaScope;
+function CreateShimScope(const AGlobalScope: TGocciaScope;
+  const AName: string): TGocciaScope;
 begin
-  ModuleScope := AInterpreter.GlobalScope.CreateChild(skModule,
-    'Shim:' + AName);
+  Result := AGlobalScope.CreateChild(skModule, 'Shim:' + AName);
   // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
   // Environment Record's [[ThisValue]] is undefined.
-  ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   // Built-in shims may need argument-count presence checks without
   // enabling the legacy arguments object for user code.
-  ModuleScope.ArgumentsObjectEnabled := True;
-  { A cached shim program is evaluated into every engine on the thread. That
-    is sound because evaluation writes nothing into the AST: what the shim
-    creates lives in ModuleScope and in the context's realm. The one node
-    that can cache a runtime value on itself is a tagged template, and the
-    evaluator caches its template object on the node only when the context
-    has no realm. CreateEvaluationContext always sets the interpreter's
-    realm, so the template object goes into that realm's template map, as
-    ES2026 §13.2.8.3 GetTemplateObject requires. Goccia.Shims.Test pins
-    this. }
-  Result := AInterpreter.CreateEvaluationContext;
-  Result.Scope := ModuleScope;
-  // Shims are engine implementation details, not user source. Keep their
-  // generated locations out of the caller's line/branch/function report.
-  Result.CoverageEnabled := False;
-  Result.HideFunctionSourceText := True;
+  Result.ArgumentsObjectEnabled := True;
 end;
 
-function LoadShimValue(const AInterpreter: TGocciaInterpreter;
+function LoadShimValue(const AExecutor: TGocciaExecutor;
   const AShimIndex: Integer): TGocciaValue;
 var
   CachedValue: TObject;
   ProgramNode: TGocciaProgram;
-  Context: TGocciaEvaluationContext;
-  I: Integer;
+  ForeignGetter, ForeignSetter: TGocciaValue;
+  RealmScope: TGocciaExecutionContextScope;
+  ShimScope: TGocciaScope;
 begin
-  if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
-  begin
-    CachedValue := CurrentRealm.GetSlot(GDateIntrinsicSlot);
+  { A lazy shim member can be touched from code of another realm (a
+    test262 $262.createRealm global, say): the shim belongs to the realm of
+    the engine whose executor loads it, so that realm is the current one
+    while the shim loads and registers what it provides. }
+  RealmScope := nil;
+  if Assigned(AExecutor.Realm) and (CurrentRealm <> AExecutor.Realm) then
+    RealmScope := TGocciaExecutionContextScope.Create(CreateExecutionContext(
+      AExecutor.Realm, AExecutor.GlobalScope,
+      DEFAULT_SHIMS[AShimIndex].FileName));
+  try
+    CachedValue := CurrentRealm.GetSlot(GShimExportSlots[AShimIndex]);
     if CachedValue is TGocciaValue then
       Exit(TGocciaValue(CachedValue));
-  end;
 
-  if Length(GShimPrograms) = 0 then
-    SetLength(GShimPrograms, Length(DEFAULT_SHIMS));
-  ProgramNode := GShimPrograms[AShimIndex];
-  if not Assigned(ProgramNode) then
-  begin
-    ProgramNode := ParseShimProgram(DEFAULT_SHIMS[AShimIndex]);
-    GShimPrograms[AShimIndex] := ProgramNode;
-  end;
+    if Length(GShimPrograms) = 0 then
+      SetLength(GShimPrograms, Length(DEFAULT_SHIMS));
+    ProgramNode := GShimPrograms[AShimIndex];
+    if not Assigned(ProgramNode) then
+    begin
+      ProgramNode := ParseShimProgram(DEFAULT_SHIMS[AShimIndex]);
+      GShimPrograms[AShimIndex] := ProgramNode;
+    end;
 
-  Context := CreateShimEvaluationContext(AInterpreter,
-    DEFAULT_SHIMS[AShimIndex].Name);
-  for I := 0 to ProgramNode.Body.Count - 1 do
-    EvaluateStatement(ProgramNode.Body[I], Context);
-  Result := Context.Scope.GetValue(DEFAULT_SHIMS[AShimIndex].Name);
-  if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
-  begin
-    CurrentRealm.SetSlot(GDateIntrinsicSlot, Result);
-    // The slot WeakMap is the [[DateValue]] internal slot native code tests
-    // for (Goccia.Values.DateData). Each evaluation of the shared program
-    // creates its own WeakMap in this realm's module scope.
-    RegisterDateValueStore(Context.Scope.GetValue(DATE_VALUE_STORE_NAME));
-    RegisterDateConstructor(Result);
+    ShimScope := CreateShimScope(AExecutor.GlobalScope,
+      DEFAULT_SHIMS[AShimIndex].Name);
+    if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
+    begin
+      // The Date shim's access to other realms' [[DateValue]] slots
+      // (Goccia.Values.DateData), bound in its own module environment only.
+      CreateForeignDateValueFunctions(ForeignGetter, ForeignSetter);
+      ShimScope.DefineLexicalBinding('__GocciaForeignDateValue',
+        ForeignGetter, dtConst);
+      ShimScope.DefineLexicalBinding('__GocciaSetForeignDateValue',
+        ForeignSetter, dtConst);
+    end;
+    AExecutor.EvaluateShim(ProgramNode, ShimScope,
+      DEFAULT_SHIMS[AShimIndex].FileName);
+    Result := ShimScope.GetValue(DEFAULT_SHIMS[AShimIndex].Name);
+    CurrentRealm.SetSlot(GShimExportSlots[AShimIndex], Result);
+    if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
+    begin
+      // The slot WeakMap is the [[DateValue]] internal slot native code tests
+      // for (Goccia.Values.DateData). Each evaluation of the shared program
+      // creates its own WeakMap in this realm's module scope.
+      RegisterDateValueStore(ShimScope.GetValue(DATE_VALUE_STORE_NAME));
+      RegisterDateConstructor(Result);
+    end;
+  finally
+    RealmScope.Free;
   end;
 end;
 
-function GetDateIntrinsic(
-  const AInterpreter: TGocciaInterpreter): TGocciaValue;
+function GetDateIntrinsic(const AExecutor: TGocciaExecutor): TGocciaValue;
 var
   I: Integer;
 begin
   for I := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
     if DEFAULT_SHIMS[I].Name = DATE_SHIM_NAME then
-      Exit(LoadShimValue(AInterpreter, I));
+      Exit(LoadShimValue(AExecutor, I));
   raise Exception.Create('Date shim is not registered');
 end;
 
-function IsSideEffectShim(const AName: string): Boolean;
+function ShimMember(const ATarget: TGocciaShimTarget;
+  const AName, AExportKey: string; const AAccessor: Boolean = False;
+  const AOnlyIfAbsent: Boolean = False): TGocciaShimPrototypeMember;
 begin
-  Result := (AName = 'numberArrayToLocaleString') or
-    (AName = 'hasOwnProperty') or (AName = '__proto__') or
-    (AName = 'defineGetter') or (AName = 'defineSetter') or
-    (AName = 'lookupGetter') or (AName = 'lookupSetter');
+  Result.Target := ATarget;
+  Result.Name := AName;
+  Result.ExportKey := AExportKey;
+  Result.Accessor := AAccessor;
+  Result.OnlyIfAbsent := AOnlyIfAbsent;
+end;
+
+function ShimPrototypeMembers(
+  const AIndex: Integer): TGocciaShimPrototypeMembers;
+var
+  Name: string;
+begin
+  Result := nil;
+  Name := DEFAULT_SHIMS[AIndex].Name;
+  if Name = 'numberArrayToLocaleString' then
+    Result := [ShimMember(stNumberPrototype, 'toLocaleString', 'number'),
+      ShimMember(stArrayPrototype, 'toLocaleString', 'array')]
+  else if Name = 'hasOwnProperty' then
+    Result := [ShimMember(stObjectPrototype, 'hasOwnProperty', '', False,
+      True)]
+  else if Name = '__proto__' then
+    Result := [ShimMember(stObjectPrototype, '__proto__', '__proto__', True)]
+  else if Name = 'defineGetter' then
+    Result := [ShimMember(stObjectPrototype, '__defineGetter__', '')]
+  else if Name = 'defineSetter' then
+    Result := [ShimMember(stObjectPrototype, '__defineSetter__', '')]
+  else if Name = 'lookupGetter' then
+    Result := [ShimMember(stObjectPrototype, '__lookupGetter__', '')]
+  else if Name = 'lookupSetter' then
+    Result := [ShimMember(stObjectPrototype, '__lookupSetter__', '')];
 end;
 
 constructor TGocciaShimMaterializer.Create(
-  const AInterpreter: TGocciaInterpreter; const AShimIndex: Integer);
+  const AExecutor: TGocciaExecutor; const AShimIndex: Integer);
 begin
   inherited Create;
-  FInterpreter := AInterpreter;
+  FExecutor := AExecutor;
   FShimIndex := AShimIndex;
 end;
 
 function TGocciaShimMaterializer.Materialize: TGocciaValue;
 begin
-  Result := LoadShimValue(FInterpreter, FShimIndex);
+  Result := LoadShimValue(FExecutor, FShimIndex);
+end;
+
+constructor TGocciaShimMemberMaterializer.Create(
+  const AExecutor: TGocciaExecutor; const AShimIndex: Integer;
+  const AExportKey: string);
+begin
+  inherited Create;
+  FExecutor := AExecutor;
+  FShimIndex := AShimIndex;
+  FExportKey := AExportKey;
+end;
+
+function TGocciaShimMemberMaterializer.Materialize: TGocciaValue;
+begin
+  Result := LoadShimValue(FExecutor, FShimIndex);
+  if FExportKey <> '' then
+    Result := (Result as TGocciaObjectValue).GetProperty(FExportKey);
+end;
+
+procedure TGocciaShimMemberMaterializer.MaterializeAccessor(out AGetter,
+  ASetter: TGocciaValue);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := (LoadShimValue(FExecutor, FShimIndex) as TGocciaObjectValue)
+    .GetOwnPropertyDescriptor(FExportKey);
+  AGetter := (Descriptor as TGocciaPropertyDescriptorAccessor).Getter;
+  ASetter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
 end;
 
 initialization
-  GDateIntrinsicSlot := RegisterRealmSlot('%Date%');
+  for GShimInitIndex := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
+    GShimExportSlots[GShimInitIndex] := RegisterRealmSlot(
+      '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%');
   RegisterThreadvarCleanup(@ReleaseShimProgramCache);
 
 end.

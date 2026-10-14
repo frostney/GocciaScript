@@ -65,7 +65,7 @@ begin
   Queue.HostEnvironment := Runtime.Engine.HostEnvironment;
   Queue.OwnerRealm := Runtime.Engine.Realm;
 
-  RegisterTimerGlobals(Runtime.Engine.Interpreter.GlobalScope, FHostToken);
+  RegisterTimerGlobals(Runtime.Engine.GlobalScope, FHostToken);
   Runtime.RegisterRuntimeGlobalName('setTimeout');
   Runtime.RegisterRuntimeGlobalName('setInterval');
   Runtime.RegisterRuntimeGlobalName('clearTimeout');

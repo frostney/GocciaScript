@@ -146,3 +146,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0134 — Direct eval compiles to a closure of its call site, and a sloppy eval's new vars live in a hidden variable object of the calling function](0134-direct-eval-compiles-as-a-closure-of-its-call-site.md)
 - [0135 — A call and a failed property read are located where V8 locates them](0135-calls-and-property-reads-are-located-where-v8-locates-them.md)
 - [0136 — A module's function declarations are compiled while it is linked, and read its imports by name](0136-module-function-declarations-are-compiled-while-linking.md)
+- [0137 — Bootstrap shims load on first use through the engine's executor, and a bytecode engine builds no interpreter](0137-bootstrap-shims-load-on-first-use-through-the-executor.md)

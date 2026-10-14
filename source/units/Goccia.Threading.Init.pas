@@ -104,7 +104,7 @@ var
   I: Integer;
 begin
   for I := Low(HeavyGlobals) to High(HeavyGlobals) do
-    AEngine.Interpreter.GlobalScope.GetValue(HeavyGlobals[I]);
+    AEngine.GlobalScope.GetValue(HeavyGlobals[I]);
 end;
 
 end.

@@ -154,6 +154,9 @@ type
     const DefaultWarningUnsupportedFeatures = False;
     const DefaultSourceType: TGocciaSourceType = stScript;
   private
+    { The realm's global environment. The engine owns it; an interpreter, made
+      only for an interpreter executor, shares it. }
+    FGlobalScope: TGocciaGlobalScope;
     FInterpreter: TGocciaInterpreter;
     FSourcePath: string;
     FModuleLoader: TGocciaModuleLoader;
@@ -243,6 +246,10 @@ type
       const AFactory: TGocciaLazyPropertyFactory);
     procedure RegisterLazyBuiltinGlobalProperties;
     procedure ExecuteShims;
+    { The context a module program evaluates in at the top of this realm:
+      the global environment, the engine's module callbacks and language
+      profile. }
+    function CreateEvaluationContext: TGocciaEvaluationContext;
     procedure RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
     procedure RegisterGlobalThis;
     procedure RegisterGocciaScriptGlobal;
@@ -421,6 +428,10 @@ type
     class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult; overload;
 
     property Executor: TGocciaExecutor read FExecutor;
+    { The realm's global environment. }
+    property GlobalScope: TGocciaGlobalScope read FGlobalScope;
+    { The tree-walk interpreter, made only when the engine runs an
+      interpreter executor; nil with a bytecode executor. }
     property Interpreter: TGocciaInterpreter read FInterpreter;
     property Resolver: TGocciaModuleResolver read GetResolver;
     property ContentProvider: TGocciaModuleContentProvider read GetContentProvider;
@@ -637,10 +648,10 @@ end;
 procedure TGocciaEngine.RegisterGlobal(const AName: string;
   const AValue: TGocciaValue);
 begin
-  if FInterpreter.GlobalScope.ContainsOwnLexicalBinding(AName) then
+  if FGlobalScope.ContainsOwnLexicalBinding(AName) then
   begin
     if FInjectedGlobals.IndexOf(AName) >= 0 then
-      FInterpreter.GlobalScope.ForceUpdateBinding(AName, AValue)
+      FGlobalScope.ForceUpdateBinding(AName, AValue)
     else
       ThrowError(
         'Cannot override built-in global "' + AName + '" via globals injection.',
@@ -648,7 +659,7 @@ begin
   end
   else
   begin
-    FInterpreter.GlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
+    FGlobalScope.DefineLexicalBinding(AName, AValue, dtConst);
     FInjectedGlobals.Add(AName);
   end;
 end;
@@ -667,7 +678,7 @@ begin
   // TGocciaRuntimeCore.Install runs after each attach skips it, preserving the
   // lazy descriptor instead of resolving (and materializing) the value while
   // re-mirroring globals.
-  FInterpreter.GlobalScope.MarkGlobalObjectBackedBinding(AName);
+  FGlobalScope.MarkGlobalObjectBackedBinding(AName);
 end;
 
 procedure TGocciaEngine.DefineLazyObjectProperty(
@@ -1025,27 +1036,76 @@ end;
 
 procedure TGocciaEngine.ExecuteShims;
 var
-  I: Integer;
+  I, J: Integer;
   Shim: TGocciaShimDefinition;
   Materializer: TGocciaShimMaterializer;
+  Member: TGocciaShimPrototypeMember;
+  MemberMaterializer: TGocciaShimMemberMaterializer;
+  Members: TGocciaShimPrototypeMembers;
+  Target: TGocciaObjectValue;
 begin
+  // No shim runs at boot. Each is compiled (or, in interpreted mode,
+  // evaluated) the first time a name it provides is touched: the heaviest
+  // shim (Date, ~671 source lines) is then never parsed for scripts that
+  // don't use it, and empty-script boot pays for none of them.
   for I := 0 to DefaultShimCount - 1 do
   begin
     Shim := DefaultShim(I);
-    if IsSideEffectShim(Shim.Name) then
-      // Mutates Object.prototype with no exported global to bind lazily, so it
-      // runs eagerly at boot.
-      LoadShimValue(FInterpreter, I)
-    else
+    Members := ShimPrototypeMembers(I);
+    if Length(Members) = 0 then
     begin
-      // Defer the name-bound shim's lex/parse/tree-walk until the global is
-      // first touched.  The heaviest shim (Date, ~671 source lines) is then
-      // never parsed for scripts that don't use it.
-      Materializer := TGocciaShimMaterializer.Create(FInterpreter, I);
+      Materializer := TGocciaShimMaterializer.Create(FExecutor, I);
       FLazyThunks.Add(Materializer);
       RegisterLazyGlobal(Shim.Name, Materializer.Materialize, dtConst);
+      Continue;
+    end;
+    // A prototype-member shim installs each member as a lazy property of
+    // its prototype, in the order the shim used to define them at boot.
+    for J := 0 to High(Members) do
+    begin
+      Member := Members[J];
+      case Member.Target of
+        stNumberPrototype:
+          Target := TGocciaNumberObjectValue.GetSharedPrototype;
+        stArrayPrototype:
+          Target := GetSharedArrayPrototypeForRealm(FRealm);
+      else
+        Target := TGocciaObjectValue.SharedObjectPrototype;
+      end;
+      if not Assigned(Target) or
+         (Member.OnlyIfAbsent and Target.HasOwnProperty(Member.Name)) then
+        Continue;
+      MemberMaterializer := TGocciaShimMemberMaterializer.Create(FExecutor, I,
+        Member.ExportKey);
+      FLazyThunks.Add(MemberMaterializer);
+      if Member.Accessor then
+        Target.DefineProperty(Member.Name,
+          TGocciaLazyPropertyDescriptorData.CreateAccessor(
+            MemberMaterializer.MaterializeAccessor, [pfConfigurable]))
+      else
+        Target.DefineProperty(Member.Name,
+          TGocciaLazyPropertyDescriptorData.Create(
+            MemberMaterializer.Materialize, [pfWritable, pfConfigurable]));
     end;
   end;
+end;
+
+function TGocciaEngine.CreateEvaluationContext: TGocciaEvaluationContext;
+begin
+  Result := Default(TGocciaEvaluationContext);
+  Result.Realm := FRealm;
+  Result.Scope := FGlobalScope;
+  Result.OnError := ThrowError;
+  Result.LoadModule := FModuleLoader.LoadModule;
+  Result.LoadModuleSource := FModuleLoader.LoadModuleSourceValue;
+  Result.LoadDeferredModule := FModuleLoader.LoadDeferredModuleNamespaceValue;
+  Result.ResolveModuleURL := FModuleLoader.ResolveModuleURL;
+  Result.CurrentFilePath := FSourcePath;
+  Result.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
+  Result.StrictTypes := FStrictTypes;
+  Result.NonStrictMode := cfNonStrictMode in FCompatibility;
+  Result.CompatibilityNonStrictMode := cfNonStrictMode in FCompatibility;
 end;
 
 procedure TGocciaEngine.Initialize(const AFileName: string;
@@ -1100,11 +1160,30 @@ begin
   FShims := TStringList.Create;
   FExtensions := TGocciaEngineExtensionList.Create(True);
 
-  FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
-    FModuleLoader);
-  FInterpreter.Realm := FRealm;
-  FInterpreter.JSXEnabled := ppJSX in FPreprocessors;
-  FRealm.GlobalEnv := FInterpreter.GlobalScope;
+  FGlobalScope := TGocciaGlobalScope.Create;
+  // Seed the error channel at the root: every scope created under the
+  // global scope inherits OnError at construction, so code whose scope
+  // chain was built before an error callback reached it (class bodies,
+  // static methods) can still throw structured errors.
+  FGlobalScope.OnError := ThrowError;
+  FModuleLoader.BindRuntime(FGlobalScope, ThrowError);
+  FGlobalScope.LoadModule := FModuleLoader.LoadModule;
+  FGlobalScope.LoadModuleSource := FModuleLoader.LoadModuleSourceValue;
+  FGlobalScope.LoadDeferredModule :=
+    FModuleLoader.LoadDeferredModuleNamespaceValue;
+  FGlobalScope.ResolveModuleURL := FModuleLoader.ResolveModuleURL;
+  FModuleLoader.JSXEnabled := ppJSX in FPreprocessors;
+  // Only an interpreter executor runs the tree-walk interpreter, which
+  // shares the engine's global environment.
+  FInterpreter := nil;
+  if FExecutor is TGocciaInterpreterExecutor then
+  begin
+    FInterpreter := TGocciaInterpreter.Create(AFileName, ASourceLines,
+      FModuleLoader, FGlobalScope);
+    FInterpreter.Realm := FRealm;
+    FInterpreter.JSXEnabled := ppJSX in FPreprocessors;
+  end;
+  FRealm.GlobalEnv := FGlobalScope;
   FRealm.LoadedModules := FModuleLoader;
   FLabelStatementsEnabled := False;
   FForInLoopsEnabled := False;
@@ -1119,9 +1198,9 @@ begin
     FModuleLoader.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
   end;
   FRealmExecutionContext := TGocciaExecutionContextScope.Create(
-    CreateExecutionContext(FRealm, FInterpreter.GlobalScope, AFileName));
+    CreateExecutionContext(FRealm, FGlobalScope, AFileName));
 
-  TGarbageCollector.Instance.AddRootObject(FInterpreter.GlobalScope);
+  TGarbageCollector.Instance.AddRootObject(FGlobalScope);
 
   FInjectedGlobals := TStringList.Create;
   // Owns the lazy materializers (shims, runtime namespaces) whose factory
@@ -1130,18 +1209,18 @@ begin
   RegisterDefaultShimNames(FShims);
   PinSingletons;
   RegisterBuiltIns;
-  ExecuteShims;
 
   // The executor was provided by the caller via the constructor.  When the
-  // caller chose interpreter mode, bind the bootstrapped interpreter into
-  // it now so its tree-walk methods can dispatch.  The bytecode executor
-  // does not need this hook.
+  // caller chose interpreter mode, bind the interpreter into it now so its
+  // tree-walk methods can dispatch.
   FRetainedModules := Contnrs.TObjectList.Create(True);
 
   if FExecutor is TGocciaInterpreterExecutor then
     TGocciaInterpreterExecutor(FExecutor).Interpreter := FInterpreter;
   FExecutor.RetainModuleCallback := DoRetainModule;
-  FExecutor.Initialize(FInterpreter.GlobalScope, FModuleLoader, AFileName);
+  FExecutor.Initialize(FGlobalScope, FModuleLoader, AFileName);
+  // A shim loads through the executor, so the executor is set up first.
+  ExecuteShims;
 
   if Assigned(FFunctionConstructor) then
   begin
@@ -1290,8 +1369,8 @@ begin
       FModuleLoader.Resolver.ProviderAudit := nil;
   end;
 
-  if (TGarbageCollector.Instance <> nil) and Assigned(FInterpreter) then
-    TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
+  if (TGarbageCollector.Instance <> nil) and Assigned(FGlobalScope) then
+    TGarbageCollector.Instance.RemoveRootObject(FGlobalScope);
 
     FRetainedModules.Free;
     FLazyThunks.Free;
@@ -1321,6 +1400,8 @@ begin
     FInjectedGlobals.Free;
     FShims.Free;
     FInterpreter.Free;
+    if TGarbageCollector.Instance = nil then
+      FGlobalScope.Free;
     if FOwnsModuleLoader then
       FModuleLoader.Free;
 
@@ -1352,7 +1433,7 @@ procedure TGocciaEngine.RegisterBuiltIns;
 var
   Scope: TGocciaScope;
 begin
-  Scope := FInterpreter.GlobalScope;
+  Scope := FGlobalScope;
 
   // Core language built-ins: always registered.
   FBuiltinMath := TGocciaMath.Create('Math', Scope, ThrowError,
@@ -1382,7 +1463,7 @@ end;
 procedure TGocciaEngine.DefineBuiltinBindingPlaceholder(const AName: string;
   const ADeclarationType: TGocciaDeclarationType);
 begin
-  FInterpreter.GlobalScope.DefineLexicalBinding(AName,
+  FGlobalScope.DefineLexicalBinding(AName,
     TGocciaUndefinedLiteralValue.UndefinedValue, ADeclarationType, True);
 end;
 
@@ -1414,7 +1495,7 @@ function TGocciaEngine.MaterializeTemporalGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinTemporal) then
     FBuiltinTemporal := TGocciaTemporalBuiltin.Create('Temporal',
-      FInterpreter.GlobalScope, ThrowError, FHostEnvironment, False);
+      FGlobalScope, ThrowError, FHostEnvironment, False);
   Result := FBuiltinTemporal.TemporalNamespace;
 end;
 
@@ -1422,7 +1503,7 @@ function TGocciaEngine.MaterializeIntlGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinIntl) then
   begin
-    FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', FInterpreter.GlobalScope,
+    FBuiltinIntl := TGocciaIntlBuiltin.Create('Intl', FGlobalScope,
       ThrowError, FHostEnvironment, False);
     // Capture the intrinsic %Intl.NumberFormat% / %Intl.DateTimeFormat% into
     // hidden global bindings the locale shims use. ECMA-402 toLocaleString
@@ -1434,13 +1515,13 @@ begin
     // Define-if-absent: user code could have declared these reserved names
     // before first touching Intl; redeclaring a const binding would throw and
     // abort materialization.
-    if not FInterpreter.GlobalScope.ContainsOwnLexicalBinding(
+    if not FGlobalScope.ContainsOwnLexicalBinding(
       '__GocciaIntlNumberFormat') then
-      FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlNumberFormat',
+      FGlobalScope.DefineLexicalBinding('__GocciaIntlNumberFormat',
         FBuiltinIntl.IntlNamespace.GetProperty('NumberFormat'), dtConst, True);
-    if not FInterpreter.GlobalScope.ContainsOwnLexicalBinding(
+    if not FGlobalScope.ContainsOwnLexicalBinding(
       '__GocciaIntlDateTimeFormat') then
-      FInterpreter.GlobalScope.DefineLexicalBinding('__GocciaIntlDateTimeFormat',
+      FGlobalScope.DefineLexicalBinding('__GocciaIntlDateTimeFormat',
         FBuiltinIntl.IntlNamespace.GetProperty('DateTimeFormat'), dtConst, True);
   end;
   Result := FBuiltinIntl.IntlNamespace;
@@ -1450,14 +1531,14 @@ function TGocciaEngine.MaterializeAtomicsGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinAtomics) then
     FBuiltinAtomics := TGocciaAtomics.Create(CONSTRUCTOR_ATOMICS,
-      FInterpreter.GlobalScope, ThrowError, False);
+      FGlobalScope, ThrowError, False);
   Result := FBuiltinAtomics.BuiltinObject;
 end;
 
 function TGocciaEngine.MaterializeProxyGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinProxy) then
-    FBuiltinProxy := TGocciaGlobalProxy.Create(FInterpreter.GlobalScope, False);
+    FBuiltinProxy := TGocciaGlobalProxy.Create(FGlobalScope, False);
   Result := FBuiltinProxy.ConstructorValue;
 end;
 
@@ -1465,7 +1546,7 @@ function TGocciaEngine.MaterializeReflectGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinReflect) then
     FBuiltinReflect := TGocciaGlobalReflect.Create('Reflect',
-      FInterpreter.GlobalScope, ThrowError, False);
+      FGlobalScope, ThrowError, False);
   Result := FBuiltinReflect.BuiltinObject;
 end;
 
@@ -1473,7 +1554,7 @@ function TGocciaEngine.MaterializeDisposableStackGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinDisposableStack) then
     FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create(
-      CONSTRUCTOR_DISPOSABLE_STACK, FInterpreter.GlobalScope, ThrowError,
+      CONSTRUCTOR_DISPOSABLE_STACK, FGlobalScope, ThrowError,
       False);
   Result := FBuiltinDisposableStack.DisposableStackConstructorValue;
 end;
@@ -1482,7 +1563,7 @@ function TGocciaEngine.MaterializeAsyncDisposableStackGlobal: TGocciaValue;
 begin
   if not Assigned(FBuiltinDisposableStack) then
     FBuiltinDisposableStack := TGocciaBuiltinDisposableStack.Create(
-      CONSTRUCTOR_DISPOSABLE_STACK, FInterpreter.GlobalScope, ThrowError,
+      CONSTRUCTOR_DISPOSABLE_STACK, FGlobalScope, ThrowError,
       False);
   Result := FBuiltinDisposableStack.AsyncDisposableStackConstructorValue;
 end;
@@ -1580,7 +1661,7 @@ begin
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
   TypeDef.PrototypeParent := nil;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
   FObjectConstructor := ObjectConstructor;
   if (GetErrorProto <> nil) and (GetErrorProto.Prototype = nil) then
     GetErrorProto.Prototype := ObjectConstructor.Prototype;
@@ -1593,7 +1674,7 @@ begin
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalArray);
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   ArrayConstructor := TGocciaArrayClassValue(GenericConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_MAP;
@@ -1604,7 +1685,7 @@ begin
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinMap);
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   MapConstructor := TGocciaMapClassValue(GenericConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_SET;
@@ -1615,7 +1696,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   SetConstructor := TGocciaSetClassValue(GenericConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_WEAK_MAP;
@@ -1626,7 +1707,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   WeakMapConstructor := TGocciaWeakMapClassValue(GenericConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_WEAK_SET;
@@ -1637,7 +1718,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   WeakSetConstructor := TGocciaWeakSetClassValue(GenericConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_WEAK_REF;
@@ -1648,7 +1729,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   WeakRefConstructor := TGocciaWeakRefClassValue(GenericConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_FINALIZATION_REGISTRY;
@@ -1659,7 +1740,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   FinalizationRegistryConstructor :=
     TGocciaFinalizationRegistryClassValue(GenericConstructor);
 
@@ -1678,7 +1759,7 @@ begin
         TGocciaPropertyDescriptorData.Create(
           FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key),
           [pfConfigurable, pfWritable]));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst, True);
+  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst, True);
 
   SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
   TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
@@ -1689,12 +1770,12 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SpeciesGetter, 'get [Symbol.species]', 0),
       nil, [pfConfigurable]));
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
+  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
 
   DataViewConstructor := TGocciaDataViewClassValue.Create(CONSTRUCTOR_DATA_VIEW, nil);
   TGocciaDataViewValue.ExposePrototype(DataViewConstructor);
   DataViewConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  FInterpreter.GlobalScope.DefineLexicalBinding(CONSTRUCTOR_DATA_VIEW, DataViewConstructor, dtConst, True);
+  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_DATA_VIEW, DataViewConstructor, dtConst, True);
 
   // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
   FTypedArrayIntrinsic := TGocciaTypedArrayIntrinsicClassValue.Create('TypedArray', nil);
@@ -1757,11 +1838,11 @@ begin
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalString);
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   StringConstructor := TGocciaStringClassValue(GenericConstructor);
 
   FBuiltinRegExp := TGocciaGlobalRegExp.Create(CONSTRUCTOR_REGEXP,
-    FInterpreter.GlobalScope, ThrowError, ObjectConstructor.Prototype);
+    FGlobalScope, ThrowError, ObjectConstructor.Prototype);
 
   TypeDef.ConstructorName := CONSTRUCTOR_NUMBER;
   TypeDef.Kind := gtdkPrimitiveWrapper;
@@ -1771,7 +1852,7 @@ begin
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalNumber);
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   NumberConstructor := TGocciaNumberClassValue(GenericConstructor);
 
   TypeDef.ConstructorName := CONSTRUCTOR_BOOLEAN;
@@ -1782,7 +1863,7 @@ begin
   TypeDef.StaticSource := nil;
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
   BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
 
   FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
@@ -1815,7 +1896,7 @@ begin
   TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
   TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
   TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
-  FInterpreter.GlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst, True);
+  FGlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst, True);
 
   // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
   if TGocciaSymbolValue.SharedPrototype <> nil then
@@ -1885,7 +1966,7 @@ begin
     TGocciaTypedArrayValue.SetUint8Prototype(TAConstructor.Prototype);
   end;
 
-  FInterpreter.GlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst, True);
+  FGlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst, True);
 end;
 
 procedure TGocciaEngine.RegisterGlobalThis;
@@ -1895,7 +1976,7 @@ var
   Name: string;
   Flags: TPropertyFlags;
 begin
-  Scope := FInterpreter.GlobalScope;
+  Scope := FGlobalScope;
   if Scope.ContainsOwnLexicalBinding(PROP_GLOBAL_THIS) and
      (Scope.GetValue(PROP_GLOBAL_THIS) is TGocciaObjectValue) then
     GlobalThisObj := TGocciaObjectValue(Scope.GetValue(PROP_GLOBAL_THIS))
@@ -1973,7 +2054,7 @@ begin
   // target, so a code frame captured while this engine runs comes from its own
   // source — never the caller engine's — and is restored when the scope pops.
   Result := TGocciaExecutionContextScope.Create(
-    CreateExecutionContext(FRealm, FInterpreter.GlobalScope, FSourcePath),
+    CreateExecutionContext(FRealm, FGlobalScope, FSourcePath),
     FModuleLoader.DiagnosticScope);
 end;
 
@@ -2047,7 +2128,7 @@ begin
   GocciaObj.AssignProperty('gc', GCFunc);
 
   FGocciaGlobal := GocciaObj;
-  FInterpreter.GlobalScope.DefineLexicalBinding(PROP_GOCCIA, FGocciaGlobal, dtConst, True);
+  FGlobalScope.DefineLexicalBinding(PROP_GOCCIA, FGocciaGlobal, dtConst, True);
   finally
     RemoveTempRootIfNeeded(GocciaRoot);
     RemoveTempRootIfNeeded(ShimsRoot);
@@ -2913,7 +2994,7 @@ begin
   try
     if FSourceType = stModule then
     begin
-      ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
+      ModuleScope := FGlobalScope.CreateChild(skModule,
         'Module:' + AFileName);
       ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
       ModuleScope.NonStrictMode := False;
@@ -3024,7 +3105,7 @@ begin
       'Host module "%s" conflicts with a configured virtual module.',
       [AName]);
   AModule.IsHostOwned := True;
-  FInterpreter.GlobalModules.AddOrSetValue(AName, AModule);
+  FModuleLoader.GlobalModules.AddOrSetValue(AName, AModule);
 end;
 
 procedure TGocciaEngine.RegisterHostModule(const AName: string;
@@ -3145,7 +3226,7 @@ begin
         // fresh module scope so import.meta resolves and top-level
         // `this` is undefined, matching the semantics imported
         // modules already receive via TGocciaModuleLoader.
-        ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
+        ModuleScope := FGlobalScope.CreateChild(skModule,
           'Module:' + FSourcePath);
         ModuleScope.ThisValue :=
           TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -3155,7 +3236,7 @@ begin
         EntryModule := nil;
           EntryModuleEvaluationStarted := False;
           EntryRequestedModules := nil;
-          ModuleContext := FInterpreter.CreateEvaluationContext;
+          ModuleContext := CreateEvaluationContext;
         ModuleContext.Realm := FRealm;
         ModuleContext.Scope := ModuleScope;
         ModuleContext.CurrentFilePath := FSourcePath;
@@ -3313,7 +3394,7 @@ begin
       else
       begin
         CheckTopLevelRedeclarations(PipelineResult.ProgramNode,
-          FInterpreter.GlobalScope, FSourcePath);
+          FGlobalScope, FSourcePath);
         FLastTiming.Result := ExecuteProgram(PipelineResult.ProgramNode);
         ExecEnd := GetNanoseconds;
         FLastTiming.CompileTimeNanoseconds :=
@@ -3542,11 +3623,11 @@ procedure TGocciaEngine.SetStrictTypes(const AValue: Boolean);
 begin
   FStrictTypes := AValue;
   if Assigned(FInterpreter) then
-  begin
     FInterpreter.StrictTypesEnabled := AValue;
-    if Assigned(FInterpreter.GlobalScope) then
-      FInterpreter.GlobalScope.StrictTypes := AValue;
-  end;
+  if Assigned(FModuleLoader) then
+    FModuleLoader.StrictTypesEnabled := AValue;
+  if Assigned(FGlobalScope) then
+    FGlobalScope.StrictTypes := AValue;
   if FExecutor is TGocciaBytecodeExecutor then
     TGocciaBytecodeExecutor(FExecutor).StrictTypes := AValue;
 end;
@@ -3554,7 +3635,9 @@ end;
 procedure TGocciaEngine.SetPreprocessors(const AValue: TGocciaPreprocessors);
 begin
   FPreprocessors := AValue;
-  FInterpreter.JSXEnabled := ppJSX in AValue;
+  if Assigned(FInterpreter) then
+    FInterpreter.JSXEnabled := ppJSX in AValue;
+  FModuleLoader.JSXEnabled := ppJSX in AValue;
 end;
 
 procedure TGocciaEngine.SetCompatibility(AValue: TGocciaCompatibilityFlags);
@@ -3564,15 +3647,20 @@ begin
   FForInLoopsEnabled := cfForIn in AValue;
   FExperimentalJSModuleSourceEnabled :=
     cfExperimentalJSModuleSource in AValue;
-  FInterpreter.ASIEnabled := cfASI in AValue;
-  FInterpreter.VarEnabled := cfVar in AValue;
-  FInterpreter.FunctionEnabled := cfFunction in AValue;
-  FInterpreter.TraditionalForLoopsEnabled := cfTraditionalFor in AValue;
-  FInterpreter.WhileLoopsEnabled := cfWhileLoops in AValue;
-  FInterpreter.LooseEqualityEnabled := cfLooseEquality in AValue;
-  FInterpreter.NonStrictModeEnabled := cfNonStrictMode in AValue;
-  FInterpreter.ArgumentsObjectEnabled :=
-    cfArgumentsObject in AValue;
+  if Assigned(FInterpreter) then
+  begin
+    FInterpreter.ASIEnabled := cfASI in AValue;
+    FInterpreter.VarEnabled := cfVar in AValue;
+    FInterpreter.FunctionEnabled := cfFunction in AValue;
+    FInterpreter.TraditionalForLoopsEnabled := cfTraditionalFor in AValue;
+    FInterpreter.WhileLoopsEnabled := cfWhileLoops in AValue;
+    FInterpreter.LooseEqualityEnabled := cfLooseEquality in AValue;
+    FInterpreter.NonStrictModeEnabled := cfNonStrictMode in AValue;
+    FInterpreter.ArgumentsObjectEnabled :=
+      cfArgumentsObject in AValue;
+  end;
+  FGlobalScope.NonStrictMode := cfNonStrictMode in AValue;
+  FGlobalScope.ArgumentsObjectEnabled := cfArgumentsObject in AValue;
   if Assigned(FModuleLoader) then
   begin
     FModuleLoader.Compatibility := AValue;

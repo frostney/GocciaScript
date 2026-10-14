@@ -113,7 +113,7 @@ begin
   // Reading each lazy global through the scope forces its backing object to
   // materialize, including any retained prototype-definition threadvars.
   for I := Low(LazyGlobals) to High(LazyGlobals) do
-    AEngine.Interpreter.GlobalScope.GetValue(LazyGlobals[I]);
+    AEngine.GlobalScope.GetValue(LazyGlobals[I]);
 end;
 
 procedure TLeakTests.TestRegistryDrainIsIdempotent;

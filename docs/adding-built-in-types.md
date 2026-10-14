@@ -385,7 +385,7 @@ FBuiltinYour := TGocciaGlobalYour.Create(
   CONSTRUCTOR_YOUR, Scope, ThrowError);
 ```
 
-Runtime globals do not use a selector check in the engine. Create and register them from the concrete runtime extension's `Attach` method, using `ARuntime.Engine.Interpreter.GlobalScope` and `ARuntime.Engine.ThrowError`; free extension-owned built-ins from `Detach`. If the extension exposes a JS-visible runtime global name, also call `Runtime.RegisterRuntimeGlobalName('YourType')` from `Attach` so the runtime-globals list on the `Goccia` namespace stays accurate.
+Runtime globals do not use a selector check in the engine. Create and register them from the concrete runtime extension's `Attach` method, using `ARuntime.Engine.GlobalScope` and `ARuntime.Engine.ThrowError`; free extension-owned built-ins from `Detach`. If the extension exposes a JS-visible runtime global name, also call `Runtime.RegisterRuntimeGlobalName('YourType')` from `Attach` so the runtime-globals list on the `Goccia` namespace stays accurate.
 
 ### 4e. RegisterBuiltinConstructors
 
@@ -399,7 +399,7 @@ begin
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinYour);
   TypeDef.PrototypeParent := ObjectConstructor.Prototype;
   TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FInterpreter.GlobalScope, TypeDef, SpeciesGetter,
+  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter,
     GenericConstructor);
   YourConstructor := TGocciaYourClassValue(GenericConstructor);
 end;
@@ -438,7 +438,7 @@ procedure TGocciaYourRuntimeExtension.Attach(const ARuntime: TGocciaRuntimeCore)
 begin
   inherited Attach(ARuntime);
   FBuiltinYour := TGocciaGlobalYour.Create(CONSTRUCTOR_YOUR,
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError);
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_YOUR);
 end;
 

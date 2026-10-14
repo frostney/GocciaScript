@@ -1592,7 +1592,7 @@ begin
       AEngine.ModuleLoader.EvaluateModuleBody;
     ManifestLoader.InstantiateModuleFunctions :=
       AEngine.ModuleLoader.InstantiateModuleFunctions;
-    ManifestLoader.BindRuntime(AEngine.Interpreter.GlobalScope,
+    ManifestLoader.BindRuntime(AEngine.GlobalScope,
       AEngine.ThrowError);
 
     ManifestModule := ManifestLoader.LoadHostModule(APath, APath);
