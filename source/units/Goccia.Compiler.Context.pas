@@ -84,6 +84,9 @@ type
       strict class body clears for its duration and then restores. }
     NonStrictCodeEnabled: Boolean;
     ArgumentsObjectEnabled: Boolean;
+    { Engine code (a bootstrap shim): its classes keep no source text, so
+      Function.prototype.toString shows them as built-ins. }
+    HideSourceText: Boolean;
     NonStrictMode: Boolean;
     DerivedConstructorThisGuard: Boolean;
     OptimizationOptions: TGocciaCompilerOptimizationOptions;

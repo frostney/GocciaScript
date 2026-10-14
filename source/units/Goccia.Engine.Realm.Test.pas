@@ -1540,8 +1540,8 @@ begin
       Executor);
     Engine.Execute;
 
-    Engine.Interpreter.GlobalScope.PredeclareLexicalBinding('Array', dtLet);
-    Engine.Interpreter.GlobalScope.DefineLexicalBinding('Array',
+    Engine.GlobalScope.PredeclareLexicalBinding('Array', dtLet);
+    Engine.GlobalScope.DefineLexicalBinding('Array',
       TGocciaStringLiteralValue.Create('lexical Array'), dtLet);
     Source.Text :=
       'globalThis.readCachedArray() === "lexical Array";';

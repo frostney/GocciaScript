@@ -53,6 +53,7 @@ type
     // eval compiles: that code is non-strict whatever the profile is.
     FCompatibilityNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
+    FHideSourceText: Boolean;
     FLabelReentryStatement: TGocciaStatement;
     FLoopReentryStatement: TGocciaStatement;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
@@ -140,6 +141,12 @@ type
     property NonStrictMode: Boolean read FNonStrictMode write FNonStrictMode;
     property ArgumentsObjectEnabled: Boolean
       read FArgumentsObjectEnabled write FArgumentsObjectEnabled;
+    { Compile engine code (a bootstrap shim): no function or class it defines
+      keeps its source text, so Function.prototype.toString shows each as a
+      built-in function with native code, as the interpreter does for a
+      shim. Runtime-only: such code is never serialized. }
+    property HideSourceText: Boolean read FHideSourceText
+      write FHideSourceText;
     property OptimizationOptions: TGocciaCompilerOptimizationOptions
       read FOptimizationOptions write FOptimizationOptions;
   end;
@@ -241,6 +248,7 @@ begin
     FCompatibilityNonStrictMode;
   Result.NonStrictCodeEnabled := FNonStrictMode;
   Result.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
+  Result.HideSourceText := FHideSourceText;
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
   Result.OptimizationOptions := FOptimizationOptions;
@@ -1842,6 +1850,15 @@ begin
   end;
 end;
 
+procedure ClearFunctionSourceText(const ATemplate: TGocciaFunctionTemplate);
+var
+  I: Integer;
+begin
+  ATemplate.SourceText := '';
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    ClearFunctionSourceText(ATemplate.GetFunction(I));
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
@@ -2035,6 +2052,10 @@ begin
         FCurrentScope.GetUpvalue(I).Index,
         FCurrentScope.GetUpvalue(I).Name);
     FModule.TopLevel := FCurrentTemplate;
+    // A function's source text is read while its body compiles (whether
+    // the body mentions `arguments`), so it is dropped only now.
+    if FHideSourceText then
+      ClearFunctionSourceText(FCurrentTemplate);
 
     Result := FModule;
     FModule := nil;

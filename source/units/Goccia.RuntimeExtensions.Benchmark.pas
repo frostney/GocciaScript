@@ -28,7 +28,7 @@ procedure TGocciaBenchmarkRuntimeExtension.Attach(
 begin
   inherited Attach(ARuntime);
   FBuiltinBenchmark := TGocciaBenchmark.Create('Benchmark',
-    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+    Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError);
   FMicrobenchModule := FBuiltinBenchmark.CreateModule;
   FMicrobenchModule.GetNamespaceObject;
   Runtime.Engine.ModuleLoader.GlobalModules.Add('goccia:microbench',

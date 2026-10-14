@@ -61,7 +61,7 @@ function TGocciaJSON5RuntimeExtension.MaterializeJSON5: TGocciaValue;
 begin
   if not Assigned(FBuiltinJSON5) then
     FBuiltinJSON5 := TGocciaJSON5Builtin.Create('JSON5',
-      Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError, False);
+      Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinJSON5.BuiltinObject;
 end;
 

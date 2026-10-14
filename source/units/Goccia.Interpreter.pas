@@ -30,6 +30,7 @@ type
   TGocciaInterpreter = class
   private
     FGlobalScope: TGocciaGlobalScope;
+    FOwnsGlobalScope: Boolean;
     FFileName: string;
     FSourceLines: TStringList;
     FASIEnabled: Boolean;
@@ -71,6 +72,11 @@ type
     constructor Create(const AFileName: string; const ASourceLines: TStringList); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
       const AModuleLoader: TGocciaModuleLoader); overload;
+    { Share AGlobalScope, which its owner (the engine) set up and frees, as
+      the global environment instead of making one. }
+    constructor Create(const AFileName: string; const ASourceLines: TStringList;
+      const AModuleLoader: TGocciaModuleLoader;
+      const AGlobalScope: TGocciaGlobalScope); overload;
     destructor Destroy; override;
     function Execute(const AProgram: TGocciaProgram): TGocciaValue;
     function LoadModule(const AModulePath, AImportingFilePath: string): TGocciaModule;
@@ -329,10 +335,22 @@ constructor TGocciaInterpreter.Create(const AFileName: string;
   const ASourceLines: TStringList;
   const AModuleLoader: TGocciaModuleLoader);
 begin
+  Create(AFileName, ASourceLines, AModuleLoader, nil);
+end;
+
+constructor TGocciaInterpreter.Create(const AFileName: string;
+  const ASourceLines: TStringList;
+  const AModuleLoader: TGocciaModuleLoader;
+  const AGlobalScope: TGocciaGlobalScope);
+begin
   FFileName := AFileName;
   FSourceLines := ASourceLines;
   FRealm := CurrentRealm;
-  FGlobalScope := TGocciaGlobalScope.Create;
+  FOwnsGlobalScope := not Assigned(AGlobalScope);
+  if FOwnsGlobalScope then
+    FGlobalScope := TGocciaGlobalScope.Create
+  else
+    FGlobalScope := AGlobalScope;
   // Seed the error channel at the root: every scope created under the
   // global scope inherits OnError at construction, so closures whose
   // lexical chain was built before any EvaluateStatements propagation
@@ -368,7 +386,7 @@ begin
     FModuleLoader.InstantiateModuleFunctions := nil;
   end;
 
-  if (TGarbageCollector.Instance = nil) then
+  if FOwnsGlobalScope and (TGarbageCollector.Instance = nil) then
     FGlobalScope.Free;
   if FOwnsModuleLoader then
     FModuleLoader.Free;

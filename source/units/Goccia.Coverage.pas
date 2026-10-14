@@ -141,6 +141,11 @@ type
       together dominate the per-line-hit cost of a coverage run. }
     FLastLookupPath: string;
     FLastLookupFile: TGocciaFileCoverage;
+    { Raw spellings of files that are engine code, not user source (the
+      bootstrap shims), and the record their hits go to instead, which is in
+      no report. }
+    FExcludedFiles: TGocciaCoveragePathMap;
+    FDiscardedFile: TGocciaFileCoverage;
     { AFilePath must already be canonical. }
     function GetOrCreateFile(const AFilePath: string): TGocciaFileCoverage;
     function CanonicalizePath(const AFilePath: string): string;
@@ -156,6 +161,10 @@ type
 
     procedure RegisterSourceFile(const AFilePath: string;
       const AExecutableLines: Integer);
+    { Leave the file named AFilePath, exactly as the VM reports it, out of
+      every report: its hits are recorded nowhere. For engine code that runs
+      as bytecode, such as a bootstrap shim. }
+    procedure ExcludeFile(const AFilePath: string);
     procedure RegisterSourceMap(const AFilePath: string;
       const ASourceMap: TGocciaSourceMap);
     procedure RecordLineHit(const AFilePath: string;
@@ -705,6 +714,7 @@ begin
   FSourceMaps := TGocciaSourceMapMap.Create;
   FPathCache := TGocciaCoveragePathMap.Create;
   FResolvedPaths := TGocciaCoveragePathMap.Create;
+  FExcludedFiles := TGocciaCoveragePathMap.Create;
   FEnabled := False;
   FLastLookupFile := nil;
 end;
@@ -732,6 +742,8 @@ begin
   end;
   FResolvedPaths.Free;
   FPathCache.Free;
+  FExcludedFiles.Free;
+  FDiscardedFile.Free;
   inherited;
 end;
 
@@ -763,9 +775,25 @@ function TGocciaCoverageTracker.FileFor(
 begin
   if Assigned(FLastLookupFile) and (AFilePath = FLastLookupPath) then
     Exit(FLastLookupFile);
-  Result := GetOrCreateFile(CanonicalizePath(AFilePath));
+  if (FExcludedFiles.Count > 0) and FExcludedFiles.ContainsKey(AFilePath) then
+  begin
+    if not Assigned(FDiscardedFile) then
+      FDiscardedFile := TGocciaFileCoverage.Create(AFilePath, 0);
+    Result := FDiscardedFile;
+  end
+  else
+    Result := GetOrCreateFile(CanonicalizePath(AFilePath));
   FLastLookupPath := AFilePath;
   FLastLookupFile := Result;
+end;
+
+procedure TGocciaCoverageTracker.ExcludeFile(const AFilePath: string);
+begin
+  if FExcludedFiles.ContainsKey(AFilePath) then
+    Exit;
+  FExcludedFiles.Add(AFilePath, AFilePath);
+  if AFilePath = FLastLookupPath then
+    FLastLookupFile := nil;
 end;
 
 function TGocciaCoverageTracker.ResolvedSourcePath(

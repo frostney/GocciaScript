@@ -775,7 +775,7 @@ begin
     Expect<Boolean>(Raised).ToBe(True);
     Expect<Boolean>(Assigned(Runtime.FindRuntimeExtension(
       TGocciaFFIRuntimeExtension))).ToBe(False);
-    Expect<Boolean>(Engine.Interpreter.GlobalScope.ContainsOwnLexicalBinding(
+    Expect<Boolean>(Engine.GlobalScope.ContainsOwnLexicalBinding(
       'FFI')).ToBe(False);
   finally
     Engine.Free;
@@ -790,7 +790,7 @@ begin
   try
     Runtime := AttachRuntime(Engine);
     Expect<Boolean>(InstallFFIIfGranted(Runtime)).ToBe(True);
-    Expect<Boolean>(Engine.Interpreter.GlobalScope.ContainsOwnLexicalBinding(
+    Expect<Boolean>(Engine.GlobalScope.ContainsOwnLexicalBinding(
       'FFI')).ToBe(True);
   finally
     Engine.Free;
