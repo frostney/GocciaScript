@@ -21,6 +21,9 @@ type
 
   TGocciaConsole = class(TGocciaBuiltin)
   private
+    { Label tables for console.time and console.count. Nothing but these
+      fields references them, so they are collector roots for the console's
+      lifetime (issue #1655). }
     FTimers: TGocciaObjectValue;
     FCounters: TGocciaObjectValue;
     FGroupDepth: Integer;
@@ -61,6 +64,7 @@ type
     function ConsoleTable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
+    destructor Destroy; override;
     property Enabled: Boolean read GetEnabled write SetEnabled;
     property OutputLines: TStrings read GetOutputLines write SetOutputLines;
     property OutputCallback: TGocciaConsoleOutputCallback read GetOutputCallback write SetOutputCallback;
@@ -72,7 +76,9 @@ implementation
 uses
   SysUtils,
 
-  TimingUtils;
+  TimingUtils,
+
+  Goccia.GarbageCollector;
 
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
@@ -82,6 +88,11 @@ begin
 
   FTimers := TGocciaObjectValue.Create;
   FCounters := TGocciaObjectValue.Create;
+  if Assigned(TGarbageCollector.Instance) then
+  begin
+    TGarbageCollector.Instance.AddRootObject(FTimers);
+    TGarbageCollector.Instance.AddRootObject(FCounters);
+  end;
   FGroupDepth := 0;
   FEnabled := True;
   FOutputLines := nil;
@@ -175,6 +186,19 @@ end;
 procedure TGocciaConsole.SetLogCallback(const AValue: TGocciaConsoleOutputCallback);
 begin
   FLogCallback := AValue;
+end;
+
+destructor TGocciaConsole.Destroy;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+  begin
+    GC.RemoveRootObject(FTimers);
+    GC.RemoveRootObject(FCounters);
+  end;
+  inherited;
 end;
 
 function TGocciaConsole.FormatArgs(const AArgs: TGocciaArgumentsCollection): string;
