@@ -17,6 +17,10 @@ var
   I: Integer;
   BuildTriggers: TStringList;
   BuildMode: TBuildMode = bmDev;
+  { --gc-stress: a development build with -dGOCCIA_GC_STRESS and heaptrc (-gh),
+    compiled into its own unit caches and written to build/gc-stress/ so it
+    never mixes with, or replaces, the ordinary binaries. }
+  GCStressBuild: Boolean = False;
   CleanRequested: Boolean = False;
   GVersion, GCommit, GBuildDate: string;
 
@@ -230,6 +234,21 @@ begin
   end;
 end;
 
+function GCStressExecutableDirectory: string;
+begin
+  Result := 'build' + DirectorySeparator + 'gc-stress';
+end;
+
+{ Root of the unit caches. The GC-stress build keeps its own, because FPC does
+  not recompile a unit when only the defines change: a shared cache would hand
+  stress-compiled units to an ordinary build, or the reverse. }
+function CompiledRootDirectory: string;
+begin
+  Result := 'build' + DirectorySeparator + 'compiled';
+  if GCStressBuild then
+    Result := Result + DirectorySeparator + 'gc-stress';
+end;
+
 function FPCArgs(const ASource: string;
   const AUnitOutputDirectory: string = ''): TStringArray;
 var
@@ -271,6 +290,12 @@ begin
       Args.Add('-Ct');
       Args.Add('-Cr');
       Args.Add('-Sa');
+      if GCStressBuild then
+      begin
+        Args.Add('-gh');
+        Args.Add('-dGOCCIA_GC_STRESS');
+        Args.Add('-FE' + GCStressExecutableDirectory);
+      end;
     end;
 
     Args.Add('-vw-n-h-i-l-d-u-t-p-c-x-');
@@ -291,13 +316,13 @@ begin
   RelativePath := ChangeFileExt(ATestFile, '');
   SafePath := StringReplace(RelativePath, '/', DirectorySeparator, [rfReplaceAll]);
   SafePath := StringReplace(SafePath, '\', DirectorySeparator, [rfReplaceAll]);
-  Result := 'build' + DirectorySeparator + 'compiled' + DirectorySeparator +
+  Result := CompiledRootDirectory + DirectorySeparator +
     'tests' + DirectorySeparator + SafePath;
 end;
 
 function TargetUnitOutputDirectory(const ATarget: string): string;
 begin
-  Result := 'build' + DirectorySeparator + 'compiled' + DirectorySeparator +
+  Result := CompiledRootDirectory + DirectorySeparator +
     'targets' + DirectorySeparator + ATarget;
 end;
 
@@ -622,14 +647,30 @@ begin
       BuildMode := bmDev
     else if ParamStr(I) = '--prod' then
       BuildMode := bmProd
+    else if ParamStr(I) = '--gc-stress' then
+      GCStressBuild := True
     else if ParamStr(I) = '--clean' then
       CleanRequested := True
     else
       BuildTriggers.Add(LowerCase(ParamStr(I)));
   end;
 
+  if GCStressBuild and (BuildMode = bmProd) then
+  begin
+    WriteLn('--gc-stress builds on the development flags; it cannot be ' +
+      'combined with --prod');
+    Halt(1);
+  end;
+
   if BuildMode = bmProd then
     WriteLn('Build mode: production')
+  else if GCStressBuild then
+  begin
+    WriteLn('Build mode: development, GC stress (binaries in ',
+      GCStressExecutableDirectory, ')');
+    if not DirectoryExists(GCStressExecutableDirectory) then
+      CreateDir(GCStressExecutableDirectory);
+  end
   else
     WriteLn('Build mode: development');
 
