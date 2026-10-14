@@ -380,7 +380,6 @@ uses
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.TypedArrayValue,

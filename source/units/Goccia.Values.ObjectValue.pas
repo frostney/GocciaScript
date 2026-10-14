@@ -302,7 +302,6 @@ uses
   Goccia.Values.DateData,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.NumberObjectValue,
   Goccia.Values.ProxyValue,

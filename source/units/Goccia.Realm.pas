@@ -155,11 +155,13 @@ threadvar
   // every push site brackets its entry with roots the collector already walks:
   //
   //   * TGocciaFunctionValue.Call / .CallWithNewTarget,
-  //     TGocciaMethodValue.CallWithThisValue — push strictly inside
+  //     TGocciaMethodValue.CallWithThisValue, and StartAsyncFunction in
+  //     Goccia.Evaluator.Calls — push strictly inside
   //     GC.PushActiveRoot(Self) + GC.PushActiveRoot(CallScope) and pop before
   //     either active root is released, so the entry names exactly the two
   //     objects the active-root stack is already holding.
-  //   * TGocciaAsyncFunctionEvaluation.Resume — pushes FFunction and
+  //   * TGocciaAsyncFunctionEvaluation.Resume (Goccia.Evaluator.Calls) —
+  //     pushes FFunction and
   //     FCallScope, both marked directly by the evaluation object's own
   //     MarkReferences, which the resuming await reaction keeps alive.
   //
