@@ -118,7 +118,7 @@ type
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestFailedCycleKeepsLiveBindings;
-    procedure TestInterpreterReloadedModuleRetargetsCachedImport;
+    procedure TestReloadedModuleRetargetsCachedImport;
     procedure TestReloadedDataModuleFailureNamesSpecifier;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
@@ -229,8 +229,8 @@ begin
     TestEngineRetriesModuleAfterFailedLoad);
   Test('Failed module cycles keep surviving live bindings valid',
     TestFailedCycleKeepsLiveBindings);
-  Test('Interpreter reloads retarget cached import bindings',
-    TestInterpreterReloadedModuleRetargetsCachedImport);
+  Test('Reloads retarget cached import bindings',
+    TestReloadedModuleRetargetsCachedImport);
   Test('Reloaded data module failures name the specifier, not the host path',
     TestReloadedDataModuleFailureNamesSpecifier);
   Test('Engine reports JSONL module parse line numbers',
@@ -676,6 +676,7 @@ const
   SOURCE_B_PATH = 'memory:/source-b.js';
 var
   Args: TGocciaArgumentsCollection;
+  BridgeModule: TGocciaModule;
   Engine: TGocciaEngine;
   ExportValue: TGocciaValue;
   ImporterModule: TGocciaModule;
@@ -740,8 +741,11 @@ begin
           Provider.SetModule(BRIDGE_PATH,
             'export const replacement = 3;',
             EncodeDate(2026, 1, 3));
-          ModuleLoader.LoadModule(BRIDGE_PATH, IMPORTER_PATH);
+          BridgeModule := ModuleLoader.LoadModule(BRIDGE_PATH, IMPORTER_PATH);
           Expect<Boolean>(OuterNamespace.CanResolveExport('value')).ToBe(False);
+          Expect<Boolean>(BridgeModule.TryGetExportValue('replacement',
+            ExportValue)).ToBe(True);
+          Expect<Double>(ExportValue.ToNumberLiteral.Value).ToBe(3);
         finally
           Args.Free;
         end;
@@ -759,11 +763,18 @@ begin
 end;
 
 procedure TModuleContentProviderTests
-  .TestInterpreterReloadedModuleRetargetsCachedImport;
+  .TestReloadedModuleRetargetsCachedImport;
 var
   Executor: TGocciaExecutor;
 begin
   Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertReloadedModuleRetargetsCachedImport(Executor);
+  finally
+    Executor.Free;
+  end;
+
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertReloadedModuleRetargetsCachedImport(Executor);
   finally

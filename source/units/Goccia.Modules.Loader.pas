@@ -107,6 +107,9 @@ type
     FModuleLoadStates: TOrderedStringMap<TObject>;
     FModuleSourceValues: TOrderedStringMap<TGocciaValue>;
     FRetiredModules: TGocciaModuleList;
+    { The cached record each reload in progress links its new version into,
+      by cache key (CheckForModuleReload). }
+    FReloadTargets: TOrderedStringMap<TGocciaModule>;
     FVirtualModules: TGocciaVirtualModuleRegistry;
     FWarnedVirtualCollisions: TOrderedStringMap<Boolean>;
     // This engine's own diagnostic source scope (its principal). Modules load
@@ -171,8 +174,6 @@ type
     function IsHostRequest(const ASpecifier,
       AImportingFilePath: string): Boolean;
 
-    procedure CopyModuleContents(const ASourceModule,
-      ATargetModule: TGocciaModule);
     function CaptureLoadStates: TList<TObject>;
     procedure DiscardLinkedModules(
       const APreservedStates: TList<TObject>);
@@ -619,6 +620,7 @@ begin
   FModuleLoadStates := TOrderedStringMap<TObject>.Create;
   FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
   FRetiredModules := TGocciaModuleList.Create;
+  FReloadTargets := TOrderedStringMap<TGocciaModule>.Create;
   FVirtualModules := TGocciaVirtualModuleRegistry.Create;
   FWarnedVirtualCollisions := TOrderedStringMap<Boolean>.Create;
   FDiagnosticScope := TGocciaDiagnosticSourceScope.Create;
@@ -704,6 +706,7 @@ begin
   FModules.Free;
   FModuleSourceValues.Free;
   FRetiredModules.Free;
+  FReloadTargets.Free;
   FVirtualModules.Free;
   FWarnedVirtualCollisions.Free;
   FDiagnosticScope.Free;
@@ -1776,12 +1779,6 @@ begin
   RetireModule(AModule);
 end;
 
-procedure TGocciaModuleLoader.CopyModuleContents(const ASourceModule,
-  ATargetModule: TGocciaModule);
-begin
-  ATargetModule.CopyExportsFrom(ASourceModule);
-end;
-
 procedure TGocciaModuleLoader.RetireModule(const AModule: TGocciaModule);
 begin
   if Assigned(AModule) and (FRetiredModules.IndexOf(AModule) < 0) then
@@ -2167,6 +2164,7 @@ var
   PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
   ReExportDecl: TGocciaReExportDeclaration;
+  ReloadTarget: TGocciaModule;
   RequestedModules: TGocciaModuleList;
   RequestedModulePath: string;
   PackageRoot, ResolvedPath: string;
@@ -2738,8 +2736,23 @@ begin
       RequestedModules := TGocciaModuleList.Create;
       LoadState := nil;
       try
-        Module := TGocciaModule.Create(ResolvedPath);
-        Module.IsHostOwned := IsHostOwned;
+        { A reload links the new version into the record already cached:
+          importers, namespace objects and code the previous version left
+          running hold that record, and the evaluation context, the load
+          state and every module this link binds to it must name the same
+          one. }
+        if FReloadTargets.TryGetValue(CacheKey, ReloadTarget) then
+        begin
+          FReloadTargets.Remove(CacheKey);
+          Module := ReloadTarget;
+          Module.BeginReload;
+        end
+        else
+        begin
+          ReloadTarget := nil;
+          Module := TGocciaModule.Create(ResolvedPath);
+          Module.IsHostOwned := IsHostOwned;
+        end;
         Module.LastModified := Content.LastModified;
         FModules.Add(CacheKey, Module);
         FLoadingModules.AddOrSetValue(CacheKey, True);
@@ -2799,6 +2812,8 @@ begin
           LoadState.Status := mlsLinked;
           Result := Module;
           LoadSucceeded := True;
+          if Assigned(ReloadTarget) then
+            ReloadTarget.CommitReload;
           ProgramNode := nil;
           RequestedModules := nil;
         finally
@@ -2815,7 +2830,11 @@ begin
               RequestedModules := nil;
             end;
             FModules.Remove(CacheKey);
-            Module.Free;
+            if Module = ReloadTarget then
+              { CheckForModuleReload caches the record again, as it was. }
+              Module.RollbackReload
+            else
+              Module.Free;
           end;
         end;
       finally
@@ -3352,7 +3371,15 @@ end;
   reload failure reaches script through the import rejection path and must
   name the written specifier, not the resolved host path (ADR 0108), and the
   read check judges the same request the first load judged. ACacheKey only
-  names the cache entry to take out and put back. }
+  names the cache entry to take out and put back.
+
+  AModule stays the module's record. A JavaScript module's new version links
+  into it in place (InstantiateModule, through FReloadTargets), and the
+  request that reached the cache evaluates it there. A data module is built
+  again as a new record holding only values, which AModule takes over before
+  the new record is freed. A version that fails to load leaves AModule
+  cached as it was, still older than its source, so the next request tries
+  again. }
 procedure TGocciaModuleLoader.CheckForModuleReload(const AModule: TGocciaModule;
   const ACacheKey, AModuleRequest, AImportingFilePath: string);
 var
@@ -3370,17 +3397,22 @@ begin
       ReloadCacheKey := AModule.Path;
 
     FModules.Remove(ReloadCacheKey);
+    FReloadTargets.AddOrSetValue(ReloadCacheKey, AModule);
     try
-      ReloadedModule := LoadModule(AModuleRequest, AImportingFilePath);
-    except
-      FModules.AddOrSetValue(ReloadCacheKey, AModule);
-      raise;
+      try
+        ReloadedModule := LoadModule(AModuleRequest, AImportingFilePath);
+      except
+        FModules.AddOrSetValue(ReloadCacheKey, AModule);
+        raise;
+      end;
+    finally
+      FReloadTargets.Remove(ReloadCacheKey);
     end;
 
     if ReloadedModule <> AModule then
     begin
       try
-        CopyModuleContents(ReloadedModule, AModule);
+        AModule.TakeExportsFrom(ReloadedModule);
       finally
         FModules.Remove(ReloadCacheKey);
         FModules.AddOrSetValue(ReloadCacheKey, AModule);
