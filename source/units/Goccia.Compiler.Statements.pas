@@ -7418,11 +7418,18 @@ begin
     KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
   EmitInstruction(ACtx, EncodeABx(OP_SET_CLASS_SOURCE_CONST, ADest, KeyIdx));
 
-  // ES2026 §15.7.14: Named class expressions bind the name in an inner
-  // block scope visible to methods/static initializers via upvalue capture
+  // ES2026 §15.7.14 ClassDefinitionEvaluation steps 2-3 and 8.a: the class
+  // has its own scope (classEnv), which holds the inner name binding of a
+  // named class expression, visible to methods and static initializers
+  // through upvalue capture, and the compiler's hidden `__super__` local.
+  // An anonymous class with a heritage gets the scope too: declared in the
+  // enclosing block instead, `__super__` would have its register released
+  // here and again when that block ends, and the next local of the function
+  // would share a register with a live one.
+  if HasNameBinding or HasSuper then
+    ACtx.Scope.BeginScope;
   if HasNameBinding then
   begin
-    ACtx.Scope.BeginScope;
     NameSlot := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, NameSlot, 0, 0));
   end;
@@ -7594,20 +7601,17 @@ begin
   for I := 0 to ClosedCount - 1 do
     EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
-  // Only free __super__ manually when there is no name binding scope — when
-  // HasNameBinding is true, __super__ lives inside the inner scope and EndScope
-  // below will free it together with the name binding local.
-  if HasSuper and not HasNameBinding then
-  begin
-    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(SuperReg)));
-    ACtx.Scope.FreeRegister;
-  end;
-
-  if HasNameBinding then
+  if HasNameBinding or HasSuper then
   begin
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-    for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
+    if HasNameBinding then
+      for I := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0,
+          UInt16(ClosedLocals[I])))
+    else
+      // The scope of an anonymous class holds only `__super__`, which is
+      // closed whether or not a method captured it.
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(SuperReg)));
   end;
 
   ACtx.Scope.PrivateClassReg := OldPrivateClassReg;

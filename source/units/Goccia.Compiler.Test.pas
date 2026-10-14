@@ -88,6 +88,7 @@ type
     procedure TestCompileArithmetic;
     procedure TestCompileVariable;
     procedure TestCompileFunction;
+    procedure TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
     procedure TestThisPropertyReadUsesLocalRegister;
     procedure TestThisPropertyReadRetainsDerivedGuard;
     procedure TestLocalPropertyReadUsesFusedOpcode;
@@ -198,6 +199,8 @@ begin
   Test('Compile arithmetic', TestCompileArithmetic);
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
+  Test('Anonymous derived class in a block keeps later locals apart',
+    TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart);
   Test('Initialized const operands skip OP_GET_LOCAL',
     TestInitializedConstOperandsSkipGetLocal);
   Test('Const operands before the declaration keep OP_GET_LOCAL',
@@ -784,6 +787,48 @@ begin
   try
     Expect<Boolean>(Assigned(Module)).ToBe(True);
     Expect<Boolean>(Module.TopLevel.FunctionCount > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+// Issue #1666: the hidden `__super__` local of an anonymous class with a
+// heritage was declared in the enclosing block and its register released
+// twice, so a local declared after the block shared a register with a live
+// one.
+procedure TTestCompiler.TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+
+  function SlotOf(const AName: string): Integer;
+  var
+    I: Integer;
+  begin
+    Result := -1;
+    for I := 0 to Func.DebugInfo.LocalCount - 1 do
+      if Func.DebugInfo.GetLocalInfo(I).Name = AName then
+        Exit(Func.DebugInfo.GetLocalInfo(I).Slot);
+  end;
+
+begin
+  Module := CompileSource(
+    'const f = () => {' + LineEnding +
+    '  let a = 1;' + LineEnding +
+    '  { const K = class extends Object {}; }' + LineEnding +
+    '  let b = 2;' + LineEnding +
+    '  let c = 3;' + LineEnding +
+    '  return () => a + b + c;' + LineEnding +
+    '};');
+  try
+    Func := Module.TopLevel.GetFunction(0);
+    Expect<Boolean>(Assigned(Func.DebugInfo)).ToBe(True);
+    Expect<Boolean>(SlotOf('a') >= 0).ToBe(True);
+    Expect<Boolean>(SlotOf('b') >= 0).ToBe(True);
+    Expect<Boolean>(SlotOf('c') >= 0).ToBe(True);
+    Expect<Boolean>(SlotOf('b') <> SlotOf('a')).ToBe(True);
+    Expect<Boolean>(SlotOf('c') <> SlotOf('a')).ToBe(True);
+    Expect<Boolean>(SlotOf('c') <> SlotOf('b')).ToBe(True);
   finally
     Module.Free;
   end;
