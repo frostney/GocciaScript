@@ -163,7 +163,7 @@ end;
 
 procedure TThreadPollsTests.TestFlagsShareOneWord;
 begin
-  Expect<Integer>(SizeOf(TGocciaThreadPolls)).ToBe(SizeOf(UInt32));
+  Expect<Integer>(SizeOf(GThreadPolls.Any)).ToBe(SizeOf(UInt32));
   Expect<Boolean>(GThreadPolls.Any = 0).ToBe(True);
 
   StartExecutionTimeout(60000);

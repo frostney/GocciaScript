@@ -453,7 +453,9 @@ procedure RemoveTempRootIfNeeded(var ARoot: TGocciaTempRoot);
 implementation
 
 uses
-  SyncObjs
+  SyncObjs,
+
+  Goccia.ThreadPolls
   {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
   ,
   SysUtils
@@ -671,6 +673,7 @@ begin
   if not Assigned(GCThreadInstance) then
   begin
     GCThreadInstance := TGarbageCollector.Create;
+    GThreadPolls.Collector := GCThreadInstance;
     if GCCurrentMark = 0 then
       GCCurrentMark := 1;
   end;
@@ -678,6 +681,7 @@ end;
 
 class procedure TGarbageCollector.Shutdown;
 begin
+  GThreadPolls.Collector := nil;
   GCThreadInstance.Free;
   GCThreadInstance := nil;
 end;
