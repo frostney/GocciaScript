@@ -110,6 +110,7 @@ Some opcode families intentionally use flags or mode operands instead of one opc
 - validation uses a shared opcode for require-object and require-iterable checks
 - generator metadata is serialized and a single `OP_YIELD` drives generator suspension; `yield*` uses the same opcode with delegation bookkeeping rather than a second opcode
 - bytecode generators suspend by snapshotting the VM continuation at `OP_YIELD` (instruction pointer, live registers, local cells, handler state, and GC-visible references) and resume from that snapshot instead of replaying from function entry
+- `OP_AWAIT` suspends an async body into a continuation of the same kind: the generator object for an async generator, otherwise one continuation per activation that every later `await` of that activation reuses, together with its pair of Await reaction handlers. The handlers are registered with no derived promise (ES2026 §27.7.5.3 Await step 7), and the reaction job calls them directly rather than through `[[Call]]`. A resumption from an await reaction learns of the next suspension through a flag and returns through the entry's normal teardown; other entry points still see `EGocciaBytecodeAsyncSuspend`
 
 Current opcode design rules:
 

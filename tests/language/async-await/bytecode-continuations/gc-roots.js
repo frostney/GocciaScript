@@ -136,6 +136,125 @@ describe("suspended continuations under garbage collection", () => {
       expect(await pending).toBe("class");
     });
 
+  test("a frame that suspends at different depths survives collections",
+    async () => {
+      // The continuation keeps its storage between suspensions; what it holds
+      // must follow the frame as the frame grows and shrinks.
+      const total = await callAndDrop(async () => {
+        const outer = { value: 1 };
+        await Promise.resolve();
+        collect();
+        let inner = 0;
+        {
+          const a = { value: 2 };
+          const b = { value: 3 };
+          const c = { value: 4 };
+          await Promise.resolve();
+          collect();
+          inner = a.value + b.value + c.value;
+        }
+        await Promise.resolve();
+        collect();
+        return outer.value + inner;
+      });
+      expect(total).toBe(10);
+    });
+
+  test("a for-await loop over an array survives collections between steps",
+    async () => {
+      const values = await callAndDrop(async () => {
+        const seen = [];
+        const thenable = { then: (resolve) => resolve({ tag: "thenable" }) };
+        for await (const item of [{ tag: "a" }, Promise.resolve({ tag: "b" }),
+          thenable, "c"]) {
+          collect();
+          seen.push(typeof item === "string" ? item : item.tag);
+        }
+        return seen;
+      });
+      expect(values).toEqual(["a", "b", "thenable", "c"]);
+    });
+
+  test("yield* over an array in an async generator survives collections",
+    async () => {
+      const iterator = callAndDrop(() =>
+        ({
+          async *items() {
+            yield* [{ tag: "a" }, Promise.resolve({ tag: "b" }), { tag: "c" }];
+          },
+        }).items());
+      collect();
+      const values = [];
+      for await (const item of iterator) {
+        collect();
+        values.push(item.tag);
+      }
+      expect(values).toEqual(["a", "b", "c"]);
+    });
+
+  test("a then getter that collects at a first and a later await is safe",
+    async () => {
+      // The first await suspends into a continuation nothing else holds yet;
+      // later awaits reuse it. Each reads `then` while it is being attached.
+      const collectingThenable = (label) => ({
+        label,
+        get then() {
+          collect();
+          return undefined;
+        },
+      });
+      const labels = await callAndDrop(async () => {
+        const local = { seen: [] };
+        const first = await collectingThenable("first");
+        local.seen.push(first.label);
+        const second = await collectingThenable("second");
+        collect();
+        local.seen.push(second.label);
+        return local.seen;
+      });
+      expect(labels).toEqual(["first", "second"]);
+    });
+
+  test("a then getter that collects inside for-await over an array is safe",
+    async () => {
+      const item = (tag) => ({
+        tag,
+        get then() {
+          collect();
+          return undefined;
+        },
+      });
+      const tags = await callAndDrop(async () => {
+        const seen = [];
+        for await (const value of [item("a"), item("b"), item("c")]) {
+          seen.push(value.tag);
+        }
+        return seen;
+      });
+      expect(tags).toEqual(["a", "b", "c"]);
+    });
+
+  test("a then getter that collects at an async generator's await is safe",
+    async () => {
+      const iterator = callAndDrop(() =>
+        ({
+          async *values() {
+            const got = await {
+              get then() {
+                collect();
+                return undefined;
+              },
+              value: 1,
+            };
+            yield got.value;
+            yield (await { value: 2, get then() { collect(); } }).value;
+          },
+        }).values());
+      const values = [];
+      for await (const value of iterator) values.push(value);
+      expect(values).toEqual([1, 2]);
+    });
+
   test("a sync generator resumes after collections between its yields", () => {
     const iterator = callAndDrop(() =>
       ({

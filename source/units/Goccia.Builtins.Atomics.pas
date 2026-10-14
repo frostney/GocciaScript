@@ -113,6 +113,7 @@ type
     FPromise: TGocciaPromiseValue;
     FReady: Boolean;
     FResult: string;
+    procedure SetInList(const AValue: Boolean);
   public
     constructor Create(AOwner: TGocciaAtomics;
       ABuffer: TGocciaSharedArrayBufferValue; AByteOffset: Integer;
@@ -126,7 +127,7 @@ type
     property DeadlineMilliseconds: UInt64 read FDeadlineMilliseconds;
     property Event: TEvent read FEvent;
     property HasDeadline: Boolean read FHasDeadline;
-    property InList: Boolean read FInList write FInList;
+    property InList: Boolean read FInList write SetInList;
     property Owner: TGocciaAtomics read FOwner;
     property OwnerThreadId: TThreadID read FOwnerThreadId;
     property Promise: TGocciaPromiseValue read FPromise;
@@ -137,6 +138,11 @@ type
 var
   GAtomicsLock: TGocciaCriticalSection;
   GAtomicsWaiters: TObjectList<TAtomicsWaiter>;
+  // How many Atomics.waitAsync waiters GAtomicsWaiters holds, across every
+  // thread. A thread's own waiters are added by that thread, so a read of 0
+  // here proves it has none to complete, and the per-job completion pump
+  // returns before taking the lock.
+  GAtomicsAsyncWaiterCount: Integer;
 
 threadvar
   GAtomicsAgentCanSuspend: Boolean;
@@ -186,6 +192,18 @@ begin
     TGarbageCollector.Instance.AddQueuedRoot(FBuffer);
     TGarbageCollector.Instance.AddQueuedRoot(FPromise);
   end;
+end;
+
+procedure TAtomicsWaiter.SetInList(const AValue: Boolean);
+begin
+  if FAsync and (AValue <> FInList) then
+  begin
+    if AValue then
+      AtomicIncrementInt32(GAtomicsAsyncWaiterCount)
+    else
+      AtomicDecrementInt32(GAtomicsAsyncWaiterCount);
+  end;
+  FInList := AValue;
 end;
 
 destructor TAtomicsWaiter.Destroy;
@@ -723,6 +741,8 @@ var
   Waiters: TObjectList<TAtomicsWaiter>;
 begin
   Result := 0;
+  if GAtomicsAsyncWaiterCount = 0 then
+    Exit;
   DueWaiters := TList<TAtomicsWaiter>.Create;
   try
     NowMilliseconds := UInt64(GetMilliseconds);

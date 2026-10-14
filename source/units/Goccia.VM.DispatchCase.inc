@@ -3110,6 +3110,27 @@
           SetRegister(A, CreateIteratorResult(IterResult, DoneFlag));
         end
         else if (FRegisters[C].Kind = grkObject) and
+                (FRegisters[C].ObjectValue is TGocciaVMAsyncFromSyncIteratorValue) then
+          // GetIteratorValue's own CreateAsyncFromSyncIterator result: no code
+          // can reach it to replace its next, so the step is called directly.
+          SetRegister(A, TGocciaVMAsyncFromSyncIteratorValue(
+            FRegisters[C].ObjectValue).NextStep(False, nil))
+        else if (FRegisters[C].Kind = grkObject) and
+                (FRegisters[C].ObjectValue is TGocciaVMAsyncIteratorRecordValue) then
+        begin
+          // GetIteratorValue's own record of an async iterator: its next is
+          // the captured [[NextMethod]], called on [[Iterator]] with no
+          // argument (ES2026 §14.7.5.7 ForIn/OfBodyEvaluation step 6.a).
+          CallArgs := AcquireArguments;
+          try
+            IterResult := TGocciaVMAsyncIteratorRecordValue(
+              FRegisters[C].ObjectValue).Next(CallArgs, nil);
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+          SetRegister(A, IterResult);
+        end
+        else if (FRegisters[C].Kind = grkObject) and
                 (FRegisters[C].ObjectValue is TGocciaObjectValue) then
         begin
           IterResult := FRegisters[C].ObjectValue;
@@ -3186,14 +3207,25 @@
         if Assigned(FCurrentAsyncPromise) and Assigned(Template) and
            Template.IsAsync then
         begin
-          if Template.IsGenerator and Assigned(GActiveBytecodeGenerator) then
-            AwaitContinuation := GActiveBytecodeGenerator
-          else if not Template.IsGenerator then
+          AwaitContinuation := GActiveBytecodeGenerator;
+          if Template.IsGenerator then
+          begin
+            // The generator object is this body's continuation.
+          end
+          else if Assigned(EntryGenerator) and
+                  (AwaitContinuation = EntryGenerator) and
+                  (FFrameStackCount <= InitialFrameStackCount) and
+                  (AwaitContinuation.FClosure = FCurrentClosure) then
+            // This activation is the one an earlier await suspended: this
+            // native entry was started by resuming that continuation, and
+            // the await is in the entry's own frame, not a nested call's. It
+            // suspends into the same continuation again, with the same
+            // arguments, rather than into a fresh copy per await.
+            AwaitContinuation.FThisValue := GetLocalRegister(0)
+          else
             AwaitContinuation := TGocciaBytecodeGeneratorObjectValue.CreateRegisters(
               Self, FCurrentClosure, GetLocalRegister(0),
-              CurrentArgumentsSnapshot, False)
-          else
-            AwaitContinuation := nil;
+              CurrentArgumentsSnapshot, False);
 
           if Assigned(AwaitContinuation) then
           begin
@@ -3202,6 +3234,17 @@
             AwaitContinuation.FState := bgsSuspendedYield;
             AttachAwaitContinuation(Self, AwaitContinuation, GetRegister(B),
               Template.IsGenerator);
+            // A caller that asked for it learns of the suspension from the
+            // flag, and the entry returns through the same teardown an
+            // exception would take, without one.
+            if Assigned(ASuspension) and
+               (FFrameStackCount <= InitialFrameStackCount) and
+               (FClosedNumericFrameStackCount <=
+                InitialClosedNumericFrameCount) then
+            begin
+              ASuspension^.Kind := bskAwait;
+              Exit(RegisterUndefined);
+            end;
             raise EGocciaBytecodeAsyncSuspend.Create('');
           end;
         end;
@@ -3210,16 +3253,37 @@
 
       OP_YIELD:
       begin
-        if Assigned(GActiveBytecodeGenerator) then
+        AwaitContinuation := GActiveBytecodeGenerator;
+        if Assigned(AwaitContinuation) then
         begin
           if (C and 1) <> 0 then
-            GActiveBytecodeGenerator.HandleYieldDelegate(
+            AwaitContinuation.HandleYieldDelegate(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
               InstructionStartIP)
           else
-            GActiveBytecodeGenerator.HandleYield(
+            AwaitContinuation.HandleYield(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
               Frame.IP);
+          if AwaitContinuation.FYieldPending then
+          begin
+            // The body yielded. A resumption that asked for it learns of the
+            // suspension from ASuspension, and the entry returns through the
+            // same teardown an exception would take, without one.
+            AwaitContinuation.FYieldPending := False;
+            if Assigned(ASuspension) and
+               (FFrameStackCount <= InitialFrameStackCount) and
+               (FClosedNumericFrameStackCount <=
+                InitialClosedNumericFrameCount) then
+            begin
+              ASuspension^.Kind := bskYield;
+              ASuspension^.YieldValue := AwaitContinuation.FPendingYieldValue;
+              ASuspension^.YieldIndex := AwaitContinuation.FPendingYieldIndex;
+              Exit(RegisterUndefined);
+            end;
+            raise EGocciaBytecodeYield.Create(
+              AwaitContinuation.FPendingYieldValue,
+              AwaitContinuation.FPendingYieldIndex);
+          end;
         end
         else if A <> B then
           FRegisters[B] := FRegisters[A];
