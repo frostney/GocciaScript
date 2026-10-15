@@ -79,6 +79,7 @@ type
     procedure TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
     procedure TestNonCollectingChargeNeverCollectsOrLatches;
     procedure TestTrackedTriggerBacksOffAboveSurvivors;
+    procedure TestTrackedTriggerReturnsAfterTrackedBytesAreReleased;
   end;
 
 var
@@ -173,6 +174,8 @@ begin
     TestNonCollectingChargeNeverCollectsOrLatches);
   Test('The tracked trigger backs off above a live set inside the reserve',
     TestTrackedTriggerBacksOffAboveSurvivors);
+  Test('Released tracked bytes bring the tracked trigger back to the line',
+    TestTrackedTriggerReturnsAfterTrackedBytesAreReleased);
 end;
 
 const
@@ -480,6 +483,64 @@ begin
     Charge(Line - GC.BytesAllocated);
     Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
     Expect<Boolean>(GC.ExternalPressurePending).ToBe(True);
+  finally
+    if Charged > 0 then
+      GC.ReleaseExternalBytes(Charged);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestTrackedTriggerReturnsAfterTrackedBytesAreReleased;
+const
+  CEILING_HEADROOM = 4 * 1024 * 1024;
+var
+  BaselineBytes, Ceiling, Charged, Line, Reserve, Survivors: Int64;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+
+  procedure Charge(const ABytes: Int64);
+  begin
+    Expect<Boolean>(GC.TryReserveExternalBytes(ABytes)).ToBe(True);
+    Inc(Charged, ABytes);
+  end;
+
+  procedure Release(const ABytes: Int64);
+  begin
+    GC.ReleaseExternalBytes(ABytes);
+    Dec(Charged, ABytes);
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  Charged := 0;
+  try
+    BaselineBytes := GC.BytesAllocated;
+    Ceiling := BaselineBytes + CEILING_HEADROOM;
+    GC.MaxBytes := Ceiling;
+    Reserve := GC.MemoryPressureReserve;
+    Line := Ceiling - Reserve;
+    Expect<Boolean>(Line - Reserve div 4 > BaselineBytes).ToBe(True);
+
+    { A collection that cannot get below the line backs the trigger off. }
+    Charge(Line + Reserve div 4 - BaselineBytes);
+    GC.Collect;
+    Survivors := GC.BytesAllocated;
+    Expect<Boolean>(Survivors >= Line).ToBe(True);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+
+    { The script then releases half its ballast without a collection, and
+      grows back before any checkpoint runs. The release stays on record:
+      the trigger is the line again, not halfway from the old survivors to
+      the ceiling. }
+    Release(Survivors - (Line - Reserve div 4));
+    Expect<Boolean>(GC.BytesAllocated < Line).ToBe(True);
+    Charge(Line - 1 - GC.BytesAllocated);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Charge(1);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
   finally
     if Charged > 0 then
       GC.ReleaseExternalBytes(Charged);

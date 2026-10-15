@@ -228,7 +228,9 @@ type
     // HeapTriggerBytes does from FHeapAfterLastCollect, so a live set that
     // sits inside the pressure reserve collects once per allocation budget
     // instead of at every checkpoint and every charged reservation
-    // (ADR 0141). Written by the owner thread only, at the end of Collect.
+    // (ADR 0141). Set at the end of Collect and lowered, under the
+    // accounting lock, by every release that takes BytesAllocated below it,
+    // so what was released stays released until the next collection.
     FBytesAfterLastCollect: Int64;
     // Bytes still live after the most recent forced collection that failed to
     // make room, or -1 when no such observation is on record. Absent an
@@ -256,8 +258,10 @@ type
     // the live total ABytesAllocated: one pressure reserve below the ceiling,
     // backed off above what the last full collection left live. Never above
     // MaxBytes, because a plain object registration is never refused and
-    // only a collection keeps it near the ceiling.
-    function TrackedTriggerBytes(const ABytesAllocated: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}
+    // only a collection keeps it near the ceiling. ABytesAfterLastCollect is
+    // FBytesAfterLastCollect, read by the caller with the live total.
+    function TrackedTriggerBytes(const ABytesAllocated,
+      ABytesAfterLastCollect: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}
     procedure SampleHeap;
     // AFull is False for CollectYoung, which keeps every object older than
     // its watermark: what it leaves in use is not a measure of what a
@@ -271,11 +275,19 @@ type
     // the reader rule at FAccountingLock. Never call it while holding the
     // accounting lock; read FBytesAllocated directly there.
     function GetBytesAllocated: Int64; {$IFDEF FPC}inline;{$ENDIF}
+    // Untorn read of the live total and the tracked trigger's baseline for
+    // callers that hold no lock, under the same rule as GetBytesAllocated:
+    // a cross-thread ReleaseExternalBytes writes both.
+    procedure ReadPressureTotals(out ABytesAllocated,
+      ABytesAfterLastCollect: Int64); {$IFDEF FPC}inline;{$ENDIF}
+    // Lowers FBytesAfterLastCollect to a total a release just reached.
+    // Caller holds the accounting lock.
+    procedure NoteBytesReleasedLocked; {$IFDEF FPC}inline;{$ENDIF}
     // Pressure predicate over an already-read live total, so the charge path
     // can decide from the value it just committed instead of re-reading it
     // through the locked accessor with the lock held.
-    function NeedsMemoryPressureCollection(
-      const ABytesAllocated: Int64): Boolean; overload;
+    function NeedsMemoryPressureCollection(const ABytesAllocated,
+      ABytesAfterLastCollect: Int64): Boolean; overload;
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
     procedure GrowActiveRootStack;
     // Reads the live total and the forced-collect floor, so the caller must
@@ -847,6 +859,7 @@ begin
       // reclaim and must not go on suppressing one.
       if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
         FForcedCollectFloor := -1;
+      NoteBytesReleasedLocked;
     finally
       CriticalSectionLeave(FAccountingLock);
     end;
@@ -1288,6 +1301,20 @@ begin
   {$ENDIF}
 end;
 
+procedure TGarbageCollector.ReadPressureTotals(out ABytesAllocated,
+  ABytesAfterLastCollect: Int64);
+begin
+  {$IF SizeOf(Pointer) >= 8}
+  ABytesAllocated := FBytesAllocated;
+  ABytesAfterLastCollect := FBytesAfterLastCollect;
+  {$ELSE}
+  CriticalSectionEnter(FAccountingLock);
+  ABytesAllocated := FBytesAllocated;
+  ABytesAfterLastCollect := FBytesAfterLastCollect;
+  CriticalSectionLeave(FAccountingLock);
+  {$ENDIF}
+end;
+
 procedure TGarbageCollector.RequestPressureCollection;
 begin
   FExternalPressurePending := True;
@@ -1306,16 +1333,17 @@ begin
     Result := FMaxBytes div 2;
 end;
 
-function TGarbageCollector.TrackedTriggerBytes(
-  const ABytesAllocated: Int64): Int64;
+function TGarbageCollector.TrackedTriggerBytes(const ABytesAllocated,
+  ABytesAfterLastCollect: Int64): Int64;
 var
   Baseline: Int64;
 begin
   Result := FMaxBytes - MemoryPressureReserve;
-  // A live total below the recorded level means bytes were released since
-  // that collection (a destructor, a shrinking resize), so the record no
-  // longer bounds what is live and must not hold the trigger up.
-  Baseline := FBytesAfterLastCollect;
+  // Releases since that collection (a destructor, a shrinking resize) have
+  // already lowered the record to the lowest total they reached. A sweep in
+  // progress lowers the total before Collect resets the record, so the
+  // smaller of the two still bounds what is live.
+  Baseline := ABytesAfterLastCollect;
   if ABytesAllocated < Baseline then
     Baseline := ABytesAllocated;
   if Baseline < Result then
@@ -1333,17 +1361,20 @@ begin
 end;
 
 function TGarbageCollector.NeedsMemoryPressureCollection: Boolean;
+var
+  LiveBytes, SurvivorBytes: Int64;
 begin
-  // Guards before the counter read: on 32-bit GetBytesAllocated takes the
+  // Guards before the counter read: on 32-bit ReadPressureTotals takes the
   // accounting lock, and the periodic VM/interpreter pressure polls must stay
   // free when no limit is set or a collection is already underway.
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
     Exit(False);
-  Result := NeedsMemoryPressureCollection(GetBytesAllocated);
+  ReadPressureTotals(LiveBytes, SurvivorBytes);
+  Result := NeedsMemoryPressureCollection(LiveBytes, SurvivorBytes);
 end;
 
 function TGarbageCollector.NeedsMemoryPressureCollection(
-  const ABytesAllocated: Int64): Boolean;
+  const ABytesAllocated, ABytesAfterLastCollect: Int64): Boolean;
 begin
   Result := False;
   // Explicit pressure checks remain active when routine threshold GC is
@@ -1355,7 +1386,8 @@ begin
   // back-off arithmetic: every charged reservation passes through here.
   if ABytesAllocated < FMaxBytes - MemoryPressureReserve then
     Exit;
-  Result := ABytesAllocated >= TrackedTriggerBytes(ABytesAllocated);
+  Result := ABytesAllocated >= TrackedTriggerBytes(ABytesAllocated,
+    ABytesAfterLastCollect);
 end;
 
 function TGarbageCollector.HeapTriggerBytes: Int64;
@@ -1659,7 +1691,8 @@ begin
     FPeakBytesAllocated := FBytesAllocated;
   if (FExternalBytesAllocatedSinceGC >=
       EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL) or
-     NeedsMemoryPressureCollection(FBytesAllocated) then
+     NeedsMemoryPressureCollection(FBytesAllocated,
+       FBytesAfterLastCollect) then
     RequestPressureCollection;
 end;
 
@@ -1752,9 +1785,21 @@ begin
     // reclaim and must not go on suppressing one.
     if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
       FForcedCollectFloor := -1;
+    NoteBytesReleasedLocked;
   finally
     CriticalSectionLeave(FAccountingLock);
   end;
+end;
+
+procedure TGarbageCollector.NoteBytesReleasedLocked;
+begin
+  // Bytes released outside a collection were live at the last one, so the
+  // survivors it recorded no longer bound what is live. Lowering the record
+  // here, not only for one trigger check, keeps the release in force when
+  // usage grows back before any checkpoint runs: the tracked trigger then
+  // returns to the line as soon as the total is under it again.
+  if FBytesAllocated < FBytesAfterLastCollect then
+    FBytesAfterLastCollect := FBytesAllocated;
 end;
 
 function TGarbageCollector.ExchangeMemoryPressureCountdown(
