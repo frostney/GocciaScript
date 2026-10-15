@@ -873,7 +873,8 @@ function TGocciaFunctionTemplate.AddConstantString(
 begin
   if FStringConstantIndex.TryGetValue(AValue, Result) then
     Exit;
-
+  if Length(AValue) >= 100000 then
+    WriteLn(StdErr, 'AddConstantString: len=', Length(AValue), ' (new constant)');
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then

@@ -15,7 +15,7 @@ begin F := TStringList.Create; Result := '?';
   finally F.Free; end; end;
 var Mode: string; N, I: Integer; Src: TStringList; Rts: array of TGocciaRuntime; R: TGocciaRuntime; FileName: string;
   Opts: TGocciaSourcePipelineOptions; PipeResult: TGocciaSourcePipelineResult;
-  Eng: TGocciaEngine; CompiledMod: TGocciaCompiledModule;
+  Eng: TGocciaEngine; CompiledMod: TGocciaCompiledModule; ProbeStr: string;
 begin
   Mode := ParamStr(1); N := StrToInt(ParamStr(2)); FileName := ParamStr(3);
   if Mode = 'keep' then begin
@@ -85,9 +85,39 @@ begin
       WriteLn(StdErr, 'After Free i=', I);
       TGarbageCollector.Instance.DumpLargeStringRoots;
       TGarbageCollector.Instance.Collect;
-      WriteLn(StdErr, 'After Collect i=', I);
+      WriteLn(StdErr, 'After Collect i=', I, ' live_large_strings=',
+        TGarbageCollector.Instance.CountLiveStringLiterals(100000));
       TGarbageCollector.Instance.DumpLargeStringRoots;
       if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'seq i=', I, ' VmRSS=', RssKB);
+    end;
+  end else if Mode = 'assert' then begin
+    for I := 1 to N do begin
+      Src := TStringList.Create; Src.LoadFromFile(FileName);
+      R := TGocciaRuntime.Create(FileName, Src);
+      R.Install(TGocciaConsoleRuntimeExtension.Create);
+      WriteLn(StdErr, 'Before Execute: RetainedModules=', R.Engine.RetainedModuleCount);
+      R.Execute;
+      WriteLn(StdErr, 'After Execute: RetainedModules=', R.Engine.RetainedModuleCount);
+      Src.Free; R.Free; TGarbageCollector.Instance.Collect;
+      if TGarbageCollector.Instance.CountLiveStringLiterals(100000) > 0 then
+      begin
+        WriteLn(StdErr, 'FAIL iter ', I, ': ', TGarbageCollector.Instance.CountLiveStringLiterals(100000),
+          ' large StringLiteralValue objects still live after Free+Collect');
+        TGarbageCollector.Instance.DumpLargeStringRoots;
+        Halt(1);
+      end;
+      if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'assert i=', I, ' VmRSS=', RssKB, ' OK');
+    end;
+  end else if Mode = 'probe' then begin
+    for I := 1 to N do begin
+      Src := TStringList.Create; Src.LoadFromFile(FileName);
+      R := TGocciaRuntime.Create(FileName, Src);
+      R.Install(TGocciaConsoleRuntimeExtension.Create);
+      R.Execute; Src.Free; R.Free; TGarbageCollector.Instance.Collect;
+      SetLength(ProbeStr, 110000); // Allocate large block to test if heap reuses freed space
+      FillChar(ProbeStr[1], 110000, Byte('z'));
+      ProbeStr := '';
+      if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'probe i=', I, ' VmRSS=', RssKB);
     end;
   end else begin
     for I := 1 to N do begin
