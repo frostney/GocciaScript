@@ -321,6 +321,8 @@ type
     FASCIIStringValues: array[0..127] of TGocciaStringLiteralValue;
     function CachedASCIIStringValue(
       const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
+    function CreateCachedASCIIStringValue(
+      const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -567,6 +569,8 @@ type
     function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
+    procedure SetPropertyValueGeneric(const AObject: TGocciaValue;
+      const AKey: string; const AValue: TGocciaValue);
     procedure SetPropertyValueLoose(const AObject: TGocciaValue;
       const AKey: string; const AValue: TGocciaValue);
     procedure SetSymbolPropertyValueLoose(const AObject: TGocciaValue;
@@ -6560,13 +6564,20 @@ begin
   inherited;
 end;
 
+// Kept free of managed locals: the string temporary Chr makes would cost
+// every OP_LOAD_CHAR an exception frame, cache hits included.
 function TGocciaVM.CachedASCIIStringValue(
   const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
 begin
   Result := FASCIIStringValues[ACodeUnit];
-  if Assigned(Result) then
-    Exit;
+  if not Assigned(Result) then
+    Result := CreateCachedASCIIStringValue(ACodeUnit);
+end;
 
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+function TGocciaVM.CreateCachedASCIIStringValue(
+  const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
+begin
   Result := TGocciaStringLiteralValue.Create(Chr(ACodeUnit));
   if (TGarbageCollector.Instance <> nil) then
   begin
@@ -6574,6 +6585,11 @@ begin
     FASCIIStringValues[ACodeUnit] := Result;
   end;
 end;
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
 
 procedure TGocciaVM.EnsureStackRootRegistered;
 var
@@ -13877,7 +13893,19 @@ begin
   end;
 end;
 
+// An ordinary object under a public key goes straight to its [[Set]]. This
+// procedure keeps no managed locals, so that store pays no exception frame;
+// private names, primitives and nullish targets take the generic core.
 procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
+  const AKey: string; const AValue: TGocciaValue);
+begin
+  if (AObject is TGocciaObjectValue) and not IsBytecodePrivateKey(AKey) then
+    AObject.SetProperty(AKey, AValue)
+  else
+    SetPropertyValueGeneric(AObject, AKey, AValue);
+end;
+
+procedure TGocciaVM.SetPropertyValueGeneric(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 var
   Current: TGocciaObjectValue;
