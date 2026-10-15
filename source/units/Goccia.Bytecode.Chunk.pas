@@ -630,31 +630,16 @@ begin
     FRegExpProgramCaches[I].Free;
   for I := 0 to High(FDirectEvalCodeCaches) do
     FDirectEvalCodeCaches[I].Free;
-  // Free structures that might hold string refs BEFORE clearing constants
-  WriteLn(StdErr, 'FunctionTemplate.Destroy: Template=', IntToHex(PtrUInt(Self), 16), ' FConstantCount=', FConstantCount);
-  FDebugInfo.Free;
-  FDebugInfo := nil;
-  FFunctions.Free;
-  FFunctions := nil;
-  FStringConstantIndex.Clear;
-  // Now zero string constants
+  // Explicitly zero string constants to force finalization
   for I := 0 to FConstantCount - 1 do
-  begin
     if FConstants[I].Kind = bckString then
-    begin
-      if Length(FConstants[I].StringValue) > 50000 then
-      begin
-        WriteLn(StdErr, '  clearing FConstants[', I, '] len=', Length(FConstants[I].StringValue), ' refcount=', StringRefCount(FConstants[I].StringValue));
-        UniqueString(FConstants[I].StringValue); // Force unique copy to break COW
-        WriteLn(StdErr, '  after UniqueString: refcount=', StringRefCount(FConstants[I].StringValue));
-      end;
       FConstants[I].StringValue := '';
-    end;
-  end;
   SetLength(FConstants, 0);
+  // Clear string index (keys hold strings too)
+  FStringConstantIndex.Clear;
   FStringConstantIndex.Free;
-  SetLength(FStringConstantCaches, 0);
-  SetLength(FTemplateObjectCaches, 0);
+  FFunctions.Free;
+  FDebugInfo.Free;
   inherited;
 end;
 
