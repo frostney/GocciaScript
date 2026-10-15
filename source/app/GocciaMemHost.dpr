@@ -61,6 +61,21 @@ begin
       R.Execute; Src.Free; R.Free;
       if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'seq i=', I, ' VmRSS=', RssKB);
     end;
+  end else if Mode = 'parseonly' then begin
+    for I := 1 to N do begin
+      Src := TStringList.Create; Src.LoadFromFile(FileName);
+      R := TGocciaRuntime.Create(FileName, Src);
+      Src.Free; R.Free; TGarbageCollector.Instance.Collect;
+      if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'seq i=', I, ' VmRSS=', RssKB);
+    end;
+  end else if Mode = 'compileonly' then begin
+    for I := 1 to N do begin
+      Src := TStringList.Create; Src.LoadFromFile(FileName);
+      R := TGocciaRuntime.Create(FileName, Src);
+      R.Install(TGocciaConsoleRuntimeExtension.Create);
+      Src.Free; R.Free; TGarbageCollector.Instance.Collect;
+      if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'seq i=', I, ' VmRSS=', RssKB);
+    end;
   end else begin
     for I := 1 to N do begin
       Src := TStringList.Create; Src.LoadFromFile(FileName);
