@@ -515,6 +515,9 @@ var
   // per-collector FAccountingLock (see its declaration for the lock order).
   GCCollectLock: TGocciaCriticalSection;
 
+threadvar
+  GCThreadInstance: TGarbageCollector;
+
 { TGCManagedObject }
 
 class procedure TGCManagedObject.AdvanceMark;
@@ -686,18 +689,21 @@ end;
 
 { TGarbageCollector }
 
-// The thread's collector lives in GThreadPolls, beside the allocation polls,
-// so that a value allocation reaches both through one thread-variable lookup.
+// Instance reads its own thread variable, not the GThreadPolls.Collector
+// mirror: with Instance reading the mirror, FPC 3.2.2 at -O4 dropped the VMT
+// load from a virtual call on the result (Instance.Collect in
+// Goccia.Threading.Init called through the object itself).
 class function TGarbageCollector.Instance: TGarbageCollector;
 begin
-  Result := TGarbageCollector(GThreadPolls.Collector);
+  Result := GCThreadInstance;
 end;
 
 class procedure TGarbageCollector.Initialize;
 begin
-  if not Assigned(GThreadPolls.Collector) then
+  if not Assigned(GCThreadInstance) then
   begin
-    GThreadPolls.Collector := TGarbageCollector.Create;
+    GCThreadInstance := TGarbageCollector.Create;
+    GThreadPolls.Collector := GCThreadInstance;
     if GCCurrentMark = 0 then
       GCCurrentMark := 1;
   end;
@@ -705,8 +711,9 @@ end;
 
 class procedure TGarbageCollector.Shutdown;
 begin
-  Instance.Free;
   GThreadPolls.Collector := nil;
+  GCThreadInstance.Free;
+  GCThreadInstance := nil;
 end;
 
 constructor TGarbageCollector.Create;

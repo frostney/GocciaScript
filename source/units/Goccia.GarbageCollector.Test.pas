@@ -12,6 +12,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.TestSetup,
+  Goccia.ThreadPolls,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -58,11 +59,13 @@ type
   end;
 
   { Starts, then stops, a collector of its own and records what this thread's
-    TGarbageCollector.Instance was at each step. }
+    TGarbageCollector.Instance and its GThreadPolls.Collector mirror were at
+    each step. }
   TOwnCollectorThread = class(TThread)
   public
     NoneAtStart: Boolean;
     OwnAfterInitialize: TGarbageCollector;
+    MirrorAfterInitialize: Boolean;
     OwnCountGrowth: Integer;
     NoneAfterShutdown: Boolean;
   protected
@@ -147,17 +150,20 @@ procedure TOwnCollectorThread.Execute;
 var
   Before: Integer;
 begin
-  NoneAtStart := TGarbageCollector.Instance = nil;
+  NoneAtStart := (TGarbageCollector.Instance = nil) and
+    (GThreadPolls.Collector = nil);
   TGarbageCollector.Initialize;
   try
     OwnAfterInitialize := TGarbageCollector.Instance;
+    MirrorAfterInitialize := GThreadPolls.Collector = Pointer(OwnAfterInitialize);
     Before := OwnAfterInitialize.ManagedObjectCount;
     TGocciaNumberLiteralValue.Create(1.5);
     OwnCountGrowth := OwnAfterInitialize.ManagedObjectCount - Before;
   finally
     TGarbageCollector.Shutdown;
   end;
-  NoneAfterShutdown := TGarbageCollector.Instance = nil;
+  NoneAfterShutdown := (TGarbageCollector.Instance = nil) and
+    (GThreadPolls.Collector = nil);
 end;
 
 procedure TTestGarbageCollector.SetupTests;
@@ -1001,6 +1007,7 @@ begin
     Expect<Boolean>(Worker.NoneAtStart).ToBe(True);
     Expect<Boolean>(Assigned(Worker.OwnAfterInitialize)).ToBe(True);
     Expect<Boolean>(Worker.OwnAfterInitialize = MainCollector).ToBe(False);
+    Expect<Boolean>(Worker.MirrorAfterInitialize).ToBe(True);
     Expect<Integer>(Worker.OwnCountGrowth).ToBe(1);
     Expect<Boolean>(Worker.NoneAfterShutdown).ToBe(True);
   finally
@@ -1010,6 +1017,7 @@ begin
   // The worker's allocation, Initialize and Shutdown left this thread's
   // collector alone, and this thread still allocates into it.
   Expect<Boolean>(TGarbageCollector.Instance = MainCollector).ToBe(True);
+  Expect<Boolean>(GThreadPolls.Collector = Pointer(MainCollector)).ToBe(True);
   Expect<Integer>(MainCollector.ManagedObjectCount).ToBe(MainCount);
   TGocciaNumberLiteralValue.Create(2.5);
   Expect<Integer>(MainCollector.ManagedObjectCount).ToBe(MainCount + 1);

@@ -24,9 +24,10 @@
                             function profiler is on, and restored on the way
                             out.
 
-  Collector is the thread's TGarbageCollector.Instance itself, set and
-  cleared by TGarbageCollector.Initialize and Shutdown. It sits beside the
-  flags so that a value allocation reaches both through one lookup.
+  Collector mirrors the thread's TGarbageCollector.Instance, set and cleared
+  by TGarbageCollector.Initialize and Shutdown, so that a value allocation
+  reaches both the collector and the flags through one lookup. Instance keeps
+  its own thread variable; see TGarbageCollector.Instance for why.
 
   The thread variable is declared in the interface on purpose: other units
   reference it directly, where an accessor function would add a call to the
