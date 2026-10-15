@@ -8877,7 +8877,8 @@ end;
 
 procedure TGocciaVM.SetRegister(const AIndex: Integer; const AValue: TGocciaValue);
 begin
-  EnsureRegisterCapacity(AIndex + 1);
+  if AIndex >= FRegisterCount then
+    EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := VMValueToRegisterFast(AValue);
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and
      Assigned(FLocalCells[AIndex]) then
@@ -8900,7 +8901,10 @@ end;
 procedure TGocciaVM.SetRegisterRaw(const AIndex: Integer;
   const AValue: TGocciaRegister);
 begin
-  EnsureRegisterCapacity(AIndex + 1);
+  // The window almost always holds the register already; only growth takes
+  // the call.
+  if AIndex >= FRegisterCount then
+    EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := AValue;
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and
      Assigned(FLocalCells[AIndex]) then
