@@ -6,6 +6,15 @@ program GocciaMemHost;
 uses {$IFDEF UNIX}cthreads,{$ENDIF} Classes, SysUtils,
   Goccia.Runtime, Goccia.RuntimeExtensions.Console, Goccia.GarbageCollector,
   Goccia.Bytecode.Chunk;
+
+function HeapStats: string;
+var
+  Status: TFPCHeapStatus;
+begin
+  Status := GetFPCHeapStatus;
+  Result := Format('CurrUsed=%d CurrFree=%d MaxUsed=%d', 
+                   [Status.CurrHeapUsed, Status.CurrHeapFree, Status.MaxHeapUsed]);
+end;
 function RssKB: string; var F: TStringList; I: Integer;
 begin F := TStringList.Create; Result := '?';
   try F.LoadFromFile('/proc/self/status');
@@ -14,7 +23,8 @@ begin F := TStringList.Create; Result := '?';
 var Mode: string; N, I: Integer; Src: TStringList; Rts: array of TGocciaRuntime; R: TGocciaRuntime;
 begin
   Mode := ParamStr(1); N := StrToInt(ParamStr(2));
-  Src := TStringList.Create; Src.LoadFromFile(ParamStr(3));
+  Src := TStringList.Create; 
+  Src.LoadFromFile(ParamStr(3));
   if Mode = 'keep' then begin
     SetLength(Rts, N);
     for I := 0 to N-1 do begin
@@ -27,13 +37,18 @@ begin
     for I := 1 to N do begin
       R := TGocciaRuntime.Create(ParamStr(3), Src);
       R.Install(TGocciaConsoleRuntimeExtension.Create);
-      R.Execute; R.Free; 
+      if (N >= 10) and (I mod (N div 10) = 0) then 
+        WriteLn(StdErr, '[TROUGH] i=', I, ' VmRSS=', RssKB, ' ', HeapStats);
+      R.Execute;
+      if (N >= 10) and (I mod (N div 10) = 0) then 
+        WriteLn(StdErr, '[PEAK]   i=', I, ' VmRSS=', RssKB, ' ', HeapStats);
+      R.Free; 
       if Mode = 'seqgc' then 
       begin
         TGarbageCollector.Instance.Collect;
-        CheckForTrackedStringLeaks;
+        if (N >= 10) and (I mod (N div 10) = 0) then 
+          WriteLn(StdErr, '[AFTER]  i=', I, ' VmRSS=', RssKB, ' ', HeapStats);
       end;
-      if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'seq i=', I, ' VmRSS=', RssKB);
     end;
   end;
 end.

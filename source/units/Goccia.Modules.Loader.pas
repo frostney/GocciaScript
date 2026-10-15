@@ -2974,8 +2974,8 @@ begin
           ModuleWarning.Column]));
       end;
 
-      SourceValue := TGocciaModuleSourceValue.Create(ResolvedPath,
-        Content.Text);
+      // #1704: Don't store full source text (~200KB/module) - it's never accessed
+      SourceValue := TGocciaModuleSourceValue.Create(ResolvedPath, '');
       FModuleSourceValues.Add(CacheKey, SourceValue);
       if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddRootObject(SourceValue);
