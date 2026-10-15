@@ -2959,9 +2959,18 @@ begin
     // generic AssignProperty walk.
     if not UsesOrdinarySet(Current) then
       Exit(False);
-    Descriptor := Current.GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) then
+    // Any own entry ends the fast path, a lazily installed one included, so
+    // the map is asked first and the entry is not materialized: materializing
+    // a shim member (Object.prototype.__proto__) runs bytecode, and a
+    // collection there would free AValue, which only the caller holds.
+    if Current.Properties.ContainsKey(AName) then
       Exit(False);
+    if not InheritsGetOwnProperty(Current) then
+    begin
+      Descriptor := Current.GetOwnPropertyDescriptor(AName);
+      if Assigned(Descriptor) then
+        Exit(False);
+    end;
     Current := Current.Prototype;
   end;
 

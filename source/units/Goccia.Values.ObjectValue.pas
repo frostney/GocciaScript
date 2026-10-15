@@ -250,6 +250,10 @@ type
 // for [[Set]] only for such an object; any other (a Proxy, a typed array) has
 // to be asked through AssignPropertyWithReceiver itself.
 function UsesOrdinarySet(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+// True while AObject answers a string-keyed [[GetOwnProperty]] with
+// TGocciaObjectValue's own GetOwnPropertyDescriptor, which reads only the
+// property map.
+function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 { One native call into AObject's own [[Get]], [[HasProperty]] or [[Set]]. A
   prototype walk makes it when its next object does not keep the ordinary
@@ -358,7 +362,7 @@ begin
   Result := TMethod(Method).Code = @TGocciaObjectValue.GetPropertyWithContext;
 end;
 
-function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean;
 var
   Method: TGocciaGetOwnPropertyMethod;
 begin
