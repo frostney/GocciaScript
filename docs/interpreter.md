@@ -194,7 +194,7 @@ There is one macrotask source, and it is deliberately not an event loop: `Goccia
 | Test framework | After each test callback |
 | Benchmark runner | After warmup, calibration batches, and each measurement round |
 
-For fetch-backed Promises, these integration points also pump fetch completions before treating a pending Promise as permanently unsettled.
+For fetch-backed Promises, these integration points also pump fetch completions before treating a pending Promise as permanently unsettled. `WaitForRuntimeIdle` repeats its round — every runtime extension's `WaitForIdle`, then the microtask drain — until a round leaves no extension with pending work (`HasPendingWork`), because a job can start a fetch after the fetch extension's pass. The tail of a module whose first top-level `await` settles at once is such a job. `Execute` then fails the run if the entry module's evaluation promise is still pending, with the `TypeError` a synchronous `await` reports for a promise nothing can settle.
 
 **`queueMicrotask`:** The global `queueMicrotask(callback)` function enqueues a user-provided callback into the same microtask queue used by Promise reactions. This matches the [HTML spec](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#microtask-queuing). If a `queueMicrotask` callback throws, the error is surfaced as an uncaught host callback error instead of being converted into a Promise rejection. Promise reaction handler errors still reject their result promises.
 

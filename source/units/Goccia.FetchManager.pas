@@ -84,6 +84,8 @@ function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
 { The realm-less forms act on the current realm's engine. }
 procedure WaitForFetchIdle; overload;
 procedure WaitForFetchIdle(const ARealm: TGocciaRealm); overload;
+{ True while the engine owning ARealm has a request in flight. }
+function HasPendingFetches(const ARealm: TGocciaRealm): Boolean;
 procedure DiscardFetchCompletions; overload;
 procedure DiscardFetchCompletions(const ARealm: TGocciaRealm); overload;
 
@@ -1203,6 +1205,14 @@ begin
     Manager.WaitForIdle(ARealm)
   else
     DrainMicrotasksAndFetchCompletions;
+end;
+
+function HasPendingFetches(const ARealm: TGocciaRealm): Boolean;
+var
+  Manager: TGocciaFetchManager;
+begin
+  Manager := TGocciaFetchManager.Instance;
+  Result := Assigned(Manager) and Manager.HasPendingFor(ARealm);
 end;
 
 procedure DiscardFetchCompletions;
