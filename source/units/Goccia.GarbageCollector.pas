@@ -515,9 +515,6 @@ var
   // per-collector FAccountingLock (see its declaration for the lock order).
   GCCollectLock: TGocciaCriticalSection;
 
-threadvar
-  GCThreadInstance: TGarbageCollector;
-
 { TGCManagedObject }
 
 class procedure TGCManagedObject.AdvanceMark;
@@ -671,6 +668,9 @@ end;
 
 function TGCManagedObjectList.Append(const AObject: TGCManagedObject): Integer;
 begin
+  {$IFDEF FPC}
+  // FLength and FItems are FPC rtl-generics internals; other compilers take
+  // the generic Add.
   Result := FLength;
   if Result < Length(FItems) then
   begin
@@ -679,21 +679,25 @@ begin
   end
   else
     Result := Add(AObject);
+  {$ELSE}
+  Result := Add(AObject);
+  {$ENDIF}
 end;
 
 { TGarbageCollector }
 
+// The thread's collector lives in GThreadPolls, beside the allocation polls,
+// so that a value allocation reaches both through one thread-variable lookup.
 class function TGarbageCollector.Instance: TGarbageCollector;
 begin
-  Result := GCThreadInstance;
+  Result := TGarbageCollector(GThreadPolls.Collector);
 end;
 
 class procedure TGarbageCollector.Initialize;
 begin
-  if not Assigned(GCThreadInstance) then
+  if not Assigned(GThreadPolls.Collector) then
   begin
-    GCThreadInstance := TGarbageCollector.Create;
-    GThreadPolls.Collector := GCThreadInstance;
+    GThreadPolls.Collector := TGarbageCollector.Create;
     if GCCurrentMark = 0 then
       GCCurrentMark := 1;
   end;
@@ -701,9 +705,8 @@ end;
 
 class procedure TGarbageCollector.Shutdown;
 begin
+  Instance.Free;
   GThreadPolls.Collector := nil;
-  GCThreadInstance.Free;
-  GCThreadInstance := nil;
 end;
 
 constructor TGarbageCollector.Create;
