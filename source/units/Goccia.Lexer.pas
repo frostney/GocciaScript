@@ -333,6 +333,7 @@ end;
 
 destructor TGocciaLexer.Destroy;
 begin
+  FSource := '';  // Clear source to release any large strings
   FTokens.Free;
   FSourceLines.Free;
   inherited;
