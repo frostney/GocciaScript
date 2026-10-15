@@ -613,12 +613,18 @@ begin
   begin
     for I := 0 to High(FStringConstantCaches) do
       if Assigned(FStringConstantCaches[I]) then
+      begin
         TGarbageCollector.Instance.UnpinObject(
           TGCManagedObject(FStringConstantCaches[I]));
+        FStringConstantCaches[I] := nil;
+      end;
     for I := 0 to FTemplateObjectCacheCount - 1 do
       if Assigned(FTemplateObjectCaches[I]) then
+      begin
         TGarbageCollector.Instance.UnpinObject(
           TGCManagedObject(FTemplateObjectCaches[I]));
+        FTemplateObjectCaches[I] := nil;
+      end;
   end;
   for I := 0 to FRegExpProgramCacheCount - 1 do
     FRegExpProgramCaches[I].Free;

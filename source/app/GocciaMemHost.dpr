@@ -53,6 +53,14 @@ begin
       if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'compile i=', I, ' VmRSS=', RssKB);
     end;
     Eng.Free;
+  end else if Mode = 'seqnocollect' then begin
+    for I := 1 to N do begin
+      Src := TStringList.Create; Src.LoadFromFile(FileName);
+      R := TGocciaRuntime.Create(FileName, Src);
+      R.Install(TGocciaConsoleRuntimeExtension.Create);
+      R.Execute; Src.Free; R.Free;
+      if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'seq i=', I, ' VmRSS=', RssKB);
+    end;
   end else begin
     for I := 1 to N do begin
       Src := TStringList.Create; Src.LoadFromFile(FileName);
