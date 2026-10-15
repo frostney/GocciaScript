@@ -349,6 +349,12 @@ begin
   // #1704: Clear SourceCoordinates which is retained via AST/tokens/spans
   if Assigned(FSourceCoordinates) then
     FSourceCoordinates.ClearSource;
+  // #1704: Clear SourceLines which holds the split source and is cloned to PipelineResult
+  if Assigned(FSourceLines) then
+  begin
+    FSourceLines.Clear;
+    FreeAndNil(FSourceLines);
+  end;
 end;
 
 function TGocciaLexer.CreateCheckpoint: TGocciaLexerCheckpoint;

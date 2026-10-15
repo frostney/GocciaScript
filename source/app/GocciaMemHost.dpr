@@ -7,6 +7,35 @@ uses {$IFDEF UNIX}cthreads,{$ENDIF} Classes, SysUtils,
   Goccia.Runtime, Goccia.RuntimeExtensions.Console, Goccia.GarbageCollector,
   Goccia.Bytecode.Chunk;
 
+{$IFDEF FPC}
+type
+  PAnsiRec = ^TAnsiRec;
+  TAnsiRec = packed record
+    CodePage: Word;
+    ElementSize: Word;
+    {$IFDEF CPU64}
+    _Padding: LongWord;
+    {$ENDIF}
+    RefCount: SizeInt;
+    Len: SizeInt;
+  end;
+{$ENDIF}
+
+procedure DumpLargeStrings(const ALabel: string);
+var
+  Status: TFPCHeapStatus;
+  Block: Pointer;
+  BlockSize: PtrUInt;
+  AnsiHdr: PAnsiRec;
+  Candidate: Pointer;
+  Len: SizeInt;
+begin
+  WriteLn(StdErr, '[DUMP] ', ALabel, ' — scanning heap for large strings...');
+  Status := GetFPCHeapStatus;
+  // This is a crude scan - in production we'd use proper heap walking
+  WriteLn(StdErr, '[DUMP] Heap: CurrUsed=', Status.CurrHeapUsed, ' MaxUsed=', Status.MaxHeapUsed);
+end;
+
 function HeapStats: string;
 var
   Status: TFPCHeapStatus;
