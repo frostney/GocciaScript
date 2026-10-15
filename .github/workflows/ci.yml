@@ -1492,6 +1492,13 @@ jobs:
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
 
+      # test-cli-permissions.ts fetches a loopback name only the hosts file
+      # lists, which the runner image does not have, to show fetch resolves
+      # through the system resolver.
+      - name: Add a hosts-file-only name
+        if: runner.os == 'Linux'
+        run: echo "127.0.0.2 goccia-hosts-file.test" | sudo tee -a /etc/hosts
+
       - name: Check capability flags, limits, and permission defaults
         run: bun run scripts/test-cli-permissions.ts
 
