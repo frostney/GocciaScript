@@ -594,4 +594,5 @@ During code review, the following findings were investigated and determined to b
 - Do not add new bytecode/runtime concepts under old generic naming.
 - Prefer `TGoccia*` bytecode and VM types in new code.
 - Keep interpreter and bytecode semantics aligned through shared runtime objects, not conversion layers.
+- Evaluate a call that can run guest code into a local before storing its result into a register, local cell or argument slot. Guest code can move those stacks, and Pascal leaves open whether `FRegisters[A] := F(...)` takes the slot's address before calling `F`; FPC 3.2.4-rc2 and trunk can take it first, which writes the result into the freed block. `scripts/check-vm-stack-stores.ts` rejects such a store.
 - Allocate an exception handler's register before compiling the region it protects. A throw skips the `OP_CLOSE_UPVALUE` instructions of the scopes it leaves, so when it reaches a handler the VM detaches the closure cell of every local slot above that handler's register.

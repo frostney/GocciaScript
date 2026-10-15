@@ -723,7 +723,11 @@
         end;
 
       OP_NEG_INT, OP_NEG_FLOAT:
-        FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]));
+      begin
+        // ToNumber of an object operand runs guest code (see FRegisters).
+        LeftDouble := RegisterToDouble(FRegisters[B]);
+        FRegisters[A] := VMNumberRegister(-LeftDouble);
+      end;
 
       OP_CONCAT:
       begin
@@ -2161,8 +2165,12 @@
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) < 0)
           else
-            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.LessThan, LeftValue, RightValue));
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.LessThan, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
         end;
       end;
 
@@ -2194,8 +2202,12 @@
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) > 0)
           else
-            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.GreaterThan, LeftValue, RightValue));
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.GreaterThan, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
         end;
       end;
 
@@ -2227,8 +2239,12 @@
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) <= 0)
           else
-            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue));
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
         end;
       end;
 
@@ -2260,8 +2276,12 @@
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) >= 0)
           else
-            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue));
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
         end;
       end;
 
@@ -2743,23 +2763,31 @@
             if (CalleeIntrinsicKind = nikFunctionBind) and
                (FRegisters[A - 1].ObjectValue is TGocciaFunctionBase) then
             begin
+              // Binding reads the target's length and name, which can be
+              // getters that run guest code (see FRegisters).
               case B of
                 0:
-                  FRegisters[A] := RegisterObject(
-                    TGocciaBoundFunctionValue.CreateWithoutArgs(
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithoutArgs(
                       FRegisters[A - 1].ObjectValue,
-                      TGocciaUndefinedLiteralValue.UndefinedValue));
+                      TGocciaUndefinedLiteralValue.UndefinedValue);
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
                 1:
-                  FRegisters[A] := RegisterObject(
-                    TGocciaBoundFunctionValue.CreateWithoutArgs(
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithoutArgs(
                       FRegisters[A - 1].ObjectValue,
-                      RegisterToValue(FRegisters[A + 1])));
+                      RegisterToValue(FRegisters[A + 1]));
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
                 2:
-                  FRegisters[A] := RegisterObject(
-                    TGocciaBoundFunctionValue.CreateWithSingleArg(
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithSingleArg(
                       FRegisters[A - 1].ObjectValue,
                       RegisterToValue(FRegisters[A + 1]),
-                      RegisterToValue(FRegisters[A + 2])));
+                      RegisterToValue(FRegisters[A + 2]));
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
               else
                 BytecodeFunction := nil;
               end;
@@ -2967,8 +2995,10 @@
           SetLength(RegisterArgs, C);
           for I := 0 to C - 1 do
             RegisterArgs[I] := FRegisters[B + 1 + I];
-          FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+          // The constructor runs guest code (see FRegisters).
+          GuestCallRegister := TGocciaVMClassValue(FRegisters[B].ObjectValue)
             .InstantiateRegisters(RegisterArgs);
+          FRegisters[A] := GuestCallRegister;
         end
         else
         begin
@@ -3015,8 +3045,10 @@
           for I := 0 to SpreadArray.Elements.Count - 1 do
             RegisterArgs[I] := VMValueToRegisterFast(
               SpreadArray.GetProperty(IntegerToString(I)));
-          FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+          // The constructor runs guest code (see FRegisters).
+          GuestCallRegister := TGocciaVMClassValue(FRegisters[B].ObjectValue)
             .InstantiateRegisters(RegisterArgs);
+          FRegisters[A] := GuestCallRegister;
         end
         else
         begin
@@ -3100,7 +3132,9 @@
             end
             else
             begin
-              FRegisters[A] := VMValueToRegisterFast(IterResult.GetProperty(PROP_VALUE));
+              // A `value` getter runs guest code (see FRegisters).
+              GuestCallValue := IterResult.GetProperty(PROP_VALUE);
+              FRegisters[A] := VMValueToRegisterFast(GuestCallValue);
               FRegisters[B] := RegisterBoolean(False);
             end;
           end;
@@ -3521,17 +3555,24 @@
 
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
-        FRegisters[A] := RegisterBoolean(
-          (Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName)));
+        // Contains can materialize a lazy global (a shim) or reach a Proxy
+        // trap on the global object's prototype chain, either of which runs
+        // guest code (see FRegisters).
+        GuestCallBoolean := Assigned(FGlobalScope) and
+          FGlobalScope.Contains(GlobalName);
+        FRegisters[A] := RegisterBoolean(GuestCallBoolean);
       end;
 
       OP_DELETE_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+        // Deleting through the global object can reach a Proxy trap on its
+        // prototype chain, which runs guest code (see FRegisters).
         if Assigned(FGlobalScope) then
-          FRegisters[A] := RegisterBoolean(FGlobalScope.DeleteBinding(GlobalName))
+          GuestCallBoolean := FGlobalScope.DeleteBinding(GlobalName)
         else
-          FRegisters[A] := RegisterBoolean(True);
+          GuestCallBoolean := True;
+        FRegisters[A] := RegisterBoolean(GuestCallBoolean);
       end;
 
       OP_IMPORT:
