@@ -283,6 +283,9 @@ begin
   Create(0);
 end;
 
+// Every object creates one. Nothing here can raise but an allocation
+// failure, so the constructor goes without an implicit exception frame.
+{$IMPLICITEXCEPTIONS OFF}
 constructor TGocciaShapedPropertyMap.Create(AInitialCapacity: Integer);
 begin
   inherited Create(AInitialCapacity);
@@ -295,6 +298,7 @@ begin
   FShape := nil;
   FShapeEntryCount := 0;
 end;
+{$IMPLICITEXCEPTIONS ON}
 
 procedure TGocciaShapedPropertyMap.RequireStorageBytes(const ABytes: Int64;
   const APendingValue: TGocciaPropertyDescriptor);

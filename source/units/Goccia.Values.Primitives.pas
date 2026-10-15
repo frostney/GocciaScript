@@ -695,9 +695,10 @@ begin
   Result := True;
 end;
 
+// Neither constructor calls the inherited one: it is TObject.Create, which is
+// empty but, as a constructor, costs an exception frame on every string.
 constructor TGocciaStringLiteralValue.Create(const AValue: string);
 begin
-  inherited Create;
   FValue := AValue;
   FLength := Length(AValue);
   FChargedBytes := ReserveBackingStore(Int64(FLength) * SizeOf(Char));
@@ -706,7 +707,6 @@ end;
 constructor TGocciaStringLiteralValue.CreateConcatenation(
   const APrefix: TGocciaStringLiteralValue; const ASuffix: string);
 begin
-  inherited Create;
   FPrefix := APrefix;
   FValue := ASuffix;
   FLength := APrefix.FLength + Length(ASuffix);

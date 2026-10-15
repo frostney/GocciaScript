@@ -362,7 +362,8 @@ constructor TOrderedStringMap<TValue>.Create(AInitialCapacity: Integer);
 var
   I: Integer;
 begin
-  inherited Create;
+  // No inherited call: it would reach TObject.Create, which is empty but, as a
+  // constructor, costs an exception frame on every object's property map.
   FCount := 0;
   FDeletedCount := 0;
   FEntryCount := 0;
