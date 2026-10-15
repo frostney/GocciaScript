@@ -1372,6 +1372,9 @@ begin
   if (TGarbageCollector.Instance <> nil) and Assigned(FGlobalScope) then
     TGarbageCollector.Instance.RemoveRootObject(FGlobalScope);
 
+  // Release FSourceLines reference before freeing modules (ADR temp investigation)
+  FSourceLines := nil;
+
     FRetainedModules.Free;
     FLazyThunks.Free;
     FExtensions.Free;
