@@ -276,6 +276,9 @@
             NumericComparisonResult := FRegisters[A].IntValue <= Int16(B)
           else if FRegisters[A].Kind = grkFloat then
             NumericComparisonResult := FRegisters[A].FloatValue <= Int16(B)
+          else if VMBoxedNumberRegister(FRegisters[A]) then
+            NumericComparisonResult := TGocciaNumberLiteralValue(
+              FRegisters[A].ObjectValue).Value <= Int16(B)
           else
             raise Exception.Create(
               'Invalid non-numeric source for OP_JUMP_IF_NUM_NOT_LTE_IMM');
@@ -464,11 +467,16 @@
           FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
         end;
 
+      // A proven Number can also arrive boxed: NaN, the infinities and -0
+      // are kept as number values rather than scalar registers.
       OP_SUB_NUM_IMM:
         if FRegisters[B].Kind = grkInt then
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue - Int16(C))
         else if FRegisters[B].Kind = grkFloat then
           FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - Int16(C))
+        else if VMBoxedNumberRegister(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
+            FRegisters[B].ObjectValue).Value - Int16(C))
         else
           raise Exception.Create(
             'Invalid non-numeric source for OP_SUB_NUM_IMM');
@@ -478,6 +486,9 @@
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue + Int16(C))
         else if FRegisters[B].Kind = grkFloat then
           FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + Int16(C))
+        else if VMBoxedNumberRegister(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
+            FRegisters[B].ObjectValue).Value + Int16(C))
         else
           raise Exception.Create(
             'Invalid non-numeric source for OP_ADD_NUM_IMM');
