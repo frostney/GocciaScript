@@ -273,6 +273,34 @@ const CATALOG: Probe[] = [
       `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B {}; } return typeof new C(); });\n`,
   },
   {
+    id: "class-extends-chain-fields",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses that each declare a field",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B { x = 1; }; } return new C().x; });\n`,
+  },
+  {
+    id: "class-extends-chain-constructors",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses whose constructors call super()",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B { constructor(...a) { super(...a); } }; } return typeof new C(); });\n`,
+  },
+  {
+    id: "class-extends-chain-super",
+    growth: "linear",
+    summary: "super() and Reflect.construct into the most derived of DEPTH chained subclasses",
+    body: (d) =>
+      `report(() => { let C = class { first = 1; }; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B {}; } const Leaf = C; const Top = class extends Leaf { constructor() { super(); } }; return new Top().first + Reflect.construct(Leaf, []).first; });\n`,
+  },
+  {
+    id: "class-extends-chain-mixed",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses, alternating default and super()-calling constructors",
+    body: (d) =>
+      `report(() => { let C = class {}; let i = 0; for (const _ of Array.from({ length: ${d} })) { const B = C; C = i % 2 === 0 ? class extends B {} : class extends B { constructor(...a) { super(...a); } }; i += 1; } return typeof new C(); });\n`,
+  },
+  {
     id: "json-stringify-array",
     growth: "linear",
     summary: "JSON.stringify of an array nested DEPTH deep",
