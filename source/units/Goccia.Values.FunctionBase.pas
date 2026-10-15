@@ -1393,13 +1393,13 @@ begin
     BoundArgs.Capacity := AArgs.Length - 1;
     for I := 1 to AArgs.Length - 1 do
       BoundArgs.Add(AArgs.GetElement(I));
-
-    Result := TGocciaBoundFunctionValue.Create(AThisValue, BoundThis, BoundArgs);
-    BoundArgs := nil;
-  finally
-    if Assigned(BoundArgs) then
-      BoundArgs.Free;
+  except
+    BoundArgs.Free;
+    raise;
   end;
+  // The constructor owns the list from here on, including when the target's
+  // length or name getter throws.
+  Result := TGocciaBoundFunctionValue.Create(AThisValue, BoundThis, BoundArgs);
 end;
 
 // ES2026 §20.2.3.5 Function.prototype.toString()
@@ -1507,37 +1507,52 @@ begin
   InitializeBoundFunctionProperties;
 end;
 
+// Takes ownership of ABoundArgs on entry, before anything can raise: the
+// length and name reads below run guest code that may throw, and a raising
+// constructor destroys the half-built object, which frees FBoundArgs. The
+// caller therefore must not free the list itself on any path.
 constructor TGocciaBoundFunctionValue.Create(const AOriginalFunction: TGocciaValue; const ABoundThis: TGocciaValue; const ABoundArgs: TGocciaValueList);
 begin
-  inherited Create;
-  FOriginalFunction := AOriginalFunction;
-  FBoundThis := ABoundThis;
   FBoundArgs := nil;
   FSingleBoundArg := nil;
   FBoundArgCount := ABoundArgs.Count;
-  case ABoundArgs.Count of
+  case FBoundArgCount of
     0:
-      begin
-        InitializeBoundFunctionProperties;
-      end;
+      ABoundArgs.Free;
     1:
       begin
         FSingleBoundArg := ABoundArgs[0];
-        InitializeBoundFunctionProperties;
+        ABoundArgs.Free;
       end;
   else
     FBoundArgs := ABoundArgs;
-    InitializeBoundFunctionProperties;
-    Exit;
   end;
-  ABoundArgs.Free;
+  inherited Create;
+  FOriginalFunction := AOriginalFunction;
+  FBoundThis := ABoundThis;
+  InitializeBoundFunctionProperties;
 end;
 
 procedure TGocciaBoundFunctionValue.InitializeBoundFunctionProperties;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
-  FBoundLength := SnapshotBoundFunctionLength(FOriginalFunction,
-    FBoundArgCount);
-  FBoundName := SnapshotBoundFunctionName(FOriginalFunction);
+  // ES2026 §20.2.3.2 steps 5-8: the length and name reads run after step 3
+  // (BoundFunctionCreate) has captured the bound this and arguments, and both
+  // can run guest getters that collect. This object is still inside its
+  // constructor, so it is not yet registered with the collector and nothing
+  // marks the values its fields hold — a boxed register value bound by the VM
+  // fast path is reachable from nowhere else. Rooting Self marks the target,
+  // the bound this and every bound argument through MarkReferences.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    FBoundLength := SnapshotBoundFunctionLength(FOriginalFunction,
+      FBoundArgCount);
+    FBoundName := SnapshotBoundFunctionName(FOriginalFunction);
+  finally
+    Roots.Clear;
+  end;
   if FOriginalFunction is TGocciaObjectValue then
     Self.Prototype := TGocciaObjectValue(FOriginalFunction).Prototype;
 
