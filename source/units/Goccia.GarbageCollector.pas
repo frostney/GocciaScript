@@ -391,6 +391,8 @@ type
     procedure PrintTimingSummary;
     {$ENDIF}
 
+    // #1704 investigation: audit StringLiteralValue FValue pointers
+
     property Enabled: Boolean read FEnabled write FEnabled;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
     property TotalCollected: Int64 read FTotalCollected;

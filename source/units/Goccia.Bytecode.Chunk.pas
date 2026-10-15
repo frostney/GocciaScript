@@ -630,14 +630,29 @@ begin
     FRegExpProgramCaches[I].Free;
   for I := 0 to High(FDirectEvalCodeCaches) do
     FDirectEvalCodeCaches[I].Free;
-  // Explicitly zero string constants to force finalization
-  for I := 0 to FConstantCount - 1 do
-    if FConstants[I].Kind = bckString then
-      FConstants[I].StringValue := '';
-  SetLength(FConstants, 0);
-  // Clear string index (keys hold strings too)
-  FStringConstantIndex.Clear;
+  // Free string constant index (releases map keys)
   FStringConstantIndex.Free;
+  FStringConstantIndex := nil;
+  // Clear template string fields
+  FName := '';
+  FSourceText := '';
+  FClosedNumericSelfName := '';
+  FModuleEnvironmentBinding := '';
+  // Nil string constant cache entries
+  SetLength(FStringConstantCaches, 0);
+  // Zero string fields in constants
+  for I := 0 to FConstantCount - 1 do
+  begin
+    FConstants[I].StringValue := '';
+    FConstants[I].RegExpFlags := '';
+    SetLength(FConstants[I].CookedStrings, 0);
+    SetLength(FConstants[I].RawStrings, 0);
+    SetLength(FConstants[I].CookedValid, 0);
+  end;
+  SetLength(FConstants, 0);
+  // Clear upvalue descriptor names
+  for I := 0 to FUpvalueCount - 1 do
+    FUpvalueDescriptors[I].Name := '';
   FFunctions.Free;
   FDebugInfo.Free;
   inherited;
@@ -869,8 +884,6 @@ function TGocciaFunctionTemplate.AddConstantString(
 begin
   if FStringConstantIndex.TryGetValue(AValue, Result) then
     Exit;
-  if Length(AValue) >= 100000 then
-    WriteLn(StdErr, 'AddConstantString: len=', Length(AValue), ' Template=', IntToHex(PtrUInt(Self), 16));
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then

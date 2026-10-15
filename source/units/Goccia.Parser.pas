@@ -2809,13 +2809,8 @@ begin
           raise TGocciaSyntaxError.Create(
             'Strict mode string literals must not contain decimal escapes',
             Token.Line, Token.Column, FFileName, FSourceLines);
-        // For large strings, don't store SourceText to prevent COW leak (ADR 0013, issue #1704)
-        if Length(Token.Lexeme) > 50000 then
-          Result := TGocciaLiteralExpression.Create(
-            TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Span, '')
-        else
-          Result := TGocciaLiteralExpression.Create(
-            TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Span, SourceText);
+        Result := TGocciaLiteralExpression.Create(
+          TGocciaStringLiteralValue.Create(Token.Lexeme), Token.Span, SourceText);
       end;
     gttTemplate, gttTemplateHead:
       begin

@@ -422,6 +422,8 @@ end;
 
 destructor TGocciaSourcePipelineResult.Destroy;
 begin
+  if Assigned(FProgramNode) then
+    WriteLn(StdErr, 'PipelineResult.Destroy: Freeing ProgramNode (AST)');
   FProgramNode.Free;
   FSourceMap.Free;
   FOriginMap.Free;
