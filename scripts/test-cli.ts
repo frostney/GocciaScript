@@ -3808,6 +3808,52 @@ console.log("--max-memory (a live set inside the pressure reserve does not colle
     );
 }
 
+console.log("--max-memory (a live set inside the pressure reserve gives up burst headroom)...");
+{
+  // ADR 0141's trade-off, pinned. A plain value allocation over the ceiling
+  // is refused without collecting first, and the backed-off trigger lets up
+  // to half the remaining headroom fill with garbage before a checkpoint
+  // collects it. So a single native burst that fits in the headroom on its
+  // own is refused once garbage sits in front of it, and fits again after
+  // an explicit collection. Sizes are measured in the run, so the shape
+  // holds whatever an object costs on the platform: the live set is parked
+  // 1.5 bursts under the ceiling, 0.6 of a burst of garbage stays below the
+  // backed-off trigger, and the burst then needs 1.6.
+  const src = [
+    "const keys = Array.from({ length: 400 }, (_, i) => \"k\" + i);",
+    "const big = Object.fromEntries(keys.map((k, i) => [k, i]));",
+    "const steps = Array.from({ length: 200000 }, (_, i) => i);",
+    "Goccia.gc();",
+    "const before = Goccia.gc.bytesAllocated;",
+    "let held = Object.entries(big);",
+    "const burst = Goccia.gc.bytesAllocated - before;",
+    "held = undefined;",
+    "Goccia.gc();",
+    "const ballast = new ArrayBuffer(Goccia.gc.maxBytes - Goccia.gc.bytesAllocated - Math.floor(burst * 1.5));",
+    "Goccia.gc();",
+    "const base = Goccia.gc.bytesAllocated;",
+    "let last;",
+    "for (const i of steps) {",
+    "  if (Goccia.gc.bytesAllocated - base >= burst * 0.6) break;",
+    "  last = { a: i };",
+    "}",
+    "let refused = false;",
+    "try { held = Object.entries(big); } catch (e) { refused = e instanceof RangeError; }",
+    "held = undefined;",
+    "Goccia.gc();",
+    "held = Object.entries(big);",
+    "[refused, held.length === 400, ballast.byteLength > 0];",
+    "",
+  ].join("\n");
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=64MiB"], { timeout: 120_000 });
+  if (exitCode !== 0)
+    throw new Error(`Burst-headroom run should exit 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (JSON.stringify(json.files?.[0]?.result) !== "[true,true,true]")
+    throw new Error(
+      `A burst behind garbage the back-off left should be refused, then fit after Goccia.gc(), got ${JSON.stringify(json.files?.[0]?.result)}`,
+    );
+}
+
 console.log("--max-memory (maxBytes readonly)...");
 {
   const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${RUNNER} --compat-asi 2>&1`.nothrow();

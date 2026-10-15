@@ -257,9 +257,13 @@ type
     // The BytesAllocated level at which the pressure checks collect, given
     // the live total ABytesAllocated: one pressure reserve below the ceiling,
     // backed off above what the last full collection left live. Never above
-    // MaxBytes, because a plain object registration is never refused and
-    // only a collection keeps it near the ceiling. ABytesAfterLastCollect is
-    // FBytesAfterLastCollect, read by the caller with the live total.
+    // MaxBytes: a plain value allocation that would pass the ceiling is
+    // refused with the RangeError without collecting first, so only a
+    // checkpoint collection clears the garbage in front of it. Backed off, up
+    // to half the remaining headroom can hold garbage when a burst starts,
+    // which is the burst headroom a live set inside the reserve gives up
+    // (ADR 0141). ABytesAfterLastCollect is FBytesAfterLastCollect, read by
+    // the caller with the live total.
     function TrackedTriggerBytes(const ABytesAllocated,
       ABytesAfterLastCollect: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}
     procedure SampleHeap;

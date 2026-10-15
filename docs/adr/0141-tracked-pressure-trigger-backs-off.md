@@ -65,10 +65,23 @@ the heap record.
 **The trigger never rises above the ceiling.** Charged reservations and gated
 growth do not rely on the trigger: both force a collection and re-test before
 they refuse (ADR 0110), so they never pass the ceiling and still find garbage
-the back-off left on the heap. A plain object registration is never refused,
-though, and only a checkpoint collection keeps those near the ceiling. The
-backed-off trigger is therefore at most `MaxBytes`, and a script whose live
-set has reached the ceiling collects at every checkpoint, as before.
+the back-off left on the heap. A plain value allocation that would pass the
+ceiling is refused with the catchable `RangeError` without collecting first
+(`TGocciaValue.AfterConstruction`), so only a checkpoint collection clears
+the garbage in front of it. The backed-off trigger is therefore at most
+`MaxBytes`, and a script whose live set has reached the ceiling collects at
+every checkpoint, as before.
+
+**A live set inside the reserve gives up burst headroom.** Before this
+change every checkpoint inside the reserve collected, so the plain
+allocations between two checkpoints could use all of the headroom `h` above
+the live set. With the back-off, up to `h / 2` of garbage can already sit in
+that headroom when a burst starts. A burst between two checkpoints that fits
+in `h` but not in what is left is refused with the `RangeError` where the
+earlier trigger ran it. The ceiling does not move, nothing allocates past it,
+a script whose live set is below the line is unaffected, and catching the
+error, calling `Goccia.gc()` and retrying succeeds. This is accepted in
+exchange for removing the collection at every checkpoint.
 
 **One predicate serves every caller.** `NeedsMemoryPressureCollection` tests
 the backed-off trigger, so the VM's checkpoint, the interpreter's checkpoint
@@ -101,6 +114,13 @@ collection still marks every frame, and the reserve is still kept for the
   checkpoint interval before a collection, and most collections would move
   from the checkpoints into the forced collections of charged and gated
   requests, which run with more of the engine's state held in Pascal locals.
+- **Collect before refusing a plain value allocation**, as charged
+  reservations do. It would keep the full headroom, but a collection could
+  then run inside any allocation, including in the middle of a built-in that
+  holds values only in Pascal locals, the bug class
+  [#1679](https://github.com/frostney/GocciaScript/issues/1679) tracks. The
+  GC-stress build collects at instruction boundaries, not at allocation
+  sites, so it could not find such cases.
 - **Back off by half the survivors, as the heap trigger does.** The heap
   trigger may sit above the ceiling because refusal does not use it. The
   tracked trigger may not, for the reason above.
@@ -145,3 +165,20 @@ the line once a collection gets back under it. `scripts/test-cli.ts` counts
 `memory.gc.collections` for a run that parks its live set 3 MiB under a 64 MiB
 ceiling and then allocates 20,000 objects and 500 small buffers: 779
 collections before, 2 after, against a bound of 40.
+
+The cost is the burst headroom described above. Two reproductions from the
+review of this change, at `--max-memory=64MiB`, production builds, bytecode
+mode:
+
+- A live set parked 128 KiB under the ceiling makes two `Object.entries`
+  bursts of about 40 KiB and 88 KiB per iteration, separated by loops longer
+  than a checkpoint interval that allocate nothing. The earlier trigger
+  finishes 200 iterations; this change refuses the second.
+- A live set parked 12 KiB under the ceiling allocates 100,000 small objects
+  that are garbage at once. The earlier trigger finishes; this change refuses
+  after 2,041.
+
+Both refusals are the catchable `RangeError`, and no run passed the ceiling.
+`scripts/test-cli.ts` pins the shape: with the live set parked 1.5 bursts
+under the ceiling and 0.6 of a burst of garbage made, an `Object.entries`
+burst is refused, and after `Goccia.gc()` the same burst fits.
