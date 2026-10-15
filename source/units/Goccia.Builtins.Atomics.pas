@@ -18,6 +18,10 @@ uses
 
 function PumpAtomicsWaitAsyncCompletions: Integer;
 function HasPendingAtomicsWaitAsyncCompletions: Boolean;
+{ True while this thread has an async waiter that settles without an
+  Atomics.notify: one already notified, or one with a timeout. A waiter with
+  no timeout that nothing notifies never settles. }
+function HasSelfSettlingAtomicsWaitAsyncWaiters: Boolean;
 function WaitForAtomicsPromise(const APromise: TGocciaPromiseValue): Boolean;
 procedure SetAtomicsAgentCanSuspend(AValue: Boolean);
 procedure ShutdownAtomicsWaiters;
@@ -794,6 +798,28 @@ begin
     Waiters := GetAtomicsWaiters;
     for I := 0 to Waiters.Count - 1 do
       if Waiters[I].Async and (Waiters[I].OwnerThreadId = GetGocciaThreadId) then
+        Exit(True);
+  finally
+    CriticalSectionLeave(GAtomicsLock);
+  end;
+end;
+
+function HasSelfSettlingAtomicsWaitAsyncWaiters: Boolean;
+var
+  I: Integer;
+  OwnerThreadId: TThreadID;
+  Waiters: TObjectList<TAtomicsWaiter>;
+begin
+  Result := False;
+  if GAtomicsAsyncWaiterCount = 0 then
+    Exit;
+  OwnerThreadId := GetGocciaThreadId;
+  CriticalSectionEnter(GAtomicsLock);
+  try
+    Waiters := GetAtomicsWaiters;
+    for I := 0 to Waiters.Count - 1 do
+      if Waiters[I].Async and (Waiters[I].OwnerThreadId = OwnerThreadId) and
+         (Waiters[I].Ready or Waiters[I].HasDeadline) then
         Exit(True);
   finally
     CriticalSectionLeave(GAtomicsLock);

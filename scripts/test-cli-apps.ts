@@ -13635,6 +13635,23 @@ await section("Runner: a fetch awaited after a top-level await that settles at o
         else if (!run.combined.includes("TypeError: await: Promise did not settle") || lines[0] !== "a" || lines.includes("unreachable"))
           failures.push(`${label}: should print a, then fail with the unsettled-await TypeError, got:\n${run.combined}`);
       }
+      // The entry waits on a promise a throwing reaction never settles: the
+      // rejection nothing handled is the run's error, not the unsettled await.
+      // Host bytecode awaits synchronously and fails at the await instead.
+      const thrown = [
+        "await Promise.resolve();",
+        "console.log('a');",
+        `await new Promise(() => fetch('${url}').then(() => { throw new Error('boom'); }));`,
+        "console.log('unreachable');",
+      ].join("\n");
+      for (const { path, run } of await runBoth(thrown, mode, mode === "interpreted")) {
+        const label = `${path} ${mode}, reaction that throws`;
+        const lines = programLines(run.stdout);
+        if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+          failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+        else if (!run.combined.includes("Error: boom") || run.combined.includes("did not settle") || lines[0] !== "a")
+          failures.push(`${label}: should print a, then fail with the reaction's Error: boom, got:\n${run.combined}`);
+      }
     }
   } finally {
     server.stop(true);

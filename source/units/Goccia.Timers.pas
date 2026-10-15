@@ -324,6 +324,10 @@ procedure DiscardRealTimers;
   finished. Returns False when the bound stopped it with timers still runnable. }
 function DrainRealTimersForHost: Boolean;
 
+{ True when DrainRealTimersForHost has a timeout to run: real mode, the current
+  realm's queue, intervals left out as that drain leaves them. }
+function HasRealTimeoutsForHost: Boolean;
+
 { An exception a real-mode timer threw, for the host to attribute. }
 function TakeUncaughtTimerError(out AValue: TGocciaValue): Boolean;
 
@@ -1470,6 +1474,15 @@ begin
     Exit(True);
   Queue.DrainRealTimers;
   Result := not Assigned(Queue.FirstRealTimer(True));
+end;
+
+function HasRealTimeoutsForHost: Boolean;
+var
+  Queue: TGocciaTimerQueue;
+begin
+  Queue := OwningQueueForCurrentRealm;
+  Result := Assigned(Queue) and (not Queue.Faking) and
+    Assigned(Queue.FirstRealTimer(True));
 end;
 
 function TakeUncaughtTimerError(out AValue: TGocciaValue): Boolean;

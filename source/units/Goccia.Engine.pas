@@ -564,6 +564,7 @@ uses
   Goccia.Scope.Redeclaration,
   Goccia.Shims,
   Goccia.Spec,
+  Goccia.Timeout,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
@@ -2261,6 +2262,12 @@ begin
         begin
           if Assigned(Queue) and Queue.HasPending then
             Queue.DrainQueue
+          else if HasSelfSettlingAtomicsWaitAsyncWaiters then
+          begin
+            { An Atomics.waitAsync timeout still to expire. }
+            CheckExecutionTimeoutNow;
+            Sleep(1);
+          end
           else
             Break;
         end
@@ -3172,14 +3179,22 @@ end;
   threw. Still pending, its top-level await waits on a promise that nothing
   left in the run can settle: that fails the run as it does where the entry's
   awaits run synchronously (Goccia.Values.Await.AwaitValue), never reporting
-  a run that stopped partway as a success. }
-procedure RaiseUnlessEntryPromiseFulfilled(const APromise: TGocciaPromiseValue);
+  a run that stopped partway as a success. A rejection no handler took is
+  usually why — a reaction that threw instead of settling what the entry
+  awaits — so it is reported first, and under the throw policy it is the
+  run's error. }
+procedure RaiseUnlessEntryPromiseFulfilled(const AEngine: TGocciaEngine;
+  const APromise: TGocciaPromiseValue);
 begin
   case APromise.State of
     gpsRejected:
       raise TGocciaThrowValue.Create(APromise.PromiseResult);
     gpsPending:
-      ThrowTypeError(SErrorAwaitPromiseUnsettled, SSuggestAwaitMicrotaskDrain);
+      begin
+        AEngine.RaiseUnhandledRejection;
+        ThrowTypeError(SErrorAwaitPromiseUnsettled,
+          SSuggestAwaitMicrotaskDrain);
+      end;
   end;
 end;
 
@@ -3393,11 +3408,11 @@ begin
                   (RunModuleForSourceType). }
                 if EntryHasTopLevelAwait and
                    (ModuleResult is TGocciaPromiseValue) then
-                  RaiseUnlessEntryPromiseFulfilled(
+                  RaiseUnlessEntryPromiseFulfilled(Self,
                     TGocciaPromiseValue(ModuleResult));
                 if Assigned(EntryModule) and
                    (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
-                  RaiseUnlessEntryPromiseFulfilled(
+                  RaiseUnlessEntryPromiseFulfilled(Self,
                     TGocciaPromiseValue(EntryModule.EvaluationPromise));
                 RaiseUnhandledRejection;
                 FLastTiming.Result := ModuleResult;
