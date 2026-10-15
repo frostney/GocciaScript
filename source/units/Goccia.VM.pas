@@ -531,10 +531,28 @@ type
       const AUseMappedArguments: Boolean;
       const AFormalParameterCount: Integer): TGocciaObjectValue;
     function InvokeImplicitSuperInitialization(const AClassValue: TGocciaClassValue;
-      const AInstance: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+      const AInstance: TGocciaValue; const AArguments: TGocciaArgumentsCollection;
+      const AForwardsToSuperClass: PBoolean = nil): TGocciaValue;
     function InvokeImplicitSuperInitializationRegisters(
       const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const AArguments: TGocciaRegisterArray;
+      const AForwardsToSuperClass: PBoolean = nil): TGocciaValue;
+    function InvokeImplicitSuperForwardingChain(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+    function InvokeImplicitSuperForwardingChainRegisters(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
       const AArguments: TGocciaRegisterArray): TGocciaValue;
+    function InvokeLongImplicitSuperForwardingChain(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const ABoxedArguments: TGocciaArgumentsCollection;
+      const ARegisterArguments: TGocciaRegisterArray;
+      const AUseRegisters: Boolean): TGocciaValue;
+    procedure InitializeImplicitSuperForwardingClass(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const ABoxedArguments: TGocciaArgumentsCollection;
+      const ARegisterArguments: TGocciaRegisterArray;
+      const AUseRegisters: Boolean);
     procedure BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
     procedure ApplyElementDecorator(const ADecoratorFn: TGocciaValue;
       const ADescriptor: string; const AComputedKey: TGocciaValue = nil);
@@ -11992,13 +12010,22 @@ begin
   end;
 end;
 
+{ ES2026 §15.7.14 ClassDefinitionEvaluation step 14.a: a derived class's
+  default constructor performs Construct(F.[[GetPrototypeOf]](), args,
+  NewTarget) and then InitializeInstanceElements(result, F) (§7.3.33).
+  Nothing bounds how many such classes a chain may have, so this does not
+  recurse into the parent of a class whose default constructor forwards to
+  one: it hands the class to InvokeImplicitSuperForwardingChain, which walks
+  the run of forwarding classes in a loop (issue #1665). Given
+  AForwardsToSuperClass, it is one step of that walk instead: it sets the flag
+  and returns rather than forwarding. }
 function TGocciaVM.InvokeImplicitSuperInitialization(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
-  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AForwardsToSuperClass: PBoolean): TGocciaValue;
 var
   ConstructorThisValue: TGocciaValue;
   SuperResult: TGocciaValue;
-  TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
@@ -12166,27 +12193,27 @@ begin
     Exit;
   end;
 
-  TargetInstance := InvokeImplicitSuperInitialization(
-    ImplicitSuperConstructorClass(AClassValue), AInstance, AArguments);
-  if not Assigned(TargetInstance) then
-    TargetInstance := AInstance;
-  if not (AClassValue is TGocciaVMClassValue) and
-     (TargetInstance is TGocciaInstanceValue) then
-    TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(AArguments);
-  RunClassInitializers(AClassValue, TargetInstance);
-  Result := TargetInstance;
+  { A default constructor forwarding to a parent class. }
+  if Assigned(AForwardsToSuperClass) then
+  begin
+    AForwardsToSuperClass^ := True;
+    Exit;
+  end;
+  Result := InvokeImplicitSuperForwardingChain(AClassValue, AInstance,
+    AArguments);
 end;
 
+{ InvokeImplicitSuperInitialization over unboxed arguments. }
 function TGocciaVM.InvokeImplicitSuperInitializationRegisters(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
-  const AArguments: TGocciaRegisterArray): TGocciaValue;
+  const AArguments: TGocciaRegisterArray;
+  const AForwardsToSuperClass: PBoolean): TGocciaValue;
 var
   BoxedArgs: TGocciaArgumentsCollection;
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
   ConstructorThisValue: TGocciaValue;
   SuperResult: TGocciaValue;
   SuperResultRegister: TGocciaRegister;
-  TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
@@ -12421,22 +12448,186 @@ begin
     Exit;
   end;
 
-  TargetInstance := InvokeImplicitSuperInitializationRegisters(
-    ImplicitSuperConstructorClass(AClassValue), AInstance, AArguments);
-  if not Assigned(TargetInstance) then
-    TargetInstance := AInstance;
-  if not (AClassValue is TGocciaVMClassValue) and
-     (TargetInstance is TGocciaInstanceValue) then
+  { A default constructor forwarding to a parent class. }
+  if Assigned(AForwardsToSuperClass) then
   begin
-    BoxedArgs := MaterializeArguments(AArguments);
-    try
-      TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(BoxedArgs);
-    finally
-      ReleaseArguments(BoxedArgs);
-    end;
+    AForwardsToSuperClass^ := True;
+    Exit;
   end;
-  RunClassInitializers(AClassValue, TargetInstance);
-  Result := TargetInstance;
+  Result := InvokeImplicitSuperForwardingChainRegisters(AClassValue, AInstance,
+    AArguments);
+end;
+
+const
+  { Forwarding classes InvokeImplicitSuperForwardingChain keeps in a fixed
+    local array before it hands the walk to
+    InvokeLongImplicitSuperForwardingChain. }
+  IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES = 8;
+
+{ AClassValue's default constructor forwards to its parent class. Reading an
+  ordinary class's [[Prototype]] and testing IsConstructor are not observable,
+  so the run of forwarding classes is walked down in a loop to the first class
+  whose constructor does real work, and each forwarding class's instance
+  elements are then initialized from the base outwards: the order the nested
+  Construct calls of §15.7.14 step 14.a would return in. The first few
+  classes are kept in a fixed array, so a short chain needs no managed local
+  and no implicit exception frame. }
+function TGocciaVM.InvokeImplicitSuperForwardingChain(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+var
+  Forwarding: array[0..IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES - 1] of
+    TGocciaClassValue;
+  Count, I: Integer;
+  Current: TGocciaClassValue;
+  ForwardsToSuperClass: Boolean;
+begin
+  Forwarding[0] := AClassValue;
+  Count := 1;
+  Current := AClassValue;
+  repeat
+    Current := ImplicitSuperConstructorClass(Current);
+    ForwardsToSuperClass := False;
+    Result := InvokeImplicitSuperInitialization(Current, AInstance,
+      AArguments, @ForwardsToSuperClass);
+    if not ForwardsToSuperClass then
+      Break;
+    if Count = IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES then
+    begin
+      Result := InvokeLongImplicitSuperForwardingChain(Current, AInstance,
+        AArguments, nil, False);
+      Break;
+    end;
+    Forwarding[Count] := Current;
+    Inc(Count);
+  until False;
+  if not Assigned(Result) then
+    Result := AInstance;
+  for I := Count - 1 downto 0 do
+  begin
+    Current := Forwarding[I];
+    if not (Current is TGocciaVMClassValue) and
+       (Result is TGocciaInstanceValue) then
+      TGocciaInstanceValue(Result).InitializeNativeFromArguments(AArguments);
+    RunClassInitializers(Current, Result);
+  end;
+end;
+
+{ InvokeImplicitSuperForwardingChain over unboxed arguments. }
+function TGocciaVM.InvokeImplicitSuperForwardingChainRegisters(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const AArguments: TGocciaRegisterArray): TGocciaValue;
+var
+  Forwarding: array[0..IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES - 1] of
+    TGocciaClassValue;
+  Count, I: Integer;
+  Current: TGocciaClassValue;
+  ForwardsToSuperClass: Boolean;
+begin
+  Forwarding[0] := AClassValue;
+  Count := 1;
+  Current := AClassValue;
+  repeat
+    Current := ImplicitSuperConstructorClass(Current);
+    ForwardsToSuperClass := False;
+    Result := InvokeImplicitSuperInitializationRegisters(Current, AInstance,
+      AArguments, @ForwardsToSuperClass);
+    if not ForwardsToSuperClass then
+      Break;
+    if Count = IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES then
+    begin
+      Result := InvokeLongImplicitSuperForwardingChain(Current, AInstance, nil,
+        AArguments, True);
+      Break;
+    end;
+    Forwarding[Count] := Current;
+    Inc(Count);
+  until False;
+  if not Assigned(Result) then
+    Result := AInstance;
+  for I := Count - 1 downto 0 do
+  begin
+    Current := Forwarding[I];
+    if not (Current is TGocciaVMClassValue) and
+       (Result is TGocciaInstanceValue) then
+      InitializeImplicitSuperForwardingClass(Current, Result, nil, AArguments,
+        True)
+    else
+      RunClassInitializers(Current, Result);
+  end;
+end;
+
+{ The walk InvokeImplicitSuperForwardingChain continues here once its chain
+  outgrows the fixed array: AClassValue forwards to its parent class, and the
+  forwarding classes from it to the base go into a growable array, a managed
+  local that would cost every construction an implicit exception frame if the
+  short walk declared it. }
+function TGocciaVM.InvokeLongImplicitSuperForwardingChain(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const ABoxedArguments: TGocciaArgumentsCollection;
+  const ARegisterArguments: TGocciaRegisterArray;
+  const AUseRegisters: Boolean): TGocciaValue;
+var
+  Forwarding: array of TGocciaClassValue;
+  Count, I: Integer;
+  Current: TGocciaClassValue;
+  ForwardsToSuperClass: Boolean;
+begin
+  SetLength(Forwarding, 64);
+  Forwarding[0] := AClassValue;
+  Count := 1;
+  Current := AClassValue;
+  repeat
+    Current := ImplicitSuperConstructorClass(Current);
+    ForwardsToSuperClass := False;
+    if AUseRegisters then
+      Result := InvokeImplicitSuperInitializationRegisters(Current, AInstance,
+        ARegisterArguments, @ForwardsToSuperClass)
+    else
+      Result := InvokeImplicitSuperInitialization(Current, AInstance,
+        ABoxedArguments, @ForwardsToSuperClass);
+    if not ForwardsToSuperClass then
+      Break;
+    if Count = Length(Forwarding) then
+      SetLength(Forwarding, Count * 2);
+    Forwarding[Count] := Current;
+    Inc(Count);
+  until False;
+  if not Assigned(Result) then
+    Result := AInstance;
+  for I := Count - 1 downto 0 do
+    InitializeImplicitSuperForwardingClass(Forwarding[I], Result,
+      ABoxedArguments, ARegisterArguments, AUseRegisters);
+end;
+
+{ InitializeInstanceElements for one forwarding class once its parent's
+  construction has produced AInstance; a class the VM did not build may first
+  have a native receiver to fill from the arguments. }
+procedure TGocciaVM.InitializeImplicitSuperForwardingClass(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const ABoxedArguments: TGocciaArgumentsCollection;
+  const ARegisterArguments: TGocciaRegisterArray;
+  const AUseRegisters: Boolean);
+var
+  BoxedArgs: TGocciaArgumentsCollection;
+begin
+  if not (AClassValue is TGocciaVMClassValue) and
+     (AInstance is TGocciaInstanceValue) then
+  begin
+    if AUseRegisters then
+    begin
+      BoxedArgs := MaterializeArguments(ARegisterArguments);
+      try
+        TGocciaInstanceValue(AInstance).InitializeNativeFromArguments(BoxedArgs);
+      finally
+        ReleaseArguments(BoxedArgs);
+      end;
+    end
+    else
+      TGocciaInstanceValue(AInstance).InitializeNativeFromArguments(
+        ABoxedArguments);
+  end;
+  RunClassInitializers(AClassValue, AInstance);
 end;
 
 // A private auto-accessor (`accessor #x`) is a private field in both modes:
