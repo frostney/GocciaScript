@@ -1215,9 +1215,12 @@ begin
     // clears the dispose method's register before the call, and a getter can
     // return a fresh Proxy. Its [[Call]] reads the apply trap, which runs
     // guest code, and then reads the Proxy's own target and handler, so it is
-    // rooted until the call returns.
+    // rooted until the call returns. The receiver joins the trap's root-bearing
+    // arguments only after that lookup, so it is rooted here as well.
     Roots.Initialize;
     Roots.Add(ACallee);
+    if Assigned(AThisValue) then
+      Roots.Add(AThisValue);
     try
       Result := GProxyApplyHook(ACallee, AArgs, AThisValue);
     finally
