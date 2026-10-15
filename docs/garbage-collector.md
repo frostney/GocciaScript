@@ -4,12 +4,8 @@
 
 ## Executive Summary
 
-- **Mark-and-sweep** — Two-phase tracing GC (`Goccia.GarbageCollector.pas`) for every GocciaScript value
-- **Auto-registration** — Every `TGocciaValue` registers with the GC via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
-- **Weak reference phase** — WeakMap, WeakSet, WeakRef, and FinalizationRegistry use post-mark weak tracing/sweeping hooks so weak targets do not become strong roots
-- **Kept objects** — WeakRef construction and `deref()` keep targets stable until the next host job checkpoint
-- **Finalization cleanup** — FinalizationRegistry cleanup jobs are enqueued by GC and run after the normal microtask queue
-- **Generation-counter marking** — O(1) mark-clear via `AdvanceMark` instead of O(n) flag reset per collection; explicit collections are serialized across worker threads because some intrinsic objects are shared
+- **Mark-and-sweep** — Two-phase tracing GC (`Goccia.GarbageCollector.pas`) for every GocciaScript value: each `TGocciaValue` registers via `AfterConstruction` and overrides `MarkReferences` to mark what it owns; generation-counter marking (`AdvanceMark`) clears marks in O(1), and explicit collections are serialized across worker threads because some intrinsic objects are shared
+- **Weak references and finalization** — WeakMap, WeakSet, WeakRef and FinalizationRegistry use post-mark weak tracing and sweeping hooks, so weak targets never become strong roots; WeakRef construction and `deref()` keep targets until the next host job checkpoint, and FinalizationRegistry cleanup jobs run after the normal microtask queue
 - **Pinned singletons** — `undefined`, `null`, `true`, `false`, `NaN`, `Infinity` are pinned once at engine startup; built-in prototypes are pinned per-engine via [realm slots](core-patterns.md#realm-ownership--slot-registration) and released atomically when the realm is destroyed
 - **Collection under memory pressure** — Script execution collects only at the VM's pressure checkpoints, when either the tracked bytes or the heap manager's in-use total nears the `--max-memory` ceiling ([ADR 0129](adr/0129-heap-triggered-collection.md)); there is no allocation-count collection while a script runs
 - **Two refusal contracts** — the `--max-memory` ceiling refuses a *charged* allocation with a catchable `RangeError` and a [gated growth point](#gated-growth-points) with the script-opaque `MemoryLimitError`. Both force a collection and re-test before refusing; they differ in what the guest can do about the answer, not in how it is reached ([ADR 0110](adr/0110-growth-gate-collects-before-refusing.md))
