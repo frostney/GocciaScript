@@ -32,6 +32,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunction,
@@ -95,6 +96,8 @@ var
   ProxyInstance: TGocciaProxyValue;
   Revoker: TGocciaProxyRevoker;
   ResultObj: TGocciaObjectValue;
+  RevokeFunction: TGocciaNativeFunctionValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if AArgs.Length < 2 then
     ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
@@ -113,20 +116,35 @@ begin
   if not (HandlerArg is TGocciaObjectValue) then
     ThrowTypeError(SErrorProxyNonObjectTargetOrHandler, SSuggestProxyTargetType);
 
-  ProxyInstance := TGocciaProxyValue.Create(TargetArg,
-    TGocciaObjectValue(HandlerArg));
-  Revoker := TGocciaProxyRevoker.Create(ProxyInstance);
+  // Each allocation and property store below is a collection safe point, and
+  // until the result holds them the proxy, the revoker and the revoke
+  // function are held only here (issue #1679).
+  Roots.Initialize;
+  try
+    ProxyInstance := TGocciaProxyValue.Create(TargetArg,
+      TGocciaObjectValue(HandlerArg));
+    Roots.Add(ProxyInstance);
+    Revoker := TGocciaProxyRevoker.Create(ProxyInstance);
+    Roots.Add(Revoker);
 
-  // Use TGocciaRevocableProxyResult to hold the Revoker via an
-  // internal Pascal field (not a JS-visible property) so the GC can
-  // trace it without exposing implementation state to reflection APIs.
-  ResultObj := TGocciaRevocableProxyResult.Create(Revoker);
-  ResultObj.AssignProperty(PROP_PROXY, ProxyInstance);
-  ResultObj.AssignProperty(PROP_REVOKE,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      Revoker.RevokeCallback, '', 0));
+    // Use TGocciaRevocableProxyResult to hold the Revoker via an
+    // internal Pascal field (not a JS-visible property) so the GC can
+    // trace it without exposing implementation state to reflection APIs.
+    ResultObj := TGocciaRevocableProxyResult.Create(Revoker);
+    Roots.Add(ResultObj);
+    ResultObj.AssignProperty(PROP_PROXY, ProxyInstance);
+    // The revoke function calls a method of Revoker, so it keeps Revoker
+    // alive itself: a program can keep revoke and drop the result object
+    // that also holds it.
+    RevokeFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      Revoker.RevokeCallback, '', 0);
+    RevokeFunction.CapturedRoot := Revoker;
+    ResultObj.AssignProperty(PROP_REVOKE, RevokeFunction);
 
-  Result := ResultObj;
+    Result := ResultObj;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 end.

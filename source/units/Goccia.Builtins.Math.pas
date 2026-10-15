@@ -570,6 +570,7 @@ var
   MaxVal, NumVal: TGocciaNumberLiteralValue;
   Coerced: array of TGocciaNumberLiteralValue;
   HasNaN: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let coerced be a new empty List.
   // Step 2: For each element arg of args, append ? ToNumber(arg) to coerced.
@@ -580,11 +581,19 @@ begin
   begin
     SetLength(Coerced, AArgs.Length);
     HasNaN := False;
-    for I := 0 to AArgs.Length - 1 do
-    begin
-      Coerced[I] := AArgs.GetElement(I).ToNumberLiteral;
-      if Coerced[I].IsNaN then
-        HasNaN := True;
+    // A later argument's valueOf can collect an earlier coerced number that
+    // only Coerced holds (issue #1679).
+    Roots.Initialize;
+    try
+      for I := 0 to AArgs.Length - 1 do
+      begin
+        Coerced[I] := AArgs.GetElement(I).ToNumberLiteral;
+        Roots.Add(Coerced[I]);
+        if Coerced[I].IsNaN then
+          HasNaN := True;
+      end;
+    finally
+      Roots.Clear;
     end;
 
     // Step 4: If any element is NaN, return NaN after all coercions.
@@ -615,6 +624,7 @@ var
   MinVal, NumVal: TGocciaNumberLiteralValue;
   Coerced: array of TGocciaNumberLiteralValue;
   HasNaN: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let coerced be a new empty List.
   // Step 2: For each element arg of args, append ? ToNumber(arg) to coerced.
@@ -625,11 +635,19 @@ begin
   begin
     SetLength(Coerced, AArgs.Length);
     HasNaN := False;
-    for I := 0 to AArgs.Length - 1 do
-    begin
-      Coerced[I] := AArgs.GetElement(I).ToNumberLiteral;
-      if Coerced[I].IsNaN then
-        HasNaN := True;
+    // A later argument's valueOf can collect an earlier coerced number that
+    // only Coerced holds (issue #1679).
+    Roots.Initialize;
+    try
+      for I := 0 to AArgs.Length - 1 do
+      begin
+        Coerced[I] := AArgs.GetElement(I).ToNumberLiteral;
+        Roots.Add(Coerced[I]);
+        if Coerced[I].IsNaN then
+          HasNaN := True;
+      end;
+    finally
+      Roots.Clear;
     end;
 
     // Step 4: If any element is NaN, return NaN after all coercions.
@@ -654,12 +672,18 @@ end;
 // ES2026 §21.3.2.27 Math.pow(base, exponent)
 function TGocciaMath.MathPow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Base, Exponent: TGocciaNumberLiteralValue;
+  BaseValue: Double;
+  Exponent: TGocciaNumberLiteralValue;
 begin
-  Base := TGocciaArgumentConverter.GetNumber(AArgs, 0);
+  // Step 1: Let base be ? ToNumber(base). Kept as a double: converting the
+  // exponent can run a valueOf that collects the number base was boxed in
+  // (issue #1679).
+  BaseValue := TGocciaArgumentConverter.GetNumber(AArgs, 0).Value;
+  // Step 2: Let exponent be ? ToNumber(exponent).
   Exponent := TGocciaArgumentConverter.GetNumber(AArgs, 1);
+  // Step 3: Return Number::exponentiate(base, exponent).
   Result := TGocciaNumberLiteralValue.Create(
-    NumberExponentiation(Base.Value, Exponent.Value));
+    NumberExponentiation(BaseValue, Exponent.Value));
 end;
 
 // §21.3.2.32 Math.sqrt ( x )
@@ -697,15 +721,25 @@ end;
 function TGocciaMath.MathClamp(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value, MinVal, MaxVal: TGocciaNumberLiteralValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Math.clamp', ThrowError);
 
-  // Step 1: Let x be ? ToNumber(x).
-  Value := AArgs.GetElement(0).ToNumberLiteral;
-  // Step 2: Let lower be ? ToNumber(lower).
-  MinVal := AArgs.GetElement(1).ToNumberLiteral;
-  // Step 3: Let upper be ? ToNumber(upper).
-  MaxVal := AArgs.GetElement(2).ToNumberLiteral;
+  // Converting lower and upper can run a valueOf that collects the numbers
+  // converted before it (issue #1679).
+  Roots.Initialize;
+  try
+    // Step 1: Let x be ? ToNumber(x).
+    Value := AArgs.GetElement(0).ToNumberLiteral;
+    Roots.Add(Value);
+    // Step 2: Let lower be ? ToNumber(lower).
+    MinVal := AArgs.GetElement(1).ToNumberLiteral;
+    Roots.Add(MinVal);
+    // Step 3: Let upper be ? ToNumber(upper).
+    MaxVal := AArgs.GetElement(2).ToNumberLiteral;
+  finally
+    Roots.Clear;
+  end;
 
   // Step 4: If any argument is NaN, return NaN.
   if Value.IsNaN or MinVal.IsNaN or MaxVal.IsNaN then
@@ -961,11 +995,19 @@ end;
 function TGocciaMath.MathAtan2(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Y, X: TGocciaNumberLiteralValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  // Step 1: Let ny be ? ToNumber(y).
-  Y := TGocciaArgumentConverter.GetNumber(AArgs, 0);
-  // Step 2: Let nx be ? ToNumber(x).
-  X := TGocciaArgumentConverter.GetNumber(AArgs, 1);
+  // Converting x can run a valueOf that collects ny (issue #1679).
+  Roots.Initialize;
+  try
+    // Step 1: Let ny be ? ToNumber(y).
+    Y := TGocciaArgumentConverter.GetNumber(AArgs, 0);
+    Roots.Add(Y);
+    // Step 2: Let nx be ? ToNumber(x).
+    X := TGocciaArgumentConverter.GetNumber(AArgs, 1);
+  finally
+    Roots.Clear;
+  end;
 
   // Step 3: Return the implementation-approximated Number value for atan2(ny, nx).
   if Y.IsNaN or X.IsNaN then

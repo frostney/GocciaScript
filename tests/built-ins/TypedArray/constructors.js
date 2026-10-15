@@ -556,3 +556,42 @@ describe("TypedArray constructors", () => {
     });
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("TypedArray constructors across a collection", () => {
+  // Reuses the memory a wrongly collected object leaves behind.
+  const churn = () => Array.from({ length: 2000 }, (_, i) => [i, { i }]);
+
+  test("Reflect.construct keeps the new array while the prototype lookup collects", () => {
+    const NewTarget = new Proxy((class {}).bind(null), {
+      get(target, property) {
+        if (property === "prototype") {
+          Goccia.gc();
+          churn();
+          return Uint8Array.prototype;
+        }
+        return target[property];
+      },
+    });
+    const iterable = {
+      [Symbol.iterator]() {
+        return [1, 2, 3][Symbol.iterator]();
+      },
+    };
+    const typedArray = Reflect.construct(Uint8Array, [iterable], NewTarget);
+    expect(Array.from(typedArray)).toEqual([1, 2, 3]);
+    expect(Object.getPrototypeOf(typedArray)).toBe(Uint8Array.prototype);
+  });
+
+  test("keeps the new array while an array-like source's getter collects", () => {
+    const source = {
+      length: 2,
+      get 0() {
+        Goccia.gc();
+        churn();
+        return 7;
+      },
+      1: { valueOf: () => [8].length * 8 },
+    };
+    expect(Array.from(new Uint8Array(source))).toEqual([7, 8]);
+  });
+});

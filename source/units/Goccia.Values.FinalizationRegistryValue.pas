@@ -27,12 +27,27 @@ type
   TGocciaFinalizationRegistryValue = class(TGocciaInstanceValue)
   private
     FCleanupCallback: TGocciaValue;
+    { [[Cells]] whose target is still alive. }
     FCells: TList<TGocciaFinalizationRegistryCell>;
+    { [[Cells]] whose target was collected: [[WeakRefTarget]] is empty and the
+      cleanup job that removes the cell has not run yet. They are still cells
+      of the registry (ES2026 §9.9.3 empties the target and leaves the cell
+      in place), so unregister must find them, and a cell it removes here
+      never reaches the callback. Kept apart from FCells so a cleanup job
+      takes the next one in O(1). }
+    FPendingCells: TList<TGocciaFinalizationRegistryCell>;
+    { The native function every cleanup job of this registry calls. Made on
+      the first register, because a collection is no place to allocate. Its
+      CapturedRoot is the registry, so a queued job keeps the registry and
+      its pending held values alive until it runs. }
+    FCleanupJob: TGocciaValue;
     { The microtask scope the registry was created in. A collection can run
       while a nested engine is executing, and the cleanup job still belongs to
       the engine that created the registry. }
     FOwnerScope: TGocciaMicrotaskScopeId;
-    procedure EnqueueCleanup(const AHeldValue: TGocciaValue);
+    procedure EnqueueCleanup;
+    function RunCleanupJob(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     procedure InitializePrototype;
   public
     function FinalizationRegistryRegister(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -62,7 +77,9 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
   Goccia.Values.WeakReferenceSupport;
@@ -86,6 +103,8 @@ begin
   inherited Create(AClass);
   FCleanupCallback := nil;
   FCells := TList<TGocciaFinalizationRegistryCell>.Create;
+  FPendingCells := TList<TGocciaFinalizationRegistryCell>.Create;
+  FCleanupJob := nil;
   FOwnerScope := CurrentMicrotaskScope;
   InitializePrototype;
   Shared := GetFinalizationRegistryShared;
@@ -98,6 +117,7 @@ begin
   if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.UnregisterWeakContainer(Self);
   FCells.Free;
+  FPendingCells.Free;
   inherited;
 end;
 
@@ -172,24 +192,58 @@ begin
   inherited;
   if Assigned(FCleanupCallback) then
     FCleanupCallback.MarkReferences;
+  if Assigned(FCleanupJob) then
+    FCleanupJob.MarkReferences;
   for I := 0 to FCells.Count - 1 do
     if Assigned(FCells[I].HeldValue) then
       FCells[I].HeldValue.MarkReferences;
+  for I := 0 to FPendingCells.Count - 1 do
+    if Assigned(FPendingCells[I].HeldValue) then
+      FPendingCells[I].HeldValue.MarkReferences;
 end;
 
-procedure TGocciaFinalizationRegistryValue.EnqueueCleanup(
-  const AHeldValue: TGocciaValue);
+// One job per emptied cell, each running CleanupFinalizationRegistry for one
+// cell (ES2026 §9.12 lets an implementation stop after any cell), so the
+// microtasks a callback queues run before the next callback, as they did when
+// each job called the callback directly.
+procedure TGocciaFinalizationRegistryValue.EnqueueCleanup;
 var
   Task: TGocciaMicrotask;
 begin
-  if (TGocciaMicrotaskQueue.Instance = nil) then
+  if (TGocciaMicrotaskQueue.Instance = nil) or not Assigned(FCleanupJob) then
     Exit;
-  Task.Handler := FCleanupCallback;
+  Task.Handler := FCleanupJob;
   Task.ResultPromise := nil;
-  Task.Value := AHeldValue;
+  Task.Value := TGocciaUndefinedLiteralValue.UndefinedValue;
   Task.ReactionType := prtFulfill;
   TGocciaMicrotaskQueue.Instance.EnqueueFinalizationCleanup(Task,
     FOwnerScope);
+end;
+
+// ES2026 §9.12 CleanupFinalizationRegistry, for at most one cell. The cell may
+// be gone already: unregister removes an emptied cell too, and then its job
+// has nothing to do.
+function TGocciaFinalizationRegistryValue.RunCleanupJob(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  HeldValue: TGocciaValue;
+  CallArgs: TGocciaArgumentsCollection;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if FPendingCells.Count = 0 then
+    Exit;
+  // Steps 3.a-3.b: Choose a cell whose target is empty and remove it.
+  HeldValue := FPendingCells[0].HeldValue;
+  FPendingCells.Delete(0);
+  // Step 3.c: Perform ? HostCallJobCallback(callback, undefined, « heldValue »).
+  CallArgs := TGocciaArgumentsCollection.Create([HeldValue]);
+  try
+    InvokeCallable(FCleanupCallback, CallArgs,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    CallArgs.Free;
+  end;
 end;
 
 procedure TGocciaFinalizationRegistryValue.SweepWeakReferences;
@@ -200,17 +254,35 @@ begin
   for I := FCells.Count - 1 downto 0 do
   begin
     Cell := FCells[I];
-    if Assigned(Cell.Target) and not Cell.Target.GCMarked then
-    begin
-      EnqueueCleanup(Cell.HeldValue);
-      FCells.Delete(I);
-    end
-    else if Cell.HasUnregisterToken and Assigned(Cell.UnregisterToken) and
-            not Cell.UnregisterToken.GCMarked then
+    if Cell.HasUnregisterToken and Assigned(Cell.UnregisterToken) and
+       not Cell.UnregisterToken.GCMarked then
     begin
       Cell.UnregisterToken := nil;
       Cell.HasUnregisterToken := False;
       FCells[I] := Cell;
+    end;
+    if Assigned(Cell.Target) and not Cell.Target.GCMarked then
+    begin
+      // ES2026 §9.9.3: set cell.[[WeakRefTarget]] to empty and enqueue the
+      // cleanup job. The cell stays a cell of this registry until the job
+      // removes it.
+      Cell.Target := nil;
+      FPendingCells.Add(Cell);
+      FCells.Delete(I);
+      EnqueueCleanup;
+    end;
+  end;
+
+  // A pending cell's token is weak too, and unregister compares against it.
+  for I := 0 to FPendingCells.Count - 1 do
+  begin
+    Cell := FPendingCells[I];
+    if Cell.HasUnregisterToken and Assigned(Cell.UnregisterToken) and
+       not Cell.UnregisterToken.GCMarked then
+    begin
+      Cell.UnregisterToken := nil;
+      Cell.HasUnregisterToken := False;
+      FPendingCells[I] := Cell;
     end;
   end;
 end;
@@ -222,6 +294,7 @@ var
   Registry: TGocciaFinalizationRegistryValue;
   Target, HeldValue, UnregisterToken: TGocciaValue;
   Cell: TGocciaFinalizationRegistryCell;
+  Job: TGocciaNativeFunctionValue;
 begin
   if not (AThisValue is TGocciaFinalizationRegistryValue) then
     ThrowTypeError(SErrorFinalizationRegistryRegisterNonRegistry,
@@ -247,6 +320,14 @@ begin
       'FinalizationRegistry.prototype.register');
     Cell.UnregisterToken := UnregisterToken;
     Cell.HasUnregisterToken := True;
+  end;
+
+  if not Assigned(Registry.FCleanupJob) then
+  begin
+    Job := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      Registry.RunCleanupJob, '', 1);
+    Job.CapturedRoot := Registry;
+    Registry.FCleanupJob := Job;
   end;
 
   // Count this registry as a live weak container on its first cell.
@@ -282,6 +363,14 @@ begin
        IsSameValue(Registry.FCells[I].UnregisterToken, UnregisterToken) then
     begin
       Registry.FCells.Delete(I);
+      Removed := True;
+    end;
+  for I := Registry.FPendingCells.Count - 1 downto 0 do
+    if Registry.FPendingCells[I].HasUnregisterToken and
+       IsSameValue(Registry.FPendingCells[I].UnregisterToken,
+         UnregisterToken) then
+    begin
+      Registry.FPendingCells.Delete(I);
       Removed := True;
     end;
 
