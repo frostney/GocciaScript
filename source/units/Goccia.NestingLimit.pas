@@ -23,9 +23,9 @@ const
   // a loop and do not count here; MAX_TREE_HEIGHT bounds them.
   //
   // Real code stays far below the limit: the deepest nesting in the bundles
-  // the benchmarks run (Web Tooling, JetStream, are-we-fast-yet) and in about
-  // 900 npm files (bundled webpack, babel, TypeScript, Next.js) is 65 levels,
-  // and test262 stays below 130. The costliest constructs (computed member
+  // the benchmarks run (Web Tooling, JetStream, are-we-fast-yet) and in 542
+  // distinct npm files (bundled webpack, Babel, TypeScript, Next.js) is 172
+  // levels, in webpack's bundle5.js, and test262 stays below 130. The costliest constructs (computed member
   // keys, binding patterns, spreads) take about 3.5 KiB of stack per level
   // to parse in a production build and 4 KiB in a development build, so the
   // deepest accepted source parses in about half of an 8 MiB stack, the size
