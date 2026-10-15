@@ -157,6 +157,9 @@ type
       write FHideSourceText;
     property OptimizationOptions: TGocciaCompilerOptimizationOptions
       read FOptimizationOptions write FOptimizationOptions;
+    // Expressions and statements open in the walk over the tree: 0 after a
+    // compile that completed.
+    property NestingDepth: Integer read FNestingDepth;
   end;
 
 const
@@ -1922,6 +1925,9 @@ var
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
 begin
+  // A compile that raised left the levels it had entered open; this one
+  // starts at the top of the tree.
+  FNestingDepth := 0;
   if Assigned(FNumericParameterProofs) then
     FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
