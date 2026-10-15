@@ -1200,6 +1200,8 @@ end;
 function DispatchCall(const ACallee: TGocciaValue;
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
   if ACallee is TGocciaFunctionBase then
     Result := TGocciaFunctionBase(ACallee).Call(AArgs, AThisValue)
@@ -1208,7 +1210,20 @@ begin
   else if ACallee is TGocciaClassValue then
     Result := TGocciaClassValue(ACallee).Call(AArgs, AThisValue)
   else if IsRegisteredProxyValue(ACallee) and ACallee.IsCallable then
-    Result := GProxyApplyHook(ACallee, AArgs, AThisValue)
+  begin
+    // A caller can hold the Proxy only in a Pascal local: OP_USING_DISPOSE
+    // clears the dispose method's register before the call, and a getter can
+    // return a fresh Proxy. Its [[Call]] reads the apply trap, which runs
+    // guest code, and then reads the Proxy's own target and handler, so it is
+    // rooted until the call returns.
+    Roots.Initialize;
+    Roots.Add(ACallee);
+    try
+      Result := GProxyApplyHook(ACallee, AArgs, AThisValue);
+    finally
+      Roots.Clear;
+    end;
+  end
   else
     raise TGocciaError.Create('not callable', 0, 0, '', nil);
 end;

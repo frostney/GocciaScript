@@ -61,7 +61,7 @@ type
       const AIsSkipped: Boolean = False; const AIsFocused: Boolean = False);
     destructor Destroy; override;
     procedure AddEntry(const AEntry: TGocciaRegisteredEntry);
-    procedure AddHook(const ACallback: TGocciaFunctionBase; const APhase: TGocciaTestHookPhase);
+    procedure AddHook(const ACallback: TGocciaValue; const APhase: TGocciaTestHookPhase);
     procedure ClearRegisteredContent;
     function DisplayName: string; override;
     function GetFullName: string; override;
@@ -1138,7 +1138,7 @@ begin
   Entries.Add(AEntry);
 end;
 
-procedure TGocciaTestSuite.AddHook(const ACallback: TGocciaFunctionBase;
+procedure TGocciaTestSuite.AddHook(const ACallback: TGocciaValue;
   const APhase: TGocciaTestHookPhase);
 begin
   AddTempRootIfNeeded(ACallback);
@@ -3721,11 +3721,11 @@ procedure TGocciaTestAssertions.RegisterHook(
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, AHookName, ThrowError);
 
-  if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
+  // Any callable, a callable Proxy included: RunCallbacks dispatches it.
+  if not AArgs.GetElement(0).IsCallable then
     Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsFunctionArg, [AHookName]), SSuggestTestUsage);
 
-  GetCurrentRegistrationSuite.AddHook(TGocciaFunctionBase(AArgs.GetElement(0)),
-    APhase);
+  GetCurrentRegistrationSuite.AddHook(AArgs.GetElement(0), APhase);
 end;
 
 function TGocciaTestAssertions.GetEachRowArguments(
@@ -5234,7 +5234,8 @@ function TGocciaTestAssertions.OnTestFinished(const AArgs: TGocciaArgumentsColle
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'onTestFinished', ThrowError);
 
-  if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
+  // Any callable, a callable Proxy included: RunCallbacks dispatches it.
+  if not AArgs.GetElement(0).IsCallable then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorOnTestFinishedExpectsFunction, SSuggestTestUsage);
 
   AddTempRootIfNeeded(AArgs.GetElement(0));

@@ -35,3 +35,24 @@ describe("using with a callable Proxy as the dispose method", () => {
     }).toThrow(SyntaxError);
   });
 });
+
+describe("a callable Proxy dispose method held only by the disposal", () => {
+  // OP_USING_DISPOSE clears the method's register before the call, so a
+  // Proxy a getter returned is referenced only by the call that runs it.
+  test("survives a collection while its apply trap is looked up", () => {
+    let disposed = 0;
+    {
+      using r = {
+        get [Symbol.dispose]() {
+          return new Proxy(() => {}, {
+            get apply() {
+              Goccia.gc();
+              return () => { disposed++; };
+            },
+          });
+        },
+      };
+    }
+    expect(disposed).toBe(1);
+  });
+});
