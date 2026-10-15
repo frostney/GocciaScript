@@ -155,3 +155,38 @@ describe("Iterator.from()", () => {
     expect(() => iter.next()).toThrow(TypeError);
   });
 });
+
+describe("Iterator.from() — collection in a Proxy trap", () => {
+  // Iterator.from reads the iterator's next method, then walks its prototype
+  // chain for OrdinaryHasInstance(%Iterator%, iterator), which runs a Proxy's
+  // getPrototypeOf trap. A next method only the get trap returned must
+  // survive a collection in that trap. take() bounds the run either way.
+  const churn = () => {
+    Goccia.gc();
+    return Array.from({ length: 200 }, (_, i) => ({ i, s: "x" + i, a: [i] }));
+  };
+  const proxyIterator = (limit) => new Proxy({}, {
+    get(target, key) {
+      if (key === "next") {
+        let n = 0;
+        return () => (n < limit ? { value: ++n, done: false } : { value: undefined, done: true });
+      }
+      return undefined;
+    },
+    getPrototypeOf() {
+      churn();
+      return null;
+    },
+  });
+
+  test("keeps the next method the get trap returned when getPrototypeOf collects", () => {
+    const iterable = { [Symbol.iterator]() { return proxyIterator(2); } };
+    const result = Iterator.from(iterable).take(10).toArray();
+    expect(result).toEqual([1, 2]);
+  });
+
+  test("keeps the next method of an iterator passed directly when getPrototypeOf collects", () => {
+    const result = Iterator.from(proxyIterator(3)).take(10).toArray();
+    expect(result).toEqual([1, 2, 3]);
+  });
+});
