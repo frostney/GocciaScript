@@ -563,6 +563,59 @@ begin
     Result := TGocciaNumberLiteralValue.Create(Floor(NumberArg.Value + 0.5));
 end;
 
+// The slow path of CoerceNumberArguments, from the first argument whose
+// conversion can run guest code: the numbers converted so far, and each one
+// converted from here on, go in a frame before the next conversion runs.
+// Kept apart so the try it needs costs the fast path nothing.
+procedure CoerceNumberArgumentsRooted(const AArgs: TGocciaArgumentsCollection;
+  var ACoerced: array of TGocciaNumberLiteralValue; const AFrom: Integer);
+var
+  I: Integer;
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  try
+    for I := 0 to AFrom - 1 do
+      Roots.Add(ACoerced[I]);
+    for I := AFrom to High(ACoerced) do
+    begin
+      ACoerced[I] := AArgs.GetElement(I).ToNumberLiteral;
+      Roots.Add(ACoerced[I]);
+    end;
+  finally
+    Roots.Clear;
+  end;
+end;
+
+{ ToNumber on the first Length(ACoerced) arguments, in order, into ACoerced.
+  Converting an argument that is not already a Number can run guest code
+  (valueOf, toString or @@toPrimitive on an object), and that code can collect
+  a number an earlier conversion produced, which only ACoerced holds
+  (issue #1679). The frame is raised only from such an argument on, so the
+  all-Number calls these functions mostly see do not pay for it. }
+procedure CoerceNumberArguments(const AArgs: TGocciaArgumentsCollection;
+  var ACoerced: array of TGocciaNumberLiteralValue);
+var
+  I: Integer;
+  Arg: TGocciaValue;
+begin
+  for I := 0 to High(ACoerced) do
+  begin
+    Arg := AArgs.GetElement(I);
+    // TGocciaNumberLiteralValue has no subclasses, and ToNumber of a Number
+    // is the Number itself.
+    if Arg.ClassType = TGocciaNumberLiteralValue then
+      ACoerced[I] := TGocciaNumberLiteralValue(Arg)
+    else if I = 0 then
+      ACoerced[I] := Arg.ToNumberLiteral
+    else
+    begin
+      CoerceNumberArgumentsRooted(AArgs, ACoerced, I);
+      Exit;
+    end;
+  end;
+end;
+
 // §21.3.2.24 Math.max ( ...args )
 function TGocciaMath.MathMax(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -570,7 +623,6 @@ var
   MaxVal, NumVal: TGocciaNumberLiteralValue;
   Coerced: array of TGocciaNumberLiteralValue;
   HasNaN: Boolean;
-  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let coerced be a new empty List.
   // Step 2: For each element arg of args, append ? ToNumber(arg) to coerced.
@@ -580,21 +632,11 @@ begin
   else
   begin
     SetLength(Coerced, AArgs.Length);
+    CoerceNumberArguments(AArgs, Coerced);
     HasNaN := False;
-    // A later argument's valueOf can collect an earlier coerced number that
-    // only Coerced holds (issue #1679).
-    Roots.Initialize;
-    try
-      for I := 0 to AArgs.Length - 1 do
-      begin
-        Coerced[I] := AArgs.GetElement(I).ToNumberLiteral;
-        Roots.Add(Coerced[I]);
-        if Coerced[I].IsNaN then
-          HasNaN := True;
-      end;
-    finally
-      Roots.Clear;
-    end;
+    for I := 0 to High(Coerced) do
+      if Coerced[I].IsNaN then
+        HasNaN := True;
 
     // Step 4: If any element is NaN, return NaN after all coercions.
     if HasNaN then
@@ -624,7 +666,6 @@ var
   MinVal, NumVal: TGocciaNumberLiteralValue;
   Coerced: array of TGocciaNumberLiteralValue;
   HasNaN: Boolean;
-  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let coerced be a new empty List.
   // Step 2: For each element arg of args, append ? ToNumber(arg) to coerced.
@@ -634,21 +675,11 @@ begin
   else
   begin
     SetLength(Coerced, AArgs.Length);
+    CoerceNumberArguments(AArgs, Coerced);
     HasNaN := False;
-    // A later argument's valueOf can collect an earlier coerced number that
-    // only Coerced holds (issue #1679).
-    Roots.Initialize;
-    try
-      for I := 0 to AArgs.Length - 1 do
-      begin
-        Coerced[I] := AArgs.GetElement(I).ToNumberLiteral;
-        Roots.Add(Coerced[I]);
-        if Coerced[I].IsNaN then
-          HasNaN := True;
-      end;
-    finally
-      Roots.Clear;
-    end;
+    for I := 0 to High(Coerced) do
+      if Coerced[I].IsNaN then
+        HasNaN := True;
 
     // Step 4: If any element is NaN, return NaN after all coercions.
     if HasNaN then
@@ -721,25 +752,15 @@ end;
 function TGocciaMath.MathClamp(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Value, MinVal, MaxVal: TGocciaNumberLiteralValue;
-  Roots: TGocciaActiveRootFrame;
+  Coerced: array[0..2] of TGocciaNumberLiteralValue;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 3, 'Math.clamp', ThrowError);
 
-  // Converting lower and upper can run a valueOf that collects the numbers
-  // converted before it (issue #1679).
-  Roots.Initialize;
-  try
-    // Step 1: Let x be ? ToNumber(x).
-    Value := AArgs.GetElement(0).ToNumberLiteral;
-    Roots.Add(Value);
-    // Step 2: Let lower be ? ToNumber(lower).
-    MinVal := AArgs.GetElement(1).ToNumberLiteral;
-    Roots.Add(MinVal);
-    // Step 3: Let upper be ? ToNumber(upper).
-    MaxVal := AArgs.GetElement(2).ToNumberLiteral;
-  finally
-    Roots.Clear;
-  end;
+  // Steps 1-3: Let x, lower and upper be ? ToNumber of each argument.
+  CoerceNumberArguments(AArgs, Coerced);
+  Value := Coerced[0];
+  MinVal := Coerced[1];
+  MaxVal := Coerced[2];
 
   // Step 4: If any argument is NaN, return NaN.
   if Value.IsNaN or MinVal.IsNaN or MaxVal.IsNaN then
@@ -995,19 +1016,12 @@ end;
 function TGocciaMath.MathAtan2(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Y, X: TGocciaNumberLiteralValue;
-  Roots: TGocciaActiveRootFrame;
+  Coerced: array[0..1] of TGocciaNumberLiteralValue;
 begin
-  // Converting x can run a valueOf that collects ny (issue #1679).
-  Roots.Initialize;
-  try
-    // Step 1: Let ny be ? ToNumber(y).
-    Y := TGocciaArgumentConverter.GetNumber(AArgs, 0);
-    Roots.Add(Y);
-    // Step 2: Let nx be ? ToNumber(x).
-    X := TGocciaArgumentConverter.GetNumber(AArgs, 1);
-  finally
-    Roots.Clear;
-  end;
+  // Steps 1-2: Let ny be ? ToNumber(y) and nx be ? ToNumber(x).
+  CoerceNumberArguments(AArgs, Coerced);
+  Y := Coerced[0];
+  X := Coerced[1];
 
   // Step 3: Return the implementation-approximated Number value for atan2(ny, nx).
   if Y.IsNaN or X.IsNaN then

@@ -71,7 +71,7 @@ type
     // Appends a new entry for a key FindBucket has just reported absent;
     // ABucketIdx is the free bucket it returned.
     procedure InsertNew(const AKey: TKey; const AValue: TValue;
-      AHash: Cardinal; ABucketIdx: Integer);
+      AHash: Cardinal; ABucketIdx: Integer); {$IFDEF FPC}inline;{$ENDIF}
 
   protected
     function HashKey(const AKey: TKey): Cardinal; virtual;
@@ -99,7 +99,7 @@ type
     // When one is, returns False and leaves that entry, its key and its
     // value exactly as they were: Add would overwrite the value, and an
     // entry whose key and value are the same object stops being one.
-    function TryAdd(const AKey: TKey; const AValue: TValue): Boolean;
+    function TryAdd(const AKey: TKey; const AValue: TValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function TryGetValue(const AKey: TKey; out AValue: TValue): Boolean; override;
     function ContainsKey(const AKey: TKey): Boolean; override;
     function Remove(const AKey: TKey): Boolean; override;
@@ -320,6 +320,34 @@ end;
 
 { Core operations }
 
+procedure TOrderedMap<TKey, TValue>.InsertNew(const AKey: TKey;
+  const AValue: TValue; AHash: Cardinal; ABucketIdx: Integer);
+var
+  EntryIdx: Integer;
+begin
+  if (FEntryCount + 1) * 100 > FBucketCount * LOAD_FACTOR_PERCENT then
+  begin
+    if (FCount < FEntryCount div 2) and CanCompact then
+      Compact
+    else
+      Grow;
+    FindBucket(AKey, AHash, ABucketIdx);
+  end;
+
+  EntryIdx := FEntryCount;
+  Inc(FEntryCount);
+  if FEntryCount > Length(FEntries) then
+    SetLength(FEntries, FEntryCount * 2);
+
+  FEntries[EntryIdx].Key := AKey;
+  FEntries[EntryIdx].Value := AValue;
+  FEntries[EntryIdx].Hash := AHash;
+  FEntries[EntryIdx].Active := True;
+
+  FBuckets[ABucketIdx] := EntryIdx;
+  Inc(FCount);
+end;
+
 procedure TOrderedMap<TKey, TValue>.Add(const AKey: TKey; const AValue: TValue);
 var
   Hash: Cardinal;
@@ -347,34 +375,6 @@ begin
     Exit(False);
   InsertNew(AKey, AValue, Hash, BucketIdx);
   Result := True;
-end;
-
-procedure TOrderedMap<TKey, TValue>.InsertNew(const AKey: TKey;
-  const AValue: TValue; AHash: Cardinal; ABucketIdx: Integer);
-var
-  EntryIdx: Integer;
-begin
-  if (FEntryCount + 1) * 100 > FBucketCount * LOAD_FACTOR_PERCENT then
-  begin
-    if (FCount < FEntryCount div 2) and CanCompact then
-      Compact
-    else
-      Grow;
-    FindBucket(AKey, AHash, ABucketIdx);
-  end;
-
-  EntryIdx := FEntryCount;
-  Inc(FEntryCount);
-  if FEntryCount > Length(FEntries) then
-    SetLength(FEntries, FEntryCount * 2);
-
-  FEntries[EntryIdx].Key := AKey;
-  FEntries[EntryIdx].Value := AValue;
-  FEntries[EntryIdx].Hash := AHash;
-  FEntries[EntryIdx].Active := True;
-
-  FBuckets[ABucketIdx] := EntryIdx;
-  Inc(FCount);
 end;
 
 function TOrderedMap<TKey, TValue>.TryGetValue(const AKey: TKey;
