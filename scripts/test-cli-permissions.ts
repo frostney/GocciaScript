@@ -662,6 +662,62 @@ console.log("Private network ranges need an explicit address or private...");
   }
 }
 
+/**
+ * A loopback name from /etc/hosts other than localhost (which fetch answers
+ * itself), with every address the file lists for it. Debian and Ubuntu list
+ * the machine's own hostname under 127.0.1.1; the Linux CI jobs add one.
+ */
+function findLoopbackHostsFileName(): { name: string; addresses: Set<string> } | undefined {
+  if (isWindows || !existsSync("/etc/hosts")) return undefined;
+  const entries: [string, string[]][] = readFileSync("/etc/hosts", "utf-8")
+    .split("\n")
+    .map((line) => line.replace(/#.*/, "").trim().split(/\s+/))
+    .filter((fields) => fields.length > 1)
+    .map((fields) => [fields[0], fields.slice(1).map((name) => name.toLowerCase())]);
+  const isLocalhost = (name: string) => /(^|\.)localhost\.?$/.test(name);
+  for (const [address, names] of entries) {
+    if (!/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(address)) continue;
+    const name = names.find((candidate) => !isLocalhost(candidate) && /^[a-z0-9.-]+$/.test(candidate));
+    if (name === undefined) continue;
+    const addresses = new Set(entries.filter(([, listed]) => listed.includes(name)).map(([listed]) => listed));
+    return { name, addresses };
+  }
+  return undefined;
+}
+
+console.log("Fetch resolves names through the system resolver, hosts file included...");
+{
+  // FPC's own DNS client read /etc/resolv.conf and never the hosts file, so
+  // a name only /etc/hosts knows failed with "Failed to resolve host" (#1565).
+  // Resolving through getaddrinfo reaches the listed loopback address, and
+  // the private-range check still applies to that resolved address.
+  const entry = findLoopbackHostsFileName();
+  if (entry === undefined) {
+    console.log("  skipped: no loopback name other than localhost in /etc/hosts on this machine");
+  } else {
+    const tmp = makeTmp();
+    try {
+      const file = join(tmp, "hosts-name.js");
+      writeFileSync(
+        file,
+        `fetch("http://${entry.name}:1/").then(() => console.log("reached"), (e) => console.log(e.name, e.message));\n`,
+      );
+
+      const granted = run(RUNNER, [`--allow-net=${entry.name},private`, file]);
+      const connected = /TypeError Failed to connect to (\d+\.\d+\.\d+\.\d+):1/.exec(granted.stdout);
+      if (connected === null || !entry.addresses.has(connected[1]))
+        throw new Error(
+          `${entry.name} should resolve to ${[...entry.addresses].join(" or ")} from /etc/hosts and reach the connect, got:\n${granted.combined}`,
+        );
+
+      const unscoped = run(RUNNER, [`--allow-net=${entry.name}`, file]);
+      expectIncludes(unscoped.stdout, `PermissionDenied net: ${entry.name}:1`, "hosts-file name resolving privately");
+    } finally {
+      clean(tmp);
+    }
+  }
+}
+
 // -- Config permissions ------------------------------------------------------------
 
 console.log("A malformed permissions value fails instead of being ignored...");
