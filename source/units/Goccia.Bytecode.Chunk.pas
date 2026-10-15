@@ -624,6 +624,13 @@ begin
     FRegExpProgramCaches[I].Free;
   for I := 0 to High(FDirectEvalCodeCaches) do
     FDirectEvalCodeCaches[I].Free;
+  // Explicitly zero string constants to force finalization
+  for I := 0 to FConstantCount - 1 do
+    if FConstants[I].Kind = bckString then
+      FConstants[I].StringValue := '';
+  SetLength(FConstants, 0);
+  // Clear string index (keys hold strings too)
+  FStringConstantIndex.Clear;
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;

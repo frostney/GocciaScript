@@ -1,16 +1,21 @@
 program GocciaMemHost;
-{ bench host: GocciaMemHost <keep|seq> <N> <file>
+{ bench host: GocciaMemHost <keep|seq|seqgc|parse|compile> <N> <file>
   keep: create N runtimes (bytecode, console only), execute file in each, keep all alive
-  seq : create/execute/free N times sequentially, print VmRSS every N/10 }
+  seq/seqgc: create/execute/free N times sequentially, print VmRSS every N/10
+  parse: parse N times, discard AST, measure RSS (phase binary search)
+  compile: parse+compile N times via engine, free module, measure RSS }
 {$I Goccia.inc}
 uses {$IFDEF UNIX}cthreads,{$ENDIF} Classes, SysUtils,
-  Goccia.Runtime, Goccia.RuntimeExtensions.Console, Goccia.GarbageCollector;
+  Goccia.Runtime, Goccia.RuntimeExtensions.Console, Goccia.GarbageCollector,
+  Goccia.Engine, Goccia.Executor, Goccia.Executor.Bytecode, Goccia.SourcePipeline, Goccia.AST.Node;
 function RssKB: string; var F: TStringList; I: Integer;
 begin F := TStringList.Create; Result := '?';
   try F.LoadFromFile('/proc/self/status');
     for I := 0 to F.Count-1 do if Pos('VmRSS', F[I]) = 1 then Result := Trim(Copy(F[I],7,99));
   finally F.Free; end; end;
 var Mode: string; N, I: Integer; Src: TStringList; Rts: array of TGocciaRuntime; R: TGocciaRuntime; FileName: string;
+  Opts: TGocciaSourcePipelineOptions; PipeResult: TGocciaSourcePipelineResult;
+  Eng: TGocciaEngine; CompiledMod: TGocciaCompiledModule;
 begin
   Mode := ParamStr(1); N := StrToInt(ParamStr(2)); FileName := ParamStr(3);
   if Mode = 'keep' then begin
@@ -23,6 +28,31 @@ begin
       Src.Free;
     end;
     WriteLn(StdErr, 'keep N=', N, ' VmRSS=', RssKB);
+  end else if Mode = 'parse' then begin
+    for I := 1 to N do begin
+      Src := TStringList.Create; Src.LoadFromFile(FileName);
+      Opts := Default(TGocciaSourcePipelineOptions);
+      Opts.SourceType := stScript;
+      PipeResult := TGocciaSourcePipeline.Parse(Src, FileName, Opts);
+      PipeResult.ProgramNode.Free; PipeResult.Free; Src.Free;
+      TGarbageCollector.Instance.Collect;
+      if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'parse i=', I, ' VmRSS=', RssKB);
+    end;
+  end else if Mode = 'compile' then begin
+    Src := TStringList.Create; Src.LoadFromFile(FileName);
+    Eng := TGocciaEngine.Create(FileName, Src, TGocciaBytecodeExecutor.Create);
+    Src.Free;
+    for I := 1 to N do begin
+      Src := TStringList.Create; Src.LoadFromFile(FileName);
+      Opts := Default(TGocciaSourcePipelineOptions);
+      Opts.SourceType := stScript;
+      PipeResult := TGocciaSourcePipeline.Parse(Src, FileName, Opts);
+      CompiledMod := Eng.CompileModule(PipeResult.ProgramNode);
+      CompiledMod.Free; PipeResult.ProgramNode.Free; PipeResult.Free; Src.Free;
+      TGarbageCollector.Instance.Collect;
+      if (N >= 10) and (I mod (N div 10) = 0) then WriteLn(StdErr, 'compile i=', I, ' VmRSS=', RssKB);
+    end;
+    Eng.Free;
   end else begin
     for I := 1 to N do begin
       Src := TStringList.Create; Src.LoadFromFile(FileName);
