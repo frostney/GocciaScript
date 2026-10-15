@@ -1159,6 +1159,117 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
   }
 });
 
+await section("test262 runner: negative tests need the expected error in the expected phase...", async () => {
+  // #1571: a parse or resolution negative passes only when the source is
+  // rejected before evaluation with negative.type. A body that runs reaches
+  // the harness $DONOTEVALUATE() and fails instead of passing on its throw.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), [
+      "function $DONOTEVALUATE() {",
+      '  throw "Test262: This statement should not be evaluated.";',
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(join(harness, "assert.js"), "");
+    const negative = (phase: string, type: string, flags: string[] = []) => [
+      "/*---",
+      "negative:",
+      `  phase: ${phase}`,
+      `  type: ${type}`,
+      ...(flags.length > 0 ? [`flags: [${flags.join(", ")}]`] : []),
+      "---*/",
+    ];
+    const cases: [string, string[], string, string][] = [
+      // [file, source lines, expected status, expected message fragment]
+      ["parse-rejected.js", [...negative("parse", "SyntaxError"), "$DONOTEVALUATE();", "var = ;"], "PASS", ""],
+      ["parse-missed.js", [...negative("parse", "SyntaxError"), "$DONOTEVALUATE();", "var x = 1;"], "FAIL", "$DONOTEVALUATE reached"],
+      ["parse-clean.js", [...negative("parse", "SyntaxError"), "var x = 1;"], "FAIL", "body executed cleanly"],
+      ["parse-js-throw.js", [...negative("parse", "SyntaxError"), 'throw new SyntaxError("late");'], "FAIL", "thrown as a JS value during evaluation"],
+      ["parse-wrong-type.js", [...negative("parse", "ReferenceError"), "$DONOTEVALUATE();", "var = ;"], "FAIL", "got SyntaxError"],
+      ["parse-strict.js", [...negative("parse", "SyntaxError", ["onlyStrict"]), "$DONOTEVALUATE();", "var public = 1;"], "PASS", ""],
+      ["parse-raw-missed.js", [...negative("parse", "SyntaxError", ["raw"]), 'throw "Test262: This statement should not be evaluated.";', "var x = 1;"], "FAIL", "$DONOTEVALUATE reached"],
+      // raw gets no harness, so $DONOTEVALUATE is not even defined.
+      ["parse-raw-no-harness.js", [...negative("parse", "SyntaxError", ["raw"]), "$DONOTEVALUATE();", "var x = 1;"], "FAIL", "ReferenceError was thrown as a JS value"],
+      ["parse-module-missed.js", [...negative("parse", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "export const a = 1;"], "FAIL", "$DONOTEVALUATE reached"],
+      ["resolution-rejected.js", [...negative("resolution", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "import { missing } from './resolution_FIXTURE.js';"], "PASS", ""],
+      ["runtime-module.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new TypeError("x");'], "PASS", ""],
+      ["runtime-module-wrong-type.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new RangeError("x");'], "FAIL", "got RangeError"],
+      ["runtime-wrapped.js", [...negative("runtime", "ReferenceError"), "unresolvable;"], "PASS", ""],
+    ];
+    writeFileSync(join(tests, "resolution_FIXTURE.js"), "export var present;\n");
+    for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
+
+    const out = join(tmp, "negative.json");
+    Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "language",
+        "--mode=bytecode",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    if (report.run?.gradingContract !== 2)
+      throw new Error(`test262 report should publish gradingContract 2, got ${JSON.stringify(report.run)}`);
+    const byId = new Map<string, { status: string; message?: string }>(
+      report.results.map((r: { id: string; status: string; message?: string }) => [r.id, r]),
+    );
+    for (const [file, , status, fragment] of cases) {
+      const result = byId.get(`language/${file}`);
+      if (!result || result.status !== status || !(result.message ?? "").includes(fragment))
+        throw new Error(`${file}: expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 comment: a grading-contract change reports but does not block...", async () => {
+  const tmp = makeTmp();
+  try {
+    const report = (status: string, gradingContract?: number) => ({
+      summary: {
+        totalDiscovered: 1, totalRun: 1, passed: status === "PASS" ? 1 : 0,
+        failed: status === "PASS" ? 0 : 1, wrapperInfraFailures: 0, timeouts: 0,
+        durationSeconds: 1,
+        byCategory: [{ category: "language", run: 1, passed: status === "PASS" ? 1 : 0,
+          failed: status === "PASS" ? 0 : 1, wrapperInfra: 0, timeouts: 0 }],
+      },
+      results: [{ id: "language/a.js", status, durationMs: 1 }],
+      run: gradingContract === undefined ? {} : { gradingContract },
+    });
+    const baseline = join(tmp, "baseline.json");
+    const sameContract = join(tmp, "same.json");
+    const newContract = join(tmp, "new.json");
+    writeFileSync(baseline, JSON.stringify(report("PASS")));
+    writeFileSync(sameContract, JSON.stringify(report("FAIL", 1)));
+    writeFileSync(newContract, JSON.stringify(report("FAIL", 2)));
+    const comment = (results: string) => Bun.spawnSync(
+      ["bun", "scripts/run_test262_suite.ts", "--comment", results, baseline],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    const blocked = comment(sameContract);
+    if (blocked.exitCode !== 1 || !blocked.stdout.toString().includes("Regression vs cached"))
+      throw new Error(`same-contract PASS -> FAIL should block: ${blocked.stdout.toString()}`);
+    const reported = comment(newContract);
+    const markdown = reported.stdout.toString();
+    if (reported.exitCode !== 0 || !markdown.includes("Grading contract changed (v1 → v2)") ||
+        !markdown.includes("language/a.js"))
+      throw new Error(`contract-change PASS -> FAIL should be reported, not block: ${markdown}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("test262 runner: deterministic shards merge into one complete report...", async () => {
   const tmp = makeTmp();
   try {
