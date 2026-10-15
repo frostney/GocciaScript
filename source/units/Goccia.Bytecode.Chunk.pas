@@ -865,8 +865,15 @@ end;
 
 function TGocciaFunctionTemplate.AddConstantString(
   const AValue: string): UInt16;
+var
+  SkipIndex: Boolean;
 begin
-  if FStringConstantIndex.TryGetValue(AValue, Result) then
+  // #1704: Skip deduplication index for very large string literals to reduce
+  // heap fragmentation from map key storage. Large literals are rare in
+  // practice; the small duplication risk is acceptable vs heap pressure.
+  SkipIndex := Length(AValue) >= 100000;
+  
+  if (not SkipIndex) and FStringConstantIndex.TryGetValue(AValue, Result) then
     Exit;
 
   if FConstantCount > High(UInt16) then
@@ -874,9 +881,14 @@ begin
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckString;
-  FConstants[FConstantCount].StringValue := AValue;
+  if SkipIndex then
+    // Force fresh allocation for large strings to potentially improve heap reuse
+    FConstants[FConstantCount].StringValue := Copy(AValue, 1, Length(AValue))
+  else
+    FConstants[FConstantCount].StringValue := AValue;
   Result := UInt16(FConstantCount);
-  FStringConstantIndex.Add(AValue, Result);
+  if not SkipIndex then
+    FStringConstantIndex.Add(AValue, Result);
   Inc(FConstantCount);
 end;
 
