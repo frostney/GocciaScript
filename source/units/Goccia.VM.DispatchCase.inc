@@ -3955,7 +3955,8 @@
             // Clear B before the call so that if it throws, the follow-up
             // OP_AWAIT sees null instead of the stale dispose function.
             FRegisters[B] := RegisterNull;
-            RightValue := TGocciaFunctionBase(LeftValue).CallNoArgs(
+            // GetDisposeMethod admits any callable, a callable Proxy too.
+            RightValue := DispatchCallNoArgs(LeftValue,
               RegisterToValue(FRegisters[C]));
             // Store result in B so a follow-up OP_AWAIT can await it
             if Assigned(RightValue) then
