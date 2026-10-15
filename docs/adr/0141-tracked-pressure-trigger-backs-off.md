@@ -53,9 +53,11 @@ allocates, rather than one per checkpoint.
 
 **The trigger comes back down on its own.** A collection that gets the live
 set under the line records a level below it, and the trigger is the line
-again. Between collections, a live total below the recorded level (a
-destructor's release, a resize that shrinks a buffer) takes the place of the
-record, so freeing memory lowers the trigger without waiting for a collection.
+again. Between collections, a release that takes the live total below the
+recorded level (a destructor's release, a resize that shrinks a buffer) lowers
+the record to that total, so freeing memory lowers the trigger without waiting
+for a collection, and the lower record holds when the script grows back before
+any checkpoint runs.
 A young collection (`CollectYoung`, used only between benchmark rounds) keeps
 every older object, so it does not move the record, as ADR 0129 decided for
 the heap record.
