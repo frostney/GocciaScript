@@ -2803,8 +2803,14 @@ begin
     gttString:
       begin
         Token := Advance;
-        SourceText := ExtractSourceRange(Token.Line, Token.Column);
-        if FStrictModeActive and
+        // Only extract source text for small literals that might be directives.
+        // Large literals (>30 chars) can't be "use strict" so save memory by not
+        // storing their source text, avoiding heap fragmentation from 100KB+ copies.
+        if Length(Token.Lexeme) <= 30 then
+          SourceText := ExtractSourceRange(Token.Line, Token.Column)
+        else
+          SourceText := '';
+        if FStrictModeActive and (SourceText <> '') and
            StringLiteralSourceHasStrictForbiddenEscape(SourceText) then
           raise TGocciaSyntaxError.Create(
             'Strict mode string literals must not contain decimal escapes',

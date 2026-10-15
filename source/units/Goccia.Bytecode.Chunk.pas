@@ -853,18 +853,30 @@ end;
 
 function TGocciaFunctionTemplate.AddConstantString(
   const AValue: string): UInt16;
+var
+  UniqueStr: string;
+  IsLarge: Boolean;
 begin
-  if FStringConstantIndex.TryGetValue(AValue, Result) then
+  // For small strings, check if already indexed for deduplication
+  IsLarge := Length(AValue) > 1024;
+  if not IsLarge and FStringConstantIndex.TryGetValue(AValue, Result) then
     Exit;
 
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
+  // Break Copy-on-Write sharing to avoid retaining references to source strings.
+  // UniqueString forces a copy with refcount=1 that will be properly freed.
+  UniqueStr := AValue;
+  UniqueString(UniqueStr);
   FConstants[FConstantCount].Kind := bckString;
-  FConstants[FConstantCount].StringValue := AValue;
+  FConstants[FConstantCount].StringValue := UniqueStr;
   Result := UInt16(FConstantCount);
-  FStringConstantIndex.Add(AValue, Result);
+  // Don't index large strings (>1KB) - they're unlikely to be duplicated and storing
+  // them as map keys causes heap fragmentation. The index is only for deduplication.
+  if not IsLarge then
+    FStringConstantIndex.Add(UniqueStr, Result);
   Inc(FConstantCount);
 end;
 
