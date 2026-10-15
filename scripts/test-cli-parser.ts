@@ -1336,6 +1336,28 @@ console.log("Nesting limit...");
     if (res.exitCode !== 0 || !/^(true|1|SyntaxError: .*native stack.*)\n$/.test(printed))
       throw new Error(`${desc} on a nearly exhausted native stack should finish or throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
   }
+
+  // A pattern compiled on a shallow stack and matched at the bottom of that
+  // recursion: matching recurses once per nested lookaround, and running out
+  // of stack there is the call stack's RangeError, not a SyntaxError (the
+  // pattern is valid) or a plain Error (as the step and backtrack limits
+  // are). Each case reaches the VM through a different entry point.
+  const lowStackMatch = (flags: string, expression: string): string =>
+    `const re = new RegExp("(?=".repeat(1000) + "a" + ")".repeat(1000), "${flags}");\n` +
+    lowStack(expression);
+  const lowStackMatchCases: Array<[string, string, string, string]> = [
+    ["RegExp.prototype.test", "", `re.test("a")`, "true"],
+    ["RegExp.prototype.exec", "", `re.exec("a")`, "a"],
+    ["String.prototype.search", "", `"aaa".search(re)`, "0"],
+    ["a global String.prototype.replace", "g", `"aaa".replace(re, "b")`, "bbb"],
+    ["a global String.prototype.match", "g", `"aaa".match(re)`, "a,a,a"],
+  ];
+  for (const [desc, flags, expression, matched] of lowStackMatchCases) {
+    const res = runLoaderJson(lowStackMatch(flags, expression), ["--mode=bytecode"], { timeout: 60000 });
+    const printed = normalizeLineEndings(res.json.output);
+    if (res.exitCode !== 0 || (printed !== `${matched}\n` && printed !== "RangeError: Maximum call stack size exceeded\n"))
+      throw new Error(`${desc} with nested lookarounds on a nearly exhausted native stack should match or throw a RangeError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+  }
 }
 
 console.log("\nAll test-cli-parser.ts tests passed.");

@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.RegExp.Engine,
+  Goccia.RegExp.VM,
   Goccia.Values.Primitives;
 
 type
@@ -84,6 +85,11 @@ function HasInternalRegExpFlag(const AValue: TGocciaValue;
   every match of a loop. }
 function BuildRegExpMatchArray(const AInputValue: TGocciaValue;
   const AMatchResult: TGocciaRegExpMatchResult): TGocciaValue;
+{ Throws the JavaScript error for a match that the RegExp VM stopped:
+  RangeError when nested lookarounds ran out of native stack, as for any
+  other exhausted call stack, and Error for its step and backtrack limits
+  (ADR 0128). }
+procedure ThrowRegExpRuntimeError(const AError: ERegExpRuntimeError);
 
 implementation
 
@@ -101,7 +107,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.RegExp.&Program,
-  Goccia.RegExp.VM,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -936,6 +941,13 @@ begin
     AMatch := TGocciaRegExpExecutionResult.FromNative(MatchResult);
 end;
 
+procedure ThrowRegExpRuntimeError(const AError: ERegExpRuntimeError);
+begin
+  if AError is ERegExpStackExhausted then
+    ThrowRangeError(AError.Message);
+  ThrowError(AError.Message);
+end;
+
 function MatchRegExpNativeObject(const AValue: TGocciaValue;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart, AUpdateLastIndex: Boolean;
@@ -973,7 +985,7 @@ begin
         AMatchResult);
   except
     on E: ERegExpRuntimeError do
-      ThrowError(E.Message);
+      ThrowRegExpRuntimeError(E);
   end;
 
   ShouldUpdate := AUpdateLastIndex and

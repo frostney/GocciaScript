@@ -12,6 +12,10 @@ uses
 
 type
   ERegExpRuntimeError = class(Exception);
+  // Lookarounds nested deeper than the native stack left at the start of the
+  // match allows. The pattern itself is valid; the runtime reports it as the
+  // RangeError for any other exhausted call stack.
+  ERegExpStackExhausted = class(ERegExpRuntimeError);
 
   TRegExpInputUnits = array of Cardinal;
 
@@ -599,12 +603,12 @@ end;
 // The compiler bounds how deeply lookarounds nest (Goccia.NestingLimit), but
 // a match can start deep in the native stack, in a callback that recursion
 // has re-entered many times; past NESTING_UNCHECKED_DEPTH levels the match
-// fails with an error instead of running off the end of the stack. Out of
-// line: RunVM calls it only for lookarounds nested that deep.
+// fails with ERegExpStackExhausted instead of running off the end of the
+// stack. Out of line: RunVM calls it only for lookarounds nested that deep.
 procedure CheckLookaroundStack;
 begin
   if NativeStackNearlyExhausted then
-    raise ERegExpRuntimeError.Create(SErrorRegExpLookaroundStack);
+    raise ERegExpStackExhausted.Create(SErrorRegExpLookaroundStack);
 end;
 
 function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
