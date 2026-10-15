@@ -30,6 +30,7 @@ ES2026 §16.2.1.6.1.3 `Evaluate()` returns the module's evaluation promise;
 True when any of its extensions does. `WaitForRuntimeIdle` runs a round
 (every extension's `WaitForIdle`, then the microtask and `Atomics.waitAsync`
 drain) and repeats it while any extension reports work.
+
 - The fetch extension reports a request in flight for its realm.
 - The timers extension reports a real-mode timeout its host drain would run.
   Once the drain's loop limit has stopped it, it reports nothing, so a timer
