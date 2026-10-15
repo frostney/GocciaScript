@@ -1804,6 +1804,14 @@ begin
   Result := TGocciaNumberLiteralValue.Create(AValue);
 end;
 
+// True when ARegister holds a Number as a boxed value, as NaN, the infinities
+// and -0 are (VMNumberRegister).
+function VMBoxedNumberRegister(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := (ARegister.Kind = grkObject) and
+    (ARegister.ObjectValue is TGocciaNumberLiteralValue);
+end;
+
 function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then

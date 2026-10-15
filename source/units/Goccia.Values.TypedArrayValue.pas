@@ -3000,6 +3000,13 @@ begin
 end;
 
 // ECMA-402 §17.1.6 %TypedArray%.prototype.toLocaleString([locales [, options]])
+//
+// An element is a fresh number or BigInt value, held only here while its
+// toLocaleString is looked up and called. The lookup can run a getter, and
+// the first lookup of Number.prototype.toLocaleString in a realm loads its
+// shim as bytecode, which reaches the VM's memory-pressure checkpoint. One
+// TGocciaActiveRootFrame per element holds it, its wrapper object, the method
+// and the method's result until that is converted (issue #1655).
 function TGocciaTypedArrayValue.TypedArrayToLocaleString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -3009,6 +3016,7 @@ var
   Element, Method, Formatted: TGocciaValue;
   ElementObject: TGocciaObjectValue;
   CallArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   TA := RequireAttachedTypedArray(AThisValue, '%TypedArray%.prototype.toLocaleString');
   Len := TA.Length;
@@ -3020,26 +3028,35 @@ begin
     if (Element is TGocciaUndefinedLiteralValue) or
        (Element is TGocciaNullLiteralValue) then
       Continue;
-    ElementObject := ToObject(Element);
-    Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
-    if (Method = nil) or not Method.IsCallable then
-      ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
-
-    CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+    Roots.Initialize;
     try
-      if AArgs.Length > 0 then
-        CallArgs.Add(AArgs.GetElement(0))
-      else
-        CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-      if AArgs.Length > 1 then
-        CallArgs.Add(AArgs.GetElement(1))
-      else
-        CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-      Formatted := InvokeCallable(Method, CallArgs, Element);
+      Roots.Add(Element);
+      ElementObject := ToObject(Element);
+      Roots.Add(ElementObject);
+      Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
+      if (Method = nil) or not Method.IsCallable then
+        ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
+      Roots.Add(Method);
+
+      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+      try
+        if AArgs.Length > 0 then
+          CallArgs.Add(AArgs.GetElement(0))
+        else
+          CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        if AArgs.Length > 1 then
+          CallArgs.Add(AArgs.GetElement(1))
+        else
+          CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        Formatted := InvokeCallable(Method, CallArgs, Element);
+      finally
+        CallArgs.Free;
+      end;
+      Roots.Add(Formatted);
+      S := S + Formatted.ToStringLiteral.Value;
     finally
-      CallArgs.Free;
+      Roots.Clear;
     end;
-    S := S + Formatted.ToStringLiteral.Value;
   end;
   Result := TGocciaStringLiteralValue.Create(S);
 end;
