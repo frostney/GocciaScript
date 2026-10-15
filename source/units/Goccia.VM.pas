@@ -707,6 +707,10 @@ type
       const AThisValue: TGocciaValue = nil): TGocciaValue;
     function ExecuteImportedModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
+    { Waits, from the top level of a module-source entry, until APromise,
+      the entry's pending asynchronous dependencies, settles; raises its
+      rejection. }
+    procedure AwaitModuleDependencies(const APromise: TGocciaValue);
     { ES2026 §16.2.1.7.3.1 InitializeEnvironment step for a function
       declaration of a module: InstantiateFunctionObject of ATemplate, a
       template whose ModuleEnvironmentBinding is set, with AModuleEnvironment
@@ -16829,6 +16833,28 @@ begin
     FFrameDepth := SavedFrameDepth - 1;
   try
     Result := ExecuteModule(AModule);
+  finally
+    FFrameDepth := SavedFrameDepth;
+  end;
+end;
+
+{ ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation step 12: a module with
+  pending asynchronous dependencies executes only once they have evaluated
+  (§16.2.1.6.1.3.4 AsyncModuleExecutionFulfilled). A module-source entry the
+  bytecode executor runs has no continuation of its own to defer, so its top
+  level waits for them as Await does in a frame that cannot suspend
+  (AwaitValue). The jobs that run meanwhile are not calls from the entry's top
+  level: like a module top level ExecuteImportedModule runs, they take the
+  depth of the frame below it, so --max-stack counts only their own calls. }
+procedure TGocciaVM.AwaitModuleDependencies(const APromise: TGocciaValue);
+var
+  SavedFrameDepth: Integer;
+begin
+  SavedFrameDepth := FFrameDepth;
+  if SavedFrameDepth > 0 then
+    FFrameDepth := SavedFrameDepth - 1;
+  try
+    AwaitValue(APromise);
   finally
     FFrameDepth := SavedFrameDepth;
   end;
