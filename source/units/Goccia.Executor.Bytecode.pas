@@ -31,7 +31,10 @@ type
     FArgumentsObjectEnabled: Boolean;
     FLinkedModules: TOrderedStringMap<TGocciaModule>;
     FLinkedReferrer: string;
+    FEntryRequests: TGocciaModuleList;
+    FEntryRequestsLeft: Integer;
     procedure LinkModuleRequests(const AModule: TGocciaBytecodeModule);
+    procedure AwaitEntryRequests;
     procedure InitializeEntryLocalExports(const AModule: TGocciaBytecodeModule;
       const AEntry: TGocciaModule);
     procedure InitializeEntryLinkedExports(const AModule: TGocciaBytecodeModule;
@@ -91,6 +94,7 @@ type
 implementation
 
 uses
+  Generics.Collections,
   SysUtils,
 
   TimingUtils,
@@ -613,14 +617,59 @@ begin
   end;
 end;
 
+{ The program's OP_IMPORTs, which run in source order after its function
+  declarations are instantiated and before any other statement of its body,
+  evaluate its linked requests. For a module-source entry this is ES2026
+  §16.2.1.6.1.3.1 InnerModuleEvaluation steps 11-12: once its last request
+  has evaluated, the entry waits for each request whose evaluation is
+  asynchronous (one of its [[PendingAsyncDependencies]]) before its body
+  runs, and fails with the error of one that failed. The names the last
+  import declaration binds are assigned after this wait. }
 function TGocciaBytecodeExecutor.LoadLinkedModule(const AModulePath,
   AImportingFilePath: string): TGocciaModule;
 begin
   if Assigned(FLinkedModules) and (AImportingFilePath = FLinkedReferrer) and
      FLinkedModules.TryGetValue(AModulePath, Result) then
-    Result := FModuleLoader.EvaluateModule(Result)
+  begin
+    Result := FModuleLoader.EvaluateModule(Result);
+    if Assigned(FEntryRequests) then
+    begin
+      FEntryRequests.Add(Result);
+      Dec(FEntryRequestsLeft);
+      if FEntryRequestsLeft = 0 then
+        AwaitEntryRequests;
+    end;
+  end
   else
     Result := FModuleLoader.LoadModule(AModulePath, AImportingFilePath);
+end;
+
+procedure TGocciaBytecodeExecutor.AwaitEntryRequests;
+var
+  I: Integer;
+  PendingPromises: TList<TGocciaPromiseValue>;
+  Promise: TGocciaPromiseValue;
+  Requests: TGocciaModuleList;
+begin
+  Requests := FEntryRequests;
+  FEntryRequests := nil;
+  PendingPromises := TList<TGocciaPromiseValue>.Create;
+  try
+    for I := 0 to Requests.Count - 1 do
+    begin
+      Promise := TGocciaModuleLoader.EvaluationWaitPromise(Requests[I],
+        FVM.CurrentRuntimeModule);
+      if Assigned(Promise) and (Promise.State <> gpsFulfilled) and
+         (PendingPromises.IndexOf(Promise) < 0) then
+        PendingPromises.Add(Promise);
+    end;
+    if PendingPromises.Count > 0 then
+      FVM.AwaitModuleDependencies(
+        TGocciaModuleLoader.AllEvaluationsSettled(PendingPromises));
+  finally
+    PendingPromises.Free;
+    Requests.Free;
+  end;
 end;
 
 function TGocciaBytecodeExecutor.RunCompiledModule(
@@ -638,6 +687,8 @@ var
   SavedLinkedModules: TOrderedStringMap<TGocciaModule>;
   SavedLinkedReferrer: string;
   SavedLoadModule: TLoadModuleCallback;
+  SavedEntryRequests: TGocciaModuleList;
+  SavedEntryRequestsLeft: Integer;
   WasEnabled: Boolean;
 begin
   GC := TGarbageCollector.Instance;
@@ -657,7 +708,10 @@ begin
   SavedLinkedModules := FLinkedModules;
   SavedLinkedReferrer := FLinkedReferrer;
   SavedLoadModule := FVM.LoadModule;
+  SavedEntryRequests := FEntryRequests;
+  SavedEntryRequestsLeft := FEntryRequestsLeft;
   FLinkedModules := nil;
+  FEntryRequests := nil;
   try
     HasEntryExports := Assigned(FVM.CurrentRuntimeModule) and
       (TGocciaBytecodeModule(AModule).ExportCount > 0);
@@ -668,8 +722,16 @@ begin
     if HasEntryExports then
       InitializeEntryLinkedExports(TGocciaBytecodeModule(AModule),
         FVM.CurrentRuntimeModule);
+    if Assigned(FVM.CurrentRuntimeModule) and Assigned(FLinkedModules) then
+    begin
+      FEntryRequests := TGocciaModuleList.Create;
+      FEntryRequestsLeft := TGocciaBytecodeModule(AModule).ImportCount;
+    end;
     Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule), AThisValue);
   finally
+    FEntryRequests.Free;
+    FEntryRequests := SavedEntryRequests;
+    FEntryRequestsLeft := SavedEntryRequestsLeft;
     FVM.LoadModule := SavedLoadModule;
     FLinkedModules.Free;
     FLinkedModules := SavedLinkedModules;
