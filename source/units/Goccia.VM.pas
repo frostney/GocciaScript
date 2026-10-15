@@ -15994,7 +15994,6 @@ var
   IterResult: TGocciaValue;
   NextMethod: TGocciaValue;
   DoneFlag: Boolean;
-  Running: Boolean;
   Template: TGocciaFunctionTemplate;
   Constant: PGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
@@ -16420,10 +16419,9 @@ begin
         end;
       end;
     end;
-    Running := True;
     InstructionLimitState := CaptureInstructionLimitState;
     EscapingThrow := nil;
-    while Running and (Frame.IP < Template.CodeCount) do
+    while Frame.IP < Template.CodeCount do
     begin
       try
         UseProdDispatch := not FCoverageEnabled and not FProfilingOpcodes and
@@ -16434,7 +16432,7 @@ begin
           goto LInstrumentedLoopHead;
 
 LProdLoopHead:
-        if not (Running and (Frame.IP < Template.CodeCount)) then
+        if Frame.IP >= Template.CodeCount then
           goto LInnerLoopsDone;
         InstructionStartIP := Frame.IP;
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
@@ -16466,7 +16464,7 @@ LProdLoopHead:
         goto LDispatchCase;
 
 LInstrumentedLoopHead:
-        if not (Running and (Frame.IP < Template.CodeCount)) then
+        if Frame.IP >= Template.CodeCount then
           goto LInnerLoopsDone;
         if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
            Assigned(AStopGenerator) then
