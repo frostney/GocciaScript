@@ -1873,21 +1873,21 @@ begin
   // restoring store has; both are held only here (issue #1679).
   Roots.Initialize;
   try
-    // Step 3: Let previousLastIndex be ? Get(rx, "lastIndex").
+    // Step 4: Let previousLastIndex be ? Get(rx, "lastIndex").
     PreviousLastIndex := RegexValue.GetProperty(PROP_LAST_INDEX);
     Roots.Add(PreviousLastIndex);
-    // Step 4: If SameValue(previousLastIndex, +0𝔽) is false, set lastIndex to +0𝔽.
+    // Step 5: If previousLastIndex is not +0𝔽, set lastIndex to +0𝔽.
     if not IsSameValue(PreviousLastIndex, TGocciaNumberLiteralValue.ZeroValue) then
       RegexValue.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(0));
-    // Step 5: Let result be ? RegExpExec(rx, S).
+    // Step 6: Let result be ? RegExpExec(rx, S).
     HasMatch := MatchRegExpObjectOnce(RegexValue, Input, MatchValue);
     if HasMatch then
       Roots.Add(MatchValue);
-    // Steps 6-7: restore lastIndex when it changed.
+    // Steps 7-8: restore lastIndex when it changed.
     CurrentLastIndex := RegexValue.GetProperty(PROP_LAST_INDEX);
     if not IsSameValue(CurrentLastIndex, PreviousLastIndex) then
       RegexValue.SetProperty(PROP_LAST_INDEX, PreviousLastIndex);
-    // Steps 8-9: Return -1 on no match, else ? Get(result, "index").
+    // Steps 9-10: Return -1 on no match, else ? Get(result, "index").
     if not HasMatch then
       Result := TGocciaNumberLiteralValue.Create(-1)
     else

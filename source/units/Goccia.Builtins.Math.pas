@@ -706,11 +706,11 @@ var
   BaseValue: Double;
   Exponent: TGocciaNumberLiteralValue;
 begin
-  // Step 1: Let base be ? ToNumber(base). Kept as a double: converting the
+  // Step 1: Set base to ? ToNumber(base). Kept as a double: converting the
   // exponent can run a valueOf that collects the number base was boxed in
   // (issue #1679).
   BaseValue := TGocciaArgumentConverter.GetNumber(AArgs, 0).Value;
-  // Step 2: Let exponent be ? ToNumber(exponent).
+  // Step 2: Set exponent to ? ToNumber(exponent).
   Exponent := TGocciaArgumentConverter.GetNumber(AArgs, 1);
   // Step 3: Return Number::exponentiate(base, exponent).
   Result := TGocciaNumberLiteralValue.Create(
