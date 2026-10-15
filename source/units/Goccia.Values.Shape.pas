@@ -284,8 +284,10 @@ begin
 end;
 
 // Every object creates one. Nothing here can raise but an allocation
-// failure, so the constructor goes without an implicit exception frame.
-{$IMPLICITEXCEPTIONS OFF}
+// failure, so this constructor goes without an implicit exception frame (the
+// inherited map constructor keeps its own); the cost is that a map whose
+// storage cannot be allocated leaks instead of being freed.
+{$IFDEF FPC}{$IMPLICITEXCEPTIONS OFF}{$ENDIF}
 constructor TGocciaShapedPropertyMap.Create(AInitialCapacity: Integer);
 begin
   inherited Create(AInitialCapacity);
@@ -298,7 +300,7 @@ begin
   FShape := nil;
   FShapeEntryCount := 0;
 end;
-{$IMPLICITEXCEPTIONS ON}
+{$IFDEF FPC}{$IMPLICITEXCEPTIONS ON}{$ENDIF}
 
 procedure TGocciaShapedPropertyMap.RequireStorageBytes(const ABytes: Int64;
   const APendingValue: TGocciaPropertyDescriptor);

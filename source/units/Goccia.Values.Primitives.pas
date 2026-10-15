@@ -527,16 +527,21 @@ end;
 // Every boxed number passes through here. Without the implicit exception
 // frame FPC wraps a constructor in, a box costs no thread-variable lookups for
 // the frame; see ConstructorDestroysOnException.
-{$IMPLICITEXCEPTIONS OFF}
+{$IFDEF FPC}{$IMPLICITEXCEPTIONS OFF}{$ENDIF}
 constructor TGocciaNumberLiteralValue.Create(const AValue: Double);
 begin
   FValue := AValue;
 end;
-{$IMPLICITEXCEPTIONS ON}
+{$IFDEF FPC}{$IMPLICITEXCEPTIONS ON}{$ENDIF}
 
 class function TGocciaNumberLiteralValue.ConstructorDestroysOnException: Boolean;
 begin
+  // Only FPC builds the constructor above without its frame.
+  {$IFDEF FPC}
   Result := False;
+  {$ELSE}
+  Result := True;
+  {$ENDIF}
 end;
 
 function TGocciaNumberLiteralValue.GetIsNaN: Boolean;
