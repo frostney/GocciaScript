@@ -6,6 +6,7 @@ interface
 
 uses
   Generics.Collections,
+  SysUtils,
 
   CriticalSections,
   HashMap,
@@ -307,6 +308,7 @@ type
 
     procedure AddRootObject(const AObject: TGCManagedObject);
     procedure RemoveRootObject(const AObject: TGCManagedObject);
+    procedure DumpLargeStringRoots;
     procedure PushActiveRoot(const AObject: TGCManagedObject);
     procedure PopActiveRoot; {$IFDEF FPC}inline;{$ENDIF}
 
@@ -983,6 +985,15 @@ procedure TGarbageCollector.RemoveRootObject(
   const AObject: TGCManagedObject);
 begin
   FRootObjects.Remove(AObject);
+end;
+
+procedure TGarbageCollector.DumpLargeStringRoots;
+var
+  Pair: TGCObjectSet.TKeyValuePair;
+begin
+  WriteLn(StdErr, 'GC Root count: ', FRootObjects.Count);
+  for Pair in FRootObjects do
+    WriteLn(StdErr, 'ROOT: ', Pair.Key.ClassName);
 end;
 
 procedure TGarbageCollector.GrowActiveRootStack;

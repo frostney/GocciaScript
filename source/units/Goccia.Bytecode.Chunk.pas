@@ -607,6 +607,7 @@ destructor TGocciaFunctionTemplate.Destroy;
 var
   I: Integer;
 begin
+  WriteLn(StdErr, 'TGocciaFunctionTemplate.Destroy: FConstantCount=', FConstantCount);
   // Unpin any runtime values that were built and cached during VM execution.
   // Guard against the GC already having been shut down.
   if (TGarbageCollector.Instance <> nil) then
@@ -633,7 +634,11 @@ begin
   // Explicitly zero string constants to force finalization
   for I := 0 to FConstantCount - 1 do
     if FConstants[I].Kind = bckString then
+    begin
+      if Length(FConstants[I].StringValue) > 50000 then
+        WriteLn(StdErr, 'FunctionTemplate clearing FConstants[', I, '] len=', Length(FConstants[I].StringValue));
       FConstants[I].StringValue := '';
+    end;
   SetLength(FConstants, 0);
   // Clear string index (keys hold strings too)
   FStringConstantIndex.Clear;
