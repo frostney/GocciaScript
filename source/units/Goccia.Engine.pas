@@ -286,12 +286,12 @@ type
     function MaterializeAsyncDisposableStackGlobal: TGocciaValue;
     procedure DoRetainModule(const AModule: TObject);
     procedure DiscardRuntimePending;
-    function ExtensionsHavePendingWork: Boolean;
     procedure PrintSourcePipelineWarnings(
       const APipelineResult: TGocciaSourcePipelineResult);
     { The parse options of this engine's language profile. }
     function SourcePipelineOptions(
       const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
+    function ExtensionsHavePendingWork: Boolean;
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;

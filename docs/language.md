@@ -104,9 +104,11 @@ class C {
 }
 ```
 
-**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason. Top-level `await` works identically in interpreter mode and bytecode mode. A top-level `await` on a promise that nothing left in the run can settle fails the run with `TypeError: await: Promise did not settle after microtask drain`.
+**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason. Top-level `await` works identically in interpreter mode and bytecode mode.
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
+
+**Unsettled top-level `await`:** A top-level `await` on a promise that nothing left in the run can settle fails the run with `TypeError: await: Promise did not settle after microtask drain`.
 
 ### Classes
 
