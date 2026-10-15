@@ -3128,7 +3128,8 @@ begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
     if Descriptor.ClassType = TGocciaLazyPropertyDescriptorData then
-      Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
+      Descriptor := MaterializeOwnLazyPropertyHolding(AName, Descriptor,
+        AValue, Self);
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       if not TGocciaPropertyDescriptorData(Descriptor).Writable then
@@ -3151,7 +3152,7 @@ begin
       AssignThroughExoticParent(Proto, AName, AValue);
       Exit;
     end;
-    Descriptor := Proto.GetOwnPropertyDescriptor(AName);
+    Descriptor := Proto.GetOwnPropertyDescriptorHolding(AName, AValue, Self);
     if Assigned(Descriptor) then
     begin
       if (Descriptor is TGocciaPropertyDescriptorAccessor) and

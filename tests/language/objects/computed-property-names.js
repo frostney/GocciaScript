@@ -161,3 +161,19 @@ test("computed property names infer anonymous function names", () => {
   expect(getterDesc.get.name).toBe("get [getter]");
   expect(setterDesc.set.name).toBe("set ");
 });
+
+// A computed key naming a lazily installed Object.prototype member (__proto__,
+// __defineGetter__) defines an own data property. The define must not load
+// that member while the value is held only natively: loading it runs bytecode,
+// and a collection there freed the value (#1679, GC-stress build).
+test("a computed key naming a lazy Object.prototype member keeps its value", () => {
+  const number = { ["__proto__"]: 42 };
+  const text = { ["__proto__"]: `v${number.__proto__}` };
+  const fraction = { ["__defineGetter__"]: 1.5 };
+
+  expect(Object.hasOwn(number, "__proto__")).toBe(true);
+  expect(number.__proto__).toBe(42);
+  expect(Object.getPrototypeOf(number)).toBe(Object.prototype);
+  expect(text.__proto__).toBe("v42");
+  expect(fraction.__defineGetter__).toBe(1.5);
+});
