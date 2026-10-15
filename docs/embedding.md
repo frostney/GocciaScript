@@ -523,6 +523,8 @@ end;
 
 Runtime globals and runtime modules can be reduced by installing only concrete extensions, for example `Runtime.Install(TGocciaConsoleRuntimeExtension.Create)`.
 
+An extension with host work of its own (a request, a timer, a callback from another thread) settles it in `WaitForIdle`, which the engine calls when a run has nothing else to do. A job the engine drains afterwards can start more of that work, so the engine repeats its round while any extension's `HasPendingWork` returns True ([ADR 0142](adr/0142-the-run-waits-until-no-extension-has-pending-work.md)). Return True only when `WaitForIdle` will block on that work or make progress on it; a True it does nothing about spins the engine thread. An extension that does not override `HasPendingWork` gets a single pass, so work a late job starts is not waited for. A wait inside `WaitForIdle` should call `CheckExecutionTimeoutNow` and `CheckInstructionLimit` between polls, so the run deadline and a host stop end it.
+
 ### Preprocessors and Compatibility
 
 | System | Type | Default | Purpose |

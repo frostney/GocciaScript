@@ -557,6 +557,7 @@ uses
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.InstructionLimit,
   Goccia.Keywords.Contextual,
   Goccia.MicrotaskQueue,
   Goccia.Platform,
@@ -2248,9 +2249,18 @@ var
   I: Integer;
   Queue: TGocciaMicrotaskQueue;
   GC: TGarbageCollector;
+  Repeating: Boolean;
 begin
+  Repeating := False;
   try
     repeat
+      { A further round waits again: the deadline and a host's stop end it. }
+      if Repeating then
+      begin
+        CheckExecutionTimeoutNow;
+        CheckInstructionLimit;
+      end;
+      Repeating := True;
       for I := 0 to FExtensions.Count - 1 do
         FExtensions[I].WaitForIdle;
       GC := TGarbageCollector.Instance;
@@ -2264,8 +2274,10 @@ begin
             Queue.DrainQueue
           else if HasSelfSettlingAtomicsWaitAsyncWaiters then
           begin
-            { An Atomics.waitAsync timeout still to expire. }
+            { An Atomics.waitAsync timeout still to expire. The deadline and
+              a host's stop end the wait, as in every other engine wait. }
             CheckExecutionTimeoutNow;
+            CheckInstructionLimit;
             Sleep(1);
           end
           else

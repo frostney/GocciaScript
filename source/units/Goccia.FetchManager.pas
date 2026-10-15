@@ -1021,6 +1021,7 @@ begin
     while HasPendingFor(ARealm) and (PumpCompletions = 0) do
     begin
       CheckExecutionTimeoutNow;
+      CheckInstructionLimit;
       Sleep(FETCH_POLL_INTERVAL_MS);
     end;
   until False;
