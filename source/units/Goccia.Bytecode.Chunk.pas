@@ -630,20 +630,31 @@ begin
     FRegExpProgramCaches[I].Free;
   for I := 0 to High(FDirectEvalCodeCaches) do
     FDirectEvalCodeCaches[I].Free;
-  // Explicitly zero string constants to force finalization
+  // Free structures that might hold string refs BEFORE clearing constants
+  WriteLn(StdErr, 'FunctionTemplate.Destroy: Template=', IntToHex(PtrUInt(Self), 16), ' FConstantCount=', FConstantCount);
+  FDebugInfo.Free;
+  FDebugInfo := nil;
+  FFunctions.Free;
+  FFunctions := nil;
+  FStringConstantIndex.Clear;
+  // Now zero string constants
   for I := 0 to FConstantCount - 1 do
+  begin
     if FConstants[I].Kind = bckString then
     begin
       if Length(FConstants[I].StringValue) > 50000 then
-        WriteLn(StdErr, 'FunctionTemplate clearing FConstants[', I, '] len=', Length(FConstants[I].StringValue));
+      begin
+        WriteLn(StdErr, '  clearing FConstants[', I, '] len=', Length(FConstants[I].StringValue), ' refcount=', StringRefCount(FConstants[I].StringValue));
+        UniqueString(FConstants[I].StringValue); // Force unique copy to break COW
+        WriteLn(StdErr, '  after UniqueString: refcount=', StringRefCount(FConstants[I].StringValue));
+      end;
       FConstants[I].StringValue := '';
     end;
+  end;
   SetLength(FConstants, 0);
-  // Clear string index (keys hold strings too)
-  FStringConstantIndex.Clear;
   FStringConstantIndex.Free;
-  FFunctions.Free;
-  FDebugInfo.Free;
+  SetLength(FStringConstantCaches, 0);
+  SetLength(FTemplateObjectCaches, 0);
   inherited;
 end;
 
@@ -874,7 +885,7 @@ begin
   if FStringConstantIndex.TryGetValue(AValue, Result) then
     Exit;
   if Length(AValue) >= 100000 then
-    WriteLn(StdErr, 'AddConstantString: len=', Length(AValue), ' (new constant)');
+    WriteLn(StdErr, 'AddConstantString: len=', Length(AValue), ' Template=', IntToHex(PtrUInt(Self), 16));
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
