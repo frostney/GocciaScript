@@ -86,6 +86,21 @@ describe("TypedArray.prototype.filter", () => {
   });
 
   test("throws when species returns a view of the source's own immutable buffer", () => {
+    const buffer = new Uint8Array([1, 2, 0, 0]).buffer.transferToImmutable();
+    const ta = new Uint8Array(buffer, 0, 2);
+    ta.constructor = {
+      [Symbol.species]: class {
+        constructor(length) {
+          return new Uint8Array(buffer, 2, length);
+        }
+      },
+    };
+
+    expect(() => ta.filter(() => true)).toThrow(TypeError);
+    expect(Array.from(new Uint8Array(buffer))).toEqual([1, 2, 0, 0]);
+  });
+
+  test("throws for an empty result when species returns an immutable view", () => {
     const buffer = new Uint8Array([1, 2]).buffer.transferToImmutable();
     const ta = new Uint8Array(buffer);
     ta.constructor = {
@@ -96,9 +111,7 @@ describe("TypedArray.prototype.filter", () => {
       },
     };
 
-    expect(() => ta.filter(() => true)).toThrow(TypeError);
     expect(() => ta.filter(() => false)).toThrow(TypeError);
-    expect(Array.from(ta)).toEqual([1, 2]);
   });
 
   test.each([BigInt64Array, BigUint64Array])("%s continues after callback detaches buffer", (TA) => {

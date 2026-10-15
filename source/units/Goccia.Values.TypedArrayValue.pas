@@ -2807,7 +2807,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-// ES2026 §23.2.3.20 %TypedArray%.prototype.map(callbackfn [, thisArg])
+// ES2026 §23.2.3.22 %TypedArray%.prototype.map(callbackfn [, thisArg])
 function TGocciaTypedArrayValue.TypedArrayMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
@@ -2850,7 +2850,7 @@ begin
   end;
 end;
 
-// ES2026 §23.2.3.9 %TypedArray%.prototype.filter(callbackfn [, thisArg])
+// ES2026 §23.2.3.10 %TypedArray%.prototype.filter(callbackfn [, thisArg])
 function TGocciaTypedArrayValue.TypedArrayFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
