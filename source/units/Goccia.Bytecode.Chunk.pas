@@ -607,7 +607,6 @@ destructor TGocciaFunctionTemplate.Destroy;
 var
   I: Integer;
 begin
-  WriteLn(StdErr, 'TGocciaFunctionTemplate.Destroy: FConstantCount=', FConstantCount);
   // Unpin any runtime values that were built and cached during VM execution.
   // Guard against the GC already having been shut down.
   if (TGarbageCollector.Instance <> nil) then
