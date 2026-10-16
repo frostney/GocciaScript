@@ -1887,7 +1887,8 @@ begin
       ADescriptor.Free;
       Exit;
     end;
-    ADescriptor.Free;
+    // The base contract: a definition that throws leaves the descriptor to
+    // its caller, which frees it. Freeing it here as well freed it twice.
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
       SSuggestCannotDeleteNonConfigurable);
   end;
