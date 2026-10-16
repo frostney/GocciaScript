@@ -281,6 +281,34 @@ describe("private accessor decorators", () => {
     expect(setterType).toBe("function");
   });
 
+  test("a callable Proxy replaces a static or instance private getter and setter", () => {
+    const proxied = (fn) => new Proxy(fn, {});
+    const wrapGetter = (getter) =>
+      proxied(({ wrapped() { return getter.call(this) * 10; } }).wrapped);
+    const wrapSetter = (setter) =>
+      proxied(({ wrapped(v) { setter.call(this, v + 1); } }).wrapped);
+    class S {
+      static #x = 1;
+      @wrapGetter static get #v() { return S.#x; }
+      @wrapSetter static set #v(v) { S.#x = v; }
+      static read() { return S.#v; }
+      static write(v) { S.#v = v; }
+    }
+    class I {
+      #x = 1;
+      @wrapGetter get #v() { return this.#x; }
+      @wrapSetter set #v(v) { this.#x = v; }
+      read() { return this.#v; }
+      write(v) { this.#v = v; }
+    }
+
+    S.write(4);
+    expect(S.read()).toBe(50);
+    const instance = new I();
+    instance.write(4);
+    expect(instance.read()).toBe(50);
+  });
+
   test("a private getter decorator that returns undefined keeps the getter", () => {
     class A {
       @(() => undefined) get #v() { return 1; }
