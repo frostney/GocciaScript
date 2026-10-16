@@ -387,6 +387,8 @@ TGocciaPropertyDescriptorAccessor = class
 end;
 ```
 
+**Who frees a descriptor.** `GetOwnPropertyDescriptor`, `GetOwnSymbolPropertyDescriptor` and `OwnPropertyDescriptorForKey` ([[GetOwnProperty]]) return either the descriptor the object stores, which the object owns, or one built for a property the object does not store: an array element or `length`, a function's `length` and `name`, a class's `prototype`, a String object's index, a typed-array element, a module namespace export, a Proxy trap's result. A built descriptor is `CallerOwned`. The caller releases whatever it got with `ReleaseDescriptor`, which frees only a caller-owned one, and reads what it needs before it defines or deletes on the same object, since that may free a stored descriptor. A caller that keeps a descriptor clones it or calls `TakeOwnership`. `HasOwnPropertyDescriptor` and `OwnPropertyIsEnumerable` answer the common questions without handing a descriptor out ([ADR 0143](adr/0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)).
+
 ### Property Deletion
 
 `DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. Delete call sites convert `False` to `TypeError` by default, matching ECMAScript strict mode semantics. With script source `--compat-non-strict-mode`, expression-level `delete` keeps the `False` result instead, and identifier delete can remove configurable global object properties through the global scope's `DeleteBinding` path.

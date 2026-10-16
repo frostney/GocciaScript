@@ -595,7 +595,7 @@ The `GocciaTestRunner` program:
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests, reconciles snapshots through the
    installed host, and collects results.
-6. When the run has more than one file, `GC.Collect` runs after each file: on the main thread in a sequential run (`--jobs=1`) and on the worker that ran the file in a parallel one. This reclaims the file's garbage before the next file starts. It does not reclaim the file's parsed AST, which is never freed, so memory still grows by roughly the size of each file's AST. A one-file run does not collect after its file.
+6. When the run has more than one file, `GC.Collect` runs after each file: on the main thread in a sequential run (`--jobs=1`) and on the worker that ran the file in a parallel one. This reclaims the file's garbage before the next file starts. The file's parsed AST is freed once the file is compiled, with its source text ([ADR 0143](adr/0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)). A one-file run does not collect after its file. When the run ends, each worker's runtime shuts down as the worker exits, and the main thread's once the run has reported, so the collectors destroy every value still alive and a heaptrc build reports no unfreed block.
 7. Aggregates pass/fail/skip counts across all files.
 8. Prints a summary with total statistics.
 

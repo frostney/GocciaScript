@@ -1813,10 +1813,9 @@ finalization
   CriticalSectionDone(GCCollectLock);
   {$IFDEF GOCCIA_GC_STRESS}
   // Skip heaptrc's exit report. heaptrc is finalized after this unit and
-  // checks useheaptrace first. With the known leaks (#1592) the report runs to
-  // hundreds of megabytes and about 15 seconds per process, and leaks are the
-  // memory-safety job's concern, not this build's: heaptrc still halts on a
-  // double free or a corrupted block at the moment it happens.
+  // checks useheaptrace first. Leaks are the memory-safety job's concern, not
+  // this build's: heaptrc still halts on a double free or a corrupted block at
+  // the moment it happens.
   useheaptrace := False;
   {$ENDIF}
 
