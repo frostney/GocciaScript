@@ -3352,6 +3352,7 @@ var
   ResultRoot, IteratorRoot, NextMethodRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
+  ResultRoots: TGocciaActiveRootFrame;
 begin
   BPE := TGocciaTypedArrayValue.BytesPerElement(FKind);
 
@@ -3551,22 +3552,32 @@ begin
       Exit(NewTA);
     end;
 
-    if FirstArg is TGocciaArrayValue then
-    begin
-      SrcArr := TGocciaArrayValue(FirstArg);
-      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
-      for I := 0 to SrcArr.Elements.Count - 1 do
-        NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
-      Exit(NewTA);
-    end;
+    // Each element's valueOf, and on the array-like path each element
+    // getter, can collect while the new typed array is held only here
+    // (issue #1679).
+    ResultRoots.Initialize;
+    try
+      if FirstArg is TGocciaArrayValue then
+      begin
+        SrcArr := TGocciaArrayValue(FirstArg);
+        NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
+        ResultRoots.Add(NewTA);
+        for I := 0 to SrcArr.Elements.Count - 1 do
+          NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
+        Exit(NewTA);
+      end;
 
-    Len := LengthOfArrayLikeEx(TGocciaObjectValue(FirstArg), RawLen);
-    if RawLen > High(Integer) then
-      ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
-    for I := 0 to Len - 1 do
-      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
-    Exit(NewTA);
+      Len := LengthOfArrayLikeEx(TGocciaObjectValue(FirstArg), RawLen);
+      if RawLen > High(Integer) then
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
+      NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+      ResultRoots.Add(NewTA);
+      for I := 0 to Len - 1 do
+        NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
+      Exit(NewTA);
+    finally
+      ResultRoots.Clear;
+    end;
   end;
 
   // new TypedArray(length) — ES2026 §23.2.1.2 step 5: ToIndex(length)

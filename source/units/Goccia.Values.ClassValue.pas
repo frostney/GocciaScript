@@ -12,6 +12,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.CapabilityAudit,
   Goccia.Constants,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -82,6 +83,11 @@ type
     function GetPrivatePropertyGetter(const AName: string): TGocciaValue;
     function GetPrivatePropertySetter(const AName: string): TGocciaValue;
     procedure MaterializeIntrinsicProperty(const AName: string);
+    // The body of Instantiate. ARoots is the frame Instantiate raised around
+    // it; every value this body reads again after guest code runs goes in it.
+    function InstantiateRooted(const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue;
+      var ARoots: TGocciaActiveRootFrame): TGocciaValue;
   public
     class procedure SetDefaultPrototype(const AProto: TGocciaObjectValue); static;
     class procedure PatchDefaultPrototype(const AClassValue: TGocciaClassValue); static;
@@ -189,7 +195,10 @@ type
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure AddFieldInitializerWithKey(const AName: string; const AComputedKey: TGocciaValue; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure SetMethodInitializers(const AInitializers: array of TGocciaValue);
-    procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
+    { Puts AInitializers ahead of the method initializers already set: a
+      decorator's addInitializer callbacks for methods run before the
+      compiled field initializer the class set with SetMethodInitializers. }
+    procedure PrependMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
@@ -479,7 +488,6 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
   Goccia.Timeout,
@@ -1227,14 +1235,19 @@ begin
     FMethodInitializers[Idx] := AInitializers[Idx];
 end;
 
-procedure TGocciaClassValue.AppendMethodInitializers(const AInitializers: array of TGocciaValue);
+procedure TGocciaClassValue.PrependMethodInitializers(const AInitializers: array of TGocciaValue);
 var
-  OldLen, Idx: Integer;
+  OldLen, AddLen, Idx: Integer;
 begin
   OldLen := Length(FMethodInitializers);
-  SetLength(FMethodInitializers, OldLen + Length(AInitializers));
-  for Idx := 0 to High(AInitializers) do
-    FMethodInitializers[OldLen + Idx] := AInitializers[Idx];
+  AddLen := Length(AInitializers);
+  if AddLen = 0 then
+    Exit;
+  SetLength(FMethodInitializers, OldLen + AddLen);
+  for Idx := OldLen - 1 downto 0 do
+    FMethodInitializers[Idx + AddLen] := FMethodInitializers[Idx];
+  for Idx := 0 to AddLen - 1 do
+    FMethodInitializers[Idx] := AInitializers[Idx];
 end;
 
 procedure TGocciaClassValue.AppendFieldInitializers(const AInitializers: array of TGocciaValue);
@@ -1607,8 +1620,30 @@ begin
 end;
 
 // ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)
+//
+// One frame holds what construction reads again after guest code runs
+// (issue #1679): the prototype read from newTarget, which a getter or Proxy
+// trap can hand back fresh, and the instance in each form it takes. A delayed
+// prototype lookup runs that guest code after the native instance exists and
+// before anything else refers to it, and the native initialization and the
+// native superclass construction run with the instance held only by this call.
 function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection;
   const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  try
+    Result := InstantiateRooted(AArguments, ANewTarget, Roots);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+function TGocciaClassValue.InstantiateRooted(
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue;
+  var ARoots: TGocciaActiveRootFrame): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
@@ -1698,27 +1733,27 @@ begin
   end
   else
     InstancePrototype := FClassPrototype;
+  ARoots.Add(InstancePrototype);
 
   if Assigned(NativeClass) then
   begin
     NativeInstance := NativeClass.CreateNativeInstance(AArguments);
+    ARoots.Add(NativeInstance);
     if DelayNativePrototypeLookup and
        (NativeInstance is TGocciaInstanceValue) then
     begin
-      TGarbageCollector.Instance.AddTempRoot(NativeInstance);
-      try
-        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
-      finally
-        TGarbageCollector.Instance.RemoveTempRoot(NativeInstance);
-      end;
+      TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
       NativeInstanceInitialized := True;
     end;
   end;
 
   if Assigned(NativeClass) and Assigned(ANewTarget) and
      DelayNativePrototypeLookup then
+  begin
     InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,
       ANewTarget, NativeIntrinsicPrototype);
+    ARoots.Add(InstancePrototype);
+  end;
 
   // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
@@ -1732,18 +1767,12 @@ begin
   begin
     Instance := TGocciaInstanceValue.Create(Self,
       EstimatedInstancePropertyCapacity);
+    ARoots.Add(Instance);
     Instance.Prototype := InstancePrototype;
   end;
 
   if NativeInstanceInitialized and (NativeInstance is TGocciaInstanceValue) then
-  begin
-    TGarbageCollector.Instance.AddTempRoot(Instance);
-    try
-      TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(Instance);
-    end;
-  end;
+    TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
 
   { §13.3.7.1 SuperCall step 3: super() reaching something that is not a
     constructor is a TypeError, and Object.setPrototypeOf is the only way to
@@ -1761,6 +1790,7 @@ begin
     if Assigned(NativeInstance) then
     begin
       Instance := NativeInstance;
+      ARoots.Add(Instance);
       if Assigned(NativeClass) or not DelayNativePrototypeLookup then
         Instance.Prototype := InstancePrototype;
       if NativeInstance is TGocciaInstanceValue then

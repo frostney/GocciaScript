@@ -16,6 +16,7 @@ type
     procedure TestTrimECMAScriptWhitespace;
     procedure TestUnicodeCaseMapping;
     procedure TestUTF8WellFormedChecks;
+    procedure TestUTF8EncodingSizesOutputExactly;
     procedure TestUTF16WellFormedChecks;
     procedure TestUTF16CodePointIndexing;
     procedure TestUTF16CodeUnitIndexing;
@@ -37,6 +38,8 @@ begin
     TestUnicodeCaseMapping);
   Test('UTF-8 decoder rejects invalid byte sequences',
     TestUTF8WellFormedChecks);
+  Test('UTF-8 encoder sizes its output exactly',
+    TestUTF8EncodingSizesOutputExactly);
   Test('UTF-16 well-formed helpers follow surrogate pairing',
     TestUTF16WellFormedChecks);
   Test('Code point helpers index UTF-16 text',
@@ -139,6 +142,57 @@ begin
     TBytes.Create($E2, Ord('A'), Ord('B')))).ToBe(#$FFFD + 'AB');
   Expect<string>(DecodeUTF8WithReplacement(
     TBytes.Create($E2, $80, Ord('A')))).ToBe(#$FFFD + 'A');
+end;
+
+function BytesToHex(const ABytes: TBytes): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(ABytes) do
+    Result := Result + IntToHex(ABytes[I], 2);
+end;
+
+procedure TTextSemanticsTests.TestUTF8EncodingSizesOutputExactly;
+var
+  Bytes: TBytes;
+  ErrorOffset, I: Integer;
+  Text: string;
+begin
+  Expect<Boolean>(TryEncodeUTF8('', Bytes, ErrorOffset)).ToBe(True);
+  Expect<Integer>(ErrorOffset).ToBe(-1);
+  Expect<Integer>(Length(Bytes)).ToBe(0);
+  Expect<Integer>(Length(EncodeUTF8WithReplacement(''))).ToBe(0);
+
+  Expect<Boolean>(TryEncodeUTF8('a' + #$00E9 + #$4E2D + #$D83D#$DE00, Bytes,
+    ErrorOffset)).ToBe(True);
+  Expect<Integer>(ErrorOffset).ToBe(-1);
+  Expect<string>(BytesToHex(Bytes)).ToBe('61C3A9E4B8ADF09F9880');
+
+  // Unpaired surrogates, a reversed pair and one at the end become U+FFFD
+  Expect<string>(BytesToHex(EncodeUTF8WithReplacement(
+    #$D800 + 'b' + #$DFFF + #$DE00#$D83D + 'a' + #$D83D))).ToBe(
+    'EFBFBD62EFBFBDEFBFBDEFBFBD61EFBFBD');
+  Expect<string>(BytesToHex(EncodeUTF8WithReplacement(
+    #$D83D#$D83D#$DE00))).ToBe('EFBFBDF09F9880');
+
+  // Without replacement, the bytes before the first unpaired surrogate remain
+  Expect<Boolean>(TryEncodeUTF8('ab' + #$DC00 + 'c', Bytes, ErrorOffset))
+    .ToBe(False);
+  Expect<Integer>(ErrorOffset).ToBe(2);
+  Expect<string>(BytesToHex(Bytes)).ToBe('6162');
+  Expect<Boolean>(TryEncodeUTF8(#$D83D#$DE00 + #$D800, Bytes, ErrorOffset))
+    .ToBe(False);
+  Expect<Integer>(ErrorOffset).ToBe(2);
+  Expect<string>(BytesToHex(Bytes)).ToBe('F09F9880');
+
+  Text := '';
+  for I := 1 to 10000 do
+    Text := Text + 'a' + #$00E9 + #$4E2D + #$D83D#$DE00;
+  Bytes := EncodeUTF8WithReplacement(Text);
+  Expect<Integer>(Length(Bytes)).ToBe(100000);
+  Expect<string>(BytesToHex(Copy(Bytes, 99990, 10))).ToBe(
+    '61C3A9E4B8ADF09F9880');
 end;
 
 procedure TTextSemanticsTests.TestUTF16WellFormedChecks;
