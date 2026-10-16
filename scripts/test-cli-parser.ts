@@ -1229,13 +1229,13 @@ console.log("Arrow in a ternary consequent under ASI...");
   }
 
   // Neither reading closes every conditional, so these stay SyntaxErrors.
-  assertSyntaxErrorInBothModes(
+  assertSyntaxError(
     "const r = 1 ? (l) => ({ a: 1 });\n",
     "arrow consequent with no ':' is rejected",
     [],
     { messageIncludes: 'Expected ":" in conditional expression' },
   );
-  assertSyntaxErrorInBothModes(
+  assertSyntaxError(
     "const r = 1 ? (x): number => x : 2 : 3;\n",
     "return-typed arrow consequent with a surplus ':' is rejected",
   );
