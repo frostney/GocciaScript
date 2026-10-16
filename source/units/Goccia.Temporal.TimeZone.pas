@@ -189,6 +189,12 @@ const
   MILLISECONDS_PER_HOUR = MINUTES_PER_HOUR * MILLISECONDS_PER_MINUTE;
   MILLISECONDS_PER_DAY = 24 * MILLISECONDS_PER_HOUR;
   MAX_SYMLINK_LENGTH = 1024;
+  { Temporal instants span 10^8 days either side of the epoch; a transition
+    outside that range is not reported. }
+  MAX_TRANSITION_EPOCH_SECONDS = Int64(100000000) * 24 * 60 * 60;
+  { A wall-clock time lies within a day of the instants that can produce it,
+    so gaps are searched for within two days either side of it. }
+  GAP_SEARCH_WINDOW_SECONDS = 2 * 24 * 60 * 60;
   KNOWN_TIMEZONE_PRIMARY_IDENTIFIER_COUNT = 152;
   {$IFDEF MSWINDOWS}
   ICU_LIBRARY = 'icu.dll';
@@ -836,6 +842,7 @@ begin
   try
     AData.Identifier := ATimeZone;
     SetLength(AData.Transitions, 0);
+    ClearTimeZoneRule(AData.Rule);
 
     if not TryGetWindowsICUOffsetSeconds(ICU, Calendar,
       ICU_TRANSITION_WINDOW_START_SECONDS, AData.DefaultOffsetSeconds) then
@@ -1419,6 +1426,7 @@ begin
     AData.Identifier := UTC_TIMEZONE_ID;
     SetLength(AData.Transitions, 0);
     AData.DefaultOffsetSeconds := 0;
+    ClearTimeZoneRule(AData.Rule);
     Result := True;
     Exit;
   end;
@@ -1618,6 +1626,49 @@ begin
   Result := GetOrLoadTimeZoneData(ATimeZone, Data);
 end;
 
+// RFC 9636 §3.3: the footer rule governs every instant after the last
+// transition. With no transitions at all it governs every instant, as in
+// the reference tzcode reader.
+function IsRuleInstant(const AData: TTimeZoneInformationData;
+  const AEpochSeconds: Int64): Boolean;
+begin
+  Result := AData.Rule.Present and ((Length(AData.Transitions) = 0) or
+    (AEpochSeconds > AData.Transitions[High(AData.Transitions)].TransitionEpochSeconds));
+end;
+
+{ The next (ANext) or previous rule transition from AEpochSeconds that lies
+  after the last explicit transition and within the Temporal instant range.
+  ANext finds the first one later than AEpochSeconds; otherwise the last one
+  earlier than it. }
+function TryGetRuleTransition(const AData: TTimeZoneInformationData;
+  const AEpochSeconds: Int64; const ANext: Boolean;
+  out ATransitionEpochSeconds: Int64): Boolean;
+var
+  SearchFromEpochSeconds: Int64;
+begin
+  Result := False;
+  ATransitionEpochSeconds := 0;
+  if not AData.Rule.Present then
+    Exit;
+
+  SearchFromEpochSeconds := AEpochSeconds;
+  if ANext and (Length(AData.Transitions) > 0) and
+     (SearchFromEpochSeconds < AData.Transitions[High(AData.Transitions)].TransitionEpochSeconds) then
+    SearchFromEpochSeconds := AData.Transitions[High(AData.Transitions)].TransitionEpochSeconds;
+  if SearchFromEpochSeconds > MAX_TRANSITION_EPOCH_SECONDS then
+    SearchFromEpochSeconds := MAX_TRANSITION_EPOCH_SECONDS;
+  if SearchFromEpochSeconds < -MAX_TRANSITION_EPOCH_SECONDS then
+    SearchFromEpochSeconds := -MAX_TRANSITION_EPOCH_SECONDS;
+
+  if not TryGetTimeZoneRuleTransition(AData.Rule, SearchFromEpochSeconds, ANext,
+    ATransitionEpochSeconds) then
+    Exit;
+  if (ATransitionEpochSeconds > MAX_TRANSITION_EPOCH_SECONDS) or
+     (ATransitionEpochSeconds < -MAX_TRANSITION_EPOCH_SECONDS) then
+    Exit;
+  Result := IsRuleInstant(AData, ATransitionEpochSeconds);
+end;
+
 function GetUtcOffsetSeconds(const ATimeZone: string; const AEpochSeconds: Int64): Integer;
 var
   Data: TTimeZoneInformationData;
@@ -1642,6 +1693,9 @@ begin
     Result := 0;
     Exit;
   end;
+
+  if IsRuleInstant(Data, AEpochSeconds) then
+    Exit(TimeZoneRuleOffsetSeconds(Data.Rule, AEpochSeconds));
 
   if Length(Data.Transitions) = 0 then
   begin
@@ -1705,6 +1759,7 @@ var
   Data: TTimeZoneInformationData;
   OffsetSecs: Integer;
   I: Integer;
+  TransitionEpochSeconds, BeforeEpochSeconds: Int64;
 begin
   Result := False;
   ATransitionEpochMilliseconds := 0;
@@ -1716,6 +1771,7 @@ begin
 
   if ANext then
   begin
+    // Rule transitions all follow the explicit ones, so they come last.
     for I := 0 to Length(Data.Transitions) - 1 do
     begin
       if IsTransitionAfterInstant(Data.Transitions[I].TransitionEpochSeconds,
@@ -1726,9 +1782,27 @@ begin
         Exit(True);
       end;
     end;
+    if TryGetRuleTransition(Data, FloorEpochSecond(AEpochMilliseconds), True,
+      TransitionEpochSeconds) then
+    begin
+      ATransitionEpochMilliseconds := TransitionEpochSeconds * MILLISECONDS_PER_SECOND;
+      Exit(True);
+    end;
   end
   else
   begin
+    // A transition at second T is before the instant when T is earlier than
+    // the instant rounded up to a whole second.
+    BeforeEpochSeconds := FloorEpochSecond(AEpochMilliseconds);
+    if (AEpochMilliseconds <> BeforeEpochSeconds * MILLISECONDS_PER_SECOND) or
+       (ASubMillisecondNanoseconds <> 0) then
+      Inc(BeforeEpochSeconds);
+    if TryGetRuleTransition(Data, BeforeEpochSeconds, False,
+      TransitionEpochSeconds) then
+    begin
+      ATransitionEpochMilliseconds := TransitionEpochSeconds * MILLISECONDS_PER_SECOND;
+      Exit(True);
+    end;
     for I := Length(Data.Transitions) - 1 downto 0 do
     begin
       if IsTransitionBeforeInstant(Data.Transitions[I].TransitionEpochSeconds,
@@ -1870,6 +1944,68 @@ begin
     ConsiderOffsetForLocalDateTime(AInstants, ACount, LocalEpochMilliseconds,
       Data.Transitions[I].UtcOffsetSeconds, AYear, AMonth, ADay, AHour,
       AMinute, ASecond, AMillisecond, ATimeZone);
+  if Data.Rule.Present then
+  begin
+    ConsiderOffsetForLocalDateTime(AInstants, ACount, LocalEpochMilliseconds,
+      Data.Rule.StandardOffsetSeconds, AYear, AMonth, ADay, AHour, AMinute,
+      ASecond, AMillisecond, ATimeZone);
+    ConsiderOffsetForLocalDateTime(AInstants, ACount, LocalEpochMilliseconds,
+      Data.Rule.DaylightOffsetSeconds, AYear, AMonth, ADay, AHour, AMinute,
+      ASecond, AMillisecond, ATimeZone);
+  end;
+end;
+
+{ True when a transition at ATransitionEpochSeconds moves the offset forward
+  from APreviousOffsetSeconds to ANextOffsetSeconds and skips the wall-clock
+  time ALocalEpochMilliseconds. }
+function IsLocalTimeInForwardGap(const ALocalEpochMilliseconds,
+  ATransitionEpochSeconds: Int64; const APreviousOffsetSeconds,
+  ANextOffsetSeconds: Integer): Boolean;
+var
+  TransitionEpochMilliseconds: Int64;
+begin
+  if ANextOffsetSeconds <= APreviousOffsetSeconds then
+    Exit(False);
+  TransitionEpochMilliseconds := ATransitionEpochSeconds * MILLISECONDS_PER_SECOND;
+  Result := (ALocalEpochMilliseconds >= TransitionEpochMilliseconds +
+      Int64(APreviousOffsetSeconds) * MILLISECONDS_PER_SECOND) and
+    (ALocalEpochMilliseconds < TransitionEpochMilliseconds +
+      Int64(ANextOffsetSeconds) * MILLISECONDS_PER_SECOND);
+end;
+
+{ A forward rule transition whose skipped wall-clock range contains
+  ALocalEpochMilliseconds: the gap it falls into. }
+function TryFindRuleGapForLocalEpochMilliseconds(const AData: TTimeZoneInformationData;
+  const ALocalEpochMilliseconds: Int64; out APreviousOffsetSeconds,
+  ANextOffsetSeconds: Integer; out ATransitionEpochSeconds: Int64): Boolean;
+var
+  LocalEpochSeconds, SearchEpochSeconds, TransitionEpochSeconds: Int64;
+begin
+  Result := False;
+  APreviousOffsetSeconds := 0;
+  ANextOffsetSeconds := 0;
+  ATransitionEpochSeconds := 0;
+  if not AData.Rule.Present or not AData.Rule.HasDaylightSaving then
+    Exit;
+
+  LocalEpochSeconds := FloorEpochSecond(ALocalEpochMilliseconds);
+  SearchEpochSeconds := LocalEpochSeconds - GAP_SEARCH_WINDOW_SECONDS;
+  while TryGetRuleTransition(AData, SearchEpochSeconds, True,
+    TransitionEpochSeconds) and
+    (TransitionEpochSeconds <= LocalEpochSeconds + GAP_SEARCH_WINDOW_SECONDS) do
+  begin
+    APreviousOffsetSeconds := TimeZoneRuleOffsetSeconds(AData.Rule,
+      TransitionEpochSeconds - 1);
+    ANextOffsetSeconds := TimeZoneRuleOffsetSeconds(AData.Rule,
+      TransitionEpochSeconds);
+    if IsLocalTimeInForwardGap(ALocalEpochMilliseconds, TransitionEpochSeconds,
+      APreviousOffsetSeconds, ANextOffsetSeconds) then
+    begin
+      ATransitionEpochSeconds := TransitionEpochSeconds;
+      Exit(True);
+    end;
+    SearchEpochSeconds := TransitionEpochSeconds;
+  end;
 end;
 
 function TryFindGapForLocalEpochMilliseconds(const ATimeZone: string;
@@ -1878,7 +2014,7 @@ function TryFindGapForLocalEpochMilliseconds(const ATimeZone: string;
 var
   Data: TTimeZoneInformationData;
   PreviousOffsetSeconds, NextOffsetSeconds, I: Integer;
-  TransitionEpochMilliseconds, LocalBeforeTransition, LocalAfterTransition: Int64;
+  TransitionEpochSeconds: Int64;
 begin
   Result := False;
   APreviousOffsetSeconds := 0;
@@ -1894,72 +2030,48 @@ begin
   for I := 0 to Length(Data.Transitions) - 1 do
   begin
     NextOffsetSeconds := Data.Transitions[I].UtcOffsetSeconds;
-    if NextOffsetSeconds > PreviousOffsetSeconds then
+    if IsLocalTimeInForwardGap(ALocalEpochMilliseconds,
+      Data.Transitions[I].TransitionEpochSeconds, PreviousOffsetSeconds,
+      NextOffsetSeconds) then
     begin
-      TransitionEpochMilliseconds :=
+      APreviousOffsetSeconds := PreviousOffsetSeconds;
+      ANextOffsetSeconds := NextOffsetSeconds;
+      ATransitionEpochMilliseconds :=
         Data.Transitions[I].TransitionEpochSeconds * MILLISECONDS_PER_SECOND;
-      LocalBeforeTransition := TransitionEpochMilliseconds +
-        Int64(PreviousOffsetSeconds) * MILLISECONDS_PER_SECOND;
-      LocalAfterTransition := TransitionEpochMilliseconds +
-        Int64(NextOffsetSeconds) * MILLISECONDS_PER_SECOND;
-      if (ALocalEpochMilliseconds >= LocalBeforeTransition) and
-         (ALocalEpochMilliseconds < LocalAfterTransition) then
-      begin
-        APreviousOffsetSeconds := PreviousOffsetSeconds;
-        ANextOffsetSeconds := NextOffsetSeconds;
-        ATransitionEpochMilliseconds := TransitionEpochMilliseconds;
-        Exit(True);
-      end;
+      Exit(True);
     end;
     PreviousOffsetSeconds := NextOffsetSeconds;
   end;
+
+  if TryFindRuleGapForLocalEpochMilliseconds(Data, ALocalEpochMilliseconds,
+    APreviousOffsetSeconds, ANextOffsetSeconds, TransitionEpochSeconds) then
+  begin
+    ATransitionEpochMilliseconds := TransitionEpochSeconds * MILLISECONDS_PER_SECOND;
+    Result := True;
+  end;
 end;
 
+{ The transition that skips the day's midnight, when the wall clock comes
+  back within the same day. }
 function TryFindStartOfDayGap(const AYear, AMonth, ADay: Integer;
   const ATimeZone: string; out ATransitionEpochMilliseconds: Int64): Boolean;
 var
-  Data: TTimeZoneInformationData;
   DateRec: TTemporalDateRecord;
   DayStartMilliseconds, DayEndMilliseconds: Int64;
-  TransitionEpochMilliseconds, LocalBeforeTransition, LocalAfterTransition: Int64;
-  PreviousOffsetSeconds, NextOffsetSeconds, I: Integer;
+  PreviousOffsetSeconds, NextOffsetSeconds: Integer;
 begin
-  Result := False;
-  ATransitionEpochMilliseconds := 0;
-
-  if (ATimeZone = UTC_TIMEZONE_ID) or
-     ParseOffsetString(ATimeZone, PreviousOffsetSeconds) or
-     (not GetOrLoadTimeZoneData(ATimeZone, Data)) then
-    Exit;
-
   DayStartMilliseconds := LocalDateTimeToLocalEpochMilliseconds(AYear,
     AMonth, ADay, 0, 0, 0, 0);
   DateRec := AddDaysToDate(AYear, AMonth, ADay, 1);
   DayEndMilliseconds := LocalDateTimeToLocalEpochMilliseconds(DateRec.Year,
     DateRec.Month, DateRec.Day, 0, 0, 0, 0);
 
-  PreviousOffsetSeconds := Data.DefaultOffsetSeconds;
-  for I := 0 to Length(Data.Transitions) - 1 do
-  begin
-    NextOffsetSeconds := Data.Transitions[I].UtcOffsetSeconds;
-    if NextOffsetSeconds > PreviousOffsetSeconds then
-    begin
-      TransitionEpochMilliseconds :=
-        Data.Transitions[I].TransitionEpochSeconds * MILLISECONDS_PER_SECOND;
-      LocalBeforeTransition := TransitionEpochMilliseconds +
-        Int64(PreviousOffsetSeconds) * MILLISECONDS_PER_SECOND;
-      LocalAfterTransition := TransitionEpochMilliseconds +
-        Int64(NextOffsetSeconds) * MILLISECONDS_PER_SECOND;
-      if (DayStartMilliseconds >= LocalBeforeTransition) and
-         (DayStartMilliseconds < LocalAfterTransition) and
-         (LocalAfterTransition < DayEndMilliseconds) then
-      begin
-        ATransitionEpochMilliseconds := TransitionEpochMilliseconds;
-        Exit(True);
-      end;
-    end;
-    PreviousOffsetSeconds := NextOffsetSeconds;
-  end;
+  Result := TryFindGapForLocalEpochMilliseconds(ATimeZone, DayStartMilliseconds,
+    PreviousOffsetSeconds, NextOffsetSeconds, ATransitionEpochMilliseconds) and
+    (ATransitionEpochMilliseconds + Int64(NextOffsetSeconds) *
+      MILLISECONDS_PER_SECOND < DayEndMilliseconds);
+  if not Result then
+    ATransitionEpochMilliseconds := 0;
 end;
 
 procedure ThrowDisambiguationRangeError;

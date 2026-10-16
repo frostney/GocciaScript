@@ -49,6 +49,8 @@ Temporal.ZonedDateTime  // Date + time + timezone
 3. Windows ICU on Windows 10 and newer
 4. embedded generated TZif resource data
 
+Each TZif file lists transitions up to a point (2037 in the embedded data and in fat system zoneinfo) and ends with a footer TZ string, such as `PST8PDT,M3.2.0,M11.1.0`, that gives the zone's current daylight-saving rule. As RFC 9636 §3.3 specifies, offsets, `getTimeZoneTransition()` and wall-clock resolution follow that rule for every instant after the last listed transition, through the end of the Temporal range; a slim file with no transitions uses the rule for every instant. Windows ICU data is read as transitions from 1800 to 2200 and has no rule, so on Windows a zone keeps its last offset before 2200 from then on.
+
 The embedded data is generated from the upstream IANA timezone data distribution and linked as a FreePascal `.res` resource. This keeps named IANA zones and DST transitions available in single-binary builds even when neither system zoneinfo nor Windows ICU can provide the requested zone. Define `GOCCIA_TEMPORAL_NO_EMBEDDED_TZDATA` at compile time to omit the embedded fallback.
 
 ## Temporal.Duration
