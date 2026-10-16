@@ -1,17 +1,16 @@
 /*---
-description: dynamic import() evaluated by the interpreter of a module whose compiled top-level throws rejects with the thrown value itself
+description: dynamic import() from an imported module function of a module whose top level throws rejects with the thrown value itself
 features: [modules, compat-function]
 ---*/
 
-// importThrowing is an imported module-level async function, so under the
-// bytecode executor it runs on the interpreter and evaluates import() through
-// the interpreter's TGocciaImportExpression ladder. The imported module's
-// top-level code is VM-compiled, so its throw crosses that boundary as the
-// engine's bytecode-throw exception. The rejection must carry the thrown
-// value's identity, not a fresh Error synthesized from "Name: message".
+// importThrowing is an imported module-level async function that evaluates
+// import(). The imported module's top-level throw reaches the VM's dynamic
+// import handling as the engine's bytecode-throw exception. The rejection must
+// carry the thrown value's identity, not a fresh Error synthesized from
+// "Name: message".
 import { importThrowing } from "./helpers/importer.js";
 
-describe("interpreter dynamic import() of a module with a compiled top-level throw", () => {
+describe("dynamic import() of a module with a throwing top level", () => {
   test("rejects with the thrown value, identity preserved", async () => {
     // Arm the imported module's top-level throw for this evaluation only.
     globalThis.__gocciaArmTopLevelThrow = true;

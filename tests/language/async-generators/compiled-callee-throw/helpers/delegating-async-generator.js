@@ -1,9 +1,7 @@
-// A module-level exported async generator. With compat-function enabled the
-// module loader creates it as an interpreter closure even under the bytecode
-// executor, so its yield* delegation runs through the interpreter's
-// async-from-sync iterator (Goccia.Generator.Continuation). The sync iterable
-// it delegates to is created by the VM-compiled caller, so that iterable's
-// `next` throw crosses the boundary as the engine's bytecode-throw exception.
+// A module-level exported async generator. Its yield* wraps the sync iterable
+// it is given in the VM's async-from-sync iterator, so a throw from that
+// iterable's `next` reaches the wrapper as the engine's bytecode-throw
+// exception. The iterable is created by the importing test.
 export async function* delegate(iterable) {
   yield* iterable;
 }

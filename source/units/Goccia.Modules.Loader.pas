@@ -18,7 +18,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Error.ThrowErrorCallback,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -42,8 +42,8 @@ type
     declarations of a module-form program: bind every top-level function
     declaration of AProgram, an `export default function` included, to a
     function object in AContext.Scope, the module environment, before any
-    module body runs. The executor creates the functions as it runs code, so
-    the bytecode executor compiles the program here and leaves it in
+    module body runs. The engine creates the functions as compiled
+    closures, so it compiles the program here and leaves it in
     AContext.CompiledModule for its module body evaluator. }
   TGocciaModuleFunctionInstantiator = procedure(const AProgram: TGocciaProgram;
     var AContext: TGocciaEvaluationContext) of object;
@@ -1618,7 +1618,7 @@ procedure TGocciaModuleLoader.BindRuntime(const AGlobalScope: TGocciaGlobalScope
 begin
   if Assigned(FGlobalScope) and (FGlobalScope <> AGlobalScope) then
     raise Exception.Create(
-      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine/executor.');
+      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine.');
   FGlobalScope := AGlobalScope;
   FOnError := AOnError;
 end;
@@ -1667,10 +1667,8 @@ end;
 
 // ES2026 §16.2.1.7.3.1 InitializeEnvironment: while linking a module, a named
 // import whose ResolveExport result is null or ambiguous is a SyntaxError. The
-// tree-walking interpreter also enforces this lazily as it evaluates each
-// import declaration (Goccia.AST.Statements), but the bytecode compiler resolves
-// import bindings at their use sites, so missing names must be rejected here at
-// link time to keep both engines in lockstep (ADR 0014). Source modules still
+// bytecode compiler resolves import bindings at their use sites, so missing
+// names must be rejected here at link time (ADR 0014). Source modules still
 // mid-evaluation in a cycle are skipped via IsEvaluatingModulePath, matching the
 // re-export validation in RegisterStaticModuleExports.
 procedure TGocciaModuleLoader.ValidateStaticNamedImports(
@@ -2788,8 +2786,6 @@ begin
           Context.ResolveModuleURL := ResolveModuleURL;
           Context.CurrentFilePath := ResolvedPath;
           Context.CurrentModule := Module;
-          Context.CoverageEnabled := False;
-          Context.StrictTypes := FStrictTypesEnabled;
           Context.NonStrictMode := False;
           Context.CompatibilityNonStrictMode := False;
           Context.DisposalTracker := nil;
@@ -2797,8 +2793,8 @@ begin
           PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
           if not Assigned(FInstantiateModuleFunctions) then
             raise EInvalidOperation.Create(
-              'The module loader has no function instantiator; attach an ' +
-              'executor before loading modules');
+              'The module loader has no function instantiator; attach it ' +
+              'to an engine before loading modules');
           FInstantiateModuleFunctions(ProgramNode, Context);
           if GetVarEnabled then
             HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);

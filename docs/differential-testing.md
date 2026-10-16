@@ -1,10 +1,10 @@
 # Differential Testing
 
-*Four-runtime differential suite comparison: goccia interpreted, goccia bytecode, vitest as the testing-API oracle, and bun as the ECMAScript oracle.*
+*Three-runtime differential suite comparison: goccia, vitest as the testing-API oracle, and bun as the ECMAScript oracle.*
 
 ## Executive Summary
 
-- **Four runtimes per file** — every differential suite under `scripts/differential/` runs under `GocciaTestRunner --mode=interpreted`, `GocciaTestRunner --mode=bytecode`, and whichever external runtimes its classification names
+- **Up to three runtimes per file** — every differential suite under `scripts/differential/` runs under `GocciaTestRunner` and whichever external runtimes its classification names
 - **Two oracles, different jobs** — vitest decides testing-API semantics (matchers, hooks, accounting) because being an exact Vitest drop-in *is* the product; bun decides ECMAScript semantics, and is advisory everywhere else
 - **Names *and* counts** — two runtimes can fail the same number of different tests, and can agree on which tests fail while running different numbers of them, so every comparison checks both
 - **A timeout is a divergence** — a hang is a finding, never an infrastructure error
@@ -93,8 +93,8 @@ inherited function properties, and `Reflect.apply` installed as a function's own
 `apply` — alongside ordinary intrinsic use. That pairing is the point: the
 bytecode VM routes `.call`/`.apply`/`.bind` on a function receiver through call
 fast paths, and while those matched on the callee's *name* a user-defined member
-was silently redirected into the intrinsic in bytecode mode only. The suite fails
-in whichever mode stops distinguishing the two.
+was silently redirected into the intrinsic. The suite fails if goccia stops
+distinguishing the two.
 
 `q-reflectconstruct.test.js` covers construction that does not go through the
 `new` operator — `Reflect.construct`, a proxy without a construct trap, a bound
@@ -102,7 +102,7 @@ class — paired with the `new` spelling of the same class. Instance elements ar
 what a second construction path drops: fields, private fields, and method
 initializers live outside the constructor body, so a path that only runs the
 body produces an instance that looks plausible and is missing every declared
-field. Interpreted mode did exactly that until the shared Construct operation
+field. The tree-walk interpreter did exactly that until the shared Construct operation
 was routed into the same instantiation `new` uses, and the suite pins the
 newTarget and override-return shapes alongside it.
 
@@ -157,40 +157,36 @@ every run. See [Testing API](testing-api.md) for the supported surface.
 
 `e-mocks.test.js` imports `vi` from a bare `vitest` specifier, which Vitest
 resolves to itself and goccia resolves to its bundled compatibility shim, so the
-differential suite gates against Vitest across both goccia modes. Bun stays
+differential suite gates against Vitest. Bun stays
 skipped: it injects its own `vi` under `bun:test`, but importing the real `vitest` package
 from a file run by `bun test` drops bun's injected globals and the file fails on
 `describe is not defined`, so there is no bun-runnable spelling of it.
 
-## The three invariants
+## The two invariants
 
 Each differential suite produces a verdict per runtime. A file is reported as
-divergent when a gating invariant breaks.
+divergent when a gating invariant breaks. Both compare failed test names before
+counts: equal counts prove nothing, because two runtimes can fail the same
+number of different tests, and the counts are still compared because a
+failed-name set cannot reveal a test that ran under one runtime and not the
+other.
 
-**1. Mode parity.** The interpreter and the bytecode VM must agree on the set of
-*failed test names* for the same file, and on the pass and fail counts. A break
-here means the two execution paths disagree with each other, independent of what
-the correct answer is. Names come first because equal counts prove nothing: the
-two modes can fail the same number of different tests. The counts are still
-compared, because a failed-name set cannot reveal a test that ran in one mode and
-not the other. The two directions are reported separately as
-`MODE-PARITY BROKEN: interp-only fails:` and `bytecode-only fails:`. An oracle is
-only consulted once goccia agrees with goccia.
-
-**2. Vitest as the testing-API oracle.** For a differential suite vitest gates,
-the set of failed test names under goccia must equal the set under vitest; the pass, fail
-and skip counts must match both goccia modes; and the two must agree on whether
+**1. Vitest as the testing-API oracle.** For a differential suite vitest gates,
+the set of failed test names under goccia must equal the set under vitest; the
+pass, fail and skip counts must match goccia's; and the two must agree on whether
 the *file* failed. Skip counts matter here in a way they do not elsewhere: the
 difference between a test that failed and a test that was never entered is
 exactly what hook semantics are about, and a runner that failed two tests where
 vitest skipped them has the same pass count and the wrong behaviour.
 
-**3. Bun as the ECMAScript oracle.** For a differential suite bun gates, the
-failed-name sets and the pass/fail counts must match, held against the interpreter *and* the
-bytecode mode. Bun's human summary reports neither skips nor a file-level
+**2. Bun as the ECMAScript oracle.** For a differential suite bun gates, the
+failed-name sets and the pass/fail counts must match goccia's. Bun's human summary reports neither skips nor a file-level
 verdict, so those two dimensions are compared for vitest only. Where bun is
 advisory the same comparison runs and the same messages are printed, without
 affecting the exit code.
+
+A `*.goccia.test.js` suite has no oracle, so neither invariant applies to it.
+It must pass outright under goccia: no failed tests and no failed file.
 
 ## Comparing suite-level errors
 
@@ -230,7 +226,7 @@ point it belongs in `f-lifecycle.test.js`.
 Each file gets a per-runtime timeout of `DIFFRUN_TIMEOUT` seconds (default 60);
 the single vitest invocation gets that budget multiplied by the number of files
 it runs. A runtime that exceeds it reports `TIMEOUT` and counts as a divergence
-rather than as a harness error. This is deliberate: a parser or executor that
+rather than as a harness error. This is deliberate: a parser or VM that
 never terminates on input the other runtimes complete is exactly the class of
 defect this lane exists to surface, and treating it as infrastructure noise would
 hide it. The counterpart is that the timeout must stay generous enough that a
