@@ -276,6 +276,9 @@
             NumericComparisonResult := FRegisters[A].IntValue <= Int16(B)
           else if FRegisters[A].Kind = grkFloat then
             NumericComparisonResult := FRegisters[A].FloatValue <= Int16(B)
+          else if VMBoxedNumberRegister(FRegisters[A]) then
+            NumericComparisonResult := TGocciaNumberLiteralValue(
+              FRegisters[A].ObjectValue).Value <= Int16(B)
           else
             raise Exception.Create(
               'Invalid non-numeric source for OP_JUMP_IF_NUM_NOT_LTE_IMM');
@@ -464,11 +467,16 @@
           FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
         end;
 
+      // A proven Number can also arrive boxed: NaN, the infinities and -0
+      // are kept as number values rather than scalar registers.
       OP_SUB_NUM_IMM:
         if FRegisters[B].Kind = grkInt then
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue - Int16(C))
         else if FRegisters[B].Kind = grkFloat then
           FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - Int16(C))
+        else if VMBoxedNumberRegister(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
+            FRegisters[B].ObjectValue).Value - Int16(C))
         else
           raise Exception.Create(
             'Invalid non-numeric source for OP_SUB_NUM_IMM');
@@ -478,6 +486,9 @@
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue + Int16(C))
         else if FRegisters[B].Kind = grkFloat then
           FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + Int16(C))
+        else if VMBoxedNumberRegister(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
+            FRegisters[B].ObjectValue).Value + Int16(C))
         else
           raise Exception.Create(
             'Invalid non-numeric source for OP_ADD_NUM_IMM');
@@ -3944,7 +3955,8 @@
             // Clear B before the call so that if it throws, the follow-up
             // OP_AWAIT sees null instead of the stale dispose function.
             FRegisters[B] := RegisterNull;
-            RightValue := TGocciaFunctionBase(LeftValue).CallNoArgs(
+            // GetDisposeMethod admits any callable, a callable Proxy too.
+            RightValue := DispatchCallNoArgs(LeftValue,
               RegisterToValue(FRegisters[C]));
             // Store result in B so a follow-up OP_AWAIT can await it
             if Assigned(RightValue) then

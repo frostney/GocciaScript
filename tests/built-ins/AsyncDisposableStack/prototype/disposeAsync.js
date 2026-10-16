@@ -61,3 +61,40 @@ describe("AsyncDisposableStack.prototype.disposeAsync", () => {
     );
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("disposeAsync across a collection", () => {
+  test("returns a usable promise when a synchronous disposer collects", async () => {
+    const log = [];
+    const stack = new AsyncDisposableStack();
+    stack.defer(() => { log.push("second"); Goccia.gc(); });
+    stack.defer(() => { log.push("first"); Goccia.gc(); });
+
+    const disposal = stack.disposeAsync();
+    expect(disposal instanceof Promise).toBe(true);
+    await disposal;
+    expect(log).toEqual(["first", "second"]);
+  });
+
+  test("awaits a disposer result whose then getter collects", async () => {
+    const log = [];
+    const stack = new AsyncDisposableStack();
+    stack.defer(() => { log.push("earlier"); });
+    stack.defer(() => ({
+      get then() {
+        Goccia.gc();
+        return undefined;
+      },
+    }));
+
+    await stack.disposeAsync();
+    expect(log).toEqual(["earlier"]);
+  });
+
+  test("rejects with a disposer's error after a later disposer collects", async () => {
+    const stack = new AsyncDisposableStack();
+    stack.defer(() => { Goccia.gc(); });
+    stack.defer(() => { throw new RangeError("kept"); });
+
+    await expect(stack.disposeAsync()).rejects.toThrow("kept");
+  });
+});
