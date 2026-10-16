@@ -25,7 +25,7 @@ Read-only first, one approval checkpoint, then apply, then hand off:
 5. Open the prep PR via `/create-pr` — the final review gate.
 
 ### Hard blockers — stop and report
-- The `DEFINITION_OF_DONE` gate is red (build, `tests`, `tests --mode=bytecode`, or `format --check` fails).
+- The `DEFINITION_OF_DONE` gate is red (build, `tests`, or `format --check` fails).
 - The working tree is dirty/unexpected, or the branch is behind the base (per `git-workflow`).
 
 ### Deliberate non-blocker
@@ -41,7 +41,6 @@ Read-only first, one approval checkpoint, then apply, then hand off:
 ```bash
 ./build.pas testrunner
 ./build/GocciaTestRunner -P tests
-./build/GocciaTestRunner -P tests --mode=bytecode
 ./format.pas --check
 ```
 When the website is in scope, also run its configured checks: `cd website` then `bun test`, the Biome lint, and `tsc --noEmit` (see `website/package.json` scripts). **Read `website/AGENTS.md` first — this is _not_ the Next.js you know; consult `node_modules/next/dist/docs/` before any website edit.** A red gate is a hard blocker → stop.
@@ -99,7 +98,7 @@ Also refresh `README.md` and `VISION.md` so claims and feature lists match shipp
 Emit one consolidated report:
 
 1. **Verdict** — `READY for /create-release` or `BLOCKED` (+ why).
-2. **Gate results** — build / `tests` / `tests --mode=bytecode` / `format --check` (+ website checks if in scope).
+2. **Gate results** — build / `tests` / `format --check` (+ website checks if in scope).
 3. **Conformance** — current rate, delta vs last release, regressions (non-blocking).
 4. **Findings & fixes** — by category (docs, website, `CONTEXT.md`, changelog preview, housekeeping), each with the diff applied or proposed.
 5. **Generated-data** — verify-clean result; current test262/suite pins.

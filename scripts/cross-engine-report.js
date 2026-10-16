@@ -5,7 +5,6 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const DEFAULT_GOCCIA_FLAGS = [
-  '--mode=bytecode',
   '--compat-traditional-for-loop',
   '--compat-while-loops',
   '--compat-for-in-loop',

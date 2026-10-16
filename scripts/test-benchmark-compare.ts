@@ -110,24 +110,16 @@ console.log("medianVariance()...");
 
 console.log("buildBenchmarkComparison() with main build...");
 {
-  const interpData = report("benchmarks/arraybuffer.js", [
+  const bytecodeData = report("benchmarks/arraybuffer.js", [
     bench("arraybuffer", "create", 123000, 110000, 127052, 5),
     bench("arraybuffer", "brand new", 5000, 4900, 5100, 3),
   ]);
-  const interpMain = report("benchmarks/arraybuffer.js", [
+  const bytecodeMain = report("benchmarks/arraybuffer.js", [
     bench("arraybuffer", "create", 120000, 111000, 127000, 5),
     // "brand new" intentionally absent from main → should render as 🆕.
   ]);
-  const bytecodeData = report("benchmarks/arraybuffer.js", [
-    bench("arraybuffer", "create", 162000, 140000, 190000, 8),
-  ]);
-  const bytecodeMain = report("benchmarks/arraybuffer.js", [
-    bench("arraybuffer", "create", 160000, 152000, 164000, 8),
-  ]);
 
   const { body } = buildBenchmarkComparison({
-    interpData,
-    interpMain,
     bytecodeData,
     bytecodeMain,
     runnerLabel: "ubuntu-latest x64",
@@ -142,18 +134,30 @@ console.log("buildBenchmarkComparison() with main build...");
   // never a green improvement.
   assert(body.includes("~ overlap"), "overlapping benchmark renders as unchanged overlap");
   assert(!body.includes("🟢 1 improved"), "no spurious improvement from same-runner overlap");
+  assert(body.includes("1 unchanged") && body.includes("🆕 1 new"), "totals count the overlap and the new benchmark");
+  assert(!/interp/i.test(body), "no interpreted column or totals");
+}
+
+// -- buildBenchmarkComparison(): a significant change opens its file -------------
+
+console.log("buildBenchmarkComparison() with a regression...");
+{
+  const { body } = buildBenchmarkComparison({
+    bytecodeData: report("benchmarks/a.js", [bench("a", "slow", 80, 75, 85, 2)]),
+    bytecodeMain: report("benchmarks/a.js", [bench("a", "slow", 100, 95, 105, 2)]),
+  });
+  assert(body.includes("🔴 1 regressed"), "a disjoint lower range is a regression");
+  assert(body.includes("<details open>"), "a file with a significant change starts expanded");
+  assert(body.includes("Typical per-run noise (median variance): ±2.0%"), "noise floor comes from the PR run");
 }
 
 // -- buildBenchmarkComparison(): no main build to compare --------------------------
 
 console.log("buildBenchmarkComparison() without main build...");
 {
-  const interpData = report("benchmarks/arraybuffer.js", [bench("arraybuffer", "create", 123000, 110000, 127052)]);
   const bytecodeData = report("benchmarks/arraybuffer.js", [bench("arraybuffer", "create", 162000, 140000, 190000)]);
 
   const { body } = buildBenchmarkComparison({
-    interpData,
-    interpMain: null,
     bytecodeData,
     bytecodeMain: null,
   });
@@ -162,6 +166,7 @@ console.log("buildBenchmarkComparison() without main build...");
   assert(!body.includes("Δ"), "no delta column without a main build");
   // The footnote must not claim a comparison that did not happen (issue #815 review).
   assert(!body.includes("back-to-back"), "no-main footnote does not claim a back-to-back comparison");
+  assert(body.includes("| create | 140,000..190,000 |"), "raw PR range is listed per benchmark");
 }
 
 console.log(`\nbenchmark-compare: ${passed} assertions passed.`);

@@ -30,7 +30,7 @@ GocciaScript includes a benchmark runner for measuring execution performance. Be
 
 # Run a benchmark from stdin
 printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
-printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner - --source-type=module --mode=bytecode
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner - --source-type=module
 
 # Run benchmarks with 2 parallel workers (default: CPU count)
 ./build/GocciaBenchmarkRunner benchmarks --jobs=2
@@ -68,7 +68,7 @@ Use `--output=<file>` to write results to a file instead of stdout.
 
 `GocciaBenchmarkRunner` accepts the same VM profiling options as `GocciaRunner`:
 `--profile=opcodes|functions|all`, `--profile-output=<path>`, and
-`--profile-format=flamegraph`. Profiling forces bytecode mode and serial execution
+`--profile-format=flamegraph`. Profiling forces serial execution
 because profiler state is per thread.
 
 Use profiler-backed benchmark runs when a benchmark ratio is ambiguous and you need
@@ -221,13 +221,13 @@ The `GocciaBenchmarkRunner` program:
 2. Scans the provided path for script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`), skipping anything under a `helpers/` directory.
 3. For each file, creates a `TGocciaEngine`, attaches `TGocciaRuntimeCore`, applies the loader runtime profile, and installs the benchmark runtime extension.
 4. Loads and executes the source so benchmark files import `"goccia:microbench"` and register groups and benchmarks.
-5. Measures lex, parse, compile (bytecode mode), script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
+5. Measures lex, parse, compile, script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
 6. `group()` calls execute immediately, registering nested `bench()` entries.
 7. After the script finishes, the runner auto-runs any benchmarks that were registered but not already consumed by a script-callable `run()`:
    - **Setup:** Advances generator callbacks to their first `yield` (timed) when a benchmark uses generator-style setup.
    - **Warmup:** Configurable iterations to stabilize (default 5). The yielded function or plain benchmark function is called for each iteration.
    - **Calibrate:** Scales batch size until it runs for at least the target calibration time (default 200ms). Uses nanosecond-resolution timing via `TimingUtils` (`clock_gettime` with `CLOCK_MONOTONIC` on Linux and `CLOCK_MONOTONIC_RAW` on macOS, where `CLOCK_MONOTONIC` only advances in whole microseconds; `QueryPerformanceCounter` on Windows).
-   - **Measure:** Runs multiple measurement rounds (default 7). GC is disabled during measurement for identical behavior in both interpreter and bytecode modes. Between rounds, `CollectYoung` reclaims measurement garbage efficiently (pre-marks old objects, only traverses new allocations). After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
+   - **Measure:** Runs multiple measurement rounds (default 7). GC is disabled during measurement. Between rounds, `CollectYoung` reclaims measurement garbage efficiently (pre-marks old objects, only traverses new allocations). After all rounds, IQR-based outlier filtering removes noise spikes before computing the coefficient of variation (CV%) and median values.
    - **Sample:** Individually times at most 10,000 calibrated invocations. This separate pass leaves historical ops/sec and variance semantics unchanged and cannot add more invocations than calibration selected.
    - **Teardown:** Closes generator callbacks after measurement (timed), running `finally` cleanup when present.
 8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
@@ -293,7 +293,7 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 
 ## Sample Output
 
-Console format (default). This excerpt is from an interpreted run of a
+Console format (default). This excerpt is from a run of a
 scratch file with three benchmarks, using the default calibration and rounds:
 
 ```text
@@ -334,8 +334,7 @@ When a benchmark uses generator setup or teardown, the last line of its block di
 
 ## CI Integration
 
-Benchmarks run as part of the CI pipeline in both **interpreter mode** and
-**bytecode mode**. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and
+Benchmarks run as part of the CI pipeline. CI uses `GOCCIA_BENCH_CALIBRATION_MS=100` and
 `GOCCIA_BENCH_ROUNDS=7` for stable measurements with IQR outlier filtering. On
 pushes to `main`, the ubuntu-latest x64 runner emits JSON and validates the
 report shape. PR comparison builds and benchmarks `main` on the PR's own runner
@@ -361,16 +360,16 @@ paths are `benchmark-profiles/runs/<artifactId>/aggregate.json.gz`,
 
 ### PR Benchmark Comparison
 
-The PR workflow (`.github/workflows/pr.yml`) builds the PR's base commit (`main`) in a `build-main` job and benchmarks that `main` build and the PR build **back-to-back on the same runner** (after a discarded warm-up), so deltas reflect the diff rather than cross-runner variance (issue #815, [ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The comparison logic lives in [`scripts/benchmark-compare.js`](../scripts/benchmark-compare.js) (unit-tested by `scripts/test-benchmark-compare.ts`). It posts a collapsible comparison comment on the PR; each benchmark file gets a **unified table** with both execution modes side by side:
+The PR workflow (`.github/workflows/pr.yml`) builds the PR's base commit (`main`) in a `build-main` job and benchmarks that `main` build and the PR build **back-to-back on the same runner** (after a discarded warm-up), so deltas reflect the diff rather than cross-runner variance (issue #815, [ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The comparison logic lives in [`scripts/benchmark-compare.js`](../scripts/benchmark-compare.js) (unit-tested by `scripts/test-benchmark-compare.ts`). It posts a collapsible comparison comment on the PR; each benchmark file gets its own table:
 
-- Each table row shows `| Benchmark | Interpreted (main → PR) | Δ | Bytecode (main → PR) | Δ |` with the point estimate and same-runner `main`/PR min-max range in the form `10,000 ops/sec [9,500..10,500] → 9,200 ops/sec [8,700..9,700]`
+- Each table row shows a benchmark's same-runner `main` and PR point estimates, each with its min-max range, in the form `10,000 ops/sec [9,500..10,500] → 9,200 ops/sec [8,700..9,700]`, followed by the `Δ`
 - Classification uses **range overlap** instead of a single point value: if the PR run sits fully above the `main` range it is improved, if it sits fully below it is regressed, and overlapping ranges are treated as unchanged noise
 - Percentage deltas remain in the `Δ` column as secondary context, even when the classifier marks a benchmark as `~ overlap`
 - The overall summary reports the measured **median per-run variance** as a noise floor, so sub-noise deltas are read as unchanged
 - Results are **grouped by file**, each in a collapsible `<details>` section
 - Files with significant changes (improvements or regressions) are auto-expanded
-- Each file summary shows per-mode counts (e.g., `Interp: 🟢 1, 7 unch. · Bytecode: 🟢 2, 6 unch.`)
-- The **overall PR summary** shows per-mode totals on separate lines with average percentage deltas
+- Each file summary counts improved, regressed, unchanged, and new benchmarks
+- The **overall PR summary** shows the totals with the average percentage delta
 - The comparison is **advisory** (comment-only, never merge-blocking)
 - 🟢 marks non-overlapping improvements, 🔴 marks non-overlapping regressions, `~ overlap` marks overlapping ranges, and 🆕 marks new benchmarks absent from the `main` build
 
@@ -440,8 +439,7 @@ The normalized report records:
 
 Pull requests run an AWFY report lane from `.github/workflows/pr.yml`.
 The target set is recorded in `perf/awfy/manifest.json` under `ciReport`: all
-pinned AWFY benchmarks under the production-built PR `GocciaRunner` (bytecode
-mode), the production-built `main` baseline `GocciaRunner`, QuickJS, and the latest Node Current
+pinned AWFY benchmarks under the production-built PR `GocciaRunner`, the production-built `main` baseline `GocciaRunner`, QuickJS, and the latest Node Current
 release resolved by `actions/setup-node` at workflow time, with five raw samples
 per engine.
 Sampling is interleaved as target -> repetition -> engine, so every repetition
@@ -614,7 +612,7 @@ module. The generated entry times one direct call to the module's exported
 `fn()`; process repetitions provide the raw samples, so Benchmark.js and its
 Lodash-based measurement machinery are not part of the measured bundle.
 
-Each bundle runs with `GocciaRunner` in bytecode mode with every `--compat-*`
+Each bundle runs with `GocciaRunner` with every `--compat-*`
 flag and `--unsafe-function-constructor`. Workloads share a five-minute process
 ceiling (`ciReport.timeoutMs`); `ciReport.timeoutMsByWorkload` pins documented
 exceptions (currently `babel`, ten minutes).

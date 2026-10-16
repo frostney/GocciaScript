@@ -12,21 +12,6 @@ import { RUNNER } from "./test-cli/binaries";
 import { assertSyntaxError, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { clean, mkdtemp } from "./test-cli/tmpdir";
 
-function assertSyntaxErrorInBothModes(
-  source: string,
-  desc: string,
-  args: readonly string[] = [],
-  opts?: { timeout?: number; messageIncludes?: string; line?: number },
-): void {
-  assertSyntaxError(source, desc, [...args, "--mode=interpreted"], opts);
-  assertSyntaxError(
-    source,
-    `${desc} (bytecode)`,
-    [...args, "--mode=bytecode"],
-    opts,
-  );
-}
-
 // -- Error display (SyntaxError with caret and suggestion) ----------------------
 
 console.log("Error display (SyntaxError with caret and suggestion)...");
@@ -46,24 +31,12 @@ console.log("Error display (SyntaxError with caret and suggestion)...");
 
 console.log("Error display (JSON error output)...");
 {
-  const { exitCode, json } = runLoaderJson("const x = ;\n", ["--mode=interpreted"]);
+  const { exitCode, json } = runLoaderJson("const x = ;\n");
   if (exitCode !== 1) throw new Error(`Syntax error exit code should be 1, got ${exitCode}`);
   if (json.ok !== false) throw new Error(`JSON error ok should be false`);
   if (json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError, got ${json.error?.type}`);
   if (typeof json.error?.line !== "number") throw new Error(`JSON error should include numeric line, got ${json.error?.line}`);
   if (typeof json.error?.column !== "number") throw new Error(`JSON error should include numeric column, got ${json.error?.column}`);
-}
-
-// -- Error display (bytecode mode) ----------------------------------------------
-
-console.log("Error display (bytecode SyntaxError)...");
-{
-  const { exitCode, json } = runLoaderJson("const x = ;\n", ["--mode=bytecode"]);
-  if (exitCode !== 1) throw new Error(`Bytecode syntax error exit code should be 1, got ${exitCode}`);
-  if (json.ok !== false) throw new Error(`Bytecode JSON error ok should be false`);
-  if (json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError in bytecode, got ${json.error?.type}`);
-  if (typeof json.error?.line !== "number") throw new Error(`Bytecode JSON error should include numeric line, got ${json.error?.line}`);
-  if (typeof json.error?.column !== "number") throw new Error(`Bytecode JSON error should include numeric column, got ${json.error?.column}`);
 }
 
 // -- Malformed optional private field access ------------------------------------
@@ -72,7 +45,6 @@ console.log("Malformed optional private field access...");
 {
   const source = "class Box { #value = 1; read(obj) { return obj?.#; } }\n";
   assertSyntaxError(source, "optional private access without name");
-  assertSyntaxError(source, "optional private access without name (bytecode)", ["--mode=bytecode"]);
 }
 
 // -- Malformed literal class accessors ------------------------------------------
@@ -87,8 +59,7 @@ console.log("Malformed literal class accessors...");
     ["class C { set 1; }\n", "numeric-named setter declaration"],
     ["class C { set class = 1; }\n", "keyword-named setter field"],
   ] as const) {
-    assertSyntaxError(source, desc, ["--mode=interpreted"]);
-    assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
+    assertSyntaxError(source, desc);
   }
 }
 
@@ -102,8 +73,7 @@ console.log("Accessor properties are invalid destructuring assignment targets...
     ["let obj = {}; ({ get ['x']() { return 1; } } = obj);\n", "computed getter destructuring target"],
     ["let obj = {}; ({ set ['x'](value) {} } = obj);\n", "computed setter destructuring target"],
   ] as const) {
-    assertSyntaxError(source, desc, ["--mode=interpreted"]);
-    assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
+    assertSyntaxError(source, desc);
   }
 }
 
@@ -165,8 +135,7 @@ console.log("Function parameter-list early errors...");
   ] as const;
 
   for (const { desc, source, args } of cases) {
-    assertSyntaxError(source, desc, [...args, "--mode=interpreted"]);
-    assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
+    assertSyntaxError(source, desc, [...args]);
   }
 }
 
@@ -408,7 +377,7 @@ console.log("Language early errors use the CLI parser...");
   ] as const;
 
   for (const { source, desc, args } of cases)
-    assertSyntaxErrorInBothModes(source, desc, args);
+    assertSyntaxError(source, desc, [...args]);
 }
 
 // -- Annex B labelled-function early errors -----------------------------------
@@ -475,7 +444,7 @@ console.log("Annex B labelled-function early errors...");
   ] as const;
 
   for (const { source, desc, args } of cases)
-    assertSyntaxErrorInBothModes(source, desc, args);
+    assertSyntaxError(source, desc, [...args]);
 }
 
 // -- Strict-mode legacy octal literal rejection ---------------------------------
@@ -485,11 +454,6 @@ console.log("Strict-mode legacy octal literal rejection...");
   const source = '"use strict";\n01;\n';
   assertSyntaxError(source, "legacy octal literal in strict code", [
     "--compat-non-strict-mode",
-    "--mode=interpreted",
-  ]);
-  assertSyntaxError(source, "legacy octal literal in strict bytecode", [
-    "--compat-non-strict-mode",
-    "--mode=bytecode",
   ]);
 }
 
@@ -600,26 +564,23 @@ console.log("Unsupported/default-disabled syntax errors by default...");
   ];
 
   for (const { desc, source, message, expectedWarningOutput } of cases) {
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
-      const defaultRes = runLoaderJson(source, modeArgs);
-      if (defaultRes.exitCode === 0)
-        throw new Error(`${label}: unsupported syntax should fail by default`);
-      if (defaultRes.json.ok !== false || defaultRes.json.error?.type !== "SyntaxError")
-        throw new Error(`${label}: expected SyntaxError JSON, got ${JSON.stringify(defaultRes.json.error)}`);
-      if (!String(defaultRes.json.error?.message ?? "").includes(message))
-        throw new Error(`${label}: expected message containing ${message}, got ${defaultRes.json.error?.message}`);
+    const defaultRes = runLoaderJson(source);
+    if (defaultRes.exitCode === 0)
+      throw new Error(`${desc}: unsupported syntax should fail by default`);
+    if (defaultRes.json.ok !== false || defaultRes.json.error?.type !== "SyntaxError")
+      throw new Error(`${desc}: expected SyntaxError JSON, got ${JSON.stringify(defaultRes.json.error)}`);
+    if (!String(defaultRes.json.error?.message ?? "").includes(message))
+      throw new Error(`${desc}: expected message containing ${message}, got ${defaultRes.json.error?.message}`);
 
-      const warningRes = runLoaderJson(source, ["--warning-unsupported-features", ...modeArgs]);
-      if (warningRes.exitCode !== 0)
-        throw new Error(`${label}: --warning-unsupported-features should recover, got exit ${warningRes.exitCode}`);
-      if (warningRes.json.ok !== true)
-        throw new Error(`${label}: warning recovery should succeed, got ${JSON.stringify(warningRes.json.error)}`);
-      if (normalizeLineEndings(warningRes.json.output) !== expectedWarningOutput)
-        throw new Error(
-          `${label}: expected warning recovery output ${JSON.stringify(expectedWarningOutput)}, got ${JSON.stringify(warningRes.json.output)}`,
-        );
-    }
+    const warningRes = runLoaderJson(source, ["--warning-unsupported-features"]);
+    if (warningRes.exitCode !== 0)
+      throw new Error(`${desc}: --warning-unsupported-features should recover, got exit ${warningRes.exitCode}`);
+    if (warningRes.json.ok !== true)
+      throw new Error(`${desc}: warning recovery should succeed, got ${JSON.stringify(warningRes.json.error)}`);
+    if (normalizeLineEndings(warningRes.json.output) !== expectedWarningOutput)
+      throw new Error(
+        `${desc}: expected warning recovery output ${JSON.stringify(expectedWarningOutput)}, got ${JSON.stringify(warningRes.json.output)}`,
+      );
   }
 
   const sourceBeforeDeclaration = [
@@ -662,28 +623,26 @@ console.log("Unsupported syntax in imported modules follows the entry policy..."
     writeFileSync(dep, 'var dep = 1;\nconsole.log("dep");\n');
     writeFileSync(entry, 'import "./dep.js";\nconsole.log("entry");\n');
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? "module dependency (bytecode)" : "module dependency";
-      const defaultProc = Bun.spawnSync([RUNNER, "--source-type=module", ...modeArgs, entry], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const defaultOut = `${defaultProc.stdout.toString()}${defaultProc.stderr.toString()}`;
-      if (defaultProc.exitCode === 0)
-        throw new Error(`${label}: imported unsupported syntax should fail by default`);
-      if (!defaultOut.includes("SyntaxError") || !defaultOut.includes("'var' declarations are not supported"))
-        throw new Error(`${label}: expected imported SyntaxError, got: ${defaultOut}`);
+    const label = "module dependency";
+    const defaultProc = Bun.spawnSync([RUNNER, "--source-type=module", entry], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const defaultOut = `${defaultProc.stdout.toString()}${defaultProc.stderr.toString()}`;
+    if (defaultProc.exitCode === 0)
+      throw new Error(`${label}: imported unsupported syntax should fail by default`);
+    if (!defaultOut.includes("SyntaxError") || !defaultOut.includes("'var' declarations are not supported"))
+      throw new Error(`${label}: expected imported SyntaxError, got: ${defaultOut}`);
 
-      const warningProc = Bun.spawnSync(
-        [RUNNER, "--source-type=module", "--warning-unsupported-features", ...modeArgs, entry],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const warningOut = `${warningProc.stdout.toString()}${warningProc.stderr.toString()}`;
-      if (warningProc.exitCode !== 0)
-        throw new Error(`${label}: warning mode should recover imported unsupported syntax, got: ${warningOut}`);
-      if (!warningOut.includes("dep") || !warningOut.includes("entry"))
-        throw new Error(`${label}: warning mode should execute dependency and entry, got: ${warningOut}`);
-    }
+    const warningProc = Bun.spawnSync(
+      [RUNNER, "--source-type=module", "--warning-unsupported-features", entry],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const warningOut = `${warningProc.stdout.toString()}${warningProc.stderr.toString()}`;
+    if (warningProc.exitCode !== 0)
+      throw new Error(`${label}: warning mode should recover imported unsupported syntax, got: ${warningOut}`);
+    if (!warningOut.includes("dep") || !warningOut.includes("entry"))
+      throw new Error(`${label}: warning mode should execute dependency and entry, got: ${warningOut}`);
   } finally {
     clean(tmp);
   }
@@ -760,28 +719,25 @@ console.log("Disabled-feature diagnostics with interpolated template literals...
   ];
 
   for (const { desc, compatFlag, source, expected } of recoveryCases) {
-    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = args[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
-      const defaultRes = runLoaderJson(source, args);
-      if (defaultRes.exitCode === 0)
-        throw new Error(`${label}: disabled syntax should fail by default`);
-      if (defaultRes.json.error?.type !== "SyntaxError")
-        throw new Error(`${label}: expected SyntaxError, got ${JSON.stringify(defaultRes.json.error)}`);
-      if (defaultRes.json.error?.message === "Unterminated template literal")
-        throw new Error(`${label}: regressed to unterminated-template syntax error`);
+    const defaultRes = runLoaderJson(source);
+    if (defaultRes.exitCode === 0)
+      throw new Error(`${desc}: disabled syntax should fail by default`);
+    if (defaultRes.json.error?.type !== "SyntaxError")
+      throw new Error(`${desc}: expected SyntaxError, got ${JSON.stringify(defaultRes.json.error)}`);
+    if (defaultRes.json.error?.message === "Unterminated template literal")
+      throw new Error(`${desc}: regressed to unterminated-template syntax error`);
 
-      const warningRes = runLoaderJson(source, ["--warning-unsupported-features", ...args]);
-      if (warningRes.json.ok !== true) {
-        if (warningRes.json.error?.message === "Unterminated template literal")
-          throw new Error(
-            `${label}: regressed -- warning recovery surfaced "Unterminated template literal"`,
-          );
-        throw new Error(`${label}: warning mode should recover, got ok=${warningRes.json.ok} error=${JSON.stringify(warningRes.json.error)}`);
-      }
-      if (warningRes.exitCode !== 0) throw new Error(`${label}: warning mode should exit 0, got ${warningRes.exitCode}`);
-      if (normalizeLineEndings(warningRes.json.output) !== expected)
-        throw new Error(`${label}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(warningRes.json.output)}`);
+    const warningRes = runLoaderJson(source, ["--warning-unsupported-features"]);
+    if (warningRes.json.ok !== true) {
+      if (warningRes.json.error?.message === "Unterminated template literal")
+        throw new Error(
+          `${desc}: regressed -- warning recovery surfaced "Unterminated template literal"`,
+        );
+      throw new Error(`${desc}: warning mode should recover, got ok=${warningRes.json.ok} error=${JSON.stringify(warningRes.json.error)}`);
     }
+    if (warningRes.exitCode !== 0) throw new Error(`${desc}: warning mode should exit 0, got ${warningRes.exitCode}`);
+    if (normalizeLineEndings(warningRes.json.output) !== expected)
+      throw new Error(`${desc}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(warningRes.json.output)}`);
 
     const diag = Bun.spawnSync([RUNNER], {
       stdin: new TextEncoder().encode(source),
@@ -874,7 +830,7 @@ console.log("JSX preprocessor termination...");
   ];
 
   for (const { desc, source, messageIncludes, line } of cases)
-    assertSyntaxErrorInBothModes(source, desc, [], {
+    assertSyntaxError(source, desc, [], {
       timeout: JSX_SCAN_TIMEOUT_MS,
       messageIncludes,
       line,
@@ -888,23 +844,19 @@ console.log("JSX preprocessor termination...");
   // before the attribute scan ever begins.
   {
     const nonAsciiSource = 'const element = <svg fill="a" \u00fcnter="b" />;\n';
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode"
-        ? "non-ASCII attribute byte (bytecode)"
-        : "non-ASCII attribute byte";
-      const res = runLoaderJson(nonAsciiSource, modeArgs, {
-        timeout: JSX_SCAN_TIMEOUT_MS,
-      });
-      const message = String(res.json.error?.message ?? "");
-      if (res.json.error?.type !== "SyntaxError")
-        throw new Error(`${label}: expected a SyntaxError, got ${JSON.stringify(res.json.error)}`);
-      if (!/Unsupported attribute syntax at "\\x[0-9a-f]{2}"/.test(message))
-        throw new Error(`${label}: the stalled byte should be reported as a complete lowercase hex escape, got ${message}`);
-      // The whole point of the escape: nothing outside printable ASCII may
-      // reach the envelope, because a lone high byte is not valid UTF-8.
-      if (/[^\x09\x0a\x0d\x20-\x7e]/.test(message))
-        throw new Error(`${label}: the diagnostic should stay ASCII-only, got ${JSON.stringify(message)}`);
-    }
+    const label = "non-ASCII attribute byte";
+    const res = runLoaderJson(nonAsciiSource, [], {
+      timeout: JSX_SCAN_TIMEOUT_MS,
+    });
+    const message = String(res.json.error?.message ?? "");
+    if (res.json.error?.type !== "SyntaxError")
+      throw new Error(`${label}: expected a SyntaxError, got ${JSON.stringify(res.json.error)}`);
+    if (!/Unsupported attribute syntax at "\\x[0-9a-f]{2}"/.test(message))
+      throw new Error(`${label}: the stalled byte should be reported as a complete lowercase hex escape, got ${message}`);
+    // The whole point of the escape: nothing outside printable ASCII may
+    // reach the envelope, because a lone high byte is not valid UTF-8.
+    if (/[^\x09\x0a\x0d\x20-\x7e]/.test(message))
+      throw new Error(`${label}: the diagnostic should stay ASCII-only, got ${JSON.stringify(message)}`);
   }
 
   // The attribute-list stall is extension-sensitive, so it is pinned to real
@@ -926,11 +878,9 @@ console.log("JSX preprocessor termination...");
     const jsxFile = join(tmp, "stall.jsx");
     writeFileSync(jsxFile, angleBracketSource);
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode"
-        ? "attribute list stall in .jsx (bytecode)"
-        : "attribute list stall in .jsx";
-      const res = runLoaderJson("", [...modeArgs, jsxFile], {
+    {
+      const label = "attribute list stall in .jsx";
+      const res = runLoaderJson("", [jsxFile], {
         timeout: JSX_SCAN_TIMEOUT_MS,
       });
       if (res.exitCode !== 1)
@@ -946,11 +896,9 @@ console.log("JSX preprocessor termination...");
     const tsFile = join(tmp, "annotations.ts");
     writeFileSync(tsFile, angleBracketSource);
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode"
-        ? "angle-bracket type syntax in .ts (bytecode)"
-        : "angle-bracket type syntax in .ts";
-      const res = runLoaderJson("", [...modeArgs, tsFile], {
+    {
+      const label = "angle-bracket type syntax in .ts";
+      const res = runLoaderJson("", [tsFile], {
         timeout: JSX_SCAN_TIMEOUT_MS,
       });
       if (res.exitCode !== 0)
@@ -1012,9 +960,9 @@ console.log("Malformed type annotations...");
   ] as const;
 
   for (const { desc, source, messageIncludes } of malformed)
-    assertSyntaxErrorInBothModes(source, desc, [], { messageIncludes });
+    assertSyntaxError(source, desc, [], { messageIncludes });
 
-  // assertSyntaxErrorInBothModes feeds the source over stdin, which the
+  // assertSyntaxError feeds the source over stdin, which the
   // pipeline names `<stdin>`; the accepted forms below are written to a `.ts`
   // file. Those are different parser paths — JSX preprocessing is skipped only
   // for TypeScript extensions — so the rejections are repeated as real `.ts`
@@ -1025,16 +973,14 @@ console.log("Malformed type annotations...");
       for (const { desc, source, messageIncludes } of malformed) {
         const path = join(tmp, "malformed.ts");
         writeFileSync(path, source);
-        for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-          const res = await $`${RUNNER} ${path} ${args} 2>&1`.quiet().nothrow();
-          const out = res.text();
-          if (res.exitCode === 0)
-            throw new Error(`${desc} (.ts file) should be rejected, got exit 0`);
-          if (!out.includes(messageIncludes))
-            throw new Error(
-              `${desc} (.ts file) should mention "${messageIncludes}", got: ${out}`,
-            );
-        }
+        const res = await $`${RUNNER} ${path} 2>&1`.quiet().nothrow();
+        const out = res.text();
+        if (res.exitCode === 0)
+          throw new Error(`${desc} (.ts file) should be rejected, got exit 0`);
+        if (!out.includes(messageIncludes))
+          throw new Error(
+            `${desc} (.ts file) should mention "${messageIncludes}", got: ${out}`,
+          );
       }
     } finally {
       clean(tmp);
@@ -1075,13 +1021,11 @@ console.log("Malformed type annotations...");
       for (const source of accepted) {
         const path = join(tmp, "accepted.ts");
         writeFileSync(path, `${source}\n`);
-        for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-          const res = await $`${RUNNER} ${path} ${args} 2>&1`.quiet().nothrow();
-          if (res.exitCode !== 0)
-            throw new Error(
-              `Valid type syntax must still parse: ${source}\n  got: ${res.text()}`,
-            );
-        }
+        const res = await $`${RUNNER} ${path} 2>&1`.quiet().nothrow();
+        if (res.exitCode !== 0)
+          throw new Error(
+            `Valid type syntax must still parse: ${source}\n  got: ${res.text()}`,
+          );
       }
     } finally {
       clean(tmp);
@@ -1142,7 +1086,7 @@ console.log("Definite assignment assertion rules...");
   ] as const;
 
   for (const { desc, source, messageIncludes, args } of cases)
-    assertSyntaxErrorInBothModes(source, desc, args ?? [], { messageIncludes });
+    assertSyntaxError(source, desc, [...(args ?? [])], { messageIncludes });
 
   // The '!' is a restricted production: on the next line it starts a new
   // expression statement rather than being absorbed as an assertion.
@@ -1152,14 +1096,12 @@ console.log("Definite assignment assertion rules...");
     "console.log(typeof x)",
     "",
   ].join("\n");
-  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-    const label = modeArgs[0] === "--mode=bytecode" ? "leading-! after ASI (bytecode)" : "leading-! after ASI";
-    const res = runLoaderJson(asiSource, ["--compat-asi", ...modeArgs]);
-    if (res.exitCode !== 0)
-      throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
-    if (normalizeLineEndings(res.json.output) !== "ran\nundefined\n")
-      throw new Error(`${label}: expected "ran\\nundefined", got ${JSON.stringify(res.json.output)}`);
-  }
+  const label = "leading-! after ASI";
+  const res = runLoaderJson(asiSource, ["--compat-asi"]);
+  if (res.exitCode !== 0)
+    throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+  if (normalizeLineEndings(res.json.output) !== "ran\nundefined\n")
+    throw new Error(`${label}: expected "ran\\nundefined", got ${JSON.stringify(res.json.output)}`);
 }
 
 // -- Type alias skipping across line breaks under ASI ---------------------------
@@ -1179,9 +1121,9 @@ console.log("Type alias skipping under ASI...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-    const label = modeArgs[0] === "--mode=bytecode" ? "multi-line type alias (bytecode)" : "multi-line type alias";
-    const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
+  {
+    const label = "multi-line type alias";
+    const res = runLoaderJson(source, ["--compat-asi"]);
     if (res.exitCode !== 0)
       throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
     if (normalizeLineEndings(res.json.output) !== "2\n")
@@ -1197,12 +1139,11 @@ console.log("Type alias skipping under ASI...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-    const label = modeArgs[0] === "--mode=bytecode" ? "relational in skipped var (bytecode)" : "relational in skipped var";
+  {
+    const label = "relational in skipped var";
     const res = runLoaderJson(relationalSource, [
       "--warning-unsupported-features",
       "--compat-asi",
-      ...modeArgs,
     ]);
     if (res.exitCode !== 0)
       throw new Error(`${label}: should recover, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
@@ -1247,15 +1188,13 @@ console.log("Parenthesized ternary consequent...");
     },
   ] as const;
 
-  for (const { desc, source, output } of cases)
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
-      const res = runLoaderJson(source, [...COMPAT, ...modeArgs]);
-      if (res.exitCode !== 0)
-        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
-      if (normalizeLineEndings(res.json.output) !== output)
-        throw new Error(`${label}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
-    }
+  for (const { desc, source, output } of cases) {
+    const res = runLoaderJson(source, COMPAT);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== output)
+      throw new Error(`${desc}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+  }
 }
 
 // -- Arrow in a ternary consequent under automatic semicolon insertion ----------
@@ -1281,24 +1220,22 @@ console.log("Arrow in a ternary consequent under ASI...");
     },
   ] as const;
 
-  for (const { desc, source, output } of cases)
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
-      const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
-      if (res.exitCode !== 0)
-        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
-      if (normalizeLineEndings(res.json.output) !== output)
-        throw new Error(`${label}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
-    }
+  for (const { desc, source, output } of cases) {
+    const res = runLoaderJson(source, ["--compat-asi"]);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== output)
+      throw new Error(`${desc}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+  }
 
   // Neither reading closes every conditional, so these stay SyntaxErrors.
-  assertSyntaxErrorInBothModes(
+  assertSyntaxError(
     "const r = 1 ? (l) => ({ a: 1 });\n",
     "arrow consequent with no ':' is rejected",
     [],
     { messageIncludes: 'Expected ":" in conditional expression' },
   );
-  assertSyntaxErrorInBothModes(
+  assertSyntaxError(
     "const r = 1 ? (x): number => x : 2 : 3;\n",
     "return-typed arrow consequent with a surplus ':' is rejected",
   );

@@ -43,7 +43,6 @@ type BenchmarkProfileSummary = {
   generatedAt: string;
   run: {
     commit: string | null;
-    mode: "bytecode";
     deterministic: true;
     profileDir: string;
     profileCount: number;
@@ -297,7 +296,6 @@ function buildSummary(profileDir: string): BenchmarkProfileSummary {
     generatedAt: new Date().toISOString(),
     run: {
       commit: process.env.GITHUB_SHA ?? process.env.BENCHMARK_PROFILE_COMMIT ?? null,
-      mode: "bytecode",
       deterministic: true,
       profileDir: resolvedProfileDir,
       profileCount: paths.length,
@@ -341,7 +339,6 @@ function writeMarkdown(summary: BenchmarkProfileSummary, outputPath: string): vo
   lines.push("# Benchmark Profile Report", "");
   lines.push(`Generated: ${summary.generatedAt}`);
   lines.push(`Commit: ${summary.run.commit ?? "unknown"}`);
-  lines.push("Mode: bytecode");
   lines.push("Deterministic: true");
   lines.push(`Profiles: ${formatInteger(summary.run.profileCount)}`);
   lines.push(`Total opcodes: ${formatInteger(summary.totalOpcodes)}`);

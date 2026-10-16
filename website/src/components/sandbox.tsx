@@ -237,9 +237,7 @@ const RUNNER_COMMAND = `# run from the directory holding goccia.json and main.js
 # once: review and trust the sandbox section
 ./build/GocciaRunner --trust goccia.json
 
-./build/GocciaRunner main.js \\
-  --mode=bytecode \\
-  --diff=unified`;
+./build/GocciaRunner main.js --diff=unified`;
 
 const SANDBOX_CONFIG = `{
   "sandbox": {
@@ -372,7 +370,7 @@ type SandboxProps = {
 };
 
 export function Sandbox({
-  apiCommand = "GocciaRunner --compat-asi --timeout=5000 --mode=bytecode",
+  apiCommand = "GocciaRunner --compat-asi --timeout=5000",
 }: SandboxProps) {
   // The globals are not passed as a flag: `buildScript` inlines them ahead of
   // the user script, which reaches the engine on stdin.

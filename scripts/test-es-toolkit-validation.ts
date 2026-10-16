@@ -8,7 +8,6 @@ import {
   downloadTarball,
   extractVerifiedPackage,
   integrityCacheKey,
-  matchesKnownBytecodeDivergence,
   parseSingleMarker,
   resolveArchiveEntry,
   validateTarballUrl,
@@ -115,16 +114,8 @@ try {
   rmSync(extractionDirectory, { recursive: true, force: true });
 }
 
-const probe = {
-  id: "example",
-  file: "example.mjs",
-  knownBytecodeDivergence: {
-    errorPattern: "^ReferenceError: Cannot access '.+' before initialization$",
-    reason: "known bytecode boundary",
-  },
-};
-const completedRun = (mode: "interpreted" | "bytecode", status: "pass" | "fail", error?: string) => ({
-  mode,
+const probe = { id: "example", file: "example.mjs" };
+const completedRun = (status: "pass" | "fail", error?: string) => ({
   transport: "completed" as const,
   exitCode: status === "pass" ? 0 : 1,
   stdout: "",
@@ -132,57 +123,45 @@ const completedRun = (mode: "interpreted" | "bytecode", status: "pass" | "fail",
   marker: { id: "example", status, ...(error ? { error } : {}) },
   markerError: null,
 });
-const passingRuns = {
-  interpreted: completedRun("interpreted", "pass"),
-  bytecode: completedRun("bytecode", "pass"),
-};
-assert(classifySemanticProbe(probe, passingRuns)[0] === "semantic-pass", "matching passes must be semantic passes");
-const failingRuns = {
-  interpreted: completedRun("interpreted", "fail", "same semantic failure"),
-  bytecode: completedRun("bytecode", "fail", "same semantic failure"),
-};
-assert(classifySemanticProbe(probe, failingRuns)[0] === "semantic-failure", "matching failures must be semantic failures");
-const divergentRuns = {
-  interpreted: completedRun("interpreted", "pass"),
-  bytecode: completedRun("bytecode", "fail", "ReferenceError: Cannot access 'x' before initialization"),
-};
-const classification = classifySemanticProbe(probe, divergentRuns)[0];
-assert(classification === "bytecode-divergence", "different mode outcomes must be bytecode divergence");
-assert(matchesKnownBytecodeDivergence(probe, classification, divergentRuns), "exact known divergence must match");
-const missingMarkerRuns = {
-  ...passingRuns,
-  bytecode: {
-    ...passingRuns.bytecode,
-    marker: null,
-    markerError: "expected one marker, found 0",
-  },
+const passingRun = completedRun("pass");
+assert(classifySemanticProbe(probe, passingRun)[0] === "semantic-pass", "a passing probe must be a semantic pass");
+const failingRun = completedRun("fail", "semantic failure");
+assert(classifySemanticProbe(probe, failingRun)[0] === "semantic-failure", "a failing probe must be a semantic failure");
+const missingMarkerRun = {
+  ...passingRun,
+  marker: null,
+  markerError: "expected one marker, found 0",
 };
 assert(
-  classifySemanticProbe(probe, missingMarkerRuns)[0] === "bytecode-divergence",
-  "a marker from only one mode must be bytecode divergence",
+  classifySemanticProbe(probe, missingMarkerRun)[0] === "harness-failure",
+  "a probe without a result marker must be a harness failure",
 );
-const mismatchedMarkerRuns = {
-  ...passingRuns,
-  bytecode: {
-    ...passingRuns.bytecode,
-    marker: { id: "different-probe", status: "pass" },
-  },
+const mismatchedMarkerRun = {
+  ...passingRun,
+  marker: { id: "different-probe", status: "pass" },
 };
 assert(
-  classifySemanticProbe(probe, mismatchedMarkerRuns)[0] === "harness-failure",
+  classifySemanticProbe(probe, mismatchedMarkerRun)[0] === "harness-failure",
   "mismatched marker ids must be harness failures",
 );
-const timedOutRuns = {
-  ...passingRuns,
-  interpreted: {
-    ...passingRuns.interpreted,
-    transport: "timeout" as const,
-    exitCode: null,
-    marker: null,
-    markerError: "probe exceeded 1s",
-  },
+const invalidStatusRun = {
+  ...passingRun,
+  marker: { id: "example", status: "skipped" },
 };
-assert(classifySemanticProbe(probe, timedOutRuns)[0] === "harness-failure", "timeouts must be harness failures");
+assert(
+  classifySemanticProbe(probe, invalidStatusRun)[0] === "harness-failure",
+  "a marker status other than pass or fail must be a harness failure",
+);
+const timedOutRun = {
+  ...passingRun,
+  transport: "timeout" as const,
+  exitCode: null,
+  marker: null,
+  markerError: "probe exceeded 1s",
+};
+assert(classifySemanticProbe(probe, timedOutRun)[0] === "harness-failure", "timeouts must be harness failures");
+const crashedRun = { ...passingRun, exitCode: 139 };
+assert(classifySemanticProbe(probe, crashedRun)[0] === "harness-failure", "native crashes must be harness failures");
 
 assert(parseSingleMarker("Marker:{\"ok\":true}\n", "Marker:")[0]?.ok === true, "single marker must parse");
 assert(parseSingleMarker("", "Marker:")[1]?.includes("found 0"), "missing marker must be reported");

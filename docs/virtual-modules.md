@@ -7,7 +7,7 @@ global binding.
 
 Virtual modules use the ordinary module loader. Static and dynamic imports,
 import attributes, Import Bytes, source and defer phases, relative imports,
-`import.meta`, module caching, the interpreter, and the bytecode VM all follow
+`import.meta`, module caching, and the bytecode VM all follow
 the same paths as filesystem modules where the module kind and enabled flags
 support them.
 

@@ -19,7 +19,7 @@ When your change affects behavior visible to users or contributors, update the r
 |-------------|--------|
 | New language feature | [docs/language.md](docs/language.md) + [docs/built-ins.md](docs/built-ins.md) if it adds API surface |
 | New built-in type | [docs/built-ins.md](docs/built-ins.md) + follow the [Adding Built-in Types](docs/adding-built-in-types.md) checklist |
-| Architecture change | The relevant `docs/` file ([interpreter.md](docs/interpreter.md), [bytecode-vm.md](docs/bytecode-vm.md), [core-patterns.md](docs/core-patterns.md), etc.) |
+| Architecture change | The relevant `docs/` file ([architecture.md](docs/architecture.md), [bytecode-vm.md](docs/bytecode-vm.md), [core-patterns.md](docs/core-patterns.md), etc.) |
 | New design decision | ADR under [docs/adr/](docs/adr/) |
 | User-facing feature | [README.md](README.md) |
 | Workflow or style change | The relevant file under [docs/contributing/](docs/contributing/) |
@@ -47,9 +47,9 @@ Before implementation, use [DEFINITION_OF_READY.md](DEFINITION_OF_READY.md) to c
 
 These rules **must** be followed when modifying the codebase:
 
-### 1. Evaluator Purity and VMT Dispatch
+### 1. Explicit State and Virtual Dispatch
 
-Evaluation is **pure** — same expression + context always produces the same result. State changes happen through scope and value objects, never evaluator-internal state. Expression and statement evaluation uses VMT dispatch on AST nodes. See [docs/interpreter.md](docs/interpreter.md) for the full evaluator model.
+Runtime state flows through explicit parameters (the `TGocciaEvaluationContext` record, the scope chain, and value objects), never through global mutable state. Value behavior such as property access and type discrimination uses virtual methods on `TGocciaValue` rather than `is` check chains. See [Architecture § Evaluation Context](docs/architecture.md#evaluation-context) and [Core patterns § Virtual Dispatch Value System](docs/core-patterns.md#virtual-dispatch-value-system).
 
 ### 2. Scope Creation
 
@@ -70,12 +70,11 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 - Add JavaScript tests under the `tests/` directory, following the existing directory structure.
 - **One method per file** — each test file focuses on a single method or operation.
 - **Edge cases are co-located** — edge case tests belong in the same file as the happy-path tests.
-- Always verify changes by running the all-executor JavaScript suite:
+- Always verify changes by running the JavaScript suite:
 
   ```bash
   ./build.pas testrunner
   ./build/GocciaTestRunner -P tests
-  ./build/GocciaTestRunner -P tests --mode=bytecode
   ```
 
   `-P` accepts the test configs' permission requests for that run only and
@@ -125,5 +124,5 @@ benchmark, bundler, and configuration command reference.
 ## Further reading
 
 - **[README.md](README.md)** — What GocciaScript is, how to get started, and the [documentation index](README.md#documentation)
-- **Engine docs** — [Architecture](docs/architecture.md), [Interpreter](docs/interpreter.md), [Bytecode VM](docs/bytecode-vm.md), [Core patterns](docs/core-patterns.md)
+- **Engine docs** — [Architecture](docs/architecture.md), [Bytecode VM](docs/bytecode-vm.md), [Core patterns](docs/core-patterns.md)
 - **[AGENTS.md](AGENTS.md)** — Agent-only operating manual for coding assistants
