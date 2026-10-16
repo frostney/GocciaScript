@@ -67,7 +67,7 @@ describe("GocciaScript positioning", () => {
       /TC39 Type Annotations proposal/i,
       /types-as-comments runtime model/i,
       /optional --strict-types.+runtime enforcement/i,
-      /interpreter and bytecode modes/i,
+      /inferred primitive contracts/i,
       /not a replacement.+static structural type checker/i,
     ]);
   });

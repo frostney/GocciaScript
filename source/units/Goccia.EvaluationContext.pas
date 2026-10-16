@@ -1,4 +1,10 @@
-unit Goccia.Evaluator.Context;
+unit Goccia.EvaluationContext;
+
+{ The host-side evaluation record (realm, scope, module-loading callbacks,
+  source flags) that the engine, the module loader and declaration
+  instantiation pass to each other. It is not the ECMA-262
+  execution context; that is TGocciaExecutionContext in
+  Goccia.ExecutionContext. }
 
 {$I Goccia.inc}
 
@@ -22,19 +28,12 @@ type
     LoadDeferredModule: TLoadDeferredModuleCallback;
     ResolveModuleURL: TResolveModuleURLCallback;
     CurrentFilePath: string;
-    CoverageEnabled: Boolean;
-    StrictTypes: Boolean;
     NonStrictMode: Boolean;
     CompatibilityNonStrictMode: Boolean;
-    HideFunctionSourceText: Boolean;
-    InEvalCode: Boolean;
-    EvalVarScope: TGocciaScope;
-    RejectArgumentsVarDeclarationInEval: Boolean;
-    RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
     CurrentModule: TGocciaModule;
     ModuleEnvironmentInitialized: Boolean;
-    { The module body an executor compiled while it instantiated the
+    { The module body the engine compiled while it instantiated the
       module's function declarations (TGocciaModuleFunctionInstantiator),
       which evaluating the body then runs; nil when nothing was compiled.
       A TGocciaBytecodeModule, typed as TObject to keep the bytecode units

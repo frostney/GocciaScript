@@ -3,10 +3,9 @@ description: StringNumericLiteral conversion agrees across runtime coercion and 
 features: [type-coercion, unary-plus]
 ---*/
 
-// `+"literal"` is constant-folded by the bytecode compiler and evaluated at
-// runtime by the interpreter, so the same assertion guards both paths once the
-// suite runs in --mode=bytecode as well. `dyn` takes its operand as a parameter
-// that cannot be folded, pinning the runtime VM path even in bytecode mode.
+// `+"literal"` is constant-folded by the bytecode compiler. `dyn` takes its
+// operand as a parameter that cannot be folded, pinning the runtime VM path,
+// so each assertion guards both the folded and the runtime conversion.
 const dyn = (s) => Number(s);
 
 describe('StringNumericLiteral conversion', () => {

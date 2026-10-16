@@ -299,31 +299,26 @@ test("errors thrown by iter.return() propagate to the caller (normal completion)
 });
 
 test("iter.return() is invoked when destructuring throws (abrupt completion)", () => {
-  // ES2024 §7.4.10 step 4: even when destructuring's own completion is
-  // abrupt, IteratorClose runs.  We verify return() was called; the spec
-  // also requires the original abrupt completion to win over a throwing
-  // return() (interpreter mode honours this; bytecode mode currently
-  // performs eager iteration via IterableToArray, so return() can fire
-  // before the setter has a chance to throw — that's a separate
-  // ordering issue tracked elsewhere).  The cross-mode contract is just
-  // that return() runs and the caller observes some thrown error.
-  let returnCalls = 0;
+  // ES2026 §7.4.11 IteratorClose: the iterator is closed even when
+  // destructuring's own completion is abrupt, and that original throw
+  // completion wins over a throwing return() (step 5).
+  const log = [];
   const iter = {
     [Symbol.iterator]() {
       return {
-        next() { return { value: 1, done: false }; },
-        return() { returnCalls++; return { value: undefined, done: true }; }
+        next() { log.push("next"); return { value: 1, done: false }; },
+        return() { log.push("return"); throw new Error("return boom"); }
       };
     }
   };
 
   const target = {};
   Object.defineProperty(target, 'x', {
-    set() { throw new Error('setter throws'); }
+    set() { log.push("set"); throw new Error('setter throws'); }
   });
 
   expect(() => {
     [target.x] = iter;
-  }).toThrow(Error);
-  expect(returnCalls).toBe(1);
+  }).toThrow('setter throws');
+  expect(log).toEqual(["next", "set", "return"]);
 });

@@ -15,7 +15,7 @@ Prefer the exact GitHub Actions artifact when reviewing a specific run. Use Blob
 daily pointers for retained main-run history and window comparison.
 
 - `test262-profile` artifact / `test262-profiles/` Blob namespace: full-corpus
-  conformance-profile runs. Check commit SHA, test262 SHA, mode, corpus size,
+  conformance-profile runs. Check commit SHA, test262 SHA, corpus size,
   timeout/memory settings, and wrapper-infra counts before comparing trends.
   The `run` block carries `durationSeconds`, `passed`, `failed`, `timeouts`,
   `totalRun`, and `test262Sha`; `pathBreakdown[]` carries per-path
@@ -29,7 +29,7 @@ daily pointers for retained main-run history and window comparison.
   test262 for allocation trends).
 
 If both artifact and Blob payloads exist for the same run, confirm commit SHA,
-mode, generated timestamp, and profile count match before using them together.
+generated timestamp, and profile count match before using them together.
 
 Profile artifacts are retained ~30 days, so review the **whole retained window,
 not two runs**. Two adjacent runs cannot separate a real change from runner

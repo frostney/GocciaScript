@@ -12,7 +12,7 @@ uses
 
 const
   { The release that removed the pre-ADR-0122 flags; removed-option errors
-    name it. }
+    name it unless the option gives its own release. }
   OPTIONS_REMOVED_IN_VERSION = '0.14.0';
   { Exit status for an unusable invocation (TCLIUsageError, and the
     no-argument rule); script and run failures exit 1. }
@@ -247,14 +247,16 @@ type
   { An option that no longer exists. It stays parseable, hidden from help,
     so using it fails with a message naming its replacement rather than an
     "unknown option" error. AConfigName is its config key ('' when it never
-    had one). }
+    had one); ARemovedInVersion is the release the messages name. }
   TRemovedOption = class(TOptionBase)
   private
     FFlagReplacement: string;
     FConfigReplacement: string;
+    FRemovedInVersion: string;
   public
     constructor Create(const ALongName, AConfigName, AFlagReplacement,
-      AConfigReplacement: string);
+      AConfigReplacement: string;
+      const ARemovedInVersion: string = OPTIONS_REMOVED_IN_VERSION);
     procedure Apply(const AValue: string); override;
     procedure ApplyExplicit(const AValue: string;
       const AHasEquals: Boolean); override;
@@ -706,13 +708,15 @@ end;
 { TRemovedOption }
 
 constructor TRemovedOption.Create(const ALongName, AConfigName,
-  AFlagReplacement, AConfigReplacement: string);
+  AFlagReplacement, AConfigReplacement: string;
+  const ARemovedInVersion: string);
 begin
   inherited Create(ALongName, '');
   if AConfigName <> ALongName then
     ConfigName := AConfigName;
   FFlagReplacement := AFlagReplacement;
   FConfigReplacement := AConfigReplacement;
+  FRemovedInVersion := ARemovedInVersion;
   Hidden := True;
 end;
 
@@ -735,7 +739,7 @@ end;
 function TRemovedOption.RemovedFlagMessage: string;
 begin
   Result := Format('--%s was removed in GocciaScript %s; %s',
-    [LongName, OPTIONS_REMOVED_IN_VERSION, FFlagReplacement]);
+    [LongName, FRemovedInVersion, FFlagReplacement]);
 end;
 
 function TRemovedOption.RemovedConfigMessage(
@@ -748,7 +752,7 @@ begin
   else
     Key := LongName;
   Result := Format('%s: "%s" was removed in GocciaScript %s; %s',
-    [AConfigPath, Key, OPTIONS_REMOVED_IN_VERSION, FConfigReplacement]);
+    [AConfigPath, Key, FRemovedInVersion, FConfigReplacement]);
 end;
 
 { TRepeatableOption }

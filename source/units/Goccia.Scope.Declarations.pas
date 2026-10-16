@@ -3,9 +3,8 @@ unit Goccia.Scope.Declarations;
 { Declaration instantiation helpers that create the bindings of a scope from
   the declarations of its code, without evaluating any of it: lexical
   predeclaration (bindings left in their temporal dead zone) and var hoisting
-  (bindings initialized to undefined). Module linking uses them in both
-  execution modes (ES2026 §16.2.1.7.3.1 InitializeEnvironment), so they live
-  outside the tree-walk evaluator. }
+  (bindings initialized to undefined). Module linking uses them (ES2026
+  §16.2.1.7.3.1 InitializeEnvironment). }
 
 {$I Goccia.inc}
 
@@ -16,7 +15,7 @@ uses
 
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Scope,
   Goccia.Scope.BindingMap;
 
@@ -40,10 +39,6 @@ procedure PredeclareBlockLexicalBinding(const ANode: TGocciaASTNode;
 
 procedure PredeclareModuleLexicalDeclarations(const AProgram: TGocciaProgram;
   const AScope: TGocciaScope);
-procedure PredeclareScriptLexicalDeclarations(const AProgram: TGocciaProgram;
-  const AScope: TGocciaScope);
-procedure PredeclareFunctionBodyLexicalDeclarations(
-  const ANodes: TObjectList<TGocciaASTNode>; const AScope: TGocciaScope);
 
 implementation
 
@@ -267,24 +262,6 @@ var
 begin
   for I := 0 to AProgram.Body.Count - 1 do
     PredeclareBlockLexicalBinding(AProgram.Body[I], AScope, True);
-end;
-
-procedure PredeclareScriptLexicalDeclarations(const AProgram: TGocciaProgram;
-  const AScope: TGocciaScope);
-var
-  I: Integer;
-begin
-  for I := 0 to AProgram.Body.Count - 1 do
-    PredeclareBlockLexicalBinding(AProgram.Body[I], AScope, False);
-end;
-
-procedure PredeclareFunctionBodyLexicalDeclarations(
-  const ANodes: TObjectList<TGocciaASTNode>; const AScope: TGocciaScope);
-var
-  I: Integer;
-begin
-  for I := 0 to ANodes.Count - 1 do
-    PredeclareBlockLexicalBinding(ANodes[I], AScope, False);
 end;
 
 end.

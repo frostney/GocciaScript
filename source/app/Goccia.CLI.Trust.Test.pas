@@ -1168,7 +1168,7 @@ begin
   FFI.Request.Allow[gcRead].Scopes := ['/lib/modules'];
 
   Report := FormatUntrustedReport([Fetch, FFI], 'GocciaTestRunner',
-    '/home/u/.config/goccia/trust.json', '', '', ['report', '--mode=bytecode'],
+    '/home/u/.config/goccia/trust.json', '', '', ['report', '--silent'],
     FRoot);
   Expect<string>(Report).ToBe(
     '2 config files request permissions that have not been trusted:' +
@@ -1186,9 +1186,9 @@ begin
     'goccia.json --trust report' + PathDelim + 'ffi' + PathDelim +
     'goccia.json' + sLineBreak +
     'To accept them for this run only:' + sLineBreak +
-    '  GocciaTestRunner -P report --mode=bytecode' + sLineBreak +
+    '  GocciaTestRunner -P report --silent' + sLineBreak +
     'To run with command-line grants only:' + sLineBreak +
-    '  GocciaTestRunner --ignore-config-permissions report --mode=bytecode');
+    '  GocciaTestRunner --ignore-config-permissions report --silent');
 
   { More than three configs are trusted through their common directory. }
   SetLength(Many, 4);

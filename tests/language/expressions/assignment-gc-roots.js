@@ -5,8 +5,8 @@ features: [Goccia.gc, Symbol.toPrimitive]
 
 const hasGoccia = typeof Goccia !== "undefined";
 
-// The base, the key and the assigned value of an assignment live only in the
-// evaluator's own locals while the expression is being evaluated, so a
+// The base, the key and the assigned value of an assignment may live only in
+// engine-internal temporaries while the expression is being evaluated, so a
 // collection that runs from inside the key conversion, the right-hand side or
 // the setter can free them. The allocation churn after gc() is what makes a
 // freed slot observable; a bare gc() usually leaves it readable.
@@ -73,7 +73,7 @@ describe.runIf(hasGoccia)("assignment expression GC roots", () => {
       },
     };
     // After the pop, the same object is the key AND the value, and nothing but
-    // the evaluator refers to it.
+    // the engine's temporaries refers to it.
     const holder = [{ toString: () => "alias", tag: "same-object" }];
 
     target[holder[0]] = holder.pop();

@@ -59,7 +59,7 @@ type
     function Fork(const AStreamId: QWord): IGocciaHostRandom;
   end;
 
-Engine := TGocciaEngine.Create('app.js', Source, Executor);
+Engine := TGocciaEngine.Create('app.js', Source);
 Engine.HostEnvironment.Configure(
   TApplicationClock.Create,
   TApplicationRandom.Create(Seed));

@@ -13,13 +13,16 @@ uses
   Goccia.SourcePipeline;
 
 type
-  TGocciaExecutionMode = (emInterpreted, emBytecode);
   TGocciaSourceType = (stScript, stModule);
 
 const
-  { The mode an entry point runs in when neither --mode nor a config "mode"
-    key chooses one. }
-  DEFAULT_EXECUTION_MODE = emBytecode;
+  { The release that removed --mode and the "mode" config key, when bytecode
+    became the only way GocciaScript executes. }
+  EXECUTION_MODE_REMOVED_IN_VERSION = '0.15.0';
+  EXECUTION_MODE_REMOVED_FLAG_HINT =
+    'bytecode is the only execution mode, so drop the option';
+  EXECUTION_MODE_REMOVED_CONFIG_HINT =
+    'bytecode is the only execution mode, so drop the key';
 
 type
   TGocciaCompatibilityFlagDescriptor = record
@@ -63,7 +66,6 @@ type
 
   TGocciaEngineOptions = class
   private
-    FMode: TEnumOption<TGocciaExecutionMode>;
     FSourceType: TEnumOption<TGocciaSourceType>;
     FCompatibilityFlags: array[TGocciaCompatibility] of TFlagOption;
     FImportMap: TStringOption;
@@ -96,11 +98,6 @@ type
     { Hides the limits a binary does not apply from --help and makes config
       files ignore them without validation. }
     procedure HideUnsupportedSettings(const AHonored: TGocciaHonoredSettings);
-    { The selected execution mode: --mode or a config "mode" key when given,
-      otherwise DEFAULT_EXECUTION_MODE. }
-    function ExecutionMode: TGocciaExecutionMode;
-
-    property Mode: TEnumOption<TGocciaExecutionMode> read FMode;
     property SourceType: TEnumOption<TGocciaSourceType> read FSourceType;
     property ImportMap: TStringOption read FImportMap;
     property Aliases: TRepeatableOption read FAliases;
@@ -234,6 +231,10 @@ function TryHandleCapabilityArgument(const AArgument, AProgramName: string;
   message the shared application gives. }
 procedure RejectUnsupportedSettingArgument(const AArgument,
   AProgramName: string; const AHonored: TGocciaHonoredSettings);
+{ For binaries with their own argument parser: raises TCLIUsageError when
+  AArgument is the removed --mode option, with the same message the shared
+  application gives. }
+procedure RejectRemovedExecutionModeArgument(const AArgument: string);
 
 function CompatibilityFlagDescriptor(
   const AFlag: TGocciaCompatibility): TGocciaCompatibilityFlagDescriptor;
@@ -619,6 +620,27 @@ begin
         [AProgramName, Name]);
 end;
 
+function CreateRemovedExecutionModeOption: TRemovedOption;
+begin
+  Result := TRemovedOption.Create('mode', 'mode',
+    EXECUTION_MODE_REMOVED_FLAG_HINT, EXECUTION_MODE_REMOVED_CONFIG_HINT,
+    EXECUTION_MODE_REMOVED_IN_VERSION);
+end;
+
+procedure RejectRemovedExecutionModeArgument(const AArgument: string);
+var
+  Removed: TRemovedOption;
+begin
+  if (AArgument <> '--mode') and (Copy(AArgument, 1, 7) <> '--mode=') then
+    Exit;
+  Removed := CreateRemovedExecutionModeOption;
+  try
+    raise TCLIUsageError.Create(Removed.RemovedFlagMessage);
+  finally
+    Removed.Free;
+  end;
+end;
+
 const
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -720,6 +742,7 @@ begin
     'use "permissions": { "deny-read": true } instead'));
   AList.Add(TRemovedOption.Create('stack-size', 'stack-size',
     'use --max-stack instead', 'use "max-stack" instead'));
+  AList.Add(CreateRemovedExecutionModeOption);
 end;
 
 constructor TGocciaEngineOptions.Create;
@@ -727,8 +750,6 @@ var
   Flag: TGocciaCompatibility;
 begin
   inherited Create;
-  FMode := TEnumOption<TGocciaExecutionMode>.Create('mode',
-    'Execution mode (default: bytecode)', 'Engine');
   FSourceType := TEnumOption<TGocciaSourceType>.Create('source-type',
     'Source loading kind (default: script; .mjs infers module)', 'Engine');
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
@@ -776,7 +797,7 @@ begin
     'Warn and recover for unsupported/default-disabled syntax instead of failing parsing',
     'Engine');
   FStrictTypes := TFlagOption.Create('strict-types',
-    'Enforce type annotations at runtime (interpreter and bytecode)', 'Engine');
+    'Enforce type annotations at runtime', 'Engine');
   FExperimentalAST := TFlagOption.Create('experimental-ast',
     'Enable the experimental goccia:ast parse module', 'Runtime');
   FInspectDepth := TIntegerOption.Create('inspect-depth',
@@ -794,7 +815,6 @@ destructor TGocciaEngineOptions.Destroy;
 var
   Flag: TGocciaCompatibility;
 begin
-  FMode.Free;
   FSourceType.Free;
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
     FCompatibilityFlags[Flag].Free;
@@ -830,8 +850,6 @@ begin
     Permissions, then Limits. }
   SetLength(Leading, ENGINE_FIXED_OPTION_COUNT + CompatibilityFlagCount);
   Index := 0;
-  Leading[Index] := FMode;
-  Inc(Index);
   Leading[Index] := FSourceType;
   Inc(Index);
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
@@ -887,11 +905,6 @@ function TGocciaEngineOptions.CompatibilityFlagOption(
   const AFlag: TGocciaCompatibility): TFlagOption;
 begin
   Result := FCompatibilityFlags[AFlag];
-end;
-
-function TGocciaEngineOptions.ExecutionMode: TGocciaExecutionMode;
-begin
-  Result := FMode.ValueOr(DEFAULT_EXECUTION_MODE);
 end;
 
 function TGocciaEngineOptions.SettingOption(

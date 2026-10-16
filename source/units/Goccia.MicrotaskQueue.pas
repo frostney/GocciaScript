@@ -333,8 +333,8 @@ end;
 procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
   const AException: Exception);
 begin
-  { Precondition, shared with the sibling reject helpers in Goccia.Values.Await
-    and Goccia.Interpreter: invoke this only from inside the `on E: Exception`
+  { Precondition, shared with the sibling reject helper in Goccia.Values.Await:
+    invoke this only from inside the `on E: Exception`
     handler that caught AException. With no promise to reject there is nothing
     to absorb the exception into, so it keeps unwinding to the host. `raise
     AException` re-raised the object by name, which starts a second propagation
