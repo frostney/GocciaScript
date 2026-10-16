@@ -744,23 +744,27 @@ procedure CompileWinARM64VariadicArgument(
   var APlan: TGocciaFFIArgumentPlan;
   var AImaginaryOffset, AGPRCount, AStackOffset, AScratchOffset: Integer);
 const
-  REGISTER_AREA_SIZE = 64;
+  SLOT_SIZE = 8;
+  REGISTER_SLOT_COUNT = 8;
+  REGISTER_AREA_SIZE = SLOT_SIZE * REGISTER_SLOT_COUNT;
+  MAX_BY_VALUE_COMPOSITE_SIZE = 16;
+  INDIRECT_COPY_ALIGNMENT = 16;
 var
   ValueSize, SlotStart, SlotEnd, Consumed, ChunkSize: Integer;
 begin
   if APlan.TypeDescriptor.IsAggregate and
-     (APlan.TypeDescriptor.Size > 16) then
+     (APlan.TypeDescriptor.Size > MAX_BY_VALUE_COMPOSITE_SIZE) then
   begin
     APlan.Indirect := True;
     APlan.IndirectCopyOffset := ScratchAppend(AScratchOffset,
-      APlan.TypeDescriptor.Size, 16);
+      APlan.TypeDescriptor.Size, INDIRECT_COPY_ALIGNMENT);
     ValueSize := SizeOf(Pointer);
   end
   else
     ValueSize := APlan.TypeDescriptor.Size;
 
-  SlotStart := AlignFFIOffset(AImaginaryOffset, 8);
-  SlotEnd := SlotStart + AlignFFIOffset(ValueSize, 8);
+  SlotStart := AlignFFIOffset(AImaginaryOffset, SLOT_SIZE);
+  SlotEnd := SlotStart + AlignFFIOffset(ValueSize, SLOT_SIZE);
   if SlotEnd - REGISTER_AREA_SIZE > MAX_FFI_AGGREGATE_SIZE then
     raise EArgumentOutOfRangeException.Create('FFI call stack image exceeds limit');
   AImaginaryOffset := SlotEnd;
@@ -770,10 +774,10 @@ begin
         (SlotStart + Consumed < REGISTER_AREA_SIZE) do
   begin
     ChunkSize := ValueSize - Consumed;
-    if ChunkSize > 8 then ChunkSize := 8;
-    AppendPlacement(APlan.Placements, fpkGPR, (SlotStart + Consumed) div 8,
-      -1, Consumed, ChunkSize);
-    Inc(Consumed, 8);
+    if ChunkSize > SLOT_SIZE then ChunkSize := SLOT_SIZE;
+    AppendPlacement(APlan.Placements, fpkGPR,
+      (SlotStart + Consumed) div SLOT_SIZE, -1, Consumed, ChunkSize);
+    Inc(Consumed, SLOT_SIZE);
   end;
   if Consumed < ValueSize then
     AppendPlacement(APlan.Placements, fpkStack, -1,
@@ -781,11 +785,11 @@ begin
       ValueSize - Consumed);
   if SlotEnd > REGISTER_AREA_SIZE then
   begin
-    AGPRCount := 8;
+    AGPRCount := REGISTER_SLOT_COUNT;
     AStackOffset := SlotEnd - REGISTER_AREA_SIZE;
   end
   else
-    AGPRCount := SlotEnd div 8;
+    AGPRCount := SlotEnd div SLOT_SIZE;
 end;
 
 procedure CompileI386Return(var APlan: TGocciaFFIReturnPlan;

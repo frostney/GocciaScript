@@ -21,6 +21,7 @@ type
     procedure TestDarwinARM64VariadicTailPlacement;
     procedure TestWinARM64VariadicUsesIntegerRegisters;
     procedure TestWinARM64VariadicSplitsAcrossX7;
+    procedure TestWinARM64VariadicSplitsPartialSlot;
     procedure TestWinARM64VariadicLargeAggregateByPointer;
   public
     procedure SetupTests; override;
@@ -40,6 +41,8 @@ begin
     TestWinARM64VariadicUsesIntegerRegisters);
   Test('Windows ARM64 variadic aggregates split between x7 and the stack',
     TestWinARM64VariadicSplitsAcrossX7);
+  Test('Windows ARM64 variadic aggregates keep their size when split',
+    TestWinARM64VariadicSplitsPartialSlot);
   Test('Windows ARM64 variadic aggregates over 16 bytes pass by pointer',
     TestWinARM64VariadicLargeAggregateByPointer);
 end;
@@ -236,6 +239,7 @@ begin
     try
       ExpectPlacement(Plan, 0, 0, fpkGPR, 0, -1);
       ExpectPlacement(Plan, 1, 0, fpkGPR, 1, -1);
+      Expect<Integer>(Plan.Arguments[1].Placements[0].Size).ToBe(4);
       ExpectPlacement(Plan, 2, 0, fpkGPR, 2, -1);
       Expect<Integer>(Length(Plan.Arguments[3].Placements)).ToBe(2);
       ExpectPlacement(Plan, 3, 0, fpkGPR, 3, -1);
@@ -305,6 +309,45 @@ begin
     for I := 0 to High(Arguments) do
       Arguments[I].ReleaseReference;
     F64.ReleaseReference;
+  end;
+end;
+
+procedure TFFIABITests.TestWinARM64VariadicSplitsPartialSlot;
+var
+  Arguments: array[0..8] of TGocciaFFITypeDescriptor;
+  I32, ReturnType: TGocciaFFITypeDescriptor;
+  Plan: TGocciaFFICompiledSignature;
+  I: Integer;
+begin
+  I32 := TGocciaFFITypeDescriptor.CreateScalar(fftI32);
+  for I := 0 to 6 do
+    Arguments[I] := TGocciaFFITypeDescriptor.CreateScalar(fftI64);
+  // A 12-byte aggregate starting in x7: eight bytes in x7, the last four in
+  // the first stack slot, and the slot rounded up to 16 bytes.
+  Arguments[7] := TGocciaFFITypeDescriptor.CreateArray(I32, 3);
+  Arguments[8] := TGocciaFFITypeDescriptor.CreateScalar(fftI32);
+  ReturnType := TGocciaFFITypeDescriptor.CreateScalar(fftVoid);
+  try
+    Plan := TGocciaFFICompiledSignature.Create(fabiWinARM64, Arguments,
+      ReturnType, 1);
+    try
+      Expect<Integer>(Length(Plan.Arguments[7].Placements)).ToBe(2);
+      ExpectPlacement(Plan, 7, 0, fpkGPR, 7, -1);
+      Expect<Integer>(Plan.Arguments[7].Placements[0].Size).ToBe(8);
+      ExpectPlacement(Plan, 7, 1, fpkStack, -1, 0);
+      Expect<Integer>(Plan.Arguments[7].Placements[1].ValueOffset).ToBe(8);
+      Expect<Integer>(Plan.Arguments[7].Placements[1].Size).ToBe(4);
+      ExpectPlacement(Plan, 8, 0, fpkStack, -1, 8);
+      Expect<Integer>(Plan.Arguments[8].Placements[0].Size).ToBe(4);
+      Expect<Integer>(Plan.StackSize).ToBe(16);
+    finally
+      Plan.Free;
+    end;
+  finally
+    ReturnType.ReleaseReference;
+    for I := 0 to High(Arguments) do
+      Arguments[I].ReleaseReference;
+    I32.ReleaseReference;
   end;
 end;
 
