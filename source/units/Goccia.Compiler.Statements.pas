@@ -230,10 +230,12 @@ procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
 threadvar
   // GBreakJumps/GContinueJumps are created and freed within
   // BeginLoopControl/EndLoopControl, so they are nil at rest.
-  // GPendingFinally is save/restored around nested compilations, but the
-  // outermost compilation creates it lazily and leaves it, emptied, for the
-  // next one; GLabelControls is likewise reused across compilations. Both are
-  // released at thread teardown (see ClearCompilerWorkingState, #892, #1592).
+  // GPendingFinally is saved and restored around each program and function
+  // body compilation (TGocciaCompiler.Compile, DoCompileFunctionBody), so an
+  // entry a compile error leaves behind, which points into a tree that is
+  // freed with its program, goes with the compilation. GLabelControls is
+  // reused across compilations. Both are also released at thread teardown
+  // (see ClearCompilerWorkingState, #892, #1592).
   GBreakJumps: TList<Integer>;
   GContinueJumps: TList<Integer>;
   GPendingFinally: TList<TPendingFinallyEntry>;
