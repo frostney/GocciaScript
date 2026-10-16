@@ -969,8 +969,28 @@ begin
 end;
 
 procedure TGarbageCollector.ClearKeptObjects;
+const
+  // Above this many slots, a fresh set is cheaper than clearing this one.
+  KEPT_OBJECTS_REUSE_CAPACITY = 1024;
+var
+  Previous: TGCObjectSet;
 begin
-  FKeptObjects.Clear;
+  // This runs after every job. Clearing walks every slot of the set, used or
+  // not, and the set keeps the capacity a job once grew it to: after one job
+  // keeps n objects (n FinalizationRegistry registrations, say), each later
+  // job would pay O(n) here, and draining n cleanup jobs would be O(n^2).
+  if FKeptObjects.Count = 0 then
+    Exit;
+  if FKeptObjects.Capacity > KEPT_OBJECTS_REUSE_CAPACITY then
+  begin
+    // Create the replacement before freeing the old set, so a failed
+    // allocation never leaves the field pointing at freed memory.
+    Previous := FKeptObjects;
+    FKeptObjects := TGCObjectSet.Create;
+    Previous.Free;
+  end
+  else
+    FKeptObjects.Clear;
 end;
 
 procedure TGarbageCollector.AddRootObject(
