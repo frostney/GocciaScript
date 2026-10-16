@@ -7,7 +7,7 @@
 - **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
 - **Change workflow** — Git and pull request mechanics follow known-good-route `git-workflow`; a GocciaScript change adds spec verification, tests, and docs or ADR updates
 - **Pull request titles** — Conventional Commits, because `cliff.toml` builds the changelog from the squash-merge subject
-- **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode` ([Testing requirements](../../CONTRIBUTING.md#3-testing-requirements) explains `-P`)
+- **Verification** — Run the JavaScript suite before every push: `./build.pas testrunner` and `./build/GocciaTestRunner -P tests` ([Testing requirements](../../CONTRIBUTING.md#3-testing-requirements) explains `-P`)
 
 ## Local setup
 
@@ -53,7 +53,7 @@ Branching, commits, pushes, and pull requests follow known-good-route
 
 1. **Implementation** that follows [Implementation principles](../../CONTRIBUTING.md#implementation-principles), [Critical rules](../../CONTRIBUTING.md#critical-rules), [Code style](code-style.md), and the architecture docs for the area you touch.
 2. **Spec verification and annotation.** For ECMAScript behavior, verify semantics against the current official ECMA-262 text, then add `// ESYYYY` spec comments as described in [ECMAScript spec annotations](code-style.md#ecmascript-spec-annotations).
-3. **Tests.** JavaScript tests under `tests/` are primary. Add Pascal units under `source/units/*.Test.pas` when you touch AST, evaluator, or value types. See [testing.md](../testing.md).
+3. **Tests.** JavaScript tests under `tests/` are primary. Add Pascal units under `source/units/*.Test.pas` when you touch AST, compiler, VM, or value types. See [testing.md](../testing.md).
 4. **Documentation** per [CONTRIBUTING: Documentation](../../CONTRIBUTING.md#documentation). Record a new architectural or design decision as an ADR under [`docs/adr/`](../adr/).
 
 ## Issues and pull requests
@@ -95,13 +95,12 @@ stacked branch also needs a [full CI](#full-ci) run before it is marked ready.
 ```bash
 ./build.pas testrunner
 ./build/GocciaTestRunner -P tests
-./build/GocciaTestRunner -P tests --mode=bytecode
 ```
 
 [Testing requirements](../../CONTRIBUTING.md#3-testing-requirements) explains `-P`
 and the one-time `--trust` alternative.
 
-For interpreter/VM internals, also run native Pascal tests as described under [Testing](../testing.md).
+For compiler/VM internals, also run native Pascal tests as described under [Testing](../testing.md).
 
 ### Full CI
 

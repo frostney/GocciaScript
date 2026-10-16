@@ -2,7 +2,7 @@
 //
 // Both are deliberate deviations recorded in docs/module-resolution.md, so
 // neither bun nor vitest can act as an oracle for them and this file is
-// classified `skip` for both. Mode parity is still checked.
+// classified `skip` for both; every test must pass under goccia.
 import {
   importCommonJSOnlyPackage,
   importEsbuildBundledPackage,

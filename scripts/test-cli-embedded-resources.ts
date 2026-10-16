@@ -98,9 +98,6 @@ greek.test("\u03A9") &&
 ];
 
 for (const probe of behaviorProbes) {
-  console.log(`${probe.label} (interpreted)...`);
-  assertLoaderReturnsTrue(probe.source, probe.label, ["--mode=interpreted"]);
-
-  console.log(`${probe.label} (bytecode)...`);
-  assertLoaderReturnsTrue(probe.source, `${probe.label} bytecode`, ["--mode=bytecode"]);
+  console.log(`${probe.label}...`);
+  assertLoaderReturnsTrue(probe.source, probe.label);
 }

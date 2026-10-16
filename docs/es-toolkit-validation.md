@@ -5,8 +5,8 @@
 ## Executive Summary
 
 - **Pinned input** — The manifest records es-toolkit 1.49.0's release commit and npm tarball SHA-512 integrity
-- **Exact evidence** — Named public-package probes run in interpreter and bytecode modes; the lane does not claim whole-suite coverage or publish a pass-rate percentage
-- **Separate classifications** — Semantic failures, bytecode divergence, disabled capabilities, host globals, and harness failures remain distinct in the JSON report
+- **Exact evidence** — Named public-package probes run under `GocciaRunner`; the lane does not claim whole-suite coverage or publish a pass-rate percentage
+- **Separate classifications** — Semantic failures, disabled capabilities, host globals, and harness failures remain distinct in the JSON report
 - **Sandbox-aligned** — The lane does not enable unsafe dynamic code generation or add Node/browser host stubs
 
 ## Scope and pin
@@ -56,15 +56,10 @@ cache key derived from the pinned integrity value.
 
 | Classification | Meaning |
 |---|---|
-| semantic pass / failure | Both execution modes completed the same named public-library probe; a failure is an assertion mismatch in both modes |
-| bytecode divergence | Interpreter and bytecode outcomes differ; known transitive-module TDZ failures are accepted only when they match the manifest's pinned error pattern |
+| semantic pass / failure | The runner completed the named public-library probe; a failure is an assertion mismatch |
 | disabled capability | The default-disabled `Function` constructor is recorded as sandbox policy, not library semantics |
 | host global | `Buffer`, `process`, and `Blob` availability is recorded without treating Node or browser host APIs as ECMAScript conformance |
 | harness failure | Download/integrity, package, process, timeout, marker, or native-runtime failures made the evidence untrustworthy |
-
-Known bytecode divergences remain visible in the report and are allowlisted by
-their exact error class and message shape, not by a blanket skip. A newly passing
-bytecode probe is accepted; a different divergence fails the lane.
 
 ## Vision boundary
 

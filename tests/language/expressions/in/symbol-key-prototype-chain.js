@@ -53,8 +53,9 @@ describe("in with a symbol key", () => {
     expect(() => key in object).toThrow(RangeError);
   });
 
-  // 100,000 nested Proxies take a few hundred megabytes in interpreted mode,
-  // which a 32-bit process running parallel test workers cannot spare.
+  // 100,000 nested Proxies took a few hundred megabytes when measured under
+  // the since-removed interpreter, which a 32-bit process running parallel
+  // test workers cannot spare.
   const is64Bit = typeof Goccia !== "undefined" &&
     ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
 

@@ -2,9 +2,8 @@
 /**
  * depth-probe.ts
  *
- * Runs depth and nesting probes against a GocciaRunner binary, in each
- * execution mode it supports, and classifies how each one ends: completed, a
- * catchable error, an engine fatal error, a crash, a timeout, or a kill by the
+ * Runs depth and nesting probes against a GocciaRunner binary and classifies
+ * how each one ends: completed, a catchable error, an engine fatal error, a crash, a timeout, or a kill by the
  * memory cap. A seeded fuzz mode composes the same shapes pseudo-randomly.
  *
  * MANUAL USE ONLY. This is a developer and agent tool; it is deliberately not
@@ -92,6 +91,24 @@ const bindChain = (depth, fn) => {
   }
   return bound;
 };
+// bind names each level "bound " + its target's name, so these chains hide
+// the name to keep their memory linear in the depth.
+const namelessBindChain = (depth, fn) => {
+  let bound = fn;
+  for (const _ of Array.from({ length: depth })) {
+    bound = bound.bind(null);
+    Object.defineProperty(bound, "name", { value: "" });
+  }
+  return bound;
+};
+const proxyBindChain = (depth, fn) => {
+  const handler = { get: (target, key, receiver) => (key === "name" ? undefined : Reflect.get(target, key, receiver)) };
+  let f = fn;
+  for (const _ of Array.from({ length: depth })) {
+    f = Function.prototype.bind.call(new Proxy(f, handler), null);
+  }
+  return f;
+};
 const describeError = (error) => {
   if (error !== null && typeof error === "object") {
     const ctor = error.constructor;
@@ -127,8 +144,6 @@ interface Probe {
   summary: string;
   /** Fixed depths that replace the growth class defaults (e.g. a repeat count). */
   depths?: number[];
-  /** The only execution modes the probe means anything in; others are skipped. */
-  modes?: string[];
   body: (depth: number) => string;
 }
 
@@ -266,6 +281,39 @@ const CATALOG: Probe[] = [
     body: (d) => `report(() => bindChain(${d}, () => 1)());\n`,
   },
   {
+    id: "bind-chain-construct",
+    growth: "linear",
+    summary: "new on a class bound DEPTH times",
+    body: (d) => `report(() => typeof new (namelessBindChain(${d}, class {}))());\n`,
+  },
+  {
+    id: "bind-chain-instanceof",
+    growth: "linear",
+    summary: "instanceof against a class bound DEPTH times (each level reads @@hasInstance)",
+    body: (d) => `report(() => { const C = class {}; return new C() instanceof namelessBindChain(${d}, C); });\n`,
+  },
+  {
+    id: "proxy-bind-alternating-call",
+    growth: "linear",
+    summary: "Call a chain that alternates a Proxy and a bound function DEPTH times (#1497)",
+    body: (d) =>
+      `report(() => proxyBindChain(${d}, () => 1)());\n`,
+  },
+  {
+    id: "proxy-bind-alternating-construct",
+    growth: "linear",
+    summary: "new on a chain that alternates a Proxy and a bound function DEPTH times (#1497)",
+    body: (d) =>
+      `report(() => typeof new (proxyBindChain(${d}, class {}))());\n`,
+  },
+  {
+    id: "class-extends-proxy-chain",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH classes that each extend a Proxy of the previous one (#1497)",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = new Proxy(C, {}); C = class extends B {}; } return typeof new C(); });\n`,
+  },
+  {
     id: "class-extends-chain",
     growth: "linear",
     summary: "Construct the most derived of DEPTH chained subclasses",
@@ -385,10 +433,7 @@ const CATALOG: Probe[] = [
     growth: "linear",
     // The callbacks are native re-entries of the bytecode VM, each on a
     // fresh native frame, so the recursion ends where the native stack does.
-    // The tree-walk interpreter overflows the native stack on such a
-    // recursion by itself, before any pattern is compiled.
-    modes: ["bytecode"],
-    summary: "RegExp with DEPTH nested groups, compiled at the bottom of a recursion through Array.prototype.map callbacks that used up the native stack (bytecode only)",
+    summary: "RegExp with DEPTH nested groups, compiled at the bottom of a recursion through Array.prototype.map callbacks that used up the native stack",
     body: (d) =>
       `let compiled = "none";\n` +
       `const down = () => { try { return [0].map(down)[0]; } catch (e) { if (compiled === "none") { try { compiled = String(new RegExp("(".repeat(${d}) + "a" + ")".repeat(${d})).test("a")); } catch (inner) { compiled = describeError(inner); } } return 0; } };\n` +
@@ -696,9 +741,6 @@ and a timeout. Manual use only; see docs/contributing/tooling.md.
 Selection:
   --list                       List the catalog and exit
   --probe=a,b                  Only these probes (an exact id, or part of one)
-  --modes=a,b                  Execution modes to probe (default interpreted,bytecode);
-                               a mode the runner rejects is reported and skipped
-  --mode=NAME                  One execution mode; same as --modes=NAME
   --depth=N                    Run every selected probe at exactly N
   --depths=a,b                 Depths for linear probes (default 1000,30000)
   --quadratic-depths=a,b       Depths for quadratic probes (default 300,3000)
@@ -739,7 +781,6 @@ interface Options {
   runner: string;
   list: boolean;
   probes: string[];
-  modes: string[];
   depth?: number;
   depths: Record<Growth, number[]>;
   fuzz: boolean;
@@ -785,7 +826,6 @@ const parseOptions = (argv: string[]): Options => {
     runner: "",
     list: false,
     probes: [],
-    modes: ["interpreted", "bytecode"],
     depths: structuredClone(DEFAULTS.depths),
     fuzz: false,
     seed: Math.floor(Math.random() * 2 ** 31),
@@ -810,16 +850,6 @@ const parseOptions = (argv: string[]): Options => {
         process.exit(0);
       case "--list": options.list = true; break;
       case "--probe": options.probes = value.split(",").filter(Boolean); break;
-      // Mode names are passed through to the runner, which decides which it
-      // supports; see the preflight in main().
-      case "--mode":
-      case "--modes": {
-        const modes = value.split(",").map((mode) => mode.trim());
-        if (modes.some((mode) => !/^[a-z][a-z0-9-]*$/.test(mode))) fail(`${name} takes mode names such as bytecode, got: ${value}`);
-        options.modes = [...new Set(modes)];
-        if (name === "--mode" && options.modes.length !== 1) fail(`--mode takes one mode; use --modes=${value}`);
-        break;
-      }
       case "--depth": options.depth = parseInteger(name, value, 0); break;
       case "--depths": options.depths.linear = parseList(name, value); break;
       case "--quadratic-depths": options.depths.quadratic = parseList(name, value); break;
@@ -985,10 +1015,10 @@ const killGroup = (pid: number | undefined): void => {
   }
 };
 
-const runProgram = (launcher: Launcher, options: Options, file: string, mode: string): Promise<RunResult> =>
+const runProgram = (launcher: Launcher, options: Options, file: string): Promise<RunResult> =>
   new Promise((resolveRun) => {
     const start = process.hrtime.bigint();
-    const [command, ...args] = [...launcher.prefix, options.runner, file, `--mode=${mode}`, ...options.runnerArgs];
+    const [command, ...args] = [...launcher.prefix, options.runner, file, ...options.runnerArgs];
     // A process group of its own, so a timeout or Ctrl-C kills the runner
     // and not just the wrapper around it.
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -1117,8 +1147,7 @@ interface Job {
   depth: number;
   source: string;
   shape?: string;
-  modes?: string[];
-  replay: (mode: string) => string;
+  replay: string;
 }
 
 const truncate = (text: string, width: number): string =>
@@ -1158,9 +1187,8 @@ const main = async (): Promise<void> => {
     options.allowUncapped ? "--no-memory-cap" : "",
     ...options.runnerArgs.map((arg) => `--runner-arg=${arg}`),
   ];
-  const replayCommand = (args: string[], mode: string): string =>
-    [...RUNTIME, SCRIPT, displayPath(options.runner), ...args, `--mode=${mode}`,
-      ...commonFlags.filter(Boolean)]
+  const replayCommand = (args: string[]): string =>
+    [...RUNTIME, SCRIPT, displayPath(options.runner), ...args, ...commonFlags.filter(Boolean)]
       .map(quote)
       .join(" ");
 
@@ -1186,7 +1214,7 @@ const main = async (): Promise<void> => {
         depth: program.depth,
         source: program.source,
         shape: program.shape,
-        replay: (mode) => replayCommand(["--fuzz", `--seed=${options.seed}`, `--index=${index}`, ...limitFlags], mode),
+        replay: replayCommand(["--fuzz", `--seed=${options.seed}`, `--index=${index}`, ...limitFlags]),
       });
     }
   } else {
@@ -1206,8 +1234,7 @@ const main = async (): Promise<void> => {
           growth: probe.growth,
           depth,
           source: probe.body(depth),
-          modes: probe.modes,
-          replay: (mode) => replayCommand([`--probe=${probe.id}`, `--depth=${depth}`], mode),
+          replay: replayCommand([`--probe=${probe.id}`, `--depth=${depth}`]),
         });
       }
     }
@@ -1229,37 +1256,18 @@ const main = async (): Promise<void> => {
     });
   }
 
-  // Preflight: run a trivial program in each requested mode. A mode the
-  // runner rejects as an option (for example after an executor is removed)
-  // is skipped and reported, not counted as a finding; a runner that cannot
-  // run the trivial program at all is a setup error.
+  // Preflight: a runner that cannot run a trivial program is a setup error,
+  // not a finding.
   const preflight = join(work, "preflight.js");
   writeFileSync(preflight, PRELUDE + "report(() => 1 + 1);\n");
-  const modes: string[] = [];
-  const skipped: string[] = [];
-  for (const mode of options.modes) {
-    const result = await runProgram(launcher, options, preflight, mode);
-    if (result.outcome === "completed" && result.detail === "2") {
-      modes.push(mode);
-      continue;
-    }
-    const message = result.output.trim().split("\n")[0] ?? "";
-    if (/\bmode\b/i.test(message) && result.outcome !== "crash" && result.outcome !== "timeout") {
-      skipped.push(`${mode} (${truncate(message, 100)})`);
-      continue;
-    }
+  const preflightResult = await runProgram(launcher, options, preflight);
+  if (preflightResult.outcome !== "completed" || preflightResult.detail !== "2") {
     removeWorkDir();
-    fail(`the runner cannot run a trivial program in --mode=${mode}: ${result.outcome}: ${result.detail}`);
+    fail(`the runner cannot run a trivial program: ${preflightResult.outcome}: ${preflightResult.detail}`);
   }
-  console.log(`modes:       ${modes.join(", ") || "none"}`);
-  if (skipped.length > 0) console.log(`skipped:     ${skipped.join("; ")}: not supported by this runner`);
   console.log("");
-  if (modes.length === 0) {
-    removeWorkDir();
-    fail("the runner supports none of the requested modes");
-  }
 
-  const header = `${"probe".padEnd(32)}${"growth".padEnd(7)}${"depth".padEnd(8)}${"mode".padEnd(12)}${"outcome".padEnd(12)}${"time".padEnd(9)}detail`;
+  const header = `${"probe".padEnd(32)}${"growth".padEnd(7)}${"depth".padEnd(8)}${"outcome".padEnd(12)}${"time".padEnd(9)}detail`;
   console.log(header);
   console.log("-".repeat(header.length + 20));
 
@@ -1272,40 +1280,36 @@ const main = async (): Promise<void> => {
       const file = join(work, `probe-${jobIndex}.js`);
       writeFileSync(file, source);
       if (job.shape) console.log(`${job.id}  ${job.shape}`);
-      for (const mode of modes) {
-        if (job.modes !== undefined && !job.modes.includes(mode)) continue;
-        const result = await runProgram(launcher, options, file, mode);
-        counts.set(result.outcome, (counts.get(result.outcome) ?? 0) + 1);
-        console.log(
-          truncate(job.id, 31).padEnd(32) +
-            (GROWTH_LABEL[job.growth] ?? job.growth).padEnd(7) +
-            String(job.depth).padEnd(8) +
-            mode.padEnd(12) +
-            result.outcome.padEnd(12) +
-            `${result.seconds.toFixed(2)}s`.padEnd(9) +
-            truncate(result.detail.replaceAll("\n", " "), 90),
+      const result = await runProgram(launcher, options, file);
+      counts.set(result.outcome, (counts.get(result.outcome) ?? 0) + 1);
+      console.log(
+        truncate(job.id, 31).padEnd(32) +
+          (GROWTH_LABEL[job.growth] ?? job.growth).padEnd(7) +
+          String(job.depth).padEnd(8) +
+          result.outcome.padEnd(12) +
+          `${result.seconds.toFixed(2)}s`.padEnd(9) +
+          truncate(result.detail.replaceAll("\n", " "), 90),
+      );
+      if (options.verbose && result.outcome !== "completed") {
+        for (const line of result.output.trim().split("\n").slice(0, 20)) console.log(`    | ${truncate(line, 200)}`);
+      }
+      if (FINDINGS.includes(result.outcome)) {
+        findings.push(`${result.outcome.padEnd(11)} ${job.id} depth ${job.depth}: ${result.detail}\n    replay: ${job.replay}`);
+      }
+      if (options.keep && KEPT.includes(result.outcome)) {
+        mkdirSync(options.out, { recursive: true });
+        const name = `${job.id.replaceAll(":", "-")}-d${job.depth}.js`;
+        const target = join(options.out, name);
+        writeFileSync(
+          target,
+          `// depth-probe: ${result.outcome}: ${result.detail.replaceAll("\n", " ")}\n` +
+            (job.shape ? `// shape: ${job.shape}\n` : "") +
+            `// runner: ${options.runner}${options.runnerArgs.length ? " " + options.runnerArgs.join(" ") : ""}\n` +
+            `// memory cap: ${launcher.description}; timeout ${options.timeoutSeconds}s\n` +
+            `// replay: ${job.replay}\n` +
+            source,
         );
-        if (options.verbose && result.outcome !== "completed") {
-          for (const line of result.output.trim().split("\n").slice(0, 20)) console.log(`    | ${truncate(line, 200)}`);
-        }
-        if (FINDINGS.includes(result.outcome)) {
-          findings.push(`${result.outcome.padEnd(11)} ${job.id} depth ${job.depth} ${mode}: ${result.detail}\n    replay: ${job.replay(mode)}`);
-        }
-        if (options.keep && KEPT.includes(result.outcome)) {
-          mkdirSync(options.out, { recursive: true });
-          const name = `${job.id.replaceAll(":", "-")}-d${job.depth}-${mode}.js`;
-          const target = join(options.out, name);
-          writeFileSync(
-            target,
-            `// depth-probe: ${result.outcome}: ${result.detail.replaceAll("\n", " ")}\n` +
-              (job.shape ? `// shape: ${job.shape}\n` : "") +
-              `// runner: ${options.runner} --mode=${mode}${options.runnerArgs.length ? " " + options.runnerArgs.join(" ") : ""}\n` +
-              `// memory cap: ${launcher.description}; timeout ${options.timeoutSeconds}s\n` +
-              `// replay: ${job.replay(mode)}\n` +
-              source,
-          );
-          kept.push(target);
-        }
+        kept.push(target);
       }
     }
   } finally {

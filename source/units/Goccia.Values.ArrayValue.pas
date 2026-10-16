@@ -258,8 +258,6 @@ function InvokeArrayCallback(const ACallback: TGocciaValue;
 begin
   // The builtin's live arguments root the callback and receiver; ACallArgs
   // roots its own slots. Nested dispatch cannot reuse either collection.
-  // An interpreter callback sets aside the caller's generator continuation
-  // itself (Goccia.Evaluator.Calls), so this unit does not touch it.
   if Assigned(ATypedCallback) then
     Result := ATypedCallback.Call(ACallArgs, AThisArg)
   else

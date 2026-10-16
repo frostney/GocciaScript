@@ -23,7 +23,6 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.Executor,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.JSON.Utils,
@@ -115,7 +114,6 @@ type
     MaxTests: Integer;
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
-    Mode: TGocciaTest262ExecutionMode;
     ProfileMode: TTest262ProfileMode;
     ShardIndex: Integer;
     ShardCount: Integer;
@@ -438,7 +436,6 @@ begin
   FOptions.Jobs := DEFAULT_JOBS;
   FOptions.TimeoutMs := DEFAULT_TIMEOUT_MS;
   FOptions.MaxMemoryBytes := DEFAULT_MAX_MEMORY_BYTES;
-  FOptions.Mode := t262emBytecode;
   FOptions.ProfileMode := tpmAll;
   FOptions.ShardIndex := -1;
   FOptions.ShardCount := 0;
@@ -467,7 +464,6 @@ begin
   WriteLn('  --filter=GLOB                Test ID glob');
   WriteLn('  --max-tests=N                Cap before sharding (0 = unlimited)');
   WriteLn('  --jobs=N                     Concurrent native workers (default: 4)');
-  WriteLn('  --mode=interpreted|bytecode  Execution mode (default: bytecode)');
   WriteLn('  --timeout=DURATION           Per-test cooperative timeout: 500ms, 20s, 2m, or plain milliseconds');
   WriteLn('  --max-memory=BYTES           Per-test GC heap ceiling: 512MiB, 1GiB, or plain bytes');
   WriteLn('  --shard-index=N              Zero-based shard index');
@@ -626,16 +622,7 @@ begin
       FOptions.ShardCount := PositiveInteger('--shard-count',
         ArgumentValue('--shard-count'))
     else if (Argument = '--mode') or StartsStr('--mode=', Argument) then
-    begin
-      Value := ArgumentValue('--mode');
-      if Value = 'interpreted' then
-        FOptions.Mode := t262emInterpreted
-      else if Value = 'bytecode' then
-        FOptions.Mode := t262emBytecode
-      else
-        raise TParseError.Create(
-          '--mode requires interpreted or bytecode');
-    end
+      RejectRemovedExecutionModeArgument(Argument)
     else if (Argument = '--profile-mode') or
         StartsStr('--profile-mode=', Argument) then
     begin
@@ -668,9 +655,6 @@ begin
   if (FOptions.ShardIndex >= 0) and
      (FOptions.ShardIndex >= FOptions.ShardCount) then
     raise TParseError.Create('--shard-index must be less than --shard-count');
-  if (FOptions.ProfileDir <> '') and
-     (FOptions.Mode <> t262emBytecode) then
-    raise TCLIUsageError.Create('--profile-dir requires --mode=bytecode');
 end;
 
 function TTest262App.NormalizeId(const APath: string): string;
@@ -1257,7 +1241,6 @@ var
   ErrorName: string;
   DoNotEvaluateReached: Boolean;
   ExecutionFailed: Boolean;
-  Executor: TGocciaExecutor;
   Harness: string;
   Host: TGocciaTest262Host;
   HostError: Boolean;
@@ -1275,7 +1258,6 @@ begin
   StartNanoseconds := GetNanoseconds;
   Metadata := nil;
   Source := nil;
-  Executor := nil;
   Engine := nil;
   Host := nil;
   PrintHost := nil;
@@ -1317,7 +1299,6 @@ begin
         Metadata.HasFeature('realms-tests');
       EngineOptions.AgentCanSuspend :=
         Test262SourceCanSuspendAgent(ACase.Path);
-      EngineOptions.Mode := FOptions.Mode;
       if Metadata.HasFlag('module') then
         EngineOptions.SourceType := stModule
       else
@@ -1342,10 +1323,9 @@ begin
         ForceHostDirectories(ExtractFileDir(ProfilePath));
       end;
 
-      Executor := CreateTest262Executor(FOptions.Mode);
-      Engine := TGocciaEngine.Create(ACase.Path, Source, Executor,
+      Engine := TGocciaEngine.Create(ACase.Path, Source,
         EngineOptions.Capabilities);
-      ConfigureTest262Engine(Engine, Executor, EngineOptions);
+      ConfigureTest262Engine(Engine, EngineOptions);
       Host := TGocciaTest262Host.Create(EngineOptions);
       Host.ConfigureHostEnvironment(Engine.HostEnvironment);
       PrintHost := TTest262PrintHost.Create;
@@ -1435,7 +1415,6 @@ begin
     PrintHost.Free;
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
     Metadata.Free;
     AResult.DurationMs := Round(
@@ -1870,10 +1849,6 @@ begin
       Lines.Add('    "test262Sha": null,')
     else
       Lines.Add('    "test262Sha": ' + JSONString(Test262SHA) + ',');
-    if FOptions.Mode = t262emBytecode then
-      Lines.Add('    "mode": "bytecode",')
-    else
-      Lines.Add('    "mode": "interpreted",');
     Lines.Add('    "categories": [');
     for I := 0 to Categories.Count - 1 do
     begin
@@ -1916,14 +1891,12 @@ function TTest262App.RunHostEval: Integer;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   PrintHost: TTest262PrintHost;
   Source: TStringList;
 begin
   Result := 0;
   Source := ReadSourceFromText(Input);
-  Executor := nil;
   Engine := nil;
   Host := nil;
   PrintHost := nil;
@@ -1934,7 +1907,6 @@ begin
       cfArgumentsObject, cfLabel, cfForIn];
     EngineOptions.UnsafeShadowRealm := True;
     EngineOptions.AgentCanSuspend := True;
-    EngineOptions.Mode := FOptions.Mode;
     EngineOptions.SourceType := FOptions.HostEvalSourceType;
     EngineOptions.TimeoutMs := FOptions.TimeoutMs;
     EngineOptions.MaxMemoryBytes := FOptions.MaxMemoryBytes;
@@ -1944,10 +1916,9 @@ begin
       GetCurrentDir);
     StartExecutionTimeout(FOptions.TimeoutMs);
     SetMaxStackDepth(DEFAULT_STACK_DEPTH);
-    Executor := CreateTest262Executor(FOptions.Mode);
-    Engine := TGocciaEngine.Create('<test262-host-eval>', Source, Executor,
+    Engine := TGocciaEngine.Create('<test262-host-eval>', Source,
       EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    ConfigureTest262Engine(Engine, EngineOptions);
     if FOptions.HostEvalDeterministic then
       Engine.HostEnvironment.UseDeterministicProfile;
     Engine.WarningUnsupportedFeatures :=
@@ -1993,7 +1964,6 @@ begin
     PrintHost.Free;
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -2005,10 +1975,6 @@ begin
     Exit(RunHostEval);
   WriteLn('Suite:         ', FOptions.SuiteDir);
   WriteLn('Categories:    ', FOptions.Categories);
-  if FOptions.Mode = t262emBytecode then
-    WriteLn('Mode:          bytecode')
-  else
-    WriteLn('Mode:          interpreted');
   WriteLn('Jobs:          ', FOptions.Jobs);
   WriteLn('Timeout:       ', FOptions.TimeoutMs, 'ms');
   if FOptions.ShardCount > 0 then

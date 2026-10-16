@@ -4,11 +4,10 @@ features: [ShadowRealm, Goccia]
 ---*/
 
 // The parser reads `a + b + c` and `a.b().c` in a loop, but the tree it
-// builds is as tall as the chain is long, and the compiler, the evaluator and
-// the code that frees the tree walk it recursively. The syntax tree of a
+// builds is as tall as the chain is long, and the compiler and the code that
+// frees the tree walk it recursively. The syntax tree of a
 // statement may be 4,096 levels tall, counting each level of nesting and each
-// link of a chain. A 30,000-term chain used to crash the development build,
-// and the interpreter in the production build.
+// link of a chain. A 30,000-term chain used to crash the development build.
 const LIMIT_MESSAGE = "exceeds the supported limit of 4096 levels";
 const DEEP = 30000;
 const realm = new ShadowRealm();

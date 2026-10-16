@@ -18,10 +18,10 @@ type
     HasDisposeArgument: Boolean;
   end;
 
-  { Tracks disposable resources for a block scope. Resources are disposed in
-    reverse declaration order at block exit. This class only stores the
-    resource records; the actual disposal logic lives in the evaluator to
-    avoid circular dependencies with AwaitValue. }
+  { Tracks the disposable resources of a DisposableStack or
+    AsyncDisposableStack. Resources are disposed in reverse order of
+    addition. This class only stores the resource records; the actual
+    disposal logic lives in Goccia.Builtins.DisposableStack. }
   TGocciaDisposalTracker = class
   private
     FResources: array of TGocciaDisposableResource;

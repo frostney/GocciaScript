@@ -35,8 +35,7 @@ const
   // How tall the syntax tree of a statement or expression may be, counting
   // each level of nesting and each link of an operator, member or call chain.
   // The parser builds a chain in a loop, but every pass after it (the
-  // bytecode compiler and its analyses, the tree-walk evaluator, freeing the
-  // tree) recurses once per link, so a chain long enough would overflow the
+  // bytecode compiler and its analyses, freeing the tree) recurses once per link, so a chain long enough would overflow the
   // stack there. The parser bounds the height bottom up (see
   // TGocciaParser.LeaveNesting) and reports a SyntaxError past this limit.
   //

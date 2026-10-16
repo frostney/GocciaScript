@@ -8,9 +8,7 @@ features: [stack-depth-limit]
 // call like any other, so the test runner's default limit of 2,200 nested
 // calls applies to them, not a fixed cap of 512 native re-entries.
 //
-// Recursion without end is checked by scripts/test-cli.ts in bytecode mode
-// only: the interpreter recurses natively and does not guard its stack, and
-// 2,200 nested async calls take most of a worker's 8 MiB there.
+// Recursion without end is checked by scripts/test-cli.ts.
 const DEPTH = 600;
 
 describe("recursion through native re-entry", () => {

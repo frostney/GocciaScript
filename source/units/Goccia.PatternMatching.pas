@@ -30,14 +30,12 @@ type
 
 function MatchValueEquals(const ASubject, ACandidate: TGocciaValue): Boolean;
 function GetCustomMatcher(const AMatcher: TGocciaValue): TGocciaValue;
-procedure ThrowNoMatchingPattern;
 
 implementation
 
 uses
   Goccia.Arithmetic,
   Goccia.Values.ClassValue,
-  Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
@@ -62,11 +60,6 @@ begin
       TGocciaSymbolValue.WellKnownCustomMatcher);
   if Assigned(Result) and (Result is TGocciaUndefinedLiteralValue) then
     Result := nil;
-end;
-
-procedure ThrowNoMatchingPattern;
-begin
-  ThrowTypeError('No pattern matched');
 end;
 
 end.
