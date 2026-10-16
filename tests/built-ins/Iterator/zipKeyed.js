@@ -232,6 +232,44 @@ describe("Iterator.zipKeyed() — longest mode", () => {
       expect(result[1].x.marker).toBe("padding-x");
       expect(result[1].y).toBe(3);
     });
+
+    // The padding option and the key list are both held only by the builtin
+    // while the iterables' getters run.
+    test("keeps the padding option and the keys alive while the iterables' getters collect", () => {
+      const options = {
+        get mode() { return "longest"; },
+        get padding() { return { b: { tag: "pad-b" } }; },
+      };
+      const iterables = {
+        get a() { Goccia.gc(); return [1, 2]; },
+        get b() { Goccia.gc(); return [3]; },
+      };
+
+      const result = [...Iterator.zipKeyed(iterables, options)];
+
+      expect(result).toEqual([{ a: 1, b: 3 }, { a: 2, b: { tag: "pad-b" } }]);
+    });
+
+    // Once the getter deletes the symbol-keyed property, the key list is the
+    // only thing still referencing that symbol.
+    test("skips a later key an earlier getter deleted, after a collection", () => {
+      const makeIterables = () => {
+        const iterables = {
+          get first() {
+            delete iterables[Object.getOwnPropertySymbols(iterables)[0]];
+            Goccia.gc();
+            return [1];
+          },
+        };
+        iterables[Symbol("later")] = [2];
+        return iterables;
+      };
+
+      const result = Iterator.zipKeyed(makeIterables()).toArray();
+
+      expect(result).toEqual([{ first: 1 }]);
+      expect(Object.getOwnPropertySymbols(result[0])).toEqual([]);
+    });
   });
 });
 

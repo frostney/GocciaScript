@@ -2204,6 +2204,18 @@ begin
         LeavePropertyDelegation;
       end;
     end
+    else if FTarget is TGocciaBoundFunctionValue then
+    begin
+      // A bound function forwards to its own target by a native call too, so
+      // a chain that alternates Proxies with bound functions is counted here.
+      EnterPropertyDelegation;
+      try
+        Result := TGocciaBoundFunctionValue(FTarget).Call(AArguments,
+          AThisValue);
+      finally
+        LeavePropertyDelegation;
+      end;
+    end
     else if FTarget is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(FTarget).Call(AArguments, AThisValue)
     else if FTarget is TGocciaClassValue then
@@ -2264,9 +2276,15 @@ begin
     // synthetic receiver), nested proxies, classes, ordinary functions, and
     // native constructors. Native-constructor newTarget propagation remains
     // tracked in #530.
-    if FTarget is TGocciaProxyValue then
+    if (FTarget is TGocciaProxyValue) or
+       (FTarget is TGocciaBoundFunctionValue) or
+       (FTarget is TGocciaClassValue) then
     begin
-      // A Proxy target is counted; see MAX_PROPERTY_DELEGATION_DEPTH.
+      // A Proxy target is counted; see MAX_PROPERTY_DELEGATION_DEPTH. So is
+      // a bound function, which forwards to its own target natively, and a
+      // class: one whose heritage is a Proxy constructs it from its implicit
+      // constructor by a native call, so `class extends new Proxy(C, {})`
+      // repeated forms a chain with no script frame in it.
       EnterPropertyDelegation;
       try
         Result := ConstructValue(FTarget, AArguments, EffectiveNewTarget);
@@ -2278,14 +2296,33 @@ begin
       Result := ConstructValue(FTarget, AArguments, EffectiveNewTarget);
 end;
 
-// The innermost target of a nest of Proxies. typeof, IsCallable and
-// IsConstructable cannot throw, so they step through the nest in a loop
-// rather than recursing through it.
+// The innermost target of a nest of Proxies. typeof and IsCallable cannot
+// throw, so they step through the nest in a loop rather than recursing
+// through it.
 function InnermostProxyTarget(const AProxy: TGocciaProxyValue): TGocciaValue;
 begin
   Result := AProxy.Target;
   while Result.ClassType = TGocciaProxyValue do
     Result := TGocciaProxyValue(Result).Target;
+end;
+
+// The same walk, through the bound functions between Proxies as well, for
+// IsConstructable, which cannot throw either: ES2026 §10.4.1.3 BoundFunctionCreate step 6 gives a bound
+// function [[Construct]] exactly when its target has one. (A bound function
+// is callable whatever its target, so typeof and IsCallable stop at it.)
+function InnermostConstructTarget(const AProxy: TGocciaProxyValue): TGocciaValue;
+begin
+  Result := AProxy.Target;
+  while True do
+  begin
+    if Result.ClassType = TGocciaProxyValue then
+      Result := TGocciaProxyValue(Result).Target
+    else if (Result is TGocciaBoundFunctionValue) and
+            Assigned(TGocciaBoundFunctionValue(Result).OriginalFunction) then
+      Result := TGocciaBoundFunctionValue(Result).OriginalFunction
+    else
+      Break;
+  end;
 end;
 
 function TGocciaProxyValue.TypeOf: string;
@@ -2302,7 +2339,7 @@ end;
 
 function TGocciaProxyValue.IsConstructable: Boolean;
 begin
-  Result := InnermostProxyTarget(Self).IsConstructable;
+  Result := InnermostConstructTarget(Self).IsConstructable;
 end;
 
 function TGocciaProxyValue.ToStringTag: string;
@@ -2398,23 +2435,32 @@ end;
 function DispatchProxyGetFunctionRealm(
   const AProxy: TGocciaValue): TGocciaRealm;
 var
+  Current: TGocciaValue;
   Proxy: TGocciaProxyValue;
 begin
   // ES2026 §7.3.24 GetFunctionRealm steps through a nest of Proxies, each
-  // of which must not be revoked; a loop, so a deep nest takes no stack.
-  Proxy := TGocciaProxyValue(AProxy);
-  Proxy.CheckRevoked;
-  while Proxy.FTarget is TGocciaProxyValue do
+  // of which must not be revoked, and through the bound functions between
+  // them (step 2); a loop, so a deep nest takes no stack.
+  Current := AProxy;
+  while True do
   begin
-    Proxy := TGocciaProxyValue(Proxy.FTarget);
-    Proxy.CheckRevoked;
+    if Current is TGocciaProxyValue then
+    begin
+      Proxy := TGocciaProxyValue(Current);
+      Proxy.CheckRevoked;
+      Current := Proxy.FTarget;
+    end
+    else if Current is TGocciaBoundFunctionValue then
+      Current := TGocciaBoundFunctionValue(Current).OriginalFunction
+    else
+      Break;
   end;
 
-  if Proxy.FTarget is TGocciaFunctionBase then
-    Exit(TGocciaFunctionBase(Proxy.FTarget).CreationRealm);
+  if Current is TGocciaFunctionBase then
+    Exit(TGocciaFunctionBase(Current).CreationRealm);
 
-  if Proxy.FTarget is TGocciaClassValue then
-    Exit(TGocciaClassValue(Proxy.FTarget).CreationRealm);
+  if Current is TGocciaClassValue then
+    Exit(TGocciaClassValue(Current).CreationRealm);
 
   Result := nil;
 end;

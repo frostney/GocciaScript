@@ -66,6 +66,11 @@ interface SuiteRunMetadata {
   jobs: number;
   timeoutMs: number;
   maxMemoryBytes: number;
+  /**
+   * Grading contract version (docs/test262.md). Absent in reports written
+   * before the field existed, which were graded under contract 1.
+   */
+  gradingContract?: number;
 }
 
 interface ShardMetadata {
@@ -752,6 +757,11 @@ function readShardReport(path: string): SuiteReport {
   return report;
 }
 
+/** Reports written before `run.gradingContract` existed used contract 1. */
+function gradingContractOf(run: { gradingContract?: number } | undefined | null): number {
+  return run?.gradingContract ?? 1;
+}
+
 function mergeShardReports(paths: string[]): SuiteReport {
   const reports = paths.map(readShardReport);
   const first = reports[0];
@@ -766,6 +776,7 @@ function mergeShardReports(paths: string[]): SuiteReport {
     jobs: first.run!.jobs,
     timeoutMs: first.run!.timeoutMs,
     maxMemoryBytes: first.run!.maxMemoryBytes,
+    gradingContract: gradingContractOf(first.run),
   });
   const seenShards = new Set<number>();
   const seenTests = new Set<string>();
@@ -791,6 +802,7 @@ function mergeShardReports(paths: string[]): SuiteReport {
       jobs: report.run!.jobs,
       timeoutMs: report.run!.timeoutMs,
       maxMemoryBytes: report.run!.maxMemoryBytes,
+      gradingContract: gradingContractOf(report.run),
     });
     if (signature !== runSignature) {
       throw new Error(`Run metadata mismatch in ${path}`);
@@ -981,8 +993,12 @@ function bucketAreas(results: PerTestRecord[]): Map<string, AreaBucket> {
 }
 
 function buildCommentMarkdown(
-  data: { summary: SuiteSummary; results: PerTestRecord[] } | null,
-  baseline: { summary: BaselineSummary; results?: PerTestRecord[] } | null,
+  data: { summary: SuiteSummary; results: PerTestRecord[]; run?: SuiteRunMetadata } | null,
+  baseline: {
+    summary: BaselineSummary;
+    results?: PerTestRecord[];
+    run?: { gradingContract?: number };
+  } | null,
 ): { markdown: string; regressed: boolean } {
   const marker = "<!-- test262-results -->";
   let body = "## test262 Conformance\n\n";
@@ -997,10 +1013,18 @@ function buildCommentMarkdown(
   const s = data.summary;
   const delta = computeRegression(data, baseline);
   const hasBaseline = delta.hasBaseline;
-  const regressed = hasBaseline && delta.newFails.length > 0;
+  // A baseline graded under another contract is not comparable test by test:
+  // the runner, not the engine, moved those tests. Report the transitions but
+  // do not block; main republishes the baseline under the new contract.
+  const baseContract = gradingContractOf(baseline?.run);
+  const currentContract = gradingContractOf(data.run);
+  const contractChanged = hasBaseline && baseContract !== currentContract;
+  const regressed = hasBaseline && delta.newFails.length > 0 && !contractChanged;
 
   if (regressed) {
     body += `> 🚫 **Regression vs cached \`main\` baseline.** ${delta.newFails.length} previously-passing test(s) now fail; pass count Δ ${delta.totalPassedDelta >= 0 ? "+" : ""}${delta.totalPassedDelta}. This run blocks merge — see "Newly failing" below.\n\n`;
+  } else if (contractChanged && delta.newFails.length > 0) {
+    body += `> ℹ️ **Grading contract changed (v${baseContract} → v${currentContract}).** The cached \`main\` baseline was graded under the previous contract, so ${delta.newFails.length} PASS → FAIL transition(s) are reported but do not block. The next \`main\` run republishes the baseline under v${currentContract}.\n\n`;
   }
   const baselineByCat = new Map<string, CategorySummary>();
   if (hasBaseline) {
@@ -1081,7 +1105,7 @@ function buildCommentMarkdown(
       delta.newTimeouts.length > 0 ||
       delta.resolvedTimeouts.length > 0)
   ) {
-    body += `<details${regressed ? " open" : ""}>\n<summary>Per-test deltas (+${delta.newPasses.length} / -${delta.newFails.length} / timeout +${delta.newTimeouts.length} / -${delta.resolvedTimeouts.length})</summary>\n\n`;
+    body += `<details${regressed || contractChanged ? " open" : ""}>\n<summary>Per-test deltas (+${delta.newPasses.length} / -${delta.newFails.length} / timeout +${delta.newTimeouts.length} / -${delta.resolvedTimeouts.length})</summary>\n\n`;
     if (delta.newFails.length > 0) {
       body += `**Newly failing (${delta.newFails.length}):**\n\n`;
       for (const id of delta.newFails.slice(0, 100)) body += `- \`${id}\`\n`;

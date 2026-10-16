@@ -131,6 +131,15 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
 
   Use a `.ts` or `.mts` source when an annotation needs the bare `<T>` form.
 
+## Arrow Return Types in Conditionals
+
+Inside a conditional's consequent, `(x) : y => z` reads two ways: an arrow with return type `y`, or the parenthesized expression `(x)`, the conditional's `:`, and an alternate arrow `y => z`. GocciaScript follows TypeScript's rule: there, the return-typed arrow is kept only when the `:` that closes the conditional follows its body. One `:` is needed for each consequent the arrow is nested in. Otherwise the group is a parenthesized expression, so plain JavaScript such as minified `c ? (l) => ({ a: 1 }) : (l) => 2` parses as written.
+
+```typescript
+const pick = c ? (x: number): number => x : (y: number) => -y; // return-typed arrow
+const make = c ? (l) => ({ a: 1 }) : (l) => 2;                 // `({ a: 1 })` is the body
+```
+
 ## Automatic Semicolon Insertion and Type Syntax
 
 Type-level declarations that are skipped rather than parsed (`type`, `import type`, `export type`) are erased whole under ASI, even when they span lines: a union `|` or intersection `&` leading the next line, a break right after the `=`, a break before a function type's `=>`, and a conditional type broken around `?` and `:` all stay part of the declaration. A type argument list wrapped across lines is fine too, because its breaks fall after a `<` or `,` or before a `>`.
