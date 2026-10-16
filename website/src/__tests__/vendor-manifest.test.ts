@@ -7,6 +7,7 @@ import {
   binaryNames,
   checkVendorManifestFloor,
   DEFAULT_EXECUTION_MODE,
+  effectiveExecutionMode,
   findVersion,
   hostFilesystemBoundaryFlag,
   isFlagSupported,
@@ -404,8 +405,37 @@ describe("supportsModeFlag", () => {
     expect(supportsModeFlag(noMode, "testRunner")).toBe(true);
   });
 
-  test("treats an unprobed (locally built) engine as supporting --mode", () => {
-    expect(supportsModeFlag(undefined, "loader")).toBe(true);
+  test("is false for a 0.15+ binary, whose help no longer lists --mode", () => {
+    const bytecodeOnly: VendorFeatureSet = {
+      loader: ["--compat-asi", "--deny-read", "--source-type"],
+      testRunner: ["--compat-asi", "--deny-read", "--source-type"],
+    };
+    expect(supportsModeFlag(bytecodeOnly, "loader")).toBe(false);
+    expect(supportsModeFlag(bytecodeOnly, "testRunner")).toBe(false);
+  });
+
+  test("a binary without --mode runs bytecode whatever the request names", () => {
+    const bytecodeOnly: VendorFeatureSet = {
+      loader: ["--compat-asi", "--deny-read"],
+      testRunner: ["--compat-asi", "--deny-read"],
+    };
+    expect(effectiveExecutionMode("interpreted", bytecodeOnly, "loader")).toBe(
+      "bytecode",
+    );
+    expect(effectiveExecutionMode(undefined, undefined, "testRunner")).toBe(
+      "bytecode",
+    );
+    expect(
+      effectiveExecutionMode("interpreted", MODERN_FEATURES, "loader"),
+    ).toBe("interpreted");
+    expect(effectiveExecutionMode(undefined, MODERN_FEATURES, "loader")).toBe(
+      DEFAULT_EXECUTION_MODE,
+    );
+  });
+
+  test("treats an unprobed (locally built) engine as not supporting --mode", () => {
+    expect(supportsModeFlag(undefined, "loader")).toBe(false);
+    expect(supportsModeFlag(undefined, "testRunner")).toBe(false);
   });
 });
 
