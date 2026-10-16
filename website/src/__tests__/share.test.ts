@@ -91,13 +91,15 @@ describe("playground execution mode", () => {
     "v0.9.0": { loader: true, testRunner: false },
   };
 
-  test("a version is mode-selectable per runner, and an unknown one is", () => {
+  test("a version is mode-selectable per runner, and an unknown one is not", () => {
     expect(isModeSelectable(support, "v0.14.0", "execute")).toBe(true);
     expect(isModeSelectable(support, "v0.6.1", "execute")).toBe(false);
     expect(isModeSelectable(support, "v0.9.0", "execute")).toBe(true);
     expect(isModeSelectable(support, "v0.9.0", "test")).toBe(false);
-    expect(isModeSelectable(support, "local-build", "test")).toBe(true);
-    expect(isModeSelectable(undefined, "v0.6.1", "execute")).toBe(true);
+    // An unknown tag is a locally built engine, which has no --mode since
+    // 0.15.0, so the playground shows no toggle for it.
+    expect(isModeSelectable(support, "local-build", "test")).toBe(false);
+    expect(isModeSelectable(undefined, "v0.6.1", "execute")).toBe(false);
   });
 
   test("a selectable version carries the selected mode", () => {

@@ -21,8 +21,6 @@ uses
   Goccia.CLI.Stdin,
   Goccia.CLI.Trust,
   Goccia.Engine,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.ScriptLoader.SourceRegistry;
 
 type
@@ -233,8 +231,7 @@ type
     procedure ApplyCommandLineVirtualModulesToEngine(
       const AEngine: TGocciaEngine);
     function CreateEngine(const AFileName: string;
-      const ASource: TStringList;
-      const AExecutor: TGocciaExecutor): TGocciaEngine;
+      const ASource: TStringList): TGocciaEngine;
     { Returns the effective job count: --jobs value, or ProcessorCount,
       capped to AFileCount. Returns 1 when parallelism is not desired. }
     function GetJobCount(const AFileCount: Integer): Integer;
@@ -340,7 +337,6 @@ uses
   Goccia.CLI.Help,
   Goccia.Coverage,
   Goccia.Error.Suggestions,
-  Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
@@ -1791,8 +1787,8 @@ begin
     Exit('a symbol');
   if AValue is TGocciaBigIntValue then
     Exit('a BigInt');
-  { An object literal is a TGocciaObjectValue in the interpreter and a
-    TGocciaVMLiteralObjectValue in bytecode mode; both are plain objects. }
+  { A natively built object is a TGocciaObjectValue and an object literal a
+    TGocciaVMLiteralObjectValue; both are plain objects. }
   if not (AValue is TGocciaObjectValue) or
      ((AValue.ClassType <> TGocciaObjectValue) and
       (AValue.ClassType <> TGocciaVMLiteralObjectValue) and
@@ -1834,10 +1830,10 @@ type
 
 { Evaluates the JavaScript or TypeScript module at APath in an engine of its
   own with AEngine's capability set, the config's directory as its project,
-  and AEngine's language settings and execution mode: its imports are guest
-  reads, judged like the script's, and whatever it leaves on its global object
-  stays in that engine. Running it on AEngine's kind of executor means a throw
-  from it is located exactly as the same module passed with --globals is.
+  and AEngine's language settings: its imports are guest reads, judged like
+  the script's, and whatever it leaves on its global object stays in that
+  engine. A throw from it is located exactly as the same module passed with
+  --globals is.
   Returns the requested exports as JSON, so only data reaches the script.
   AModulePath receives the module's canonical path. }
 function EvaluateIsolatedConfigModule(const AEngine: TGocciaEngine;
@@ -1845,7 +1841,6 @@ function EvaluateIsolatedConfigModule(const AEngine: TGocciaEngine;
   out AModulePath: string): string;
 var
   Isolated: TGocciaEngine;
-  Executor: TGocciaExecutor;
   Source: TStringList;
   Module: TGocciaModule;
   ExportValue, ExportedValue: TGocciaValue;
@@ -1861,15 +1856,8 @@ begin
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
     Source := TStringList.Create;
-    { The module runs in the script's execution mode; bytecode unless the
-      script runs in an interpreter. }
-    if AEngine.Executor is TGocciaInterpreterExecutor then
-      Executor := TGocciaInterpreterExecutor.Create
-    else
-      Executor := TGocciaBytecodeExecutor.Create;
     try
-      Isolated := TGocciaEngine.Create(APath, Source, Executor,
-        AEngine.Capabilities);
+      Isolated := TGocciaEngine.Create(APath, Source, AEngine.Capabilities);
       try
         Isolated.ProjectRoot := ExtractFileDir(AConfigPath);
         Isolated.ConfigureCapabilityAuditAsChildOf(AEngine);
@@ -1944,7 +1932,6 @@ begin
         Isolated.Free;
       end;
     finally
-      Executor.Free;
       Source.Free;
     end;
   finally
@@ -2253,7 +2240,7 @@ begin
 end;
 
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
-  const ASource: TStringList; const AExecutor: TGocciaExecutor): TGocciaEngine;
+  const ASource: TStringList): TGocciaEngine;
 var
   AliasBaseDirectory: string;
   FileConfig: TConfigEntryArray;
@@ -2267,7 +2254,7 @@ begin
     SetLength(FileConfig, 0);
   Verdict := FileConfigVerdict(FileConfigPath, AFileName);
   { The capability set is fixed when the engine is created (ADR 0122). }
-  Result := TGocciaEngine.Create(AFileName, ASource, AExecutor,
+  Result := TGocciaEngine.Create(AFileName, ASource,
     ResolveVerdictCapabilities(FEngineOptions, Verdict, HonoredCapabilities));
   try
     Result.CapabilityProvenance := CapabilityProvenance(Verdict);
@@ -2297,9 +2284,8 @@ begin
     ApplyVirtualModulesToEngine(Result, FileConfigPath);
     { A detected entry is configured as a Script; the engine keeps the top
       level of one that turns out a Module off the global object. }
-    if AExecutor is TGocciaBytecodeExecutor then
-      TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
-        Result.SourceType <> Goccia.Engine.stModule;
+    Result.GlobalBackedTopLevel :=
+      Result.SourceType <> Goccia.Engine.stModule;
   except
     Result.Free;
     raise;

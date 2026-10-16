@@ -15,9 +15,6 @@ uses
 
   Goccia.Engine,
   Goccia.Error,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.Values.Primitives;
@@ -31,8 +28,7 @@ type
     function ParseError(const ASource: string;
       const ASourceType: TGocciaSourceType;
       const ACompatibility: TGocciaCompatibilityFlags = []): string;
-    function RunEntry(const AExecutor: TGocciaExecutor;
-      const AFileName, ASource: string; const AOverride: Boolean;
+    function RunEntry(const AFileName, ASource: string; const AOverride: Boolean;
       const ASourceType: TGocciaSourceType;
       out ASourceTypeAfterRun: TGocciaSourceType): string;
     procedure TestImportDeclarationIsModule;
@@ -45,17 +41,9 @@ type
     procedure TestWithInADetectedSloppyModuleIsAStrictModeError;
     procedure TestExplicitScriptKeepsModuleDeclarations;
     procedure TestDefaultEntrySourceType;
-    procedure AssertDetectedModuleEntryRunsAsModule(
-      const AExecutor: TGocciaExecutor);
-    procedure AssertDetectedScriptEntryRunsAsScript(
-      const AExecutor: TGocciaExecutor);
-    procedure AssertEmbedderChoosesScript(const AExecutor: TGocciaExecutor);
-    procedure TestDetectedModuleEntryInterpreter;
-    procedure TestDetectedModuleEntryBytecode;
-    procedure TestDetectedScriptEntryInterpreter;
-    procedure TestDetectedScriptEntryBytecode;
-    procedure TestEmbedderChoosesScriptInterpreter;
-    procedure TestEmbedderChoosesScriptBytecode;
+    procedure TestDetectedModuleEntryRunsAsModule;
+    procedure TestDetectedScriptEntryRunsAsScript;
+    procedure TestEmbedderChoosesScript;
     procedure TestDuplicateImportedBindingIsAnEarlyError;
   public
     procedure SetupTests; override;
@@ -85,18 +73,12 @@ begin
     TestDefaultEntrySourceType);
   Test('Two imports binding one name are an early error of a Module',
     TestDuplicateImportedBindingIsAnEarlyError);
-  Test('A detected Module entry has an undefined this (interpreter)',
-    TestDetectedModuleEntryInterpreter);
-  Test('A detected Module entry has an undefined this (bytecode)',
-    TestDetectedModuleEntryBytecode);
-  Test('A detected Script entry keeps its globals (interpreter)',
-    TestDetectedScriptEntryInterpreter);
-  Test('A detected Script entry keeps its globals (bytecode)',
-    TestDetectedScriptEntryBytecode);
-  Test('An embedder that sets stScript runs module syntax as a Script ' +
-    '(interpreter)', TestEmbedderChoosesScriptInterpreter);
-  Test('An embedder that sets stScript runs module syntax as a Script ' +
-    '(bytecode)', TestEmbedderChoosesScriptBytecode);
+  Test('A detected Module entry has an undefined this',
+    TestDetectedModuleEntryRunsAsModule);
+  Test('A detected Script entry keeps its globals',
+    TestDetectedScriptEntryRunsAsScript);
+  Test('An embedder that sets stScript runs module syntax as a Script',
+    TestEmbedderChoosesScript);
 end;
 
 function TEngineSourceTypeTests.ParsedSourceType(const ASource: string;
@@ -137,8 +119,7 @@ begin
   end;
 end;
 
-function TEngineSourceTypeTests.RunEntry(const AExecutor: TGocciaExecutor;
-  const AFileName, ASource: string; const AOverride: Boolean;
+function TEngineSourceTypeTests.RunEntry(const AFileName, ASource: string; const AOverride: Boolean;
   const ASourceType: TGocciaSourceType;
   out ASourceTypeAfterRun: TGocciaSourceType): string;
 var
@@ -148,7 +129,7 @@ begin
   Source := TStringList.Create;
   try
     Source.Text := ASource;
-    Engine := TGocciaEngine.Create(AFileName, Source, AExecutor);
+    Engine := TGocciaEngine.Create(AFileName, Source);
     try
       if AOverride then
         Engine.SourceType := ASourceType;
@@ -238,26 +219,23 @@ end;
 procedure TEngineSourceTypeTests.TestDefaultEntrySourceType;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('entry.js', Source, Executor);
+    Engine := TGocciaEngine.Create('entry.js', Source);
     try
       Expect<Boolean>(Engine.SourceType = stDetect).ToBe(True);
     finally
       Engine.Free;
     end;
-    Engine := TGocciaEngine.Create('entry.mjs', Source, Executor);
+    Engine := TGocciaEngine.Create('entry.mjs', Source);
     try
       Expect<Boolean>(Engine.SourceType = stModule).ToBe(True);
     finally
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -280,12 +258,11 @@ begin
     .ToBe('');
 end;
 
-procedure TEngineSourceTypeTests.AssertDetectedModuleEntryRunsAsModule(
-  const AExecutor: TGocciaExecutor);
+procedure TEngineSourceTypeTests.TestDetectedModuleEntryRunsAsModule;
 var
   After: TGocciaSourceType;
 begin
-  Expect<string>(RunEntry(AExecutor, 'entry.js',
+  Expect<string>(RunEntry('entry.js',
     'export const answer = 42;' + LineEnding +
     'String(this) + ":" + typeof import.meta.url;',
     False, stDetect, After)).ToBe('undefined:string');
@@ -293,100 +270,26 @@ begin
   Expect<Boolean>(After = stDetect).ToBe(True);
 end;
 
-procedure TEngineSourceTypeTests.AssertDetectedScriptEntryRunsAsScript(
-  const AExecutor: TGocciaExecutor);
+procedure TEngineSourceTypeTests.TestDetectedScriptEntryRunsAsScript;
 var
   After: TGocciaSourceType;
 begin
-  Expect<string>(RunEntry(AExecutor, 'entry.js',
+  Expect<string>(RunEntry('entry.js',
     'const scriptGlobal = 1;' + LineEnding +
     'String(this === globalThis) + ":" + typeof scriptGlobal;',
     False, stDetect, After)).ToBe('true:number');
   Expect<Boolean>(After = stDetect).ToBe(True);
 end;
 
-procedure TEngineSourceTypeTests.AssertEmbedderChoosesScript(
-  const AExecutor: TGocciaExecutor);
+procedure TEngineSourceTypeTests.TestEmbedderChoosesScript;
 var
   After: TGocciaSourceType;
 begin
-  Expect<string>(RunEntry(AExecutor, 'entry.js',
+  Expect<string>(RunEntry('entry.js',
     'export const answer = 42;' + LineEnding +
     'String(this === globalThis);',
     True, stScript, After)).ToBe('true');
   Expect<Boolean>(After = stScript).ToBe(True);
-end;
-
-procedure TEngineSourceTypeTests.TestDetectedModuleEntryInterpreter;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertDetectedModuleEntryRunsAsModule(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TEngineSourceTypeTests.TestDetectedModuleEntryBytecode;
-var
-  Executor: TGocciaBytecodeExecutor;
-begin
-  Executor := TGocciaBytecodeExecutor.Create;
-  try
-    AssertDetectedModuleEntryRunsAsModule(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TEngineSourceTypeTests.TestDetectedScriptEntryInterpreter;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertDetectedScriptEntryRunsAsScript(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TEngineSourceTypeTests.TestDetectedScriptEntryBytecode;
-var
-  Executor: TGocciaBytecodeExecutor;
-begin
-  Executor := TGocciaBytecodeExecutor.Create;
-  try
-    AssertDetectedScriptEntryRunsAsScript(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TEngineSourceTypeTests.TestEmbedderChoosesScriptInterpreter;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertEmbedderChoosesScript(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TEngineSourceTypeTests.TestEmbedderChoosesScriptBytecode;
-var
-  Executor: TGocciaBytecodeExecutor;
-begin
-  Executor := TGocciaBytecodeExecutor.Create;
-  try
-    AssertEmbedderChoosesScript(Executor);
-  finally
-    Executor.Free;
-  end;
 end;
 
 begin

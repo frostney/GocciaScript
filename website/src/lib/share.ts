@@ -68,7 +68,7 @@ export type PlaygroundModeSupport = Record<
 
 /** Whether the playground can pass `--mode` to the binary that runs `runner`
  *  for `version`. A version missing from the table (a locally built engine)
- *  is a current one, which takes `--mode`. */
+ *  is built from this repository, which has no `--mode` since 0.15.0. */
 export function isModeSelectable(
   modeSupport: PlaygroundModeSupport | undefined,
   version: string,
@@ -76,7 +76,7 @@ export function isModeSelectable(
 ): boolean {
   return (
     modeSupport?.[version]?.[runner === "test" ? "testRunner" : "loader"] ??
-    true
+    false
   );
 }
 

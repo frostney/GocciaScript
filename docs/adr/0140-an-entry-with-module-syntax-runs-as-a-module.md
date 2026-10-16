@@ -73,10 +73,9 @@ modules commonly have their entry in such a cycle (`main.js` and `state.js`).
 - **A Module's imported names are early errors.** A module that declares a
   name one of its imports binds, or two imports binding one name, is a
   SyntaxError before it runs (§16.2.1.1, with LexicallyDeclaredNames §8.2.4).
-  Bytecode mode accepted it for every Module, and interpreted mode reported it
-  only when the declaration ran. A detected entry would have turned an error
-  a Script entry reported into a silent redeclaration, so the check joined the
-  source pipeline's other Module early errors.
+  The engine accepted it for every Module. A detected entry would have made
+  more entries Modules that accept it silently, so the check joined the source
+  pipeline's other Module early errors.
 
 ## Where it applies
 
@@ -115,8 +114,8 @@ file whose only module syntax is `export type` as CommonJS.
   to keep them.
 - In this repository's `tests/` tree, 71 files outside a
   `"source-type": "module"` directory have a top-level import or export, so
-  the test runner now runs them as modules. The suite passes in both modes
-  without changes to them.
+  the test runner now runs them as modules. The suite passes without changes
+  to them.
 - Detection costs one check per top-level statement of the parse it
   already does. Under callgrind, with a production build, a 228 KB Script
   entry of 3,001 top-level statements ran 8,856,448,966 instructions, against

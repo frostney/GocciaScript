@@ -162,9 +162,6 @@ type
     class function ParseModuleSource(const ASource: string;
       const AFileName: string;
       const AOptions: TGocciaSourcePipelineOptions): TGocciaSourcePipelineModuleResult; static;
-    class function ParseExpression(const AExpressionText,
-      AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
-      const ADeclaredPrivateNames: TStrings = nil): TGocciaExpression; static;
     class function ParseFunctionParameters(const AParametersSource,
       AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
       const AKind: TGocciaDynamicFunctionKind = dfkNormal): Boolean; static;
@@ -772,45 +769,6 @@ begin
       end;
     finally
       PipelineResult.Free;
-    end;
-  finally
-    SourceLines.Free;
-  end;
-end;
-
-class function TGocciaSourcePipeline.ParseExpression(const AExpressionText,
-  AFileName: string; const AOptions: TGocciaSourcePipelineOptions;
-  const ADeclaredPrivateNames: TStrings): TGocciaExpression;
-var
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
-  SourceLines: TStringList;
-begin
-  Result := nil;
-  if AExpressionText = '' then
-    Exit;
-
-  SourceLines := CreateECMAScriptSourceLines(AExpressionText);
-  try
-    Lexer := TGocciaLexer.Create(AExpressionText, AFileName);
-    try
-      Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName, SourceLines);
-      ConfigureParser(Parser, AOptions);
-      try
-        if Assigned(ADeclaredPrivateNames) then
-          Result := Parser.ParseExpressionWithPrivateNames(ADeclaredPrivateNames)
-        else
-          Result := Parser.Expression;
-        if not Parser.AtEnd then
-        begin
-          Result.Free;
-          Result := nil;
-        end;
-      finally
-        Parser.Free;
-      end;
-    finally
-      Lexer.Free;
     end;
   finally
     SourceLines.Free;

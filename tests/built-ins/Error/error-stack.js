@@ -815,8 +815,8 @@ const absentTarget = null;
 const nestedTargets = { inner: null };
 
 test("a failed property read is located at its property name, or at the [ of a computed read, as V8 locates it", () => {
-  // A built-in's error is located at the call that reached it, in both modes;
-  // the reads below start five lines after it, one to a line.
+  // A built-in's error is located at the call that reached it; the reads
+  // below start five lines after it, one to a line.
   let line = 0;
   try {
     JSON.parse("{");

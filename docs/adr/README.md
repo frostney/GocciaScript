@@ -147,4 +147,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0135 — A call and a failed property read are located where V8 locates them](0135-calls-and-property-reads-are-located-where-v8-locates-them.md)
 - [0136 — A module's function declarations are compiled while it is linked, and read its imports by name](0136-module-function-declarations-are-compiled-while-linking.md)
 - [0137 — Bootstrap shims load on first use through the engine's executor, and a bytecode engine builds no interpreter](0137-bootstrap-shims-load-on-first-use-through-the-executor.md)
+- [0138 — Bytecode is the only way GocciaScript executes, and the engine owns its VM](0138-bytecode-is-the-only-way-gocciascript-executes.md)
 - [0140 — An entry with a top-level import or export runs as a Module unless a source type is named](0140-an-entry-with-module-syntax-runs-as-a-module.md)

@@ -85,8 +85,8 @@ storage.run("registered", () => pending.then(handler));
 reaches `handler` with `"registered"` bound however `pending` is eventually
 settled.
 
-An async generator body observes the context of whichever call resumed it, in
-both executors and as in Node — a `for await` inside a `run` sees that run's
+An async generator body observes the context of whichever call resumed it, as
+in Node — a `for await` inside a `run` sees that run's
 store, and a generator resumed outside one sees no store.
 
 It travels into timer callbacks too. A `setTimeout` scheduled inside a `run`

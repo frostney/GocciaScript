@@ -42,9 +42,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.ExecutionContext,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.Modules,
   Goccia.Modules.Loader,
@@ -81,7 +78,6 @@ type
   private
     FEngine: TGocciaEngine;
     FSource: TStringList;
-    FExecutor: TGocciaExecutor;
     FEvalHost: TGocciaShadowRealmEvalHost;
   public
     constructor Create(const AParentEngine: TGocciaEngine);
@@ -183,17 +179,11 @@ var
 begin
   inherited Create;
   FSource := TStringList.Create;
-  // Match the parent's execution mode so bytecode-mode hosts get bytecode
-  // child realms (and interpreter hosts get interpreter child realms):
-  // evaluate() and the child's eval run through the child engine's executor
+  // evaluate() and the child's eval run on the child engine
   // (TGocciaEngine.EvaluateGlobalEval).
-  if AParentEngine.Executor is TGocciaBytecodeExecutor then
-    FExecutor := TGocciaBytecodeExecutor.Create
-  else
-    FExecutor := TGocciaInterpreterExecutor.Create;
   { A child realm inherits its creator's capability set and project: it may
     never reach more of the host than the realm that created it (ADR 0122). }
-  FEngine := TGocciaEngine.Create('<shadow-realm>', FSource, FExecutor,
+  FEngine := TGocciaEngine.Create('<shadow-realm>', FSource,
     AParentEngine.Capabilities);
   FEngine.ProjectRoot := AParentEngine.ProjectRoot;
   FEngine.HostEnvironment.ConfigureAsChildOf(
@@ -269,7 +259,6 @@ begin
       RealmScope.Free;
     end;
   end;
-  FExecutor.Free;
   FSource.Free;
   FEvalHost.Free;
   inherited;

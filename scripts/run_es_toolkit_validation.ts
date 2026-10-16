@@ -16,11 +16,9 @@ const HARNESS_DIRECTORY = "scripts/es_toolkit_harness";
 const DEFAULT_MANIFEST = join(HARNESS_DIRECTORY, "manifest.json");
 const RESULT_MARKER = "GocciaEsToolkitResult:";
 const ENVIRONMENT_MARKER = "GocciaEsToolkitEnvironment:";
-const MODES = ["interpreted", "bytecode"] as const;
 const NPM_REGISTRY_HOST = "registry.npmjs.org";
 const MAX_REDIRECTS = 10;
 
-type Mode = (typeof MODES)[number];
 type JsonObject = Record<string, any>;
 
 interface Options {
@@ -51,16 +49,11 @@ interface Manifest {
   probes: Array<{
     id: string;
     file: string;
-    knownBytecodeDivergence?: {
-      errorPattern: string;
-      reason: string;
-    };
   }>;
   environmentProbe: string;
 }
 
 interface ProbeRun {
-  mode: Mode;
   transport: "completed" | "timeout";
   exitCode: number | null;
   stdout: string;
@@ -75,7 +68,7 @@ interface PreparedPackage {
 }
 
 function printHelp(): void {
-  console.log(`Run bounded, pinned es-toolkit compatibility probes in both Goccia execution modes.
+  console.log(`Run bounded, pinned es-toolkit compatibility probes under GocciaRunner.
 
 Usage: bun run scripts/run_es_toolkit_validation.ts [options]
 
@@ -304,7 +297,6 @@ export function parseSingleMarker(stdout: string, marker: string): [JsonObject |
 async function runProbe(
   goccia: string,
   probePath: string,
-  mode: Mode,
   importMap: string,
   packageRoot: string,
   engineFlags: string[],
@@ -317,7 +309,6 @@ async function runProbe(
     [
       goccia,
       probePath,
-      `--mode=${mode}`,
       `--import-map=${importMap}`,
       `--allow-read=${packageRoot}`,
       ...engineFlags,
@@ -337,7 +328,6 @@ async function runProbe(
 
   if (timedOut) {
     return {
-      mode,
       transport: "timeout",
       exitCode: null,
       stdout,
@@ -349,7 +339,6 @@ async function runProbe(
 
   const [parsedMarker, markerError] = parseSingleMarker(stdout, marker);
   return {
-    mode,
     transport: "completed",
     exitCode,
     stdout,
@@ -365,34 +354,21 @@ export function isNativeOrHarnessFailure(result: ProbeRun): boolean {
 
 export function classifySemanticProbe(
   probe: Manifest["probes"][number],
-  runs: Record<Mode, ProbeRun>,
+  run: ProbeRun,
 ): [string, string] {
-  const interpreted = runs.interpreted;
-  const bytecode = runs.bytecode;
-  if (isNativeOrHarnessFailure(interpreted) || isNativeOrHarnessFailure(bytecode)) {
+  if (isNativeOrHarnessFailure(run)) {
     return ["harness-failure", "probe timed out, crashed, or exited outside the JavaScript error contract"];
   }
-  if (interpreted.marker === null && bytecode.marker === null) {
-    return ["harness-failure", "neither mode produced a result marker"];
+  if (run.marker === null) {
+    return ["harness-failure", "the probe produced no result marker"];
   }
-  if (interpreted.marker === null || bytecode.marker === null) {
-    return ["bytecode-divergence", "only one execution mode completed the probe contract"];
-  }
-  if (interpreted.marker.id !== probe.id || bytecode.marker.id !== probe.id) {
+  if (run.marker.id !== probe.id) {
     return ["harness-failure", "probe marker id does not match the manifest"];
   }
-  const interpretedStatus = interpreted.marker.status;
-  const bytecodeStatus = bytecode.marker.status;
-  if (!["pass", "fail"].includes(interpretedStatus) || !["pass", "fail"].includes(bytecodeStatus)) {
-    return ["harness-failure", "probe marker status must be pass or fail"];
-  }
-  if (interpretedStatus === "pass" && bytecodeStatus === "pass") {
-    return ["semantic-pass", "both execution modes passed"];
-  }
-  if (interpretedStatus === "fail" && bytecodeStatus === "fail") {
-    return ["semantic-failure", "both execution modes reported the same semantic class of failure"];
-  }
-  return ["bytecode-divergence", "execution modes produced different semantic outcomes"];
+  const status = run.marker.status;
+  if (status === "pass") return ["semantic-pass", "the probe passed"];
+  if (status === "fail") return ["semantic-failure", "the probe reported a semantic failure"];
+  return ["harness-failure", "probe marker status must be pass or fail"];
 }
 
 function compactRun(result: ProbeRun): JsonObject {
@@ -406,20 +382,6 @@ function compactRun(result: ProbeRun): JsonObject {
   };
 }
 
-export function matchesKnownBytecodeDivergence(
-  probe: Manifest["probes"][number],
-  classification: string,
-  runs: Record<Mode, ProbeRun>,
-): boolean {
-  const expected = probe.knownBytecodeDivergence;
-  if (classification !== "bytecode-divergence" || !expected) return false;
-  const interpretedMarker = runs.interpreted.marker ?? {};
-  const bytecodeMarker = runs.bytecode.marker ?? {};
-  return interpretedMarker.status === "pass"
-    && bytecodeMarker.status === "fail"
-    && new RegExp(expected.errorPattern).test(bytecodeMarker.error ?? "");
-}
-
 async function buildReport(
   manifest: Manifest,
   goccia: string,
@@ -431,94 +393,61 @@ async function buildReport(
   const summary: Record<string, any[]> = {
     semanticPasses: [],
     semanticFailures: [],
-    bytecodeDivergences: [],
     disabledCapabilities: [],
     hostGlobals: [],
     harnessFailures: [],
   };
 
   for (const probe of manifest.probes) {
-    const runs = {} as Record<Mode, ProbeRun>;
-    for (const mode of MODES) {
-      runs[mode] = await runProbe(
-        goccia,
-        join(HARNESS_DIRECTORY, probe.file),
-        mode,
-        importMap,
-        packageRoot,
-        manifest.engineFlags,
-        RESULT_MARKER,
-        timeoutSeconds,
-      );
-    }
-    const [classification, reason] = classifySemanticProbe(probe, runs);
-    const knownDivergence = matchesKnownBytecodeDivergence(probe, classification, runs);
+    const run = await runProbe(
+      goccia,
+      join(HARNESS_DIRECTORY, probe.file),
+      importMap,
+      packageRoot,
+      manifest.engineFlags,
+      RESULT_MARKER,
+      timeoutSeconds,
+    );
+    const [classification, reason] = classifySemanticProbe(probe, run);
     semanticResults.push({
       id: probe.id,
       classification,
       reason,
-      knownBytecodeDivergence: probe.knownBytecodeDivergence ?? null,
-      matchesKnownBytecodeDivergence: knownDivergence,
-      modes: Object.fromEntries(MODES.map((mode) => [mode, compactRun(runs[mode])])),
+      run: compactRun(run),
     });
     if (classification === "semantic-pass") summary.semanticPasses.push(probe.id);
     else if (classification === "semantic-failure") summary.semanticFailures.push(probe.id);
-    else if (classification === "bytecode-divergence") {
-      summary.bytecodeDivergences.push({
-        id: probe.id,
-        known: knownDivergence,
-        reason: probe.knownBytecodeDivergence?.reason ?? reason,
-      });
-    } else summary.harnessFailures.push({ id: probe.id, reason });
+    else summary.harnessFailures.push({ id: probe.id, reason });
   }
 
-  const environmentRuns = {} as Record<Mode, ProbeRun>;
-  for (const mode of MODES) {
-    environmentRuns[mode] = await runProbe(
-      goccia,
-      join(HARNESS_DIRECTORY, manifest.environmentProbe),
-      mode,
-      importMap,
-      packageRoot,
-      manifest.engineFlags,
-      ENVIRONMENT_MARKER,
-      timeoutSeconds,
-    );
-  }
-  for (const mode of MODES) {
-    const result = environmentRuns[mode];
-    if (isNativeOrHarnessFailure(result) || result.marker === null) {
-      summary.harnessFailures.push({ id: `environment:${mode}`, reason: result.markerError });
-    }
-  }
-
-  const environmentMarkers = Object.fromEntries(
-    MODES.flatMap((mode) => environmentRuns[mode].marker === null ? [] : [[mode, environmentRuns[mode].marker]]),
-  ) as Partial<Record<Mode, JsonObject>>;
-  if (Object.keys(environmentMarkers).length === MODES.length) {
+  const environmentRun = await runProbe(
+    goccia,
+    join(HARNESS_DIRECTORY, manifest.environmentProbe),
+    importMap,
+    packageRoot,
+    manifest.engineFlags,
+    ENVIRONMENT_MARKER,
+    timeoutSeconds,
+  );
+  const environmentMarker = isNativeOrHarnessFailure(environmentRun) ? null : environmentRun.marker;
+  if (environmentMarker === null) {
+    summary.harnessFailures.push({ id: "environment", reason: environmentRun.markerError });
+  } else {
     summary.disabledCapabilities.push({
       name: "Function constructor",
-      interpreted: environmentMarkers.interpreted!.functionConstructor,
-      bytecode: environmentMarkers.bytecode!.functionConstructor,
+      capability: environmentMarker.functionConstructor,
     });
     for (const name of ["Buffer", "Blob", "process"]) {
-      summary.hostGlobals.push({
-        name,
-        interpreted: environmentMarkers.interpreted!.hostGlobals[name],
-        bytecode: environmentMarkers.bytecode!.hostGlobals[name],
-      });
+      summary.hostGlobals.push({ name, type: environmentMarker.hostGlobals[name] });
     }
   }
 
-  const unexpectedDivergences = summary.bytecodeDivergences.filter((item) => !item.known);
-  const functionCapabilities = Object.values(environmentMarkers).map((marker) => marker!.functionConstructor);
   const functionErrorPattern = new RegExp(manifest.expectedEnvironment.functionConstructorErrorPattern);
-  const defaultFunctionBoundaryPreserved = functionCapabilities.length === MODES.length
-    && functionCapabilities.every(
-      (capability) => capability.status === "disabled" && functionErrorPattern.test(capability.error ?? ""),
-    );
+  const functionCapability = environmentMarker?.functionConstructor;
+  const defaultFunctionBoundaryPreserved = functionCapability !== undefined
+    && functionCapability.status === "disabled"
+    && functionErrorPattern.test(functionCapability.error ?? "");
   const ok = summary.semanticFailures.length === 0
-    && unexpectedDivergences.length === 0
     && summary.harnessFailures.length === 0
     && defaultFunctionBoundaryPreserved;
 
@@ -529,7 +458,7 @@ async function buildReport(
     goccia,
     engineFlags: manifest.engineFlags,
     semanticResults,
-    environment: Object.fromEntries(MODES.map((mode) => [mode, compactRun(environmentRuns[mode])])),
+    environment: compactRun(environmentRun),
     summary,
     defaultFunctionBoundaryPreserved,
     ok,
@@ -539,12 +468,8 @@ async function buildReport(
 function printSummary(report: JsonObject): void {
   const summary = report.summary;
   console.log(`es-toolkit ${report.upstream.version} @ ${report.upstream.commit}`);
-  console.log(`Semantic probes passed in both modes: ${summary.semanticPasses.length}`);
+  console.log(`Semantic probes passed: ${summary.semanticPasses.length}`);
   console.log(`Semantic failures: ${summary.semanticFailures.length}`);
-  console.log(`Bytecode divergences: ${summary.bytecodeDivergences.length}`);
-  for (const divergence of summary.bytecodeDivergences) {
-    console.log(`  - ${divergence.id} (${divergence.known ? "known" : "unexpected"}): ${divergence.reason}`);
-  }
   console.log(`Disabled capabilities: ${summary.disabledCapabilities.length}`);
   console.log(`Host globals observed: ${summary.hostGlobals.length}`);
   console.log(`Harness failures: ${summary.harnessFailures.length}`);

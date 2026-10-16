@@ -45,7 +45,6 @@ uses
   Goccia.CLI.Permissions,
   Goccia.Engine,
   Goccia.Error,
-  Goccia.Executor.Bytecode,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.Runtime,
@@ -255,7 +254,6 @@ end;
 function RunOneFile(const AFileName: string): TFileVerdict;
 var
   Source: TStringList;
-  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Core: TGocciaRuntimeCore;
   FileConfig: TConfigEntryArray;
@@ -285,51 +283,46 @@ begin
 
       Request := ReadFileRequest(FileConfig, FileConfigPath);
 
-      Executor := TGocciaBytecodeExecutor.Create;
+      Engine := TGocciaEngine.Create(AFileName, Source,
+        ResolveCapabilities(nil, Request, True, WASM_HONORED_CAPABILITIES,
+          GetCurrentDir));
       try
-        Engine := TGocciaEngine.Create(AFileName, Source, Executor,
-          ResolveCapabilities(nil, Request, True, WASM_HONORED_CAPABILITIES,
-            GetCurrentDir));
+        Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
+        { As GocciaTestRunner configures its engines. }
+        Engine.GlobalBackedTopLevel :=
+          Engine.SourceType <> Goccia.Engine.stModule;
+        ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);
+        Engine.Compatibility := Compatibility;
+        Engine.StrictTypes :=
+          ResolveFlagOption(EngineOptions.StrictTypes, FileConfig);
+        { unsafe-* keys are requests: ReadFileRequest has refused the file
+          unless -P accepted them. }
+        Engine.FunctionConstructor.Enabled :=
+          gurFunctionConstructor in Request.Unsafe;
+        if gurShadowRealm in Request.Unsafe then
+          EnableShadowRealm(Engine);
+
+        Core := AttachRuntime(Engine);
+        ApplyTestRunnerRuntimeProfile(Core);
+        {$IFNDEF LAKON}
+        InstallFFIIfGranted(Core);
+        {$ENDIF}
+        DisableRuntimeConsole(Engine);
+        Engine.SuppressWarnings := True;
+
+        Engine.Execute;
+        TestResult := RunRegisteredTests(Engine);
+        GC := TGarbageCollector.Instance;
+        if Assigned(GC) then
+          GC.AddTempRoot(TestResult);
         try
-          Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
-          { As GocciaTestRunner configures its bytecode executor. }
-          Executor.GlobalBackedTopLevel :=
-            Engine.SourceType <> Goccia.Engine.stModule;
-          ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);
-          Engine.Compatibility := Compatibility;
-          Engine.StrictTypes :=
-            ResolveFlagOption(EngineOptions.StrictTypes, FileConfig);
-          { unsafe-* keys are requests: ReadFileRequest has refused the file
-            unless -P accepted them. }
-          Engine.FunctionConstructor.Enabled :=
-            gurFunctionConstructor in Request.Unsafe;
-          if gurShadowRealm in Request.Unsafe then
-            EnableShadowRealm(Engine);
-
-          Core := AttachRuntime(Engine);
-          ApplyTestRunnerRuntimeProfile(Core);
-          {$IFNDEF LAKON}
-          InstallFFIIfGranted(Core);
-          {$ENDIF}
-          DisableRuntimeConsole(Engine);
-          Engine.SuppressWarnings := True;
-
-          Engine.Execute;
-          TestResult := RunRegisteredTests(Engine);
-          GC := TGarbageCollector.Instance;
-          if Assigned(GC) then
-            GC.AddTempRoot(TestResult);
-          try
-            ExtractVerdict(TestResult, Result);
-          finally
-            if Assigned(GC) then
-              GC.RemoveTempRoot(TestResult);
-          end;
+          ExtractVerdict(TestResult, Result);
         finally
-          Engine.Free;
+          if Assigned(GC) then
+            GC.RemoveTempRoot(TestResult);
         end;
       finally
-        Executor.Free;
+        Engine.Free;
       end;
     except
       on E: TGocciaError do

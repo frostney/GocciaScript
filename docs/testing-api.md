@@ -531,7 +531,7 @@ Running `tests/` under Vitest needs a local Vitest install and a config that poi
 
 A suite written against Vitest imports from a bare `vitest` specifier, which would otherwise resolve to nothing. `GocciaTestRunner` ships a small shim inside the binary and resolves that specifier to it by default, so such a suite runs unchanged. Pass `--no-vitest-compat` to leave the specifier unresolvable.
 
-The shim is a runner default only. It does not follow `goccia:test` to the other binaries: in `GocciaRunner` (either mode), `GocciaREPL`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve even though `goccia:test` imports fine. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag or configuration key that turns it on elsewhere; an embedder that wants it installs `TGocciaVitestCompatRuntimeExtension` alongside the testing extension. The shim statically imports `goccia:timers`, so `TGocciaTimersRuntimeExtension` is a hard prerequisite: without it every `vitest` import fails to resolve, not only the `vi` timer members. Install the timers extension whenever the compat shim is installed (the runner always does).
+The shim is a runner default only. It does not follow `goccia:test` to the other binaries: in `GocciaRunner` (host or sandbox mode), `GocciaREPL`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve even though `goccia:test` imports fine. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag or configuration key that turns it on elsewhere; an embedder that wants it installs `TGocciaVitestCompatRuntimeExtension` alongside the testing extension. The shim statically imports `goccia:timers`, so `TGocciaTimersRuntimeExtension` is a hard prerequisite: without it every `vitest` import fails to resolve, not only the `vi` timer members. Install the timers extension whenever the compat shim is installed (the runner always does).
 
 The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only in the shim — the engine itself never grows one:
 
@@ -603,7 +603,7 @@ Automock throws because it would have to execute the real module's top-level cod
 
 Further divergences from Vitest worth knowing:
 
-- A missing export is reported **eagerly, at link time**, as `Module "./m.js" has no export named "x"`; Vitest reports it lazily, at property access. Bytecode mode raises it as a `SyntaxError` before any module of the test file's graph evaluates. Interpreter mode may first evaluate the test file's earlier imports, and reports a script-source-type test file's missing import as a `RuntimeError`.
+- A missing export is reported **eagerly, at link time**, as `Module "./m.js" has no export named "x"`; Vitest reports it lazily, at property access. GocciaScript raises it as a `SyntaxError` before any module of the test file's graph evaluates.
 - An **aliased or namespaced callee silently does nothing**: `import { vi as v } from "vitest"; v.mock(...)` is not hoisted and never applies. This is Vitest parity — Vitest's hoist is a syntactic transform that matches only the literal `vi.mock` / `vitest.mock` spellings — but it is silent in both, so prefer the literal spelling.
 - A **non-string specifier is skipped**, since the address cannot be resolved before evaluation.
 - A test-file `var` (under `--compat-var`) referenced from a factory is a `ReferenceError` under module source type, where Vitest yields `undefined`. Under script source type a static import sees `undefined`, as in Vitest, and a dynamic `import()` resolves the variable, as for `const` in the table above.
@@ -750,7 +750,7 @@ expect(set).toEqual(new Set([2, 1]));
 | `mock()` / `spyOn()` | Standalone globals | `vi.fn()` / `vi.spyOn()` (Vitest) or `jest.fn()` / `jest.spyOn()` (Jest) |
 | `new` on a mock | `TypeError`; `mock.instances` is always empty | Constructs, and `mock.instances` records the instance |
 | `vi.mock` factories | Must directly return an object literal; no automock, no spread-based partial mock | Any factory shape; automock and `importOriginal` partial mocks supported |
-| Missing export on a mock | Reported eagerly at link time; bytecode raises a `SyntaxError` before any module evaluates | Reported lazily, at property access |
+| Missing export on a mock | Reported eagerly at link time as a `SyntaxError`, before any module evaluates | Reported lazily, at property access |
 | `process` | Not provided; inject one with `--global` / `--globals` when a suite needs it | The real process environment and the rest of the Node `process` API |
 | `import.meta.env` | Not available; `vi.stubEnv` writes to `process.env` | Vite populates it, and `vi.stubEnv` writes there |
 | Timer ids | Numbers, as on the web | Node `Timeout` objects with `ref`/`unref`/`refresh` |
