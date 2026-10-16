@@ -38,9 +38,11 @@ modules commonly have their entry in such a cycle (`main.js` and `state.js`).
 
 ## Decision
 
-- **Without a named source type, the entry's syntax picks its goal.** An
-  entry with a top-level `import` declaration or `export` declaration runs
-  as a Module, and any other entry runs as a Script, as before. This reverses
+- **Without a named source type, the entry's syntax picks its goal.** When
+  neither a source type setting nor a `.mjs` or `.mts` file name has already
+  selected the goal, an entry with a top-level `import` declaration or
+  `export` declaration runs as a Module, and any other entry runs as a
+  Script, as before. This reverses
   #1484 for entries that have module syntax: the entry is one Module Record,
   so an import of its file gets that record, and each module of a cycle
   evaluates once (§16.2.1.6.1.3.1 InnerModuleEvaluation, step 3).
