@@ -13,7 +13,7 @@ uses
   Goccia.AST.Node,
   Goccia.ControlFlow,
   Goccia.DisposalTracker,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Scope,
   Goccia.Utils,
   Goccia.Values.IteratorValue,

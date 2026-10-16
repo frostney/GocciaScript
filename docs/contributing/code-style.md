@@ -389,7 +389,7 @@ Units are organized by category using dot-separated names:
 |----------|---------|---------|
 | `Goccia.Values.*` | Value type hierarchy | `Primitives`, `ObjectValue`, `ArrayValue`, `ClassValue` |
 | `Goccia.Builtins.*` | Built-in object implementations | `Console`, `Math`, `JSON`, `GlobalObject` |
-| `Goccia.Evaluator.*` | Evaluator sub-modules | `Arithmetic`, `Bitwise`, `Comparison`, `Assignment` |
+| `Goccia.Evaluator.*` | Tree-walk evaluator sub-modules | `Assignment`, `Calls`, `Generators`, `PatternMatching` |
 | `Goccia.AST.*` | AST node definitions | `Node`, `Expressions`, `Statements` |
 | `Goccia.Arguments.*` | Function argument handling | `Collection`, `Converter`, `Validator` |
 

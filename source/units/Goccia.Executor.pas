@@ -8,7 +8,7 @@ uses
   UnicodeStringList,
 
   Goccia.AST.Node,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Modules.Loader,
   Goccia.Realm,
   Goccia.Scope,

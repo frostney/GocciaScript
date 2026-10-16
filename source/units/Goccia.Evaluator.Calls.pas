@@ -14,7 +14,7 @@ unit Goccia.Evaluator.Calls;
 interface
 
 uses
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.Scope,
   Goccia.Values.FunctionValue;
 

@@ -9,7 +9,7 @@
 - **Shared source pipeline** — Preprocessors, lexer, parser, warning data, source maps, and AST artifacts are shared between execution modes
 - **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
-- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not call the interpreter or evaluator (it shares only the `Goccia.Evaluator.Context` record type), and an engine with a bytecode executor builds no interpreter. The VM still links the tree-walk evaluator to construct a class the evaluator built, which only the interpreter executor creates, until the interpreter is removed. See [Bytecode VM § Overview](bytecode-vm.md#overview)
+- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not call the interpreter or evaluator (it shares only the `Goccia.EvaluationContext` record type), and an engine with a bytecode executor builds no interpreter. The VM still links the tree-walk evaluator to construct a class the evaluator built, which only the interpreter executor creates, until the interpreter is removed. See [Bytecode VM § Overview](bytecode-vm.md#overview)
 
 ## Overview
 

@@ -374,6 +374,7 @@ uses
 
   Goccia.Arithmetic,
   Goccia.Builtins.Globals,
+  Goccia.Builtins.Testing.DeepEquality,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
@@ -381,7 +382,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
-  Goccia.Evaluator.Comparison,
   Goccia.Execution.CallSite,
   Goccia.FetchManager,
   Goccia.FloatingPoint,
