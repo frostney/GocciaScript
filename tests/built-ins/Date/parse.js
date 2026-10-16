@@ -124,3 +124,20 @@ test("returns NaN rather than throwing for a local time past the time value rang
   }
   expect(Number.isNaN(Date.parse("9/14/275760"))).toBe(true);
 });
+
+test("applies an explicit offset before the time value range", () => {
+  // The range applies to the UTC instant, not to the fields before the offset.
+  expect(Date.parse("+275760-09-13T01:00:00+02:00")).toBe(8.64e15 - 3600000);
+  expect(Date.parse("-271821-04-19T23:00:00-02:00")).toBe(-8.64e15 + 3600000);
+  expect(Date.parse("Sat Sep 13 275760 01:00:00 GMT+0200")).toBe(8.64e15 - 3600000);
+  expect(Number.isNaN(Date.parse("+275760-09-13T00:00:00-01:00"))).toBe(true);
+  expect(Number.isNaN(Date.parse("-271821-04-20T00:00:00+01:00"))).toBe(true);
+  expect(Number.isNaN(new Date("+275760-09-13T00:00:00-01:00").getTime())).toBe(true);
+});
+
+test("reads back what toString writes for the last valid instant", () => {
+  const date = new Date(8.64e15);
+  expect(Date.parse(date.toString())).toBe(8.64e15);
+  expect(Date.parse(date.toUTCString())).toBe(8.64e15);
+  expect(Date.parse(date.toISOString())).toBe(8.64e15);
+});

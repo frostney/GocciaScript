@@ -101,6 +101,18 @@ describe("Date constructor", () => {
     expect(Number.isNaN(new Date(-271821, 3, 19).getTime())).toBe(true);
   });
 
+  test("reads the first and last valid instants back from their local fields", () => {
+    // Off UTC their local fields lie past the time value range: east of UTC
+    // after the end, west of UTC (local mean time) before the start. The range
+    // applies to TimeClip(UTC(finalDate)), after the offset comes off.
+    for (const time of [8.64e15, -8.64e15]) {
+      const date = new Date(time);
+      const local = new Date(date.getFullYear(), date.getMonth(), date.getDate(),
+        date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds());
+      expect(local.getTime()).toBe(time);
+    }
+  });
+
   test("year 0-99 maps to 1900-1999", () => {
     const d = new Date(95, 0, 1, 0, 0, 0, 0);
     expect(d.getFullYear()).toBe(1995);

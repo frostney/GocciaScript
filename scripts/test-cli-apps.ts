@@ -4014,6 +4014,64 @@ await section("Loader: Date.parse reads legacy dates without an offset as local 
   }
 });
 
+// CI runs in UTC, where local fields and the UTC instant agree. Off UTC the
+// local fields of the first and last valid instants lie past the time value
+// range, which applies to TimeClip(UTC(date)), after the offset comes off.
+await section("Loader: Date applies the time value range after converting local time...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const local = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(),",
+      "  d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds()).getTime();",
+      "const nearEnd = new Date(8.64e15 - 3600000);",
+      "const nearStart = new Date(-8.64e15 + 3600000);",
+      "[",
+      "  new Date(1970, 0, -99999999, 0, -420, 0, 0).getTime(),",
+      "  new Date(1970, 0, 100000001, 0, 480, 0, -1).getTime(),",
+      "  local(new Date(8.64e15)),",
+      "  local(new Date(-8.64e15)),",
+      "  nearEnd.setHours(nearEnd.getHours() + 1),",
+      "  nearStart.setHours(nearStart.getHours() - 1),",
+      "  Date.parse(new Date(8.64e15).toString()),",
+      '  Date.parse("+275760-09-13T01:00:00"),',
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "-8639999996822000|NaN|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|NaN",
+      ],
+      [
+        "Asia/Tokyo",
+        "NaN|8639999996399999|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|8639999971200000",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date range in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --host-environment errors withhold provider source...", async () => {
   const tmp = makeTmp();
   try {
