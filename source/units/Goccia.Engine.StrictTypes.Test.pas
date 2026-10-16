@@ -11,7 +11,6 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Engine,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.Scope,
   Goccia.TestSetup,
   Goccia.Values.Error,
@@ -21,9 +20,7 @@ type
   TEngineStrictTypesTests = class(TTestSuite)
   private
     function CreateEmptySource: TStringList;
-    procedure TestDefaultIsFalse;
     procedure TestBytecodeExecutorDefaultIsFalse;
-    procedure TestSetterPropagatesToInterpreterScope;
     procedure TestSetterPropagatesToBytecodeExecutor;
     procedure TestEffectiveStrictTypesReadsLiveRoot;
     procedure TestAssignBindingGatedOnLiveStrictTypes;
@@ -33,12 +30,8 @@ type
 
 procedure TEngineStrictTypesTests.SetupTests;
 begin
-  Test('Engine.StrictTypes defaults to False (interpreter)',
-    TestDefaultIsFalse);
   Test('Engine.StrictTypes defaults to False (bytecode executor)',
     TestBytecodeExecutorDefaultIsFalse);
-  Test('Setting Engine.StrictTypes propagates to interpreter global scope',
-    TestSetterPropagatesToInterpreterScope);
   Test('Setting Engine.StrictTypes propagates to bytecode executor',
     TestSetterPropagatesToBytecodeExecutor);
   Test('EffectiveStrictTypes reads live root after setter (regression)',
@@ -53,27 +46,6 @@ begin
   Result.Text := '';
 end;
 
-procedure TEngineStrictTypesTests.TestDefaultIsFalse;
-var
-  Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
-  Source: TStringList;
-begin
-  Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
-    try
-      Expect<Boolean>(Engine.StrictTypes).ToBe(False);
-    finally
-      Engine.Free;
-      Source.Free;
-    end;
-  finally
-    Executor.Free;
-  end;
-end;
-
 procedure TEngineStrictTypesTests.TestBytecodeExecutorDefaultIsFalse;
 var
   Engine: TGocciaEngine;
@@ -84,7 +56,7 @@ begin
   Executor := TGocciaBytecodeExecutor.Create;
   Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
   try
-    { Both execution modes default to non-strict.  Strict-types is now
+    { The engine defaults to non-strict.  Strict-types is now
       an opt-in flag controlled by the --strict-types CLI option or
       "strict-types" config key. }
     Expect<Boolean>(Engine.StrictTypes).ToBe(False);
@@ -93,30 +65,6 @@ begin
     Engine.Free;
     Executor.Free;
     Source.Free;
-  end;
-end;
-
-procedure TEngineStrictTypesTests.TestSetterPropagatesToInterpreterScope;
-var
-  Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
-  Source: TStringList;
-begin
-  Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
-    try
-      Engine.StrictTypes := True;
-      Expect<Boolean>(Engine.StrictTypes).ToBe(True);
-      Expect<Boolean>(Engine.Interpreter.StrictTypesEnabled).ToBe(True);
-      Expect<Boolean>(Engine.GlobalScope.StrictTypes).ToBe(True);
-    finally
-      Engine.Free;
-      Source.Free;
-    end;
-  finally
-    Executor.Free;
   end;
 end;
 
@@ -133,6 +81,7 @@ begin
     Engine.StrictTypes := True;
     Expect<Boolean>(Engine.StrictTypes).ToBe(True);
     Expect<Boolean>(Executor.StrictTypes).ToBe(True);
+    Expect<Boolean>(Engine.GlobalScope.StrictTypes).ToBe(True);
   finally
     Engine.Free;
     Executor.Free;
@@ -143,12 +92,12 @@ end;
 procedure TEngineStrictTypesTests.TestEffectiveStrictTypesReadsLiveRoot;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Child: TGocciaScope;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
     try
@@ -166,8 +115,8 @@ begin
 
       { EffectiveStrictTypes walks to the root, so closures
         created before the setter still observe the live value -- this
-        is what the interpreter's call paths in Goccia.Evaluator.Calls and
-        Goccia.Evaluator.Generators read when seeding the call context. }
+        is what AssignBinding reads when it enforces a binding's type
+        hint. }
       Expect<Boolean>(Child.EffectiveStrictTypes).ToBe(True);
 
       { Flipping it back also flows through. }
@@ -185,13 +134,13 @@ end;
 procedure TEngineStrictTypesTests.TestAssignBindingGatedOnLiveStrictTypes;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Scope: TGocciaScope;
   Threw: Boolean;
 begin
   Source := CreateEmptySource;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<strict-test>', Source, Executor);
     try

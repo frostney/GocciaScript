@@ -136,7 +136,7 @@ function InvokeThenOnPrimitive(const AValue,
 
 { Settles ATarget from ASource's outcome: fulfilled with AFulfillmentValue once
   ASource is fulfilled, rejected with ASource's reason once it is rejected.
-  Dynamic import uses it in both execution modes — `import()` settles from the
+  Dynamic import uses it — `import()` settles from the
   module's evaluation promise but fulfils with the namespace (ES2026 §13.3.10.3
   ContinueDynamicImport). Consuming the source this way handles it. }
 procedure SettlePromiseFromPromise(const ATarget, ASource: TGocciaPromiseValue;
@@ -324,9 +324,8 @@ begin
     Result := GetPromiseShared.Prototype.GetProperty(PROP_CONSTRUCTOR);
 end;
 
-// ES2026 §27.2.4.7.1 PromiseResolve(%Promise%, value).  Keeping this at
-// the Promise value seam gives both executors the same constructor-observation
-// and thenable-assimilation behaviour.
+// ES2026 §27.2.4.7.1 PromiseResolve(%Promise%, value), including its
+// constructor observation and thenable assimilation.
 function PromiseResolveIntrinsic(
   const AValue: TGocciaValue): TGocciaPromiseValue;
 var

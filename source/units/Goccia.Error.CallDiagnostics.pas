@@ -4,22 +4,21 @@ unit Goccia.Error.CallDiagnostics;
 
 { Shared "value is not callable / not a constructor" diagnostics.
 
-  Both executors have to name the callee the way the author wrote it — the
-  tree-walk evaluator reads it off the call expression's source span, the
-  bytecode VM off the per-call-site descriptor its compiler records. Building
-  the message and the suggestion here is what keeps the two modes textually
-  identical: neither executor formats these strings itself. }
+  The VM has to name the callee the way the author wrote it, which it reads
+  off the per-call-site descriptor the compiler records from the call
+  expression's source span. The message and the suggestion are built here:
+  the VM does not format these strings itself. }
 
 interface
 
 type
   { What kind of call site produced a non-callable fault. Selects the
     suggestion: an ordinary call/new gets the shape-based suggestion, a tagged
-    template gets the tag-must-be-callable hint that both executors share. }
+    template gets the tag-must-be-callable hint. }
   TGocciaCalleeKind = (cckPlain, cckTaggedTemplate);
 
-  { A call site's callee, described well enough to build the same diagnostic
-    from either executor.
+  { A call site's callee, described well enough to build the diagnostic
+    without the AST.
 
     CalleeText is the callee expression's source text, normalized (see
     NormalizeCalleeText); '' when it is unavailable or unreasonably long, in

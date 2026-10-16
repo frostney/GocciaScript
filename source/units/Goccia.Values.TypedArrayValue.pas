@@ -3255,8 +3255,8 @@ begin
 end;
 
 // ES2026 §23.2.5.1: %TypedArray% is abstract and rejects direct construction,
-// so the tree-walk instantiation path must not build an ordinary instance for
-// it either.
+// so the implicit-constructor chain walk stops at it rather than build an
+// ordinary instance for it.
 function TGocciaTypedArrayIntrinsicClassValue.UsesOwnInstantiation: Boolean;
 begin
   Result := True;
@@ -3315,8 +3315,9 @@ begin
 end;
 
 // ES2026 §23.2.5.1 TypedArray(...): the constructor allocates an exotic
-// integer-indexed receiver from newTarget, which the tree-walk instantiation
-// path cannot produce.
+// integer-indexed receiver from newTarget, which the generic class
+// instantiation path cannot produce, so the implicit-constructor chain walk
+// stops at it.
 function TGocciaTypedArrayClassValue.UsesOwnInstantiation: Boolean;
 begin
   Result := True;

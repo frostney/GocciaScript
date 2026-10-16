@@ -1171,8 +1171,8 @@ begin
         end
         else if E is EGocciaBytecodeThrow then
         begin
-          { A JS throw that escapes the bytecode VM is the same verdict as the
-            evaluator's TGocciaThrowValue and must render the same way; without
+          { A JS throw that escapes the bytecode VM is the same verdict as a
+            native TGocciaThrowValue and must render the same way; without
             this arm it fell through to the bare "Fatal error:" line and lost
             the location, code frame and suggestion. }
           if (not GIsWorkerThread) and (not IsJsonOutput) then

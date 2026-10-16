@@ -50,7 +50,6 @@ uses
   Classes,
 
   Goccia.GarbageCollector,
-  Goccia.Interpreter,
   Goccia.Scope;
 
 procedure EnsureSharedPrototypesInitialized(
@@ -71,9 +70,7 @@ begin
   try
     // Create a minimal engine. The constructor registers all built-in
     // types, which triggers lazy shared prototype initialisation for
-    // every value type (Array, Object, Map, Set, Promise, etc.). The engine
-    // builds its interpreter in every mode, so a bytecode executor warms the
-    // shared state of both executors.
+    // every value type (Array, Object, Map, Set, Promise, etc.).
     Executor := TGocciaBytecodeExecutor.Create;
     try
       Engine := TGocciaEngine.Create('<thread-init>', Source, Executor,

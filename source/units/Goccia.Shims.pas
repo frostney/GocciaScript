@@ -10,7 +10,7 @@ unit Goccia.Shims;
   LoadShimValue evaluates the module in a child scope through the engine's
   executor and returns the exported value, which the engine binds into the
   global scope. The bytecode executor compiles the shim, so every function it
-  defines is a VM closure; no interpreter is involved.
+  defines is a VM closure.
 
   A default shim is parsed once per thread runtime and its program is reused by
   every engine that thread builds; see "Shimmed Legacy Globals" in
@@ -1020,10 +1020,8 @@ var
 threadvar
   { One parsed program per DEFAULT_SHIMS entry, filled on first use, so a
     thread parses each shim once however many engines load it. The bytecode
-    executor compiles the program per engine; the interpreter executor
-    evaluates it, and the functions it defines then keep pointing into the
-    AST. A parsed program is therefore never released while the thread's
-    engines run, and TGocciaProgram.Free releases only the program node, not
+    executor compiles the program per engine. A parsed program is never
+    released while the thread's engines run, and TGocciaProgram.Free releases only the program node, not
     the statements under it. Parsing per engine leaked the shim ASTs of every
     engine: about 1.1 MB per engine that used Date on 64-bit. The test runner
     builds one engine per file, and its snapshot formatter uses Date in every

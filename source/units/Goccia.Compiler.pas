@@ -92,7 +92,7 @@ type
       every declaration local (§19.2.1.1 step 18: varEnv is lexEnv). The eval
       code is strict only by its own directive, also in an engine whose
       profile is strict (no non-strict compatibility): a directive-free eval
-      is non-strict code there too, as the interpreter evaluates it. The
+      is non-strict code there too. The
       profile still decides the Annex B block-function var bindings and,
       in the parser, which syntax is accepted.
       ADeclaredVarNames is declaredVarNames (§19.2.1.3 steps 11-12). The host
@@ -143,8 +143,8 @@ type
       read FArgumentsObjectEnabled write FArgumentsObjectEnabled;
     { Compile engine code (a bootstrap shim): no function or class it defines
       keeps its source text, so Function.prototype.toString shows each as a
-      built-in function with native code, as the interpreter does for a
-      shim. Runtime-only: such code is never serialized. }
+      built-in function with native code. Runtime-only: such code is never
+      serialized. }
     property HideSourceText: Boolean read FHideSourceText
       write FHideSourceText;
     property OptimizationOptions: TGocciaCompilerOptimizationOptions

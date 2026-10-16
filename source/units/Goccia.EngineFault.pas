@@ -56,11 +56,10 @@ uses
   working behavior into a fatal exit:
 
     EStackOverflow     Descends from EExternal alongside EAccessViolation, but
-                       the engine converts it to the guest RangeError
-                       "Maximum call stack size exceeded" on purpose
-                       (PascalExceptionToErrorObject in Goccia.Evaluator.pas).
-                       Recursion depth is a guest-observable limit, not
-                       corruption. No class listed above is an ancestor of it,
+                       the engine's script boundaries convert it into a
+                       catchable guest error like any other non-fault Pascal
+                       exception. Recursion depth is a guest-observable
+                       limit, not corruption. No class listed above is an ancestor of it,
                        so it keeps converting.
     EOutOfMemory       A refusal, not a corruption: the allocator declined a
                        request and left the heap exactly as it was. FPC 3.2.2

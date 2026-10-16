@@ -557,7 +557,7 @@ type
     // "<name> is not defined" for an unresolvable reference (ES2026 §6.2.5.5
     // GetValue step 2, §6.2.5.6 PutValue step 2.a), created from the
     // intrinsic %ReferenceError% whatever the global `ReferenceError` binding
-    // holds, and carrying the evaluator's suggestion.
+    // holds, and carrying the declare-before-use suggestion.
     OP_THROW_UNDEFINED_VARIABLE = 236,
     // A = callee register, Bx = index of the template's eval site record.
     // Always followed by the OP_CALL or OP_CALL_METHOD of an `eval(...)`

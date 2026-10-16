@@ -13,7 +13,7 @@ uses
   Goccia.Capabilities,
   Goccia.Constants.ErrorNames,
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
+  Goccia.Executor.Bytecode,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.Realm,
@@ -42,7 +42,7 @@ type
   TFetchRuntimeExtensionTests = class(TTestSuite)
   private
     FOuterEngine: TGocciaEngine;
-    FOuterExecutor, FInnerExecutor: TGocciaInterpreterExecutor;
+    FOuterExecutor, FInnerExecutor: TGocciaBytecodeExecutor;
     FOuterSource, FInnerSource: TStringList;
     FOuterRealm: TGocciaRealm;
     FPromise: TGocciaPromiseValue;
@@ -53,7 +53,7 @@ type
     procedure StartOuterRequest;
     function RejectionMessage: string;
     function CreateFetchEngine(const AName: string;
-      const AExecutor: TGocciaInterpreterExecutor;
+      const AExecutor: TGocciaBytecodeExecutor;
       const ASource: TStringList;
       const ACapabilities: TGocciaCapabilities): TGocciaEngine;
     function OuterCapabilities: TGocciaCapabilities;
@@ -95,7 +95,7 @@ begin
 end;
 
 function TFetchRuntimeExtensionTests.CreateFetchEngine(const AName: string;
-  const AExecutor: TGocciaInterpreterExecutor;
+  const AExecutor: TGocciaBytecodeExecutor;
   const ASource: TStringList;
   const ACapabilities: TGocciaCapabilities): TGocciaEngine;
 begin
@@ -118,14 +118,14 @@ end;
 procedure TFetchRuntimeExtensionTests.TestEachEngineKeepsItsOwnRequestPolicy;
 var
   OuterEngine, InnerEngine: TGocciaEngine;
-  OuterExecutor, InnerExecutor: TGocciaInterpreterExecutor;
+  OuterExecutor, InnerExecutor: TGocciaBytecodeExecutor;
   OuterSource, InnerSource: TStringList;
   Observed: TGocciaCapabilities;
 begin
   OuterSource := TStringList.Create;
   InnerSource := TStringList.Create;
-  OuterExecutor := TGocciaInterpreterExecutor.Create;
-  InnerExecutor := TGocciaInterpreterExecutor.Create;
+  OuterExecutor := TGocciaBytecodeExecutor.Create;
+  InnerExecutor := TGocciaBytecodeExecutor.Create;
   try
     OuterEngine := CreateFetchEngine('<outer>', OuterExecutor, OuterSource,
       OuterCapabilities);
@@ -172,8 +172,8 @@ procedure TFetchRuntimeExtensionTests.SetUpOuterEngine;
 begin
   FOuterSource := TStringList.Create;
   FInnerSource := TStringList.Create;
-  FOuterExecutor := TGocciaInterpreterExecutor.Create;
-  FInnerExecutor := TGocciaInterpreterExecutor.Create;
+  FOuterExecutor := TGocciaBytecodeExecutor.Create;
+  FInnerExecutor := TGocciaBytecodeExecutor.Create;
   FOuterEngine := CreateFetchEngine('<outer>', FOuterExecutor, FOuterSource,
     OuterCapabilities);
   FOuterRealm := FetchExtension(FOuterEngine).BuiltinFetch.Realm;

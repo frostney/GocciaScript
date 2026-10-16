@@ -25,7 +25,7 @@ classDiagram
     TGocciaObjectValue <|-- TGocciaClassValue
 
     TGocciaObjectValue <|-- TGocciaFunctionBase
-    TGocciaFunctionBase <|-- TGocciaFunctionValue
+    TGocciaFunctionBase <|-- TGocciaBytecodeFunctionValue
     TGocciaFunctionBase <|-- TGocciaNativeFunctionValue
     TGocciaFunctionBase <|-- TGocciaBoundFunctionValue
     TGocciaInstanceValue <|-- TGocciaArrayValue
@@ -159,7 +159,7 @@ Returns `True` for values that can be invoked as functions. Overridden by:
 
 | Type | Returns |
 |------|---------|
-| `TGocciaFunctionBase` (and all subclasses: `TGocciaFunctionValue`, `TGocciaArrowFunctionValue`, `TGocciaMethodValue`, `TGocciaBoundFunctionValue`, `TGocciaNativeFunctionValue`) | `True` |
+| `TGocciaFunctionBase` (and all subclasses: `TGocciaBytecodeFunctionValue`, `TGocciaBoundFunctionValue`, `TGocciaNativeFunctionValue`) | `True` |
 | `TGocciaClassValue` | `True` (callable via `new`) |
 | `TGocciaProxyValue` | Delegates to the proxy target |
 | All others | `False` (inherited default) |
@@ -326,7 +326,7 @@ The implicit coercion checks for symbols are implemented at the operator level (
 
 **Weak eligibility:** `TGocciaSymbolValue.Registered` distinguishes symbols returned by `Symbol.for()` from local/well-known symbols. Non-registered symbols can be held weakly by WeakMap/WeakSet; registered symbols are pinned by the global symbol registry and rejected by `CanBeHeldWeakly`.
 
-Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`. The `in` operator handles symbol keys directly via `HasSymbolProperty`, without converting them to strings (see `Goccia.Evaluator.TypeOperations.pas`).
+Objects store symbol-keyed properties separately from string-keyed properties via `TGocciaObjectValue.FSymbolDescriptors`. The `in` operator handles symbol keys directly via `HasSymbolPropertyInChain`, without converting them to strings (see `TGocciaVM.HasPropertyValue` in `Goccia.VM.pas`).
 
 ## Type Conversion
 
@@ -503,82 +503,49 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 ## Functions
 
-### User-Defined Functions (`TGocciaFunctionValue`)
+### User-Defined Functions (`TGocciaBytecodeFunctionValue`)
 
-The base runtime type for user-defined functions. Uses call-site `this` binding (like ECMAScript's ordinary functions).
+Every source-defined function — ordinary function, arrow, method, async function, generator, and async generator — is a `TGocciaBytecodeFunctionValue` (`Goccia.VM`), a sealed `TGocciaFunctionBase` subclass. It wraps a `TGocciaBytecodeClosure` (`Goccia.VM.Closure`): the compiled `TGocciaFunctionTemplate`, the upvalue cells the function captured, and, for methods, `HomeObject`, `HomeClass` and `PrivateClass`. The template's `IsArrow`, `IsAsync` and `IsGenerator` flags select the call behaviour; there is no subclass per function form. See [Bytecode VM](bytecode-vm.md) for compilation and calls.
 
-- **Parameters** — List of parameter nodes (supports destructuring, defaults, and rest parameters).
-- **Body** — List of AST statements.
-- **Closure** — Reference to the scope where the function was defined.
-- **`BindThis` (virtual)** — Determines how `this` is resolved during a call. The base implementation uses call-site `this`.
-- **`ExecuteBody` (protected)** — Hands the call to the interpreter's call path: binding `this` via `BindThis`, binding parameters, running the body and producing the return value live in `Goccia.Evaluator.Calls`, which registers itself with `RegisterFunctionCallPaths` when linked. `Goccia.Values.FunctionValue` does not use the evaluator. Called by `Call`.
-- **`length` property** — Returns the number of formal parameters before the first default/rest parameter (ECMAScript spec).
-- **`name` property** — Returns the function name. For anonymous arrow functions assigned to variables (`const add = () => {}`), the evaluator infers the name from the variable declaration.
+- **Async functions** — `Call` creates a `TGocciaPromiseValue`, runs the closure, resolves the promise with the completion value, and rejects it with a thrown value.
+- **Generators** — `Call` returns a generator object instead of running the body (see [Generator Values](#generator-values-gocciavaluesgeneratorvaluepas)).
 
-### Arrow Functions (`TGocciaArrowFunctionValue`)
+### Arrow Functions
 
-Extends `TGocciaFunctionValue`. Overrides `CreateCallScope` to return `TGocciaArrowCallScope` (transparent to `Find*` scope walks) and `BindThis` to walk the closure scope chain for lexical `this`, per ECMAScript spec. Arrow functions never receive their own `this`, `super`, `new.target`, or owning class — they always inherit from their defining scope, regardless of how they are called.
-
-Created from `TGocciaArrowFunctionExpression` AST nodes (arrow function syntax: `(x) => ...`).
-
-### Async Function Values (`Goccia.Values.AsyncFunctionValue.pas`)
-
-Async functions extend their sync counterparts and return Promises:
-
-| Type | Extends | Created from |
-|------|---------|--------------|
-| `TGocciaAsyncFunctionValue` | `TGocciaFunctionValue` | `async` shorthand methods |
-| `TGocciaAsyncArrowFunctionValue` | `TGocciaArrowFunctionValue` | `async` arrow functions |
-| `TGocciaAsyncMethodValue` | `TGocciaMethodValue` | `async` class methods |
-
-**Call semantics:** `Call` creates a `TGocciaPromiseValue`, executes the body in a try/except, resolves on success, and rejects on `TGocciaThrowValue`. `this` binding is inherited from the superclass via virtual dispatch (`BindThis`).
+An arrow's template has `IsArrow` set. An arrow has no `this` binding of its own: the compiler resolves `this` in its body to the enclosing function's `this` through an upvalue, so the call-site receiver is ignored. An arrow also takes `new.target` from its closure.
 
 ### Generator Values (`Goccia.Values.GeneratorValue.pas`)
 
-Generator functions and methods extend the source-defined function value hierarchy but return generator objects instead of executing immediately:
+`Goccia.Values.GeneratorValue` holds the generator object base classes (`TGocciaGeneratorBaseValue`, `TGocciaAsyncGeneratorBaseValue`) and the `next`/`return`/`throw` methods on the generator prototypes. The VM's generator objects, `TGocciaBytecodeGeneratorObjectValue` and `TGocciaBytecodeAsyncGeneratorObjectValue`, live in `Goccia.VM`.
 
-| Type | Extends | Returns |
-|------|---------|---------|
-| `TGocciaGeneratorFunctionValue` | `TGocciaFunctionValue` | `TGocciaGeneratorObjectValue` |
-| `TGocciaAsyncGeneratorFunctionValue` | `TGocciaGeneratorFunctionValue` | `TGocciaAsyncGeneratorObjectValue` |
-| `TGocciaGeneratorMethodValue` | `TGocciaMethodValue` | `TGocciaGeneratorObjectValue` |
-| `TGocciaAsyncGeneratorMethodValue` | `TGocciaGeneratorMethodValue` | `TGocciaAsyncGeneratorObjectValue` |
-
-`Goccia.Values.GeneratorValue` holds what both executors share: these function classes, the generator object base classes, and the `next`/`return`/`throw` methods on the generator prototypes. The interpreter's generator objects live in `Goccia.Evaluator.Generators`, which creates them through `RegisterGeneratorObjectFactory`; the VM's are in `Goccia.VM`.
-
-Interpreter generator objects hold a resumable `TGocciaGeneratorContinuation`. Sync generators expose `next`, `return`, `throw`, and `[Symbol.iterator]`; async generators expose the async iterator protocol and return Promises from `next`, `return`, and `throw`.
+Sync generators expose `next`, `return`, `throw`, and `[Symbol.iterator]`; async generators expose the async iterator protocol and return Promises from `next`, `return`, and `throw`.
 
 ### `this` Binding
 
-`this` binding is determined by the runtime type via virtual dispatch on `BindThis`:
+`this` binding follows the function form:
 
-| Runtime Type | `this` binding | Created from |
-|-------------|---------------|-------------|
-| `TGocciaFunctionValue` | Call-site (receiver) | `TGocciaFunctionExpression` / `TGocciaObjectMethodDefinition` |
-| `TGocciaArrowFunctionValue` | Lexical (closure scope walk) | `TGocciaArrowFunctionExpression` (arrow syntax) |
-| `TGocciaMethodValue` | Call-site (inherited from base) | `TGocciaClassMethod` (class methods) |
-| `TGocciaAsyncFunctionValue` / `TGocciaAsyncArrowFunctionValue` / `TGocciaAsyncMethodValue` | Inherited from superclass via `BindThis` | `async` functions |
-| `TGocciaGeneratorFunctionValue` / `TGocciaGeneratorMethodValue` / async generator variants | Inherited from superclass via `BindThis` | generator functions and methods |
+| Function form | `this` binding |
+|---------------|---------------|
+| Ordinary function, shorthand method, class method | Call-site (receiver) |
+| Arrow function | Lexical (the enclosing function's `this`, captured as an upvalue) |
+| Async and generator variants | Same as the non-async, non-generator form |
 
 Standalone calls to ordinary, method, async, and generator functions receive `undefined` as `this` by default (strict mode, no implicit global). Arrow functions ignore the call-site receiver and keep their lexical `this` from the closure scope walk. With script source `--compat-non-strict-mode`, ordinary non-arrow functions coerce nullish `this` to `globalThis`; module source remains strict.
 
 ### Arguments Object (`Goccia.Values.ArgumentsObjectValue.pas`)
 
-Compatibility `arguments` objects are created by `Goccia.Values.ArgumentsObjectValue`. Unmapped objects are ordinary `TGocciaObjectValue` instances. Sloppy simple-parameter functions use a mapped arguments-object subclass that keeps an internal parameter map and overrides get/set/define/delete so indexed properties alias parameter bindings until deletion, accessor conversion, or non-writable descriptor changes break the mapping. Bytecode mapped objects store parameter cells; interpreter mapped objects store the call scope.
+Compatibility `arguments` objects are created by `Goccia.Values.ArgumentsObjectValue`. Unmapped objects are ordinary `TGocciaObjectValue` instances. Sloppy simple-parameter functions use a mapped arguments-object subclass that keeps an internal parameter map and overrides get/set/define/delete so indexed properties alias parameter bindings until deletion, accessor conversion, or non-writable descriptor changes break the mapping. Mapped objects store the parameter cells.
 
 ### Array Method Callbacks
 
 When array prototype methods (`map`, `filter`, `reduce`, `forEach`, etc.) invoke user-provided callbacks, they pass `undefined` as `ThisValue`. This means:
 
-- Arrow function callbacks (`TGocciaArrowFunctionValue`) inherit `this` from their lexical scope (e.g., the enclosing class method), which is the correct ECMAScript behavior.
+- Arrow function callbacks inherit `this` from their lexical scope (e.g., the enclosing class method), which is the correct ECMAScript behavior.
 - Shorthand method references passed as callbacks receive `undefined` as `this` (matching strict mode semantics for unbound method extraction).
 
-### Methods (`TGocciaMethodValue`)
+### Methods
 
-Extends `TGocciaFunctionValue` with:
-
-- **`SuperClass`** — Reference for `super` calls.
-- **`OwningClass`** — The class that declared this method. When called, `TGocciaMethodValue.CreateCallScope` creates a `TGocciaMethodCallScope` that carries both `SuperClass` and `OwningClass` as typed fields. The evaluator resolves these via `FindSuperClass` and `FindOwningClass` which walk the scope chain using virtual dispatch.
+A method is a `TGocciaBytecodeFunctionValue` whose closure carries `HomeObject` (the `[[HomeObject]]` that `super` property lookups start from), `HomeClass` (the class that declared the method), and `PrivateClass` (the innermost class body the function was created in, used for private-name resolution).
 
 ### Function Prototype (`TGocciaFunctionSharedPrototype`)
 
@@ -739,20 +706,18 @@ GocciaScript distinguishes two function forms — arrow functions and shorthand 
 
 **The problem:** By default (the recommended profile) there is no `function` keyword; it is off unless `--compat-function` is enabled. Arrow functions and shorthand methods have fundamentally different `this` semantics, but they need distinct representation at both the AST and runtime levels.
 
-**The solution:** Separate AST nodes and runtime types:
+**The solution:** Separate AST nodes, compiled into function templates the VM tells apart:
 
-| Syntax | AST Node | Runtime Type | `this` binding |
-|--------|----------|-------------|---------------|
-| `(x) => x + 1` | `TGocciaArrowFunctionExpression` | `TGocciaArrowFunctionValue` | Lexical (closure scope) |
-| `method() { ... }` | `TGocciaObjectMethodDefinition` | `TGocciaFunctionValue` | Call-site (receiver) |
-| `class { method() {} }` | `TGocciaClassMethod` | `TGocciaMethodValue` | Call-site (receiver) |
+| Syntax | AST Node | `this` binding |
+|--------|----------|---------------|
+| `(x) => x + 1` | `TGocciaArrowFunctionExpression` | Lexical (enclosing function's `this`) |
+| `method() { ... }` | `TGocciaObjectMethodDefinition` | Call-site (receiver) |
+| `class { method() {} }` | `TGocciaClassMethod` | Call-site (receiver) |
 
-The runtime uses virtual dispatch — `TGocciaFunctionValue.BindThis` is a virtual method overridden by `TGocciaArrowFunctionValue` — so `this` binding resolution has no branch overhead.
+All three become a `TGocciaBytecodeFunctionValue`. An arrow's template has `IsArrow` set and its body reads `this` from the enclosing function through an upvalue; the other forms bind the call-site receiver.
 
 **Why this design?**
 
-- **Type-safe dispatch** — The `this` binding strategy is encoded in the type hierarchy rather than a boolean flag. The vtable resolves the correct `BindThis` at zero cost.
-- **Self-documenting** — Reading the code, you know what a `TGocciaArrowFunctionValue` does vs a `TGocciaFunctionValue` without checking a flag.
 - **ECMAScript fidelity** — Arrow functions always capture `this` from their defining scope; methods receive `this` from their call site. This matches the spec exactly.
 - **Strict mode by default** — Standalone calls to either form receive `undefined` as `this`, matching strict mode. There is no implicit global `this` unless script source enables `--compat-non-strict-mode`.
 - **Callback correctness** — Array prototype methods (`map`, `filter`, `reduce`) pass `undefined` as `ThisValue` to callbacks. Arrow function callbacks correctly inherit their enclosing method's `this`; extracted method references receive `undefined`, preventing accidental `this` leakage.
@@ -777,7 +742,7 @@ Class getters and setters are stored as accessor descriptors on the class protot
 Private fields use **composite keys** (`ClassName:FieldName`) in the instance's private property dictionary. This solves the inheritance shadowing problem where a base class and a derived class both declare a private field with the same name — in JavaScript, `Base.#x` and `Derived.#x` are completely separate slots.
 
 - **Storage** — Private fields are stored on `TGocciaInstanceValue.FPrivateProperties` using keys like `"Base:x"` and `"Derived:x"`.
-- **Access resolution** — When a method accesses `this.#x`, the evaluator resolves which class declared the method (via `FindOwningClass`, which walks the scope chain for `TGocciaMethodCallScope` or `TGocciaClassInitScope` using virtual dispatch) and uses that class name to build the composite key.
+- **Access resolution** — When a method accesses `this.#x`, the VM resolves the class body that declares the name, starting from the running closure's `PrivateClass` and walking outward through enclosing class bodies (`TGocciaVM.LexicalBytecodePrivateClass`), and builds the key from that class (`TGocciaVM.ResolveBytecodePrivateRuntimeKey`).
 - **Private getters/setters** — Stored separately from public ones on `TGocciaClassValue` in `FPrivateGetters`/`FPrivateSetters`, because they don't participate in the prototype's property descriptor chain.
 - **Declaration order** — Instance property initializers run in source declaration order, recorded in the class value's `FFieldOrder`.
 

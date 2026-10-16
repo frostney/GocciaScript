@@ -28,15 +28,8 @@ type
     LoadDeferredModule: TLoadDeferredModuleCallback;
     ResolveModuleURL: TResolveModuleURLCallback;
     CurrentFilePath: string;
-    CoverageEnabled: Boolean;
-    StrictTypes: Boolean;
     NonStrictMode: Boolean;
     CompatibilityNonStrictMode: Boolean;
-    HideFunctionSourceText: Boolean;
-    InEvalCode: Boolean;
-    EvalVarScope: TGocciaScope;
-    RejectArgumentsVarDeclarationInEval: Boolean;
-    RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;
     DisposalTracker: TObject; // TGocciaDisposalTracker or nil
     CurrentModule: TGocciaModule;
     ModuleEnvironmentInitialized: Boolean;

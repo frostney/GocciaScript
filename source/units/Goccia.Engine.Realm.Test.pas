@@ -17,7 +17,6 @@ uses
   Goccia.ExecutionContext,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.Lexer,
   Goccia.MicrotaskQueue,
@@ -42,7 +41,6 @@ type
     FRecordedSourcePaths: TStringList;
     FNestedLog: TStringList;
     FNestedChildSource: string;
-    FNestedChildIsBytecode: Boolean;
     FRejectionLog: TStringList;
     FChildRejectionLog: TStringList;
     FRejectionHookHandles: Boolean;
@@ -75,7 +73,7 @@ type
     function NestedRunChildProbe(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure AssertNestedExecuteLeavesOuterJobsWithExecutor(
-      const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
+      const AExecutor: TGocciaExecutor);
     function UnhandledRejectionMessage(const AExecutor: TGocciaExecutor;
       const ASource: string;
       const AMode: TGocciaUnhandledRejectionMode;
@@ -94,7 +92,7 @@ type
       const ASource: string; const AMode: TGocciaUnhandledRejectionMode;
       out ARaised: string): string;
     procedure AssertUnhandledRejectionHookWithExecutor(
-      const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
+      const AExecutor: TGocciaExecutor);
   public
     procedure SetupTests; override;
 
@@ -108,25 +106,17 @@ type
     procedure TestSequentialEnginesHaveFreshURLPrototype;
     procedure TestNestedEngineRestoresOuterRealmOnDestroy;
     procedure TestNestedEngineRestoresOuterAsyncContextOnDestroy;
-    procedure TestInterpreterNestedExecuteLeavesOuterJobs;
     procedure TestBytecodeNestedExecuteLeavesOuterJobs;
-    procedure TestInterpreterExecuteRaisesUnhandledRejection;
     procedure TestBytecodeExecuteRaisesUnhandledRejection;
-    procedure TestInterpreterModuleLastValueIsNotItsFailure;
     procedure TestBytecodeModuleLastValueIsNotItsFailure;
-    procedure TestInterpreterUnhandledRejectionHook;
     procedure TestBytecodeUnhandledRejectionHook;
     procedure TestEachEngineGetsADistinctRealm;
-    procedure TestInterpreterExecutionContextUsesEngineRealm;
     procedure TestBytecodeExecutionContextUsesEngineRealm;
-    procedure TestInterpreterFunctionExecutionContextUsesFunctionValue;
     procedure TestBytecodeFunctionExecutionContextUsesFunctionValue;
-    procedure TestInterpreterConstructorExecutionContextUsesFunctionValue;
     procedure TestBytecodeConstructorExecutionContextUsesFunctionValue;
     procedure TestBytecodeFunctionExecutionContextCarriesSourcePath;
     procedure TestBytecodeFunctionExecutionContextFollowsCalleeModule;
     procedure TestBytecodeEntryRebindsTheThreadCallStack;
-    procedure TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites;
     procedure TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites;
     procedure TestBytecodeGlobalReadCacheRevalidatesLexicalShadow;
   end;
@@ -153,38 +143,22 @@ begin
     TestNestedEngineRestoresOuterRealmOnDestroy);
   Test('Destroying a nested engine restores the outer async context',
     TestNestedEngineRestoresOuterAsyncContextOnDestroy);
-  Test('Interpreter nested Execute neither runs nor drops the outer jobs',
-    TestInterpreterNestedExecuteLeavesOuterJobs);
   Test('Bytecode nested Execute neither runs nor drops the outer jobs',
     TestBytecodeNestedExecuteLeavesOuterJobs);
-  Test('Interpreter Execute raises an unhandled rejection unless told to ' +
-    'ignore it',
-    TestInterpreterExecuteRaisesUnhandledRejection);
   Test('Bytecode Execute raises an unhandled rejection unless told to ' +
     'ignore it',
     TestBytecodeExecuteRaisesUnhandledRejection);
-  Test('Interpreter Execute does not fail a module with the rejected ' +
-    'promise its last statement leaves',
-    TestInterpreterModuleLastValueIsNotItsFailure);
   Test('Bytecode Execute does not fail a module with the rejected ' +
     'promise its last statement leaves',
     TestBytecodeModuleLastValueIsNotItsFailure);
-  Test('Interpreter reports each unhandled rejection to the hook',
-    TestInterpreterUnhandledRejectionHook);
   Test('Bytecode reports each unhandled rejection to the hook',
     TestBytecodeUnhandledRejectionHook);
   Test('Each engine owns a distinct realm instance',
     TestEachEngineGetsADistinctRealm);
-  Test('Interpreter execution context uses the engine realm',
-    TestInterpreterExecutionContextUsesEngineRealm);
   Test('Bytecode execution context uses the engine realm',
     TestBytecodeExecutionContextUsesEngineRealm);
-  Test('Interpreter function execution context carries function value',
-    TestInterpreterFunctionExecutionContextUsesFunctionValue);
   Test('Bytecode function execution context carries function value',
     TestBytecodeFunctionExecutionContextUsesFunctionValue);
-  Test('Interpreter constructor execution context carries function value',
-    TestInterpreterConstructorExecutionContextUsesFunctionValue);
   Test('Bytecode constructor execution context carries function value',
     TestBytecodeConstructorExecutionContextUsesFunctionValue);
   Test('Bytecode function execution context carries its source path',
@@ -193,8 +167,6 @@ begin
     TestBytecodeFunctionExecutionContextFollowsCalleeModule);
   Test('Bytecode entry rebinds the thread''s call stack',
     TestBytecodeEntryRebindsTheThreadCallStack);
-  Test('Interpreter repeated engine execution gets fresh template sites',
-    TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites);
   Test('Bytecode repeated engine execution gets fresh template sites',
     TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites);
   Test('Bytecode global read cache revalidates a later lexical shadow',
@@ -210,7 +182,7 @@ function TTestEngineRealm.RunRuntimeInline(
   const ASource: string): TGocciaScriptResult;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Runtime: TGocciaRuntime;
   Source: TStringList;
 begin
@@ -218,7 +190,7 @@ begin
   Source.Text := ASource;
   Engine := nil;
   Runtime := nil;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<engine-realm-test>', Source, Executor);
     Runtime := TGocciaRuntime.Create(Engine);
@@ -420,12 +392,12 @@ end;
 procedure TTestEngineRealm.TestCurrentRealmIsAssignedDuringLife;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
   Source.Text := '';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<realm-life>', Source, Executor);
     try
@@ -442,14 +414,14 @@ end;
 procedure TTestEngineRealm.TestCurrentRealmIsClearedAfterDestroy;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   PreviousRealm: TGocciaRealm;
 begin
   PreviousRealm := CurrentRealm;
   Source := TStringList.Create;
   Source.Text := '';
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create('<realm-clear>', Source, Executor);
     Engine.Free;
@@ -557,7 +529,7 @@ end;
 procedure TTestEngineRealm.TestNestedEngineRestoresOuterRealmOnDestroy;
 var
   OuterEngine, InnerEngine: TGocciaEngine;
-  OuterExecutor, InnerExecutor: TGocciaInterpreterExecutor;
+  OuterExecutor, InnerExecutor: TGocciaBytecodeExecutor;
   OuterSource, InnerSource: TStringList;
   OuterRealm, InnerRealm: TGocciaRealm;
 begin
@@ -566,8 +538,8 @@ begin
   InnerSource := TStringList.Create;
   InnerSource.Text := '';
 
-  OuterExecutor := TGocciaInterpreterExecutor.Create;
-  InnerExecutor := TGocciaInterpreterExecutor.Create;
+  OuterExecutor := TGocciaBytecodeExecutor.Create;
+  InnerExecutor := TGocciaBytecodeExecutor.Create;
   try
     OuterEngine := TGocciaEngine.Create('<outer>', OuterSource, OuterExecutor);
     try
@@ -604,7 +576,7 @@ end;
 procedure TTestEngineRealm.TestNestedEngineRestoresOuterAsyncContextOnDestroy;
 var
   OuterEngine, InnerEngine: TGocciaEngine;
-  OuterExecutor, InnerExecutor: TGocciaInterpreterExecutor;
+  OuterExecutor, InnerExecutor: TGocciaBytecodeExecutor;
   OuterSource, InnerSource: TStringList;
   OuterContext: TGocciaAsyncContextSnapshot;
   Key, Store: TGocciaValue;
@@ -614,8 +586,8 @@ begin
   InnerSource := TStringList.Create;
   InnerSource.Text := '';
 
-  OuterExecutor := TGocciaInterpreterExecutor.Create;
-  InnerExecutor := TGocciaInterpreterExecutor.Create;
+  OuterExecutor := TGocciaBytecodeExecutor.Create;
+  InnerExecutor := TGocciaBytecodeExecutor.Create;
   try
     OuterEngine := TGocciaEngine.Create('<outer-async>', OuterSource,
       OuterExecutor);
@@ -682,10 +654,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   ChildSource := TStringList.Create;
   ChildSource.Text := FNestedChildSource;
-  if FNestedChildIsBytecode then
-    ChildExecutor := TGocciaBytecodeExecutor.Create
-  else
-    ChildExecutor := TGocciaInterpreterExecutor.Create;
+  ChildExecutor := TGocciaBytecodeExecutor.Create;
   ChildEngine := nil;
   try
     ChildEngine := TGocciaEngine.Create('<nested-child>', ChildSource,
@@ -718,7 +687,7 @@ begin
 end;
 
 procedure TTestEngineRealm.AssertNestedExecuteLeavesOuterJobsWithExecutor(
-  const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
+  const AExecutor: TGocciaExecutor);
 const
   OUTER_SOURCE =
     'Promise.resolve().then(() => report("outer job"));' +
@@ -740,7 +709,6 @@ begin
   Source := TStringList.Create;
   Source.Text := OUTER_SOURCE;
   FNestedLog := TStringList.Create;
-  FNestedChildIsBytecode := AIsBytecode;
   Engine := nil;
   try
     Engine := TGocciaEngine.Create('<nested-outer>', Source, AExecutor);
@@ -778,25 +746,13 @@ begin
   end;
 end;
 
-procedure TTestEngineRealm.TestInterpreterNestedExecuteLeavesOuterJobs;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertNestedExecuteLeavesOuterJobsWithExecutor(Executor, False);
-  finally
-    Executor.Free;
-  end;
-end;
-
 procedure TTestEngineRealm.TestBytecodeNestedExecuteLeavesOuterJobs;
 var
   Executor: TGocciaBytecodeExecutor;
 begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
-    AssertNestedExecuteLeavesOuterJobsWithExecutor(Executor, True);
+    AssertNestedExecuteLeavesOuterJobsWithExecutor(Executor);
   finally
     Executor.Free;
   end;
@@ -918,18 +874,6 @@ begin
     urThrow, stModule)).ToBe('after await');
 end;
 
-procedure TTestEngineRealm.TestInterpreterModuleLastValueIsNotItsFailure;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertModuleRejectionsWithExecutor(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
 procedure TTestEngineRealm.TestBytecodeModuleLastValueIsNotItsFailure;
 var
   Executor: TGocciaBytecodeExecutor;
@@ -937,18 +881,6 @@ begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertModuleRejectionsWithExecutor(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TTestEngineRealm.TestInterpreterExecuteRaisesUnhandledRejection;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertUnhandledRejectionModesWithExecutor(Executor);
   finally
     Executor.Free;
   end;
@@ -1064,7 +996,7 @@ begin
 end;
 
 procedure TTestEngineRealm.AssertUnhandledRejectionHookWithExecutor(
-  const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
+  const AExecutor: TGocciaExecutor);
 const
   TWO_LEFT =
     'Promise.reject(new Error("first"));' +
@@ -1088,7 +1020,6 @@ begin
   FRejectionLog := TStringList.Create;
   FChildRejectionLog := nil;
   FNestedLog := TStringList.Create;
-  FNestedChildIsBytecode := AIsBytecode;
   FRejectionHookHandles := False;
   FRejectionHookHandlesAll := False;
   FRejectionHookHandlesFirst := False;
@@ -1194,25 +1125,13 @@ begin
   end;
 end;
 
-procedure TTestEngineRealm.TestInterpreterUnhandledRejectionHook;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertUnhandledRejectionHookWithExecutor(Executor, False);
-  finally
-    Executor.Free;
-  end;
-end;
-
 procedure TTestEngineRealm.TestBytecodeUnhandledRejectionHook;
 var
   Executor: TGocciaBytecodeExecutor;
 begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
-    AssertUnhandledRejectionHookWithExecutor(Executor, True);
+    AssertUnhandledRejectionHookWithExecutor(Executor);
   finally
     Executor.Free;
   end;
@@ -1221,7 +1140,7 @@ end;
 procedure TTestEngineRealm.TestEachEngineGetsADistinctRealm;
 var
   EngineA, EngineB: TGocciaEngine;
-  ExecutorA, ExecutorB: TGocciaInterpreterExecutor;
+  ExecutorA, ExecutorB: TGocciaBytecodeExecutor;
   SourceA, SourceB: TStringList;
   RealmA, RealmB: TGocciaRealm;
 begin
@@ -1236,8 +1155,8 @@ begin
   SourceB := TStringList.Create;
   SourceB.Text := '';
 
-  ExecutorA := TGocciaInterpreterExecutor.Create;
-  ExecutorB := TGocciaInterpreterExecutor.Create;
+  ExecutorA := TGocciaBytecodeExecutor.Create;
+  ExecutorB := TGocciaBytecodeExecutor.Create;
   try
     EngineA := TGocciaEngine.Create('<engine-a>', SourceA, ExecutorA);
     try
@@ -1262,18 +1181,6 @@ begin
   end;
 end;
 
-procedure TTestEngineRealm.TestInterpreterExecutionContextUsesEngineRealm;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertRealmProbeWithExecutor(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
 procedure TTestEngineRealm.TestBytecodeExecutionContextUsesEngineRealm;
 var
   Executor: TGocciaBytecodeExecutor;
@@ -1281,18 +1188,6 @@ begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertRealmProbeWithExecutor(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TTestEngineRealm.TestInterpreterFunctionExecutionContextUsesFunctionValue;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertFunctionContextProbeWithExecutor(Executor);
   finally
     Executor.Free;
   end;
@@ -1473,18 +1368,6 @@ begin
   end;
 end;
 
-procedure TTestEngineRealm.TestInterpreterConstructorExecutionContextUsesFunctionValue;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertConstructorFunctionContextProbeWithExecutor(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
 procedure TTestEngineRealm.TestBytecodeConstructorExecutionContextUsesFunctionValue;
 var
   Executor: TGocciaBytecodeExecutor;
@@ -1492,18 +1375,6 @@ begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertConstructorFunctionContextProbeWithExecutor(Executor);
-  finally
-    Executor.Free;
-  end;
-end;
-
-procedure TTestEngineRealm.TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites;
-var
-  Executor: TGocciaInterpreterExecutor;
-begin
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    AssertRepeatedTaggedTemplateExecutionWithExecutor(Executor);
   finally
     Executor.Free;
   end;

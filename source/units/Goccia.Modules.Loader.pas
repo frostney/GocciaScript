@@ -1667,10 +1667,8 @@ end;
 
 // ES2026 §16.2.1.7.3.1 InitializeEnvironment: while linking a module, a named
 // import whose ResolveExport result is null or ambiguous is a SyntaxError. The
-// tree-walking interpreter also enforces this lazily as it evaluates each
-// import declaration (Goccia.AST.Statements), but the bytecode compiler resolves
-// import bindings at their use sites, so missing names must be rejected here at
-// link time to keep both engines in lockstep (ADR 0014). Source modules still
+// bytecode compiler resolves import bindings at their use sites, so missing
+// names must be rejected here at link time (ADR 0014). Source modules still
 // mid-evaluation in a cycle are skipped via IsEvaluatingModulePath, matching the
 // re-export validation in RegisterStaticModuleExports.
 procedure TGocciaModuleLoader.ValidateStaticNamedImports(
@@ -2788,8 +2786,6 @@ begin
           Context.ResolveModuleURL := ResolveModuleURL;
           Context.CurrentFilePath := ResolvedPath;
           Context.CurrentModule := Module;
-          Context.CoverageEnabled := False;
-          Context.StrictTypes := FStrictTypesEnabled;
           Context.NonStrictMode := False;
           Context.CompatibilityNonStrictMode := False;
           Context.DisposalTracker := nil;

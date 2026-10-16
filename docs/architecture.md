@@ -5,11 +5,11 @@
 ## Executive Summary
 
 - **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and source text execution; `Goccia.Runtime` attaches runtime globals, import-only runtime modules, file helpers, and extensions
-- **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaInterpreterExecutor` and `TGocciaBytecodeExecutor` implement it independently
+- **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaBytecodeExecutor` is its only implementation since the tree-walk interpreter was removed ([#875](https://github.com/frostney/GocciaScript/issues/875))
 - **Shared source pipeline** — Preprocessors, lexer, parser, warning data, source maps, and AST artifacts are shared between execution modes
 - **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
-- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not call the interpreter or evaluator (it shares only the `Goccia.EvaluationContext` record type), and an engine with a bytecode executor builds no interpreter. The VM still links the tree-walk evaluator to construct a class the evaluator built, which only the interpreter executor creates, until the interpreter is removed. See [Bytecode VM § Overview](bytecode-vm.md#overview)
+- **Single executor** — The `TGocciaBytecodeExecutor` unit depends on the compiler and VM (it also shares the `Goccia.EvaluationContext` record type). See [Bytecode VM § Overview](bytecode-vm.md#overview)
 
 ## Overview
 
@@ -40,10 +40,8 @@ Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Compiler -> G
 | Engine | `Goccia.Engine`, `Goccia.HostEnvironment`, `Goccia.Capabilities` | Core language built-ins, language configuration, the engine's immutable capability set, host-controlled script time/randomness, source text execution, executor dispatch |
 | Runtime | `Goccia.Runtime`, `Goccia.RuntimeExtensions.*`, `Goccia.RuntimeProfiles.*` | Runtime integration layer, runtime extensions such as console/fetch/data modules/SemVer/testing/benchmarks/FFI, loader/test/benchmark profiles, and file-backed helpers |
 | Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
-| Interpreter executor | `Goccia.Executor.Interpreter` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
 | Bytecode executor | `Goccia.Executor.Bytecode` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
 | Source pipeline | `Goccia.SourcePipeline`, `Goccia.JSX.Transformer`, `Goccia.Lexer`, `Goccia.Parser`, `Goccia.AST.*` | Source text to AST, including parser policy, preprocessor dispatch, source maps, warning data, and generated-source lines |
-| Interpreter | `Goccia.Interpreter`, `Goccia.Evaluator.*` | Tree-walk execution |
 | Bytecode compiler | `Goccia.Compiler*` | AST to bytecode templates/modules |
 | Bytecode format | `Goccia.Bytecode*` | Opcodes, templates, modules, binary I/O, debug info |
 | Bytecode VM | `Goccia.VM*` | Register execution, closures, upvalues, handlers |
@@ -110,19 +108,15 @@ Nested execution runs inside the sandbox-mode host: `runScript` and shell `gocci
 
 ## Executor Architecture
 
-The engine uses a **strategy pattern** for execution. `TGocciaExecutor` is the abstract base; two concrete implementations exist:
+The engine uses a **strategy pattern** for execution. `TGocciaExecutor` is the abstract base; one concrete implementation exists:
 
 ```text
 TGocciaExecutor (abstract — Goccia.Executor.pas)
-├── TGocciaInterpreterExecutor (Goccia.Executor.Interpreter.pas)
-│     Wraps TGocciaInterpreter for tree-walk execution
 └── TGocciaBytecodeExecutor (Goccia.Executor.Bytecode.pas)
       Compiles to bytecode and runs on TGocciaVM
-      Executor unit does not call the evaluator; the VM still links Goccia.Evaluator
-      for classes the evaluator built
 ```
 
-The engine bootstraps the realm itself: it creates the global scope (`Engine.GlobalScope`), binds it to the module loader and registers the built-ins. It creates a `TGocciaInterpreter`, which shares that global scope, only for a `TGocciaInterpreterExecutor`; with a bytecode executor `Engine.Interpreter` is nil. The executor receives the global scope and module loader via `Initialize`, then handles all program and module body execution, and loads the bootstrap shims when they are first used (`TGocciaExecutor.EvaluateShim`, see [Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)).
+The engine bootstraps the realm itself: it creates the global scope (`Engine.GlobalScope`), binds it to the module loader and registers the built-ins. The executor receives the global scope and module loader via `Initialize`, then handles all program and module body execution, and loads the bootstrap shims when they are first used (`TGocciaExecutor.EvaluateShim`, see [Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)).
 
 Callers must pass an explicit executor to the engine constructor — there is no implicit default. The engine never frees the executor; the caller (or a wrapping layer such as `TGocciaRuntime`) owns it and frees it after the engine.
 

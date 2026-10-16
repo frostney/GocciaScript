@@ -632,7 +632,6 @@ Pascal unit tests are the tertiary testing layer for low-level internals that ar
 | Test File | Tests |
 |-----------|-------|
 | `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
-| `Goccia.Values.FunctionValue.Test.pas` | Function/method creation, closure capture, parameter handling, scope resolution, AST evaluation |
 | `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
 | `Goccia.Builtins.TestingLibrary.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toStrictEqual`, `toContainEqual`, `toMatchObject`, `toMatch`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeDefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
 
@@ -641,7 +640,6 @@ These compile as standalone executables and run directly:
 ```bash
 ./build.pas tests
 ./build/Goccia.Values.Primitives.Test
-./build/Goccia.Values.FunctionValue.Test
 ./build/Goccia.Values.ObjectValue.Test
 ./build/Goccia.Builtins.TestingLibrary.Test
 ```

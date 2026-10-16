@@ -9,9 +9,8 @@
   loads the Date shim in every one, which helped run a 32-bit process out of
   address space.
 
-  Also pins how shims load (#873, #911): no shim loads at boot, and with a
-  bytecode executor a shim is compiled, so its functions are VM closures and
-  the engine builds no interpreter. }
+  Also pins how shims load (#873, #911): no shim loads at boot, and a shim is
+  compiled, so its functions are VM closures. }
 
 program Goccia.Shims.Test;
 
@@ -24,18 +23,14 @@ uses
 
   TestingPascalLibrary,
 
-  Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.AST.Statements,
   Goccia.Engine,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.Shims,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.ThreadCleanupRegistry,
-  Goccia.Values.FunctionValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -55,10 +50,8 @@ type
     procedure TestEnginesStillLoadShimsAfterTheCacheIsReleased;
     procedure TestCacheReleaseIsRegistered;
     procedure TestASharedProgramKeepsItsTemplateObjectsInEachRealm;
-    procedure TestABytecodeEngineBuildsNoInterpreter;
     procedure TestBootLoadsNoShim;
     procedure TestBytecodeShimFunctionsAreCompiled;
-    procedure TestInterpretedShimFunctionsTreeWalk;
     procedure TestToStringOfANamelessFunctionLeavesNothingBehind;
   end;
 
@@ -74,14 +67,10 @@ begin
     TestCacheReleaseIsRegistered);
   Test('a program evaluated in one engine after another keeps its template objects in each realm',
     TestASharedProgramKeepsItsTemplateObjectsInEachRealm);
-  Test('an engine with a bytecode executor builds no interpreter',
-    TestABytecodeEngineBuildsNoInterpreter);
   Test('booting an engine loads no shim',
     TestBootLoadsNoShim);
   Test('with a bytecode executor the shims define VM closures',
     TestBytecodeShimFunctionsAreCompiled);
-  Test('with an interpreter executor the shims define tree-walk functions',
-    TestInterpretedShimFunctionsTreeWalk);
   Test('Function.prototype.toString of a nameless built-in leaves nothing behind',
     TestToStringOfANamelessFunctionLeavesNothingBehind);
 end;
@@ -175,11 +164,11 @@ function TTestShims.TemplateObjectsInAFreshRealm(
   const AProgram: TGocciaProgram): Integer;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
     Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
@@ -203,14 +192,12 @@ var
   Options: TGocciaSourcePipelineOptions;
   ParseResult: TGocciaSourcePipelineModuleResult;
   ProgramNode: TGocciaProgram;
-  Site: TGocciaTaggedTemplateExpression;
   I: Integer;
 begin
   { Sharing a shim program across engines relies on evaluation writing
-    nothing into the AST. A tagged template's template object is the one
-    value the evaluator could cache on a node, and it must go into the
-    realm's template map instead (ES2026 §13.2.8.3 GetTemplateObject), both
-    at the top level and inside a function the program defines. }
+    nothing into the AST. A tagged template's template object goes into the
+    realm's template map (ES2026 §13.2.8.3 GetTemplateObject), both at the
+    top level and inside a function the program defines. }
   Options := TGocciaSourcePipeline.DefaultOptions;
   Options.Preprocessors := [];
   Options.Compatibility := [cfFunction];
@@ -223,35 +210,10 @@ begin
     ParseResult.Free;
   end;
   try
-    Site := (ProgramNode.Body[1] as TGocciaExpressionStatement).Expression as
-      TGocciaTaggedTemplateExpression;
     for I := 1 to 2 do
-    begin
       Expect<Integer>(TemplateObjectsInAFreshRealm(ProgramNode)).ToBe(2);
-      Expect<Boolean>(Assigned(Site.TemplateObject)).ToBe(False);
-    end;
   finally
     ProgramNode.Free;
-  end;
-end;
-
-procedure TTestShims.TestABytecodeEngineBuildsNoInterpreter;
-var
-  Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
-  Source: TStringList;
-begin
-  Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
-  Engine := nil;
-  try
-    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
-    Expect<Boolean>(Assigned(Engine.Interpreter)).ToBe(False);
-    Expect<Boolean>(Assigned(Engine.GlobalScope)).ToBe(True);
-  finally
-    Engine.Free;
-    Executor.Free;
-    Source.Free;
   end;
 end;
 
@@ -296,28 +258,6 @@ begin
     Expect<string>(TGocciaObjectValue.SharedObjectPrototype
       .GetProperty('__lookupGetter__').ClassName)
       .ToBe('TGocciaBytecodeFunctionValue');
-  finally
-    Engine.Free;
-    Executor.Free;
-    Source.Free;
-  end;
-end;
-
-procedure TTestShims.TestInterpretedShimFunctionsTreeWalk;
-var
-  DateConstructor: TGocciaValue;
-  Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
-  Source: TStringList;
-begin
-  Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := nil;
-  try
-    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
-    Expect<Boolean>(Assigned(Engine.Interpreter)).ToBe(True);
-    DateConstructor := GetDateIntrinsic(Engine.Executor);
-    Expect<Boolean>(DateConstructor is TGocciaFunctionValue).ToBe(True);
   finally
     Engine.Free;
     Executor.Free;

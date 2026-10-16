@@ -1788,8 +1788,8 @@ begin
     Exit('a symbol');
   if AValue is TGocciaBigIntValue then
     Exit('a BigInt');
-  { An object literal is a TGocciaObjectValue in the interpreter and a
-    TGocciaVMLiteralObjectValue in bytecode mode; both are plain objects. }
+  { A natively built object is a TGocciaObjectValue and an object literal a
+    TGocciaVMLiteralObjectValue; both are plain objects. }
   if not (AValue is TGocciaObjectValue) or
      ((AValue.ClassType <> TGocciaObjectValue) and
       (AValue.ClassType <> TGocciaVMLiteralObjectValue) and
