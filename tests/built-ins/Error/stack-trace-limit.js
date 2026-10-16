@@ -98,11 +98,7 @@ test("a stack-overflow RangeError under the default --max-stack is truncated", (
   expect(lines.length).toBe(1 + LIMIT + 1);
   expect(lines.slice(1, LIMIT + 1).every((line) => line.startsWith("    at recurse ("))).toBe(true);
   // Every recurse frame and the test function's frames, less the ones
-  // rendered. The interpreter also lists the refused call, whose body never
-  // ran, so its count is one higher.
+  // rendered.
   const total = depth + base;
-  expect([
-    `    ... ${total - LIMIT} more frames`,
-    `    ... ${total + 1 - LIMIT} more frames`,
-  ].includes(lines[LIMIT + 1])).toBe(true);
+  expect(lines[LIMIT + 1]).toBe(`    ... ${total - LIMIT} more frames`);
 });

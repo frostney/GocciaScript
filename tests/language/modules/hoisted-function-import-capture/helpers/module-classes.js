@@ -151,11 +151,12 @@ export class Factory {
 }
 
 // A class *created inside* a hoisted function declaration, which the module
-// instantiates while it is linked, before its body runs. Bytecode mode once
-// ran such a declaration in the tree-walk evaluator, so this class recorded
+// instantiates while it is linked, before its body runs. Such a declaration
+// once ran in the since-removed tree-walk evaluator, so this class recorded
 // its instance elements as AST expressions; extending it from the entry file
-// put that superclass under a compiled one. The "evaluator" names below keep
-// that history; the class semantics they check hold in both modes.
+// put that superclass under a compiled one. The "evaluator" names below
+// (identifiers and the field values the tests assert on) are historical;
+// every class here is now compiled.
 export function makeEvaluatorBuiltBase() {
   return class EvaluatorBuiltBase {
     label = PREFIX + "evaluator-base";
@@ -172,13 +173,15 @@ export function makeEvaluatorBuiltBase() {
   };
 }
 
-// Another evaluator-built class, this time with no constructor of its own, so
-// construction reaches the compiled superclass's *implicit* branch.
+// Another class built inside a hoisted function, this time with no
+// constructor of its own, so construction reaches the superclass's *implicit*
+// branch.
 export function makeSubclassOf(Base) {
   return class EvaluatorBuiltSub extends Base {};
 }
 
-// An evaluator-built class with fields of its own and no constructor, meant to
+// A class built inside a hoisted function, with fields of its own and no
+// constructor, meant to
 // sit *between* a compiled subclass and the constructor that actually runs.
 // §15.7.14 step 15a still owes it an implicit constructor, and the class it is
 // sandwiched between is what makes the omission observable.

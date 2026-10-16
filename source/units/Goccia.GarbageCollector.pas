@@ -75,7 +75,7 @@ type
   TGCManagedObjectList = TObjectList<TGCManagedObject>;
   // Backing store for the active-root stack only. A bare array rather than
   // TGCManagedObjectList because that stack is pushed and popped once per
-  // rooted evaluator temporary: TObjectList pays a virtual Notify dispatch per
+  // rooted temporary: TObjectList pays a virtual Notify dispatch per
   // Add and per Delete, and Delete additionally moves the tail, none of which
   // buys anything for a non-owning LIFO stack whose element type is a plain
   // class reference.
@@ -93,7 +93,7 @@ type
   // A stack-local group of GC roots. Initialize before first use, Add every
   // value that must survive a collecting safe point, and Clear in a finally so
   // the exception path is covered. Add tolerates nil and tolerates the same
-  // object twice, which is what makes it the right tool for evaluator
+  // object twice, which is what makes it the right tool for native
   // temporaries where two locals can hold one object.
   //
   // Release is a count rollback, not a per-entry pop: Clear releases exactly
@@ -212,8 +212,8 @@ type
     // ceiling before a pressure collection runs. Every
     // HEAP_SAMPLE_INTERVAL registrations SampleHeap reads the heap manager's
     // in-use total; at or above HeapTriggerBytes it latches the same pending
-    // flag an external reservation uses, so the existing checkpoints (the
-    // interpreter's per-expression check, the VM dispatch countdown) collect.
+    // flag an external reservation uses, so the existing checkpoint (the VM
+    // dispatch countdown) collects.
     // No collection site is added, and refusal still compares BytesAllocated.
     FHeapPressurePending: Boolean;
     FHeapSampleCountdown: Integer;
@@ -339,7 +339,8 @@ type
     // when the live set has crossed the reserve below the ceiling. AForce
     // skips that heuristic and always collects; it exists for the last-resort
     // site in TryReserveExternalBytes, which must not refuse a reservation
-    // before a collection has actually been attempted.
+    // before a collection has actually been attempted, and for the VM's
+    // checkpoint in a GC-stress build (GOCCIA_GC_STRESS).
     procedure CollectForMemoryPressure(const AProtect: TGCManagedObject;
       const AForce: Boolean = False);
 
@@ -457,11 +458,12 @@ uses
   ,
   SysUtils
   {$IFDEF GC_TIMING}, TimingUtils{$ENDIF}
-  {$ENDIF};
+  {$ENDIF}
+  {$IFDEF GOCCIA_GC_STRESS}, heaptrc{$ENDIF};
 
 const
   // Slots pre-allocated for the active-root stack, and the unit it doubles
-  // from. Deep enough that ordinary evaluator nesting never reallocates.
+  // from. Deep enough that ordinary nesting never reallocates.
   ACTIVE_ROOT_STACK_INITIAL_CAPACITY = 256;
 
 function CurrentHeapBytes: Int64;
@@ -1287,7 +1289,7 @@ end;
 function TGarbageCollector.NeedsMemoryPressureCollection: Boolean;
 begin
   // Guards before the counter read: on 32-bit GetBytesAllocated takes the
-  // accounting lock, and the periodic VM/interpreter pressure polls must stay
+  // accounting lock, and the periodic VM pressure polls must stay
   // free when no limit is set or a collection is already underway.
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
     Exit(False);
@@ -1346,8 +1348,8 @@ begin
     FHeapAfterLastCollect := HeapBytes;
   if HeapBytes >= HeapTriggerBytes then
   begin
-    // Rides the external-pressure latch so the interpreter's per-expression
-    // checkpoint keeps testing a single flag; FHeapPressurePending only
+    // Rides the external-pressure latch so the collection checkpoint keeps
+    // testing a single flag; FHeapPressurePending only
     // attributes the collection that follows.
     FHeapPressurePending := True;
     RequestPressureCollection;
@@ -1755,8 +1757,23 @@ end;
 initialization
   CriticalSectionInit(GCCollectLock);
   GCCurrentMark := 1;
+  {$IFDEF GOCCIA_GC_STRESS}
+  // A GC-stress build links heaptrc (-gh, from ./build.pas --gc-stress). Keep
+  // every released block out of reuse: heaptrc fills a freed block with $F0, so
+  // a stale reference to a collected value faults on its next use instead of
+  // reading whatever a later allocation put there.
+  keepreleased := True;
+  {$ENDIF}
 
 finalization
   CriticalSectionDone(GCCollectLock);
+  {$IFDEF GOCCIA_GC_STRESS}
+  // Skip heaptrc's exit report. heaptrc is finalized after this unit and
+  // checks useheaptrace first. With the known leaks (#1592) the report runs to
+  // hundreds of megabytes and about 15 seconds per process, and leaks are the
+  // memory-safety job's concern, not this build's: heaptrc still halts on a
+  // double free or a corrupted block at the moment it happens.
+  useheaptrace := False;
+  {$ENDIF}
 
 end.

@@ -162,11 +162,10 @@ describe("imported module functions construct module classes", () => {
     expect(Array.isArray(redirected)).toBe(true);
   });
 
-  // TGocciaMethodValue.CallWithThisValue runs only the constructor body, so a
-  // superclass whose instance elements are AST expressions loses them unless
-  // the VM hands them back to the evaluator. Interpreted mode never had the
-  // gap, which made this a mode divergence rather than a missing fast path.
-  test("a compiled subclass of an evaluator-built base runs the base's fields", () => {
+  // A base class built inside a hoisted module function, extended from the
+  // entry file: construction through an explicit or an implicit super() call
+  // must run the base's instance elements, including its private brand.
+  test("a compiled subclass of a hoisted-function-built base runs the base's fields", () => {
     const Base = makeEvaluatorBuiltBase();
 
     class ExplicitSuper extends Base {
@@ -192,11 +191,11 @@ describe("imported module functions construct module classes", () => {
     expect(implicit.brand()).toBe("id-evaluator-brand");
   });
 
-  // §15.7.14 step 15a: the evaluator-built class in the middle has no
+  // §15.7.14 step 15a: the hoisted-function-built class in the middle has no
   // constructor of its own, so the compiled subclass's implicit constructor
   // used to walk straight past it to the base that does — dropping the middle
   // class's fields and its private brand.
-  test("a compiled subclass runs an evaluator-built middle class's fields", () => {
+  test("a compiled subclass runs a hoisted-function-built middle class's fields", () => {
     const Base = makeEvaluatorBuiltBase();
     const Middle = makeFieldedSubclassOf(Base);
 

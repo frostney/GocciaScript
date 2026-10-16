@@ -4,23 +4,18 @@ program Goccia.Builtins.TestingLibrary.Test;
 
 uses
   Classes,
-  Generics.Collections,
   SysUtils,
 
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
-  Goccia.AST.Expressions,
-  Goccia.AST.Node,
   Goccia.Builtins.TestingLibrary,
   Goccia.Error.ThrowErrorCallback,
   Goccia.RegExp.Runtime,
   Goccia.Scope,
-  Goccia.SourceSpan,
   Goccia.TestSetup,
   Goccia.Values.ArrayValue,
   Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue,
   Goccia.Values.MockFunction,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -177,7 +172,8 @@ type
     FRecordedEvents: TStringList;
 
     procedure DummyThrowError(const AMessage: string; const ALine, AColumn: Integer);
-    function CreateNoOpFunction: TGocciaFunctionValue;
+    function NoOpCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function CreateNoOpFunction: TGocciaNativeFunctionValue;
     function ResolveGlobalCallable(const AName: string): TGocciaFunctionBase;
     function ResolveCallableProperty(const AName, AProperty: string): TGocciaFunctionBase;
     function RunRegisteredTests: TGocciaObjectValue;
@@ -1797,15 +1793,15 @@ begin
   raise Exception.Create(AMessage);
 end;
 
-function TTestSkipAndConditionalAPIs.CreateNoOpFunction: TGocciaFunctionValue;
-var
-  Statements: TObjectList<TGocciaASTNode>;
-  ParamArray: TGocciaParameterArray;
+function TTestSkipAndConditionalAPIs.NoOpCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Statements := TObjectList<TGocciaASTNode>.Create;
-  Statements.Add(TGocciaLiteralExpression.Create(TGocciaUndefinedLiteralValue.UndefinedValue, TGocciaSourceSpan.Empty));
-  SetLength(ParamArray, 0);
-  Result := TGocciaFunctionValue.Create(ParamArray, Statements, FScope, 'noop');
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestSkipAndConditionalAPIs.CreateNoOpFunction: TGocciaNativeFunctionValue;
+begin
+  Result := TGocciaNativeFunctionValue.Create(NoOpCallback, 'noop', 0);
 end;
 
 function TTestSkipAndConditionalAPIs.ResolveGlobalCallable(

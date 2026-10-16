@@ -60,7 +60,7 @@ uses
   SyncObjs,
 
   {$IFDEF UNIX}
-  Sockets, BaseUnix, NetDB,
+  Sockets, BaseUnix,
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   WinSock2,
@@ -157,6 +157,93 @@ begin
 end;
 {$ENDIF}
 
+{$IFDEF UNIX}
+{ The platform resolver: getaddrinfo(3) from libc, which the binaries already
+  link through cthreads. It follows the system's resolver configuration
+  (nsswitch, /etc/hosts, stub resolvers, IPv6 nameservers), as every other
+  program on the host does. FPC's NetDB resolves names itself instead: it
+  reads /etc/resolv.conf, queries only its IPv4 nameservers, and never
+  consults /etc/hosts or nsswitch. getaddrinfo is thread-safe in glibc, musl
+  and the BSD libcs, which matters because fetch workers resolve on their own
+  threads. }
+type
+  PHostAddrInfo = ^THostAddrInfo;
+  {$PUSH}
+  {$PACKRECORDS C}
+  THostAddrInfo = record
+    ai_flags: cint;
+    ai_family: cint;
+    ai_socktype: cint;
+    ai_protocol: cint;
+    ai_addrlen: TSockLen;
+    { glibc and musl put the address before the canonical name; Darwin and
+      FreeBSD put the canonical name first. }
+    {$IF DEFINED(LINUX)}
+    ai_addr: PSockAddr;
+    ai_canonname: PAnsiChar;
+    {$ELSEIF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
+    ai_canonname: PAnsiChar;
+    ai_addr: PSockAddr;
+    {$ELSE}
+      {$ERROR Declare this host's struct addrinfo field order in HTTPClient}
+    {$IFEND}
+    ai_next: PHostAddrInfo;
+  end;
+  {$POP}
+
+function HostGetAddrInfo(ANodeName, AServName: PAnsiChar;
+  AHints: PHostAddrInfo; out ARes: PHostAddrInfo): cint; cdecl;
+  external 'c' name 'getaddrinfo';
+procedure HostFreeAddrInfo(AInfo: PHostAddrInfo); cdecl;
+  external 'c' name 'freeaddrinfo';
+function HostGaiStrError(ACode: cint): PAnsiChar; cdecl;
+  external 'c' name 'gai_strerror';
+
+{ The first IPv4 address the platform resolver gives for AHost, as
+  dotted-quad text. IPv4 only: the connect path opens AF_INET sockets. }
+function ResolveIPv4WithSystemResolver(const AHost: string): string;
+var
+  Hints: THostAddrInfo;
+  Res, Cur: PHostAddrInfo;
+  HostBytes: TBytes;
+  ErrorOffset: Integer;
+  Status: cint;
+begin
+  if not TryEncodeASCIINullTerminated(AHost, HostBytes, ErrorOffset) then
+    raise EHTTPError.CreateFmt(
+      'HTTP host contains a non-ASCII code unit at offset %d',
+      [ErrorOffset]);
+  FillChar(Hints, SizeOf(Hints), 0);
+  Hints.ai_family := AF_INET;
+  Hints.ai_socktype := SOCK_STREAM;
+  Hints.ai_protocol := IPPROTO_TCP;
+  Res := nil;
+  Status := HostGetAddrInfo(PAnsiChar(@HostBytes[0]), nil, @Hints, Res);
+  if Status <> 0 then
+    raise EHTTPError.CreateFmt('Failed to resolve host: %s (%s)',
+      [AHost, string(AnsiString(HostGaiStrError(Status)))]);
+  Result := '';
+  try
+    Cur := Res;
+    while Assigned(Cur) do
+    begin
+      if (Cur^.ai_family = AF_INET) and Assigned(Cur^.ai_addr) and
+         (Cur^.ai_addrlen >= SizeOf(TInetSockAddr)) then
+      begin
+        Result := NetAddrToStr(PInetSockAddr(Cur^.ai_addr)^.sin_addr);
+        Break;
+      end;
+      Cur := Cur^.ai_next;
+    end;
+  finally
+    if Assigned(Res) then
+      HostFreeAddrInfo(Res);
+  end;
+  if Result = '' then
+    raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
+end;
+{$ENDIF}
+
 // ---------------------------------------------------------------------------
 // URL parsing (ParseHTTPURL) lives in HTTPTypes so socket-free layers can use
 // it; named here through the used unit.
@@ -198,7 +285,7 @@ function ConnectSocketBlocking(const AHost: string; const APort,
   ATimeoutMilliseconds: Integer): TSocket;
 var
   SockAddr: TInetSockAddr;
-  HostEntry: THostEntry;
+  Octets: array[0..3] of Byte;
   Addr: in_addr;
   ConnectResult: Integer;
   OriginalFlags: Integer;
@@ -206,15 +293,15 @@ var
   SocketError: Integer;
   SocketErrorLength: TSockLen;
 begin
-  // Try as numeric IP first
-  Addr := StrToNetAddr(AHost);
-  if Addr.s_addr = 0 then
-  begin
-    // DNS lookup via netdb
-    if not ResolveHostByName(AHost, HostEntry) then
-      raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
-    Addr := HostEntry.Addr;
-  end;
+  { DoRequest passes the literal ResolveHostToAddress pinned, so the
+    numeric path is the one taken and nothing is resolved twice. A name
+    goes to the same system resolver. }
+  if not TryParseIPv4(AHost, Octets) and
+     not TryParseIPv4(ResolveIPv4WithSystemResolver(AHost), Octets) then
+    raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
+  Addr.s_addr := htonl((Cardinal(Octets[0]) shl 24) or
+    (Cardinal(Octets[1]) shl 16) or (Cardinal(Octets[2]) shl 8) or
+    Cardinal(Octets[3]));
 
   Result := fpSocket(AF_INET, SOCK_STREAM, 0);
   if Result < 0 then
@@ -1072,7 +1159,6 @@ function ResolveHostToAddress(const AHost: string): string;
 {$IFDEF UNIX}
 var
   Octets: array[0..3] of Byte;
-  HostEntry: THostEntry;
 {$ENDIF}
 {$IFDEF MSWINDOWS}
 var
@@ -1094,9 +1180,7 @@ begin
     Exit(LOCALHOST_ADDRESS);
 
   {$IFDEF UNIX}
-  if not ResolveHostByName(AHost, HostEntry) then
-    raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
-  Result := NetAddrToStr(HostEntry.Addr);
+  Result := ResolveIPv4WithSystemResolver(AHost);
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   EnsureWinSockInit;

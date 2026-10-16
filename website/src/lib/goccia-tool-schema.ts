@@ -121,7 +121,7 @@ export function gocciaRunInputSchema() {
         type: "string",
         enum: ["interpreted", "bytecode"],
         description:
-          "Execution backend, passed as --mode=<value> to binaries that advertise --mode; binaries that do not run their built-in default. Defaults to bytecode.",
+          "Execution backend for releases up to 0.14, passed as --mode=<value> to binaries that advertise --mode. GocciaScript 0.15.0 removed the option and runs only bytecode, so binaries without it ignore this field. Defaults to bytecode.",
         default: DEFAULT_EXECUTION_MODE,
       },
       asi: {

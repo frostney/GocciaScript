@@ -3,9 +3,9 @@ description: the execution-context stack survives collections from every re-entr
 features: [Goccia.gc, generators, async-generators, async-await, Proxy, classes]
 ---*/
 
-// Every entry the interpreter and the bytecode VM push onto the execution-
-// context stack names a scope and (in the VM) a function value as raw
-// pointers that no root source marks; the stack relies on those objects being
+// Every entry the engine and the bytecode VM push onto the execution-context
+// stack names a scope and (for a VM call) a function value as raw pointers
+// that no root source marks; the stack relies on those objects being
 // reachable through the frame, closure or active-root that owns them for as
 // long as the entry lives (see the rooting notes in
 // Goccia.ExecutionContext.pas and Goccia.Realm.pas). These cases force

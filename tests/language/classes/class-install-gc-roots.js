@@ -104,7 +104,7 @@ describe.runIf(hasGoccia)("class installation GC roots", () => {
         return new Box();
       }
       static fill() {
-        // The receiver is a call result held only by the evaluator while the
+        // The receiver is a call result held only by the engine while the
         // right-hand side runs.
         Box.make().#slot = (churn(), "filled");
       }
