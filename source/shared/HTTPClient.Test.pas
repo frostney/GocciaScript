@@ -5,10 +5,12 @@ program HTTPClientTest;
 uses
   {$IFDEF UNIX}cthreads, BaseUnix, Sockets,{$ENDIF}
 
+  Classes,
   SysUtils,
 
   HTTPClient,
   HTTPTypes,
+  NetworkAddress,
   TestingPascalLibrary,
   TimingUtils;
 
@@ -34,8 +36,89 @@ type
     procedure TestResolvesLiteralAddressWithoutLookup;
     procedure TestResolvesLocalhostNamesToLoopback;
     procedure TestResolvesAHostNameToDottedQuad;
+    {$IFDEF UNIX}
+    procedure TestResolvesAHostsFileName;
+    {$ENDIF}
     procedure TestDefaultPolicyPreservesHistoricalBehavior;
   end;
+
+{$IFDEF UNIX}
+var
+  GHostsFileName: string;
+  GHostsFileAddresses: TStringList;
+
+{ A loopback name in /etc/hosts other than localhost (which the client
+  answers itself), and every address the file lists for it. Debian and
+  Ubuntu list the machine's own hostname under 127.0.1.1. }
+function FindLoopbackHostsFileName(out AName: string;
+  const AAddresses: TStringList): Boolean;
+var
+  Lines, Fields: TStringList;
+  Address, Candidate, Line: string;
+  CommentAt, I, J: Integer;
+  Octets: array[0..3] of Byte;
+
+  function IsLocalhost(const AValue: string): Boolean;
+  begin
+    Result := (AValue = 'localhost') or (AValue = 'localhost.') or
+      (Pos('.localhost', AValue) > 0);
+  end;
+
+  function SplitLine(const AValue: string): Boolean;
+  begin
+    Fields.Clear;
+    Line := AValue;
+    CommentAt := Pos('#', Line);
+    if CommentAt > 0 then
+      Line := Copy(Line, 1, CommentAt - 1);
+    Line := StringReplace(Trim(Line), #9, ' ', [rfReplaceAll]);
+    Fields.DelimitedText := Line;
+    Result := Fields.Count > 1;
+  end;
+begin
+  Result := False;
+  AName := '';
+  if not FileExists('/etc/hosts') then
+    Exit;
+  Lines := TStringList.Create;
+  Fields := TStringList.Create;
+  try
+    Fields.Delimiter := ' ';
+    Fields.StrictDelimiter := False;
+    Lines.LoadFromFile('/etc/hosts');
+    for I := 0 to Lines.Count - 1 do
+    begin
+      if not SplitLine(Lines[I]) then
+        Continue;
+      Address := Fields[0];
+      if not TryParseIPv4(Address, Octets) or (Octets[0] <> 127) then
+        Continue;
+      for J := 1 to Fields.Count - 1 do
+      begin
+        Candidate := LowerCase(Fields[J]);
+        if (Candidate <> '') and not IsLocalhost(Candidate) then
+        begin
+          AName := Candidate;
+          Break;
+        end;
+      end;
+      if AName <> '' then
+        Break;
+    end;
+    if AName = '' then
+      Exit;
+    for I := 0 to Lines.Count - 1 do
+      if SplitLine(Lines[I]) then
+        for J := 1 to Fields.Count - 1 do
+          if LowerCase(Fields[J]) = AName then
+            AAddresses.Add(Fields[0]);
+    Result := True;
+  finally
+    Fields.Free;
+    Lines.Free;
+  end;
+end;
+{$ENDIF}
 
 procedure THTTPClientTests.SetupTests;
 begin
@@ -66,6 +149,15 @@ begin
     TestResolvesAHostNameToDottedQuad);
   Test('Resolves literal address without lookup',
     TestResolvesLiteralAddressWithoutLookup);
+  {$IFDEF UNIX}
+  if FindLoopbackHostsFileName(GHostsFileName, GHostsFileAddresses) then
+    Test('Resolves a name only the hosts file lists',
+      TestResolvesAHostsFileName)
+  else
+    Skip('Resolves a name only the hosts file lists',
+      TestResolvesAHostsFileName,
+      'no loopback name other than localhost in /etc/hosts');
+  {$ENDIF}
   Test('Default policy preserves historical behavior',
     TestDefaultPolicyPreservesHistoricalBehavior);
 end;
@@ -350,6 +442,17 @@ begin
   Expect<Integer>(Dots).ToBe(3);
 end;
 
+{$IFDEF UNIX}
+{ Resolution goes through the platform resolver, which consults the hosts
+  file; FPC's NetDB DNS client did not, so this name failed to resolve
+  (issue #1565). }
+procedure THTTPClientTests.TestResolvesAHostsFileName;
+begin
+  Expect<Boolean>(GHostsFileAddresses.IndexOf(
+    ResolveHostToAddress(GHostsFileName)) >= 0).ToBe(True);
+end;
+{$ENDIF}
+
 procedure THTTPClientTests.TestResolvesLiteralAddressWithoutLookup;
 begin
   Expect<string>(ResolveHostToAddress('93.184.216.34')).ToBe('93.184.216.34');
@@ -368,7 +471,16 @@ begin
 end;
 
 begin
-  TestRunnerProgram.AddSuite(THTTPClientTests.Create('HTTP client'));
-  TestRunnerProgram.Run;
-  ExitCode := TestResultToExitCode;
+  {$IFDEF UNIX}
+  GHostsFileAddresses := TStringList.Create;
+  try
+  {$ENDIF}
+    TestRunnerProgram.AddSuite(THTTPClientTests.Create('HTTP client'));
+    TestRunnerProgram.Run;
+    ExitCode := TestResultToExitCode;
+  {$IFDEF UNIX}
+  finally
+    GHostsFileAddresses.Free;
+  end;
+  {$ENDIF}
 end.

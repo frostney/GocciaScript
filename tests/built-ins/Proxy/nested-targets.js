@@ -117,8 +117,8 @@ describe.runIf(typeof Goccia !== "undefined")("Proxies nested 3,000 deep, past t
 });
 
 // 20,000 nested Proxies are deep enough to exhaust the native stack without
-// the bound, and take tens of megabytes in interpreted mode, too much for a
-// 32-bit process running parallel test workers.
+// the bound, and took tens of megabytes when measured under the since-removed
+// interpreter, too much for a 32-bit process running parallel test workers.
 const is64Bit = typeof Goccia !== "undefined" &&
   ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
 

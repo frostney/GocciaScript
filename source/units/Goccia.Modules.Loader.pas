@@ -18,7 +18,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Error.ThrowErrorCallback,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -42,8 +42,8 @@ type
     declarations of a module-form program: bind every top-level function
     declaration of AProgram, an `export default function` included, to a
     function object in AContext.Scope, the module environment, before any
-    module body runs. The executor creates the functions as it runs code, so
-    the bytecode executor compiles the program here and leaves it in
+    module body runs. The engine creates the functions as compiled
+    closures, so it compiles the program here and leaves it in
     AContext.CompiledModule for its module body evaluator. }
   TGocciaModuleFunctionInstantiator = procedure(const AProgram: TGocciaProgram;
     var AContext: TGocciaEvaluationContext) of object;
@@ -254,6 +254,10 @@ type
       AImportingFilePath: string; const AImportNames: array of string;
       const ALine, AColumn: Integer): TGocciaModule;
     function EvaluateModule(const AModule: TGocciaModule): TGocciaModule;
+    class function EvaluationWaitPromise(const ARequestedModule,
+      AImporter: TGocciaModule): TGocciaPromiseValue; static;
+    class function AllEvaluationsSettled(
+      const APromises: TList<TGocciaPromiseValue>): TGocciaPromiseValue; static;
     function LoadModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
     { Host enrollment entry point. Ownership is stamped on the resolved root and
@@ -1614,7 +1618,7 @@ procedure TGocciaModuleLoader.BindRuntime(const AGlobalScope: TGocciaGlobalScope
 begin
   if Assigned(FGlobalScope) and (FGlobalScope <> AGlobalScope) then
     raise Exception.Create(
-      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine/executor.');
+      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine.');
   FGlobalScope := AGlobalScope;
   FOnError := AOnError;
 end;
@@ -1663,10 +1667,8 @@ end;
 
 // ES2026 §16.2.1.7.3.1 InitializeEnvironment: while linking a module, a named
 // import whose ResolveExport result is null or ambiguous is a SyntaxError. The
-// tree-walking interpreter also enforces this lazily as it evaluates each
-// import declaration (Goccia.AST.Statements), but the bytecode compiler resolves
-// import bindings at their use sites, so missing names must be rejected here at
-// link time to keep both engines in lockstep (ADR 0014). Source modules still
+// bytecode compiler resolves import bindings at their use sites, so missing
+// names must be rejected here at link time (ADR 0014). Source modules still
 // mid-evaluation in a cycle are skipped via IsEvaluatingModulePath, matching the
 // re-export validation in RegisterStaticModuleExports.
 procedure TGocciaModuleLoader.ValidateStaticNamedImports(
@@ -1925,6 +1927,64 @@ begin
     EvaluateLinkedModule(AModule);
 end;
 
+{ The promise AImporter waits on before it executes, for one module it
+  requested (ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation step 11.c): the
+  promise of the asynchronous cycle the requested module belongs to, unless
+  the importer is that cycle's root, or else the requested module's own
+  evaluation promise. Nil when the requested module evaluated
+  synchronously. }
+class function TGocciaModuleLoader.EvaluationWaitPromise(
+  const ARequestedModule, AImporter: TGocciaModule): TGocciaPromiseValue;
+var
+  WaitModule: TGocciaModule;
+begin
+  Result := nil;
+  if not Assigned(ARequestedModule) then
+    Exit;
+
+  WaitModule := ARequestedModule.AsyncCycleRoot;
+  if Assigned(WaitModule) and (WaitModule <> AImporter) and
+     (WaitModule.EvaluationPromise is TGocciaPromiseValue) then
+    Exit(TGocciaPromiseValue(WaitModule.EvaluationPromise));
+
+  if ARequestedModule.EvaluationPromise is TGocciaPromiseValue then
+    Result := TGocciaPromiseValue(ARequestedModule.EvaluationPromise);
+end;
+
+{ A promise that fulfills once every one of APromises has fulfilled and
+  rejects with the first rejection, as an importer's
+  [[PendingAsyncDependencies]] count down (ES2026 §16.2.1.6.1.3.4
+  AsyncModuleExecutionFulfilled, §16.2.1.6.1.3.5
+  AsyncModuleExecutionRejected). Nil for none; the promise itself for one. }
+class function TGocciaModuleLoader.AllEvaluationsSettled(
+  const APromises: TList<TGocciaPromiseValue>): TGocciaPromiseValue;
+var
+  AggregatePromise: TGocciaPromiseValue;
+  FulfillHandler: TGocciaNativeFunctionValue;
+  I: Integer;
+  RejectHandler: TGocciaNativeFunctionValue;
+  WaitState: TGocciaModuleEvaluationWaitState;
+begin
+  Result := nil;
+  if (not Assigned(APromises)) or (APromises.Count = 0) then
+    Exit;
+  if APromises.Count = 1 then
+    Exit(APromises[0]);
+
+  AggregatePromise := TGocciaPromiseValue.Create;
+  WaitState := TGocciaModuleEvaluationWaitState.Create(AggregatePromise,
+    APromises.Count);
+  FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    WaitState.Fulfill, '<module-dependency-fulfill>', 1);
+  FulfillHandler.CapturedRoot := WaitState;
+  RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    WaitState.Reject, '<module-dependency-reject>', 1);
+  RejectHandler.CapturedRoot := WaitState;
+  for I := 0 to APromises.Count - 1 do
+    APromises[I].InvokeThen(FulfillHandler, RejectHandler);
+  Result := AggregatePromise;
+end;
+
 function TGocciaModuleLoader.LoadHostModule(const AModulePath,
   AImportingFilePath: string): TGocciaModule;
 var
@@ -1974,38 +2034,16 @@ procedure TGocciaModuleLoader.EvaluateLinkedModule(
   const AModule: TGocciaModule);
 var
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  AggregatePromise: TGocciaPromiseValue;
   DeferredBody: TGocciaDeferredModuleBody;
   DeferredHandler: TGocciaNativeFunctionValue;
   EvalPromise: TGocciaPromiseValue;
-  FulfillHandler: TGocciaNativeFunctionValue;
   I: Integer;
   LoadState: TGocciaModuleLoadState;
   LoadStateObject: TObject;
   PendingDependencyPromise: TGocciaPromiseValue;
   PendingPromises: TList<TGocciaPromiseValue>;
   ProgramConsumed: Boolean;
-  RejectHandler: TGocciaNativeFunctionValue;
   Succeeded: Boolean;
-  WaitState: TGocciaModuleEvaluationWaitState;
-
-  function WaitPromiseFor(
-    const ARequestedModule: TGocciaModule): TGocciaPromiseValue;
-  var
-    WaitModule: TGocciaModule;
-  begin
-    Result := nil;
-    if not Assigned(ARequestedModule) then
-      Exit;
-
-    WaitModule := ARequestedModule.AsyncCycleRoot;
-    if Assigned(WaitModule) and (WaitModule <> AModule) and
-       (WaitModule.EvaluationPromise is TGocciaPromiseValue) then
-      Exit(TGocciaPromiseValue(WaitModule.EvaluationPromise));
-
-    if ARequestedModule.EvaluationPromise is TGocciaPromiseValue then
-      Result := TGocciaPromiseValue(ARequestedModule.EvaluationPromise);
-  end;
 
   procedure DrainRequestedModuleEvaluationPromises;
   var
@@ -2016,7 +2054,8 @@ var
     try
       for J := 0 to LoadState.RequestedModules.Count - 1 do
       begin
-        EvalPromise := WaitPromiseFor(LoadState.RequestedModules[J]);
+        EvalPromise := EvaluationWaitPromise(LoadState.RequestedModules[J],
+          AModule);
         if not Assigned(EvalPromise) then
           Continue;
 
@@ -2031,26 +2070,7 @@ var
         end;
       end;
 
-      if PendingPromises.Count = 0 then
-        Exit;
-      if PendingPromises.Count = 1 then
-      begin
-        PendingDependencyPromise := PendingPromises[0];
-        Exit;
-      end;
-
-      AggregatePromise := TGocciaPromiseValue.Create;
-      WaitState := TGocciaModuleEvaluationWaitState.Create(AggregatePromise,
-        PendingPromises.Count);
-      FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        WaitState.Fulfill, '<module-dependency-fulfill>', 1);
-      FulfillHandler.CapturedRoot := WaitState;
-      RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        WaitState.Reject, '<module-dependency-reject>', 1);
-      RejectHandler.CapturedRoot := WaitState;
-      for J := 0 to PendingPromises.Count - 1 do
-        PendingPromises[J].InvokeThen(FulfillHandler, RejectHandler);
-      PendingDependencyPromise := AggregatePromise;
+      PendingDependencyPromise := AllEvaluationsSettled(PendingPromises);
     finally
       PendingPromises.Free;
     end;
@@ -2766,8 +2786,6 @@ begin
           Context.ResolveModuleURL := ResolveModuleURL;
           Context.CurrentFilePath := ResolvedPath;
           Context.CurrentModule := Module;
-          Context.CoverageEnabled := False;
-          Context.StrictTypes := FStrictTypesEnabled;
           Context.NonStrictMode := False;
           Context.CompatibilityNonStrictMode := False;
           Context.DisposalTracker := nil;
@@ -2775,8 +2793,8 @@ begin
           PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
           if not Assigned(FInstantiateModuleFunctions) then
             raise EInvalidOperation.Create(
-              'The module loader has no function instantiator; attach an ' +
-              'executor before loading modules');
+              'The module loader has no function instantiator; attach it ' +
+              'to an engine before loading modules');
           FInstantiateModuleFunctions(ProgramNode, Context);
           if GetVarEnabled then
             HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);

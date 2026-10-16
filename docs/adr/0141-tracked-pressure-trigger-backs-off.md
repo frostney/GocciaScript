@@ -6,9 +6,9 @@
 
 ## Context
 
-While a script runs, the collector runs only at the pressure checkpoints (the
-VM every 1,024 dispatched instructions, the interpreter after every
-expression) and at the forced collection a refused request takes. A
+While a script runs, the collector runs only at the VM's pressure checkpoints
+(every 1,024 dispatched instructions) and at the forced collection a refused
+request takes. A
 checkpoint collects when a trigger has fired. The tracked-bytes trigger fired
 whenever `BytesAllocated` was at or above `MaxBytes - Reserve`, where the
 reserve is `MaxBytes / 8` clamped to 16 KiB…16 MiB. A charged reservation
@@ -32,8 +32,10 @@ live objects:
 | `new ArrayBuffer(64)` | 26.6 MiB, below the line | 2,000 | 3.19 | 0 |
 | `new ArrayBuffer(64)` | 58.1 MiB, inside the reserve | 2,000 | 7,050.8 | 2,096 |
 
-[#1508](https://github.com/frostney/GocciaScript/issues/1508) reports the same
-trigger in interpreted mode, where the checkpoint follows every expression.
+[#1508](https://github.com/frostney/GocciaScript/issues/1508) reported the same
+trigger in the interpreted mode that
+[ADR 0138](0138-bytecode-is-the-only-way-gocciascript-executes.md) has since
+removed, where the checkpoint followed every expression.
 
 ADR 0129 gave the heap-manager trigger a back-off for the same shape: after a
 full collection it records the heap still in use and raises the trigger above
@@ -84,8 +86,8 @@ error, calling `Goccia.gc()` and retrying succeeds. This is accepted in
 exchange for removing the collection at every checkpoint.
 
 **One predicate serves every caller.** `NeedsMemoryPressureCollection` tests
-the backed-off trigger, so the VM's checkpoint, the interpreter's checkpoint
-and the latch in `TryChargeExternalBytesLocked` all change together. The
+the backed-off trigger, so the VM's checkpoint and the latch in
+`TryChargeExternalBytesLocked` change together. The
 non-collecting charge path (`TryChargeExternalBytes`, used for VM stacks and
 suspended generator frames) still never latches. The forced collections
 (`TryCollectForLimitedBytes`, the GC-stress checkpoint) pass `AForce` and do
@@ -140,8 +142,9 @@ bytecode mode), median of 3 runs. "Below the line" holds about 26.6 MiB live,
 | `new ArrayBuffer(64)` | inside the reserve | 2,000 | 4,177 | 2,096 | 1.80 | 1 |
 
 Inside the reserve, allocation now costs what it costs below the line. In
-interpreted mode the same in-reserve object loop, cut to 2,000 allocations,
-went from 64.5 s and 51,091 collections to 9 ms and 2. That is the collection
+the interpreted mode that existed when this was measured, the same in-reserve
+object loop, cut to 2,000 allocations, went from 64.5 s and 51,091
+collections to 9 ms and 2. That is the collection
 half of #1508; its `--timeout` overshoot is a separate fix.
 
 Without a ceiling in reach nothing changes. Callgrind instruction counts on

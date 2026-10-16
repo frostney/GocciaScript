@@ -77,3 +77,7 @@ third more than tree-walking them.
   passed between realms used to be recognized.
 - Embedders read the global scope from `Engine.GlobalScope`; code that read it
   through `Engine.Interpreter` fails with a bytecode executor.
+
+**Superseded in part by [ADR 0138](0138-bytecode-is-the-only-way-gocciascript-executes.md):** GocciaScript 0.15.0 folded the executor
+into the engine and removed the interpreter, so a shim loads through
+`TGocciaEngine.ShimLoader` and `Engine.Interpreter` no longer exists.
