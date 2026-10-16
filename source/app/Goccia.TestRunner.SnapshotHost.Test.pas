@@ -66,10 +66,19 @@ begin
     TestRewritesAfterUnicodeLineSeparator);
   Test('Rewrites with non-breaking space before matcher arguments',
     TestRewritesWithNonBreakingSpaceBeforeArguments);
+  {$IFDEF UNIX}
   Test('Refuses a snapshot file that is a symbolic link',
     TestRefusesSymlinkedSnapshotFile);
   Test('Refuses a __snapshots__ directory that is a symbolic link',
     TestRefusesSymlinkedSnapshotDirectory);
+  {$ELSE}
+  Skip('Refuses a snapshot file that is a symbolic link',
+    TestRefusesSymlinkedSnapshotFile,
+    'links are not available on this platform');
+  Skip('Refuses a __snapshots__ directory that is a symbolic link',
+    TestRefusesSymlinkedSnapshotDirectory,
+    'links are not available on this platform');
+  {$ENDIF}
   Test('Rejects a late inline flush from the previous run',
     TestRejectsLateFlushFromPreviousRun);
 end;
