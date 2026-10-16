@@ -17,14 +17,13 @@ function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitive
 // else is coerced via ToString. Callers must check the returned type.
 function ToPropertyKey(const AValue: TGocciaValue): TGocciaValue;
 
-// Every computed property access on a possibly-nullish base must call
-// ToPropertyKeyForBase rather than a bare ToPropertyKey. Pass AForWrite for store
-// targets so the message reads "cannot set properties" rather than "cannot read
-// properties".
+// Every computed property access on a possibly-nullish base must reject the
+// nullish base with this before it converts the key with ToPropertyKey
+// (ES2026 §6.2.5.5 GetValue steps 3.a then 3.c, §6.2.5.6 PutValue the same).
+// Pass AForWrite for store targets so the message reads "cannot set
+// properties" rather than "cannot read properties".
 procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
   const AForWrite: Boolean = False); {$IFDEF FPC}inline;{$ENDIF}
-function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
-  const AForWrite: Boolean = False): TGocciaValue;
 
 implementation
 
@@ -261,15 +260,6 @@ begin
   if (ABase is TGocciaNullLiteralValue) or
      (ABase is TGocciaUndefinedLiteralValue) then
     ThrowNullishBasePropertyAccess(ABase, AUncoercedKey, AForWrite);
-end;
-
-// ES2026 §6.2.5.5 GetValue steps 3.a then 3.c (or §6.2.5.6 PutValue, same order):
-// reject a nullish base, then convert the referenced name with ToPropertyKey.
-function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
-  const AForWrite: Boolean): TGocciaValue;
-begin
-  RequireCoercibleBaseForPropertyAccess(ABase, AUncoercedKey, AForWrite);
-  Result := ToPropertyKey(AUncoercedKey);
 end;
 
 end.

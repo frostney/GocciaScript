@@ -176,10 +176,6 @@ jobs:
   memory-safety:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [interpreter, bytecode]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -206,14 +202,12 @@ jobs:
       - name: Run suite under heaptrc
         id: heaptrc
         run: |
-          modeflag="--mode=bytecode"
-          if [ "${{ matrix.mode }}" = "interpreter" ]; then modeflag="--mode=interpreted"; fi
           # HEAPTRC halt-on-error would abort mid-suite; capture and inspect
           # the summary instead so a leak reports alongside the test results.
-          ./build/GocciaTestRunnerHeaptrc -P tests $modeflag 2> build/heaptrc-${{ matrix.mode }}.log
-          tail -20 build/heaptrc-${{ matrix.mode }}.log
-          if grep -qE '[1-9][0-9]* unfreed memory blocks' build/heaptrc-${{ matrix.mode }}.log; then
-            echo "::error::heaptrc reported unfreed blocks in ${{ matrix.mode }} mode"
+          ./build/GocciaTestRunnerHeaptrc -P tests 2> build/heaptrc.log
+          tail -20 build/heaptrc.log
+          if grep -qE '[1-9][0-9]* unfreed memory blocks' build/heaptrc.log; then
+            echo "::error::heaptrc reported unfreed blocks"
             exit 1
           fi
 
@@ -221,23 +215,21 @@ jobs:
         # A full suite run under memcheck is slow; --error-exitcode makes any
         # invalid access fail the job rather than scroll past.
         run: |
-          modeflag="--mode=bytecode"
-          if [ "${{ matrix.mode }}" = "interpreter" ]; then modeflag="--mode=interpreted"; fi
           valgrind \
             --tool=memcheck \
             --error-exitcode=42 \
             --errors-for-leak-kinds=none \
             --leak-check=no \
             --track-origins=yes \
-            --log-file=build/valgrind-${{ matrix.mode }}.log \
-            ./build/GocciaTestRunner -P tests $modeflag
-          tail -40 build/valgrind-${{ matrix.mode }}.log
+            --log-file=build/valgrind.log \
+            ./build/GocciaTestRunner -P tests
+          tail -40 build/valgrind.log
 
       - name: Upload memory-safety logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: memory-safety-${{ matrix.mode }}
+          name: memory-safety
           path: build/*.log
           if-no-files-found: ignore
           retention-days: 30

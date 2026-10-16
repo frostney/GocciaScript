@@ -10,14 +10,10 @@ uses
   OrderedStringMap,
 
   Goccia.Arguments.Collection,
-  Goccia.AST.Expressions,
-  Goccia.AST.Node,
   Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Realm,
-  Goccia.Scope,
   Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -26,14 +22,6 @@ uses
 type
   // Forward declaration
   TGocciaInstanceValue = class;
-
-  TGocciaClassFieldOrderEntry = record
-    Name: string;
-    IsPrivate: Boolean;
-    IsComputed: Boolean;
-    ComputedKey: TGocciaValue;
-    Initializer: TGocciaExpression;
-  end;
 
   TGocciaDecoratorFieldInitializerEntry = record
     Name: string;
@@ -47,17 +35,10 @@ type
   private
     FName: string;
     FSuperClass: TGocciaClassValue;
-    FGetters: TOrderedStringMap<TGocciaFunctionBase>;
-    FSetters: TOrderedStringMap<TGocciaFunctionBase>;
     FClassPrototype: TGocciaObjectValue;
-    FConstructorMethod: TGocciaMethodValue;
     FStaticMethods: TGocciaValueMap;
-    FInstancePropertyDefs: TGocciaExpressionMap;
-    FPrivateInstancePropertyDefs: TGocciaExpressionMap;
-    FFieldOrder: array of TGocciaClassFieldOrderEntry;
     FPrivateStaticProperties: TGocciaValueMap;
     FPrivateStaticMethods: TGocciaValueMap;
-    FPrivateMethods: TOrderedStringMap<TGocciaMethodValue>;
     // A private accessor is any callable: a decorator may replace it with a
     // callable Proxy, which is not a TGocciaFunctionBase.
     FPrivateGetters: TOrderedStringMap<TGocciaValue>;
@@ -96,22 +77,6 @@ type
     // cache.
     FPrivateNamesVersion: Cardinal;
     FSourceText: string;
-    // ES2026 §15.7.14 ClassDefinitionEvaluation steps 1-2 and §15.7.10
-    // ClassFieldDefinitionEvaluation step 2b: the class environment that was
-    // current when this class was evaluated. A field initializer is a function
-    // whose [[Environment]] is that environment, not the environment of
-    // whatever scope happens to run `new`.
-    FDefinitionScope: TGocciaScope;
-    // The script or module path that was current when this class was
-    // evaluated. TGocciaFunctionValue keeps the same thing as
-    // FSourceFilePath, for the same reasons: `import()` and `import.meta`
-    // resolve against the *defining* file, and coverage and call-stack frames
-    // are attributed to it. A class body runs code — field initializers and
-    // static blocks — outside any of its own methods, so the class value has
-    // to carry it too.
-    FDefinitionSourcePath: string;
-    function GetPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
-    function GetPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetStaticPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetPrivatePropertyGetter(const AName: string): TGocciaValue;
@@ -128,31 +93,20 @@ type
     function TypeOf: string; override;
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
-    procedure AddMethod(const AName: string; const AMethod: TGocciaMethodValue);
-    procedure AddGetter(const AName: string; const AGetter: TGocciaFunctionBase);
-    procedure AddSetter(const AName: string; const ASetter: TGocciaFunctionBase);
     procedure AddStaticGetter(const AName: string; const AGetter: TGocciaFunctionBase);
     procedure AddStaticSetter(const AName: string; const ASetter: TGocciaFunctionBase);
     procedure AddPrivateGetter(const AName: string; const AGetter: TGocciaValue);
     procedure AddPrivateSetter(const AName: string; const ASetter: TGocciaValue);
-    function HasPrivateGetter(const AName: string): Boolean;
-    function HasPrivateSetter(const AName: string): Boolean;
     function HasOwnPrivateGetter(const AName: string): Boolean;
     function HasOwnPrivateSetter(const AName: string): Boolean;
     function HasOwnPrivateStaticProperty(const AName: string): Boolean;
     function HasOwnPrivateStaticMethod(const AName: string): Boolean;
-    function HasOwnPrivateName(const AName: string): Boolean;
-    function HasPrivateInstanceElements: Boolean;
     function GetOwnPrivatePropertyGetter(
       const AName: string): TGocciaValue;
     function GetOwnPrivatePropertySetter(
       const AName: string): TGocciaValue;
-    procedure AddInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
-    procedure AddPrivateInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
     procedure AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
     procedure AddPrivateStaticMethod(const AName: string; const AValue: TGocciaValue);
-    procedure AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
-    function GetPrivateMethod(const AName: string): TGocciaMethodValue;
     procedure DeclarePrivateName(const AName: string;
       const AInternalKey: string = '');
     function ResolveDeclaredPrivateKey(const AName: string;
@@ -161,9 +115,9 @@ type
     function TryGetDeclaredPrivateKeyName(const AInternalKey: string;
       out AName: string): Boolean;
     property PrivateNamesVersion: Cardinal read FPrivateNamesVersion;
-    procedure AppendOwnPrivateNames(const ANames: TStrings);
-    // The names AppendOwnPrivateNames lists, appended to ANames[0..ACount-1]
-    // without duplicates. ANames may be longer than ACount.
+    // Every private name this class declares, appended to
+    // ANames[0..ACount-1] without duplicates. ANames may be longer than
+    // ACount.
     procedure CollectOwnPrivateNames(var ANames: TArray<string>;
       var ACount: Integer);
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; virtual;
@@ -173,26 +127,12 @@ type
       const ARealm: TGocciaRealm): TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue = nil): TGocciaValue; virtual;
-    // True when this class value carries its own [[Construct]] implementation
-    // instead of the AST constructor method and field tables that the
-    // tree-walk instantiation path drives. Typed arrays allocate an exotic
-    // receiver, and a bytecode-compiled class holds its constructor as a
-    // closure rather than a TGocciaMethodValue; for both, `new` must go
-    // through Instantiate. The tree-walk evaluator is handed such classes in
-    // bytecode mode, because a module's top-level function declarations are
-    // created by the evaluator while linking (ES2026 §16.2.1.7.3.1
-    // InitializeEnvironment) and keep running there.
+    // True when this class value carries its own [[Construct]] implementation:
+    // a compiled class runs its constructor closure, and %TypedArray% and the
+    // typed array constructors allocate an exotic receiver or refuse to be
+    // constructed. ResolveImplicitConstructorChain stops at such a class
+    // instead of collapsing its implicit constructor into the walk.
     function UsesOwnInstantiation: Boolean; virtual;
-    // Runs this class's own [[Construct]] steps — field initializers and
-    // constructor body — against an already-allocated receiver, and reports
-    // whether it did. This is what `super()` from a tree-walk subclass and
-    // `new` through a bound wrapper need: they own the receiver, so they
-    // cannot call Instantiate. Returns False for class values whose
-    // construction the tree-walk path drives from the AST constructor method.
-    function TryConstructOnReceiver(
-      const AArguments: TGocciaArgumentsCollection;
-      const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
-      out AResult: TGocciaValue): Boolean; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
     // Approximates ES2026 §15.7.14 ClassDefinitionEvaluation step 19's
     // [[ConstructorKind]] = ~derived~, which decides when instance elements
@@ -200,16 +140,15 @@ type
     // step 5b), a ~derived~ one when super() returns (§13.3.7.1 step 11).
     // Reports True when a resolved superclass or a linked native super
     // constructor is present. `class A extends null {}` reports True, which is
-    // the spec-correct answer (§15.7.14 step 9a makes it ~derived~): the
-    // evaluator links Function.prototype as the native super constructor for
+    // the spec-correct answer (§15.7.14 step 9a makes it ~derived~): class
+    // definition links Function.prototype as the native super constructor for
     // it, and the construction paths recognise that sentinel and raise the
     // TypeError §10.2.2 requires when the implicit derived constructor tries
     // to call super().
     function HasDerivedConstructorKind: Boolean;
-    function HasInstanceInitializerWork: Boolean;
     // ECMAScript: number of expected constructor parameters before the first
-    // default/rest. Built-in classes default to 0; user classes derive from
-    // their constructor method's formal parameters.
+    // default/rest. Built-in classes default to 0; a compiled class reports
+    // its constructor's.
     function GetClassLength: Integer; virtual;
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
@@ -233,27 +172,14 @@ type
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 
     property Name: string read FName;
-    property DefinitionScope: TGocciaScope read FDefinitionScope
-      write FDefinitionScope;
-    property DefinitionSourcePath: string read FDefinitionSourcePath
-      write FDefinitionSourcePath;
     property SourceText: string read FSourceText write FSourceText;
     property CreationRealm: TGocciaRealm read FCreationRealm;
     property PrivateBrandToken: string read FPrivateBrandToken;
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property NativeSuperConstructor: TGocciaObjectValue read FNativeSuperConstructor write FNativeSuperConstructor;
     property Prototype: TGocciaObjectValue read FClassPrototype;
-    property ConstructorMethod: TGocciaMethodValue read FConstructorMethod;
-    property InstancePropertyDefs: TGocciaExpressionMap read FInstancePropertyDefs;
-    property PrivateInstancePropertyDefs: TGocciaExpressionMap read FPrivateInstancePropertyDefs;
-    procedure SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
-    function FieldOrderCount: Integer;
-    function FieldOrderEntry(const AIndex: Integer): TGocciaClassFieldOrderEntry;
     property PrivateStaticProperties: TGocciaValueMap read FPrivateStaticProperties;
     property PrivateStaticMethods: TGocciaValueMap read FPrivateStaticMethods;
-    property PrivateMethods: TOrderedStringMap<TGocciaMethodValue> read FPrivateMethods;
-    property PropertyGetter[const AName: string]: TGocciaFunctionBase read GetPropertyGetter;
-    property PropertySetter[const AName: string]: TGocciaFunctionBase read GetPropertySetter;
     property StaticPropertyGetter[const AName: string]: TGocciaFunctionBase read GetStaticPropertyGetter;
     property StaticPropertySetter[const AName: string]: TGocciaFunctionBase read GetStaticPropertySetter;
     property PrivatePropertyGetter[const AName: string]: TGocciaValue read GetPrivatePropertyGetter;
@@ -263,7 +189,6 @@ type
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure AddFieldInitializerWithKey(const AName: string; const AComputedKey: TGocciaValue; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure SetMethodInitializers(const AInitializers: array of TGocciaValue);
-    procedure SetFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
@@ -449,11 +374,8 @@ type
     procedure AssignPropertySlow(const AName: string; const AValue: TGocciaValue;
       const ACanCreate: Boolean);
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
-    function GetPrivateProperty(const AName: string; const AAccessClass: TGocciaClassValue): TGocciaValue;
-    procedure SetPrivateProperty(const AName: string; const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue; const AThrowIfExists: Boolean = False);
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
-    function IsInstanceOf(const AClass: TGocciaClassValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure MarkReferences; override;
@@ -473,31 +395,6 @@ function GetNativePrototypeFromConstructor(
   const ANativeClass: TGocciaClassValue;
   const ANewTarget: TGocciaValue;
   const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
-
-type
-  { Runs a class's AST-declared instance elements against AInstance.
-
-    §15.7.10 ClassFieldDefinitionEvaluation records an evaluator-built class's
-    fields as expressions in InstancePropertyDefs, not as the closure-shaped
-    values RunFieldInitializers walks, and evaluating an expression needs an
-    evaluation context. Only the tree-walk evaluator has one, so it registers
-    this hook and every other holder of a TGocciaClassValue — including the
-    bytecode VM — reaches those elements through it. }
-  TGocciaClassInstanceElementsHook = procedure(
-    const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue);
-
-procedure RegisterClassInstanceElementsHook(
-  const AHook: TGocciaClassInstanceElementsHook);
-{ True when AClassValue's instance elements are AST-declared, which is exactly
-  the classes the evaluator built. A compiled class records field initializers
-  as closures instead and always reports False here. }
-function HasASTInstanceElements(
-  const AClassValue: TGocciaClassValue): Boolean;
-
-{ Runs them when there are any and an evaluator registered itself; reports
-  whether it ran anything. }
-function TryRunASTInstanceElements(const AClassValue: TGocciaClassValue;
-  const AInstance: TGocciaValue): Boolean;
 
 type
   TGocciaClassChain = array of TGocciaClassValue;
@@ -615,33 +512,6 @@ uses
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue;
 
-var
-  GClassInstanceElementsHook: TGocciaClassInstanceElementsHook;
-
-procedure RegisterClassInstanceElementsHook(
-  const AHook: TGocciaClassInstanceElementsHook);
-begin
-  GClassInstanceElementsHook := AHook;
-end;
-
-function HasASTInstanceElements(
-  const AClassValue: TGocciaClassValue): Boolean;
-begin
-  Result := Assigned(AClassValue) and
-    ((AClassValue.InstancePropertyDefs.Count > 0) or
-     (AClassValue.PrivateInstancePropertyDefs.Count > 0));
-end;
-
-function TryRunASTInstanceElements(const AClassValue: TGocciaClassValue;
-  const AInstance: TGocciaValue): Boolean;
-begin
-  Result := Assigned(GClassInstanceElementsHook) and
-    (AInstance is TGocciaObjectValue) and
-    HasASTInstanceElements(AClassValue);
-  if Result then
-    GClassInstanceElementsHook(AClassValue, AInstance);
-end;
-
 function ImplicitSuperConstructorTarget(
   const AClassValue: TGocciaClassValue): TGocciaObjectValue;
 begin
@@ -749,8 +619,7 @@ begin
 
     Next := TGocciaClassValue(Target);
     if (Next.NativeInstanceDefaultPrototype <> nil) or
-       Next.UsesOwnInstantiation or
-       Assigned(Next.ConstructorMethod) then
+       Next.UsesOwnInstantiation then
     begin
       AChain.HostClass := Next;
       Break;
@@ -1054,24 +923,16 @@ begin
     FPrototype := FSuperClass
   else if TGocciaFunctionBase.GetSharedPrototype <> nil then
     FPrototype := TGocciaFunctionBase.GetSharedPrototype;
-  FGetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
-  FSetters := TOrderedStringMap<TGocciaFunctionBase>.Create;
   FStaticMethods := TGocciaValueMap.Create;
-  FInstancePropertyDefs := TGocciaExpressionMap.Create;
-  FPrivateInstancePropertyDefs := TGocciaExpressionMap.Create;
   FPrivateStaticProperties := TGocciaValueMap.Create;
   FPrivateStaticMethods := TGocciaValueMap.Create;
-  FPrivateMethods := TOrderedStringMap<TGocciaMethodValue>.Create;
   FPrivateGetters := TOrderedStringMap<TGocciaValue>.Create;
   FPrivateSetters := TOrderedStringMap<TGocciaValue>.Create;
   FDeclaredPrivateNames := TStringStringMap.Create;
   FNativeSuperConstructor := nil;
   FClassPrototype := TGocciaObjectValue.Create;
-  FConstructorMethod := nil;
   FNameDeleted := False;
   FLengthDeleted := False;
-  FDefinitionScope := nil;
-  FDefinitionSourcePath := '';
   if Assigned(FSuperClass) then
     FClassPrototype.Prototype := FSuperClass.Prototype
   else if TGocciaObjectValue.SharedObjectPrototype <> nil then
@@ -1083,14 +944,9 @@ end;
 
 destructor TGocciaClassValue.Destroy;
 begin
-  FGetters.Free;
-  FSetters.Free;
   FStaticMethods.Free;
-  FInstancePropertyDefs.Free;
-  FPrivateInstancePropertyDefs.Free;
   FPrivateStaticProperties.Free;
   FPrivateStaticMethods.Free;
-  FPrivateMethods.Free;
   FPrivateGetters.Free;
   FPrivateSetters.Free;
   FDeclaredPrivateNames.Free;
@@ -1101,8 +957,6 @@ end;
 
 procedure TGocciaClassValue.MarkReferences;
 var
-  PrivateMethodPair: TOrderedStringMap<TGocciaMethodValue>.TKeyValuePair;
-  FuncPair: TOrderedStringMap<TGocciaFunctionBase>.TKeyValuePair;
   ValPair: TGocciaValueMap.TKeyValuePair;
   I: Integer;
 begin
@@ -1112,25 +966,11 @@ begin
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
 
-  { The class environment outlives the class definition exactly the way a
-    function's closure outlives its declaration: field initializers are
-    closures over it, so it is reachable for as long as the class is. }
-  if Assigned(FDefinitionScope) then
-    FDefinitionScope.MarkReferences;
-
   if Assigned(FNativeSuperConstructor) then
     FNativeSuperConstructor.MarkReferences;
 
   if Assigned(FClassPrototype) then
     FClassPrototype.MarkReferences;
-
-  if Assigned(FConstructorMethod) then
-    FConstructorMethod.MarkReferences;
-
-  for FuncPair in FGetters do
-    FuncPair.Value.MarkReferences;
-  for FuncPair in FSetters do
-    FuncPair.Value.MarkReferences;
 
   for ValPair in FStaticMethods do
     if Assigned(ValPair.Value) then
@@ -1143,9 +983,6 @@ begin
   for ValPair in FPrivateStaticMethods do
     if Assigned(ValPair.Value) then
       ValPair.Value.MarkReferences;
-
-  for PrivateMethodPair in FPrivateMethods do
-    PrivateMethodPair.Value.MarkReferences;
 
   for ValPair in FPrivateGetters do
     ValPair.Value.MarkReferences;
@@ -1173,9 +1010,6 @@ begin
     if Assigned(FStaticDecoratorFieldInitializers[I].ComputedKey) then
       FStaticDecoratorFieldInitializers[I].ComputedKey.MarkReferences;
   end;
-  for I := 0 to High(FFieldOrder) do
-    if Assigned(FFieldOrder[I].ComputedKey) then
-      FFieldOrder[I].ComputedKey.MarkReferences;
 end;
 
 function TGocciaClassValue.IsCallable: Boolean;
@@ -1210,68 +1044,6 @@ end;
 function TGocciaClassValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
   Result := TGocciaBooleanLiteralValue.TrueValue;
-end;
-
-procedure TGocciaClassValue.AddMethod(const AName: string; const AMethod: TGocciaMethodValue);
-begin
-  AMethod.OwningClass := Self;
-  // If this is the constructor, store it separately
-  if AName = PROP_CONSTRUCTOR then
-  begin
-    AMethod.Name := PROP_CONSTRUCTOR;
-    FConstructorMethod := AMethod;
-    Exit;
-  end;
-
-  // ES §14.3.7: class method definitions have enumerable: false
-  FClassPrototype.DefineProperty(AName,
-    TGocciaPropertyDescriptorData.Create(AMethod, [pfConfigurable, pfWritable]));
-end;
-
-procedure TGocciaClassValue.AddGetter(const AName: string; const AGetter: TGocciaFunctionBase);
-var
-  ExistingDescriptor: TGocciaPropertyDescriptor;
-  ExistingSetter: TGocciaValue;
-begin
-  FGetters.AddOrSetValue(AName, AGetter);
-
-  // Check if there's already a setter for this property
-  ExistingDescriptor := FClassPrototype.GetOwnPropertyDescriptor(AName);
-  if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
-     Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
-  begin
-    // Merge with existing setter
-    ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
-    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, ExistingSetter, [pfConfigurable, pfWritable]));
-  end
-  else
-  begin
-    // No existing setter, create getter-only descriptor
-    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(AGetter, nil, [pfConfigurable, pfWritable]));
-  end;
-end;
-
-procedure TGocciaClassValue.AddSetter(const AName: string; const ASetter: TGocciaFunctionBase);
-var
-  ExistingDescriptor: TGocciaPropertyDescriptor;
-  ExistingGetter: TGocciaValue;
-begin
-  FSetters.AddOrSetValue(AName, ASetter);
-
-  // Check if there's already a getter for this property
-  ExistingDescriptor := FClassPrototype.GetOwnPropertyDescriptor(AName);
-  if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
-     Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
-  begin
-    // Merge with existing getter
-    ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
-    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, ASetter, [pfConfigurable, pfWritable]));
-  end
-  else
-  begin
-    // No existing getter, create setter-only descriptor
-    FClassPrototype.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(nil, ASetter, [pfConfigurable, pfWritable]));
-  end;
 end;
 
 procedure TGocciaClassValue.AddStaticGetter(const AName: string; const AGetter: TGocciaFunctionBase);
@@ -1326,20 +1098,6 @@ begin
   Inc(FPrivateNamesVersion);
 end;
 
-function TGocciaClassValue.HasPrivateGetter(const AName: string): Boolean;
-begin
-  Result := FPrivateGetters.ContainsKey(AName);
-  if not Result and Assigned(FSuperClass) then
-    Result := FSuperClass.HasPrivateGetter(AName);
-end;
-
-function TGocciaClassValue.HasPrivateSetter(const AName: string): Boolean;
-begin
-  Result := FPrivateSetters.ContainsKey(AName);
-  if not Result and Assigned(FSuperClass) then
-    Result := FSuperClass.HasPrivateSetter(AName);
-end;
-
 function TGocciaClassValue.HasOwnPrivateGetter(const AName: string): Boolean;
 begin
   Result := FPrivateGetters.ContainsKey(AName);
@@ -1360,25 +1118,6 @@ function TGocciaClassValue.HasOwnPrivateStaticMethod(
   const AName: string): Boolean;
 begin
   Result := FPrivateStaticMethods.ContainsKey(AName);
-end;
-
-function TGocciaClassValue.HasOwnPrivateName(const AName: string): Boolean;
-begin
-  Result := FDeclaredPrivateNames.ContainsKey(AName) or
-    FPrivateInstancePropertyDefs.ContainsKey(AName) or
-    FPrivateStaticProperties.ContainsKey(AName) or
-    FPrivateStaticMethods.ContainsKey(AName) or
-    FPrivateMethods.ContainsKey(AName) or
-    FPrivateGetters.ContainsKey(AName) or
-    FPrivateSetters.ContainsKey(AName);
-end;
-
-function TGocciaClassValue.HasPrivateInstanceElements: Boolean;
-begin
-  Result := (FPrivateInstancePropertyDefs.Count > 0) or
-    (FPrivateMethods.Count > 0) or
-    (FPrivateGetters.Count > 0) or
-    (FPrivateSetters.Count > 0);
 end;
 
 function TGocciaClassValue.GetOwnPrivatePropertyGetter(
@@ -1412,18 +1151,6 @@ begin
   if Assigned(FSuperClass) then
     Result := FSuperClass.GetPrivatePropertySetter(AName)
   else
-    Result := nil;
-end;
-
-function TGocciaClassValue.GetPropertyGetter(const AName: string): TGocciaFunctionBase;
-begin
-  if not FGetters.TryGetValue(AName, Result) then
-    Result := nil;
-end;
-
-function TGocciaClassValue.GetPropertySetter(const AName: string): TGocciaFunctionBase;
-begin
-  if not FSetters.TryGetValue(AName, Result) then
     Result := nil;
 end;
 
@@ -1496,15 +1223,6 @@ begin
   SetLength(FMethodInitializers, Length(AInitializers));
   for Idx := 0 to High(AInitializers) do
     FMethodInitializers[Idx] := AInitializers[Idx];
-end;
-
-procedure TGocciaClassValue.SetFieldInitializers(const AInitializers: array of TGocciaValue);
-var
-  Idx: Integer;
-begin
-  SetLength(FFieldInitializers, Length(AInitializers));
-  for Idx := 0 to High(AInitializers) do
-    FFieldInitializers[Idx] := AInitializers[Idx];
 end;
 
 procedure TGocciaClassValue.AppendMethodInitializers(const AInitializers: array of TGocciaValue);
@@ -1658,18 +1376,6 @@ begin
   end;
 end;
 
-procedure TGocciaClassValue.AddInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
-begin
-  FInstancePropertyDefs.Add(AName, AExpression);
-end;
-
-procedure TGocciaClassValue.AddPrivateInstanceProperty(const AName: string; const AExpression: TGocciaExpression);
-begin
-  DeclarePrivateName(AName);
-  FPrivateInstancePropertyDefs.Add(AName, AExpression);
-  Inc(FPrivateNamesVersion);
-end;
-
 procedure TGocciaClassValue.AddPrivateStaticProperty(const AName: string; const AValue: TGocciaValue);
 begin
   DeclarePrivateName(AName);
@@ -1690,19 +1396,6 @@ begin
   DeclarePrivateName(AName);
   FPrivateStaticMethods.AddOrSetValue(AName, AValue);
   Inc(FPrivateNamesVersion);
-end;
-
-procedure TGocciaClassValue.AddPrivateMethod(const AName: string; const AMethod: TGocciaMethodValue);
-begin
-  DeclarePrivateName(AName);
-  FPrivateMethods.AddOrSetValue(AName, AMethod);
-  Inc(FPrivateNamesVersion);
-end;
-
-function TGocciaClassValue.GetPrivateMethod(const AName: string): TGocciaMethodValue;
-begin
-  if not FPrivateMethods.TryGetValue(AName, Result) then
-    Result := nil;
 end;
 
 procedure TGocciaClassValue.DeclarePrivateName(const AName: string;
@@ -1748,21 +1441,6 @@ begin
     AInternalKey := '';
 end;
 
-procedure TGocciaClassValue.AppendOwnPrivateNames(const ANames: TStrings);
-var
-  Names: TArray<string>;
-  Count, I: Integer;
-begin
-  if not Assigned(ANames) then
-    Exit;
-  Names := nil;
-  Count := 0;
-  CollectOwnPrivateNames(Names, Count);
-  for I := 0 to Count - 1 do
-    if ANames.IndexOf(Names[I]) < 0 then
-      ANames.Add(Names[I]);
-end;
-
 // Appends AName to ANames[0..ACount-1] unless it is already there, compared
 // by code units.
 procedure AddUniquePrivateName(var ANames: TArray<string>; var ACount: Integer;
@@ -1806,14 +1484,10 @@ begin
         AddUniquePrivateName(ANames, ACount, DeclaredPair.Value)
       else
         AddUniquePrivateName(ANames, ACount, DeclaredPair.Key);
-  if FPrivateInstancePropertyDefs.CountFast > 0 then
-    AddUniquePrivateNames(ANames, ACount, FPrivateInstancePropertyDefs.Keys);
   if FPrivateStaticProperties.CountFast > 0 then
     AddUniquePrivateNames(ANames, ACount, FPrivateStaticProperties.Keys);
   if FPrivateStaticMethods.CountFast > 0 then
     AddUniquePrivateNames(ANames, ACount, FPrivateStaticMethods.Keys);
-  if FPrivateMethods.CountFast > 0 then
-    AddUniquePrivateNames(ANames, ACount, FPrivateMethods.Keys);
   if FPrivateGetters.CountFast > 0 then
     AddUniquePrivateNames(ANames, ACount, FPrivateGetters.Keys);
   if FPrivateSetters.CountFast > 0 then
@@ -1904,25 +1578,6 @@ begin
   Result := FSourceText;
 end;
 
-procedure TGocciaClassValue.SetFieldOrder(const AOrder: array of TGocciaClassFieldOrderEntry);
-var
-  I: Integer;
-begin
-  SetLength(FFieldOrder, Length(AOrder));
-  for I := 0 to High(AOrder) do
-    FFieldOrder[I] := AOrder[I];
-end;
-
-function TGocciaClassValue.FieldOrderCount: Integer;
-begin
-  Result := Length(FFieldOrder);
-end;
-
-function TGocciaClassValue.FieldOrderEntry(const AIndex: Integer): TGocciaClassFieldOrderEntry;
-begin
-  Result := FFieldOrder[AIndex];
-end;
-
 function TGocciaClassValue.EstimatedInstancePropertyCapacity: Integer;
 var
   WalkClass: TGocciaClassValue;
@@ -1932,7 +1587,6 @@ begin
   WalkClass := Self;
   while Assigned(WalkClass) do
   begin
-    Inc(Result, Length(WalkClass.FFieldOrder));
     for I := 0 to High(WalkClass.FDecoratorFieldInitializers) do
       if not WalkClass.FDecoratorFieldInitializers[I].IsStatic then
         Inc(Result);
@@ -1945,34 +1599,8 @@ begin
   Result := Assigned(FSuperClass) or Assigned(FNativeSuperConstructor);
 end;
 
-function TGocciaClassValue.HasInstanceInitializerWork: Boolean;
-var
-  I: Integer;
-begin
-  if HasPrivateInstanceElements or
-     (Length(FFieldOrder) > 0) or
-     (Length(FMethodInitializers) > 0) or
-     (Length(FFieldInitializers) > 0) then
-    Exit(True);
-
-  for I := 0 to High(FDecoratorFieldInitializers) do
-    if not FDecoratorFieldInitializers[I].IsStatic then
-      Exit(True);
-
-  Result := False;
-end;
-
 function TGocciaClassValue.UsesOwnInstantiation: Boolean;
 begin
-  Result := False;
-end;
-
-function TGocciaClassValue.TryConstructOnReceiver(
-  const AArguments: TGocciaArgumentsCollection;
-  const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
-  out AResult: TGocciaValue): Boolean;
-begin
-  AResult := nil;
   Result := False;
 end;
 
@@ -1982,26 +1610,16 @@ function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollect
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
-  ImplicitSuperClass: TGocciaClassValue;
   NativeClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
   NativeSuperConstructor: TGocciaObjectValue;
   NativeIntrinsicPrototype: TGocciaObjectValue;
-  ConstructorToCall: TGocciaMethodValue;
   InstancePrototype: TGocciaObjectValue;
-  FinalThis: TGocciaValue;
-  ConstructResult: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
   DelayNativePrototypeLookup: Boolean;
   NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
   Chain: TGocciaImplicitConstructorChain;
-  CollapsedIndex: Integer;
-  function IsUndefinedConstructResult(const AValue: TGocciaValue): Boolean;
-  begin
-    Result := (not Assigned(AValue)) or
-      (AValue is TGocciaUndefinedLiteralValue);
-  end;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
@@ -2125,142 +1743,44 @@ begin
     end;
   end;
 
-  ConstructorToCall := FConstructorMethod;
-  ImplicitSuperClass := Chain.HostClass;
-  if not Assigned(ConstructorToCall) and Assigned(ImplicitSuperClass) then
-    ConstructorToCall := ImplicitSuperClass.ConstructorMethod;
-
   { §13.3.7.1 SuperCall step 3: super() reaching something that is not a
     constructor is a TypeError, and Object.setPrototypeOf is the only way to
     put one there. }
-  if (not Assigned(FConstructorMethod)) and
-     ImplicitSuperConstructorIsUnusable(Chain) then
+  if ImplicitSuperConstructorIsUnusable(Chain) then
     ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
-  if Assigned(ConstructorToCall) then
+  if (not Assigned(NativeInstance)) and Assigned(NativeSuperConstructor) then
   begin
-    TGarbageCollector.Instance.AddTempRoot(Instance);
-    try
-      ConstructResult := ConstructorToCall.CallWithThisValue(AArguments,
-        Instance, FinalThis, ANewTarget);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(Instance);
-    end;
-
-    // ES2026 §10.2.2 step 11: explicit Object return replaces the receiver
-    if ConstructResult is TGocciaObjectValue then
+    if NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype then
+      ThrowTypeError(SErrorSuperNotConstructor,
+        SSuggestNotConstructorType);
+    NativeInstance := ConstructNativeSuperInstance(NativeSuperConstructor);
+    NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance);
+    if Assigned(NativeInstance) then
     begin
-      if ConstructorToCall = FConstructorMethod then
-        Exit(TGocciaObjectValue(ConstructResult));
-      { A borrowed superclass constructor is standing in for this class's
-        implicit `super(...args)`, so §13.3.7.1 step 11 binds what it returned
-        as `this` and this class's own instance elements still land on it. }
-      Instance := TGocciaObjectValue(ConstructResult);
-    end
-    // ES2026 §10.2.2 step 12: derived constructors must return Object or
-    // undefined — any other value is a TypeError
-    else if Assigned(FSuperClass) or Assigned(FNativeSuperConstructor) then
-    begin
-      if Assigned(ConstructResult) and
-         not (ConstructResult is TGocciaUndefinedLiteralValue) then
-        ThrowTypeError('Derived constructor returned non-object',
-          SSuggestNotConstructorType);
-
-      { §10.2.2 step 13.c belongs to the constructor that returned, which is
-        the borrowed one when this class declares none of its own: a subclass
-        with no constructor of its own, extending a class whose constructor
-        never calls super(), leaves `this` uninitialized just the same. }
-      if IsUndefinedConstructResult(ConstructResult) and
-         not ConstructorToCall.LastSuperConstructorCalled and
-         ((ConstructorToCall = FConstructorMethod) or
-          (Assigned(ImplicitSuperClass) and
-           ImplicitSuperClass.HasDerivedConstructorKind)) then
-        ThrowReferenceError(
-          SErrorSuperConstructorNotCalled);
-
-      if (FinalThis is TGocciaObjectValue) then
-      begin
-        if ConstructorToCall = FConstructorMethod then
-          Exit(TGocciaObjectValue(FinalThis));
-        Instance := TGocciaObjectValue(FinalThis);
-      end
-      else if IsUndefinedConstructResult(ConstructResult) then
-        ThrowReferenceError(
-          SErrorSuperConstructorNotCalled);
+      Instance := NativeInstance;
+      if Assigned(NativeClass) or not DelayNativePrototypeLookup then
+        Instance.Prototype := InstancePrototype;
+      if NativeInstance is TGocciaInstanceValue then
+        TGocciaInstanceValue(NativeInstance).ClassValue := Self;
     end;
-  end
-  else
-  begin
-    if (not Assigned(NativeInstance)) and Assigned(NativeSuperConstructor) then
-    begin
-      if NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype then
-        ThrowTypeError(SErrorSuperNotConstructor,
-          SSuggestNotConstructorType);
-      NativeInstance := ConstructNativeSuperInstance(NativeSuperConstructor);
-      NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance);
-      if Assigned(NativeInstance) then
-      begin
-        Instance := NativeInstance;
-        if Assigned(NativeClass) or not DelayNativePrototypeLookup then
-          Instance.Prototype := InstancePrototype;
-        if NativeInstance is TGocciaInstanceValue then
-          TGocciaInstanceValue(NativeInstance).ClassValue := Self;
-      end;
-    end;
-
-    if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
-      if not NativeInstanceConstructedByNativeSuper then
-        if not NativeInstanceInitialized then
-          TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
   end;
 
-  { §15.7.14 step 15a / §7.3.33 InitializeInstanceElements: the implicit
-    constructor this class ran above forwards to super and then initializes its
-    own instance elements, and so does every class the chain walk collapsed on
-    the way to the constructor that actually ran. A class with a constructor of
-    its own already did this from its super() and is skipped.
-
-    The elements are AST expressions that only the evaluator can evaluate, so
-    they go through the registered hook. Without this every route through
-    §7.3.14 Construct — Reflect.construct, a proxy with no construct trap, a
-    bound class, and every species construction — handed back an instance whose
-    declared fields were undefined whenever the superclass chain reached a
-    built-in, because those are the classes the evaluator's construct redirect
-    declines. }
-  if not Assigned(FConstructorMethod) then
-  begin
-    TGarbageCollector.Instance.AddTempRoot(Instance);
-    try
-      for CollapsedIndex := High(Chain.Collapsed) downto 0 do
-        TryRunASTInstanceElements(Chain.Collapsed[CollapsedIndex], Instance);
-      TryRunASTInstanceElements(Self, Instance);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(Instance);
-    end;
-  end;
+  if Assigned(NativeInstance) and (NativeInstance is TGocciaInstanceValue) then
+    if not NativeInstanceConstructedByNativeSuper then
+      if not NativeInstanceInitialized then
+        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
 
   Result := Instance;
 end;
 
 function TGocciaClassValue.GetClassLength: Integer;
-var
-  I: Integer;
-  Params: TGocciaParameterArray;
 begin
-  // ECMAScript: a class's length is the number of formal parameters of its
-  // constructor before the first default/rest. Native classes without a JS
-  // constructor method (Map, Set, WeakMap, WeakSet, etc.) default to 0,
-  // which matches the spec for built-in collection constructors.
+  // A built-in class without a source constructor (Map, Set, WeakMap,
+  // WeakSet, etc.) has length 0, which matches the spec for the built-in
+  // collection constructors. Compiled classes and built-ins with a different
+  // length override this.
   Result := 0;
-  if not Assigned(FConstructorMethod) then
-    Exit;
-  Params := FConstructorMethod.Parameters;
-  for I := 0 to Length(Params) - 1 do
-  begin
-    if Params[I].IsRest then Break;
-    if Assigned(Params[I].DefaultValue) then Break;
-    Inc(Result);
-  end;
 end;
 
 function TGocciaClassValue.GetProperty(const AName: string): TGocciaValue;
@@ -3276,116 +2796,6 @@ end;
 procedure TGocciaInstanceValue.FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection);
 begin
   // No-op by default; native subclasses override when setup must finish after prototype lookup
-end;
-
-function TGocciaInstanceValue.IsInstanceOf(const AClass: TGocciaClassValue): Boolean;
-var
-  CurrentClass: TGocciaClassValue;
-begin
-  Result := False;
-  CurrentClass := FClass;
-
-  while Assigned(CurrentClass) do
-  begin
-    if CurrentClass = AClass then
-    begin
-      Result := True;
-      Exit;
-    end;
-    CurrentClass := CurrentClass.SuperClass;
-  end;
-end;
-
-function TGocciaInstanceValue.GetPrivateProperty(const AName: string; const AAccessClass: TGocciaClassValue): TGocciaValue;
-var
-  CurrentClass: TGocciaClassValue;
-  CanAccess: Boolean;
-  CompositeKey: string;
-begin
-  // Check if the accessing class can access this private field
-  // Rule: A class can access private fields if:
-  // 1. It's accessing its own private field (AAccessClass = the class that owns the field)
-  // 2. It's a subclass of the class that owns the field
-  CanAccess := False;
-
-  // Check if AAccessClass is the same as FClass (derived class accessing derived class field)
-  if AAccessClass = FClass then
-  begin
-    CanAccess := True;
-  end
-  else
-  begin
-    // Check if AAccessClass is in the inheritance chain of FClass (superclass accessing its own field)
-    CurrentClass := FClass;
-    while Assigned(CurrentClass) do
-    begin
-      if CurrentClass = AAccessClass then
-      begin
-        CanAccess := True;
-        Break;
-      end;
-      CurrentClass := CurrentClass.SuperClass;
-    end;
-  end;
-
-  if not CanAccess then
-    ThrowTypeError(Format(SErrorPrivateFieldInaccessible, [AName]),
-      SSuggestPrivateFieldAccess);
-
-  // Use composite key (ClassName:FieldName) to support per-class private field scoping
-  CompositeKey := AAccessClass.Name + ':' + AName;
-  if Assigned(FPrivateProperties) and FPrivateProperties.TryGetValue(CompositeKey, Result) then
-    Exit
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-procedure TGocciaInstanceValue.SetPrivateProperty(const AName: string;
-  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
-  const AThrowIfExists: Boolean);
-var
-  CurrentClass: TGocciaClassValue;
-  CanAccess: Boolean;
-  CompositeKey: string;
-begin
-  // Check if the accessing class can access this private field
-  // Rule: A class can access private fields if:
-  // 1. It's accessing its own private field (AAccessClass = the class that owns the field)
-  // 2. It's a subclass of the class that owns the field
-  CanAccess := False;
-
-  // Check if AAccessClass is the same as FClass (derived class accessing derived class field)
-  if AAccessClass = FClass then
-  begin
-    CanAccess := True;
-  end
-  else
-  begin
-    // Check if AAccessClass is in the inheritance chain of FClass (superclass accessing its own field)
-    CurrentClass := FClass;
-    while Assigned(CurrentClass) do
-    begin
-      if CurrentClass = AAccessClass then
-      begin
-        CanAccess := True;
-        Break;
-      end;
-      CurrentClass := CurrentClass.SuperClass;
-    end;
-  end;
-
-  if not CanAccess then
-    ThrowTypeError(Format(SErrorPrivateFieldInaccessible, [AName]),
-      SSuggestPrivateFieldAccess);
-
-  // Use composite key (ClassName:FieldName) to support per-class private field scoping
-  CompositeKey := AAccessClass.Name + ':' + AName;
-  if not Assigned(FPrivateProperties) then
-    FPrivateProperties := TGocciaValueMap.Create;
-  if AThrowIfExists and FPrivateProperties.ContainsKey(CompositeKey) then
-    ThrowTypeError('Cannot initialize private elements twice',
-      SSuggestPrivateFieldAccess);
-  FPrivateProperties.AddOrSetValue(CompositeKey, AValue);
 end;
 
 destructor TGocciaInstanceValue.Destroy;

@@ -308,8 +308,8 @@ var
   Roots: TGocciaActiveRootFrame;
 begin
   { Two things are live here and reachable from nowhere else. The owning value
-    holds this map, and a native builder or an evaluator temporary may be the
-    only thing holding the owner. The pending descriptor is worse: the Add that
+    holds this map, and a native builder may be the only thing holding the
+    owner. The pending descriptor is worse: the Add that
     called this has not stored it yet, so the value it points at is reachable
     only through a plain class the collector does not trace, and a descriptor
     read out of — or on its way into — a property map is not a root.

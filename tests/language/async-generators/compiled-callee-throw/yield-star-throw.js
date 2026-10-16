@@ -1,12 +1,11 @@
 /*---
-description: interpreter-run async generator yield* over a compiled throwing sync next rejects with the thrown value itself
+description: an imported module async generator's yield* over a throwing sync next rejects with the thrown value itself
 features: [async-generators, modules, compat-function]
 ---*/
 
-// `delegate` is an imported module-level async generator, so under the bytecode
-// executor it runs on the interpreter and its yield* uses the interpreter's
-// async-from-sync iterator. The throwing sync iterable is created here, so its
-// `next` is VM-compiled and its throw crosses that boundary as the engine's
+// `delegate` is an imported module-level async generator whose yield* wraps the
+// throwing sync iterable created here in the VM's async-from-sync iterator.
+// The iterable's `next` throw reaches that native wrapper as the engine's
 // bytecode-throw exception. The rejection must carry the thrown value's
 // identity, not a fresh Error synthesized from "Name: message".
 import { delegate } from "./helpers/delegating-async-generator.js";
@@ -18,7 +17,7 @@ class Boom extends Error {
   }
 }
 
-describe("interpreter async generator yield* over a compiled throwing sync iterator", () => {
+describe("imported async generator yield* over a throwing sync iterator", () => {
   test("rejects next() with the thrown error's identity", async () => {
     const boom = new Boom("boom");
     const throwingIterable = {

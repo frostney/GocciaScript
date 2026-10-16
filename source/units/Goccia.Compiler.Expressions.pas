@@ -4930,8 +4930,8 @@ end;
 { Records the callee expression as the author wrote it against the call or
   construct instruction about to be emitted, so that when the VM finds the
   callee is not callable it can report "obj.method is not a function" rather
-  than "undefined is not a function" — the same text the tree-walk evaluator
-  builds from the AST (Goccia.Error.CallDiagnostics). Must be called
+  than "undefined is not a function", built from the AST by
+  Goccia.Error.CallDiagnostics. Must be called
   immediately before the emission: the key is the instruction's start PC,
   which is CodeCount at this moment. }
 procedure RecordCallSite(const ACtx: TGocciaCompilationContext;
@@ -6749,7 +6749,7 @@ begin
     ACtx.CompileExpression(AExpr.Expressions[I], ACtx.Scope.AllocateRegister);
 
   // Record the tag as the callee so a non-callable tag reports the tag by name
-  // and the shared tag-must-be-callable suggestion, matching the evaluator.
+  // and the shared tag-must-be-callable suggestion.
   RecordCallSite(ACtx, AExpr, AExpr.Tag, cckTaggedTemplate);
   if IsMethodCall then
     EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, UInt16(ArgCount),
@@ -7111,7 +7111,7 @@ end;
 
 // ES2026 §16.2.1.7.3.1 InitializeEnvironment, step for a function declaration
 // of a module the loader links: InstantiateFunctionObject runs before the
-// module body, so the declaration compiles to a template that the executor
+// module body, so the declaration compiles to a template that the engine
 // instantiates while linking (TGocciaFunctionTemplate.ModuleEnvironmentBinding)
 // rather than to an OP_CLOSURE of the module body.
 function CompileModuleFunctionDeclarationTemplate(
@@ -8295,7 +8295,7 @@ end;
 
 { Records the import() expression's own position against the import
   instruction about to be emitted, so the VM locates what the load decides or
-  refuses where the tree-walk evaluator does. }
+  refuses at the import() expression itself. }
 procedure RecordImportCallSite(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaImportCallExpression);
 begin

@@ -41,8 +41,7 @@ uses
   SysUtils,
 
   Goccia.Values.ArrayValue,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.NativeFunction,
+  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue;
 
 { TGocciaArgumentConverter }
@@ -80,7 +79,7 @@ begin
   if (AIndex >= 0) and (AIndex < ACollection.Length) then
   begin
     Arg := ACollection.GetElement(AIndex);
-    Result := (Arg is TGocciaFunctionValue) or (Arg is TGocciaNativeFunctionValue);
+    Result := Arg is TGocciaFunctionBase;
   end;
 end;
 
@@ -141,7 +140,7 @@ var
   Arg: TGocciaValue;
 begin
   Arg := ACollection.GetElement(AIndex); // Returns undefined if out of bounds
-  if (Arg is TGocciaFunctionValue) or (Arg is TGocciaNativeFunctionValue) then
+  if Arg is TGocciaFunctionBase then
     Result := Arg
   else
   begin

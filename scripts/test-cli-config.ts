@@ -87,28 +87,20 @@ async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<
     writeFileSync(join(tmp, "test-runner.js"), testCase.testRunnerSource);
     writeFileSync(join(tmp, "bench.js"), testCase.benchSource);
 
-    const loaderOut = await $`${RUNNER} --print ${join(tmp, "test.js")} --mode=interpreted 2>&1`.text();
+    const loaderOut = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!containsLine(loaderOut, testCase.loaderExpectedLine))
-      throw new Error(`Loader interp ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderOut}`);
+      throw new Error(`Loader ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderOut}`);
 
-    const loaderBc = await $`${RUNNER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, testCase.loaderExpectedLine))
-      throw new Error(`Loader bytecode ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderBc}`);
-
-    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=interpreted --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1"))
-      throw new Error(`TestRunner interp ${testCase.name} should pass, got: ${trInterp}`);
-
-    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1"))
-      throw new Error(`TestRunner bytecode ${testCase.name} should pass, got: ${trBc}`);
+    const trOut = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    if (!trOut.includes("Passed: 1"))
+      throw new Error(`TestRunner ${testCase.name} should pass, got: ${trOut}`);
 
     await $`${BUNDLER} ${join(tmp, "test.js")}`.quiet();
     if (!existsSync(join(tmp, "test.gbc")))
       throw new Error(`Bundler ${testCase.name} should compile`);
 
-    const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=interpreted", "--no-progress"],
+    const bench = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
       {
         stdout: "pipe",
         stderr: "pipe",
@@ -116,24 +108,10 @@ async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<
         timeout: 60_000,
       },
     );
-    if (benchInterp.exitCode !== 0)
-      throw new Error(`BenchmarkRunner interp ${testCase.name} exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
-    if (!benchInterp.stdout.toString().includes(testCase.benchNeedle))
-      throw new Error(`BenchmarkRunner interp ${testCase.name} should mention '${testCase.benchNeedle}'`);
-
-    const benchBc = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=bytecode", "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchBc.exitCode !== 0)
-      throw new Error(`BenchmarkRunner bytecode ${testCase.name} exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
-    if (!benchBc.stdout.toString().includes(testCase.benchNeedle))
-      throw new Error(`BenchmarkRunner bytecode ${testCase.name} should mention '${testCase.benchNeedle}'`);
+    if (bench.exitCode !== 0)
+      throw new Error(`BenchmarkRunner ${testCase.name} exited ${bench.exitCode}: ${bench.stderr.toString()}`);
+    if (!bench.stdout.toString().includes(testCase.benchNeedle))
+      throw new Error(`BenchmarkRunner ${testCase.name} should mention '${testCase.benchNeedle}'`);
   } finally {
     clean(tmp);
   }
@@ -145,11 +123,10 @@ console.log("goccia.json loading...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 2 + 2\nx\n");
 
     const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`goccia.json should enable bytecode, got: ${out}`);
     if (!containsLine(out, "4")) throw new Error(`goccia.json should produce 4 on its own line, got: ${out}`);
   } finally {
     clean(tmp);
@@ -181,27 +158,25 @@ console.log("deterministic config applies before runtime globals attach...");
     );
 
     const expected = "0.8833108082136426|0|0|0|0";
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const loader = runCwd(
-        RUNNER,
-        ["--print", join(tmp, "test.js"), `--mode=${mode}`],
-        tmp,
+    const loader = runCwd(
+      RUNNER,
+      ["--print", join(tmp, "test.js")],
+      tmp,
+    );
+    if (!containsLine(loader.combined, expected))
+      throw new Error(
+        `Loader deterministic config expected ${expected}, got: ${loader.combined}`,
       );
-      if (!containsLine(loader.combined, expected))
-        throw new Error(
-          `Loader deterministic config ${mode} expected ${expected}, got: ${loader.combined}`,
-        );
 
-      const testRunner = runCwd(
-        TESTRUNNER,
-        [join(tmp, "test-runner.js"), `--mode=${mode}`, "--no-progress"],
-        tmp,
+    const testRunner = runCwd(
+      TESTRUNNER,
+      [join(tmp, "test-runner.js"), "--no-progress"],
+      tmp,
+    );
+    if (!testRunner.combined.includes("Passed: 1"))
+      throw new Error(
+        `TestRunner deterministic config should pass, got: ${testRunner.combined}`,
       );
-      if (!testRunner.combined.includes("Passed: 1"))
-        throw new Error(
-          `TestRunner deterministic config ${mode} should pass, got: ${testRunner.combined}`,
-        );
-    }
   } finally {
     clean(tmp);
   }
@@ -233,17 +208,15 @@ console.log("host environment config loads a provider module before runtime glob
     );
 
     const expected = "123|0.125|UTC|123|0";
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const loader = runCwd(
-        RUNNER,
-        ["--print", join(tmp, "test.js"), `--mode=${mode}`],
-        tmp,
+    const loader = runCwd(
+      RUNNER,
+      ["--print", join(tmp, "test.js")],
+      tmp,
+    );
+    if (!containsLine(loader.combined, expected))
+      throw new Error(
+        `Loader host environment config expected ${expected}, got: ${loader.combined}`,
       );
-      if (!containsLine(loader.combined, expected))
-        throw new Error(
-          `Loader host environment config ${mode} expected ${expected}, got: ${loader.combined}`,
-        );
-    }
   } finally {
     clean(tmp);
   }
@@ -255,11 +228,10 @@ console.log("goccia.toml loading...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\n');
     writeFileSync(join(tmp, "test.js"), "const x = 10\nx\n");
 
     const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`goccia.toml should enable bytecode, got: ${out}`);
     if (!containsLine(out, "10")) throw new Error(`goccia.toml should produce 10 on its own line, got: ${out}`);
   } finally {
     clean(tmp);
@@ -272,11 +244,11 @@ console.log("goccia.json5 loading...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json5"), '{"compat-asi": true, mode: "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json5"), "{'compat-asi': true}\n");
     writeFileSync(join(tmp, "test.js"), "const x = 10\nx\n");
 
-    const out = await $`${RUNNER} ${join(tmp, "test.js")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`goccia.json5 should enable bytecode, got: ${out}`);
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    if (!containsLine(out, "10")) throw new Error(`goccia.json5 should enable ASI (10 on its own line), got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -288,13 +260,13 @@ console.log("Priority: TOML > JSON5 > JSON...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"mode": "interpreted", "compat-asi": true}\n');
-    writeFileSync(join(tmp, "goccia.json5"), '{"compat-asi": true, mode: "interpreted"}\n');
-    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": false}\n');
+    writeFileSync(join(tmp, "goccia.json5"), "{'compat-asi': false}\n");
+    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\n');
     writeFileSync(join(tmp, "test.js"), "const x = 1\nx\n");
 
-    const out = await $`${RUNNER} ${join(tmp, "test.js")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`TOML should win over JSON5 and JSON, got: ${out}`);
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.nothrow().text();
+    if (!containsLine(out, "1")) throw new Error(`TOML should win over JSON5 and JSON, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -307,12 +279,11 @@ console.log("Discovery from entry file directory...");
   const tmp = makeTmp();
   try {
     mkdirSync(join(tmp, "src"), { recursive: true });
-    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(join(tmp, "src", "test.js"), "const x = 7\nx\n");
 
     const out = await $`${RUNNER} --print ${join(tmp, "src", "test.js")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`Config in parent should be discovered, got: ${out}`);
-    if (!containsLine(out, "7")) throw new Error(`Should produce 7 on its own line, got: ${out}`);
+    if (!containsLine(out, "7")) throw new Error(`Config in parent should be discovered (7 on its own line), got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -350,11 +321,9 @@ console.log("Config max-stack...");
       "let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n",
     );
 
-    for (const mode of ["interpreted", "bytecode"]) {
-      const out = await $`${RUNNER} ${join(tmp, "test.js")} --mode=${mode} 2>&1`.text();
-      if (!containsLine(out, "50"))
-        throw new Error(`max-stack config should allow 50 nested calls (${mode}), got: ${out}`);
-    }
+    const out = await $`${RUNNER} ${join(tmp, "test.js")} 2>&1`.text();
+    if (!containsLine(out, "50"))
+      throw new Error(`max-stack config should allow 50 nested calls, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -404,11 +373,10 @@ console.log("Config extends...");
   const tmp = makeTmp();
   try {
     writeFileSync(join(tmp, "base.json"), '{"compat-asi": true}\n');
-    writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 5\nx\n");
 
     const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`Extends should enable bytecode, got: ${out}`);
     if (!containsLine(out, "5")) throw new Error(`Extends should inherit ASI, got: ${out}`);
   } finally {
     clean(tmp);
@@ -425,12 +393,11 @@ console.log("Config extends from subdirectory...");
     writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(
       join(tmp, "tests", "asi", "goccia.json"),
-      '{"extends": "../../goccia.json", "mode": "bytecode"}\n',
+      '{"extends": "../../goccia.json"}\n',
     );
     writeFileSync(join(tmp, "tests", "asi", "test.js"), "const x = 99\nx\n");
 
     const out = await $`${RUNNER} --print ${join(tmp, "tests", "asi", "test.js")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`Subdirectory extends should enable bytecode, got: ${out}`);
     if (!containsLine(out, "99")) throw new Error(`Subdirectory extends should inherit ASI, got: ${out}`);
   } finally {
     clean(tmp);
@@ -443,7 +410,7 @@ console.log("TestRunner respects config...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(
       join(tmp, "test.js"),
       [
@@ -458,7 +425,6 @@ console.log("TestRunner respects config...");
     const resultsPath = join(tmp, "results.json");
     runCwd(TESTRUNNER, ["test.js", "--no-progress", `--output=${resultsPath}`], tmp);
     const results = readFileSync(resultsPath, "utf-8");
-    if (!results.includes('"mode": "bytecode"')) throw new Error(`TestRunner results should show bytecode mode`);
     if (!results.includes('"passed": 1')) throw new Error(`TestRunner results should show 1 passed`);
     const resultsJson = JSON.parse(results);
     if (typeof resultsJson.build?.version !== "string") throw new Error("TestRunner JSON build.version should be present");
@@ -480,24 +446,21 @@ console.log("TestRunner JSON load errors include per-file error...");
   try {
     writeFileSync(join(tmp, "bad.js"), "const broken = ;\n");
 
-    for (const mode of ["interpreted", "bytecode"]) {
-      const resultsPath = join(tmp, `load-error-${mode}.json`);
-      const args = ["bad.js", "--no-progress", `--output=${resultsPath}`];
-      args.push(`--mode=${mode}`);
-      runCwd(TESTRUNNER, args, tmp, { expectFail: true });
+    const resultsPath = join(tmp, "load-error.json");
+    const args = ["bad.js", "--no-progress", `--output=${resultsPath}`];
+    runCwd(TESTRUNNER, args, tmp, { expectFail: true });
 
-      const resultsJson = JSON.parse(readFileSync(resultsPath, "utf-8"));
-      const file = resultsJson.files?.[0];
-      const result = resultsJson.results?.[0];
-      if (resultsJson.ok !== false) throw new Error(`TestRunner ${mode} load error should mark ok=false`);
-      if (file?.ok !== false) throw new Error(`TestRunner ${mode} load error file should mark ok=false`);
-      if (typeof file?.error?.message !== "string" || file.error.message.length === 0)
-        throw new Error(`TestRunner ${mode} load error should include files[].error.message`);
-      if (file.errorMessage !== file.error.message)
-        throw new Error(`TestRunner ${mode} errorMessage should match shared error message`);
-      if (typeof result?.error?.message !== "string" || result.error.message.length === 0)
-        throw new Error(`TestRunner ${mode} load error should include results[].error.message`);
-    }
+    const resultsJson = JSON.parse(readFileSync(resultsPath, "utf-8"));
+    const file = resultsJson.files?.[0];
+    const result = resultsJson.results?.[0];
+    if (resultsJson.ok !== false) throw new Error(`TestRunner load error should mark ok=false`);
+    if (file?.ok !== false) throw new Error(`TestRunner load error file should mark ok=false`);
+    if (typeof file?.error?.message !== "string" || file.error.message.length === 0)
+      throw new Error(`TestRunner load error should include files[].error.message`);
+    if (file.errorMessage !== file.error.message)
+      throw new Error(`TestRunner errorMessage should match shared error message`);
+    if (typeof result?.error?.message !== "string" || result.error.message.length === 0)
+      throw new Error(`TestRunner load error should include results[].error.message`);
   } finally {
     clean(tmp);
   }
@@ -540,30 +503,19 @@ console.log("Per-file ASI config across all apps...");
     writeFileSync(join(strictDir, "test.js"), "const y = 99;\ny;\n");
     writeFileSync(join(strictDir, "bad.js"), "const z = 1\nz\n");
 
-    // Loader (interpreted)
-    const loaderInterp = await $`${RUNNER} --print ${join(asiDir, "test.js")} --mode=interpreted 2>&1`.text();
-    if (!containsLine(loaderInterp, "42")) throw new Error(`Loader interp ASI should produce 42 on its own line, got: ${loaderInterp}`);
+    // Loader
+    const loaderOut = await $`${RUNNER} --print ${join(asiDir, "test.js")} 2>&1`.text();
+    if (!containsLine(loaderOut, "42")) throw new Error(`Loader ASI should produce 42 on its own line, got: ${loaderOut}`);
 
-    const strictOk = await $`${RUNNER} --print ${join(strictDir, "test.js")} --mode=interpreted 2>&1`.text();
+    const strictOk = await $`${RUNNER} --print ${join(strictDir, "test.js")} 2>&1`.text();
     if (!containsLine(strictOk, "99")) throw new Error(`Strict subdir should produce 99 on its own line, got: ${strictOk}`);
 
-    const strictBad = await $`${RUNNER} ${join(strictDir, "bad.js")} --mode=interpreted 2>&1`.nothrow();
+    const strictBad = await $`${RUNNER} ${join(strictDir, "bad.js")} 2>&1`.nothrow();
     if (!strictBad.text().includes("SyntaxError")) throw new Error("Strict subdir should reject missing semicolons");
 
-    // Loader (bytecode)
-    const loaderBc = await $`${RUNNER} --print ${join(asiDir, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, "42")) throw new Error(`Loader bytecode ASI should produce 42 on its own line, got: ${loaderBc}`);
-
-    const strictBcBad = await $`${RUNNER} ${join(strictDir, "bad.js")} --mode=bytecode 2>&1`.nothrow();
-    if (!strictBcBad.text().includes("SyntaxError")) throw new Error("Strict bytecode should reject");
-
-    // TestRunner (interpreted)
-    const trInterp = await $`${TESTRUNNER} ${join(asiDir, "test-runner.js")} --mode=interpreted --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp ASI should pass, got: ${trInterp}`);
-
-    // TestRunner (bytecode)
-    const trBc = await $`${TESTRUNNER} ${join(asiDir, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode ASI should pass, got: ${trBc}`);
+    // TestRunner
+    const trOut = await $`${TESTRUNNER} ${join(asiDir, "test-runner.js")} --no-progress 2>&1`.text();
+    if (!trOut.includes("Passed: 1")) throw new Error(`TestRunner ASI should pass, got: ${trOut}`);
 
     // Bundler
     await $`${BUNDLER} ${join(asiDir, "test.js")}`.quiet();
@@ -578,9 +530,9 @@ console.log("Per-file ASI config across all apps...");
     await $`${BUNDLER} ${join(strictDir, "bad.js")} --compat-asi`.quiet();
     if (!existsSync(join(strictDir, "bad.gbc"))) throw new Error("Bundler --compat-asi override should compile");
 
-    // BenchmarkRunner (interpreted)
-    const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(asiDir, "bench.js"), "--mode=interpreted", "--no-progress"],
+    // BenchmarkRunner
+    const bench = Bun.spawnSync(
+      [resolve(BENCHRUNNER), join(asiDir, "bench.js"), "--no-progress"],
       {
         stdout: "pipe",
         stderr: "pipe",
@@ -588,21 +540,8 @@ console.log("Per-file ASI config across all apps...");
         timeout: 60_000,
       },
     );
-    if (benchInterp.exitCode !== 0) throw new Error(`BenchmarkRunner interp ASI exited ${benchInterp.exitCode}: ${benchInterp.stderr.toString()}`);
-    if (!benchInterp.stdout.toString().includes("asi")) throw new Error("BenchmarkRunner interp ASI should mention 'asi'");
-
-    // BenchmarkRunner (bytecode)
-    const benchBc = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(asiDir, "bench.js"), "--mode=bytecode", "--no-progress"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-        timeout: 60_000,
-      },
-    );
-    if (benchBc.exitCode !== 0) throw new Error(`BenchmarkRunner bytecode ASI exited ${benchBc.exitCode}: ${benchBc.stderr.toString()}`);
-    if (!benchBc.stdout.toString().includes("asi")) throw new Error("BenchmarkRunner bytecode ASI should mention 'asi'");
+    if (bench.exitCode !== 0) throw new Error(`BenchmarkRunner ASI exited ${bench.exitCode}: ${bench.stderr.toString()}`);
+    if (!bench.stdout.toString().includes("asi")) throw new Error("BenchmarkRunner ASI should mention 'asi'");
   } finally {
     clean(tmp);
   }
@@ -637,17 +576,11 @@ console.log("Per-file allow-ffi config across runtime apps...");
     const loaderNoConfig = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
     if (!containsLine(loaderNoConfig, "undefined")) throw new Error(`Loader without allow-ffi config should leave FFI undefined, got: ${loaderNoConfig}`);
 
-    const loaderOut = await $`${RUNNER} -P --print ${join(tmp, "test.js")} --mode=interpreted 2>&1`.text();
+    const loaderOut = await $`${RUNNER} -P --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!containsLine(loaderOut, "object")) throw new Error(`Loader allow-ffi config should expose FFI, got: ${loaderOut}`);
 
-    const loaderBc = await $`${RUNNER} -P --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, "object")) throw new Error(`Loader bytecode allow-ffi config should expose FFI, got: ${loaderBc}`);
-
-    const trInterp = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --mode=interpreted --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner allow-ffi config should pass, got: ${trInterp}`);
-
-    const trBc = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode allow-ffi config should pass, got: ${trBc}`);
+    const trOut = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    if (!trOut.includes("Passed: 1")) throw new Error(`TestRunner allow-ffi config should pass, got: ${trOut}`);
 
     const parallelLoaderDir = join(tmp, "loader-parallel");
     mkdirSync(parallelLoaderDir);
@@ -684,21 +617,19 @@ console.log("Per-file allow-ffi config across runtime apps...");
         throw new Error(`TestRunner ${jobsArgs.join(" ")} should run both files, got: ${trShortJobs.combined}`);
     }
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
-      const bench = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "-P", join(tmp, "bench.js"), "--no-progress", ...modeArgs],
-        {
-          stdout: "pipe",
-          stderr: "pipe",
-          env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
-          timeout: 60_000,
-        },
-      );
-      if (bench.exitCode !== 0)
-        throw new Error(`BenchmarkRunner allow-ffi config ${modeArgs.join(" ")} exited ${bench.exitCode}: ${bench.stderr.toString()}`);
-      if (!bench.stdout.toString().includes("allow-ffi"))
-        throw new Error(`BenchmarkRunner allow-ffi config output should mention 'allow-ffi', got: ${bench.stdout.toString()}`);
-    }
+    const bench = Bun.spawnSync(
+      [resolve(BENCHRUNNER), "-P", join(tmp, "bench.js"), "--no-progress"],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 60_000,
+      },
+    );
+    if (bench.exitCode !== 0)
+      throw new Error(`BenchmarkRunner allow-ffi config exited ${bench.exitCode}: ${bench.stderr.toString()}`);
+    if (!bench.stdout.toString().includes("allow-ffi"))
+      throw new Error(`BenchmarkRunner allow-ffi config output should mention 'allow-ffi', got: ${bench.stdout.toString()}`);
 
     const parallelBenchDir = join(tmp, "bench-parallel");
     mkdirSync(parallelBenchDir);
@@ -949,7 +880,7 @@ console.log("compat-while-loops OFF errors by default...");
   }
 }
 
-// -- Multi-directory TestRunner (lenient + strict, both execution modes) ---------
+// -- Multi-directory TestRunner (lenient + strict) ------------------------------
 
 console.log("Multi-directory TestRunner...");
 {
@@ -985,15 +916,10 @@ console.log("Multi-directory TestRunner...");
       ].join("\n") + "\n",
     );
 
-    // TestRunner interpreted: both subdirs
-    const trInterp = await $`${TESTRUNNER} ${lenientDir} ${strictDir} --mode=interpreted --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 2")) throw new Error(`TestRunner interp multi-dir should pass 2, got: ${trInterp}`);
-    if (!trInterp.includes("Failed: 0")) throw new Error(`TestRunner interp multi-dir should fail 0, got: ${trInterp}`);
-
-    // TestRunner bytecode: both subdirs
-    const trBc = await $`${TESTRUNNER} ${lenientDir} ${strictDir} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 2")) throw new Error(`TestRunner bytecode multi-dir should pass 2, got: ${trBc}`);
-    if (!trBc.includes("Failed: 0")) throw new Error(`TestRunner bytecode multi-dir should fail 0, got: ${trBc}`);
+    // TestRunner: both subdirs
+    const trOut = await $`${TESTRUNNER} ${lenientDir} ${strictDir} --no-progress 2>&1`.text();
+    if (!trOut.includes("Passed: 2")) throw new Error(`TestRunner multi-dir should pass 2, got: ${trOut}`);
+    if (!trOut.includes("Failed: 0")) throw new Error(`TestRunner multi-dir should fail 0, got: ${trOut}`);
   } finally {
     clean(tmp);
   }
@@ -1038,17 +964,11 @@ console.log("Explicit multi-file TestRunner config isolation...");
 
     const first = join(argsDir, "test.js");
     const second = join(nonStrictDir, "test.js");
-    const trInterp = runCwd(TESTRUNNER, [first, second, "--jobs=1", "--mode=interpreted", "--no-progress"], tmp);
-    if (!trInterp.combined.includes("Passed: 2"))
-      throw new Error(`TestRunner interp explicit multi-file config isolation should pass 2, got: ${trInterp.combined}`);
-    if (!trInterp.combined.includes("Failed: 0"))
-      throw new Error(`TestRunner interp explicit multi-file config isolation should fail 0, got: ${trInterp.combined}`);
-
-    const trBc = runCwd(TESTRUNNER, [first, second, "--jobs=1", "--mode=bytecode", "--no-progress"], tmp);
-    if (!trBc.combined.includes("Passed: 2"))
-      throw new Error(`TestRunner bytecode explicit multi-file config isolation should pass 2, got: ${trBc.combined}`);
-    if (!trBc.combined.includes("Failed: 0"))
-      throw new Error(`TestRunner bytecode explicit multi-file config isolation should fail 0, got: ${trBc.combined}`);
+    const trOut = runCwd(TESTRUNNER, [first, second, "--jobs=1", "--no-progress"], tmp);
+    if (!trOut.combined.includes("Passed: 2"))
+      throw new Error(`TestRunner explicit multi-file config isolation should pass 2, got: ${trOut.combined}`);
+    if (!trOut.combined.includes("Failed: 0"))
+      throw new Error(`TestRunner explicit multi-file config isolation should fail 0, got: ${trOut.combined}`);
   } finally {
     clean(tmp);
   }
@@ -1077,17 +997,17 @@ console.log("CLI options override file config...");
     if (!noConfigRes.text().includes("SyntaxError")) throw new Error("No config should reject");
 
     // CLI --compat-asi overrides no-config
-    const cliAsi = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} --compat-asi --mode=interpreted 2>&1`.text();
+    const cliAsi = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} --compat-asi 2>&1`.text();
     if (!containsLine(cliAsi, "1")) throw new Error(`CLI --compat-asi should override, got: ${cliAsi}`);
 
-    // CLI --compat-asi bytecode
-    const cliAsiBc = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} --compat-asi --mode=bytecode 2>&1`.text();
-    if (!containsLine(cliAsiBc, "1")) throw new Error(`CLI --compat-asi bytecode should override, got: ${cliAsiBc}`);
-
-    // CLI --mode=interpreted overrides config mode
-    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
-    const overrideMode = await $`${RUNNER} ${join(tmp, "test.js")} --mode=interpreted 2>&1`.text();
-    if (!overrideMode.includes("(interpreted)")) throw new Error(`CLI --mode=interpreted should override config, got: ${overrideMode}`);
+    // CLI --max-stack overrides config max-stack
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "max-stack": 50}\n');
+    writeFileSync(
+      join(tmp, "stack.js"),
+      "let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n",
+    );
+    const overrideStack = await $`${RUNNER} ${join(tmp, "stack.js")} --max-stack=100 2>&1`.text();
+    if (!containsLine(overrideStack, "100")) throw new Error(`CLI --max-stack should override config, got: ${overrideStack}`);
 
     // Bundler CLI --compat-asi overrides no-config
     await $`${BUNDLER} ${join(noConfigDir, "test.js")} --compat-asi`.quiet();
@@ -1246,10 +1166,9 @@ console.log("--config=<file> loads .json explicitly...");
     // Script lives in tmp with no goccia.* anywhere on its parent chain.
     writeFileSync(join(tmp, "test.js"), "const x = 11\nx\n");
     // Config lives in a sibling directory; auto-discovery would never find it.
-    writeFileSync(join(cfgDir, "custom.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(cfgDir, "custom.json"), '{"compat-asi": true}\n');
 
     const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`--config=.json should enable bytecode, got: ${out}`);
     if (!containsLine(out, "11")) throw new Error(`--config=.json should enable ASI (11 on its own line), got: ${out}`);
   } finally {
     clean(tmp);
@@ -1263,10 +1182,9 @@ console.log("--config=<file> loads .toml explicitly...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 21\nx\n");
-    writeFileSync(join(cfgDir, "custom.toml"), 'compat-asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "custom.toml"), 'compat-asi = true\n');
 
     const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`--config=.toml should enable bytecode, got: ${out}`);
     if (!containsLine(out, "21")) throw new Error(`--config=.toml should enable ASI (21 on its own line), got: ${out}`);
   } finally {
     clean(tmp);
@@ -1280,10 +1198,9 @@ console.log("--config=<file> loads .json5 explicitly...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 31\nx\n");
-    writeFileSync(join(cfgDir, "custom.json5"), '{"compat-asi": true, mode: "bytecode"}\n');
+    writeFileSync(join(cfgDir, "custom.json5"), "{'compat-asi': true}\n");
 
     const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json5")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`--config=.json5 should enable bytecode, got: ${out}`);
     if (!containsLine(out, "31")) throw new Error(`--config=.json5 should enable ASI (31 on its own line), got: ${out}`);
   } finally {
     clean(tmp);
@@ -1296,12 +1213,11 @@ console.log("--config=<file> with relative path resolves against cwd...");
   const tmp = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 41\nx\n");
-    writeFileSync(join(tmp, "custom.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(tmp, "custom.json"), '{"compat-asi": true}\n');
 
     // Relative path; cwd is tmp.
     const out = runCwd(RUNNER, ["--print", "test.js", "--config=./custom.json"], tmp);
-    if (!out.combined.includes("(bytecode)")) throw new Error(`Relative --config should resolve, got: ${out.combined}`);
-    if (!containsLine(out.combined, "41")) throw new Error(`Relative --config should enable ASI, got: ${out.combined}`);
+    if (!containsLine(out.combined, "41")) throw new Error(`Relative --config should resolve and enable ASI, got: ${out.combined}`);
   } finally {
     clean(tmp);
   }
@@ -1319,11 +1235,10 @@ console.log("--config=<dir> finds goccia.json...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 51\nx\n");
-    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
+    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": true}\n');
 
     const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> with goccia.json should enable bytecode, got: ${out}`);
-    if (!containsLine(out, "51")) throw new Error(`--config=<dir> should enable ASI, got: ${out}`);
+    if (!containsLine(out, "51")) throw new Error(`--config=<dir> with goccia.json should enable ASI, got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
@@ -1337,12 +1252,12 @@ console.log("--config=<dir> respects priority TOML > JSON5 > JSON...");
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 61\nx\n");
     // All three present; TOML must win (matches auto-discovery priority).
-    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": true, "mode": "interpreted"}\n');
-    writeFileSync(join(cfgDir, "goccia.json5"), '{"compat-asi": true, mode: "interpreted"}\n');
-    writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": false}\n');
+    writeFileSync(join(cfgDir, "goccia.json5"), "{'compat-asi': false}\n");
+    writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\n');
 
-    const out = await $`${RUNNER} ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> should pick TOML over JSON5/JSON, got: ${out}`);
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.nothrow().text();
+    if (!containsLine(out, "61")) throw new Error(`--config=<dir> should pick TOML over JSON5/JSON, got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
@@ -1355,11 +1270,11 @@ console.log("--config=<dir> with trailing slash works...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 71\nx\n");
-    writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\n');
 
     // Some shells/users will pass the directory with a trailing slash.
-    const out = await $`${RUNNER} ${join(tmp, "test.js")} --config=${cfgDir + "/"} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`--config=<dir>/ should still find config, got: ${out}`);
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${cfgDir + "/"} 2>&1`.text();
+    if (!containsLine(out, "71")) throw new Error(`--config=<dir>/ should still find config, got: ${out}`);
   } finally {
     clean(tmp);
     clean(cfgDir);
@@ -1373,7 +1288,7 @@ console.log("--config=<dir> does not walk upward...");
     // Place a config in tmp; pass an empty subdirectory as --config.
     // Auto-discovery would walk up and find tmp/goccia.toml, but the
     // explicit directory form must NOT — it should error out.
-    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\n');
     const empty = join(tmp, "empty");
     mkdirSync(empty);
     writeFileSync(join(tmp, "test.js"), "const x = 81\nx\n");
@@ -1406,7 +1321,7 @@ console.log("--config=<missing path> is a hard error...");
 //
 // With --config given, the root-config walk-up MUST be skipped.  We prove
 // this by placing a hostile goccia.json near the entry file (which would
-// flip mode to interpreted) and showing that the explicit config wins.
+// lower max-stack) and showing that the explicit config wins.
 
 console.log("--config skips auto-discovery of nearby goccia.*...");
 {
@@ -1414,13 +1329,18 @@ console.log("--config skips auto-discovery of nearby goccia.*...");
   const cfgDir = makeTmp();
   try {
     // Hostile config alongside the script; auto-discovery would pick this up.
-    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "interpreted"}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "max-stack": 10}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 101\nx\n");
-    // Explicit config selects bytecode.
-    writeFileSync(join(cfgDir, "good.toml"), 'compat-asi = true\nmode = "bytecode"\n');
+    writeFileSync(
+      join(tmp, "stack.js"),
+      "let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n",
+    );
+    // Explicit config selects max-stack 50.
+    writeFileSync(join(cfgDir, "good.toml"), 'compat-asi = true\nmax-stack = 50\n');
 
+    const stackOut = await $`${RUNNER} ${join(tmp, "stack.js")} --config=${join(cfgDir, "good.toml")} 2>&1`.text();
+    if (!containsLine(stackOut, "50")) throw new Error(`--config should skip nearby goccia.json, got: ${stackOut}`);
     const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "good.toml")} 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`--config should skip nearby goccia.json, got: ${out}`);
     if (!containsLine(out, "101")) throw new Error(`--config should still apply ASI, got: ${out}`);
   } finally {
     clean(tmp);
@@ -1436,12 +1356,17 @@ console.log("CLI options override values from --config...");
   const cfgDir = makeTmp();
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 111\nx\n");
-    // --config says interpreted...
-    writeFileSync(join(cfgDir, "custom.toml"), 'compat-asi = true\nmode = "interpreted"\n');
+    writeFileSync(
+      join(tmp, "stack.js"),
+      "let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n",
+    );
+    // --config says max-stack 50...
+    writeFileSync(join(cfgDir, "custom.toml"), 'compat-asi = true\nmax-stack = 50\n');
 
-    // ...but a direct --mode=bytecode on the CLI must win.
-    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} --mode=bytecode 2>&1`.text();
-    if (!out.includes("(bytecode)")) throw new Error(`CLI --mode should override --config value, got: ${out}`);
+    // ...but a direct --max-stack=100 on the CLI must win.
+    const stackOut = await $`${RUNNER} ${join(tmp, "stack.js")} --config=${join(cfgDir, "custom.toml")} --max-stack=100 2>&1`.text();
+    if (!containsLine(stackOut, "100")) throw new Error(`CLI --max-stack should override --config value, got: ${stackOut}`);
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} --max-stack=100 2>&1`.text();
     if (!containsLine(out, "111")) throw new Error(`ASI from --config should still apply, got: ${out}`);
   } finally {
     clean(tmp);
@@ -1459,7 +1384,7 @@ console.log("--config works on TestRunner...");
   const tmp = makeTmp();
   const cfgDir = makeTmp();
   try {
-    writeFileSync(join(cfgDir, "ci.toml"), 'compat-asi = true\nmode = "bytecode"\n');
+    writeFileSync(join(cfgDir, "ci.toml"), 'compat-asi = true\n');
     writeFileSync(
       join(tmp, "test.js"),
       [
@@ -1557,15 +1482,13 @@ console.log("Virtual modules in goccia.json...");
       join(tmp, "entry.js"),
       'import value from "host:main"; value;\n',
     );
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const out = runCwd(
-        RUNNER,
-        [join(tmp, "entry.js"), "--print", `--mode=${mode}`],
-        tmp,
-      );
-      if (!containsLine(out.stdout, "3"))
-        throw new Error(`Config virtual module ${mode} expected 3, got: ${out.combined}`);
-    }
+    const out = runCwd(
+      RUNNER,
+      [join(tmp, "entry.js"), "--print"],
+      tmp,
+    );
+    if (!containsLine(out.stdout, "3"))
+      throw new Error(`Config virtual module expected 3, got: ${out.combined}`);
   } finally {
     clean(tmp);
   }
@@ -1636,43 +1559,39 @@ console.log("Executable manifests keep --deny-read in force...");
     ];
     // A manifest the config names is read under the script's own set, so an
     // outright --deny-read refuses the manifest itself, before any import.
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      for (const entry of ["host.mjs", "virtual.mjs"]) {
-        const refused = runCwd(
-          RUNNER,
-          [join(configDir, entry), "--print", "--deny-read", `--mode=${mode}`],
-          tmp,
-          { expectFail: true },
-        );
-        if (refused.combined.includes("HOST-FILE-READ"))
-          throw new Error(`config modules manifest re-enabled host filesystem loading (${mode}): ${refused.combined}`);
-        if (!refused.combined.includes("PermissionDenied: read: modules.js"))
-          throw new Error(`config modules manifest should be refused under --deny-read (${mode}): ${refused.combined}`);
-      }
+    for (const entry of ["host.mjs", "virtual.mjs"]) {
+      const refused = runCwd(
+        RUNNER,
+        [join(configDir, entry), "--print", "--deny-read"],
+        tmp,
+        { expectFail: true },
+      );
+      if (refused.combined.includes("HOST-FILE-READ"))
+        throw new Error(`config modules manifest re-enabled host filesystem loading: ${refused.combined}`);
+      if (!refused.combined.includes("PermissionDenied: read: modules.js"))
+        throw new Error(`config modules manifest should be refused under --deny-read: ${refused.combined}`);
     }
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      for (const { name, dir, args } of cases) {
-        const blocked = runCwd(
-          RUNNER,
-          [join(dir, "host.mjs"), "--print", "--deny-read", `--mode=${mode}`, ...args],
-          tmp,
-          { expectFail: true },
-        );
-        if (blocked.combined.includes("HOST-FILE-READ"))
-          throw new Error(`${name} manifest re-enabled host filesystem loading (${mode}): ${blocked.combined}`);
-        // --deny-read denies read outright, so the import is refused
-        // with a PermissionDenied naming the specifier as written.
-        if (!blocked.combined.includes(`PermissionDenied: read: ${outside}`))
-          throw new Error(`${name} host import should be refused by the read capability (${mode}): ${blocked.combined}`);
+    for (const { name, dir, args } of cases) {
+      const blocked = runCwd(
+        RUNNER,
+        [join(dir, "host.mjs"), "--print", "--deny-read", ...args],
+        tmp,
+        { expectFail: true },
+      );
+      if (blocked.combined.includes("HOST-FILE-READ"))
+        throw new Error(`${name} manifest re-enabled host filesystem loading: ${blocked.combined}`);
+      // --deny-read denies read outright, so the import is refused
+      // with a PermissionDenied naming the specifier as written.
+      if (!blocked.combined.includes(`PermissionDenied: read: ${outside}`))
+        throw new Error(`${name} host import should be refused by the read capability: ${blocked.combined}`);
 
-        const resolved = runCwd(
-          RUNNER,
-          [join(dir, "virtual.mjs"), "--print", "--deny-read", `--mode=${mode}`, ...args],
-          tmp,
-        );
-        if (!containsLine(resolved.stdout, "31"))
-          throw new Error(`${name} manifest modules should resolve under --deny-read (${mode}): ${resolved.combined}`);
-      }
+      const resolved = runCwd(
+        RUNNER,
+        [join(dir, "virtual.mjs"), "--print", "--deny-read", ...args],
+        tmp,
+      );
+      if (!containsLine(resolved.stdout, "31"))
+        throw new Error(`${name} manifest modules should resolve under --deny-read: ${resolved.combined}`);
     }
 
     // A JavaScript manifest runs host code. Under --deny-read it is
@@ -1687,53 +1606,48 @@ console.log("Executable manifests keep --deny-read in force...");
       join(projDir, "trampoline.mjs"),
       "const m = await readLater(); console.log(m.secret);\n",
     );
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const trampoline = runCwd(
-        RUNNER,
-        [
-          join(projDir, "trampoline.mjs"),
-          "--deny-read",
-          `--mode=${mode}`,
-          "--modules",
-          join(projDir, "trampoline.js"),
-        ],
-        tmp,
-        { expectFail: true },
-      );
-      if (trampoline.combined.includes("HOST-FILE-READ"))
-        throw new Error(`A manifest's global function imported as the host under --deny-read (${mode}): ${trampoline.combined}`);
-      if (!trampoline.combined.includes(`PermissionDenied: read: ${outside}`))
-        throw new Error(`A manifest's global function import should be refused by the read capability (${mode}): ${trampoline.combined}`);
-      // Without the deny the manifest is evaluated in place, but a function
-      // it leaves behind still runs later as guest code: its import() is a
-      // guest read, refused without a grant and allowed with one.
-      const inPlaceDenied = runCwd(
-        RUNNER,
-        [
-          join(projDir, "trampoline.mjs"),
-          `--mode=${mode}`,
-          "--modules",
-          join(projDir, "trampoline.js"),
-        ],
-        tmp,
-        { expectFail: true },
-      );
-      if (!inPlaceDenied.combined.includes(`PermissionDenied: read: ${outside}`))
-        throw new Error(`A manifest function's later import is a guest read (${mode}): ${inPlaceDenied.combined}`);
-      const inPlace = runCwd(
-        RUNNER,
-        [
-          join(projDir, "trampoline.mjs"),
-          `--mode=${mode}`,
-          `--allow-read=${outside}`,
-          "--modules",
-          join(projDir, "trampoline.js"),
-        ],
-        tmp,
-      );
-      if (!containsLine(inPlace.stdout, "HOST-FILE-READ"))
-        throw new Error(`A granted guest read from a manifest function succeeds (${mode}): ${inPlace.combined}`);
-    }
+    const trampoline = runCwd(
+      RUNNER,
+      [
+        join(projDir, "trampoline.mjs"),
+        "--deny-read",
+        "--modules",
+        join(projDir, "trampoline.js"),
+      ],
+      tmp,
+      { expectFail: true },
+    );
+    if (trampoline.combined.includes("HOST-FILE-READ"))
+      throw new Error(`A manifest's global function imported as the host under --deny-read: ${trampoline.combined}`);
+    if (!trampoline.combined.includes(`PermissionDenied: read: ${outside}`))
+      throw new Error(`A manifest's global function import should be refused by the read capability: ${trampoline.combined}`);
+    // Without the deny the manifest is evaluated in place, but a function
+    // it leaves behind still runs later as guest code: its import() is a
+    // guest read, refused without a grant and allowed with one.
+    const inPlaceDenied = runCwd(
+      RUNNER,
+      [
+        join(projDir, "trampoline.mjs"),
+        "--modules",
+        join(projDir, "trampoline.js"),
+      ],
+      tmp,
+      { expectFail: true },
+    );
+    if (!inPlaceDenied.combined.includes(`PermissionDenied: read: ${outside}`))
+      throw new Error(`A manifest function's later import is a guest read: ${inPlaceDenied.combined}`);
+    const inPlace = runCwd(
+      RUNNER,
+      [
+        join(projDir, "trampoline.mjs"),
+        `--allow-read=${outside}`,
+        "--modules",
+        join(projDir, "trampoline.js"),
+      ],
+      tmp,
+    );
+    if (!containsLine(inPlace.stdout, "HOST-FILE-READ"))
+      throw new Error(`A granted guest read from a manifest function succeeds: ${inPlace.combined}`);
 
     // The same holds for a --globals module: host code while it is enrolled,
     // but a function it exports runs later as guest code, so its import()
@@ -1742,23 +1656,20 @@ console.log("Executable manifests keep --deny-read in force...");
       join(projDir, "host-globals.js"),
       `export const readLater = () => import(${JSON.stringify(outside)});\n`,
     );
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const late = runCwd(
-        RUNNER,
-        [
-          join(projDir, "trampoline.mjs"),
-          "--deny-read",
-          `--mode=${mode}`,
-          `--globals=${join(projDir, "host-globals.js")}`,
-        ],
-        tmp,
-        { expectFail: true },
-      );
-      if (late.combined.includes("HOST-FILE-READ"))
-        throw new Error(`A --globals function imported as the host under --deny-read (${mode}): ${late.combined}`);
-      if (!late.combined.includes(`PermissionDenied: read: ${outside}`))
-        throw new Error(`A --globals function import should be refused by the read capability (${mode}): ${late.combined}`);
-    }
+    const late = runCwd(
+      RUNNER,
+      [
+        join(projDir, "trampoline.mjs"),
+        "--deny-read",
+        `--globals=${join(projDir, "host-globals.js")}`,
+      ],
+      tmp,
+      { expectFail: true },
+    );
+    if (late.combined.includes("HOST-FILE-READ"))
+      throw new Error(`A --globals function imported as the host under --deny-read: ${late.combined}`);
+    if (!late.combined.includes(`PermissionDenied: read: ${outside}`))
+      throw new Error(`A --globals function import should be refused by the read capability: ${late.combined}`);
 
     writeFileSync(
       join(projDir, "manifest.test.js"),
@@ -1771,22 +1682,19 @@ console.log("Executable manifests keep --deny-read in force...");
         "",
       ].join("\n"),
     );
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const out = runCwd(
-        TESTRUNNER,
-        [
-          join(projDir, "manifest.test.js"),
-          "--no-progress",
-          "--deny-read",
-          `--mode=${mode}`,
-          "--modules",
-          join(projDir, "modules.js"),
-        ],
-        tmp,
-      );
-      if (!out.stdout.includes("Passed: 2"))
-        throw new Error(`TestRunner manifest should keep --deny-read in force (${mode}): ${out.combined}`);
-    }
+    const out = runCwd(
+      TESTRUNNER,
+      [
+        join(projDir, "manifest.test.js"),
+        "--no-progress",
+        "--deny-read",
+        "--modules",
+        join(projDir, "modules.js"),
+      ],
+      tmp,
+    );
+    if (!out.stdout.includes("Passed: 2"))
+      throw new Error(`TestRunner manifest should keep --deny-read in force: ${out.combined}`);
   } finally {
     clean(tmp);
   }
@@ -1962,29 +1870,27 @@ console.log("Config globals module that throws is located as --globals locates i
     writeFileSync(join(cliDir, "main.js"), 'console.log("ran");\n');
     writeFileSync(join(cfgDir, "goccia.json"), JSON.stringify({ globals: "./g.js" }));
     const header = "TypeError: Cannot read properties of null (reading 'y')";
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const fromConfig = runCwd(RUNNER, ["main.js", `--mode=${mode}`], cfgDir, {
-        expectFail: true,
-      });
-      const fromCli = runCwd(
-        RUNNER,
-        ["main.js", `--mode=${mode}`, `--globals=${globalsPath}`],
-        cliDir,
-        { expectFail: true },
+    const fromConfig = runCwd(RUNNER, ["main.js"], cfgDir, {
+      expectFail: true,
+    });
+    const fromCli = runCwd(
+      RUNNER,
+      ["main.js", `--globals=${globalsPath}`],
+      cliDir,
+      { expectFail: true },
+    );
+    if (!fromConfig.combined.includes(header))
+      throw new Error(`Config globals throw should report ${header}: ${fromConfig.combined}`);
+    if (fromConfig.combined.includes("ran") || fromCli.combined.includes("ran"))
+      throw new Error(`A throwing globals module must stop the run: ${fromConfig.combined}${fromCli.combined}`);
+    if (fromConfig.stderr !== fromCli.stderr || fromConfig.stdout !== fromCli.stdout)
+      throw new Error(
+        `Config globals throw should match the --globals form.\nconfig:\n${fromConfig.combined}\n--globals:\n${fromCli.combined}`,
       );
-      if (!fromConfig.combined.includes(header))
-        throw new Error(`Config globals throw should report ${header} (${mode}): ${fromConfig.combined}`);
-      if (fromConfig.combined.includes("ran") || fromCli.combined.includes("ran"))
-        throw new Error(`A throwing globals module must stop the run (${mode}): ${fromConfig.combined}${fromCli.combined}`);
-      if (fromConfig.stderr !== fromCli.stderr || fromConfig.stdout !== fromCli.stdout)
-        throw new Error(
-          `Config globals throw should match the --globals form (${mode}).\nconfig:\n${fromConfig.combined}\n--globals:\n${fromCli.combined}`,
-        );
-      // Bytecode locates a top-level throw, at the property whose read failed
-      // (ADR 0135); the interpreter does not yet (#1273), in either form.
-      if (mode === "bytecode" && !fromConfig.combined.includes(`--> ${globalsPath}:2:6`))
-        throw new Error(`Config globals throw should be located at g.js:2:6 (${mode}): ${fromConfig.combined}`);
-    }
+    // A top-level throw is located at the property whose read failed
+    // (ADR 0135).
+    if (!fromConfig.combined.includes(`--> ${globalsPath}:2:6`))
+      throw new Error(`Config globals throw should be located at g.js:2:6: ${fromConfig.combined}`);
   } finally {
     clean(tmp);
   }
