@@ -1660,7 +1660,7 @@ function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AContext: TGocciaEvaluationContext;
   const ANewTarget: TGocciaValue = nil): TGocciaValue;
 var
-  BoundFunction: TGocciaBoundFunctionValue;
+  BoundTarget, BoundThis: TGocciaValue;
   ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
@@ -1741,17 +1741,12 @@ begin
 
   if AConstructor is TGocciaBoundFunctionValue then
   begin
-    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
-    if IsSameValue(BoundFunction, EffectiveNewTarget) then
-      EffectiveNewTarget := BoundFunction.OriginalFunction;
-    CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-      BoundFunction.BoundArgCount + AArguments.Length);
+    // ES2026 §10.4.1.2: a chain of bound functions collapses in a loop.
+    CombinedArgs := CollapseBoundFunctionChain(
+      TGocciaBoundFunctionValue(AConstructor), AArguments,
+      EffectiveNewTarget, BoundTarget, BoundThis);
     try
-      for I := 0 to BoundFunction.BoundArgCount - 1 do
-        CombinedArgs.Add(BoundFunction.GetBoundArg(I));
-      for I := 0 to AArguments.Length - 1 do
-        CombinedArgs.Add(AArguments.GetElement(I));
-      Exit(InvokeConstructableWithReceiver(BoundFunction.OriginalFunction,
+      Exit(InvokeConstructableWithReceiver(BoundTarget,
         CombinedArgs, AReceiver, AContext, EffectiveNewTarget));
     finally
       CombinedArgs.Free;
@@ -6666,22 +6661,15 @@ function ConstructBoundFunction(const AConstructor: TGocciaBoundFunctionValue;
   const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   BoundArgs: TGocciaArgumentsCollection;
-  I: Integer;
-  Target: TGocciaValue;
+  Target, BoundThis, NoNewTarget: TGocciaValue;
 begin
-  Target := AConstructor.OriginalFunction;
-  BoundArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-    AConstructor.BoundArgCount + AArguments.Length);
+  // ES2026 §10.4.1.2: a chain of bound functions collapses in a loop, so only
+  // its innermost target, which is not a bound function, is constructed.
+  NoNewTarget := nil;
+  BoundArgs := CollapseBoundFunctionChain(AConstructor, AArguments,
+    NoNewTarget, Target, BoundThis);
   try
-    for I := 0 to AConstructor.BoundArgCount - 1 do
-      BoundArgs.Add(AConstructor.GetBoundArg(I));
-    for I := 0 to AArguments.Length - 1 do
-      BoundArgs.Add(AArguments.GetElement(I));
-
-    if Target is TGocciaBoundFunctionValue then
-      Result := ConstructBoundFunction(TGocciaBoundFunctionValue(Target),
-        BoundArgs, AContext)
-    else if Target is TGocciaProxyValue then
+    if Target is TGocciaProxyValue then
       Result := TGocciaProxyValue(Target).ConstructTrap(BoundArgs)
     else if Target is TGocciaClassValue then
     begin
@@ -8072,7 +8060,7 @@ begin
                   Elem.IsStatic, ElementName, ElementKey));
               DecoratorArgs.Add(ContextObject);
 
-              DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              DecoratorResult := DispatchCall(DecoratorFn, DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8106,7 +8094,7 @@ begin
               DecoratorArgs.Add(GetterFnValue);
               DecoratorArgs.Add(ContextObject);
 
-              DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              DecoratorResult := DispatchCall(DecoratorFn, DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8114,7 +8102,7 @@ begin
                   AContext.OnError('Getter decorator must return a function or undefined', ALine, AColumn);
 
                 if Elem.IsPrivate then
-                  ClassValue.AddPrivateGetter(ElementName, TGocciaFunctionValue(DecoratorResult))
+                  ClassValue.AddPrivateGetter(ElementName, DecoratorResult)
                 else
                 begin
                   ExistingDescriptor := GetDecoratedAccessorDescriptor(
@@ -8149,7 +8137,7 @@ begin
               DecoratorArgs.Add(SetterFnValue);
               DecoratorArgs.Add(ContextObject);
 
-              DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              DecoratorResult := DispatchCall(DecoratorFn, DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8157,7 +8145,7 @@ begin
                   AContext.OnError('Setter decorator must return a function or undefined', ALine, AColumn);
 
                 if Elem.IsPrivate then
-                  ClassValue.AddPrivateSetter(ElementName, TGocciaFunctionValue(DecoratorResult))
+                  ClassValue.AddPrivateSetter(ElementName, DecoratorResult)
                 else
                 begin
                   ExistingDescriptor := GetDecoratedAccessorDescriptor(
@@ -8179,7 +8167,7 @@ begin
               DecoratorArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
               DecoratorArgs.Add(ContextObject);
 
-              DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              DecoratorResult := DispatchCall(DecoratorFn, DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8209,7 +8197,7 @@ begin
               DecoratorArgs.Add(AutoAccessorValue);
               DecoratorArgs.Add(ContextObject);
 
-              DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+              DecoratorResult := DispatchCall(DecoratorFn, DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
               if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
               begin
@@ -8266,7 +8254,7 @@ begin
 
       DecoratorArgs := TGocciaArgumentsCollection.Create([ClassValue, ContextObject]);
       try
-        DecoratorResult := TGocciaFunctionBase(DecoratorFn).Call(DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+        DecoratorResult := DispatchCall(DecoratorFn, DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
         if (DecoratorResult <> nil) and not (DecoratorResult is TGocciaUndefinedLiteralValue) then
         begin
@@ -8296,7 +8284,7 @@ begin
     begin
       InitArgs := TGocciaArgumentsCollection.Create;
       try
-        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassValue);
+        DispatchCall(InitializerResults[I], InitArgs, ClassValue);
       finally
         InitArgs.Free;
       end;
@@ -8308,7 +8296,7 @@ begin
     begin
       InitArgs := TGocciaArgumentsCollection.Create;
       try
-        TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassValue);
+        DispatchCall(InitializerResults[I], InitArgs, ClassValue);
       finally
         InitArgs.Free;
       end;
@@ -8693,7 +8681,7 @@ end;
 function EvaluatePrivateMemberOnInstance(const AInstance: TGocciaInstanceValue; const APrivateName: string; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   AccessClass: TGocciaClassValue;
-  GetterFn: TGocciaFunctionBase;
+  GetterFn: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
   PrivateName: string;
   Descriptor: TGocciaPropertyDescriptor;
@@ -8712,7 +8700,7 @@ begin
     GetterFn := AccessClass.PrivatePropertyGetter[PrivateName];
     EmptyArgs := TGocciaArgumentsCollection.Create;
     try
-      Result := GetterFn.Call(EmptyArgs, AInstance);
+      Result := DispatchCall(GetterFn, EmptyArgs, AInstance);
     finally
       EmptyArgs.Free;
     end;
@@ -8747,8 +8735,8 @@ begin
         begin
           EmptyArgs := TGocciaArgumentsCollection.Create;
           try
-            Result := TGocciaFunctionBase(
-              TGocciaPropertyDescriptorAccessor(Descriptor).Getter).Call(
+            Result := DispatchCall(
+              TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
                 EmptyArgs, AInstance);
           finally
             EmptyArgs.Free;
@@ -8788,7 +8776,7 @@ function EvaluatePrivateMemberOnObject(const AReceiver: TGocciaObjectValue;
   const APrivateName: string; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   AccessClass: TGocciaClassValue;
-  GetterFn: TGocciaFunctionBase;
+  GetterFn: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
   PrivateName: string;
   Descriptor: TGocciaPropertyDescriptor;
@@ -8809,7 +8797,7 @@ begin
     GetterFn := AccessClass.PrivatePropertyGetter[PrivateName];
     EmptyArgs := TGocciaArgumentsCollection.Create;
     try
-      Result := GetterFn.Call(EmptyArgs, AReceiver);
+      Result := DispatchCall(GetterFn, EmptyArgs, AReceiver);
     finally
       EmptyArgs.Free;
     end;
@@ -8853,7 +8841,7 @@ function EvaluatePrivateMemberOnClass(const AClassValue: TGocciaClassValue;
   const APrivateName: string; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   AccessClass: TGocciaClassValue;
-  GetterFn: TGocciaFunctionBase;
+  GetterFn: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
   PrivateName: string;
 begin
@@ -8869,7 +8857,7 @@ begin
     GetterFn := AccessClass.GetOwnPrivatePropertyGetter(PrivateName);
     EmptyArgs := TGocciaArgumentsCollection.Create;
     try
-      Result := GetterFn.Call(EmptyArgs, AClassValue);
+      Result := DispatchCall(GetterFn, EmptyArgs, AClassValue);
     finally
       EmptyArgs.Free;
     end;
@@ -8891,7 +8879,7 @@ procedure AssignPrivateMemberOnClass(const AClassValue: TGocciaClassValue;
   const AContext: TGocciaEvaluationContext);
 var
   AccessClass: TGocciaClassValue;
-  SetterFn: TGocciaFunctionBase;
+  SetterFn: TGocciaValue;
   SetterArgs: TGocciaArgumentsCollection;
   PrivateName: string;
   Descriptor: TGocciaPropertyDescriptor;
@@ -8909,7 +8897,7 @@ begin
     SetterArgs := TGocciaArgumentsCollection.Create;
     try
       SetterArgs.Add(AValue);
-      SetterFn.Call(SetterArgs, AClassValue);
+      DispatchCall(SetterFn, SetterArgs, AClassValue);
     finally
       SetterArgs.Free;
     end;
@@ -8934,7 +8922,7 @@ procedure AssignPrivateMemberOnInstance(const AInstance: TGocciaInstanceValue;
   const AContext: TGocciaEvaluationContext);
 var
   AccessClass: TGocciaClassValue;
-  SetterFn: TGocciaFunctionBase;
+  SetterFn: TGocciaValue;
   SetterArgs: TGocciaArgumentsCollection;
   PrivateName: string;
   Descriptor: TGocciaPropertyDescriptor;
@@ -8953,7 +8941,7 @@ begin
     SetterArgs := TGocciaArgumentsCollection.Create;
     try
       SetterArgs.Add(AValue);
-      SetterFn.Call(SetterArgs, AInstance);
+      DispatchCall(SetterFn, SetterArgs, AInstance);
     finally
       SetterArgs.Free;
     end;
@@ -8979,8 +8967,8 @@ begin
         SetterArgs := TGocciaArgumentsCollection.Create;
         try
           SetterArgs.Add(AValue);
-          TGocciaFunctionBase(
-            TGocciaPropertyDescriptorAccessor(Descriptor).Setter).Call(
+          DispatchCall(
+            TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
               SetterArgs, AInstance);
         finally
           SetterArgs.Free;
@@ -9010,7 +8998,7 @@ procedure AssignPrivateMemberOnObject(const AReceiver: TGocciaObjectValue;
   const AContext: TGocciaEvaluationContext);
 var
   AccessClass: TGocciaClassValue;
-  SetterFn: TGocciaFunctionBase;
+  SetterFn: TGocciaValue;
   SetterArgs: TGocciaArgumentsCollection;
   PendingNewTarget: TGocciaValue;
   FieldInitializer: TGocciaExpression;
@@ -9049,7 +9037,7 @@ begin
     SetterArgs := TGocciaArgumentsCollection.Create;
     try
       SetterArgs.Add(AValue);
-      SetterFn.Call(SetterArgs, AReceiver);
+      DispatchCall(SetterFn, SetterArgs, AReceiver);
     finally
       SetterArgs.Free;
     end;
@@ -10539,7 +10527,7 @@ var
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
   AccessClass: TGocciaClassValue;
-  SetterFn: TGocciaFunctionBase;
+  SetterFn: TGocciaValue;
   SetterArgs: TGocciaArgumentsCollection;
 begin
   if AObjectValue is TGocciaInstanceValue then
@@ -10553,7 +10541,7 @@ begin
       SetterArgs := TGocciaArgumentsCollection.Create;
       try
         SetterArgs.Add(AValue);
-        SetterFn.Call(SetterArgs, Instance);
+        DispatchCall(SetterFn, SetterArgs, Instance);
       finally
         SetterArgs.Free;
       end;
