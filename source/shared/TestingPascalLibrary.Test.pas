@@ -56,7 +56,7 @@ end;
 
 procedure TTestingPascalLibraryTests.TestNonASCIIStringMismatchShowsBothStrings;
 var
-  Message: string;
+  Expected, Message: string;
 begin
   Message := '';
   try
@@ -65,8 +65,13 @@ begin
     on E: ETestAssertionError do
       Message := E.Message;
   end;
-  Expect<string>(Message).ToBe(
-    'Expected "caf'#$00E9'" to be "'#$00FC'ber '#$D83D#$DE00'"');
+  { The RTL's Exception keeps its message as an AnsiString in the system
+    code page, so on Windows a character outside it comes back as '?'. That
+    loss happens after FormatValue; expect the message as Exception holds it.
+    The text goes through a variable so that the conversion runs when the
+    test runs, not when the compiler folds a constant. }
+  Expected := 'Expected "caf'#$00E9'" to be "'#$00FC'ber '#$D83D#$DE00'"';
+  Expect<string>(Message).ToBe(string(AnsiString(Expected)));
 end;
 
 procedure TTestingPascalLibraryTests.TestAnsiStringMismatchShowsBothStrings;
