@@ -219,13 +219,14 @@ begin
       ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
+  // Released before ToPropertyDescriptor, which reads nothing from it: the
+  // attribute getters it runs may delete or redefine the property, freeing a
+  // stored descriptor.
+  ReleaseDescriptor(ExistingDescriptor);
+
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
   DescriptorObject := TGocciaObjectValue(Attrs);
-  try
-    Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
-  finally
-    ReleaseDescriptor(ExistingDescriptor);
-  end;
+  Descriptor := ToPropertyDescriptor(DescriptorObject, nil);
 
   // Step 4: Return target.[[DefineOwnProperty]](key, desc) — returns boolean.
   // Validation failures become false; abrupt completions still propagate.

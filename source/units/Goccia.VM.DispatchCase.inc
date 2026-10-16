@@ -1227,9 +1227,9 @@
               RightValue);
             goto LDispatchNext;
           end;
-          DefineEnumerableDataProperty(
+          DefineOwnDataProperty(
             TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
-            RightValue);
+            RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
         end
         else
           SetPropertyValue(GetRegister(A), GlobalName, RightValue);
@@ -1243,8 +1243,8 @@
         begin
           PropKey := ClassifyPropertyKey(FRegisters[B], False);
           if PropKey.Kind = pkkSymbol then
-            DefineEnumerableDataSymbolProperty(TGocciaObjectValue(TargetValue),
-              PropKey.Symbol, RightValue)
+            DefineOwnDataSymbolProperty(TGocciaObjectValue(TargetValue),
+              PropKey.Symbol, RightValue, [pfEnumerable, pfConfigurable, pfWritable])
           else
           begin
             GlobalName := PropertyKeyName(PropKey);
@@ -1270,8 +1270,8 @@
               goto LDispatchNext;
             end;
 
-            DefineEnumerableDataProperty(TGocciaObjectValue(TargetValue),
-              GlobalName, RightValue);
+            DefineOwnDataProperty(TGocciaObjectValue(TargetValue),
+              GlobalName, RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
           end;
         end
         else
@@ -1287,11 +1287,11 @@
         begin
           PropKey := ClassifyPropertyKey(FRegisters[B], False);
           if PropKey.Kind = pkkSymbol then
-            DefineEnumerableDataSymbolProperty(TGocciaObjectValue(TargetValue),
-              PropKey.Symbol, RightValue)
+            DefineOwnDataSymbolProperty(TGocciaObjectValue(TargetValue),
+              PropKey.Symbol, RightValue, [pfEnumerable, pfConfigurable, pfWritable])
           else
-            DefineEnumerableDataProperty(TGocciaObjectValue(TargetValue),
-              PropertyKeyName(PropKey), RightValue);
+            DefineOwnDataProperty(TGocciaObjectValue(TargetValue),
+              PropertyKeyName(PropKey), RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
         end
         else
           SetPropertyValue(TargetValue,
@@ -1322,10 +1322,9 @@
           if FRegisters[A].ObjectValue is TGocciaVMClassValue then
             SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
               True);
-          TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
-            GlobalName,
-            TGocciaPropertyDescriptorData.Create(
-              RightValue, [pfConfigurable, pfWritable]));
+          DefineOwnDataProperty(
+            TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
+            RightValue, [pfConfigurable, pfWritable]);
         end
         else
           SetPropertyValue(GetRegister(A), GlobalName, RightValue);
@@ -1352,15 +1351,12 @@
             SetBytecodeHomeObject(RightValue, TargetValue);
 
           if PropKey.Kind = pkkSymbol then
-            TGocciaObjectValue(TargetValue).DefineSymbolProperty(
-              PropKey.Symbol,
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfConfigurable, pfWritable]))
+            DefineOwnDataSymbolProperty(TGocciaObjectValue(TargetValue),
+              PropKey.Symbol, RightValue, [pfConfigurable, pfWritable])
           else
-            TGocciaObjectValue(TargetValue).DefineProperty(
-              PropertyKeyName(PropKey),
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfConfigurable, pfWritable]));
+            DefineOwnDataProperty(TGocciaObjectValue(TargetValue),
+              PropertyKeyName(PropKey), RightValue,
+              [pfConfigurable, pfWritable]);
         end
         else
           SetPropertyValue(TargetValue,

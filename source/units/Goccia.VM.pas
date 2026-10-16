@@ -585,14 +585,16 @@ type
     function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
-    { CreateDataPropertyOrThrow for a field or a computed literal key: the
-      descriptor is the target's once the definition succeeds and is freed
-      when it throws (a frozen receiver, a proxy trap). }
-    procedure DefineEnumerableDataProperty(const ATarget: TGocciaObjectValue;
-      const AName: string; const AValue: TGocciaValue);
-    procedure DefineEnumerableDataSymbolProperty(
+    { DefinePropertyOrThrow of a data property for a field, a computed
+      literal key or a class element: the descriptor is the target's once the
+      definition succeeds and is freed when it throws (a frozen receiver, a
+      proxy trap, a class's own "prototype"). }
+    procedure DefineOwnDataProperty(const ATarget: TGocciaObjectValue;
+      const AName: string; const AValue: TGocciaValue;
+      const AFlags: TPropertyFlags);
+    procedure DefineOwnDataSymbolProperty(
       const ATarget: TGocciaObjectValue; const ASymbol: TGocciaSymbolValue;
-      const AValue: TGocciaValue);
+      const AValue: TGocciaValue; const AFlags: TPropertyFlags);
     procedure SetPropertyValueLoose(const AObject: TGocciaValue;
       const AKey: string; const AValue: TGocciaValue);
     procedure SetSymbolPropertyValueLoose(const AObject: TGocciaValue;
@@ -12309,10 +12311,17 @@ begin
 
   Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter,
     [pfEnumerable, pfConfigurable]);
-  if AKey is TGocciaSymbolValue then
-    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
-  else
-    Target.DefineProperty(AName, Descriptor);
+  // A definition that throws (a static accessor named "prototype") leaves the
+  // descriptor to its caller.
+  try
+    if AKey is TGocciaSymbolValue then
+      Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+    else
+      Target.DefineProperty(AName, Descriptor);
+  except
+    Descriptor.Free;
+    raise;
+  end;
 end;
 
 procedure TGocciaVM.BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
@@ -13456,6 +13465,7 @@ var
   PrivateName: string;
   BrandKey: string;
   BrandValue: TGocciaValue;
+  Getter: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
   if (AObject is TGocciaNullLiteralValue) or
@@ -13507,18 +13517,21 @@ begin
         try
           if Descriptor is TGocciaPropertyDescriptorAccessor then
           begin
+            // Released before the getter runs, which could replace the
+            // descriptor; the finally below then has nothing to release.
+            Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+            ReleaseDescriptor(Descriptor);
+            Descriptor := nil;
             if not TryGetRawPrivateValue(
               AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
               BrandValue) then
               ThrowBytecodePrivateTypeError(AKey,
                 SErrorPrivateFieldInaccessible);
-            if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
+            if Assigned(Getter) then
             begin
               EmptyArgs := TGocciaArgumentsCollection.Create;
               try
-                Exit(InvokeFunctionValue(
-                  TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-                  EmptyArgs, AObject));
+                Exit(InvokeFunctionValue(Getter, EmptyArgs, AObject));
               finally
                 EmptyArgs.Free;
               end;
@@ -13707,14 +13720,13 @@ begin
   end;
 end;
 
-procedure TGocciaVM.DefineEnumerableDataProperty(
+procedure TGocciaVM.DefineOwnDataProperty(
   const ATarget: TGocciaObjectValue; const AName: string;
-  const AValue: TGocciaValue);
+  const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  Descriptor := TGocciaPropertyDescriptorData.Create(AValue,
-    [pfEnumerable, pfConfigurable, pfWritable]);
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, AFlags);
   try
     ATarget.DefineProperty(AName, Descriptor);
   except
@@ -13723,14 +13735,13 @@ begin
   end;
 end;
 
-procedure TGocciaVM.DefineEnumerableDataSymbolProperty(
+procedure TGocciaVM.DefineOwnDataSymbolProperty(
   const ATarget: TGocciaObjectValue; const ASymbol: TGocciaSymbolValue;
-  const AValue: TGocciaValue);
+  const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  Descriptor := TGocciaPropertyDescriptorData.Create(AValue,
-    [pfEnumerable, pfConfigurable, pfWritable]);
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, AFlags);
   try
     ATarget.DefineSymbolProperty(ASymbol, Descriptor);
   except
@@ -13745,6 +13756,7 @@ var
   Current: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   StoppedAtData: Boolean;
+  Setter: TGocciaValue;
   SetterArgs: TGocciaArgumentsCollection;
   PrivateName: string;
   BoxedValue: TGocciaObjectValue;
@@ -13803,6 +13815,11 @@ begin
           if (Descriptor is TGocciaPropertyDescriptorAccessor) and
              Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
           begin
+            // Released before the setter runs, which could replace the
+            // descriptor; the finally below then has nothing to release.
+            Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+            ReleaseDescriptor(Descriptor);
+            Descriptor := nil;
             if not TryGetRawPrivateValue(
               AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
               ExistingValue) then
@@ -13810,9 +13827,7 @@ begin
                 SErrorPrivateFieldInaccessible);
             SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
             try
-              InvokeFunctionValue(
-                TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-                SetterArgs, AObject);
+              InvokeFunctionValue(Setter, SetterArgs, AObject);
             finally
               SetterArgs.Free;
             end;

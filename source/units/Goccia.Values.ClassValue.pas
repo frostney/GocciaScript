@@ -2659,6 +2659,7 @@ end;
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Setter: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
 begin
@@ -2696,21 +2697,21 @@ begin
          Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) and
          TGocciaPropertyDescriptorAccessor(Descriptor).Setter.IsCallable then
       begin
+        // Released before the call: the setter may delete or redefine the
+        // property, which frees a stored descriptor.
+        Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+        ReleaseDescriptor(Descriptor);
         Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
         try
           Args.Add(AValue);
           // A setter is any callable, a callable Proxy included; only a
           // function object takes the direct path.
-          if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionBase then
-            TGocciaFunctionBase(
-              TGocciaPropertyDescriptorAccessor(Descriptor).Setter).Call(
-              Args, Self)
+          if Setter is TGocciaFunctionBase then
+            TGocciaFunctionBase(Setter).Call(Args, Self)
           else
-            InvokeCallable(TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-              Args, Self);
+            InvokeCallable(Setter, Args, Self);
         finally
           Args.Free;
-          ReleaseDescriptor(Descriptor);
         end;
         Exit;
       end

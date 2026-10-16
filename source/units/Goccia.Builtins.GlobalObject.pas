@@ -824,12 +824,13 @@ begin
       ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
+  // Released before ToPropertyDescriptor, which reads nothing from it: the
+  // attribute getters it runs may delete or redefine the property, freeing a
+  // stored descriptor.
+  ReleaseDescriptor(ExistingDescriptor);
+
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
-  try
-    Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
-  finally
-    ReleaseDescriptor(ExistingDescriptor);
-  end;
+  Descriptor := ToPropertyDescriptor(DescriptorObject, nil);
 
   // Step 4: Perform ? DefinePropertyOrThrow(O, key, desc)
   // DefineProperty/DefineSymbolProperty takes ownership on success;

@@ -1060,6 +1060,7 @@ function TryCloneOwnProperty(const ASource: TGocciaObjectValue; const AKey: stri
   out AClonedValue: TGocciaValue): Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  IsData, IsEnumerable: Boolean;
   RawValue: TGocciaValue;
   RawRoot: TGocciaTempRoot;
 begin
@@ -1069,17 +1070,19 @@ begin
   Descriptor := ASource.GetOwnPropertyDescriptor(AKey);
   if not Assigned(Descriptor) then
     Exit;
-  try
-    if not (pfEnumerable in Descriptor.Flags) then
-      Exit;
-
-    if Descriptor is TGocciaPropertyDescriptorData then
-      RawValue := TGocciaPropertyDescriptorData(Descriptor).Value
-    else
-      RawValue := ASource.GetPropertyWithContext(AKey, ASource);
-  finally
-    ReleaseDescriptor(Descriptor);
-  end;
+  IsEnumerable := pfEnumerable in Descriptor.Flags;
+  IsData := Descriptor is TGocciaPropertyDescriptorData;
+  if IsData then
+    RawValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    RawValue := nil;
+  // Released before the getter runs: it may delete or redefine the key,
+  // which frees a stored descriptor.
+  ReleaseDescriptor(Descriptor);
+  if not IsEnumerable then
+    Exit;
+  if not IsData then
+    RawValue := ASource.GetPropertyWithContext(AKey, ASource);
 
   if RawValue = nil then
     RawValue := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1156,7 +1159,7 @@ function CloneError(const AError: TGocciaObjectValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
   ErrorName: string;
-  NameValue: TGocciaValue;
+  MessageValue, NameValue: TGocciaValue;
   Prototype: TGocciaObjectValue;
 begin
   NameValue := AError.GetProperty(PROP_NAME);
@@ -1174,19 +1177,20 @@ begin
   RegisterClone(AError, Result, AMemory);
 
   Descriptor := AError.GetOwnPropertyDescriptor(PROP_MESSAGE);
-  try
-    if (Descriptor is TGocciaPropertyDescriptorData) and
-      Assigned(TGocciaPropertyDescriptorData(Descriptor).Value) then
-      { Non-enumerable, matching both an ordinary error's own message and what
-        node and bun put on the clone. }
-      Result.DefineProperty(PROP_MESSAGE,
-        TGocciaPropertyDescriptorData.Create(
-          TGocciaStringLiteralValue.Create(
-            TGocciaPropertyDescriptorData(Descriptor).Value.ToStringLiteral.Value),
-          [pfConfigurable, pfWritable]));
-  finally
-    ReleaseDescriptor(Descriptor);
-  end;
+  if Descriptor is TGocciaPropertyDescriptorData then
+    MessageValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    MessageValue := nil;
+  // Released before the conversion: a guest toString may delete or redefine
+  // the message, which frees a stored descriptor.
+  ReleaseDescriptor(Descriptor);
+  if Assigned(MessageValue) then
+    { Non-enumerable, matching both an ordinary error's own message and what
+      node and bun put on the clone. }
+    Result.DefineProperty(PROP_MESSAGE,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(MessageValue.ToStringLiteral.Value),
+        [pfConfigurable, pfWritable]));
 
   { The source's stack text, not a fresh capture: node and bun both hand back a
     stack identical to the original's. `stack` is an accessor on Error.prototype
