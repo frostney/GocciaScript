@@ -16446,7 +16446,8 @@ begin
           (AStopAtIP < 0) and not FThreadPolls^.InstructionLimitActive;
         // One loop, two instruction-fetch paths, no goto: FPC lowers a
         // function that uses goto on wasm32 into a state machine over its
-        // whole body, and natively this loop executes as many instructions.
+        // whole body, and natively this loop executes no more instructions
+        // (ADR 0144).
         // Continue in the opcode case fetches the next instruction without
         // the memory-pressure check at the end of the body.
         while Running and (Frame.IP < Template.CodeCount) do

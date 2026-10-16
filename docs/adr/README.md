@@ -148,3 +148,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0136 — A module's function declarations are compiled while it is linked, and read its imports by name](0136-module-function-declarations-are-compiled-while-linking.md)
 - [0137 — Bootstrap shims load on first use through the engine's executor, and a bytecode engine builds no interpreter](0137-bootstrap-shims-load-on-first-use-through-the-executor.md)
 - [0138 — Bytecode is the only way GocciaScript executes, and the engine owns its VM](0138-bytecode-is-the-only-way-gocciascript-executes.md)
+- [0144 — The VM dispatch loop uses no goto](0144-the-vm-dispatch-loop-uses-no-goto.md)
