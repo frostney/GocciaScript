@@ -531,10 +531,28 @@ type
       const AUseMappedArguments: Boolean;
       const AFormalParameterCount: Integer): TGocciaObjectValue;
     function InvokeImplicitSuperInitialization(const AClassValue: TGocciaClassValue;
-      const AInstance: TGocciaValue; const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+      const AInstance: TGocciaValue; const AArguments: TGocciaArgumentsCollection;
+      const AForwardsToSuperClass: PBoolean = nil): TGocciaValue;
     function InvokeImplicitSuperInitializationRegisters(
       const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const AArguments: TGocciaRegisterArray;
+      const AForwardsToSuperClass: PBoolean = nil): TGocciaValue;
+    function InvokeImplicitSuperForwardingChain(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+    function InvokeImplicitSuperForwardingChainRegisters(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
       const AArguments: TGocciaRegisterArray): TGocciaValue;
+    function InvokeLongImplicitSuperForwardingChain(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const ABoxedArguments: TGocciaArgumentsCollection;
+      const ARegisterArguments: TGocciaRegisterArray;
+      const AUseRegisters: Boolean): TGocciaValue;
+    procedure InitializeImplicitSuperForwardingClass(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const ABoxedArguments: TGocciaArgumentsCollection;
+      const ARegisterArguments: TGocciaRegisterArray;
+      const AUseRegisters: Boolean);
     procedure BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
     procedure ApplyElementDecorator(const ADecoratorFn: TGocciaValue;
       const ADescriptor: string; const AComputedKey: TGocciaValue = nil);
@@ -707,6 +725,10 @@ type
       const AThisValue: TGocciaValue = nil): TGocciaValue;
     function ExecuteImportedModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
+    { Waits, from the top level of a module-source entry, until APromise,
+      the entry's pending asynchronous dependencies, settles; raises its
+      rejection. }
+    procedure AwaitModuleDependencies(const APromise: TGocciaValue);
     { ES2026 §16.2.1.7.3.1 InitializeEnvironment step for a function
       declaration of a module: InstantiateFunctionObject of ATemplate, a
       template whose ModuleEnvironmentBinding is set, with AModuleEnvironment
@@ -830,7 +852,18 @@ const
   // up the chain before it leaves the store to the general assignment path.
   LITERAL_FAST_SET_MAX_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
+  // A GC-stress build (./build.pas --gc-stress, which defines GOCCIA_GC_STRESS)
+  // reaches the pressure checkpoint every 8 dispatched instructions and forces
+  // a full collection there, so a value held only in a Pascal local while guest
+  // code runs is freed at once instead of by chance. Other builds keep the
+  // ordinary interval and collect only under memory pressure.
+  {$IFDEF GOCCIA_GC_STRESS}
+  MEMORY_PRESSURE_CHECK_INTERVAL = 7;
+  MEMORY_PRESSURE_CHECK_FORCES_COLLECTION = True;
+  {$ELSE}
   MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
+  MEMORY_PRESSURE_CHECK_FORCES_COLLECTION = False;
+  {$ENDIF}
   // Initial capacities of the VM stacks. Growth past them is charged to the
   // collector, and a stack never shrinks below them (ADR 0130).
   // The register, local-cell and argument arenas and the frame stack start
@@ -1791,6 +1824,14 @@ begin
   if AValue = 1.0 then
     Exit(TGocciaNumberLiteralValue.OneValue);
   Result := TGocciaNumberLiteralValue.Create(AValue);
+end;
+
+// True when ARegister holds a Number as a boxed value, as NaN, the infinities
+// and -0 are (VMNumberRegister).
+function VMBoxedNumberRegister(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := (ARegister.Kind = grkObject) and
+    (ARegister.ObjectValue is TGocciaNumberLiteralValue);
 end;
 
 function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
@@ -2940,9 +2981,18 @@ begin
     // generic AssignProperty walk.
     if not UsesOrdinarySet(Current) then
       Exit(False);
-    Descriptor := Current.GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) then
+    // Any own entry ends the fast path, a lazily installed one included, so
+    // the map is asked first and the entry is not materialized: materializing
+    // a shim member (Object.prototype.__proto__) runs bytecode, and a
+    // collection there would free AValue, which only the caller holds.
+    if Current.Properties.ContainsKey(AName) then
       Exit(False);
+    if not InheritsGetOwnProperty(Current) then
+    begin
+      Descriptor := Current.GetOwnPropertyDescriptor(AName);
+      if Assigned(Descriptor) then
+        Exit(False);
+    end;
     Current := Current.Prototype;
   end;
 
@@ -5612,7 +5662,7 @@ function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
   const AReceiver: TGocciaValue;
   const ANewTarget: TGocciaValue = nil): TGocciaValue;
 var
-  BoundFunction: TGocciaBoundFunctionValue;
+  BoundTarget, BoundThis: TGocciaValue;
   ClassConstructor: TGocciaClassValue;
   CombinedArgs: TGocciaArgumentsCollection;
   SuperResult: TGocciaValue;
@@ -5650,17 +5700,12 @@ begin
 
   if AConstructor is TGocciaBoundFunctionValue then
   begin
-    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
-    if IsSameValue(BoundFunction, EffectiveNewTarget) then
-      EffectiveNewTarget := BoundFunction.OriginalFunction;
-    CombinedArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-      BoundFunction.BoundArgCount + AArguments.Length);
+    // ES2026 §10.4.1.2: a chain of bound functions collapses in a loop.
+    CombinedArgs := CollapseBoundFunctionChain(
+      TGocciaBoundFunctionValue(AConstructor), AArguments,
+      EffectiveNewTarget, BoundTarget, BoundThis);
     try
-      for I := 0 to BoundFunction.BoundArgCount - 1 do
-        CombinedArgs.Add(BoundFunction.GetBoundArg(I));
-      for I := 0 to AArguments.Length - 1 do
-        CombinedArgs.Add(AArguments.GetElement(I));
-      Exit(InvokeConstructableWithReceiver(BoundFunction.OriginalFunction,
+      Exit(InvokeConstructableWithReceiver(BoundTarget,
         CombinedArgs, AReceiver, EffectiveNewTarget));
     finally
       CombinedArgs.Free;
@@ -10543,7 +10588,7 @@ function TGocciaVM.ConstructValue(const AConstructor: TGocciaValue;
 var
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundArgs: TGocciaArgumentsCollection;
-  BoundFunction: TGocciaBoundFunctionValue;
+  BoundTarget, BoundThis: TGocciaValue;
   ClassConstructor: TGocciaClassValue;
   ConstructorName: string;
   EvalContext: TGocciaEvaluationContext;
@@ -10638,18 +10683,13 @@ begin
 
   if AConstructor is TGocciaBoundFunctionValue then
   begin
-    BoundFunction := TGocciaBoundFunctionValue(AConstructor);
-    if IsSameValue(BoundFunction, EffectiveNewTarget) then
-      EffectiveNewTarget := BoundFunction.OriginalFunction;
-    BoundArgs := TGocciaArgumentsCollection.CreateWithCapacity(
-      BoundFunction.BoundArgCount + AArguments.Length);
+    // ES2026 §10.4.1.2: a chain of bound functions collapses in a loop, so
+    // only its innermost target is constructed by a native call.
+    BoundArgs := CollapseBoundFunctionChain(
+      TGocciaBoundFunctionValue(AConstructor), AArguments,
+      EffectiveNewTarget, BoundTarget, BoundThis);
     try
-      for I := 0 to BoundFunction.BoundArgCount - 1 do
-        BoundArgs.Add(BoundFunction.GetBoundArg(I));
-      for I := 0 to AArguments.Length - 1 do
-        BoundArgs.Add(AArguments.GetElement(I));
-      Result := ConstructValue(BoundFunction.OriginalFunction, BoundArgs,
-        EffectiveNewTarget);
+      Result := ConstructValue(BoundTarget, BoundArgs, EffectiveNewTarget);
     finally
       BoundArgs.Free;
     end;
@@ -10977,8 +11017,7 @@ begin
         PrivateBrandToken := BytecodePrivateTokenForKey(AName,
           TGocciaClassValue(ATarget).PrivateBrandToken);
         TGocciaClassValue(ATarget).AddPrivateGetter(
-          BytecodePrivateRuntimeKey(AName, PrivateBrandToken),
-          TGocciaFunctionBase(AGetter));
+          BytecodePrivateRuntimeKey(AName, PrivateBrandToken), AGetter);
       end
     else
       TGocciaClassValue(ATarget).AddStaticGetter(AName, TGocciaFunctionBase(AGetter));
@@ -10998,8 +11037,7 @@ begin
         PrivateBrandToken := BytecodePrivateTokenForKey(AName,
           TGocciaClassValue(ATarget).PrivateBrandToken);
         TGocciaClassValue(ATarget).AddPrivateSetter(
-          BytecodePrivateRuntimeKey(AName, PrivateBrandToken),
-          TGocciaFunctionBase(ASetter));
+          BytecodePrivateRuntimeKey(AName, PrivateBrandToken), ASetter);
       end
     else
       TGocciaClassValue(ATarget).AddStaticSetter(AName, TGocciaFunctionBase(ASetter));
@@ -11960,13 +11998,22 @@ begin
   end;
 end;
 
+{ ES2026 §15.7.14 ClassDefinitionEvaluation step 14.a: a derived class's
+  default constructor performs Construct(F.[[GetPrototypeOf]](), args,
+  NewTarget) and then InitializeInstanceElements(result, F) (§7.3.33).
+  Nothing bounds how many such classes a chain may have, so this does not
+  recurse into the parent of a class whose default constructor forwards to
+  one: it hands the class to InvokeImplicitSuperForwardingChain, which walks
+  the run of forwarding classes in a loop (issue #1665). Given
+  AForwardsToSuperClass, it is one step of that walk instead: it sets the flag
+  and returns rather than forwarding. }
 function TGocciaVM.InvokeImplicitSuperInitialization(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
-  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AForwardsToSuperClass: PBoolean): TGocciaValue;
 var
   ConstructorThisValue: TGocciaValue;
   SuperResult: TGocciaValue;
-  TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
@@ -12134,27 +12181,27 @@ begin
     Exit;
   end;
 
-  TargetInstance := InvokeImplicitSuperInitialization(
-    ImplicitSuperConstructorClass(AClassValue), AInstance, AArguments);
-  if not Assigned(TargetInstance) then
-    TargetInstance := AInstance;
-  if not (AClassValue is TGocciaVMClassValue) and
-     (TargetInstance is TGocciaInstanceValue) then
-    TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(AArguments);
-  RunClassInitializers(AClassValue, TargetInstance);
-  Result := TargetInstance;
+  { A default constructor forwarding to a parent class. }
+  if Assigned(AForwardsToSuperClass) then
+  begin
+    AForwardsToSuperClass^ := True;
+    Exit;
+  end;
+  Result := InvokeImplicitSuperForwardingChain(AClassValue, AInstance,
+    AArguments);
 end;
 
+{ InvokeImplicitSuperInitialization over unboxed arguments. }
 function TGocciaVM.InvokeImplicitSuperInitializationRegisters(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
-  const AArguments: TGocciaRegisterArray): TGocciaValue;
+  const AArguments: TGocciaRegisterArray;
+  const AForwardsToSuperClass: PBoolean): TGocciaValue;
 var
   BoxedArgs: TGocciaArgumentsCollection;
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
   ConstructorThisValue: TGocciaValue;
   SuperResult: TGocciaValue;
   SuperResultRegister: TGocciaRegister;
-  TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
@@ -12389,22 +12436,186 @@ begin
     Exit;
   end;
 
-  TargetInstance := InvokeImplicitSuperInitializationRegisters(
-    ImplicitSuperConstructorClass(AClassValue), AInstance, AArguments);
-  if not Assigned(TargetInstance) then
-    TargetInstance := AInstance;
-  if not (AClassValue is TGocciaVMClassValue) and
-     (TargetInstance is TGocciaInstanceValue) then
+  { A default constructor forwarding to a parent class. }
+  if Assigned(AForwardsToSuperClass) then
   begin
-    BoxedArgs := MaterializeArguments(AArguments);
-    try
-      TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(BoxedArgs);
-    finally
-      ReleaseArguments(BoxedArgs);
-    end;
+    AForwardsToSuperClass^ := True;
+    Exit;
   end;
-  RunClassInitializers(AClassValue, TargetInstance);
-  Result := TargetInstance;
+  Result := InvokeImplicitSuperForwardingChainRegisters(AClassValue, AInstance,
+    AArguments);
+end;
+
+const
+  { Forwarding classes InvokeImplicitSuperForwardingChain keeps in a fixed
+    local array before it hands the walk to
+    InvokeLongImplicitSuperForwardingChain. }
+  IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES = 8;
+
+{ AClassValue's default constructor forwards to its parent class. Reading an
+  ordinary class's [[Prototype]] and testing IsConstructor are not observable,
+  so the run of forwarding classes is walked down in a loop to the first class
+  whose constructor does real work, and each forwarding class's instance
+  elements are then initialized from the base outwards: the order the nested
+  Construct calls of §15.7.14 step 14.a would return in. The first few
+  classes are kept in a fixed array, so a short chain needs no managed local
+  and no implicit exception frame. }
+function TGocciaVM.InvokeImplicitSuperForwardingChain(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection): TGocciaValue;
+var
+  Forwarding: array[0..IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES - 1] of
+    TGocciaClassValue;
+  Count, I: Integer;
+  Current: TGocciaClassValue;
+  ForwardsToSuperClass: Boolean;
+begin
+  Forwarding[0] := AClassValue;
+  Count := 1;
+  Current := AClassValue;
+  repeat
+    Current := ImplicitSuperConstructorClass(Current);
+    ForwardsToSuperClass := False;
+    Result := InvokeImplicitSuperInitialization(Current, AInstance,
+      AArguments, @ForwardsToSuperClass);
+    if not ForwardsToSuperClass then
+      Break;
+    if Count = IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES then
+    begin
+      Result := InvokeLongImplicitSuperForwardingChain(Current, AInstance,
+        AArguments, nil, False);
+      Break;
+    end;
+    Forwarding[Count] := Current;
+    Inc(Count);
+  until False;
+  if not Assigned(Result) then
+    Result := AInstance;
+  for I := Count - 1 downto 0 do
+  begin
+    Current := Forwarding[I];
+    if not (Current is TGocciaVMClassValue) and
+       (Result is TGocciaInstanceValue) then
+      TGocciaInstanceValue(Result).InitializeNativeFromArguments(AArguments);
+    RunClassInitializers(Current, Result);
+  end;
+end;
+
+{ InvokeImplicitSuperForwardingChain over unboxed arguments. }
+function TGocciaVM.InvokeImplicitSuperForwardingChainRegisters(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const AArguments: TGocciaRegisterArray): TGocciaValue;
+var
+  Forwarding: array[0..IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES - 1] of
+    TGocciaClassValue;
+  Count, I: Integer;
+  Current: TGocciaClassValue;
+  ForwardsToSuperClass: Boolean;
+begin
+  Forwarding[0] := AClassValue;
+  Count := 1;
+  Current := AClassValue;
+  repeat
+    Current := ImplicitSuperConstructorClass(Current);
+    ForwardsToSuperClass := False;
+    Result := InvokeImplicitSuperInitializationRegisters(Current, AInstance,
+      AArguments, @ForwardsToSuperClass);
+    if not ForwardsToSuperClass then
+      Break;
+    if Count = IMPLICIT_SUPER_INLINE_FORWARDING_CLASSES then
+    begin
+      Result := InvokeLongImplicitSuperForwardingChain(Current, AInstance, nil,
+        AArguments, True);
+      Break;
+    end;
+    Forwarding[Count] := Current;
+    Inc(Count);
+  until False;
+  if not Assigned(Result) then
+    Result := AInstance;
+  for I := Count - 1 downto 0 do
+  begin
+    Current := Forwarding[I];
+    if not (Current is TGocciaVMClassValue) and
+       (Result is TGocciaInstanceValue) then
+      InitializeImplicitSuperForwardingClass(Current, Result, nil, AArguments,
+        True)
+    else
+      RunClassInitializers(Current, Result);
+  end;
+end;
+
+{ The walk InvokeImplicitSuperForwardingChain continues here once its chain
+  outgrows the fixed array: AClassValue forwards to its parent class, and the
+  forwarding classes from it to the base go into a growable array, a managed
+  local that would cost every construction an implicit exception frame if the
+  short walk declared it. }
+function TGocciaVM.InvokeLongImplicitSuperForwardingChain(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const ABoxedArguments: TGocciaArgumentsCollection;
+  const ARegisterArguments: TGocciaRegisterArray;
+  const AUseRegisters: Boolean): TGocciaValue;
+var
+  Forwarding: array of TGocciaClassValue;
+  Count, I: Integer;
+  Current: TGocciaClassValue;
+  ForwardsToSuperClass: Boolean;
+begin
+  SetLength(Forwarding, 64);
+  Forwarding[0] := AClassValue;
+  Count := 1;
+  Current := AClassValue;
+  repeat
+    Current := ImplicitSuperConstructorClass(Current);
+    ForwardsToSuperClass := False;
+    if AUseRegisters then
+      Result := InvokeImplicitSuperInitializationRegisters(Current, AInstance,
+        ARegisterArguments, @ForwardsToSuperClass)
+    else
+      Result := InvokeImplicitSuperInitialization(Current, AInstance,
+        ABoxedArguments, @ForwardsToSuperClass);
+    if not ForwardsToSuperClass then
+      Break;
+    if Count = Length(Forwarding) then
+      SetLength(Forwarding, Count * 2);
+    Forwarding[Count] := Current;
+    Inc(Count);
+  until False;
+  if not Assigned(Result) then
+    Result := AInstance;
+  for I := Count - 1 downto 0 do
+    InitializeImplicitSuperForwardingClass(Forwarding[I], Result,
+      ABoxedArguments, ARegisterArguments, AUseRegisters);
+end;
+
+{ InitializeInstanceElements for one forwarding class once its parent's
+  construction has produced AInstance; a class the VM did not build may first
+  have a native receiver to fill from the arguments. }
+procedure TGocciaVM.InitializeImplicitSuperForwardingClass(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const ABoxedArguments: TGocciaArgumentsCollection;
+  const ARegisterArguments: TGocciaRegisterArray;
+  const AUseRegisters: Boolean);
+var
+  BoxedArgs: TGocciaArgumentsCollection;
+begin
+  if not (AClassValue is TGocciaVMClassValue) and
+     (AInstance is TGocciaInstanceValue) then
+  begin
+    if AUseRegisters then
+    begin
+      BoxedArgs := MaterializeArguments(ARegisterArguments);
+      try
+        TGocciaInstanceValue(AInstance).InitializeNativeFromArguments(BoxedArgs);
+      finally
+        ReleaseArguments(BoxedArgs);
+      end;
+    end
+    else
+      TGocciaInstanceValue(AInstance).InitializeNativeFromArguments(
+        ABoxedArguments);
+  end;
+  RunClassInitializers(AClassValue, AInstance);
 end;
 
 // A private auto-accessor (`accessor #x`) is a private field in both modes:
@@ -12556,7 +12767,7 @@ begin
   DecoratorArgs.Add(ClassVal);
   DecoratorArgs.Add(ContextObject);
   try
-    DecoratorResult := TGocciaFunctionBase(ADecoratorFn).Call(
+    DecoratorResult := DispatchCall(ADecoratorFn,
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     ReleaseArguments(DecoratorArgs);
@@ -12999,7 +13210,7 @@ begin
   DecoratorArgs.Add(ElementValue);
   DecoratorArgs.Add(ContextObject);
   try
-    DecoratorResult := TGocciaFunctionBase(ADecoratorFn).Call(
+    DecoratorResult := DispatchCall(ADecoratorFn,
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     ReleaseArguments(DecoratorArgs);
@@ -13026,7 +13237,7 @@ begin
           ThrowTypeError(SErrorGetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsPrivate then
           TGocciaClassValue(ClassVal).AddPrivateGetter(
-            Name, TGocciaFunctionBase(DecoratorResult))
+            Name, DecoratorResult)
         else
           DefineDecoratedGetterProperty(
             IsStatic, ElementName, ElementKey, DecoratorResult);
@@ -13037,7 +13248,7 @@ begin
           ThrowTypeError(SErrorSetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsPrivate then
           TGocciaClassValue(ClassVal).AddPrivateSetter(
-            Name, TGocciaFunctionBase(DecoratorResult))
+            Name, DecoratorResult)
         else
           DefineDecoratedSetterProperty(
             IsStatic, ElementName, ElementKey, DecoratorResult);
@@ -13117,7 +13328,7 @@ begin
   begin
     InitArgs := AcquireArguments;
     try
-      TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
+      DispatchCall(InitializerResults[I], InitArgs, ClassVal);
     finally
       ReleaseArguments(InitArgs);
     end;
@@ -13128,7 +13339,7 @@ begin
   begin
     InitArgs := AcquireArguments;
     try
-      TGocciaFunctionBase(InitializerResults[I]).Call(InitArgs, ClassVal);
+      DispatchCall(InitializerResults[I], InitArgs, ClassVal);
     finally
       ReleaseArguments(InitArgs);
     end;
@@ -13634,9 +13845,9 @@ begin
       begin
         EmptyArgs := TGocciaArgumentsCollection.Create;
         try
-          Exit(TGocciaClassValue(AObject).GetOwnPrivatePropertyGetter(
-            PrivateName).Call(
-            EmptyArgs, AObject));
+          Exit(DispatchCall(
+            TGocciaClassValue(AObject).GetOwnPrivatePropertyGetter(
+              PrivateName), EmptyArgs, AObject));
         finally
           EmptyArgs.Free;
         end;
@@ -13886,9 +14097,9 @@ begin
       begin
         SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
         try
-          TGocciaClassValue(AObject).GetOwnPrivatePropertySetter(
-            PrivateName).Call(
-            SetterArgs, AObject);
+          DispatchCall(
+            TGocciaClassValue(AObject).GetOwnPrivatePropertySetter(
+              PrivateName), SetterArgs, AObject);
         finally
           SetterArgs.Free;
         end;
@@ -16493,7 +16704,8 @@ LDispatchCase:
         if FMemoryPressureCheckCountdown = 0 then
         begin
           if Assigned(GC) then
-            GC.CollectForMemoryPressure(nil);
+            GC.CollectForMemoryPressure(nil,
+              MEMORY_PRESSURE_CHECK_FORCES_COLLECTION);
           FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
           if FStackChargePending then
             SettleStackGrowth
@@ -16809,6 +17021,28 @@ begin
     FFrameDepth := SavedFrameDepth - 1;
   try
     Result := ExecuteModule(AModule);
+  finally
+    FFrameDepth := SavedFrameDepth;
+  end;
+end;
+
+{ ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation step 12: a module with
+  pending asynchronous dependencies executes only once they have evaluated
+  (§16.2.1.6.1.3.4 AsyncModuleExecutionFulfilled). A module-source entry the
+  bytecode executor runs has no continuation of its own to defer, so its top
+  level waits for them as Await does in a frame that cannot suspend
+  (AwaitValue). The jobs that run meanwhile are not calls from the entry's top
+  level: like a module top level ExecuteImportedModule runs, they take the
+  depth of the frame below it, so --max-stack counts only their own calls. }
+procedure TGocciaVM.AwaitModuleDependencies(const APromise: TGocciaValue);
+var
+  SavedFrameDepth: Integer;
+begin
+  SavedFrameDepth := FFrameDepth;
+  if SavedFrameDepth > 0 then
+    FFrameDepth := SavedFrameDepth - 1;
+  try
+    AwaitValue(APromise);
   finally
     FFrameDepth := SavedFrameDepth;
   end;
