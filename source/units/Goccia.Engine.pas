@@ -186,6 +186,11 @@ type
       file that requested them; nil outside a run. }
     FLinkedModules: TOrderedStringMap<TGocciaModule>;
     FLinkedReferrer: string;
+    { A module-source entry's linked requests as its OP_IMPORTs evaluate
+      them, and how many are still to evaluate (AwaitEntryRequests); nil
+      outside such an entry's imports. }
+    FEntryRequests: TGocciaModuleList;
+    FEntryRequestsLeft: Integer;
     FCompileTimeNanoseconds: Int64;
     FExecuteTimeNanoseconds: Int64;
     FShimLoader: TGocciaShimLoader;
@@ -306,7 +311,10 @@ type
     function RunBytecodeModule(const AModule: TGocciaBytecodeModule;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure LinkModuleRequests(const AModule: TGocciaBytecodeModule);
-    procedure InitializeEntryExports(const AModule: TGocciaBytecodeModule;
+    procedure AwaitEntryRequests;
+    procedure InitializeEntryLocalExports(const AModule: TGocciaBytecodeModule;
+      const AEntry: TGocciaModule);
+    procedure InitializeEntryLinkedExports(const AModule: TGocciaBytecodeModule;
       const AEntry: TGocciaModule);
     function LoadLinkedModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
@@ -2666,21 +2674,20 @@ end;
 
 { ES2026 §16.2.1.7.3.1 InitializeEnvironment for a module-source entry, the
   Module Record the engine registered as the VM's current runtime module.
-  Run after its requests are linked and before any of them evaluates, so a
-  module in a cycle with the entry resolves every name the entry exports.
-  A local export is a binding in its temporal dead zone, kept in a module
-  environment of its own (the program's top-level bindings live in VM
-  registers); the program's OP_EXPORTs initialize and update it. The other
-  kinds bind to the linked module of their request. }
-procedure TGocciaEngine.InitializeEntryExports(
+  The entry's local exports are bound before its requests are linked, as
+  Execute binds them: a module in a cycle with the entry that links
+  meanwhile resolves each of them, and its `export * from` the entry
+  forwards them (§16.2.1.7.2.1 GetExportedNames), since the loader settles a
+  star export's names when the module is linked. A local export is a binding
+  in its temporal dead zone, kept in a module environment of its own (the
+  program's top-level bindings live in VM registers); the program's
+  OP_EXPORTs initialize and update it. }
+procedure TGocciaEngine.InitializeEntryLocalExports(
   const AModule: TGocciaBytecodeModule; const AEntry: TGocciaModule);
 var
-  Changed: Boolean;
   ExportEnvironment: TGocciaScope;
   Export_: TGocciaModuleExport;
   I: Integer;
-  SourceModule: TGocciaModule;
-  StarName: string;
 begin
   ExportEnvironment := nil;
   for I := 0 to AModule.ExportCount - 1 do
@@ -2696,7 +2703,20 @@ begin
   end;
   if Assigned(ExportEnvironment) then
     AEntry.SetEnvironment(ExportEnvironment);
+end;
 
+{ The entry's other exports bind to the linked module of their request, so
+  they are bound once its requests are linked and before any of them
+  evaluates. }
+procedure TGocciaEngine.InitializeEntryLinkedExports(
+  const AModule: TGocciaBytecodeModule; const AEntry: TGocciaModule);
+var
+  Changed: Boolean;
+  Export_: TGocciaModuleExport;
+  I: Integer;
+  SourceModule: TGocciaModule;
+  StarName: string;
+begin
   for I := 0 to AModule.ExportCount - 1 do
   begin
     Export_ := AModule.GetExport(I);
@@ -2741,23 +2761,71 @@ begin
   end;
 end;
 
+{ The program's OP_IMPORTs, which run in source order after its function
+  declarations are instantiated and before any other statement of its body,
+  evaluate its linked requests. For a module-source entry this is ES2026
+  §16.2.1.6.1.3.1 InnerModuleEvaluation steps 11-12: once its last request
+  has evaluated, the entry waits for each request whose evaluation is
+  asynchronous (one of its [[PendingAsyncDependencies]]) before its body
+  runs, and fails with the error of one that failed. The names the last
+  import declaration binds are assigned after this wait. }
 function TGocciaEngine.LoadLinkedModule(const AModulePath,
   AImportingFilePath: string): TGocciaModule;
 begin
   if Assigned(FLinkedModules) and (AImportingFilePath = FLinkedReferrer) and
      FLinkedModules.TryGetValue(AModulePath, Result) then
-    Result := FModuleLoader.EvaluateModule(Result)
+  begin
+    Result := FModuleLoader.EvaluateModule(Result);
+    if Assigned(FEntryRequests) then
+    begin
+      FEntryRequests.Add(Result);
+      Dec(FEntryRequestsLeft);
+      if FEntryRequestsLeft = 0 then
+        AwaitEntryRequests;
+    end;
+  end
   else
     Result := FModuleLoader.LoadModule(AModulePath, AImportingFilePath);
+end;
+
+procedure TGocciaEngine.AwaitEntryRequests;
+var
+  I: Integer;
+  PendingPromises: TList<TGocciaPromiseValue>;
+  Promise: TGocciaPromiseValue;
+  Requests: TGocciaModuleList;
+begin
+  Requests := FEntryRequests;
+  FEntryRequests := nil;
+  PendingPromises := TList<TGocciaPromiseValue>.Create;
+  try
+    for I := 0 to Requests.Count - 1 do
+    begin
+      Promise := TGocciaModuleLoader.EvaluationWaitPromise(Requests[I],
+        FVM.CurrentRuntimeModule);
+      if Assigned(Promise) and (Promise.State <> gpsFulfilled) and
+         (PendingPromises.IndexOf(Promise) < 0) then
+        PendingPromises.Add(Promise);
+    end;
+    if PendingPromises.Count > 0 then
+      FVM.AwaitModuleDependencies(
+        TGocciaModuleLoader.AllEvaluationsSettled(PendingPromises));
+  finally
+    PendingPromises.Free;
+    Requests.Free;
+  end;
 end;
 
 function TGocciaEngine.RunBytecodeModule(const AModule: TGocciaBytecodeModule;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   GC: TGarbageCollector;
+  HasEntryExports: Boolean;
   SavedLinkedModules: TOrderedStringMap<TGocciaModule>;
   SavedLinkedReferrer: string;
   SavedLoadModule: TLoadModuleCallback;
+  SavedEntryRequests: TGocciaModuleList;
+  SavedEntryRequestsLeft: Integer;
   WasEnabled: Boolean;
 begin
   GC := TGarbageCollector.Instance;
@@ -2777,13 +2845,28 @@ begin
   SavedLinkedModules := FLinkedModules;
   SavedLinkedReferrer := FLinkedReferrer;
   SavedLoadModule := FVM.LoadModule;
+  SavedEntryRequests := FEntryRequests;
+  SavedEntryRequestsLeft := FEntryRequestsLeft;
   FLinkedModules := nil;
+  FEntryRequests := nil;
   try
+    HasEntryExports := Assigned(FVM.CurrentRuntimeModule) and
+      (AModule.ExportCount > 0);
+    if HasEntryExports then
+      InitializeEntryLocalExports(AModule, FVM.CurrentRuntimeModule);
     LinkModuleRequests(AModule);
-    if Assigned(FVM.CurrentRuntimeModule) and (AModule.ExportCount > 0) then
-      InitializeEntryExports(AModule, FVM.CurrentRuntimeModule);
+    if HasEntryExports then
+      InitializeEntryLinkedExports(AModule, FVM.CurrentRuntimeModule);
+    if Assigned(FVM.CurrentRuntimeModule) and Assigned(FLinkedModules) then
+    begin
+      FEntryRequests := TGocciaModuleList.Create;
+      FEntryRequestsLeft := AModule.ImportCount;
+    end;
     Result := FVM.ExecuteModule(AModule, AThisValue);
   finally
+    FEntryRequests.Free;
+    FEntryRequests := SavedEntryRequests;
+    FEntryRequestsLeft := SavedEntryRequestsLeft;
     FVM.LoadModule := SavedLoadModule;
     FLinkedModules.Free;
     FLinkedModules := SavedLinkedModules;
@@ -3514,7 +3597,8 @@ begin
         resolved path, stamped with its file's modification time, and mark it
         evaluating before its imports are linked, as Execute does. As the
         VM's current runtime module it gets the program's exports
-        (InitializeEntryExports, then OP_EXPORT). }
+        (InitializeEntryLocalExports and InitializeEntryLinkedExports, then
+        OP_EXPORT). }
       EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then

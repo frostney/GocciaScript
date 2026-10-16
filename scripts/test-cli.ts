@@ -5081,6 +5081,57 @@ console.log("Entry module evaluated once...");
   }
 }
 
+// -- Entry waits for a dependency's top-level await (#1652) --------------------
+
+// ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation: a module the entry imports that
+// evaluates asynchronously is one of the entry's pending dependencies, so the
+// entry's body runs once it has evaluated (§16.2.1.6.1.3.4
+// AsyncModuleExecutionFulfilled) and not at all if it fails (§16.2.1.6.1.3.5
+// AsyncModuleExecutionRejected). tests/language/modules covers the order and a
+// cycle; this covers the run's exit status, its --print result, and a
+// dependency waiting on a timer.
+console.log("Entry waits for a dependency's top-level await...");
+{
+  const tmp = mkdtemp("goccia-entry-tla-");
+  try {
+    const files: Record<string, string> = {
+      "dep.mjs": 'console.log("dep start");\nexport let later = "before";\nawait 0;\nlater = "after";\nconsole.log("dep end");\n',
+      "order.mjs": 'import { later } from "./dep.mjs";\nconsole.log("entry " + later);\n',
+      "print.mjs": 'import { later } from "./dep.mjs";\n"completion " + later;\n',
+      "failing-dep.mjs": 'export let later = "before";\nawait 0;\nthrow new Error("dependency failed");\n',
+      "failing.mjs": 'import { later } from "./failing-dep.mjs";\nconsole.log("entry ran");\n',
+      "timer-dep.mjs": 'export let later = "before";\nawait new Promise((resolve) => setTimeout(resolve, 5));\nlater = "after";\n',
+      "timer.test.mjs": 'import { later } from "./timer-dep.mjs";\nconst atEntry = later;\ntest("the entry ran after the timer", () => { expect(atEntry).toBe("after"); });\n',
+    };
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+
+    const lines = (out: string, prefixes: string[]): string[] =>
+      normalizeLineEndings(out)
+        .split("\n")
+        .filter((line) => prefixes.some((prefix) => line.startsWith(prefix)));
+
+    const order = await $`${join(process.cwd(), RUNNER)} order.mjs`.cwd(tmp).nothrow().quiet();
+    const orderLines = lines(order.text(), ["dep ", "entry "]);
+    if (order.exitCode !== 0 || JSON.stringify(orderLines) !== JSON.stringify(["dep start", "dep end", "entry after"]))
+      throw new Error(`entry order: got exit ${order.exitCode}: ${order.text()}${order.stderr}`);
+
+    const failing = await $`${join(process.cwd(), RUNNER)} failing.mjs`.cwd(tmp).nothrow().quiet();
+    const failingOut = failing.text() + failing.stderr.toString();
+    if (failing.exitCode === 0 || failingOut.includes("entry ran") || !failingOut.includes("dependency failed"))
+      throw new Error(`failing dependency: got exit ${failing.exitCode}: ${failingOut}`);
+
+    const print = await $`${join(process.cwd(), RUNNER)} print.mjs --print`.cwd(tmp).nothrow().quiet();
+    if (print.exitCode !== 0 || !lines(print.text(), ["completion "]).includes("completion after"))
+      throw new Error(`--print result: got exit ${print.exitCode}: ${print.text()}${print.stderr}`);
+
+    const timer = await $`${join(process.cwd(), TESTRUNNER)} -P timer.test.mjs`.cwd(tmp).nothrow().quiet();
+    if (timer.exitCode !== 0)
+      throw new Error(`timer dependency: got exit ${timer.exitCode}: ${timer.text()}${timer.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- Timers: containment and uncaught attribution ------------------------------
 
 // Two properties that only show up in the runner's output, so neither can be

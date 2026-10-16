@@ -230,6 +230,52 @@ describe("Iterator.zip() — longest mode", () => {
       expect(result[1][0].marker).toBe("padding-1");
       expect(result[1][1]).toBe(3);
     });
+
+    // The padding option is read before the iterables and used after them, so
+    // a padding object only a getter returned must survive every collection
+    // the iterables' [Symbol.iterator]() and next() run in between.
+    test("keeps a padding option a getter returned alive while the iterables are read", () => {
+      const options = {
+        get mode() { return "longest"; },
+        get padding() { return [{ tag: "pad-a" }, { tag: "pad-b" }]; },
+      };
+      const iterables = {
+        [Symbol.iterator]() {
+          Goccia.gc();
+          const inner = [[1], [2, 3]][Symbol.iterator]();
+          return {
+            next() {
+              Goccia.gc();
+              return inner.next();
+            },
+          };
+        },
+      };
+
+      const result = [...Iterator.zip(iterables, options)];
+
+      expect(result).toEqual([[1, 2], [{ tag: "pad-a" }, 3]]);
+    });
+
+    test("keeps a padding option alive while an item's [Symbol.iterator]() collects", () => {
+      const collecting = (values) => ({
+        [Symbol.iterator]() {
+          Goccia.gc();
+          return values[Symbol.iterator]();
+        },
+      });
+      const options = {
+        mode: "longest",
+        get padding() { return [{ tag: "first" }, { tag: "second" }]; },
+      };
+
+      const result = Iterator.zip(
+        [collecting([1, 2]), collecting([3])],
+        options
+      ).toArray();
+
+      expect(result).toEqual([[1, 3], [2, { tag: "second" }]]);
+    });
   });
 });
 

@@ -319,6 +319,54 @@ Both run on Linux only. Valgrind slows the suite by roughly an order of
 magnitude, which is why neither runs per-PR. Findings upload as artifacts with
 a 30-day retention.
 
+### GC-stress build
+
+A missing GC root is a value that only a Pascal local holds while guest code
+runs. It is freed only if a collection falls inside that window, and an
+ordinary build collects only under memory pressure, so it usually is not.
+`./build.pas --gc-stress` makes the window certain:
+
+| Defined by `-dGOCCIA_GC_STRESS` | Effect |
+|---|---|
+| `Goccia.VM.pas` | The memory-pressure checkpoint in the dispatch loop runs every 8 instructions instead of every 1,025 and forces a full collection each time. |
+| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: the known leaks (#1592) make it hundreds of megabytes per process. |
+
+`--gc-stress` adds `-gh` and the define to the development flags. It compiles
+into `build/compiled/gc-stress/` and writes binaries to `build/gc-stress/`, so
+it never shares FPC units with an ordinary build. It cannot be combined with
+`--prod`. Without the define, both units compile to the same machine code as
+before.
+
+```bash
+./build.pas --gc-stress testrunner test262runner
+./build/gc-stress/GocciaTestRunner -P tests/built-ins/Promise --timeout=0
+```
+
+Pass `--timeout=0`: under stress, `tests/language/functions/function-parameters.js`
+alone takes about 50 seconds.
+
+The scheduled [GC-stress workflow](../../.github/workflows/gc-stress.yml) runs
+every Sunday at 04:41 UTC and on demand. `scripts/gc-stress.ts` runs the
+GC-sensitive test262 directories (Promise, Iterator, the async-function and
+await directories, eval code, arguments objects and generators) and `tests/`
+paths under the stress build and under an ordinary development build of the
+same commit. It reports only tests that pass in the ordinary build and fail
+under stress. Each `tests/` file runs in its own process, because an
+engine-integrity fault stops a whole test-runner run. To reproduce the whole
+comparison locally, build both variants and point the script at a test262
+checkout:
+
+```bash
+./build.pas testrunner test262runner
+./build.pas --gc-stress testrunner test262runner
+bun scripts/gc-stress.ts --suite-dir=../test262 --jobs=8
+```
+
+The report goes to `build/gc-stress-report/report.md`. A stress-only failure
+fails the job. On a scheduled or `main` run, it also opens one tracking issue
+or comments on the open one (`.github/scripts/report-gc-stress.sh`). Runs on
+other branches only print what they would file.
+
 ## Depth and Fuzz Probe
 
 `scripts/depth-probe.ts` runs depth and nesting shapes against a `GocciaRunner`
