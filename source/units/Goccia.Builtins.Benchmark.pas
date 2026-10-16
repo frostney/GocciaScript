@@ -441,10 +441,6 @@ var
   ConstructorValue: TGocciaValue;
   ConstructorName: TGocciaValue;
 begin
-  if (AFunction is TGocciaGeneratorFunctionValue) or
-     (AFunction is TGocciaGeneratorMethodValue) then
-    Exit(True);
-
   ConstructorValue := AFunction.GetProperty(PROP_CONSTRUCTOR);
   if ConstructorValue is TGocciaObjectValue then
   begin

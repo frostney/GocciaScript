@@ -314,7 +314,7 @@ const main = () => {
         const withoutPas = sym.replace(/\.pas$/, "");
 
         if (sym.endsWith("*")) {
-          // Wildcard: `Goccia.Evaluator.*`
+          // Wildcard: `Goccia.Compiler.*`
           const prefix = sym.replace(/\.\*$/, ".");
           found = [...unitNames].some((u) => u.startsWith(prefix));
         } else if (unitNames.has(withPas) || unitNames.has(withoutPas)) {

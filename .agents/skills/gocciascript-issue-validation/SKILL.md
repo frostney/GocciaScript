@@ -49,7 +49,6 @@ bun scripts/run_test262_suite.ts \
   --suite-dir /path/to/test262-suite \
   --categories intl402 \
   --filter 'intl402/NumberFormat/prototype/format/example.js' \
-  --mode bytecode \
   --jobs 1 \
   --verbose
 ```

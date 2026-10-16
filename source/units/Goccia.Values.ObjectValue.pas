@@ -28,6 +28,10 @@ type
     function StoreLazyPropertyDescriptor(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor;
       out ABlockedByExtensibility: Boolean): Boolean;
+    // MaterializeOwnLazyProperty for a define whose pending ADescriptor, a
+    // plain class the collector does not trace, holds the value.
+    function MaterializeOwnLazyPropertyForDefine(const AName: string;
+      const ACurrent, ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
   protected
     FProperties: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
@@ -46,6 +50,12 @@ type
       materializes into when it is a lazy placeholder, and return the entry. }
     function MaterializeOwnLazyProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+    { MaterializeOwnLazyProperty for a store that holds AValue and AReceiver
+      only natively. Materializing a lazy entry loads a shim, which runs
+      bytecode and can collect, so that happens with both of them rooted. }
+    function MaterializeOwnLazyPropertyHolding(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor;
+      const AValue, AReceiver: TGocciaValue): TGocciaPropertyDescriptor;
     // ES2026 §10.1.8.1 OrdinaryGet step 2: the lookup once this object has no
     // own property AName. For a subclass that reads its own properties itself.
     function GetPropertyFromPrototype(const AName: string;
@@ -105,6 +115,11 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; virtual;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; virtual;
+    { GetOwnPropertyDescriptor for a [[Set]] that holds AValue and AReceiver
+      only natively: a lazy entry is materialized with both rooted (see
+      MaterializeOwnLazyPropertyHolding). }
+    function GetOwnPropertyDescriptorHolding(const AName: string;
+      const AValue, AReceiver: TGocciaValue): TGocciaPropertyDescriptor; {$IFDEF FPC}inline;{$ENDIF}
     function HasProperty(const AName: string): Boolean; virtual;
     function HasOwnProperty(const AName: string): Boolean; virtual;
     function DeleteProperty(const AName: string): Boolean; virtual;
@@ -250,6 +265,10 @@ type
 // for [[Set]] only for such an object; any other (a Proxy, a typed array) has
 // to be asked through AssignPropertyWithReceiver itself.
 function UsesOrdinarySet(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+// True while AObject answers a string-keyed [[GetOwnProperty]] with
+// TGocciaObjectValue's own GetOwnPropertyDescriptor, which reads only the
+// property map.
+function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 { One native call into AObject's own [[Get]], [[HasProperty]] or [[Set]]. A
   prototype walk makes it when its next object does not keep the ordinary
@@ -358,7 +377,7 @@ begin
   Result := TMethod(Method).Code = @TGocciaObjectValue.GetPropertyWithContext;
 end;
 
-function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean;
 var
   Method: TGocciaGetOwnPropertyMethod;
 begin
@@ -906,6 +925,68 @@ begin
   LazyDescriptor.Free;
 end;
 
+function TGocciaObjectValue.MaterializeOwnLazyPropertyHolding(
+  const AName: string; const ADescriptor: TGocciaPropertyDescriptor;
+  const AValue, AReceiver: TGocciaValue): TGocciaPropertyDescriptor;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  if ADescriptor.ClassType <> TGocciaLazyPropertyDescriptorData then
+    Exit(ADescriptor);
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    Roots.Add(AValue);
+    Roots.Add(AReceiver);
+    Result := MaterializeOwnLazyProperty(AName, ADescriptor);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+function TGocciaObjectValue.MaterializeOwnLazyPropertyForDefine(
+  const AName: string;
+  const ACurrent, ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  if ACurrent.ClassType <> TGocciaLazyPropertyDescriptorData then
+    Exit(ACurrent);
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    ADescriptor.PushRoots(Roots);
+    Result := MaterializeOwnLazyProperty(AName, ACurrent);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+function TGocciaObjectValue.GetOwnPropertyDescriptorHolding(
+  const AName: string;
+  const AValue, AReceiver: TGocciaValue): TGocciaPropertyDescriptor;
+var
+  Method: TGocciaGetOwnPropertyMethod;
+begin
+  // An object that keeps the ordinary [[GetOwnProperty]] is answered from the
+  // map directly. Any other answers through its own method, after a lazy
+  // entry has been materialized here, so its fallback to the map finds it
+  // built.
+  Method := GetOwnPropertyDescriptor;
+  if TMethod(Method).Code <> @TGocciaObjectValue.GetOwnPropertyDescriptor then
+  begin
+    if FProperties.TryGetValue(AName, Result) and
+       (Result.ClassType = TGocciaLazyPropertyDescriptorData) then
+      MaterializeOwnLazyPropertyHolding(AName, Result, AValue, AReceiver);
+    Exit(GetOwnPropertyDescriptor(AName));
+  end;
+  if not FProperties.TryGetValue(AName, Result) then
+    Exit(nil);
+  if Result.ClassType = TGocciaLazyPropertyDescriptorData then
+    Result := MaterializeOwnLazyPropertyHolding(AName, Result, AValue,
+      AReceiver);
+end;
+
 procedure TGocciaObjectValue.MaterializeAllLazyStringProperties;
 var
   Descriptor: TGocciaPropertyDescriptor;
@@ -983,7 +1064,7 @@ begin
   FProperties := TGocciaShapedPropertyMap.Create(APropertyCapacity);
   // Rooting for the property-store path lives on the map, at the growth gate:
   // that is the one point in a store that can collect, and the map is the only
-  // thing every entry path — evaluator, native builder, class field, spread —
+  // thing every entry path — VM store, native builder, class field, spread —
   // passes through. The map needs a way back to the value that holds it so the
   // properties already stored stay reachable across a collection taken there.
   TGocciaShapedPropertyMap(FProperties).Owner := Self;
@@ -1383,7 +1464,8 @@ var
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
-    Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
+    Descriptor := MaterializeOwnLazyPropertyHolding(AName, Descriptor, AValue,
+      Self);
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
       Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
@@ -1421,7 +1503,7 @@ begin
       AssignThroughExoticParent(Proto, AName, AValue);
       Exit;
     end;
-    Descriptor := Proto.GetOwnPropertyDescriptor(AName);
+    Descriptor := Proto.GetOwnPropertyDescriptorHolding(AName, AValue, Self);
     if Assigned(Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -1474,7 +1556,8 @@ begin
   // procedure, a counted call when it answers [[Set]] itself.
   Current := Self;
   repeat
-    OwnDesc := Current.GetOwnPropertyDescriptor(AName);
+    OwnDesc := Current.GetOwnPropertyDescriptorHolding(AName, AValue,
+      AReceiver);
     if Assigned(OwnDesc) then
       Break;
     Parent := Current.FPrototype;
@@ -1492,7 +1575,8 @@ begin
     if not (AReceiver is TGocciaObjectValue) then
       Exit(False);
     ReceiverObj := TGocciaObjectValue(AReceiver);
-    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
+    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptorHolding(AName, AValue,
+      AReceiver);
     if Assigned(ReceiverDesc) then
     begin
       // Step 2d: Receiver already has own property P
@@ -1519,7 +1603,8 @@ begin
       Exit(False);
     ReceiverObj := TGocciaObjectValue(AReceiver);
     // Step 2c: Let existingDescriptor be Receiver.[[GetOwnProperty]](P)
-    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
+    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptorHolding(AName, AValue,
+      AReceiver);
     if Assigned(ReceiverDesc) then
     begin
       // Step 2d.i: If IsAccessorDescriptor(existingDescriptor), return false
@@ -1764,7 +1849,8 @@ begin
   Current := nil;
   FProperties.TryGetValue(AName, Current);
   if Assigned(Current) then
-    Current := MaterializeOwnLazyProperty(AName, Current);
+    Current := MaterializeOwnLazyPropertyForDefine(AName, Current,
+      ADescriptor);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -1805,7 +1891,8 @@ begin
   Current := nil;
   FProperties.TryGetValue(AName, Current);
   if Assigned(Current) then
-    Current := MaterializeOwnLazyProperty(AName, Current);
+    Current := MaterializeOwnLazyPropertyForDefine(AName, Current,
+      ADescriptor);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin

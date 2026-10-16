@@ -336,8 +336,9 @@ begin
   end;
 
   // The source-order table is the authority, but it is built by the parser
-  // and the maps are what the evaluator reads; walking both and deduplicating
-  // means a shape the table does not describe still gets its body walked.
+  // beside the maps, which the compiler also reads; walking both and
+  // deduplicating means a shape the table does not describe still gets its
+  // body walked.
   for I := 0 to AObject.Properties.CountFast - 1 do
     VisitExpression(AObject.Properties.EntryAt(I).Value);
   for I := 0 to AObject.Getters.CountFast - 1 do

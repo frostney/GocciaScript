@@ -83,3 +83,7 @@ of `goccia.json`, without inline text or base64 entries; `--diff-format` and
 always include timestamp metadata; and config is discovered as for every other
 run instead of only through `--config`. The nested `runScript` options `seed`,
 `diffFormat`, and `diffMetadata` became `copy` and `diff`.
+
+**Superseded in part by [ADR 0138](0138-bytecode-is-the-only-way-gocciascript-executes.md):** GocciaScript 0.15.0 removed `--mode`,
+the interpreter executor and the executor contract, so the sandbox runs on an
+engine that compiles everything to bytecode and owns its VM.

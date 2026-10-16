@@ -7,7 +7,7 @@
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
 - **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific), endian-dependent byte indexing
-- **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of depth limits in each execution mode
+- **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
 
 ## Auto-Formatting
 
@@ -208,8 +208,8 @@ This works because `DoubleToBits` copies the whole `Double` into a `UInt64`, so 
 
 ## Fuzzing and Memory Safety
 
-`GocciaFuzzHarness` drives a single input through lex, parse, and **both**
-executors under tight instruction, timeout, memory, and stack bounds. It exists
+`GocciaFuzzHarness` drives a single input through lex, parse, bytecode
+compilation, and the VM under tight instruction, timeout, memory, and stack bounds. It exists
 because the engine is a from-scratch, manually memory-managed implementation
 whose stated purpose is running adversarial input — see
 [VISION.md](../../VISION.md).
@@ -227,7 +227,7 @@ nonzero. That is what makes a nonzero exit a finding rather than noise.
 ./build/GocciaFuzzHarness --verbose path/to/input.js
 ```
 
-Read from stdin with `-`. `--verbose` prints the per-executor classification;
+Read from stdin with `-`. `--verbose` prints the classification;
 without it the harness is silent and communicates only through its exit code,
 which is what `afl-fuzz` needs.
 
@@ -319,6 +319,54 @@ Both run on Linux only. Valgrind slows the suite by roughly an order of
 magnitude, which is why neither runs per-PR. Findings upload as artifacts with
 a 30-day retention.
 
+### GC-stress build
+
+A missing GC root is a value that only a Pascal local holds while guest code
+runs. It is freed only if a collection falls inside that window, and an
+ordinary build collects only under memory pressure, so it usually is not.
+`./build.pas --gc-stress` makes the window certain:
+
+| Defined by `-dGOCCIA_GC_STRESS` | Effect |
+|---|---|
+| `Goccia.VM.pas` | The memory-pressure checkpoint in the dispatch loop runs every 8 instructions instead of every 1,025 and forces a full collection each time. |
+| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: the known leaks (#1592) make it hundreds of megabytes per process. |
+
+`--gc-stress` adds `-gh` and the define to the development flags. It compiles
+into `build/compiled/gc-stress/` and writes binaries to `build/gc-stress/`, so
+it never shares FPC units with an ordinary build. It cannot be combined with
+`--prod`. Without the define, both units compile to the same machine code as
+before.
+
+```bash
+./build.pas --gc-stress testrunner test262runner
+./build/gc-stress/GocciaTestRunner -P tests/built-ins/Promise --timeout=0
+```
+
+Pass `--timeout=0`: under stress, `tests/language/functions/function-parameters.js`
+alone takes about 50 seconds.
+
+The scheduled [GC-stress workflow](../../.github/workflows/gc-stress.yml) runs
+every Sunday at 04:41 UTC and on demand. `scripts/gc-stress.ts` runs the
+GC-sensitive test262 directories (Promise, Iterator, the async-function and
+await directories, eval code, arguments objects and generators) and `tests/`
+paths under the stress build and under an ordinary development build of the
+same commit. It reports only tests that pass in the ordinary build and fail
+under stress. Each `tests/` file runs in its own process, because an
+engine-integrity fault stops a whole test-runner run. To reproduce the whole
+comparison locally, build both variants and point the script at a test262
+checkout:
+
+```bash
+./build.pas testrunner test262runner
+./build.pas --gc-stress testrunner test262runner
+bun scripts/gc-stress.ts --suite-dir=../test262 --jobs=8
+```
+
+The report goes to `build/gc-stress-report/report.md`. A stress-only failure
+fails the job. On a scheduled or `main` run, it also opens one tracking issue
+or comments on the open one (`.github/scripts/report-gc-stress.sh`). Runs on
+other branches only print what they would file.
+
 ## Depth and Fuzz Probe
 
 `scripts/depth-probe.ts` runs depth and nesting shapes against a `GocciaRunner`
@@ -327,7 +375,7 @@ chains, native-trap nests, deep prototype chains, deep recursion, deeply nested
 values through `JSON`, `structuredClone`, `join` and `flat`, deep syntactic
 nesting, and recovery after a caught `RangeError`. Where the fuzz harness asks
 whether one input breaks the engine, the probe asks where its depth limits are
-and what happens past them, in each execution mode the runner supports.
+and what happens past them.
 
 It is **manual-only**. Nothing in CI, Lefthook, or the nightly runs it. Run it
 when you change recursion, stack limits, Proxy forwarding, the parser's
@@ -335,18 +383,12 @@ nesting, or the collector, and when you investigate a depth crash.
 
 ```bash
 ./build.pas --prod runner
-bun scripts/depth-probe.ts build/GocciaRunner            # the whole catalog, every mode
+bun scripts/depth-probe.ts build/GocciaRunner            # the whole catalog
 npx tsx scripts/depth-probe.ts build/GocciaRunner --list  # probes, growth class, default depths
 bun scripts/depth-probe.ts build/GocciaRunner --probe=proxy-getOwnPropertyDescriptor --depth=30000
 bun scripts/depth-probe.ts build/GocciaRunner --fuzz --count=200 --keep
-bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17 --mode=bytecode
+bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17
 ```
-
-`--modes` chooses the execution modes (default `interpreted,bytecode`;
-`--mode=NAME` is one of them). Before probing, the tool runs a trivial program
-in each mode: a mode the runner rejects is listed as skipped rather than
-counted as a finding, so the tool keeps working against a runner with fewer
-executors.
 
 Probe production and development builds separately: the production build
 compiles without FPC's stack checking (`-Ct`), so a native stack overflow that
