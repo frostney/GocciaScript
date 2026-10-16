@@ -91,6 +91,24 @@ const bindChain = (depth, fn) => {
   }
   return bound;
 };
+// bind names each level "bound " + its target's name, so these chains hide
+// the name to keep their memory linear in the depth.
+const namelessBindChain = (depth, fn) => {
+  let bound = fn;
+  for (const _ of Array.from({ length: depth })) {
+    bound = bound.bind(null);
+    Object.defineProperty(bound, "name", { value: "" });
+  }
+  return bound;
+};
+const proxyBindChain = (depth, fn) => {
+  const handler = { get: (target, key, receiver) => (key === "name" ? undefined : Reflect.get(target, key, receiver)) };
+  let f = fn;
+  for (const _ of Array.from({ length: depth })) {
+    f = Function.prototype.bind.call(new Proxy(f, handler), null);
+  }
+  return f;
+};
 const describeError = (error) => {
   if (error !== null && typeof error === "object") {
     const ctor = error.constructor;
@@ -263,11 +281,72 @@ const CATALOG: Probe[] = [
     body: (d) => `report(() => bindChain(${d}, () => 1)());\n`,
   },
   {
+    id: "bind-chain-construct",
+    growth: "linear",
+    summary: "new on a class bound DEPTH times",
+    body: (d) => `report(() => typeof new (namelessBindChain(${d}, class {}))());\n`,
+  },
+  {
+    id: "bind-chain-instanceof",
+    growth: "linear",
+    summary: "instanceof against a class bound DEPTH times (each level reads @@hasInstance)",
+    body: (d) => `report(() => { const C = class {}; return new C() instanceof namelessBindChain(${d}, C); });\n`,
+  },
+  {
+    id: "proxy-bind-alternating-call",
+    growth: "linear",
+    summary: "Call a chain that alternates a Proxy and a bound function DEPTH times (#1497)",
+    body: (d) =>
+      `report(() => proxyBindChain(${d}, () => 1)());\n`,
+  },
+  {
+    id: "proxy-bind-alternating-construct",
+    growth: "linear",
+    summary: "new on a chain that alternates a Proxy and a bound function DEPTH times (#1497)",
+    body: (d) =>
+      `report(() => typeof new (proxyBindChain(${d}, class {}))());\n`,
+  },
+  {
+    id: "class-extends-proxy-chain",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH classes that each extend a Proxy of the previous one (#1497)",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = new Proxy(C, {}); C = class extends B {}; } return typeof new C(); });\n`,
+  },
+  {
     id: "class-extends-chain",
     growth: "linear",
     summary: "Construct the most derived of DEPTH chained subclasses",
     body: (d) =>
       `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B {}; } return typeof new C(); });\n`,
+  },
+  {
+    id: "class-extends-chain-fields",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses that each declare a field",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B { x = 1; }; } return new C().x; });\n`,
+  },
+  {
+    id: "class-extends-chain-constructors",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses whose constructors call super()",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B { constructor(...a) { super(...a); } }; } return typeof new C(); });\n`,
+  },
+  {
+    id: "class-extends-chain-super",
+    growth: "linear",
+    summary: "super() and Reflect.construct into the most derived of DEPTH chained subclasses",
+    body: (d) =>
+      `report(() => { let C = class { first = 1; }; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B {}; } const Leaf = C; const Top = class extends Leaf { constructor() { super(); } }; return new Top().first + Reflect.construct(Leaf, []).first; });\n`,
+  },
+  {
+    id: "class-extends-chain-mixed",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses, alternating default and super()-calling constructors",
+    body: (d) =>
+      `report(() => { let C = class {}; let i = 0; for (const _ of Array.from({ length: ${d} })) { const B = C; C = i % 2 === 0 ? class extends B {} : class extends B { constructor(...a) { super(...a); } }; i += 1; } return typeof new C(); });\n`,
   },
   {
     id: "json-stringify-array",

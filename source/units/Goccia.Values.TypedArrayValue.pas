@@ -256,6 +256,10 @@ const
 type
   TGocciaTypedArrayIteratorKind = (taikValues, taikKeys, taikEntries);
 
+  // TC39 Immutable ArrayBuffers: the accessMode (~read~ or ~write~) that
+  // TypedArraySpeciesCreate validates its result against.
+  TGocciaTypedArrayAccessMode = (taamRead, taamWrite);
+
   TGocciaTypedArrayIteratorValue = class(TGocciaIteratorValue)
   private
     FSource: TGocciaTypedArrayValue;
@@ -1604,8 +1608,11 @@ begin
 end;
 
 // ES2026 §23.2.4.3 TypedArraySpeciesCreate(exemplar, argumentList)
+// TC39 Immutable ArrayBuffers TypedArraySpeciesCreate(exemplar, argumentList [, accessMode])
 function TypedArraySpeciesCreate(const AExemplar: TGocciaTypedArrayValue;
-  const AArguments: TGocciaArgumentsCollection): TGocciaTypedArrayValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AAccessMode: TGocciaTypedArrayAccessMode;
+  const AMethod: string): TGocciaTypedArrayValue;
 var
   ConstructorValue, ConstructedValue: TGocciaValue;
   ExpectedLength: Integer;
@@ -1617,6 +1624,12 @@ begin
       ['TypedArraySpeciesCreate']), SSuggestTypedArrayConstructorReceiver);
 
   Result := TGocciaTypedArrayValue(ConstructedValue);
+  // TC39 Immutable ArrayBuffers ValidateTypedArray step 4: if accessMode is
+  // ~write~ and IsImmutableBuffer(O.[[ViewedArrayBuffer]]), throw a TypeError.
+  // This holds even when the result views the exemplar's own buffer.
+  if (AAccessMode = taamWrite) and
+     IsTypedArrayBackedByImmutableArrayBuffer(Result) then
+    ThrowTypeError(AMethod + ' cannot write to an immutable ArrayBuffer');
   if TGocciaTypedArrayValue.IsBigIntKind(Result.FKind) <>
      TGocciaTypedArrayValue.IsBigIntKind(AExemplar.FKind) then
     ThrowTypeError(SErrorBigIntTypedArrayCannotMix, SSuggestBigIntTypedArrayValue);
@@ -1796,7 +1809,9 @@ begin
     Args.Add(AElement);
     Args.Add(AIndex);
     Args.Add(AArray);
-    Result := TGocciaFunctionBase(ACallback).Call(Args, AThisArg);
+    // The caller checked IsCallable, which a callable Proxy or a class also
+    // passes; DispatchCall reaches each through its own [[Call]].
+    Result := DispatchCall(ACallback, Args, AThisArg);
   finally
     Args.Free;
     RemoveTempRootIfNeeded(ThisRoot);
@@ -2024,15 +2039,16 @@ begin
   ConstructorArgs := TGocciaArgumentsCollection.Create(
     [TGocciaNumberLiteralValue.Create(NewLen)]);
   try
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers %TypedArray%.prototype.slice step 13:
+    // TypedArraySpeciesCreate(O, « 𝔽(countBytes) », ~write~)
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+      'TypedArray.prototype.slice');
   finally
     ConstructorArgs.Free;
   end;
 
   if NewLen > 0 then
     EnsureTypedArrayAttached(TA, 'TypedArray.prototype.slice');
-  if NewTA.FBufferValue <> TA.FBufferValue then
-    EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.slice');
   CurrentLength := TA.Length;
   CopyElements := Max(Min(Final, CurrentLength) - First, 0);
   if CopyElements > NewLen then
@@ -2104,7 +2120,10 @@ begin
       TA.FByteOffset + BeginIdx * BPE));
     if not UseAutoLengthResult then
       ConstructorArgs.Add(TGocciaNumberLiteralValue.Create(NewLen));
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers: subarray keeps the default ~read~ access,
+    // so a view of an immutable buffer is a valid result.
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamRead,
+      'TypedArray.prototype.subarray');
   finally
     ConstructorArgs.Free;
   end;
@@ -2790,7 +2809,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-// ES2026 §23.2.3.20 %TypedArray%.prototype.map(callbackfn [, thisArg])
+// ES2026 §23.2.3.22 %TypedArray%.prototype.map(callbackfn [, thisArg])
 function TGocciaTypedArrayValue.TypedArrayMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
@@ -2810,11 +2829,13 @@ begin
   ConstructorArgs := TGocciaArgumentsCollection.Create(
     [TGocciaNumberLiteralValue.Create(SourceLength)]);
   try
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers %TypedArray%.prototype.map step 5:
+    // TypedArraySpeciesCreate(O, « 𝔽(len) », ~write~)
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+      'TypedArray.prototype.map');
   finally
     ConstructorArgs.Free;
   end;
-  EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.map');
   InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, NewTA);
   try
@@ -2831,7 +2852,7 @@ begin
   end;
 end;
 
-// ES2026 §23.2.3.9 %TypedArray%.prototype.filter(callbackfn [, thisArg])
+// ES2026 §23.2.3.10 %TypedArray%.prototype.filter(callbackfn [, thisArg])
 function TGocciaTypedArrayValue.TypedArrayFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
@@ -2866,11 +2887,13 @@ begin
     ConstructorArgs := TGocciaArgumentsCollection.Create(
       [TGocciaNumberLiteralValue.Create(Kept.Count)]);
     try
-      NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+      // TC39 Immutable ArrayBuffers %TypedArray%.prototype.filter step 9:
+      // TypedArraySpeciesCreate(O, « 𝔽(captured) », ~write~)
+      NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+        'TypedArray.prototype.filter');
     finally
       ConstructorArgs.Free;
     end;
-    EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.filter');
     for I := 0 to Kept.Count - 1 do
       NewTA.WriteValueToElement(I, Kept[I]);
     Result := NewTA;
@@ -2998,6 +3021,13 @@ begin
 end;
 
 // ECMA-402 §17.1.6 %TypedArray%.prototype.toLocaleString([locales [, options]])
+//
+// An element is a fresh number or BigInt value, held only here while its
+// toLocaleString is looked up and called. The lookup can run a getter, and
+// the first lookup of Number.prototype.toLocaleString in a realm loads its
+// shim as bytecode, which reaches the VM's memory-pressure checkpoint. One
+// TGocciaActiveRootFrame per element holds it, its wrapper object, the method
+// and the method's result until that is converted (issue #1655).
 function TGocciaTypedArrayValue.TypedArrayToLocaleString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -3007,6 +3037,7 @@ var
   Element, Method, Formatted: TGocciaValue;
   ElementObject: TGocciaObjectValue;
   CallArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   TA := RequireAttachedTypedArray(AThisValue, '%TypedArray%.prototype.toLocaleString');
   Len := TA.Length;
@@ -3018,26 +3049,35 @@ begin
     if (Element is TGocciaUndefinedLiteralValue) or
        (Element is TGocciaNullLiteralValue) then
       Continue;
-    ElementObject := ToObject(Element);
-    Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
-    if (Method = nil) or not Method.IsCallable then
-      ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
-
-    CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+    Roots.Initialize;
     try
-      if AArgs.Length > 0 then
-        CallArgs.Add(AArgs.GetElement(0))
-      else
-        CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-      if AArgs.Length > 1 then
-        CallArgs.Add(AArgs.GetElement(1))
-      else
-        CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-      Formatted := InvokeCallable(Method, CallArgs, Element);
+      Roots.Add(Element);
+      ElementObject := ToObject(Element);
+      Roots.Add(ElementObject);
+      Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
+      if (Method = nil) or not Method.IsCallable then
+        ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
+      Roots.Add(Method);
+
+      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+      try
+        if AArgs.Length > 0 then
+          CallArgs.Add(AArgs.GetElement(0))
+        else
+          CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        if AArgs.Length > 1 then
+          CallArgs.Add(AArgs.GetElement(1))
+        else
+          CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        Formatted := InvokeCallable(Method, CallArgs, Element);
+      finally
+        CallArgs.Free;
+      end;
+      Roots.Add(Formatted);
+      S := S + Formatted.ToStringLiteral.Value;
     finally
-      CallArgs.Free;
+      Roots.Clear;
     end;
-    S := S + Formatted.ToStringLiteral.Value;
   end;
   Result := TGocciaStringLiteralValue.Create(S);
 end;
