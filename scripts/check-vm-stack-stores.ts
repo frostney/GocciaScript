@@ -12,7 +12,7 @@
  * after calling F. FPC 3.2.2 calls F first; FPC 3.2.4-rc2 and trunk can
  * compute the address first, so if F runs guest code that moves the stack,
  * the result is written into the freed block and the register keeps its old
- * value (test262 in bytecode mode built with those compilers failed with
+ * value (test262 against a build from those compilers failed with
  * `ReferenceError: Date is not defined`). Evaluate such a call into a local,
  * then store the local.
  *
