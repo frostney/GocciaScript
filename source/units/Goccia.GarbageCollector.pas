@@ -339,7 +339,8 @@ type
     // when the live set has crossed the reserve below the ceiling. AForce
     // skips that heuristic and always collects; it exists for the last-resort
     // site in TryReserveExternalBytes, which must not refuse a reservation
-    // before a collection has actually been attempted.
+    // before a collection has actually been attempted, and for the VM's
+    // checkpoint in a GC-stress build (GOCCIA_GC_STRESS).
     procedure CollectForMemoryPressure(const AProtect: TGCManagedObject;
       const AForce: Boolean = False);
 
@@ -457,7 +458,8 @@ uses
   ,
   SysUtils
   {$IFDEF GC_TIMING}, TimingUtils{$ENDIF}
-  {$ENDIF};
+  {$ENDIF}
+  {$IFDEF GOCCIA_GC_STRESS}, heaptrc{$ENDIF};
 
 const
   // Slots pre-allocated for the active-root stack, and the unit it doubles
@@ -1755,8 +1757,23 @@ end;
 initialization
   CriticalSectionInit(GCCollectLock);
   GCCurrentMark := 1;
+  {$IFDEF GOCCIA_GC_STRESS}
+  // A GC-stress build links heaptrc (-gh, from ./build.pas --gc-stress). Keep
+  // every released block out of reuse: heaptrc fills a freed block with $F0, so
+  // a stale reference to a collected value faults on its next use instead of
+  // reading whatever a later allocation put there.
+  keepreleased := True;
+  {$ENDIF}
 
 finalization
   CriticalSectionDone(GCCollectLock);
+  {$IFDEF GOCCIA_GC_STRESS}
+  // Skip heaptrc's exit report. heaptrc is finalized after this unit and
+  // checks useheaptrace first. With the known leaks (#1592) the report runs to
+  // hundreds of megabytes and about 15 seconds per process, and leaks are the
+  // memory-safety job's concern, not this build's: heaptrc still halts on a
+  // double free or a corrupted block at the moment it happens.
+  useheaptrace := False;
+  {$ENDIF}
 
 end.

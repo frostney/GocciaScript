@@ -2979,7 +2979,8 @@ begin
         resolved path, stamped with its file's modification time, and mark it
         evaluating before its imports are linked, as Execute does. As the
         VM's current runtime module it gets the program's exports
-        (TGocciaBytecodeExecutor.InitializeEntryExports, then OP_EXPORT). }
+        (TGocciaBytecodeExecutor.InitializeEntryLocalExports and
+        InitializeEntryLinkedExports, then OP_EXPORT). }
       EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then
