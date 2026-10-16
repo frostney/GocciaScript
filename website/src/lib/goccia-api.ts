@@ -27,6 +27,7 @@ import {
 import {
   DEFAULT_EXECUTION_MODE,
   type ExecutionMode,
+  effectiveExecutionMode,
   findVersion,
   hostFilesystemBoundaryFlag,
   isFlagSupported,
@@ -863,8 +864,14 @@ async function runHandler(
   // and a request that names that same version explicitly share a single
   // cache entry. Different versions get isolated entries — switching the
   // dropdown to nightly or v0.6.1 always re-spawns until that version's
-  // cache fills.
-  const mode: ExecutionMode = body.mode ?? DEFAULT_EXECUTION_MODE;
+  // cache fills. The key carries the mode the binary actually runs: a binary
+  // without `--mode` (any 0.15+ release) ignores the request's mode, so both
+  // values share one entry for it.
+  const mode: ExecutionMode = effectiveExecutionMode(
+    body.mode,
+    features,
+    config.kind === "execute" ? "loader" : "testRunner",
+  );
   const cacheKey = responseCacheKey({
     kind: config.kind,
     code,

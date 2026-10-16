@@ -476,12 +476,12 @@ function playgroundMarkdown(searchParams: URLSearchParams): string {
   return [
     frontmatter(
       "Playground - GocciaScript",
-      "Run GocciaScript in the browser with example programs and selectable backends.",
+      "Run GocciaScript in the browser with example programs and selectable engine versions.",
     ),
     "",
     "# Playground",
     "",
-    "Run GocciaScript in the browser. Choose an example, select the bytecode VM backend (the default) or the tree-walk interpreter on versions that support `--mode`, toggle ASI, and execute the script.",
+    "Run GocciaScript in the browser. Choose an example and an engine version, toggle ASI, and execute the script. Versions up to 0.14 also offer their tree-walk interpreter through `--mode`; bytecode is the default for every version and the only backend from 0.15.",
     "",
     "## Examples",
     "",
@@ -505,9 +505,7 @@ function sandboxMarkdown(): string {
 # once: review and trust the sandbox section
 ./build/GocciaRunner --trust goccia.json
 
-./build/GocciaRunner main.js \\
-  --mode=bytecode \\
-  --diff=unified`;
+./build/GocciaRunner main.js --diff=unified`;
   const sandboxConfig = `{
   "sandbox": {
     "copy": ["project=/", "tools"],

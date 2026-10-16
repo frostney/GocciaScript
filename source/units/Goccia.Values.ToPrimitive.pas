@@ -17,14 +17,13 @@ function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitive
 // else is coerced via ToString. Callers must check the returned type.
 function ToPropertyKey(const AValue: TGocciaValue): TGocciaValue;
 
-// Every computed property access on a possibly-nullish base must call
-// ToPropertyKeyForBase rather than a bare ToPropertyKey. Pass AForWrite for store
-// targets so the message reads "cannot set properties" rather than "cannot read
-// properties".
+// Every computed property access on a possibly-nullish base must reject the
+// nullish base with this before it converts the key with ToPropertyKey
+// (ES2026 §6.2.5.5 GetValue steps 3.a then 3.c, §6.2.5.6 PutValue the same).
+// Pass AForWrite for store targets so the message reads "cannot set
+// properties" rather than "cannot read properties".
 procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
   const AForWrite: Boolean = False); {$IFDEF FPC}inline;{$ENDIF}
-function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
-  const AForWrite: Boolean = False): TGocciaValue;
 
 implementation
 
@@ -36,6 +35,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
@@ -58,7 +58,13 @@ begin
     Roots.Initialize;
     Args := TGocciaArgumentsCollection.Create;
     try
-      AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
+      // ES2026 §7.1.1.1 OrdinaryToPrimitive step 3.b.i: Call(method, O).
+      // IsCallable admits any callable; only a function object takes the
+      // direct path, and a callable Proxy or a class goes through [[Call]].
+      if Method is TGocciaFunctionBase then
+        AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue)
+      else
+        AResult := InvokeCallable(Method, Args, AThisValue);
       Roots.Add(AResult);
       Result := AResult.IsPrimitive;
     finally
@@ -121,7 +127,13 @@ begin
       Args := TGocciaArgumentsCollection.Create;
       try
         Args.Add(HintValue(AHint));
-        Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue);
+        // A callable Proxy or a class passes GetMethod too (§7.3.10 step 3
+        // asks only IsCallable), so only a function object takes the direct
+        // path.
+        if ExoticToPrim is TGocciaFunctionBase then
+          Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue)
+        else
+          Result := InvokeCallable(ExoticToPrim, Args, AValue);
       finally
         Args.Free;
       end;
@@ -248,15 +260,6 @@ begin
   if (ABase is TGocciaNullLiteralValue) or
      (ABase is TGocciaUndefinedLiteralValue) then
     ThrowNullishBasePropertyAccess(ABase, AUncoercedKey, AForWrite);
-end;
-
-// ES2026 §6.2.5.5 GetValue steps 3.a then 3.c (or §6.2.5.6 PutValue, same order):
-// reject a nullish base, then convert the referenced name with ToPropertyKey.
-function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
-  const AForWrite: Boolean): TGocciaValue;
-begin
-  RequireCoercibleBaseForPropertyAccess(ABase, AUncoercedKey, AForWrite);
-  Result := ToPropertyKey(AUncoercedKey);
 end;
 
 end.

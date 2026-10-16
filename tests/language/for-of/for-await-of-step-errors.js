@@ -273,9 +273,7 @@ describe("for-await-of step errors reach the catch without an extra close tick",
     expect(log).toEqual(["next", "caught:x", "t1", "t2"]);
   });
 
-  // Node 24 logs "t1 caught:x t2 t3"; --mode=interpreted waits for each step
-  // by draining the microtask queue and catches before t1, so these assert
-  // only that no close step delays the catch past t2.
+  // No close step delays the catch past t2.
   test("array holding a rejected promise", async () => {
     const log = [];
     const rejected = Promise.reject("x");
@@ -287,6 +285,8 @@ describe("for-await-of step errors reach the catch without an extra close tick",
       }
     })();
     await Promise.all([loop, ticker(log, 3)]);
+    // Node 24: t1 caught:x t2 t3
+    expect(log).toEqual(["t1", "caught:x", "t2", "t3"]);
     expect(log.indexOf("caught:x")).toBeLessThan(log.indexOf("t2"));
     expect(log.length).toBe(4);
   });
@@ -316,6 +316,7 @@ describe("for-await-of step errors reach the catch without an extra close tick",
     // Node 24: next1 return t1 caught:x t2 t3. The async-from-sync wrapper
     // closes the sync iterator itself (§27.1.5.4 step 13); the loop does not
     // close it a second time.
+    expect(log).toEqual(["next1", "return", "t1", "caught:x", "t2", "t3"]);
     expect(log.indexOf("caught:x")).toBeLessThan(log.indexOf("t2"));
     expect(log.filter((entry) => entry === "return").length).toBeLessThan(2);
   });

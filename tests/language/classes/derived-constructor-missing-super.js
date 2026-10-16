@@ -99,10 +99,10 @@ describe("a derived constructor that never calls super()", () => {
     expect(Object.keys(new (Ok.bind(null))())).toEqual(["seq", "tail"]);
   });
 
-  test("both modes report the same message", () => {
+  test("the access check and the return check report the same message", () => {
     // The two checks — reading `this` and returning without super() — live in
-    // different places and fire in different orders per mode, so they share one
-    // message rather than describing the route they took.
+    // different places and fire depending on whether the body touches `this`,
+    // so they share one message rather than describing the route they took.
     class TouchesThis extends Base {
       constructor() {
         this.x = 1;

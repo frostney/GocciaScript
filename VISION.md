@@ -56,5 +56,5 @@ Testing is where a sandboxed runtime meets ordinary developer work. The built-in
 
 - [Language](docs/language.md) — ECMAScript support, recommended defaults, compatibility flags, and shims
 - [Embedding](docs/embedding.md) — How to embed GocciaScript in a FreePascal application
-- [Architecture](docs/architecture.md) — Engine pipeline and execution modes
+- [Architecture](docs/architecture.md) — Engine pipeline and main layers
 - [Errors](docs/errors.md) — Error system and sandboxing behavior

@@ -202,7 +202,7 @@ artifact names.
 | Async positive    | captured output contains `Test262:AsyncTestComplete`                 | `Test262:AsyncTestFailure:<name>: <msg>`, no marker, or a throw before `$DONE` |
 | Negative runtime  | captured output contains `Test262:NegativeTestError:<expected-type>` | `Test262:NegativeTestNoError` or another error type                       |
 | Top-level negative runtime | escaped throw has the expected error type                   | no throw or another error type                                           |
-| Negative parse    | parsing or linking throws as expected                                | source executes cleanly                                                  |
+| Negative parse / resolution | parsing, early errors, or linking raise `negative.type` before evaluation | clean run, `$DONOTEVALUATE` reached, a JS-level throw, or another error type |
 
 Async markers are emitted by stock test262 `doneprintHandle.js` via
 `$DONE`; the runner captures `print` output in the worker and scans it for
@@ -219,11 +219,13 @@ semantics under test.
 
 All four template kinds are produced by `TTest262App.BuildSource` in
 `GocciaTest262Runner`. Bodies for positive sync, positive async,
-empty, and script-scope tests are all `harness + body` — identical
-shape, no special wrapping. Tests flagged `onlyStrict` receive a
-`"use strict"` directive prefix before the harness so the runtime uses
-strict directive semantics while the runner can still enable
-compatibility-gated parser support for Script tests.
+empty, script-scope, and negative parse/resolution tests are all
+`harness + body` — identical shape, no special wrapping. Tests flagged
+`onlyStrict` receive a `"use strict"` directive prefix before the harness so
+the runtime uses strict directive semantics while the runner can still enable
+compatibility-gated parser support for Script tests. Tests flagged `raw` run
+their file exactly as written: no harness, no prefix, frontmatter kept. Each
+test runs once; `noStrict` and unflagged Script tests run without the prefix.
 
 ### Positive (sync, async, empty, script-scope)
 
@@ -250,15 +252,17 @@ try {
 }
 ```
 
-Top-level global-code runtime negatives that expect `SyntaxError` use the
-positive template shape instead:
+Top-level global-code runtime negatives that expect `SyntaxError`, and every
+`module`-flagged runtime negative (top-level `import`/`export` cannot sit inside
+`try`), use the positive template shape instead:
 
 ```text
 {harness_source}
 {body}
 ```
 
-The runner then checks the escaped engine error type directly.
+The runner then checks the escaped error's `constructor.name` (read from data
+properties only, so no accessor getter runs) against `negative.type`.
 
 The error-class identification uses `e.constructor.name`, matching the
 spec-visible constructor/prototype path. If this cannot identify the
@@ -274,16 +278,34 @@ avoids collisions with test-body bindings.
 ### Negative parse
 
 ```text
+{harness_source}
 {body}
 ```
 
-Body alone (with the `"use strict";` prefix for `onlyStrict` tests). The
-runner executes it in process and records whether parsing, linking, or
-execution raised. Any raised error passes the test;
-the error type is not compared. A body that completes cleanly fails with
-`expected parse error, body executed cleanly`. Module-flagged negative
-tests of every phase use this template too, because top-level `import`
-cannot sit inside the negative-runtime `try` wrapper.
+Used for `negative.phase` `parse` and `resolution` (and `early`, should it
+reappear). The source is the positive template: like every other non-raw test,
+the body gets the stock harness, as the test262 interpretation rules require,
+so `sta.js` defines `$DONOTEVALUATE()`. Each non-raw parse or resolution test
+calls it as its first statement. `raw` tests get no harness and no
+`"use strict";` prefix, and keep their original source, frontmatter included;
+the evaluated ones throw the same string literal themselves. The test passes
+only when all of these hold:
+
+1. execution raised;
+2. the body was not evaluated: the escaped value is not the string
+   `$DONOTEVALUATE()` throws (`Test262: This statement should not be
+   evaluated.`);
+3. the error was raised before evaluation, as a host-level engine error
+   from the parser, early-error checks, or module linking (of these, only
+   `TGocciaSyntaxError` is named `SyntaxError`). A `SyntaxError` thrown as a
+   JS value during evaluation does not count;
+4. the error name equals `negative.type`.
+
+An engine that misses an early error therefore runs the body, reaches
+`$DONOTEVALUATE()`, and fails with `body was evaluated ($DONOTEVALUATE
+reached)` instead of passing on the resulting throw (see #1571). Any
+`SyntaxError` raised before evaluation passes, whichever rule raised it; this
+is the same grading the test262 interpretation rules and other runners apply.
 
 ## Failure classification
 
@@ -440,7 +462,7 @@ Default categories: `built-ins, harness, intl402, language, staging`
 There is no eligibility filter. Every discovered test runs. Tests
 that depend on missing features fail with a real diagnostic, not an
 invisible skip. On POSIX, each worker process owns exactly one test, so its
-heap, roots, queues, executor, engine, and realm cannot leak into the next case.
+heap, roots, queues, VM, engine, and realm cannot leak into the next case.
 Process exit also returns allocator-retained storage to the operating system.
 Cooperative timeouts (`--timeout`, default `20s`), per-test memory ceilings
 (`--max-memory`, a size such as `512MiB`), and the native worker watchdog bound
@@ -460,9 +482,19 @@ feature-level filter.
 
 ## Updating the contract
 
-Changes to `TTest262App.BuildSource` in `GocciaTest262Runner` are
-verified by the full conformance run itself (no separate regression
-suite). After any wrapper-template change:
+The contract has a version, `GRADING_CONTRACT_VERSION` in
+`GocciaTest262Runner`, published in every report as `run.gradingContract`
+(reports without the field were graded under contract 1). Bump it when a
+grading or template change moves tests between PASS and FAIL without an engine
+change. When the cached `main` baseline was graded under a different contract,
+the PR comment still lists every PASS → FAIL transition but does not fail the
+regression gate; the next `main` run republishes the baseline under the new
+contract. Contract 2 (#1571) made negative parse and resolution tests require a
+pre-evaluation error of `negative.type`.
+
+`scripts/test-cli-apps.ts` covers the negative grading paths with a small
+synthetic suite. After any wrapper-template change, also verify against the
+full conformance run:
 
 1. Run locally, from the repository root:
 

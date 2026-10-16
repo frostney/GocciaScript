@@ -15,11 +15,11 @@ const
   // NATIVE_STACK_RESERVE bytes of the stack free and throws the RangeError of
   // --max-stack instead of entering once less than that remains, so no
   // --max-stack value, including 0, lets these re-entries overflow the native
-  // stack. The check runs only where the bytecode loop is entered: a chain of
-  // native calls (Proxies forwarding to their targets, bound functions calling
-  // theirs) is not checked in between, and the delegation caps below bound
-  // only some of those chains. Native re-entries are function calls, and count
-  // against --max-stack as well.
+  // stack. A chain of native calls that never enters the bytecode loop
+  // (Proxies forwarding to their targets, a bound function between them, a
+  // class extending a Proxy) is counted by the delegation caps below, which
+  // check the same reserve once they nest. Native re-entries are function
+  // calls, and count against --max-stack as well.
   NATIVE_STACK_RESERVE = 256 * 1024;
 
   // Where the bounds of the running thread's stack cannot be found, a native
@@ -46,10 +46,12 @@ const
   // A level costs more native stack when its trap is a native function
   // reached through a bound function or a Proxy (`Reflect.apply.bind(null)`,
   // `new Proxy(Reflect.apply, {})`): in a production build on Linux x86-64,
-  // interpreted, under the deepest recursion the default --max-stack allows,
-  // such a nest ran out of native stack after about 2,130 levels. The cap
-  // stays below that. A trap wrapped in several bound functions costs more
-  // again and is not covered: three already exhaust the stack there.
+  // under the deepest recursion the default --max-stack allows, such a nest
+  // ran out of native stack after about 2,130 levels (measured under the
+  // since-removed tree-walk interpreter). The cap stays below that. A level
+  // that costs more again, such as a trap wrapped in several bound functions,
+  // is stopped before the cap by the native stack check
+  // EnterPropertyDelegation makes once delegations nest.
   MAX_PROPERTY_DELEGATION_DEPTH = 2000;
 
   // The same walk enters an array, function, class or class instance by a
@@ -431,10 +433,34 @@ begin
     CheckNativeStackHeadroomSlow(ADepth, ALimit);
 end;
 
+// Out of line: it runs only once delegations nest. A level costs a different
+// amount of native stack depending on what it forwards through (a bound
+// function, a native trap, a class's implicit constructor), so the count alone
+// does not keep a nest inside the stack when native re-entries already hold
+// most of it. Past NATIVE_REENTRY_UNCHECKED_DEPTH nested delegations each one
+// also checks the stack, like a native re-entry into the VM does. Where the
+// bounds of the stack cannot be found, the count is the only bound.
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure CheckDelegationNativeStack;
+var
+  Limit: NativeUInt;
+begin
+  Limit := NativeStackLimit;
+  if (Limit <> 0) and (NativeStackPosition < Limit) then
+    ThrowMaxCallStackExceeded;
+end;
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
+
 procedure EnterPropertyDelegation;
 begin
   if GPropertyDelegationDepth >= MAX_PROPERTY_DELEGATION_DEPTH then
     ThrowMaxCallStackExceeded;
+  if GPropertyDelegationDepth >= NATIVE_REENTRY_UNCHECKED_DEPTH then
+    CheckDelegationNativeStack;
   Inc(GPropertyDelegationDepth);
 end;
 
@@ -447,6 +473,8 @@ procedure EnterObjectDelegation;
 begin
   if GObjectDelegationDepth >= MAX_OBJECT_DELEGATION_DEPTH then
     ThrowMaxCallStackExceeded;
+  if GObjectDelegationDepth >= NATIVE_REENTRY_UNCHECKED_DEPTH then
+    CheckDelegationNativeStack;
   Inc(GObjectDelegationDepth);
 end;
 

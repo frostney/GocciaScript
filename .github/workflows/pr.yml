@@ -134,10 +134,6 @@ jobs:
   test:
     needs: build
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [interpreted, bytecode]
     defaults:
       run:
         shell: bash
@@ -160,53 +156,52 @@ jobs:
         run: ./fixtures/ffi/build.sh
 
       - name: Run all JavaScript tests
-        run: ./build/GocciaTestRunner -P tests --mode=${{ matrix.mode }} --silent --no-progress --output=test-results-${{ matrix.mode }}.json
+        run: ./build/GocciaTestRunner -P tests --silent --no-progress --output=test-results.json
 
       - name: Check GocciaTestRunner CLI behaviour
         run: |
-          grep -q '"mode": "${{ matrix.mode }}"' test-results-${{ matrix.mode }}.json
-          grep -q '"totalFiles":' test-results-${{ matrix.mode }}.json
-          grep -q '"jobCount":' test-results-${{ matrix.mode }}.json
+          grep -q '"totalFiles":' test-results.json
+          grep -q '"jobCount":' test-results.json
 
       - name: Check GocciaTestRunner coverage CLI
         run: |
           # --coverage prints a summary to stdout
-          cov_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage 2>&1)"
+          cov_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --coverage 2>&1)"
           [[ "$cov_output" == *'Coverage Summary:'* ]]
           [[ "$cov_output" == *'array-creation.js'* ]]
 
           # --coverage-format=lcov --coverage-output writes an lcov file
-          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage --coverage-format=lcov --coverage-output=cov.lcov
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --coverage --coverage-format=lcov --coverage-output=cov.lcov
           grep -q '^SF:' cov.lcov
           grep -q '^DA:' cov.lcov
           grep -q '^end_of_record' cov.lcov
           rm cov.lcov
 
           # --coverage-format=json --coverage-output writes a JSON file
-          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage --coverage-format=json --coverage-output=cov.json
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --coverage --coverage-format=json --coverage-output=cov.json
           grep -q '"path":' cov.json
           grep -q '"statementMap":' cov.json
           rm cov.json
 
           # order-independent: --coverage-output before --coverage-format
-          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage --coverage-output=cov2.lcov --coverage-format=lcov
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --coverage --coverage-output=cov2.lcov --coverage-format=lcov
           grep -q '^DA:' cov2.lcov
           rm cov2.lcov
 
           # single-file detail view shows line annotations
-          detail_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage 2>&1)"
+          detail_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --coverage 2>&1)"
           detail_re='[0-9]+x \|'
           [[ "$detail_output" =~ $detail_re ]]
 
           # branch coverage: lcov contains BRDA/BRF entries for branching code
-          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js --mode=${{ matrix.mode }} --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
+          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
           grep -q '^BRDA:' branch-cov.lcov
           grep -q '^BRF:' branch-cov.lcov
           grep -q '^BRH:' branch-cov.lcov
           rm branch-cov.lcov
 
           # branch coverage: JSON contains branchMap and b entries
-          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js --mode=${{ matrix.mode }} --coverage --coverage-format=json --coverage-output=branch-cov.json
+          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js --coverage --coverage-format=json --coverage-output=branch-cov.json
           grep -q '"branchMap":' branch-cov.json
           grep -q '"b":' branch-cov.json
           rm branch-cov.json
@@ -215,12 +210,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: test-results-${{ matrix.mode }}
+          name: test-results
           retention-days: 1
-          path: test-results-${{ matrix.mode }}.json
+          path: test-results.json
 
       - name: Run Pascal unit tests
-        if: matrix.mode == 'interpreted'
         run: |
           found=0
           for test_bin in build/*.Test build/*.Test.exe; do
@@ -248,10 +242,6 @@ jobs:
     # per-step `timeout`s below cap each pass, and this caps the whole leg so a
     # runaway fails in minutes instead of burning the default 360-minute budget.
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [interpreted, bytecode]
     defaults:
       run:
         shell: bash
@@ -288,7 +278,7 @@ jobs:
       # and warms the OS file cache for the benchmark sources (shared by both
       # binaries) before measuring. It deliberately uses a tiny calibration
       # (10 ms, 1 round) so it stays light: an earlier full two-binary warm-up
-      # roughly doubled the interpreted leg and loaded the runner right before
+      # roughly doubled the leg and loaded the runner right before
       # measuring, destabilising per-benchmark calibration enough that a measured
       # pass could run away for tens of minutes (issue #815 follow-up). The
       # runner's built-in per-benchmark warm-up (5 iterations) covers
@@ -297,7 +287,7 @@ jobs:
         env:
           GOCCIA_BENCH_ROUNDS: 1
           GOCCIA_BENCH_CALIBRATION_MS: 10
-        run: timeout 120 ./build/GocciaBenchmarkRunner benchmarks --mode=${{ matrix.mode }} --no-progress > /dev/null 2>&1 || true
+        run: timeout 120 ./build/GocciaBenchmarkRunner benchmarks --no-progress > /dev/null 2>&1 || true
 
       # `main` is built from the PR's base commit, so it cannot run benchmarks the
       # PR newly adds or changes to use new language features. The report is still
@@ -306,7 +296,7 @@ jobs:
       # entry and renders as 🆕 new. The PR's own run below is intentionally NOT
       # tolerant — a broken PR benchmark should fail the leg.
       # `timeout` (GNU coreutils, present on ubuntu runners) caps a single pass:
-      # a normal interpreted/bytecode pass is ~3 min, so 8 min is generous, and a
+      # a normal pass is ~3 min, so 8 min is generous, and a
       # runaway calibration loop is killed (SIGKILL 30 s after SIGTERM) instead of
       # spinning for the whole job. A killed `main` pass writes no JSON and the
       # comparison degrades to PR-only via if-no-files-found + null-main handling.
@@ -315,16 +305,15 @@ jobs:
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: timeout -k 30 480 ./build-main/GocciaBenchmarkRunner benchmarks --mode=${{ matrix.mode }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}-main.json
+        run: timeout -k 30 480 ./build-main/GocciaBenchmarkRunner benchmarks --no-progress --format=json --output=benchmark-main.json
 
       - name: Run benchmarks
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: timeout -k 30 480 ./build/GocciaBenchmarkRunner benchmarks --mode=${{ matrix.mode }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
+        run: timeout -k 30 480 ./build/GocciaBenchmarkRunner benchmarks --no-progress --format=json --output=benchmark.json
 
       - name: Capture deterministic profiles (main base)
-        if: matrix.mode == 'bytecode'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -334,7 +323,6 @@ jobs:
             out="profile-main/${rel%.*}.json"
             mkdir -p "$(dirname "$out")"
             ./build-main/GocciaBenchmarkRunner "$bench" \
-              --mode=bytecode \
               --profile-deterministic \
               --profile=all \
               --profile-output="$out" \
@@ -344,7 +332,6 @@ jobs:
           done < <(find benchmarks -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' -o -name '*.mjs' \) ! -path '*/helpers/*' | sort)
 
       - name: Capture deterministic profiles
-        if: matrix.mode == 'bytecode'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -354,7 +341,6 @@ jobs:
             out="profile-current/${rel%.*}.json"
             mkdir -p "$(dirname "$out")"
             ./build/GocciaBenchmarkRunner "$bench" \
-              --mode=bytecode \
               --profile-deterministic \
               --profile=all \
               --profile-output="$out" \
@@ -365,28 +351,27 @@ jobs:
 
       - name: Check benchmark CLI behaviour
         run: |
-          grep -q '"files": \[' benchmark-${{ matrix.mode }}.json
-          grep -q '"totalBenchmarks":' benchmark-${{ matrix.mode }}.json
-          grep -q '"jobCount":' benchmark-${{ matrix.mode }}.json
+          grep -q '"files": \[' benchmark.json
+          grep -q '"totalBenchmarks":' benchmark.json
+          grep -q '"jobCount":' benchmark.json
 
       - name: Upload results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: benchmark-${{ matrix.mode }}
+          name: benchmark
           retention-days: 1
-          path: benchmark-${{ matrix.mode }}.json
+          path: benchmark.json
 
       - name: Upload main results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: benchmark-${{ matrix.mode }}-main
+          name: benchmark-main
           retention-days: 1
           # Absent when build-main failed; the comparison degrades to PR-only.
           if-no-files-found: ignore
-          path: benchmark-${{ matrix.mode }}-main.json
+          path: benchmark-main.json
 
       - name: Upload deterministic profiles
-        if: matrix.mode == 'bytecode'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: profile-current
@@ -394,7 +379,6 @@ jobs:
           path: profile-current/
 
       - name: Upload main deterministic profiles
-        if: matrix.mode == 'bytecode'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: profile-main
@@ -824,6 +808,13 @@ jobs:
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
 
+      # test-cli-permissions.ts fetches a loopback name only the hosts file
+      # lists, which the runner image does not have, to show fetch resolves
+      # through the system resolver.
+      - name: Add a hosts-file-only name
+        if: runner.os == 'Linux'
+        run: echo "127.0.0.2 goccia-hosts-file.test" | sudo tee -a /etc/hosts
+
       - name: Check capability flags, limits, and permission defaults
         run: bun run scripts/test-cli-permissions.ts
 
@@ -963,7 +954,6 @@ jobs:
         run: |
           ./build/GocciaTest262Runner \
             --suite-dir=test262-suite \
-            --mode=bytecode \
             --jobs=4 \
             --timeout=20s \
             --shard-index=${{ strategy.job-index }} \
@@ -1028,15 +1018,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download interpreted results
+      - name: Download benchmark results
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: benchmark-interpreted
-
-      - name: Download bytecode results
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: benchmark-bytecode
+          name: benchmark
 
       - name: Download deterministic profiles
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -1045,17 +1030,11 @@ jobs:
           name: profile-current
           path: profile-current/
 
-      - name: Download interpreted main results
+      - name: Download main benchmark results
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         continue-on-error: true
         with:
-          name: benchmark-interpreted-main
-
-      - name: Download bytecode main results
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        continue-on-error: true
-        with:
-          name: benchmark-bytecode-main
+          name: benchmark-main
 
       - name: Download main deterministic profiles
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -1094,10 +1073,8 @@ jobs:
             }
 
             const { body: inner } = buildBenchmarkComparison({
-              interpData: read('benchmark-interpreted.json'),
-              interpMain: tryRead('benchmark-interpreted-main.json'),
-              bytecodeData: read('benchmark-bytecode.json'),
-              bytecodeMain: tryRead('benchmark-bytecode-main.json'),
+              bytecodeData: read('benchmark.json'),
+              bytecodeMain: tryRead('benchmark-main.json'),
               profileDiff,
               runnerLabel: 'ubuntu-latest x64',
             });
@@ -1227,29 +1204,17 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Download test results (interpreted)
+      - name: Download test results
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         continue-on-error: true
         with:
-          name: test-results-interpreted
+          name: test-results
 
-      - name: Download test results (bytecode)
+      - name: Download benchmark results
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         continue-on-error: true
         with:
-          name: test-results-bytecode
-
-      - name: Download benchmark results (interpreted)
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        continue-on-error: true
-        with:
-          name: benchmark-interpreted
-
-      - name: Download benchmark results (bytecode)
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        continue-on-error: true
-        with:
-          name: benchmark-bytecode
+          name: benchmark
 
       - name: Download boot timing
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -1279,40 +1244,37 @@ jobs:
               return `${bytes} B`;
             };
             const fmtCount = (value) => typeof value === 'number' ? value.toLocaleString('en-US') : '—';
-            const fmtNonNegativeBytes = (bytes) => typeof bytes === 'number' && bytes >= 0 ? fmtBytes(bytes) : '—';
-            const hasNonNegativeValue = (...values) => values.some((value) => typeof value === 'number' && value >= 0);
+            const isNonNegative = (value) => typeof value === 'number' && value >= 0;
             const testSummary = (report) => {
               if (!report) return '—';
               const passed = typeof report.passed === 'number' ? `${fmtCount(report.passed)} passed` : '—';
               return report.failed > 0 ? `${passed}, ${fmtCount(report.failed)} failed` : passed;
             };
             const countSummary = (count) => typeof count === 'number' ? fmtCount(count) : '—';
-            const row = (metric, interpreted, bytecode) => `| ${metric} | ${interpreted} | ${bytecode} |\n`;
+            const row = (metric, value) => `| ${metric} | ${value} |\n`;
+            const tableHeader = '| Metric | Value |\n|--------|-------|\n';
             const details = (summary, content) => `<details>\n<summary>${summary}</summary>\n\n${content}\n</details>\n\n`;
-            const memoryRows = (interpreted, bytecode) => {
-              let rows = '| Metric | Interpreted | Bytecode |\n';
-              rows += '|--------|------------|----------|\n';
-              rows += row('GC Live', fmtBytes(interpreted?.memory?.gc?.liveBytes), fmtBytes(bytecode?.memory?.gc?.liveBytes));
-              rows += row('GC Peak Live', fmtBytes(interpreted?.memory?.gc?.peakLiveBytes), fmtBytes(bytecode?.memory?.gc?.peakLiveBytes));
-              rows += row('GC Allocated During Run', fmtBytes(interpreted?.memory?.gc?.allocatedDuringRunBytes), fmtBytes(bytecode?.memory?.gc?.allocatedDuringRunBytes));
-              rows += row('GC Limit', fmtBytes(interpreted?.memory?.gc?.limitBytes), fmtBytes(bytecode?.memory?.gc?.limitBytes));
-              rows += row('GC Collections', fmtCount(interpreted?.memory?.gc?.collections), fmtCount(bytecode?.memory?.gc?.collections));
-              rows += row('GC Collected Objects', fmtCount(interpreted?.memory?.gc?.collectedObjects), fmtCount(bytecode?.memory?.gc?.collectedObjects));
-              rows += row('Heap Start Allocated', fmtBytes(interpreted?.memory?.heap?.startAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.startAllocatedBytes));
-              rows += row('Heap End Allocated', fmtBytes(interpreted?.memory?.heap?.endAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.endAllocatedBytes));
-              rows += row('Heap Delta Allocated', fmtBytes(interpreted?.memory?.heap?.deltaAllocatedBytes), fmtBytes(bytecode?.memory?.heap?.deltaAllocatedBytes));
-              if (hasNonNegativeValue(interpreted?.memory?.heap?.deltaFreeBytes, bytecode?.memory?.heap?.deltaFreeBytes))
-                rows += row('Heap Delta Free', fmtNonNegativeBytes(interpreted?.memory?.heap?.deltaFreeBytes), fmtNonNegativeBytes(bytecode?.memory?.heap?.deltaFreeBytes));
+            const memoryRows = (report) => {
+              let rows = tableHeader;
+              rows += row('GC Live', fmtBytes(report?.memory?.gc?.liveBytes));
+              rows += row('GC Peak Live', fmtBytes(report?.memory?.gc?.peakLiveBytes));
+              rows += row('GC Allocated During Run', fmtBytes(report?.memory?.gc?.allocatedDuringRunBytes));
+              rows += row('GC Limit', fmtBytes(report?.memory?.gc?.limitBytes));
+              rows += row('GC Collections', fmtCount(report?.memory?.gc?.collections));
+              rows += row('GC Collected Objects', fmtCount(report?.memory?.gc?.collectedObjects));
+              rows += row('Heap Start Allocated', fmtBytes(report?.memory?.heap?.startAllocatedBytes));
+              rows += row('Heap End Allocated', fmtBytes(report?.memory?.heap?.endAllocatedBytes));
+              rows += row('Heap Delta Allocated', fmtBytes(report?.memory?.heap?.deltaAllocatedBytes));
+              if (isNonNegative(report?.memory?.heap?.deltaFreeBytes))
+                rows += row('Heap Delta Free', fmtBytes(report.memory.heap.deltaFreeBytes));
               return rows;
             };
 
-            const testInterp = tryRead('test-results-interpreted.json');
-            const testBytecode = tryRead('test-results-bytecode.json');
-            const benchInterp = tryRead('benchmark-interpreted.json');
-            const benchBytecode = tryRead('benchmark-bytecode.json');
+            const testResults = tryRead('test-results.json');
+            const bench = tryRead('benchmark.json');
             const boot = tryRead('boot-timing.json');
 
-            if (!testInterp && !testBytecode && !benchInterp && !benchBytecode && !boot) {
+            if (!testResults && !bench && !boot) {
               console.log('No timing data available');
               return;
             }
@@ -1321,96 +1283,59 @@ jobs:
 
             let body = '## Suite Timing\n\n';
 
-            if (testInterp || testBytecode) {
-              const iTests = testInterp ? testInterp.totalTests : '—';
-              const bTests = testBytecode ? testBytecode.totalTests : '—';
-              const iPassed = testInterp ? `${testInterp.passed} ✅` : '—';
-              const bPassed = testBytecode ? `${testBytecode.passed} ✅` : '—';
-              const iFailed = testInterp ? testInterp.failed : 0;
-              const bFailed = testBytecode ? testBytecode.failed : 0;
-              const iSkipped = testInterp ? testInterp.skipped : 0;
-              const bSkipped = testBytecode ? testBytecode.skipped : 0;
-              const iDur = testInterp ? fmtDur(testInterp.durationNanoseconds) : '—';
-              const bDur = testBytecode ? fmtDur(testBytecode.durationNanoseconds) : '—';
-              const iJobs = testInterp ? (testInterp.jobCount || 1) : 1;
-              const bJobs = testBytecode ? (testBytecode.jobCount || 1) : 1;
-              const isParallel = iJobs > 1 || bJobs > 1;
+            if (testResults) {
+              const jobs = testResults.jobCount || 1;
+              const isParallel = jobs > 1;
               const timingLabel = isParallel ? ' (cumulative)' : '';
-              const iLex = testInterp ? fmtDur(testInterp.lexTimeNanoseconds) : '—';
-              const bLex = testBytecode ? fmtDur(testBytecode.lexTimeNanoseconds) : '—';
-              const iParse = testInterp ? fmtDur(testInterp.parseTimeNanoseconds) : '—';
-              const bParse = testBytecode ? fmtDur(testBytecode.parseTimeNanoseconds) : '—';
-              const bCompile = testBytecode ? fmtDur(testBytecode.compileTimeNanoseconds) : '—';
-              const iExec = testInterp ? fmtDur(testInterp.executeTimeNanoseconds) : '—';
-              const bExec = testBytecode ? fmtDur(testBytecode.executeTimeNanoseconds) : '—';
-              const iEngine = testInterp ? fmtDur(testInterp.totalEngineNanoseconds) : '—';
-              const bEngine = testBytecode ? fmtDur(testBytecode.totalEngineNanoseconds) : '—';
 
-              let section = '| Metric | Interpreted | Bytecode |\n';
-              section += '|--------|------------|----------|\n';
-              section += row('Total', iTests, bTests);
-              section += row('Passed', iPassed, bPassed);
-              if (iFailed > 0 || bFailed > 0)
-                section += row('Failed', iFailed > 0 ? `${iFailed} ❌` : '0', bFailed > 0 ? `${bFailed} ❌` : '0');
-              if (iSkipped > 0 || bSkipped > 0)
-                section += row('Skipped', iSkipped, bSkipped);
+              let section = tableHeader;
+              section += row('Total', testResults.totalTests);
+              section += row('Passed', `${testResults.passed} ✅`);
+              if (testResults.failed > 0)
+                section += row('Failed', `${testResults.failed} ❌`);
+              if (testResults.skipped > 0)
+                section += row('Skipped', testResults.skipped);
               if (isParallel)
-                section += row('Workers', iJobs, bJobs);
-              section += row('Test Duration', iDur, bDur);
-              section += row(`Lex${timingLabel}`, iLex, bLex);
-              section += row(`Parse${timingLabel}`, iParse, bParse);
-              section += row(`Compile${timingLabel}`, '—', bCompile);
-              section += row(`Execute${timingLabel}`, iExec, bExec);
-              section += row(`Engine Total${timingLabel}`, iEngine, bEngine);
+                section += row('Workers', jobs);
+              section += row('Test Duration', fmtDur(testResults.durationNanoseconds));
+              section += row(`Lex${timingLabel}`, fmtDur(testResults.lexTimeNanoseconds));
+              section += row(`Parse${timingLabel}`, fmtDur(testResults.parseTimeNanoseconds));
+              section += row(`Compile${timingLabel}`, fmtDur(testResults.compileTimeNanoseconds));
+              section += row(`Execute${timingLabel}`, fmtDur(testResults.executeTimeNanoseconds));
+              section += row(`Engine Total${timingLabel}`, fmtDur(testResults.totalEngineNanoseconds));
               if (isParallel) {
-                const fmtAvg = (ns, jobs) => jobs > 1 ? fmtDur(ns / jobs) : '—';
-                const iAvgLex = testInterp && iJobs > 1 ? fmtAvg(testInterp.lexTimeNanoseconds, iJobs) : '—';
-                const bAvgLex = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.lexTimeNanoseconds, bJobs) : '—';
-                const iAvgParse = testInterp && iJobs > 1 ? fmtAvg(testInterp.parseTimeNanoseconds, iJobs) : '—';
-                const bAvgParse = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.parseTimeNanoseconds, bJobs) : '—';
-                const bAvgCompile = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.compileTimeNanoseconds, bJobs) : '—';
-                const iAvgExec = testInterp && iJobs > 1 ? fmtAvg(testInterp.executeTimeNanoseconds, iJobs) : '—';
-                const bAvgExec = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.executeTimeNanoseconds, bJobs) : '—';
-                const iAvgEngine = testInterp && iJobs > 1 ? fmtAvg(testInterp.totalEngineNanoseconds, iJobs) : '—';
-                const bAvgEngine = testBytecode && bJobs > 1 ? fmtAvg(testBytecode.totalEngineNanoseconds, bJobs) : '—';
-                section += row('Lex (avg/worker)', iAvgLex, bAvgLex);
-                section += row('Parse (avg/worker)', iAvgParse, bAvgParse);
-                section += row('Compile (avg/worker)', '—', bAvgCompile);
-                section += row('Execute (avg/worker)', iAvgExec, bAvgExec);
-                section += row('Engine Total (avg/worker)', iAvgEngine, bAvgEngine);
+                const fmtAvg = (ns) => typeof ns === 'number' ? fmtDur(ns / jobs) : '—';
+                section += row('Lex (avg/worker)', fmtAvg(testResults.lexTimeNanoseconds));
+                section += row('Parse (avg/worker)', fmtAvg(testResults.parseTimeNanoseconds));
+                section += row('Compile (avg/worker)', fmtAvg(testResults.compileTimeNanoseconds));
+                section += row('Execute (avg/worker)', fmtAvg(testResults.executeTimeNanoseconds));
+                section += row('Engine Total (avg/worker)', fmtAvg(testResults.totalEngineNanoseconds));
               }
               section += '\n### Memory\n\n';
               section += '_GC rows aggregate the main thread plus all worker thread-local GCs. Test runner worker shutdown frees thread-local heaps in bulk; that shutdown reclamation is not counted as GC collections or collected objects._\n\n';
-              section += memoryRows(testInterp, testBytecode);
-              body += details(`Test Runner (interpreted: ${testSummary(testInterp)}; bytecode: ${testSummary(testBytecode)})`, section);
+              section += memoryRows(testResults);
+              body += details(`Test Runner (${testSummary(testResults)})`, section);
             }
 
-            if (benchInterp || benchBytecode) {
-              const iBenchCount = benchInterp ? benchInterp.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0) : '—';
-              const bBenchCount = benchBytecode ? benchBytecode.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0) : '—';
-              const iBenchDur = benchInterp ? fmtDur(benchInterp.totalDurationNanoseconds) : '—';
-              const bBenchDur = benchBytecode ? fmtDur(benchBytecode.totalDurationNanoseconds) : '—';
-              const iBenchJobs = benchInterp ? (benchInterp.jobCount || 1) : 1;
-              const bBenchJobs = benchBytecode ? (benchBytecode.jobCount || 1) : 1;
-              const benchParallel = iBenchJobs > 1 || bBenchJobs > 1;
+            if (bench) {
+              const benchCount = bench.files.reduce((a, f) => a + f.benchmarks.filter(b => !b.error).length, 0);
+              const benchJobs = bench.jobCount || 1;
 
-              let section = '| Metric | Interpreted | Bytecode |\n';
-              section += '|--------|------------|----------|\n';
-              section += row('Total', iBenchCount, bBenchCount);
-              if (benchParallel)
-                section += row('Workers', iBenchJobs, bBenchJobs);
-              section += row('Duration', iBenchDur, bBenchDur);
+              let section = tableHeader;
+              section += row('Total', benchCount);
+              if (benchJobs > 1)
+                section += row('Workers', benchJobs);
+              section += row('Duration', fmtDur(bench.totalDurationNanoseconds));
               section += '\n### Memory\n\n';
               section += '_GC rows aggregate the main thread plus all worker thread-local GCs. Benchmark runner performs explicit between-file collections, so collection and collected-object counts can be much higher than the test runner._\n\n';
-              section += memoryRows(benchInterp, benchBytecode);
-              body += details(`Benchmarks (interpreted: ${countSummary(iBenchCount)}; bytecode: ${countSummary(bBenchCount)})`, section);
+              section += memoryRows(bench);
+              body += details(`Benchmarks (${countSummary(benchCount)})`, section);
             }
 
             if (boot) {
-              let section = '| Metric | Interpreted | Bytecode |\n';
-              section += '|--------|------------|----------|\n';
-              section += row('Boot (median)', fmtMs(boot.interpreted?.medianMs), fmtMs(boot.bytecode?.medianMs));
-              section += row('Boot (min)', fmtMs(boot.interpreted?.minMs), fmtMs(boot.bytecode?.minMs));
+              let section = tableHeader;
+              section += row('Boot (median)', fmtMs(boot.bytecode?.medianMs));
+              section += row('Boot (min)', fmtMs(boot.bytecode?.minMs));
               section += `\n_Empty-script (\`0;\`) end-to-end process wall-clock for \`GocciaRunner\`, min and median over ${boot.runs ?? '?'} runs after ${boot.warmup ?? '?'} warmups. Includes a fixed process / dynamic-loader floor that does not shrink, so it understates the engine-boot speedup; treat as practical boot time, not pure engine work._\n`;
               body += details('Boot', section);
             }

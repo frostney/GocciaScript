@@ -62,11 +62,15 @@ interface SuiteSummary {
 interface SuiteRunMetadata {
   suiteDir: string;
   test262Sha: string | null;
-  mode: "interpreted" | "bytecode";
   categories: string[];
   jobs: number;
   timeoutMs: number;
   maxMemoryBytes: number;
+  /**
+   * Grading contract version (docs/test262.md). Absent in reports written
+   * before the field existed, which were graded under contract 1.
+   */
+  gradingContract?: number;
 }
 
 interface ShardMetadata {
@@ -203,7 +207,6 @@ type Test262ProfileSummary = {
   run: {
     suiteDir: string;
     test262Sha: string | null;
-    mode: "bytecode";
     categories: string[];
     jobs: number;
     timeoutMs: number;
@@ -492,7 +495,6 @@ function writeProfileMarkdown(summary: Test262ProfileSummary, outputPath: string
   const lines: string[] = [];
   lines.push("# test262 Profile Report", "");
   lines.push(`Generated: ${summary.generatedAt}`);
-  lines.push(`Mode: ${summary.run.mode}`);
   lines.push(`test262 SHA: ${summary.run.test262Sha ?? "unknown"}`);
   lines.push(`Categories: ${summary.run.categories.join(", ")}`);
   lines.push(
@@ -755,6 +757,11 @@ function readShardReport(path: string): SuiteReport {
   return report;
 }
 
+/** Reports written before `run.gradingContract` existed used contract 1. */
+function gradingContractOf(run: { gradingContract?: number } | undefined | null): number {
+  return run?.gradingContract ?? 1;
+}
+
 function mergeShardReports(paths: string[]): SuiteReport {
   const reports = paths.map(readShardReport);
   const first = reports[0];
@@ -765,11 +772,11 @@ function mergeShardReports(paths: string[]): SuiteReport {
 
   const runSignature = JSON.stringify({
     test262Sha: first.run!.test262Sha,
-    mode: first.run!.mode,
     categories: first.run!.categories,
     jobs: first.run!.jobs,
     timeoutMs: first.run!.timeoutMs,
     maxMemoryBytes: first.run!.maxMemoryBytes,
+    gradingContract: gradingContractOf(first.run),
   });
   const seenShards = new Set<number>();
   const seenTests = new Set<string>();
@@ -791,11 +798,11 @@ function mergeShardReports(paths: string[]): SuiteReport {
     }
     const signature = JSON.stringify({
       test262Sha: report.run!.test262Sha,
-      mode: report.run!.mode,
       categories: report.run!.categories,
       jobs: report.run!.jobs,
       timeoutMs: report.run!.timeoutMs,
       maxMemoryBytes: report.run!.maxMemoryBytes,
+      gradingContract: gradingContractOf(report.run),
     });
     if (signature !== runSignature) {
       throw new Error(`Run metadata mismatch in ${path}`);
@@ -836,9 +843,6 @@ function mergeShardReports(paths: string[]): SuiteReport {
 async function runMerge(argv: string[]): Promise<number> {
   const args = parseMergeArgs(argv);
   const report = mergeShardReports(args.reports);
-  if (args.profileDir && report.run!.mode !== "bytecode") {
-    throw new Error("--profile-dir requires bytecode shard reports");
-  }
   mkdirSync(dirname(args.output!), { recursive: true });
   writeFileSync(args.output!, JSON.stringify(report, null, 2) + "\n");
   console.log(`Merged ${args.reports.length} shards into: ${resolve(args.output!)}`);
@@ -848,7 +852,6 @@ async function runMerge(argv: string[]): Promise<number> {
     const profileSummary = buildProfileSummary(report.results, args.profileDir, {
       suiteDir: run.suiteDir,
       test262Sha: run.test262Sha,
-      mode: "bytecode",
       categories: run.categories,
       jobs: run.jobs,
       timeoutMs: run.timeoutMs,
@@ -990,8 +993,12 @@ function bucketAreas(results: PerTestRecord[]): Map<string, AreaBucket> {
 }
 
 function buildCommentMarkdown(
-  data: { summary: SuiteSummary; results: PerTestRecord[] } | null,
-  baseline: { summary: BaselineSummary; results?: PerTestRecord[] } | null,
+  data: { summary: SuiteSummary; results: PerTestRecord[]; run?: SuiteRunMetadata } | null,
+  baseline: {
+    summary: BaselineSummary;
+    results?: PerTestRecord[];
+    run?: { gradingContract?: number };
+  } | null,
 ): { markdown: string; regressed: boolean } {
   const marker = "<!-- test262-results -->";
   let body = "## test262 Conformance\n\n";
@@ -1006,10 +1013,18 @@ function buildCommentMarkdown(
   const s = data.summary;
   const delta = computeRegression(data, baseline);
   const hasBaseline = delta.hasBaseline;
-  const regressed = hasBaseline && delta.newFails.length > 0;
+  // A baseline graded under another contract is not comparable test by test:
+  // the runner, not the engine, moved those tests. Report the transitions but
+  // do not block; main republishes the baseline under the new contract.
+  const baseContract = gradingContractOf(baseline?.run);
+  const currentContract = gradingContractOf(data.run);
+  const contractChanged = hasBaseline && baseContract !== currentContract;
+  const regressed = hasBaseline && delta.newFails.length > 0 && !contractChanged;
 
   if (regressed) {
     body += `> 🚫 **Regression vs cached \`main\` baseline.** ${delta.newFails.length} previously-passing test(s) now fail; pass count Δ ${delta.totalPassedDelta >= 0 ? "+" : ""}${delta.totalPassedDelta}. This run blocks merge — see "Newly failing" below.\n\n`;
+  } else if (contractChanged && delta.newFails.length > 0) {
+    body += `> ℹ️ **Grading contract changed (v${baseContract} → v${currentContract}).** The cached \`main\` baseline was graded under the previous contract, so ${delta.newFails.length} PASS → FAIL transition(s) are reported but do not block. The next \`main\` run republishes the baseline under v${currentContract}.\n\n`;
   }
   const baselineByCat = new Map<string, CategorySummary>();
   if (hasBaseline) {
@@ -1090,7 +1105,7 @@ function buildCommentMarkdown(
       delta.newTimeouts.length > 0 ||
       delta.resolvedTimeouts.length > 0)
   ) {
-    body += `<details${regressed ? " open" : ""}>\n<summary>Per-test deltas (+${delta.newPasses.length} / -${delta.newFails.length} / timeout +${delta.newTimeouts.length} / -${delta.resolvedTimeouts.length})</summary>\n\n`;
+    body += `<details${regressed || contractChanged ? " open" : ""}>\n<summary>Per-test deltas (+${delta.newPasses.length} / -${delta.newFails.length} / timeout +${delta.newTimeouts.length} / -${delta.resolvedTimeouts.length})</summary>\n\n`;
     if (delta.newFails.length > 0) {
       body += `**Newly failing (${delta.newFails.length}):**\n\n`;
       for (const id of delta.newFails.slice(0, 100)) body += `- \`${id}\`\n`;
@@ -1121,7 +1136,7 @@ function buildCommentMarkdown(
   const baselineNote = hasBaseline
     ? " Δ vs main compares against the most recent cached `main` baseline."
     : " No `main` baseline cached yet — Δ columns will appear once a `main` run completes.";
-  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64, bytecode mode. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
+  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
 
   return { markdown: marker + "\n" + body, regressed };
 }

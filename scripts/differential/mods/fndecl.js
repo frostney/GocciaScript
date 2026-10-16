@@ -235,9 +235,9 @@ export class Factory {
 
 // Async declarations whose body throws through a callee. A module's function
 // declarations are created at link time while `raiseAsyncFailure` next to them
-// is compiled with the module body, so in bytecode mode the throw crosses from
-// one machinery into the other — and it crosses back only once the async
-// function has already suspended at an await.
+// is compiled with the module body, so the throw crosses from one machinery
+// into the other — and it crosses back only once the async function has
+// already suspended at an await.
 export class AsyncFailure extends Error {
   constructor(message) {
     super(message);
