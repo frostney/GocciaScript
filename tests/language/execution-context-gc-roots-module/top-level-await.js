@@ -3,13 +3,11 @@ description: a top-level-await module's execution-context entry survives collect
 features: [Goccia.gc, async-await, top-level-await]
 ---*/
 
-// A module body containing top-level await is evaluated through
-// TGocciaInterpreterAsyncModuleEvaluation, whose Resume pushes an execution
-// context naming the *module* scope — the one place an execution-context entry
-// carries something other than the engine global scope or a VM frame's
-// closure. Each resumption re-pushes that entry, and between resumptions the
-// only thing referring to the evaluation is the await reaction, so the module
-// scope has to stay marked for the entry to stay valid. Collecting twice at
+// A module body containing top-level await runs as an async VM frame whose
+// execution-context entry names the *module* scope rather than the engine
+// global scope. Between resumptions the only thing referring to the
+// evaluation is the await reaction, so the module scope has to stay marked
+// for the entry to stay valid. Collecting twice at
 // every suspension point and then reading module-scope bindings back is what
 // catches a scope that was swept and recycled.
 const collect = () => {

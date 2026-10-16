@@ -334,9 +334,8 @@ ordinary build collects only under memory pressure, so it usually is not.
 `--gc-stress` adds `-gh` and the define to the development flags. It compiles
 into `build/compiled/gc-stress/` and writes binaries to `build/gc-stress/`, so
 it never shares FPC units with an ordinary build. It cannot be combined with
-`--prod`. Only the bytecode VM is stressed; the interpreter's pressure checks
-are not per-instruction. Without the define, both units compile to the same
-machine code as before.
+`--prod`. Without the define, both units compile to the same machine code as
+before.
 
 ```bash
 ./build.pas --gc-stress testrunner test262runner

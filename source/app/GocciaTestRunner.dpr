@@ -25,8 +25,6 @@ uses
   Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.EngineFault,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
@@ -239,7 +237,7 @@ type
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     function RunBytecodeTestModule(const AEngine: TGocciaEngine;
-      const AModule: TGocciaCompiledModule;
+      const AModule: TGocciaBytecodeModule;
       const AFileName: string): TGocciaValue;
     function RunGocciaScriptBytecode(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
@@ -1003,7 +1001,7 @@ begin
 end;
 
 function TTestRunnerApp.RunBytecodeTestModule(const AEngine: TGocciaEngine;
-  const AModule: TGocciaCompiledModule;
+  const AModule: TGocciaBytecodeModule;
   const AFileName: string): TGocciaValue;
 begin
   Result := AEngine.RunModuleForSourceType(AModule, AFileName);
@@ -1016,8 +1014,7 @@ var
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  Module: TGocciaCompiledModule;
-  Executor: TGocciaBytecodeExecutor;
+  Module: TGocciaBytecodeModule;
   Engine: TGocciaEngine;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
@@ -1058,87 +1055,82 @@ begin
     end;
 
     try
-      Executor := TGocciaBytecodeExecutor.Create;
+      Engine := CreateEngine(AFileName, Source);
       try
-        Engine := CreateEngine(AFileName, Source, Executor);
-        try
-          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
-          if FSilent.Present or GIsWorkerThread or IsJsonOutput then
-          begin
-            DisableRuntimeConsole(Engine);
-            Engine.SuppressWarnings := True;
-          end;
-          if IsJsonOutput then
-            SuppressTestReporterOutput(Engine);
+        ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
+        if FSilent.Present or GIsWorkerThread or IsJsonOutput then
+        begin
+          DisableRuntimeConsole(Engine);
+          Engine.SuppressWarnings := True;
+        end;
+        if IsJsonOutput then
+          SuppressTestReporterOutput(Engine);
 
-            LexStart := GetNanoseconds;
-            PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-            PipelineOptions.Preprocessors := Engine.Preprocessors;
-            PipelineOptions.Compatibility := Engine.Compatibility;
-            PipelineOptions.LabelStatementsEnabled :=
-              Engine.LabelStatementsEnabled;
-            PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
-            PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-              Engine.ExperimentalJSModuleSourceEnabled;
-            PipelineOptions.WarningUnsupportedFeatures :=
-              Engine.WarningUnsupportedFeatures;
-            PipelineOptions.SourceType := Engine.SourceType;
-            ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
-              PipelineOptions);
+          LexStart := GetNanoseconds;
+          PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
+          PipelineOptions.Preprocessors := Engine.Preprocessors;
+          PipelineOptions.Compatibility := Engine.Compatibility;
+          PipelineOptions.LabelStatementsEnabled :=
+            Engine.LabelStatementsEnabled;
+          PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
+          PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+            Engine.ExperimentalJSModuleSourceEnabled;
+          PipelineOptions.WarningUnsupportedFeatures :=
+            Engine.WarningUnsupportedFeatures;
+          PipelineOptions.SourceType := Engine.SourceType;
+          ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+            PipelineOptions);
+          try
+            SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
+              PipelineOptions, FSilent.Present or IsJsonOutput);
+            LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+            ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
+            SourcePipelineResult.RegisterCoverageSource(AFileName);
+
+            CompileStart := GetNanoseconds;
+            Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
+            CompileEnd := GetNanoseconds;
+            SourcePipelineResult.Free;
+            SourcePipelineResult := nil;
+
+            StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS));
+            StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
-              SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
-                PipelineOptions, FSilent.Present or IsJsonOutput);
-              LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-              ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-              SourcePipelineResult.RegisterCoverageSource(AFileName);
-
-              CompileStart := GetNanoseconds;
-              Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-              CompileEnd := GetNanoseconds;
-              SourcePipelineResult.Free;
-              SourcePipelineResult := nil;
-
-              StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS));
-              StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-              try
-                { runTests is called once the file has run. Called from
-                  the file's own top level, it
-                  held one frame of the call stack limit for every test. It
-                  still ends like the file's run did: what the tests leave
-                  pending runs, and a rejection they leave fails the file. }
-                RunBytecodeTestModule(Engine, Module, AFileName);
-                ResultValue := RunRegisteredTests(Engine, True);
-                if Assigned(GC) and Assigned(ResultValue) then
-                begin
-                  GC.AddTempRoot(ResultValue);
-                  ResultValueRooted := True;
-                end;
-              finally
-                ClearExecutionTimeout;
-                ClearInstructionLimit;
+              { runTests is called once the file has run. Called from
+                the file's own top level, it
+                held one frame of the call stack limit for every test. It
+                still ends like the file's run did: what the tests leave
+                pending runs, and a rejection they leave fails the file. }
+              RunBytecodeTestModule(Engine, Module, AFileName);
+              ResultValue := RunRegisteredTests(Engine, True);
+              if Assigned(GC) and Assigned(ResultValue) then
+              begin
+                GC.AddTempRoot(ResultValue);
+                ResultValueRooted := True;
               end;
             finally
-              ActiveOptionsScope.Free;
+              ClearExecutionTimeout;
+              ClearInstructionLimit;
             end;
-            ExecEnd := GetNanoseconds;
+          finally
+            ActiveOptionsScope.Free;
+          end;
+          ExecEnd := GetNanoseconds;
 
-            if ResultValue is TGocciaObjectValue then
-              MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
+          if ResultValue is TGocciaObjectValue then
+            MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
 
-            Result.TestResult := ScriptResult;
-            Result.Timing.Result := ResultValue;
-            Result.Timing.LexTimeNanoseconds := LexTimeNanoseconds;
-            Result.Timing.ParseTimeNanoseconds := ParseTimeNanoseconds;
-            Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
-            Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
-            Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
-            Result.Timing.FileName := AFileName;
-            Result.ErrorMessage := '';
-        finally
-          Engine.Free;
-        end;
+          Result.TestResult := ScriptResult;
+          Result.Timing.Result := ResultValue;
+          Result.Timing.LexTimeNanoseconds := LexTimeNanoseconds;
+          Result.Timing.ParseTimeNanoseconds := ParseTimeNanoseconds;
+          Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
+          Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+          Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
+          Result.Timing.FileName := AFileName;
+          Result.ErrorMessage := '';
       finally
-        Executor.Free;
+        Engine.Free;
       end;
     except
       on E: Exception do
@@ -1171,8 +1163,8 @@ begin
         end
         else if E is EGocciaBytecodeThrow then
         begin
-          { A JS throw that escapes the bytecode VM is the same verdict as the
-            evaluator's TGocciaThrowValue and must render the same way; without
+          { A JS throw that escapes the bytecode VM is the same verdict as a
+            native TGocciaThrowValue and must render the same way; without
             this arm it fell through to the bare "Fatal error:" line and lost
             the location, code frame and suggestion. }
           if (not GIsWorkerThread) and (not IsJsonOutput) then

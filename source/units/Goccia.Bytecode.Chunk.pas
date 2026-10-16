@@ -272,13 +272,13 @@ type
 
   // One call/construct site's callee, as the author wrote it. Recorded by the
   // compiler at emit time and read by the VM only on the throw path, so a
-  // non-callable callee is named identically in both execution modes (see
+  // non-callable callee is named as written (see
   // Goccia.Error.CallDiagnostics).
   TGocciaCallSiteEntry = record
     PC: UInt32;
     Callee: TGocciaCalleeDescriptor;
-    // The call expression's own position, which is where the tree-walk
-    // evaluator points a "not a function" diagnostic. The instruction line map
+    // The call expression's own position, which is where a "not a function"
+    // diagnostic points. The instruction line map
     // resolves to the enclosing statement instead, so the position is carried
     // here rather than read back off the debug info.
     Line: Integer;

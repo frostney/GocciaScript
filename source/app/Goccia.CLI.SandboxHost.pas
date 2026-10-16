@@ -117,8 +117,6 @@ uses
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
@@ -434,8 +432,6 @@ function TGocciaSandboxHost.ExecuteInContext(
 var
   Source: TStringList;
   OutputLines: TStringList;
-  Executor: TGocciaExecutor;
-  BytecodeExecutor: TGocciaBytecodeExecutor;
   Resolver: TGocciaSandboxModuleResolver;
   Provider: TGocciaSandboxModuleContentProvider;
   Engine: TGocciaEngine;
@@ -475,7 +471,6 @@ begin
   Resolver := TGocciaSandboxModuleResolver.Create(AContext.Fs, SANDBOX_ROOT);
   Provider := TGocciaSandboxModuleContentProvider.Create(AContext.Fs);
   Engine := nil;
-  Executor := nil;
   CloneRealm := CurrentRealm;
   PreviousOutputLines := FCurrentOutputLines;
   PreviousHostEnvironment := FCurrentHostEnvironment;
@@ -494,12 +489,9 @@ begin
       else
         EngineCapabilities := FRootCapabilities;
 
-      BytecodeExecutor := TGocciaBytecodeExecutor.Create;
-      BytecodeExecutor.GlobalBackedTopLevel := True;
-      Executor := BytecodeExecutor;
-
-      Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor,
+      Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver,
         EngineCapabilities);
+      Engine.GlobalBackedTopLevel := True;
       { The entry is a sandbox path, so the project the engine derives from
         it names a host directory that has nothing to do with the run (for
         /tmp/x.js, the host's /tmp). No host directory is exempt from the
@@ -607,8 +599,8 @@ begin
       end;
       { The same guest throw, as the bytecode VM delivers it. Without this
         branch a bytecode run reported an uncaught throw as a host fault and
-        printed the bare message where the interpreter printed the frame —
-        the guest picking both the classification and the format. }
+        printed the bare message instead of the frame — the guest picking
+        both the classification and the format. }
       on E: EGocciaBytecodeThrow do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
@@ -632,7 +624,6 @@ begin
       Result.ErrorOutput := Result.ErrorMessage + sLineBreak;
   finally
     Engine.Free;
-    Executor.Free;
     Resolver.Free;
     Provider.Free;
     FCurrentHostEnvironment := PreviousHostEnvironment;
