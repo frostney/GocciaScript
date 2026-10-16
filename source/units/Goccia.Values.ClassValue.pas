@@ -380,6 +380,8 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
+    procedure AssignPropertySlow(const AName: string; const AValue: TGocciaValue;
+      const ACanCreate: Boolean);
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
@@ -2669,7 +2671,55 @@ begin
   Result := GetPropertyFromPrototype(AName, AThisContext);
 end;
 
+// The two stores that need nothing but the maps: a writable own data
+// property, and a new own property behind a prototype chain that holds none
+// of the name. Kept free of managed locals so that they pay no exception
+// frame; everything else is AssignPropertySlow, which walks again from the
+// start.
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Proto: TGocciaObjectValue;
+begin
+  if FProperties.TryGetValue(AName, Descriptor) then
+  begin
+    if (Descriptor.ClassType = TGocciaPropertyDescriptorData) and
+       TGocciaPropertyDescriptorData(Descriptor).Writable then
+      TGocciaPropertyDescriptorData(Descriptor).Value := AValue
+    else
+      AssignPropertySlow(AName, AValue, ACanCreate);
+    Exit;
+  end;
+
+  Proto := FPrototype;
+  while Assigned(Proto) do
+  begin
+    if not UsesOrdinarySet(Proto) or
+       Assigned(Proto.GetOwnPropertyDescriptor(AName)) then
+    begin
+      AssignPropertySlow(AName, AValue, ACanCreate);
+      Exit;
+    end;
+    Proto := Proto.Prototype;
+  end;
+
+  if not ACanCreate or not FExtensible or
+     (ClassType <> TGocciaInstanceValue) then
+  begin
+    AssignPropertySlow(AName, AValue, ACanCreate);
+    Exit;
+  end;
+
+  // OrdinarySet creates an own data property, which OrdinaryDefineOwnProperty
+  // accepts as given; an instance of exactly this class has the ordinary
+  // DefineProperty, so the descriptor goes straight into the map.
+  NoteIndexedOwnProperty(AName);
+  FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+procedure TGocciaInstanceValue.AssignPropertySlow(const AName: string;
+  const AValue: TGocciaValue; const ACanCreate: Boolean);
 var
   Descriptor: TGocciaPropertyDescriptor;
   Args: TGocciaArgumentsCollection;

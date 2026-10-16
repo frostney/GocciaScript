@@ -370,6 +370,9 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 | `CheckStackDepth`, `CheckNativeStackHeadroom` | `ThrowMaxCallStackExceeded`, `CheckNativeStackHeadroomSlow` |
 | `TGocciaVM.SetupNewFrame` | `TGocciaVM.InternExecutionSourcePath` |
 | `TGocciaVM.ExecuteClosure` | `TGocciaVM.ExecuteClosureWithHeapArguments` |
+| `TGocciaVM.SetPropertyValue` | `SetPropertyValueGeneric` |
+| `TGocciaInstanceValue.AssignProperty` | `AssignPropertySlow` |
+| `CachedASCIIStringValue` | `CreateCachedASCIIStringValue` |
 
 The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, to a function that returns a managed record by value, and to a resource string passed as an argument: `ThrowRangeError(SErrorMaxCallStackExceeded)` on a path that is never taken still gives the procedure around it a frame.
 
@@ -391,6 +394,11 @@ end;
 Turn the switch back on explicitly, as above. `{$PUSH}` and `{$POP}` do not save optimizer switches in FPC 3.2.2, so a `{$POP}` leaves automatic inlining off for the rest of the unit. Do not use `{$OPTIMIZATION DEFAULT}` either: it resets to the command line and drops the `NOFASTMATH` guard. A core that contains a `try` block, or that is well above ten nodes, is not inlined and needs no bracket.
 
 FPC also does not inline a procedure into another unit when it calls one that is local to the implementation section. `ThrowMaxCallStackExceeded` is declared in the interface of `Goccia.StackLimit` for that reason: the VM inlines `CheckStackDepth` and `CheckNativeStackHeadroom` as a compare and a branch.
+
+A constructor carries the same frame even with no managed local: FPC wraps it so that an exception destroys the half-built instance, and `TObject.Create` has one of its own. The constructors every value or property allocation runs are compiled without it, inside `{$IFDEF FPC}{$IMPLICITEXCEPTIONS OFF}{$ENDIF}` and an explicit `ON` afterwards: `TGocciaNumberLiteralValue.Create`, the property descriptor constructors and `TGocciaShapedPropertyMap.Create(Integer)`. Constructors whose only ancestor constructor is `TObject.Create` (property maps, string values) skip `inherited Create`. Two rules come with this:
+
+- A value class whose constructor has no frame overrides `TGocciaValue.ConstructorDestroysOnException` to return `False`. When the memory limit refuses such a value in `AfterConstruction`, FPC does not destroy it, so it stays registered and the next collection frees it; a value with the frame is unregistered first, because FPC destroys it. `Goccia.GarbageCollector.Test` checks both halves.
+- The bracket must not cover the first routine of a unit's implementation section. FPC 3.2.2 compiles the generic specializations a unit declares with the implicit-exception state in force there, so the bracket would silently drop the frames of every specialized method as well.
 
 An explicit `try..finally` installs the same frame when control reaches it (on targets where FPC uses `setjmp` frames; Win64 uses table-based unwinding). Around a lock it is only needed if the locked region can raise: `TGarbageCollector.RegisterObject` reads the instance size first, so that what runs under the accounting lock is integer arithmetic on its own fields, and takes the lock without one.
 

@@ -74,6 +74,7 @@ type
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
     procedure TestCrossThreadReleaseKeepsAccountingExact;
     procedure TestRegisterObjectAdvancesEveryByteCounter;
+    procedure TestValueRefusedByTheLimitIsReclaimedOnce;
     procedure TestHeapTriggerKeepsGarbageNearTheCeiling;
     procedure TestHeapTriggerBacksOffAboveSurvivors;
     procedure TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
@@ -158,6 +159,8 @@ begin
     TestCrossThreadReleaseKeepsAccountingExact);
   Test('Registering an object advances the live, total and peak byte counters',
     TestRegisterObjectAdvancesEveryByteCounter);
+  Test('A value refused by the memory limit is reclaimed exactly once',
+    TestValueRefusedByTheLimitIsReclaimedOnce);
   { Heap-triggered collection reads the FPC heap manager's status; other
     compilers report no heap total, so the trigger is inert there. }
   {$IFDEF FPC}
@@ -638,6 +641,59 @@ begin
     TChildManaged.InstanceSize);
   Expect<Int64>(GC.PeakBytesAllocated - LiveBefore).ToBe(
     TChildManaged.InstanceSize);
+end;
+
+// A number box's constructor has no implicit exception frame, so when the
+// limit refuses it FPC does not destroy it: it must stay registered for the
+// collector to free. An object's constructor has the frame, so FPC destroys
+// it and it must already be unregistered. Both refusals also charge the same
+// RangeError, so the number's refusal leaves exactly one box more charged.
+procedure TTestGarbageCollector.TestValueRefusedByTheLimitIsReclaimedOnce;
+var
+  GC: TGarbageCollector;
+  Baseline: Integer;
+  LiveBefore, PreviousMaxBytes, BeforeRefusals, AfterNumber,
+    AfterObject: Int64;
+
+  function Refuses(const AIsNumber: Boolean): Boolean;
+  begin
+    Result := False;
+    try
+      if AIsNumber then
+        TGocciaNumberLiteralValue.Create(1.5)
+      else
+        TGocciaObjectValue.Create(nil);
+    except
+      Result := True;
+    end;
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  Baseline := GC.ManagedObjectCount;
+  LiveBefore := GC.BytesAllocated;
+  PreviousMaxBytes := GC.MaxBytes;
+  // Any allocation now exceeds the limit (zero would mean no limit).
+  GC.MaxBytes := LiveBefore + 1;
+  try
+    // A first refusal also builds what every later RangeError reuses.
+    Refuses(False);
+    BeforeRefusals := GC.BytesAllocated;
+    Expect<Boolean>(Refuses(True)).ToBe(True);
+    AfterNumber := GC.BytesAllocated;
+    Expect<Boolean>(Refuses(False)).ToBe(True);
+    AfterObject := GC.BytesAllocated;
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+
+  Expect<Int64>((AfterNumber - BeforeRefusals) - (AfterObject - AfterNumber))
+    .ToBe(TGocciaNumberLiteralValue.InstanceSize);
+
+  GC.Collect;
+  Expect<Int64>(GC.BytesAllocated).ToBe(LiveBefore);
+  Expect<Boolean>(GC.ManagedObjectCount <= Baseline).ToBe(True);
 end;
 
 procedure TTestGarbageCollector.TestReservationCollectsAndRetries;

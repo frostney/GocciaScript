@@ -20,6 +20,10 @@ type
   TGocciaValue = class(TGCManagedObject)
   public
     procedure AfterConstruction; override;
+    // False for a class whose constructors are compiled without an implicit
+    // exception frame: FPC then does not destroy the instance when
+    // AfterConstruction raises, so the GC must keep it registered.
+    class function ConstructorDestroysOnException: Boolean; virtual;
     function RuntimeCopy: TGocciaValue; virtual;
 
     function TypeName: string; virtual; abstract;
@@ -114,6 +118,7 @@ type
     class var FNegativeInfinityValue: TGocciaNumberLiteralValue;
   public
     constructor Create(const AValue: Double);
+    class function ConstructorDestroysOnException: Boolean; override;
 
     class function NaNValue: TGocciaNumberLiteralValue;
     class function NegativeZeroValue: TGocciaNumberLiteralValue;
@@ -261,7 +266,10 @@ begin
     begin
       // Unregister before throwing: AfterConstruction exceptions trigger
       // automatic destruction, so the GC must not hold a dangling pointer.
-      GC.UnregisterObject(Self);
+      // A frameless constructor does not destroy the instance; the GC
+      // reclaims it instead.
+      if ConstructorDestroysOnException then
+        GC.UnregisterObject(Self);
       ThrowMemoryLimitExceeded(GC);
     end;
   end;
@@ -271,6 +279,11 @@ begin
   Polls := GThreadPolls;
   if Polls.Any <> 0 then
     RunAllocationPolls(Polls);
+end;
+
+class function TGocciaValue.ConstructorDestroysOnException: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;
@@ -511,9 +524,24 @@ begin
   Result := True;
 end;
 
+// Every boxed number passes through here. Without the implicit exception
+// frame FPC wraps a constructor in, a box costs no thread-variable lookups for
+// the frame; see ConstructorDestroysOnException.
+{$IFDEF FPC}{$IMPLICITEXCEPTIONS OFF}{$ENDIF}
 constructor TGocciaNumberLiteralValue.Create(const AValue: Double);
 begin
   FValue := AValue;
+end;
+{$IFDEF FPC}{$IMPLICITEXCEPTIONS ON}{$ENDIF}
+
+class function TGocciaNumberLiteralValue.ConstructorDestroysOnException: Boolean;
+begin
+  // Only FPC builds the constructor above without its frame.
+  {$IFDEF FPC}
+  Result := False;
+  {$ELSE}
+  Result := True;
+  {$ENDIF}
 end;
 
 function TGocciaNumberLiteralValue.GetIsNaN: Boolean;
@@ -672,9 +700,10 @@ begin
   Result := True;
 end;
 
+// Neither constructor calls the inherited one: it is TObject.Create, which is
+// empty but, as a constructor, costs an exception frame on every string.
 constructor TGocciaStringLiteralValue.Create(const AValue: string);
 begin
-  inherited Create;
   FValue := AValue;
   FLength := Length(AValue);
   FChargedBytes := ReserveBackingStore(Int64(FLength) * SizeOf(Char));
@@ -683,7 +712,6 @@ end;
 constructor TGocciaStringLiteralValue.CreateConcatenation(
   const APrefix: TGocciaStringLiteralValue; const ASuffix: string);
 begin
-  inherited Create;
   FPrefix := APrefix;
   FValue := ASuffix;
   FLength := APrefix.FLength + Length(ASuffix);
