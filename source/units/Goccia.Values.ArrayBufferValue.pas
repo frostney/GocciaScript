@@ -39,6 +39,12 @@ type
     constructor Create(const AByteLength: Integer = 0); overload;
     constructor Create(const AByteLength: Integer; const AMaxByteLength: Integer); overload;
     constructor Create(const AClass: TGocciaClassValue); overload;
+    { A fixed-length buffer that adopts AData by reference instead of
+      allocating and copying. The bytes are charged against the memory limit
+      inside the constructor, before the buffer registers itself, exactly as
+      Create(Length(AData)) charges them. Callers must not use AData
+      afterwards. }
+    constructor CreateFromBytes(const AData: TBytes);
     destructor Destroy; override;
 
     { Immutable ArrayBuffers proposal: build a fixed-length immutable buffer
@@ -350,6 +356,14 @@ end;
 // Immutable ArrayBuffers proposal: create a fixed-length immutable buffer
 // whose data block is the supplied bytes. Used by Import Bytes to back the
 // default Uint8Array export.
+constructor TGocciaArrayBufferValue.CreateFromBytes(const AData: TBytes);
+begin
+  // Called as a method on Self, Create(0) initializes without allocating;
+  // AfterConstruction, and with it the registration, runs once afterwards.
+  Create(0);
+  SetData(AData);
+end;
+
 class function TGocciaArrayBufferValue.CreateImmutableFromBytes(
   const AData: TBytes): TGocciaArrayBufferValue;
 begin

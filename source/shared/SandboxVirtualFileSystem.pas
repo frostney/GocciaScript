@@ -165,6 +165,12 @@ type
     function SnapshotList(const APath: string): TSandboxFsStatArray;
     function SnapshotReadAllBytes(const APath: string): TBytes;
     function SnapshotReadAllText(const APath: string): string;
+    { Whether the file APath and the file AOtherPath in AOther hold the same
+      bytes, compared in place a machine word at a time without copying
+      either. Non-observing, like the other snapshot reads. }
+    function SnapshotSameBytes(const APath: string;
+      const AOther: TSandboxVirtualFileSystem;
+      const AOtherPath: string): Boolean;
 
     function Open(const APath: string;
       const AMode: TSandboxFsOpenMode): TSandboxFsFile;
@@ -1111,6 +1117,46 @@ var
 begin
   Bytes := SnapshotReadAllBytes(APath);
   Result := DecodeUTF8WithReplacement(Bytes);
+end;
+
+function TSandboxVirtualFileSystem.SnapshotSameBytes(const APath: string;
+  const AOther: TSandboxVirtualFileSystem;
+  const AOtherPath: string): Boolean;
+var
+  Node, OtherNode: TSandboxFsNode;
+  Left, Right: PByte;
+  Remaining: Int64;
+begin
+  Node := RequireFile(APath);
+  OtherNode := AOther.RequireFile(AOtherPath);
+  if Node.FSize <> OtherNode.FSize then
+    Exit(False);
+  Remaining := Node.FSize;
+  if Remaining = 0 then
+    Exit(True);
+  Left := @Node.FData[0];
+  Right := @OtherNode.FData[0];
+  if Left = Right then
+    Exit(True);
+  // FPC 3.2.2's CompareByte and CompareMem cost about five instructions a
+  // byte on x86-64; a word loop costs about that much per eight bytes.
+  while Remaining >= SizeOf(NativeUInt) do
+  begin
+    if PNativeUInt(Left)^ <> PNativeUInt(Right)^ then
+      Exit(False);
+    Inc(Left, SizeOf(NativeUInt));
+    Inc(Right, SizeOf(NativeUInt));
+    Dec(Remaining, SizeOf(NativeUInt));
+  end;
+  while Remaining > 0 do
+  begin
+    if Left^ <> Right^ then
+      Exit(False);
+    Inc(Left);
+    Inc(Right);
+    Dec(Remaining);
+  end;
+  Result := True;
 end;
 
 function TSandboxVirtualFileSystem.Open(const APath: string;

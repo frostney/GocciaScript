@@ -43,6 +43,7 @@ type
     procedure TestCopyRenameAndForkMetadata;
     procedure TestForkDoesNotReadClock;
     procedure TestSnapshotReadsDoNotAdvanceAccessTime;
+    procedure TestSnapshotSameBytesComparesInPlace;
     procedure TestDirectoryEntryChangesUpdateParentMetadata;
     procedure TestRecursiveMkdirReportsFirstCreatedPath;
     procedure TestDefaultClockUsesUnixEpoch;
@@ -66,6 +67,8 @@ begin
   Test('Fork does not read the shared clock', TestForkDoesNotReadClock);
   Test('Snapshot reads do not advance access time',
     TestSnapshotReadsDoNotAdvanceAccessTime);
+  Test('SnapshotSameBytes compares files in place',
+    TestSnapshotSameBytesComparesInPlace);
   Test('Directory entry changes update parent metadata',
     TestDirectoryEntryChangesUpdateParentMetadata);
   Test('Recursive mkdir reports its first created path',
@@ -238,6 +241,63 @@ begin
 
   ExpectTime(AfterStat.AccessedAt, BeforeStat.AccessedAt);
   ExpectTime(FFs.Stat('/').AccessedAt, TimeAt(0));
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestSnapshotSameBytesComparesInPlace;
+var
+  Bytes, Changed: TBytes;
+  Other: TSandboxVirtualFileSystem;
+  Size, Index: Integer;
+  BeforeStat: TSandboxFsStat;
+  Raised: Boolean;
+begin
+  Other := TSandboxVirtualFileSystem.Create(16 * 1024 * 1024, FClock);
+  try
+    FClock.Value := TimeAt(10);
+    // Sizes on both sides of a machine word, so the word loop and the byte
+    // tail are each reached, alone and together.
+    for Size := 0 to 19 do
+    begin
+      SetLength(Bytes, Size);
+      for Index := 0 to Size - 1 do
+        Bytes[Index] := Byte(Index * 37 + 11);
+      FFs.WriteAllBytes('/file.bin', Bytes);
+      Other.WriteAllBytes('/other.bin', Bytes);
+      Expect<Boolean>(FFs.SnapshotSameBytes('/file.bin', Other,
+        '/other.bin')).ToBe(True);
+      Expect<Boolean>(FFs.SnapshotSameBytes('/file.bin', FFs,
+        '/file.bin')).ToBe(True);
+      for Index := 0 to Size - 1 do
+      begin
+        Changed := Copy(Bytes);
+        Changed[Index] := Changed[Index] xor $80;
+        Other.WriteAllBytes('/other.bin', Changed);
+        Expect<Boolean>(FFs.SnapshotSameBytes('/file.bin', Other,
+          '/other.bin')).ToBe(False);
+      end;
+      Other.WriteAllBytes('/other.bin', Copy(Bytes, 0, Size div 2));
+      if Size > 0 then
+        Expect<Boolean>(FFs.SnapshotSameBytes('/file.bin', Other,
+          '/other.bin')).ToBe(False);
+    end;
+
+    BeforeStat := FFs.Stat('/file.bin');
+    FClock.Value := TimeAt(20);
+    FFs.SnapshotSameBytes('/file.bin', Other, '/other.bin');
+    ExpectTime(FFs.Stat('/file.bin').AccessedAt, BeforeStat.AccessedAt);
+
+    FFs.MakeDirectory('/directory');
+    Raised := False;
+    try
+      FFs.SnapshotSameBytes('/directory', Other, '/other.bin');
+    except
+      on E: ESandboxFsIsADirectory do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+  finally
+    Other.Free;
+  end;
 end;
 
 procedure TTestSandboxVirtualFileSystem.TestDirectoryEntryChangesUpdateParentMetadata;
