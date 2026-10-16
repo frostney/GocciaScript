@@ -110,7 +110,7 @@ const sum = library.bind("sum_values", {
 sum(3, FFI.varargs(["i8", "i16", "i32"], [10, 20, 12]));
 ```
 
-The variadic planner applies the C default argument promotions: `f32` becomes `f64`, while `bool`, `i8`, `i16`, `u8`, and `u16` become `i32`. Other supported argument descriptors retain their ordinary ABI classification. Variadic callbacks are not supported.
+The variadic planner applies the C default argument promotions: `f32` becomes `f64`, while `bool`, `i8`, `i16`, `u8`, and `u16` become `i32`. Other supported argument descriptors keep the platform's variadic classification: on most targets that is the ordinary one, Apple ARM64 passes the tail on the stack, and Windows ARM64 passes every argument of a variadic function, fixed ones included, in `x0`-`x7` and then on the stack, without floating-point registers or HFA handling. Variadic callbacks are not supported.
 
 ## Callbacks
 
