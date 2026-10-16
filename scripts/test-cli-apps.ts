@@ -11664,6 +11664,82 @@ console.log("Loader: fetch re-checks the net capability on every redirect hop...
   }
 }
 
+// The first HTTPS handshake in a process loads OpenSSL on a fetch worker
+// thread. FPC 3.2.2's loader is not safe when several workers reach it at once:
+// the losers reported "HTTPS requires OpenSSL but it could not be loaded" for
+// a library that had just loaded (#1676). Only the Linux OpenSSL backend loads
+// lazily; macOS and Windows link their TLS stacks and would not trust a
+// self-signed fixture anyway. Every run is a fresh process, because only the
+// first batch races, and several runs make a regression all but certain to
+// show: before the fix about half of all fresh processes lost requests.
+await section("Loader: concurrent HTTPS fetches in a fresh process all load OpenSSL...", async () => {
+  if (process.platform !== "linux") {
+    console.log("  skipped: the lazily loaded OpenSSL backend is Linux-only");
+    return;
+  }
+  const tmp = makeTmp();
+  const certFile = join(tmp, "cert.pem");
+  const keyFile = join(tmp, "key.pem");
+  const generated = Bun.spawnSync(
+    [
+      "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+      "-keyout", keyFile, "-out", certFile, "-days", "1",
+      "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  if (generated.exitCode !== 0) {
+    clean(tmp);
+    throw new Error(`openssl could not create the HTTPS fixture certificate: ${generated.stderr.toString()}`);
+  }
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    tls: { cert: readFileSync(certFile, "utf-8"), key: readFileSync(keyFile, "utf-8") },
+    fetch() {
+      return new Response("ok", { status: 200 });
+    },
+  });
+  const requestCount = 16;
+  const runs = 10;
+  const script = join(tmp, "concurrent-https.js");
+  writeFileSync(
+    script,
+    [
+      `const urls = Array.from({ length: ${requestCount} }, (_, i) => "https://localhost:${server.port}/?" + i);`,
+      "const results = await Promise.allSettled(urls.map((url) => fetch(url).then((response) => response.status)));",
+      "console.log(results.map((r) => r.status === 'fulfilled' ? String(r.value) : 'rejected: ' + r.reason.message).join('\\n'));",
+      "",
+    ].join("\n"),
+  );
+  try {
+    for (let run = 1; run <= runs; run++) {
+      // Async spawn: the fixture server answers on this process's event loop.
+      const proc = Bun.spawn(
+        [RUNNER, "--source-type=module", "--allow-net=localhost,private", "--timeout=20000", script],
+        // OpenSSL's default verify paths honour SSL_CERT_FILE, so the
+        // runner's ordinary certificate verification trusts the fixture.
+        { stdout: "pipe", stderr: "pipe", env: { ...process.env, SSL_CERT_FILE: certFile } },
+      );
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      const lines = normalizeLineEndings(stdout).split("\n").filter((line) => /^(\d{3}|rejected: )/.test(line));
+      const failures = lines.filter((line) => line !== "200");
+      if (exitCode !== 0 || lines.length !== requestCount || failures.length > 0)
+        throw new Error(
+          `Run ${run}/${runs}: all ${requestCount} concurrent HTTPS fetches should return 200 ` +
+            `(exit ${exitCode}, ${failures.length} failed):\n${stdout}${stderr}`,
+        );
+    }
+  } finally {
+    server.stop(true);
+    clean(tmp);
+  }
+});
+
 // ============================================================================
 // --multifile (all runners)
 // ============================================================================
