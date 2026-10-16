@@ -216,7 +216,7 @@ The `--profile` option on GocciaRunner enables language-level profiling of the b
 - `--profile=all` — both
 - `--profile-output=path.json` — JSON export
 
-The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). `ExecuteClosureRegistersInternal` selects a production dispatch loop when coverage, opcode profiling, stop-IP, and the instruction limit are all inactive; that loop omits those per-instruction checks. Any of them being active selects the instrumented loop, which keeps the previous guards. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
+The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). The dispatch loop of `ExecuteClosureRegistersInternal` fetches each instruction through one of two paths. When coverage, opcode profiling, stop-IP, and the instruction limit are all inactive it takes the production path, which omits those per-instruction checks. Any of them being active selects the instrumented path, which keeps them. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
 
 ## Runtime Error Diagnostics
 
@@ -378,7 +378,7 @@ execution path.
 
 ## Instruction Limit
 
-The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, execution uses the instrumented loop: the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When the budget is inactive, production dispatch omits that poll entirely. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API.
+The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, the dispatch loop fetches through its instrumented path: the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When the budget is inactive, production dispatch omits that poll entirely. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API.
 
 ## Binary Format
 
@@ -589,4 +589,5 @@ During code review, the following findings were investigated and determined to b
 - Do not add new bytecode/runtime concepts under old generic naming.
 - Prefer `TGoccia*` bytecode and VM types in new code.
 - Keep the VM and the built-ins on shared runtime objects, not conversion layers.
+- Keep `goto` out of the VM. The dispatch loop is one `while` loop with a production and an instrumented fetch path, and `Continue` in `Goccia.VM.DispatchCase.inc` moves to the next instruction. FPC's wasm32 code generator turns a function that uses `goto` into a state machine over its whole body, which made the dispatch function about three times slower there; natively the loop executes as many instructions as the `goto` version did (callgrind, every AWFY workload within 0.2%).
 - Allocate an exception handler's register before compiling the region it protects. A throw skips the `OP_CLOSE_UPVALUE` instructions of the scopes it leaves, so when it reaches a handler the VM detaches the closure cell of every local slot above that handler's register.
