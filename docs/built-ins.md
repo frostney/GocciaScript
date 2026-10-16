@@ -708,8 +708,8 @@ filesystem. This covers the listed `fs` surface, not the entire Node.js host or 
 | Method / Property | Description |
 |-------------------|-------------|
 | `fs.readFileSync(path, options?)` | Read text when `options` is `"utf8"` / `"utf-8"` or `{ encoding: "utf8" }`; otherwise returns `Uint8Array` |
-| `fs.writeFileSync(path, data)` | Write UTF-8 string data or bytes from `Uint8Array` |
-| `fs.appendFileSync(path, data)` | Append UTF-8 string data or bytes from `Uint8Array` |
+| `fs.writeFileSync(path, data)` | Write UTF-8 string data, or the bytes a TypedArray or `DataView` views (`byteLength` bytes from `byteOffset`) |
+| `fs.appendFileSync(path, data)` | Append UTF-8 string data, or the bytes a TypedArray or `DataView` views |
 | `fs.mkdirSync(path, options?)` | Create a directory; `{ recursive: true }` creates parents |
 | `fs.readdirSync(path)` | Return child names |
 | `fs.statSync(path)` | Return a Stats snapshot with `path`, `name`, `type`, `size`, `atimeMs`, `mtimeMs`, `ctimeMs`, `birthtimeMs`, lazy Date accessors, and type predicates |
