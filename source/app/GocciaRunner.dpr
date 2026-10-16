@@ -34,7 +34,6 @@ uses
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
   Goccia.Executor.Bytecode,
   Goccia.Executor,
   Goccia.Error,
@@ -186,8 +185,6 @@ type
       const ACapture: TScriptLoaderConsoleCapture);
     procedure ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
     procedure ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
-    function ExecuteInterpreted(const ASource: TStringList; const AFileName: string;
-      const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
     function RunBytecodeModule(const AEngine: TGocciaEngine;
       const AModule: TGocciaCompiledModule;
       const AFileName: string): TGocciaValue;
@@ -685,21 +682,11 @@ begin
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
     ProfilerOptions.Mode.Apply('functions');
 
-  // Profiling requires bytecode mode regardless of the --mode option.
-  if ProfilerOptions.Mode.Present then
-    EngineOptions.Mode.Apply('bytecode');
-
   // --coverage-format / --coverage-output imply --coverage, so every later
   // reader can test Enabled alone instead of repeating the three-way check.
   // Mirrors TTestRunnerApp.Validate.
   if CoverageOptions.Format.Present or CoverageOptions.OutputPath.Present then
     CoverageOptions.Enabled.Apply('');
-
-  // Coverage requires bytecode mode regardless of the --mode option: the
-  // interpreter only instruments the entry file and counts statements per
-  // AST node instead of per executed line.
-  if CoverageOptions.Enabled.Present then
-    EngineOptions.Mode.Apply('bytecode');
 
   if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
     raise TParseError.Create(
@@ -892,60 +879,6 @@ begin
         AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
 end;
 
-function TRunnerApp.ExecuteInterpreted(const ASource: TStringList;
-  const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
-var
-  Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
-  ScriptResult: TGocciaScriptResult;
-  SourceMap: TGocciaSourceMap;
-  StartTime, ExecEnd: Int64;
-begin
-  { Total is end to end in every mode: from before the engine is created to
-    the end of the run, so it includes engine boot. }
-  StartTime := GetNanoseconds;
-  Executor := TGocciaInterpreterExecutor.Create;
-  try
-    Engine := CreateEngine(AFileName, ASource, Executor);
-    try
-      FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
-      Engine.SuppressWarnings := GIsWorkerThread or
-        IsJsonOutput;
-      ConfigureConsole(RuntimeConsole(Engine), ACapture);
-      ApplyDataGlobalsToEngine(Engine);
-      StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
-      StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-      try
-        ApplyModuleGlobalsToEngine(Engine);
-        ScriptResult := Engine.Execute;
-      finally
-        ClearExecutionTimeout;
-        ClearInstructionLimit;
-        SourceMap := Engine.TakeLastSourceMap;
-        try
-          if Assigned(SourceMap) and Assigned(ASource) then
-            SourceMap.SetSourceContent(0, StringListToLFText(ASource));
-          WriteSourceMapIfEnabled(SourceMap, AFileName);
-        finally
-          SourceMap.Free;
-        end;
-      end;
-      ExecEnd := GetNanoseconds;
-    finally
-      Engine.Free;
-    end;
-  finally
-    Executor.Free;
-  end;
-
-  Result.ResultValue := ScriptResult.Result;
-  Result.Timing.LexTimeNanoseconds := ScriptResult.LexTimeNanoseconds;
-  Result.Timing.ParseTimeNanoseconds := ScriptResult.ParseTimeNanoseconds;
-  Result.Timing.CompileTimeNanoseconds := 0;
-  Result.Timing.ExecuteTimeNanoseconds := ScriptResult.ExecuteTimeNanoseconds;
-  Result.Timing.TotalTimeNanoseconds := ExecEnd - StartTime;
-end;
-
 function TRunnerApp.RunBytecodeModule(const AEngine: TGocciaEngine;
   const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
@@ -1094,7 +1027,7 @@ begin
        FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
        FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end
-  else if EngineOptions.ExecutionMode = emBytecode then
+  else
   begin
     WriteLn('Running script (bytecode): ', AFileName);
     // Concatenated and encoded here rather than formatted: Format converts
@@ -1112,21 +1045,6 @@ begin
         [FormatDuration(AReport.Timing.LexTimeNanoseconds),
          FormatDuration(AReport.Timing.ParseTimeNanoseconds),
          FormatDuration(AReport.Timing.CompileTimeNanoseconds),
-         FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
-         FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
-  end
-  else
-  begin
-    WriteLn('Running script (interpreted): ', AFileName);
-    if DefaultSystemCodePage = CP_UTF8 then
-      WriteLn(UTF8Encode('  Lex: ' + FormatDuration(AReport.Timing.LexTimeNanoseconds) +
-        ' | Parse: ' + FormatDuration(AReport.Timing.ParseTimeNanoseconds) +
-        ' | Execute: ' + FormatDuration(AReport.Timing.ExecuteTimeNanoseconds) +
-        ' | Total: ' + FormatDuration(AReport.Timing.TotalTimeNanoseconds)))
-    else
-      WriteLn(SysUtils.Format('  Lex: %s | Parse: %s | Execute: %s | Total: %s',
-        [FormatDuration(AReport.Timing.LexTimeNanoseconds),
-         FormatDuration(AReport.Timing.ParseTimeNanoseconds),
          FormatDuration(AReport.Timing.ExecuteTimeNanoseconds),
          FormatDuration(AReport.Timing.TotalTimeNanoseconds)]));
   end;
@@ -1166,10 +1084,7 @@ begin
       if Extension = EXT_GBC then
         Report := ExecuteBytecodeFromFile(AFileName, Capture)
       else
-        case EngineOptions.ExecutionMode of
-          emInterpreted: Report := ExecuteInterpreted(ASource, AFileName, Capture);
-          emBytecode:    Report := ExecuteBytecodeFromSource(ASource, AFileName, Capture);
-        end;
+        Report := ExecuteBytecodeFromSource(ASource, AFileName, Capture);
 
       Report.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
       if IsJsonOutput then
@@ -1252,10 +1167,7 @@ begin
       if Extension = EXT_GBC then
         Report := ExecuteBytecodeFromFile(AFileName, Capture)
       else
-        case EngineOptions.ExecutionMode of
-          emInterpreted: Report := ExecuteInterpreted(ASource, AFileName, Capture);
-          emBytecode:    Report := ExecuteBytecodeFromSource(ASource, AFileName, Capture);
-        end;
+        Report := ExecuteBytecodeFromSource(ASource, AFileName, Capture);
 
       if AMeasureMemory then
         Report.MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement)
@@ -1876,7 +1788,6 @@ begin
   Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes);
   FSandboxHost := Host;
   try
-    Host.Bytecode := EngineOptions.ExecutionMode = emBytecode;
     Host.TimeoutMilliseconds := EngineOptions.Timeout.Milliseconds(0);
     Host.MaxInstructions := EngineOptions.MaxInstructions.ValueOr(0);
     Host.ImportMapPath := EngineOptions.ImportMap.ValueOr('');

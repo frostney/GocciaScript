@@ -70,12 +70,11 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 - Add JavaScript tests under the `tests/` directory, following the existing directory structure.
 - **One method per file** — each test file focuses on a single method or operation.
 - **Edge cases are co-located** — edge case tests belong in the same file as the happy-path tests.
-- Always verify changes by running the all-executor JavaScript suite:
+- Always verify changes by running the JavaScript suite:
 
   ```bash
   ./build.pas testrunner
   ./build/GocciaTestRunner -P tests
-  ./build/GocciaTestRunner -P tests --mode=bytecode
   ```
 
   `-P` accepts the test configs' permission requests for that run only and

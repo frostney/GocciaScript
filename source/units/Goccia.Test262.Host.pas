@@ -12,14 +12,11 @@ uses
   Goccia.SourcePipeline;
 
 type
-  TGocciaTest262ExecutionMode = (t262emInterpreted, t262emBytecode);
-
   TGocciaTest262EngineOptions = record
     Compatibility: TGocciaCompatibilityFlags;
     ExperimentalJSModuleSourceEnabled: Boolean;
     UnsafeShadowRealm: Boolean;
     AgentCanSuspend: Boolean;
-    Mode: TGocciaTest262ExecutionMode;
     SourceType: TGocciaSourceType;
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
@@ -42,8 +39,7 @@ type
     property Backend: TObject read FImplementation;
   end;
 
-function CreateTest262Executor(
-  const AMode: TGocciaTest262ExecutionMode): TGocciaExecutor;
+function CreateTest262Executor: TGocciaExecutor;
 procedure ConfigureTest262Engine(const AEngine: TGocciaEngine;
   const AExecutor: TGocciaExecutor;
   const AOptions: TGocciaTest262EngineOptions;
@@ -68,7 +64,6 @@ uses
   Goccia.Error,
   Goccia.ExecutionContext,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
@@ -204,13 +199,9 @@ type
     function LoadContent(const APath: string): TGocciaModuleContent; override;
   end;
 
-function CreateTest262Executor(
-  const AMode: TGocciaTest262ExecutionMode): TGocciaExecutor;
+function CreateTest262Executor: TGocciaExecutor;
 begin
-  case AMode of
-    t262emInterpreted: Result := TGocciaInterpreterExecutor.Create;
-    t262emBytecode: Result := TGocciaBytecodeExecutor.Create;
-  end;
+  Result := TGocciaBytecodeExecutor.Create;
 end;
 
 procedure ConfigureTest262Engine(const AEngine: TGocciaEngine;
@@ -385,7 +376,7 @@ var
 begin
   inherited Create;
   FSource := TStringList.Create;
-  FExecutor := CreateTest262Executor(AOptions.Mode);
+  FExecutor := CreateTest262Executor;
   FEngine := TGocciaEngine.Create('<test262-realm>', FSource, FExecutor,
     AOptions.Capabilities);
   ChildOptions := AOptions;
@@ -786,7 +777,7 @@ begin
         'test262_harness' + PathDelim + '$262.js')) + sLineBreak +
       FSourceText);
     try
-      Executor := CreateTest262Executor(FOptions.Mode);
+      Executor := CreateTest262Executor;
       try
         Engine := TGocciaEngine.Create('<test262-agent>', Source, Executor,
           FOptions.Capabilities);

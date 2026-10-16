@@ -10,7 +10,6 @@ const DEFAULT_MANIFEST = path.join('perf', 'web-tooling', 'manifest.json');
 const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_REPETITIONS = 1;
 const DEFAULT_GOCCIA_FLAGS = [
-  '--mode=bytecode',
   '--compat-asi',
   '--compat-var',
   '--compat-function',

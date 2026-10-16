@@ -22,7 +22,6 @@ uses
   Goccia.Error.Detail,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
@@ -56,8 +55,6 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-  TBareExecutionMode = (bemInterpreted, bemBytecode);
-
   TBareOptions = record
     Compatibility: TGocciaCompatibilityFlags;
     LabelStatementsEnabled: Boolean;
@@ -69,7 +66,6 @@ type
     UnsafeShadowRealm: Boolean;
     Deterministic: Boolean;
     Print: Boolean;
-    Mode: TBareExecutionMode;
     SourceType: TGocciaSourceType;
     SourceTypeExplicit: Boolean;
     FileName: string;
@@ -118,7 +114,6 @@ begin
   WriteLn(AOut, '  --strict-types                Enforce type annotations at runtime');
   WriteLn(AOut, '  --warning-unsupported-features');
   WriteLn(AOut, '                                Warn and recover for unsupported/default-disabled syntax');
-  WriteLn(AOut, '  --mode=interpreted|bytecode   Execution mode (default: bytecode)');
   WriteLn(AOut, '  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
   WriteLn(AOut, '  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn(AOut, '  --unsafe-function-constructor Enable dynamic Function constructor');
@@ -130,21 +125,11 @@ begin
   WriteLn(AOut, '  --max-instructions=N          Maximum bytecode steps before aborting');
   WriteLn(AOut, '  --max-stack=N                 Maximum call stack depth (default: 10000; 0 = no limit)');
   WriteLn(AOut, '  --profile=opcodes|functions|all');
-  WriteLn(AOut, '                                Enable bytecode VM profiling (forces bytecode mode)');
+  WriteLn(AOut, '                                Enable bytecode VM profiling');
   WriteLn(AOut, '  --profile-output=PATH         Write profiler JSON to PATH');
   WriteLn(AOut, '  --help                        Show this help');
   WriteLn(AOut);
   Write(AOut, StdinUsageNote(BARE_PROGRAM_NAME, BARE_STDIN_USAGE));
-end;
-
-procedure ParseMode(const AValue: string; var AOptions: TBareOptions);
-begin
-  if AValue = 'interpreted' then
-    AOptions.Mode := bemInterpreted
-  else if AValue = 'bytecode' then
-    AOptions.Mode := bemBytecode
-  else
-    raise Exception.Create('Invalid --mode value: ' + AValue);
 end;
 
 procedure ParseSourceType(const AValue: string; var AOptions: TBareOptions);
@@ -215,7 +200,6 @@ begin
   else
     raise Exception.Create('Invalid --profile value: ' + AValue);
   AOptions.ProfileModePresent := True;
-  AOptions.Mode := bemBytecode;
 end;
 
 procedure InitializeProfiler(const AOptions: TBareOptions);
@@ -295,7 +279,6 @@ begin
   AOptions.UnsafeShadowRealm := False;
   AOptions.Deterministic := False;
   AOptions.Print := False;
-  AOptions.Mode := bemBytecode;
   AOptions.SourceType := stScript;
   AOptions.SourceTypeExplicit := False;
   AOptions.FileName := STDIN_PATH_MARKER;
@@ -343,8 +326,8 @@ begin
       AOptions.Deterministic := True
     else if Arg = '--print' then
       AOptions.Print := True
-    else if StartsStr('--mode=', Arg) then
-      ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), AOptions)
+    else if (Arg = '--mode') or StartsStr('--mode=', Arg) then
+      RejectRemovedExecutionModeArgument(Arg)
     else if StartsStr('--source-type=', Arg) then
       ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt),
         AOptions)
@@ -389,8 +372,6 @@ begin
   if not AOptions.SourceTypeExplicit and
      IsModuleSourceFileName(AOptions.FileName) then
     AOptions.SourceType := stModule;
-  if AOptions.ProfileModePresent then
-    AOptions.Mode := bemBytecode;
   if (AOptions.ProfileOutputPath <> '') and
      not AOptions.ProfileModePresent then
     raise Exception.Create(
@@ -441,15 +422,6 @@ begin
     WriteLn(AResult.ToStringLiteral.Value);
 end;
 
-function CreateExecutorForMode(
-  const AMode: TBareExecutionMode): TGocciaExecutor;
-begin
-  case AMode of
-    bemInterpreted: Result := TGocciaInterpreterExecutor.Create;
-    bemBytecode: Result := TGocciaBytecodeExecutor.Create;
-  end;
-end;
-
 function RunBare(const AOptions: TBareOptions): Integer;
 var
   DisplayName: string;
@@ -476,7 +448,7 @@ begin
     SetMaxStackDepth(AOptions.StackSize);
     PrintHost := TBarePrintHost.Create;
     try
-      Executor := CreateExecutorForMode(AOptions.Mode);
+      Executor := TGocciaBytecodeExecutor.Create;
       try
         Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
         try

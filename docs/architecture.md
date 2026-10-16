@@ -104,7 +104,7 @@ CLI bytecode paths that need parse artifacts use `TGocciaCLISourcePipelineResult
 | GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `AfterExecute` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 
-`GocciaRunner` has a host mode and a [sandbox mode](permissions.md#sandbox-mode). In sandbox mode it copies the host inputs into a `TSandboxVirtualFileSystem` and captures that as the seed baseline before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. Both modes use the same executor abstraction: `--mode=interpreted` uses `TGocciaInterpreterExecutor`, while `--mode=bytecode` uses `TGocciaBytecodeExecutor`.
+`GocciaRunner` has a host mode and a [sandbox mode](permissions.md#sandbox-mode). In sandbox mode it copies the host inputs into a `TSandboxVirtualFileSystem` and captures that as the seed baseline before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. Both modes run on `TGocciaBytecodeExecutor`.
 
 Nested execution runs inside the sandbox-mode host: `runScript` and shell `goccia` dispatch through `TGocciaSandboxContext.RunScriptCallback`. Shared-VFS execution remains the default, while `{ sandbox: true }` / `goccia --sandbox` creates a child `TGocciaSandboxContext` whose `copy` entries come from parent-VFS paths and runs it through the same interpreter or bytecode executor mode.
 

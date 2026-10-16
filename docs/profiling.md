@@ -15,7 +15,7 @@
 
 The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
 
-Profiling implies `--mode=bytecode` automatically, as does `--coverage` (see [Testing — Coverage](testing.md#coverage)). When profiling is off, production dispatch does not record opcodes; turning `--profile` on selects the instrumented loop that still carries the per-instruction profiler guard.
+When profiling is off, production dispatch does not record opcodes; turning `--profile` on selects the instrumented loop that still carries the per-instruction profiler guard.
 
 ## CLI Usage
 
@@ -185,7 +185,7 @@ Run both on the same production binary for the full picture:
 ./build/GocciaRunner script.js --profile=all
 
 # sample run (no --profile, to avoid measuring profiling overhead)
-./build/GocciaRunner script.js --mode=bytecode &
+./build/GocciaRunner script.js &
 PID=$!
 sleep 0.2
 sample "$PID" 10 1 -file sample-output.txt -mayDie
