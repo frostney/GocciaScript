@@ -790,6 +790,9 @@ begin
   if Assigned(GC) then
     GC.ReleaseExternalBytes(FChargedBytes);
   FChargedBytes := 0;
+  // TEMPORARY: log AFTER releasing to confirm full teardown
+  if Length(FValue) > 50000 then
+    WriteLn(StdErr, 'TGocciaStringLiteralValue.Destroy: len=', Length(FValue), ' released');
   inherited;
 end;
 

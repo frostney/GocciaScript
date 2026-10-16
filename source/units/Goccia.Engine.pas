@@ -1411,8 +1411,14 @@ begin
   if (TGarbageCollector.Instance <> nil) and Assigned(FGlobalScope) then
     TGarbageCollector.Instance.RemoveRootObject(FGlobalScope);
 
-    FRetainedModules.Free;
-    FLazyThunks.Free;
+  FSourceLines := nil;
+
+  FRetainedModules.Free;
+  FLazyThunks.Free;
+  
+  // Collect AFTER freeing modules to sweep unreachable objects
+  if TGarbageCollector.Instance <> nil then
+    TGarbageCollector.Instance.Collect;
     FExtensions.Free;
     FBuiltinMath.Free;
     FBuiltinGlobalObject.Free;
@@ -3990,6 +3996,8 @@ begin
       FLastSourceMap := PipelineResult.TakeSourceMap
     else
       FLastSourceMap := nil;
+    if Assigned(PipelineResult) then
+      WriteLn(StdErr, 'Execute: Freeing PipelineResult');
     PipelineResult.Free;
   end;
 

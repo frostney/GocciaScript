@@ -6,6 +6,7 @@ interface
 
 uses
   Generics.Collections,
+  SysUtils,
 
   CriticalSections,
   HashMap,
@@ -307,6 +308,8 @@ type
 
     procedure AddRootObject(const AObject: TGCManagedObject);
     procedure RemoveRootObject(const AObject: TGCManagedObject);
+    procedure DumpLargeStringRoots;
+    function CountLiveStringLiterals(MinLength: Integer): Integer;
     procedure PushActiveRoot(const AObject: TGCManagedObject);
     procedure PopActiveRoot; {$IFDEF FPC}inline;{$ENDIF}
 
@@ -388,6 +391,8 @@ type
     procedure PrintTimingSummary;
     {$ENDIF}
 
+    // #1704 investigation: audit StringLiteralValue FValue pointers
+
     property Enabled: Boolean read FEnabled write FEnabled;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
     property TotalCollected: Int64 read FTotalCollected;
@@ -453,6 +458,7 @@ procedure RemoveTempRootIfNeeded(var ARoot: TGocciaTempRoot);
 implementation
 
 uses
+  Goccia.Values.Primitives,
   SyncObjs
   {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
   ,
@@ -1003,6 +1009,34 @@ procedure TGarbageCollector.RemoveRootObject(
   const AObject: TGCManagedObject);
 begin
   FRootObjects.Remove(AObject);
+end;
+
+procedure TGarbageCollector.DumpLargeStringRoots;
+var
+  Pair: TGCObjectSet.TKeyValuePair;
+begin
+  WriteLn(StdErr, 'GC Root count: ', FRootObjects.Count);
+  for Pair in FRootObjects do
+    WriteLn(StdErr, 'ROOT: ', Pair.Key.ClassName);
+end;
+
+function TGarbageCollector.CountLiveStringLiterals(MinLength: Integer): Integer;
+var
+  Obj: TGCManagedObject;
+  StrVal: TGocciaStringLiteralValue;
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to FManagedObjects.Count - 1 do
+  begin
+    Obj := FManagedObjects[I];
+    if Obj is TGocciaStringLiteralValue then
+    begin
+      StrVal := TGocciaStringLiteralValue(Obj);
+      if Length(StrVal.Value) >= MinLength then
+        Inc(Result);
+    end;
+  end;
 end;
 
 procedure TGarbageCollector.GrowActiveRootStack;
