@@ -1171,7 +1171,6 @@ await section("test262 runner: negative tests need the expected error in the exp
         TEST262RUNNER,
         "--suite-dir", suite,
         "--categories", "language",
-        "--mode=bytecode",
         "--jobs=1",
         "--output", out,
       ],

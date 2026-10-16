@@ -1220,15 +1220,13 @@ console.log("Arrow in a ternary consequent under ASI...");
     },
   ] as const;
 
-  for (const { desc, source, output } of cases)
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
-      const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
-      if (res.exitCode !== 0)
-        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
-      if (normalizeLineEndings(res.json.output) !== output)
-        throw new Error(`${label}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
-    }
+  for (const { desc, source, output } of cases) {
+    const res = runLoaderJson(source, ["--compat-asi"]);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== output)
+      throw new Error(`${desc}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+  }
 
   // Neither reading closes every conditional, so these stay SyntaxErrors.
   assertSyntaxErrorInBothModes(

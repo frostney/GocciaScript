@@ -5089,8 +5089,7 @@ console.log("Entry module evaluated once...");
 // AsyncModuleExecutionFulfilled) and not at all if it fails (§16.2.1.6.1.3.5
 // AsyncModuleExecutionRejected). tests/language/modules covers the order and a
 // cycle; this covers the run's exit status, its --print result, and a
-// dependency waiting on a timer. Only the bytecode run waits for a timer: the
-// interpreter still drains microtasks alone before the entry's body.
+// dependency waiting on a timer.
 console.log("Entry waits for a dependency's top-level await...");
 {
   const tmp = mkdtemp("goccia-entry-tla-");
@@ -5111,25 +5110,23 @@ console.log("Entry waits for a dependency's top-level await...");
         .split("\n")
         .filter((line) => prefixes.some((prefix) => line.startsWith(prefix)));
 
-    for (const mode of ["interpreted", "bytecode"]) {
-      const order = await $`${join(process.cwd(), RUNNER)} order.mjs --mode=${mode}`.cwd(tmp).nothrow().quiet();
-      const orderLines = lines(order.text(), ["dep ", "entry "]);
-      if (order.exitCode !== 0 || JSON.stringify(orderLines) !== JSON.stringify(["dep start", "dep end", "entry after"]))
-        throw new Error(`entry order (${mode}): got exit ${order.exitCode}: ${order.text()}${order.stderr}`);
+    const order = await $`${join(process.cwd(), RUNNER)} order.mjs`.cwd(tmp).nothrow().quiet();
+    const orderLines = lines(order.text(), ["dep ", "entry "]);
+    if (order.exitCode !== 0 || JSON.stringify(orderLines) !== JSON.stringify(["dep start", "dep end", "entry after"]))
+      throw new Error(`entry order: got exit ${order.exitCode}: ${order.text()}${order.stderr}`);
 
-      const failing = await $`${join(process.cwd(), RUNNER)} failing.mjs --mode=${mode}`.cwd(tmp).nothrow().quiet();
-      const failingOut = failing.text() + failing.stderr.toString();
-      if (failing.exitCode === 0 || failingOut.includes("entry ran") || !failingOut.includes("dependency failed"))
-        throw new Error(`failing dependency (${mode}): got exit ${failing.exitCode}: ${failingOut}`);
+    const failing = await $`${join(process.cwd(), RUNNER)} failing.mjs`.cwd(tmp).nothrow().quiet();
+    const failingOut = failing.text() + failing.stderr.toString();
+    if (failing.exitCode === 0 || failingOut.includes("entry ran") || !failingOut.includes("dependency failed"))
+      throw new Error(`failing dependency: got exit ${failing.exitCode}: ${failingOut}`);
 
-      const print = await $`${join(process.cwd(), RUNNER)} print.mjs --print --mode=${mode}`.cwd(tmp).nothrow().quiet();
-      if (print.exitCode !== 0 || !lines(print.text(), ["completion "]).includes("completion after"))
-        throw new Error(`--print result (${mode}): got exit ${print.exitCode}: ${print.text()}${print.stderr}`);
-    }
+    const print = await $`${join(process.cwd(), RUNNER)} print.mjs --print`.cwd(tmp).nothrow().quiet();
+    if (print.exitCode !== 0 || !lines(print.text(), ["completion "]).includes("completion after"))
+      throw new Error(`--print result: got exit ${print.exitCode}: ${print.text()}${print.stderr}`);
 
     const timer = await $`${join(process.cwd(), TESTRUNNER)} -P timer.test.mjs`.cwd(tmp).nothrow().quiet();
     if (timer.exitCode !== 0)
-      throw new Error(`timer dependency (bytecode): got exit ${timer.exitCode}: ${timer.text()}${timer.stderr}`);
+      throw new Error(`timer dependency: got exit ${timer.exitCode}: ${timer.text()}${timer.stderr}`);
   } finally {
     clean(tmp);
   }
