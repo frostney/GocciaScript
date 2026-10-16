@@ -173,3 +173,38 @@ describe("Iterator.concat()", () => {
     expect(result).toEqual(expected);
   });
 });
+
+describe("Iterator.concat() — collection while reading [Symbol.iterator]", () => {
+  // Each item's [Symbol.iterator] is read in turn, and a getter can return a
+  // method nothing else references. A later item's getter that collects must
+  // not free a method an earlier getter returned.
+  const churn = () => {
+    Goccia.gc();
+    return Array.from({ length: 200 }, (_, i) => ({ i, s: "x" + i, a: [i] }));
+  };
+  const viaGetter = (values, collect) => ({
+    get [Symbol.iterator]() {
+      if (collect) churn();
+      return () => values[Symbol.iterator]();
+    },
+  });
+
+  test("keeps a method an earlier getter returned when a later getter collects", () => {
+    const result = Iterator.concat(viaGetter([1, 2], false), viaGetter([3], true))
+      .take(10)
+      .toArray();
+    expect(result).toEqual([1, 2, 3]);
+  });
+
+  test("keeps every getter-returned method when each getter collects", () => {
+    const result = Iterator.concat(
+      viaGetter([1], true),
+      viaGetter([2, 3], true),
+      viaGetter([], true),
+      viaGetter([4], true)
+    )
+      .take(10)
+      .toArray();
+    expect(result).toEqual([1, 2, 3, 4]);
+  });
+});

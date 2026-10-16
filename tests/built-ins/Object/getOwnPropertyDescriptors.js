@@ -273,3 +273,46 @@ describe("Object.getOwnPropertyDescriptors", () => {
     ]);
   });
 });
+
+describe("Object.getOwnPropertyDescriptors() — collection in a Proxy trap", () => {
+  // The result object is built while each [[GetOwnProperty]] runs, and for a
+  // Proxy the keys come from the ownKeys trap's result. A collection in the
+  // getOwnPropertyDescriptor trap must free neither.
+  const churn = () => {
+    Goccia.gc();
+    return Array.from({ length: 200 }, (_, i) => ({ i, s: "x" + i, a: [i] }));
+  };
+
+  test("keeps the result object alive when the trap collects", () => {
+    const proxy = new Proxy({ a: 1, b: 2, c: 3 }, {
+      getOwnPropertyDescriptor(target, key) {
+        churn();
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    const descs = Object.getOwnPropertyDescriptors(proxy);
+
+    expect(Object.keys(descs)).toEqual(["a", "b", "c"]);
+    expect([descs.a.value, descs.b.value, descs.c.value]).toEqual([1, 2, 3]);
+  });
+
+  test("keeps fresh keys the ownKeys trap returned alive when the trap collects", () => {
+    const names = ["alpha", "beta", "gamma"];
+    const target = { alpha: 1, beta: 2, gamma: 3 };
+    const proxy = new Proxy(target, {
+      ownKeys() {
+        return names.map((name) => name.split("").join(""));
+      },
+      getOwnPropertyDescriptor(targetObject, key) {
+        churn();
+        return Reflect.getOwnPropertyDescriptor(targetObject, key);
+      },
+    });
+
+    const descs = Object.getOwnPropertyDescriptors(proxy);
+
+    expect(Object.keys(descs)).toEqual(names);
+    expect(descs.gamma.value).toBe(3);
+  });
+});

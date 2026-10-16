@@ -626,7 +626,8 @@ begin
   until False;
   CallbackArgs := TGocciaArgumentsCollection.Create([BroadcastValue]);
   try
-    Result := TGocciaFunctionBase(Callback).Call(CallbackArgs,
+    // Any callable, a callable Proxy included.
+    Result := DispatchCall(Callback, CallbackArgs,
       TGocciaUndefinedLiteralValue.UndefinedValue);
   finally
     CallbackArgs.Free;

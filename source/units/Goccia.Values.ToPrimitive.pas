@@ -35,6 +35,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
@@ -57,7 +58,13 @@ begin
     Roots.Initialize;
     Args := TGocciaArgumentsCollection.Create;
     try
-      AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
+      // ES2026 §7.1.1.1 OrdinaryToPrimitive step 3.b.i: Call(method, O).
+      // IsCallable admits any callable; only a function object takes the
+      // direct path, and a callable Proxy or a class goes through [[Call]].
+      if Method is TGocciaFunctionBase then
+        AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue)
+      else
+        AResult := InvokeCallable(Method, Args, AThisValue);
       Roots.Add(AResult);
       Result := AResult.IsPrimitive;
     finally
@@ -120,7 +127,13 @@ begin
       Args := TGocciaArgumentsCollection.Create;
       try
         Args.Add(HintValue(AHint));
-        Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue);
+        // A callable Proxy or a class passes GetMethod too (§7.3.10 step 3
+        // asks only IsCallable), so only a function object takes the direct
+        // path.
+        if ExoticToPrim is TGocciaFunctionBase then
+          Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue)
+        else
+          Result := InvokeCallable(ExoticToPrim, Args, AValue);
       finally
         Args.Free;
       end;

@@ -39,6 +39,8 @@ uses
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.VM.Exception;
 
@@ -54,7 +56,16 @@ const
   ASYNC_FAIL_MARKER = 'Test262:AsyncTestFailure:';
   NEGATIVE_NO_ERROR_MARKER = 'Test262:NegativeTestNoError';
   NEGATIVE_ERROR_MARKER = 'Test262:NegativeTestError:';
+  { The value stock harness/sta.js $DONOTEVALUATE() throws. raw negative
+    tests throw the same string literal themselves. Seeing it thrown means
+    the test body was evaluated. }
+  DONOTEVALUATE_THROWN = 'Test262: This statement should not be evaluated.';
   WORKER_RESULT_VERSION = 1;
+  { Version of the grading contract in docs/test262.md, published as
+    run.gradingContract. Bump it whenever a grading change can move a test
+    between PASS and FAIL without an engine change, so the PR comparison
+    does not block on a baseline graded under the old contract. }
+  GRADING_CONTRACT_VERSION = 2;
 
 type
   TTest262Outcome = (toPass, toFail, toWrapperInfra, toTimeout);
@@ -899,6 +910,10 @@ begin
   finally
     HeaderLines.Free;
   end;
+  { INTERPRETING.md: a raw test's source "must not be modified in any
+    way", so it keeps its frontmatter comment and original layout. }
+  if AMetadata.HasFlag('raw') then
+    ABody := ASource;
   Result := True;
 end;
 
@@ -946,6 +961,59 @@ begin
   end;
 end;
 
+{ Unwrapped negative-runtime tests are graded against negative.type, which
+  names the thrown value's constructor (test262's Test262Error has no own or
+  inherited "name" data property). Mirror the wrapped path's
+  e.constructor.name, reading data properties only so grading never calls
+  an accessor's getter. }
+function DataPropertyValue(const AObject: TGocciaObjectValue;
+  const AName: string): TGocciaValue;
+var
+  Current: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := nil;
+  Current := AObject;
+  while Assigned(Current) do
+  begin
+    Descriptor := Current.GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      if Descriptor is TGocciaPropertyDescriptorData then
+        Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+      Exit;
+    end;
+    Current := Current.Prototype;
+  end;
+end;
+
+function NegativeErrorName(const AKind: TTest262WrapperKind;
+  const AThrown: TGocciaValue): string;
+var
+  Constructor_, Name: TGocciaValue;
+begin
+  Result := ThrownErrorName(AThrown);
+  if (AKind <> twNegativeRuntimeUnwrapped) or
+     not (AThrown is TGocciaObjectValue) then
+    Exit;
+  Constructor_ := DataPropertyValue(TGocciaObjectValue(AThrown),
+    'constructor');
+  if not (Constructor_ is TGocciaObjectValue) then
+    Exit;
+  Name := DataPropertyValue(TGocciaObjectValue(Constructor_), 'name');
+  if (Name is TGocciaStringLiteralValue) and
+     (TGocciaStringLiteralValue(Name).Value <> '') then
+    Result := TGocciaStringLiteralValue(Name).Value;
+end;
+
+{ True when the escaped value is the string sta.js $DONOTEVALUATE() throws,
+  i.e. the engine evaluated a body that should have been rejected first. }
+function IsDoNotEvaluateThrow(const AThrown: TGocciaValue): Boolean;
+begin
+  Result := (AThrown is TGocciaStringLiteralValue) and
+    (TGocciaStringLiteralValue(AThrown).Value = DONOTEVALUATE_THROWN);
+end;
+
 function TTest262App.BuildSource(const AHarness, ABody: string;
   const AKind: TTest262WrapperKind;
   const AStrictMode: Boolean): string;
@@ -957,8 +1025,6 @@ begin
   else
     Prefix := '';
 
-  if AKind = twNegativeParse then
-    Exit(Prefix + ABody);
   if AKind = twNegativeRuntimeUnwrapped then
     Exit(Prefix + AHarness + sLineBreak + ABody);
   if AKind = twNegativeRuntime then
@@ -992,9 +1058,12 @@ begin
   begin
     if (AMetadata.NegativePhase = 'parse') or
        (AMetadata.NegativePhase = 'early') or
-       (AMetadata.NegativePhase = 'resolution') or
-       AMetadata.HasFlag('module') then
+       (AMetadata.NegativePhase = 'resolution') then
       Exit(twNegativeParse);
+    { A module body cannot be wrapped in try/catch (import/export must stay
+      top-level), so runtime-phase module negatives are graded unwrapped. }
+    if AMetadata.HasFlag('module') then
+      Exit(twNegativeRuntimeUnwrapped);
     if (AMetadata.NegativePhase = 'runtime') and
        (AMetadata.NegativeType = 'SyntaxError') and
        StartsStr('language/global-code/', ACase.Id) then
@@ -1034,7 +1103,8 @@ end;
 
 procedure ClassifyResult(const AKind: TTest262WrapperKind;
   const AExpectedErrorType, AOutput, AErrorName, ADiagnostic: string;
-  const AExecutionFailed, ATimedOut: Boolean;
+  const AExecutionFailed, ATimedOut, AHostError,
+    ADoNotEvaluateReached: Boolean;
   out AOutcome: TTest262Outcome; out AMessage, AResultDiagnostic: string);
 var
   Actual: string;
@@ -1049,13 +1119,33 @@ begin
   end;
   if AKind = twNegativeParse then
   begin
-    if AExecutionFailed then
-      AOutcome := toPass
-    else
+    { A parse/early/resolution negative passes only when the source is
+      rejected before evaluation with the expected error constructor.
+      Parse, early-error and module-linking failures surface as host-level
+      TGocciaError exceptions before any statement runs; once evaluation has
+      started, errors escape as JS throw values instead. }
+    AOutcome := toFail;
+    if not AExecutionFailed then
+      AMessage := 'expected ' + AExpectedErrorType +
+        ' before evaluation, body executed cleanly'
+    else if ADoNotEvaluateReached then
+      AMessage := 'expected ' + AExpectedErrorType +
+        ' before evaluation, body was evaluated ($DONOTEVALUATE reached)'
+    else if not AHostError then
     begin
-      AOutcome := toFail;
-      AMessage := 'expected parse error, body executed cleanly';
-    end;
+      AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, ' +
+        AErrorName + ' was thrown as a JS value during evaluation';
+      AResultDiagnostic := Copy(ADiagnostic, 1, 300);
+    end
+    else if (AExpectedErrorType <> '') and
+            (AErrorName <> AExpectedErrorType) then
+    begin
+      AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, got ' +
+        AErrorName;
+      AResultDiagnostic := Copy(ADiagnostic, 1, 300);
+    end
+    else
+      AOutcome := toPass;
     Exit;
   end;
 
@@ -1149,9 +1239,11 @@ var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
   ErrorName: string;
+  DoNotEvaluateReached: Boolean;
   ExecutionFailed: Boolean;
   Harness: string;
   Host: TGocciaTest262Host;
+  HostError: Boolean;
   Kind: TTest262WrapperKind;
   Metadata: TTest262Metadata;
   PrintHost: TTest262PrintHost;
@@ -1170,6 +1262,8 @@ begin
   Host := nil;
   PrintHost := nil;
   ExecutionFailed := False;
+  DoNotEvaluateReached := False;
+  HostError := False;
   TimedOut := False;
   ErrorName := '';
   Diagnostic := '';
@@ -1179,10 +1273,14 @@ begin
       if not ParseTest(ReadUTF8FileText(ACase.Path), Body, Metadata) then
         raise Exception.Create('frontmatter parse failed');
       Kind := DetermineKind(ACase, Metadata);
+      { Negative parse and resolution tests get the harness like every
+        other non-raw test (INTERPRETING.md, "Test262-Defined Bindings"),
+        so a body that is evaluated reaches sta.js $DONOTEVALUATE(). raw
+        tests run unmodified, once, in non-strict mode. }
       Harness := BuildHarness(Metadata, Metadata.HasFlag('async'),
-        Metadata.HasFlag('raw') or (Kind = twNegativeParse));
+        Metadata.HasFlag('raw'));
       SourceText := BuildSource(Harness, Body, Kind,
-        Metadata.HasFlag('onlyStrict'));
+        Metadata.HasFlag('onlyStrict') and not Metadata.HasFlag('raw'));
       Source := CreateECMAScriptSourceLines(SourceText);
 
       EngineOptions := Default(TGocciaTest262EngineOptions);
@@ -1248,7 +1346,8 @@ begin
         on E: EGocciaBytecodeThrow do
         begin
           ExecutionFailed := True;
-          ErrorName := ThrownErrorName(E.ThrownValue);
+          ErrorName := NegativeErrorName(Kind, E.ThrownValue);
+          DoNotEvaluateReached := IsDoNotEvaluateThrow(E.ThrownValue);
           Diagnostic := FormatThrowDetail(E.ThrownValue, ACase.Path,
             Source, False, Engine.ModuleLoader.DiagnosticScope.Principal,
             E.Suggestion);
@@ -1256,7 +1355,8 @@ begin
         on E: TGocciaThrowValue do
         begin
           ExecutionFailed := True;
-          ErrorName := ThrownErrorName(E.Value);
+          ErrorName := NegativeErrorName(Kind, E.Value);
+          DoNotEvaluateReached := IsDoNotEvaluateThrow(E.Value);
           Diagnostic := FormatThrowDetail(E.Value, ACase.Path, Source,
             False, Engine.ModuleLoader.DiagnosticScope.Principal,
             E.Suggestion);
@@ -1264,19 +1364,25 @@ begin
         on E: TGocciaError do
         begin
           ExecutionFailed := True;
+          { Parse, early-error and module-linking failures arrive here, as
+            host-level errors. JS-level throws arrive as TGocciaThrowValue or
+            EGocciaBytecodeThrow above instead. }
+          HostError := True;
           ErrorName := ErrorDisplayName(E);
           Diagnostic := E.GetDetailedMessage(False);
         end;
         on E: Exception do
         begin
           ExecutionFailed := True;
+          HostError := True;
           ErrorName := E.ClassName;
           Diagnostic := E.ClassName + ': ' + E.Message;
         end;
       end;
 
       ClassifyResult(Kind, Metadata.NegativeType, PrintHost.Text,
-        ErrorName, Diagnostic, ExecutionFailed, TimedOut, AResult.Status,
+        ErrorName, Diagnostic, ExecutionFailed, TimedOut, HostError,
+        DoNotEvaluateReached, AResult.Status,
         AResult.Message, AResult.Diagnostic);
     except
       on E: Exception do
@@ -1755,7 +1861,8 @@ begin
     Lines.Add('    "jobs": ' + IntToStr(FOptions.Jobs) + ',');
     Lines.Add('    "timeoutMs": ' + IntToStr(FOptions.TimeoutMs) + ',');
     Lines.Add('    "maxMemoryBytes": ' +
-      IntToStr(FOptions.MaxMemoryBytes));
+      IntToStr(FOptions.MaxMemoryBytes) + ',');
+    Lines.Add('    "gradingContract": ' + IntToStr(GRADING_CONTRACT_VERSION));
     Lines.Add('  }' + IfThen(FOptions.ShardCount > 0, ',', ''));
     if FOptions.ShardCount > 0 then
     begin
