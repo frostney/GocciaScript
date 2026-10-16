@@ -189,7 +189,10 @@ type
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure AddFieldInitializerWithKey(const AName: string; const AComputedKey: TGocciaValue; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure SetMethodInitializers(const AInitializers: array of TGocciaValue);
-    procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
+    { Puts AInitializers ahead of the method initializers already set: a
+      decorator's addInitializer callbacks for methods run before the
+      compiled field initializer the class set with SetMethodInitializers. }
+    procedure PrependMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
@@ -1223,14 +1226,19 @@ begin
     FMethodInitializers[Idx] := AInitializers[Idx];
 end;
 
-procedure TGocciaClassValue.AppendMethodInitializers(const AInitializers: array of TGocciaValue);
+procedure TGocciaClassValue.PrependMethodInitializers(const AInitializers: array of TGocciaValue);
 var
-  OldLen, Idx: Integer;
+  OldLen, AddLen, Idx: Integer;
 begin
   OldLen := Length(FMethodInitializers);
-  SetLength(FMethodInitializers, OldLen + Length(AInitializers));
-  for Idx := 0 to High(AInitializers) do
-    FMethodInitializers[OldLen + Idx] := AInitializers[Idx];
+  AddLen := Length(AInitializers);
+  if AddLen = 0 then
+    Exit;
+  SetLength(FMethodInitializers, OldLen + AddLen);
+  for Idx := OldLen - 1 downto 0 do
+    FMethodInitializers[Idx + AddLen] := FMethodInitializers[Idx];
+  for Idx := 0 to AddLen - 1 do
+    FMethodInitializers[Idx] := AInitializers[Idx];
 end;
 
 procedure TGocciaClassValue.AppendFieldInitializers(const AInitializers: array of TGocciaValue);
