@@ -62,7 +62,9 @@ which nothing left in an idle run will call, so the wait does not block on it.
 An engine nested on the same thread, such as a sandbox `runScript` child, does
 not wait out its caller's waiters. Extension work comes first: before the wait
 sleeps for a waiter, a job that started host work sends the loop back to the
-extension passes, whose waits pump Atomics completions too. The wait sleeps 1 ms
+extension passes. The fetch extension's wait settles a waiter that falls due
+while a request is in flight on each poll, so neither the request nor the
+waiter waits for the other. The wait sleeps 1 ms
 between polls and checks the run deadline and the instruction budget each
 time, as every other engine wait does, so a host stop ends it promptly.
 Timers stay virtual ([ADR 0113](0113-deterministic-virtual-timer-queue.md)):

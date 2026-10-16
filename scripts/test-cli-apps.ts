@@ -13383,13 +13383,16 @@ await section("Runner: a fetch awaited after a top-level await that settles at o
     throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
 });
 
-await section("Runner: the idle wait for an Atomics.waitAsync timeout neither delays a fetch nor holds a nested run...", async () => {
-  // Both scripts time a step from inside and print whether it was prompt.
-  // The waiter's 5 s timeout is what a slow step would have waited out.
+await section("Runner: the idle wait for an Atomics.waitAsync timeout neither delays nor is delayed by a fetch, and does not hold a nested run...", async () => {
+  // The scripts time each step from inside and print whether it was prompt.
+  // A waiter's timeout is what a slow fetch would have waited out, and the
+  // slow endpoint is what a slow waiter would have waited for.
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch() {
+    async fetch(request) {
+      if (new URL(request.url).pathname === "/slow")
+        await Bun.sleep(1500);
       return new Response("ok", { status: 200 });
     },
   });
@@ -13397,15 +13400,30 @@ await section("Runner: the idle wait for an Atomics.waitAsync timeout neither de
   const prompt = (label: string, start: string) =>
     `console.log('${label} ' + (Date.now() - ${start} < 2000 ? 'prompt' : 'late'));`;
   // A job starts a fetch while a timed waiter is pending: the fetch's response
-  // is waited for first, not after the waiter's timeout.
+  // is waited for first, not after the waiter's timeout, and the waiter still
+  // times out on time.
   const fetchFirst = [
     "const view = new Int32Array(new SharedArrayBuffer(4));",
     "await Promise.resolve();",
-    "const waited = Atomics.waitAsync(view, 0, 0, 5000).value;",
+    "const waitStart = Date.now();",
+    "const waited = Atomics.waitAsync(view, 0, 0, 3000).value;",
     "const fetchStart = Date.now();",
     `await fetch('${url}');`,
     prompt("fetch", "fetchStart"),
-    "console.log('waiter ' + (await waited));",
+    "const outcome = await waited;",
+    "console.log('waiter ' + outcome + ' ' + (Date.now() - waitStart < 4500 ? 'on time' : 'late'));",
+  ].join("\n");
+  // A waiter that falls due while a slow fetch is in flight settles then, not
+  // after the response, so it wins the race.
+  const waiterFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const raceStart = Date.now();",
+    "const winner = await Promise.race([",
+    "  Atomics.waitAsync(view, 0, 0, 100).value.then(() => 'waiter'),",
+    `  fetch('${url}slow').then(() => 'fetch'),`,
+    "]);",
+    "console.log('winner ' + winner + ' ' + (Date.now() - raceStart < 1000 ? 'prompt' : 'late'));",
   ].join("\n");
   // A nested run has no waiter of its own and ends without waiting out its
   // caller's.
@@ -13422,7 +13440,8 @@ await section("Runner: the idle wait for an Atomics.waitAsync timeout neither de
   const failures: string[] = [];
   try {
     for (const [name, files, expected] of [
-      ["fetch during a waiter", { "/main.js": fetchFirst }, ["fetch prompt", "waiter timed-out"]],
+      ["fetch during a waiter", { "/main.js": fetchFirst }, ["fetch prompt", "waiter timed-out on time"]],
+      ["waiter during a slow fetch", { "/main.js": waiterFirst }, ["winner waiter prompt"]],
       ["nested run during a waiter", { "/main.js": nested, "/child.js": "console.log('child ran');\n" }, ["child prompt", "child ok true", "waiter timed-out"]],
     ] as const) {
       const run = await runNestedFetchSandbox({ ...files }, []);

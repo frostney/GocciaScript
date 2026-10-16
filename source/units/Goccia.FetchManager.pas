@@ -1022,6 +1022,11 @@ begin
     begin
       CheckExecutionTimeoutNow;
       CheckInstructionLimit;
+      { An Atomics.waitAsync timeout that falls due while a request is in
+        flight settles now, not once the response arrives: the drain above
+        runs its reactions. }
+      if PumpAtomicsWaitAsyncCompletions > 0 then
+        Break;
       Sleep(FETCH_POLL_INTERVAL_MS);
     end;
   until False;

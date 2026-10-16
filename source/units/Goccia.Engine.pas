@@ -2313,8 +2313,9 @@ begin
             Queue.DrainQueue
           else if ExtensionsHavePendingWork then
             { A job started host work after its extension's pass: the next
-              round waits on it, pumping Atomics completions as it does,
-              before this loop sleeps for an Atomics timeout. }
+              round waits on it before this loop sleeps for an Atomics
+              timeout. The fetch wait settles a waiter that falls due
+              meanwhile. }
             Break
           else if HasSelfSettlingAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
           begin
