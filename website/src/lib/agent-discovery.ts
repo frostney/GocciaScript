@@ -108,13 +108,13 @@ export function buildMcpServerCard(origin: string, version = "nightly") {
         {
           name: "goccia.execute",
           description:
-            "Run GocciaScript source through the public browser API with optional mode, ASI, and compatibility flags.",
+            "Run GocciaScript source through the public browser API with optional ASI and compatibility flags.",
           inputSchema: gocciaRunInputSchema(),
         },
         {
           name: "goccia.test",
           description:
-            "Run a GocciaScript test file through the public browser API with optional mode, ASI, and compatibility flags.",
+            "Run a GocciaScript test file through the public browser API with optional ASI and compatibility flags.",
           inputSchema: gocciaRunInputSchema(),
         },
       ],
@@ -162,7 +162,6 @@ POST JSON to \`/api/execute\`:
 \`\`\`json
 {
   "code": "1 + 1;",
-  "mode": "bytecode",
   "asi": true,
   "compatVar": false,
   "compatFunction": false
@@ -172,7 +171,7 @@ POST JSON to \`/api/execute\`:
 Options:
 
 - \`code\` — GocciaScript source code, capped at ${MAX_GOCCIA_CODE_BYTES} bytes (${MAX_GOCCIA_CODE_BYTES / 1024} KiB).
-- \`mode\` — \`bytecode\` or \`interpreted\`, passed as \`--mode=<value>\` to binaries that advertise \`--mode\`. The website API defaults this to \`bytecode\`.
+- \`mode\` — \`bytecode\` or \`interpreted\`, for releases up to 0.14 only: it is passed as \`--mode=<value>\` to binaries that advertise \`--mode\`. GocciaScript 0.15.0 removed the option and runs only bytecode, so newer binaries ignore the field. The website API defaults this to \`bytecode\`.
 - \`asi\` — enables automatic semicolon insertion. The website API keeps this short field name for version compatibility; selected binaries may map it to \`--asi\` or \`--compat-asi\` depending on their supported flags. The website API defaults this to \`true\`.
 - \`compatVar\` — enables legacy \`var\` declarations, matching \`--compat-var\`.
 - \`compatFunction\` — enables the \`function\` keyword, matching \`--compat-function\`.

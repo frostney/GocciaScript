@@ -23,8 +23,7 @@
   in here was probed against the pinned Vitest 4.1.10 rather than read off its
   documentation. See docs/adr/0113-deterministic-virtual-timer-queue.md.
 
-  The queue is shared machinery: it sits below both executors, so the
-  interpreter and the bytecode VM get identical behaviour by construction. }
+  The queue is shared machinery that sits below the bytecode VM. }
 
 unit Goccia.Timers;
 
@@ -846,8 +845,8 @@ end;
 procedure TGocciaTimerQueue.DiscardTimers;
 begin
   { Drop the queue but keep any uncaught error: the engine's own idle teardown
-    (DiscardRuntimePending) runs this before an interpreted run's test runner
-    gets to call TakeUncaughtTimerError, so clearing it here loses a throwing
+    (DiscardRuntimePending) runs this before the test runner's later runTests
+    call gets to call TakeUncaughtTimerError, so clearing it here loses a throwing
     module-scope timer and lets the file pass. The error is cleared on read
     (TakeUncaughtError) or at the engine boundary (ResetForEngine), which is the
     point at which a leftover value would otherwise reach the next engine. }

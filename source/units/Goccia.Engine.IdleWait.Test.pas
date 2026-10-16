@@ -11,7 +11,6 @@ uses
   TimingUtils,
 
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.InstructionLimit,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
@@ -82,17 +81,15 @@ function TEngineIdleWaitTests.RunEntry(const AStopFromExtension: Boolean;
   out AElapsedMilliseconds: Int64): string;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Started: Int64;
 begin
   Result := '';
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
     Source.Text := WAIT_ON_A_WAITER_WITH_A_TIMEOUT;
-    Engine := TGocciaEngine.Create('<idle-wait>', Source, Executor);
+    Engine := TGocciaEngine.Create('<idle-wait>', Source);
     Engine.SourceType := stModule;
     if AStopFromExtension then
       Engine.AddExtension(TSpendBudgetExtension.Create);
@@ -108,7 +105,6 @@ begin
     { The extension's spent budget outlives the run on this thread. }
     ClearInstructionLimit;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;

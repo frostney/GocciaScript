@@ -122,10 +122,7 @@ describe("awaiting a thenable that rejects is handled by the await", () => {
 
   test("asynchronous disposer", async () => {
     expect(await reasonOf(async () => {
-      // In a block: interpreter mode has no `using` directly in a function body.
-      {
-        await using resource = { [Symbol.asyncDispose]: () => rejecting("dispose") };
-      }
+      await using resource = { [Symbol.asyncDispose]: () => rejecting("dispose") };
     })).toBe("dispose");
   });
 

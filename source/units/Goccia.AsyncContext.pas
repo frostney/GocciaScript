@@ -8,7 +8,7 @@
   that created it does afterwards.
 
   Two seams keep the current snapshot travelling with continuations, and both
-  live in the machinery both executors share:
+  live in the runtime machinery below the VM:
 
     - a promise reaction records the snapshot in effect when it is registered
       (Goccia.Values.PromiseValue), and

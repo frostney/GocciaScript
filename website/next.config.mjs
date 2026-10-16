@@ -27,6 +27,19 @@ const nextConfig = {
       },
     ];
   },
+  // Docs pages that were removed keep their URL alive by pointing at the page
+  // that now holds their content. docs/interpreter.md went with the tree-walk
+  // interpreter in 0.15.0; its scope, error and microtask sections moved to
+  // docs/architecture.md.
+  async redirects() {
+    return [
+      {
+        source: "/docs/interpreter",
+        destination: "/docs/architecture",
+        permanent: true,
+      },
+    ];
+  },
   outputFileTracingIncludes: {
     "/api/execute": ["./vendor/**"],
     "/api/test": ["./vendor/**"],

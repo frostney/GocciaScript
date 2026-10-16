@@ -46,11 +46,12 @@ const
   // A level costs more native stack when its trap is a native function
   // reached through a bound function or a Proxy (`Reflect.apply.bind(null)`,
   // `new Proxy(Reflect.apply, {})`): in a production build on Linux x86-64,
-  // interpreted, under the deepest recursion the default --max-stack allows,
-  // such a nest ran out of native stack after about 2,130 levels. The cap
-  // stays below that. A level that costs more again, such as a trap wrapped
-  // in several bound functions, is stopped before the cap by the native stack
-  // check EnterPropertyDelegation makes once delegations nest.
+  // under the deepest recursion the default --max-stack allows, such a nest
+  // ran out of native stack after about 2,130 levels (measured under the
+  // since-removed tree-walk interpreter). The cap stays below that. A level
+  // that costs more again, such as a trap wrapped in several bound functions,
+  // is stopped before the cap by the native stack check
+  // EnterPropertyDelegation makes once delegations nest.
   MAX_PROPERTY_DELEGATION_DEPTH = 2000;
 
   // The same walk enters an array, function, class or class instance by a

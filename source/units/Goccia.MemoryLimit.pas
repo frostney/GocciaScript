@@ -32,8 +32,8 @@ type
 
     Opacity is a property of the handlers, not of the class. Every boundary
     that would otherwise convert a Pascal exception into something the guest
-    can observe — the evaluator's try/catch statement paths, the VM's
-    async-iterator and dynamic-import arms, the microtask, await, generator
+    can observe — the VM's async-iterator and dynamic-import arms, the
+    microtask, await, generator
     and promise-reaction boundaries, Array.fromAsync, the sandbox's
     fs.promises and shell boundaries, Response.json, the benchmark run loop,
     and the test library's toThrow — names this class in its re-raise
@@ -41,7 +41,7 @@ type
     explicit `on E: TGocciaMemoryLimitError do raise;` or through the shared
     IsUncatchableFault predicate in Goccia.UncatchableFault.pas. A new
     boundary that omits it makes the ceiling catchable again, which is what
-    Goccia.MemoryLimit.Test.pas guards against in both execution modes.
+    Goccia.MemoryLimit.Test.pas guards against.
     Prefer the shared predicate at new boundaries: an allowlist spelled out by
     hand is one that can be spelled out incompletely.
 
@@ -50,7 +50,7 @@ type
     `if IsEngineIntegrityFault(E) then raise;`. This ceiling is opaque because
     a ceiling the guest can catch is one it can ignore; an integrity fault is
     opaque for a stronger reason still, and is the backstop for the failure
-    this family cannot describe — an evaluator temporary left unrooted across a
+    this family cannot describe — a temporary left unrooted across a
     collecting safe point surfaces as a use-after-free, which without the guard
     `catch (e)` absorbs. The family, its two deliberate carve-outs and the
     reasoning live in Goccia.EngineFault.pas and

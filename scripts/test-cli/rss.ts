@@ -158,7 +158,7 @@ function requireMeasurement(run: PeakRssRun, label: string): number | null {
  * Asserts the run never grew past `limitBytes`.
  *
  * This is the "refused before it happens" assertion: the limit is not the
- * budget itself — the process has an interpreter, a heap and the allocations
+ * budget itself — the process has an engine, a heap and the allocations
  * it made before the refusal — but a ceiling far below what the same script
  * reaches when nothing stops it.
  */

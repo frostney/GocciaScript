@@ -1,21 +1,19 @@
 /*---
-description: A non-callable callee and a nullish property base are reported with the same message text in both execution modes
+description: A non-callable callee and a nullish property base are reported with Node's message text, naming the callee as written
 esid: sec-function-calls-runtime-semantics-evaluation
 ---*/
 
 // ES2026 §13.3.6.1 step 6 (throw a TypeError when the callee is not callable)
 // and §6.2.5.5 GetValue step 3.a (ToObject on a nullish base) say only *that*
 // a TypeError is thrown, not what it says. The message is therefore an engine
-// choice — and it used to be a different choice per execution mode: the
-// tree-walk evaluator named the callee off the AST while the bytecode VM only
-// had the runtime value, so `obj.missingMethod()` read
-// "obj.missingMethod is not a function" interpreted and
-// "undefined is not a function" compiled. Nullish property reads diverged the
-// same way ("Cannot read property 'x' of undefined" vs Node's
-// "Cannot read properties of undefined (reading 'x')").
+// choice. The VM names the callee from the descriptor the compiler records off
+// the AST, so `obj.missingMethod()` reads "obj.missingMethod is not a
+// function" rather than "undefined is not a function", and a nullish property
+// read uses Node's "Cannot read properties of undefined (reading 'x')" rather
+// than "Cannot read property 'x' of undefined".
 //
-// Both modes now build these strings from one shared formatter, so this file
-// pins the text itself: it fails in whichever mode drifts.
+// These strings are built by one shared formatter, so this file pins the text
+// itself: it fails if the wording drifts.
 
 const messageOf = (fn) => {
   try {
@@ -82,8 +80,8 @@ describe("non-callable callee messages", () => {
   test("reports a TypeError for a missing symbol-keyed tagged-template tag", () => {
     // A missing symbol-keyed computed member reads as `undefined` (§10.1.8.1
     // [[Get]] returns undefined for an absent property), so the tag callee here
-    // is the undefined value, not callable. Both execution modes must name the
-    // tag from its source text and report "undefined is not a function"'s
+    // is the undefined value, not callable. The engine must name the tag from
+    // its source text and report "undefined is not a function"'s
     // shared wording — this pins the tagged-template computed-member path.
     const obj = {};
     const s = Symbol("missing");

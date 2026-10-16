@@ -132,8 +132,8 @@ const
   RESOLVED_CANDIDATE_DIAGNOSTIC_FORMAT = '  Resolved to: %s';
 
 { A failure is located at the import that asked for the module — a static
-  import declaration or an import() call — which both executors enter as the
-  call site while the load runs, as they do for a PermissionDenied. A load
+  import declaration or an import() call — which the VM enters as the call
+  site while the load runs, as it does for a PermissionDenied. A load
   with no call site in the importing file (an entry module, a preload) has no
   position. }
 constructor TGocciaModuleResolutionError.CreateResolutionFailure(

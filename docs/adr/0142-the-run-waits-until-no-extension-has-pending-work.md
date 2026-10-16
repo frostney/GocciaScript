@@ -2,22 +2,23 @@
 
 **Date:** 2026-10-15
 **Area:** `engine`, `runtime`, `cli`
-**Related:** [ADR 0113](0113-deterministic-virtual-timer-queue.md), [ADR 0124](0124-unhandled-rejections-fail-the-run.md), [ADR 0125](0125-unhandled-rejection-hook.md)
+**Related:** [ADR 0138](0138-bytecode-is-the-only-way-gocciascript-executes.md), [ADR 0113](0113-deterministic-virtual-timer-queue.md), [ADR 0124](0124-unhandled-rejections-fail-the-run.md), [ADR 0125](0125-unhandled-rejection-hook.md)
 
 ## Context
 
 A module entry whose first top-level `await` settled at once, followed by
 `await fetch(url)`, ended right after the request started, with exit 0
 ([#1559](https://github.com/frostney/GocciaScript/issues/1559)). That happened
-on every path through `TGocciaEngine.Execute`: `--copy` and `--sandbox` in
-both modes, and host mode interpreted. `Execute` runs the entry as an async
+on every path through `TGocciaEngine.Execute`: `--copy` and `--sandbox`, and
+host mode while the tree-walk interpreter still existed. `Execute` runs the entry as an async
 module, so the rest of its body runs as a job in the run's final
 `WaitForRuntimeIdle`. That wait ran each extension's `WaitForIdle` once,
 before it drained the microtask queue. A fetch started by a job in that drain
 had nothing left waiting for it, so the run ended and the request was
 discarded. The entry's evaluation promise was still pending, and `Execute`
-reported that as success. Host-mode bytecode worked only because it compiles
-top-level `await` as a synchronous await that pumps fetch itself.
+reported that as success. A host-mode run, which compiles the entry itself,
+worked only because it compiles top-level `await` as a synchronous await that
+pumps fetch itself.
 
 ES2026 §16.2.1.6.1.3 `Evaluate()` returns the module's evaluation promise;
 §9.5 leaves it to the host to decide when its run is finished.
@@ -44,14 +45,14 @@ nothing about spins the engine thread. An extension that does not override
 the hook keeps the old single pass, so one that can gain work after a
 microtask drain must implement it.
 
-**An entry still pending when the run is idle fails the run, in every mode.**
+**An entry still pending when the run is idle fails the run, on every path.**
 Nothing left in the run can settle it. `Execute` first reports the oldest
 unhandled rejection the usual way ([ADR 0124](0124-unhandled-rejections-fail-the-run.md),
 [ADR 0125](0125-unhandled-rejection-hook.md)): a reaction that threw instead
 of settling what the entry awaits is the real cause, and under `urThrow` it is
 the run's error. Otherwise it raises
-`TypeError: await: Promise did not settle after microtask drain`, which host
-bytecode already raised at the await itself. A rejected entry still raises its
+`TypeError: await: Promise did not settle after microtask drain`, which a
+host-mode run already raised at the await itself. A rejected entry still raises its
 own reason.
 
 **The idle wait waits out `Atomics.waitAsync` timeouts in real time.**
@@ -81,15 +82,16 @@ no real time passes for them.
 
 ## Consequences
 
-- A `--copy`, `--sandbox` or host-interpreted entry whose top-level `await`
-  can never settle now exits non-zero instead of 0. Host bytecode already did.
+- A `--copy`, `--sandbox` or embedder `Execute` entry whose top-level `await`
+  can never settle now exits non-zero instead of 0. A host-mode run already
+  did.
 - A reaction that throws while the entry waits reports that error on those
-  paths. Host bytecode still reports the generic `TypeError`, because its
+  paths. A host-mode run still reports the generic `TypeError`, because its
   synchronous await fails before any rejection is reported.
 - An embedder's extension with host work of its own must implement
   `HasPendingWork` to have that work waited for after a late job starts it.
 
 ## Related
 
-- [Interpreter — Synchronous Microtask Queue](../interpreter.md#synchronous-microtask-queue)
+- [Architecture — Synchronous Microtask Queue](../architecture.md#synchronous-microtask-queue)
 - [Embedding — Runtime Extensions](../embedding.md#runtime-extensions)
