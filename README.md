@@ -222,8 +222,8 @@ resource limits.
 
 ### Run via Bytecode
 
-Scripts, tests, benchmarks, and the REPL run in the bytecode VM, the only
-execution mode, and `GocciaBundler` compiles source to the public `.gbc` artifact.
+Scripts, tests, benchmarks, and the REPL compile to bytecode and run in the
+Goccia VM, and `GocciaBundler` compiles source to the public `.gbc` artifact.
 
 ```bash
 ./build/GocciaRunner example.js
@@ -231,7 +231,7 @@ execution mode, and `GocciaBundler` compiles source to the public `.gbc` artifac
 ./build/GocciaRunner example.gbc
 ```
 
-See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor architecture.
+See [Bytecode VM](docs/bytecode-vm.md) for the compiler and VM architecture.
 
 ### Reproduce An Execution
 
@@ -368,29 +368,27 @@ application-specific globals, modules, capabilities, and limits. See
 
 ## Architecture
 
-GocciaScript supports two execution modes that share the same source pipeline (preprocessors, lexer, parser, AST):
+GocciaScript runs every program through one pipeline: the source pipeline (preprocessors, lexer, parser) builds an AST, the compiler turns it into Goccia bytecode, and the Goccia VM runs it:
 
 ```mermaid
 flowchart LR
     Source["Source Code"] --> Preprocessors["Preprocessors"] --> Lexer --> Parser --> AST
-    AST --> Interpreter["Tree-Walk Interpreter"] --> Result1["Result"]
-    AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result2["Result"]
+    AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result["Result"]
 ```
 
-Both execution modes share the same value types, built-ins, scope chain, and mark-and-sweep GC. The bytecode executor uses a Goccia-owned VM with tagged `TGocciaRegister` values (unboxed scalars) that fall back to `TGocciaValue` for heap objects, not a generic VM layer.
+The VM, the built-ins and the runtime share one set of value types, one scope chain, and one mark-and-sweep GC. The VM is Goccia-owned rather than a generic VM layer: it keeps tagged `TGocciaRegister` values (unboxed scalars) and falls back to `TGocciaValue` for heap objects. GocciaScript 0.15.0 removed the tree-walk interpreter that earlier releases offered as a second execution mode.
 
-See [Architecture](docs/architecture.md) for pipelines and layers, [Interpreter](docs/interpreter.md) for tree-walk execution, [Bytecode VM](docs/bytecode-vm.md) for bytecode execution, [Core patterns](docs/core-patterns.md) for implementation patterns, and [GocciaScript Context](CONTEXT.md) for canonical terminology.
+See [Architecture](docs/architecture.md) for the pipeline and layers, [Bytecode VM](docs/bytecode-vm.md) for bytecode execution, [Core patterns](docs/core-patterns.md) for implementation patterns, and [GocciaScript Context](CONTEXT.md) for canonical terminology.
 
 ## Design Principles
 
 - **Explicitness**: Modules, classes, methods, and properties use explicit, descriptive names even at the cost of verbosity. Shortcuts are avoided.
 - **OOP over everything**: Rely on type safety of specialized classes rather than generic data structures.
 - **Define vs Assign**: `Define` creates a new variable binding; `Assign` changes an existing one. These are distinct operations throughout the codebase (see [Core patterns](docs/core-patterns.md#define-vs-assign)).
-- **Pure evaluation**: The evaluator is composed of pure functions with no side effects.
 - **No global mutable state**: All runtime state flows through explicit parameters — the evaluation context, the scope chain, and value objects.
-- **Virtual dispatch**: Property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope chain resolution (`GetThisValue`/`GetOwningClass`/`GetSuperClass`) all use virtual methods, replacing type checks with single VMT calls.
+- **Virtual dispatch**: Property access (`GetProperty`/`SetProperty`), type discrimination (`IsPrimitive`/`IsCallable`), and scope lookups (`GetThisValue`, `ResolveIdentifier`) all use virtual methods, replacing type checks with single VMT calls.
 
-See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md) for the design rationale.
+See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.md) for the design rationale.
 
 ## Documentation
 
@@ -408,8 +406,8 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Async Context](docs/built-ins-async-context.md) | `node:async_hooks`: `AsyncLocalStorage`, `AsyncResource`, and what propagates |
 | [Errors](docs/errors.md) | Error types, parser/runtime display, `Error.cause`, `try`/`catch`/`finally` |
 | [JSON Output](docs/json-output.md) | The `--output=json` and `--output=compact-json` envelopes, including errors and timeouts |
-| [Architecture](docs/architecture.md) | Pipelines, main layers, design direction, duplication boundaries |
-| [Interpreter](docs/interpreter.md) · [Bytecode VM](docs/bytecode-vm.md) | Tree-walk and bytecode execution modes |
+| [Architecture](docs/architecture.md) | Pipeline, main layers, scopes, errors, microtask queue, design direction |
+| [Bytecode VM](docs/bytecode-vm.md) | Compiler, opcodes, register VM, `.gbc` format |
 | [Core patterns](docs/core-patterns.md) | Recurring implementation patterns |
 | [GocciaScript Context](CONTEXT.md) | Canonical project terminology and glossary |
 | [Value System](docs/value-system.md) | Type hierarchy, virtual property access, primitives, objects |

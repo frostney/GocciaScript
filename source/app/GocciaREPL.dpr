@@ -18,8 +18,6 @@ uses
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.GarbageCollector,
@@ -106,12 +104,11 @@ var
   Editor: TLineEditor;
   ReadResult: TLineReadResult;
   Eng: TGocciaEngine;
-  BcExecutor: TGocciaBytecodeExecutor;
   ResultValue: TGocciaValue;
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  Module: TGocciaCompiledModule;
+  Module: TGocciaBytecodeModule;
   StartTime, CompileStart, CompileEnd, ExecStart, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 
@@ -146,10 +143,8 @@ begin
   Source := TStringList.Create;
   Editor := TLineEditor.Create;
 
-  BcExecutor := TGocciaBytecodeExecutor.Create;
-  BcExecutor.GlobalBackedTopLevel := True;
   try
-    Eng := CreateEngine(REPL_FILE_NAME, Source, BcExecutor);
+    Eng := CreateEngine(REPL_FILE_NAME, Source);
     try
       while True do
       begin
@@ -250,7 +245,6 @@ begin
       Eng.Free;
     end;
   finally
-    BcExecutor.Free;
     Editor.Free;
     Source.Free;
   end;

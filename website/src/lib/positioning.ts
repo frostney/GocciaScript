@@ -14,7 +14,7 @@ export const TYPE_ANNOTATIONS_QUESTION =
   "How do type annotations and --strict-types relate?";
 
 export const TYPE_ANNOTATIONS_ANSWER =
-  "GocciaScript implements the TC39 Type Annotations proposal and its types-as-comments runtime model: supported annotations have no runtime effect by default. The optional --strict-types GocciaScript extension adds runtime enforcement for supported annotations and inferred primitive contracts in interpreter and bytecode modes. It is not a replacement for a static structural type checker such as tsc.";
+  "GocciaScript implements the TC39 Type Annotations proposal and its types-as-comments runtime model: supported annotations have no runtime effect by default. The optional --strict-types GocciaScript extension adds runtime enforcement for supported annotations and inferred primitive contracts. It is not a replacement for a static structural type checker such as tsc.";
 
 export const NODE_COMPATIBILITY_QUESTION = "Is GocciaScript Node-compatible?";
 

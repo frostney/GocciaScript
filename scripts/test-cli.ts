@@ -3049,7 +3049,7 @@ const assertParkedGateOutcome = (
 // catchable TypeError carrying the budget text, which is the ceiling-you-can-ignore-
 // in-a-loop this whole convention exists to prevent. Both handlers now name the limit
 // family (timeout, instruction limit, memory limit) ahead of the generic arm, as
-// Goccia.Builtins.GlobalFetch.pas and Goccia.Interpreter.pas do.
+// Goccia.Builtins.GlobalFetch.pas does.
 //
 // Reaching the gate from a stringify needs a replacer: the plain serializer writes
 // into a native buffer and only the result string is charged, while the replacer walk

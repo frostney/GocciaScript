@@ -13,7 +13,6 @@ uses
   Goccia.Capabilities,
   Goccia.Constants.ErrorNames,
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.Realm,
@@ -42,7 +41,6 @@ type
   TFetchRuntimeExtensionTests = class(TTestSuite)
   private
     FOuterEngine: TGocciaEngine;
-    FOuterExecutor, FInnerExecutor: TGocciaInterpreterExecutor;
     FOuterSource, FInnerSource: TStringList;
     FOuterRealm: TGocciaRealm;
     FPromise: TGocciaPromiseValue;
@@ -53,7 +51,6 @@ type
     procedure StartOuterRequest;
     function RejectionMessage: string;
     function CreateFetchEngine(const AName: string;
-      const AExecutor: TGocciaInterpreterExecutor;
       const ASource: TStringList;
       const ACapabilities: TGocciaCapabilities): TGocciaEngine;
     function OuterCapabilities: TGocciaCapabilities;
@@ -95,11 +92,10 @@ begin
 end;
 
 function TFetchRuntimeExtensionTests.CreateFetchEngine(const AName: string;
-  const AExecutor: TGocciaInterpreterExecutor;
   const ASource: TStringList;
   const ACapabilities: TGocciaCapabilities): TGocciaEngine;
 begin
-  Result := TGocciaEngine.Create(AName, ASource, AExecutor, ACapabilities);
+  Result := TGocciaEngine.Create(AName, ASource, ACapabilities);
   try
     AttachRuntime(Result).Install(TGocciaFetchRuntimeExtension.Create);
   except
@@ -118,21 +114,18 @@ end;
 procedure TFetchRuntimeExtensionTests.TestEachEngineKeepsItsOwnRequestPolicy;
 var
   OuterEngine, InnerEngine: TGocciaEngine;
-  OuterExecutor, InnerExecutor: TGocciaInterpreterExecutor;
   OuterSource, InnerSource: TStringList;
   Observed: TGocciaCapabilities;
 begin
   OuterSource := TStringList.Create;
   InnerSource := TStringList.Create;
-  OuterExecutor := TGocciaInterpreterExecutor.Create;
-  InnerExecutor := TGocciaInterpreterExecutor.Create;
   try
-    OuterEngine := CreateFetchEngine('<outer>', OuterExecutor, OuterSource,
+    OuterEngine := CreateFetchEngine('<outer>', OuterSource,
       OuterCapabilities);
     try
       OuterEngine.FetchMaxResponseBytes := OUTER_MAX_RESPONSE_BYTES;
 
-      InnerEngine := CreateFetchEngine('<inner>', InnerExecutor, InnerSource,
+      InnerEngine := CreateFetchEngine('<inner>', InnerSource,
         InnerCapabilities);
       try
         Observed := FetchExtension(InnerEngine).BuiltinFetch.Capabilities;
@@ -161,8 +154,6 @@ begin
     // The last user gone, the manager goes with it.
     Expect<Boolean>(TGocciaFetchManager.Instance = nil).ToBe(True);
   finally
-    InnerExecutor.Free;
-    OuterExecutor.Free;
     InnerSource.Free;
     OuterSource.Free;
   end;
@@ -172,9 +163,7 @@ procedure TFetchRuntimeExtensionTests.SetUpOuterEngine;
 begin
   FOuterSource := TStringList.Create;
   FInnerSource := TStringList.Create;
-  FOuterExecutor := TGocciaInterpreterExecutor.Create;
-  FInnerExecutor := TGocciaInterpreterExecutor.Create;
-  FOuterEngine := CreateFetchEngine('<outer>', FOuterExecutor, FOuterSource,
+  FOuterEngine := CreateFetchEngine('<outer>', FOuterSource,
     OuterCapabilities);
   FOuterRealm := FetchExtension(FOuterEngine).BuiltinFetch.Realm;
   Expect<Boolean>(FOuterRealm = FOuterEngine.Realm).ToBe(True);
@@ -187,8 +176,6 @@ begin
     TGarbageCollector.Instance.RemoveTempRoot(FPromise);
   FPromise := nil;
   FreeAndNil(FOuterEngine);
-  FreeAndNil(FInnerExecutor);
-  FreeAndNil(FOuterExecutor);
   FreeAndNil(FInnerSource);
   FreeAndNil(FOuterSource);
 end;
@@ -232,7 +219,7 @@ begin
 
     // Nothing pumps between the dispatch and the check below, so the outer
     // request is still pending however quickly its worker finishes.
-    InnerEngine := CreateFetchEngine('<inner>', FInnerExecutor, FInnerSource,
+    InnerEngine := CreateFetchEngine('<inner>', FInnerSource,
       InnerCapabilities);
     try
       // What a nested run does when it ends: discard its own pending work,
@@ -269,7 +256,7 @@ begin
     StartOuterRequest;
     Manager := TGocciaFetchManager.Instance;
 
-    InnerEngine := CreateFetchEngine('<inner>', FInnerExecutor, FInnerSource,
+    InnerEngine := CreateFetchEngine('<inner>', FInnerSource,
       InnerCapabilities);
     try
       // Compared by identity only, after the inner realm is gone.

@@ -32,7 +32,6 @@ uses
   Goccia.Engine,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
-  Goccia.Interpreter,
   Goccia.RegExp.VM,
   Goccia.Scope,
   Goccia.Temporal.TimeZone,

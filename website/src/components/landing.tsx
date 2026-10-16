@@ -533,7 +533,7 @@ console.log("total:", total);`;
       label: "Compiler & VM",
       small: "register bytecode → .gbc",
       overview:
-        "By default the compiler lowers the AST to a register-based bytecode and the VM executes that. With --mode=interpreted a tree-walk evaluator runs the AST directly — same object model, same scope chain, just a different backend.",
+        "The compiler lowers the AST to a register-based bytecode and the VM executes that. Bytecode is the only backend: the VM works directly on the engine's object model and scope chain, and the same bytecode can be saved as a .gbc file.",
       docId: "bytecode-vm",
       docLabel: "Bytecode VM",
     },

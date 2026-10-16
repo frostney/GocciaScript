@@ -23,7 +23,6 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.Executor,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.JSON.Utils,
@@ -1242,7 +1241,6 @@ var
   ErrorName: string;
   DoNotEvaluateReached: Boolean;
   ExecutionFailed: Boolean;
-  Executor: TGocciaExecutor;
   Harness: string;
   Host: TGocciaTest262Host;
   HostError: Boolean;
@@ -1260,7 +1258,6 @@ begin
   StartNanoseconds := GetNanoseconds;
   Metadata := nil;
   Source := nil;
-  Executor := nil;
   Engine := nil;
   Host := nil;
   PrintHost := nil;
@@ -1326,10 +1323,9 @@ begin
         ForceHostDirectories(ExtractFileDir(ProfilePath));
       end;
 
-      Executor := CreateTest262Executor;
-      Engine := TGocciaEngine.Create(ACase.Path, Source, Executor,
+      Engine := TGocciaEngine.Create(ACase.Path, Source,
         EngineOptions.Capabilities);
-      ConfigureTest262Engine(Engine, Executor, EngineOptions);
+      ConfigureTest262Engine(Engine, EngineOptions);
       Host := TGocciaTest262Host.Create(EngineOptions);
       Host.ConfigureHostEnvironment(Engine.HostEnvironment);
       PrintHost := TTest262PrintHost.Create;
@@ -1419,7 +1415,6 @@ begin
     PrintHost.Free;
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
     Metadata.Free;
     AResult.DurationMs := Round(
@@ -1896,14 +1891,12 @@ function TTest262App.RunHostEval: Integer;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   PrintHost: TTest262PrintHost;
   Source: TStringList;
 begin
   Result := 0;
   Source := ReadSourceFromText(Input);
-  Executor := nil;
   Engine := nil;
   Host := nil;
   PrintHost := nil;
@@ -1923,10 +1916,9 @@ begin
       GetCurrentDir);
     StartExecutionTimeout(FOptions.TimeoutMs);
     SetMaxStackDepth(DEFAULT_STACK_DEPTH);
-    Executor := CreateTest262Executor;
-    Engine := TGocciaEngine.Create('<test262-host-eval>', Source, Executor,
+    Engine := TGocciaEngine.Create('<test262-host-eval>', Source,
       EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    ConfigureTest262Engine(Engine, EngineOptions);
     if FOptions.HostEvalDeterministic then
       Engine.HostEnvironment.UseDeterministicProfile;
     Engine.WarningUnsupportedFeatures :=
@@ -1972,7 +1964,6 @@ begin
     PrintHost.Free;
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
