@@ -1302,6 +1302,16 @@ console.log("Nesting limit...");
   // has used up the native stack: the Array.prototype.map callbacks are native
   // re-entries of the bytecode VM. The limit then comes from the stack that is
   // left, still as a SyntaxError the script can catch.
+  //
+  // The recursion has to end because the native stack ran out, not at the
+  // default --max-stack of 2,200 calls: a re-entry here costs about 4 KiB in a
+  // production x86-64 build, so on a stack above about 9.5 MiB the call cap
+  // comes first and leaves megabytes of stack below it, and the expression
+  // then simply runs. A --max-stack far above what any test stack holds makes
+  // the native stack the limit on every platform and stack size; the VM's
+  // NATIVE_STACK_RESERVE check still ends the recursion before the stack
+  // overflows.
+  const LOW_STACK_ARGS = ["--max-stack=100000"];
   const lowStack = (expression: string): string =>
     "let result = \"none\";\n" +
     "const down = () => { try { return [0].map(down)[0]; } catch (e) { if (result === \"none\") { " +
@@ -1312,19 +1322,23 @@ console.log("Nesting limit...");
     ["ShadowRealm.prototype.evaluate", `new ShadowRealm().evaluate("[".repeat(1000) + "]".repeat(1000) + ".length")`, ["--unsafe-shadowrealm"]],
   ];
   for (const [desc, expression, args] of lowStackCases) {
-    const res = runLoaderJson(lowStack(expression), [...args], { timeout: 60000 });
+    const res = runLoaderJson(lowStack(expression), [...LOW_STACK_ARGS, ...args], { timeout: 60000 });
     const printed = normalizeLineEndings(res.json.output);
-    if (res.exitCode !== 0 || !/^(true|1|SyntaxError: .*native stack.*)\n$/.test(printed))
-      throw new Error(`${desc} on a nearly exhausted native stack should finish or throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+    if (res.exitCode !== 0 || !/^SyntaxError: .*native stack.*\n$/.test(printed))
+      throw new Error(`${desc} on a nearly exhausted native stack should throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
   }
 
-  // A pattern compiled on a shallow stack and matched at the bottom of that
-  // recursion: matching recurses once per nested lookaround, and running out
-  // of stack there is the call stack's RangeError, not a SyntaxError (the
-  // pattern is valid) or a plain Error (as the step and backtrack limits
-  // are). Each case reaches the VM through a different entry point.
+  // A pattern compiled on a shallow stack and matched both there and at the
+  // bottom of that recursion: matching recurses once per nested lookaround,
+  // and running out of stack there is the call stack's RangeError, not a
+  // SyntaxError (the pattern is valid) or a plain Error (as the step and
+  // backtrack limits are). The pattern consumes the "a" after its
+  // lookarounds, so every match is non-empty and the shallow result is
+  // distinct from no output. Each case reaches the VM through a different
+  // entry point.
   const lowStackMatch = (flags: string, expression: string): string =>
-    `const re = new RegExp("(?=".repeat(1000) + "a" + ")".repeat(1000), "${flags}");\n` +
+    `const re = new RegExp("(?=".repeat(1000) + "a" + ")".repeat(1000) + "a", "${flags}");\n` +
+    `console.log(String(${expression}));\n` +
     lowStack(expression);
   const lowStackMatchCases: Array<[string, string, string, string]> = [
     ["RegExp.prototype.test", "", `re.test("a")`, "true"],
@@ -1334,10 +1348,10 @@ console.log("Nesting limit...");
     ["a global String.prototype.match", "g", `"aaa".match(re)`, "a,a,a"],
   ];
   for (const [desc, flags, expression, matched] of lowStackMatchCases) {
-    const res = runLoaderJson(lowStackMatch(flags, expression), [], { timeout: 60000 });
+    const res = runLoaderJson(lowStackMatch(flags, expression), LOW_STACK_ARGS, { timeout: 60000 });
     const printed = normalizeLineEndings(res.json.output);
-    if (res.exitCode !== 0 || (printed !== `${matched}\n` && printed !== "RangeError: Maximum call stack size exceeded\n"))
-      throw new Error(`${desc} with nested lookarounds on a nearly exhausted native stack should match or throw a RangeError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+    if (res.exitCode !== 0 || printed !== `${matched}\nRangeError: Maximum call stack size exceeded\n`)
+      throw new Error(`${desc} with nested lookarounds should match on a shallow stack and throw a RangeError on a nearly exhausted native stack, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
   }
 }
 
