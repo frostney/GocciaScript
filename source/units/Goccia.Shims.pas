@@ -286,8 +286,10 @@ const
         'const legacyDateDayFromYear = (year: number): number =>'#10 +
         '  365 * (year - 1970) + Math.floor((year - 1969) / 4) -'#10 +
         '  Math.floor((year - 1901) / 100) + Math.floor((year - 1601) / 400);'#10 +
-        '// MakeDate of the given fields, read in timeZone, or as UTC shifted by'#10 +
-        '// offsetMilliseconds when timeZone is "UTC" (a string with an explicit offset).'#10 +
+        '// TimeClip(UTC(MakeDate(fields))): the time value of the fields read as local'#10 +
+        '// time in timeZone, or NaN outside the range. With timeZone "UTC", the fields'#10 +
+        '// are read at offsetMilliseconds (a string with an explicit offset); other'#10 +
+        '// zones ignore it.'#10 +
         'const makeDateEpochMillisecondsRaw = (args: any[], timeZone: string, adjustTwoDigitYear: boolean, offsetMilliseconds: number = 0): number => {'#10 +
         '  if (args.length === 0) return NaN;'#10 +
         '  const yearValue: number = toDateInteger(args[0]);'#10 +
