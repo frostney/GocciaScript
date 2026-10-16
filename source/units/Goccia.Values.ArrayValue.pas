@@ -1467,6 +1467,7 @@ begin
     ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [IndexName, ToStringTag]),
       SSuggestPropertyHasOnlyGetter);
   end;
+  ReleaseDescriptor(Descriptor);
 
   Descriptor := inherited GetOwnPropertyDescriptor(IndexName);
   if Assigned(Descriptor) then
@@ -1550,6 +1551,7 @@ begin
     ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [IndexName, ToStringTag]),
       SSuggestPropertyHasOnlyGetter);
   end;
+  ReleaseDescriptor(Descriptor);
 
   Descriptor := inherited GetOwnPropertyDescriptor(IndexName);
   if Assigned(Descriptor) then
@@ -3832,6 +3834,7 @@ begin
       ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]),
         SSuggestPropertyHasOnlyGetter);
     end;
+    ReleaseDescriptor(Descriptor);
 
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
@@ -4032,13 +4035,13 @@ begin
   begin
     if FFrozen then
       Result := TGocciaPropertyDescriptorData.Create(
-        FElements[Integer(Index)], [pfEnumerable])
+        FElements[Integer(Index)], [pfEnumerable]).AsCallerOwned
     else if FSealed then
       Result := TGocciaPropertyDescriptorData.Create(
-        FElements[Integer(Index)], [pfEnumerable, pfWritable])
+        FElements[Integer(Index)], [pfEnumerable, pfWritable]).AsCallerOwned
     else
       Result := TGocciaPropertyDescriptorData.Create(
-        FElements[Integer(Index)], [pfEnumerable, pfConfigurable, pfWritable]);
+        FElements[Integer(Index)], [pfEnumerable, pfConfigurable, pfWritable]).AsCallerOwned;
   end
   else if AName = PROP_LENGTH then
   begin
@@ -4046,10 +4049,10 @@ begin
       FLength := FElements.Count;
     if FLengthWritable then
       Result := TGocciaPropertyDescriptorData.Create(
-        TGocciaNumberLiteralValue.Create(FLength), [pfWritable])
+        TGocciaNumberLiteralValue.Create(FLength), [pfWritable]).AsCallerOwned
     else
       Result := TGocciaPropertyDescriptorData.Create(
-        TGocciaNumberLiteralValue.Create(FLength), []);
+        TGocciaNumberLiteralValue.Create(FLength), []).AsCallerOwned;
   end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);

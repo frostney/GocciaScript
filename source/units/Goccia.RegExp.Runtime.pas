@@ -1018,11 +1018,12 @@ begin
   Prototype := Obj.Prototype;
   if not Assigned(Prototype) or (Prototype <> GetRegExpPrototype) then
     Exit;
-  if Assigned(Obj.GetOwnPropertyDescriptor(PROP_EXEC)) then
+  if Obj.HasOwnPropertyDescriptor(PROP_EXEC) then
     Exit;
   Descriptor := Prototype.GetOwnPropertyDescriptor(PROP_EXEC);
   Result := (Descriptor is TGocciaPropertyDescriptorData) and
     IsDefaultRegExpExecMethod(TGocciaPropertyDescriptorData(Descriptor).Value);
+  ReleaseDescriptor(Descriptor);
 end;
 
 function CreateRegExpScanner(const AValue: TGocciaValue;

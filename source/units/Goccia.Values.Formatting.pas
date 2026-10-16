@@ -361,11 +361,8 @@ var
 
   // Whether AName is among the own enumerable properties already listed.
   function ListsEnumerable(const AName: string): Boolean;
-  var
-    Descriptor: TGocciaPropertyDescriptor;
   begin
-    Descriptor := AObj.GetOwnPropertyDescriptor(AName);
-    Result := Assigned(Descriptor) and Descriptor.Enumerable;
+    Result := AObj.OwnPropertyIsEnumerable(AName);
   end;
 
   procedure AddEntry(const AText: string);

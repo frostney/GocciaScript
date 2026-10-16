@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Values.NativeFunctionCallback,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 type
@@ -18,7 +19,11 @@ type
     function GetInitializers: TArray<TGocciaValue>;
   end;
 
-  TGocciaAccessGetter = class
+  { The hosts of a decorator context's access.get / access.set functions.
+    They are managed values, each the CapturedRoot of the native function
+    whose method it hosts, so the collector keeps them, and the values they
+    hold, exactly as long as that function, and frees them with it. }
+  TGocciaAccessGetter = class(TGocciaObjectValue)
   private
     FTarget: TGocciaValue;
     FPropertyName: string;
@@ -26,16 +31,18 @@ type
   public
     constructor Create(const ATarget: TGocciaValue; const APropertyName: string);
     constructor CreateWithKey(const ATarget: TGocciaValue; const APropertyKey: TGocciaValue);
+    procedure MarkReferences; override;
     function Get(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-  TGocciaAccessSetter = class
+  TGocciaAccessSetter = class(TGocciaObjectValue)
   private
     FPropertyName: string;
     FPropertyKey: TGocciaValue;
   public
     constructor Create(const APropertyName: string);
     constructor CreateWithKey(const APropertyKey: TGocciaValue);
+    procedure MarkReferences; override;
     function SetValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
@@ -43,7 +50,6 @@ implementation
 
 uses
   Goccia.Values.ClassValue,
-  Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
 
 { TGocciaInitializerCollector }
@@ -71,6 +77,7 @@ end;
 
 constructor TGocciaAccessGetter.Create(const ATarget: TGocciaValue; const APropertyName: string);
 begin
+  inherited Create(nil);
   FTarget := ATarget;
   FPropertyName := APropertyName;
   FPropertyKey := nil;
@@ -78,12 +85,24 @@ end;
 
 constructor TGocciaAccessGetter.CreateWithKey(const ATarget: TGocciaValue; const APropertyKey: TGocciaValue);
 begin
+  inherited Create(nil);
   FTarget := ATarget;
   FPropertyKey := APropertyKey;
   if Assigned(APropertyKey) and not (APropertyKey is TGocciaSymbolValue) then
     FPropertyName := APropertyKey.ToStringLiteral.Value
   else
     FPropertyName := '';
+end;
+
+procedure TGocciaAccessGetter.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FTarget) then
+    FTarget.MarkReferences;
+  if Assigned(FPropertyKey) then
+    FPropertyKey.MarkReferences;
 end;
 
 function TGocciaAccessGetter.Get(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -118,17 +137,28 @@ end;
 
 constructor TGocciaAccessSetter.Create(const APropertyName: string);
 begin
+  inherited Create(nil);
   FPropertyName := APropertyName;
   FPropertyKey := nil;
 end;
 
 constructor TGocciaAccessSetter.CreateWithKey(const APropertyKey: TGocciaValue);
 begin
+  inherited Create(nil);
   FPropertyKey := APropertyKey;
   if Assigned(APropertyKey) and not (APropertyKey is TGocciaSymbolValue) then
     FPropertyName := APropertyKey.ToStringLiteral.Value
   else
     FPropertyName := '';
+end;
+
+procedure TGocciaAccessSetter.MarkReferences;
+begin
+  if GCMarked then
+    Exit;
+  inherited;
+  if Assigned(FPropertyKey) then
+    FPropertyKey.MarkReferences;
 end;
 
 function TGocciaAccessSetter.SetValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

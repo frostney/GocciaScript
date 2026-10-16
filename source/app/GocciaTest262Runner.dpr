@@ -981,6 +981,7 @@ begin
     begin
       if Descriptor is TGocciaPropertyDescriptorData then
         Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+      ReleaseDescriptor(Descriptor);
       Exit;
     end;
     Current := Current.Prototype;

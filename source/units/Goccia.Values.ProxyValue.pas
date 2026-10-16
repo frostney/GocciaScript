@@ -768,33 +768,36 @@ begin
   if ATarget is TGocciaObjectValue then
     TargetDesc := TGocciaObjectValue(ATarget).GetOwnPropertyDescriptor(
       APropertyLabel);
+  try
+    ExtensibleTarget := ProxyTargetIsExtensible(ATarget);
+    SettingConfigFalse := ADescriptor.HasConfigurableField and
+      not ADescriptor.Configurable;
 
-  ExtensibleTarget := ProxyTargetIsExtensible(ATarget);
-  SettingConfigFalse := ADescriptor.HasConfigurableField and
-    not ADescriptor.Configurable;
+    if not Assigned(TargetDesc) then
+    begin
+      if (not ExtensibleTarget) or SettingConfigFalse then
+        ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
+          SSuggestProxyTrapInvariant);
+      Exit;
+    end;
 
-  if not Assigned(TargetDesc) then
-  begin
-    if (not ExtensibleTarget) or SettingConfigFalse then
+    if not IsCompatibleProxyDefineDescriptor(ExtensibleTarget, ADescriptor,
+      TargetDesc) then
       ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
         SSuggestProxyTrapInvariant);
-    Exit;
+
+    if SettingConfigFalse and TargetDesc.Configurable then
+      ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
+        SSuggestProxyTrapInvariant);
+
+    if IsDataDescriptor(TargetDesc) and not TargetDesc.Configurable and
+       TargetDesc.Writable and ADescriptor.HasWritableField and
+       not ADescriptor.Writable then
+      ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
+        SSuggestProxyTrapInvariant);
+  finally
+    ReleaseDescriptor(TargetDesc);
   end;
-
-  if not IsCompatibleProxyDefineDescriptor(ExtensibleTarget, ADescriptor,
-    TargetDesc) then
-    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
-      SSuggestProxyTrapInvariant);
-
-  if SettingConfigFalse and TargetDesc.Configurable then
-    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
-      SSuggestProxyTrapInvariant);
-
-  if IsDataDescriptor(TargetDesc) and not TargetDesc.Configurable and
-     TargetDesc.Writable and ADescriptor.HasWritableField and
-     not ADescriptor.Writable then
-    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [APropertyLabel]),
-      SSuggestProxyTrapInvariant);
 end;
 
 procedure ValidateProxyDefineSymbolTrapResult(
@@ -810,34 +813,37 @@ begin
   if ATarget is TGocciaObjectValue then
     TargetDesc := TGocciaObjectValue(ATarget).GetOwnSymbolPropertyDescriptor(
       ASymbol);
+  try
+    PropertyLabel := ASymbol.ToDisplayString.Value;
+    ExtensibleTarget := ProxyTargetIsExtensible(ATarget);
+    SettingConfigFalse := ADescriptor.HasConfigurableField and
+      not ADescriptor.Configurable;
 
-  PropertyLabel := ASymbol.ToDisplayString.Value;
-  ExtensibleTarget := ProxyTargetIsExtensible(ATarget);
-  SettingConfigFalse := ADescriptor.HasConfigurableField and
-    not ADescriptor.Configurable;
+    if not Assigned(TargetDesc) then
+    begin
+      if (not ExtensibleTarget) or SettingConfigFalse then
+        ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
+          SSuggestProxyTrapInvariant);
+      Exit;
+    end;
 
-  if not Assigned(TargetDesc) then
-  begin
-    if (not ExtensibleTarget) or SettingConfigFalse then
+    if not IsCompatibleProxyDefineDescriptor(ExtensibleTarget, ADescriptor,
+      TargetDesc) then
       ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
         SSuggestProxyTrapInvariant);
-    Exit;
+
+    if SettingConfigFalse and TargetDesc.Configurable then
+      ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
+        SSuggestProxyTrapInvariant);
+
+    if IsDataDescriptor(TargetDesc) and not TargetDesc.Configurable and
+       TargetDesc.Writable and ADescriptor.HasWritableField and
+       not ADescriptor.Writable then
+      ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
+        SSuggestProxyTrapInvariant);
+  finally
+    ReleaseDescriptor(TargetDesc);
   end;
-
-  if not IsCompatibleProxyDefineDescriptor(ExtensibleTarget, ADescriptor,
-    TargetDesc) then
-    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
-      SSuggestProxyTrapInvariant);
-
-  if SettingConfigFalse and TargetDesc.Configurable then
-    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
-      SSuggestProxyTrapInvariant);
-
-  if IsDataDescriptor(TargetDesc) and not TargetDesc.Configurable and
-     TargetDesc.Writable and ADescriptor.HasWritableField and
-     not ADescriptor.Writable then
-    ThrowTypeError(Format(SErrorProxyDefineReturnedFalse, [PropertyLabel]),
-      SSuggestProxyTrapInvariant);
 end;
 
 procedure ValidateProxyGetOwnTrapDescriptor(const APropertyLabel: string;
@@ -1049,6 +1055,7 @@ begin
       TargetDesc := TargetGetOwnPropertyDescriptorForKey(TargetKeys[I]);
       TargetKeyNonconfigurable[I] := Assigned(TargetDesc) and
         not TargetDesc.Configurable;
+      ReleaseDescriptor(TargetDesc);
       if TargetKeyNonconfigurable[I] then
         HasNonconfigurableKey := True;
     end;
@@ -1117,18 +1124,22 @@ begin
     if FTarget is TGocciaObjectValue then
     begin
       TargetDesc := TargetGetOwnPropertyDescriptor(AName);
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-      begin
-        // Non-configurable, non-writable data: result must be SameValue
-        if (TargetDesc is TGocciaPropertyDescriptorData) and
-           not TargetDesc.Writable and
-           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
-          ThrowTypeError(Format(SErrorProxyGetNonConfigurableValue, [AName]), SSuggestProxyTrapInvariant);
-        // Non-configurable accessor without getter: result must be undefined
-        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
-           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
-           not (Result is TGocciaUndefinedLiteralValue) then
-          ThrowTypeError(Format(SErrorProxyGetNoGetter, [AName]), SSuggestProxyTrapInvariant);
+      try
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        begin
+          // Non-configurable, non-writable data: result must be SameValue
+          if (TargetDesc is TGocciaPropertyDescriptorData) and
+             not TargetDesc.Writable and
+             not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
+            ThrowTypeError(Format(SErrorProxyGetNonConfigurableValue, [AName]), SSuggestProxyTrapInvariant);
+          // Non-configurable accessor without getter: result must be undefined
+          if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+             not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
+             not (Result is TGocciaUndefinedLiteralValue) then
+            ThrowTypeError(Format(SErrorProxyGetNoGetter, [AName]), SSuggestProxyTrapInvariant);
+        end;
+      finally
+        ReleaseDescriptor(TargetDesc);
       end;
     end;
   end
@@ -1170,17 +1181,21 @@ begin
     if FTarget is TGocciaObjectValue then
     begin
       TargetDesc := TargetGetOwnPropertyDescriptor(AName);
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-      begin
-        // Non-configurable, non-writable data property: value must match
-        if (TargetDesc is TGocciaPropertyDescriptorData) and
-           not TargetDesc.Writable and
-           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
-          ThrowTypeError(Format(SErrorProxySetNonConfigurableValue, [AName]), SSuggestProxyTrapInvariant);
-        // Non-configurable accessor without setter
-        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
-           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
-          ThrowTypeError(Format(SErrorProxySetNoSetter, [AName]), SSuggestProxyTrapInvariant);
+      try
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        begin
+          // Non-configurable, non-writable data property: value must match
+          if (TargetDesc is TGocciaPropertyDescriptorData) and
+             not TargetDesc.Writable and
+             not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
+            ThrowTypeError(Format(SErrorProxySetNonConfigurableValue, [AName]), SSuggestProxyTrapInvariant);
+          // Non-configurable accessor without setter
+          if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+             not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
+            ThrowTypeError(Format(SErrorProxySetNoSetter, [AName]), SSuggestProxyTrapInvariant);
+        end;
+      finally
+        ReleaseDescriptor(TargetDesc);
       end;
     end;
   end
@@ -1224,17 +1239,21 @@ begin
     if FTarget is TGocciaObjectValue then
     begin
       TargetDesc := TargetGetOwnPropertyDescriptor(AName);
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-      begin
-        // Non-configurable, non-writable data property: value must match
-        if (TargetDesc is TGocciaPropertyDescriptorData) and
-           not TargetDesc.Writable and
-           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
-          ThrowTypeError(Format(SErrorProxySetNonConfigurableValue, [AName]), SSuggestProxyTrapInvariant);
-        // Non-configurable accessor without setter
-        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
-           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
-          ThrowTypeError(Format(SErrorProxySetNoSetter, [AName]), SSuggestProxyTrapInvariant);
+      try
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        begin
+          // Non-configurable, non-writable data property: value must match
+          if (TargetDesc is TGocciaPropertyDescriptorData) and
+             not TargetDesc.Writable and
+             not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
+            ThrowTypeError(Format(SErrorProxySetNonConfigurableValue, [AName]), SSuggestProxyTrapInvariant);
+          // Non-configurable accessor without setter
+          if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+             not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
+            ThrowTypeError(Format(SErrorProxySetNoSetter, [AName]), SSuggestProxyTrapInvariant);
+        end;
+      finally
+        ReleaseDescriptor(TargetDesc);
       end;
     end;
 
@@ -1281,12 +1300,16 @@ begin
     if (not Result) and (FTarget is TGocciaObjectValue) then
     begin
       TargetDesc := TargetGetOwnPropertyDescriptor(AName);
-      // Cannot hide non-configurable own property
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-        ThrowTypeError(Format(SErrorProxyHasNonConfigurable, [AName]), SSuggestProxyTrapInvariant);
-      // Cannot hide own property on non-extensible target
-      if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
-        ThrowTypeError(SErrorProxyHasNonExtensible, SSuggestProxyTrapInvariant);
+      try
+        // Cannot hide non-configurable own property
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+          ThrowTypeError(Format(SErrorProxyHasNonConfigurable, [AName]), SSuggestProxyTrapInvariant);
+        // Cannot hide own property on non-extensible target
+        if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
+          ThrowTypeError(SErrorProxyHasNonExtensible, SSuggestProxyTrapInvariant);
+      finally
+        ReleaseDescriptor(TargetDesc);
+      end;
     end;
   end
   else
@@ -1325,10 +1348,14 @@ begin
     if (not Result) and (FTarget is TGocciaObjectValue) then
     begin
       TargetDesc := TargetGetOwnSymbolPropertyDescriptor(ASymbol);
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-        ThrowTypeError(SErrorProxyHasSymbolNonConfigurable, SSuggestProxyTrapInvariant);
-      if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
-        ThrowTypeError(SErrorProxyHasSymbolNonExtensible, SSuggestProxyTrapInvariant);
+      try
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+          ThrowTypeError(SErrorProxyHasSymbolNonConfigurable, SSuggestProxyTrapInvariant);
+        if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
+          ThrowTypeError(SErrorProxyHasSymbolNonExtensible, SSuggestProxyTrapInvariant);
+      finally
+        ReleaseDescriptor(TargetDesc);
+      end;
     end;
   end
   else
@@ -1338,14 +1365,11 @@ begin
 end;
 
 function TGocciaProxyValue.HasOwnProperty(const AName: string): Boolean;
-var
-  Descriptor: TGocciaPropertyDescriptor;
 begin
   // ES2026 §28.1.1: Own-property check uses [[GetOwnProperty]], not
   // [[HasProperty]], so Object.hasOwn(proxy, key) only reports true
   // for own properties, not inherited ones.
-  Descriptor := GetOwnPropertyDescriptor(AName);
-  Result := Assigned(Descriptor);
+  Result := HasOwnPropertyDescriptor(AName);
 end;
 
 // ES2026 §28.1.1 [[Get]](P, Receiver) — symbol key
@@ -1374,16 +1398,20 @@ begin
     if FTarget is TGocciaObjectValue then
     begin
       TargetDesc := TargetGetOwnSymbolPropertyDescriptor(ASymbol);
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-      begin
-        if (TargetDesc is TGocciaPropertyDescriptorData) and
-           not TargetDesc.Writable and
-           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
-          ThrowTypeError(SErrorProxyGetSymbolNonConfigurable, SSuggestProxyTrapInvariant);
-        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
-           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
-           not (Result is TGocciaUndefinedLiteralValue) then
-          ThrowTypeError(SErrorProxyGetSymbolNoGetter, SSuggestProxyTrapInvariant);
+      try
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        begin
+          if (TargetDesc is TGocciaPropertyDescriptorData) and
+             not TargetDesc.Writable and
+             not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
+            ThrowTypeError(SErrorProxyGetSymbolNonConfigurable, SSuggestProxyTrapInvariant);
+          if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+             not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
+             not (Result is TGocciaUndefinedLiteralValue) then
+            ThrowTypeError(SErrorProxyGetSymbolNoGetter, SSuggestProxyTrapInvariant);
+        end;
+      finally
+        ReleaseDescriptor(TargetDesc);
       end;
     end;
   end
@@ -1425,16 +1453,20 @@ begin
     if FTarget is TGocciaObjectValue then
     begin
       TargetDesc := TargetGetOwnSymbolPropertyDescriptor(ASymbol);
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-      begin
-        if (TargetDesc is TGocciaPropertyDescriptorData) and
-           not TargetDesc.Writable and
-           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
-          ThrowTypeError(SErrorProxyGetSymbolNonConfigurable, SSuggestProxyTrapInvariant);
-        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
-           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
-           not (Result is TGocciaUndefinedLiteralValue) then
-          ThrowTypeError(SErrorProxyGetSymbolNoGetter, SSuggestProxyTrapInvariant);
+      try
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        begin
+          if (TargetDesc is TGocciaPropertyDescriptorData) and
+             not TargetDesc.Writable and
+             not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, Result) then
+            ThrowTypeError(SErrorProxyGetSymbolNonConfigurable, SSuggestProxyTrapInvariant);
+          if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+             not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Getter) and
+             not (Result is TGocciaUndefinedLiteralValue) then
+            ThrowTypeError(SErrorProxyGetSymbolNoGetter, SSuggestProxyTrapInvariant);
+        end;
+      finally
+        ReleaseDescriptor(TargetDesc);
       end;
     end;
   end
@@ -1479,17 +1511,21 @@ begin
     if FTarget is TGocciaObjectValue then
     begin
       TargetDesc := TargetGetOwnSymbolPropertyDescriptor(ASymbol);
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-      begin
-        // Non-configurable, non-writable data property: value must match
-        if (TargetDesc is TGocciaPropertyDescriptorData) and
-           not TargetDesc.Writable and
-           not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
-          ThrowTypeError(SErrorProxySetSymbolNonConfigurable, SSuggestProxyTrapInvariant);
-        // Non-configurable accessor without setter
-        if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
-           not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
-          ThrowTypeError(SErrorProxySetSymbolNoSetter, SSuggestProxyTrapInvariant);
+      try
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+        begin
+          // Non-configurable, non-writable data property: value must match
+          if (TargetDesc is TGocciaPropertyDescriptorData) and
+             not TargetDesc.Writable and
+             not IsSameValue(TGocciaPropertyDescriptorData(TargetDesc).Value, AValue) then
+            ThrowTypeError(SErrorProxySetSymbolNonConfigurable, SSuggestProxyTrapInvariant);
+          // Non-configurable accessor without setter
+          if (TargetDesc is TGocciaPropertyDescriptorAccessor) and
+             not Assigned(TGocciaPropertyDescriptorAccessor(TargetDesc).Setter) then
+            ThrowTypeError(SErrorProxySetSymbolNoSetter, SSuggestProxyTrapInvariant);
+        end;
+      finally
+        ReleaseDescriptor(TargetDesc);
       end;
     end;
 
@@ -1538,12 +1574,16 @@ begin
     if Result and (FTarget is TGocciaObjectValue) then
     begin
       TargetDesc := TargetGetOwnPropertyDescriptor(AName);
-      // Cannot delete non-configurable own property
-      if Assigned(TargetDesc) and not TargetDesc.Configurable then
-        ThrowTypeError(Format(SErrorProxyDeleteNonConfigurable, [AName]), SSuggestProxyTrapInvariant);
-      // Cannot delete own property on non-extensible target (property still exists)
-      if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
-        ThrowTypeError(SErrorProxyDeleteNonExtensible, SSuggestProxyTrapInvariant);
+      try
+        // Cannot delete non-configurable own property
+        if Assigned(TargetDesc) and not TargetDesc.Configurable then
+          ThrowTypeError(Format(SErrorProxyDeleteNonConfigurable, [AName]), SSuggestProxyTrapInvariant);
+        // Cannot delete own property on non-extensible target (property still exists)
+        if Assigned(TargetDesc) and not TGocciaObjectValue(FTarget).Extensible then
+          ThrowTypeError(SErrorProxyDeleteNonExtensible, SSuggestProxyTrapInvariant);
+      finally
+        ReleaseDescriptor(TargetDesc);
+      end;
     end;
   end
   else
@@ -1588,52 +1628,55 @@ begin
       TargetObject := TGocciaObjectValue(FTarget);
       TargetDesc := TargetGetOwnPropertyDescriptor(AName);
     end;
-
-    // Per spec, trap must return an object or undefined (not null)
-    if TrapResult is TGocciaUndefinedLiteralValue then
-    begin
-      // ES2026 §28.1.1 step 10-11: Cannot hide non-configurable property
-      if Assigned(TargetObject) then
+    try
+      // Per spec, trap must return an object or undefined (not null)
+      if TrapResult is TGocciaUndefinedLiteralValue then
       begin
-        if Assigned(TargetDesc) and not TargetDesc.Configurable then
-          ThrowTypeError(Format(SErrorProxyGetOwnNonConfigurable, [AName]), SSuggestProxyTrapInvariant);
-        if Assigned(TargetDesc) and not TargetObject.Extensible then
-          ThrowTypeError(SErrorProxyGetOwnNonExtensible, SSuggestProxyTrapInvariant);
-      end;
-      Exit(nil);
-    end;
-
-    if not (TrapResult is TGocciaObjectValue) then
-      ThrowTypeError(SErrorProxyGetOwnReturnType, SSuggestProxyTrapReturnType);
-
-    TrapDesc := ToPropertyDescriptor(TrapResult, TargetDesc);
-    try
-      CompletedDesc := CompleteProxyTrapPropertyDescriptor(TrapDesc);
-    finally
-      TrapDesc.Free;
-    end;
-    // CompletedDesc is a plain class and the sole holder of the value the
-    // trap just produced. ProxyTargetIsExtensible is evaluated as an argument
-    // below and runs the target's isExtensible trap when the target is itself
-    // a proxy — guest code, with that value reachable from nowhere. Without
-    // this the guest is handed back a recycled object rather than a crash,
-    // which is the worse failure: a silently wrong descriptor value.
-    Roots.Initialize;
-    try
-      Roots.Add(Self);
-      Roots.Add(FTarget);
-      CompletedDesc.PushRoots(Roots);
-      try
+        // ES2026 §28.1.1 step 10-11: Cannot hide non-configurable property
         if Assigned(TargetObject) then
-          ValidateProxyGetOwnTrapDescriptor(AName,
-            ProxyTargetIsExtensible(FTarget), TargetDesc, CompletedDesc);
-        Result := CompletedDesc;
-      except
-        CompletedDesc.Free;
-        raise;
+        begin
+          if Assigned(TargetDesc) and not TargetDesc.Configurable then
+            ThrowTypeError(Format(SErrorProxyGetOwnNonConfigurable, [AName]), SSuggestProxyTrapInvariant);
+          if Assigned(TargetDesc) and not TargetObject.Extensible then
+            ThrowTypeError(SErrorProxyGetOwnNonExtensible, SSuggestProxyTrapInvariant);
+        end;
+        Exit(nil);
+      end;
+
+      if not (TrapResult is TGocciaObjectValue) then
+        ThrowTypeError(SErrorProxyGetOwnReturnType, SSuggestProxyTrapReturnType);
+
+      TrapDesc := ToPropertyDescriptor(TrapResult, TargetDesc);
+      try
+        CompletedDesc := CompleteProxyTrapPropertyDescriptor(TrapDesc);
+      finally
+        TrapDesc.Free;
+      end;
+      // CompletedDesc is a plain class and the sole holder of the value the
+      // trap just produced. ProxyTargetIsExtensible is evaluated as an argument
+      // below and runs the target's isExtensible trap when the target is itself
+      // a proxy — guest code, with that value reachable from nowhere. Without
+      // this the guest is handed back a recycled object rather than a crash,
+      // which is the worse failure: a silently wrong descriptor value.
+      Roots.Initialize;
+      try
+        Roots.Add(Self);
+        Roots.Add(FTarget);
+        CompletedDesc.PushRoots(Roots);
+        try
+          if Assigned(TargetObject) then
+            ValidateProxyGetOwnTrapDescriptor(AName,
+              ProxyTargetIsExtensible(FTarget), TargetDesc, CompletedDesc);
+          Result := CompletedDesc.AsCallerOwned;
+        except
+          CompletedDesc.Free;
+          raise;
+        end;
+      finally
+        Roots.Clear;
       end;
     finally
-      Roots.Clear;
+      ReleaseDescriptor(TargetDesc);
     end;
   end
   else
@@ -1680,47 +1723,50 @@ begin
       TargetObject := TGocciaObjectValue(FTarget);
       TargetDesc := TargetGetOwnSymbolPropertyDescriptor(ASymbol);
     end;
-
-    if TrapResult is TGocciaUndefinedLiteralValue then
-    begin
-      if Assigned(TargetObject) then
+    try
+      if TrapResult is TGocciaUndefinedLiteralValue then
       begin
-        if Assigned(TargetDesc) and not TargetDesc.Configurable then
-          ThrowTypeError(Format(SErrorProxyGetOwnNonConfigurable,
-            [PropertyLabel]), SSuggestProxyTrapInvariant);
-        if Assigned(TargetDesc) and not TargetObject.Extensible then
-          ThrowTypeError(SErrorProxyGetOwnNonExtensible,
-            SSuggestProxyTrapInvariant);
-      end;
-      Exit(nil);
-    end;
-
-    if not (TrapResult is TGocciaObjectValue) then
-      ThrowTypeError(SErrorProxyGetOwnReturnType, SSuggestProxyTrapReturnType);
-
-    TrapDesc := ToPropertyDescriptor(TrapResult, TargetDesc);
-    try
-      CompletedDesc := CompleteProxyTrapPropertyDescriptor(TrapDesc);
-    finally
-      TrapDesc.Free;
-    end;
-    // Same window as the string arm above.
-    Roots.Initialize;
-    try
-      Roots.Add(Self);
-      Roots.Add(FTarget);
-      CompletedDesc.PushRoots(Roots);
-      try
         if Assigned(TargetObject) then
-          ValidateProxyGetOwnTrapDescriptor(PropertyLabel,
-            ProxyTargetIsExtensible(FTarget), TargetDesc, CompletedDesc);
-        Result := CompletedDesc;
-      except
-        CompletedDesc.Free;
-        raise;
+        begin
+          if Assigned(TargetDesc) and not TargetDesc.Configurable then
+            ThrowTypeError(Format(SErrorProxyGetOwnNonConfigurable,
+              [PropertyLabel]), SSuggestProxyTrapInvariant);
+          if Assigned(TargetDesc) and not TargetObject.Extensible then
+            ThrowTypeError(SErrorProxyGetOwnNonExtensible,
+              SSuggestProxyTrapInvariant);
+        end;
+        Exit(nil);
+      end;
+
+      if not (TrapResult is TGocciaObjectValue) then
+        ThrowTypeError(SErrorProxyGetOwnReturnType, SSuggestProxyTrapReturnType);
+
+      TrapDesc := ToPropertyDescriptor(TrapResult, TargetDesc);
+      try
+        CompletedDesc := CompleteProxyTrapPropertyDescriptor(TrapDesc);
+      finally
+        TrapDesc.Free;
+      end;
+      // Same window as the string arm above.
+      Roots.Initialize;
+      try
+        Roots.Add(Self);
+        Roots.Add(FTarget);
+        CompletedDesc.PushRoots(Roots);
+        try
+          if Assigned(TargetObject) then
+            ValidateProxyGetOwnTrapDescriptor(PropertyLabel,
+              ProxyTargetIsExtensible(FTarget), TargetDesc, CompletedDesc);
+          Result := CompletedDesc.AsCallerOwned;
+        except
+          CompletedDesc.Free;
+          raise;
+        end;
+      finally
+        Roots.Clear;
       end;
     finally
-      Roots.Clear;
+      ReleaseDescriptor(TargetDesc);
     end;
   end
   else
@@ -2009,6 +2055,7 @@ begin
       FilteredKeys[Count] := AllKeys[I];
       Inc(Count);
     end;
+    ReleaseDescriptor(Descriptor);
   end;
   SetLength(FilteredKeys, Count);
   Result := FilteredKeys;

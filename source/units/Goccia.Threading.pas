@@ -239,8 +239,12 @@ type
   procedure InitThreadRuntime(AEnableCoverage: Boolean = False;
     AMaxBytes: Int64 = 0);
 
-  { Shut down the thread-local runtime for the calling thread.
-    Must be called before the worker thread exits. }
+  { Shut down the thread-local runtime for the calling thread: drain the
+    threadvar cleanups, then free the microtask queue, the call stack and the
+    collector, which destroys every value it still manages. A worker thread
+    calls it before it exits; TGocciaApplication.RunApplication calls it on
+    the main thread once the application has finished. No engine may still
+    be alive on the thread. }
   procedure ShutdownThreadRuntime;
 
 implementation

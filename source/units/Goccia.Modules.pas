@@ -691,6 +691,7 @@ function TGocciaModule.AddStarExportForwarding(const AExportName: string;
   const ASourceModule: TGocciaModule;
   const ASourceExportName: string): Boolean;
 var
+  ExistingBinding: TGocciaModuleExportBinding;
   ExistingBindingModule: TGocciaModule;
   ExistingBindingName: string;
   ExistingValue: TGocciaValue;
@@ -739,6 +740,8 @@ begin
     if FStarExportNames.ContainsKey(AExportName) then
     begin
       InvalidateNamespaceObject;
+      if FExportBindings.TryGetValue(AExportName, ExistingBinding) then
+        ExistingBinding.Free;
       FExportBindings.Remove(AExportName);
       FExportsTable.Remove(AExportName);
       FStarExportNames.Remove(AExportName);
@@ -1221,15 +1224,12 @@ end;
 function TGocciaModuleNamespaceObject.GetEnumerablePropertyNames:
   TArray<string>;
 var
-  Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
   Result := FModule.GetExportNames;
+  { [[GetOwnProperty]] of each export: it throws for one still in its TDZ. }
   for I := 0 to High(Result) do
-  begin
-    Descriptor := GetOwnPropertyDescriptor(Result[I]);
-    Descriptor.Free;
-  end;
+    HasOwnPropertyDescriptor(Result[I]);
 end;
 
 function TGocciaModuleNamespaceObject.GetEnumerablePropertyValues:
@@ -1252,7 +1252,7 @@ var
 begin
   if TryGetExportValue(AName, Value) then
     Exit(TGocciaPropertyDescriptorData.Create(Value,
-      [pfEnumerable, pfWritable]));
+      [pfEnumerable, pfWritable]).AsCallerOwned);
   Result := inherited GetOwnPropertyDescriptor(AName);
 end;
 
@@ -1284,18 +1284,11 @@ end;
 
 function TGocciaModuleNamespaceObject.HasOwnProperty(
   const AName: string): Boolean;
-var
-  Descriptor: TGocciaPropertyDescriptor;
 begin
   if not FModule.HasExport(AName) then
     Exit(inherited HasOwnProperty(AName));
 
-  Descriptor := GetOwnPropertyDescriptor(AName);
-  try
-    Result := Assigned(Descriptor);
-  finally
-    Descriptor.Free;
-  end;
+  Result := HasOwnPropertyDescriptor(AName);
 end;
 
 // ES2026 §10.4.6.7 Module Namespace Exotic Objects [[HasProperty]](P)

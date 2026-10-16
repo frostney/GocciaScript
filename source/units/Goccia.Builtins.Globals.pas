@@ -536,7 +536,6 @@ end;
 function TGocciaGlobals.ErrorStackSetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Descriptor: TGocciaPropertyDescriptor;
   Receiver: TGocciaObjectValue;
   Value: TGocciaValue;
 begin
@@ -554,8 +553,7 @@ begin
   if Receiver = FErrorProto then
     ThrowTypeError('Cannot set Error.prototype.stack');
 
-  Descriptor := Receiver.GetOwnPropertyDescriptor(PROP_STACK);
-  if Assigned(Descriptor) then
+  if Receiver.HasOwnPropertyDescriptor(PROP_STACK) then
   begin
     if not Receiver.AssignPropertyWithReceiver(PROP_STACK, Value, Receiver) then
       ThrowTypeError('Cannot set stack property');
@@ -1071,13 +1069,17 @@ begin
   Descriptor := ASource.GetOwnPropertyDescriptor(AKey);
   if not Assigned(Descriptor) then
     Exit;
-  if not (pfEnumerable in Descriptor.Flags) then
-    Exit;
+  try
+    if not (pfEnumerable in Descriptor.Flags) then
+      Exit;
 
-  if Descriptor is TGocciaPropertyDescriptorData then
-    RawValue := TGocciaPropertyDescriptorData(Descriptor).Value
-  else
-    RawValue := ASource.GetPropertyWithContext(AKey, ASource);
+    if Descriptor is TGocciaPropertyDescriptorData then
+      RawValue := TGocciaPropertyDescriptorData(Descriptor).Value
+    else
+      RawValue := ASource.GetPropertyWithContext(AKey, ASource);
+  finally
+    ReleaseDescriptor(Descriptor);
+  end;
 
   if RawValue = nil then
     RawValue := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -1172,15 +1174,19 @@ begin
   RegisterClone(AError, Result, AMemory);
 
   Descriptor := AError.GetOwnPropertyDescriptor(PROP_MESSAGE);
-  if (Descriptor is TGocciaPropertyDescriptorData) and
-    Assigned(TGocciaPropertyDescriptorData(Descriptor).Value) then
-    { Non-enumerable, matching both an ordinary error's own message and what
-      node and bun put on the clone. }
-    Result.DefineProperty(PROP_MESSAGE,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(
-          TGocciaPropertyDescriptorData(Descriptor).Value.ToStringLiteral.Value),
-        [pfConfigurable, pfWritable]));
+  try
+    if (Descriptor is TGocciaPropertyDescriptorData) and
+      Assigned(TGocciaPropertyDescriptorData(Descriptor).Value) then
+      { Non-enumerable, matching both an ordinary error's own message and what
+        node and bun put on the clone. }
+      Result.DefineProperty(PROP_MESSAGE,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaStringLiteralValue.Create(
+            TGocciaPropertyDescriptorData(Descriptor).Value.ToStringLiteral.Value),
+          [pfConfigurable, pfWritable]));
+  finally
+    ReleaseDescriptor(Descriptor);
+  end;
 
   { The source's stack text, not a fresh capture: node and bun both hand back a
     stack identical to the original's. `stack` is an accessor on Error.prototype
@@ -1455,6 +1461,7 @@ begin
       TGocciaPropertyDescriptorData(Descriptor).Value).Value
   else
     Result := ADefault;
+  ReleaseDescriptor(Descriptor);
 end;
 
 { DOMException is a serializable platform object (WebIDL §3.14.1): its
@@ -1492,15 +1499,19 @@ begin
   begin
     Tag := Current.GetOwnSymbolPropertyDescriptor(
       TGocciaSymbolValue.WellKnownToStringTag);
-    if Tag is TGocciaPropertyDescriptorData then
-    begin
-      if TGocciaPropertyDescriptorData(Tag).Value is TGocciaStringLiteralValue then
-        Exit('[object ' + TGocciaStringLiteralValue(
-          TGocciaPropertyDescriptorData(Tag).Value).Value + ']');
-      Break;
+    try
+      if Tag is TGocciaPropertyDescriptorData then
+      begin
+        if TGocciaPropertyDescriptorData(Tag).Value is TGocciaStringLiteralValue then
+          Exit('[object ' + TGocciaStringLiteralValue(
+            TGocciaPropertyDescriptorData(Tag).Value).Value + ']');
+        Break;
+      end;
+      if Assigned(Tag) then
+        Break;
+    finally
+      ReleaseDescriptor(Tag);
     end;
-    if Assigned(Tag) then
-      Break;
     Current := Current.Prototype;
   end;
   Result := '[object Object]';

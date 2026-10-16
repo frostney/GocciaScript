@@ -831,7 +831,7 @@ begin
 
   Result := CreateStringIndexDescriptor(FPrimitive, AName);
   if Assigned(Result) then
-    Exit;
+    Exit(Result.AsCallerOwned);
 
   if AName = PROP_LENGTH then
   begin
@@ -839,7 +839,7 @@ begin
     Result := TGocciaPropertyDescriptorData.Create(
       TGocciaNumberLiteralValue.Create(
         UTF16CodeUnitLength(FPrimitive.ToStringLiteral.Value)),
-      []);
+      []).AsCallerOwned;
     Exit;
   end;
 end;

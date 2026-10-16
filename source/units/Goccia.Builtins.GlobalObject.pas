@@ -257,7 +257,6 @@ var
   Keys: TGocciaArrayValue;
   KeysRoot: TGocciaTempRoot;
   Names: TArray<string>;
-  Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.keys', ThrowError);
@@ -283,11 +282,8 @@ begin
       Names := Obj.GetOwnPropertyKeys;
 
     for I := 0 to High(Names) do
-    begin
-      Descriptor := Obj.GetOwnPropertyDescriptor(Names[I]);
-      if Assigned(Descriptor) and Descriptor.Enumerable then
+      if Obj.OwnPropertyIsEnumerable(Names[I]) then
         Keys.Elements.Add(TGocciaStringLiteralValue.Create(Names[I]));
-    end;
 
     Result := Keys;
   finally
@@ -305,7 +301,6 @@ var
   Values: TGocciaArrayValue;
   ValuesRoot: TGocciaTempRoot;
   PropertyNames: TArray<string>;
-  Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.values', ThrowError);
@@ -329,11 +324,8 @@ begin
       PropertyNames := Obj.GetOwnPropertyKeys;
 
     for I := 0 to High(PropertyNames) do
-    begin
-      Descriptor := Obj.GetOwnPropertyDescriptor(PropertyNames[I]);
-      if Assigned(Descriptor) and Descriptor.Enumerable then
+      if Obj.OwnPropertyIsEnumerable(PropertyNames[I]) then
         Values.Elements.Add(Obj.GetProperty(PropertyNames[I]));
-    end;
 
     Result := Values;
   finally
@@ -353,7 +345,6 @@ var
   Entry: TGocciaArrayValue;
   EntryRoot: TGocciaTempRoot;
   PropertyNames: TArray<string>;
-  Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'Object.entries', ThrowError);
@@ -380,8 +371,7 @@ begin
 
     for I := 0 to High(PropertyNames) do
     begin
-      Descriptor := Obj.GetOwnPropertyDescriptor(PropertyNames[I]);
-      if not (Assigned(Descriptor) and Descriptor.Enumerable) then
+      if not Obj.OwnPropertyIsEnumerable(PropertyNames[I]) then
         Continue;
 
       Entry := TGocciaArrayValue.Create;
@@ -409,7 +399,6 @@ var
   PropertyNames: TArray<string>;
   PropertyKeyValues: TArray<TGocciaValue>;
   SymbolKeys: TArray<TGocciaSymbolValue>;
-  Descriptor: TGocciaPropertyDescriptor;
   PropValue: TGocciaValue;
   SourceArg: TGocciaValue;
   GC: TGarbageCollector;
@@ -425,8 +414,7 @@ var
 
   procedure AssignStringKey(const AName: string);
   begin
-    Descriptor := Source.GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) and Descriptor.Enumerable then
+    if Source.OwnPropertyIsEnumerable(AName) then
     begin
       PropValue := Source.GetProperty(AName);
       if IsReadonlyStringExoticKey(InitialObj, AName) then
@@ -438,8 +426,7 @@ var
 
   procedure AssignSymbolKey(const ASymbol: TGocciaSymbolValue);
   begin
-    Descriptor := Source.GetOwnSymbolPropertyDescriptor(ASymbol);
-    if Assigned(Descriptor) and Descriptor.Enumerable then
+    if Source.OwnSymbolPropertyIsEnumerable(ASymbol) then
     begin
       PropValue := Source.GetSymbolProperty(ASymbol);
       InitialObj.AssignSymbolProperty(ASymbol, PropValue);
@@ -574,8 +561,8 @@ begin
     KeyValue := ToPropertyKey(AArgs.GetElement(1));
     if KeyValue is TGocciaSymbolValue then
     begin
-      if Assigned(ClassObj.GetOwnSymbolPropertyDescriptor(
-        TGocciaSymbolValue(KeyValue))) then
+      if ClassObj.HasOwnSymbolPropertyDescriptor(
+        TGocciaSymbolValue(KeyValue)) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -690,7 +677,11 @@ begin
     if Descriptor = nil then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue
     else
-      Result := FromPropertyDescriptor(Descriptor);
+      try
+        Result := FromPropertyDescriptor(Descriptor);
+      finally
+        ReleaseDescriptor(Descriptor);
+      end;
   finally
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -742,8 +733,12 @@ begin
           Descriptor := Obj.GetOwnPropertyDescriptor(
             KeyValue.ToStringLiteral.Value);
         if Descriptor <> nil then
-          Descriptors.CreateDataPropertyOrThrow(KeyValue,
-            FromPropertyDescriptor(Descriptor));
+          try
+            Descriptors.CreateDataPropertyOrThrow(KeyValue,
+              FromPropertyDescriptor(Descriptor));
+          finally
+            ReleaseDescriptor(Descriptor);
+          end;
       end;
       Exit(Descriptors);
     end;
@@ -756,8 +751,12 @@ begin
       Descriptor := Obj.GetOwnPropertyDescriptor(PropertyNames[I]);
       // Step 4b-c: Let descriptor be FromPropertyDescriptor(desc) and add to result
       if Descriptor <> nil then
-        Descriptors.CreateDataPropertyOrThrow(PropertyNames[I],
-          FromPropertyDescriptor(Descriptor));
+        try
+          Descriptors.CreateDataPropertyOrThrow(PropertyNames[I],
+            FromPropertyDescriptor(Descriptor));
+        finally
+          ReleaseDescriptor(Descriptor);
+        end;
     end;
 
     // Step 4 continued: For each element key of ownKeys (symbol keys)
@@ -766,8 +765,12 @@ begin
     begin
       Descriptor := Obj.GetOwnSymbolPropertyDescriptor(OwnSymbols[I]);
       if Descriptor <> nil then
-        Descriptors.CreateDataPropertyOrThrow(OwnSymbols[I],
-          FromPropertyDescriptor(Descriptor));
+        try
+          Descriptors.CreateDataPropertyOrThrow(OwnSymbols[I],
+            FromPropertyDescriptor(Descriptor));
+        finally
+          ReleaseDescriptor(Descriptor);
+        end;
     end;
 
     // Step 5: Return descriptors
@@ -822,7 +825,11 @@ begin
   end;
 
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
-  Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
+  try
+    Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
+  finally
+    ReleaseDescriptor(ExistingDescriptor);
+  end;
 
   // Step 4: Perform ? DefinePropertyOrThrow(O, key, desc)
   // DefineProperty/DefineSymbolProperty takes ownership on success;
@@ -850,31 +857,17 @@ var
   PropertyKeyValues: TArray<TGocciaValue>;
   SymbolKeys: TArray<TGocciaSymbolValue>;
   PendingProperties: TPendingDefinePropertyArray;
-  PropertyDescriptor: TGocciaPropertyDescriptor;
   DescriptorValue: TGocciaValue;
   KeyValue: TGocciaValue;
   GC: TGarbageCollector;
   I: Integer;
   StagingRoots: TGocciaActiveRootFrame;
 
-  // PropertyDescriptor is read for its Enumerable flag and then dropped, and
-  // it is deliberately NOT freed. Whether GetOwnPropertyDescriptor's result is
-  // caller-owned cannot be decided here: an ordinary object returns the
-  // descriptor its property map owns, and freeing that corrupts the map; a
-  // proxy returns a freshly completed one when it has a
-  // getOwnPropertyDescriptor trap but forwards to the target — map-owned
-  // again — when it does not; a String object synthesises for index and
-  // `length` keys and returns a map-owned descriptor for every other key. So
-  // the receiver's type does not answer the question, and probing for the trap
-  // would re-run guest code the spec only permits once per key.
-  //
-  // The consequence is a small leak per synthesising key, shared with every
-  // other GetOwnPropertyDescriptor caller in the engine. Closing it needs an
-  // ownership signal on the accessor itself, not a rule at this call site.
+  // Each key's [[GetOwnProperty]] runs once (a proxy trap may run guest
+  // code), and only its Enumerable flag is read before it is released.
   procedure CaptureStringDescriptor(const AName: string);
   begin
-    PropertyDescriptor := PropertiesObject.GetOwnPropertyDescriptor(AName);
-    if Assigned(PropertyDescriptor) and PropertyDescriptor.Enumerable then
+    if PropertiesObject.OwnPropertyIsEnumerable(AName) then
     begin
       DescriptorValue := PropertiesObject.GetProperty(AName);
       AppendPendingDefineProperty(PendingProperties, AName, nil, False,
@@ -884,8 +877,7 @@ var
 
   procedure CaptureSymbolDescriptor(const ASymbol: TGocciaSymbolValue);
   begin
-    PropertyDescriptor := PropertiesObject.GetOwnSymbolPropertyDescriptor(ASymbol);
-    if Assigned(PropertyDescriptor) and PropertyDescriptor.Enumerable then
+    if PropertiesObject.OwnSymbolPropertyIsEnumerable(ASymbol) then
     begin
       DescriptorValue := PropertiesObject.GetSymbolProperty(ASymbol);
       AppendPendingDefineProperty(PendingProperties, '', ASymbol, True,

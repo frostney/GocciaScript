@@ -20,7 +20,53 @@ type
   TGocciaDirectEvalUsageFlag = (deuDirectEval, deuSloppyDirectEval);
   TGocciaDirectEvalUsage = set of TGocciaDirectEvalUsageFlag;
 
-  TGocciaASTNode = class
+  TGocciaASTArena = class;
+
+  { Every object a parse allocates for its tree: the nodes, and the four
+    helper classes that are not nodes (TGocciaClassDefinition,
+    TGocciaDestructuringProperty, TGocciaObjectMatchProperty,
+    TGocciaMatchClause).
+
+    Ownership rule (ADR 0143): an AST object created while a parse runs belongs
+    to that parse's arena, and only the arena frees it. The arena is handed to
+    the TGocciaProgram the parse returns, so freeing the program frees the
+    whole tree, and a parse that raises frees what it built. A node therefore
+    never frees another AST object, and a container a node holds (a list, a
+    map) never owns its elements: the node frees the container alone.
+    Sharing a node between two parents, or reusing it in a rewritten tree, is
+    safe for the same reason.
+
+    An object freed explicitly before its arena (a node the parser discards)
+    leaves the arena first, so the arena does not free it twice. An object
+    created with no parse running (a compiler temporary, a unit test's
+    hand-built node) has no arena; whoever creates it frees it. }
+  TGocciaASTObject = class
+  private
+    FArena: TGocciaASTArena;
+  protected
+    { False for an object that owns its arena instead of belonging to one:
+      TGocciaProgram. }
+    class function JoinsArena: Boolean; virtual;
+  public
+    procedure AfterConstruction; override;
+    procedure BeforeDestruction; override;
+  end;
+
+  { Owns the AST objects of one parse. Freeing it frees every object still in
+    it, in no particular order: no AST object's destructor touches another. }
+  TGocciaASTArena = class
+  private
+    FObjects: TFPList;
+    procedure Adopt(const AObject: TGocciaASTObject);
+    procedure Forget(const AObject: TGocciaASTObject);
+    function GetCount: Integer;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    property Count: Integer read GetCount;
+  end;
+
+  TGocciaASTNode = class(TGocciaASTObject)
   private
     FSpan: TGocciaSourceSpan;
     function GetLine: Integer;
@@ -51,19 +97,34 @@ type
     property Labels[const AIndex: Integer]: string read GetLabel;
   end;
 
-  // Program node
+  // Program node. It owns the arena of the parse that produced it, so freeing
+  // the program frees the whole tree (see TGocciaASTObject).
   TGocciaProgram = class(TGocciaASTNode)
   private
     FBody: TObjectList<TGocciaStatement>;
     FHasTopLevelAwait: Boolean;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
+    FNodeArena: TGocciaASTArena;
+  protected
+    class function JoinsArena: Boolean; override;
   public
+    { ABody must not own its statements; the program frees the list. }
     constructor Create(const ABody: TObjectList<TGocciaStatement>);
+    destructor Destroy; override;
+    { Takes ownership of the arena holding this program's nodes. }
+    procedure AdoptArena(const AArena: TGocciaASTArena);
     property Body: TObjectList<TGocciaStatement> read FBody;
     property HasTopLevelAwait: Boolean read FHasTopLevelAwait write FHasTopLevelAwait;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
       write FDirectEvalUsage;
   end;
+
+{ The arena AST objects created on this thread join, or nil. }
+function ActiveASTArena: TGocciaASTArena;
+{ Makes AArena the active arena and returns the one it replaces, which the
+  caller restores with RestoreASTArena when its parse ends. }
+function ActivateASTArena(const AArena: TGocciaASTArena): TGocciaASTArena;
+procedure RestoreASTArena(const APrevious: TGocciaASTArena);
 
 // Conservative pre-scan the bytecode compiler uses to decide whether a
 // non-arrow function must materialize an implicit arguments object (only
@@ -87,6 +148,100 @@ function FunctionSourceMayReferenceArgumentsObject(
   const ASourceText: string): Boolean;
 
 implementation
+
+threadvar
+  GActiveASTArena: TGocciaASTArena;
+
+function ActiveASTArena: TGocciaASTArena;
+begin
+  Result := GActiveASTArena;
+end;
+
+function ActivateASTArena(const AArena: TGocciaASTArena): TGocciaASTArena;
+begin
+  Result := GActiveASTArena;
+  GActiveASTArena := AArena;
+end;
+
+procedure RestoreASTArena(const APrevious: TGocciaASTArena);
+begin
+  GActiveASTArena := APrevious;
+end;
+
+{ TGocciaASTObject }
+
+class function TGocciaASTObject.JoinsArena: Boolean;
+begin
+  Result := True;
+end;
+
+procedure TGocciaASTObject.AfterConstruction;
+begin
+  inherited;
+  if Assigned(GActiveASTArena) and JoinsArena then
+    GActiveASTArena.Adopt(Self);
+end;
+
+procedure TGocciaASTObject.BeforeDestruction;
+begin
+  if Assigned(FArena) then
+    FArena.Forget(Self);
+  inherited;
+end;
+
+{ TGocciaASTArena }
+
+constructor TGocciaASTArena.Create;
+begin
+  inherited Create;
+  FObjects := TFPList.Create;
+end;
+
+destructor TGocciaASTArena.Destroy;
+var
+  I: Integer;
+  AObject: TGocciaASTObject;
+begin
+  for I := 0 to FObjects.Count - 1 do
+  begin
+    AObject := TGocciaASTObject(FObjects[I]);
+    if not Assigned(AObject) then
+      Continue;
+    AObject.FArena := nil;
+    AObject.Free;
+  end;
+  FObjects.Free;
+  inherited;
+end;
+
+procedure TGocciaASTArena.Adopt(const AObject: TGocciaASTObject);
+begin
+  AObject.FArena := Self;
+  FObjects.Add(AObject);
+end;
+
+procedure TGocciaASTArena.Forget(const AObject: TGocciaASTObject);
+var
+  I: Integer;
+begin
+  { An explicit free is of an object the parser built a moment ago and
+    discarded, so it sits near the end. }
+  for I := FObjects.Count - 1 downto 0 do
+    if FObjects[I] = Pointer(AObject) then
+    begin
+      if I = FObjects.Count - 1 then
+        FObjects.Count := I
+      else
+        FObjects[I] := nil;
+      AObject.FArena := nil;
+      Exit;
+    end;
+end;
+
+function TGocciaASTArena.GetCount: Integer;
+begin
+  Result := FObjects.Count;
+end;
 
 function FunctionSourceMayReferenceArgumentsObject(
   const ASourceText: string): Boolean;
@@ -152,6 +307,25 @@ begin
   else
     inherited Create(TGocciaSourceSpan.Empty);
   FBody := ABody;
+end;
+
+destructor TGocciaProgram.Destroy;
+begin
+  if Assigned(FBody) then
+    FBody.OwnsObjects := False;
+  FBody.Free;
+  FNodeArena.Free;
+  inherited;
+end;
+
+class function TGocciaProgram.JoinsArena: Boolean;
+begin
+  Result := False;
+end;
+
+procedure TGocciaProgram.AdoptArena(const AArena: TGocciaASTArena);
+begin
+  FNodeArena := AArena;
 end;
 
 end.

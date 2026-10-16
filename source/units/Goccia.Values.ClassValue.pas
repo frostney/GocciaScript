@@ -1058,6 +1058,7 @@ begin
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
     ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+  ReleaseDescriptor(ExistingDescriptor);
 
   inherited DefineProperty(AName,
     TGocciaPropertyDescriptorAccessor.Create(
@@ -1078,6 +1079,7 @@ begin
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
     ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+  ReleaseDescriptor(ExistingDescriptor);
 
   inherited DefineProperty(AName,
     TGocciaPropertyDescriptorAccessor.Create(
@@ -1165,6 +1167,7 @@ begin
     if Getter is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(Getter);
   end;
+  ReleaseDescriptor(Descriptor);
 end;
 
 function TGocciaClassValue.GetStaticPropertySetter(const AName: string): TGocciaFunctionBase;
@@ -1180,6 +1183,7 @@ begin
     if Setter is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(Setter);
   end;
+  ReleaseDescriptor(Descriptor);
 end;
 
 procedure TGocciaClassValue.AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
@@ -1810,6 +1814,7 @@ begin
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
+      ReleaseDescriptor(Descriptor);
       Result := inherited GetPropertyWithContext(AName, AThisContext);
       Exit;
     end;
@@ -1832,6 +1837,7 @@ begin
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
+      ReleaseDescriptor(Descriptor);
       Result := inherited GetPropertyWithContext(AName, AThisContext);
       Exit;
     end;
@@ -1863,8 +1869,12 @@ begin
   if FProperties.ContainsKey(AName) then
     Exit;
   Descriptor := GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) then
-    FProperties.Add(AName, Descriptor);
+  if not Assigned(Descriptor) then
+    Exit;
+  if Descriptor.CallerOwned then
+    FProperties.Add(AName, Descriptor.TakeOwnership)
+  else
+    FProperties.Add(AName, ClonePropertyDescriptor(Descriptor));
 end;
 
 procedure TGocciaClassValue.DefineProperty(const AName: string;
@@ -1926,7 +1936,8 @@ end;
 function TGocciaClassValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
 begin
   if AName = PROP_PROTOTYPE then
-    Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
+    Result := TGocciaPropertyDescriptorData.Create(FClassPrototype,
+      []).AsCallerOwned
   else if AName = PROP_NAME then
   begin
     // Check if .name was explicitly set (e.g. static name = 'Custom')
@@ -1936,10 +1947,11 @@ begin
       // Synthesize from FName: { writable: false, enumerable: false, configurable: true }
       if (FName = '') or (FName = '<anonymous>') then
         Result := TGocciaPropertyDescriptorData.Create(
-          TGocciaStringLiteralValue.Create(''), [pfConfigurable])
+          TGocciaStringLiteralValue.Create(''), [pfConfigurable]).AsCallerOwned
       else
         Result := TGocciaPropertyDescriptorData.Create(
-          TGocciaStringLiteralValue.Create(FName), [pfConfigurable]);
+          TGocciaStringLiteralValue.Create(FName),
+          [pfConfigurable]).AsCallerOwned;
     end;
   end
   else if AName = PROP_LENGTH then
@@ -1950,7 +1962,8 @@ begin
     Result := inherited GetOwnPropertyDescriptor(AName);
     if not Assigned(Result) and not FLengthDeleted then
       Result := TGocciaPropertyDescriptorData.Create(
-        TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable]);
+        TGocciaNumberLiteralValue.Create(GetClassLength),
+        [pfConfigurable]).AsCallerOwned;
   end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
@@ -2040,9 +2053,12 @@ end;
 function TGocciaClassValue.DeleteProperty(const AName: string): Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  HasDescriptor: Boolean;
 begin
   Descriptor := inherited GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) then
+  HasDescriptor := Assigned(Descriptor);
+  ReleaseDescriptor(Descriptor);
+  if HasDescriptor then
   begin
     Result := inherited DeleteProperty(AName);
     if Result then
@@ -2693,16 +2709,22 @@ begin
               Args, Self);
         finally
           Args.Free;
+          ReleaseDescriptor(Descriptor);
         end;
         Exit;
       end
       else if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
+        ReleaseDescriptor(Descriptor);
         ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
       else if (Descriptor is TGocciaPropertyDescriptorData) and
               (not TGocciaPropertyDescriptorData(Descriptor).Writable) then
+      begin
+        ReleaseDescriptor(Descriptor);
         ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
+      end;
+      ReleaseDescriptor(Descriptor);
     end;
     Proto := Proto.Prototype;
   end;

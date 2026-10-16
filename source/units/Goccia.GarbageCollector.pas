@@ -281,6 +281,7 @@ type
     procedure TraceWeakReferences;
     procedure SweepWeakReferences;
     procedure SweepObjects;
+    procedure ReleaseAllManagedObjects;
   public
     class function Instance: TGarbageCollector; {$IFDEF FPC}inline;{$ENDIF}
     class procedure Initialize;
@@ -733,6 +734,7 @@ begin
   {$IFDEF GC_TIMING}
   PrintTimingSummary;
   {$ENDIF}
+  ReleaseAllManagedObjects;
   // Root sources are not owned and can outlive the collector (a pooled argument
   // collection freed during engine tear-down, for instance). Drop their
   // back-pointer so their destructors do not unregister into freed memory.
@@ -1142,6 +1144,48 @@ begin
   if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
     FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
   FTotalCollected := FTotalCollected + Collected;
+end;
+
+{ Destroys every object this collector still manages: a collection in which
+  nothing is reachable. Runs from Destroy, so a thread's (or the process's)
+  last collector frees the values that outlived every engine on it instead of
+  leaking them (#1592). The destructors run in list order, as in any sweep,
+  so the rule a sweep already relies on holds here too: a value's destructor
+  frees what it owns natively and never calls into another managed object,
+  which may already be gone. Roots are dropped first; pins, temp roots and
+  root objects protect nothing once the collector itself is going away. A
+  destructor that allocates registers a new object, which the next pass
+  frees. }
+procedure TGarbageCollector.ReleaseAllManagedObjects;
+const
+  MAX_RELEASE_PASSES = 16;
+var
+  Pass: Integer;
+begin
+  FPinnedObjects.Clear;
+  FTempRoots.Clear;
+  FQueuedRoots.Clear;
+  FKeptObjects.Clear;
+  FRootObjects.Clear;
+  FActiveRootCount := 0;
+  CriticalSectionEnter(GCCollectLock);
+  try
+    FCollecting := True;
+    try
+      Pass := 0;
+      while (FManagedObjects.Count > 0) and (Pass < MAX_RELEASE_PASSES) do
+      begin
+        { A fresh epoch: no object carries its mark, so the sweep frees all. }
+        TGCManagedObject.AdvanceMark;
+        SweepObjects;
+        Inc(Pass);
+      end;
+    finally
+      FCollecting := False;
+    end;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
 end;
 
 procedure TGarbageCollector.Collect;

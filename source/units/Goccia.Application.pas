@@ -33,6 +33,7 @@ uses
   Goccia.Error.Detail,
   Goccia.Modules.Resolver,
   Goccia.Terminal.Colors,
+  Goccia.Threading,
   Goccia.Values.Error,
   Goccia.VM.Exception;
 
@@ -89,6 +90,10 @@ begin
     Result := App.Run;
   finally
     App.Free;
+    { Every engine is gone by now. Shutting the main thread's runtime down
+      destroys what its collector still manages, as each worker's does when
+      it exits, so a run ends with nothing left allocated (#1592). }
+    ShutdownThreadRuntime;
   end;
 end;
 
