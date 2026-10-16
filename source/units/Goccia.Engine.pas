@@ -2272,7 +2272,12 @@ begin
         begin
           if Assigned(Queue) and Queue.HasPending then
             Queue.DrainQueue
-          else if HasSelfSettlingAtomicsWaitAsyncWaiters then
+          else if ExtensionsHavePendingWork then
+            { A job started host work after its extension's pass: the next
+              round waits on it, pumping Atomics completions as it does,
+              before this loop sleeps for an Atomics timeout. }
+            Break
+          else if HasSelfSettlingAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
           begin
             { An Atomics.waitAsync timeout still to expire. The deadline and
               a host's stop end the wait, as in every other engine wait. }

@@ -55,9 +55,13 @@ bytecode already raised at the await itself. A rejected entry still raises its
 own reason.
 
 **The idle wait waits out `Atomics.waitAsync` timeouts in real time.**
-It waits for waiters that have a timeout or were already notified. A waiter
-with no timeout can be settled only by `Atomics.notify`, which nothing left in
-an idle run will call, so the wait does not block on it. The wait sleeps 1 ms
+It waits for the running engine's waiters that have a timeout or were already
+notified. A waiter with no timeout can be settled only by `Atomics.notify`,
+which nothing left in an idle run will call, so the wait does not block on it.
+An engine nested on the same thread, such as a sandbox `runScript` child, does
+not wait out its caller's waiters. Extension work comes first: before the wait
+sleeps for a waiter, a job that started host work sends the loop back to the
+extension passes, whose waits pump Atomics completions too. The wait sleeps 1 ms
 between polls and checks the run deadline and the instruction budget each
 time, as every other engine wait does, so a host stop ends it promptly.
 Timers stay virtual ([ADR 0113](0113-deterministic-virtual-timer-queue.md)):

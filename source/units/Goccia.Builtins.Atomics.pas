@@ -18,10 +18,6 @@ uses
 
 function PumpAtomicsWaitAsyncCompletions: Integer;
 function HasPendingAtomicsWaitAsyncCompletions: Boolean;
-{ True while this thread has an async waiter that settles without an
-  Atomics.notify: one already notified, or one with a timeout. A waiter with
-  no timeout that nothing notifies never settles. }
-function HasSelfSettlingAtomicsWaitAsyncWaiters: Boolean;
 function WaitForAtomicsPromise(const APromise: TGocciaPromiseValue): Boolean;
 procedure SetAtomicsAgentCanSuspend(AValue: Boolean);
 procedure ShutdownAtomicsWaiters;
@@ -64,6 +60,13 @@ type
     function AtomicsXor(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
+
+{ True while AOwner (one engine's Atomics) has an async waiter on this thread
+  that settles without an Atomics.notify: one already notified, or one with a
+  timeout. A waiter with no timeout that nothing notifies never settles. An
+  engine nested on the thread does not wait out its caller's waiters. }
+function HasSelfSettlingAtomicsWaitAsyncWaiters(
+  const AOwner: TGocciaAtomics): Boolean;
 
 implementation
 
@@ -804,21 +807,23 @@ begin
   end;
 end;
 
-function HasSelfSettlingAtomicsWaitAsyncWaiters: Boolean;
+function HasSelfSettlingAtomicsWaitAsyncWaiters(
+  const AOwner: TGocciaAtomics): Boolean;
 var
   I: Integer;
   OwnerThreadId: TThreadID;
   Waiters: TObjectList<TAtomicsWaiter>;
 begin
   Result := False;
-  if GAtomicsAsyncWaiterCount = 0 then
+  if (GAtomicsAsyncWaiterCount = 0) or not Assigned(AOwner) then
     Exit;
   OwnerThreadId := GetGocciaThreadId;
   CriticalSectionEnter(GAtomicsLock);
   try
     Waiters := GetAtomicsWaiters;
     for I := 0 to Waiters.Count - 1 do
-      if Waiters[I].Async and (Waiters[I].OwnerThreadId = OwnerThreadId) and
+      if Waiters[I].Async and (Waiters[I].Owner = AOwner) and
+         (Waiters[I].OwnerThreadId = OwnerThreadId) and
          (Waiters[I].Ready or Waiters[I].HasDeadline) then
         Exit(True);
   finally

@@ -13847,6 +13847,65 @@ await section("Runner: a fetch awaited after a top-level await that settles at o
     throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
 });
 
+await section("Runner: the idle wait for an Atomics.waitAsync timeout neither delays a fetch nor holds a nested run...", async () => {
+  // Both scripts time a step from inside and print whether it was prompt.
+  // The waiter's 5 s timeout is what a slow step would have waited out.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      return new Response("ok", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const prompt = (label: string, start: string) =>
+    `console.log('${label} ' + (Date.now() - ${start} < 2000 ? 'prompt' : 'late'));`;
+  // A job starts a fetch while a timed waiter is pending: the fetch's response
+  // is waited for first, not after the waiter's timeout.
+  const fetchFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const waited = Atomics.waitAsync(view, 0, 0, 5000).value;",
+    "const fetchStart = Date.now();",
+    `await fetch('${url}');`,
+    prompt("fetch", "fetchStart"),
+    "console.log('waiter ' + (await waited));",
+  ].join("\n");
+  // A nested run has no waiter of its own and ends without waiting out its
+  // caller's.
+  const nested = [
+    "import { runScript } from 'goccia';",
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "const waited = Atomics.waitAsync(view, 0, 0, 5000).value;",
+    "const childStart = Date.now();",
+    "const child = runScript('/child.js');",
+    prompt("child", "childStart"),
+    "console.log('child ok ' + child.ok);",
+    "console.log('waiter ' + (await waited));",
+  ].join("\n");
+  const failures: string[] = [];
+  try {
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      for (const [name, files, expected] of [
+        ["fetch during a waiter", { "/main.js": fetchFirst }, ["fetch prompt", "waiter timed-out"]],
+        ["nested run during a waiter", { "/main.js": nested, "/child.js": "console.log('child ran');\n" }, ["child prompt", "child ok true", "waiter timed-out"]],
+      ] as const) {
+        const run = await runNestedFetchSandbox({ ...files }, mode, []);
+        const label = `sandbox ${mode}, ${name}`;
+        const lines = run.stdout.split("\n").filter((line) => line !== "");
+        if (run.timedOut || run.exitCode !== 0)
+          failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+        else if (JSON.stringify(lines) !== JSON.stringify(expected))
+          failures.push(`${label}: should print ${JSON.stringify(expected)}, got ${JSON.stringify(lines)}`);
+      }
+    }
+  } finally {
+    server.stop(true);
+  }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
+});
+
 await section("Runner: a deadline that elapses while a fetch is pending ends the run, not the fetch...", async () => {
   // A request's socket gives up when the run's deadline does. That used to
   // reach the script as a catchable `TypeError: Invalid HTTP response: no
