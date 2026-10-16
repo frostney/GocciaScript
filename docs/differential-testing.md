@@ -226,7 +226,7 @@ point it belongs in `f-lifecycle.test.js`.
 Each file gets a per-runtime timeout of `DIFFRUN_TIMEOUT` seconds (default 60);
 the single vitest invocation gets that budget multiplied by the number of files
 it runs. A runtime that exceeds it reports `TIMEOUT` and counts as a divergence
-rather than as a harness error. This is deliberate: a parser or executor that
+rather than as a harness error. This is deliberate: a parser or VM that
 never terminates on input the other runtimes complete is exactly the class of
 defect this lane exists to surface, and treating it as infrastructure noise would
 hide it. The counterpart is that the timeout must stay generous enough that a
