@@ -112,133 +112,97 @@ function medianVariance(data) {
 const newStats = () => ({ improved: 0, regressed: 0, unchanged: 0, new: 0, changes: [] });
 
 // options:
-//   interpData, bytecodeData       — required PR-run reports (this run)
-//   interpMain, bytecodeMain        — same-runner `main`-build reports (may be null)
+//   bytecodeData                    — required PR-run report (this run)
+//   bytecodeMain                    — same-runner `main`-build report (may be null)
 //   profileDiff                     — optional pre-rendered deterministic profile markdown
 //   runnerLabel                     — e.g. 'ubuntu-latest x64'
 // returns { body } — markdown WITHOUT the HTML comment marker.
 function buildBenchmarkComparison(options) {
-  const interpData = options.interpData;
-  const bytecodeData = options.bytecodeData;
-  const interpMain = options.interpMain || null;
-  const bytecodeMain = options.bytecodeMain || null;
+  const currentData = options.bytecodeData;
+  const mainData = options.bytecodeMain || null;
   const runnerLabel = options.runnerLabel || 'ubuntu-latest x64';
 
-  const hasAnyMain = interpMain || bytecodeMain;
+  const hasMain = mainData != null;
+  const mainMap = buildMap(mainData);
 
-  const interpMainMap = buildMap(interpMain);
-  const bytecodeMainMap = buildMap(bytecodeMain);
-  const bytecodeCurrentMap = buildMap(bytecodeData);
-
-  const totals = { interp: newStats(), bytecode: newStats() };
+  const totals = newStats();
   let totalBenchmarks = 0;
   const fileBlocks = [];
 
-  for (const file of interpData.files) {
+  for (const file of currentData.files) {
     const fileName = file.fileName;
-    const iBase = interpMainMap[fileName] || {};
-    const bBase = bytecodeMainMap[fileName] || {};
-    const bCurrent = bytecodeCurrentMap[fileName] || {};
-    const fileS = { interp: newStats(), bytecode: newStats() };
+    const base = mainMap[fileName] || {};
+    const fileS = newStats();
     let fileRows = '';
     const benches = file.benchmarks.filter((b) => !b.error);
     totalBenchmarks += benches.length;
 
-    if (hasAnyMain) {
-      fileRows += '| Benchmark | Interpreted (main → PR) | Δ | Bytecode (main → PR) | Δ |\n';
-      fileRows += '|-----------|------------|---|---------|---|\n';
+    if (hasMain) {
+      fileRows += '| Benchmark | main → PR | Δ |\n';
+      fileRows += '|-----------|-----------|---|\n';
     } else {
-      fileRows += '| Benchmark | Interpreted | Bytecode |\n';
-      fileRows += '|-----------|------------|----------|\n';
+      fileRows += '| Benchmark | ops/sec |\n';
+      fileRows += '|-----------|---------|\n';
     }
 
     for (const bench of benches) {
       const key = `${bench.suite} > ${bench.name}`;
-      const iCurrent = normalizeBenchmark(bench);
-      const bCurrentEntry = bCurrent[key];
-      const iBaseEntry = iBase[key];
-      const bBaseEntry = bBase[key];
+      const current = normalizeBenchmark(bench);
+      const baseEntry = base[key];
 
-      if (hasAnyMain) {
-        let iDelta;
-        if (iBaseEntry) {
-          const c = calculateChange(iBaseEntry, iCurrent);
-          const classification = classify(iBaseEntry, iCurrent);
-          if (c != null) fileS.interp.changes.push(c);
-          fileS.interp[classification]++;
-          iDelta = fmtDelta(classification, c);
+      if (hasMain) {
+        let delta;
+        if (baseEntry) {
+          const c = calculateChange(baseEntry, current);
+          const classification = classify(baseEntry, current);
+          if (c != null) fileS.changes.push(c);
+          fileS[classification]++;
+          delta = fmtDelta(classification, c);
         } else {
-          iDelta = '🆕';
-          fileS.interp.new++;
+          delta = '🆕';
+          fileS.new++;
         }
-
-        let bDelta;
-        if (bCurrentEntry && bBaseEntry) {
-          const c = calculateChange(bBaseEntry, bCurrentEntry);
-          const classification = classify(bBaseEntry, bCurrentEntry);
-          if (c != null) fileS.bytecode.changes.push(c);
-          fileS.bytecode[classification]++;
-          bDelta = fmtDelta(classification, c);
-        } else if (bCurrentEntry) {
-          bDelta = '🆕';
-          fileS.bytecode.new++;
-        } else {
-          bDelta = '—';
-        }
-
-        fileRows += `| ${bench.name} | ${fmtCell(iBaseEntry, iCurrent)} | ${iDelta} | ${bCurrentEntry ? fmtCell(bBaseEntry, bCurrentEntry) : '—'} | ${bDelta} |\n`;
+        fileRows += `| ${bench.name} | ${fmtCell(baseEntry, current)} | ${delta} |\n`;
       } else {
-        fileRows += `| ${bench.name} | ${fmtRange(iCurrent)} | ${bCurrentEntry ? fmtRange(bCurrentEntry) : '—'} |\n`;
+        fileRows += `| ${bench.name} | ${fmtRange(current)} |\n`;
       }
     }
 
-    for (const mode of ['interp', 'bytecode']) {
-      for (const k of ['improved', 'regressed', 'unchanged', 'new']) totals[mode][k] += fileS[mode][k];
-      totals[mode].changes.push(...fileS[mode].changes);
-    }
+    for (const k of ['improved', 'regressed', 'unchanged', 'new']) totals[k] += fileS[k];
+    totals.changes.push(...fileS.changes);
 
-    const hasSignificant = fileS.interp.improved + fileS.interp.regressed + fileS.bytecode.improved + fileS.bytecode.regressed > 0;
+    const hasSignificant = fileS.improved + fileS.regressed > 0;
 
-    function modeSummary(label, s) {
+    function fileSummaryOf(s) {
       const p = [];
       if (s.improved > 0) p.push(`🟢 ${s.improved}`);
       if (s.regressed > 0) p.push(`🔴 ${s.regressed}`);
       if (s.new > 0) p.push(`🆕 ${s.new}`);
       if (s.unchanged > 0) p.push(`${s.unchanged} unch.`);
       const avg = fmtAvg(s.changes);
-      return `${label}: ${p.length > 0 ? p.join(', ') : `${s.changes.length + s.new}`}${avg ? ` · ${avg}` : ''}`;
+      return `${p.length > 0 ? p.join(', ') : `${s.changes.length + s.new}`}${avg ? ` · ${avg}` : ''}`;
     }
 
-    const fileSummary = hasAnyMain
-      ? modeSummary('Interp', fileS.interp) + ' · ' + modeSummary('Bytecode', fileS.bytecode)
-      : `${benches.length} benchmarks`;
+    const fileSummary = hasMain ? fileSummaryOf(fileS) : `${benches.length} benchmarks`;
 
     fileBlocks.push({ fileName, fileSummary, fileRows, hasSignificant });
   }
 
   let body = '## Benchmark Results\n\n';
 
-  if (hasAnyMain) {
-    function overallMode(label, s) {
-      const p = [];
-      if (s.improved > 0) p.push(`🟢 ${s.improved} improved`);
-      if (s.regressed > 0) p.push(`🔴 ${s.regressed} regressed`);
-      if (s.new > 0) p.push(`🆕 ${s.new} new`);
-      if (s.unchanged > 0) p.push(`${s.unchanged} unchanged`);
-      const avg = fmtAvg(s.changes);
-      return `**${label}:** ${p.join(' · ')}${avg ? ` · ${avg}` : ''}`;
-    }
+  if (hasMain) {
+    const p = [];
+    if (totals.improved > 0) p.push(`🟢 ${totals.improved} improved`);
+    if (totals.regressed > 0) p.push(`🔴 ${totals.regressed} regressed`);
+    if (totals.new > 0) p.push(`🆕 ${totals.new} new`);
+    if (totals.unchanged > 0) p.push(`${totals.unchanged} unchanged`);
+    const avg = fmtAvg(totals.changes);
     body += `**${totalBenchmarks}** benchmarks · PR vs same-runner \`main\` build\n\n`;
-    body += overallMode('Interpreted', totals.interp) + '\\\n';
-    body += overallMode('Bytecode', totals.bytecode) + '\n\n';
+    body += `${p.join(' · ')}${avg ? ` · ${avg}` : ''}\n\n`;
 
-    const iNoise = medianVariance(interpData);
-    const bNoise = medianVariance(bytecodeData);
-    const noiseParts = [];
-    if (iNoise != null) noiseParts.push(`interpreted ±${iNoise.toFixed(1)}%`);
-    if (bNoise != null) noiseParts.push(`bytecode ±${bNoise.toFixed(1)}%`);
-    if (noiseParts.length > 0) {
-      body += `Typical per-run noise (median variance): ${noiseParts.join(', ')}. Deltas within noise overlap and read as unchanged.\n\n`;
+    const noise = medianVariance(currentData);
+    if (noise != null) {
+      body += `Typical per-run noise (median variance): ±${noise.toFixed(1)}%. Deltas within noise overlap and read as unchanged.\n\n`;
     }
   } else {
     body += `**${totalBenchmarks}** benchmarks (no same-runner \`main\` build to compare)\n\n`;
@@ -257,7 +221,7 @@ function buildBenchmarkComparison(options) {
     body += options.profileDiff + '\n\n';
   }
 
-  body += hasAnyMain
+  body += hasMain
     ? `<sub>Measured on ${runnerLabel}. Each PR run also builds the \`main\` base and benchmarks it back-to-back on the same runner after a warm-up discard, so the ranges compare two runs measured under the same conditions; overlapping min/max ranges are treated as unchanged noise. Percentage deltas are secondary context. See docs/adr/0076.</sub>`
     : `<sub>Measured on ${runnerLabel}. No \`main\` build was available to compare against, so these are raw PR-run numbers. See docs/adr/0076.</sub>`;
 

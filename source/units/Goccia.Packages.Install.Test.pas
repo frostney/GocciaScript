@@ -379,12 +379,12 @@ var
   Lock: TGocciaLockfile;
   Pin: string;
 begin
-  WriteFile('goccia.json', '{' + #10 + '  "mode": "bytecode"' + #10 + '}' +
+  WriteFile('goccia.json', '{' + #10 + '  "timeout": "5s"' + #10 + '}' +
     #10);
   Expect<string>(Run(AddRequest('raylib',
     KEY_V1 + '/bindings/raylib.ts'), TGocciaCapabilities.None)).ToBe('');
   Expect<string>(ReadFile('goccia.json')).ToBe('{' + #10 +
-    '  "mode": "bytecode",' + #10 + '  "imports": {' + #10 +
+    '  "timeout": "5s",' + #10 + '  "imports": {' + #10 +
     '    "raylib": "' + KEY_V1 + '/bindings/raylib.ts"' + #10 + '  }' + #10 +
     '}' + #10);
   Lock := LoadLockfile(Path('goccia.lock.json'));

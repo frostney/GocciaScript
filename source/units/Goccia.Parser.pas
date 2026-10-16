@@ -126,6 +126,14 @@ type
     FStrictModeActive: Boolean;
     FStrictModeSourceActive: Boolean;
     FAllowInExpression: Boolean;
+    // How many conditional consequents (`c ? HERE : alt`) the AssignmentExpression
+    // being parsed sits in, counting through the productions that continue it:
+    // a conditional's alternate, an arrow's concise body and an assignment's
+    // right-hand side. Every other AssignmentExpression starts again at 0. While
+    // it is non-zero an arrow head followed by `: Type =>` is only an arrow with
+    // a return type if enough ':' follow its body to close those consequents
+    // (see ReturnTypedArrowClosesConsequents).
+    FConditionalConsequentDepth: Integer;
     FParenthesizedExpressionDepth: Integer;
     // ADR 0134 static detection: what the function being parsed contains
     // so far (TGocciaDirectEvalUsage).
@@ -224,6 +232,9 @@ type
     function ConsumeVarBindingName(const AMessage,
       ASuggestion: string): TGocciaToken;
     function IsArrowFunction: Boolean;
+    function ReturnTypedArrowClosesConsequents(
+      const ATypeStart, ATypeEnd: Integer): Boolean;
+    procedure SkipAssignmentExpressionForProbe;
     function ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ConvertBigIntLiteralName(const ALexeme: string): string;
@@ -350,6 +361,7 @@ type
     function ObjectLiteral: TGocciaExpression;
     function ArrowFunction(const AIsAsync: Boolean = False): TGocciaExpression;
     function Assignment: TGocciaExpression;
+    function AssignmentInheritingConsequentDepth: TGocciaExpression;
     function AssignmentAllowIn: TGocciaExpression;
     function AssignmentNoIn: TGocciaExpression;
     function ExpressionAllowIn: TGocciaExpression;
@@ -412,7 +424,6 @@ type
     function Parse: TGocciaProgram;
     function ParseUnchecked: TGocciaProgram;
     function ParseWithPrivateNames(const ADeclaredNames: TStrings): TGocciaProgram;
-    function ParseExpressionWithPrivateNames(const ADeclaredNames: TStrings): TGocciaExpression;
     function ParseExpressionUnchecked: TGocciaExpression;
     function Expression: TGocciaExpression;
     function AtEnd: Boolean;
@@ -620,6 +631,7 @@ begin
   FActiveIterationLabels := TUnicodeStringList.Create;
   FDirectLabelStart := -1;
   FAllowInExpression := True;
+  FConditionalConsequentDepth := 0;
 end;
 
 constructor TGocciaParser.CreateFromLexer(const ALexer: TGocciaLexer;
@@ -641,6 +653,7 @@ begin
   FActiveIterationLabels := TUnicodeStringList.Create;
   FDirectLabelStart := -1;
   FAllowInExpression := True;
+  FConditionalConsequentDepth := 0;
 end;
 
 function TGocciaParser.SourceSpanAtPosition(const ALine,
@@ -984,23 +997,6 @@ end;
 function TGocciaParser.GetWarning(const AIndex: Integer): TGocciaParserWarning;
 begin
   Result := FWarnings[AIndex];
-end;
-
-function TGocciaParser.ParseExpressionWithPrivateNames(const ADeclaredNames: TStrings): TGocciaExpression;
-var
-  I: Integer;
-begin
-  PushPrivateClassContext;
-  try
-    if Assigned(ADeclaredNames) then
-      for I := 0 to ADeclaredNames.Count - 1 do
-        DeclarePrivateName(ADeclaredNames[I]);
-
-    Result := Expression;
-    ValidateCurrentPrivateClassContext;
-  finally
-    PopPrivateClassContext;
-  end;
 end;
 
 function TGocciaParser.ParseWithPrivateNames(const ADeclaredNames: TStrings): TGocciaProgram;
@@ -1752,6 +1748,8 @@ var
   NumberToken, QuestionToken: TGocciaToken;
   Line, Column: Integer;
   MatchedQuestion: Boolean;
+  SavedAllowInExpression: Boolean;
+  SavedConsequentDepth: Integer;
 begin
   Result := LogicalOr;
 
@@ -1764,7 +1762,20 @@ begin
       Line := Previous.Line;
       Column := Previous.Column;
       Condition := Result;
-      Consequent := AssignmentAllowIn;
+      // ConditionalExpression : ShortCircuitExpression ? AssignmentExpression[+In]
+      //   : AssignmentExpression. The ':' belongs to this conditional, so inside
+      // the consequent a `(x) : T =>` head is only a return-typed arrow when its
+      // body is followed by that ':' (FConditionalConsequentDepth).
+      SavedAllowInExpression := FAllowInExpression;
+      SavedConsequentDepth := FConditionalConsequentDepth;
+      FAllowInExpression := True;
+      FConditionalConsequentDepth := SavedConsequentDepth + 1;
+      try
+        Consequent := AssignmentInheritingConsequentDepth;
+      finally
+        FConditionalConsequentDepth := SavedConsequentDepth;
+        FAllowInExpression := SavedAllowInExpression;
+      end;
     end
     else
     begin
@@ -1783,7 +1794,9 @@ begin
     end;
     Consume(gttColon, 'Expected ":" in conditional expression',
       SSuggestTernaryColon);
-    Alternate := Assignment;   // ECMAScript spec: AssignmentExpression
+    // ECMAScript spec: AssignmentExpression, which still closes whatever
+    // consequents enclose this conditional.
+    Alternate := AssignmentInheritingConsequentDepth;
     Result := TGocciaConditionalExpression.Create(Condition, Consequent,
       Alternate, SourceSpanAtPosition(Line, Column));
   end;
@@ -3004,7 +3017,7 @@ begin
             if Match(gttLeftBrace) then
               ArrowBody := ParseFunctionBodyBlock
             else
-              ArrowBody := Assignment;
+              ArrowBody := AssignmentInheritingConsequentDepth;
           finally
             ArrowDirectEvalUsage := LeaveDirectEvalScope(OuterDirectEvalUsage);
             FInGeneratorFunction := SavedInGeneratorFunction;
@@ -3582,7 +3595,7 @@ begin
       RestPattern, HasRestWildcard, ExpressionNode.Span));
   end;
 
-  Result := TGocciaValueMatchPattern.Create(ExpressionNode, False,
+  Result := TGocciaValueMatchPattern.Create(ExpressionNode,
     ExpressionNode.Span);
 end;
 
@@ -3689,7 +3702,7 @@ begin
     else
       Pattern := TGocciaValueMatchPattern.Create(
         TGocciaIdentifierExpression.Create(Key, Previous.Span),
-        False, Previous.Span);
+        Previous.Span);
 
     Properties.Add(TGocciaObjectMatchProperty.Create(Key, Pattern, IsComputed,
       KeyExpression));
@@ -4720,7 +4733,7 @@ begin
       if Match(gttLeftBrace) then
         Body := ParseFunctionBodyBlock
       else
-        Body := Assignment;
+        Body := AssignmentInheritingConsequentDepth;
       if HasUseStrictDirective(Body) then
         ValidateParameterEarlyErrors(Parameters, Line, Column, True,
           ParametersParsedInAwaitContext, ParametersParsedInYieldContext,
@@ -4743,7 +4756,28 @@ begin
   Result := ArrowFn;
 end;
 
+// An AssignmentExpression reached from anywhere other than a conditional
+// branch, an arrow's concise body or an assignment's right-hand side — an
+// argument, an element, a parenthesized expression, an initializer — is not
+// closed by any enclosing conditional's ':', so it parses with
+// FConditionalConsequentDepth back at 0. The common case is already 0 and
+// skips the save and restore.
 function TGocciaParser.Assignment: TGocciaExpression;
+var
+  SavedConsequentDepth: Integer;
+begin
+  SavedConsequentDepth := FConditionalConsequentDepth;
+  if SavedConsequentDepth = 0 then
+    Exit(AssignmentInheritingConsequentDepth);
+  FConditionalConsequentDepth := 0;
+  try
+    Result := AssignmentInheritingConsequentDepth;
+  finally
+    FConditionalConsequentDepth := SavedConsequentDepth;
+  end;
+end;
+
+function TGocciaParser.AssignmentInheritingConsequentDepth: TGocciaExpression;
 var
   Left, Right: TGocciaExpression;
   Line, Column: Integer;
@@ -4787,7 +4821,7 @@ begin
         if Match(gttLeftBrace) then
           ArrowBody := ParseFunctionBodyBlock
         else
-          ArrowBody := Assignment;
+          ArrowBody := AssignmentInheritingConsequentDepth;
       finally
         ArrowDirectEvalUsage := LeaveDirectEvalScope(OuterDirectEvalUsage);
         LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
@@ -4817,7 +4851,7 @@ begin
     Operator := OperatorToken.TokenType;
     Line := OperatorToken.Line;
     Column := OperatorToken.Column;
-    Right := Assignment;
+    Right := AssignmentInheritingConsequentDepth;
 
     // Check for destructuring assignment
     if (Operator = gttAssign) and IsAssignmentPattern(Left) then
@@ -8471,6 +8505,8 @@ var
   ParenCount: Integer;
   CurrentType: TGocciaTokenType;
   LexError: Boolean;
+  HasReturnType: Boolean;
+  TypeStart, TypeEnd: Integer;
 begin
   // Probe the parenthesized group for an arrow, then rewind the parser cursor.
   // The tokens scanned here are kept for the real parse to reuse instead of
@@ -8483,6 +8519,9 @@ begin
     SavedLexer := FLexer.CreateCheckpoint;
   Result := False;
   LexError := False;
+  HasReturnType := False;
+  TypeStart := 0;
+  TypeEnd := 0;
 
   try
     try
@@ -8496,9 +8535,14 @@ begin
         if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
         begin
           Advance;
+          TypeStart := FCurrent;
           CollectTypeAnnotation(ARROW_RETURN_TYPE_TERMINATORS);
+          TypeEnd := FCurrent;
+          HasReturnType := True;
         end;
         Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
+        if Result and HasReturnType and (FConditionalConsequentDepth > 0) then
+          Result := ReturnTypedArrowClosesConsequents(TypeStart, TypeEnd);
         Exit;
       end;
 
@@ -8576,10 +8620,15 @@ begin
       if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
       begin
         Advance;
+        TypeStart := FCurrent;
         CollectTypeAnnotation(ARROW_RETURN_TYPE_TERMINATORS);
+        TypeEnd := FCurrent;
+        HasReturnType := True;
       end;
 
       Result := CheckWithLexicalGoal(gttArrow, glgInputElementDiv);
+      if Result and HasReturnType and (FConditionalConsequentDepth > 0) then
+        Result := ReturnTypedArrowClosesConsequents(TypeStart, TypeEnd);
     except
       on E: TGocciaLexerError do
       begin
@@ -8596,6 +8645,157 @@ begin
     if Assigned(FLexer) and
       (LexError or FLexer.HasGoalSensitiveTokenSince(SavedLexer.TokenCount)) then
       FLexer.RestoreCheckpoint(SavedLexer);
+  end;
+end;
+
+// Inside a conditional's consequent, `(x) : y => z` reads two ways: an arrow
+// with return type `y`, or the parenthesized consequent `(x)` followed by the
+// conditional's own ':' and an alternate arrow `y => z`. ECMAScript has no
+// return types, so `c ? (l) => ({ a: 1 }) : (l) => 2` (issue #1533) must take
+// the second reading for the group `({ a: 1 })`.
+//
+// TypeScript's parser settles it in parseParenthesizedArrowFunctionExpression:
+// with allowReturnTypeInArrowFunction false — set for a conditional's
+// consequent and carried through its alternate, arrow bodies and assignment
+// right-hand sides — it parses the return-typed arrow and its body, and keeps
+// it only if a ':' follows. This mirrors that rule, scanning tokens instead of
+// parsing, and extends it to nested consequents: the arrow reading needs one
+// ':' for every consequent it sits in, the parenthesized reading one fewer. So
+// with the cursor on the candidate's '=>', the arrow wins only if its body is
+// followed by FConditionalConsequentDepth ':'-led branches. That keeps
+// `a ? b ? c => ({ k: 1 }) : d => e : f` valid JavaScript, which TypeScript
+// itself rejects.
+//
+// TypeScript also parses the return type exactly, while the probe collects it
+// loosely up to the first '=>'. In `a ? (x) => ({}) : b ? (y) => 1 : 2` that
+// "type" is `b ? (y)`: the alternate's own conditional. A '?' or ':' outside
+// any bracket of a real type only comes from a conditional type, which pairs
+// them, so a type whose top-level '?' and ':' do not pair up is the
+// conditional's alternate and the arrow reading is rejected.
+function TGocciaParser.ReturnTypedArrowClosesConsequents(
+  const ATypeStart, ATypeEnd: Integer): Boolean;
+var
+  I, Depth, Questions, Colons: Integer;
+begin
+  Depth := 0;
+  Questions := 0;
+  Colons := 0;
+  for I := ATypeStart to ATypeEnd - 1 do
+    case FTokens[I].TokenType of
+      gttLeftParen, gttLeftBracket, gttLeftBrace:
+        Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace:
+        Dec(Depth);
+      gttQuestion:
+        if Depth = 0 then
+          Inc(Questions);
+      gttColon:
+        if Depth = 0 then
+          Inc(Colons);
+    end;
+  if Questions <> Colons then
+    Exit(False);
+
+  Advance; // '=>'
+  SkipAssignmentExpressionForProbe; // the arrow's body
+  for I := 1 to FConditionalConsequentDepth do
+  begin
+    if not CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
+      Exit(False);
+    if I < FConditionalConsequentDepth then
+    begin
+      Advance; // ':'
+      SkipAssignmentExpressionForProbe; // that conditional's alternate
+    end;
+  end;
+  Result := True;
+end;
+
+// Skips one AssignmentExpression for a speculative probe, stopping before the
+// first depth-0 token that ends it: ',' ';' an unbalanced closer, a ':' with no
+// '?' of its own, or — after a complete operand — a token on a new line that
+// cannot continue the expression (the automatic semicolon insertion boundary).
+// A block arrow body is a brace group, so `=> { ... }` skips whole too.
+procedure TGocciaParser.SkipAssignmentExpressionForProbe;
+var
+  Depth, QuestionDepth: Integer;
+  NeedsOperand: Boolean;
+  Token: TGocciaToken;
+  CurrentType: TGocciaTokenType;
+
+  // Whether a token can follow a complete operand within the same expression:
+  // a binary, assignment or conditional operator, a call, member access,
+  // tagged template, or a TypeScript `as` / `satisfies`.
+  function ContinuesExpression(const AToken: TGocciaToken): Boolean;
+  begin
+    case AToken.TokenType of
+      gttNot, gttBitwiseNot, gttTypeof, gttVoid, gttDelete, gttNew:
+        Result := False;
+      gttLeftParen, gttLeftBracket, gttDot, gttOptionalChaining,
+      gttTemplate, gttTemplateHead, gttAs:
+        Result := True;
+      gttIdentifier:
+        Result := AToken.Lexeme = KEYWORD_SATISFIES;
+    else
+      Result := TokenRequiresFollowingOperand(AToken.TokenType);
+    end;
+  end;
+
+begin
+  Depth := 0;
+  QuestionDepth := 0;
+  NeedsOperand := True;
+  while True do
+  begin
+    if NeedsOperand then
+      Token := PeekWithLexicalGoal(glgInputElementRegExp)
+    else
+      Token := PeekWithLexicalGoal(glgInputElementDiv);
+    CurrentType := Token.TokenType;
+    if CurrentType = gttEOF then
+      Exit;
+
+    if Depth = 0 then
+    begin
+      case CurrentType of
+        gttComma, gttSemicolon, gttRightParen, gttRightBracket, gttRightBrace:
+          Exit;
+        gttQuestion:
+          Inc(QuestionDepth);
+        gttColon:
+          begin
+            if QuestionDepth = 0 then
+              Exit;
+            Dec(QuestionDepth);
+          end;
+      end;
+      if not NeedsOperand and (Token.Line > Previous.Line) and
+         not ContinuesExpression(Token) then
+        Exit;
+    end;
+
+    if CurrentType in [gttTemplateHead, gttTemplate] then
+    begin
+      SkipTemplateLiteral;
+      NeedsOperand := False;
+      Continue;
+    end;
+
+    case CurrentType of
+      gttLeftParen, gttLeftBracket, gttLeftBrace:
+        begin
+          Inc(Depth);
+          NeedsOperand := True;
+        end;
+      gttRightParen, gttRightBracket, gttRightBrace:
+        begin
+          Dec(Depth);
+          NeedsOperand := False;
+        end;
+    else
+      NeedsOperand := TokenRequiresFollowingOperand(CurrentType);
+    end;
+    Advance;
   end;
 end;
 

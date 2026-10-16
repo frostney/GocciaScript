@@ -1,4 +1,4 @@
-# 0138 - A reload links its new version into the cached module record
+# 0139 - A reload links its new version into the cached module record
 
 **Date:** 2026-10-14
 **Area:** `modules`, `gc`
@@ -75,8 +75,8 @@ its source module's roots mark what it forwards.
 - The engine keeps every version's compiled code for its lifetime, as it does
   for eval and `Function` code (ADR 0134), so each reload still adds that code
   to the engine's memory.
-- `Goccia.Modules.Reload.Test` reloads modules repeatedly in bytecode mode and
-  collects garbage after every reload. It covers importers, old closures and
+- `Goccia.Modules.Reload.Test` reloads modules repeatedly and collects
+  garbage after every reload. It covers importers, old closures and
   class instances, changed exports, a module linked during a reload that
   imports the reloading module, a reload that fails to link, JSON modules, and
   the live object count across 200 reloads.

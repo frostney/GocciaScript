@@ -18,7 +18,6 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.GarbageCollector,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -55,13 +54,12 @@ type
       out ALastModified: TDateTime): Boolean; override;
   end;
 
-  { A bytecode engine over a module loader whose in-memory modules a test
+  { An engine over a module loader whose in-memory modules a test
     rewrites. Each Define stamps its text newer than everything defined
     before it, so the next Load of a module already loaded reloads it. }
   TModuleReloadFixture = class
   private
     FEngine: TGocciaEngine;
-    FExecutor: TGocciaBytecodeExecutor;
     FLoader: TGocciaModuleLoader;
     FProvider: TMemoryModuleContentProvider;
     FResolver: TInMemoryModuleResolver;
@@ -156,11 +154,9 @@ begin
   FResolver := TInMemoryModuleResolver.Create;
   FSource := TStringList.Create;
   FSource.Text := '1;';
-  FExecutor := TGocciaBytecodeExecutor.Create;
   FLoader := TGocciaModuleLoader.Create(RELOAD_ENTRY_PATH, FResolver,
     FProvider);
-  FEngine := TGocciaEngine.Create(RELOAD_ENTRY_PATH, FSource, FLoader,
-    FExecutor);
+  FEngine := TGocciaEngine.Create(RELOAD_ENTRY_PATH, FSource, FLoader);
   FEngine.Compatibility := [cfFunction];
 end;
 
@@ -168,7 +164,6 @@ destructor TModuleReloadFixture.Destroy;
 begin
   FEngine.Free;
   FLoader.Free;
-  FExecutor.Free;
   FSource.Free;
   FResolver.Free;
   FProvider.Free;

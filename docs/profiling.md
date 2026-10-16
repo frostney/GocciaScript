@@ -15,7 +15,7 @@
 
 The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
 
-Profiling implies `--mode=bytecode` automatically, as does `--coverage` (see [Testing — Coverage](testing.md#coverage)). When profiling is off, production dispatch does not record opcodes; turning `--profile` on selects the instrumented loop that still carries the per-instruction profiler guard.
+When profiling is off, production dispatch does not record opcodes; turning `--profile` on selects the instrumented loop that still carries the per-instruction profiler guard.
 
 ## CLI Usage
 
@@ -185,7 +185,7 @@ Run both on the same production binary for the full picture:
 ./build/GocciaRunner script.js --profile=all
 
 # sample run (no --profile, to avoid measuring profiling overhead)
-./build/GocciaRunner script.js --mode=bytecode &
+./build/GocciaRunner script.js &
 PID=$!
 sleep 0.2
 sample "$PID" 10 1 -file sample-output.txt -mayDie
@@ -216,4 +216,4 @@ The profiler's allocation count per function tells you *which JS function* drive
 
 The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag. The instance is per-thread, so parallel workers never share profiler state. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack for correct self-time calculation across recursive calls. Allocation tracking hooks into `TGocciaValue.AfterConstruction` via `GThreadPolls.ProfilingAllocations`, a flag in the per-thread poll word ([Thread Variables on Hot Paths](core-patterns.md#thread-variables-on-hot-paths)), attributing each allocation to the function on top of the profiler's timing stack.
 
-When profiling is disabled, the remaining cost is small but not zero: each allocation reads the per-thread poll word `GThreadPolls.Any`, which it reads anyway for the timeout and the instruction limit, and each native VM entry (`ExecuteClosureRegistersInternal`) saves that flag, sets it from the VM's function-profiling state, and restores it on exit. A callback-heavy A/B run (6M `map`/`reduce` callbacks in bytecode mode) put that save/restore within run-to-run noise.
+When profiling is disabled, the remaining cost is small but not zero: each allocation reads the per-thread poll word `GThreadPolls.Any`, which it reads anyway for the timeout and the instruction limit, and each native VM entry (`ExecuteClosureRegistersInternal`) saves that flag, sets it from the VM's function-profiling state, and restores it on exit. A callback-heavy A/B run (6M `map`/`reduce` callbacks) put that save/restore within run-to-run noise.

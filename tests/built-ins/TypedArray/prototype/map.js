@@ -87,6 +87,26 @@ describe("TypedArray.prototype.map", () => {
     expect(mapped[1]).toBe(2.5);
   });
 
+  test("throws when species returns a view of the source's own immutable buffer", () => {
+    const buffer = new Uint8Array([1, 2]).buffer.transferToImmutable();
+    const ta = new Uint8Array(buffer);
+    ta.constructor = {
+      [Symbol.species]: class {
+        constructor(length) {
+          return new Uint8Array(buffer, 0, length);
+        }
+      },
+    };
+    let calls = 0;
+
+    expect(() => ta.map((x) => {
+      calls++;
+      return x + 1;
+    })).toThrow(TypeError);
+    expect(calls).toBe(0);
+    expect(Array.from(ta)).toEqual([1, 2]);
+  });
+
   test.each([BigInt64Array, BigUint64Array])("%s continues after callback detaches buffer", (TA) => {
     const ta = new TA(2);
     const buffer = ta.buffer;

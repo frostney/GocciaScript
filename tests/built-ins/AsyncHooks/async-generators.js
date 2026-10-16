@@ -5,11 +5,10 @@ features: [AsyncLocalStorage, async-generators]
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-// Async generators drive their bodies through per-mode request queues that the
+// Async generators drive their bodies through a request queue that the
 // async-context seams do not touch directly. Every expectation here was probed
-// against Node v24.0.1 and holds in both executors: the body observes the
-// context of whichever call resumed it, and the surrounding frames are
-// unaffected.
+// against Node v24.0.1: the body observes the context of whichever call
+// resumed it, and the surrounding frames are unaffected.
 const als = new AsyncLocalStorage();
 
 describe("AsyncLocalStorage across async generators", () => {

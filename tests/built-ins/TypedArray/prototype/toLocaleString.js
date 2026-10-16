@@ -41,6 +41,34 @@ describe("%TypedArray%.prototype.toLocaleString", () => {
   });
 });
 
+describe("%TypedArray%.prototype.toLocaleString — collection while reading toLocaleString", () => {
+  // Each element is a fresh value held only by the builtin while its
+  // toLocaleString is read and called. A getter that collects must not free
+  // it before the method receives it as this.
+  test("keeps each element alive across a collecting toLocaleString getter", () => {
+    const original = Object.getOwnPropertyDescriptor(Number.prototype, "toLocaleString");
+
+    try {
+      Object.defineProperty(Number.prototype, "toLocaleString", {
+        configurable: true,
+        get() {
+          Goccia.gc();
+          Array.from({ length: 200 }, (_, i) => ({ i, s: "x" + i, a: [i] }));
+          return {
+            method() {
+              return "n" + this;
+            },
+          }.method;
+        },
+      });
+
+      expect(new Float64Array([1.5, 2.25, -3.125]).toLocaleString()).toBe("n1.5,n2.25,n-3.125");
+    } finally {
+      Object.defineProperty(Number.prototype, "toLocaleString", original);
+    }
+  });
+});
+
 describe.runIf(isIntl)("%TypedArray%.prototype.toLocaleString Intl elements", () => {
   test("formats number elements through Number.prototype.toLocaleString", () => {
     const options = { minimumFractionDigits: 3 };

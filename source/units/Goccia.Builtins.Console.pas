@@ -21,6 +21,9 @@ type
 
   TGocciaConsole = class(TGocciaBuiltin)
   private
+    { Label tables for console.time and console.count. Nothing but these
+      fields references them, so MarkBuiltinReferences marks them for the
+      console's lifetime (issue #1655). }
     FTimers: TGocciaObjectValue;
     FCounters: TGocciaObjectValue;
     FGroupDepth: Integer;
@@ -41,6 +44,7 @@ type
     function GetLogCallback: TGocciaConsoleOutputCallback;
     procedure SetLogCallback(const AValue: TGocciaConsoleOutputCallback);
   protected
+    procedure MarkBuiltinReferences; override;
   published
     function ConsoleLog(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ConsoleWarn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -175,6 +179,15 @@ end;
 procedure TGocciaConsole.SetLogCallback(const AValue: TGocciaConsoleOutputCallback);
 begin
   FLogCallback := AValue;
+end;
+
+procedure TGocciaConsole.MarkBuiltinReferences;
+begin
+  inherited;
+  if Assigned(FTimers) then
+    FTimers.MarkReferences;
+  if Assigned(FCounters) then
+    FCounters.MarkReferences;
 end;
 
 function TGocciaConsole.FormatArgs(const AArgs: TGocciaArgumentsCollection): string;

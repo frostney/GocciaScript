@@ -95,4 +95,4 @@ agent and never calls `Execute`.
 
 ## Related
 
-- [Interpreter — Synchronous Microtask Queue](../interpreter.md#synchronous-microtask-queue)
+- [Architecture — Synchronous Microtask Queue](../architecture.md#synchronous-microtask-queue)

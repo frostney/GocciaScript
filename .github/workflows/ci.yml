@@ -419,20 +419,13 @@ jobs:
         if: runner.os == 'Windows' && matrix.target != 'i386-win32'
         run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
 
-      - name: Run all JavaScript tests (interpreted)
-        run: ./build/GocciaTestRunner -P tests --mode=interpreted --silent --no-progress --output=test-results-interpreted.json
-
-      - name: Run all JavaScript tests (bytecode)
-        run: ./build/GocciaTestRunner -P tests --mode=bytecode --silent --no-progress --output=test-results-bytecode.json
+      - name: Run all JavaScript tests
+        run: ./build/GocciaTestRunner -P tests --silent --no-progress --output=test-results.json
 
       - name: Check GocciaTestRunner CLI behaviour
         run: |
-          grep -q '"mode": "interpreted"' test-results-interpreted.json
-          grep -q '"totalFiles":' test-results-interpreted.json
-          grep -q '"jobCount":' test-results-interpreted.json
-          grep -q '"mode": "bytecode"' test-results-bytecode.json
-          grep -q '"totalFiles":' test-results-bytecode.json
-          grep -q '"jobCount":' test-results-bytecode.json
+          grep -q '"totalFiles":' test-results.json
+          grep -q '"jobCount":' test-results.json
 
       - name: Check GocciaTestRunner coverage CLI
         run: |
@@ -458,9 +451,6 @@ jobs:
           detail_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --coverage 2>&1)"
           detail_re='[0-9]+x \|'
           [[ "$detail_output" =~ $detail_re ]]
-
-          bytecode_cov="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=bytecode --coverage 2>&1)"
-          [[ "$bytecode_cov" == *'Coverage Summary:'* ]]
 
           ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
           grep -q '^BRDA:' branch-cov.lcov
@@ -727,7 +717,6 @@ jobs:
 
           ./build/GocciaTest262Runner \
             --suite-dir=test262-suite \
-            --mode=bytecode \
             --jobs=4 \
             --timeout=20s \
             --shard-index=${{ strategy.job-index }} \
@@ -1233,40 +1222,16 @@ jobs:
         include:
           - target: aarch64-darwin
             runner: macos-latest
-            mode: interpreted
-          - target: aarch64-darwin
-            runner: macos-latest
-            mode: bytecode
           - target: x86_64-darwin
             runner: macos-15-intel
-            mode: interpreted
-          - target: x86_64-darwin
-            runner: macos-15-intel
-            mode: bytecode
           - target: x86_64-linux
             runner: ubuntu-latest
-            mode: interpreted
-          - target: x86_64-linux
-            runner: ubuntu-latest
-            mode: bytecode
           - target: aarch64-linux
             runner: ubuntu-24.04-arm
-            mode: interpreted
-          - target: aarch64-linux
-            runner: ubuntu-24.04-arm
-            mode: bytecode
           - target: x86_64-win64
             runner: windows-latest
-            mode: interpreted
-          - target: x86_64-win64
-            runner: windows-latest
-            mode: bytecode
           - target: i386-win32
             runner: windows-latest
-            mode: interpreted
-          - target: i386-win32
-            runner: windows-latest
-            mode: bytecode
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -1292,7 +1257,7 @@ jobs:
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: ./build/GocciaBenchmarkRunner benchmarks --mode=${{ matrix.mode }} --no-progress
+        run: ./build/GocciaBenchmarkRunner benchmarks --no-progress
 
       # main/x86_64-linux emits JSON so the next step can validate the benchmark
       # report shape. PR comparison no longer reads a cached baseline from here —
@@ -1302,19 +1267,19 @@ jobs:
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: ./build/GocciaBenchmarkRunner benchmarks --mode=${{ matrix.mode }} --no-progress --format=console --format=json --output=benchmark-${{ matrix.mode }}-results.json
+        run: ./build/GocciaBenchmarkRunner benchmarks --no-progress --format=console --format=json --output=benchmark-results.json
 
       - name: Check benchmark CLI behaviour
         if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
         run: |
-          grep -q '"files": \[' benchmark-${{ matrix.mode }}-results.json
-          grep -q '"totalBenchmarks":' benchmark-${{ matrix.mode }}-results.json
-          grep -q '"jobCount":' benchmark-${{ matrix.mode }}-results.json
+          grep -q '"files": \[' benchmark-results.json
+          grep -q '"totalBenchmarks":' benchmark-results.json
+          grep -q '"jobCount":' benchmark-results.json
           python3 - <<'PY'
           import json
           import sys
 
-          path = "benchmark-${{ matrix.mode }}-results.json"
+          path = "benchmark-results.json"
           with open(path, encoding="utf-8") as fh:
             report = json.load(fh)
 
@@ -1337,12 +1302,12 @@ jobs:
           PY
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
+        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
         with:
           no-cache: true
 
       - name: Capture deterministic profile baseline
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode'
+        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux'
         run: |
           set -euo pipefail
           mkdir -p profile-baseline
@@ -1351,7 +1316,6 @@ jobs:
             out="profile-baseline/${rel%.*}.json"
             mkdir -p "$(dirname "$out")"
             ./build/GocciaBenchmarkRunner "$bench" \
-              --mode=bytecode \
               --profile-deterministic \
               --profile=all \
               --profile-output="$out" \
@@ -1361,7 +1325,7 @@ jobs:
           done < <(find benchmarks -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' -o -name '*.mjs' \) ! -path '*/helpers/*' | sort)
 
       - name: Aggregate benchmark profile report
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode' && hashFiles('profile-baseline/**') != ''
+        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && hashFiles('profile-baseline/**') != ''
         run: |
           bun scripts/aggregate_benchmark_profiles.ts \
             --profile-dir profile-baseline \
@@ -1369,7 +1333,7 @@ jobs:
             --markdown-output benchmark-profile-aggregate.md
 
       - name: Upload benchmark profile
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode' && hashFiles('benchmark-profile-aggregate.json') != '' && hashFiles('profile-baseline/**') != ''
+        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && hashFiles('benchmark-profile-aggregate.json') != '' && hashFiles('profile-baseline/**') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: benchmark-profile
@@ -1380,7 +1344,7 @@ jobs:
             profile-baseline/
 
       - name: Publish benchmark profile reports
-        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && matrix.mode == 'bytecode' && hashFiles('benchmark-profile-aggregate.json') != '' && hashFiles('profile-baseline/**') != ''
+        if: github.ref == 'refs/heads/main' && matrix.target == 'x86_64-linux' && hashFiles('benchmark-profile-aggregate.json') != '' && hashFiles('profile-baseline/**') != ''
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           BENCHMARK_PROFILE_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
@@ -1492,6 +1456,13 @@ jobs:
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
 
+      # test-cli-permissions.ts fetches a loopback name only the hosts file
+      # lists, which the runner image does not have, to show fetch resolves
+      # through the system resolver.
+      - name: Add a hosts-file-only name
+        if: runner.os == 'Linux'
+        run: echo "127.0.0.2 goccia-hosts-file.test" | sudo tee -a /etc/hosts
+
       - name: Check capability flags, limits, and permission defaults
         run: bun run scripts/test-cli-permissions.ts
 
@@ -1506,13 +1477,6 @@ jobs:
 
       - name: Check differential suites against vitest and bun
         run: bun run scripts/test-cli-differential.ts
-
-      # The coverage steps above assert that a report is produced and has the
-      # right shape. This one asserts the counts themselves match between the
-      # interpreter and the bytecode VM, which is how an interpreter miscount
-      # that kept the percentages plausible was caught.
-      - name: Check coverage parity between execution modes
-        run: bun run scripts/test-cli-coverage-parity.ts
 
       - name: Check benchmark comparison logic
         run: bun run scripts/test-benchmark-compare.ts

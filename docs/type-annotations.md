@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Types as comments by default** — Supported annotations follow the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/) proposal's types-as-comments model and have no runtime effect
-- **Optional enforcement** — `--strict-types` checks supported annotations at runtime in both execution modes; it is a runtime contract, not a static structural checker such as `tsc`
+- **Optional enforcement** — `--strict-types` checks supported annotations at runtime; it is a runtime contract, not a static structural checker such as `tsc`
 - **Extension decides `<`** — A leading `<` is read as JSX or as a type parameter list by file extension, modeled on TypeScript with GocciaScript-specific extension rules (JSX is also recognized in `.js` and `.mjs`, and never in `.ts` or `.mts`)
 - **Restricted `!` productions** — Definite assignment and non-null assertions must sit on the same line as their operand, so ASI code keeps its usual meaning
 - **Bounded surface** — Namespaces, parameter properties, angle-bracket assertions, class-field definite assignment, and generic async arrows are deliberately unsupported
@@ -18,7 +18,7 @@ The annotation surface is part of GocciaScript's language profile; see
 
 GocciaScript implements the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/) proposal. Supported annotations follow its types-as-comments model and have no runtime effect by default. Raw type strings are preserved on AST nodes for potential future optimization.
 
-**GocciaScript runtime extension** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce supported annotations at runtime in both interpreter and bytecode modes. Annotated variables, function parameters, and literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. This optional runtime contract is not a replacement for a static structural checker such as `tsc`.
+**GocciaScript runtime extension** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce supported annotations at runtime. Annotated variables, function parameters, and literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. This optional runtime contract is not a replacement for a static structural checker such as `tsc`.
 
 An unannotated `let` takes an inferred type from the syntactic form of its initializer alone, and only from these forms:
 
@@ -130,6 +130,15 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
   ```
 
   Use a `.ts` or `.mts` source when an annotation needs the bare `<T>` form.
+
+## Arrow Return Types in Conditionals
+
+Inside a conditional's consequent, `(x) : y => z` reads two ways: an arrow with return type `y`, or the parenthesized expression `(x)`, the conditional's `:`, and an alternate arrow `y => z`. GocciaScript follows TypeScript's rule: there, the return-typed arrow is kept only when the `:` that closes the conditional follows its body. One `:` is needed for each consequent the arrow is nested in. Otherwise the group is a parenthesized expression, so plain JavaScript such as minified `c ? (l) => ({ a: 1 }) : (l) => 2` parses as written.
+
+```typescript
+const pick = c ? (x: number): number => x : (y: number) => -y; // return-typed arrow
+const make = c ? (l) => ({ a: 1 }) : (l) => 2;                 // `({ a: 1 })` is the body
+```
 
 ## Automatic Semicolon Insertion and Type Syntax
 

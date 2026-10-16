@@ -78,6 +78,7 @@ uses
   Goccia.DisposalTracker,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Scope.BindingMap,
   Goccia.ThreadCleanupRegistry,
@@ -187,31 +188,44 @@ procedure TAsyncDisposableStackDisposeJob.ScheduleAwait(
 var
   AwaitPromise: TGocciaPromiseValue;
   FulfillHandler, RejectHandler: TGocciaNativeFunctionValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  AwaitPromise := TGocciaPromiseValue.Create;
-  FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    AwaitFulfilled, '', 1);
-  RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    AwaitRejected, '', 1);
-  FulfillHandler.CapturedRoot := Self;
-  RejectHandler.CapturedRoot := Self;
+  // Resolving with a thenable reads its `then`, which can be a getter, and a
+  // rejected await drains the next disposer: both run guest code while the
+  // awaited value, the await promise and its handlers are held only here.
+  Roots.Initialize;
   try
-    if AValue is TGocciaPromiseValue then
-      AwaitPromise.SubscribeTo(TGocciaPromiseValue(AValue))
-    else
-      AwaitPromise.Resolve(AValue);
-    AwaitPromise.InvokeThen(FulfillHandler, RejectHandler);
-  except
-    on E: EGocciaBytecodeThrow do
-    begin
-      AddError(E.ThrownValue);
-      Drain;
+    Roots.Add(AValue);
+    AwaitPromise := TGocciaPromiseValue.Create;
+    Roots.Add(AwaitPromise);
+    FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      AwaitFulfilled, '', 1);
+    Roots.Add(FulfillHandler);
+    RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      AwaitRejected, '', 1);
+    Roots.Add(RejectHandler);
+    FulfillHandler.CapturedRoot := Self;
+    RejectHandler.CapturedRoot := Self;
+    try
+      if AValue is TGocciaPromiseValue then
+        AwaitPromise.SubscribeTo(TGocciaPromiseValue(AValue))
+      else
+        AwaitPromise.Resolve(AValue);
+      AwaitPromise.InvokeThen(FulfillHandler, RejectHandler);
+    except
+      on E: EGocciaBytecodeThrow do
+      begin
+        AddError(E.ThrownValue);
+        Drain;
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        AddError(E.Value);
+        Drain;
+      end;
     end;
-    on E: TGocciaThrowValue do
-    begin
-      AddError(E.Value);
-      Drain;
-    end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -682,27 +696,38 @@ var
   Job: TAsyncDisposableStackDisposeJob;
   Promise: TGocciaPromiseValue;
   Slot: PDisposableStackSlot;
+  Roots: TGocciaActiveRootFrame;
 begin
-  Promise := TGocciaPromiseValue.Create;
+  // Start runs disposers synchronously until the first one that has to be
+  // awaited. Until then the result promise and the job, which holds the
+  // errors collected so far, are referenced only from here.
+  Roots.Initialize;
   try
-    Slot := GetSlotForKind(AThisValue, True);
-    if Slot^.Disposed then
-    begin
-      Promise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
-      Exit(Promise);
-    end
-    else
-      Slot^.Disposed := True;
+    Promise := TGocciaPromiseValue.Create;
+    Roots.Add(Promise);
+    try
+      Slot := GetSlotForKind(AThisValue, True);
+      if Slot^.Disposed then
+      begin
+        Promise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+        Exit(Promise);
+      end
+      else
+        Slot^.Disposed := True;
 
-    Job := TAsyncDisposableStackDisposeJob.Create(Slot, Promise);
-    Job.Start;
-  except
-    on E: EGocciaBytecodeThrow do
-      Promise.Reject(E.ThrownValue);
-    on E: TGocciaThrowValue do
-      Promise.Reject(E.Value);
+      Job := TAsyncDisposableStackDisposeJob.Create(Slot, Promise);
+      Roots.Add(Job);
+      Job.Start;
+    except
+      on E: EGocciaBytecodeThrow do
+        Promise.Reject(E.ThrownValue);
+      on E: TGocciaThrowValue do
+        Promise.Reject(E.Value);
+    end;
+    Result := Promise;
+  finally
+    Roots.Clear;
   end;
-  Result := Promise;
 end;
 
 // TC39 Explicit Resource Management §3.5.3.7 AsyncDisposableStack.prototype.move()
