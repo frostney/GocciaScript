@@ -308,3 +308,42 @@ test("Symbol.replace and Symbol.match leave lastIndex at the last match end when
   expect(() => subject.match(matchRegex)).toThrow(Error);
   expect(matchRegex.lastIndex).toBe(2);
 });
+
+describe.runIf(typeof Goccia !== "undefined")("Symbol.replace across a collection", () => {
+  // Reuses the memory a wrongly collected object leaves behind.
+  const churn = () => Array.from({ length: 2000 }, (_, i) => [i, { i }]);
+
+  test("keeps capture strings while a later capture and groups collect", () => {
+    let calls = 0;
+    const match = {
+      length: 3,
+      0: "b",
+      index: 1,
+      1: { toString: () => ["c", "1"].join("") },
+      get 2() {
+        Goccia.gc();
+        churn();
+        return "c2";
+      },
+      get groups() {
+        Goccia.gc();
+        churn();
+        return undefined;
+      },
+    };
+    const protocol = {
+      flags: "",
+      lastIndex: 0,
+      exec() {
+        calls += 1;
+        return calls === 1 ? match : null;
+      },
+    };
+    const result = RegExp.prototype[Symbol.replace].call(
+      protocol,
+      "abc",
+      (matched, first, second) => `[${matched}|${first}|${second}]`,
+    );
+    expect(result).toBe("a[b|c1|c2]c");
+  });
+});
