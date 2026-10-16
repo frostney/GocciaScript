@@ -1287,6 +1287,10 @@ console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, B
       "dynamic.js":
         'var dynamicVar = 1;\nconst m = await import("./lib.js");\nconsole.log(m.v, typeof globalThis.dynamicVar, this === globalThis);\n',
       "lib.js": 'export const v = "lib";\n',
+      // A detected Module's top-level lexical declarations stay in the module
+      // scope, so one may share a global's name. CompileModule clears
+      // GlobalBackedTopLevel for it, which the host set for a Script entry.
+      "shadow-global.js": "export {};\nconst NaN = 1;\nconsole.log(NaN);\n",
       "meta.js": "console.log(typeof import.meta.url);\n",
       "with-module.js": "with ({}) {}\nexport {};\n",
       "with-script.js": "with ({}) {}\n",
@@ -1319,6 +1323,8 @@ console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, B
     expectLine("detected module entry in a cycle", run(RUNNER, ["cyc.js"]), "y");
     expectLine("detected module entry's function in a cycle",
       run(RUNNER, ["fcyc.js", "--compat-function"]), "yh");
+    expectLine("detected module may bind a global's name at top level",
+      run(RUNNER, ["shadow-global.js"]), "1");
     expectLine("entry without module syntax stays a Script",
       run(RUNNER, ["script.js", "--compat-var"]), "number true");
     expectLine("entry with only dynamic import() stays a Script",

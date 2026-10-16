@@ -490,7 +490,8 @@ type
       declarations on the global object, lexical declarations in its
       declarative record, so later programs on the engine see them. False by
       default, which keeps them in the program's own frame. The CLI hosts set
-      it to SourceType = stScript. }
+      it to SourceType <> stModule; CompileModule and Execute clear it for a
+      run whose goal settles on Module (ADR 0140). }
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     { How this engine loads its bootstrap shims; GetDateIntrinsic takes it. }
