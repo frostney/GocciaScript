@@ -5,7 +5,7 @@
 
 ## Executive Summary
 
-- **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaBytecodeExecutor`, the bytecode VM)
+- **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders; the engine compiles to bytecode and runs it on a VM of its own
 - **Sandboxing** — Fix what the engine may reach with an immutable [capability set](permissions.md) (`None` by default); choose runtime extensions explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
@@ -60,20 +60,20 @@ uses
   Classes,
 
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.Values.Primitives;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   ScriptResult: TGocciaScriptResult;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('session', Source, Executor);
+    Engine := TGocciaEngine.Create('session', Source);
     try
+      // Keep each execution's top-level bindings in the global scope
+      Engine.GlobalBackedTopLevel := True;
+
       // First execution — defines a variable
       Source.Text := 'const x = 42;';
       Engine.Execute;
@@ -86,31 +86,28 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
   end;
 end;
 ```
 
-The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. Variables, functions, and classes defined in previous executions remain available.
+The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. With `GlobalBackedTopLevel` set, variables, functions, and classes defined in previous executions remain available.
 
-### Engine Constructor and Executor Ownership
+### Engine Constructor
 
-Callers must pass an explicit executor — `TGocciaBytecodeExecutor` (in `Goccia.Executor.Bytecode`) for the bytecode VM. The engine does not own the executor; the caller frees it after the engine. `TGocciaRuntime`'s file/source convenience overloads handle this internally for embedders who want the default bytecode setup. The realm's global scope is `Engine.GlobalScope`. Every constructor also has an overload taking a `TGocciaCapabilities` that fixes what the engine may reach outside the process; the overloads without one use `TGocciaCapabilities.None`. See [Permissions](permissions.md). For `net`, `AllowsNetHost(host, port)` judges a URL before any lookup and `AllowsNetAddress(host, port, address)` judges the address the host resolved to. A private, loopback, or link-local address passes only when every layer names it — with the standalone `private` scope or an IP or CIDR scope covering it — so `TGocciaCapabilities.None.Allow(gcNet, 'private')` reaches local services and nothing public, while a host allow alone never reaches a name that resolves privately. Config trust is a CLI policy, not an engine one: nothing in the engine reads a `goccia.json` or a trust store. An embedder that honors project config files reads a file's permission request with `ReadConfigPermissionRequest` (in `Goccia.CLI.Permissions`, from the entries `CLI.ConfigFile.ParseConfigFile` returns) and decides for itself whether to grant it — for example by passing it to `ResolveCapabilities` with `AConfigGrantsAccepted` set to its own decision. `NormalizedPermissionBlock` and `PermissionBlockHash` give the same canonical block and SHA-256 the CLI trusts, if the host wants to keep its own record. Set `Engine.CapabilityProvenance` to say where the set came from in the `capabilities.effective` audit event. See [Permissions — Config trust](permissions.md#config-trust).
+The engine compiles everything it runs to bytecode and runs it on a VM it creates and frees itself, so there is nothing to create or free besides the engine. Settings that shape compilation are engine properties: `StrictTypes`, `Compatibility`, and `GlobalBackedTopLevel`, which binds a program's top-level declarations in the global scope the way a Script's are. It is `False` by default; the CLI hosts set it to `Engine.SourceType = stScript`, and `TGocciaRuntime`'s file/source overloads do the same when they run. The realm's global scope is `Engine.GlobalScope`. Every constructor also has an overload taking a `TGocciaCapabilities` that fixes what the engine may reach outside the process; the overloads without one use `TGocciaCapabilities.None`. See [Permissions](permissions.md). For `net`, `AllowsNetHost(host, port)` judges a URL before any lookup and `AllowsNetAddress(host, port, address)` judges the address the host resolved to. A private, loopback, or link-local address passes only when every layer names it — with the standalone `private` scope or an IP or CIDR scope covering it — so `TGocciaCapabilities.None.Allow(gcNet, 'private')` reaches local services and nothing public, while a host allow alone never reaches a name that resolves privately. Config trust is a CLI policy, not an engine one: nothing in the engine reads a `goccia.json` or a trust store. An embedder that honors project config files reads a file's permission request with `ReadConfigPermissionRequest` (in `Goccia.CLI.Permissions`, from the entries `CLI.ConfigFile.ParseConfigFile` returns) and decides for itself whether to grant it — for example by passing it to `ResolveCapabilities` with `AConfigGrantsAccepted` set to its own decision. `NormalizedPermissionBlock` and `PermissionBlockHash` give the same canonical block and SHA-256 the CLI trusts, if the host wants to keep its own record. Set `Engine.CapabilityProvenance` to say where the set came from in the `capabilities.effective` audit event. See [Permissions — Config trust](permissions.md#config-trust).
 
 ### Automatic Semicolon Insertion
 
 ASI is disabled by default. To enable ECMAScript-compliant automatic semicolon insertion (ES2026 §12.10), include `cfASI` in the engine compatibility set after creating the engine:
 
 ```pascal
-Executor := TGocciaBytecodeExecutor.Create;
+Engine := TGocciaEngine.Create('app.js', Source);
 try
-  Engine := TGocciaEngine.Create('app.js', Source, Executor);
   Engine.Compatibility := [cfASI];  // Semicolons are now optional per ES2026 rules
   Engine.Execute;
 finally
   Engine.Free;
-  Executor.Free;
 end;
 ```
 
@@ -231,7 +228,6 @@ For resolution logic outside that surface (URL imports, in-memory modules, or a 
 ```pascal
 uses
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.Modules.Resolver;
 
 type
@@ -249,19 +245,16 @@ end;
 var
   Resolver: TMyResolver;
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
 begin
   Resolver := TMyResolver.Create('/path/to/project');
-  Executor := TGocciaBytecodeExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('app.js', Source, Resolver, Executor);
+    Engine := TGocciaEngine.Create('app.js', Source, Resolver);
     try
       Engine.Execute;
     finally
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Resolver.Free;  // caller owns the resolver when injected
   end;
 end;
@@ -281,7 +274,6 @@ uses
   SysUtils,
 
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver;
@@ -329,20 +321,17 @@ end;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   ModuleLoader: TGocciaModuleLoader;
   Resolver: TMemoryResolver;
   Provider: TMemoryContentProvider;
 begin
   Resolver := TMemoryResolver.Create;
   Provider := TMemoryContentProvider.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   try
     ModuleLoader := TGocciaModuleLoader.Create('memory:/app.js', Resolver,
       Provider);
     try
-      Engine := TGocciaEngine.Create('memory:/app.js', Source,
-        ModuleLoader, Executor);
+      Engine := TGocciaEngine.Create('memory:/app.js', Source, ModuleLoader);
       try
         Engine.Execute;
       finally
@@ -352,7 +341,6 @@ begin
       ModuleLoader.Free;  // caller owns injected module loaders
     end;
   finally
-    Executor.Free;
     Provider.Free;  // caller owns injected providers
     Resolver.Free;
   end;
@@ -472,23 +460,18 @@ Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arr
 When you already have an engine, pass it to the runtime constructor:
 
 ```pascal
-Executor := TGocciaBytecodeExecutor.Create;
+Engine := TGocciaEngine.Create('app.js', Source);
+Runtime := TGocciaRuntime.Create(Engine);
 try
-  Engine := TGocciaEngine.Create('app.js', Source, Executor);
-  Runtime := TGocciaRuntime.Create(Engine);
-  try
-    ApplyLoaderRuntimeProfile(Runtime.Core);
-    Runtime.Execute;
-  finally
-    Runtime.Free;
-    Engine.Free;
-  end;
+  ApplyLoaderRuntimeProfile(Runtime.Core);
+  Runtime.Execute;
 finally
-  Executor.Free;
+  Runtime.Free;
+  Engine.Free;
 end;
 ```
 
-Passing an engine does not transfer ownership by default. Use `TGocciaRuntime.Create(Engine, True)` when the runtime should free the engine. The executor is always owned by the caller — free it after the engine.
+Passing an engine does not transfer ownership by default. Use `TGocciaRuntime.Create(Engine, True)` when the runtime should free the engine. A runtime given an engine leaves its `GlobalBackedTopLevel` setting alone.
 
 ### Runtime Extensions
 
@@ -506,18 +489,13 @@ When embedding, grant `ffi` in the engine's capability set and call `InstallFFII
 To add the test framework for a custom test runner:
 
 ```pascal
-Executor := TGocciaBytecodeExecutor.Create;
+Engine := TGocciaEngine.Create('tests/my-test.js', Source);
+Runtime := TGocciaRuntime.Create(Engine, True);
 try
-  Engine := TGocciaEngine.Create('tests/my-test.js', Source, Executor);
-  Runtime := TGocciaRuntime.Create(Engine, True);
-  try
-    ApplyTestRunnerRuntimeProfile(Runtime.Core);
-    Runtime.Execute;
-  finally
-    Runtime.Free;
-  end;
+  ApplyTestRunnerRuntimeProfile(Runtime.Core);
+  Runtime.Execute;
 finally
-  Executor.Free;
+  Runtime.Free;
 end;
 ```
 
@@ -531,12 +509,12 @@ Runtime globals and runtime modules can be reduced by installing only concrete e
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
 | `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
 | `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` and `.mts` file names infer `stModule` |
-| `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
+| `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations; applies to code compiled after it is set, and the setter updates the global scope |
+| `GlobalBackedTopLevel` | `Boolean` | `False` | Bind a program's top-level declarations in the global scope, as a Script's are; see [Engine Constructor](#engine-constructor) |
 
 ```pascal
-Executor := TGocciaBytecodeExecutor.Create;
+Engine := TGocciaEngine.Create('app.js', Source);
 try
-  Engine := TGocciaEngine.Create('app.js', Source, Executor);
   Engine.Preprocessors := [];              // Disable JSX
   Engine.Compatibility := [
     cfASI,
@@ -550,19 +528,20 @@ try
   ];                                       // Enable selected source-pipeline flags
   Engine.WarningUnsupportedFeatures := True; // Optional migration mode for disabled syntax diagnostics
   Engine.SourceType := stModule;           // Run entry as module source (top-level this is undefined; import.meta resolves)
-  Engine.StrictTypes := True;              // Enforce type annotations in both execution modes
+  Engine.StrictTypes := True;              // Enforce type annotations
+  Engine.Execute;
 finally
-  Executor.Free;
+  Engine.Free;
 end;
 ```
 
 When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source.
 
-**Top-level binding persistence differs between source types.** With `SourceType = stScript`, the engine reuses its global scope (`Engine.GlobalScope`) across every call to `Execute`, which is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, keep `SourceType` at `stScript` (the default) or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
+**Top-level binding persistence differs between source types.** With `SourceType = stScript` and `GlobalBackedTopLevel` set, the engine binds each run's top-level declarations in its global scope (`Engine.GlobalScope`), which it reuses across every call to `Execute`; that is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. Without `GlobalBackedTopLevel` they stay in the run's own frame, and the next `Execute` throws a `ReferenceError` for `x`. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, keep `SourceType` at `stScript` (the default) and set `GlobalBackedTopLevel`, or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
 
 ## Injecting Custom Globals
 
-You can inject Pascal functions and values into the script's global scope by working with the engine's interpreter scope directly.
+You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly.
 
 ### Injecting a Value
 
@@ -572,20 +551,17 @@ uses
   SysUtils,
 
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
   Source.Text := 'APP_VERSION;';
-  Executor := TGocciaBytecodeExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    Engine := TGocciaEngine.Create('app.js', Source);
     try
       // Inject a constant into the global scope
       Engine.GlobalScope.DefineLexicalBinding(
@@ -598,7 +574,6 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -616,7 +591,6 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives;
@@ -635,7 +609,6 @@ end;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Host: TMyHost;
   Func: TGocciaNativeFunctionValue;
@@ -643,9 +616,8 @@ begin
   Host := TMyHost.Create;
   Source := TStringList.Create;
   Source.Text := 'getTimestamp();';
-  Executor := TGocciaBytecodeExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    Engine := TGocciaEngine.Create('app.js', Source);
     try
       // Create a native function: callback, name, arity (-1 for variadic)
       Func := TGocciaNativeFunctionValue.Create(Host.GetTimestamp, 'getTimestamp', 0);
@@ -655,7 +627,6 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
     Host.Free;
   end;
@@ -684,7 +655,6 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
-  Goccia.Executor.Bytecode,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
@@ -724,7 +694,6 @@ end;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   API: TFileSystemAPI;
   FSObject: TGocciaObjectValue;
@@ -732,9 +701,8 @@ begin
   API := TFileSystemAPI.Create;
   Source := TStringList.Create;
   Source.Text := 'fs.readFile("data.txt");';
-  Executor := TGocciaBytecodeExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    Engine := TGocciaEngine.Create('app.js', Source);
     try
       FSObject := TGocciaObjectValue.Create;
       FSObject.RegisterNativeMethod(
@@ -748,7 +716,6 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
     API.Free;
   end;

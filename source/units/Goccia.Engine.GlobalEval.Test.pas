@@ -27,8 +27,6 @@ uses
   Goccia.Capabilities,
   Goccia.Engine,
   Goccia.Error,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.SourcePipeline,
   Goccia.Test262.Host,
   Goccia.TestSetup,
@@ -47,8 +45,7 @@ const
 type
   TGlobalEvalTests = class(TTestSuite)
   private
-    function CreateEngine(const AExecutor: TGocciaExecutor;
-      const ASource: TStringList): TGocciaEngine;
+    function CreateEngine(const ASource: TStringList): TGocciaEngine;
     function EvalStage(const AEngine: TGocciaEngine;
       const ASource: string): TGocciaGlobalEvalStage;
     procedure TestBytecodeEvalCreatesVMFunctions;
@@ -62,8 +59,7 @@ type
     procedure TestBytecodeEvalReturnsCompletionValue;
     procedure TestBytecodeEvalReportsCompileStage;
     procedure TestBytecodeEvalReportsRunStage;
-    procedure AssertDirectiveFreeEvalIsNonStrict(
-      const AExecutor: TGocciaExecutor);
+    procedure AssertDirectiveFreeEvalIsNonStrict;
     procedure TestBytecodeEvalIsNonStrictInStrictEngine;
   public
     procedure SetupTests; override;
@@ -93,10 +89,9 @@ begin
     TestBytecodeEvalIsNonStrictInStrictEngine);
 end;
 
-function TGlobalEvalTests.CreateEngine(const AExecutor: TGocciaExecutor;
-  const ASource: TStringList): TGocciaEngine;
+function TGlobalEvalTests.CreateEngine(const ASource: TStringList): TGocciaEngine;
 begin
-  Result := TGocciaEngine.Create('<global-eval-test>', ASource, AExecutor);
+  Result := TGocciaEngine.Create('<global-eval-test>', ASource);
   Result.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
   Result.LabelStatementsEnabled := True;
 end;
@@ -118,16 +113,14 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalCreatesVMFunctions;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Value := Engine.EvaluateGlobalEval('function made() {} made',
       '<global-eval-test>', Stage);
     Expect<Boolean>(Value.ClassName = BYTECODE_FUNCTION_CLASS).ToBe(True);
@@ -139,7 +132,6 @@ begin
     Expect<Boolean>(Value.ClassName = BYTECODE_FUNCTION_CLASS).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -147,22 +139,19 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalCreatesVMClasses;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Value := Engine.EvaluateGlobalEval('class Made {} Made',
       '<global-eval-test>', Stage);
     Expect<Boolean>(Value.ClassName = VM_CLASS_CLASS).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -171,7 +160,6 @@ procedure TGlobalEvalTests.TestBytecodeTest262HostEvalCreatesVMFunctions;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   Source: TStringList;
   GlobalObject: TGocciaObjectValue;
@@ -185,13 +173,12 @@ begin
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor;
   Engine := nil;
   Host := nil;
   try
-    Engine := TGocciaEngine.Create('<global-eval-test>', Source, Executor,
+    Engine := TGocciaEngine.Create('<global-eval-test>', Source,
       EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    ConfigureTest262Engine(Engine, EngineOptions);
     Host := TGocciaTest262Host.Create(EngineOptions);
     Host.ConfigureHostEnvironment(Engine.HostEnvironment);
     Host.Install(Engine);
@@ -206,7 +193,6 @@ begin
   finally
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -215,7 +201,6 @@ procedure TGlobalEvalTests.TestBytecodeStrictDirectEvalCreatesVMValues;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   Source: TStringList;
   GlobalObject: TGocciaObjectValue;
@@ -236,13 +221,12 @@ begin
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor;
   Engine := nil;
   Host := nil;
   try
-    Engine := TGocciaEngine.Create('<direct-eval-test>', Source, Executor,
+    Engine := TGocciaEngine.Create('<direct-eval-test>', Source,
       EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    ConfigureTest262Engine(Engine, EngineOptions);
     Host := TGocciaTest262Host.Create(EngineOptions);
     Host.ConfigureHostEnvironment(Engine.HostEnvironment);
     Host.Install(Engine);
@@ -261,7 +245,6 @@ begin
   finally
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -273,7 +256,6 @@ function TGlobalEvalTests.DirectEvalRetainedModules(const ASource: string;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   Source: TStringList;
 begin
@@ -285,13 +267,12 @@ begin
     cfTraditionalFor];
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor;
   Engine := nil;
   Host := nil;
   try
     Engine := TGocciaEngine.Create('<direct-eval-cache-test>', Source,
-      Executor, EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+      EngineOptions.Capabilities);
+    ConfigureTest262Engine(Engine, EngineOptions);
     Host := TGocciaTest262Host.Create(EngineOptions);
     Host.ConfigureHostEnvironment(Engine.HostEnvironment);
     Host.Install(Engine);
@@ -300,7 +281,6 @@ begin
   finally
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -357,17 +337,15 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalVarIsDeletableGlobal;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Descriptor: TGocciaPropertyDescriptor;
   GlobalObject: TGocciaObjectValue;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Engine.EvaluateGlobalEval('var made = 1; function madeFn() {}',
       '<global-eval-test>', Stage);
     GlobalObject := TGocciaObjectValue(Engine.Realm.GlobalObject);
@@ -379,7 +357,6 @@ begin
     Expect<Boolean>(Descriptor.Configurable).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -387,16 +364,14 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalReturnsCompletionValue;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Value := Engine.EvaluateGlobalEval('1; if (true) { 2 } else { 3 }',
       '<global-eval-test>', Stage);
     Expect<Double>((Value as TGocciaNumberLiteralValue).Value).ToBe(2);
@@ -417,7 +392,6 @@ begin
     Expect<Boolean>(Value is TGocciaUndefinedLiteralValue).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -425,19 +399,16 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalReportsCompileStage;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Expect<Boolean>(EvalStage(Engine, 'new.target') = gesCompile).ToBe(True);
     Expect<Boolean>(EvalStage(Engine, 'return 1') = gesCompile).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -445,14 +416,12 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalReportsRunStage;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Expect<Boolean>(EvalStage(Engine, 'throw 1') = gesRun).ToBe(True);
     TGocciaObjectValue(Engine.Realm.GlobalObject).PreventExtensions;
     // EvalDeclarationInstantiation's CanDeclareGlobalVar check runs after
@@ -461,15 +430,13 @@ begin
       True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
 
 // ES2026 §19.2.1.1 step 13: eval code is strict only by its own directive,
 // also in an engine without the non-strict compatibility profile.
-procedure TGlobalEvalTests.AssertDirectiveFreeEvalIsNonStrict(
-  const AExecutor: TGocciaExecutor);
+procedure TGlobalEvalTests.AssertDirectiveFreeEvalIsNonStrict;
 var
   Engine: TGocciaEngine;
   Source: TStringList;
@@ -479,7 +446,7 @@ begin
   Source := TStringList.Create;
   Engine := nil;
   try
-    Engine := TGocciaEngine.Create('<global-eval-test>', Source, AExecutor);
+    Engine := TGocciaEngine.Create('<global-eval-test>', Source);
     Engine.Compatibility := [cfASI, cfVar, cfFunction];
     Value := Engine.EvaluateGlobalEval(
       'implicitFromEval = 1; typeof implicitFromEval', '<global-eval-test>',
@@ -495,15 +462,8 @@ begin
 end;
 
 procedure TGlobalEvalTests.TestBytecodeEvalIsNonStrictInStrictEngine;
-var
-  Executor: TGocciaBytecodeExecutor;
 begin
-  Executor := TGocciaBytecodeExecutor.Create;
-  try
-    AssertDirectiveFreeEvalIsNonStrict(Executor);
-  finally
-    Executor.Free;
-  end;
+  AssertDirectiveFreeEvalIsNonStrict;
 end;
 
 begin

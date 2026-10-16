@@ -16625,8 +16625,8 @@ end;
 { ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation step 12: a module with
   pending asynchronous dependencies executes only once they have evaluated
   (§16.2.1.6.1.3.4 AsyncModuleExecutionFulfilled). A module-source entry the
-  bytecode executor runs has no continuation of its own to defer, so its top
-  level waits for them as Await does in a frame that cannot suspend
+  engine runs has no continuation of its own to defer, so its top level
+  waits for them as Await does in a frame that cannot suspend
   (AwaitValue). The jobs that run meanwhile are not calls from the entry's top
   level: like a module top level ExecuteImportedModule runs, they take the
   depth of the frame below it, so --max-stack counts only their own calls. }

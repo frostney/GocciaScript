@@ -1302,7 +1302,7 @@ var
   Fraction: Double;
   RoundedMilliseconds: Double;
 begin
-  DateConstructor := GetDateIntrinsic(Runtime.Engine.Executor);
+  DateConstructor := GetDateIntrinsic(Runtime.Engine.ShimLoader);
   Fraction := Frac(AMilliseconds);
   RoundedMilliseconds := AMilliseconds - Fraction;
   if Fraction >= 0.5 then

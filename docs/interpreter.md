@@ -191,8 +191,8 @@ There is one macrotask source, and it is deliberately not an event loop: `Goccia
 | Context | When microtasks drain |
 |---------|----------------------|
 | `TGocciaEngine.Execute` | After the script program (through `ExecuteProgram`) or the module body finishes (`WaitForRuntimeIdle`) |
-| `TGocciaEngine.ExecuteProgram` | After `FExecutor.ExecuteProgram` returns, in either execution mode (`WaitForRuntimeIdle`) |
-| `TGocciaEngine.RunModule` / `RunModuleInScope` | After the executor runs a precompiled `TGocciaCompiledModule` (`WaitForRuntimeIdle`) |
+| `TGocciaEngine.ExecuteProgram` | After the compiled program returns (`WaitForRuntimeIdle`) |
+| `TGocciaEngine.RunModule` / `RunModuleInScope` | After a precompiled `TGocciaBytecodeModule` returns (`WaitForRuntimeIdle`) |
 | Test framework | After each test callback |
 | Benchmark runner | After warmup, calibration batches, and each measurement round |
 

@@ -5,15 +5,15 @@
 ## Executive Summary
 
 - **Engine/runtime split** — `TGocciaEngine` orchestrates parsing, execution, core language built-ins, and source text execution; `Goccia.Runtime` attaches runtime globals, import-only runtime modules, file helpers, and extensions
-- **Execution mode abstraction** — `TGocciaExecutor` is the abstract class; `TGocciaBytecodeExecutor` is its only implementation since the tree-walk interpreter was removed ([#875](https://github.com/frostney/GocciaScript/issues/875))
+- **One engine, one VM** — `TGocciaEngine` compiles every program, module body, shim and eval to bytecode and runs it on a `TGocciaVM` it owns; there is no executor to choose since the tree-walk interpreter was removed ([#875](https://github.com/frostney/GocciaScript/issues/875))
 - **Shared source pipeline** — Preprocessors, lexer, parser, warning data, source maps, and AST artifacts are shared between execution modes
 - **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
-- **Single executor** — The `TGocciaBytecodeExecutor` unit depends on the compiler and VM (it also shares the `Goccia.EvaluationContext` record type). See [Bytecode VM § Overview](bytecode-vm.md#overview)
+- **Compiler and VM** — The engine drives the compiler and VM directly (it shares the `Goccia.EvaluationContext` record type with the module loader). See [Bytecode VM § Overview](bytecode-vm.md#overview)
 
 ## Overview
 
-GocciaScript has two execution modes: interpreter mode (tree-walk over the AST) and bytecode mode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates both, delegating execution to a pluggable `TGocciaExecutor`. Both execution modes share the same source pipeline, value system, core language built-ins, and garbage collector. Runtime globals and import-only runtime modules are attached through runtime extensions; see [Main Layers](#main-layers) for the `Goccia.Engine` / `Goccia.Runtime` split. See [Bytecode VM](bytecode-vm.md) for the bytecode executor's architecture.
+GocciaScript has two execution modes: interpreter mode (tree-walk over the AST) and bytecode mode (`TGocciaVM`). A single `TGocciaEngine` class orchestrates execution, compiling to bytecode and running it on a VM it owns. Both execution modes share the same source pipeline, value system, core language built-ins, and garbage collector. Runtime globals and import-only runtime modules are attached through runtime extensions; see [Main Layers](#main-layers) for the `Goccia.Engine` / `Goccia.Runtime` split. See [Bytecode VM](bytecode-vm.md) for the bytecode executor's architecture.
 
 The source pipeline public API is `TGocciaSourcePipeline` in `Goccia.SourcePipeline`. `Parse` accepts source text plus `TGocciaSourcePipelineOptions` (preprocessors, compatibility flag set, unsupported-feature warning policy, and source type) and returns an owning `TGocciaSourcePipelineResult` containing the AST, generated-source lines, source map, timings, and warnings as data. Narrow source-pipeline entry points cover module source, dynamic `Function` validation/wrapper parsing, and expression fragments so hosts do not construct or configure `TGocciaParser` directly. Embedders that want to run source should continue using `TGocciaEngine.Execute` or the `RunScript*` helpers; direct source-pipeline use is for hosts that need parse artifacts, such as bytecode compilation paths.
 
@@ -37,10 +37,8 @@ Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Compiler -> G
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
-| Engine | `Goccia.Engine`, `Goccia.HostEnvironment`, `Goccia.Capabilities` | Core language built-ins, language configuration, the engine's immutable capability set, host-controlled script time/randomness, source text execution, executor dispatch |
+| Engine | `Goccia.Engine`, `Goccia.HostEnvironment`, `Goccia.Capabilities` | Core language built-ins, language configuration, the engine's immutable capability set, host-controlled script time/randomness, source text execution, bytecode compilation and the engine's `TGocciaVM` |
 | Runtime | `Goccia.Runtime`, `Goccia.RuntimeExtensions.*`, `Goccia.RuntimeProfiles.*` | Runtime integration layer, runtime extensions such as console/fetch/data modules/SemVer/testing/benchmarks/FFI, loader/test/benchmark profiles, and file-backed helpers |
-| Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
-| Bytecode executor | `Goccia.Executor.Bytecode` (`TGocciaBytecodeExecutor`) | Bytecode compile + VM execution; no interpreter dependency |
 | Source pipeline | `Goccia.SourcePipeline`, `Goccia.JSX.Transformer`, `Goccia.Lexer`, `Goccia.Parser`, `Goccia.AST.*` | Source text to AST, including parser policy, preprocessor dispatch, source maps, warning data, and generated-source lines |
 | Bytecode compiler | `Goccia.Compiler*` | AST to bytecode templates/modules |
 | Bytecode format | `Goccia.Bytecode*` | Opcodes, templates, modules, binary I/O, debug info |
@@ -102,23 +100,15 @@ CLI bytecode paths that need parse artifacts use `TGocciaCLISourcePipelineResult
 | GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `AfterExecute` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 
-`GocciaRunner` has a host mode and a [sandbox mode](permissions.md#sandbox-mode). In sandbox mode it copies the host inputs into a `TSandboxVirtualFileSystem` and captures that as the seed baseline before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. Both modes run on `TGocciaBytecodeExecutor`.
+`GocciaRunner` has a host mode and a [sandbox mode](permissions.md#sandbox-mode). In sandbox mode it copies the host inputs into a `TSandboxVirtualFileSystem` and captures that as the seed baseline before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. Both modes run on the bytecode VM.
 
 Nested execution runs inside the sandbox-mode host: `runScript` and shell `goccia` dispatch through `TGocciaSandboxContext.RunScriptCallback`. Shared-VFS execution remains the default, while `{ sandbox: true }` / `goccia --sandbox` creates a child `TGocciaSandboxContext` whose `copy` entries come from parent-VFS paths and runs it through the same interpreter or bytecode executor mode.
 
-## Executor Architecture
+## Execution Architecture
 
-The engine uses a **strategy pattern** for execution. `TGocciaExecutor` is the abstract base; one concrete implementation exists:
+The engine bootstraps the realm itself: it creates the global scope (`Engine.GlobalScope`), binds it to the module loader and registers the built-ins. It also creates the `TGocciaVM` it runs everything on and frees it in its destructor. It compiles each program, module body, `Function` constructor body and eval with `TGocciaCompiler` and runs the result on that VM, gives the module loader its callbacks for instantiating and evaluating module bodies, and loads the bootstrap shims when they are first used (`TGocciaEngine.ShimLoader`, see [Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)).
 
-```text
-TGocciaExecutor (abstract — Goccia.Executor.pas)
-└── TGocciaBytecodeExecutor (Goccia.Executor.Bytecode.pas)
-      Compiles to bytecode and runs on TGocciaVM
-```
-
-The engine bootstraps the realm itself: it creates the global scope (`Engine.GlobalScope`), binds it to the module loader and registers the built-ins. The executor receives the global scope and module loader via `Initialize`, then handles all program and module body execution, and loads the bootstrap shims when they are first used (`TGocciaExecutor.EvaluateShim`, see [Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)).
-
-Callers must pass an explicit executor to the engine constructor — there is no implicit default. The engine never frees the executor; the caller (or a wrapping layer such as `TGocciaRuntime`) owns it and frees it after the engine.
+The engine's constructors take no executor. Settings that shape compilation are engine properties: `StrictTypes`, `Compatibility` and `GlobalBackedTopLevel`, which binds a program's top-level declarations in the global environment as a Script's are ([Embedding § Engine Constructor](embedding.md#engine-constructor)).
 
 ## Realm Isolation
 

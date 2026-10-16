@@ -749,17 +749,12 @@ ASI also interacts with the type syntax; see [Type Annotations](type-annotations
 
 ```pascal
 // Enable ASI via the engine API
-Executor := TGocciaBytecodeExecutor.Create;
+Engine := TGocciaEngine.Create(FileName, Source);
 try
-  Engine := TGocciaEngine.Create(FileName, Source, Executor);
-  try
-    Engine.Compatibility := [cfASI];
-    Engine.Execute;
-  finally
-    Engine.Free;
-  end;
+  Engine.Compatibility := [cfASI];
+  Engine.Execute;
 finally
-  Executor.Free;
+  Engine.Free;
 end;
 ```
 

@@ -13,8 +13,6 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Engine,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.GarbageCollector,
   Goccia.MemoryLimit,
   Goccia.Runtime,
@@ -183,14 +181,14 @@ type
       reached the host instead of the script. Any other escaping exception is
       not an answer to that question and propagates. }
     function FaultEscapesScript(const ASource: string;
-      const AExecutor: TGocciaExecutor; const AName: string;
+      const AName: string;
       const AFaultClass: ExceptClass): Boolean;
     { The same question for a module running against the sandbox runtime
       extension. Both sandbox injection points are armed to raise
       AInjectedClass; pass nil to arm neither and let the ordinary filesystem
       error through. }
     function SandboxFaultEscapesScript(const ASource: string;
-      const AExecutor: TGocciaExecutor; const AName: string;
+      const AName: string;
       const AEscapingClass, AInjectedClass: ExceptClass): Boolean;
     procedure TestGateRefusesOverBudgetRequest;
     procedure TestGatePermitsInBudgetRequest;
@@ -259,8 +257,7 @@ type
       script asks for next and a margin its element objects overrun. }
     function ArmChargedRefusalBudget(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    function ChargedRefusalName(const AExecutor: TGocciaExecutor;
-      const AName: string): string;
+    function ChargedRefusalName(const AName: string): string;
     procedure TestFittingGatedStorageLeavesTheChargedRefusal;
   protected
     procedure BeforeEach; override;
@@ -689,7 +686,7 @@ begin
 end;
 
 function TMemoryLimitTests.FaultEscapesScript(const ASource: string;
-  const AExecutor: TGocciaExecutor; const AName: string;
+  const AName: string;
   const AFaultClass: ExceptClass): Boolean;
 var
   Source: TStringList;
@@ -700,7 +697,7 @@ begin
   Result := False;
   Source := TStringList.Create;
   Source.Text := ASource;
-  Engine := TGocciaEngine.Create(AName, Source, AExecutor);
+  Engine := TGocciaEngine.Create(AName, Source);
   GC := TGarbageCollector.Instance;
   PreviousMaxBytes := 0;
   FSwallowedFaultReported := False;
@@ -734,13 +731,12 @@ begin
     if Assigned(GC) then
       GC.MaxBytes := PreviousMaxBytes;
     Engine.Free;
-    AExecutor.Free;
     Source.Free;
   end;
 end;
 
 function TMemoryLimitTests.SandboxFaultEscapesScript(const ASource: string;
-  const AExecutor: TGocciaExecutor; const AName: string;
+  const AName: string;
   const AEscapingClass, AInjectedClass: ExceptClass): Boolean;
 var
   Source: TStringList;
@@ -753,7 +749,7 @@ begin
   Result := False;
   Source := TStringList.Create;
   Source.Text := ASource;
-  Engine := TGocciaEngine.Create(AName, Source, AExecutor);
+  Engine := TGocciaEngine.Create(AName, Source);
   Context := TGocciaSandboxContext.Create;
   GC := TGarbageCollector.Instance;
   PreviousMaxBytes := 0;
@@ -789,7 +785,6 @@ begin
       GC.MaxBytes := PreviousMaxBytes;
     Engine.Free;
     Context.Free;
-    AExecutor.Free;
     Source.Free;
   end;
 end;
@@ -1588,7 +1583,6 @@ begin
     had the catch block absorbed the refusal, the script would have run to
     completion and Execute would have returned normally. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create,
     'memory-limit-sync-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
 
@@ -1609,7 +1603,6 @@ begin
     async function body used to be converted into a spurious access
     violation, which the guest could then catch as an ordinary Error. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create,
     'memory-limit-async-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
 
@@ -1624,7 +1617,6 @@ const
     '} catch (e) {}';
 begin
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create,
     'memory-limit-executor-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
 
@@ -1648,7 +1640,6 @@ const
     'main();';
 begin
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create,
     'memory-limit-async-generator-bytecode.js', TGocciaMemoryLimitError)).ToBe(True);
 end;
 
@@ -1681,7 +1672,6 @@ const
     '} catch (e) {}';
 begin
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create,
     'memory-limit-iterator-close-bytecode.js',
     TGocciaMemoryLimitError)).ToBe(True);
 end;
@@ -1699,7 +1689,6 @@ begin
   { The counterweight to the guards above: the same budget must not turn an
     ordinary in-language error into a host-level failure. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create,
     'memory-limit-script-error-bytecode.js', TGocciaMemoryLimitError)).ToBe(False);
 end;
 
@@ -1789,15 +1778,12 @@ const
     'total;';
 var
   Source: TStringList;
-  Executor: TGocciaExecutor;
   Engine: TGocciaEngine;
   ScriptResult: TGocciaScriptResult;
 begin
   Source := TStringList.Create;
   Source.Text := SourceText;
-  Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create('closed-numeric-pressure.js', Source,
-    Executor);
+  Engine := TGocciaEngine.Create('closed-numeric-pressure.js', Source);
   FPressureMaxBytes := TGarbageCollector.Instance.MaxBytes;
   try
     Engine.InjectGlobal('__squeezeMemory',
@@ -1815,7 +1801,6 @@ begin
   finally
     TGarbageCollector.Instance.MaxBytes := FPressureMaxBytes;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -1841,13 +1826,11 @@ function TMemoryLimitTests.RunBytecodeMeasurement(const AName,
   ASourceText: string): Double;
 var
   Source: TStringList;
-  Executor: TGocciaExecutor;
   Engine: TGocciaEngine;
 begin
   Source := TStringList.Create;
   Source.Text := ASourceText;
-  Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create(AName, Source, Executor);
+  Engine := TGocciaEngine.Create(AName, Source);
   try
     Engine.InjectGlobal('__nativeHeap',
       TGocciaNativeFunctionValue.CreateWithoutPrototype(NativeHeapAfterCollect,
@@ -1858,7 +1841,6 @@ begin
     Result := Engine.Execute.Result.ToNumberLiteral.Value;
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -1929,7 +1911,7 @@ begin
 end;
 
 function TMemoryLimitTests.ChargedRefusalName(
-  const AExecutor: TGocciaExecutor; const AName: string): string;
+  const AName: string): string;
 var
   Source: TStringList;
   Engine: TGocciaEngine;
@@ -1946,7 +1928,7 @@ begin
     '  refusal = e.name;' + sLineBreak +
     '}' + sLineBreak +
     'refusal;';
-  Engine := TGocciaEngine.Create(AName, Source, AExecutor);
+  Engine := TGocciaEngine.Create(AName, Source);
   PreviousMaxBytes := TGarbageCollector.Instance.MaxBytes;
   try
     Engine.InjectGlobal(CHARGED_REFUSAL_ARM_GLOBAL_NAME,
@@ -1956,7 +1938,6 @@ begin
   finally
     TGarbageCollector.Instance.MaxBytes := PreviousMaxBytes;
     Engine.Free;
-    AExecutor.Free;
     Source.Free;
   end;
 end;
@@ -1973,8 +1954,7 @@ begin
     same script through the CLI; with a fixed 200000-byte ceiling it sat a few
     hundred bytes from the gate's line, and #1622's eight extra bytes per class
     value pushed development builds across it. }
-  Expect<string>(ChargedRefusalName(TGocciaBytecodeExecutor.Create,
-    'charged-refusal-bytecode.js')).ToBe('RangeError');
+  Expect<string>(ChargedRefusalName('charged-refusal-bytecode.js')).ToBe('RangeError');
 end;
 
 procedure TMemoryLimitTests.TestSyncCatchCannotSwallowIntegrityFault;
@@ -1997,7 +1977,6 @@ begin
     fail — a fault that never reached the host because the guest caught it,
     versus one that never fired at all. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create,
     'integrity-fault-sync-bytecode.js', EObjectCheck)).ToBe(True);
   Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
 end;
@@ -2024,7 +2003,6 @@ begin
     observes, so a host-side flag is the only way the swallow can report
     itself. }
   Expect<Boolean>(FaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create,
     'integrity-fault-async-bytecode.js', EObjectCheck)).ToBe(True);
   Expect<Boolean>(FSwallowedFaultReported).ToBe(False);
 end;
@@ -2036,10 +2014,10 @@ begin
     Pascal exception into a rejection, so the budget stopped being a ceiling the
     moment a script wrapped its filesystem calls in try/catch. }
   Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
-    TGocciaBytecodeExecutor.Create, 'sandbox-refusal-job-bytecode.js',
+    'sandbox-refusal-job-bytecode.js',
     TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
   Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
-    TGocciaBytecodeExecutor.Create, 'sandbox-refusal-argument-bytecode.js',
+    'sandbox-refusal-argument-bytecode.js',
     TGocciaMemoryLimitError, TGocciaMemoryLimitError)).ToBe(True);
 end;
 
@@ -2049,10 +2027,10 @@ begin
     sandbox boundary must not become a rejected promise the guest catches and
     carries on from. }
   Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_JOB_SOURCE,
-    TGocciaBytecodeExecutor.Create, 'sandbox-integrity-job-bytecode.js',
+    'sandbox-integrity-job-bytecode.js',
     EObjectCheck, EObjectCheck)).ToBe(True);
   Expect<Boolean>(SandboxFaultEscapesScript(SANDBOX_ARGUMENT_SOURCE,
-    TGocciaBytecodeExecutor.Create, 'sandbox-integrity-argument-bytecode.js',
+    'sandbox-integrity-argument-bytecode.js',
     EObjectCheck, EObjectCheck)).ToBe(True);
 end;
 
@@ -2080,7 +2058,7 @@ begin
     against Exception rather than a specific class makes any escape at all a
     failure. }
   Expect<Boolean>(SandboxFaultEscapesScript(SourceText,
-    TGocciaBytecodeExecutor.Create, 'sandbox-catchable-bytecode.js',
+    'sandbox-catchable-bytecode.js',
     Exception, nil)).ToBe(False);
 end;
 
@@ -2107,7 +2085,7 @@ begin
   FInstallFailingAuditSink := True;
   try
     Expect<Boolean>(FaultEscapesScript(SourceText,
-      TGocciaBytecodeExecutor.Create, 'response-json-audit-bytecode.js',
+      'response-json-audit-bytecode.js',
       EGocciaCapabilityAuditDeliveryError)).ToBe(True);
   finally
     FInstallFailingAuditSink := False;

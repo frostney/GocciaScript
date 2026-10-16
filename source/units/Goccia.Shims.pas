@@ -8,9 +8,9 @@ unit Goccia.Shims;
 
   Each shim's Source is a valid GocciaScript module with a single named export.
   LoadShimValue evaluates the module in a child scope through the engine's
-  executor and returns the exported value, which the engine binds into the
-  global scope. The bytecode executor compiles the shim, so every function it
-  defines is a VM closure.
+  shim loader and returns the exported value, which the engine binds into the
+  global scope. The engine compiles the shim, so every function it defines is
+  a VM closure.
 
   A default shim is parsed once per thread runtime and its program is reused by
   every engine that thread builds; see "Shimmed Legacy Globals" in
@@ -23,11 +23,28 @@ interface
 uses
   Classes,
 
-  Goccia.Executor,
+  Goccia.AST.Node,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
 type
+  { Runs a bootstrap shim's module program in AScope, the shim's own module
+    environment under the global scope, leaving the shim's top-level
+    bindings, its export included, in AScope. AFileName names the shim in
+    stack frames. TGocciaEngine provides one; see TGocciaShimLoader. }
+  TGocciaShimEvaluator = procedure(const AProgram: TGocciaProgram;
+    const AScope: TGocciaScope; const AFileName: string) of object;
+
+  { How one engine loads its shims: its realm, its global environment, and
+    the evaluator that runs a shim program on its VM
+    (TGocciaEngine.ShimLoader). }
+  TGocciaShimLoader = record
+    Realm: TGocciaRealm;
+    GlobalScope: TGocciaScope;
+    Evaluate: TGocciaShimEvaluator;
+  end;
+
   TGocciaShimDefinition = record
     Name: string;      // Exported name (must match the export in Source)
     FileName: string;  // Virtual filename for error reporting
@@ -54,15 +71,15 @@ type
   TGocciaShimPrototypeMembers = array of TGocciaShimPrototypeMember;
 
   { Defers a single name-bound shim's lex/parse/evaluate until the global is
-    first touched.  Holds the executor and shim definition; Materialize
+    first touched.  Holds the shim loader and shim definition; Materialize
     matches the of-object lazy factory the engine registers on globalThis.
     The engine owns the materializer for its lifetime. }
   TGocciaShimMaterializer = class
   private
-    FExecutor: TGocciaExecutor;
+    FLoader: TGocciaShimLoader;
     FShimIndex: Integer;
   public
-    constructor Create(const AExecutor: TGocciaExecutor;
+    constructor Create(const ALoader: TGocciaShimLoader;
       const AShimIndex: Integer);
     function Materialize: TGocciaValue;
   end;
@@ -73,11 +90,11 @@ type
     materializer for its lifetime. }
   TGocciaShimMemberMaterializer = class
   private
-    FExecutor: TGocciaExecutor;
+    FLoader: TGocciaShimLoader;
     FShimIndex: Integer;
     FExportKey: string;
   public
-    constructor Create(const AExecutor: TGocciaExecutor;
+    constructor Create(const ALoader: TGocciaShimLoader;
       const AShimIndex: Integer; const AExportKey: string);
     function Materialize: TGocciaValue;
     procedure MaterializeAccessor(out AGetter, ASetter: TGocciaValue);
@@ -103,15 +120,15 @@ procedure RegisterDefaultShimNames(const AShims: TStringList);
 function CreateShimScope(const AGlobalScope: TGocciaScope;
   const AName: string): TGocciaScope;
 
-{ Evaluate default shim AShimIndex (see DefaultShim) with AExecutor, in a
+{ Evaluate default shim AShimIndex (see DefaultShim) with ALoader, in a
   child scope of its global scope, and return its exported value. A shim is
   evaluated once per realm; later calls return the realm's export. }
-function LoadShimValue(const AExecutor: TGocciaExecutor;
+function LoadShimValue(const ALoader: TGocciaShimLoader;
   const AShimIndex: Integer): TGocciaValue;
 
 { Return the realm's original Date constructor without consulting the mutable
   global property.  Materializes the Date shim on first use. }
-function GetDateIntrinsic(const AExecutor: TGocciaExecutor): TGocciaValue;
+function GetDateIntrinsic(const ALoader: TGocciaShimLoader): TGocciaValue;
 
 { Drop the calling thread's cached shim programs. Registered with
   Goccia.ThreadCleanupRegistry, so a thread's runtime shutdown releases them;
@@ -126,9 +143,7 @@ implementation
 uses
   SysUtils,
 
-  Goccia.AST.Node,
   Goccia.ExecutionContext,
-  Goccia.Realm,
   Goccia.SourcePipeline,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.DateData,
@@ -1019,8 +1034,8 @@ var
 
 threadvar
   { One parsed program per DEFAULT_SHIMS entry, filled on first use, so a
-    thread parses each shim once however many engines load it. The bytecode
-    executor compiles the program per engine. A parsed program is never
+    thread parses each shim once however many engines load it. Each engine
+    compiles the program itself. A parsed program is never
     released while the thread's engines run, and TGocciaProgram.Free releases only the program node, not
     the statements under it. Parsing per engine leaked the shim ASTs of every
     engine: about 1.1 MB per engine that used Date on 64-bit. The test runner
@@ -1098,7 +1113,7 @@ begin
   Result.ArgumentsObjectEnabled := True;
 end;
 
-function LoadShimValue(const AExecutor: TGocciaExecutor;
+function LoadShimValue(const ALoader: TGocciaShimLoader;
   const AShimIndex: Integer): TGocciaValue;
 var
   CachedValue: TObject;
@@ -1109,12 +1124,12 @@ var
 begin
   { A lazy shim member can be touched from code of another realm (a
     test262 $262.createRealm global, say): the shim belongs to the realm of
-    the engine whose executor loads it, so that realm is the current one
+    the engine whose loader loads it, so that realm is the current one
     while the shim loads and registers what it provides. }
   RealmScope := nil;
-  if Assigned(AExecutor.Realm) and (CurrentRealm <> AExecutor.Realm) then
+  if Assigned(ALoader.Realm) and (CurrentRealm <> ALoader.Realm) then
     RealmScope := TGocciaExecutionContextScope.Create(CreateExecutionContext(
-      AExecutor.Realm, AExecutor.GlobalScope,
+      ALoader.Realm, ALoader.GlobalScope,
       DEFAULT_SHIMS[AShimIndex].FileName));
   try
     CachedValue := CurrentRealm.GetSlot(GShimExportSlots[AShimIndex]);
@@ -1130,7 +1145,7 @@ begin
       GShimPrograms[AShimIndex] := ProgramNode;
     end;
 
-    ShimScope := CreateShimScope(AExecutor.GlobalScope,
+    ShimScope := CreateShimScope(ALoader.GlobalScope,
       DEFAULT_SHIMS[AShimIndex].Name);
     if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
     begin
@@ -1142,7 +1157,7 @@ begin
       ShimScope.DefineLexicalBinding('__GocciaSetForeignDateValue',
         ForeignSetter, dtConst);
     end;
-    AExecutor.EvaluateShim(ProgramNode, ShimScope,
+    ALoader.Evaluate(ProgramNode, ShimScope,
       DEFAULT_SHIMS[AShimIndex].FileName);
     Result := ShimScope.GetValue(DEFAULT_SHIMS[AShimIndex].Name);
     CurrentRealm.SetSlot(GShimExportSlots[AShimIndex], Result);
@@ -1159,13 +1174,13 @@ begin
   end;
 end;
 
-function GetDateIntrinsic(const AExecutor: TGocciaExecutor): TGocciaValue;
+function GetDateIntrinsic(const ALoader: TGocciaShimLoader): TGocciaValue;
 var
   I: Integer;
 begin
   for I := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
     if DEFAULT_SHIMS[I].Name = DATE_SHIM_NAME then
-      Exit(LoadShimValue(AExecutor, I));
+      Exit(LoadShimValue(ALoader, I));
   raise Exception.Create('Date shim is not registered');
 end;
 
@@ -1206,31 +1221,31 @@ begin
 end;
 
 constructor TGocciaShimMaterializer.Create(
-  const AExecutor: TGocciaExecutor; const AShimIndex: Integer);
+  const ALoader: TGocciaShimLoader; const AShimIndex: Integer);
 begin
   inherited Create;
-  FExecutor := AExecutor;
+  FLoader := ALoader;
   FShimIndex := AShimIndex;
 end;
 
 function TGocciaShimMaterializer.Materialize: TGocciaValue;
 begin
-  Result := LoadShimValue(FExecutor, FShimIndex);
+  Result := LoadShimValue(FLoader, FShimIndex);
 end;
 
 constructor TGocciaShimMemberMaterializer.Create(
-  const AExecutor: TGocciaExecutor; const AShimIndex: Integer;
+  const ALoader: TGocciaShimLoader; const AShimIndex: Integer;
   const AExportKey: string);
 begin
   inherited Create;
-  FExecutor := AExecutor;
+  FLoader := ALoader;
   FShimIndex := AShimIndex;
   FExportKey := AExportKey;
 end;
 
 function TGocciaShimMemberMaterializer.Materialize: TGocciaValue;
 begin
-  Result := LoadShimValue(FExecutor, FShimIndex);
+  Result := LoadShimValue(FLoader, FShimIndex);
   if FExportKey <> '' then
     Result := (Result as TGocciaObjectValue).GetProperty(FExportKey);
 end;
@@ -1240,7 +1255,7 @@ procedure TGocciaShimMemberMaterializer.MaterializeAccessor(out AGetter,
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  Descriptor := (LoadShimValue(FExecutor, FShimIndex) as TGocciaObjectValue)
+  Descriptor := (LoadShimValue(FLoader, FShimIndex) as TGocciaObjectValue)
     .GetOwnPropertyDescriptor(FExportKey);
   AGetter := (Descriptor as TGocciaPropertyDescriptorAccessor).Getter;
   ASetter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;

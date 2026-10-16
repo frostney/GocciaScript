@@ -1444,8 +1444,8 @@ begin
 end;
 
 { Records a static module request of a program no loader links (the entry,
-  a REPL input) in the module's request table, which the bytecode executor
-  links before running it (ES2026 §16.2.1.6.1.2 Link()). Source- and
+  a REPL input) in the module's request table, which the engine links
+  before running it (ES2026 §16.2.1.6.1.2 Link()). Source- and
   defer-phase imports keep their own load paths and are not recorded. }
 procedure AddModuleRequest(const AModule: TGocciaBytecodeModule;
   const AStmt: TGocciaStatement);

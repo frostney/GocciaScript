@@ -164,7 +164,7 @@ threadvar
   //     global scope set to the *module* scope, which
   //     TGocciaModule.SetEnvironment likewise registers with AddRootObject
   //     for as long as the module holds it, and a shim body with its module
-  //     scope, which TGocciaBytecodeExecutor.EvaluateShim temp-roots for the
+  //     scope, which TGocciaEngine.EvaluateShim temp-roots for the
   //     run.
   //   * TGocciaVM direct eval — Scope is the eval activation scope, temp-
   //     rooted around the whole eval, and FunctionValue is the caller

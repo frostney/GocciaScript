@@ -15,8 +15,6 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
@@ -47,9 +45,8 @@ type
 
   TModuleFunctionInstantiationTests = class(TTestSuite)
   private
-    procedure AssertImportedModuleFunctions(const AExecutor: TGocciaExecutor);
-    procedure AssertEntryModuleFunctionReadsImport(
-      const AExecutor: TGocciaExecutor);
+    procedure AssertImportedModuleFunctions;
+    procedure AssertEntryModuleFunctionReadsImport;
   public
     procedure SetupTests; override;
 
@@ -146,8 +143,7 @@ begin
     TestEntryModuleFunctionReadsImport);
 end;
 
-procedure TModuleFunctionInstantiationTests.AssertImportedModuleFunctions(
-  const AExecutor: TGocciaExecutor);
+procedure TModuleFunctionInstantiationTests.AssertImportedModuleFunctions;
 const
   FUNCTION_EXPORTS: array[0..3] of string = ('exported', 'default',
     'asyncFn', 'generatorFn');
@@ -172,8 +168,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader,
-        AExecutor);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
       try
         Engine.Compatibility := [cfFunction];
         Module := ModuleLoader.LoadModule(FUNCTIONS_PATH, ENTRY_PATH);
@@ -213,22 +208,14 @@ begin
 end;
 
 procedure TModuleFunctionInstantiationTests.TestBytecodeModuleFunctionsAreCompiled;
-var
-  Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaBytecodeExecutor.Create;
-  try
-    AssertImportedModuleFunctions(Executor);
-  finally
-    Executor.Free;
-  end;
+  AssertImportedModuleFunctions;
 end;
 
 { The entry of TGocciaEngine.Execute links its requests itself. Its function
   declarations exist before its body runs, and read the entry's imports from
   its module environment once the imports' modules are loaded. }
-procedure TModuleFunctionInstantiationTests.AssertEntryModuleFunctionReadsImport(
-  const AExecutor: TGocciaExecutor);
+procedure TModuleFunctionInstantiationTests.AssertEntryModuleFunctionReadsImport;
 var
   Engine: TGocciaEngine;
   ModuleLoader: TGocciaModuleLoader;
@@ -251,8 +238,7 @@ begin
 
     ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
     try
-      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader,
-        AExecutor);
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
       try
         Engine.Compatibility := [cfFunction];
         Engine.SourceType := stModule;
@@ -273,15 +259,8 @@ begin
 end;
 
 procedure TModuleFunctionInstantiationTests.TestEntryModuleFunctionReadsImport;
-var
-  Executor: TGocciaExecutor;
 begin
-  Executor := TGocciaBytecodeExecutor.Create;
-  try
-    AssertEntryModuleFunctionReadsImport(Executor);
-  finally
-    Executor.Free;
-  end;
+  AssertEntryModuleFunctionReadsImport;
 end;
 
 begin
