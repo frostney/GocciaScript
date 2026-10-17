@@ -95,7 +95,10 @@ one.
 - A value's destructor still frees only what the value owns natively and never
   calls into another managed object: at teardown, as in any sweep, its peers
   may already be gone. Nothing may use a managed value after its thread's
-  runtime has shut down.
+  runtime has shut down. The main thread's runtime is shut down once, as the
+  process ends: it frees the process-wide singletons (the primitives, the
+  well-known symbols, the array hole) without resetting their cached
+  pointers, so no engine may start on any thread after it.
 - A native object whose method backs a native function, and which holds
   values, is a managed value set as the function's `CapturedRoot`, so the
   collector keeps and frees it with the function. A `TGCManagedObject`

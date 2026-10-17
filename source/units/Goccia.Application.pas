@@ -92,7 +92,10 @@ begin
     App.Free;
     { Every engine is gone by now. Shutting the main thread's runtime down
       destroys what its collector still manages, as each worker's does when
-      it exits, so a run ends with nothing left allocated (#1592). }
+      it exits, so a run ends with nothing left allocated (#1592). That
+      includes the process-wide singletons (primitives, well-known symbols,
+      the array hole), whose cached pointers are not reset: this is the
+      process's last runtime, and no engine may start after it (ADR 0143). }
     ShutdownThreadRuntime;
   end;
 end;
