@@ -3643,6 +3643,28 @@ begin
   end;
 end;
 
+{ The path an entry module is registered and stamped under: the one the
+  loader's resolver gives an import of the entry's file. That is the expanded
+  host path, unless the content provider knows the file only by the name the
+  host gave it. The sandbox's virtual filesystem names files by `/`-rooted
+  paths on every platform, and its resolver answers an import of `./cyc.js`
+  with `/cyc.js`, while on Windows ExpandFileName turns `/cyc.js` into a drive
+  path the filesystem does not have. Registered under that, the entry was
+  missed by an import of its own file, which loaded a second copy of it. }
+function EntryModulePath(const ALoader: TGocciaModuleLoader;
+  const ASourcePath: string): string;
+var
+  Provider: TGocciaModuleContentProvider;
+begin
+  Result := ExpandFileName(ASourcePath);
+  if Result = ASourcePath then
+    Exit;
+  Provider := ALoader.ContentProvider;
+  if Assigned(Provider) and Provider.Exists(ASourcePath) and
+     not Provider.Exists(Result) then
+    Result := ASourcePath;
+end;
+
 function TGocciaEngine.RunModuleForSourceType(
   const AModule: TGocciaBytecodeModule;
   const AFileName: string): TGocciaValue;
@@ -3677,7 +3699,8 @@ begin
         VM's current runtime module it gets the program's exports
         (InitializeEntryLocalExports and InitializeEntryLinkedExports, then
         OP_EXPORT). }
-      EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
+      EntryModule := TGocciaModule.Create(
+        EntryModulePath(FModuleLoader, AFileName));
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then
         EntryModule.LastModified := EntryLastModified;
@@ -3940,7 +3963,8 @@ begin
         if Assigned(FModuleLoader) then
         begin
           EntryRequestedModules := TGocciaModuleList.Create;
-          EntryModule := TGocciaModule.Create(ExpandFileName(FSourcePath));
+          EntryModule := TGocciaModule.Create(
+            EntryModulePath(FModuleLoader, FSourcePath));
           { Stamp the entry with its file's modification time, as the
             loader stamps every module it loads. Unstamped, a later
             import of the entry's own path took it for a changed file
