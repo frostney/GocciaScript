@@ -1348,7 +1348,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-// ES2026 §25.4.13 Atomics.store(typedArray, index, value)
+// ES2026 §25.4.11 Atomics.store(typedArray, index, value)
 function TGocciaAtomics.AtomicsStore(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var

@@ -80,6 +80,8 @@ result.point.x;
 
 Pointer arguments accept `FFIPointer`, `ArrayBuffer`, `SharedArrayBuffer`, `TypedArray`, FFI aggregate values, persistent callback handles, or `null`.
 
+A `TypedArray` passes the address of its first element in the buffer's current data block, so a view of a resized or grown buffer passes the bytes it views now. A view with no elements passes a native null pointer: an empty view, a view of a detached buffer, or a view past the end of its shrunk buffer. An empty `ArrayBuffer` or `SharedArrayBuffer` also passes null. The address is valid only during the call; script code that resizes the buffer while the native function runs (from a callback) leaves it pointing at the old block.
+
 ## Nullable UTF-8 Arguments
 
 Plain `utf8string` retains its existing JavaScript string-coercion behavior. Use `FFI.nullable("utf8string")` when JavaScript `null` must map to a native null pointer:
