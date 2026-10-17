@@ -591,7 +591,7 @@ Targets must satisfy ECMAScript `CanBeHeldWeakly`: objects and non-registered sy
 
 Implements the [ECMAScript FinalizationRegistry](https://tc39.es/ecma262/#sec-finalization-registry-objects).
 
-A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`.
+A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`. The registration stays in the registry until its cleanup job runs, so `unregister` can still remove it in the meantime, and then its callback never runs.
 
 | Method/Property | Description |
 |--------|-------------|

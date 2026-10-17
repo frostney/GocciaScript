@@ -50,6 +50,9 @@ type
     procedure TestDefaultQuotasAreBounded;
     procedure TestNodeQuotaRejectsAtomically;
     procedure TestRootClampCallback;
+    procedure TestWholeFileWritesHoldExactlyTheirBytes;
+    procedure TestHandleWritesStillGrowByDoubling;
+    procedure TestWholeFileWriteRefusedByQuotaAllocatesNothing;
   end;
 
 function TDeterministicSandboxClock.Now: TDateTime;
@@ -78,6 +81,12 @@ begin
   Test('Node quota rejects atomically', TestNodeQuotaRejectsAtomically);
   Test('Root clamp callback reports one attempted escape',
     TestRootClampCallback);
+  Test('Whole-file writes hold exactly their bytes',
+    TestWholeFileWritesHoldExactlyTheirBytes);
+  Test('Writes through a handle still grow by doubling',
+    TestHandleWritesStillGrowByDoubling);
+  Test('A whole-file write the quota refuses allocates nothing',
+    TestWholeFileWriteRefusedByQuotaAllocatesNothing);
 end;
 
 procedure TTestSandboxVirtualFileSystem.BeforeEach;
@@ -396,6 +405,98 @@ begin
   Expect<string>(FLastClampPath).ToBe('../../secret.txt');
   Expect<string>(FLastClampBase).ToBe('/work');
   Expect<string>(FLastCanonicalPath).ToBe('/secret.txt');
+end;
+
+function FilledBytes(const ACount: Integer): TBytes;
+begin
+  Result := nil;
+  SetLength(Result, ACount);
+  if ACount > 0 then
+    FillChar(Result[0], ACount, 65);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestWholeFileWritesHoldExactlyTheirBytes;
+const
+  SIZES: array[0..7] of Integer = (1, 63, 64, 65, 4096, 4097,
+    1024 * 1024 + 1, 0);
+var
+  Index: Integer;
+begin
+  { A size just above a power of two is the case a doubling buffer rounds
+    up the most. }
+  for Index := Low(SIZES) to High(SIZES) do
+  begin
+    FFs.WriteAllBytes('/file.bin', FilledBytes(SIZES[Index]));
+    Expect<Int64>(FFs.SnapshotAllocatedBytes('/file.bin')).ToBe(
+      SIZES[Index]);
+    Expect<Int64>(FFs.Stat('/file.bin').Size).ToBe(SIZES[Index]);
+    Expect<Int64>(FFs.UsedBytes).ToBe(SIZES[Index]);
+  end;
+
+  { A shrinking rewrite releases the larger buffer. }
+  FFs.WriteAllBytes('/file.bin', FilledBytes(100000));
+  FFs.WriteAllBytes('/file.bin', FilledBytes(10));
+  Expect<Int64>(FFs.SnapshotAllocatedBytes('/file.bin')).ToBe(10);
+  Expect<Int64>(FFs.UsedBytes).ToBe(10);
+  Expect<Integer>(Length(FFs.ReadAllBytes('/file.bin'))).ToBe(10);
+
+  { 'h', 'é' (two bytes), 'llo'. }
+  FFs.WriteAllText('/file.txt', 'h' + #$C3#$A9 + 'llo');
+  Expect<Int64>(FFs.SnapshotAllocatedBytes('/file.txt')).ToBe(6);
+  Expect<Int64>(FFs.UsedBytes).ToBe(16);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestHandleWritesStillGrowByDoubling;
+var
+  Handle: TSandboxFsFile;
+  Data: TBytes;
+begin
+  FFs.WriteAllBytes('/file.bin', FilledBytes(65));
+  FFs.AppendAllText('/file.bin', 'x');
+  Expect<Int64>(FFs.SnapshotAllocatedBytes('/file.bin')).ToBe(130);
+  FFs.AppendAllText('/file.bin', 'y');
+  Expect<Int64>(FFs.SnapshotAllocatedBytes('/file.bin')).ToBe(130);
+  Expect<Int64>(FFs.Stat('/file.bin').Size).ToBe(67);
+  Expect<Int64>(FFs.UsedBytes).ToBe(67);
+
+  Data := FilledBytes(100);
+  Handle := FFs.Open('/stream.bin', omWrite);
+  try
+    Handle.Write(Data[0], Length(Data));
+  finally
+    Handle.Free;
+  end;
+  Expect<Int64>(FFs.SnapshotAllocatedBytes('/stream.bin')).ToBe(128);
+  Expect<Int64>(FFs.Stat('/stream.bin').Size).ToBe(100);
+  Expect<Int64>(FFs.UsedBytes).ToBe(167);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestWholeFileWriteRefusedByQuotaAllocatesNothing;
+var
+  LimitedFs: TSandboxVirtualFileSystem;
+  Raised: Boolean;
+begin
+  LimitedFs := TSandboxVirtualFileSystem.Create(100, FClock);
+  try
+    LimitedFs.WriteAllBytes('/file.bin', FilledBytes(50));
+    Raised := False;
+    try
+      LimitedFs.WriteAllBytes('/file.bin', FilledBytes(1000));
+    except
+      on E: ESandboxFsQuotaExceeded do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Boolean>(LimitedFs.SnapshotAllocatedBytes('/file.bin') <
+      1000).ToBe(True);
+    Expect<Int64>(LimitedFs.UsedBytes).ToBe(0);
+
+    LimitedFs.WriteAllBytes('/file.bin', FilledBytes(100));
+    Expect<Int64>(LimitedFs.SnapshotAllocatedBytes('/file.bin')).ToBe(100);
+    Expect<Int64>(LimitedFs.UsedBytes).ToBe(100);
+  finally
+    LimitedFs.Free;
+  end;
 end;
 
 begin

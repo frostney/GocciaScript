@@ -108,6 +108,8 @@ class C {
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
 
+**Unsettled top-level `await`:** A top-level `await` on a promise that nothing left in the run can settle fails the run with `TypeError: await: Promise did not settle after microtask drain`.
+
 ### Classes
 
 - Class declarations and expressions.
@@ -487,6 +489,8 @@ The storage is a private name of its own, so it is not an own property, and the 
 - Static method/getter/setter: during class definition, after static methods are placed.
 - Non-static method/getter/setter: during class construction, before field initialization.
 - Field/accessor: during construction, immediately after the decorated element is initialized.
+
+`addInitializer` throws a `TypeError` when its argument is not callable, and when it is called after its decorator has returned, for example through a context the decorator kept. Each decorator gets its own context, so a later decorator cannot add initializers through an earlier one's `addInitializer` either.
 
 **`Symbol.metadata`:** Each decorated class receives a `[Symbol.metadata]` property containing a null-prototype object. Metadata objects inherit from the parent class's metadata via prototype chain.
 

@@ -11,6 +11,7 @@ const LATIN1 = String.fromCharCode(0x00, 0x41, 0x80, 0xC0, 0xFF, 0xA9, 0xBE, 0x7
 const SHORT_B64 = btoa(SHORT_ASCII);
 const MEDIUM_B64 = btoa(MEDIUM_ASCII);
 const LATIN1_B64 = btoa(LATIN1);
+const LARGE_B64 = "QUJD".repeat(25000);
 
 group("btoa", () => {
   bench("short ASCII (13 chars)", () => {
@@ -37,6 +38,10 @@ group("atob", () => {
 
   bench("Latin-1 output", () => {
     atob(LATIN1_B64);
+  });
+
+  bench("large base64 (100,000 chars)", () => {
+    atob(LARGE_B64);
   });
 
   bench("forgiving (no padding)", () => {

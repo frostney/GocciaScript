@@ -6,7 +6,8 @@
 
     - case-sensitive, '/'-separated paths; '..' clamps at root
       (chroot-jail semantics - there is no way to address the host)
-    - files are TBytes with capacity doubling; directories are
+    - files are TBytes: a whole-file write holds exactly its bytes, and
+      writes through a handle grow the buffer by doubling; directories are
       sorted child maps (deterministic, byte-ordered listings)
     - streaming handles (TSandboxFsFile) with seek / truncate / append
     - a byte quota so a sandboxed workload cannot balloon host memory
@@ -165,6 +166,10 @@ type
     function SnapshotList(const APath: string): TSandboxFsStatArray;
     function SnapshotReadAllBytes(const APath: string): TBytes;
     function SnapshotReadAllText(const APath: string): string;
+    { The bytes the file APath's buffer holds: its size after WriteAllBytes
+      or WriteAllText, more while it grows through a handle, whose writes
+      double the buffer. }
+    function SnapshotAllocatedBytes(const APath: string): Int64;
     { Whether the file APath and the file AOtherPath in AOther hold the same
       bytes, compared in place a machine word at a time without copying
       either. Non-observing, like the other snapshot reads. }
@@ -1029,9 +1034,21 @@ procedure TSandboxVirtualFileSystem.WriteAllBytes(const APath: string;
   const AData: TBytes);
 var
   Handle: TSandboxFsFile;
+  Node: TSandboxFsNode;
 begin
   Handle := Open(APath, omWrite);
   try
+    { The whole content is known, so the buffer holds exactly its bytes
+      rather than the power of two GrowFile rounds a growing file up to.
+      The quota is checked before the buffer is allocated, and the old
+      buffer is released first rather than copied into the new one. }
+    Node := Handle.FNode;
+    EnsureGrowth(Length(AData) - Node.FSize);
+    if Length(Node.FData) <> Length(AData) then
+    begin
+      Node.FData := nil;
+      SetLength(Node.FData, Length(AData));
+    end;
     if Length(AData) > 0 then
       Handle.Write(AData[0], Length(AData));
   finally
@@ -1041,15 +1058,8 @@ end;
 
 procedure TSandboxVirtualFileSystem.WriteAllText(const APath: string;
   const AText: string);
-var
-  Handle: TSandboxFsFile;
 begin
-  Handle := Open(APath, omWrite);
-  try
-    Handle.WriteText(AText);
-  finally
-    Handle.Free;
-  end;
+  WriteAllBytes(APath, EncodeUTF8WithReplacement(AText));
 end;
 
 procedure TSandboxVirtualFileSystem.AppendAllText(const APath: string;
@@ -1117,6 +1127,12 @@ var
 begin
   Bytes := SnapshotReadAllBytes(APath);
   Result := DecodeUTF8WithReplacement(Bytes);
+end;
+
+function TSandboxVirtualFileSystem.SnapshotAllocatedBytes(
+  const APath: string): Int64;
+begin
+  Result := Length(RequireFile(APath).FData);
 end;
 
 function TSandboxVirtualFileSystem.SnapshotSameBytes(const APath: string;

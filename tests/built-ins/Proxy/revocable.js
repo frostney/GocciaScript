@@ -54,3 +54,24 @@ describe("Proxy.revocable", () => {
     expect(() => Proxy.revocable(null, {})).toThrow(TypeError);
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("Proxy.revocable across a collection", () => {
+  // Fresh revocable proxies reuse the memory a wrongly collected revoker
+  // leaves behind, so a stale revoke would revoke one of them instead.
+  const churn = () => Array.from({ length: 2000 }, () => Proxy.revocable({}, {}));
+
+  test("revoke still revokes after the result object is collected", () => {
+    const holder = {};
+    const makeRevoke = () => {
+      const result = Proxy.revocable({ value: 1 }, {});
+      holder.proxy = result.proxy;
+      return result.revoke;
+    };
+    const revoke = makeRevoke();
+    Goccia.gc();
+    const others = churn();
+    revoke();
+    expect(() => holder.proxy.value).toThrow(TypeError);
+    expect(others.every(({ proxy }) => typeof proxy === "object")).toBe(true);
+  });
+});

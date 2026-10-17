@@ -1545,6 +1545,34 @@ begin
     TGocciaArrayBufferValue(AArray.FBufferValue).Immutable;
 end;
 
+// Copies AByteCount bytes from ASource's data block at ASourceByteIndex to
+// ATarget's data block at ATargetByteIndex as one block. The copy has memmove
+// semantics: when both ranges share a data block the result is as if the
+// source bytes were cloned first, as ES2026 §23.2.3.26.2
+// SetTypedArrayFromTypedArray step 19 clones a source on the target's buffer.
+// Callers have validated detachment and lengths; this repeats one explicit
+// range check against the current data blocks and copies nothing, answering
+// False, when either range falls outside its block, so the caller can fall
+// back to its element-wise path.
+function TryCopyTypedArrayBytes(const ASource: TGocciaTypedArrayValue;
+  const ASourceByteIndex: Integer; const ATarget: TGocciaTypedArrayValue;
+  const ATargetByteIndex, AByteCount: Integer): Boolean;
+begin
+  if AByteCount <= 0 then
+    Exit(True);
+  if IsDetachedTypedArray(ASource) or IsDetachedTypedArray(ATarget) then
+    Exit(False);
+  ASource.SyncBufferData;
+  ATarget.SyncBufferData;
+  if (ASourceByteIndex < 0) or (ATargetByteIndex < 0) or
+     (Int64(ASourceByteIndex) + AByteCount > System.Length(ASource.FBufferData)) or
+     (Int64(ATargetByteIndex) + AByteCount > System.Length(ATarget.FBufferData)) then
+    Exit(False);
+  Move(ASource.FBufferData[ASourceByteIndex],
+    ATarget.FBufferData[ATargetByteIndex], AByteCount);
+  Result := True;
+end;
+
 procedure EnsureTypedArrayAttached(const AArray: TGocciaTypedArrayValue; const AMethod: string);
 begin
   if IsTypedArrayOutOfBounds(AArray) then
@@ -1962,13 +1990,12 @@ begin
   Result := AThisValue;
 end;
 
-// ES2026 §23.2.3.3 %TypedArray%.prototype.copyWithin(target, start [, end])
+// ES2026 §23.2.3.6 %TypedArray%.prototype.copyWithin(target, start [, end])
 function TGocciaTypedArrayValue.TypedArrayCopyWithin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
   Target, Start, Final, Count, Direction, From, To_, Len, CurrentLen: Integer;
   BPE: Integer;
-  TempBuf: TBytes;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.copyWithin');
   EnsureTypedArrayWritable(TA, 'TypedArray.prototype.copyWithin');
@@ -1999,11 +2026,11 @@ begin
     Exit(AThisValue);
 
   BPE := BytesPerElement(TA.FKind);
-  SetLength(TempBuf, Count * BPE);
   From := TA.FByteOffset + Start * BPE;
   To_ := TA.FByteOffset + Target * BPE;
-  Move(TA.FBufferData[From], TempBuf[0], Count * BPE);
-  Move(TempBuf[0], TA.FBufferData[To_], Count * BPE);
+  // The spec copies backwards when the target overlaps the source from above,
+  // so overlapping ranges behave as a memmove, which one block move is.
+  TryCopyTypedArrayBytes(TA, From, TA, To_, Count * BPE);
 
   Result := AThisValue;
 end;
@@ -2059,9 +2086,24 @@ begin
     CopyBytes := CopyElements * BPE;
     SourceByteIndex := TA.FByteOffset + First * BPE;
     TargetByteIndex := NewTA.FByteOffset;
-    for I := 0 to CopyBytes - 1 do
-      NewTA.FBufferData[TargetByteIndex + I] :=
-        TA.FBufferData[SourceByteIndex + I];
+    // ES2026 §23.2.3.27 step 14.g.ix: the same element type is copied byte by
+    // byte in ascending order. A block move is the same copy unless a species
+    // result views the source's data block at a higher overlapping index,
+    // where ascending order repeats source bytes.
+    TA.SyncBufferData;
+    NewTA.SyncBufferData;
+    if (Pointer(TA.FBufferData) = Pointer(NewTA.FBufferData)) and
+       (TargetByteIndex > SourceByteIndex) and
+       (TargetByteIndex < SourceByteIndex + CopyBytes) then
+    begin
+      for I := 0 to CopyBytes - 1 do
+        NewTA.FBufferData[TargetByteIndex + I] :=
+          TA.FBufferData[SourceByteIndex + I];
+    end
+    else if not TryCopyTypedArrayBytes(TA, SourceByteIndex, NewTA,
+      TargetByteIndex, CopyBytes) then
+      for I := 0 to CopyElements - 1 do
+        NewTA.WriteValueToElement(I, TA.GetElementAsValue(First + I));
   end
   else if IsBigIntKind(TA.FKind) then
   begin
@@ -2130,7 +2172,7 @@ begin
   Result := NewTA;
 end;
 
-// ES2026 §23.2.3.25 %TypedArray%.prototype.set(source [, offset])
+// ES2026 §23.2.3.26 %TypedArray%.prototype.set(source [, offset])
 function TGocciaTypedArrayValue.TypedArraySet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, SrcTA: TGocciaTypedArrayValue;
@@ -2166,9 +2208,18 @@ begin
     if (TargetOffset > TargetLen) or
        (SourceLen > TargetLen - TargetOffset) then
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
-    // ES2026 §23.2.3.25.1 step 1.b: mixed BigInt/Number content types throw
+    // ES2026 §23.2.3.26.2 step 17: mixed BigInt/Number content types throw
     if IsBigIntKind(TA.FKind) <> IsBigIntKind(SrcTA.FKind) then
       ThrowTypeError(SErrorBigIntTypedArrayRequiresBigInt, SSuggestBigIntTypedArrayValue);
+    // ES2026 §23.2.3.26.2 SetTypedArrayFromTypedArray steps 19 and 23: the
+    // same element type transfers the bytes unchanged. One block move is that
+    // transfer, and covers the clone of a source sharing the target's data
+    // block, since the move handles overlap.
+    if (SrcTA.FKind = TA.FKind) and
+       TryCopyTypedArrayBytes(SrcTA, SrcTA.FByteOffset, TA,
+         TA.FByteOffset + TargetOffset * TA.FElementSize,
+         SourceLen * TA.FElementSize) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
     if IsBigIntKind(TA.FKind) then
     begin
       SetLength(BigIntSnapshot, SourceLen);
@@ -2188,7 +2239,7 @@ begin
   end
   else
   begin
-    // ES2026 §23.2.3.25.2 SetTypedArrayFromArrayLike
+    // ES2026 §23.2.3.26.1 SetTypedArrayFromArrayLike
     SrcObj := ToObject(AArgs.GetElement(0));
     SrcLen := LengthOfArrayLike(SrcObj);
     if (TargetOffset > TargetLen) or
@@ -3344,6 +3395,7 @@ var
   ResultRoot, IteratorRoot, NextMethodRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
+  ResultRoots: TGocciaActiveRootFrame;
 begin
   BPE := TGocciaTypedArrayValue.BytesPerElement(FKind);
 
@@ -3360,7 +3412,14 @@ begin
     if TGocciaTypedArrayValue.IsBigIntKind(FKind) <>
        TGocciaTypedArrayValue.IsBigIntKind(SrcTA.Kind) then
       ThrowTypeError(SErrorBigIntTypedArrayCannotMix, SSuggestBigIntTypedArrayValue);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, SrcTA.Length);
+    Len := SrcTA.Length;
+    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+    // ES2026 §23.2.5.1.2 InitializeTypedArrayFromTypedArray step 11: the same
+    // element type clones the source bytes (CloneArrayBuffer), which one block
+    // move does.
+    if (SrcTA.Kind = FKind) and
+       TryCopyTypedArrayBytes(SrcTA, SrcTA.FByteOffset, NewTA, 0, Len * BPE) then
+      Exit(NewTA);
     if TGocciaTypedArrayValue.IsBigIntKind(FKind) then
     begin
       for I := 0 to SrcTA.Length - 1 do
@@ -3543,22 +3602,32 @@ begin
       Exit(NewTA);
     end;
 
-    if FirstArg is TGocciaArrayValue then
-    begin
-      SrcArr := TGocciaArrayValue(FirstArg);
-      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
-      for I := 0 to SrcArr.Elements.Count - 1 do
-        NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
-      Exit(NewTA);
-    end;
+    // Each element's valueOf, and on the array-like path each element
+    // getter, can collect while the new typed array is held only here
+    // (issue #1679).
+    ResultRoots.Initialize;
+    try
+      if FirstArg is TGocciaArrayValue then
+      begin
+        SrcArr := TGocciaArrayValue(FirstArg);
+        NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
+        ResultRoots.Add(NewTA);
+        for I := 0 to SrcArr.Elements.Count - 1 do
+          NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
+        Exit(NewTA);
+      end;
 
-    Len := LengthOfArrayLikeEx(TGocciaObjectValue(FirstArg), RawLen);
-    if RawLen > High(Integer) then
-      ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
-    for I := 0 to Len - 1 do
-      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
-    Exit(NewTA);
+      Len := LengthOfArrayLikeEx(TGocciaObjectValue(FirstArg), RawLen);
+      if RawLen > High(Integer) then
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
+      NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+      ResultRoots.Add(NewTA);
+      for I := 0 to Len - 1 do
+        NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
+      Exit(NewTA);
+    finally
+      ResultRoots.Clear;
+    end;
   end;
 
   // new TypedArray(length) — ES2026 §23.2.1.2 step 5: ToIndex(length)

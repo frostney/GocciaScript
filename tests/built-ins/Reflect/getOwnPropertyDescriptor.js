@@ -103,3 +103,107 @@ describe("Reflect.getOwnPropertyDescriptor", () => {
     expect(() => Reflect.getOwnPropertyDescriptor("str", "x")).toThrow(TypeError);
   });
 });
+
+// ES2026 §28.1.6 step 4 and §6.2.6.4 FromPropertyDescriptor: every field is
+// made with CreateDataPropertyOrThrow, so it is an own data property and no
+// setter inherited from Object.prototype runs.
+describe("Reflect.getOwnPropertyDescriptor with setters on Object.prototype", () => {
+  const FIELDS = ["value", "writable", "get", "set", "enumerable", "configurable"];
+
+  // Installs a setter for every descriptor field name on Object.prototype,
+  // calls fn, and removes the setters again before returning fn's result.
+  const withPrototypeSetters = (onSet, fn) => {
+    FIELDS.forEach((name) => {
+      // A null-prototype descriptor: an ordinary one would inherit the
+      // accessors already installed and be rejected by ToPropertyDescriptor.
+      const descriptor = Object.create(null);
+      descriptor.set = (v) => { onSet(name, v); };
+      descriptor.configurable = true;
+      Object.defineProperty(Object.prototype, name, descriptor);
+    });
+    try {
+      return fn();
+    } finally {
+      FIELDS.forEach((name) => { delete Object.prototype[name]; });
+    }
+  };
+
+  const ownDataFields = (desc) =>
+    Object.getOwnPropertyNames(desc).filter((name) =>
+      Object.hasOwn(Object.getOwnPropertyDescriptor(desc, name), "value"));
+
+  test("a string-keyed data property", () => {
+    const calls = [];
+    const obj = { x: 1 };
+    const desc = withPrototypeSetters((name) => calls.push(name),
+      () => Reflect.getOwnPropertyDescriptor(obj, "x"));
+
+    expect(calls).toEqual([]);
+    expect(ownDataFields(desc)).toEqual(["value", "writable", "enumerable", "configurable"]);
+    expect(desc.value).toBe(1);
+    expect(desc.writable).toBe(true);
+  });
+
+  test("a symbol-keyed data property", () => {
+    const calls = [];
+    const key = Symbol("x");
+    const obj = { [key]: 2 };
+    const desc = withPrototypeSetters((name) => calls.push(name),
+      () => Reflect.getOwnPropertyDescriptor(obj, key));
+
+    expect(calls).toEqual([]);
+    expect(ownDataFields(desc)).toEqual(["value", "writable", "enumerable", "configurable"]);
+    expect(desc.value).toBe(2);
+  });
+
+  test("a string-keyed accessor property", () => {
+    const calls = [];
+    const getter = () => 3;
+    const obj = {};
+    Object.defineProperty(obj, "x", { get: getter, enumerable: true, configurable: true });
+    const desc = withPrototypeSetters((name) => calls.push(name),
+      () => Reflect.getOwnPropertyDescriptor(obj, "x"));
+
+    expect(calls).toEqual([]);
+    expect(ownDataFields(desc)).toEqual(["get", "set", "enumerable", "configurable"]);
+    expect(desc.get).toBe(getter);
+    expect(desc.set).toBe(undefined);
+  });
+
+  test("a symbol-keyed accessor property", () => {
+    const calls = [];
+    const key = Symbol("x");
+    const setter = (v) => {};
+    const obj = {};
+    Object.defineProperty(obj, key, { set: setter, configurable: true });
+    const desc = withPrototypeSetters((name) => calls.push(name),
+      () => Reflect.getOwnPropertyDescriptor(obj, key));
+
+    expect(calls).toEqual([]);
+    expect(ownDataFields(desc)).toEqual(["get", "set", "enumerable", "configurable"]);
+    expect(desc.set).toBe(setter);
+    expect(desc.enumerable).toBe(false);
+  });
+
+  test("a setter that deletes the property being described does not run", () => {
+    const obj = { x: 4 };
+    const desc = withPrototypeSetters(() => { delete obj.x; },
+      () => Reflect.getOwnPropertyDescriptor(obj, "x"));
+
+    expect(Object.hasOwn(obj, "x")).toBe(true);
+    expect(desc.value).toBe(4);
+    expect(desc.writable).toBe(true);
+    expect(desc.enumerable).toBe(true);
+    expect(desc.configurable).toBe(true);
+  });
+
+  test("matches Object.getOwnPropertyDescriptor", () => {
+    const obj = { x: 5 };
+    const [fromReflect, fromObject] = withPrototypeSetters(() => {}, () => [
+      Reflect.getOwnPropertyDescriptor(obj, "x"),
+      Object.getOwnPropertyDescriptor(obj, "x"),
+    ]);
+
+    expect(Object.getOwnPropertyNames(fromReflect)).toEqual(Object.getOwnPropertyNames(fromObject));
+  });
+});
