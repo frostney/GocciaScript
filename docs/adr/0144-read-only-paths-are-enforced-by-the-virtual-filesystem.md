@@ -45,9 +45,10 @@ point.
 **A refused write is `EROFS`.** `Goccia.Sandbox.FileSystemErrors` maps
 `ESandboxFsReadOnly` to code `EROFS`, description `read-only file system`,
 and errno `-EROFS` (libuv's `-4043` on Windows), following
-[ADR 0092](0092-sandbox-filesystem-error-contract.md). A script catches an
-`Error` with `code === "EROFS"` from every `fs` form. The shell's commands
-fail with exit code 1 and the message on standard error.
+[ADR 0092](0092-sandbox-filesystem-error-contract.md). A script receives an
+`Error` with `code === "EROFS"` from every `fs` form: the synchronous form
+throws it, the callback form passes it, the promise form rejects with it. The
+shell's commands fail with exit code 1 and the message on standard error.
 
 **The marks belong to one filesystem.** A `runScript` child that shares the
 filesystem is refused like its caller. An isolated child (`{ sandbox: true }`)
@@ -60,7 +61,8 @@ caller's tree.
   also refuse the embedder's own writes.
 - Error precedence follows from where each check sits. Writing a new file
   under a marked directory whose parent is missing is `EROFS`, not `ENOENT`.
-  A plain `mkdir` of an existing marked directory is still `EEXIST`, because
-  it would create nothing.
+  A plain `mkdir` of an existing marked directory is still `EEXIST`, and a
+  recursive one succeeds, because neither would create anything. Opening a
+  marked directory for writing is `EISDIR`, as it is for any directory.
 - `GocciaRunner` does not mark anything yet. A command-line or config opt-in
   that makes `--copy` inputs read-only at write time is left to #1546.
