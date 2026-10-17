@@ -4086,6 +4086,93 @@ await section("Loader: --global option...", async () => {
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
 });
 
+await section("Loader: Date local time keeps a zone's daylight saving time after 2037...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "[",
+      "  new Date(2049, 4, 1).getTime(),",
+      "  new Date(2038, 6, 1, 12).getTimezoneOffset(),",
+      "  new Date(2038, 0, 15, 12).getTimezoneOffset(),",
+      "  new Date(2040, 2, 11, 2, 30).getHours(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      ["America/Los_Angeles", "2503465200000|420|480|3"],
+      ["Australia/Sydney", "2503404000000|-600|-660|2"],
+      ["Europe/Dublin", "2503436400000|-60|0|2"],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date local time in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: a TZif file with only a footer rule follows it at every instant...", async () => {
+  const tmp = makeTmp();
+  try {
+    // A minimal version 2 TZif file with no transitions and one local time
+    // type, so the footer rule governs every instant. GOCCIA_TZDIR is read
+    // before system zoneinfo and Windows ICU, so every platform reads it.
+    const block = (): number[] => {
+      const bytes = [...Buffer.from("TZif2"), ...new Array(15).fill(0)];
+      const int32 = (value: number) =>
+        bytes.push((value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255);
+      // isutcnt, isstdcnt, leapcnt, timecnt, typecnt, charcnt
+      for (const count of [0, 0, 0, 0, 1, 4]) int32(count);
+      int32(-28800);
+      bytes.push(0, 0, ...Buffer.from("PST"), 0);
+      return bytes;
+    };
+    mkdirSync(join(tmp, "America"));
+    writeFileSync(
+      join(tmp, "America", "Los_Angeles"),
+      Uint8Array.from([...block(), ...block(), ...Buffer.from("\nPST8PDT,M3.2.0,M11.1.0\n")]),
+    );
+    const source = [
+      'const at = (instant) => Temporal.Instant.from(instant).toZonedDateTimeISO("America/Los_Angeles");',
+      'const max = new Temporal.ZonedDateTime(8640000000000000000000n, "America/Los_Angeles");',
+      "[",
+      // The rule's offset even where full data has local mean time (-07:52:58).
+      '  at("1850-07-01T12:00:00Z").offset,',
+      '  at("2030-01-15T12:00:00Z").offset,',
+      '  at("2030-07-01T12:00:00Z").offset,',
+      "  max.offset,",
+      '  max.getTimeZoneTransition("previous").toInstant().toString(),',
+      '  String(max.getTimeZoneTransition("next")),',
+      '].join("|");',
+      "",
+    ].join("\n");
+    const expected = "-07:00|-08:00|-07:00|-07:00|+275760-03-09T10:00:00Z|null";
+    const result = runLoaderJson(source, [], { env: { ...process.env, GOCCIA_TZDIR: tmp } });
+    const actual = result.json.files?.[0]?.result;
+    if (result.exitCode !== 0 || actual !== expected)
+      throw new Error(`Slim TZif rule expected ${expected}, got ${actual}${result.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: ShadowRealm.importValue inherits the host module aliases...", async () => {
   const tmp = makeTmp();
   try {
