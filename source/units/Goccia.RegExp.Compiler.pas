@@ -138,10 +138,13 @@ type
     procedure CompileQuantifier(AAtomStart: Integer);
     procedure CompileCharacterClass;
     procedure CompileUnicodeSetsClass;
-    procedure ApplyNestedSetOps(var AContents: TRegExpClassContents);
-    procedure ParseClassUnion(var AContents: TRegExpClassContents);
-    procedure ParseClassEscape(var AContents: TRegExpClassContents);
-    procedure ParseStringDisjunction(var AContents: TRegExpClassContents);
+    procedure ParseClassSetExpression(var AContents: TRegExpClassContents;
+      out AMayContainStrings: Boolean);
+    function ParseClassSetOperand(var AContents: TRegExpClassContents;
+      out AMayContainStrings: Boolean): Boolean;
+    function ParseClassSetCharacter: Cardinal;
+    procedure ParseStringDisjunction(var AContents: TRegExpClassContents;
+      out AMayContainStrings: Boolean);
     procedure CompileEscape(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure CompileEscapeAtom;
     procedure CompileGroup;
@@ -1528,45 +1531,178 @@ begin
     raise EConvertError.Create('Invalid Unicode property of strings: ' + APropertyName);
 end;
 
-procedure TRegExpCompiler.ParseClassEscape(var AContents: TRegExpClassContents);
+const
+  // ES2026 §22.2.1 ClassSetSyntaxCharacter
+  CLASS_SET_SYNTAX_CHARACTERS = ['(', ')', '[', ']', '{', '}', '/', '-',
+    '\', '|'];
+  // ES2026 §22.2.1 ClassSetReservedDoublePunctuator: each is one of these
+  // characters twice.
+  CLASS_SET_DOUBLE_PUNCTUATOR_CHARACTERS = ['&', '!', '#', '$', '%', '*',
+    '+', ',', '.', ':', ';', '<', '=', '>', '?', '@', '^', '`', '~'];
+  // ES2026 §22.2.1 SyntaxCharacter, `/` (IdentityEscape[+UnicodeMode]) and
+  // ClassSetReservedPunctuator: the characters a class may escape as
+  // themselves.
+  CLASS_SET_IDENTITY_ESCAPES = ['^', '$', '\', '.', '*', '+', '?', '(', ')',
+    '[', ']', '{', '}', '|', '/', '&', '-', '!', '#', '%', ',', ':', ';',
+    '<', '=', '>', '@', '`', '~'];
+  SErrorClassSetOperation =
+    'Invalid regular expression: invalid set operation in character class';
+  SErrorNegatedClassStrings =
+    'Invalid regular expression: negated character class may contain strings';
+
+// ES2026 §22.2.1 ClassSetCharacter
+function TRegExpCompiler.ParseClassSetCharacter: Cardinal;
 var
   C: Char;
-  PropertyName: string;
-  CodePoint: Cardinal;
-  NegContents: TRegExpClassContents;
 begin
+  if AtEnd then
+    raise EConvertError.Create('Unterminated character class');
+  C := Peek;
+  if C <> '\' then
+  begin
+    // [lookahead ∉ ClassSetReservedDoublePunctuator]
+    if CharInSet(C, CLASS_SET_DOUBLE_PUNCTUATOR_CHARACTERS) and
+       (PeekAt(1) = C) then
+      raise EConvertError.Create('Invalid regular expression: unescaped ' +
+        C + C + ' in unicode sets mode character class');
+    // SourceCharacter but not ClassSetSyntaxCharacter
+    if CharInSet(C, CLASS_SET_SYNTAX_CHARACTERS) then
+      raise EConvertError.Create('Invalid regular expression: unescaped ' +
+        C + ' in unicode sets mode character class');
+    Exit(ReadCodePoint);
+  end;
+  Inc(FPos);
+  if AtEnd then
+    raise EConvertError.Create('Invalid regular expression: \ at end of pattern');
   C := Advance;
   case C of
-    'd', 'D', 'w', 'W', 's', 'S':
-      begin
-        AddBuiltinCharClass(C, AContents.Ranges, AContents.RangeCount);
-      end;
-    'n': AddClassRange(AContents, $0A, $0A);
-    'r': AddClassRange(AContents, $0D, $0D);
-    't': AddClassRange(AContents, $09, $09);
-    'v': AddClassRange(AContents, $0B, $0B);
-    'f': AddClassRange(AContents, $0C, $0C);
+    // \ CharacterEscape[+UnicodeMode]
+    'n': Result := $0A;
+    'r': Result := $0D;
+    't': Result := $09;
+    'v': Result := $0B;
+    'f': Result := $0C;
     '0':
       begin
-        if not AtEnd and (Peek >= '0') and (Peek <= '9') then
-          AddClassRange(AContents, Ord(C), Ord(C))
+        // 0 [lookahead ∉ DecimalDigit]
+        if (Peek >= '0') and (Peek <= '9') then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid decimal escape in unicode mode');
+        Result := 0;
+      end;
+    'x': Result := ParseHexEscape(2);
+    'u': Result := ParseUnicodeEscape;
+    'c':
+      begin
+        if ((Peek >= 'a') and (Peek <= 'z')) or
+           ((Peek >= 'A') and (Peek <= 'Z')) then
+          Result := Ord(Advance) mod 32
         else
-          AddClassRange(AContents, 0, 0);
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid control escape in unicode mode');
       end;
-    'x':
-      begin
-        CodePoint := ParseHexEscape(2);
-        AddClassRange(AContents, CodePoint, CodePoint);
-      end;
-    'u':
-      begin
-        CodePoint := ParseUnicodeEscape;
-        AddClassRange(AContents, CodePoint, CodePoint);
-      end;
-    'p', 'P':
-      begin
-        if Match('{') then
+    // \b
+    'b': Result := $08;
+  else
+    // IdentityEscape[+UnicodeMode] and \ ClassSetReservedPunctuator
+    if not CharInSet(C, CLASS_SET_IDENTITY_ESCAPES) then
+      raise EConvertError.Create(
+        'Invalid regular expression: invalid escape in unicode mode');
+    Result := Ord(C);
+  end;
+end;
+
+// ES2026 §22.2.1 ClassStringDisjunction :: \q{ ClassStringDisjunctionContents }
+// Called after `\q{`. AMayContainStrings is MayContainStrings (§22.2.1.8):
+// True when a ClassString is empty or longer than one code point.
+procedure TRegExpCompiler.ParseStringDisjunction(
+  var AContents: TRegExpClassContents; out AMayContainStrings: Boolean);
+var
+  CodePoints: array of Cardinal;
+  CodePointCount: Integer;
+begin
+  AMayContainStrings := False;
+  SetLength(CodePoints, 16);
+  repeat
+    // ClassString :: [empty] | NonEmptyClassString
+    CodePointCount := 0;
+    while not AtEnd and (Peek <> '|') and (Peek <> '}') do
+    begin
+      if CodePointCount >= Length(CodePoints) then
+        SetLength(CodePoints, CodePointCount * 2);
+      CodePoints[CodePointCount] := ParseClassSetCharacter;
+      Inc(CodePointCount);
+    end;
+    if CodePointCount <> 1 then
+      AMayContainStrings := True;
+    if CodePointCount = 1 then
+      AddClassRange(AContents, CodePoints[0], CodePoints[0])
+    else if CodePointCount > 0 then
+      AddClassString(AContents, Copy(CodePoints, 0, CodePointCount));
+  until not Match('|');
+  if not Match('}') then
+    raise EConvertError.Create('Unterminated string disjunction \\q{}');
+end;
+
+// ES2026 §22.2.1 ClassSetOperand, or in a ClassUnion a ClassSetRange.
+// Returns True when it read a ClassSetRange. AMayContainStrings is
+// MayContainStrings (§22.2.1.8) of what it read.
+function TRegExpCompiler.ParseClassSetOperand(
+  var AContents: TRegExpClassContents; out AMayContainStrings: Boolean): Boolean;
+var
+  Nested: TRegExpClassContents;
+  NestedMayContainStrings: Boolean;
+  C: Char;
+  PropertyName: string;
+  Lo, Hi: Cardinal;
+begin
+  Result := False;
+  AMayContainStrings := False;
+  if Peek = '[' then
+  begin
+    // NestedClass :: [ [lookahead ≠ ^] ClassContents ] | [^ ClassContents ]
+    Inc(FPos);
+    if Match('^') then
+    begin
+      ParseClassSetExpression(Nested, NestedMayContainStrings);
+      if not Match(']') then
+        raise EConvertError.Create('Unterminated character class');
+      // ES2026 §22.2.1.1 Early Errors: NestedClass :: [^ ClassContents ]
+      if NestedMayContainStrings then
+        raise EConvertError.Create(SErrorNegatedClassStrings);
+      NormalizeRanges(Nested.Ranges, Nested.RangeCount);
+      ComplementContents(Nested);
+    end
+    else
+    begin
+      ParseClassSetExpression(Nested, NestedMayContainStrings);
+      if not Match(']') then
+        raise EConvertError.Create('Unterminated character class');
+      AMayContainStrings := NestedMayContainStrings;
+    end;
+    MergeClassContents(AContents, Nested);
+    Exit;
+  end;
+  if (Peek = '\') and CharInSet(PeekAt(1),
+     ['d', 'D', 's', 'S', 'w', 'W', 'p', 'P', 'q']) then
+  begin
+    Inc(FPos);
+    C := Advance;
+    case C of
+      'q':
         begin
+          // ClassStringDisjunction
+          if not Match('{') then
+            raise EConvertError.Create(
+              'Invalid regular expression: invalid escape in unicode mode');
+          ParseStringDisjunction(AContents, AMayContainStrings);
+        end;
+      'p', 'P':
+        begin
+          // NestedClass :: \ CharacterClassEscape[+UnicodeMode]
+          if not Match('{') then
+            raise EConvertError.Create(
+              'Invalid regular expression: invalid escape in unicode mode');
           PropertyName := '';
           while not AtEnd and (Peek <> '}') do
             PropertyName := PropertyName + Advance;
@@ -1578,275 +1714,102 @@ begin
               raise EConvertError.Create(
                 'Negated \\P{} cannot be used with properties of strings');
             GetStringPropertySequences(PropertyName, AContents);
+            AMayContainStrings := True;
           end
           else if C = 'P' then
           begin
-            InitClassContents(NegContents);
-            GetUnicodePropertyRanges(PropertyName, NegContents.Ranges,
-              NegContents.RangeCount);
-            NormalizeRanges(NegContents.Ranges, NegContents.RangeCount);
-            ComplementContents(NegContents);
-            MergeClassContents(AContents, NegContents);
+            InitClassContents(Nested);
+            GetUnicodePropertyRanges(PropertyName, Nested.Ranges,
+              Nested.RangeCount);
+            NormalizeRanges(Nested.Ranges, Nested.RangeCount);
+            ComplementContents(Nested);
+            MergeClassContents(AContents, Nested);
           end
           else
             GetUnicodePropertyRanges(PropertyName, AContents.Ranges,
               AContents.RangeCount);
-        end
-        else
-          raise EConvertError.Create(
-            'Invalid regular expression: invalid escape in unicode mode');
-      end;
-    'q':
-      begin
-        if FUnicodeSets and Match('{') then
-          ParseStringDisjunction(AContents)
-        else
-          raise EConvertError.Create(
-            'Invalid regular expression: invalid escape in unicode mode');
-      end;
-    'b':
-      AddClassRange(AContents, $08, $08);
-    'c':
-      begin
-        if not AtEnd and (((Peek >= 'a') and (Peek <= 'z')) or
-           ((Peek >= 'A') and (Peek <= 'Z'))) then
-          AddClassRange(AContents, Ord(Advance) mod 32, Ord(FPattern[FPos - 1]) mod 32)
-        else
-          raise EConvertError.Create(
-            'Invalid regular expression: invalid control escape in unicode mode');
-      end;
-  else
-    if not CharInSet(C, ['/', '^', '$', '\', '.', '*', '+',
-       '?', '(', ')', '[', ']', '{', '}', '|', '-', '&', '!', '#',
-       '%', ',', ':', ';', '<', '=', '>', '@', '`', '~']) then
-      raise EConvertError.Create(
-        'Invalid regular expression: invalid escape in unicode mode')
+        end;
     else
-      AddClassRange(AContents, Ord(C), Ord(C));
-  end;
-end;
-
-procedure TRegExpCompiler.ParseStringDisjunction(
-  var AContents: TRegExpClassContents);
-var
-  CodePoints: array of Cardinal;
-  CodePointCount: Integer;
-  CodePoint: Cardinal;
-begin
-  CodePointCount := 0;
-  SetLength(CodePoints, 16);
-  while not AtEnd and (Peek <> '}') do
-  begin
-    if Peek = '|' then
-    begin
-      if CodePointCount = 1 then
-        AddClassRange(AContents, CodePoints[0], CodePoints[0])
-      else if CodePointCount > 0 then
-      begin
-        SetLength(CodePoints, CodePointCount);
-        AddClassString(AContents, CodePoints);
-        SetLength(CodePoints, 16);
-      end;
-      CodePointCount := 0;
-      Inc(FPos);
-      Continue;
+      AddBuiltinCharClass(C, AContents.Ranges, AContents.RangeCount);
     end;
-    if Peek = '\' then
-    begin
-      Inc(FPos);
-      case Peek of
-        'u':
-          begin
-            Inc(FPos);
-            CodePoint := ParseUnicodeEscape;
-          end;
-        'n': begin Inc(FPos); CodePoint := $0A; end;
-        'r': begin Inc(FPos); CodePoint := $0D; end;
-        't': begin Inc(FPos); CodePoint := $09; end;
-      else
-        CodePoint := Ord(Advance);
-      end;
-    end
-    else
-      CodePoint := ReadCodePoint;
-    if CodePointCount >= Length(CodePoints) then
-      SetLength(CodePoints, CodePointCount * 2);
-    CodePoints[CodePointCount] := CodePoint;
-    Inc(CodePointCount);
+    Exit;
   end;
-  if not Match('}') then
-    raise EConvertError.Create('Unterminated string disjunction \\q{}');
-  if CodePointCount = 1 then
-    AddClassRange(AContents, CodePoints[0], CodePoints[0])
-  else if CodePointCount > 0 then
+  // ClassSetCharacter, or ClassSetRange :: ClassSetCharacter - ClassSetCharacter
+  Lo := ParseClassSetCharacter;
+  if (Peek = '-') and (PeekAt(1) <> '-') then
   begin
-    SetLength(CodePoints, CodePointCount);
-    AddClassString(AContents, CodePoints);
+    Inc(FPos);
+    Hi := ParseClassSetCharacter;
+    // ES2026 §22.2.1.1 Early Errors: ClassSetRange
+    if Lo > Hi then
+      raise EConvertError.Create(
+        'Invalid regular expression: range out of order in character class');
+    AddClassRange(AContents, Lo, Hi);
+    Exit(True);
   end;
+  AddClassRange(AContents, Lo, Lo);
 end;
 
-procedure TRegExpCompiler.ApplyNestedSetOps(
-  var AContents: TRegExpClassContents);
+// ES2026 §22.2.1 ClassContents[+UnicodeMode, +UnicodeSetsMode]
+//   :: [empty] | ClassSetExpression
+// ClassSetExpression :: ClassUnion | ClassIntersection | ClassSubtraction
+// Stops before the closing `]`. AMayContainStrings is MayContainStrings
+// (§22.2.1.8).
+procedure TRegExpCompiler.ParseClassSetExpression(
+  var AContents: TRegExpClassContents; out AMayContainStrings: Boolean);
 var
-  RightContents: TRegExpClassContents;
-  HaveIntersect, HaveSubtract: Boolean;
+  Operand: TRegExpClassContents;
+  OperandMayContainStrings, FirstIsRange: Boolean;
+  SetOperator: Char;
 begin
-  HaveIntersect := False;
-  HaveSubtract := False;
-  while not AtEnd and (Peek <> ']') do
+  InitClassContents(AContents);
+  AMayContainStrings := False;
+  if AtEnd or (Peek = ']') then
+    Exit;
+  FirstIsRange := ParseClassSetOperand(AContents, AMayContainStrings);
+  if ((Peek = '&') and (PeekAt(1) = '&')) or
+     ((Peek = '-') and (PeekAt(1) = '-')) then
   begin
-    if (Peek = '&') and (PeekAt(1) = '&') then
+    // ClassIntersection :: ClassSetOperand && [lookahead ≠ &] ClassSetOperand
+    //   | ClassIntersection && [lookahead ≠ &] ClassSetOperand
+    // ClassSubtraction :: ClassSetOperand -- ClassSetOperand
+    //   | ClassSubtraction -- ClassSetOperand
+    // Both join single operands, never a range, with one kind of operator.
+    if FirstIsRange then
+      raise EConvertError.Create(SErrorClassSetOperation);
+    SetOperator := Peek;
+    while (Peek = SetOperator) and (PeekAt(1) = SetOperator) do
     begin
-      if HaveSubtract then
-        raise EConvertError.Create(
-          'Invalid regular expression: cannot mix && and -- in the same class');
-      HaveIntersect := True;
       Inc(FPos, 2);
-      InitClassContents(RightContents);
-      ParseClassUnion(RightContents);
-      IntersectClassContents(AContents, RightContents);
-    end
-    else if (Peek = '-') and (PeekAt(1) = '-') then
-    begin
-      if HaveIntersect then
-        raise EConvertError.Create(
-          'Invalid regular expression: cannot mix && and -- in the same class');
-      HaveSubtract := True;
-      Inc(FPos, 2);
-      InitClassContents(RightContents);
-      ParseClassUnion(RightContents);
-      SubtractClassContents(AContents, RightContents);
-    end
-    else
-      Break;
-  end;
-end;
-
-procedure TRegExpCompiler.ParseClassUnion(var AContents: TRegExpClassContents);
-var
-  Lo, Hi: Cardinal;
-  SavePos, SaveStringPos: Integer;
-  IsClassEscape: Boolean;
-  EscContents: TRegExpClassContents;
-begin
-  while not AtEnd and (Peek <> ']') do
-  begin
-    if (Peek = '&') and (PeekAt(1) = '&') then
-      Break;
-    if (Peek = '-') and (PeekAt(1) = '-') then
-      Break;
-    if Peek = '[' then
-    begin
-      Inc(FPos);
-      InitClassContents(EscContents);
-      if Match('^') then
+      if (SetOperator = '&') and (Peek = '&') then
+        raise EConvertError.Create(SErrorClassSetOperation);
+      InitClassContents(Operand);
+      if ParseClassSetOperand(Operand, OperandMayContainStrings) then
+        raise EConvertError.Create(SErrorClassSetOperation);
+      if SetOperator = '&' then
       begin
-        ParseClassUnion(EscContents);
-        ApplyNestedSetOps(EscContents);
-        if not Match(']') then
-          raise EConvertError.Create('Unterminated character class');
-        if EscContents.StringCount > 0 then
-          raise EConvertError.Create(
-            'Negated character class cannot contain strings');
-        NormalizeRanges(EscContents.Ranges, EscContents.RangeCount);
-        ComplementContents(EscContents);
-        MergeClassContents(AContents, EscContents);
+        IntersectClassContents(AContents, Operand);
+        // §22.2.1.8: an intersection may contain strings only when every
+        // operand may.
+        AMayContainStrings := AMayContainStrings and OperandMayContainStrings;
       end
       else
-      begin
-        ParseClassUnion(EscContents);
-        ApplyNestedSetOps(EscContents);
-        if not Match(']') then
-          raise EConvertError.Create('Unterminated character class');
-        MergeClassContents(AContents, EscContents);
-      end;
-      Continue;
+        // §22.2.1.8: a subtraction may contain strings when its first
+        // operand may.
+        SubtractClassContents(AContents, Operand);
     end;
-    if Peek = '\' then
-    begin
-      Inc(FPos);
-      IsClassEscape := FUnicodeSets and CharInSet(Peek,
-        ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P', 'q']);
-      SavePos := AContents.RangeCount;
-      SaveStringPos := AContents.StringCount;
-      ParseClassEscape(AContents);
-      if (AContents.StringCount > SaveStringPos) and
-         (AContents.Strings[AContents.StringCount - 1].CodePoints <> nil) then
-        Continue;
-      if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') and
-         (PeekAt(1) <> '-') then
-      begin
-        if IsClassEscape then
-          raise EConvertError.Create(
-            'Invalid regular expression: character class escape in range');
-        if AContents.RangeCount > SavePos then
-        begin
-          Lo := AContents.Ranges[AContents.RangeCount - 1].Lo;
-          Dec(AContents.RangeCount);
-          Inc(FPos);
-          if Peek = '\' then
-          begin
-            Inc(FPos);
-            if FUnicodeSets and CharInSet(Peek,
-               ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P', 'q']) then
-              raise EConvertError.Create(
-                'Invalid regular expression: character class escape in range');
-            InitClassContents(EscContents);
-            ParseClassEscape(EscContents);
-            if EscContents.RangeCount > 0 then
-            begin
-              Hi := EscContents.Ranges[0].Lo;
-              if Lo > Hi then
-                raise EConvertError.Create(
-                  'Invalid regular expression: range out of order in character class');
-              AddClassRange(AContents, Lo, Hi);
-            end;
-          end
-          else
-          begin
-            Hi := ReadCodePoint;
-            if Lo > Hi then
-              raise EConvertError.Create(
-                'Invalid regular expression: range out of order in character class');
-            AddClassRange(AContents, Lo, Hi);
-          end;
-        end;
-      end;
-      Continue;
-    end;
-    if FUnicodeSets and CharInSet(Peek, ['(', ')', '/', '|']) then
-      raise EConvertError.Create(
-        'Invalid regular expression: unescaped ' + Peek + ' in unicode sets mode character class');
-    Lo := ReadCodePoint;
-    if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') and
-       (PeekAt(1) <> '-') then
-    begin
-      Inc(FPos);
-      if Peek = '\' then
-      begin
-        Inc(FPos);
-        InitClassContents(EscContents);
-        ParseClassEscape(EscContents);
-        if EscContents.RangeCount > 0 then
-        begin
-          Hi := EscContents.Ranges[0].Lo;
-          if Lo > Hi then
-            raise EConvertError.Create(
-              'Invalid regular expression: range out of order in character class');
-          AddClassRange(AContents, Lo, Hi);
-        end;
-      end
-      else
-      begin
-        Hi := ReadCodePoint;
-        if Lo > Hi then
-          raise EConvertError.Create(
-            'Invalid regular expression: range out of order in character class');
-        AddClassRange(AContents, Lo, Hi);
-      end;
-    end
-    else
-      AddClassRange(AContents, Lo, Lo);
+    if not AtEnd and (Peek <> ']') then
+      raise EConvertError.Create(SErrorClassSetOperation);
+    Exit;
+  end;
+  // ClassUnion :: ClassSetRange ClassUnion_opt | ClassSetOperand ClassUnion_opt
+  while not AtEnd and (Peek <> ']') do
+  begin
+    if ((Peek = '&') and (PeekAt(1) = '&')) or
+       ((Peek = '-') and (PeekAt(1) = '-')) then
+      raise EConvertError.Create(SErrorClassSetOperation);
+    ParseClassSetOperand(AContents, OperandMayContainStrings);
+    AMayContainStrings := AMayContainStrings or OperandMayContainStrings;
   end;
 end;
 
@@ -1906,20 +1869,19 @@ begin
     FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
 end;
 
+// ES2026 §22.2.1 CharacterClass[+UnicodeMode, +UnicodeSetsMode], after `[`
 procedure TRegExpCompiler.CompileUnicodeSetsClass;
 var
   Contents: TRegExpClassContents;
-  Negated: Boolean;
+  Negated, MayContainStrings: Boolean;
 begin
   Negated := Match('^');
-  InitClassContents(Contents);
-  ParseClassUnion(Contents);
-  ApplyNestedSetOps(Contents);
+  ParseClassSetExpression(Contents, MayContainStrings);
   if not Match(']') then
     raise EConvertError.Create('Unterminated character class');
-  if Negated and (Contents.StringCount > 0) then
-    raise EConvertError.Create(
-      'Negated character class cannot contain strings');
+  // ES2026 §22.2.1.1 Early Errors: CharacterClass :: [^ ClassContents ]
+  if Negated and MayContainStrings then
+    raise EConvertError.Create(SErrorNegatedClassStrings);
   EmitClassContents(Contents, Negated);
 end;
 
