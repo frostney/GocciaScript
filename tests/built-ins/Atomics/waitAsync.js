@@ -50,4 +50,20 @@ describe("Atomics.waitAsync", () => {
     expect(result.async).toBe(true);
     expect(await result.value).toBe("timed-out");
   });
+
+  test("compares against the current block after the value's valueOf grew the buffer", () => {
+    const sab = new SharedArrayBuffer(4, { maxByteLength: 64 });
+    const i32 = new Int32Array(sab);
+    const value = {
+      valueOf() {
+        sab.grow(64);
+        new Int32Array(sab)[0] = 1;
+        return 1;
+      },
+    };
+
+    const result = Atomics.waitAsync(i32, 0, value, 0);
+    expect(result.async).toBe(false);
+    expect(result.value).toBe("timed-out");
+  });
 });

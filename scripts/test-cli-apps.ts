@@ -8921,6 +8921,83 @@ await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs..
   }
 });
 
+await section("Runner sandbox mode: fs writes the bytes a view holds after its buffer was resized...", async () => {
+  // A length-tracking Uint8Array over a grown buffer writes the bytes the
+  // buffer holds now, zeros past its old end, not bytes past the end of the
+  // buffer's previous data block; a shrunk one its new length; a view past the
+  // end of its shrunk buffer and a view of a detached buffer write nothing.
+  // Each line matches Node.
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'const show = (label, path) => console.log(label + ":" + fs.readFileSync(path).join(","));',
+          'const grown = () => {',
+          '  const rab = new ArrayBuffer(4, { maxByteLength: 4096 });',
+          '  const view = new Uint8Array(rab);',
+          '  view.fill(7);',
+          '  rab.resize(8);',
+          '  return view;',
+          '};',
+          'const large = new ArrayBuffer(4, { maxByteLength: 4096 });',
+          'const largeView = new Uint8Array(large);',
+          'largeView.fill(7);',
+          'large.resize(4096);',
+          'fs.writeFileSync("/large.bin", largeView);',
+          'const written = fs.readFileSync("/large.bin");',
+          'console.log("large:" + written.length + ":" + written.slice(4).every((b) => b === 0));',
+          'fs.writeFileSync("/grown.bin", grown());',
+          'show("grown", "/grown.bin");',
+          'fs.writeFileSync("/append.bin", "");',
+          'fs.appendFileSync("/append.bin", grown());',
+          'show("append", "/append.bin");',
+          'await fs.promises.writeFile("/promise.bin", grown());',
+          'show("promise", "/promise.bin");',
+          'const shrinking = new ArrayBuffer(8, { maxByteLength: 8 });',
+          'const tracking = new Uint8Array(shrinking);',
+          'const fixed = new Uint8Array(shrinking, 0, 8);',
+          'tracking.fill(9);',
+          'shrinking.resize(2);',
+          'fs.writeFileSync("/shrunk.bin", tracking);',
+          'show("shrunk", "/shrunk.bin");',
+          'fs.writeFileSync("/out-of-bounds.bin", fixed);',
+          'show("out-of-bounds", "/out-of-bounds.bin");',
+          'const detachable = new ArrayBuffer(8, { maxByteLength: 8 });',
+          'const detached = new Uint8Array(detachable);',
+          'detachable.transfer();',
+          'fs.writeFileSync("/detached.bin", detached);',
+          'show("detached", "/detached.bin");',
+        ].join("\n"),
+      },
+    ]);
+
+    const expected = [
+      "large:4096:true",
+      "grown:7,7,7,7,0,0,0,0",
+      "append:7,7,7,7,0,0,0,0",
+      "promise:7,7,7,7,0,0,0,0",
+      "shrunk:9,9",
+      "out-of-bounds:",
+      "detached:",
+    ];
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode resized-view write run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = stdout.split("\n");
+    if (JSON.stringify(actual) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode fs should write the bytes a resized view holds, got: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metadata...", async () => {
   const tmp = makeNativeTmp();
   try {
