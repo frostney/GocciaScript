@@ -846,17 +846,20 @@ begin
     TChildManaged.InstanceSize);
 end;
 
-// A number box's constructor has no implicit exception frame, so when the
-// limit refuses it FPC does not destroy it: it must stay registered for the
-// collector to free. An object's constructor has the frame, so FPC destroys
-// it and it must already be unregistered. Both refusals also charge the same
-// RangeError, so the number's refusal leaves exactly one box more charged.
+// In a production build a number box's constructor has no implicit
+// exception frame, so when the limit refuses it FPC does not destroy it: it
+// must stay registered for the collector to free, and the number's refusal
+// leaves exactly one box more charged than the object's. An object's
+// constructor has the frame (and so does the number's in a development
+// build), so FPC destroys it and it must already be unregistered. Both
+// refusals charge the same RangeError besides. The final collection must
+// free everything either way.
 procedure TTestGarbageCollector.TestValueRefusedByTheLimitIsReclaimedOnce;
 var
   GC: TGarbageCollector;
   Baseline: Integer;
   LiveBefore, PreviousMaxBytes, BeforeRefusals, AfterNumber,
-    AfterObject: Int64;
+    AfterObject, ExpectedKept: Int64;
 
   function Refuses(const AIsNumber: Boolean): Boolean;
   begin
@@ -891,8 +894,15 @@ begin
     GC.MaxBytes := PreviousMaxBytes;
   end;
 
+  // Decided by the build, not by the override: an override that disagrees
+  // with the bracket must fail here.
+  {$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}
+  ExpectedKept := TGocciaNumberLiteralValue.InstanceSize;
+  {$ELSE}
+  ExpectedKept := 0;
+  {$ENDIF}
   Expect<Int64>((AfterNumber - BeforeRefusals) - (AfterObject - AfterNumber))
-    .ToBe(TGocciaNumberLiteralValue.InstanceSize);
+    .ToBe(ExpectedKept);
 
   GC.Collect;
   Expect<Int64>(GC.BytesAllocated).ToBe(LiveBefore);

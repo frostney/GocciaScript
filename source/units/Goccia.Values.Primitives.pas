@@ -528,17 +528,24 @@ end;
 // Every boxed number passes through here. Without the implicit exception
 // frame FPC wraps a constructor in, a box costs no thread-variable lookups for
 // the frame; see ConstructorDestroysOnException.
-{$IFDEF FPC}{$IMPLICITEXCEPTIONS OFF}{$ENDIF}
+//
+// Exception-safe without the frame: the body cannot raise, NewInstance raises
+// before there is an instance, and everything TGocciaValue.AfterConstruction
+// can raise (the memory limit, a timeout, an instruction limit) comes after
+// RegisterObject, so a refused box stays registered and the next collection
+// frees it. A production build has no stack check in the prologues between.
+{$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}{$IMPLICITEXCEPTIONS OFF}{$ENDIF}
 constructor TGocciaNumberLiteralValue.Create(const AValue: Double);
 begin
   FValue := AValue;
 end;
-{$IFDEF FPC}{$IMPLICITEXCEPTIONS ON}{$ENDIF}
+{$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}{$IMPLICITEXCEPTIONS ON}{$ENDIF}
 
 class function TGocciaNumberLiteralValue.ConstructorDestroysOnException: Boolean;
 begin
-  // Only FPC builds the constructor above without its frame.
-  {$IFDEF FPC}
+  // Only a build with frameless constructors compiles the one above without
+  // its frame.
+  {$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}
   Result := False;
   {$ELSE}
   Result := True;

@@ -2676,6 +2676,15 @@ end;
 // of the name. Kept free of managed locals so that they pay no exception
 // frame; everything else is AssignPropertySlow, which walks again from the
 // start.
+//
+// The fast path allocates nothing before its last step and calls nothing that
+// can run guest code, collect or hand back a descriptor it must free: it reads
+// a prototype only when that prototype keeps the ordinary [[Set]] and
+// [[GetOwnProperty]], and then only asks its map whether the name is there,
+// without materializing a lazy entry. An exception can therefore only come
+// from the final Add's growth gate, which DefineProperty, the slow path's
+// last step, reaches the same way; the frame this procedure no longer has
+// guarded nothing on that step.
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
@@ -2694,8 +2703,8 @@ begin
   Proto := FPrototype;
   while Assigned(Proto) do
   begin
-    if not UsesOrdinarySet(Proto) or
-       Assigned(Proto.GetOwnPropertyDescriptor(AName)) then
+    if not UsesOrdinarySet(Proto) or not InheritsGetOwnProperty(Proto) or
+       Proto.Properties.ContainsKey(AName) then
     begin
       AssignPropertySlow(AName, AValue, ACanCreate);
       Exit;
