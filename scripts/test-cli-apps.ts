@@ -471,6 +471,30 @@ await section("Loader: compact-json omits build, memory, stdout, stderr...", asy
   if (typeof file.timing?.total_ns !== "number") throw new Error("compact-json per-file timing should be present");
 });
 
+await section("Loader: output keeps an empty last console line...", async () => {
+  // One element per console line, empty lines included, at the top level and
+  // in files[] alike.
+  const cases: { source: string; expected: string[] }[] = [
+    { source: 'console.log("a"); console.log("");\n', expected: ["a", ""] },
+    { source: 'console.log("a"); console.log(""); console.log("");\n', expected: ["a", "", ""] },
+    { source: 'console.log("a"); console.log(""); console.log("b");\n', expected: ["a", "", "b"] },
+    { source: 'console.log("");\n', expected: [""] },
+    { source: 'console.log("a\\n");\n', expected: ["a", ""] },
+    { source: "const quiet = 1;\n", expected: [] },
+  ];
+  for (const format of ["json", "compact-json"]) {
+    for (const { source, expected } of cases) {
+      const { exitCode, json, stderr } = runLoaderJson(source, [`--output=${format}`]);
+      const label = `${format} ${JSON.stringify(source.trim())}`;
+      if (exitCode !== 0) throw new Error(`${label} exited ${exitCode}: ${stderr}`);
+      if (JSON.stringify(json.output) !== JSON.stringify(expected))
+        throw new Error(`${label} output should be ${JSON.stringify(expected)}, got ${JSON.stringify(json.output)}`);
+      if (JSON.stringify(json.files?.[0]?.output) !== JSON.stringify(expected))
+        throw new Error(`${label} files[0].output should be ${JSON.stringify(expected)}, got ${JSON.stringify(json.files?.[0]?.output)}`);
+    }
+  }
+});
+
 await section("Loader: compact-json error path omits build, memory, stdout, stderr...", async () => {
   const { exitCode, json } = runLoaderJson("throw new Error('boom');\n", ["--output=compact-json"]);
   if (exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");

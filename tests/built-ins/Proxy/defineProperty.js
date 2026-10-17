@@ -165,3 +165,75 @@ describe("Proxy defineProperty reads the target's descriptor once", () => {
     expect(Reflect.defineProperty(proxy, "x", { value: 5, configurable: true })).toBe(true);
   });
 });
+
+// ES2026 §10.5.6 step 7: descObj is FromPropertyDescriptor(Desc) (§6.2.6.4),
+// whose fields are own data properties made with CreateDataPropertyOrThrow, so
+// no setter inherited from Object.prototype runs while it is built.
+describe("Proxy defineProperty trap descriptor with setters on Object.prototype", () => {
+  const FIELDS = ["value", "writable", "get", "set", "enumerable", "configurable"];
+
+  const withPrototypeSetters = (onSet, fn) => {
+    FIELDS.forEach((name) => {
+      // A null-prototype descriptor: an ordinary one would inherit the
+      // accessors already installed and be rejected by ToPropertyDescriptor.
+      const descriptor = Object.create(null);
+      descriptor.set = (v) => { onSet(name, v); };
+      descriptor.configurable = true;
+      Object.defineProperty(Object.prototype, name, descriptor);
+    });
+    try {
+      return fn();
+    } finally {
+      FIELDS.forEach((name) => { delete Object.prototype[name]; });
+    }
+  };
+
+  const ownDataFields = (desc) =>
+    Object.getOwnPropertyNames(desc).filter((name) =>
+      Object.hasOwn(Object.getOwnPropertyDescriptor(desc, name), "value"));
+
+  test("a data descriptor reaches the trap with every field as an own data property", () => {
+    const calls = [];
+    let fields;
+    let value;
+    const proxy = new Proxy({}, {
+      defineProperty: (t, key, desc) => {
+        fields = ownDataFields(desc);
+        value = Object.getOwnPropertyDescriptor(desc, "value").value;
+        return true;
+      },
+    });
+    // Null-prototype, so the setters on Object.prototype are not read as
+    // descriptor fields.
+    const descriptor = Object.assign(Object.create(null),
+      { value: 7, writable: true, enumerable: true, configurable: true });
+    withPrototypeSetters((name) => calls.push(name), () =>
+      Object.defineProperty(proxy, "x", descriptor));
+
+    expect(calls).toEqual([]);
+    expect(fields).toEqual(["value", "writable", "enumerable", "configurable"]);
+    expect(value).toBe(7);
+  });
+
+  test("an accessor descriptor for a symbol key reaches the trap with every field as an own data property", () => {
+    const calls = [];
+    const key = Symbol("x");
+    const getter = () => 1;
+    let fields;
+    let get;
+    const proxy = new Proxy({}, {
+      defineProperty: (t, k, desc) => {
+        fields = ownDataFields(desc);
+        get = Object.getOwnPropertyDescriptor(desc, "get").value;
+        return true;
+      },
+    });
+    const descriptor = Object.assign(Object.create(null), { get: getter, configurable: true });
+    withPrototypeSetters((name) => calls.push(name), () =>
+      Reflect.defineProperty(proxy, key, descriptor));
+
+    expect(calls).toEqual([]);
+    expect(fields).toEqual(["get", "configurable"]);
+    expect(get).toBe(getter);
+  });
+});
