@@ -93,7 +93,8 @@ const
   EPOCH_WEEKDAY = 4;
   { POSIX: std and dst offsets have hours 0..24. }
   RULE_MAX_OFFSET_HOURS = 24;
-  { RFC 9636 §3.3.2: rule times have signed hours -167..167. }
+  { POSIX.1-2024 §8.3 and RFC 9636 §3.3.2: rule times have signed hours
+    -167..167. }
   RULE_MAX_TIME_HOURS = 167;
   RULE_DEFAULT_TIME_SECONDS = 2 * SECONDS_PER_HOUR;
   RULE_MIN_NAME_LENGTH = 3;
@@ -103,6 +104,35 @@ const
     the instant's UTC year. }
   RULE_EVENT_YEAR_MARGIN = 2;
   RULE_EVENT_CAPACITY = 2 * (2 * RULE_EVENT_YEAR_MARGIN + 1);
+  RULE_HOUR_DIGITS = 3;
+  RULE_MINUTE_DIGITS = 2;
+  RULE_DAY_DIGITS = 3;
+  RULE_MONTH_DIGITS = 2;
+  RULE_WEEK_DIGITS = 1;
+  DECIMAL_BASE = 10;
+  MONTHS_PER_YEAR = 12;
+  FEBRUARY = 2;
+  MARCH = 3;
+  { Jn: day 60 is March 1 in every year. }
+  JULIAN_DAY_MARCH_1 = 60;
+  { Gregorian leap-year cycles. }
+  YEARS_PER_LEAP_CYCLE = 4;
+  YEARS_PER_CENTURY = 100;
+  YEARS_PER_ERA = 400;
+  DAYS_PER_LEAP_CYCLE = 4 * DAYS_PER_COMMON_YEAR + 1;
+  DAYS_PER_CENTURY = 100 * DAYS_PER_COMMON_YEAR + 24;
+  DAYS_PER_ERA = 400 * DAYS_PER_COMMON_YEAR + 97;
+  { The civil-date conversions below (H. Hinnant, "chrono-Compatible
+    Low-Level Date Algorithms") count years from March 1, so the leap day
+    ends the year. Day 0 of that count is 0000-03-01, 719468 days before
+    1970-01-01, and the shifted month m (0 = March) starts
+    (153 * m + 2) div 5 days into its year. }
+  MARCH_BASED_EPOCH_DAYS = 719468;
+  MONTH_START_NUMERATOR = 153;
+  MONTH_START_ROUNDING = 2;
+  MONTH_START_DENOMINATOR = 5;
+  { January's index in the March-based count. }
+  MARCH_BASED_JANUARY = MONTHS_PER_YEAR - MARCH;
 
 function ReadBigEndianInt32(const ABuffer: TBytes; const AOffset: Integer): Int32;
 begin
@@ -413,7 +443,7 @@ begin
   while (APosition <= Length(AText)) and IsRuleDigit(AText[APosition]) and
         (APosition - Start < AMaxDigits) do
   begin
-    AValue := AValue * 10 + (Ord(AText[APosition]) - Ord('0'));
+    AValue := AValue * DECIMAL_BASE + (Ord(AText[APosition]) - Ord('0'));
     Inc(APosition);
   end;
   Result := APosition > Start;
@@ -436,19 +466,22 @@ begin
     Inc(APosition);
   end;
 
-  if not TryReadRuleNumber(AText, APosition, 3, Hours) or (Hours > AMaxHours) then
+  if not TryReadRuleNumber(AText, APosition, RULE_HOUR_DIGITS, Hours) or
+     (Hours > AMaxHours) then
     Exit;
   Minutes := 0;
   Seconds := 0;
   if (APosition <= Length(AText)) and (AText[APosition] = ':') then
   begin
     Inc(APosition);
-    if not TryReadRuleNumber(AText, APosition, 2, Minutes) or (Minutes > 59) then
+    if not TryReadRuleNumber(AText, APosition, RULE_MINUTE_DIGITS, Minutes) or
+       (Minutes >= SECONDS_PER_MINUTE) then
       Exit;
     if (APosition <= Length(AText)) and (AText[APosition] = ':') then
     begin
       Inc(APosition);
-      if not TryReadRuleNumber(AText, APosition, 2, Seconds) or (Seconds > 59) then
+      if not TryReadRuleNumber(AText, APosition, RULE_MINUTE_DIGITS, Seconds) or
+         (Seconds >= SECONDS_PER_MINUTE) then
         Exit;
     end;
   end;
@@ -471,7 +504,7 @@ begin
   begin
     Inc(APosition);
     ADate.Kind := tzrdJulianDay;
-    if not TryReadRuleNumber(AText, APosition, 3, ADate.Day) or
+    if not TryReadRuleNumber(AText, APosition, RULE_DAY_DIGITS, ADate.Day) or
        (ADate.Day < 1) or (ADate.Day > DAYS_PER_COMMON_YEAR) then
       Exit;
   end
@@ -479,26 +512,26 @@ begin
   begin
     Inc(APosition);
     ADate.Kind := tzrdMonthWeekDay;
-    if not TryReadRuleNumber(AText, APosition, 2, ADate.Month) or
-       (ADate.Month < 1) or (ADate.Month > 12) then
+    if not TryReadRuleNumber(AText, APosition, RULE_MONTH_DIGITS, ADate.Month) or
+       (ADate.Month < 1) or (ADate.Month > MONTHS_PER_YEAR) then
       Exit;
     if (APosition > Length(AText)) or (AText[APosition] <> '.') then
       Exit;
     Inc(APosition);
-    if not TryReadRuleNumber(AText, APosition, 1, ADate.Week) or
+    if not TryReadRuleNumber(AText, APosition, RULE_WEEK_DIGITS, ADate.Week) or
        (ADate.Week < 1) or (ADate.Week > RULE_LAST_WEEK) then
       Exit;
     if (APosition > Length(AText)) or (AText[APosition] <> '.') then
       Exit;
     Inc(APosition);
-    if not TryReadRuleNumber(AText, APosition, 1, ADate.Day) or
+    if not TryReadRuleNumber(AText, APosition, RULE_WEEK_DIGITS, ADate.Day) or
        (ADate.Day >= DAYS_PER_WEEK) then
       Exit;
   end
   else
   begin
     ADate.Kind := tzrdZeroBasedDay;
-    if not TryReadRuleNumber(AText, APosition, 3, ADate.Day) or
+    if not TryReadRuleNumber(AText, APosition, RULE_DAY_DIGITS, ADate.Day) or
        (ADate.Day > DAYS_PER_COMMON_YEAR) then
       Exit;
   end;
@@ -514,7 +547,7 @@ begin
 end;
 
 // POSIX.1-2024 Base Definitions §8.3 TZ: std offset [dst [offset]
-// [,start[/time],end[/time]]], with the RFC 9636 §3.3.2 time extension.
+// [,start[/time],end[/time]]], the form RFC 9636 §3.3 requires in a footer.
 function TryParseTimeZoneRule(const AText: string; out ARule: TTimeZoneRule): Boolean;
 var
   Position, OffsetSeconds: Integer;
@@ -579,15 +612,17 @@ end;
 
 function IsLeapYear(const AYear: Int64): Boolean;
 begin
-  Result := (AYear mod 4 = 0) and ((AYear mod 100 <> 0) or (AYear mod 400 = 0));
+  Result := (AYear mod YEARS_PER_LEAP_CYCLE = 0) and
+    ((AYear mod YEARS_PER_CENTURY <> 0) or (AYear mod YEARS_PER_ERA = 0));
 end;
 
 function DaysInMonth(const AYear: Int64; const AMonth: Integer): Integer;
 const
-  MONTH_DAYS: array[1..12] of Integer = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31);
+  MONTH_DAYS: array[1..MONTHS_PER_YEAR] of Integer =
+    (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31);
 begin
   Result := MONTH_DAYS[AMonth];
-  if (AMonth = 2) and IsLeapYear(AYear) then
+  if (AMonth = FEBRUARY) and IsLeapYear(AYear) then
     Inc(Result);
 end;
 
@@ -598,17 +633,16 @@ var
   ShiftedMonth: Integer;
 begin
   Year := AYear;
-  if AMonth <= 2 then
+  if AMonth < MARCH then
     Dec(Year);
-  Era := FloorDivide(Year, 400);
-  YearOfEra := Year - Era * 400;
-  if AMonth > 2 then
-    ShiftedMonth := AMonth - 3
-  else
-    ShiftedMonth := AMonth + 9;
-  DayOfYear := (153 * ShiftedMonth + 2) div 5 + ADay - 1;
-  Result := Era * 146097 + YearOfEra * 365 + YearOfEra div 4 -
-    YearOfEra div 100 + DayOfYear - 719468;
+  Era := FloorDivide(Year, YEARS_PER_ERA);
+  YearOfEra := Year - Era * YEARS_PER_ERA;
+  ShiftedMonth := (AMonth + MONTHS_PER_YEAR - MARCH) mod MONTHS_PER_YEAR;
+  DayOfYear := (MONTH_START_NUMERATOR * ShiftedMonth + MONTH_START_ROUNDING) div
+    MONTH_START_DENOMINATOR + ADay - 1;
+  Result := Era * DAYS_PER_ERA + YearOfEra * DAYS_PER_COMMON_YEAR +
+    YearOfEra div YEARS_PER_LEAP_CYCLE - YearOfEra div YEARS_PER_CENTURY +
+    DayOfYear - MARCH_BASED_EPOCH_DAYS;
 end;
 
 { The proleptic Gregorian year containing a day since 1970-01-01. }
@@ -616,15 +650,19 @@ function YearFromDays(const ADays: Int64): Int64;
 var
   ShiftedDays, Era, DayOfEra, YearOfEra, DayOfYear: Int64;
 begin
-  ShiftedDays := ADays + 719468;
-  Era := FloorDivide(ShiftedDays, 146097);
-  DayOfEra := ShiftedDays - Era * 146097;
-  YearOfEra := (DayOfEra - DayOfEra div 1460 + DayOfEra div 36524 -
-    DayOfEra div 146096) div 365;
-  DayOfYear := DayOfEra - (365 * YearOfEra + YearOfEra div 4 - YearOfEra div 100);
-  Result := YearOfEra + Era * 400;
-  // The era year starts in March; January and February belong to the next.
-  if (5 * DayOfYear + 2) div 153 >= 10 then
+  ShiftedDays := ADays + MARCH_BASED_EPOCH_DAYS;
+  Era := FloorDivide(ShiftedDays, DAYS_PER_ERA);
+  DayOfEra := ShiftedDays - Era * DAYS_PER_ERA;
+  YearOfEra := (DayOfEra - DayOfEra div (DAYS_PER_LEAP_CYCLE - 1) +
+    DayOfEra div DAYS_PER_CENTURY - DayOfEra div (DAYS_PER_ERA - 1)) div
+    DAYS_PER_COMMON_YEAR;
+  DayOfYear := DayOfEra - (DAYS_PER_COMMON_YEAR * YearOfEra +
+    YearOfEra div YEARS_PER_LEAP_CYCLE - YearOfEra div YEARS_PER_CENTURY);
+  Result := YearOfEra + Era * YEARS_PER_ERA;
+  // January and February end the March-based year, so they belong to the
+  // next calendar year.
+  if (MONTH_START_DENOMINATOR * DayOfYear + MONTH_START_ROUNDING) div
+     MONTH_START_NUMERATOR >= MARCH_BASED_JANUARY then
     Inc(Result);
 end;
 
@@ -637,7 +675,7 @@ begin
       begin
         Result := DaysFromCivil(AYear, 1, 1) + ADate.Day - 1;
         // Jn never counts February 29 (day 60 in a leap year).
-        if IsLeapYear(AYear) and (ADate.Day >= 60) then
+        if IsLeapYear(AYear) and (ADate.Day >= JULIAN_DAY_MARCH_1) then
           Inc(Result);
       end;
     tzrdZeroBasedDay:
@@ -672,7 +710,8 @@ type
   year of AEpochSeconds, in time order, one per instant. When two changes
   fall on the same instant the later one in rule order wins, so an all-year
   daylight-saving rule (RFC 9636 §3.3.1), whose end meets the next start,
-  never shows standard time. }
+  never shows standard time. That exact meeting is the only all-year form
+  recognised; zic writes no other. }
 procedure BuildTimeZoneRuleEvents(const ARule: TTimeZoneRule;
   const AEpochSeconds: Int64; out AEvents: TTimeZoneRuleEvents);
 var

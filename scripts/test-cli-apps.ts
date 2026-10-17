@@ -4049,13 +4049,12 @@ await section("Loader: Date local time keeps a zone's daylight saving time after
   }
 });
 
-await section("Loader: a slim TZif file's footer rule gives every offset and transition...", async () => {
+await section("Loader: a TZif file with only a footer rule follows it at every instant...", async () => {
   const tmp = makeTmp();
   try {
-    // A slim version 2 TZif file, as current zic writes by default: no
-    // transitions and one local time type, so the footer rule governs every
-    // instant. GOCCIA_TZDIR is read before system zoneinfo and Windows ICU,
-    // so every platform reads this file.
+    // A minimal version 2 TZif file with no transitions and one local time
+    // type, so the footer rule governs every instant. GOCCIA_TZDIR is read
+    // before system zoneinfo and Windows ICU, so every platform reads it.
     const block = (): number[] => {
       const bytes = [...Buffer.from("TZif2"), ...new Array(15).fill(0)];
       const int32 = (value: number) =>
@@ -4086,23 +4085,10 @@ await section("Loader: a slim TZif file's footer rule gives every offset and tra
       "",
     ].join("\n");
     const expected = "-07:00|-08:00|-07:00|-07:00|+275760-03-09T10:00:00Z|null";
-    const proc = Bun.spawnSync([RUNNER, "--output=json"], {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, GOCCIA_TZDIR: tmp },
-    });
-    const stdout = proc.stdout.toString();
-    let actual: unknown;
-    try {
-      actual = JSON.parse(stdout).files?.[0]?.result;
-    } catch {
-      actual = stdout;
-    }
-    if (proc.exitCode !== 0 || actual !== expected)
-      throw new Error(
-        `Slim TZif rule expected ${expected}, got ${actual} (exit ${proc.exitCode})${proc.stderr.toString()}`,
-      );
+    const result = runLoaderJson(source, [], { env: { ...process.env, GOCCIA_TZDIR: tmp } });
+    const actual = result.json.files?.[0]?.result;
+    if (result.exitCode !== 0 || actual !== expected)
+      throw new Error(`Slim TZif rule expected ${expected}, got ${actual}${result.stderr}`);
   } finally {
     clean(tmp);
   }

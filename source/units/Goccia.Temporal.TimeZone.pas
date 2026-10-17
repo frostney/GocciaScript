@@ -1626,9 +1626,9 @@ begin
   Result := GetOrLoadTimeZoneData(ATimeZone, Data);
 end;
 
-// RFC 9636 §3.3: the footer rule governs every instant after the last
-// transition. With no transitions at all it governs every instant, as in
-// the reference tzcode reader.
+// RFC 9636 §3.2: the footer rule governs every instant after the last
+// transition (at the transition itself both agree, §3.3), and every instant
+// when there are no transitions.
 function IsRuleInstant(const AData: TTimeZoneInformationData;
   const AEpochSeconds: Int64): Boolean;
 begin
@@ -1941,9 +1941,16 @@ begin
     Data.DefaultOffsetSeconds, AYear, AMonth, ADay, AHour, AMinute,
     ASecond, AMillisecond, ATimeZone);
   for I := 0 to Length(Data.Transitions) - 1 do
-    ConsiderOffsetForLocalDateTime(AInstants, ACount, LocalEpochMilliseconds,
-      Data.Transitions[I].UtcOffsetSeconds, AYear, AMonth, ADay, AHour,
-      AMinute, ASecond, AMillisecond, ATimeZone);
+  begin
+    OffsetSeconds := Data.Transitions[I].UtcOffsetSeconds;
+    // Where the rule governs the candidate instant, only the rule's two
+    // offsets can match, and those are tried below.
+    if not IsRuleInstant(Data, FloorEpochSecond(LocalEpochMilliseconds -
+      Int64(OffsetSeconds) * MILLISECONDS_PER_SECOND)) then
+      ConsiderOffsetForLocalDateTime(AInstants, ACount, LocalEpochMilliseconds,
+        OffsetSeconds, AYear, AMonth, ADay, AHour, AMinute, ASecond,
+        AMillisecond, ATimeZone);
+  end;
   if Data.Rule.Present then
   begin
     ConsiderOffsetForLocalDateTime(AInstants, ACount, LocalEpochMilliseconds,
@@ -1980,6 +1987,7 @@ function TryFindRuleGapForLocalEpochMilliseconds(const AData: TTimeZoneInformati
   ANextOffsetSeconds: Integer; out ATransitionEpochSeconds: Int64): Boolean;
 var
   LocalEpochSeconds, SearchEpochSeconds, TransitionEpochSeconds: Int64;
+  PreviousOffsetSeconds, NextOffsetSeconds: Integer;
 begin
   Result := False;
   APreviousOffsetSeconds := 0;
@@ -1994,13 +2002,15 @@ begin
     TransitionEpochSeconds) and
     (TransitionEpochSeconds <= LocalEpochSeconds + GAP_SEARCH_WINDOW_SECONDS) do
   begin
-    APreviousOffsetSeconds := TimeZoneRuleOffsetSeconds(AData.Rule,
+    PreviousOffsetSeconds := TimeZoneRuleOffsetSeconds(AData.Rule,
       TransitionEpochSeconds - 1);
-    ANextOffsetSeconds := TimeZoneRuleOffsetSeconds(AData.Rule,
+    NextOffsetSeconds := TimeZoneRuleOffsetSeconds(AData.Rule,
       TransitionEpochSeconds);
     if IsLocalTimeInForwardGap(ALocalEpochMilliseconds, TransitionEpochSeconds,
-      APreviousOffsetSeconds, ANextOffsetSeconds) then
+      PreviousOffsetSeconds, NextOffsetSeconds) then
     begin
+      APreviousOffsetSeconds := PreviousOffsetSeconds;
+      ANextOffsetSeconds := NextOffsetSeconds;
       ATransitionEpochSeconds := TransitionEpochSeconds;
       Exit(True);
     end;

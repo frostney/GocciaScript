@@ -23,6 +23,7 @@ type
     procedure TestJulianDaySkipsLeapDay;
     procedure TestZeroBasedDayCountsLeapDay;
     procedure TestNextAndPreviousTransitions;
+    procedure TestNegativeAndLongRuleTimes;
     procedure TestFarFutureOffset;
     procedure TestReadsFooterRule;
     procedure TestReadsVersionFourFile;
@@ -46,6 +47,14 @@ const
   EPOCH_2040_07_01 = 2224713600;
   EPOCH_2040_11_04_0900 = 2235632400;
   EPOCH_2040_12_31_NOON = 2240568000;
+  EPOCH_2040_03_23 = 2216073600;
+  EPOCH_2040_03_25_0100 = 2216250000;
+  EPOCH_2040_10_27_2300 = 2234991600;
+  EPOCH_2040_10_28_0100 = 2234998800;
+  { America/Nuuk's footer: changes at -1:00 and 0:00 local time. }
+  NUUK_RULE = '<-02>2<-01>,M3.5.0/-1,M10.5.0/0';
+  { Asia/Jerusalem's footer: the spring change at 26:00 on a Thursday. }
+  JERUSALEM_RULE = 'IST-2IDT,M3.4.4/26,M10.5.0';
   { 275760-09-13T00:00:00Z, the largest Temporal instant. }
   EPOCH_MAX_INSTANT = 8640000000000;
 
@@ -143,6 +152,8 @@ begin
   Test('n counts February 29', TestZeroBasedDayCountsLeapDay);
   Test('finds the next and previous rule transitions',
     TestNextAndPreviousTransitions);
+  Test('applies negative and over-24-hour rule times',
+    TestNegativeAndLongRuleTimes);
   Test('applies the rule at the largest Temporal instant', TestFarFutureOffset);
   Test('reads the footer rule of a TZif file', TestReadsFooterRule);
   Test('reads a version 4 TZif file through its 64-bit block',
@@ -326,6 +337,31 @@ begin
   Rule := ParseRule('JST-9');
   Expect<Boolean>(TryGetTimeZoneRuleTransition(Rule, EPOCH_2040_01_01, True,
     Transition)).ToBe(False);
+end;
+
+procedure TTimeZoneInformationFileTests.TestNegativeAndLongRuleTimes;
+var
+  Rule: TTimeZoneRule;
+  Transition: Int64;
+begin
+  // -1:00 on Sunday 2040-03-25 is 23:00 on the 24th at -02:00.
+  Rule := ParseRule(NUUK_RULE);
+  Expect<Boolean>(TryGetTimeZoneRuleTransition(Rule, EPOCH_2040_01_01, True,
+    Transition)).ToBe(True);
+  Expect<Boolean>(Transition = EPOCH_2040_03_25_0100).ToBe(True);
+  Expect<Boolean>(TryGetTimeZoneRuleTransition(Rule, EPOCH_2040_07_01, True,
+    Transition)).ToBe(True);
+  Expect<Boolean>(Transition = EPOCH_2040_10_28_0100).ToBe(True);
+  Expect<Integer>(TimeZoneRuleOffsetSeconds(Rule, EPOCH_2040_07_01)).ToBe(-3600);
+
+  // 26:00 on Thursday 2040-03-22 is 02:00 on the 23rd at +02:00.
+  Rule := ParseRule(JERUSALEM_RULE);
+  Expect<Boolean>(TryGetTimeZoneRuleTransition(Rule, EPOCH_2040_01_01, True,
+    Transition)).ToBe(True);
+  Expect<Boolean>(Transition = EPOCH_2040_03_23).ToBe(True);
+  Expect<Boolean>(TryGetTimeZoneRuleTransition(Rule, EPOCH_2040_07_01, True,
+    Transition)).ToBe(True);
+  Expect<Boolean>(Transition = EPOCH_2040_10_27_2300).ToBe(True);
 end;
 
 procedure TTimeZoneInformationFileTests.TestFarFutureOffset;
