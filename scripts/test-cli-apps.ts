@@ -9098,6 +9098,107 @@ await section("Runner sandbox mode: fs errors are Node-shaped...", async () => {
   }
 });
 
+await section("Runner sandbox mode: fs writes a view's bytes, not one byte per element...", async () => {
+  // Node writes a TypedArray or DataView as the bytes it views: byteLength
+  // bytes from byteOffset. Each line prints the bytes written back. A plain
+  // ArrayBuffer and an out-of-bounds DataView throw a TypeError, as in Node,
+  // but write nothing (Node opens, so creates, the file first).
+  const tmp = makeNativeTmp();
+  try {
+    const kinds = [
+      ["Int8Array", 1], ["Uint8Array", 1], ["Uint8ClampedArray", 1],
+      ["Int16Array", 2], ["Uint16Array", 2], ["Float16Array", 2],
+      ["Int32Array", 4], ["Uint32Array", 4], ["Float32Array", 4],
+      ["Float64Array", 8], ["BigInt64Array", 8], ["BigUint64Array", 8],
+    ] as const;
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'const show = (label, path) => console.log(label + ":" + fs.readFileSync(path).join(","));',
+          'const pattern = new ArrayBuffer(64);',
+          'const all = new Uint8Array(pattern);',
+          'for (const i of all.keys()) all[i] = i;',
+          `for (const Kind of [${kinds.map(([name]) => name).join(", ")}]) {`,
+          '  fs.writeFileSync("/kind.bin", new Kind(pattern, 8, 2));',
+          '  show(Kind.name, "/kind.bin");',
+          '}',
+          'fs.writeFileSync("/zeros.bin", new Uint16Array(3));',
+          'show("zeros", "/zeros.bin");',
+          'fs.writeFileSync("/dataview.bin", new DataView(pattern, 2, 5));',
+          'show("dataview", "/dataview.bin");',
+          'fs.writeFileSync("/dataview-tail.bin", new DataView(pattern, 60));',
+          'show("dataview-tail", "/dataview-tail.bin");',
+          'fs.writeFileSync("/append.bin", new Uint16Array(pattern, 0, 1));',
+          'fs.appendFileSync("/append.bin", new Uint32Array(pattern, 4, 1));',
+          'show("append", "/append.bin");',
+          'await fs.promises.writeFile("/promise.bin", new Int16Array(pattern, 10, 2));',
+          'await fs.promises.appendFile("/promise.bin", new DataView(pattern, 20, 3));',
+          'show("promise", "/promise.bin");',
+          'const growable = new ArrayBuffer(2, { maxByteLength: 8 });',
+          'const tracking = new Uint16Array(growable);',
+          'const trackingView = new DataView(growable, 2);',
+          'tracking[0] = 0x0101;',
+          'growable.resize(8);',
+          'fs.writeFileSync("/grown.bin", tracking);',
+          'show("grown", "/grown.bin");',
+          'fs.writeFileSync("/grown-dataview.bin", trackingView);',
+          'show("grown-dataview", "/grown-dataview.bin");',
+          'const shrinking = new ArrayBuffer(16, { maxByteLength: 16 });',
+          'const fixed = new Uint32Array(shrinking, 4, 2);',
+          'const fixedView = new DataView(shrinking, 4, 8);',
+          'shrinking.resize(8);',
+          'fs.writeFileSync("/out-of-bounds.bin", fixed);',
+          'show("out-of-bounds", "/out-of-bounds.bin");',
+          'try { fs.writeFileSync("/out-of-bounds-dataview.bin", fixedView); console.log("out-of-bounds-dataview:written"); }',
+          'catch (error) { console.log("out-of-bounds-dataview:" + error.name + ":" + fs.existsSync("/out-of-bounds-dataview.bin")); }',
+          'const detachable = new ArrayBuffer(8);',
+          'const detached = new Float64Array(detachable);',
+          'const detachedView = new DataView(detachable);',
+          'detachable.transfer();',
+          'fs.writeFileSync("/detached.bin", detached);',
+          'show("detached", "/detached.bin");',
+          'try { fs.writeFileSync("/detached-dataview.bin", detachedView); console.log("detached-dataview:written"); }',
+          'catch (error) { console.log("detached-dataview:" + error.name + ":" + fs.existsSync("/detached-dataview.bin")); }',
+          'try { fs.writeFileSync("/buffer.bin", pattern); console.log("buffer:written"); }',
+          'catch (error) { console.log("buffer:" + error.name + ":" + fs.existsSync("/buffer.bin")); }',
+        ].join("\n"),
+      },
+    ]);
+
+    const range = (start: number, count: number) =>
+      Array.from({ length: count }, (_, index) => start + index).join(",");
+    const expected = [
+      ...kinds.map(([name, size]) => `${name}:${range(8, 2 * size)}`),
+      "zeros:0,0,0,0,0,0",
+      `dataview:${range(2, 5)}`,
+      `dataview-tail:${range(60, 4)}`,
+      `append:${range(0, 2)},${range(4, 4)}`,
+      `promise:${range(10, 4)},${range(20, 3)}`,
+      "grown:1,1,0,0,0,0,0,0",
+      "grown-dataview:0,0,0,0,0,0",
+      "out-of-bounds:",
+      "out-of-bounds-dataview:TypeError:false",
+      "detached:",
+      "detached-dataview:TypeError:false",
+      "buffer:TypeError:false",
+    ];
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode view write run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = stdout.split("\n");
+    if (JSON.stringify(actual) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode should write each view's bytes, expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: aliases and import maps resolve sandbox module paths...", async () => {
   const tmp = makeNativeTmp();
   try {
