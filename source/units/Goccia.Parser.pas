@@ -6121,7 +6121,10 @@ begin
         BindingPattern := ParsePattern;
         BindingName := '';
       end
-      else if Check(gttIdentifier) or
+      // ES2026 §14.7.5 ForDeclaration : LetOrConst ForBinding
+      // ForBinding : BindingIdentifier, which includes `as`, `from` and
+      // (outside strict mode code) `static`.
+      else if IsIdentifierBindingToken(Peek.TokenType) or
               (IsVar and Check(gttLet) and EffectiveNonStrictModeEnabled) then
       begin
         if IsVar then

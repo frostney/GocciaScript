@@ -1,5 +1,5 @@
 /*---
-description: Binding patterns accept the contextual words `from` and `as` as BindingIdentifiers (ES2026 §13.1, §14.3.3)
+description: Binding patterns and for-heads accept the contextual words `from` and `as` as BindingIdentifiers (ES2026 §13.1, §14.3.3, §14.7.5)
 features: [destructuring]
 ---*/
 
@@ -66,6 +66,29 @@ describe("contextual words as pattern bindings", () => {
       seen.push(from + as);
     }
     expect(seen).toEqual([3, 7]);
+  });
+
+  test("for...of plain bindings", () => {
+    const seen = [];
+    for (const from of [1, 2]) {
+      seen.push(from);
+    }
+    for (let as of [3]) {
+      as += 1;
+      seen.push(as);
+    }
+    expect(seen).toEqual([1, 2, 4]);
+  });
+
+  test("for await...of bindings", async () => {
+    const seen = [];
+    for await (const from of [Promise.resolve(1)]) {
+      seen.push(from);
+    }
+    for await (const [as] of [[2]]) {
+      seen.push(as);
+    }
+    expect(seen).toEqual([1, 2]);
   });
 
   test("catch parameters", () => {
