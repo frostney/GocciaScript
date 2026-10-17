@@ -6157,6 +6157,56 @@ await section("TestRunner: a parallel worker reclaims each file's garbage before
   }
 });
 
+await section("Runner: --multifile --jobs=1 reclaims each section's garbage before the next section...", async () => {
+  // Sequential multifile runs execute one section after another with automatic
+  // collection off. Before the runner collected after each section, every freed
+  // engine's garbage stayed live until the end, so memory grew about 4 MiB per
+  // JSON section. The peak live GC heap is the observable: with the collection,
+  // it must stay flat regardless of the section count.
+  const tmp = makeTmp();
+  try {
+    const sectionSource = [
+      "const data = [];",
+      "for (const i of Array.from({ length: 5000 }, (_, k) => k)) {",
+      '  data.push({ id: i, value: "x".repeat(100) });',
+      "}",
+      "",
+    ].join("\n");
+
+    const peakLiveBytes = (mode: string, sectionCount: number): number => {
+      const sections = Array(sectionCount).fill(sectionSource).join("---\n");
+      const file = join(tmp, `gc-${mode}-${sectionCount}.js`);
+      writeFileSync(file, sections);
+      const resultsPath = join(tmp, `gc-${mode}-${sectionCount}.json`);
+      const proc = Bun.spawnSync(
+        [resolve(RUNNER), file, "--multifile", "--jobs=1", `--mode=${mode}`, `--output=json`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Runner --multifile garbage run (${mode}, ${sectionCount} sections) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const json = JSON.parse(proc.stdout.toString());
+      if (!json.ok || json.files?.length !== sectionCount)
+        throw new Error(`Runner --multifile garbage run (${mode}, ${sectionCount} sections) should produce ${sectionCount} ok sections: ${json.ok}, ${json.files?.length} files`);
+      return json.memory.gc.peakLiveBytes;
+    };
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      // Two sections give a baseline; sixteen sections would grow about 8x without
+      // the per-section collection. With it, the sixteen-section peak stays within
+      // twice the two-section peak.
+      const twoSections = peakLiveBytes(mode, 2);
+      const sixteenSections = peakLiveBytes(mode, 16);
+      if (sixteenSections > twoSections * 2)
+        throw new Error(
+          `Runner --multifile (${mode}) peak live GC heap grew with the section count: ` +
+            `${sixteenSections} bytes for 16 sections vs ${twoSections} bytes for 2 sections`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --output=json emits structured JSON envelope to stdout...", async () => {
   const tmp = makeTmp();
   try {
