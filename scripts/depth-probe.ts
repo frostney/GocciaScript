@@ -516,6 +516,12 @@ const CATALOG: Probe[] = [
     body: (d) => `const o = {};\no.o = o;\nreport(() => typeof o${".o".repeat(d)});\n`,
   },
   {
+    id: "parse-member-chain-tag",
+    growth: "linear",
+    summary: "Parse a DEPTH-long member chain o.o.o... used as a template tag",
+    body: (d) => `const o = () => o;\no.o = o;\nreport(() => typeof o${".o".repeat(d)}\`\`);\n`,
+  },
+  {
     id: "parse-call-chain",
     growth: "linear",
     summary: "Parse a DEPTH-long call chain f()()()...",

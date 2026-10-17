@@ -829,9 +829,17 @@ begin
   end;
 end;
 
+// The level's height only grows until LeaveNesting computes it, so checking
+// it here rejects the same trees, before anything walks the chain: the
+// parser itself recurses down a chain that is used as a template tag
+// (ExpressionIsOptionalChainTag), so that check must never see a chain taller
+// than the limit.
 procedure TGocciaParser.CountChainLink;
 begin
   Inc(FNestingFrames[FNestingDepth].Links);
+  if FNestingFrames[FNestingDepth].ChildHeight +
+    FNestingFrames[FNestingDepth].Links + 1 > MAX_TREE_HEIGHT then
+    RaiseTreeHeightExceeded;
 end;
 
 // The operand of a prefix operator: `!!!x` recurses once per operator.

@@ -33,6 +33,7 @@ const chains = {
   calls: [(d) => `const f = () => f; typeof f${"()".repeat(d)}`, () => "function"],
   "optional calls": [(d) => `const f = () => f; typeof f${"?.()".repeat(d)}`, () => "function"],
   "tagged templates": [(d) => `const tag = () => tag; typeof tag${"`x`".repeat(d)}`, () => "function"],
+  "tagged member access": [(d) => `const o = () => o; o.o = o; typeof o${".o".repeat(d)}\`x\``, () => "function"],
 };
 
 describe("chain length limit", () => {
@@ -45,6 +46,13 @@ describe("chain length limit", () => {
       expectHeightError(source(DEEP));
     });
   }
+
+  test("a member chain of 300,000 links used as a template tag is a SyntaxError", () => {
+    // The parser checks a template tag for an optional chain by walking the
+    // chain recursively; a chain this long used to exhaust the native stack
+    // there, before the height was checked.
+    expectHeightError(`const o = () => o; o.o = o; typeof o${".o".repeat(300000)}\`x\``);
+  });
 
   test("a chain of 2,000 method calls evaluates", () => {
     // The shape of regenerate's Unicode tables, which Babel bundles: a call
