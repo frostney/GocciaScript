@@ -213,7 +213,8 @@ begin
     if (TGocciaOpCode(Op) = OP_APPLY_ELEMENT_DECORATOR_CONST) and
        (B <> 0) then
       RequireRegister(B);
-    if TGocciaOpCode(Op) in [OP_BEGIN_DECORATORS,
+    if TGocciaOpCode(Op) in [OP_BEGIN_DECORATORS, OP_APPLY_CLASS_DECORATOR,
+       OP_FINISH_DECORATORS, OP_APPLY_ELEMENT_DECORATOR_CONST,
        OP_DEFINE_ACCESSOR_CONST, OP_DEFINE_ACCESSOR_DYNAMIC] then
       RequireRegister(Int64(A) + 1);
     if (TGocciaOpCode(Op) in [OP_SUPER_GET_CONST, OP_SUPER_GET,

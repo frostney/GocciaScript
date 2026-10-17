@@ -38,6 +38,7 @@ type
     procedure TestNegativeZeroStoredAsPositiveZero;
     procedure TestCanonicalizeKeyMapsNegativeZero;
     procedure TestAddSetMemberStoresCanonicalKeyAndValue;
+    procedure TestAddSetMemberKeepsExistingMember;
 
     { Insertion-ordered cursor with tombstone deletes. }
     procedure TestCursorVisitsInInsertionOrder;
@@ -69,6 +70,7 @@ begin
   Test('-0 is stored as +0', TestNegativeZeroStoredAsPositiveZero);
   Test('CanonicalizeKey maps -0 to +0', TestCanonicalizeKeyMapsNegativeZero);
   Test('AddSetMember stores the canonical element as key and value', TestAddSetMemberStoresCanonicalKeyAndValue);
+  Test('AddSetMember leaves an existing member as both key and value', TestAddSetMemberKeepsExistingMember);
   Test('Cursor visits entries in insertion order', TestCursorVisitsInInsertionOrder);
   Test('Cursor skips tombstones; re-add appends at end', TestCursorSkipsTombstonesAndReaddAppends);
   Test('NextEntryBounded skips tombstones and excludes appends past the limit', TestNextEntryBoundedSkipsTombstonesAndExcludesAppends);
@@ -300,6 +302,30 @@ begin
     Expect<Boolean>(TGocciaNumberLiteralValue(Key).IsNegativeZero).ToBe(False);
     Expect<Boolean>(TGocciaNumberLiteralValue(Value).IsNegativeZero).ToBe(False);
     Expect<Boolean>(Key = Value).ToBe(True);
+  finally
+    Store.Free;
+  end;
+end;
+
+procedure TOrderedValueMapTests.TestAddSetMemberKeepsExistingMember;
+var
+  Store: TGocciaOrderedValueMap;
+  First, Second, Key, Value: TGocciaValue;
+  Cursor: Integer;
+begin
+  Store := TGocciaOrderedValueMap.Create;
+  try
+    // Two distinct objects for one SameValueZero member: the second add must
+    // not replace the value slot, or the key would be marked by nothing.
+    First := Num(1.5);
+    Second := Num(1.5);
+    Store.AddSetMember(First);
+    Store.AddSetMember(Second);
+    Expect<Integer>(Store.Count).ToBe(1);
+    Cursor := 0;
+    Expect<Boolean>(Store.NextEntry(Cursor, Key, Value)).ToBe(True);
+    Expect<Boolean>(Key = First).ToBe(True);
+    Expect<Boolean>(Value = First).ToBe(True);
   finally
     Store.Free;
   end;
