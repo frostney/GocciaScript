@@ -170,3 +170,135 @@ describe("Proxy getOwnPropertyDescriptor trap", () => {
     expect(() => Object.getOwnPropertyDescriptor(proxy, key)).toThrow(TypeError);
   });
 });
+
+// ES2026 §10.5.5 steps 7-11: the trap result's type is checked before the
+// target is read, IsExtensible(target) runs before ToPropertyDescriptor, and
+// targetDesc is a copy of the target's property as step 8 read it. Guest code
+// in either later step that deletes or redefines that property does not change
+// the checks. Expected values are from Node.js 24.
+describe("Proxy getOwnPropertyDescriptor reads the target's descriptor once", () => {
+  const expected = { value: 2, writable: true, enumerable: true, configurable: true };
+
+  test("a trap result accessor that deletes the target property", () => {
+    const target = { x: 1 };
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        get enumerable() {
+          delete target.x;
+          return true;
+        },
+        value: 2,
+        writable: true,
+        configurable: true,
+      }),
+    });
+
+    expect(Object.getOwnPropertyDescriptor(proxy, "x")).toEqual(expected);
+    expect(Object.hasOwn(target, "x")).toBe(false);
+  });
+
+  test("a trap result accessor that deletes the target's symbol property", () => {
+    const key = Symbol("x");
+    const target = { [key]: 1 };
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        get enumerable() {
+          delete target[key];
+          return true;
+        },
+        value: 2,
+        writable: true,
+        configurable: true,
+      }),
+    });
+
+    expect(Object.getOwnPropertyDescriptor(proxy, key)).toEqual(expected);
+  });
+
+  test("a trap result accessor that makes the target property non-configurable", () => {
+    const target = { x: 1 };
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        get enumerable() {
+          Object.defineProperty(target, "x", { value: 3, writable: false, configurable: false });
+          return true;
+        },
+        value: 2,
+        writable: true,
+        configurable: true,
+      }),
+    });
+
+    expect(Object.getOwnPropertyDescriptor(proxy, "x")).toEqual(expected);
+    expect(Object.getOwnPropertyDescriptor(target, "x").configurable).toBe(false);
+  });
+
+  test("a target proxy whose isExtensible trap deletes the property", () => {
+    const inner = { x: 1 };
+    const target = new Proxy(inner, {
+      isExtensible: (t) => {
+        delete inner.x;
+        return Reflect.isExtensible(t);
+      },
+    });
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({ value: 2, writable: true, enumerable: true, configurable: true }),
+    });
+
+    expect(Object.getOwnPropertyDescriptor(proxy, "x")).toEqual(expected);
+  });
+
+  test("a target proxy whose isExtensible trap deletes the symbol property", () => {
+    const key = Symbol("x");
+    const inner = { [key]: 1 };
+    const target = new Proxy(inner, {
+      isExtensible: (t) => {
+        delete inner[key];
+        return Reflect.isExtensible(t);
+      },
+    });
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({ value: 2, writable: true, enumerable: true, configurable: true }),
+    });
+
+    expect(Object.getOwnPropertyDescriptor(proxy, key)).toEqual(expected);
+  });
+
+  test("asks IsExtensible before reading the trap result", () => {
+    const log = [];
+    const target = new Proxy({ x: 1 }, {
+      isExtensible: (t) => {
+        log.push("isExtensible");
+        return Reflect.isExtensible(t);
+      },
+    });
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: () => ({
+        get enumerable() {
+          log.push("enumerable");
+          return true;
+        },
+        value: 2,
+        writable: true,
+        configurable: true,
+      }),
+    });
+
+    Object.getOwnPropertyDescriptor(proxy, "x");
+    expect(log).toEqual(["isExtensible", "enumerable"]);
+  });
+
+  test("rejects a non-object trap result before reading the target", () => {
+    const log = [];
+    const target = new Proxy({ x: 1 }, {
+      getOwnPropertyDescriptor: (t, key) => {
+        log.push("target");
+        return Reflect.getOwnPropertyDescriptor(t, key);
+      },
+    });
+    const proxy = new Proxy(target, { getOwnPropertyDescriptor: () => 1 });
+
+    expect(() => Object.getOwnPropertyDescriptor(proxy, "x")).toThrow(TypeError);
+    expect(log).toEqual([]);
+  });
+});

@@ -119,3 +119,49 @@ describe("Proxy defineProperty trap", () => {
     }).toThrow(TypeError);
   });
 });
+
+// ES2026 §10.5.6 steps 11-15: targetDesc is a copy of the target's property as
+// step 11 read it, so a target isExtensible trap (step 12) that deletes the
+// property does not change the checks. Expected values are from Node.js 24.
+describe("Proxy defineProperty reads the target's descriptor once", () => {
+  test("a target proxy whose isExtensible trap deletes the property", () => {
+    const inner = { x: 1 };
+    const target = new Proxy(inner, {
+      isExtensible: (t) => {
+        delete inner.x;
+        return Reflect.isExtensible(t);
+      },
+    });
+    const proxy = new Proxy(target, { defineProperty: () => true });
+
+    expect(Object.defineProperty(proxy, "x", { value: 5 })).toBe(proxy);
+    expect(Object.hasOwn(inner, "x")).toBe(false);
+  });
+
+  test("a target proxy whose isExtensible trap deletes the symbol property", () => {
+    const key = Symbol("x");
+    const inner = { [key]: 1 };
+    const target = new Proxy(inner, {
+      isExtensible: (t) => {
+        delete inner[key];
+        return Reflect.isExtensible(t);
+      },
+    });
+    const proxy = new Proxy(target, { defineProperty: () => true });
+
+    expect(Reflect.defineProperty(proxy, key, { value: 5 })).toBe(true);
+  });
+
+  test("a target proxy whose isExtensible trap makes the property non-configurable", () => {
+    const inner = { x: 1 };
+    const target = new Proxy(inner, {
+      isExtensible: (t) => {
+        Object.defineProperty(inner, "x", { value: 3, writable: false, configurable: false });
+        return Reflect.isExtensible(t);
+      },
+    });
+    const proxy = new Proxy(target, { defineProperty: () => true });
+
+    expect(Reflect.defineProperty(proxy, "x", { value: 5, configurable: true })).toBe(true);
+  });
+});
