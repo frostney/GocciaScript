@@ -88,6 +88,15 @@ b`;
     expect(fn()).toBe("a\n");
   });
 
+  test("template with a line break before its first substitution is returned", () => {
+    const b = "b"
+    const fn = () => {
+      return `a
+${b}`;
+    }
+    expect(fn()).toBe("a\nb");
+  });
+
   test("string with a line continuation is returned", () => {
     const fn = () => {
       return "a\

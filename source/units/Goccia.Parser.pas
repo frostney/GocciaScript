@@ -1267,7 +1267,7 @@ begin
   raise Error;
 end;
 
-// ES2026 §12.10 Rules of Automatic Semicolon Insertion: a LineTerminator
+// ES2026 §12.10.1 Rules of Automatic Semicolon Insertion: a LineTerminator
 // separates two adjacent tokens when the earlier one ends on a line before
 // the one the later one starts on. A token can span lines (a template literal,
 // a string with a LineContinuation); the LineTerminator inside it is part of
@@ -1279,7 +1279,7 @@ begin
   Result := ABefore.Line < AAfter.StartLine;
 end;
 
-// ES2026 §12.10 [no LineTerminator here] between the previous token and Peek
+// ES2026 §12.10.1 [no LineTerminator here] between the previous token and Peek
 function TGocciaParser.HasLineTerminatorBeforePeek: Boolean;
 begin
   Result := HasLineTerminatorBetween(Previous, Peek);

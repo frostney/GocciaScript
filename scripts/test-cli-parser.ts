@@ -507,6 +507,7 @@ console.log("ASI and line breaks inside a token...");
     'const a = 1 "x\\\ny";\n',
     "string with a line continuation after an expression on its line",
     ["--compat-asi"],
+    { messageIncludes: "Expected \";\"" },
   );
 
   const separated = runLoaderJson('const a = 1\n"x\\\ny";\nconsole.log(a);\n', ["--compat-asi"]);
