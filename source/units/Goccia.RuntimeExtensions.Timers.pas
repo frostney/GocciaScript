@@ -28,11 +28,14 @@ type
   private
     FTimersModule: TGocciaRuntimeNamespaceModuleRegistration;
     FHostToken: TObject;
+    { The last WaitForIdle stopped at the drain's bound, timers still due. }
+    FDrainBounded: Boolean;
     function MaterializeTimers: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
     procedure WaitForIdle; override;
+    function HasPendingWork: Boolean; override;
     procedure DiscardPending; override;
   end;
 
@@ -98,7 +101,15 @@ end;
 procedure TGocciaTimersRuntimeExtension.WaitForIdle;
 begin
   inherited;
-  DrainRealTimersForHost;
+  FDrainBounded := not DrainRealTimersForHost;
+end;
+
+{ A timeout the drain would run, scheduled after this extension's pass by a job
+  or another extension's work. Once the bound has stopped a drain, a timer
+  that keeps rescheduling itself is not work the run waits for again. }
+function TGocciaTimersRuntimeExtension.HasPendingWork: Boolean;
+begin
+  Result := (not FDrainBounded) and HasRealTimeoutsForHost;
 end;
 
 procedure TGocciaTimersRuntimeExtension.DiscardPending;

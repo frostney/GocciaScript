@@ -2208,6 +2208,10 @@ type
   TGocciaVMDecoratorSession = class
   public
     MetadataObject: TGocciaObjectValue;
+    // Managed by the garbage collector, not by the session: the
+    // addInitializer function of each decorator context made for a collector
+    // keeps it alive, and a decorator can keep its context after the session
+    // ends.
     MethodCollector: TGocciaInitializerCollector;
     FieldCollector: TGocciaInitializerCollector;
     StaticFieldCollector: TGocciaInitializerCollector;
@@ -2216,7 +2220,6 @@ type
     OriginalClassValue: TGocciaValue;
     StaticDecoratorInitializersRun: Boolean;
     constructor Create(const AMetadataObject: TGocciaObjectValue);
-    destructor Destroy; override;
     procedure MarkReferences;
   end;
 
@@ -3147,29 +3150,7 @@ begin
   StaticDecoratorInitializersRun := False;
 end;
 
-destructor TGocciaVMDecoratorSession.Destroy;
-begin
-  MethodCollector.Free;
-  FieldCollector.Free;
-  StaticFieldCollector.Free;
-  ClassCollector.Free;
-  inherited;
-end;
-
 procedure TGocciaVMDecoratorSession.MarkReferences;
-  procedure MarkCollector(const ACollector: TGocciaInitializerCollector);
-  var
-    Initializers: TArray<TGocciaValue>;
-    Initializer: TGocciaValue;
-  begin
-    if not Assigned(ACollector) then
-      Exit;
-    Initializers := ACollector.GetInitializers;
-    for Initializer in Initializers do
-      if Assigned(Initializer) then
-        Initializer.MarkReferences;
-  end;
-
 begin
   if Assigned(MetadataObject) then
     MetadataObject.MarkReferences;
@@ -3177,10 +3158,10 @@ begin
     ClassValue.MarkReferences;
   if Assigned(OriginalClassValue) and (OriginalClassValue <> ClassValue) then
     OriginalClassValue.MarkReferences;
-  MarkCollector(MethodCollector);
-  MarkCollector(FieldCollector);
-  MarkCollector(StaticFieldCollector);
-  MarkCollector(ClassCollector);
+  MethodCollector.MarkReferences;
+  FieldCollector.MarkReferences;
+  StaticFieldCollector.MarkReferences;
+  ClassCollector.MarkReferences;
 end;
 
 procedure RunStaticDecoratorInitializersForSession(
@@ -12365,7 +12346,9 @@ var
   Session: TGocciaVMDecoratorSession;
   ClassVal, DecoratorResult: TGocciaValue;
   ContextObject: TGocciaObjectValue;
+  AddInitializerFunction: TGocciaAddInitializerFunction;
   DecoratorArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not Assigned(FActiveDecoratorSession) then
     Exit;
@@ -12384,17 +12367,25 @@ begin
   ContextObject.AssignProperty(PROP_NAME,
     TGocciaStringLiteralValue.Create(TGocciaClassValue(ClassVal).Name));
   ContextObject.AssignProperty(PROP_METADATA, Session.MetadataObject);
-  ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      Session.ClassCollector.AddInitializer, PROP_ADD_INITIALIZER, 1));
+  AddInitializerFunction := TGocciaAddInitializerFunction.Create(
+    Session.ClassCollector);
+  ContextObject.AssignProperty(PROP_ADD_INITIALIZER, AddInitializerFunction);
 
   DecoratorArgs := AcquireArguments(2);
   DecoratorArgs.Add(ClassVal);
   DecoratorArgs.Add(ContextObject);
+  // The decorator can delete addInitializer from its context, so the
+  // function stays rooted here until Finish has run.
+  Roots.Initialize;
+  Roots.Add(AddInitializerFunction);
   try
     DecoratorResult := DispatchCall(ADecoratorFn,
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    // Decorators proposal, ApplyDecoratorsToClassDefinition step 1.f:
+    // decorationState.[[Finished]] is set once the decorator has returned.
+    AddInitializerFunction.Finish;
   finally
+    Roots.Clear;
     ReleaseArguments(DecoratorArgs);
   end;
 
@@ -12509,7 +12500,9 @@ var
   AccessGetterHelper: TGocciaAccessGetter;
   AccessSetterHelper: TGocciaAccessSetter;
   Collector: TGocciaInitializerCollector;
+  AddInitializerFunction: TGocciaAddInitializerFunction;
   DecoratorArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
   KindStr: string;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   GetterValue, SetterValue, NewGetter, NewSetter, NewInit: TGocciaValue;
@@ -12983,9 +12976,8 @@ begin
     Collector := Session.FieldCollector
   else
     Collector := Session.MethodCollector;
-  ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      Collector.AddInitializer, PROP_ADD_INITIALIZER, 1));
+  AddInitializerFunction := TGocciaAddInitializerFunction.Create(Collector);
+  ContextObject.AssignProperty(PROP_ADD_INITIALIZER, AddInitializerFunction);
 
   case Kind of
     'm':
@@ -13045,10 +13037,18 @@ begin
   DecoratorArgs := AcquireArguments(2);
   DecoratorArgs.Add(ElementValue);
   DecoratorArgs.Add(ContextObject);
+  // The decorator can delete addInitializer from its context, so the
+  // function stays rooted here until Finish has run.
+  Roots.Initialize;
+  Roots.Add(AddInitializerFunction);
   try
     DecoratorResult := DispatchCall(ADecoratorFn,
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    // Decorators proposal, ApplyDecoratorsToElementDefinition step 5.k:
+    // decorationState.[[Finished]] is set once the decorator has returned.
+    AddInitializerFunction.Finish;
   finally
+    Roots.Clear;
     ReleaseArguments(DecoratorArgs);
   end;
 
