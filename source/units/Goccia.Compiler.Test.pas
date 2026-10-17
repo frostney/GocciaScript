@@ -130,6 +130,7 @@ type
     procedure TestBinaryRoundTripConstants;
     procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
+    procedure TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
     procedure TestConstantFoldsSpecialNumbers;
@@ -278,6 +279,8 @@ begin
   Test('Binary loader rejects malformed artifacts',
     TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
+  Test('A compile after compiles that raised starts at nesting depth 0',
+    TestCompileAfterRaisedCompileStartsAtNestingDepthZero);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
   Test('Constant folds BigInt', TestConstantFoldsBigInt);
   Test('Constant folds special numbers', TestConstantFoldsSpecialNumbers);
@@ -2291,6 +2294,89 @@ begin
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeAx(OP_JUMP, -2));
   ExpectRejected(Template);
+end;
+
+// A compile that raises leaves the levels it had entered open. A compiler
+// reused after it must not start the next walk from them: repeated failures
+// would otherwise push every later walk past NESTING_UNCHECKED_DEPTH, where
+// each node pays a native-stack check.
+procedure TTestCompiler.TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
+var
+  Compiler: TGocciaCompiler;
+  Module: TGocciaBytecodeModule;
+  Attempt: Integer;
+  Raised: Boolean;
+
+  function ParseSource(const ASource: string;
+    const ANonStrictMode: Boolean): TGocciaProgram;
+  var
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    SourceLines: TStringList;
+    ParserOptions: TGocciaParserOptions;
+  begin
+    Lexer := TGocciaLexer.Create(ASource, '<test>');
+    SourceLines := CreateTextLines(ASource);
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+    try
+      ParserOptions := Parser.Options;
+      ParserOptions.NonStrictModeEnabled := ANonStrictMode;
+      Parser.ApplyOptions(ParserOptions);
+      Result := Parser.Parse;
+    finally
+      Parser.Free;
+      SourceLines.Free;
+      Lexer.Free;
+    end;
+  end;
+
+  procedure CompileProgram(const ASource: string;
+    const ANonStrictParse: Boolean);
+  var
+    ProgramNode: TGocciaProgram;
+  begin
+    ProgramNode := ParseSource(ASource, ANonStrictParse);
+    try
+      Module := Compiler.Compile(ProgramNode);
+    finally
+      ProgramNode.Free;
+    end;
+  end;
+
+begin
+  Compiler := TGocciaCompiler.Create('<test>');
+  try
+    // The parser accepts `with` in non-strict code; the compiler, strict,
+    // rejects it five levels into the walk: the declaration, the arrow, the
+    // if, its block and the `with` itself.
+    Compiler.NonStrictMode := False;
+    for Attempt := 1 to 3 do
+    begin
+      Raised := False;
+      Module := nil;
+      try
+        CompileProgram(
+          'const outer = () => { if (true) { with ({}) {} } };', True);
+      except
+        on E: TGocciaSyntaxError do
+          Raised := True;
+      end;
+      Module.Free;
+      Expect<Boolean>(Raised).ToBe(True);
+      Expect<Boolean>(Compiler.NestingDepth > 0).ToBe(True);
+    end;
+
+    Module := nil;
+    CompileProgram('const a = (1 + (2 + 3)); a;', False);
+    try
+      Expect<Boolean>(Assigned(Module)).ToBe(True);
+      Expect<Integer>(Compiler.NestingDepth).ToBe(0);
+    finally
+      Module.Free;
+    end;
+  finally
+    Compiler.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestUndeclaredPrivateNameRaisesSyntaxError;

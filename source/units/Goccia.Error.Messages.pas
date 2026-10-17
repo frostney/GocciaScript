@@ -546,6 +546,14 @@ resourcestring
   SErrorCannotUseInOperator = 'Cannot use ''in'' operator to search for ''%s'' in %s';
   SErrorCannotDestructureNotObject = 'Cannot destructure %s as it is not an object';
   SErrorMaxCallStackExceeded = 'Maximum call stack size exceeded';
+  // Source nested past Goccia.NestingLimit's MAX_NESTING_DEPTH, or, parsed or
+  // compiled where the native stack is already deep, nested further than the
+  // stack left allows (both SyntaxErrors).
+  SErrorNestingLimitExceeded = 'Nesting exceeds the supported limit of %d levels';
+  SErrorNestingStackExhausted = 'Nesting is too deep for the native stack that is left';
+  // An expression or statement whose syntax tree, counting each link of its
+  // operator, member and call chains, is taller than MAX_TREE_HEIGHT.
+  SErrorTreeHeightExceeded = 'Nesting, counting each link of operator and call chains, exceeds the supported limit of %d levels';
 
   // Module loading errors
   // Names no module address on purpose: the only address available where this
