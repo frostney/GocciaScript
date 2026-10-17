@@ -60,7 +60,7 @@ type
     FCurrentCapabilities: TGocciaCapabilities;
     FHasCurrentCapabilities: Boolean;
     FCurrentEngine: TGocciaEngine;
-    FKeepRootResult: Boolean;
+    FPrintRootResult: Boolean;
 
     procedure ConfigureResolver(const AResolver: TGocciaSandboxModuleResolver);
     procedure CopyNestedInputs(const AParentContext,
@@ -106,13 +106,15 @@ type
       write FRootCapabilities;
     property OnConfigureEngine: TGocciaSandboxEngineConfigurator
       read FOnConfigureEngine write FOnConfigureEngine;
-    { Whether Run copies the root program's completion value into its
-      result's ResultValue (True by default). The copy walks the whole value,
-      and is charged to the run's own memory and time budget, so a caller
-      that never reads the value turns it off. A nested run's value is always
-      copied: runScript returns it to the calling program. }
-    property KeepRootResult: Boolean read FKeepRootResult
-      write FKeepRootResult;
+    { Whether Run converts the root program's completion value to a string
+      into its result's ResultText, as host mode's --print does (False by
+      default). The conversion can run the value's own methods, so it happens
+      while the run's engine is alive, inside the run's limits, and an error
+      it throws fails the run. The root value itself is never copied out: it
+      belongs to an engine that is freed when Run returns. A nested run's
+      value is always copied: runScript returns it to the calling program. }
+    property PrintRootResult: Boolean read FPrintRootResult
+      write FPrintRootResult;
   end;
 
 implementation
@@ -125,6 +127,7 @@ uses
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Error,
   Goccia.Error.Detail,
+  Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
@@ -320,6 +323,24 @@ begin
   end;
 end;
 
+{ The text --print shows for a run's value: its string conversion, as host
+  mode prints it, with no value printed as undefined. Converting can run the
+  value's own toString or valueOf, so it is rooted while that code runs. }
+function ResultValueText(const AValue: TGocciaValue): string;
+var
+  Root: TGocciaTempRoot;
+begin
+  if not Assigned(AValue) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value);
+  InitializeTempRoot(Root);
+  AddTempRootIfNeeded(Root, AValue);
+  try
+    Result := AValue.ToStringLiteral.Value;
+  finally
+    RemoveTempRootIfNeeded(Root);
+  end;
+end;
+
 { TGocciaSandboxHost }
 
 constructor TGocciaSandboxHost.Create(const AQuotaBytes: Int64;
@@ -331,7 +352,7 @@ begin
   FInputs := TSandboxHostInputs.Create(FContext.Fs);
   FAliases := TStringList.Create;
   FRootCapabilities := TGocciaCapabilities.None;
-  FKeepRootResult := True;
+  FPrintRootResult := False;
 end;
 
 destructor TGocciaSandboxHost.Destroy;
@@ -535,20 +556,33 @@ begin
         ExecutionRealm := CurrentRealm;
         { ExecuteNested counts the depth before it calls here, so a depth of
           zero is the root run. }
-        if (FRunScriptDepth > 0) or FKeepRootResult then
+        if (FRunScriptDepth > 0) or FPrintRootResult then
         begin
-          { Cloning reads the run's result, and reading can run its getters.
-            The run's microtask scope has ended, so without one of its own for
-            the clone, a job a getter queued would run in the caller, and a
-            promise it left rejected would fail the caller. Both end with the
-            clone instead. }
+          { Cloning or converting reads the run's result, and reading can run
+            its getters or its toString. The run's microtask scope has ended,
+            so without one of its own here, a job that code queued would run
+            in the caller, and a promise it left rejected would fail the
+            caller. Both end here instead. }
           MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
           CloneScopeToken := 0;
           if Assigned(MicrotaskQueue) then
             CloneScopeToken := MicrotaskQueue.EnterScope;
           try
-            SetCurrentRealm(CloneRealm);
-            Result.ResultValue := CloneResultValue(ScriptResult.Result);
+            if FRunScriptDepth > 0 then
+            begin
+              { The copy is made in the calling program's realm, which
+                outlives this run's engine. }
+              SetCurrentRealm(CloneRealm);
+              Result.ResultValue := CloneResultValue(ScriptResult.Result);
+            end
+            else
+            begin
+              { The root run has no calling realm for a copy to live in, so
+                its value is converted here, in its own realm, before the
+                engine is freed. }
+              Result.ResultText := ResultValueText(ScriptResult.Result);
+              Result.HasResultText := True;
+            end;
           finally
             SetCurrentRealm(ExecutionRealm);
             if Assigned(MicrotaskQueue) then

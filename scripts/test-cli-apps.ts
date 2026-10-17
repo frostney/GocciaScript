@@ -620,6 +620,46 @@ await section("Loader: --print emits 'undefined' when result is undefined...", a
     throw new Error(`Loader --print should emit "undefined" (matches node -p), got: ${out}`);
 });
 
+await section("Loader: --print and --output=json convert the last value before its engine is freed...", async () => {
+  // The conversion can run the value's own methods and the realm's
+  // built-ins, so it happens while the run's engine is alive. Converting
+  // after the engine was freed ended in "Range check error" for these, and
+  // in an access violation for a toJSON value.
+  const printOf = (source: string) => {
+    const proc = Bun.spawnSync([RUNNER, "--print"], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      exitCode: proc.exitCode,
+      lines: normalizeLineEndings(proc.stdout.toString()).split("\n").filter((l) => !l.startsWith("Running script") && !l.trimStart().startsWith("Lex:") && l !== ""),
+      stderr: proc.stderr.toString(),
+    };
+  };
+  const cases: Array<[string, string, string[]]> = [
+    ["own toString", '({ toString() { return "custom"; } });\n', ["custom"]],
+    ["toString that logs", 'const x = { toString: () => { console.log("side"); return "y"; } };\nx;\n', ["side", "y"]],
+    ["Symbol.toPrimitive", '({ [Symbol.toPrimitive]: () => "prim" });\n', ["prim"]],
+    ["arrow function", "(() => 1);\n", ["() => 1"]],
+  ];
+  for (const [label, source, expected] of cases) {
+    const run = printOf(source);
+    if (run.exitCode !== 0 || JSON.stringify(run.lines) !== JSON.stringify(expected))
+      throw new Error(`--print of ${label} should print ${JSON.stringify(expected)}, got (exit ${run.exitCode}) ${JSON.stringify(run.lines)}\n${run.stderr}`);
+  }
+  const date = printOf("new Date(0);\n");
+  if (date.exitCode !== 0 || date.lines.length !== 1 || !/^\w{3} \w{3} \d{2} 19(69|70) \d{2}:\d{2}:\d{2} GMT[+-]\d{4}/.test(date.lines[0]))
+    throw new Error(`--print of a Date should print its string, got (exit ${date.exitCode}) ${JSON.stringify(date.lines)}\n${date.stderr}`);
+
+  const toJson = await runLoaderJsonAsync("({ toJSON() { return 7; } });\n");
+  if (toJson.exitCode !== 0 || toJson.json.files?.[0]?.result !== 7)
+    throw new Error(`--output=json of a toJSON value should report 7, got (exit ${toJson.exitCode}) ${JSON.stringify(toJson.json.files?.[0]?.result)}\n${toJson.stderr}`);
+  const dateJson = await runLoaderJsonAsync("new Date(0);\n");
+  if (dateJson.exitCode !== 0 || dateJson.json.files?.[0]?.result !== "1970-01-01T00:00:00.000Z")
+    throw new Error(`--output=json of a Date should report its ISO string, got (exit ${dateJson.exitCode}) ${JSON.stringify(dateJson.json.files?.[0]?.result)}\n${dateJson.stderr}`);
+});
+
 await section("Loader: --print honored from goccia.json...", async () => {
   const tmp = makeTmp();
   try {
@@ -10859,6 +10899,49 @@ await section("Runner sandbox mode: --print prints the last value like host mode
     const undef = runSandboxCli(["empty.js", "--sandbox", "--print"], { cwd: tmp });
     if (undef.exitCode !== 0 || undef.stdout !== "undefined\n")
       throw new Error(`Sandbox mode --print should print undefined, got (exit ${undef.exitCode}):\n${undef.stdout}${undef.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --print converts any last value as host mode does...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // The root value used to be copied out of the run without a realm, so
+    // an object lost its prototype and printed an empty "Error:", and a
+    // BigInt or Symbol became undefined.
+    const cases: Array<[string, string, string]> = [
+      ["object", "({ a: 1 });", "[object Object]\n"],
+      ["nested object", '({ a: [1, { b: 2 }], c: "x" });', "[object Object]\n"],
+      ["typed array", "new Uint8Array(3);", "0,0,0\n"],
+      ["Map", "new Map([[1, 2]]);", "[object Map]\n"],
+      ["arrow function", "(() => 1);", "() => 1\n"],
+      ["BigInt", "10n;", "10\n"],
+      ["array", "[1, 2, 3];", "1,2,3\n"],
+      ["own toString", '({ toString() { return "custom"; } });', "custom\n"],
+      ["toString that logs", 'const x = { toString: () => { console.log("side"); return "y"; } };\nx;', "side\ny\n"],
+    ];
+    for (const [label, source, expected] of cases) {
+      writeFileSync(join(tmp, "value.js"), source);
+      const run = runSandboxCli(["value.js", "--sandbox", "--print"], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout !== expected || run.stderr !== "")
+        throw new Error(`Sandbox --print of ${label} should print ${JSON.stringify(expected)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    // A Symbol has no string conversion, in host mode either: the run fails
+    // with the TypeError.
+    writeFileSync(join(tmp, "symbol.js"), 'Symbol("s");');
+    const symbol = runSandboxCli(["symbol.js", "--sandbox", "--print"], { cwd: tmp });
+    if (symbol.exitCode !== 1 || symbol.stdout !== "" || !symbol.stderr.includes("TypeError: Cannot convert a Symbol value to a string"))
+      throw new Error(`Sandbox --print of a Symbol should fail with the TypeError, got (exit ${symbol.exitCode}):\n${symbol.stdout}${symbol.stderr}`);
+    // The conversion is part of the run, under its limits.
+    writeFileSync(join(tmp, "forever.js"), [
+      "const forever = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 0 }) }) };",
+      'const x = { toString: () => { for (const _ of forever) {} return "never"; } };',
+      "x;",
+    ].join("\n"));
+    const forever = runSandboxCli(["forever.js", "--sandbox", "--print", "--max-instructions=100000"], { cwd: tmp });
+    if (forever.exitCode !== 1 || forever.stdout !== "" || !forever.stderr.includes("instruction limit"))
+      throw new Error(`A conversion that never ends should hit the run's instruction limit, got (exit ${forever.exitCode}):\n${forever.stdout}${forever.stderr}`);
   } finally {
     clean(tmp);
   }
