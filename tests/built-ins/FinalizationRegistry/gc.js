@@ -217,3 +217,40 @@ describe.runIf(hasGoccia)("FinalizationRegistry GC behavior", () => {
     });
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("FinalizationRegistry unregister after a collection", () => {
+  test("unregister finds a cell whose target was collected before its cleanup ran", () => {
+    const log = [];
+    const token = {};
+    const registry = new FinalizationRegistry((held) => {
+      log.push(held);
+    });
+    globalThis.__finalizationRegistryKeep = registry;
+
+    const result = new Promise((resolve) => {
+      queueMicrotask(() => {
+        let target = {};
+        registry.register(target, "held", token);
+        target = null;
+      });
+      queueMicrotask(() => {
+        // The target is collected here and its cleanup job queued; the cell
+        // stays in the registry until that job runs (ES2026 §9.9.3, §9.12).
+        Goccia.gc();
+        log.push(registry.unregister(token));
+        log.push(registry.unregister(token));
+      });
+      queueMicrotask(() => {
+        Goccia.gc();
+      });
+      queueMicrotask(() => {
+        setTimeout(() => resolve(log.slice()), 0);
+      });
+    });
+
+    return result.then((finalLog) => {
+      globalThis.__finalizationRegistryKeep = undefined;
+      expect(finalLog).toEqual([true, false]);
+    });
+  });
+});

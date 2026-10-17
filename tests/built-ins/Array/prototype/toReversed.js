@@ -80,3 +80,26 @@ test("toReversed caches length while reading elements", () => {
   }
   expect(result).toEqual([4, 3, undefined, 5, 0]);
 });
+
+describe.runIf(typeof Goccia !== "undefined")("toReversed across a collection", () => {
+  // Reuses the memory a wrongly collected object leaves behind.
+  const churn = () => Array.from({ length: 2000 }, (_, i) => [i, { i }]);
+
+  test("keeps the result and the receiver while an element getter collects", () => {
+    const source = {
+      length: 3,
+      get 0() {
+        Goccia.gc();
+        churn();
+        return "a";
+      },
+      1: "b",
+      get 2() {
+        Goccia.gc();
+        churn();
+        return "c";
+      },
+    };
+    expect(Array.prototype.toReversed.call(source)).toEqual(["c", "b", "a"]);
+  });
+});
