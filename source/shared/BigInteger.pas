@@ -652,8 +652,8 @@ begin
     Sticky := not AbsValue.Equal(Shifted.ShiftLeft(Shift));
     if RoundBit and (Sticky or ((Mantissa and 1) = 1)) then
       Inc(Mantissa);
-    // Mantissa contains at most 53 bits and therefore also fits Int64, and
-    // converts to Double exactly. Pass Ldexp a Double: given an integer
+    // Mantissa is at most 2^53 (53 bits, or 2^53 after rounding up), so it
+    // fits Int64 and converts to Double exactly. Pass Ldexp a Double: given an integer
     // argument, FPC 3.2.4 picks its Single overload and rounds the
     // mantissa to 24 bits.
     MantissaValue := Int64(Mantissa);
