@@ -683,8 +683,9 @@ begin
 end;
 
 { For a file or directory that is deleted, moved away, or moved or copied
-  in: a directory also changes everything below its path, so a read-only
-  path there refuses it too, whether that path exists or not. }
+  in. A directory takes the whole subtree below its path, so a read-only
+  path anywhere there refuses it too, whether that path exists or not and
+  whatever the directory holds. }
 procedure TSandboxVirtualFileSystem.EnsureTreeWritable(
   const ACanonicalPath: string; const AIsDirectory: Boolean);
 begin

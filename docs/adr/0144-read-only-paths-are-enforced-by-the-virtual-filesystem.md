@@ -33,9 +33,11 @@ copying onto such a path raise `ESandboxFsReadOnly`, with the message
 `<canonical path>: read-only file system`. So do deleting or moving a path
 from inside a marked tree, deleting or moving a writable directory that holds
 a marked one, which would otherwise take the marked tree with it, and moving
-or copying a directory to a destination with a marked path below it, which
-would otherwise create entries under the mark. Reads and copies out of a marked
-tree are not affected. A fork keeps the marks. Marks cannot be removed.
+or copying a directory to a destination with a marked path below it: the
+whole subtree under a directory's destination is reserved, whatever the
+directory holds, because checking each entry it would create is not worth
+the cost. Reads and copies out of a marked tree are not affected. A fork
+keeps the marks. Marks cannot be removed.
 
 Every guest write path already ends in one of those operations, so checking
 there covers all of them, including forms added later. Checking in the `fs`
