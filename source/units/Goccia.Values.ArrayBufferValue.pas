@@ -353,9 +353,6 @@ begin
     FPrototype := Shared.Prototype;
 end;
 
-// Immutable ArrayBuffers proposal: create a fixed-length immutable buffer
-// whose data block is the supplied bytes. Used by Import Bytes to back the
-// default Uint8Array export.
 constructor TGocciaArrayBufferValue.CreateFromBytes(const AData: TBytes);
 begin
   // Called as a method on Self, Create(0) initializes without allocating;
@@ -364,6 +361,9 @@ begin
   SetData(AData);
 end;
 
+// Immutable ArrayBuffers proposal: create a fixed-length immutable buffer
+// whose data block is the supplied bytes. Used by Import Bytes to back the
+// default Uint8Array export.
 class function TGocciaArrayBufferValue.CreateImmutableFromBytes(
   const AData: TBytes): TGocciaArrayBufferValue;
 begin
