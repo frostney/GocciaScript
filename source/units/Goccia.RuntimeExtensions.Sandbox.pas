@@ -1800,8 +1800,10 @@ var
 begin
   Existing := nil;
   try
+    { An append writes; it does not read, so it leaves the access time
+      alone, and a refused one changes nothing at all. }
     if FContext.Fs.Exists(APath) then
-      Existing := FContext.Fs.ReadAllBytes(APath);
+      Existing := FContext.Fs.SnapshotReadAllBytes(APath);
     SetLength(Combined, Length(Existing) + Length(AData));
     if Length(Existing) > 0 then
       Move(Existing[0], Combined[0], Length(Existing));

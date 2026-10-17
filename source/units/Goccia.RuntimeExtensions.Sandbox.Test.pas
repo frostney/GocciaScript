@@ -26,6 +26,7 @@ type
     procedure RunModule(const AContext: TGocciaSandboxContext;
       const ASource: string);
     procedure TestReadOnlyPathsRefuseEveryWriteForm;
+    procedure TestRefusedAppendChangesNoMetadata;
   public
     procedure SetupTests; override;
   end;
@@ -124,6 +125,8 @@ procedure TSandboxRuntimeExtensionTests.SetupTests;
 begin
   Test('A script sees EROFS from every fs write form and the shell under ' +
     'a read-only path', TestReadOnlyPathsRefuseEveryWriteForm);
+  Test('A refused append leaves even the file''s timestamps unchanged',
+    TestRefusedAppendChangesNoMetadata);
 end;
 
 procedure TSandboxRuntimeExtensionTests.RunModule(
@@ -222,6 +225,38 @@ begin
     Expect<Boolean>(Pos('/data', Diff) > 0).ToBe(False);
   finally
     Lines.Free;
+    Context.Free;
+  end;
+end;
+
+procedure TSandboxRuntimeExtensionTests.TestRefusedAppendChangesNoMetadata;
+const
+  APPEND_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'let code = "none";' + LineEnding +
+    'try { fs.appendFileSync("/data/a.txt", "x"); }' + LineEnding +
+    'catch (error) { code = error.code; }' + LineEnding +
+    'fs.writeFileSync("/out/code.txt", code);' + LineEnding;
+var
+  Context: TGocciaSandboxContext;
+  Diff: string;
+begin
+  Context := TGocciaSandboxContext.Create;
+  try
+    Context.Fs.MakeDirectory('/data');
+    Context.Fs.WriteAllText('/data/a.txt', 'original');
+    Context.Fs.MakeDirectory('/out');
+    Context.Fs.AddReadOnlyPath('/data');
+    Context.CaptureBaseline;
+
+    RunModule(Context, APPEND_SOURCE);
+
+    Expect<string>(Context.Fs.ReadAllText('/out/code.txt')).ToBe('EROFS');
+    { With metadata: the access time is not advanced either. }
+    Diff := Context.DiffJson(True);
+    Expect<Boolean>(Pos('/out/code.txt', Diff) > 0).ToBe(True);
+    Expect<Boolean>(Pos('/data', Diff) > 0).ToBe(False);
+  finally
     Context.Free;
   end;
 end;
