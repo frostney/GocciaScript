@@ -518,15 +518,19 @@ begin
   Result := False;
 end;
 
+// A Uint8Array over ABytes itself: the new ArrayBuffer adopts the array and
+// charges the memory limit as an allocation of the same length would, so the
+// bytes are neither zero-filled nor copied. The caller must not use ABytes
+// afterwards.
 function BytesToUint8Array(const ABytes: TBytes): TGocciaTypedArrayValue;
 var
-  Data: TBytes;
-  I: Integer;
+  Buffer: TGocciaArrayBufferValue;
 begin
-  Result := TGocciaTypedArrayValue.Create(takUint8, Length(ABytes));
-  Data := Result.BufferData;
-  for I := 0 to High(ABytes) do
-    Data[Result.ByteOffset + I] := ABytes[I];
+  if Length(ABytes) > High(Integer) then
+    ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
+  Buffer := TGocciaArrayBufferValue.CreateFromBytes(ABytes);
+  Result := TGocciaTypedArrayValue.Create(takUint8, Buffer, 0,
+    Length(ABytes));
 end;
 
 function ArrayBufferViewBufferData(const ABuffer: TGocciaValue): TBytes;
@@ -551,7 +555,7 @@ var
   TA: TGocciaTypedArrayValue;
   View: TGocciaDataViewValue;
   Data: TBytes;
-  Offset, ByteLength, I: Integer;
+  Offset, ByteLength: Integer;
 begin
   ABytes := nil;
   if AValue is TGocciaTypedArrayValue then
@@ -578,8 +582,8 @@ begin
     Exit(False);
 
   SetLength(ABytes, ByteLength);
-  for I := 0 to ByteLength - 1 do
-    ABytes[I] := Data[Offset + I];
+  if ByteLength > 0 then
+    Move(Data[Offset], ABytes[0], ByteLength);
   Result := True;
 end;
 
