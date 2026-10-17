@@ -4002,6 +4002,59 @@ await section("Loader: --host-environment errors withhold provider source...", a
   }
 });
 
+// CI runs in UTC, whose offset has no seconds. Before standard time most zones
+// used local mean time (America/Los_Angeles -07:52:58, Asia/Tokyo +09:18:59);
+// toString and toTimeString write only the hours and minutes of it.
+await section("Loader: Date toString writes the hours and minutes of a local mean time offset...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const date = new Date(1800, 0, 1);",
+      "[",
+      "  date.toString(),",
+      "  date.toTimeString(),",
+      "  date.getSeconds(),",
+      '  new Date("0020-01-01T00:00:00Z").toString(),',
+      "  new Date(2024, 5, 15, 11, 30, 45).toString(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone),
+    // without the optional zone name V8 appends.
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "Wed Jan 01 1800 00:00:00 GMT-0752|00:00:00 GMT-0752|0|Tue Dec 31 0019 16:07:02 GMT-0752|Sat Jun 15 2024 11:30:45 GMT-0700",
+      ],
+      [
+        "Asia/Tokyo",
+        "Wed Jan 01 1800 00:00:00 GMT+0918|00:00:00 GMT+0918|0|Wed Jan 01 0020 09:18:59 GMT+0918|Sat Jun 15 2024 11:30:45 GMT+0900",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date toString in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --global option...", async () => {
   const { json } = runLoaderJson("x + y;\n", ["--global", "x=10", "--global", "y=20"]);
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
