@@ -180,8 +180,7 @@ Everything else needs a `read` grant covering the canonical path:
   inside the project (`ShadowRealm.prototype.importValue` counts as computed);
 - a `bytes` or data import outside the project.
 
-A computed specifier is detected at compile time: the interpreter checks the
-`import()` argument, and the bytecode compiler emits
+A computed specifier is detected at compile time: the bytecode compiler emits
 `OP_COMPUTED_IMPORT_SPECIFIER` before the import opcode.
 
 A **deny** removes the exemption too. A deny scope covering a project file
@@ -253,11 +252,10 @@ ffi deny covering the path, or the net deny scope that matched the host
 no allow can override it.
 The suggestion also travels on the error object (never as a guest-visible
 property), so a denial that surfaces through a rejected `import()` or
-`fetch()` promise still reports it. Both executors locate a denial at the
+`fetch()` promise still reports it. A denial is located at the
 guest request that caused it: the `import` or `export … from` declaration, the
 `import()` expression, or the `fetch()`/`FFI.open()` call — each at the
-position the parser records for that expression, which both executors report
-identically.
+position the parser records for that expression.
 
 ## Audit events
 
@@ -301,8 +299,7 @@ Capabilities := TGocciaCapabilities.None
   .Allow(gcNet, 'api.example.com')
   .Allow(gcImport, 'node_modules=/srv/app');
 
-Engine := TGocciaEngine.Create('/srv/app/main.js', Source, Executor,
-  Capabilities);
+Engine := TGocciaEngine.Create('/srv/app/main.js', Source, Capabilities);
 Runtime := AttachRuntime(Engine);   // filesystem provider, reads checked
 InstallFFIIfGranted(Runtime);       // installs FFI only when ffi is granted
 Engine.FetchMaxResponseBytes := 1024 * 1024;
@@ -533,9 +530,9 @@ Error: 2 config files request permissions that have not been trusted:
 Nothing was run. To trust these requests (stored in /home/u/.config/goccia/trust.json):
   GocciaTestRunner --trust tests/built-ins/FFI/goccia.json --trust tests/built-ins/fetch/goccia.json
 To accept them for this run only:
-  GocciaTestRunner -P tests --mode=bytecode
+  GocciaTestRunner -P tests
 To run with command-line grants only:
-  GocciaTestRunner --ignore-config-permissions tests --mode=bytecode
+  GocciaTestRunner --ignore-config-permissions tests
 ```
 
 Paths under the working directory are shown relative to it, the suggested

@@ -9,18 +9,15 @@ resourcestring
   SErrorIdentifierAlreadyDeclared = 'Identifier ''%s'' has already been declared';
   SErrorCannotAccessBeforeInit = 'Cannot access ''%s'' before initialization';
   SErrorAssignToConstant = 'Assignment to constant variable ''%s''';
-  // Node's wording. The bytecode VM already emitted this form, so the
-  // tree-walk evaluator uses the same constant and the two modes report an
-  // unresolved identifier identically.
+  // Node's wording.
   SErrorUndefinedVariable = '%s is not defined';
 
   // Type errors — function calls.
   // One form for every non-callable callee: what goes in the slot is the
   // callee as the author wrote it when that is known, and the runtime type
-  // name otherwise. Both executors build it through
-  // Goccia.Error.CallDiagnostics so the text cannot drift between modes; the
-  // older per-shape variants ('obj.m is not a function' assembled from two
-  // parts, and a quoted-identifier form) were retired for that reason.
+  // name otherwise. The VM builds it through Goccia.Error.CallDiagnostics;
+  // the older per-shape variants ('obj.m is not a function' assembled from
+  // two parts, and a quoted-identifier form) were retired.
   SErrorValueNotFunction = '%s is not a function';
   SErrorSymbolToNumber = 'Cannot convert a Symbol value to a number';
   SErrorSymbolToString = 'Cannot convert a Symbol value to a string';
@@ -39,27 +36,26 @@ resourcestring
   SErrorNotANumber = 'Value is not a Number';
 
   // Type errors — property access.
-  // Both executors use the "Cannot read properties of X (reading 'k')" form —
-  // Node's wording — so a nullish-base fault reads identically in interpreter
-  // and bytecode mode. The older "Cannot read property 'k' of X" phrasing was
-  // retired for that reason; do not reintroduce it.
+  // The "Cannot read properties of X (reading 'k')" form is Node's wording.
+  // The older "Cannot read property 'k' of X" phrasing was retired; do not
+  // reintroduce it.
   SErrorCannotReadPropertiesOf = 'Cannot read properties of %s (reading ''%s'')';
 
   // Type errors — constructors.
-  // One Node-form (unquoted) constant for both modes; the slot holds the callee
-  // as written when known (via Goccia.Error.CallDiagnostics), else the type or
+  // One Node-form (unquoted) constant; the slot holds the callee as written
+  // when known (via Goccia.Error.CallDiagnostics), else the type or
   // constructor name. The quoted `'%s' is not a constructor` variant was
-  // retired so the two executors cannot drift.
+  // retired.
   SErrorValueNotConstructor = '%s is not a constructor';
   SErrorSuperNotConstructor = 'Super constructor is not a constructor';
 
   { ES2026 §10.2.2 [[Construct]] step 13.c and §13.3.7.1 SuperCall: a derived
     constructor leaves `this` uninitialized until super() returns, and both
     reading `this` and returning report it. Which of the two fires first is an
-    implementation detail — the interpreter reaches the return check for a body
-    that never touches `this`, the compiler's OP_CHECK_DERIVED_THIS reaches the
-    access check for one that does — so both modes and both checks share this
-    one message rather than describing the route they took. Node v24.0.1 words
+    implementation detail — the VM reaches the return check for a body that
+    never touches `this`, the compiler's OP_CHECK_DERIVED_THIS reaches the
+    access check for one that does — so both checks share this one message
+    rather than describing the route they took. Node v24.0.1 words
     it the same way for the same reason. }
   SErrorSuperConstructorNotCalled = 'Must call super constructor in derived ' +
     'class before accessing ''this'' or returning from derived constructor';
@@ -77,6 +73,8 @@ resourcestring
 
   // Type errors — classes, decorators, private fields
   SErrorDecoratorMustBeFunction = 'Decorator must be a function';
+  SErrorAddInitializerAfterDecoration = 'Cannot add initializers after decoration has completed';
+  SErrorAddInitializerNotCallable = 'Initializer must be a function';
   SErrorPrivateGetterMissing = 'Private accessor #%s was defined without a getter';
   SErrorPrivateSetterMissing = 'Private accessor #%s was defined without a setter';
   SErrorPrivateFieldInaccessible = 'Private field #%s is not accessible';

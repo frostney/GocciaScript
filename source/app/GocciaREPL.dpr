@@ -18,9 +18,6 @@ uses
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.GarbageCollector,
@@ -102,25 +99,16 @@ end;
 
 procedure TREPLApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  IsBytecodeMode: Boolean;
-
   Line: string;
   Source: TStringList;
   Editor: TLineEditor;
   ReadResult: TLineReadResult;
-
-  { Interpreter mode }
   Eng: TGocciaEngine;
-  InterpExecutor: TGocciaInterpreterExecutor;
-  ScriptResult: TGocciaScriptResult;
-
-  { Bytecode mode }
-  BcExecutor: TGocciaBytecodeExecutor;
   ResultValue: TGocciaValue;
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  Module: TGocciaCompiledModule;
+  Module: TGocciaBytecodeModule;
   StartTime, CompileStart, CompileEnd, ExecStart, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
 
@@ -146,190 +134,119 @@ begin
     Exit;
   end;
 
-  IsBytecodeMode := EngineOptions.ExecutionMode = emBytecode;
-
   { The working directory's config governs the session: refuse before the
     prompt when its permission requests are not trusted. }
   ValidateFileConfig(REPL_FILE_NAME);
 
-  if IsBytecodeMode then
-    WriteLn('Goccia REPL v' + GetVersion + ' (bytecode)')
-  else
-    WriteLn('Goccia REPL v' + GetVersion + ' (interpreted)');
+  WriteLn('Goccia REPL v' + GetVersion + ' (bytecode)');
 
   Source := TStringList.Create;
   Editor := TLineEditor.Create;
 
-  if IsBytecodeMode then
-  begin
-    BcExecutor := TGocciaBytecodeExecutor.Create;
-    BcExecutor.GlobalBackedTopLevel := True;
+  try
+    Eng := CreateEngine(REPL_FILE_NAME, Source);
     try
-      Eng := CreateEngine(REPL_FILE_NAME, Source, BcExecutor);
-      try
-        while True do
-        begin
-          ReadResult := Editor.ReadLine('> ', Line);
-          if ReadResult = lrExit then
-            Break;
-          if Line = 'exit' then
-            Break;
-          if Line = '' then
-            Continue;
+      while True do
+      begin
+        ReadResult := Editor.ReadLine('> ', Line);
+        if ReadResult = lrExit then
+          Break;
+        if Line = 'exit' then
+          Break;
+        if Line = '' then
+          Continue;
 
-          Editor.AddToHistory(Line);
-          Source.Clear;
-          Source.Add(Line);
+        Editor.AddToHistory(Line);
+        Source.Clear;
+        Source.Add(Line);
 
-          StartTime := GetNanoseconds;
-          CompileStart := StartTime;
-          CompileEnd := StartTime;
-          ExecStart := StartTime;
-          ExecEnd := StartTime;
-          LexTimeNanoseconds := 0;
-          ParseTimeNanoseconds := 0;
-          SourcePipelineResult := nil;
+        StartTime := GetNanoseconds;
+        CompileStart := StartTime;
+        CompileEnd := StartTime;
+        ExecStart := StartTime;
+        ExecEnd := StartTime;
+        LexTimeNanoseconds := 0;
+        ParseTimeNanoseconds := 0;
+        SourcePipelineResult := nil;
+        try
+          PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
+          PipelineOptions.Preprocessors := Eng.Preprocessors;
+          PipelineOptions.Compatibility := Eng.Compatibility;
+          PipelineOptions.LabelStatementsEnabled :=
+            Eng.LabelStatementsEnabled;
+          PipelineOptions.ForInLoopsEnabled := Eng.ForInLoopsEnabled;
+          PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+            Eng.ExperimentalJSModuleSourceEnabled;
+          PipelineOptions.WarningUnsupportedFeatures :=
+            Eng.WarningUnsupportedFeatures;
+          PipelineOptions.SourceType := Eng.SourceType;
+          ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+            PipelineOptions);
           try
-            PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-            PipelineOptions.Preprocessors := Eng.Preprocessors;
-            PipelineOptions.Compatibility := Eng.Compatibility;
-            PipelineOptions.LabelStatementsEnabled :=
-              Eng.LabelStatementsEnabled;
-            PipelineOptions.ForInLoopsEnabled := Eng.ForInLoopsEnabled;
-            PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-              Eng.ExperimentalJSModuleSourceEnabled;
-            PipelineOptions.WarningUnsupportedFeatures :=
-              Eng.WarningUnsupportedFeatures;
-            PipelineOptions.SourceType := Eng.SourceType;
-            ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
-              PipelineOptions);
+            SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source,
+              REPL_FILE_NAME, PipelineOptions, True);
+            LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+            ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
+
+            CompileStart := GetNanoseconds;
             try
-              SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source,
-                REPL_FILE_NAME, PipelineOptions, True);
-              LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-              ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-
-              CompileStart := GetNanoseconds;
-              try
-                Module := Eng.CompileModule(SourcePipelineResult.ProgramNode);
-                CompileEnd := GetNanoseconds;
-              finally
-                SourcePipelineResult.Free;
-                SourcePipelineResult := nil;
-              end;
-
-              ExecStart := GetNanoseconds;
-              StartLimits;
-              try
-                ResultValue := Eng.RunModuleForSourceType(Module,
-                  REPL_FILE_NAME);
-              finally
-                ClearLimits;
-              end;
-              ExecEnd := GetNanoseconds;
+              Module := Eng.CompileModule(SourcePipelineResult.ProgramNode);
+              CompileEnd := GetNanoseconds;
             finally
-              ActiveOptionsScope.Free;
+              SourcePipelineResult.Free;
+              SourcePipelineResult := nil;
             end;
 
-            if ResultValue <> nil then
-              WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
-          except
-            on E: Exception do
-            begin
-              ExecEnd := GetNanoseconds;
-              if E is TGocciaError then
-                WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
-              else if E is TGocciaThrowValue then
-                WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
-                  REPL_FILE_NAME, Source, IsColorTerminal,
-                  Eng.ModuleLoader.DiagnosticScope.Principal,
-                  TGocciaThrowValue(E).Suggestion))
-              else if E is EGocciaBytecodeThrow then
-                WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
-                  REPL_FILE_NAME, Source, IsColorTerminal,
-                  Eng.ModuleLoader.DiagnosticScope.Principal,
-                  EGocciaBytecodeThrow(E).Suggestion))
-              else
-                WriteLn('Error: ', E.Message);
-            end;
-          end;
-          if FTiming.Present then
-            WriteLn(SysUtils.Format(
-              '  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
-              [FormatDuration(LexTimeNanoseconds),
-               FormatDuration(ParseTimeNanoseconds),
-               FormatDuration(CompileEnd - CompileStart),
-               FormatDuration(ExecEnd - ExecStart),
-               FormatDuration(ExecEnd - StartTime)]));
-        end;
-      finally
-        Eng.Free;
-      end;
-    finally
-      BcExecutor.Free;
-      Editor.Free;
-      Source.Free;
-    end;
-  end
-  else
-  begin
-    InterpExecutor := TGocciaInterpreterExecutor.Create;
-    try
-      Eng := CreateEngine(REPL_FILE_NAME, Source, InterpExecutor);
-      try
-        while True do
-        begin
-          ReadResult := Editor.ReadLine('> ', Line);
-          if ReadResult = lrExit then
-            Break;
-          if Line = 'exit' then
-            Break;
-          if Line = '' then
-            Continue;
-
-          Editor.AddToHistory(Line);
-          Source.Clear;
-          Source.Add(Line);
-
-          try
+            ExecStart := GetNanoseconds;
             StartLimits;
             try
-              ScriptResult := Eng.Execute;
+              ResultValue := Eng.RunModuleForSourceType(Module,
+                REPL_FILE_NAME);
             finally
               ClearLimits;
             end;
-            if ScriptResult.Result <> nil then
-              WriteLn(FormatREPLValue(ScriptResult.Result, IsColorTerminal));
-          except
-            on E: Exception do
-            begin
-              if E is TGocciaError then
-                WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
-              else if E is TGocciaThrowValue then
-                WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
-                  REPL_FILE_NAME, Source, IsColorTerminal,
-                  Eng.ModuleLoader.DiagnosticScope.Principal,
-                  TGocciaThrowValue(E).Suggestion))
-              else
-                WriteLn('Error: ', E.Message);
-            end;
+            ExecEnd := GetNanoseconds;
+          finally
+            ActiveOptionsScope.Free;
           end;
-          if FTiming.Present then
-            WriteLn(SysUtils.Format(
-              '  Lex: %s | Parse: %s | Execute: %s | Total: %s',
-              [FormatDuration(Eng.LastTiming.LexTimeNanoseconds),
-               FormatDuration(Eng.LastTiming.ParseTimeNanoseconds),
-               FormatDuration(Eng.LastTiming.ExecuteTimeNanoseconds),
-               FormatDuration(Eng.LastTiming.TotalTimeNanoseconds)]));
+
+          if ResultValue <> nil then
+            WriteLn(FormatREPLValue(ResultValue, IsColorTerminal));
+        except
+          on E: Exception do
+          begin
+            ExecEnd := GetNanoseconds;
+            if E is TGocciaError then
+              WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
+            else if E is TGocciaThrowValue then
+              WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
+                REPL_FILE_NAME, Source, IsColorTerminal,
+                Eng.ModuleLoader.DiagnosticScope.Principal,
+                TGocciaThrowValue(E).Suggestion))
+            else if E is EGocciaBytecodeThrow then
+              WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+                REPL_FILE_NAME, Source, IsColorTerminal,
+                Eng.ModuleLoader.DiagnosticScope.Principal,
+                EGocciaBytecodeThrow(E).Suggestion))
+            else
+              WriteLn('Error: ', E.Message);
+          end;
         end;
-      finally
-        Eng.Free;
+        if FTiming.Present then
+          WriteLn(SysUtils.Format(
+            '  Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+            [FormatDuration(LexTimeNanoseconds),
+             FormatDuration(ParseTimeNanoseconds),
+             FormatDuration(CompileEnd - CompileStart),
+             FormatDuration(ExecEnd - ExecStart),
+             FormatDuration(ExecEnd - StartTime)]));
       end;
     finally
-      InterpExecutor.Free;
-      Editor.Free;
-      Source.Free;
+      Eng.Free;
     end;
+  finally
+    Editor.Free;
+    Source.Free;
   end;
 end;
 

@@ -211,9 +211,9 @@ begin
 end;
 
 const
-  { Registrations between two simulated safe points. The interpreter checks
-    after every expression and the VM every 1024 instructions, so a checkpoint
-    per few dozen allocations is the realistic shape. }
+  { Registrations between two simulated safe points. The VM checks every
+    1024 instructions, so a checkpoint per few dozen allocations is the
+    realistic shape. }
   CHECKPOINT_INTERVAL = 64;
 
 { Allocates ACount unreachable objects, passing a pressure checkpoint every

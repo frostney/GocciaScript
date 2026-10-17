@@ -36,7 +36,7 @@ describe("Array subclass instance elements across Construct routes", () => {
       tag = "t";
     };
 
-  test("`new` initializes the field in both modes", () => {
+  test("`new` initializes the field", () => {
     const Tagged = makeArraySubclass();
     expect(new Tagged().tag).toBe("t");
     expect(Array.isArray(new Tagged())).toBe(true);

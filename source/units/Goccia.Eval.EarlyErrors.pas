@@ -11,9 +11,7 @@ unit Goccia.Eval.EarlyErrors;
   §19.2.1.3 EvalDeclarationInstantiation reads (VarDeclaredNames,
   LexicallyDeclaredNames, the top-level function declarations).
 
-  They are AST passes, not evaluation, so the interpreter and the bytecode
-  compiler share them and the bytecode path never links the tree-walk
-  evaluator for them. }
+  They are AST passes that run before the eval code is compiled. }
 
 interface
 

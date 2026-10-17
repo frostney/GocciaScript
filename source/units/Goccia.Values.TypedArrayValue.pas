@@ -256,6 +256,10 @@ const
 type
   TGocciaTypedArrayIteratorKind = (taikValues, taikKeys, taikEntries);
 
+  // TC39 Immutable ArrayBuffers: the accessMode (~read~ or ~write~) that
+  // TypedArraySpeciesCreate validates its result against.
+  TGocciaTypedArrayAccessMode = (taamRead, taamWrite);
+
   TGocciaTypedArrayIteratorValue = class(TGocciaIteratorValue)
   private
     FSource: TGocciaTypedArrayValue;
@@ -1604,8 +1608,11 @@ begin
 end;
 
 // ES2026 §23.2.4.3 TypedArraySpeciesCreate(exemplar, argumentList)
+// TC39 Immutable ArrayBuffers TypedArraySpeciesCreate(exemplar, argumentList [, accessMode])
 function TypedArraySpeciesCreate(const AExemplar: TGocciaTypedArrayValue;
-  const AArguments: TGocciaArgumentsCollection): TGocciaTypedArrayValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AAccessMode: TGocciaTypedArrayAccessMode;
+  const AMethod: string): TGocciaTypedArrayValue;
 var
   ConstructorValue, ConstructedValue: TGocciaValue;
   ExpectedLength: Integer;
@@ -1617,6 +1624,12 @@ begin
       ['TypedArraySpeciesCreate']), SSuggestTypedArrayConstructorReceiver);
 
   Result := TGocciaTypedArrayValue(ConstructedValue);
+  // TC39 Immutable ArrayBuffers ValidateTypedArray step 4: if accessMode is
+  // ~write~ and IsImmutableBuffer(O.[[ViewedArrayBuffer]]), throw a TypeError.
+  // This holds even when the result views the exemplar's own buffer.
+  if (AAccessMode = taamWrite) and
+     IsTypedArrayBackedByImmutableArrayBuffer(Result) then
+    ThrowTypeError(AMethod + ' cannot write to an immutable ArrayBuffer');
   if TGocciaTypedArrayValue.IsBigIntKind(Result.FKind) <>
      TGocciaTypedArrayValue.IsBigIntKind(AExemplar.FKind) then
     ThrowTypeError(SErrorBigIntTypedArrayCannotMix, SSuggestBigIntTypedArrayValue);
@@ -1796,7 +1809,9 @@ begin
     Args.Add(AElement);
     Args.Add(AIndex);
     Args.Add(AArray);
-    Result := TGocciaFunctionBase(ACallback).Call(Args, AThisArg);
+    // The caller checked IsCallable, which a callable Proxy or a class also
+    // passes; DispatchCall reaches each through its own [[Call]].
+    Result := DispatchCall(ACallback, Args, AThisArg);
   finally
     Args.Free;
     RemoveTempRootIfNeeded(ThisRoot);
@@ -2024,15 +2039,16 @@ begin
   ConstructorArgs := TGocciaArgumentsCollection.Create(
     [TGocciaNumberLiteralValue.Create(NewLen)]);
   try
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers %TypedArray%.prototype.slice step 13:
+    // TypedArraySpeciesCreate(O, « 𝔽(countBytes) », ~write~)
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+      'TypedArray.prototype.slice');
   finally
     ConstructorArgs.Free;
   end;
 
   if NewLen > 0 then
     EnsureTypedArrayAttached(TA, 'TypedArray.prototype.slice');
-  if NewTA.FBufferValue <> TA.FBufferValue then
-    EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.slice');
   CurrentLength := TA.Length;
   CopyElements := Max(Min(Final, CurrentLength) - First, 0);
   if CopyElements > NewLen then
@@ -2104,7 +2120,10 @@ begin
       TA.FByteOffset + BeginIdx * BPE));
     if not UseAutoLengthResult then
       ConstructorArgs.Add(TGocciaNumberLiteralValue.Create(NewLen));
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers: subarray keeps the default ~read~ access,
+    // so a view of an immutable buffer is a valid result.
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamRead,
+      'TypedArray.prototype.subarray');
   finally
     ConstructorArgs.Free;
   end;
@@ -2790,7 +2809,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-// ES2026 §23.2.3.20 %TypedArray%.prototype.map(callbackfn [, thisArg])
+// ES2026 §23.2.3.22 %TypedArray%.prototype.map(callbackfn [, thisArg])
 function TGocciaTypedArrayValue.TypedArrayMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
@@ -2810,11 +2829,13 @@ begin
   ConstructorArgs := TGocciaArgumentsCollection.Create(
     [TGocciaNumberLiteralValue.Create(SourceLength)]);
   try
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers %TypedArray%.prototype.map step 5:
+    // TypedArraySpeciesCreate(O, « 𝔽(len) », ~write~)
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+      'TypedArray.prototype.map');
   finally
     ConstructorArgs.Free;
   end;
-  EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.map');
   InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, NewTA);
   try
@@ -2831,7 +2852,7 @@ begin
   end;
 end;
 
-// ES2026 §23.2.3.9 %TypedArray%.prototype.filter(callbackfn [, thisArg])
+// ES2026 §23.2.3.10 %TypedArray%.prototype.filter(callbackfn [, thisArg])
 function TGocciaTypedArrayValue.TypedArrayFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
@@ -2866,11 +2887,13 @@ begin
     ConstructorArgs := TGocciaArgumentsCollection.Create(
       [TGocciaNumberLiteralValue.Create(Kept.Count)]);
     try
-      NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+      // TC39 Immutable ArrayBuffers %TypedArray%.prototype.filter step 9:
+      // TypedArraySpeciesCreate(O, « 𝔽(captured) », ~write~)
+      NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+        'TypedArray.prototype.filter');
     finally
       ConstructorArgs.Free;
     end;
-    EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.filter');
     for I := 0 to Kept.Count - 1 do
       NewTA.WriteValueToElement(I, Kept[I]);
     Result := NewTA;
@@ -3232,8 +3255,8 @@ begin
 end;
 
 // ES2026 §23.2.5.1: %TypedArray% is abstract and rejects direct construction,
-// so the tree-walk instantiation path must not build an ordinary instance for
-// it either.
+// so the implicit-constructor chain walk stops at it rather than build an
+// ordinary instance for it.
 function TGocciaTypedArrayIntrinsicClassValue.UsesOwnInstantiation: Boolean;
 begin
   Result := True;
@@ -3292,8 +3315,9 @@ begin
 end;
 
 // ES2026 §23.2.5.1 TypedArray(...): the constructor allocates an exotic
-// integer-indexed receiver from newTarget, which the tree-walk instantiation
-// path cannot produce.
+// integer-indexed receiver from newTarget, which the generic class
+// instantiation path cannot produce, so the implicit-constructor chain walk
+// stops at it.
 function TGocciaTypedArrayClassValue.UsesOwnInstantiation: Boolean;
 begin
   Result := True;
@@ -3320,6 +3344,7 @@ var
   ResultRoot, IteratorRoot, NextMethodRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
+  ResultRoots: TGocciaActiveRootFrame;
 begin
   BPE := TGocciaTypedArrayValue.BytesPerElement(FKind);
 
@@ -3519,22 +3544,32 @@ begin
       Exit(NewTA);
     end;
 
-    if FirstArg is TGocciaArrayValue then
-    begin
-      SrcArr := TGocciaArrayValue(FirstArg);
-      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
-      for I := 0 to SrcArr.Elements.Count - 1 do
-        NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
-      Exit(NewTA);
-    end;
+    // Each element's valueOf, and on the array-like path each element
+    // getter, can collect while the new typed array is held only here
+    // (issue #1679).
+    ResultRoots.Initialize;
+    try
+      if FirstArg is TGocciaArrayValue then
+      begin
+        SrcArr := TGocciaArrayValue(FirstArg);
+        NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
+        ResultRoots.Add(NewTA);
+        for I := 0 to SrcArr.Elements.Count - 1 do
+          NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
+        Exit(NewTA);
+      end;
 
-    Len := LengthOfArrayLikeEx(TGocciaObjectValue(FirstArg), RawLen);
-    if RawLen > High(Integer) then
-      ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
-    for I := 0 to Len - 1 do
-      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
-    Exit(NewTA);
+      Len := LengthOfArrayLikeEx(TGocciaObjectValue(FirstArg), RawLen);
+      if RawLen > High(Integer) then
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
+      NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+      ResultRoots.Add(NewTA);
+      for I := 0 to Len - 1 do
+        NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
+      Exit(NewTA);
+    finally
+      ResultRoots.Clear;
+    end;
   end;
 
   // new TypedArray(length) — ES2026 §23.2.1.2 step 5: ToIndex(length)

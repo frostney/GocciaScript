@@ -91,6 +91,7 @@ uses
   BaseUnix,
   {$IFNDEF DARWIN}
   ctypes,
+  CriticalSections,
   DynamicLibraries,
   OpenSSL,
   {$ENDIF}
@@ -405,6 +406,15 @@ const
   SSL_CTRL_SET_MIN_PROTO_VERSION = 123;
   TLS1_2_VERSION = $0303;
 
+var
+  // OpenSSL is loaded on the first handshake, which runs on whichever fetch
+  // or package worker thread gets there first, so several can arrive at once.
+  // EnsureOpenSSLLoaded serializes that load under this lock and records its
+  // outcome so the load runs once per process.
+  GOpenSSLLoadLock: TGocciaCriticalSection;
+  GOpenSSLLoadAttempted: Boolean = False;
+  GOpenSSLLoaded: Boolean = False;
+
 procedure PreferOpenSSLVersionThree;
 var
   I: Integer;
@@ -460,6 +470,32 @@ begin
         Exit;
 end;
 
+// FPC 3.2.2's InitSSLInterface is not safe to race: it reads SSLloaded into
+// Result before entering its own critical section, so a thread that waited on
+// that section while another loaded the library exits with Result still False
+// and reports a failed load of a loaded library. ConfigureOpenSSLLoading also
+// rewrites the openssl unit's DLLVersions, DLLSSLName and DLLUtilName globals,
+// shifting DLLVersions on every call. Both therefore run once, under a lock
+// this unit owns, and the result is read from IsSSLloaded rather than from
+// InitSSLInterface's return value. A failed load is remembered too, so every
+// later handshake reports the same missing-library error.
+function EnsureOpenSSLLoaded: Boolean;
+begin
+  CriticalSectionEnter(GOpenSSLLoadLock);
+  try
+    if not GOpenSSLLoadAttempted then
+    begin
+      GOpenSSLLoadAttempted := True;
+      ConfigureOpenSSLLoading;
+      InitSSLInterface;
+      GOpenSSLLoaded := IsSSLloaded;
+    end;
+    Result := GOpenSSLLoaded;
+  finally
+    CriticalSectionLeave(GOpenSSLLoadLock);
+  end;
+end;
+
 procedure ConfigureOpenSSLVerification(const AContext: PSSL_CTX;
   const ASSL: PSSL; const AHost: string);
 var
@@ -512,12 +548,8 @@ var
   Data: TOpenSSLData;
   HostName: TBytes;
 begin
-  if not IsSSLloaded then
-  begin
-    ConfigureOpenSSLLoading;
-    if not InitSSLInterface then
-      raise ETransportSecurityError.Create(OPENSSL_LOAD_ERROR);
-  end;
+  if not EnsureOpenSSLLoaded then
+    raise ETransportSecurityError.Create(OPENSSL_LOAD_ERROR);
 
   Data := TOpenSSLData.Create;
   Data.Context := nil;
@@ -1253,6 +1285,18 @@ begin
   end;
 end;
 
+{$ENDIF}
+
+{$IFNDEF LAKON}
+{$IFDEF UNIX}
+{$IFNDEF DARWIN}
+initialization
+  CriticalSectionInit(GOpenSSLLoadLock);
+
+finalization
+  CriticalSectionDone(GOpenSSLLoadLock);
+{$ENDIF}
+{$ENDIF}
 {$ENDIF}
 
 end.

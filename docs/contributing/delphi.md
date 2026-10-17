@@ -20,9 +20,9 @@ belong in the repository.
 Select `Win32` or `Win64` for the group and use **Build All Projects**. Outputs
 go to `build/delphi/<platform>/<configuration>`. Each project has its own DCU
 directory so changing project or architecture cannot reuse incompatible units.
-The shared project properties also give each executable an 8 MiB maximum stack,
-matching the native-stack assumption behind the interpreter's guarded Pascal
-recursion. This is executable metadata, not a separate Delphi runtime path.
+The shared project properties also give each executable an 8 MiB maximum stack
+for the engine's guarded native recursion, such as native re-entries into the
+VM. This is executable metadata, not a separate Delphi runtime path.
 
 ## Validation Contract
 

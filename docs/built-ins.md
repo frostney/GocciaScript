@@ -190,7 +190,7 @@ String prototype methods are implemented on string values:
 
 Implements the [ECMAScript RegExp](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp) including modifiers, duplicate named groups, and `RegExp.escape`.
 
-RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported in interpreter mode and bytecode mode. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
+RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
 
 **Supported flags:** `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 
@@ -591,7 +591,7 @@ Targets must satisfy ECMAScript `CanBeHeldWeakly`: objects and non-registered sy
 
 Implements the [ECMAScript FinalizationRegistry](https://tc39.es/ecma262/#sec-finalization-registry-objects).
 
-A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`.
+A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`. The registration stays in the registry until its cleanup job runs, so `unregister` can still remove it in the meantime, and then its callback never runs.
 
 | Method/Property | Description |
 |--------|-------------|
@@ -767,7 +767,7 @@ The `"goccia"` module exposes sandbox orchestration helpers.
 | Export | Description |
 |--------|-------------|
 | `$` | Bun-like shell tagged template / command factory. Commands run against the sandbox filesystem and return a lazy command object with `.run()`, `.text()`, `.json()`, `.quiet()`, and `.nothrow()` |
-| `runScript(path, options?)` | Execute another sandbox entry path with the same execution mode. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff, failureKind }` |
+| `runScript(path, options?)` | Execute another sandbox entry path on an engine of its own. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff, failureKind }` |
 
 `$` accepts tagged templates or command strings. Tagged-template substitutions are shell-quoted before command parsing.
 
@@ -794,7 +794,7 @@ if (child.failureKind === "resource-limit") {
 }
 ```
 
-A nested run is synchronous and runs only its own jobs. The caller's pending Promise callbacks, `queueMicrotask` callbacks, and `async` continuations do not run during the call, do not appear in the child's `stdout`, and are still pending when it returns, whether the child succeeds or fails. The same holds for `{ sandbox: true }` children and for shell `goccia`. [Interpreter — Synchronous Microtask Queue](interpreter.md#synchronous-microtask-queue) describes the mechanism.
+A nested run is synchronous and runs only its own jobs. The caller's pending Promise callbacks, `queueMicrotask` callbacks, and `async` continuations do not run during the call, do not appear in the child's `stdout`, and are still pending when it returns, whether the child succeeds or fails. The same holds for `{ sandbox: true }` children and for shell `goccia`. [Architecture — Synchronous Microtask Queue](architecture.md#synchronous-microtask-queue) describes the mechanism.
 
 By default, nested execution shares the current virtual filesystem:
 

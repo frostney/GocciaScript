@@ -84,6 +84,18 @@ describe("TypedArray.prototype.subarray", () => {
     expect(() => ta.subarray(1, 2)).toThrow(RangeError);
   });
 
+  test("allows a species view of an immutable buffer", () => {
+    const buffer = new Uint8Array([1, 2, 3, 4]).buffer.transferToImmutable();
+    const ta = new Uint8Array(buffer);
+    ta.constructor = { [Symbol.species]: Uint8Array };
+
+    const sub = ta.subarray(1, 3);
+
+    expect(sub.buffer).toBe(buffer);
+    expect(sub.buffer.immutable).toBe(true);
+    expect(Array.from(sub)).toEqual([2, 3]);
+  });
+
   test("omits length for length-tracking views when end is omitted", () => {
     const buf = new ArrayBuffer(8, { maxByteLength: 16 });
     const ta = new Uint8Array(buf, 2);

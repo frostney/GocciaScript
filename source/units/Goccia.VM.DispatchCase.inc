@@ -2681,9 +2681,9 @@
               SavedConstructFrameOk := False;
             // Also stamps the executing frame with this call's position so an
             // error a native callee creates captures the call site (deferred
-            // frames are 0:0). Uses the recorded call-site column, matching the
-            // tree-walk evaluator's per-call frame (the instruction line map
-            // resolves only to the enclosing statement). Snapshotted above and
+            // frames are 0:0). Uses the recorded call-site column (the
+            // instruction line map resolves only to the enclosing
+            // statement). Snapshotted above and
             // restored below.
             EnterNativeCallSite(PreviousCallSite);
             try
@@ -2809,8 +2809,7 @@
                 // whose length was grown past its element count falls through
                 // to the generic call, which runs Function.prototype.apply and
                 // therefore CreateListFromArrayLike — ascending Get order, a
-                // rooted arguments collection, and the spec argument count,
-                // exactly as the interpreter does.
+                // rooted arguments collection, and the spec argument count.
                 else if (CalleeIntrinsicKind = nikFunctionApply) and (B >= 2) and
                         (FRegisters[A + 2].Kind = grkObject) and
                         (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) and
@@ -3691,8 +3690,8 @@
             if DynImportComputed then
               SpecifierString := MarkComputedImportSpecifier(SpecifierString);
             { The import() is the call site of whatever its load decides or
-              refuses (audit events, PermissionDenied), as in the tree-walk
-              evaluator; a deferred start re-enters it. }
+              refuses (audit events, PermissionDenied); a deferred start
+              re-enters it. }
             CurrentCallExpressionLocation(DebugLine, DebugColumn);
             EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
               PreviousCallSite);
@@ -3936,8 +3935,8 @@
       begin
         // Stamp the disposal site onto the top frame so an auto-SuppressedError
         // created below (a double fault: dispose throws while an error is
-        // pending) records this location instead of the deferred frame's 0:0,
-        // matching the tree-walk interpreter. Snapshot/restore so it does not
+        // pending) records this location instead of the deferred frame's 0:0.
+        // Snapshot/restore so it does not
         // perturb the location seen by later instructions.
         if FCallStack <> nil then
           SavedConstructFrameOk :=
@@ -3955,7 +3954,8 @@
             // Clear B before the call so that if it throws, the follow-up
             // OP_AWAIT sees null instead of the stale dispose function.
             FRegisters[B] := RegisterNull;
-            RightValue := TGocciaFunctionBase(LeftValue).CallNoArgs(
+            // GetDisposeMethod admits any callable, a callable Proxy too.
+            RightValue := DispatchCallNoArgs(LeftValue,
               RegisterToValue(FRegisters[C]));
             // Store result in B so a follow-up OP_AWAIT can await it
             if Assigned(RightValue) then

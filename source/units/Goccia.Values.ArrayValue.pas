@@ -258,8 +258,6 @@ function InvokeArrayCallback(const ACallback: TGocciaValue;
 begin
   // The builtin's live arguments root the callback and receiver; ACallArgs
   // roots its own slots. Nested dispatch cannot reuse either collection.
-  // An interpreter callback sets aside the caller's generator continuation
-  // itself (Goccia.Evaluator.Calls), so this unit does not touch it.
   if Assigned(ATypedCallback) then
     Result := ATypedCallback.Call(ACallArgs, AThisArg)
   else
@@ -3511,19 +3509,30 @@ var
   View: TArrayLikeView;
   ResultArray: TGocciaArrayValue;
   I: Integer;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
   // Step 3: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
   View.CheckArrayCreateLen;
-  ResultArray := TGocciaArrayValue.Create;
+  // Each element read can run a getter or a Proxy trap, and the receiver
+  // (a fresh wrapper for a primitive this) and the result are held only here
+  // while it does (issue #1679).
+  Roots.Initialize;
+  try
+    Roots.Add(View.Obj);
+    ResultArray := TGocciaArrayValue.Create;
+    Roots.Add(ResultArray);
 
-  // Step 4: Let k be 0; repeat while k < len
-  for I := View.Len - 1 downto 0 do
-    ResultArray.Elements.Add(View.Get(I));
+    // Step 4: Let k be 0; repeat while k < len
+    for I := View.Len - 1 downto 0 do
+      ResultArray.Elements.Add(View.Get(I));
 
-  // Step 5: Return A
-  Result := ResultArray;
+    // Step 5: Return A
+    Result := ResultArray;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 // ES2026 §23.1.3.34 Array.prototype.toSorted(comparefn)
@@ -3594,112 +3603,123 @@ var
   RawStart, RawSkipCount, RawActualStart, RawActualSkipCount, NewLen: Double;
   ActualSkipCount64, StartKey, EndKey, K: Int64;
   Sparse: TArray<Int64>;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The start and skipCount conversions and every element read can run guest
+  // code; the receiver and, once made, the result are held only here
+  // (issue #1679).
+  Roots.Initialize;
+  try
+    Roots.Add(View.Obj);
 
-  // Step 3: Let relativeStart be ToIntegerOrInfinity(start).  Computed in
-  // Double against RawLen so a negative or out-of-range start clamps to the
-  // spec length, not to the truncated View.Len, on receivers whose length
-  // exceeds MaxInt (matches ArraySlice).
-  if AArgs.Length > 0 then
-  begin
-    RawStart := AArgs.GetElement(0).ToNumberLiteral.Value;
-    if IsNaN(RawStart) then
-      RawStart := 0
-    else if not IsInfinite(RawStart) then
-      RawStart := Trunc(RawStart);
-  end
-  else
-    RawStart := 0;
+    // Step 3: Let relativeStart be ToIntegerOrInfinity(start).  Computed in
+    // Double against RawLen so a negative or out-of-range start clamps to the
+    // spec length, not to the truncated View.Len, on receivers whose length
+    // exceeds MaxInt (matches ArraySlice).
+    if AArgs.Length > 0 then
+    begin
+      RawStart := AArgs.GetElement(0).ToNumberLiteral.Value;
+      if IsNaN(RawStart) then
+        RawStart := 0
+      else if not IsInfinite(RawStart) then
+        RawStart := Trunc(RawStart);
+    end
+    else
+      RawStart := 0;
 
-  // Step 4: If relativeStart < 0, let actualStart be max(len + relativeStart, 0); else min(relativeStart, len)
-  // The `0.0` literal forces Math.Max to bind to its Double overload (see
-  // ArraySlice for the Single-narrowing rationale).
-  if RawStart < 0 then
-    RawActualStart := Max(View.RawLen + RawStart, 0.0)
-  else
-    RawActualStart := Min(RawStart, View.RawLen);
+    // Step 4: If relativeStart < 0, let actualStart be max(len + relativeStart, 0); else min(relativeStart, len)
+    // The `0.0` literal forces Math.Max to bind to its Double overload (see
+    // ArraySlice for the Single-narrowing rationale).
+    if RawStart < 0 then
+      RawActualStart := Max(View.RawLen + RawStart, 0.0)
+    else
+      RawActualStart := Min(RawStart, View.RawLen);
 
-  // Step 5: If skipCount is not present, let actualSkipCount be len - actualStart
-  // Step 6: Else let actualSkipCount be min(max(ToIntegerOrInfinity(skipCount), 0), len - actualStart)
-  if AArgs.Length = 0 then
-    RawActualSkipCount := 0
-  else if AArgs.Length > 1 then
-  begin
-    RawSkipCount := AArgs.GetElement(1).ToNumberLiteral.Value;
-    if IsNaN(RawSkipCount) then
-      RawSkipCount := 0
-    else if not IsInfinite(RawSkipCount) then
-      RawSkipCount := Trunc(RawSkipCount);
-    RawActualSkipCount := Min(Max(RawSkipCount, 0.0), View.RawLen - RawActualStart);
-  end
-  else
-    RawActualSkipCount := View.RawLen - RawActualStart;
+    // Step 5: If skipCount is not present, let actualSkipCount be len - actualStart
+    // Step 6: Else let actualSkipCount be min(max(ToIntegerOrInfinity(skipCount), 0), len - actualStart)
+    if AArgs.Length = 0 then
+      RawActualSkipCount := 0
+    else if AArgs.Length > 1 then
+    begin
+      RawSkipCount := AArgs.GetElement(1).ToNumberLiteral.Value;
+      if IsNaN(RawSkipCount) then
+        RawSkipCount := 0
+      else if not IsInfinite(RawSkipCount) then
+        RawSkipCount := Trunc(RawSkipCount);
+      RawActualSkipCount := Min(Max(RawSkipCount, 0.0), View.RawLen - RawActualStart);
+    end
+    else
+      RawActualSkipCount := View.RawLen - RawActualStart;
 
-  // Step 8: Let newLen be len + insertCount - actualSkipCount
-  //         If newLen > 2^53 - 1, throw TypeError
-  //         (ArrayCreate additionally throws RangeError if newLen > 2^32 - 1
-  //          or > MaxInt — engine cannot address more than that.)
-  InsertCount := AArgs.Length - 2;
-  if InsertCount < 0 then
-    InsertCount := 0;
-  NewLen := View.RawLen + InsertCount - RawActualSkipCount;
-  View.CheckSafeIntegerLen(NewLen);
-  View.CheckArrayCreateLenValue(NewLen);
-  NewLenInt := Integer(Trunc(NewLen));
+    // Step 8: Let newLen be len + insertCount - actualSkipCount
+    //         If newLen > 2^53 - 1, throw TypeError
+    //         (ArrayCreate additionally throws RangeError if newLen > 2^32 - 1
+    //          or > MaxInt — engine cannot address more than that.)
+    InsertCount := AArgs.Length - 2;
+    if InsertCount < 0 then
+      InsertCount := 0;
+    NewLen := View.RawLen + InsertCount - RawActualSkipCount;
+    View.CheckSafeIntegerLen(NewLen);
+    View.CheckArrayCreateLenValue(NewLen);
+    NewLenInt := Integer(Trunc(NewLen));
 
-  ActualSkipCount64 := Trunc(RawActualSkipCount);
-  ActualStartIndex := Integer(Trunc(RawActualStart));
-  if RawActualSkipCount > MaxInt then
-    DeleteCount := MaxInt
-  else
-    DeleteCount := Integer(ActualSkipCount64);
+    ActualSkipCount64 := Trunc(RawActualSkipCount);
+    ActualStartIndex := Integer(Trunc(RawActualStart));
+    if RawActualSkipCount > MaxInt then
+      DeleteCount := MaxInt
+    else
+      DeleteCount := Integer(ActualSkipCount64);
 
-  // Step 9: Let A be ArrayCreate(newLen)
-  ResultArray := TGocciaArrayValue.Create(nil, NewLenInt);
+    // Step 9: Let A be ArrayCreate(newLen)
+    ResultArray := TGocciaArrayValue.Create(nil, NewLenInt);
+    Roots.Add(ResultArray);
 
-  // Step 11: Copy elements before actualStart.  ActualStartIndex ≤ NewLen ≤
-  // MaxInt, so the dense Integer loop covers the full leading range.  When
-  // RawLen > MaxInt only the trailing range can extend past MaxInt; the
-  // leading copy stays Integer-bounded by construction.
-  for I := 0 to ActualStartIndex - 1 do
-    ResultArray.Elements.Add(View.Get(I));
-
-  // Step 12: Insert new items
-  for I := 2 to AArgs.Length - 1 do
-    ResultArray.Elements.Add(AArgs.GetElement(I));
-
-  // Step 13: Copy elements after actualStart + actualSkipCount.  Source
-  // range is [ActualStartIndex + DeleteCount, RawLen); destination side is
-  // bounded by NewLen ≤ MaxInt (CheckArrayCreateLenValue above).  When
-  // RawLen exceeds MaxInt the dense Integer loop saturates at View.Len =
-  // MaxInt and silently drops every source index past it; switch to sparse
-  // enumeration so high-index source elements are picked up.  toSpliced does
-  // not preserve holes — every result position is a data property — so
-  // pre-fill the tail with undefined and overwrite present indices.
-  TailLen := NewLenInt - ActualStartIndex - InsertCount;
-  if View.NeedsSparsePath then
-  begin
-    DestBase := ResultArray.Elements.Count;
-    for I := 0 to TailLen - 1 do
-      ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-    StartKey := Int64(ActualStartIndex) + ActualSkipCount64;
-    EndKey := StartKey + Int64(TailLen);
-    Sparse := CollectSparseIndicesInRange(View.Obj, StartKey, EndKey);
-    // FPC rejects Int64 as a classic for-loop counter on 32-bit targets;
-    // the enumerator form `for K in TArray<Int64>` compiles everywhere.
-    for K in Sparse do
-      ResultArray.Elements[DestBase + Integer(K - StartKey)] := View.Get64(K);
-  end
-  else
-  begin
-    for I := ActualStartIndex + DeleteCount to View.Len - 1 do
+    // Step 11: Copy elements before actualStart.  ActualStartIndex ≤ NewLen ≤
+    // MaxInt, so the dense Integer loop covers the full leading range.  When
+    // RawLen > MaxInt only the trailing range can extend past MaxInt; the
+    // leading copy stays Integer-bounded by construction.
+    for I := 0 to ActualStartIndex - 1 do
       ResultArray.Elements.Add(View.Get(I));
-  end;
 
-  // Step 14: Return A
-  Result := ResultArray;
+    // Step 12: Insert new items
+    for I := 2 to AArgs.Length - 1 do
+      ResultArray.Elements.Add(AArgs.GetElement(I));
+
+    // Step 13: Copy elements after actualStart + actualSkipCount.  Source
+    // range is [ActualStartIndex + DeleteCount, RawLen); destination side is
+    // bounded by NewLen ≤ MaxInt (CheckArrayCreateLenValue above).  When
+    // RawLen exceeds MaxInt the dense Integer loop saturates at View.Len =
+    // MaxInt and silently drops every source index past it; switch to sparse
+    // enumeration so high-index source elements are picked up.  toSpliced does
+    // not preserve holes — every result position is a data property — so
+    // pre-fill the tail with undefined and overwrite present indices.
+    TailLen := NewLenInt - ActualStartIndex - InsertCount;
+    if View.NeedsSparsePath then
+    begin
+      DestBase := ResultArray.Elements.Count;
+      for I := 0 to TailLen - 1 do
+        ResultArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+      StartKey := Int64(ActualStartIndex) + ActualSkipCount64;
+      EndKey := StartKey + Int64(TailLen);
+      Sparse := CollectSparseIndicesInRange(View.Obj, StartKey, EndKey);
+      // FPC rejects Int64 as a classic for-loop counter on 32-bit targets;
+      // the enumerator form `for K in TArray<Int64>` compiles everywhere.
+      for K in Sparse do
+        ResultArray.Elements[DestBase + Integer(K - StartKey)] := View.Get64(K);
+    end
+    else
+    begin
+      for I := ActualStartIndex + DeleteCount to View.Len - 1 do
+        ResultArray.Elements.Add(View.Get(I));
+    end;
+
+    // Step 14: Return A
+    Result := ResultArray;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaArrayValue.ToStringLiteral: TGocciaStringLiteralValue;
@@ -4326,219 +4346,232 @@ var
   UseSparsePath: Boolean;
   Shift, RemovedRangeStart, TargetSrcKey, K: Int64;
   SourceSparse, DestSparse, TrailingSparse, RemovedSparse: TArray<Int64>;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
-  Len64 := View.Len64;
+  // start and deleteCount are converted after the receiver is made, the
+  // species constructor runs guest code, and so does every element read and
+  // write; the receiver and the removed-elements array are held only here
+  // across all of them (issue #1679).
+  Roots.Initialize;
+  try
+    Roots.Add(View.Obj);
+    Len64 := View.Len64;
 
-  // Step 5: If start is not present
-  if AArgs.Length < 1 then
-  begin
+    // Step 5: If start is not present
+    if AArgs.Length < 1 then
+    begin
+      if Assigned(View.SpeciesArr) then
+        Removed := ArraySpeciesCreate(View.Obj, 0)
+      else
+        Removed := ArrayCreateWithLength(0);
+      Roots.Add(Removed);
+      if not (Assigned(View.Arr) and View.Arr.FLengthWritable) then
+        View.Obj.AssignProperty(PROP_LENGTH,
+          TGocciaNumberLiteralValue.Create(View.RawLen));
+      Result := Removed;
+      Exit;
+    end;
+
+    // Steps 3-4: ToIntegerOrInfinity(start), then clamp against the full
+    // ToLength value.  Use Int64 so generic array-likes near
+    // Number.MAX_SAFE_INTEGER do not wrap through the dense Integer path.
+    RelativeStart64 := ToInteger64FromArgs(AArgs, 0);
+    ActualStart64 := NormalizeRelativeIndex64(RelativeStart64, Len64);
+
+    // Steps 5-9: Determine actualDeleteCount
+    if AArgs.Length > 1 then
+    begin
+      DeleteCountArg64 := ToInteger64FromArgs(AArgs, 1);
+      if DeleteCountArg64 < 0 then
+        DeleteCount64 := 0
+      else if DeleteCountArg64 > Len64 - ActualStart64 then
+        DeleteCount64 := Len64 - ActualStart64
+      else
+        DeleteCount64 := DeleteCountArg64;
+    end
+    else
+      DeleteCount64 := Len64 - ActualStart64;
+
+    ItemCount := AArgs.Length - 2;
+    if ItemCount < 0 then
+      ItemCount := 0;
+
+    // Step 9a: If len + itemCount - actualDeleteCount > 2^53 - 1, throw TypeError.
+    if (Len64 - DeleteCount64) > MAX_SAFE_INTEGER - Int64(ItemCount) then
+      ThrowTypeError(
+        'Array length exceeds maximum safe integer (2^53 - 1)',
+        'use a smaller length');
+    NewLen64 := Len64 - DeleteCount64 + Int64(ItemCount);
+
+    // Step 10: Let A be ArraySpeciesCreate(O, actualDeleteCount)
     if Assigned(View.SpeciesArr) then
-      Removed := ArraySpeciesCreate(View.Obj, 0)
+      Removed := ArraySpeciesCreate(View.Obj, DeleteCount64)
     else
-      Removed := ArrayCreateWithLength(0);
-    if not (Assigned(View.Arr) and View.Arr.FLengthWritable) then
-      View.Obj.AssignProperty(PROP_LENGTH,
-        TGocciaNumberLiteralValue.Create(View.RawLen));
+      Removed := ArrayCreateWithLength(DeleteCount64);
+    Roots.Add(Removed);
+
+    UseSparsePath := View.NeedsSparsePath or (ActualStart64 > MaxInt) or
+      (DeleteCount64 > MaxInt) or (NewLen64 > MaxInt);
+
+    if UseSparsePath then
+    begin
+      // Sparse path: receiver is a generic object with RawLen > MaxInt.  The
+      // dense Integer-indexed shift and trailing-delete loops below saturate
+      // at View.Len = MaxInt and silently drop high-index source properties
+      // and orphan high-index trailing properties.  Walk actually-present
+      // ordinary keys via CollectSparseIndicesInRange; proxy receivers retain
+      // the spec's per-index Has/Get sequence because enumeration would skip
+      // observable traps for holes.
+
+      // Step 11 (sparse): Collect removed elements.  ActualStart + DeleteCount
+      // can exceed MaxInt; use Int64 property names for removed indexes too.
+      RemovedRangeStart := ActualStart64;
+      if View.Obj is TGocciaProxyValue then
+      begin
+        K := 0;
+        while K < DeleteCount64 do
+        begin
+          if View.HasIndex64(RemovedRangeStart + K) then
+            Removed.CreateDataPropertyOrThrow(IntegerToString(K),
+              View.Get64(RemovedRangeStart + K));
+          Inc(K);
+        end;
+      end
+      else
+      begin
+        RemovedSparse := CollectSparseIndicesInRange(View.Obj,
+          RemovedRangeStart, RemovedRangeStart + DeleteCount64);
+        // FPC rejects Int64 as a classic for-loop counter on 32-bit targets;
+        // the enumerator form `for K in TArray<Int64>` compiles everywhere.
+        for K in RemovedSparse do
+          Removed.CreateDataPropertyOrThrow(IntegerToString(K - RemovedRangeStart),
+            View.Get64(K));
+      end;
+
+      if Int64(ItemCount) < DeleteCount64 then
+      begin
+        // Shift left: source [ActualStart + DeleteCount, RawLen) → dest
+        // [ActualStart + ItemCount, NewLen).  Walk source-present keys to
+        // write values, then walk originally-present dest keys whose source
+        // counterpart is absent to delete them.  Source keys are read in
+        // ascending order; since shift > 0, no read aliases a prior write.
+        Shift := DeleteCount64 - Int64(ItemCount);
+        SourceSparse := CollectSparseIndicesInRange(View.Obj,
+          ActualStart64 + DeleteCount64, Len64);
+        DestSparse := CollectSparseIndicesInRange(View.Obj,
+          ActualStart64 + Int64(ItemCount), NewLen64);
+        for K in SourceSparse do
+          View.Obj.AssignProperty(IntegerToString(K - Shift), View.Get64(K));
+        for K in DestSparse do
+        begin
+          TargetSrcKey := K + Shift;
+          if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
+            View.Obj.DeleteProperty(IntegerToString(K));
+        end;
+
+        // Delete properties in [NewLen, RawLen) — the original trailing range
+        // including any indices past MaxInt.  The dense View.DeleteIndex loop
+        // below would only reach MaxInt - 1 because View.Len is truncated.
+        TrailingSparse := CollectSparseIndicesInRange(View.Obj,
+          NewLen64, Len64);
+        for K in TrailingSparse do
+          View.Obj.DeleteProperty(IntegerToString(K));
+      end
+      else if Int64(ItemCount) > DeleteCount64 then
+      begin
+        // Shift right: source [ActualStart, Len - DeleteCount) → dest shifted
+        // by itemCount - deleteCount.  Walk present source keys descending so
+        // writes never overwrite a value that has not been read yet, then
+        // delete originally-present destination keys whose source was a hole.
+        Shift := Int64(ItemCount) - DeleteCount64;
+        SourceSparse := CollectSparseIndicesInRange(View.Obj,
+          ActualStart64, Len64 - DeleteCount64);
+        DestSparse := CollectSparseIndicesInRange(View.Obj,
+          ActualStart64 + Int64(ItemCount), NewLen64);
+        for I := Length(SourceSparse) - 1 downto 0 do
+        begin
+          K := SourceSparse[I];
+          View.Obj.AssignProperty(IntegerToString(K + Shift), View.Get64(K));
+        end;
+        for I := Length(DestSparse) - 1 downto 0 do
+        begin
+          K := DestSparse[I];
+          TargetSrcKey := K - Shift;
+          if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
+            View.Obj.DeleteProperty(IntegerToString(K));
+        end;
+      end;
+
+      // Insert new items.
+      for I := 0 to ItemCount - 1 do
+        View.Obj.AssignProperty(IntegerToString(ActualStart64 + Int64(I)),
+          AArgs.GetElement(I + 2));
+
+      // Set the spec-relative length on the receiver.
+      View.Obj.AssignProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(
+        Int64ToDouble(NewLen64)));
+    end
+    else
+    begin
+      ActualStart := Integer(ActualStart64);
+      DeleteCount := Integer(DeleteCount64);
+      NewLen := Integer(NewLen64);
+
+      // Step 11: Collect removed elements (preserve sparsity per ES spec §23.1.3.32 step 11)
+      for I := 0 to DeleteCount - 1 do
+      begin
+        if View.HasIndex(ActualStart + I) then
+          ArrayCreateDataProperty(Removed, I, View.Get(ActualStart + I));
+        // else: absent → leave hole in Removed (sparse)
+      end;
+
+      // Shift elements via View methods for prototype-aware semantics.
+      if ItemCount < DeleteCount then
+      begin
+        // Shift elements left
+        for I := ActualStart to View.Len - DeleteCount - 1 do
+        begin
+          From := I + DeleteCount;
+          Target := I + ItemCount;
+          if View.HasIndex(From) then
+            View.Put(Target, View.Get(From))
+          else
+            View.DeleteIndex(Target);
+        end;
+        // Delete trailing properties
+        for I := NewLen to View.Len - 1 do
+          View.DeleteIndex(I);
+      end
+      else if ItemCount > DeleteCount then
+      begin
+        // Shift elements right
+        for I := View.Len - DeleteCount - 1 downto ActualStart do
+        begin
+          From := I + DeleteCount;
+          Target := I + ItemCount;
+          if View.HasIndex(From) then
+            View.Put(Target, View.Get(From))
+          else
+            View.DeleteIndex(Target);
+        end;
+      end;
+      // Insert new items
+      for I := 0 to ItemCount - 1 do
+        View.Put(ActualStart + I, AArgs.GetElement(I + 2));
+      View.SetLen(NewLen);
+    end;
+
+    // Ensure removed array has correct length (preserve trailing holes)
+    Removed.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(
+      Int64ToDouble(DeleteCount64)));
+
+    // Step 17: Return A
     Result := Removed;
-    Exit;
+  finally
+    Roots.Clear;
   end;
-
-  // Steps 3-4: ToIntegerOrInfinity(start), then clamp against the full
-  // ToLength value.  Use Int64 so generic array-likes near
-  // Number.MAX_SAFE_INTEGER do not wrap through the dense Integer path.
-  RelativeStart64 := ToInteger64FromArgs(AArgs, 0);
-  ActualStart64 := NormalizeRelativeIndex64(RelativeStart64, Len64);
-
-  // Steps 5-9: Determine actualDeleteCount
-  if AArgs.Length > 1 then
-  begin
-    DeleteCountArg64 := ToInteger64FromArgs(AArgs, 1);
-    if DeleteCountArg64 < 0 then
-      DeleteCount64 := 0
-    else if DeleteCountArg64 > Len64 - ActualStart64 then
-      DeleteCount64 := Len64 - ActualStart64
-    else
-      DeleteCount64 := DeleteCountArg64;
-  end
-  else
-    DeleteCount64 := Len64 - ActualStart64;
-
-  ItemCount := AArgs.Length - 2;
-  if ItemCount < 0 then
-    ItemCount := 0;
-
-  // Step 9a: If len + itemCount - actualDeleteCount > 2^53 - 1, throw TypeError.
-  if (Len64 - DeleteCount64) > MAX_SAFE_INTEGER - Int64(ItemCount) then
-    ThrowTypeError(
-      'Array length exceeds maximum safe integer (2^53 - 1)',
-      'use a smaller length');
-  NewLen64 := Len64 - DeleteCount64 + Int64(ItemCount);
-
-  // Step 10: Let A be ArraySpeciesCreate(O, actualDeleteCount)
-  if Assigned(View.SpeciesArr) then
-    Removed := ArraySpeciesCreate(View.Obj, DeleteCount64)
-  else
-    Removed := ArrayCreateWithLength(DeleteCount64);
-
-  UseSparsePath := View.NeedsSparsePath or (ActualStart64 > MaxInt) or
-    (DeleteCount64 > MaxInt) or (NewLen64 > MaxInt);
-
-  if UseSparsePath then
-  begin
-    // Sparse path: receiver is a generic object with RawLen > MaxInt.  The
-    // dense Integer-indexed shift and trailing-delete loops below saturate
-    // at View.Len = MaxInt and silently drop high-index source properties
-    // and orphan high-index trailing properties.  Walk actually-present
-    // ordinary keys via CollectSparseIndicesInRange; proxy receivers retain
-    // the spec's per-index Has/Get sequence because enumeration would skip
-    // observable traps for holes.
-
-    // Step 11 (sparse): Collect removed elements.  ActualStart + DeleteCount
-    // can exceed MaxInt; use Int64 property names for removed indexes too.
-    RemovedRangeStart := ActualStart64;
-    if View.Obj is TGocciaProxyValue then
-    begin
-      K := 0;
-      while K < DeleteCount64 do
-      begin
-        if View.HasIndex64(RemovedRangeStart + K) then
-          Removed.CreateDataPropertyOrThrow(IntegerToString(K),
-            View.Get64(RemovedRangeStart + K));
-        Inc(K);
-      end;
-    end
-    else
-    begin
-      RemovedSparse := CollectSparseIndicesInRange(View.Obj,
-        RemovedRangeStart, RemovedRangeStart + DeleteCount64);
-      // FPC rejects Int64 as a classic for-loop counter on 32-bit targets;
-      // the enumerator form `for K in TArray<Int64>` compiles everywhere.
-      for K in RemovedSparse do
-        Removed.CreateDataPropertyOrThrow(IntegerToString(K - RemovedRangeStart),
-          View.Get64(K));
-    end;
-
-    if Int64(ItemCount) < DeleteCount64 then
-    begin
-      // Shift left: source [ActualStart + DeleteCount, RawLen) → dest
-      // [ActualStart + ItemCount, NewLen).  Walk source-present keys to
-      // write values, then walk originally-present dest keys whose source
-      // counterpart is absent to delete them.  Source keys are read in
-      // ascending order; since shift > 0, no read aliases a prior write.
-      Shift := DeleteCount64 - Int64(ItemCount);
-      SourceSparse := CollectSparseIndicesInRange(View.Obj,
-        ActualStart64 + DeleteCount64, Len64);
-      DestSparse := CollectSparseIndicesInRange(View.Obj,
-        ActualStart64 + Int64(ItemCount), NewLen64);
-      for K in SourceSparse do
-        View.Obj.AssignProperty(IntegerToString(K - Shift), View.Get64(K));
-      for K in DestSparse do
-      begin
-        TargetSrcKey := K + Shift;
-        if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
-          View.Obj.DeleteProperty(IntegerToString(K));
-      end;
-
-      // Delete properties in [NewLen, RawLen) — the original trailing range
-      // including any indices past MaxInt.  The dense View.DeleteIndex loop
-      // below would only reach MaxInt - 1 because View.Len is truncated.
-      TrailingSparse := CollectSparseIndicesInRange(View.Obj,
-        NewLen64, Len64);
-      for K in TrailingSparse do
-        View.Obj.DeleteProperty(IntegerToString(K));
-    end
-    else if Int64(ItemCount) > DeleteCount64 then
-    begin
-      // Shift right: source [ActualStart, Len - DeleteCount) → dest shifted
-      // by itemCount - deleteCount.  Walk present source keys descending so
-      // writes never overwrite a value that has not been read yet, then
-      // delete originally-present destination keys whose source was a hole.
-      Shift := Int64(ItemCount) - DeleteCount64;
-      SourceSparse := CollectSparseIndicesInRange(View.Obj,
-        ActualStart64, Len64 - DeleteCount64);
-      DestSparse := CollectSparseIndicesInRange(View.Obj,
-        ActualStart64 + Int64(ItemCount), NewLen64);
-      for I := Length(SourceSparse) - 1 downto 0 do
-      begin
-        K := SourceSparse[I];
-        View.Obj.AssignProperty(IntegerToString(K + Shift), View.Get64(K));
-      end;
-      for I := Length(DestSparse) - 1 downto 0 do
-      begin
-        K := DestSparse[I];
-        TargetSrcKey := K - Shift;
-        if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
-          View.Obj.DeleteProperty(IntegerToString(K));
-      end;
-    end;
-
-    // Insert new items.
-    for I := 0 to ItemCount - 1 do
-      View.Obj.AssignProperty(IntegerToString(ActualStart64 + Int64(I)),
-        AArgs.GetElement(I + 2));
-
-    // Set the spec-relative length on the receiver.
-    View.Obj.AssignProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(
-      Int64ToDouble(NewLen64)));
-  end
-  else
-  begin
-    ActualStart := Integer(ActualStart64);
-    DeleteCount := Integer(DeleteCount64);
-    NewLen := Integer(NewLen64);
-
-    // Step 11: Collect removed elements (preserve sparsity per ES spec §23.1.3.32 step 11)
-    for I := 0 to DeleteCount - 1 do
-    begin
-      if View.HasIndex(ActualStart + I) then
-        ArrayCreateDataProperty(Removed, I, View.Get(ActualStart + I));
-      // else: absent → leave hole in Removed (sparse)
-    end;
-
-    // Shift elements via View methods for prototype-aware semantics.
-    if ItemCount < DeleteCount then
-    begin
-      // Shift elements left
-      for I := ActualStart to View.Len - DeleteCount - 1 do
-      begin
-        From := I + DeleteCount;
-        Target := I + ItemCount;
-        if View.HasIndex(From) then
-          View.Put(Target, View.Get(From))
-        else
-          View.DeleteIndex(Target);
-      end;
-      // Delete trailing properties
-      for I := NewLen to View.Len - 1 do
-        View.DeleteIndex(I);
-    end
-    else if ItemCount > DeleteCount then
-    begin
-      // Shift elements right
-      for I := View.Len - DeleteCount - 1 downto ActualStart do
-      begin
-        From := I + DeleteCount;
-        Target := I + ItemCount;
-        if View.HasIndex(From) then
-          View.Put(Target, View.Get(From))
-        else
-          View.DeleteIndex(Target);
-      end;
-    end;
-    // Insert new items
-    for I := 0 to ItemCount - 1 do
-      View.Put(ActualStart + I, AArgs.GetElement(I + 2));
-    View.SetLen(NewLen);
-  end;
-
-  // Ensure removed array has correct length (preserve trailing holes)
-  Removed.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(
-    Int64ToDouble(DeleteCount64)));
-
-  // Step 17: Return A
-  Result := Removed;
 end;
 
 // ES2026 §23.1.3.25 Array.prototype.shift()

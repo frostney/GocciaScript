@@ -99,7 +99,7 @@ describe("buildEngineArgs", () => {
     expect(args.at(-1)).toBe("--mode=bytecode");
   });
 
-  test("names the interpreter explicitly, since newer engines default to bytecode", () => {
+  test("names the interpreter explicitly for a release that takes --mode", () => {
     for (const kind of ["loader", "testRunner"] as const) {
       const args = buildEngineArgs(
         { ...OPTIONS, mode: "interpreted" },
@@ -123,6 +123,13 @@ describe("buildEngineArgs", () => {
     expect(
       buildEngineArgs({ ...OPTIONS, mode: "bytecode" }, noMode, "testRunner"),
     ).toContain("--mode=bytecode");
+  });
+
+  test("sends no mode flag to an unprobed (locally built) engine", () => {
+    for (const mode of ["bytecode", "interpreted"] as const) {
+      const args = buildEngineArgs({ ...OPTIONS, mode }, undefined, "loader");
+      expect(args.some((arg) => arg.startsWith("--mode"))).toBe(false);
+    }
   });
 
   test("leaves the mode to the engine when the request names none", () => {

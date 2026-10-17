@@ -8,8 +8,8 @@
  * config `sandbox` section), GocciaScriptLoaderBare (core-engine-only
  * stdin/file execution, CLI print, and runtime-global absence), GocciaBundler
  * (compile, roundtrip, stdin, directory, .gbc rejection, source maps),
- * GocciaBenchmarkRunner (file, stdin, bytecode), GocciaREPL (banner,
- * evaluation, ASI, error recovery, bytecode).
+ * GocciaBenchmarkRunner (file, stdin, microbench API), GocciaREPL (banner,
+ * evaluation, ASI, error recovery, uncaught throws).
  */
 
 import { $ } from "bun";
@@ -302,10 +302,10 @@ function assertPreservesBodyFailure(outputPath: string, label: string): void {
 // GocciaRunner
 // ============================================================================
 
-// -- JSON output (interpreted + bytecode) ---------------------------------------
+// -- JSON output ----------------------------------------------------------------
 
-await section("Loader: JSON output (interpreted)...", async () => {
-  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n", ["--mode=interpreted"]);
+await section("Loader: JSON output...", async () => {
+  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n");
   const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`JSON ok should be true, got ${json.ok}`);
   if (json.fileName !== undefined) throw new Error(`JSON fileName should only be present per-file, got ${json.fileName}`);
@@ -319,6 +319,7 @@ await section("Loader: JSON output (interpreted)...", async () => {
   if (typeof json.memory?.gc?.liveBytes !== "number") throw new Error("JSON memory.gc.liveBytes should be present");
   if (typeof json.memory?.gc?.allocatedDuringRunBytes !== "number") throw new Error("JSON memory.gc.allocatedDuringRunBytes should be present");
   if (typeof json.memory?.gc?.limitBytes !== "number") throw new Error("JSON memory.gc.limitBytes should be present");
+  if (typeof json.memory?.gc?.peakLiveBytes !== "number") throw new Error("JSON memory.gc.peakLiveBytes should be present");
   if ("maxBytes" in json.memory.gc) throw new Error("JSON memory.gc.maxBytes should not be present; use limitBytes");
   if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error("JSON memory.heap.endAllocatedBytes should be present");
   if (typeof json.workers?.used !== "number") throw new Error("JSON workers.used should be present");
@@ -328,18 +329,7 @@ await section("Loader: JSON output (interpreted)...", async () => {
   if ("total_ms" in file.timing) throw new Error("JSON per-file timing should not include millisecond fields");
 });
 
-await section("Loader: JSON output (bytecode)...", async () => {
-  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n", ["--mode=bytecode"]);
-  const file = json.files?.[0];
-  if (json.ok !== true) throw new Error(`Bytecode JSON ok should be true, got ${json.ok}`);
-  if (file?.result !== 4) throw new Error(`Bytecode JSON file result should be 4, got ${file?.result}`);
-  if (!json.output?.includes("hi")) throw new Error(`Bytecode JSON output should contain "hi"`);
-  if (!json.stdout?.includes("hi")) throw new Error(`Bytecode JSON stdout should contain "hi"`);
-  if (typeof json.stderr !== "string") throw new Error("Bytecode JSON stderr should always be present");
-  if (typeof json.memory?.gc?.peakLiveBytes !== "number") throw new Error("Bytecode JSON memory.gc.peakLiveBytes should be present");
-});
-
-await section("Loader: bytecode TypedArray.from roots mapper during iterator GC...", async () => {
+await section("Loader: TypedArray.from roots mapper during iterator GC...", async () => {
   const source = `
 let i = 0;
 const iterable = {
@@ -361,7 +351,7 @@ const ta = Uint8Array.from(
 );
 ta[0] * 10 + ta[1];
 `;
-  const { exitCode, json, stderr } = runLoaderJson(source, ["--mode=bytecode"]);
+  const { exitCode, json, stderr } = runLoaderJson(source);
   if (exitCode !== 0) throw new Error(`TypedArray.from GC repro exited ${exitCode}: ${stderr}`);
   const result = json.files?.[0]?.result;
   if (result !== 12) throw new Error(`TypedArray.from GC repro expected 12, got ${result}`);
@@ -690,7 +680,7 @@ await section("Bare Loader: print global...", async () => {
 await section("Bare Loader: --max-stack bounds deep non-tail recursion with RangeError...", async () => {
   const src =
     "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1)); try { f(100000); print('NO THROW'); } catch (e) { print(e.constructor.name); }\n";
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--max-stack=1000"], {
+  const proc = Bun.spawnSync([BARE, "--max-stack=1000"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
@@ -706,7 +696,7 @@ await section("Bare Loader: proper tail calls reuse the frame (deep strict tail 
   // stack and completes well under the 1000-frame limit.
   const src =
     "const f = (n) => { 'use strict'; return n === 0 ? 'done' : f(n - 1); }; print(f(100000));\n";
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--max-stack=1000"], {
+  const proc = Bun.spawnSync([BARE, "--max-stack=1000"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
@@ -721,7 +711,7 @@ await section("Bare Loader: tail-call optimization stays strict-mode only...", a
   // is bounded by --max-stack and throws RangeError.
   const src =
     "const f = (n) => (n === 0 ? 'done' : f(n - 1)); try { print(f(100000)); } catch (e) { print(e.constructor.name); }\n";
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--max-stack=1000"], {
+  const proc = Bun.spawnSync([BARE, "--max-stack=1000"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
@@ -732,7 +722,7 @@ await section("Bare Loader: tail-call optimization stays strict-mode only...", a
 });
 
 await section("Bare Loader: removed --stack-size names --max-stack...", async () => {
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+  const proc = Bun.spawnSync([BARE, "--stack-size=1000"], {
     stdin: new TextEncoder().encode("print(1);\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -754,7 +744,7 @@ await section("Bare Loader: native re-entry recursion throws RangeError instead 
   ];
   for (const src of cases) {
     const proc = Bun.spawnSync(
-      [BARE, "--mode=bytecode", "--compat-function", "--compat-traditional-for-loop"],
+      [BARE, "--compat-function", "--compat-traditional-for-loop"],
       { stdin: new TextEncoder().encode(src), stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0)
@@ -821,18 +811,7 @@ await section("Bare Loader: .mjs module inference...", async () => {
   }
 });
 
-// --mode option: bare loader defaults to bytecode mode; both values must execute.
-await section("Bare Loader: --mode=interpreted...", async () => {
-  const proc = Bun.spawnSync([BARE, "--print", "--mode=interpreted"], {
-    stdin: new TextEncoder().encode("21 * 2;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 0) throw new Error(`Bare --mode=interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=interpreted expected 42, got: ${proc.stdout.toString()}`);
-});
-
-await section("Bare Loader: interpreted for-in scope survives Goccia.gc...", async () => {
+await section("Bare Loader: for-in scope survives Goccia.gc...", async () => {
   const source = [
     "function f() {",
     "  let obj = { p: 1, r: 3, s: 4 };",
@@ -848,7 +827,6 @@ await section("Bare Loader: interpreted for-in scope survives Goccia.gc...", asy
   ].join("\n");
   const proc = Bun.spawnSync([
     BARE,
-    "--mode=interpreted",
     "--compat-asi",
     "--compat-function",
     "--compat-for-in-loop",
@@ -859,19 +837,9 @@ await section("Bare Loader: interpreted for-in scope survives Goccia.gc...", asy
     stderr: "pipe",
   });
   if (proc.exitCode !== 0)
-    throw new Error(`Bare interpreted for-in Goccia.gc exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    throw new Error(`Bare for-in Goccia.gc exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "prs")
-    throw new Error(`Bare interpreted for-in Goccia.gc expected prs, got: ${proc.stdout.toString()}`);
-});
-
-await section("Bare Loader: --mode=bytecode...", async () => {
-  const proc = Bun.spawnSync([BARE, "--print", "--mode=bytecode"], {
-    stdin: new TextEncoder().encode("21 * 2;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 0) throw new Error(`Bare --mode=bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "42") throw new Error(`Bare --mode=bytecode expected 42, got: ${proc.stdout.toString()}`);
+    throw new Error(`Bare for-in Goccia.gc expected prs, got: ${proc.stdout.toString()}`);
 });
 
 await section("Bare Loader: bytecode top-level declarations back globalThis...", async () => {
@@ -887,7 +855,6 @@ await section("Bare Loader: bytecode top-level declarations back globalThis...",
   ].join("\n");
   const proc = Bun.spawnSync([
     BARE,
-    "--mode=bytecode",
     "--compat-var",
     "--compat-function",
     "--compat-non-strict-mode",
@@ -928,7 +895,7 @@ await section("Bare Loader: Test262 host option belongs to GocciaTest262Runner..
 });
 
 await section("Test262 Runner: --eval-host exposes Goccia test262 hooks...", async () => {
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-loose-equality"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-loose-equality"], {
     stdin: new TextEncoder().encode([
       "print(Goccia.test262Host);",
       "print(typeof Goccia.test262);",
@@ -1011,23 +978,20 @@ await section("test262 runner: computed imports and importValue may read the sui
       "}).then($DONE, $DONE);",
       "",
     ].join("\n"));
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const out = join(tmp, `computed-${mode}.json`);
-      const proc = Bun.spawnSync(
-        [
-          TEST262RUNNER,
-          "--suite-dir", suite,
-          "--categories", "language",
-          `--mode=${mode}`,
-          "--jobs=1",
-          "--output", out,
-        ],
-        { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
-      );
-      const report = JSON.parse(readFileSync(out, "utf8"));
-      if (proc.exitCode !== 0 || report.summary.passed !== 2)
-        throw new Error(`${mode}: computed fixture imports should pass, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
-    }
+    const out = join(tmp, "computed.json");
+    const proc = Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "language",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    if (proc.exitCode !== 0 || report.summary.passed !== 2)
+      throw new Error(`computed fixture imports should pass, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
   } finally {
     clean(tmp);
   }
@@ -1053,7 +1017,6 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--suite-dir", suite,
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-loop.js",
-        "--mode=bytecode",
         "--jobs=1",
         "--timeout=50ms",
         "--output", timeoutOut,
@@ -1077,7 +1040,6 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--suite-dir", suite,
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-like-error.js",
-        "--mode=bytecode",
         "--jobs=1",
         "--timeout=50ms",
         "--output", thrownErrorOut,
@@ -1101,7 +1063,6 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--suite-dir", suite,
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-marker-error.js",
-        "--mode=bytecode",
         "--jobs=1",
         "--timeout=50ms",
         "--output", markerErrorOut,
@@ -1137,7 +1098,6 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--suite-dir", suite,
         "--categories", "built-ins",
         "--filter", "built-ins/engine-fault.js",
-        "--mode=bytecode",
         "--jobs=1",
         "--output", engineFaultOut,
       ],
@@ -1154,6 +1114,116 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     }
     if (engineFaultJson.results?.[0]?.status !== "FAIL")
       throw new Error(`engine execution fault should be FAIL, got ${engineFaultJson.results?.[0]?.status}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 runner: negative tests need the expected error in the expected phase...", async () => {
+  // #1571: a parse or resolution negative passes only when the source is
+  // rejected before evaluation with negative.type. A body that runs reaches
+  // the harness $DONOTEVALUATE() and fails instead of passing on its throw.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), [
+      "function $DONOTEVALUATE() {",
+      '  throw "Test262: This statement should not be evaluated.";',
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(join(harness, "assert.js"), "");
+    const negative = (phase: string, type: string, flags: string[] = []) => [
+      "/*---",
+      "negative:",
+      `  phase: ${phase}`,
+      `  type: ${type}`,
+      ...(flags.length > 0 ? [`flags: [${flags.join(", ")}]`] : []),
+      "---*/",
+    ];
+    const cases: [string, string[], string, string][] = [
+      // [file, source lines, expected status, expected message fragment]
+      ["parse-rejected.js", [...negative("parse", "SyntaxError"), "$DONOTEVALUATE();", "var = ;"], "PASS", ""],
+      ["parse-missed.js", [...negative("parse", "SyntaxError"), "$DONOTEVALUATE();", "var x = 1;"], "FAIL", "$DONOTEVALUATE reached"],
+      ["parse-clean.js", [...negative("parse", "SyntaxError"), "var x = 1;"], "FAIL", "body executed cleanly"],
+      ["parse-js-throw.js", [...negative("parse", "SyntaxError"), 'throw new SyntaxError("late");'], "FAIL", "thrown as a JS value during evaluation"],
+      ["parse-wrong-type.js", [...negative("parse", "ReferenceError"), "$DONOTEVALUATE();", "var = ;"], "FAIL", "got SyntaxError"],
+      ["parse-strict.js", [...negative("parse", "SyntaxError", ["onlyStrict"]), "$DONOTEVALUATE();", "var public = 1;"], "PASS", ""],
+      ["parse-raw-missed.js", [...negative("parse", "SyntaxError", ["raw"]), 'throw "Test262: This statement should not be evaluated.";', "var x = 1;"], "FAIL", "$DONOTEVALUATE reached"],
+      // raw gets no harness, so $DONOTEVALUATE is not even defined.
+      ["parse-raw-no-harness.js", [...negative("parse", "SyntaxError", ["raw"]), "$DONOTEVALUATE();", "var x = 1;"], "FAIL", "ReferenceError was thrown as a JS value"],
+      ["parse-module-missed.js", [...negative("parse", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "export const a = 1;"], "FAIL", "$DONOTEVALUATE reached"],
+      ["resolution-rejected.js", [...negative("resolution", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "import { missing } from './resolution_FIXTURE.js';"], "PASS", ""],
+      ["runtime-module.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new TypeError("x");'], "PASS", ""],
+      ["runtime-module-wrong-type.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new RangeError("x");'], "FAIL", "got RangeError"],
+      ["runtime-wrapped.js", [...negative("runtime", "ReferenceError"), "unresolvable;"], "PASS", ""],
+    ];
+    writeFileSync(join(tests, "resolution_FIXTURE.js"), "export var present;\n");
+    for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
+
+    const out = join(tmp, "negative.json");
+    Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "language",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    if (report.run?.gradingContract !== 2)
+      throw new Error(`test262 report should publish gradingContract 2, got ${JSON.stringify(report.run)}`);
+    const byId = new Map<string, { status: string; message?: string }>(
+      report.results.map((r: { id: string; status: string; message?: string }) => [r.id, r]),
+    );
+    for (const [file, , status, fragment] of cases) {
+      const result = byId.get(`language/${file}`);
+      if (!result || result.status !== status || !(result.message ?? "").includes(fragment))
+        throw new Error(`${file}: expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 comment: a grading-contract change reports but does not block...", async () => {
+  const tmp = makeTmp();
+  try {
+    const report = (status: string, gradingContract?: number) => ({
+      summary: {
+        totalDiscovered: 1, totalRun: 1, passed: status === "PASS" ? 1 : 0,
+        failed: status === "PASS" ? 0 : 1, wrapperInfraFailures: 0, timeouts: 0,
+        durationSeconds: 1,
+        byCategory: [{ category: "language", run: 1, passed: status === "PASS" ? 1 : 0,
+          failed: status === "PASS" ? 0 : 1, wrapperInfra: 0, timeouts: 0 }],
+      },
+      results: [{ id: "language/a.js", status, durationMs: 1 }],
+      run: gradingContract === undefined ? {} : { gradingContract },
+    });
+    const baseline = join(tmp, "baseline.json");
+    const sameContract = join(tmp, "same.json");
+    const newContract = join(tmp, "new.json");
+    writeFileSync(baseline, JSON.stringify(report("PASS")));
+    writeFileSync(sameContract, JSON.stringify(report("FAIL", 1)));
+    writeFileSync(newContract, JSON.stringify(report("FAIL", 2)));
+    const comment = (results: string) => Bun.spawnSync(
+      ["bun", "scripts/run_test262_suite.ts", "--comment", results, baseline],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    const blocked = comment(sameContract);
+    if (blocked.exitCode !== 1 || !blocked.stdout.toString().includes("Regression vs cached"))
+      throw new Error(`same-contract PASS -> FAIL should block: ${blocked.stdout.toString()}`);
+    const reported = comment(newContract);
+    const markdown = reported.stdout.toString();
+    if (reported.exitCode !== 0 || !markdown.includes("Grading contract changed (v1 → v2)") ||
+        !markdown.includes("language/a.js"))
+      throw new Error(`contract-change PASS -> FAIL should be reported, not block: ${markdown}`);
   } finally {
     clean(tmp);
   }
@@ -1198,7 +1268,6 @@ await section("test262 runner: deterministic shards merge into one complete repo
           TEST262RUNNER,
           "--suite-dir", suite,
           "--categories", "built-ins",
-          "--mode=bytecode",
           "--jobs=1",
           "--profile-dir", profileDir,
           "--shard-index", String(shard),
@@ -1293,7 +1362,7 @@ await section("test262 runner: deterministic shards merge into one complete repo
 });
 
 await section("Test262 Runner: child realms expose host records...", async () => {
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=interpreted"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
       "print(typeof child.evalScript);",
@@ -1333,7 +1402,7 @@ await section("Test262 Runner: child realms expose host records...", async () =>
 });
 
 await section("Test262 Runner: child realm globals expose host hooks...", async () => {
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=interpreted"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
       "print(child.global.Goccia.test262Host);",
@@ -1360,11 +1429,8 @@ await section("Test262 Runner: child realm globals expose host hooks...", async 
 });
 
 console.log("Test262 Runner: cross-realm weak constructors use the newTarget realm prototype...");
-for (const { label, args } of [
-  { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-function"] },
-  { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--compat-function", "--mode=bytecode"] },
-]) {
-  const proc = Bun.spawnSync(args, {
+{
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-function"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
       "child.evalScript('function NewTarget() {} NewTarget.prototype = null; globalThis.NewTarget = NewTarget;');",
@@ -1379,9 +1445,9 @@ for (const { label, args } of [
     stderr: "pipe",
   });
   if (proc.exitCode !== 0)
-    throw new Error(`Bare ${label} cross-realm weak constructor probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    throw new Error(`Bare cross-realm weak constructor probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue")
-    throw new Error(`Bare ${label} cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
+    throw new Error(`Bare cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
 }
 
 // A built-in belongs to the realm that created it and runs there. Called from
@@ -1390,70 +1456,66 @@ for (const { label, args } of [
 // Nothing may be called between the two, because calling one of the caller's
 // own built-ins would put the caller's realm back by itself.
 await section("Test262 Runner: calling another realm's built-in returns to the caller's realm...", async () => {
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
-      stdin: new TextEncoder().encode([
-        "const child = Goccia.test262.createRealm();",
-        "const childAbs = child.global.Math.abs;",
-        "const magnitude = childAbs(-3);",
-        "const after = [];",
-        "print(magnitude);",
-        "print(Object.getPrototypeOf(after) === Array.prototype);",
-        "print(Object.getPrototypeOf(after) === child.global.Array.prototype);",
-        "",
-      ].join("\n")),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} cross-realm built-in call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "3\ntrue\nfalse")
-      throw new Error(`Test262 Runner ${mode} stayed in the callee's realm after a cross-realm built-in call: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+    stdin: new TextEncoder().encode([
+      "const child = Goccia.test262.createRealm();",
+      "const childAbs = child.global.Math.abs;",
+      "const magnitude = childAbs(-3);",
+      "const after = [];",
+      "print(magnitude);",
+      "print(Object.getPrototypeOf(after) === Array.prototype);",
+      "print(Object.getPrototypeOf(after) === child.global.Array.prototype);",
+      "",
+    ].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner cross-realm built-in call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "3\ntrue\nfalse")
+    throw new Error(`Test262 Runner stayed in the callee's realm after a cross-realm built-in call: ${proc.stdout.toString()}`);
 });
 
 // A function created by direct eval writes the locals of the function that
 // called eval, also after the eval call has returned. An operand read of such
-// a local has to see the write, in both modes: under a host with direct eval
+// a local has to see the write: under a host with direct eval
 // the bytecode compiler does not read a let binding or a parameter straight
 // from its register.
 await section("Test262 Runner: operands see writes made by functions that direct eval created...", async () => {
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = Bun.spawnSync(
-      [TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function", "--compat-var", "--compat-traditional-for-loop"],
-      {
-        stdin: new TextEncoder().encode([
-          "var out = [];",
-          'function afterEval(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); return x + w(50); }',
-          'out.push("afterEval " + afterEval(1));',
-          'function inLoop(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); let r = []; for (let i = 0; i < 2; i++) { r.push(x + w(i * 10)); } return r.join(); }',
-          'out.push("inLoop " + inLoop(1));',
-          'function createdInLoop(a) { let x = a; let r = []; let w = null; for (let i = 0; i < 3; i++) { r.push(x + (w ? w(i * 10) : 0)); w = eval("(function(v) { x = v; return 1; })"); } return r.join(); }',
-          'out.push("createdInLoop " + createdInLoop(1));',
-          'function inOperand(a) { let x = a; x += eval("x = 100; 1"); let y = x * (eval("x = 7"), 2); return x + "," + y; }',
-          'out.push("inOperand " + inOperand(1));',
-          // The writer outlives the call that created it, and the second call
-          // reads its operand before it reaches its own eval.
-          "var saved;",
-          'function beforeEval(a, first) { let x = a; const r = x + (saved ? saved(50) : 0); if (first) saved = eval("(function(v) { x = v; return 1; })"); return r; }',
-          'out.push("beforeEval " + beforeEval(1, true) + " " + beforeEval(1, false));',
-          'print(out.join("\\n"));',
-          "",
-        ].join("\n")),
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const expected = ["afterEval 2", "inLoop 2,1", "createdInLoop 1,2,11", "inOperand 7,4", "beforeEval 1 2"].join("\n");
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} eval-created writer probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Test262 Runner ${mode} operands missed a write by eval-created code: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync(
+    [TEST262RUNNER, "--eval-host", "--compat-function", "--compat-var", "--compat-traditional-for-loop"],
+    {
+      stdin: new TextEncoder().encode([
+        "var out = [];",
+        'function afterEval(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); return x + w(50); }',
+        'out.push("afterEval " + afterEval(1));',
+        'function inLoop(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); let r = []; for (let i = 0; i < 2; i++) { r.push(x + w(i * 10)); } return r.join(); }',
+        'out.push("inLoop " + inLoop(1));',
+        'function createdInLoop(a) { let x = a; let r = []; let w = null; for (let i = 0; i < 3; i++) { r.push(x + (w ? w(i * 10) : 0)); w = eval("(function(v) { x = v; return 1; })"); } return r.join(); }',
+        'out.push("createdInLoop " + createdInLoop(1));',
+        'function inOperand(a) { let x = a; x += eval("x = 100; 1"); let y = x * (eval("x = 7"), 2); return x + "," + y; }',
+        'out.push("inOperand " + inOperand(1));',
+        // The writer outlives the call that created it, and the second call
+        // reads its operand before it reaches its own eval.
+        "var saved;",
+        'function beforeEval(a, first) { let x = a; const r = x + (saved ? saved(50) : 0); if (first) saved = eval("(function(v) { x = v; return 1; })"); return r; }',
+        'out.push("beforeEval " + beforeEval(1, true) + " " + beforeEval(1, false));',
+        'print(out.join("\\n"));',
+        "",
+      ].join("\n")),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const expected = ["afterEval 2", "inLoop 2,1", "createdInLoop 1,2,11", "inOperand 7,4", "beforeEval 1 2"].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner eval-created writer probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Test262 Runner operands missed a write by eval-created code: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: bytecode eval is direct eval...", async () => {
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
       "{",
       "  let x = 41;",
@@ -1485,14 +1547,14 @@ await section("Test262 Runner: bytecode eval is direct eval...", async () => {
 });
 
 // ADR 0134 Phase 2: eval code whose variable environment is the global one
-// (indirect eval, ShadowRealm.prototype.evaluate) is compiled in bytecode mode.
+// (indirect eval, ShadowRealm.prototype.evaluate) is compiled to bytecode.
 // Each expected value below comes from the ECMAScript 2026 clause cited above
 // its section (tc39-mcp 0.6.3, es2026 snapshot 0248456c) or, for ShadowRealm,
 // the stage 2.7 proposal. Node.js 24.21 (classic script via
 // vm.runInThisContext, ShadowRealm under --experimental-shadow-realm) was run
 // as a cross-check only and agrees with every value.
-const runEvalHostProbe = (mode: string, lines: string[]) =>
-  Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+const runEvalHostProbe = (lines: string[]) =>
+  Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([...lines, ""].join("\n")),
     stdout: "pipe",
     stderr: "pipe",
@@ -1502,23 +1564,21 @@ const runEvalHostProbe = (mode: string, lines: string[]) =>
 // declarations live in a new declarative environment of their own, and a
 // strict eval's vars do too.
 await section("Test262 Runner: an indirect eval's let, const and class do not outlive the call...", async () => {
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = runEvalHostProbe(mode, [
-      "var geval = eval;",
-      'print(geval("let kept = 1; kept"));',
-      'print(geval("typeof kept"));',
-      'print(geval("let kept = 2; kept"));',
-      'print(geval("const c = 3; class K {} typeof K + c"));',
-      "print(typeof K);",
-      `print(geval("'use strict'; var sv = 4; sv"));`,
-      "print(typeof sv);",
-    ]);
-    const expected = ["1", "undefined", "2", "function3", "undefined", "4", "undefined"].join("\n");
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} indirect eval lexical probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Test262 Runner ${mode} indirect eval lexical declarations leaked: ${proc.stdout.toString()}`);
-  }
+  const proc = runEvalHostProbe([
+    "var geval = eval;",
+    'print(geval("let kept = 1; kept"));',
+    'print(geval("typeof kept"));',
+    'print(geval("let kept = 2; kept"));',
+    'print(geval("const c = 3; class K {} typeof K + c"));',
+    "print(typeof K);",
+    `print(geval("'use strict'; var sv = 4; sv"));`,
+    "print(typeof sv);",
+  ]);
+  const expected = ["1", "undefined", "2", "function3", "undefined", "4", "undefined"].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner indirect eval lexical probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Test262 Runner indirect eval lexical declarations leaked: ${proc.stdout.toString()}`);
 });
 
 // ES2026 §19.2.1.3 EvalDeclarationInstantiation (sec-evaldeclarationinstantiation)
@@ -1528,33 +1588,31 @@ await section("Test262 Runner: an indirect eval's let, const and class do not ou
 // removes them and returns true. A script's own var is created with D = false
 // (§16.1.7 GlobalDeclarationInstantiation), so delete returns false.
 await section("Test262 Runner: delete removes a global var an indirect eval created...", async () => {
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = runEvalHostProbe(mode, [
-      "var geval = eval;",
-      'geval("var made = 5; function madeFn() {}");',
-      "print(made);",
-      'var d = Object.getOwnPropertyDescriptor(globalThis, "made");',
-      'print(d.configurable + " " + d.enumerable + " " + d.writable);',
-      "print(delete made);",
-      "print(typeof made);",
-      'print(Object.prototype.hasOwnProperty.call(globalThis, "made"));',
-      "print(delete madeFn);",
-      "print(typeof madeFn);",
-      'print(geval("var inEval = 7; delete inEval"));',
-      "print(typeof inEval);",
-      "var scriptVar = 6;",
-      "print(delete scriptVar);",
-      "print(typeof scriptVar);",
-    ]);
-    const expected = [
-      "5", "true true true", "true", "undefined", "false", "true", "undefined",
-      "true", "undefined", "false", "number",
-    ].join("\n");
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} eval var delete probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Test262 Runner ${mode} eval-created global var was not deletable: ${proc.stdout.toString()}`);
-  }
+  const proc = runEvalHostProbe([
+    "var geval = eval;",
+    'geval("var made = 5; function madeFn() {}");',
+    "print(made);",
+    'var d = Object.getOwnPropertyDescriptor(globalThis, "made");',
+    'print(d.configurable + " " + d.enumerable + " " + d.writable);',
+    "print(delete made);",
+    "print(typeof made);",
+    'print(Object.prototype.hasOwnProperty.call(globalThis, "made"));',
+    "print(delete madeFn);",
+    "print(typeof madeFn);",
+    'print(geval("var inEval = 7; delete inEval"));',
+    "print(typeof inEval);",
+    "var scriptVar = 6;",
+    "print(delete scriptVar);",
+    "print(typeof scriptVar);",
+  ]);
+  const expected = [
+    "5", "true true true", "true", "undefined", "false", "true", "undefined",
+    "true", "undefined", "false", "number",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner eval var delete probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Test262 Runner eval-created global var was not deletable: ${proc.stdout.toString()}`);
 });
 
 // ES2026 §14.15.3 TryStatement Evaluation (sec-try-statement-runtime-semantics-evaluation):
@@ -1565,27 +1623,25 @@ await section("Test262 Runner: delete removes a global var an indirect eval crea
 // typeof gives "undefined" (§13.5.3.1 step 2.a) and a non-strict assignment
 // creates a global property again (§6.2.5.6 PutValue step 2.c).
 await section("Test262 Runner: an indirect eval's completion value and deleted globals reach a nested direct eval...", async () => {
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = runEvalHostProbe(mode, [
-      "var geval = eval;",
-      'print(geval("1; try { 2 } finally { 3 }"));',
-      'print(geval("99; do { -99; try { 39 } finally { break; } } while (false)"));',
-      'print(geval("l: try { 5 } finally { break l; }"));',
-      'print(geval("m: try { 6 } finally { 7; break m; }"));',
-      'print(geval("n: { 8; try { 9; break n; } finally { 10 } }"));',
-      `print(geval("var d5 = 1; delete globalThis.d5; eval('typeof d5')"));`,
-      `print(geval("var d7 = 1; delete globalThis.d7; eval('d7 = 4'); globalThis.d7"));`,
-      `print(geval("var d10 = 1; delete globalThis.d10; (function () { return eval('typeof d10'); })()"));`,
-      `print(geval("function fdel() {} delete globalThis.fdel; eval('typeof fdel')"));`,
-    ]);
-    const expected = [
-      "2", "undefined", "undefined", "7", "9", "undefined", "4", "undefined", "undefined",
-    ].join("\n");
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} eval completion probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Test262 Runner ${mode} eval completion or deleted-global lookup was wrong: ${proc.stdout.toString()}`);
-  }
+  const proc = runEvalHostProbe([
+    "var geval = eval;",
+    'print(geval("1; try { 2 } finally { 3 }"));',
+    'print(geval("99; do { -99; try { 39 } finally { break; } } while (false)"));',
+    'print(geval("l: try { 5 } finally { break l; }"));',
+    'print(geval("m: try { 6 } finally { 7; break m; }"));',
+    'print(geval("n: { 8; try { 9; break n; } finally { 10 } }"));',
+    `print(geval("var d5 = 1; delete globalThis.d5; eval('typeof d5')"));`,
+    `print(geval("var d7 = 1; delete globalThis.d7; eval('d7 = 4'); globalThis.d7"));`,
+    `print(geval("var d10 = 1; delete globalThis.d10; (function () { return eval('typeof d10'); })()"));`,
+    `print(geval("function fdel() {} delete globalThis.fdel; eval('typeof fdel')"));`,
+  ]);
+  const expected = [
+    "2", "undefined", "undefined", "7", "9", "undefined", "4", "undefined", "undefined",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner eval completion probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Test262 Runner eval completion or deleted-global lookup was wrong: ${proc.stdout.toString()}`);
 });
 
 // ES2026 §19.2.1.1 PerformEval (sec-performeval) step 13: an indirect eval is
@@ -1594,7 +1650,7 @@ await section("Test262 Runner: an indirect eval's completion value and deleted g
 // directive-free indirect eval there is still non-strict: an assignment to an
 // undeclared name creates a global (§6.2.5.6 PutValue step 2.c), and with the
 // directive it throws ReferenceError (step 2.a). Node.js 24.21 (the same body
-// as an ES module) and the interpreter on main agree.
+// as an ES module) agrees.
 await section("Test262 Runner: a directive-free indirect eval is non-strict in a strict-only engine...", async () => {
   const tmp = makeTmp();
   try {
@@ -1620,23 +1676,20 @@ await section("Test262 Runner: a directive-free indirect eval is non-strict in a
       'if (!strictThrew) throw new Error("strict eval created a global");',
       "",
     ].join("\n"));
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const out = join(tmp, `sloppy-${mode}.json`);
-      const proc = Bun.spawnSync(
-        [
-          TEST262RUNNER,
-          "--suite-dir", suite,
-          "--categories", "language",
-          `--mode=${mode}`,
-          "--jobs=1",
-          "--output", out,
-        ],
-        { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
-      );
-      const report = JSON.parse(readFileSync(out, "utf8"));
-      if (proc.exitCode !== 0 || report.summary.passed !== 1)
-        throw new Error(`${mode}: a directive-free indirect eval should be non-strict, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
-    }
+    const out = join(tmp, "sloppy.json");
+    const proc = Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "language",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    if (proc.exitCode !== 0 || report.summary.passed !== 1)
+      throw new Error(`a directive-free indirect eval should be non-strict, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
   } finally {
     clean(tmp);
   }
@@ -1649,25 +1702,23 @@ await section("Test262 Runner: a directive-free indirect eval is non-strict in a
 // an `arguments` IdentifierReference counts in a destructuring target's default
 // or computed key and as an assignment target. Node.js 24.21 agrees.
 await section("Test262 Runner: eval in a class field initializer rejects arguments in a destructuring target...", async () => {
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = runEvalHostProbe(mode, [
-      "var a, x, o = {};",
-      "function kind(src) {",
-      "  try { class C { f = eval(src); } new C(); return 'none'; }",
-      "  catch (e) { return e.constructor === SyntaxError ? 'SyntaxError' : e.constructor.name; }",
-      "}",
-      'print(kind("arguments"));',
-      'print(kind("[a = arguments] = []"));',
-      'print(kind("({[arguments]: x} = o)"));',
-      'print(kind("arguments = 1"));',
-      'print(kind("[a = 1] = []"));',
-    ]);
-    const expected = ["SyntaxError", "SyntaxError", "SyntaxError", "SyntaxError", "none"].join("\n");
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} field-initializer arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Test262 Runner ${mode} missed an arguments reference in eval code: ${proc.stdout.toString()}`);
-  }
+  const proc = runEvalHostProbe([
+    "var a, x, o = {};",
+    "function kind(src) {",
+    "  try { class C { f = eval(src); } new C(); return 'none'; }",
+    "  catch (e) { return e.constructor === SyntaxError ? 'SyntaxError' : e.constructor.name; }",
+    "}",
+    'print(kind("arguments"));',
+    'print(kind("[a = arguments] = []"));',
+    'print(kind("({[arguments]: x} = o)"));',
+    'print(kind("arguments = 1"));',
+    'print(kind("[a = 1] = []"));',
+  ]);
+  const expected = ["SyntaxError", "SyntaxError", "SyntaxError", "SyntaxError", "none"].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner field-initializer arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Test262 Runner missed an arguments reference in eval code: ${proc.stdout.toString()}`);
 });
 
 // A direct eval at a module's top level resolves `this` from the module:
@@ -1685,19 +1736,17 @@ await section("Test262 Runner: an indirect eval in a module body leaves the modu
       'export const thisType = typeof eval("this");',
       "",
     ].join("\n"));
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      // The probe imports from the temporary directory, so it runs there.
-      const proc = Bun.spawnSync([resolve(TEST262RUNNER), "--eval-host", `--mode=${mode}`], {
-        cwd: tmp,
-        stdin: new TextEncoder().encode('import { thisType } from "./mod.js";\nprint(thisType);\n'),
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      if (proc.exitCode !== 0)
-        throw new Error(`Test262 Runner ${mode} module this probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-      if (normalizeLineEndings(proc.stdout.toString()).trim() !== "undefined")
-        throw new Error(`Test262 Runner ${mode} module this after an indirect eval was: ${proc.stdout.toString()}`);
-    }
+    // The probe imports from the temporary directory, so it runs there.
+    const proc = Bun.spawnSync([resolve(TEST262RUNNER), "--eval-host"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode('import { thisType } from "./mod.js";\nprint(thisType);\n'),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner module this probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "undefined")
+      throw new Error(`Test262 Runner module this after an indirect eval was: ${proc.stdout.toString()}`);
   } finally {
     clean(tmp);
   }
@@ -1710,49 +1759,37 @@ await section("Test262 Runner: an indirect eval in a module body leaves the modu
 // var environment is the realm's global environment (steps 5-8), so a var
 // persists across evaluate calls.
 await section("Test262 Runner: ShadowRealm evaluate maps early errors to SyntaxError and abrupt bodies to TypeError...", async () => {
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = runEvalHostProbe(mode, [
-      "var r = new ShadowRealm();",
-      "function kind(f) {",
-      '  try { f(); return "none"; }',
-      '  catch (e) { return e.constructor === SyntaxError ? "SyntaxError" : e.constructor === TypeError ? "TypeError" : "other"; }',
-      "}",
-      'print(kind(() => r.evaluate("let a; let a;")));',
-      'print(kind(() => r.evaluate("let b; var b;")));',
-      `print(kind(() => r.evaluate("throw new RangeError('x')")));`,
-      'print(kind(() => r.evaluate("null.x")));',
-      `print(kind(() => r.evaluate("eval('let c; let c;')")));`,
-      'print(r.evaluate("var kept = 1; kept"));',
-      'print(r.evaluate("typeof kept"));',
-    ]);
-    const expected = [
-      "SyntaxError", "SyntaxError", "TypeError", "TypeError", "TypeError", "1", "number",
-    ].join("\n");
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} ShadowRealm evaluate error probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Test262 Runner ${mode} ShadowRealm evaluate mapped an error wrongly: ${proc.stdout.toString()}`);
-  }
+  const proc = runEvalHostProbe([
+    "var r = new ShadowRealm();",
+    "function kind(f) {",
+    '  try { f(); return "none"; }',
+    '  catch (e) { return e.constructor === SyntaxError ? "SyntaxError" : e.constructor === TypeError ? "TypeError" : "other"; }',
+    "}",
+    'print(kind(() => r.evaluate("let a; let a;")));',
+    'print(kind(() => r.evaluate("let b; var b;")));',
+    `print(kind(() => r.evaluate("throw new RangeError('x')")));`,
+    'print(kind(() => r.evaluate("null.x")));',
+    `print(kind(() => r.evaluate("eval('let c; let c;')")));`,
+    'print(r.evaluate("var kept = 1; kept"));',
+    'print(r.evaluate("typeof kept"));',
+  ]);
+  const expected = [
+    "SyntaxError", "SyntaxError", "TypeError", "TypeError", "TypeError", "1", "number",
+  ].join("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner ShadowRealm evaluate error probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Test262 Runner ShadowRealm evaluate mapped an error wrongly: ${proc.stdout.toString()}`);
 });
 
 console.log("Test262 Runner: rejected eval source preserves primitive singletons...");
-for (const { label, args } of [
-  {
-    label: "interpreted",
-    args: [TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-function", "--unsafe-function-constructor"],
-  },
-  {
-    label: "bytecode",
-    args: [
-      TEST262RUNNER,
-      "--eval-host",
-      "--compat-function",
-      "--unsafe-function-constructor",
-      "--mode=bytecode",
-    ],
-  },
-]) {
-  const proc = Bun.spawnSync(args, {
+{
+  const proc = Bun.spawnSync([
+    TEST262RUNNER,
+    "--eval-host",
+    "--compat-function",
+    "--unsafe-function-constructor",
+  ], {
     stdin: new TextEncoder().encode([
       "function rejectsSyntaxError(callback) {",
       "  try { callback(); } catch (error) { return error instanceof SyntaxError; }",
@@ -1770,16 +1807,15 @@ for (const { label, args } of [
     stderr: "pipe",
   });
   if (proc.exitCode !== 0)
-    throw new Error(`Bare ${label} rejected eval source probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    throw new Error(`Bare rejected eval source probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== "true\ntrue\ntrue\ntrue")
-    throw new Error(`Bare ${label} rejected eval source probe got: ${proc.stdout.toString()}`);
+    throw new Error(`Bare rejected eval source probe got: ${proc.stdout.toString()}`);
 }
 
 await section("Test262 Runner: bytecode eval keeps sloppy var declarations in the caller environment...", async () => {
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
-    "--mode=bytecode",
     "--compat-var",
     "--compat-function",
     "--compat-non-strict-mode",
@@ -1830,7 +1866,6 @@ await section("Test262 Runner: bytecode eval exposes later sloppy vars to existi
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
-    "--mode=bytecode",
     "--compat-var",
     "--compat-function",
     "--compat-non-strict-mode",
@@ -1865,7 +1900,6 @@ await section("Test262 Runner: bytecode eval var declarations shadow outer upval
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
-    "--mode=bytecode",
     "--compat-var",
     "--compat-function",
     "--compat-non-strict-mode",
@@ -2000,44 +2034,37 @@ await section("Test262 Runner: eval var declarations conflict only with the call
     "strictSourceBesideOwnConst 5,16",
     "strictCallerBesideOwnConst 5,16",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
-  ]) {
-    const proc = Bun.spawnSync([
-      ...mode.args,
-      "--compat-var",
-      "--compat-function",
-      "--compat-non-strict-mode",
-    ], {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} eval var conflict probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Bare ${mode.label} eval var conflict probe got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([
+    TEST262RUNNER,
+    "--eval-host",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare eval var conflict probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare eval var conflict probe got: ${proc.stdout.toString()}`);
 });
 
-// The bytecode direct-eval bridge: each probe runs in both modes against the
-// result Node.js gives, ES2026 §19.2.1.1 PerformEval and §19.2.1.3
+// The bytecode direct-eval bridge: each probe is checked against the result
+// Node.js gives, ES2026 §19.2.1.1 PerformEval and §19.2.1.3
 // EvalDeclarationInstantiation (#872, ADR 0134 Phase 0).
-function expectEvalHostProbe(label: string, lines: string[], expected: string[],
-  modes: readonly ("interpreted" | "bytecode")[] = ["interpreted", "bytecode"]) {
-  for (const mode of modes) {
-    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
-      stdin: new TextEncoder().encode([...lines, ""].join("\n")),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} ${label} probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    const actual = normalizeLineEndings(proc.stdout.toString()).trim();
-    if (actual !== expected.join("\n"))
-      throw new Error(`Test262 Runner ${mode} ${label} probe got:\n${actual}\nexpected:\n${expected.join("\n")}`);
-  }
+function expectEvalHostProbe(label: string, lines: string[], expected: string[]) {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+    stdin: new TextEncoder().encode([...lines, ""].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner ${label} probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  const actual = normalizeLineEndings(proc.stdout.toString()).trim();
+  if (actual !== expected.join("\n"))
+    throw new Error(`Test262 Runner ${label} probe got:\n${actual}\nexpected:\n${expected.join("\n")}`);
 }
 
 await section("Test262 Runner: a second eval reads the vars an earlier eval of the same function declared...", async () => {
@@ -2394,9 +2421,6 @@ await section("Test262 Runner: a strict-site eval in a generator and an async fu
 // cannot name the class's own `#h` (AllPrivateIdentifiersValid,
 // sec-static-semantics-allprivateidentifiersvalid, §15.7.7, via §19.2.1.3
 // steps 4-7): SyntaxError; it can name an outer class's `#o`.
-//
-// The interpreter still differs on both, and #825 drops mode parity as an
-// oracle, so these run in bytecode mode.
 await section("Test262 Runner: a strict-site eval resolves private names as the code at its call does...", async () => {
   expectEvalHostProbe("private names at strict eval sites", [
     "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
@@ -2421,7 +2445,7 @@ await section("Test262 Runner: a strict-site eval resolves private names as the 
     "false/false,false/false,true/true,true/true",
     "6,6,6",
     "SyntaxError ok",
-  ], ["bytecode"]);
+  ]);
 });
 
 // In a derived constructor `this` is uninitialized until super() returns
@@ -2431,8 +2455,7 @@ await section("Test262 Runner: a strict-site eval resolves private names as the 
 // sec-function-environment-records-getthisbinding, §9.1.1.3.3 step 2) and
 // after super() is the new object. An arrow in a method nested in the
 // constructor reads the method's own this binding, which super() does not
-// touch (GetThisEnvironment skips only arrow functions' environments). The
-// interpreter returns the object early, so this runs in bytecode mode.
+// touch (GetThisEnvironment skips only arrow functions' environments).
 await section("Test262 Runner: a strict-site eval in a derived constructor reads this as the constructor does...", async () => {
   expectEvalHostProbe("derived constructor this", [
     "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
@@ -2441,7 +2464,7 @@ await section("Test262 Runner: a strict-site eval in a derived constructor reads
     "print(new Q().r);",
     "class M extends P { constructor() { const o = { m() { return () => eval('this'); } }; const r = o.m()() === o; super(); this.r = r; } }",
     "print(new M().r);",
-  ], ["ReferenceError:true", "true"], ["bytecode"]);
+  ], ["ReferenceError:true", "true"]);
 });
 
 // A strict call site in a function that contains a sloppy direct eval (a
@@ -2630,14 +2653,13 @@ await section("Test262 Runner: sloppy eval declarations reuse, skip or conflict 
   ], [
     "a,undefined 4,5,undefined 1 SyntaxError function 1 function",
     "1,1 2,undefined function number,3 a,undefined 1 undefined",
-  ], ["bytecode"]);
+  ]);
 });
 
 // Block Static Semantics: Early Errors (sec-block-static-semantics-early-errors,
 // §14.2.1): a block may not declare a name twice, except that non-strict code
 // may declare a function twice (B.3.2). Eval code gets its early errors before
-// it runs (PerformEval step 11). The interpreter rejects the non-strict
-// duplicate functions, so this runs in bytecode mode.
+// it runs (PerformEval step 11).
 await section("Test262 Runner: eval code's blocks reject redeclared names...", async () => {
   expectEvalHostProbe("eval block redeclaration", [
     "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
@@ -2646,14 +2668,13 @@ await section("Test262 Runner: eval code's blocks reject redeclared names...", a
     "function constDup() { return out(() => eval('{ const x = 42; function x() {} }')); }",
     "function sloppyDup() { return out(() => eval('{ function f() { return 1; } function f() { return 2; } } f()')); }",
     "print([strictDup(), letDup(), constDup(), sloppyDup()].join());",
-  ], ["SyntaxError,SyntaxError,SyntaxError,2"], ["bytecode"]);
+  ], ["SyntaxError,SyntaxError,SyntaxError,2"]);
 });
 
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
-    "--mode=bytecode",
     "--compat-var",
     "--compat-function",
     "--compat-non-strict-mode",
@@ -2684,7 +2705,6 @@ await section("Test262 Runner: bytecode eval preserves lexical upvalue precedenc
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
-    "--mode=bytecode",
     "--compat-var",
     "--compat-function",
     "--compat-non-strict-mode",
@@ -2732,7 +2752,6 @@ await section("Test262 Runner: bytecode assignment retains its resolved eval env
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
-    "--mode=bytecode",
     "--compat-var",
     "--compat-function",
     "--compat-non-strict-mode",
@@ -2809,25 +2828,21 @@ await section("Test262 Runner: generator parameter eval uses the parameter var e
     "inside,inside,outside",
     "inside,inside,outside",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
-  ]) {
-    const proc = Bun.spawnSync([
-      ...mode.args,
-      "--compat-var",
-      "--compat-function",
-      "--compat-non-strict-mode",
-    ], {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} generator parameter eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Bare ${mode.label} generator parameter eval probe got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([
+    TEST262RUNNER,
+    "--eval-host",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare generator parameter eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare generator parameter eval probe got: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: Annex B eval preserves with-object properties...", async () => {
@@ -2843,25 +2858,21 @@ await section("Test262 Runner: Annex B eval preserves with-object properties..."
     "checkAnnexBEval();",
     "",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
-  ]) {
-    const proc = Bun.spawnSync([
-      ...mode.args,
-      "--compat-var",
-      "--compat-function",
-      "--compat-non-strict-mode",
-    ], {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} Annex B eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "eval-g,with-g")
-      throw new Error(`Bare ${mode.label} Annex B eval probe got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([
+    TEST262RUNNER,
+    "--eval-host",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare Annex B eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "eval-g,with-g")
+    throw new Error(`Bare Annex B eval probe got: ${proc.stdout.toString()}`);
 });
 
 // ES2026 §13.3.6.1: `eval(...)` is a direct eval when the identifier resolves
@@ -2921,24 +2932,21 @@ await section("Test262 Runner: eval found on a with object is a direct eval...",
     "varDeclaration made:false:false",
     "thisValue true:false",
   ].join("\n");
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = Bun.spawnSync([
-      TEST262RUNNER,
-      "--eval-host",
-      `--mode=${mode}`,
-      "--compat-var",
-      "--compat-function",
-      "--compat-non-strict-mode",
-    ], {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} with-object eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Test262 Runner ${mode} with-object eval was not a direct eval: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([
+    TEST262RUNNER,
+    "--eval-host",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner with-object eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Test262 Runner with-object eval was not a direct eval: ${proc.stdout.toString()}`);
 });
 
 // ES2026 §13.3.6.1 step 6.a compares the callee with the realm's %eval%, not
@@ -2976,24 +2984,21 @@ await section("Test262 Runner: direct eval recognises the realm's eval, not the 
     "replacedGlobal replaced",
     "afterDelete local",
   ].join("\n");
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const proc = Bun.spawnSync([
-      TEST262RUNNER,
-      "--eval-host",
-      `--mode=${mode}`,
-      "--compat-var",
-      "--compat-function",
-      "--compat-non-strict-mode",
-    ], {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Test262 Runner ${mode} realm eval identity probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Test262 Runner ${mode} direct eval did not compare with the realm's eval: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([
+    TEST262RUNNER,
+    "--eval-host",
+    "--compat-var",
+    "--compat-function",
+    "--compat-non-strict-mode",
+  ], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Test262 Runner realm eval identity probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Test262 Runner direct eval did not compare with the realm's eval: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: eval in a finally block run by return or break resolves names outside the try block...", async () => {
@@ -3022,20 +3027,15 @@ await section("Test262 Runner: eval in a finally block run by return or break re
     "inner,outer,undefined",
     "inner,outer,undefined",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
-  ]) {
-    const proc = Bun.spawnSync(mode.args, {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} finally eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Bare ${mode.label} finally eval probe got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare finally eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare finally eval probe got: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: eval reports strict delete identifier as SyntaxError...", async () => {
@@ -3048,20 +3048,15 @@ await section("Test262 Runner: eval reports strict delete identifier as SyntaxEr
     "}",
     "",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
-  ]) {
-    const proc = Bun.spawnSync(mode.args, {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} strict delete eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "SyntaxError")
-      throw new Error(`Bare ${mode.label} strict delete eval probe got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare strict delete eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== "SyntaxError")
+    throw new Error(`Bare strict delete eval probe got: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: eval validates destructuring pattern early errors...", async () => {
@@ -3092,20 +3087,15 @@ await section("Test262 Runner: eval validates destructuring pattern early errors
     "SyntaxError",
     "SyntaxError",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
-  ]) {
-    const proc = Bun.spawnSync(mode.args, {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} eval destructuring early-error probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Bare ${mode.label} eval destructuring early errors got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare eval destructuring early-error probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare eval destructuring early errors got: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: eval rejects arguments in class field initializers...", async () => {
@@ -3172,20 +3162,15 @@ await section("Test262 Runner: eval rejects arguments in class field initializer
     "static-arrow:SyntaxError",
     "false",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
-  ]) {
-    const proc = Bun.spawnSync(mode.args, {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} eval class-field arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Bare ${mode.label} eval class-field arguments got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare eval class-field arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare eval class-field arguments got: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: eval rejects arguments in generator method defaults...", async () => {
@@ -3208,20 +3193,15 @@ await section("Test262 Runner: eval rejects arguments in generator method defaul
     "generator:SyntaxError",
     "async-generator:SyntaxError",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-var", "--compat-non-strict-mode"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-var", "--compat-non-strict-mode"] },
-  ]) {
-    const proc = Bun.spawnSync(mode.args, {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} eval generator-method arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Bare ${mode.label} eval generator-method arguments got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-var", "--compat-non-strict-mode"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare eval generator-method arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare eval generator-method arguments got: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: a decorator's replacement method does not let eval use super...", async () => {
@@ -3292,17 +3272,15 @@ await section("Test262 Runner: a decorator's replacement method does not let eva
     "kept getter: base-proto",
     "wrapped method: wrapped base-proto",
   ].join("\n");
-  for (const mode of ["interpreted", "bytecode"]) {
-    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function"], {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode} decorator replacement eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Bare ${mode} decorator replacement eval super got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-function"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare decorator replacement eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare decorator replacement eval super got: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: eval super permissions stop at ordinary function boundary...", async () => {
@@ -3323,20 +3301,15 @@ await section("Test262 Runner: eval super permissions stop at ordinary function 
     "print(new Derived().method());",
     "",
   ].join("\n");
-  for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-function", "--compat-non-strict-mode"] },
-    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function", "--compat-non-strict-mode"] },
-  ]) {
-    const proc = Bun.spawnSync(mode.args, {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode.label} eval ordinary-boundary probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (proc.stdout.toString().trim() !== "SyntaxError")
-      throw new Error(`Bare ${mode.label} eval ordinary-boundary got: ${proc.stdout.toString()}`);
-  }
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-function", "--compat-non-strict-mode"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare eval ordinary-boundary probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.stdout.toString().trim() !== "SyntaxError")
+    throw new Error(`Bare eval ordinary-boundary got: ${proc.stdout.toString()}`);
 });
 
 await section("Test262 Runner: assigning a function to a property does not let eval use super...", async () => {
@@ -3441,17 +3414,15 @@ await section("Test262 Runner: assigning a function to a property does not let e
     { label: "strict large-pool", source: largePoolSource("'use strict';"), expected: largePoolExpected, flags: [] },
     { label: "sloppy large-pool", source: largePoolSource(""), expected: largePoolExpected, flags: ["--compat-non-strict-mode"] },
   ]) {
-    for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`, ...probe.flags], {
-        stdin: new TextEncoder().encode(probe.source),
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      if (proc.exitCode !== 0)
-        throw new Error(`Bare ${mode} ${probe.label} stored-function eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-      if (normalizeLineEndings(proc.stdout.toString()).trim() !== probe.expected)
-        throw new Error(`Bare ${mode} ${probe.label} stored-function eval super got: ${proc.stdout.toString()}`);
-    }
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", ...probe.flags], {
+      stdin: new TextEncoder().encode(probe.source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${probe.label} stored-function eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== probe.expected)
+      throw new Error(`Bare ${probe.label} stored-function eval super got: ${proc.stdout.toString()}`);
   }
 });
 
@@ -3459,8 +3430,7 @@ await section("Test262 Runner: bytecode static field initializers are methods fo
   // ES2026 §15.7.10: a static field initializer is a method whose home object
   // is the class; arrows inside it inherit that, and §19.2.1.1 PerformEval
   // allows super there. Defining the field never makes its value a method, so
-  // a function expression or an arrow from outside the class gets none. The
-  // interpreter's half of this table is #1389, so only bytecode runs here.
+  // a function expression or an arrow from outside the class gets none.
   const source = [
     "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
     "const probe = (label, fn) => {",
@@ -3503,7 +3473,7 @@ await section("Test262 Runner: bytecode static field initializers are methods fo
     "new.target: undefined",
     "eval var does not leak: undefined 1",
   ].join("\n");
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-function"], {
     stdin: new TextEncoder().encode(source),
     stdout: "pipe",
     stderr: "pipe",
@@ -3538,7 +3508,7 @@ await section("Test262 Runner: bytecode static field initializers are methods fo
     "field before the padding: SyntaxError",
     "field after the padding: SyntaxError",
   ].join("\n");
-  const classReceiver = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function"], {
+  const classReceiver = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-function"], {
     stdin: new TextEncoder().encode(classReceiverSource),
     stdout: "pipe",
     stderr: "pipe",
@@ -3565,7 +3535,7 @@ await section("Test262 Runner: bytecode static field initializers are methods fo
     '{"value":"5b","done":true}',
     "await 2",
   ].join("\n");
-  const suspending = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
+  const suspending = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode(suspendingSource),
     stdout: "pipe",
     stderr: "pipe",
@@ -3577,7 +3547,7 @@ await section("Test262 Runner: bytecode static field initializers are methods fo
 });
 
 await section("Test262 Runner: bytecode eval inherits arrow lexical super and new.target...", async () => {
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
     stdin: new TextEncoder().encode([
       "class Base {",
       "  constructor() { this.x = 1; }",
@@ -3612,7 +3582,6 @@ await section("Test262 Runner: bytecode direct eval creates top-level sloppy var
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
-    "--mode=bytecode",
     "--compat-var",
     "--compat-non-strict-mode",
   ], {
@@ -3637,7 +3606,6 @@ await section("Test262 Runner: bytecode module direct eval keeps module this bin
   const proc = Bun.spawnSync([
     TEST262RUNNER,
     "--eval-host",
-    "--mode=bytecode",
     "--source-type=module",
   ], {
     stdin: new TextEncoder().encode([
@@ -3655,31 +3623,17 @@ await section("Test262 Runner: bytecode module direct eval keeps module this bin
     throw new Error(`Bare bytecode module direct eval this got: ${proc.stdout.toString()}`);
 });
 
-await section("Bare Loader: --mode default is bytecode...", async () => {
+await section("Bare Loader: --help omits the removed --mode and Test262 machinery...", async () => {
   const proc = Bun.spawnSync([BARE, "--help"], {
     stdout: "pipe",
     stderr: "pipe",
   });
   if (proc.exitCode !== 0) throw new Error(`Bare --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   const help = proc.stdout.toString();
-  if (!help.includes("--mode=interpreted|bytecode"))
-    throw new Error(`Bare --help should document --mode, got: ${help}`);
-  if (!help.includes("default: bytecode"))
-    throw new Error(`Bare --help should document bytecode as default, got: ${help}`);
+  if (help.includes("--mode"))
+    throw new Error(`Bare --help should not document the removed --mode, got: ${help}`);
   if (help.includes("--test262-host"))
     throw new Error(`Bare --help should not expose Test262 machinery, got: ${help}`);
-});
-
-await section("Bare Loader: --mode invalid value rejected...", async () => {
-  const proc = Bun.spawnSync([BARE, "--mode=foo"], {
-    stdin: new TextEncoder().encode("1;\n"),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode === 0) throw new Error(`Bare --mode=foo should fail, got exit 0`);
-  const stderr = proc.stderr.toString();
-  if (!stderr.includes("Invalid --mode value: foo"))
-    throw new Error(`Bare --mode=foo should report invalid value, got stderr: ${stderr}`);
 });
 
 // -- --print --------------------------------------------------------------------
@@ -3743,128 +3697,102 @@ await section("Bare Loader: --help documents --print...", async () => {
 // Regression: ExecuteProgram freed the bytecode module before the drain, leaving
 // closures with dangling template pointers (Range check error on FCode access).
 
-await section("Bare Loader: Promise.then drain (interpreted)...", async () => {
-  const proc = Bun.spawnSync([BARE, "--mode=interpreted"], {
+await section("Bare Loader: Promise.then drain...", async () => {
+  const proc = Bun.spawnSync([BARE], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => print("then-" + v));\n'),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (proc.exitCode !== 0) throw new Error(`Bare Promise drain interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.exitCode !== 0) throw new Error(`Bare Promise drain exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "then-42")
-    throw new Error(`Bare Promise drain interpreted expected then-42, got: ${proc.stdout.toString()}`);
-});
-
-await section("Bare Loader: Promise.then drain (bytecode)...", async () => {
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode"], {
-    stdin: new TextEncoder().encode('Promise.resolve(42).then(v => print("then-" + v));\n'),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 0) throw new Error(`Bare Promise drain bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (proc.stdout.toString().trim() !== "then-42")
-    throw new Error(`Bare Promise drain bytecode expected then-42, got: ${proc.stdout.toString()}`);
+    throw new Error(`Bare Promise drain expected then-42, got: ${proc.stdout.toString()}`);
 });
 
 // -- Promise.then microtask drain (Loader) --------------------------------------
 
-await section("Loader: Promise.then drain (interpreted)...", async () => {
-  const proc = Bun.spawnSync([RUNNER, "--mode=interpreted"], {
+await section("Loader: Promise.then drain...", async () => {
+  const proc = Bun.spawnSync([RUNNER], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (proc.exitCode !== 0) throw new Error(`Loader Promise drain interpreted exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.exitCode !== 0) throw new Error(`Loader Promise drain exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (!proc.stdout.toString().includes("then-42"))
-    throw new Error(`Loader Promise drain interpreted expected then-42, got: ${proc.stdout.toString()}`);
-});
-
-await section("Loader: Promise.then drain (bytecode)...", async () => {
-  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
-    stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (proc.exitCode !== 0) throw new Error(`Loader Promise drain bytecode exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-  if (!proc.stdout.toString().includes("then-42"))
-    throw new Error(`Loader Promise drain bytecode expected then-42, got: ${proc.stdout.toString()}`);
+    throw new Error(`Loader Promise drain expected then-42, got: ${proc.stdout.toString()}`);
 });
 
 await section("Loader: --audit-log records capability decisions with source locations...", async () => {
   const tmp = makeTmp();
   try {
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const audit = join(tmp, `capabilities-${mode}.jsonl`);
-      const proc = Bun.spawnSync(
-        [
-          RUNNER,
-          `--mode=${mode}`,
-          "--allow-ffi",
-          "--unsafe-shadowrealm",
-          `--audit-log=${audit}`,
-        ],
-        {
-          stdin: new TextEncoder().encode([
-            'try { Function("return 1")(); } catch (e) {}',
-            'const holder = { ctor: Function };',
-            'try { holder.ctor("return 1")(); } catch (e) {}',
-            'try { FFI.open("./missing"); } catch (e) {}',
-            'new ShadowRealm().evaluate("new ShadowRealm(); 1");',
-            "",
-          ].join("\n")),
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
-      if (proc.exitCode !== 0)
-        throw new Error(`Loader audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-      const { effective, events } = readCapabilityEvents(audit);
-      const ffiLayer = JSON.parse(effective[0].subject).layers[0].ffi;
-      if (effective.length !== 1 || ffiLayer.allowAll !== true)
-        throw new Error(`Loader audit ${mode} effective set mismatch: ${JSON.stringify(effective)}`);
-      const expected = [
-        ["function.constructor", "deny", "Function", "<stdin>", 1],
-        ["function.constructor", "deny", "Function", "<stdin>", 3],
-        ["ffi.open", "allow", "./missing", "<stdin>", 4],
-        ["shadow-realm.construct", "allow", "ShadowRealm", "<stdin>", 5],
-        ["shadow-realm.construct", "allow", "ShadowRealm", "<shadow-realm-eval>", 1],
-      ];
-      if (events.length !== expected.length)
-        throw new Error(`Loader audit ${mode} expected ${expected.length} events, got ${JSON.stringify(events)}`);
-      expected.forEach(([kind, decision, subject, file, line], index) => {
-        const event = events[index];
-        if (event.schemaVersion !== 1 ||
-            event.kind !== kind ||
-            event.decision !== decision ||
-            event.subject !== subject ||
-            event.source?.file !== file ||
-            event.source?.line !== line ||
-            typeof event.source?.column !== "number")
-          throw new Error(`Loader audit ${mode} event ${index} mismatch: ${JSON.stringify(event)}`);
-      });
+    const audit = join(tmp, "capabilities.jsonl");
+    const proc = Bun.spawnSync(
+      [
+        RUNNER,
+        "--allow-ffi",
+        "--unsafe-shadowrealm",
+        `--audit-log=${audit}`,
+      ],
+      {
+        stdin: new TextEncoder().encode([
+          'try { Function("return 1")(); } catch (e) {}',
+          'const holder = { ctor: Function };',
+          'try { holder.ctor("return 1")(); } catch (e) {}',
+          'try { FFI.open("./missing"); } catch (e) {}',
+          'new ShadowRealm().evaluate("new ShadowRealm(); 1");',
+          "",
+        ].join("\n")),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Loader audit exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const { effective, events } = readCapabilityEvents(audit);
+    const ffiLayer = JSON.parse(effective[0].subject).layers[0].ffi;
+    if (effective.length !== 1 || ffiLayer.allowAll !== true)
+      throw new Error(`Loader audit effective set mismatch: ${JSON.stringify(effective)}`);
+    const expected = [
+      ["function.constructor", "deny", "Function", "<stdin>", 1],
+      ["function.constructor", "deny", "Function", "<stdin>", 3],
+      ["ffi.open", "allow", "./missing", "<stdin>", 4],
+      ["shadow-realm.construct", "allow", "ShadowRealm", "<stdin>", 5],
+      ["shadow-realm.construct", "allow", "ShadowRealm", "<shadow-realm-eval>", 1],
+    ];
+    if (events.length !== expected.length)
+      throw new Error(`Loader audit expected ${expected.length} events, got ${JSON.stringify(events)}`);
+    expected.forEach(([kind, decision, subject, file, line], index) => {
+      const event = events[index];
+      if (event.schemaVersion !== 1 ||
+          event.kind !== kind ||
+          event.decision !== decision ||
+          event.subject !== subject ||
+          event.source?.file !== file ||
+          event.source?.line !== line ||
+          typeof event.source?.column !== "number")
+        throw new Error(`Loader audit event ${index} mismatch: ${JSON.stringify(event)}`);
+    });
 
-      const allowAudit = join(tmp, `function-allow-${mode}.jsonl`);
-      const allow = Bun.spawnSync(
-        [
-          RUNNER,
-          `--mode=${mode}`,
-          "--unsafe-function-constructor",
-          `--audit-log=${allowAudit}`,
-        ],
-        {
-          stdin: new TextEncoder().encode('Function("return 1")();\n'),
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
-      if (allow.exitCode !== 0)
-        throw new Error(`Loader Function audit ${mode} exited ${allow.exitCode}: ${allow.stderr.toString()}`);
-      const allowEvents = readCapabilityEvents(allowAudit).events;
-      if (allowEvents.length !== 1 ||
-          allowEvents[0].kind !== "function.constructor" ||
-          allowEvents[0].decision !== "allow" ||
-          allowEvents[0].source?.line !== 1)
-        throw new Error(`Loader Function allow audit ${mode} mismatch: ${JSON.stringify(allowEvents)}`);
-    }
+    const allowAudit = join(tmp, "function-allow.jsonl");
+    const allow = Bun.spawnSync(
+      [
+        RUNNER,
+        "--unsafe-function-constructor",
+        `--audit-log=${allowAudit}`,
+      ],
+      {
+        stdin: new TextEncoder().encode('Function("return 1")();\n'),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    if (allow.exitCode !== 0)
+      throw new Error(`Loader Function audit exited ${allow.exitCode}: ${allow.stderr.toString()}`);
+    const allowEvents = readCapabilityEvents(allowAudit).events;
+    if (allowEvents.length !== 1 ||
+        allowEvents[0].kind !== "function.constructor" ||
+        allowEvents[0].decision !== "allow" ||
+        allowEvents[0].source?.line !== 1)
+      throw new Error(`Loader Function allow audit mismatch: ${JSON.stringify(allowEvents)}`);
   } finally {
     clean(tmp);
   }
@@ -3890,42 +3818,39 @@ await section("Loader: a capability decision keeps its call site across a nested
       ].join("\n"),
     );
     mkdirSync(join(tmp, "allowed"));
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const audit = join(tmp, `nested-call-site-${mode}.jsonl`);
-      const proc = Bun.spawnSync(
-        [
-          RUNNER,
-          script,
-          `--mode=${mode}`,
-          `--allow-ffi=${join(tmp, "allowed")}`,
-          `--audit-log=${audit}`,
-        ],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const output = proc.stdout.toString() + proc.stderr.toString();
-      if (proc.exitCode !== 1)
-        throw new Error(`Nested call site ${mode} should exit 1 on the uncaught refusal, got ${proc.exitCode}: ${output}`);
-      const { events } = readCapabilityEvents(audit);
-      if (events.length !== 3 ||
-          events.some((event) => event.kind !== "ffi.open" || event.decision !== "deny"))
-        throw new Error(`Nested call site ${mode} expected three ffi.open refusals, got ${JSON.stringify(events)}`);
-      const [direct, nested, uncaught] = events.map((event) => event.source);
-      if (direct?.line !== 3 || typeof direct?.column !== "number" || direct.column <= 0)
-        throw new Error(`Nested call site ${mode} direct refusal is not located: ${JSON.stringify(direct)}`);
-      // Lines 3 and 4 lay the call out identically; line 5 drops the "try { ".
-      if (nested?.file !== direct.file || nested?.line !== 4 || nested?.column !== direct.column)
-        throw new Error(`Nested call site ${mode} lost the call site across the nested call: ${JSON.stringify(nested)} vs ${JSON.stringify(direct)}`);
-      const uncaughtColumn = direct.column - "try { ".length;
-      if (uncaught?.file !== direct.file || uncaught?.line !== 5 || uncaught?.column !== uncaughtColumn)
-        throw new Error(`Nested call site ${mode} mislocated the uncaught refusal: ${JSON.stringify(uncaught)}`);
-      for (const expected of [
-        "PermissionDenied: ffi: ./outside/library",
-        `nested-call-site.js:5:${uncaughtColumn}`,
-        "5 | FFI.open(coerced);",
-      ]) {
-        if (!output.includes(expected))
-          throw new Error(`Nested call site ${mode} should report "${expected}", got: ${output}`);
-      }
+    const audit = join(tmp, "nested-call-site.jsonl");
+    const proc = Bun.spawnSync(
+      [
+        RUNNER,
+        script,
+        `--allow-ffi=${join(tmp, "allowed")}`,
+        `--audit-log=${audit}`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode !== 1)
+      throw new Error(`Nested call site should exit 1 on the uncaught refusal, got ${proc.exitCode}: ${output}`);
+    const { events } = readCapabilityEvents(audit);
+    if (events.length !== 3 ||
+        events.some((event) => event.kind !== "ffi.open" || event.decision !== "deny"))
+      throw new Error(`Nested call site expected three ffi.open refusals, got ${JSON.stringify(events)}`);
+    const [direct, nested, uncaught] = events.map((event) => event.source);
+    if (direct?.line !== 3 || typeof direct?.column !== "number" || direct.column <= 0)
+      throw new Error(`Nested call site direct refusal is not located: ${JSON.stringify(direct)}`);
+    // Lines 3 and 4 lay the call out identically; line 5 drops the "try { ".
+    if (nested?.file !== direct.file || nested?.line !== 4 || nested?.column !== direct.column)
+      throw new Error(`Nested call site lost the call site across the nested call: ${JSON.stringify(nested)} vs ${JSON.stringify(direct)}`);
+    const uncaughtColumn = direct.column - "try { ".length;
+    if (uncaught?.file !== direct.file || uncaught?.line !== 5 || uncaught?.column !== uncaughtColumn)
+      throw new Error(`Nested call site mislocated the uncaught refusal: ${JSON.stringify(uncaught)}`);
+    for (const expected of [
+      "PermissionDenied: ffi: ./outside/library",
+      `nested-call-site.js:5:${uncaughtColumn}`,
+      "5 | FFI.open(coerced);",
+    ]) {
+      if (!output.includes(expected))
+        throw new Error(`Nested call site should report "${expected}", got: ${output}`);
     }
   } finally {
     clean(tmp);
@@ -4008,17 +3933,14 @@ await section("Loader: --host-environment module controls time, zone, and random
     const expected =
       "1700000000001|1700000000002000000|Europe/London|Europe/London|0.25|0.75|1700000000000|1.5";
 
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const result = runLoaderJson(source, [
-        `--host-environment=${providerPath}`,
-        "--unsafe-shadowrealm",
-        `--mode=${mode}`,
-      ]);
-      if (result.exitCode !== 0 || result.json.files?.[0]?.result !== expected)
-        throw new Error(
-          `Loader host environment ${mode} expected ${expected}, got ${result.json.files?.[0]?.result}${result.stderr}`,
-        );
-    }
+    const result = runLoaderJson(source, [
+      `--host-environment=${providerPath}`,
+      "--unsafe-shadowrealm",
+    ]);
+    if (result.exitCode !== 0 || result.json.files?.[0]?.result !== expected)
+      throw new Error(
+        `Loader host environment expected ${expected}, got ${result.json.files?.[0]?.result}${result.stderr}`,
+      );
 
     const conflict = runLoaderJson("0;\n", [
       `--host-environment=${providerPath}`,
@@ -4058,26 +3980,23 @@ await section("Loader: --host-environment errors withhold provider source...", a
       ["Map.prototype.get = null;", "Math.random();", ""].join("\n"),
     );
 
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const proc = Bun.spawnSync(
-        [
-          RUNNER,
-          guestPath,
-          `--host-environment=${providerPath}`,
-          `--mode=${mode}`,
-        ],
-        { stdout: "pipe", stderr: "pipe" },
+    const proc = Bun.spawnSync(
+      [
+        RUNNER,
+        guestPath,
+        `--host-environment=${providerPath}`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0 || !output.includes("host-environment-secret.js:4:"))
+      throw new Error(
+        `Loader host environment should locate the provider throw, got: ${output}`,
       );
-      const output = proc.stdout.toString() + proc.stderr.toString();
-      if (proc.exitCode === 0 || !output.includes("host-environment-secret.js:4:"))
-        throw new Error(
-          `Loader host environment ${mode} should locate the provider throw, got: ${output}`,
-        );
-      if (output.includes(marker))
-        throw new Error(
-          `SECURITY: Loader host environment ${mode} disclosed provider source: ${output}`,
-        );
-    }
+    if (output.includes(marker))
+      throw new Error(
+        `SECURITY: Loader host environment disclosed provider source: ${output}`,
+      );
   } finally {
     clean(tmp);
   }
@@ -4146,30 +4065,27 @@ await section("Loader: relative aliases use the invocation or config directory..
     );
     writeFileSync(join(project, "src", "value.js"), 'export const value = "project-root";\n');
 
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const cliProc = Bun.spawnSync(
-        [
-          loader,
-          "api-tests/alias.test.js",
-          "--source-type=module",
-          `--mode=${mode}`,
-          "--unsafe-shadowrealm",
-          "--alias",
-          "@/=./src/",
-          // The child realm's importValue is a computed specifier, so it needs
-          // a read grant even inside the project; CLI scopes resolve from cwd.
-          "--allow-read=./src",
-        ],
-        { cwd: project, stdout: "pipe", stderr: "pipe" },
+    const cliProc = Bun.spawnSync(
+      [
+        loader,
+        "api-tests/alias.test.js",
+        "--source-type=module",
+        "--unsafe-shadowrealm",
+        "--alias",
+        "@/=./src/",
+        // The child realm's importValue is a computed specifier, so it needs
+        // a read grant even inside the project; CLI scopes resolve from cwd.
+        "--allow-read=./src",
+      ],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    if (cliProc.exitCode !== 0 ||
+        !containsLine(cliProc.stdout.toString(), "project-root") ||
+        !containsLine(cliProc.stdout.toString(), "child-project-root"))
+      throw new Error(
+        `Loader relative CLI alias should resolve from the invocation directory: ` +
+        `${cliProc.stdout}${cliProc.stderr}`,
       );
-      if (cliProc.exitCode !== 0 ||
-          !containsLine(cliProc.stdout.toString(), "project-root") ||
-          !containsLine(cliProc.stdout.toString(), "child-project-root"))
-        throw new Error(
-          `Loader ${mode} relative CLI alias should resolve from the invocation directory: ` +
-          `${cliProc.stdout}${cliProc.stderr}`,
-        );
-    }
 
     const baseConfigDirectory = join(tmp, "base-config");
     mkdirSync(baseConfigDirectory, { recursive: true });
@@ -4187,19 +4103,17 @@ await section("Loader: relative aliases use the invocation or config directory..
         permissions: { "allow-read": ["./src"] },
       }),
     );
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const configProc = Bun.spawnSync(
-        [loader, "-P", "project/api-tests/alias.test.js", `--mode=${mode}`],
-        { cwd: tmp, stdout: "pipe", stderr: "pipe" },
+    const configProc = Bun.spawnSync(
+      [loader, "-P", "project/api-tests/alias.test.js"],
+      { cwd: tmp, stdout: "pipe", stderr: "pipe" },
+    );
+    if (configProc.exitCode !== 0 ||
+        !containsLine(configProc.stdout.toString(), "project-root") ||
+        !containsLine(configProc.stdout.toString(), "child-project-root"))
+      throw new Error(
+        `Loader inherited relative config alias should resolve from ` +
+        `the active config directory: ${configProc.stdout}${configProc.stderr}`,
       );
-      if (configProc.exitCode !== 0 ||
-          !containsLine(configProc.stdout.toString(), "project-root") ||
-          !containsLine(configProc.stdout.toString(), "child-project-root"))
-        throw new Error(
-          `Loader ${mode} inherited relative config alias should resolve from ` +
-          `the active config directory: ${configProc.stdout}${configProc.stderr}`,
-        );
-    }
   } finally {
     clean(tmp);
   }
@@ -4210,7 +4124,7 @@ await section("Loader: --globals file...", async () => {
   try {
     const globalsPath = join(tmp, "globals.json");
     writeFileSync(globalsPath, JSON.stringify({ name: "goccia" }));
-    const { json } = runLoaderJson("name;\n", [`--globals=${globalsPath}`, "--mode=bytecode"]);
+    const { json } = runLoaderJson("name;\n", [`--globals=${globalsPath}`]);
     if (json.files?.[0]?.result !== "goccia") throw new Error(`--globals should set name to "goccia", got ${json.files?.[0]?.result}`);
   } finally {
     clean(tmp);
@@ -4305,16 +4219,14 @@ await section("Loader: --allow-import=node_modules resolves exports, wildcards, 
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const proc = Bun.spawnSync(
-        [resolve(RUNNER), "app.js", "--source-type=module", `--mode=${mode}`, "--allow-import=node_modules"],
-        { cwd: project, stdout: "pipe", stderr: "pipe" },
+    const proc = Bun.spawnSync(
+      [resolve(RUNNER), "app.js", "--source-type=module", "--allow-import=node_modules"],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
+      throw new Error(
+        `--allow-import=node_modules should resolve the run: ${proc.stdout}${proc.stderr}`,
       );
-      if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
-        throw new Error(
-          `--allow-import=node_modules should resolve the ${mode} run: ${proc.stdout}${proc.stderr}`,
-        );
-    }
 
     // The config-file spelling has to reach the resolver too, since a project
     // that needs the capability wants it recorded, not retyped.
@@ -4592,7 +4504,7 @@ await section("Loader: --globals TOML file...", async () => {
       "count = 3",
       "",
     ].join("\n"));
-    const { exitCode, json, stderr } = runLoaderJson(`name + ':' + globalThis["${quotedKey}"] + ':' + count;\n`, [`--globals=${globalsPath}`, "--mode=bytecode"]);
+    const { exitCode, json, stderr } = runLoaderJson(`name + ':' + globalThis["${quotedKey}"] + ':' + count;\n`, [`--globals=${globalsPath}`]);
     if (exitCode !== 0) throw new Error(`--globals TOML exited ${exitCode}: ${stderr}`);
     if (json.files?.[0]?.result !== "Jos\u00e9:vu:3")
       throw new Error(`--globals TOML should inject UTF-8 parsed values, got ${json.files?.[0]?.result}`);
@@ -4628,9 +4540,9 @@ await section("Loader: --globals from JS module...", async () => {
 await section("Loader: jobs a --globals JS module leaves pending run with the script...", async () => {
   const tmp = makeTmp();
   try {
-    // The module is evaluated before the entry script starts. The interpreter
-    // leaves its jobs queued for the script's own drain, so the script must
-    // still run them rather than start on an empty queue.
+    // The module is evaluated before the entry script starts. The script must
+    // still run the jobs it leaves pending rather than start on an empty
+    // queue.
     const moduleJsPath = join(tmp, "module.js");
     writeFileSync(
       moduleJsPath,
@@ -4643,12 +4555,10 @@ await section("Loader: jobs a --globals JS module leaves pending run with the sc
       'console.log("seen:" + seen);',
       "",
     ].join("\n");
-    for (const mode of ["interpreted", "bytecode"]) {
-      const { json } = runLoaderJson(source, [`--globals=${moduleJsPath}`, "--source-type=module", `--mode=${mode}`]);
-      const stdout = normalizeLineEndings(String(json.files?.[0]?.stdout ?? "")).trim();
-      if (stdout !== "seen:settled")
-        throw new Error(`--globals JS module (${mode}) should settle its exported promise for the script, got: ${stdout} ${JSON.stringify(json.files?.[0]?.error)}`);
-    }
+    const { json } = runLoaderJson(source, [`--globals=${moduleJsPath}`, "--source-type=module"]);
+    const stdout = normalizeLineEndings(String(json.files?.[0]?.stdout ?? "")).trim();
+    if (stdout !== "seen:settled")
+      throw new Error(`--globals JS module should settle its exported promise for the script, got: ${stdout} ${JSON.stringify(json.files?.[0]?.error)}`);
   } finally {
     clean(tmp);
   }
@@ -4698,8 +4608,8 @@ await section("Loader: an unhandled promise rejection fails the run...", async (
         error: null,
       },
       // A module without top-level await has no evaluation promise to fail
-      // on, so the promise its last statement leaves is like any other: the
-      // interpreter used to fail the run with it, handled or not (#1612).
+      // on, so the promise its last statement leaves is like any other: a
+      // run used to fail with it, handled or not (#1612).
       {
         name: "handled rejection left by a module's last statement",
         source: 'const rejected = Promise.reject(new Error("handled last"));\nrejected.catch(() => console.log("handled"));\nrejected;\n',
@@ -4720,24 +4630,20 @@ await section("Loader: an unhandled promise rejection fails the run...", async (
     for (const testCase of cases) {
       const file = join(tmp, testCase.module ? "script.mjs" : "script.js");
       writeFileSync(file, testCase.source);
-      for (const mode of ["interpreted", "bytecode"]) {
-        const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], { stdout: "pipe", stderr: "pipe" });
-        const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
-        const label = `Unhandled rejection (${testCase.name}, ${mode})`;
-        if (proc.exitCode !== testCase.exitCode)
-          throw new Error(`${label} should exit ${testCase.exitCode}, got ${proc.exitCode}: ${output}`);
-        if (!output.includes(testCase.stdout))
-          throw new Error(`${label} should print ${JSON.stringify(testCase.stdout)}, got: ${output}`);
-        if (testCase.error === null ? /Error:/.test(output) : !output.includes(testCase.error))
-          throw new Error(`${label} should ${testCase.error === null ? "report nothing" : `report ${testCase.error}`}, got: ${output}`);
-      }
+      const proc = Bun.spawnSync([RUNNER, file], { stdout: "pipe", stderr: "pipe" });
+      const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+      const label = `Unhandled rejection (${testCase.name})`;
+      if (proc.exitCode !== testCase.exitCode)
+        throw new Error(`${label} should exit ${testCase.exitCode}, got ${proc.exitCode}: ${output}`);
+      if (!output.includes(testCase.stdout))
+        throw new Error(`${label} should print ${JSON.stringify(testCase.stdout)}, got: ${output}`);
+      if (testCase.error === null ? /Error:/.test(output) : !output.includes(testCase.error))
+        throw new Error(`${label} should ${testCase.error === null ? "report nothing" : `report ${testCase.error}`}, got: ${output}`);
     }
 
-    for (const mode of ["interpreted", "bytecode"]) {
-      const { json } = runLoaderJson('Promise.reject(new RangeError("in json"));\n', [`--mode=${mode}`]);
-      if (json.ok !== false || json.error?.type !== "RangeError" || json.error?.message !== "in json")
-        throw new Error(`Unhandled rejection (${mode}) should be the JSON envelope's error, got: ${JSON.stringify({ ok: json.ok, error: json.error })}`);
-    }
+    const { json } = runLoaderJson('Promise.reject(new RangeError("in json"));\n');
+    if (json.ok !== false || json.error?.type !== "RangeError" || json.error?.message !== "in json")
+      throw new Error(`Unhandled rejection should be the JSON envelope's error, got: ${JSON.stringify({ ok: json.ok, error: json.error })}`);
 
     // import() settles from the module's evaluation: a module whose top-level
     // await rejects is the importer's to catch, and one still awaiting holds
@@ -4754,12 +4660,10 @@ await section("Loader: an unhandled promise rejection fails the run...", async (
         "",
       ].join("\n"),
     );
-    for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync([RUNNER, importer, "--source-type=module", `--mode=${mode}`], { stdout: "pipe", stderr: "pipe" });
-      const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
-      if (proc.exitCode !== 0 || !output.includes("caught top-level await rejects\nagain top-level await rejects\nready\n"))
-        throw new Error(`Dynamic import (${mode}) should settle from the module's evaluation, got exit ${proc.exitCode}: ${output}`);
-    }
+    const importProc = Bun.spawnSync([RUNNER, importer, "--source-type=module"], { stdout: "pipe", stderr: "pipe" });
+    const importOutput = normalizeLineEndings(importProc.stdout.toString() + importProc.stderr.toString());
+    if (importProc.exitCode !== 0 || !importOutput.includes("caught top-level await rejects\nagain top-level await rejects\nready\n"))
+      throw new Error(`Dynamic import should settle from the module's evaluation, got exit ${importProc.exitCode}: ${importOutput}`);
 
     // A file that fails takes what it left rejected with it: the next file on
     // the same thread is not blamed for it.
@@ -4767,12 +4671,10 @@ await section("Loader: an unhandled promise rejection fails the run...", async (
     mkdirSync(files);
     writeFileSync(join(files, "a.js"), 'Promise.reject(new Error("left by a")); throw new Error("a throws");\n');
     writeFileSync(join(files, "b.js"), 'console.log("b is clean");\n');
-    for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync([RUNNER, files, "--jobs=1", `--mode=${mode}`], { stdout: "pipe", stderr: "pipe" });
-      const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
-      if (!output.includes("Error: a throws") || !output.includes("b is clean") || output.includes("Error: left by a"))
-        throw new Error(`A failed file's rejection (${mode}) should not reach the next file, got: ${output}`);
-    }
+    const filesProc = Bun.spawnSync([RUNNER, files, "--jobs=1"], { stdout: "pipe", stderr: "pipe" });
+    const filesOutput = normalizeLineEndings(filesProc.stdout.toString() + filesProc.stderr.toString());
+    if (!filesOutput.includes("Error: a throws") || !filesOutput.includes("b is clean") || filesOutput.includes("Error: left by a"))
+      throw new Error(`A failed file's rejection should not reach the next file, got: ${filesOutput}`);
   } finally {
     clean(tmp);
   }
@@ -4964,7 +4866,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
     }
 
-    console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
+    console.log("Loader: function coverage...");
     const functionSourcePath = join(tmp, "function-coverage.js");
     writeFileSync(
       functionSourcePath,
@@ -4975,24 +4877,21 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         "",
       ].join("\n"),
     );
-    for (const modeArgs of [[], ["--mode=bytecode"]]) {
-      const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
-      const functionLcovPath = join(tmp, `function-${modeName}.lcov`);
-      await $`${RUNNER} ${modeArgs} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
-      const functionLcov = readFileSync(functionLcovPath, "utf-8");
-      if (!functionLcov.includes("FN:1,called")) throw new Error(`${modeName} LCOV should define called`);
-      if (!functionLcov.includes("FN:2,neverCalled")) throw new Error(`${modeName} LCOV should define neverCalled`);
-      if (!functionLcov.includes("FNDA:1,called")) throw new Error(`${modeName} LCOV should count called once`);
-      if (!functionLcov.includes("FNDA:0,neverCalled")) throw new Error(`${modeName} LCOV should retain the uncalled function`);
-      if (!functionLcov.includes("FNF:") || !functionLcov.includes("FNH:")) {
-        throw new Error(`${modeName} LCOV should report function totals`);
-      }
-      const functionNames = [...functionLcov.matchAll(/^FNDA:\d+,(.*)$/gm)]
-        .map((match) => match[1])
-        .sort();
-      if (functionNames.join(",") !== "called,neverCalled") {
-        throw new Error(`${modeName} LCOV should contain only user functions, got ${functionNames.join(", ")}`);
-      }
+    const functionLcovPath = join(tmp, "function.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
+    const functionLcov = readFileSync(functionLcovPath, "utf-8");
+    if (!functionLcov.includes("FN:1,called")) throw new Error("LCOV should define called");
+    if (!functionLcov.includes("FN:2,neverCalled")) throw new Error("LCOV should define neverCalled");
+    if (!functionLcov.includes("FNDA:1,called")) throw new Error("LCOV should count called once");
+    if (!functionLcov.includes("FNDA:0,neverCalled")) throw new Error("LCOV should retain the uncalled function");
+    if (!functionLcov.includes("FNF:") || !functionLcov.includes("FNH:")) {
+      throw new Error("LCOV should report function totals");
+    }
+    const functionNames = [...functionLcov.matchAll(/^FNDA:\d+,(.*)$/gm)]
+      .map((match) => match[1])
+      .sort();
+    if (functionNames.join(",") !== "called,neverCalled") {
+      throw new Error(`LCOV should contain only user functions, got ${functionNames.join(", ")}`);
     }
     const functionJsonPath = join(tmp, "function-coverage.json");
     await $`${RUNNER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
@@ -5008,7 +4907,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error("JSON f should retain neverCalled with zero hits");
     }
 
-    console.log("Loader: generator function coverage (--mode is a no-op under --coverage)...");
+    console.log("Loader: generator function coverage...");
     const generatorSourcePath = join(tmp, "generator-function-coverage.js");
     writeFileSync(
       generatorSourcePath,
@@ -5043,28 +4942,25 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         "",
       ].join("\n"),
     );
-    for (const modeArgs of [[], ["--mode=bytecode"]]) {
-      const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
-      const generatorLcovPath = join(tmp, `generator-function-${modeName}.lcov`);
-      await $`${RUNNER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
-      const generatorLcov = readFileSync(generatorLcovPath, "utf-8");
-      for (const name of [
-        "generatorFunction",
-        "generatorWithDefault",
-        "nestedGenerator",
-        "innerDeclaration",
-        "innerArrow",
-        "asyncGeneratorFunction",
-        "generatorMethod",
-        "asyncGeneratorMethod",
-      ]) {
-        if (!generatorLcov.includes(`FNDA:1,${name}`)) {
-          throw new Error(`${modeName} LCOV should count ${name} once`);
-        }
+    const generatorLcovPath = join(tmp, "generator-function.lcov");
+    await $`${RUNNER} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
+    const generatorLcov = readFileSync(generatorLcovPath, "utf-8");
+    for (const name of [
+      "generatorFunction",
+      "generatorWithDefault",
+      "nestedGenerator",
+      "innerDeclaration",
+      "innerArrow",
+      "asyncGeneratorFunction",
+      "generatorMethod",
+      "asyncGeneratorMethod",
+    ]) {
+      if (!generatorLcov.includes(`FNDA:1,${name}`)) {
+        throw new Error(`LCOV should count ${name} once`);
       }
     }
 
-    console.log("Loader: uncalled declarations keep names (interpreted + bytecode)...");
+    console.log("Loader: uncalled declarations keep names...");
     const declarationSourcePath = join(tmp, "function-declaration-coverage.js");
     writeFileSync(
       declarationSourcePath,
@@ -5074,22 +4970,19 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         "",
       ].join("\n"),
     );
-    for (const modeArgs of [[], ["--mode=bytecode"]]) {
-      const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
-      const declarationLcovPath = join(tmp, `function-declaration-${modeName}.lcov`);
-      await $`${RUNNER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
-      const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
-      for (const name of ["ordinaryNeverCalled", "generatorNeverCalled"]) {
-        if (!declarationLcov.includes(`FNDA:0,${name}`)) {
-          throw new Error(`${modeName} LCOV should retain the name of ${name}`);
-        }
+    const declarationLcovPath = join(tmp, "function-declaration.lcov");
+    await $`${RUNNER} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
+    const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
+    for (const name of ["ordinaryNeverCalled", "generatorNeverCalled"]) {
+      if (!declarationLcov.includes(`FNDA:0,${name}`)) {
+        throw new Error(`LCOV should retain the name of ${name}`);
       }
     }
 
     console.log("Loader: LCOV counts a static field's function value, not its initializer...");
-    // A static field initializer runs as a function of its own in bytecode
-    // mode, at the same position as an arrow or function it returns. Only
-    // the functions written in the source are counted.
+    // A static field initializer runs as a function of its own, at the same
+    // position as an arrow or function it returns. Only the functions written
+    // in the source are counted.
     const staticFieldSourcePath = join(tmp, "static-field-functions.js");
     writeFileSync(
       staticFieldSourcePath,
@@ -5116,10 +5009,10 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     const escapedFunctionNameSourcePath = join(tmp, "escaped-function-name.js");
     writeFileSync(
       escapedFunctionNameSourcePath,
-      // Static string-literal keys, not computed ones: coverage always runs in
-      // bytecode mode, where a computed method key is not known at compile time
-      // and the function is named "<method>@<line>:<column>". Literal keys carry
-      // the real CR/LF and backslash characters this escaping check needs.
+      // Static string-literal keys, not computed ones: a computed method key
+      // is not known at compile time and the function is named
+      // "<method>@<line>:<column>". Literal keys carry the real CR/LF and
+      // backslash characters this escaping check needs.
       [
         "const holder = {",
         '  "line\\r\\nbreak"() { return 1; },',
@@ -5165,13 +5058,13 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     if (!existsSync(orderPath)) throw new Error("Order-independent LCOV should exist");
     if (!readFileSync(orderPath, "utf-8").includes("SF:")) throw new Error("Order-independent LCOV should contain SF:");
 
-    console.log("Loader: coverage bytecode...");
-    const bcLcovPath = join(tmp, "bc-coverage.lcov");
-    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --mode=bytecode --coverage-format=lcov --coverage-output=${bcLcovPath}`.quiet();
-    if (!existsSync(bcLcovPath)) throw new Error("Bytecode LCOV should exist");
-    if (!readFileSync(bcLcovPath, "utf-8").includes("DA:")) throw new Error("Bytecode LCOV should contain DA:");
+    console.log("Loader: coverage line records...");
+    const lineLcovPath = join(tmp, "line-coverage.lcov");
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage-format=lcov --coverage-output=${lineLcovPath}`.quiet();
+    if (!existsSync(lineLcovPath)) throw new Error("Line LCOV should exist");
+    if (!readFileSync(lineLcovPath, "utf-8").includes("DA:")) throw new Error("Line LCOV should contain DA:");
 
-    console.log("Loader: coverage implies bytecode and reports imported modules...");
+    console.log("Loader: coverage reports imported modules...");
     const implyDir = join(tmp, "coverage-imply");
     mkdirSync(implyDir, { recursive: true });
     const implyHelperPath = join(implyDir, "helper.js");
@@ -5200,39 +5093,27 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         "",
       ].join("\n"),
     );
-    const implyReports: Record<string, Record<string, any>> = {};
-    for (const [label, modeArgs] of [
-      ["default", []],
-      ["interpreted", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as [string, string[]][]) {
-      const implyJsonPath = join(implyDir, `coverage-${label}.json`);
-      await $`${RUNNER} ${modeArgs} --coverage --coverage-format=json --coverage-output=${implyJsonPath} ${implyEntryPath}`.quiet();
+    {
+      const implyJsonPath = join(implyDir, "coverage.json");
+      await $`${RUNNER} --coverage --coverage-format=json --coverage-output=${implyJsonPath} ${implyEntryPath}`.quiet();
       const report = readCoverageByBasename(implyJsonPath);
-      implyReports[label] = report;
       const helper = report["helper.js"];
       if (!helper) {
-        throw new Error(`Coverage (${label}) should report the imported module helper.js`);
+        throw new Error("Coverage should report the imported module helper.js");
       }
       const helperFunctionNames = Object.values(helper.fnMap)
         .map((fn: any) => fn.name)
         .sort();
       if (!helperFunctionNames.includes("classify") || !helperFunctionNames.includes("unused")) {
         throw new Error(
-          `Coverage (${label}) should report imported-module functions, got ${helperFunctionNames.join(", ")}`,
+          `Coverage should report imported-module functions, got ${helperFunctionNames.join(", ")}`,
         );
       }
       if (Object.keys(helper.branchMap).length === 0) {
-        throw new Error(`Coverage (${label}) should report imported-module branches`);
+        throw new Error("Coverage should report imported-module branches");
       }
       if (!report["entry.js"]) {
-        throw new Error(`Coverage (${label}) should still report the entry file`);
-      }
-    }
-    // --coverage forces bytecode, so --mode is irrelevant to the report.
-    for (const label of ["default", "interpreted"]) {
-      if (JSON.stringify(implyReports[label]) !== JSON.stringify(implyReports.bytecode)) {
-        throw new Error(`Coverage with --mode=${label} should match the --mode=bytecode report`);
+        throw new Error("Coverage should still report the entry file");
       }
     }
 
@@ -5530,38 +5411,34 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     const parallelSecond = join(tmp, "parallel-coverage-b.js");
     writeFileSync(parallelFirst, 'test("a", () => { expect(1).toBe(1); });\n');
     writeFileSync(parallelSecond, 'test("b", () => { expect(2).toBe(2); });\n');
-    for (const mode of ["interpreted", "bytecode"]) {
-      const parallelJsonPath = join(tmp, `parallel-${mode}.json`);
-      const modeArgs = [`--mode=${mode}`];
-      const proc = Bun.spawnSync(
-        [
-          resolve(TESTRUNNER),
-          parallelFirst,
-          parallelSecond,
-          "--no-progress",
-          "--no-results",
-          "--jobs=2",
-          "--coverage",
-          "--coverage-format=json",
-          `--coverage-output=${parallelJsonPath}`,
-          ...modeArgs,
-        ],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      if (proc.exitCode !== 0)
-        throw new Error(`Parallel ${mode} coverage exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-      const parallelCoverage = JSON.parse(readFileSync(parallelJsonPath, "utf-8"));
-      if (Object.hasOwn(parallelCoverage, "<thread-init>"))
-        throw new Error(`Parallel ${mode} coverage should exclude internal <thread-init> source`);
-      // Raw keys above (the internal-source check needs the literal
-      // "<thread-init>"); user sources by basename, since a report key is
-      // canonical and a native path is not.
-      const parallelByBasename = readCoverageByBasename(parallelJsonPath);
-      for (const file of [parallelFirst, parallelSecond]) {
-        const basename = file.split(/[\\/]/).pop() as string;
-        if (!Object.hasOwn(parallelByBasename, basename))
-          throw new Error(`Parallel ${mode} coverage should retain user source ${file}`);
-      }
+    const parallelJsonPath = join(tmp, "parallel.json");
+    const proc = Bun.spawnSync(
+      [
+        resolve(TESTRUNNER),
+        parallelFirst,
+        parallelSecond,
+        "--no-progress",
+        "--no-results",
+        "--jobs=2",
+        "--coverage",
+        "--coverage-format=json",
+        `--coverage-output=${parallelJsonPath}`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Parallel coverage exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const parallelCoverage = JSON.parse(readFileSync(parallelJsonPath, "utf-8"));
+    if (Object.hasOwn(parallelCoverage, "<thread-init>"))
+      throw new Error("Parallel coverage should exclude internal <thread-init> source");
+    // Raw keys above (the internal-source check needs the literal
+    // "<thread-init>"); user sources by basename, since a report key is
+    // canonical and a native path is not.
+    const parallelByBasename = readCoverageByBasename(parallelJsonPath);
+    for (const file of [parallelFirst, parallelSecond]) {
+      const basename = file.split(/[\\/]/).pop() as string;
+      if (!Object.hasOwn(parallelByBasename, basename))
+        throw new Error(`Parallel coverage should retain user source ${file}`);
     }
 
     console.log("Loader: JSX coverage source-map translation...");
@@ -5598,7 +5475,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
 // GocciaTestRunner
 // ============================================================================
 
-await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + bytecode)...", async () => {
+await section("TestRunner: Vitest-compatible snapshot lifecycle...", async () => {
   const tmp = makeTmp();
   const localEnv = { ...process.env };
   // Keep this list aligned with GocciaTestRunner.IsContinuousIntegration.
@@ -5733,7 +5610,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
     ].join("\n");
     writeFileSync(external, externalSource);
 
-    let proc = run([external, "--mode=interpreted"]);
+    let proc = run([external]);
     if (proc.exitCode !== 0)
       throw new Error(`Snapshot creation failed: ${proc.stdout}${proc.stderr}`);
     const expectedSnapshot = [
@@ -5807,18 +5684,18 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
     if (readFileSync(snapshot, "utf-8") !== expectedSnapshot)
       throw new Error(`External snapshot formatting mismatch:\n${readFileSync(snapshot, "utf-8")}`);
 
-    proc = run([external, "--mode=bytecode"]);
+    proc = run([external]);
     if (proc.exitCode !== 0)
-      throw new Error(`Bytecode snapshot comparison failed: ${proc.stdout}${proc.stderr}`);
+      throw new Error(`Snapshot comparison failed: ${proc.stdout}${proc.stderr}`);
 
     writeFileSync(external, externalSource.replace('z: 1', 'z: 2'));
-    proc = run([external, "--mode=interpreted"]);
+    proc = run([external]);
     if (proc.exitCode === 0)
       throw new Error("Snapshot mismatch should fail without update mode");
     if (!readFileSync(snapshot, "utf-8").includes('"z": 1'))
       throw new Error("Snapshot mismatch should not write without update mode");
 
-    proc = run([external, "--mode=bytecode", "--update"]);
+    proc = run([external, "--update"]);
     if (proc.exitCode !== 0 || !readFileSync(snapshot, "utf-8").includes('"z": 2'))
       throw new Error(`Snapshot --update alias failed: ${proc.stdout}${proc.stderr}`);
 
@@ -5826,7 +5703,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       .replace('z: 1', 'z: 2')
       .split('  test("custom serializer"')[0] + '});\n';
     writeFileSync(external, withoutSerializer);
-    proc = run([external, "--mode=interpreted"]);
+    proc = run([external]);
     if (proc.exitCode !== 0 || !readFileSync(snapshot, "utf-8").includes('custom serializer'))
       throw new Error("Local obsolete snapshots should be retained without failing");
     proc = run([external], ciEnv);
@@ -5934,26 +5811,24 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
     ].join("\n");
     if (readFileSync(inline, "utf-8") !== expectedInline)
       throw new Error(`Inline snapshot formatting mismatch:\n${readFileSync(inline, "utf-8")}`);
-    proc = run([inline, "--mode=bytecode"]);
+    proc = run([inline]);
     if (proc.exitCode !== 0)
-      throw new Error(`Bytecode inline comparison failed: ${proc.stdout}${proc.stderr}`);
+      throw new Error(`Inline snapshot comparison failed: ${proc.stdout}${proc.stderr}`);
 
     const unicodeInline = join(tmp, "inline-unicode.test.js");
-    for (const mode of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      writeFileSync(unicodeInline,
-        'test("first", () => expect(true).toBe(true));\u2028' +
-        'test("unicode", () => expect("value").toMatchInlineSnapshot\u00a0());');
-      proc = run([unicodeInline, ...mode]);
-      if (proc.exitCode !== 0 ||
-          !readFileSync(unicodeInline, "utf-8").includes(
-            'toMatchInlineSnapshot\u00a0(`"value"`)'))
-        throw new Error(`Unicode inline snapshot update failed: ${proc.stdout}${proc.stderr}`);
-    }
+    writeFileSync(unicodeInline,
+      'test("first", () => expect(true).toBe(true));\u2028' +
+      'test("unicode", () => expect("value").toMatchInlineSnapshot\u00a0());');
+    proc = run([unicodeInline]);
+    if (proc.exitCode !== 0 ||
+        !readFileSync(unicodeInline, "utf-8").includes(
+          'toMatchInlineSnapshot\u00a0(`"value"`)'))
+      throw new Error(`Unicode inline snapshot update failed: ${proc.stdout}${proc.stderr}`);
 
     writeFileSync(inline, expectedInline.replace('`"hello"`', '`"wrong"`'));
-    proc = run([inline, "--mode=bytecode", "--update-snapshots"]);
+    proc = run([inline, "--update-snapshots"]);
     if (proc.exitCode !== 0 || readFileSync(inline, "utf-8") !== expectedInline)
-      throw new Error(`Bytecode inline update failed: ${proc.stdout}${proc.stderr}`);
+      throw new Error(`Inline snapshot update failed: ${proc.stdout}${proc.stderr}`);
 
     const bytecodeCreate = join(tmp, "inline-bytecode-create.test.js");
     writeFileSync(bytecodeCreate, [
@@ -5961,12 +5836,12 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       'test("bytecode creates after method semicolon", () => expect({ method() { const value = 1; return value; } }).toMatchInlineSnapshot());',
       '',
     ].join("\n"));
-    proc = run([bytecodeCreate, "--mode=bytecode"]);
+    proc = run([bytecodeCreate]);
     if (proc.exitCode !== 0 || !readFileSync(bytecodeCreate, "utf-8").includes('toMatchInlineSnapshot(`"toMatchInlineSnapshot();created"`)') || !readFileSync(bytecodeCreate, "utf-8").includes('"method": [Function]'))
-      throw new Error(`Bytecode inline creation failed: ${proc.stdout}${proc.stderr}\n${readFileSync(bytecodeCreate, "utf-8")}`);
-    proc = run([bytecodeCreate, "--mode=bytecode"]);
+      throw new Error(`Inline snapshot creation failed: ${proc.stdout}${proc.stderr}\n${readFileSync(bytecodeCreate, "utf-8")}`);
+    proc = run([bytecodeCreate]);
     if (proc.exitCode !== 0)
-      throw new Error(`Rewritten bytecode inline snapshots should parse and compare: ${proc.stdout}${proc.stderr}`);
+      throw new Error(`Rewritten inline snapshots should parse and compare: ${proc.stdout}${proc.stderr}`);
 
     const helper = join(tmp, "inline-helper.js");
     const leftEntry = join(tmp, "inline-left.test.js");
@@ -5991,11 +5866,11 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       'test("right helper", () => matchRight());',
       '',
     ].join("\n"));
-    proc = run([leftEntry, rightEntry, "--jobs=2", "--mode=bytecode"]);
+    proc = run([leftEntry, rightEntry, "--jobs=2"]);
     const helperSource = readFileSync(helper, "utf-8");
     if (proc.exitCode !== 0 || !helperSource.includes('"side": "left"') || !helperSource.includes('"side": "right"'))
       throw new Error(`Parallel imported inline snapshot update failed: ${proc.stdout}${proc.stderr}\n${helperSource}`);
-    proc = run([leftEntry, rightEntry, "--jobs=2", "--mode=bytecode"]);
+    proc = run([leftEntry, rightEntry, "--jobs=2"]);
     if (proc.exitCode !== 0)
       throw new Error(`Rewritten imported inline snapshots should compare: ${proc.stdout}${proc.stderr}`);
 
@@ -6014,14 +5889,13 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       'test("right conflict", () => match("right"));',
       '',
     ].join("\n"));
-    proc = run([conflictingLeft, conflictingRight, "--jobs=2", "--mode=bytecode"]);
+    proc = run([conflictingLeft, conflictingRight, "--jobs=2"]);
     if (proc.exitCode === 0 || readFileSync(conflictingHelper, "utf-8") !== conflictingSource)
       throw new Error(`Conflicting shared inline snapshots should fail without writing: ${proc.stdout}${proc.stderr}`);
     proc = run([
       conflictingLeft,
       conflictingRight,
       "--jobs=2",
-      "--mode=bytecode",
       "--output=compact-json",
     ]);
     const conflictResult = JSON.parse(proc.stdout.toString());
@@ -6052,7 +5926,6 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       "left.test.js",
       "right.test.js",
       "--jobs=4",
-      "--mode=bytecode",
       "--output=compact-json",
     ], localEnv, attributionDir);
     const attributionResult = JSON.parse(proc.stdout.toString());
@@ -6087,20 +5960,20 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       'test("inline part two", () => expect({ part: "two", nested: [3, 4] }).toMatchInlineSnapshot());',
       '',
     ].join("\n"));
-    proc = run([multifileInline, "--multifile", "--jobs=2", "--mode=bytecode"]);
+    proc = run([multifileInline, "--multifile", "--jobs=2"]);
     const multifileInlineSource = readFileSync(multifileInline, "utf-8");
     if (proc.exitCode !== 0 || !multifileInlineSource.includes('"part": "one"') || !multifileInlineSource.includes('"part": "two"') || !multifileInlineSource.includes("\n---\n"))
       throw new Error(`Multifile inline snapshots failed: ${proc.stdout}${proc.stderr}\n${multifileInlineSource}`);
-    proc = run([multifileInline, "--multifile", "--jobs=2", "--mode=bytecode"]);
+    proc = run([multifileInline, "--multifile", "--jobs=2"]);
     if (proc.exitCode !== 0)
       throw new Error(`Rewritten multifile inline snapshots should compare: ${proc.stdout}${proc.stderr}`);
 
     const bracketed = join(tmp, "literal.test[part1].js");
     writeFileSync(bracketed, 'test("literal bracket", () => expect({ value: 1, nested: [2, 3] }).toMatchInlineSnapshot());\n');
-    proc = run([bracketed, "--mode=bytecode"]);
+    proc = run([bracketed]);
     if (proc.exitCode !== 0 || !readFileSync(bracketed, "utf-8").includes('"nested": ['))
       throw new Error(`A real bracketed filename should not be treated as a multifile section: ${proc.stdout}${proc.stderr}`);
-    proc = run([bracketed, "--mode=bytecode"]);
+    proc = run([bracketed]);
     if (proc.exitCode !== 0)
       throw new Error(`A top-level multiline bracketed snapshot should compare on rerun: ${proc.stdout}${proc.stderr}`);
 
@@ -6111,7 +5984,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
     if (stdinExternal.exitCode === 0)
       throw new Error("External snapshots from stdin should fail");
     const stdinInline = Bun.spawnSync(
-      [resolve(TESTRUNNER), "--mode=bytecode", "--no-progress", "--no-results", "--silent"],
+      [resolve(TESTRUNNER), "--no-progress", "--no-results", "--silent"],
       { stdin: new Blob(['test("stdin", () => expect(1).toMatchInlineSnapshot(`1`));\n']), stdout: "pipe", stderr: "pipe", env: localEnv },
     );
     if (stdinInline.exitCode !== 0)
@@ -6151,26 +6024,21 @@ await section("TestRunner: an expired deadline inside a toThrow callable is not 
       ].join("\n"),
     );
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode"
-        ? "toThrow deadline (bytecode)"
-        : "toThrow deadline";
-      // Report to a file: a failing test still prints its marker line to
-      // stdout, so stdout is not parseable JSON here.
-      const reportPath = join(tmp, `throw-timeout${modeArgs[0] === "--mode=bytecode" ? "-bc" : ""}.json`);
-      const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), file, ...modeArgs, "--test-timeout=300", "--no-progress", `--output=${reportPath}`],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      if (proc.exitCode === 0)
-        throw new Error(`${label}: an expired deadline must not report a passing toThrow`);
-      const json = JSON.parse(readFileSync(reportPath, "utf-8"));
-      if (json.passed !== 0 || json.failed !== 1)
-        throw new Error(`${label}: expected 0 passed / 1 failed, got ${json.passed}/${json.failed}`);
-      const failures = (json.files?.[0]?.failedTests ?? []).join("\n");
-      if (!failures.includes("TIMEOUT"))
-        throw new Error(`${label}: expected the failure to be recorded as a TIMEOUT, got ${failures}`);
-    }
+    // Report to a file: a failing test still prints its marker line to
+    // stdout, so stdout is not parseable JSON here.
+    const reportPath = join(tmp, "throw-timeout.json");
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), file, "--test-timeout=300", "--no-progress", `--output=${reportPath}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode === 0)
+      throw new Error("toThrow deadline: an expired deadline must not report a passing toThrow");
+    const json = JSON.parse(readFileSync(reportPath, "utf-8"));
+    if (json.passed !== 0 || json.failed !== 1)
+      throw new Error(`toThrow deadline: expected 0 passed / 1 failed, got ${json.passed}/${json.failed}`);
+    const failures = (json.files?.[0]?.failedTests ?? []).join("\n");
+    if (!failures.includes("TIMEOUT"))
+      throw new Error(`toThrow deadline: expected the failure to be recorded as a TIMEOUT, got ${failures}`);
   } finally {
     clean(tmp);
   }
@@ -6238,8 +6106,9 @@ await section("TestRunner: a parallel worker reclaims each file's garbage before
   // Workers run with automatic collection off. Before the runner collected
   // after each file, every object a worker allocated stayed live until the
   // worker exited, so a run held the garbage of all its files at once. With
-  // the shims parsed once per thread, that alone raised the interpreted
-  // suite's peak from 0.70 GB to 1.27 GB resident on four 64-bit workers. The
+  // the shims parsed once per thread, that alone raised the suite's peak
+  // (measured when it still ran on the since-removed interpreter) from
+  // 0.70 GB to 1.27 GB resident on four 64-bit workers. The
   // peak live GC heap is the observable: summed over the workers, it must not
   // grow with the number of files each worker runs.
   const tmp = makeTmp();
@@ -6257,34 +6126,32 @@ await section("TestRunner: a parallel worker reclaims each file's garbage before
       "});",
       "",
     ].join("\n");
-    const peakLiveBytes = (mode: string, fileCount: number): number => {
-      const dir = join(tmp, `${mode}-${fileCount}`);
+    const peakLiveBytes = (fileCount: number): number => {
+      const dir = join(tmp, `files-${fileCount}`);
       mkdirSync(dir);
       for (let i = 0; i < fileCount; i++) writeFileSync(join(dir, `garbage-${i}.js`), source);
-      const resultsPath = join(tmp, `${mode}-${fileCount}.json`);
+      const resultsPath = join(tmp, `files-${fileCount}.json`);
       const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), "-P", dir, "--jobs=2", "--no-progress", `--mode=${mode}`, `--output=${resultsPath}`],
+        [resolve(TESTRUNNER), "-P", dir, "--jobs=2", "--no-progress", `--output=${resultsPath}`],
         { stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode !== 0)
-        throw new Error(`TestRunner garbage run (${mode}, ${fileCount} files) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+        throw new Error(`TestRunner garbage run (${fileCount} files) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
       const json = JSON.parse(readFileSync(resultsPath, "utf-8"));
       if (json.passed !== fileCount || json.workers.used !== 2)
-        throw new Error(`TestRunner garbage run (${mode}, ${fileCount} files) should pass on 2 workers: ${json.passed} passed, ${json.workers.used} workers`);
+        throw new Error(`TestRunner garbage run (${fileCount} files) should pass on 2 workers: ${json.passed} passed, ${json.workers.used} workers`);
       return json.memory.gc.peakLiveBytes;
     };
-    for (const mode of ["interpreted", "bytecode"]) {
-      // Two files give each worker one; sixteen give each worker eight. With a
-      // collection between files the peaks match; without one the sixteen-file
-      // peak is about eight times the two-file peak.
-      const oneFileEach = peakLiveBytes(mode, 2);
-      const eightFilesEach = peakLiveBytes(mode, 16);
-      if (eightFilesEach > oneFileEach * 2)
-        throw new Error(
-          `TestRunner (${mode}) peak live GC heap grew with the files per worker: ` +
-            `${eightFilesEach} bytes for 16 files vs ${oneFileEach} bytes for 2 files on 2 workers`,
-        );
-    }
+    // Two files give each worker one; sixteen give each worker eight. With a
+    // collection between files the peaks match; without one the sixteen-file
+    // peak is about eight times the two-file peak.
+    const oneFileEach = peakLiveBytes(2);
+    const eightFilesEach = peakLiveBytes(16);
+    if (eightFilesEach > oneFileEach * 2)
+      throw new Error(
+        `TestRunner peak live GC heap grew with the files per worker: ` +
+          `${eightFilesEach} bytes for 16 files vs ${oneFileEach} bytes for 2 files on 2 workers`,
+      );
   } finally {
     clean(tmp);
   }
@@ -6360,9 +6227,7 @@ await section("TestRunner: --output=json keeps stdout clean when test throws..."
 // A file-level throw emits no per-test reporter output, so the case above cannot
 // catch the reporter markers the testing library writes straight to stdout for
 // individual tests. These scenarios cover every marker-producing shape.
-for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-  const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
-
+{
   const scenarios: Array<{
     name: string;
     source: string;
@@ -6517,15 +6382,15 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
   // omits build/memory/stdout/stderr, so it needs its own coverage.
   for (const outputFlag of ["--output=json", "--output=compact-json"]) {
   for (const scenario of scenarios) {
-    const label = `TestRunner ${outputFlag} (${modeLabel}) when ${scenario.name}`;
-    console.log(`TestRunner: ${outputFlag} keeps stdout clean when ${scenario.name} (${modeLabel})...`);
+    const label = `TestRunner ${outputFlag} when ${scenario.name}`;
+    console.log(`TestRunner: ${outputFlag} keeps stdout clean when ${scenario.name}...`);
     const tmp = makeTmp();
     try {
       const file = join(tmp, "test-reporter-markers.js");
       writeFileSync(file, scenario.source);
 
       const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), file, "--no-progress", outputFlag, ...modeArgs],
+        [resolve(TESTRUNNER), file, "--no-progress", outputFlag],
         { stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode === 0)
@@ -6580,8 +6445,8 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
   // must flip its own ok and the top-level ok while the clean sibling file
   // stays ok, and the merged `failed` must carry the registration error.
   {
-    const label = `TestRunner --output=json --jobs (${modeLabel}) when a describe block throws`;
-    console.log(`TestRunner: --output=json counts a throwing describe under --jobs (${modeLabel})...`);
+    const label = "TestRunner --output=json --jobs when a describe block throws";
+    console.log("TestRunner: --output=json counts a throwing describe under --jobs...");
     const tmp = makeTmp();
     try {
       const bad = join(tmp, "test-describe-throws.js");
@@ -6594,7 +6459,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       writeFileSync(good, 'describe("clean", () => { test("passes", () => { expect(2).toBe(2); }); });\n');
 
       const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), bad, good, "--jobs=2", "--no-progress", "--output=json", ...modeArgs],
+        [resolve(TESTRUNNER), bad, good, "--jobs=2", "--no-progress", "--output=json"],
         { stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode === 0)
@@ -6644,8 +6509,8 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
   // Vitest and bun both skip the body; running it executes user code
   // against a fixture the hook failed to build.
   {
-    const label = `TestRunner (${modeLabel}) beforeEach failure skips the test body`;
-    console.log(`TestRunner: a failed beforeEach does not run the test body (${modeLabel})...`);
+    const label = "TestRunner beforeEach failure skips the test body";
+    console.log("TestRunner: a failed beforeEach does not run the test body...");
     const tmp = makeTmp();
     try {
       const file = join(tmp, "test-beforeeach-body.js");
@@ -6659,7 +6524,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       ].join("\n"));
 
       const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), file, "--no-progress", ...modeArgs],
+        [resolve(TESTRUNNER), file, "--no-progress"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const all = proc.stdout.toString() + proc.stderr.toString();
@@ -6674,7 +6539,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       // built from the fallback. Without the hook's message carried into it,
       // the JSON payload names the failed test and never says why.
       const jsonProc = Bun.spawnSync(
-        [resolve(TESTRUNNER), file, "--no-progress", "--output=json", ...modeArgs],
+        [resolve(TESTRUNNER), file, "--no-progress", "--output=json"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const json = JSON.parse(jsonProc.stdout.toString());
@@ -6700,10 +6565,10 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
   // to the abort, so an ABSENT afterEach marker means the hook was skipped, not
   // merely buffered away.
   {
-    const label = `TestRunner (${modeLabel}) afterEach vs uncatchable limit`;
+    const label = "TestRunner afterEach vs uncatchable limit";
 
     // (a) Ordinary failing test: afterEach still runs.
-    console.log(`TestRunner: afterEach runs after an ordinary test failure (${modeLabel})...`);
+    console.log("TestRunner: afterEach runs after an ordinary test failure...");
     {
       const tmp = makeTmp();
       try {
@@ -6717,7 +6582,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
         ].join("\n"));
 
         const proc = Bun.spawnSync(
-          [resolve(TESTRUNNER), file, "--no-progress", ...modeArgs],
+          [resolve(TESTRUNNER), file, "--no-progress"],
           { stdout: "pipe", stderr: "pipe" },
         );
         const all = proc.stdout.toString() + proc.stderr.toString();
@@ -6736,7 +6601,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
     // uncatchably. 100M array elements far exceed the 64 MiB budget; the refusal
     // raises the uncatchable TGocciaMemoryLimitError, which must tear the run
     // down without running the guest hook.
-    console.log(`TestRunner: afterEach is skipped when a memory limit aborts the run (${modeLabel})...`);
+    console.log("TestRunner: afterEach is skipped when a memory limit aborts the run...");
     {
       const tmp = makeTmp();
       try {
@@ -6750,7 +6615,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
         ].join("\n"));
 
         const proc = Bun.spawnSync(
-          [resolve(TESTRUNNER), file, "--no-progress", "--max-memory=67108864", ...modeArgs],
+          [resolve(TESTRUNNER), file, "--no-progress", "--max-memory=67108864"],
           { stdout: "pipe", stderr: "pipe" },
         );
         const all = proc.stdout.toString() + proc.stderr.toString();
@@ -6773,8 +6638,8 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
   // throwing beforeAll must flip its own ok and the top-level ok, while the
   // clean sibling file stays ok and the merged `failed` carries the hook.
   {
-    const label = `TestRunner --output=json --jobs (${modeLabel}) when a beforeAll hook throws`;
-    console.log(`TestRunner: --output=json counts a throwing beforeAll under --jobs (${modeLabel})...`);
+    const label = "TestRunner --output=json --jobs when a beforeAll hook throws";
+    console.log("TestRunner: --output=json counts a throwing beforeAll under --jobs...");
     const tmp = makeTmp();
     try {
       const bad = join(tmp, "test-hook-throws.js");
@@ -6789,7 +6654,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       writeFileSync(good, 'describe("clean", () => { test("passes", () => { expect(2).toBe(2); }); });\n');
 
       const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), bad, good, "--jobs=2", "--no-progress", "--output=json", ...modeArgs],
+        [resolve(TESTRUNNER), bad, good, "--jobs=2", "--no-progress", "--output=json"],
         { stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode === 0)
@@ -6830,8 +6695,8 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
   // and the worker pool have to stop, and the human summary must not call
   // the run green.
   {
-    const label = `TestRunner (${modeLabel}) --exit-on-first-failure on a suite error`;
-    console.log(`TestRunner: --exit-on-first-failure stops on a suite error (${modeLabel})...`);
+    const label = "TestRunner --exit-on-first-failure on a suite error";
+    console.log("TestRunner: --exit-on-first-failure stops on a suite error...");
     const tmp = makeTmp();
     try {
       // "a-" sorts first so the failing file is the one the runner reaches
@@ -6868,7 +6733,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       // Sequential: the loop must break before the next file is opened.
       const sequential = Bun.spawnSync(
         [resolve(TESTRUNNER), failing, ...laterFiles, "--jobs=1", "--no-progress",
-          "--exit-on-first-failure", ...modeArgs],
+          "--exit-on-first-failure"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const sequentialOut = sequential.stdout.toString() + sequential.stderr.toString();
@@ -6887,7 +6752,7 @@ for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       // never runs and never appears as a synthesised failure.
       const parallel = Bun.spawnSync(
         [resolve(TESTRUNNER), failing, ...laterFiles, "--jobs=2", "--no-progress",
-          "--exit-on-first-failure", "--output=json", ...modeArgs],
+          "--exit-on-first-failure", "--output=json"],
         { stdout: "pipe", stderr: "pipe" },
       );
       if (parallel.exitCode === 0)
@@ -6984,82 +6849,80 @@ await section("TestRunner: an unhandled promise rejection fails whatever left it
       join(throwingHooks, "b-second.test.js"),
       'describe("next file", () => { test("is clean", () => { expect(1).toBe(1); }); });\n',
     );
-    const run = (file: string, mode: string, extraArgs: string[] = []): any => {
+    const run = (file: string, extraArgs: string[] = []): any => {
       const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), "-P", file, "--no-progress", "--output=json", `--mode=${mode}`, ...extraArgs],
+        [resolve(TESTRUNNER), "-P", file, "--no-progress", "--output=json", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode !== 1)
-        throw new Error(`TestRunner (${mode}) should exit 1 for an unhandled rejection, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+        throw new Error(`TestRunner should exit 1 for an unhandled rejection, got ${proc.exitCode}: ${proc.stderr.toString()}`);
       return JSON.parse(proc.stdout.toString());
     };
-    for (const mode of ["interpreted", "bytecode"]) {
-      const kindsFile = run(kinds, mode).files[0];
-      const failures = kindsFile.failedTests.join("\n");
-      const expected = [
-        "Unhandled promise rejection outside a test: Error: describe rejection",
-        'Test "leaves a rejection" in suite "tests": unhandled promise rejection: Error: test rejection',
-        'Test "unawaited async throw" in suite "tests": unhandled promise rejection: TypeError: async throw',
-        'Hook "beforeAll" in suite "hooks" failed: Unhandled promise rejection: Error: hook rejection',
-      ];
-      for (const line of expected)
-        if (!failures.includes(line))
-          throw new Error(`TestRunner (${mode}) should report ${JSON.stringify(line)}, got:\n${failures}`);
-      if (kindsFile.failedTests.length !== expected.length)
-        throw new Error(`TestRunner (${mode}) should fail only what left a rejection, got:\n${failures}`);
-      if (kindsFile.passed !== 4 || kindsFile.failed !== 2 || kindsFile.suiteErrors !== 2)
-        throw new Error(`TestRunner (${mode}) should count 4 passed, 2 failed and 2 suite errors, got ${JSON.stringify({ passed: kindsFile.passed, failed: kindsFile.failed, suiteErrors: kindsFile.suiteErrors })}`);
+    const kindsFile = run(kinds).files[0];
+    const failures = kindsFile.failedTests.join("\n");
+    const expected = [
+      "Unhandled promise rejection outside a test: Error: describe rejection",
+      'Test "leaves a rejection" in suite "tests": unhandled promise rejection: Error: test rejection',
+      'Test "unawaited async throw" in suite "tests": unhandled promise rejection: TypeError: async throw',
+      'Hook "beforeAll" in suite "hooks" failed: Unhandled promise rejection: Error: hook rejection',
+    ];
+    for (const line of expected)
+      if (!failures.includes(line))
+        throw new Error(`TestRunner should report ${JSON.stringify(line)}, got:\n${failures}`);
+    if (kindsFile.failedTests.length !== expected.length)
+      throw new Error(`TestRunner should fail only what left a rejection, got:\n${failures}`);
+    if (kindsFile.passed !== 4 || kindsFile.failed !== 2 || kindsFile.suiteErrors !== 2)
+      throw new Error(`TestRunner should count 4 passed, 2 failed and 2 suite errors, got ${JSON.stringify({ passed: kindsFile.passed, failed: kindsFile.failed, suiteErrors: kindsFile.suiteErrors })}`);
 
-      // What the file's own top level leaves rejected fails the file before
-      // anything is collected, like a top-level throw.
-      const topLevelFile = run(topLevel, mode).files[0];
-      if (!String(topLevelFile.errorMessage).includes("Error: top-level rejection") || topLevelFile.passed !== 0)
-        throw new Error(`TestRunner (${mode}) should fail the file for a top-level rejection, got ${JSON.stringify({ errorMessage: topLevelFile.errorMessage, passed: topLevelFile.passed })}`);
+    // What the file's own top level leaves rejected fails the file before
+    // anything is collected, like a top-level throw.
+    const topLevelFile = run(topLevel).files[0];
+    if (!String(topLevelFile.errorMessage).includes("Error: top-level rejection") || topLevelFile.passed !== 0)
+      throw new Error(`TestRunner should fail the file for a top-level rejection, got ${JSON.stringify({ errorMessage: topLevelFile.errorMessage, passed: topLevelFile.passed })}`);
 
-      // A hook that throws still owns what it left rejected: neither the next
-      // suite's tests nor the next file on the thread are blamed for it.
-      const hookRun = run(throwingHooks, mode, ["--jobs=1"]);
-      const observed = hookRun.files.map((file: any) => ({
-        file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
-        ok: file.ok,
-        passed: file.passed,
-        failed: file.failed,
-        failures: file.failedTests,
-      }));
-      const expectedHooks = [
-        {
-          file: "a-first.test.js",
-          ok: false,
-          passed: 2,
-          failed: 0,
-          failures: [
-            'Hook "beforeAll" in suite "throws before" failed: Callback threw an exception: Error: beforeAll throws',
-            'Hook "afterAll" in suite "throws after" failed: Callback threw an exception: Error: afterAll throws',
-          ],
-        },
-        { file: "b-second.test.js", ok: true, passed: 1, failed: 0, failures: [] },
-      ];
-      if (JSON.stringify(observed) !== JSON.stringify(expectedHooks))
-        throw new Error(`TestRunner (${mode}) should keep a throwing hook's rejection with the hook, got ${JSON.stringify(observed)}`);
+    // A hook that throws still owns what it left rejected: neither the next
+    // suite's tests nor the next file on the thread are blamed for it.
+    const hookRun = run(throwingHooks, ["--jobs=1"]);
+    const observed = hookRun.files.map((file: any) => ({
+      file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+      ok: file.ok,
+      passed: file.passed,
+      failed: file.failed,
+      failures: file.failedTests,
+    }));
+    const expectedHooks = [
+      {
+        file: "a-first.test.js",
+        ok: false,
+        passed: 2,
+        failed: 0,
+        failures: [
+          'Hook "beforeAll" in suite "throws before" failed: Callback threw an exception: Error: beforeAll throws',
+          'Hook "afterAll" in suite "throws after" failed: Callback threw an exception: Error: afterAll throws',
+        ],
+      },
+      { file: "b-second.test.js", ok: true, passed: 1, failed: 0, failures: [] },
+    ];
+    if (JSON.stringify(observed) !== JSON.stringify(expectedHooks))
+      throw new Error(`TestRunner should keep a throwing hook's rejection with the hook, got ${JSON.stringify(observed)}`);
 
-      // A queued job that throws fails the unit that queued it; the rest of
-      // the file still runs.
-      const jobsFile = run(throwingJobs, mode).files[0];
-      const jobFailures = jobsFile.failedTests.join("\n");
-      if (jobsFile.passed !== 2 || jobsFile.failed !== 1 || jobsFile.suiteErrors !== 1 ||
-          !jobFailures.includes("Uncaught exception outside a test: Error: job from a describe body") ||
-          !jobFailures.includes("job from a hook"))
-        throw new Error(`TestRunner (${mode}) should fail only the unit whose queued job threw, got ${JSON.stringify({ passed: jobsFile.passed, failed: jobsFile.failed, suiteErrors: jobsFile.suiteErrors, failures: jobsFile.failedTests, errorMessage: jobsFile.errorMessage })}`);
-    }
+    // A queued job that throws fails the unit that queued it; the rest of
+    // the file still runs.
+    const jobsFile = run(throwingJobs).files[0];
+    const jobFailures = jobsFile.failedTests.join("\n");
+    if (jobsFile.passed !== 2 || jobsFile.failed !== 1 || jobsFile.suiteErrors !== 1 ||
+        !jobFailures.includes("Uncaught exception outside a test: Error: job from a describe body") ||
+        !jobFailures.includes("job from a hook"))
+      throw new Error(`TestRunner should fail only the unit whose queued job threw, got ${JSON.stringify({ passed: jobsFile.passed, failed: jobsFile.failed, suiteErrors: jobsFile.suiteErrors, failures: jobsFile.failedTests, errorMessage: jobsFile.errorMessage })}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("TestRunner (bytecode): work the tests leave pending runs, and a rejection it leaves fails the file...", async () => {
+await section("TestRunner: work the tests leave pending runs, and a rejection it leaves fails the file...", async () => {
   // runTests runs after the file. Work left pending once it returns, here by
   // afterAll, still runs before the file ends, and a rejection that work
-  // leaves fails the file. The interpreted path does not wait for it.
+  // leaves fails the file.
   const tmp = makeTmp();
   try {
     const file = join(tmp, "late.test.js");
@@ -7075,15 +6938,15 @@ await section("TestRunner (bytecode): work the tests leave pending runs, and a r
       ].join("\n"),
     );
     const proc = Bun.spawnSync(
-      [resolve(TESTRUNNER), "-P", file, "--no-progress", "--mode=bytecode"],
+      [resolve(TESTRUNNER), "-P", file, "--no-progress"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const out = proc.stdout.toString() + proc.stderr.toString();
     for (const line of ["TIMER AFTER TEST", "TIMER AFTER ALL"])
       if (!containsLine(out, line))
-        throw new Error(`TestRunner (bytecode) should run ${JSON.stringify(line)}, got:\n${out}`);
+        throw new Error(`TestRunner should run ${JSON.stringify(line)}, got:\n${out}`);
     if (proc.exitCode !== 1 || !out.includes("late.test.js: Error: late rejection"))
-      throw new Error(`TestRunner (bytecode) should fail the file for a late rejection, got exit ${proc.exitCode}:\n${out}`);
+      throw new Error(`TestRunner should fail the file for a late rejection, got exit ${proc.exitCode}:\n${out}`);
   } finally {
     clean(tmp);
   }
@@ -7149,38 +7012,36 @@ await section("TestRunner: a file that fails with work still queued does not rea
       mkdirSync(dir);
       writeFileSync(join(dir, "a-first.test.js"), testCase.first);
       writeFileSync(join(dir, "b-second.test.js"), passingFile);
-      for (const mode of ["interpreted", "bytecode"]) {
-        const proc = Bun.spawnSync(
-          [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", "--output=json", `--mode=${mode}`, ...testCase.args],
-          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
-        );
-        const output = proc.stdout.toString() + proc.stderr.toString();
-        const label = `TestRunner (${testCase.name}, ${mode})`;
-        if (proc.exitCode !== 1 || output.includes("Integrity fault"))
-          throw new Error(`${label} should fail only the first file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
-        const files = JSON.parse(proc.stdout.toString()).files.map((file: any) => ({
-          file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
-          ok: file.ok,
-          passed: file.passed,
-          error: testCase.error !== "" && String(file.errorMessage ?? "").includes(testCase.error),
-        }));
-        const expected = [
-          { file: "a-first.test.js", ok: false, passed: testCase.firstPassed, error: testCase.error !== "" },
-          { file: "b-second.test.js", ok: true, passed: 1, error: false },
-        ];
-        if (JSON.stringify(files) !== JSON.stringify(expected))
-          throw new Error(`${label} should report the first file's failure and run the next file, got ${JSON.stringify(files)}`);
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", "--output=json", ...testCase.args],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      const label = `TestRunner (${testCase.name})`;
+      if (proc.exitCode !== 1 || output.includes("Integrity fault"))
+        throw new Error(`${label} should fail only the first file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
+      const files = JSON.parse(proc.stdout.toString()).files.map((file: any) => ({
+        file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+        ok: file.ok,
+        passed: file.passed,
+        error: testCase.error !== "" && String(file.errorMessage ?? "").includes(testCase.error),
+      }));
+      const expected = [
+        { file: "a-first.test.js", ok: false, passed: testCase.firstPassed, error: testCase.error !== "" },
+        { file: "b-second.test.js", ok: true, passed: 1, error: false },
+      ];
+      if (JSON.stringify(files) !== JSON.stringify(expected))
+        throw new Error(`${label} should report the first file's failure and run the next file, got ${JSON.stringify(files)}`);
 
-        // The JSON reporter mutes the console, so only a plain run can show a
-        // leaked job that ran without faulting.
-        const plain = Bun.spawnSync(
-          [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", `--mode=${mode}`, ...testCase.args],
-          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
-        );
-        const plainOutput = plain.stdout.toString() + plain.stderr.toString();
-        if (plain.exitCode !== 1 || /Integrity fault|leaked job ran/.test(plainOutput))
-          throw new Error(`${label} should not run the first file's queued job, got exit ${plain.exitCode}: ${plainOutput.slice(-600)}`);
-      }
+      // The JSON reporter mutes the console, so only a plain run can show a
+      // leaked job that ran without faulting.
+      const plain = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", ...testCase.args],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const plainOutput = plain.stdout.toString() + plain.stderr.toString();
+      if (plain.exitCode !== 1 || /Integrity fault|leaked job ran/.test(plainOutput))
+        throw new Error(`${label} should not run the first file's queued job, got exit ${plain.exitCode}: ${plainOutput.slice(-600)}`);
     }
 
     // The same holds inside one file: a sibling suite still runs after a
@@ -7203,15 +7064,13 @@ await section("TestRunner: a file that fails with work still queued does not rea
         "",
       ].join("\n"),
     );
-    for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), "-P", siblings, "--no-progress", `--mode=${mode}`],
-        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
-      );
-      const output = proc.stdout.toString() + proc.stderr.toString();
-      if (proc.exitCode !== 1 || !output.includes("beforeAll throws") || !output.includes("sibling suite ran") || /leaked (timer|job) ran/.test(output))
-        throw new Error(`TestRunner (${mode}) should drop what a failed hook left pending, got exit ${proc.exitCode}: ${output.slice(-600)}`);
-    }
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), "-P", siblings, "--no-progress"],
+      { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+    );
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode !== 1 || !output.includes("beforeAll throws") || !output.includes("sibling suite ran") || /leaked (timer|job) ran/.test(output))
+      throw new Error(`TestRunner should drop what a failed hook left pending, got exit ${proc.exitCode}: ${output.slice(-600)}`);
 
     // A hook fails the same way when its promise rejects or it leaves a
     // rejection behind, without throwing.
@@ -7240,15 +7099,13 @@ await section("TestRunner: a file that fails with work still queued does not rea
           "",
         ].join("\n"),
       );
-      for (const mode of ["interpreted", "bytecode"]) {
-        const proc = Bun.spawnSync(
-          [resolve(TESTRUNNER), "-P", file, "--no-progress", `--mode=${mode}`],
-          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
-        );
-        const output = proc.stdout.toString() + proc.stderr.toString();
-        if (proc.exitCode !== 1 || !output.includes(failedHook.error) || !output.includes("sibling suite ran") || /leaked timer ran/.test(output))
-          throw new Error(`TestRunner (${failedHook.name} hook, ${mode}) should drop the timer a failed async hook left, got exit ${proc.exitCode}: ${output.slice(-600)}`);
-      }
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", file, "--no-progress"],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes(failedHook.error) || !output.includes("sibling suite ran") || /leaked timer ran/.test(output))
+        throw new Error(`TestRunner (${failedHook.name} hook) should drop the timer a failed async hook left, got exit ${proc.exitCode}: ${output.slice(-600)}`);
     }
 
     // Only the hook that failed loses its timer: one that succeeds after it
@@ -7267,15 +7124,13 @@ await section("TestRunner: a file that fails with work still queued does not rea
         "",
       ].join("\n"),
     );
-    for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), "-P", keptTimer, "--no-progress", `--mode=${mode}`],
-        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
-      );
-      const output = proc.stdout.toString() + proc.stderr.toString();
-      if (proc.exitCode !== 1 || !output.includes("kept timer ran") || /leaked timer ran/.test(output))
-        throw new Error(`TestRunner (${mode}) should drop only the failed hook's timer, got exit ${proc.exitCode}: ${output.slice(-600)}`);
-    }
+    const keptProc = Bun.spawnSync(
+      [resolve(TESTRUNNER), "-P", keptTimer, "--no-progress"],
+      { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+    );
+    const keptOutput = keptProc.stdout.toString() + keptProc.stderr.toString();
+    if (keptProc.exitCode !== 1 || !keptOutput.includes("kept timer ran") || /leaked timer ran/.test(keptOutput))
+      throw new Error(`TestRunner should drop only the failed hook's timer, got exit ${keptProc.exitCode}: ${keptOutput.slice(-600)}`);
 
     // A describe body whose queued job throws fails the file, and the tests
     // still run. The first of them pumps timers, and must not be handed the
@@ -7297,15 +7152,13 @@ await section("TestRunner: a file that fails with work still queued does not rea
         "",
       ].join("\n"),
     );
-    for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync(
-        [resolve(TESTRUNNER), "-P", collection, "--no-progress", `--mode=${mode}`],
-        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
-      );
-      const output = proc.stdout.toString() + proc.stderr.toString();
-      if (proc.exitCode !== 1 || !output.includes("Uncaught exception outside a test: Error: job from a describe body") || !output.includes("first test ran") || /leaked (timer|job) ran/.test(output))
-        throw new Error(`TestRunner (${mode}) should drop what a describe body left pending when its job throws, got exit ${proc.exitCode}: ${output.slice(-600)}`);
-    }
+    const collectionProc = Bun.spawnSync(
+      [resolve(TESTRUNNER), "-P", collection, "--no-progress"],
+      { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+    );
+    const collectionOutput = collectionProc.stdout.toString() + collectionProc.stderr.toString();
+    if (collectionProc.exitCode !== 1 || !collectionOutput.includes("Uncaught exception outside a test: Error: job from a describe body") || !collectionOutput.includes("first test ran") || /leaked (timer|job) ran/.test(collectionOutput))
+      throw new Error(`TestRunner should drop what a describe body left pending when its job throws, got exit ${collectionProc.exitCode}: ${collectionOutput.slice(-600)}`);
   } finally {
     clean(tmp);
   }
@@ -7437,27 +7290,19 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
       "",
     ].join("\n");
 
-    console.log("Loader: source map bytecode...");
+    console.log("Loader: source map...");
     const jsxPath = join(tmp, "test.jsx");
     writeFileSync(jsxPath, jsxSource);
-    await $`${RUNNER} --source-map --mode=bytecode ${jsxPath}`.quiet();
+    await $`${RUNNER} --source-map ${jsxPath}`.quiet();
     const mapPath = jsxPath.replace(/\.jsx$/, ".jsx.map");
     if (!existsSync(mapPath)) throw new Error("Source map should exist");
     assertValidSourceMap(mapPath);
 
     console.log("Loader: source map custom path...");
     const customMapPath = join(tmp, "custom.map");
-    await $`${RUNNER} --source-map=${customMapPath} --mode=bytecode ${jsxPath}`.quiet();
+    await $`${RUNNER} --source-map=${customMapPath} ${jsxPath}`.quiet();
     if (!existsSync(customMapPath)) throw new Error("Custom source map should exist");
     assertValidSourceMap(customMapPath);
-
-    console.log("Loader: source map interpreted...");
-    const interpJsxPath = join(tmp, "interp.jsx");
-    writeFileSync(interpJsxPath, jsxSource);
-    await $`${RUNNER} --source-map --mode=interpreted ${interpJsxPath}`.quiet();
-    const interpMapPath = interpJsxPath.replace(/\.jsx$/, ".jsx.map");
-    if (!existsSync(interpMapPath)) throw new Error("Interpreted source map should exist");
-    assertValidSourceMap(interpMapPath);
 
     console.log("Loader: no --source-map -> no .map...");
     const noMapJsxPath = join(tmp, "nomap.jsx");
@@ -7673,9 +7518,9 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
       throw new Error(
         `Folded non-finite constants should compile to .gbc, got exit ${compile.exitCode}: ${compile.stdout.toString()}${compile.stderr.toString()}`,
       );
-    const fromSource = run(src, "--mode=bytecode");
+    const fromSource = run(src);
     if (fromSource !== expected)
-      throw new Error(`Folded constants run from source in bytecode mode should print:\n${expected}\ngot:\n${fromSource}`);
+      throw new Error(`Folded constants run from source should print:\n${expected}\ngot:\n${fromSource}`);
     const fromGbc = run(gbc);
     if (fromGbc !== expected)
       throw new Error(`Folded constants roundtrip should print:\n${expected}\ngot:\n${fromGbc}`);
@@ -7719,11 +7564,11 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       "});",
     ]);
 
-    console.log("BenchmarkRunner: file benchmark (interpreted)...");
-    const fileOut = join(tmp, "file-interp.json");
+    console.log("BenchmarkRunner: file benchmark...");
+    const fileOut = join(tmp, "file.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--mode=interpreted", "--no-progress", "--format=json", `--output=${fileOut}`],
+        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--no-progress", "--format=json", `--output=${fileOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`File benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -7745,21 +7590,8 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       if (typeof json.memory?.heap?.endAllocatedBytes !== "number") throw new Error("Benchmark JSON memory.heap.endAllocatedBytes should be present");
       if (typeof json.workers?.used !== "number") throw new Error("Benchmark JSON workers.used should be present");
     }
-
-    console.log("BenchmarkRunner: file benchmark (bytecode)...");
-    const fileBcOut = join(tmp, "file-bc.json");
     {
-      const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--no-progress", "--format=json", `--output=${fileBcOut}`, "--mode=bytecode"],
-        { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
-      );
-      if (proc.exitCode !== 0) throw new Error(`Bytecode file benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
-    }
-    const fileBcJson = readFileSync(fileBcOut, "utf-8");
-    if (!fileBcJson.includes('"fileName":')) throw new Error('Bytecode file JSON should contain "fileName":');
-    if (fileBcJson.includes('"file":')) throw new Error('Bytecode file JSON should not contain duplicate "file" alias');
-    {
-      const parsed = JSON.parse(fileBcJson);
+      const parsed = JSON.parse(fileJson);
       const valid = parsed.files
         .flatMap((file: { benchmarks: Array<Record<string, unknown>> }) => file.benchmarks)
         .filter((bench: Record<string, unknown>) =>
@@ -7768,12 +7600,11 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
           typeof bench.meanMs === "number" && bench.meanMs > 0 &&
           typeof bench.iterations === "number" && bench.iterations > 0
         );
-      if (valid.length === 0) throw new Error("Bytecode benchmark JSON should contain at least one valid result");
+      if (valid.length === 0) throw new Error("Benchmark JSON should contain at least one valid result");
     }
 
     console.log("BenchmarkRunner: microbench API is module-only and accepts wrappers...");
     const moduleOnlyOut = join(tmp, "module-only.json");
-    const moduleOnlyBytecodeOut = join(tmp, "module-only-bytecode.json");
     const moduleOnlySource = microbenchModuleWithExports(
       "bench as microBench, group as microGroup, summary, boxplot",
       [
@@ -7793,12 +7624,9 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
         'microBench("outside wrappers", () => 2 + 2);',
       ],
     );
-    for (const run of [
-      { output: moduleOnlyOut, modeArguments: ["--mode=interpreted"] },
-      { output: moduleOnlyBytecodeOut, modeArguments: ["--mode=bytecode"] },
-    ]) {
+    {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${run.output}`, ...run.modeArguments],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${moduleOnlyOut}`],
         {
           stdin: new TextEncoder().encode(moduleOnlySource),
           stdout: "pipe",
@@ -7809,8 +7637,8 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       );
       if (proc.exitCode !== 0) throw new Error(`Module-only microbench API exit ${proc.exitCode}: ${proc.stderr.toString()}`);
     }
-    for (const outputFile of [moduleOnlyOut, moduleOnlyBytecodeOut]) {
-      const json = JSON.parse(readFileSync(outputFile, "utf-8"));
+    {
+      const json = JSON.parse(readFileSync(moduleOnlyOut, "utf-8"));
       if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum")
         throw new Error(`Module-only microbench JSON should contain benchmark name "sum", got: ${JSON.stringify(json.files?.[0]?.benchmarks)}`);
       if (json.totalBenchmarks !== 4)
@@ -7891,12 +7719,10 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
         "});",
       ],
     );
-    for (const run of [
-      { output: join(tmp, "async-scopes.json"), modeArguments: ["--mode=interpreted"] },
-      { output: join(tmp, "async-scopes-bytecode.json"), modeArguments: ["--mode=bytecode"] },
-    ]) {
+    {
+      const asyncScopesOut = join(tmp, "async-scopes.json");
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${run.output}`, ...run.modeArguments],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${asyncScopesOut}`],
         {
           stdin: new TextEncoder().encode(asyncScopeSource),
           stdout: "pipe",
@@ -7907,7 +7733,7 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       );
       if (proc.exitCode !== 0)
         throw new Error(`Async microbench scopes exit ${proc.exitCode}: ${proc.stderr.toString()}`);
-      const benchmarks = JSON.parse(readFileSync(run.output, "utf-8")).files?.[0]?.benchmarks;
+      const benchmarks = JSON.parse(readFileSync(asyncScopesOut, "utf-8")).files?.[0]?.benchmarks;
       if (!Array.isArray(benchmarks) || benchmarks.length !== 2 ||
           benchmarks.some((benchmark: any) => benchmark.summaryScope !== 1 || benchmark.boxplotScope !== 1))
         throw new Error(`Async microbench callbacks should retain both scopes: ${JSON.stringify(benchmarks)}`);
@@ -8150,11 +7976,11 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       if (proc.exitCode === 0) throw new Error("Benchmark callback timeout should fail");
     }
 
-    console.log("BenchmarkRunner: stdin benchmark (interpreted)...");
-    const stdinOutPath = join(tmp, "stdin-interp.json");
+    console.log("BenchmarkRunner: stdin benchmark...");
+    const stdinOutPath = join(tmp, "stdin.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--source-type=module", "--mode=interpreted", "--no-progress", "--format=json", `--output=${stdinOutPath}`],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${stdinOutPath}`],
         {
           stdin: new TextEncoder().encode(stdinSource),
           stdout: "pipe",
@@ -8208,29 +8034,7 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       if (json.totalBenchmarks !== 1) throw new Error(`Repeated benchmark JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
     }
 
-    console.log("BenchmarkRunner: stdin benchmark (bytecode)...");
-    const stdinBcOutPath = join(tmp, "stdin-bc.json");
-    {
-      const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${stdinBcOutPath}`, "--mode=bytecode"],
-        {
-          stdin: new TextEncoder().encode(stdinSource),
-          stdout: "pipe",
-          stderr: "pipe",
-          env: benchEnv,
-          timeout: 120_000,
-        },
-      );
-      if (proc.exitCode !== 0) throw new Error(`Bytecode stdin benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
-    }
-    const stdinBcJson = readFileSync(stdinBcOutPath, "utf-8");
-    {
-      const json = JSON.parse(stdinBcJson);
-      if (json.files?.[0]?.benchmarks?.[0]?.name !== "sum") throw new Error('Bytecode stdin JSON should contain benchmark name "sum"');
-      if (json.totalBenchmarks !== 1) throw new Error(`Bytecode stdin JSON should contain totalBenchmarks: 1, got ${json.totalBenchmarks}`);
-    }
-
-    console.log("BenchmarkRunner: async generator bytecode benchmark...");
+    console.log("BenchmarkRunner: async generator benchmark...");
     const asyncGeneratorBcOutPath = join(tmp, "async-generator-bc.json");
     {
       const asyncGeneratorSource = microbenchModule([
@@ -8244,7 +8048,7 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
         "});",
       ]);
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${asyncGeneratorBcOutPath}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${asyncGeneratorBcOutPath}`],
         {
           stdin: new TextEncoder().encode(asyncGeneratorSource),
           stdout: "pipe",
@@ -8264,11 +8068,11 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       throw new Error("Bytecode async generator benchmark should report positive opsPerSec");
     }
 
-    console.log("BenchmarkRunner: no valid bytecode benchmarks fail...");
+    console.log("BenchmarkRunner: no valid benchmarks fail...");
     const emptyBcOutPath = join(tmp, "empty-bc.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${emptyBcOutPath}`, "--mode=bytecode"],
+        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${emptyBcOutPath}`],
         {
           stdin: new TextEncoder().encode("const value = 1;\n"),
           stdout: "pipe",
@@ -8310,33 +8114,21 @@ await section("BenchmarkRunner: a rejection a bench body leaves is forgotten, no
         "});",
       ]),
     );
-    for (const mode of ["interpreted", "bytecode"]) {
-      for (const sourceType of [[], ["--source-type=module"]]) {
-        const proc = Bun.spawnSync([BENCHRUNNER, file, `--mode=${mode}`, ...sourceType], { stdout: "pipe", stderr: "pipe" });
-        const output = proc.stdout.toString() + proc.stderr.toString();
-        if (proc.exitCode !== 0 || !output.includes("leaves a rejection") || /violation|Error:/i.test(output))
-          throw new Error(`BenchmarkRunner (${mode} ${sourceType.join(" ")}) should run a bench that leaves a rejection, got exit ${proc.exitCode}: ${output.slice(-600)}`);
-      }
+    for (const sourceType of [[], ["--source-type=module"]]) {
+      const proc = Bun.spawnSync([BENCHRUNNER, file, ...sourceType], { stdout: "pipe", stderr: "pipe" });
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 0 || !output.includes("leaves a rejection") || /violation|Error:/i.test(output))
+        throw new Error(`BenchmarkRunner (${sourceType.join(" ")}) should run a bench that leaves a rejection, got exit ${proc.exitCode}: ${output.slice(-600)}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("REPL: banner (default is bytecode)...", async () => {
+await section("REPL: banner...", async () => {
   const out = await $`echo '' | ${REPL} 2>&1`.text();
   if (!out.includes("Goccia REPL")) throw new Error(`Banner should contain "Goccia REPL", got: ${out.slice(0, 200)}`);
-  if (!out.includes("(bytecode)")) throw new Error(`Default banner should contain "(bytecode)", got: ${out.slice(0, 200)}`);
-});
-
-await section("REPL: banner (interpreted)...", async () => {
-  const out = await $`echo '' | ${REPL} --mode=interpreted 2>&1`.text();
-  if (!out.includes("(interpreted)")) throw new Error(`Banner should contain "(interpreted)", got: ${out.slice(0, 200)}`);
-});
-
-await section("REPL: banner (bytecode)...", async () => {
-  const out = await $`echo '' | ${REPL} --mode=bytecode 2>&1`.text();
-  if (!out.includes("(bytecode)")) throw new Error(`Bytecode banner should contain "(bytecode)", got: ${out.slice(0, 200)}`);
+  if (!out.includes("(bytecode)")) throw new Error(`Banner should contain "(bytecode)", got: ${out.slice(0, 200)}`);
 });
 
 await section("REPL: expression evaluation...", async () => {
@@ -8355,84 +8147,67 @@ await section("REPL: error recovery...", async () => {
 });
 
 await section("REPL: an unhandled promise rejection is reported and the session continues...", async () => {
-  for (const mode of ["interpreted", "bytecode"]) {
-    const out = await $`printf 'Promise.reject(new Error("repl rejection"));\n6 * 7;\n' | ${REPL} --mode=${mode} 2>&1`.text();
-    // Reported as an uncaught error, not echoed as a value. Where the terminal
-    // does not echo piped input the report follows the prompt on its line.
-    if (!normalizeLineEndings(out).split("\n").some((line) => line.endsWith("Error: repl rejection")) || out.includes("Promise {"))
-      throw new Error(`REPL (${mode}) should report the unhandled rejection, got: ${out}`);
-    if (!normalizeLineEndings(out).split("\n").some((line) => line.endsWith("42")))
-      throw new Error(`REPL (${mode}) should keep evaluating after an unhandled rejection, got: ${out}`);
+  const out = await $`printf 'Promise.reject(new Error("repl rejection"));\n6 * 7;\n' | ${REPL} 2>&1`.text();
+  // Reported as an uncaught error, not echoed as a value. Where the terminal
+  // does not echo piped input the report follows the prompt on its line.
+  if (!normalizeLineEndings(out).split("\n").some((line) => line.endsWith("Error: repl rejection")) || out.includes("Promise {"))
+    throw new Error(`REPL should report the unhandled rejection, got: ${out}`);
+  if (!normalizeLineEndings(out).split("\n").some((line) => line.endsWith("42")))
+    throw new Error(`REPL should keep evaluating after an unhandled rejection, got: ${out}`);
 
-    // A line that fails takes what it left rejected with it: the next line is
-    // not blamed for it.
-    const next = await $`printf 'Promise.reject(new Error("left by a failing line")); throw new Error("line throws");\n10 + 1;\n' | ${REPL} --mode=${mode} 2>&1`.text();
-    if (!next.includes("Error: line throws") || !normalizeLineEndings(next).split("\n").some((line) => line.endsWith("11")) || next.includes("Error: left by a failing line"))
-      throw new Error(`REPL (${mode}) should not carry a failed line's rejection into the next line, got: ${next}`);
-  }
-});
-
-await section("REPL: bytecode evaluation...", async () => {
-  const out = await $`echo '2 + 2;' | ${REPL} --mode=bytecode 2>&1`.text();
-  if (!out.includes("4")) throw new Error(`Bytecode 2+2 should produce 4, got: ${out}`);
+  // A line that fails takes what it left rejected with it: the next line is
+  // not blamed for it.
+  const next = await $`printf 'Promise.reject(new Error("left by a failing line")); throw new Error("line throws");\n10 + 1;\n' | ${REPL} 2>&1`.text();
+  if (!next.includes("Error: line throws") || !normalizeLineEndings(next).split("\n").some((line) => line.endsWith("11")) || next.includes("Error: left by a failing line"))
+    throw new Error(`REPL should not carry a failed line's rejection into the next line, got: ${next}`);
 });
 
 await section("REPL: an uncaught bytecode throw prints its location, code frame and suggestion...", async () => {
   // A guest throw escapes the VM as EGocciaBytecodeThrow; the REPL renders it
   // like the runner does rather than as a bare `Error: <message>` line.
   const src = 'null.x\nthrow new TypeError("boom")\n';
-  for (const [label, args] of [
-    ["default", []],
-    ["bytecode", ["--mode=bytecode"]],
-  ] as const) {
-    const proc = Bun.spawnSync([REPL, ...args], {
-      stdin: new TextEncoder().encode(src),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const out = normalizeLineEndings(`${proc.stdout.toString()}${proc.stderr.toString()}`);
-    const lines = out.split("\n");
-    if (proc.exitCode !== 0)
-      throw new Error(`REPL (${label}) uncaught-throw session failed: ${out}`);
-    if (out.includes("Error: TypeError"))
-      throw new Error(`REPL (${label}) should not print a bare "Error: <message>" line for a guest throw, got: ${out}`);
-    for (const expected of [
-      "TypeError: Cannot read properties of null (reading 'x')",
-      "  Suggestion: check that the value is not null or undefined before accessing properties",
-      "  --> REPL:1:6",
-      "   1 | null.x",
-      "TypeError: boom",
-      "  --> REPL:1:7",
-      '   1 | throw new TypeError("boom")',
-    ]) {
-      if (!lines.some((line) => line.endsWith(expected)))
-        throw new Error(`REPL (${label}) uncaught throw should print ${JSON.stringify(expected)}, got: ${out}`);
-    }
+  const proc = Bun.spawnSync([REPL], {
+    stdin: new TextEncoder().encode(src),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = normalizeLineEndings(`${proc.stdout.toString()}${proc.stderr.toString()}`);
+  const lines = out.split("\n");
+  if (proc.exitCode !== 0)
+    throw new Error(`REPL uncaught-throw session failed: ${out}`);
+  if (out.includes("Error: TypeError"))
+    throw new Error(`REPL should not print a bare "Error: <message>" line for a guest throw, got: ${out}`);
+  for (const expected of [
+    "TypeError: Cannot read properties of null (reading 'x')",
+    "  Suggestion: check that the value is not null or undefined before accessing properties",
+    "  --> REPL:1:6",
+    "   1 | null.x",
+    "TypeError: boom",
+    "  --> REPL:1:7",
+    '   1 | throw new TypeError("boom")',
+  ]) {
+    if (!lines.some((line) => line.endsWith(expected)))
+      throw new Error(`REPL uncaught throw should print ${JSON.stringify(expected)}, got: ${out}`);
   }
 });
 
-await section("REPL: repeated tagged template execution (interpreted + bytecode)...", async () => {
+await section("REPL: repeated tagged template execution...", async () => {
   const src = [
     "globalThis.tag = (strings) => { globalThis.firstTemplate = strings; return strings[0]; }; tag`first`;",
     'globalThis.tag = (strings) => globalThis.firstTemplate === strings ? "stale" : strings[0]; tag`second`;',
   ].join("\n") + "\n";
 
-  for (const [label, args] of [
-    ["interpreted", ["--mode=interpreted"]],
-    ["bytecode", ["--mode=bytecode"]],
-  ] as const) {
-    const proc = Bun.spawnSync([REPL, ...args], {
-      stdin: new TextEncoder().encode(src),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const out = `${proc.stdout.toString()}${proc.stderr.toString()}`;
-    if (proc.exitCode !== 0)
-      throw new Error(`REPL ${label} tagged-template run failed: ${out}`);
-    if (!out.includes("'first'") || !out.includes("'second'") ||
-        out.includes("'stale'"))
-      throw new Error(`REPL ${label} should keep repeated parse template sites distinct, got: ${out}`);
-  }
+  const proc = Bun.spawnSync([REPL], {
+    stdin: new TextEncoder().encode(src),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = `${proc.stdout.toString()}${proc.stderr.toString()}`;
+  if (proc.exitCode !== 0)
+    throw new Error(`REPL tagged-template run failed: ${out}`);
+  if (!out.includes("'first'") || !out.includes("'second'") ||
+      out.includes("'stale'"))
+    throw new Error(`REPL should keep repeated parse template sites distinct, got: ${out}`);
 });
 
 // ============================================================================
@@ -8459,20 +8234,15 @@ await section("Runner sandbox mode: a thrown stack cannot read a host file into 
         ].join("\n"),
       },
     ]);
-    for (const [label, extraArgs] of [
-      ["interpreter", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
-        { stdout: "pipe", stderr: "pipe" },
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const combined = proc.stdout.toString() + proc.stderr.toString();
+    if (combined.includes(secretMarker))
+      throw new Error(
+        `SECURITY: Sandbox mode leaked a host file named by a thrown stack: ${combined}`,
       );
-      const combined = proc.stdout.toString() + proc.stderr.toString();
-      if (combined.includes(secretMarker))
-        throw new Error(
-          `SECURITY: Sandbox mode ${label} leaked a host file named by a thrown stack: ${combined}`,
-        );
-    }
   } finally {
     clean(tmp);
   }
@@ -8525,26 +8295,21 @@ await section("Runner sandbox mode: a nested isolated child cannot read the pare
         ].join("\n"),
       },
     ]);
-    for (const [label, extraArgs] of [
-      ["interpreter", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
-        { stdout: "pipe", stderr: "pipe" },
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const combined = proc.stdout.toString() + proc.stderr.toString();
+    if (combined.includes(leakMarker))
+      throw new Error(
+        `SECURITY: Sandbox mode nested child disclosed the parent module source: ${combined}`,
       );
-      const combined = proc.stdout.toString() + proc.stderr.toString();
-      if (combined.includes(leakMarker))
-        throw new Error(
-          `SECURITY: Sandbox mode ${label} nested child disclosed the parent module source: ${combined}`,
-        );
-      // The channel under test is the code frame, not the filesystem: confirm
-      // the isolated child genuinely cannot read the parent module directly.
-      if (!combined.includes("childCanRead:false"))
-        throw new Error(
-          `Sandbox mode ${label}: expected the isolated child to lack FS access to /parent_secret.js, got: ${combined}`,
-        );
-    }
+    // The channel under test is the code frame, not the filesystem: confirm
+    // the isolated child genuinely cannot read the parent module directly.
+    if (!combined.includes("childCanRead:false"))
+      throw new Error(
+        `Sandbox mode: expected the isolated child to lack FS access to /parent_secret.js, got: ${combined}`,
+      );
   } finally {
     clean(tmp);
   }
@@ -8553,7 +8318,7 @@ await section("Runner sandbox mode: a nested isolated child cannot read the pare
 await section("Runner sandbox mode: a legitimate error in the child's own module still renders its code frame...", async () => {
   // Feature-survival counterpart to the disclosure test: a genuine throw inside
   // a module the child itself loaded must still produce that module's code frame
-  // in both modes (the fix must not blanket-disable frames).
+  // (the fix must not blanket-disable frames).
   const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
@@ -8570,23 +8335,18 @@ await section("Runner sandbox mode: a legitimate error in the child's own module
         text: ['import { boom } from "/boom.js";', "void boom;"].join("\n"),
       },
     ]);
-    for (const [label, extraArgs] of [
-      ["interpreter", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
-        { stdout: "pipe", stderr: "pipe" },
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const combined = proc.stdout.toString() + proc.stderr.toString();
+    if (!combined.includes("own module exploded"))
+      throw new Error(`Sandbox mode should report the module error, got: ${combined}`);
+    if (!combined.includes("boom.js:3:") ||
+        !combined.includes("throw new Error('own module exploded')"))
+      throw new Error(
+        `Sandbox mode should render the child's own module code frame, got: ${combined}`,
       );
-      const combined = proc.stdout.toString() + proc.stderr.toString();
-      if (!combined.includes("own module exploded"))
-        throw new Error(`Sandbox mode ${label} should report the module error, got: ${combined}`);
-      if (!combined.includes("boom.js:3:") ||
-          !combined.includes("throw new Error('own module exploded')"))
-        throw new Error(
-          `Sandbox mode ${label} should render the child's own module code frame, got: ${combined}`,
-        );
-    }
   } finally {
     clean(tmp);
   }
@@ -8626,25 +8386,20 @@ await section("Runner sandbox mode: a nested child's genuine module source is wi
         ].join("\n"),
       },
     ]);
-    for (const [label, extraArgs] of [
-      ["interpreter", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
-        { stdout: "pipe", stderr: "pipe" },
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const combined = proc.stdout.toString() + proc.stderr.toString();
+    if (combined.includes(childMarker))
+      throw new Error(
+        `SECURITY: Sandbox mode disclosed a nested child's module source when the parent surfaced its error: ${combined}`,
       );
-      const combined = proc.stdout.toString() + proc.stderr.toString();
-      if (combined.includes(childMarker))
-        throw new Error(
-          `SECURITY: Sandbox mode ${label} disclosed a nested child's module source when the parent surfaced its error: ${combined}`,
-        );
-      // The location must still be reported (only the source excerpt is gated).
-      if (!combined.includes("/lib.js:"))
-        throw new Error(
-          `Sandbox mode ${label} should still locate the nested child's fault, got: ${combined}`,
-        );
-    }
+    // The location must still be reported (only the source excerpt is gated).
+    if (!combined.includes("/lib.js:"))
+      throw new Error(
+        `Sandbox mode should still locate the nested child's fault, got: ${combined}`,
+      );
   } finally {
     clean(tmp);
   }
@@ -8683,20 +8438,15 @@ await section("Runner sandbox mode: fs callback APIs and promises defer filesyst
       "callback:callback",
       "exists:true",
     ].join("\n");
-    for (const [label, extraArgs] of [
-      ["interpreter", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
-      if (proc.exitCode !== 0)
-        throw new Error(`Sandbox mode ${label} fs callback run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-      if (stdout !== expected)
-        throw new Error(`Sandbox mode ${label} fs callback output should be ${JSON.stringify(expected)}, got: ${stdout}`);
-    }
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode fs callback run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (stdout !== expected)
+      throw new Error(`Sandbox mode fs callback output should be ${JSON.stringify(expected)}, got: ${stdout}`);
   } finally {
     clean(tmp);
   }
@@ -8799,20 +8549,15 @@ await section("Runner sandbox mode: fs callback overloads use Node-shaped result
       "exists-shape:true",
       "promise-mkdir:/promise",
     ].join("\n");
-    for (const [label, extraArgs] of [
-      ["interpreter", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
-      if (proc.exitCode !== 0)
-        throw new Error(`Sandbox mode ${label} fs callback shape run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-      if (stdout !== expected)
-        throw new Error(`Sandbox mode ${label} fs callback shapes should be ${JSON.stringify(expected)}, got: ${stdout}`);
-    }
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode fs callback shape run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (stdout !== expected)
+      throw new Error(`Sandbox mode fs callback shapes should be ${JSON.stringify(expected)}, got: ${stdout}`);
   } finally {
     clean(tmp);
   }
@@ -8835,26 +8580,23 @@ await section("Runner sandbox mode: deterministic nested engines use stable dist
     ]);
 
     const expected = "0.8833108082136426|0.6524484863740322";
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      for (let run = 0; run < 2; run++) {
-        const proc = Bun.spawnSync(
-          [
-            RUNNER,
-            "--copy",
-            `${tree}=/`,
-            "--entry=/main.js",
-            "--source-type=module",
-            "--deterministic",
-            `--mode=${mode}`,
-          ],
-          { stdout: "pipe", stderr: "pipe" },
+    for (let run = 0; run < 2; run++) {
+      const proc = Bun.spawnSync(
+        [
+          RUNNER,
+          "--copy",
+          `${tree}=/`,
+          "--entry=/main.js",
+          "--source-type=module",
+          "--deterministic",
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString().trim();
+      if (proc.exitCode !== 0 || output !== expected)
+        throw new Error(
+          `Sandbox mode deterministic run ${run + 1} expected ${expected}, got ${output}${proc.stderr.toString()}`,
         );
-        const output = proc.stdout.toString().trim();
-        if (proc.exitCode !== 0 || output !== expected)
-          throw new Error(
-            `Sandbox mode deterministic ${mode} run ${run + 1} expected ${expected}, got ${output}${proc.stderr.toString()}`,
-          );
-      }
     }
   } finally {
     clean(tmp);
@@ -8878,17 +8620,15 @@ await section("Runner sandbox mode: a runScript child's stderr carries no host-s
       },
       { path: "/child.js", text: 'fetch("http://example.com/");' },
     ]);
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
-      if (proc.exitCode !== 0 || !stdout.includes("PermissionDenied: net: example.com"))
-        throw new Error(`Sandbox mode ${mode} child denial should reach the parent as stderr: ${stdout}${proc.stderr.toString()}`);
-      if (stdout.includes("Suggestion") || stdout.includes("--allowed-host"))
-        throw new Error(`Sandbox mode ${mode} leaked a host-side suggestion to the parent guest: ${stdout}`);
-    }
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0 || !stdout.includes("PermissionDenied: net: example.com"))
+      throw new Error(`Sandbox mode child denial should reach the parent as stderr: ${stdout}${proc.stderr.toString()}`);
+    if (stdout.includes("Suggestion") || stdout.includes("--allowed-host"))
+      throw new Error(`Sandbox mode leaked a host-side suggestion to the parent guest: ${stdout}`);
   } finally {
     clean(tmp);
   }
@@ -8937,33 +8677,31 @@ await section("Runner sandbox mode: a nested run neither runs nor drops its call
         text: 'Promise.resolve().then(() => console.log("child: never")); throw new Error("child failed");',
       },
     ]);
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
-        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
-      );
-      const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
-      if (proc.exitCode !== 0)
-        throw new Error(`Sandbox mode ${mode} nested job run should exit 0, got ${proc.exitCode}: ${lines.join("\n")}${proc.stderr.toString()}`);
-      let results: { tag: string; ok: boolean; stdout: string; order: string[] }[];
-      try {
-        results = JSON.parse(lines[lines.length - 1]);
-      } catch {
-        throw new Error(`Sandbox mode ${mode} nested job run should end with its results, got: ${lines.join("\n")}${proc.stderr.toString()}`);
-      }
-      const tags = results.map((result) => result.tag).join(",");
-      if (tags !== "shared,shared-failing,isolated,isolated-failing,shell,shell-failing")
-        throw new Error(`Sandbox mode ${mode} nested job run should report every child, got: ${tags}`);
-      for (const result of results) {
-        const failing = result.tag.endsWith("failing");
-        if (result.order.join(",") !== "returned,then,microtask,async")
-          throw new Error(`Sandbox mode ${mode} ${result.tag} child should leave its caller's jobs to run once, in order, after it returns; got: ${result.order.join(",")}`);
-        if (result.ok === failing)
-          throw new Error(`Sandbox mode ${mode} ${result.tag} child should report ok=${!failing}, got ${result.ok}`);
-        // The child's stdout uses the platform's line ending.
-        if (normalizeLineEndings(result.stdout) !== (failing ? "" : "child: sync\nchild: job\n"))
-          throw new Error(`Sandbox mode ${mode} ${result.tag} child's stdout should hold only its own output, got: ${JSON.stringify(result.stdout)}`);
-      }
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+    );
+    const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode nested job run should exit 0, got ${proc.exitCode}: ${lines.join("\n")}${proc.stderr.toString()}`);
+    let results: { tag: string; ok: boolean; stdout: string; order: string[] }[];
+    try {
+      results = JSON.parse(lines[lines.length - 1]);
+    } catch {
+      throw new Error(`Sandbox mode nested job run should end with its results, got: ${lines.join("\n")}${proc.stderr.toString()}`);
+    }
+    const tags = results.map((result) => result.tag).join(",");
+    if (tags !== "shared,shared-failing,isolated,isolated-failing,shell,shell-failing")
+      throw new Error(`Sandbox mode nested job run should report every child, got: ${tags}`);
+    for (const result of results) {
+      const failing = result.tag.endsWith("failing");
+      if (result.order.join(",") !== "returned,then,microtask,async")
+        throw new Error(`Sandbox mode ${result.tag} child should leave its caller's jobs to run once, in order, after it returns; got: ${result.order.join(",")}`);
+      if (result.ok === failing)
+        throw new Error(`Sandbox mode ${result.tag} child should report ok=${!failing}, got ${result.ok}`);
+      // The child's stdout uses the platform's line ending.
+      if (normalizeLineEndings(result.stdout) !== (failing ? "" : "child: sync\nchild: job\n"))
+        throw new Error(`Sandbox mode ${result.tag} child's stdout should hold only its own output, got: ${JSON.stringify(result.stdout)}`);
     }
   } finally {
     clean(tmp);
@@ -8993,30 +8731,28 @@ await section("Runner sandbox mode: an unhandled promise rejection fails the run
       { path: "/clean.js", text: 'console.log("child: clean");' },
       { path: "/getter.js", text: 'console.log("child: getter"); ({ get value() { Promise.reject(new Error("from a result getter")); return 1; } });' },
     ]);
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
-        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
-      );
-      const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
-      const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
-      if (proc.exitCode !== 1 || !output.includes("Error: caller rejection"))
-        throw new Error(`Sandbox mode ${mode} should fail with the caller's own rejection, got exit ${proc.exitCode}: ${output}`);
-      if (output.includes("from a result getter"))
-        throw new Error(`Sandbox mode ${mode} should not report a rejection a child's result getter left, got: ${output}`);
-      const observed = lines.slice(0, 3).map((line) => {
-        const child = JSON.parse(line);
-        // The child's stdout uses the platform's line ending.
-        return { ...child, stdout: normalizeLineEndings(child.stdout) };
-      });
-      const expected = [
-        { ok: false, failureKind: "script-error", stdout: "child: ran\n", stderr: "Error: child rejection" },
-        { ok: true, failureKind: "none", stdout: "child: getter\n", stderr: "" },
-        { ok: true, failureKind: "none", stdout: "child: clean\n", stderr: "" },
-      ];
-      if (JSON.stringify(observed) !== JSON.stringify(expected))
-        throw new Error(`Sandbox mode ${mode} should fail only the child that left a rejection, got: ${lines.join("\n")}`);
-    }
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+    );
+    const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
+    const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+    if (proc.exitCode !== 1 || !output.includes("Error: caller rejection"))
+      throw new Error(`Sandbox mode should fail with the caller's own rejection, got exit ${proc.exitCode}: ${output}`);
+    if (output.includes("from a result getter"))
+      throw new Error(`Sandbox mode should not report a rejection a child's result getter left, got: ${output}`);
+    const observed = lines.slice(0, 3).map((line) => {
+      const child = JSON.parse(line);
+      // The child's stdout uses the platform's line ending.
+      return { ...child, stdout: normalizeLineEndings(child.stdout) };
+    });
+    const expected = [
+      { ok: false, failureKind: "script-error", stdout: "child: ran\n", stderr: "Error: child rejection" },
+      { ok: true, failureKind: "none", stdout: "child: getter\n", stderr: "" },
+      { ok: true, failureKind: "none", stdout: "child: clean\n", stderr: "" },
+    ];
+    if (JSON.stringify(observed) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode should fail only the child that left a rejection, got: ${lines.join("\n")}`);
   } finally {
     clean(tmp);
   }
@@ -9065,36 +8801,34 @@ await section("Runner sandbox mode: a caller's cleanup and waitAsync jobs that c
       { path: "/child.js", text: [...childBody, 'console.log("child: done");'].join("\n") },
       { path: "/failing.js", text: [...childBody, 'throw new Error("child failed");'].join("\n") },
     ]);
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
-        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
-      );
-      const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
-      if (proc.exitCode !== 0)
-        throw new Error(`Sandbox mode ${mode} nested cleanup run should exit 0, got ${proc.exitCode}: ${lines.join("\n")}${proc.stderr.toString()}`);
-      let results: { script: string; ok: boolean; stdout: string; order: string[] }[];
-      try {
-        results = JSON.parse(lines[lines.length - 1]);
-      } catch {
-        throw new Error(`Sandbox mode ${mode} nested cleanup run should end with its results, got: ${lines.join("\n")}${proc.stderr.toString()}`);
-      }
-      // The two caller jobs are unordered relative to each other.
-      const observed = results.map((result) => ({
-        script: result.script,
-        ok: result.ok,
-        stdout: normalizeLineEndings(result.stdout),
-        first: result.order[0],
-        rest: result.order.slice(1).sort(),
-      }));
-      const rest = ["cleanup:token", "waitAsync:timed-out"];
-      const expected = [
-        { script: "/child.js", ok: true, stdout: "child: done\n", first: "returned", rest },
-        { script: "/failing.js", ok: false, stdout: "", first: "returned", rest },
-      ];
-      if (JSON.stringify(observed) !== JSON.stringify(expected))
-        throw new Error(`Sandbox mode ${mode} caller's cleanup and waitAsync jobs should run in the caller after each child returns, got: ${JSON.stringify(results)}`);
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+    );
+    const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode nested cleanup run should exit 0, got ${proc.exitCode}: ${lines.join("\n")}${proc.stderr.toString()}`);
+    let results: { script: string; ok: boolean; stdout: string; order: string[] }[];
+    try {
+      results = JSON.parse(lines[lines.length - 1]);
+    } catch {
+      throw new Error(`Sandbox mode nested cleanup run should end with its results, got: ${lines.join("\n")}${proc.stderr.toString()}`);
     }
+    // The two caller jobs are unordered relative to each other.
+    const observed = results.map((result) => ({
+      script: result.script,
+      ok: result.ok,
+      stdout: normalizeLineEndings(result.stdout),
+      first: result.order[0],
+      rest: result.order.slice(1).sort(),
+    }));
+    const rest = ["cleanup:token", "waitAsync:timed-out"];
+    const expected = [
+      { script: "/child.js", ok: true, stdout: "child: done\n", first: "returned", rest },
+      { script: "/failing.js", ok: false, stdout: "", first: "returned", rest },
+    ];
+    if (JSON.stringify(observed) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode caller's cleanup and waitAsync jobs should run in the caller after each child returns, got: ${JSON.stringify(results)}`);
   } finally {
     clean(tmp);
   }
@@ -9156,7 +8890,7 @@ await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs..
     const stdout = normalizeLineEndings(proc.stdout.toString());
     const stderr = proc.stderr.toString();
     if (proc.exitCode !== 0)
-      throw new Error(`Sandbox mode interpreter should exit 0, got ${proc.exitCode}: ${stderr}`);
+      throw new Error(`Sandbox mode run should exit 0, got ${proc.exitCode}: ${stderr}`);
     for (const expected of [
       "hello",
       "hello world",
@@ -9171,7 +8905,7 @@ await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs..
       "child-write",
     ]) {
       if (!stdout.includes(expected))
-        throw new Error(`Sandbox mode interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
+        throw new Error(`Sandbox mode stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
     }
     const defaultDiff = JSON.parse(readFileSync(diff, "utf-8"));
     const changes = defaultDiff.changes;
@@ -9187,7 +8921,7 @@ await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs..
   }
 });
 
-await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metadata in every execution mode...", async () => {
+await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metadata...", async () => {
   const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
@@ -9238,26 +8972,21 @@ await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metada
       { path: "/tracked.txt", text: "tracked" },
     ]);
 
-    for (const [label, extraArgs] of [
-      ["interpreter", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const stdout = normalizeLineEndings(proc.stdout.toString());
-      if (proc.exitCode !== 0)
-        throw new Error(`Sandbox mode ${label} Stats run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-      for (const expected of [
-        "sync-stats:true",
-        "promise-stats:true",
-        "shared-stats-prototype:true",
-        "intrinsic-stats-date:true",
-      ]) {
-        if (!containsLine(stdout, expected))
-          throw new Error(`Sandbox mode ${label} Stats stdout should include ${expected}, got: ${stdout}`);
-      }
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode Stats run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    for (const expected of [
+      "sync-stats:true",
+      "promise-stats:true",
+      "shared-stats-prototype:true",
+      "intrinsic-stats-date:true",
+    ]) {
+      if (!containsLine(stdout, expected))
+        throw new Error(`Sandbox mode Stats stdout should include ${expected}, got: ${stdout}`);
     }
   } finally {
     clean(tmp);
@@ -9319,7 +9048,7 @@ await section("Runner sandbox mode: JSON diffs always carry metadata, unified di
   }
 });
 
-await section("Runner sandbox mode: fs errors are Node-shaped in every execution mode...", async () => {
+await section("Runner sandbox mode: fs errors are Node-shaped...", async () => {
   const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
@@ -9354,21 +9083,16 @@ await section("Runner sandbox mode: fs errors are Node-shaped in every execution
       "promise|true|true|Error|ENOENT|true|readFile|/missing.txt|undefined|ENOENT: no such file or directory, readFile '/missing.txt'",
       "rename|true|true|Error|ENOENT|true|rename|/missing.txt|string|ENOENT: no such file or directory, rename '/missing.txt' -> '/destination.txt'",
     ];
-    for (const [label, extraArgs] of [
-      ["interpreter", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync(
-        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
-      if (proc.exitCode !== 0)
-        throw new Error(`Sandbox mode ${label} fs error run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-      const actual = stdout.split("\n");
-      if (JSON.stringify(actual) !== JSON.stringify(expected))
-        throw new Error(`Sandbox mode ${label} fs errors should be Node-shaped, got: ${stdout}`);
-    }
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode fs error run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = stdout.split("\n");
+    if (JSON.stringify(actual) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode fs errors should be Node-shaped, got: ${stdout}`);
   } finally {
     clean(tmp);
   }
@@ -9731,7 +9455,7 @@ await section("Runner sandbox mode: --copy-rw replaces a leftover temporary...",
   }
 });
 
-await section("Runner sandbox mode: bytecode uses the same sandbox runtime modules...", async () => {
+await section("Runner sandbox mode: runtime modules and a nested child's diff stay isolated...", async () => {
   const tmp = makeNativeTmp();
   try {
     const diff = join(tmp, "diff.json");
@@ -9760,23 +9484,23 @@ await section("Runner sandbox mode: bytecode uses the same sandbox runtime modul
     ]);
 
     const proc = Bun.spawnSync(
-      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", "--mode=bytecode", `--diff-file=${diff}`],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--diff-file=${diff}`],
       { stdout: "pipe", stderr: "pipe" },
     );
     const stdout = normalizeLineEndings(proc.stdout.toString());
     if (proc.exitCode !== 0)
-      throw new Error(`Sandbox mode bytecode should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode runtime-module run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (!containsLine(stdout, "bytecode"))
-      throw new Error(`Sandbox mode bytecode stdout should include bytecode, got: ${stdout}`);
+      throw new Error(`Sandbox mode runtime-module stdout should include bytecode, got: ${stdout}`);
     if (!containsLine(stdout, "byte-child"))
-      throw new Error(`Sandbox mode bytecode nested stdout should include byte-child, got: ${stdout}`);
+      throw new Error(`Sandbox mode nested stdout should include byte-child, got: ${stdout}`);
     if (!containsLine(stdout, "true") || !containsLine(stdout, "false"))
-      throw new Error(`Sandbox mode bytecode nested diff/isolation booleans missing, got: ${stdout}`);
+      throw new Error(`Sandbox mode nested diff/isolation booleans missing, got: ${stdout}`);
     const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/byte.txt"))
-      throw new Error(`Sandbox mode bytecode diff should include /byte.txt create, got ${JSON.stringify(changes)}`);
+      throw new Error(`Sandbox mode diff should include /byte.txt create, got ${JSON.stringify(changes)}`);
     if (changes.some((c: any) => c.path === "/byte-child.txt"))
-      throw new Error(`Sandbox mode bytecode parent diff should not include nested child writes, got ${JSON.stringify(changes)}`);
+      throw new Error(`Sandbox mode parent diff should not include nested child writes, got ${JSON.stringify(changes)}`);
   } finally {
     clean(tmp);
   }
@@ -9953,33 +9677,30 @@ await section("Runner sandbox mode: --audit-log reports root escapes without cha
       { path: "/secret.txt", text: "inside-jail" },
     ]);
 
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const audit = join(tmp, `sandbox-audit-${mode}.jsonl`);
-      const proc = Bun.spawnSync(
-        [
-          RUNNER,
-          "--copy",
-          `${tree}=/`,
-          "--entry=/main.js",
-          "--source-type=module",
-          `--mode=${mode}`,
-          `--audit-log=${audit}`,
-        ],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      if (proc.exitCode !== 0)
-        throw new Error(`Sandbox audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-      if (!containsLine(proc.stdout.toString(), "inside-jail"))
-        throw new Error(`Sandbox audit ${mode} changed clamped access: ${proc.stdout.toString()}`);
-      const { events } = readCapabilityEvents(audit);
-      if (events.length !== 1 ||
-          events[0].kind !== "sandbox.fs.path" ||
-          events[0].decision !== "deny" ||
-          events[0].subject !== "../../secret.txt" ||
-          events[0].source?.file !== "/main.js" ||
-          events[0].source?.line !== 2)
-        throw new Error(`Sandbox audit ${mode} mismatch: ${JSON.stringify(events)}`);
-    }
+    const audit = join(tmp, "sandbox-audit.jsonl");
+    const proc = Bun.spawnSync(
+      [
+        RUNNER,
+        "--copy",
+        `${tree}=/`,
+        "--entry=/main.js",
+        "--source-type=module",
+        `--audit-log=${audit}`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox audit exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (!containsLine(proc.stdout.toString(), "inside-jail"))
+      throw new Error(`Sandbox audit changed clamped access: ${proc.stdout.toString()}`);
+    const { events } = readCapabilityEvents(audit);
+    if (events.length !== 1 ||
+        events[0].kind !== "sandbox.fs.path" ||
+        events[0].decision !== "deny" ||
+        events[0].subject !== "../../secret.txt" ||
+        events[0].source?.file !== "/main.js" ||
+        events[0].source?.line !== 2)
+      throw new Error(`Sandbox audit mismatch: ${JSON.stringify(events)}`);
   } finally {
     clean(tmp);
   }
@@ -10194,12 +9915,10 @@ await section("Runner: host mode provides neither fs nor goccia...", async () =>
     for (const specifier of ["fs", "goccia"]) {
       const file = join(tmp, `${specifier}.mjs`);
       writeFileSync(file, `import * as m from "${specifier}";\nconsole.log(typeof m);\n`);
-      for (const mode of ["interpreted", "bytecode"]) {
-        const run = runSandboxCli([file, `--mode=${mode}`]);
-        const output = run.stdout + run.stderr;
-        if (run.exitCode === 0 || !output.includes(`Cannot resolve bare module specifier "${specifier}"`))
-          throw new Error(`Host mode (${mode}) should not resolve "${specifier}", got (exit ${run.exitCode}):\n${output}`);
-      }
+      const run = runSandboxCli([file]);
+      const output = run.stdout + run.stderr;
+      if (run.exitCode === 0 || !output.includes(`Cannot resolve bare module specifier "${specifier}"`))
+        throw new Error(`Host mode should not resolve "${specifier}", got (exit ${run.exitCode}):\n${output}`);
     }
   } finally {
     clean(tmp);
@@ -10251,14 +9970,12 @@ await section("Runner sandbox mode: --sandbox copies only the entry...", async (
   try {
     writeFileSync(join(tmp, "walk.js"), SANDBOX_WALK_SCRIPT);
     writeFileSync(join(tmp, "beside.txt"), "not copied");
-    for (const mode of ["interpreted", "bytecode"]) {
-      const run = runSandboxCli([join(tmp, "walk.js"), "--sandbox", "--source-type=module", `--mode=${mode}`]);
-      if (run.exitCode !== 0 || run.stdout.trim() !== "/walk.js")
-        throw new Error(`Sandbox mode (${mode}) with --sandbox should hold only /walk.js, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
-      // A clean stdout: no timing banner in sandbox mode.
-      if (run.stdout.includes("Running script") || run.stdout.includes("Lex:"))
-        throw new Error(`Sandbox mode (${mode}) should print no timing banner, got:\n${run.stdout}`);
-    }
+    const run = runSandboxCli([join(tmp, "walk.js"), "--sandbox", "--source-type=module"]);
+    if (run.exitCode !== 0 || run.stdout.trim() !== "/walk.js")
+      throw new Error(`Sandbox mode with --sandbox should hold only /walk.js, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    // A clean stdout: no timing banner in sandbox mode.
+    if (run.stdout.includes("Running script") || run.stdout.includes("Lex:"))
+      throw new Error(`Sandbox mode should print no timing banner, got:\n${run.stdout}`);
   } finally {
     clean(tmp);
   }
@@ -10380,7 +10097,7 @@ await section("Runner sandbox mode: rejects inputs and options it cannot run..."
 await section("Runner sandbox mode: write-back and the diff file refuse a directory swapped for a link during the run...", async () => {
   if (process.platform === "win32") return;
   // Named on the command line, and by a trusted config's sandbox section.
-  for (const [mode, fromConfig] of [["interpreted", false], ["bytecode", false], ["interpreted", true], ["bytecode", true]] as const) {
+  for (const fromConfig of [false, true]) {
     const tmp = makeNativeTmp();
     try {
       mkdirSync(join(tmp, "out"));
@@ -10396,7 +10113,7 @@ await section("Runner sandbox mode: write-back and the diff file refuse a direct
       if (fromConfig)
         writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"], "diff-file": "dd/diff.json" } }));
       const proc = Bun.spawn(
-        [resolve(RUNNER), "w.js", "--compat-while-loops", "--source-type=module", `--mode=${mode}`,
+        [resolve(RUNNER), "w.js", "--compat-while-loops", "--source-type=module",
           // A command-line --diff-file is the user's choice and follows
           // links; only the config's is pinned.
           ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])],
@@ -10416,13 +10133,13 @@ await section("Runner sandbox mode: write-back and the diff file refuse a direct
       const stderr = await new Response(proc.stderr).text();
       const written = readdirSync(join(tmp, "target"));
       if (written.length !== 0)
-        throw new Error(`SECURITY (${mode}): write-back or the diff followed a swapped directory into ${written.join(", ")}:\n${stdout}${stderr}`);
+        throw new Error(`SECURITY (fromConfig=${fromConfig}): write-back or the diff followed a swapped directory into ${written.join(", ")}:\n${stdout}${stderr}`);
       if (readFileSync(join(tmp, "out.real", "a.txt"), "utf-8") !== "orig")
-        throw new Error(`(${mode}) the moved-away input must be left alone`);
+        throw new Error(`(fromConfig=${fromConfig}) the moved-away input must be left alone`);
       if (exitCode !== 1 ||
           !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`) ||
           (fromConfig && !stderr.includes(`Error: diff file ${join(tmp, "dd", "diff.json")}: dd is a symbolic link or not a directory`)))
-        throw new Error(`(${mode}) a swapped directory should be refused on stderr with exit 1, got (exit ${exitCode}):\n${stdout}${stderr}`);
+        throw new Error(`(fromConfig=${fromConfig}) a swapped directory should be refused on stderr with exit 1, got (exit ${exitCode}):\n${stdout}${stderr}`);
     } finally {
       clean(tmp);
     }
@@ -10756,14 +10473,12 @@ await section("Runner sandbox mode: --print prints the last value like host mode
   try {
     writeFileSync(join(tmp, "value.js"), "1 + 1;");
     writeFileSync(join(tmp, "empty.js"), "const x = 5;");
-    for (const mode of ["interpreted", "bytecode"]) {
-      const value = runSandboxCli(["value.js", "--sandbox", "--print", `--mode=${mode}`], { cwd: tmp });
-      if (value.exitCode !== 0 || value.stdout !== "2\n")
-        throw new Error(`Sandbox mode (${mode}) --print should print 2, got (exit ${value.exitCode}):\n${value.stdout}${value.stderr}`);
-      const undef = runSandboxCli(["empty.js", "--sandbox", "--print", `--mode=${mode}`], { cwd: tmp });
-      if (undef.exitCode !== 0 || undef.stdout !== "undefined\n")
-        throw new Error(`Sandbox mode (${mode}) --print should print undefined, got (exit ${undef.exitCode}):\n${undef.stdout}${undef.stderr}`);
-    }
+    const value = runSandboxCli(["value.js", "--sandbox", "--print"], { cwd: tmp });
+    if (value.exitCode !== 0 || value.stdout !== "2\n")
+      throw new Error(`Sandbox mode --print should print 2, got (exit ${value.exitCode}):\n${value.stdout}${value.stderr}`);
+    const undef = runSandboxCli(["empty.js", "--sandbox", "--print"], { cwd: tmp });
+    if (undef.exitCode !== 0 || undef.stdout !== "undefined\n")
+      throw new Error(`Sandbox mode --print should print undefined, got (exit ${undef.exitCode}):\n${undef.stdout}${undef.stderr}`);
   } finally {
     clean(tmp);
   }
@@ -10952,26 +10667,24 @@ await section("Runner sandbox mode: runScript and the goccia builtin reject the 
       ].join("\n"),
       "/child.js": 'console.log("child");',
     });
-    for (const mode of ["interpreted", "bytecode"]) {
-      const run = runSandboxCli(["--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`]);
-      if (run.exitCode !== 0)
-        throw new Error(`Sandbox mode (${mode}) removed-option probe should exit 0, got ${run.exitCode}:\n${run.stdout}${run.stderr}`);
-      for (const expected of [
-        'TypeError: runScript option "seed" was removed; use "copy"',
-        'TypeError: runScript option "seeds" was removed; use "copy"',
-        'TypeError: runScript option "diffFormat" was removed; use diff: "json" or diff: "unified"',
-        'TypeError: runScript option "diffMetadata" was removed; JSON diffs always include timestamp metadata; use diff: true',
-        "TypeError: Shell command failed with exit code 2: goccia: --seed was removed; use --copy <from>[=<to>]",
-        "TypeError: Shell command failed with exit code 2: goccia: --diff-format was removed; use --diff=json or --diff=unified",
-        "TypeError: Shell command failed with exit code 2: goccia: --diff-metadata was removed; JSON diffs always include timestamp metadata (use --diff)",
-        "TypeError: Shell command failed with exit code 2: goccia: --diff must be json or unified",
-      ]) {
-        if (!run.stdout.includes(expected))
-          throw new Error(`Sandbox mode (${mode}) should report ${JSON.stringify(expected)}, got:\n${run.stdout}`);
-      }
-      if (run.stdout.includes("accepted"))
-        throw new Error(`Sandbox mode (${mode}) runScript accepted a removed option:\n${run.stdout}`);
+    const run = runSandboxCli(["--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"]);
+    if (run.exitCode !== 0)
+      throw new Error(`Sandbox mode removed-option probe should exit 0, got ${run.exitCode}:\n${run.stdout}${run.stderr}`);
+    for (const expected of [
+      'TypeError: runScript option "seed" was removed; use "copy"',
+      'TypeError: runScript option "seeds" was removed; use "copy"',
+      'TypeError: runScript option "diffFormat" was removed; use diff: "json" or diff: "unified"',
+      'TypeError: runScript option "diffMetadata" was removed; JSON diffs always include timestamp metadata; use diff: true',
+      "TypeError: Shell command failed with exit code 2: goccia: --seed was removed; use --copy <from>[=<to>]",
+      "TypeError: Shell command failed with exit code 2: goccia: --diff-format was removed; use --diff=json or --diff=unified",
+      "TypeError: Shell command failed with exit code 2: goccia: --diff-metadata was removed; JSON diffs always include timestamp metadata (use --diff)",
+      "TypeError: Shell command failed with exit code 2: goccia: --diff must be json or unified",
+    ]) {
+      if (!run.stdout.includes(expected))
+        throw new Error(`Sandbox mode should report ${JSON.stringify(expected)}, got:\n${run.stdout}`);
     }
+    if (run.stdout.includes("accepted"))
+      throw new Error(`Sandbox mode runScript accepted a removed option:\n${run.stdout}`);
   } finally {
     clean(tmp);
   }
@@ -11361,7 +11074,7 @@ await section("Loader: no --allow-net blocks all fetch...", async () => {
     throw new Error(`Suggestion should not name the removed --allowed-host, got: ${res.text()}`);
 });
 
-await section("Loader: read denials report one suggestion and location in both modes...", async () => {
+await section("Loader: read denials report one suggestion and location...", async () => {
   const tmp = makeTmp();
   try {
     const proj = join(tmp, "proj");
@@ -11378,88 +11091,74 @@ await section("Loader: read denials report one suggestion and location in both m
     // short spelling the temporary directory was handed out with.
     const suggestion = `Suggestion: a read deny (--deny-read or "deny-read" in goccia.json) covers ${realpathSync.native(outside)}`;
     for (const file of ["static.mjs", "dynamic.mjs"]) {
-      const outputs: string[] = [];
-      for (const mode of ["interpreted", "bytecode"]) {
-        const proc = Bun.spawnSync(
-          [resolve(RUNNER), join(proj, file), `--mode=${mode}`, "--deny-read"],
-          { stdout: "pipe", stderr: "pipe", cwd: tmp },
-        );
-        const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString())
-          .split("\n")
-          .filter((line) => !line.includes("Running script") && !line.includes("Lex:"))
-          .join("\n");
-        if (proc.exitCode === 0 || text.includes("HOST-FILE-READ"))
-          throw new Error(`${file} (${mode}) should be refused: ${text}`);
-        // The guest-visible message names only the specifier; the host-side
-        // suggestion names the canonical path.
-        if (!text.includes("PermissionDenied: read: ../outside.js") || !text.includes(suggestion))
-          throw new Error(`${file} (${mode}) should report the denial with its suggestion: ${text}`);
-        outputs.push(text);
-      }
-      if (outputs[0] !== outputs[1])
-        throw new Error(`${file} read denial differs between modes:\n${outputs[0]}\n---\n${outputs[1]}`);
+      const proc = Bun.spawnSync(
+        [resolve(RUNNER), join(proj, file), "--deny-read"],
+        { stdout: "pipe", stderr: "pipe", cwd: tmp },
+      );
+      const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString())
+        .split("\n")
+        .filter((line) => !line.includes("Running script") && !line.includes("Lex:"))
+        .join("\n");
+      if (proc.exitCode === 0 || text.includes("HOST-FILE-READ"))
+        throw new Error(`${file} should be refused: ${text}`);
+      // The guest-visible message names only the specifier; the host-side
+      // suggestion names the canonical path.
+      if (!text.includes("PermissionDenied: read: ../outside.js") || !text.includes(suggestion))
+        throw new Error(`${file} should report the denial with its suggestion: ${text}`);
       // A dynamic import is located at its import() call.
-      if (file === "dynamic.mjs" && !outputs[0].includes(`${join(proj, file)}:2:`))
-        throw new Error(`The dynamic import denial should point at its import() call: ${outputs[0]}`);
+      if (file === "dynamic.mjs" && !text.includes(`${join(proj, file)}:2:`))
+        throw new Error(`The dynamic import denial should point at its import() call: ${text}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("Loader: a static-import denial is located alike in both modes...", async () => {
+await section("Loader: a static-import denial is located at the declaration...", async () => {
   const tmp = makeTmp();
   try {
     const proj = join(tmp, "proj");
     mkdirSync(proj, { recursive: true });
     writeFileSync(join(tmp, "outside.js"), "export const o = 1;\n");
     // A script entry (.js) and a module entry (.mjs) take different paths
-    // through the interpreter; both must locate the denial at the declaration.
+    // through the engine; both must locate the denial at the declaration.
     for (const name of ["static.js", "static.mjs"]) {
       const file = join(proj, name);
       writeFileSync(file, 'const x = 1;\nimport { o } from "../outside.js";\nconsole.log(o);\n');
-      const locations: string[] = [];
-      for (const mode of ["interpreted", "bytecode"]) {
-        const proc = Bun.spawnSync(
-          [resolve(RUNNER), file, `--mode=${mode}`],
-          { stdout: "pipe", stderr: "pipe", cwd: tmp },
-        );
-        const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
-        const location = text.split("\n").find((line) => line.includes("--> "));
-        if (proc.exitCode === 0 || !text.includes("PermissionDenied: read: ../outside.js") || !location)
-          throw new Error(`${name} static-import denial (${mode}) should be located: ${text}`);
-        locations.push(location.trim());
-      }
-      if (locations[0] !== `--> ${file}:2:1` || locations[1] !== locations[0])
-        throw new Error(`${name} static-import denial location differs between modes: ${JSON.stringify(locations)}`);
+      const proc = Bun.spawnSync(
+        [resolve(RUNNER), file],
+        { stdout: "pipe", stderr: "pipe", cwd: tmp },
+      );
+      const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+      const location = text.split("\n").find((line) => line.includes("--> "));
+      if (proc.exitCode === 0 || !text.includes("PermissionDenied: read: ../outside.js") || !location)
+        throw new Error(`${name} static-import denial should be located: ${text}`);
+      if (location.trim() !== `--> ${file}:2:1`)
+        throw new Error(`${name} static-import denial should be located at the declaration, got: ${location.trim()}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("Loader: a fetch() denial is located alike in both modes...", async () => {
+await section("Loader: a fetch() denial is located at the call...", async () => {
   const tmp = makeTmp();
   try {
     const file = join(tmp, "denied-fetch.js");
     writeFileSync(file, 'const x = 1;\n  globalThis.result = fetch("http://example.com/");\n');
-    const locations: string[] = [];
-    for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync([resolve(RUNNER), file, `--mode=${mode}`], {
-        stdout: "pipe",
-        stderr: "pipe",
-        cwd: tmp,
-      });
-      const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
-      const location = text.split("\n").find((line) => line.includes("--> "));
-      if (proc.exitCode === 0 || !text.includes("PermissionDenied: net: example.com") || !location)
-        throw new Error(`fetch denial (${mode}) should be located: ${text}`);
-      locations.push(location.trim());
-    }
+    const proc = Bun.spawnSync([resolve(RUNNER), file], {
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: tmp,
+    });
+    const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+    const location = text.split("\n").find((line) => line.includes("--> "));
+    if (proc.exitCode === 0 || !text.includes("PermissionDenied: net: example.com") || !location)
+      throw new Error(`fetch denial should be located: ${text}`);
     // ADR 0014: the call expression's own position, as import() uses: the
     // callee's name, where V8 locates the call (ADR 0135).
-    if (locations[0] !== `--> ${file}:2:23` || locations[1] !== locations[0])
-      throw new Error(`fetch denial location differs between modes: ${JSON.stringify(locations)}`);
+    if (location.trim() !== `--> ${file}:2:23`)
+      throw new Error(`fetch denial should be located at the call, got: ${location.trim()}`);
   } finally {
     clean(tmp);
   }
@@ -11552,6 +11251,82 @@ console.log("Loader: fetch re-checks the net capability on every redirect hop...
     clean(tmp);
   }
 }
+
+// The first HTTPS handshake in a process loads OpenSSL on a fetch worker
+// thread. FPC 3.2.2's loader is not safe when several workers reach it at once:
+// the losers reported "HTTPS requires OpenSSL but it could not be loaded" for
+// a library that had just loaded (#1676). Only the Linux OpenSSL backend loads
+// lazily; macOS and Windows link their TLS stacks and would not trust a
+// self-signed fixture anyway. Every run is a fresh process, because only the
+// first batch races, and several runs make a regression all but certain to
+// show: before the fix about half of all fresh processes lost requests.
+await section("Loader: concurrent HTTPS fetches in a fresh process all load OpenSSL...", async () => {
+  if (process.platform !== "linux") {
+    console.log("  skipped: the lazily loaded OpenSSL backend is Linux-only");
+    return;
+  }
+  const tmp = makeTmp();
+  const certFile = join(tmp, "cert.pem");
+  const keyFile = join(tmp, "key.pem");
+  const generated = Bun.spawnSync(
+    [
+      "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+      "-keyout", keyFile, "-out", certFile, "-days", "1",
+      "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  if (generated.exitCode !== 0) {
+    clean(tmp);
+    throw new Error(`openssl could not create the HTTPS fixture certificate: ${generated.stderr.toString()}`);
+  }
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    tls: { cert: readFileSync(certFile, "utf-8"), key: readFileSync(keyFile, "utf-8") },
+    fetch() {
+      return new Response("ok", { status: 200 });
+    },
+  });
+  const requestCount = 16;
+  const runs = 10;
+  const script = join(tmp, "concurrent-https.js");
+  writeFileSync(
+    script,
+    [
+      `const urls = Array.from({ length: ${requestCount} }, (_, i) => "https://localhost:${server.port}/?" + i);`,
+      "const results = await Promise.allSettled(urls.map((url) => fetch(url).then((response) => response.status)));",
+      "console.log(results.map((r) => r.status === 'fulfilled' ? String(r.value) : 'rejected: ' + r.reason.message).join('\\n'));",
+      "",
+    ].join("\n"),
+  );
+  try {
+    for (let run = 1; run <= runs; run++) {
+      // Async spawn: the fixture server answers on this process's event loop.
+      const proc = Bun.spawn(
+        [RUNNER, "--source-type=module", "--allow-net=localhost,private", "--timeout=20000", script],
+        // OpenSSL's default verify paths honour SSL_CERT_FILE, so the
+        // runner's ordinary certificate verification trusts the fixture.
+        { stdout: "pipe", stderr: "pipe", env: { ...process.env, SSL_CERT_FILE: certFile } },
+      );
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      const lines = normalizeLineEndings(stdout).split("\n").filter((line) => /^(\d{3}|rejected: )/.test(line));
+      const failures = lines.filter((line) => line !== "200");
+      if (exitCode !== 0 || lines.length !== requestCount || failures.length > 0)
+        throw new Error(
+          `Run ${run}/${runs}: all ${requestCount} concurrent HTTPS fetches should return 200 ` +
+            `(exit ${exitCode}, ${failures.length} failed):\n${stdout}${stderr}`,
+        );
+    }
+  } finally {
+    server.stop(true);
+    clean(tmp);
+  }
+});
 
 // ============================================================================
 // --multifile (all runners)
@@ -11803,7 +11578,7 @@ await section("Loader: goccia.json multifile=true works without --multifile flag
 });
 
 console.log("Loader: --module virtual modules use the ordinary module pipeline...");
-for (const mode of ["interpreted", "bytecode"] as const) {
+{
   const source = [
     'import bytes from "host:asset";',
     'import source moduleSource from "host:pkg/main";',
@@ -11817,7 +11592,6 @@ for (const mode of ["interpreted", "bytecode"] as const) {
       RUNNER,
       "-",
       "--source-type=module",
-      `--mode=${mode}`,
       "--print",
       "--experimental-js-module-source",
       "--module",
@@ -11835,10 +11609,10 @@ for (const mode of ["interpreted", "bytecode"] as const) {
   );
   if (proc.exitCode !== 0)
     throw new Error(
-      `--module ${mode} exited ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
+      `--module exited ${proc.exitCode}: ${proc.stdout.toString()}${proc.stderr.toString()}`,
     );
   if (!containsLine(proc.stdout.toString(), "host:pkg/main|host:pkg/dep|3|11|5|object"))
-    throw new Error(`--module ${mode} did not preserve module phases, addresses, and bytes: ${proc.stdout.toString()}`);
+    throw new Error(`--module did not preserve module phases, addresses, and bytes: ${proc.stdout.toString()}`);
 }
 
 await section("Loader: dynamic import and ShadowRealm use configured virtual modules...", async () => {
@@ -12052,24 +11826,21 @@ await section("Runner sandbox mode: virtual modules share the CLI surface and ca
       manifest,
       'import modules from "./module-map.mjs"; export default modules;\n',
     );
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const configuredFromManifest = Bun.spawnSync(
-        [
-          RUNNER,
-          "--copy",
-          `${tree}=/`,
-          "--entry=/main.js",
-          "--source-type=module",
-          `--mode=${mode}`,
-          "--modules",
-          manifest,
-        ],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      if (configuredFromManifest.exitCode !== 0 ||
-          normalizeLineEndings(configuredFromManifest.stdout.toString()).trim() !== "19")
-        throw new Error(`Sandbox executable module manifest ${mode} failed: ${configuredFromManifest.stdout.toString()}${configuredFromManifest.stderr.toString()}`);
-    }
+    const configuredFromManifest = Bun.spawnSync(
+      [
+        RUNNER,
+        "--copy",
+        `${tree}=/`,
+        "--entry=/main.js",
+        "--source-type=module",
+        "--modules",
+        manifest,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (configuredFromManifest.exitCode !== 0 ||
+        normalizeLineEndings(configuredFromManifest.stdout.toString()).trim() !== "19")
+      throw new Error(`Sandbox executable module manifest failed: ${configuredFromManifest.stdout.toString()}${configuredFromManifest.stderr.toString()}`);
 
     const hostCollision = Bun.spawnSync(
       [
@@ -12422,24 +12193,19 @@ await section("Loader: goccia:test is importable and injects no globals...", asy
       ].join("\n"),
     );
 
-    for (const [label, extraArgs] of [
-      ["interpreted", ["--mode=interpreted"]],
-      ["bytecode", ["--mode=bytecode"]],
-    ] as const) {
-      const proc = Bun.spawnSync([RUNNER, file, ...extraArgs], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const out = proc.stdout.toString() + proc.stderr.toString();
-      if (proc.exitCode !== 0)
-        throw new Error(`Loader goccia:test (${label}) exited ${proc.exitCode}:\n${out}`);
-      if (!containsLine(out, "passed:2"))
-        throw new Error(`Loader goccia:test (${label}) should run 2 tests:\n${out}`);
-      if (!containsLine(out, "failed:0"))
-        throw new Error(`Loader goccia:test (${label}) should report no failures:\n${out}`);
-      if (!containsLine(out, "run:2"))
-        throw new Error(`Loader goccia:test (${label}) should report 2 run tests:\n${out}`);
-    }
+    const proc = Bun.spawnSync([RUNNER, file], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode !== 0)
+      throw new Error(`Loader goccia:test exited ${proc.exitCode}:\n${out}`);
+    if (!containsLine(out, "passed:2"))
+      throw new Error(`Loader goccia:test should run 2 tests:\n${out}`);
+    if (!containsLine(out, "failed:0"))
+      throw new Error(`Loader goccia:test should report no failures:\n${out}`);
+    if (!containsLine(out, "run:2"))
+      throw new Error(`Loader goccia:test should report 2 run tests:\n${out}`);
   } finally {
     clean(tmp);
   }
@@ -12627,9 +12393,10 @@ await section("Fuzz Harness: engine-modelled outcomes exit zero...", async () =>
       const output = proc.stdout.toString() + proc.stderr.toString();
       if (proc.exitCode !== 0)
         throw new Error(`Fuzz harness treated "${name}" as a fault (exit ${proc.exitCode}):\n${output}`);
-      // Both executors must report, otherwise a mode is silently skipped.
-      if (!output.includes("[interpreter]") || !output.includes("[bytecode]"))
-        throw new Error(`Fuzz harness did not run both executors for "${name}":\n${output}`);
+      // The bytecode executor must report, otherwise the input was silently
+      // skipped.
+      if (!output.includes("[bytecode]"))
+        throw new Error(`Fuzz harness did not run the bytecode executor for "${name}":\n${output}`);
     }
   } finally {
     clean(tmp);
@@ -12753,7 +12520,7 @@ await section("Memory budget: single large allocation is refused before it happe
       throw new Error(`Expected a memory-budget error, got:\n${refused.output}`);
     // Measured ~16 MiB here; the same script when the gate lets it through
     // peaks near 1.4 GB, so the ceiling sits an order of magnitude below the
-    // failure mode and well clear of interpreter startup.
+    // failure mode and well clear of engine startup.
     assertPeakRssBelow(refused, "refused Array(100000000)", 192 * 1024 * 1024);
 
     // The same script under a budget that accommodates it must still work,
@@ -12806,51 +12573,35 @@ await section("Memory budget: property storage growth is refused before it happe
         'print("kept " + keys.length);\n',
     );
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreter";
+    const refused = await runWithPeakRss([
+      BARE,
+      "--max-memory=16777216",
+      runaway,
+    ]);
+    if (refused.exitCode === 0)
+      throw new Error(
+        `Property growth past the budget was permitted:\n${refused.output}`,
+      );
+    if (!/exceed the memory budget/i.test(refused.output))
+      throw new Error(`Expected a memory-budget error, got:\n${refused.output}`);
+    // Measured ~80 MiB. The ceiling is far above that and far below the
+    // ~1 GB the same 4M-property loop reaches when nothing refuses it — most
+    // of what is resident here is descriptor and key-string storage the
+    // budget never sees (ADR 0106 Amendment 1), not the entry array the gate
+    // does bound.
+    //
+    // The collecting gate (ADR 0110) left this figure unchanged: measured on
+    // one machine, production builds, before -> after: 73.8 -> 73.9 MiB. The
+    // run is refused an 18,874,272-byte doubling both before and after.
+    assertPeakRssBelow(refused, "refused property growth", 384 * 1024 * 1024);
 
-      const refused = await runWithPeakRss([
-        BARE,
-        "--max-memory=16777216",
-        ...modeArgs,
-        runaway,
-      ]);
-      if (refused.exitCode === 0)
-        throw new Error(
-          `Property growth past the budget was permitted (${label}):\n${refused.output}`,
-        );
-      if (!/exceed the memory budget/i.test(refused.output))
-        throw new Error(`Expected a memory-budget error (${label}), got:\n${refused.output}`);
-      // Measured ~143 MiB interpreted and ~80 MiB compiled. The ceiling is far
-      // above both and far below the ~1 GB the same 4M-property loop reaches
-      // when nothing refuses it — most of what is resident here is descriptor
-      // and key-string storage the budget never sees (ADR 0106 Amendment 1),
-      // not the entry array the gate does bound.
-      //
-      // The collecting gate (ADR 0110) raises the interpreted figure, and the
-      // headroom above is what absorbs it. Measured on one machine, production
-      // builds, before -> after: interpreted 80.5 -> 101.7 MiB, compiled
-      // 73.8 -> 73.9 MiB. The cause is visible in the refusal itself — before,
-      // the interpreted run was refused a 4,718,496-byte doubling and the
-      // compiled run an 18,874,272-byte one; after, both are refused the same
-      // 18,874,272-byte doubling. So the interpreted run now carries two more
-      // doublings' worth of descriptors and key strings (4,718,496 -> 9,437,088
-      // -> 18,874,272) when it is finally
-      // refused, and those are exactly the storage the budget does not see.
-      // Compiled is unchanged because it already reached that doubling. Note
-      // which mode was unlucky here is the opposite of the 4 MiB case in
-      // scripts/test-cli.ts: pre-H4 the loser was whichever mode happened to
-      // arrive with a dirtier heap, which is the point of the change.
-      assertPeakRssBelow(refused, `refused property growth (${label})`, 384 * 1024 * 1024);
-
-      const permitted = Bun.spawnSync([BARE, "--max-memory=16777216", ...modeArgs, bounded], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const permittedOut = permitted.stdout.toString() + permitted.stderr.toString();
-      if (permitted.exitCode !== 0 || !permittedOut.includes("kept 20000"))
-        throw new Error(`Property growth within budget was refused (${label}):\n${permittedOut}`);
-    }
+    const permitted = Bun.spawnSync([BARE, "--max-memory=16777216", bounded], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const permittedOut = permitted.stdout.toString() + permitted.stderr.toString();
+    if (permitted.exitCode !== 0 || !permittedOut.includes("kept 20000"))
+      throw new Error(`Property growth within budget was refused:\n${permittedOut}`);
   } finally {
     clean(tmp);
   }
@@ -12882,24 +12633,20 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
         'print("objects " + sink.length);\n',
     );
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreter";
-
-      const run = await runWithPeakRss([BARE, "--max-memory=16777216", ...modeArgs, distributed]);
-      if (run.exitCode !== 0 || !run.output.includes("objects 4000"))
-        throw new Error(
-          `Distributed property growth is now refused (${label}). That is a real ` +
-            `improvement, but ADR 0106 Amendment 1 documents it as permitted — ` +
-            `update the ADR and docs/garbage-collector.md, then rewrite this ` +
-            `section as a refusal test:\n${run.output}`,
-        );
-      // Measured ~131 MiB interpreted and ~80 MiB compiled against a 16 MiB
-      // budget. The floor is 2x the budget: high enough that a merely-idle
-      // process cannot reach it, low enough to survive platform differences in
-      // page size and allocator behaviour, and low enough that the sampler
-      // fallback undershooting a spike cannot fail it.
-      assertPeakRssAbove(run, `distributed property growth (${label})`, 32 * 1024 * 1024);
-    }
+    const run = await runWithPeakRss([BARE, "--max-memory=16777216", distributed]);
+    if (run.exitCode !== 0 || !run.output.includes("objects 4000"))
+      throw new Error(
+        `Distributed property growth is now refused. That is a real ` +
+          `improvement, but ADR 0106 Amendment 1 documents it as permitted — ` +
+          `update the ADR and docs/garbage-collector.md, then rewrite this ` +
+          `section as a refusal test:\n${run.output}`,
+      );
+    // Measured ~80 MiB against a 16 MiB budget. The floor is 2x the budget:
+    // high enough that a merely-idle process cannot reach it, low enough to
+    // survive platform differences in page size and allocator behaviour, and
+    // low enough that the sampler fallback undershooting a spike cannot fail
+    // it.
+    assertPeakRssAbove(run, "distributed property growth", 32 * 1024 * 1024);
   } finally {
     clean(tmp);
   }
@@ -12938,7 +12685,6 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
 
     const run = await runWithPeakRss([
       RUNNER,
-      "--mode=bytecode",
       "--max-stack=0",
       "--max-memory=64MiB",
       "--max-instructions=4000000",
@@ -12957,7 +12703,7 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
       throw new Error(`The stacks kept their charge after the recursion unwound:\n${run.output}`);
     const idle = join(tmp, "idle.js");
     writeFileSync(idle, 'console.log("idle");\n');
-    const idleRun = await runWithPeakRss([RUNNER, "--mode=bytecode", "--max-stack=0", "--max-memory=64MiB", idle]);
+    const idleRun = await runWithPeakRss([RUNNER, "--max-stack=0", "--max-memory=64MiB", idle]);
     if (idleRun.exitCode !== 0) throw new Error(`An idle run failed (exit ${idleRun.exitCode}):\n${idleRun.output}`);
     // Measured 69.4 to 70.3 MiB above an idle run's 11.0 to 11.3 MiB over 12
     // runs on Linux x64, 1.09 times the ceiling. Before the call-stack records
@@ -12981,7 +12727,7 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
         "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1));\n" +
         'console.log("depth " + f(1000) + " " + big.byteLength);\n',
     );
-    const heavyRun = Bun.spawnSync([RUNNER, "--mode=bytecode", "--max-memory=64MiB", heavy], {
+    const heavyRun = Bun.spawnSync([RUNNER, "--max-memory=64MiB", heavy], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -13012,7 +12758,7 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
         "Goccia.gc();\n" +
         'console.log("unstarted " + (created - Goccia.gc.bytesAllocated));\n',
     );
-    const generatorRun = Bun.spawnSync([RUNNER, "--mode=bytecode", generators], {
+    const generatorRun = Bun.spawnSync([RUNNER, generators], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -13048,7 +12794,7 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
           "runAWhile(); Goccia.gc();\n" +
           'console.log("charged " + (peak - before) + " kept " + (Goccia.gc.bytesAllocated - before));\n',
       );
-      const result = Bun.spawnSync([RUNNER, "--mode=bytecode", file], { stdout: "pipe", stderr: "pipe" });
+      const result = Bun.spawnSync([RUNNER, file], { stdout: "pipe", stderr: "pipe" });
       const out = result.stdout.toString() + result.stderr.toString();
       const match = out.match(/charged (-?\d+) kept (-?\d+)/);
       if (result.exitCode !== 0 || !match) throw new Error(`The ${name} recursion did not run:\n${out}`);
@@ -13204,7 +12950,6 @@ await section("Runner sandbox mode: --allow-net and --deny-net reach the sandbox
 
 const runNestedFetchSandbox = async (
   files: Record<string, string>,
-  mode: "interpreted" | "bytecode",
   extraArgs: string[],
 ): Promise<{ exitCode: number | null; stdout: string; combined: string; timedOut: boolean }> => {
   const tmp = makeNativeTmp();
@@ -13217,7 +12962,6 @@ const runNestedFetchSandbox = async (
         `${tree}=/`,
         "--entry=/main.js",
         "--source-type=module",
-        `--mode=${mode}`,
         "--allow-net=127.0.0.1,localhost",
         ...extraArgs,
       ],
@@ -13279,23 +13023,20 @@ await section("Runner sandbox mode: a nested runScript child inherits its set si
       "pending.catch(() => {});",
       "",
     ].join("\n");
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const audit = join(tmp, `nested-${mode}.jsonl`);
-      const run = await runNestedFetchSandbox(
-        { "/main.js": main, "/child.js": child },
-        mode,
-        [`--audit-log=${audit}`],
-      );
-      if (run.timedOut || run.exitCode !== 0)
-        throw new Error(`${mode}: nested run should exit 0: ${run.combined}`);
-      const { effective, events } = readCapabilityEvents(audit);
-      if (effective.length !== 1)
-        throw new Error(`${mode}: only the root engine should report its set: ${JSON.stringify(effective)}`);
-      const fetchEvents = events.filter((event) => event.kind.startsWith("net."));
-      if (fetchEvents.length === 0 ||
-          fetchEvents.some((event) => event.source?.file !== "/child.js"))
-        throw new Error(`${mode}: the child's fetch events should name /child.js: ${JSON.stringify(fetchEvents)}`);
-    }
+    const audit = join(tmp, "nested.jsonl");
+    const run = await runNestedFetchSandbox(
+      { "/main.js": main, "/child.js": child },
+      [`--audit-log=${audit}`],
+    );
+    if (run.timedOut || run.exitCode !== 0)
+      throw new Error(`nested run should exit 0: ${run.combined}`);
+    const { effective, events } = readCapabilityEvents(audit);
+    if (effective.length !== 1)
+      throw new Error(`only the root engine should report its set: ${JSON.stringify(effective)}`);
+    const fetchEvents = events.filter((event) => event.kind.startsWith("net."));
+    if (fetchEvents.length === 0 ||
+        fetchEvents.some((event) => event.source?.file !== "/child.js"))
+      throw new Error(`the child's fetch events should name /child.js: ${JSON.stringify(fetchEvents)}`);
   } finally {
     clean(tmp);
   }
@@ -13308,19 +13049,16 @@ await section("Runner sandbox mode: a nested runScript leaves the parent's --den
     "console.log('child ok ' + child.ok);",
     ...fetchPort1Lines("after"),
   ].join("\n");
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const run = await runNestedFetchSandbox(
-      { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
-      mode,
-      ["--deny-net=private"],
-    );
-    if (run.timedOut || run.exitCode !== 0)
-      throw new Error(`${mode}: runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-    if (!run.stdout.includes("child ok true"))
-      throw new Error(`${mode}: the nested child should run, got:\n${run.combined}`);
-    if (!run.stdout.includes(`after:${PRIVATE_DENIAL}`))
-      throw new Error(`SECURITY: ${mode}: the parent's private-range denial was lost after a nested runScript, got:\n${run.combined}`);
-  }
+  const run = await runNestedFetchSandbox(
+    { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
+    ["--deny-net=private"],
+  );
+  if (run.timedOut || run.exitCode !== 0)
+    throw new Error(`runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+  if (!run.stdout.includes("child ok true"))
+    throw new Error(`the nested child should run, got:\n${run.combined}`);
+  if (!run.stdout.includes(`after:${PRIVATE_DENIAL}`))
+    throw new Error(`SECURITY: the parent's private-range denial was lost after a nested runScript, got:\n${run.combined}`);
 });
 
 await section("Runner sandbox mode: a nested runScript leaves the parent's --max-fetch-bytes in place...", async () => {
@@ -13344,17 +13082,14 @@ await section("Runner sandbox mode: a nested runScript leaves the parent's --max
       "  console.log('after:' + error.message);",
       "}",
     ].join("\n");
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const run = await runNestedFetchSandbox(
-        { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
-        mode,
-        ["--max-fetch-bytes=16"],
-      );
-      if (run.timedOut || run.exitCode !== 0)
-        throw new Error(`${mode}: runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-      if (!/after:HTTP response (body )?exceeds 16 byte limit/.test(run.stdout))
-        throw new Error(`SECURITY: ${mode}: the parent's response-body ceiling was lost after a nested runScript, got:\n${run.combined}`);
-    }
+    const run = await runNestedFetchSandbox(
+      { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
+      ["--max-fetch-bytes=16"],
+    );
+    if (run.timedOut || run.exitCode !== 0)
+      throw new Error(`runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+    if (!/after:HTTP response (body )?exceeds 16 byte limit/.test(run.stdout))
+      throw new Error(`SECURITY: the parent's response-body ceiling was lost after a nested runScript, got:\n${run.combined}`);
   } finally {
     server.stop(true);
   }
@@ -13368,18 +13103,15 @@ await section("Runner sandbox mode: a fetch followed by a nested runScript compl
     "console.log('child ok ' + child.ok);",
     "console.log('done');",
   ].join("\n");
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const run = await runNestedFetchSandbox(
-      { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
-      mode,
-      ["--deny-net=private"],
-    );
-    if (run.timedOut || run.exitCode !== 0)
-      throw new Error(`${mode}: fetch then runScript should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-    for (const expected of [`before:${PRIVATE_DENIAL}`, "child ok true", "done"])
-      if (!run.stdout.includes(expected))
-        throw new Error(`${mode}: fetch then runScript should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
-  }
+  const run = await runNestedFetchSandbox(
+    { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
+    ["--deny-net=private"],
+  );
+  if (run.timedOut || run.exitCode !== 0)
+    throw new Error(`fetch then runScript should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+  for (const expected of [`before:${PRIVATE_DENIAL}`, "child ok true", "done"])
+    if (!run.stdout.includes(expected))
+      throw new Error(`fetch then runScript should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
 });
 
 await section("Runner sandbox mode: fetch, nested runScript, fetch completes without a crash...", async () => {
@@ -13390,23 +13122,20 @@ await section("Runner sandbox mode: fetch, nested runScript, fetch completes wit
     ...fetchPort1Lines("after"),
     "console.log('done');",
   ].join("\n");
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    for (const [policyArgs, expectedError] of [
-      [["--deny-net=private"], `${PRIVATE_DENIAL}`],
-      [[], "Failed to connect to 127.0.0.1:1"],
-    ] as const) {
-      const run = await runNestedFetchSandbox(
-        { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
-        mode,
-        [...policyArgs],
-      );
-      const label = `${mode} ${policyArgs.join(" ") || "(default policy)"}`;
-      if (run.timedOut || run.exitCode !== 0)
-        throw new Error(`${label}: fetch, runScript, fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-      for (const expected of [`before:${expectedError}`, `after:${expectedError}`, "done"])
-        if (!run.stdout.includes(expected))
-          throw new Error(`${label}: fetch, runScript, fetch should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
-    }
+  for (const [policyArgs, expectedError] of [
+    [["--deny-net=private"], `${PRIVATE_DENIAL}`],
+    [[], "Failed to connect to 127.0.0.1:1"],
+  ] as const) {
+    const run = await runNestedFetchSandbox(
+      { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
+      [...policyArgs],
+    );
+    const label = policyArgs.join(" ") || "(default policy)";
+    if (run.timedOut || run.exitCode !== 0)
+      throw new Error(`${label}: fetch, runScript, fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+    for (const expected of [`before:${expectedError}`, `after:${expectedError}`, "done"])
+      if (!run.stdout.includes(expected))
+        throw new Error(`${label}: fetch, runScript, fetch should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
   }
 });
 
@@ -13431,19 +13160,16 @@ await section("Runner sandbox mode: a failing nested runScript keeps the parent'
     "  console.log('parent:' + error.message);",
     "}",
   ].join("\n");
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    const run = await runNestedFetchSandbox(
-      { "/main.js": main, "/child.js": child },
-      mode,
-      ["--deny-net=private"],
-    );
-    if (run.timedOut || run.exitCode !== 0)
-      throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-    if (!run.stdout.includes("child ok false"))
-      throw new Error(`${mode}: the nested child should fail, got:\n${run.combined}`);
-    if (!run.stdout.includes(`parent:${PRIVATE_DENIAL}`))
-      throw new Error(`${mode}: the parent's in-flight fetch should settle under its own policy, got:\n${run.combined}`);
-  }
+  const run = await runNestedFetchSandbox(
+    { "/main.js": main, "/child.js": child },
+    ["--deny-net=private"],
+  );
+  if (run.timedOut || run.exitCode !== 0)
+    throw new Error(`the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+  if (!run.stdout.includes("child ok false"))
+    throw new Error(`the nested child should fail, got:\n${run.combined}`);
+  if (!run.stdout.includes(`parent:${PRIVATE_DENIAL}`))
+    throw new Error(`the parent's in-flight fetch should settle under its own policy, got:\n${run.combined}`);
 });
 
 await section("Runner sandbox mode: a parent's fetch that completes during a nested runScript settles in the parent...", async () => {
@@ -13499,25 +13225,238 @@ await section("Runner sandbox mode: a parent's fetch that completes during a nes
       { script: "/failing.js", ok: false, stdout: "", order: ["returned", "fetched:fast"] },
       { script: "/child.js", ok: true, stdout: "child: slow\n", order: ["returned", "thenable", "fetched:fast"] },
     ];
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const run = await runNestedFetchSandbox(files, mode, []);
-      if (run.timedOut || run.exitCode !== 0)
-        throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-      const lines = run.stdout.split("\n");
-      let results: { script: string; ok: boolean; stdout: string; order: string[] }[];
-      try {
-        results = JSON.parse(lines[lines.length - 1]);
-      } catch {
-        throw new Error(`${mode}: the parent should end with its results, got:\n${run.combined}`);
+    const run = await runNestedFetchSandbox(files, []);
+    if (run.timedOut || run.exitCode !== 0)
+      throw new Error(`the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+    const lines = run.stdout.split("\n");
+    let results: { script: string; ok: boolean; stdout: string; order: string[] }[];
+    try {
+      results = JSON.parse(lines[lines.length - 1]);
+    } catch {
+      throw new Error(`the parent should end with its results, got:\n${run.combined}`);
+    }
+    // The child's stdout uses the platform's line ending.
+    const observed = results.map((result) => ({ ...result, stdout: normalizeLineEndings(result.stdout) }));
+    if (JSON.stringify(observed) !== JSON.stringify(expected))
+      throw new Error(`the parent's fetch jobs should run in the parent after each child returns, got: ${JSON.stringify(results)}`);
+  } finally {
+    server.stop(true);
+  }
+});
+
+await section("Runner: a fetch awaited after a top-level await that settles at once still completes (#1559)...", async () => {
+  // The entry's first await settles at once, so the rest of its body runs as
+  // a job inside the run's final idle wait. A fetch started there used to be
+  // left in flight when that wait returned: the run printed `a` and exited 0.
+  // Every path that runs the entry as an async module — sandbox mode, and
+  // host mode while the interpreter existed — dropped it.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      // Never already answered when the run first looks for pending work.
+      await Bun.sleep(50);
+      return new Response("hello", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const fetchTail = [
+    "console.log('a');",
+    `const response = await fetch('${url}');`,
+    "console.log('b ' + response.status + ' ' + (await response.text()));",
+    "console.log('c');",
+  ];
+  const completes = ["a", "b 200 hello", "c"];
+  const variants: { name: string; main: string; expected: string[]; hostToo: boolean }[] = [
+    { name: "await Promise.resolve()", main: ["await Promise.resolve();", ...fetchTail].join("\n"), expected: completes, hostToo: true },
+    { name: "await import('./j.js')", main: ["const j = (await import('./j.js')).default;", "console.log('j ' + j);", ...fetchTail].join("\n"), expected: ["j 42", ...completes], hostToo: true },
+    { name: "await import('fs')", main: ["const fs = (await import('fs')).default;", "console.log('fs ' + typeof fs.readFileSync);", ...fetchTail].join("\n"), expected: ["fs function", ...completes], hostToo: false },
+    {
+      name: "await main()",
+      main: ["const main = async () => {", "  await Promise.resolve();", ...fetchTail.map((line) => "  " + line), "};", "await main();"].join("\n"),
+      expected: completes,
+      hostToo: true,
+    },
+    {
+      name: "fetch().then() after await Promise.resolve()",
+      main: [
+        "await Promise.resolve();",
+        "console.log('a');",
+        `fetch('${url}').then((response) => console.log('b ' + response.status));`,
+        "console.log('c');",
+      ].join("\n"),
+      expected: ["a", "c", "b 200"],
+      hostToo: true,
+    },
+  ];
+  // Async spawns, so this process's event loop stays free to answer.
+  const spawnRunner = async (args: string[]) => {
+    const proc = Bun.spawn([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, 20_000);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      return { exitCode, stdout: normalizeLineEndings(stdout), combined: stdout + stderr, timedOut };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const runBoth = async (main: string, hostToo: boolean) => {
+    const tmp = makeNativeTmp();
+    try {
+      const tree = writeSandboxTree(tmp, { "/main.js": main, "/j.js": "export default 42;\n" });
+      const common = ["--source-type=module", "--allow-net=127.0.0.1"];
+      const runs = [{ path: "sandbox", run: await spawnRunner(["--copy", `${tree}=/`, "--entry=/main.js", ...common]) }];
+      if (hostToo)
+        runs.push({ path: "host", run: await spawnRunner([join(tree, "main.js"), ...common]) });
+      return runs;
+    } finally {
+      clean(tmp);
+    }
+  };
+  // The program's own output, without the host runner's timing report.
+  const programLines = (stdout: string) =>
+    stdout.split("\n").filter((line) => line !== "" && !line.startsWith("Running script") && !line.startsWith("  "));
+  // Every case runs, so one run names every path that drops the fetch.
+  const failures: string[] = [];
+  try {
+    for (const variant of variants) {
+      for (const { path, run } of await runBoth(variant.main, variant.hostToo)) {
+        const label = `${path}, ${variant.name}`;
+        const lines = programLines(run.stdout);
+        if (run.timedOut || run.exitCode !== 0)
+          failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+        else if (JSON.stringify(lines) !== JSON.stringify(variant.expected))
+          failures.push(`${label}: should print ${JSON.stringify(variant.expected)}, got ${JSON.stringify(lines)}`);
       }
-      // The child's stdout uses the platform's line ending.
-      const observed = results.map((result) => ({ ...result, stdout: normalizeLineEndings(result.stdout) }));
-      if (JSON.stringify(observed) !== JSON.stringify(expected))
-        throw new Error(`${mode}: the parent's fetch jobs should run in the parent after each child returns, got: ${JSON.stringify(results)}`);
+    }
+    // A rejected fetch the entry awaits is still the entry's uncaught error.
+    const rejected = ["await Promise.resolve();", "console.log('a');", "await fetch('http://127.0.0.1:1/');", "console.log('unreachable');"].join("\n");
+    for (const { path, run } of await runBoth(rejected, true)) {
+      const label = `${path}, rejected fetch`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("TypeError: Failed to connect to 127.0.0.1:1") || lines[0] !== "a" || lines.includes("unreachable"))
+        failures.push(`${label}: should print a, then fail with the fetch's TypeError, got:\n${run.combined}`);
+    }
+    // An entry still waiting once nothing is left to settle it failed; it
+    // never reports a run that stopped partway as a success.
+    const unsettled = ["await Promise.resolve();", "console.log('a');", "await new Promise(() => {});", "console.log('unreachable');"].join("\n");
+    for (const { path, run } of await runBoth(unsettled, true)) {
+      const label = `${path}, unsettled top-level await`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("TypeError: await: Promise did not settle") || lines[0] !== "a" || lines.includes("unreachable"))
+        failures.push(`${label}: should print a, then fail with the unsettled-await TypeError, got:\n${run.combined}`);
+    }
+    // The entry waits on a promise a throwing reaction never settles: the
+    // rejection nothing handled is the run's error, not the unsettled await.
+    // Host mode awaits synchronously and fails at the await instead, so only
+    // the sandbox path runs this case.
+    const thrown = [
+      "await Promise.resolve();",
+      "console.log('a');",
+      `await new Promise(() => fetch('${url}').then(() => { throw new Error('boom'); }));`,
+      "console.log('unreachable');",
+    ].join("\n");
+    for (const { path, run } of await runBoth(thrown, false)) {
+      const label = `${path}, reaction that throws`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("Error: boom") || run.combined.includes("did not settle") || lines[0] !== "a")
+        failures.push(`${label}: should print a, then fail with the reaction's Error: boom, got:\n${run.combined}`);
     }
   } finally {
     server.stop(true);
   }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
+});
+
+await section("Runner: the idle wait for an Atomics.waitAsync timeout neither delays nor is delayed by a fetch, and does not hold a nested run...", async () => {
+  // The scripts time each step from inside and print whether it was prompt.
+  // A waiter's timeout is what a slow fetch would have waited out, and the
+  // slow endpoint is what a slow waiter would have waited for.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (new URL(request.url).pathname === "/slow")
+        await Bun.sleep(1500);
+      return new Response("ok", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const prompt = (label: string, start: string) =>
+    `console.log('${label} ' + (Date.now() - ${start} < 2000 ? 'prompt' : 'late'));`;
+  // A job starts a fetch while a timed waiter is pending: the fetch's response
+  // is waited for first, not after the waiter's timeout, and the waiter still
+  // times out on time.
+  const fetchFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const waitStart = Date.now();",
+    "const waited = Atomics.waitAsync(view, 0, 0, 3000).value;",
+    "const fetchStart = Date.now();",
+    `await fetch('${url}');`,
+    prompt("fetch", "fetchStart"),
+    "const outcome = await waited;",
+    "console.log('waiter ' + outcome + ' ' + (Date.now() - waitStart < 4500 ? 'on time' : 'late'));",
+  ].join("\n");
+  // A waiter that falls due while a slow fetch is in flight settles then, not
+  // after the response, so it wins the race.
+  const waiterFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const raceStart = Date.now();",
+    "const winner = await Promise.race([",
+    "  Atomics.waitAsync(view, 0, 0, 100).value.then(() => 'waiter'),",
+    `  fetch('${url}slow').then(() => 'fetch'),`,
+    "]);",
+    "console.log('winner ' + winner + ' ' + (Date.now() - raceStart < 1000 ? 'prompt' : 'late'));",
+  ].join("\n");
+  // A nested run has no waiter of its own and ends without waiting out its
+  // caller's.
+  const nested = [
+    "import { runScript } from 'goccia';",
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "const waited = Atomics.waitAsync(view, 0, 0, 5000).value;",
+    "const childStart = Date.now();",
+    "const child = runScript('/child.js');",
+    prompt("child", "childStart"),
+    "console.log('child ok ' + child.ok);",
+    "console.log('waiter ' + (await waited));",
+  ].join("\n");
+  const failures: string[] = [];
+  try {
+    for (const [name, files, expected] of [
+      ["fetch during a waiter", { "/main.js": fetchFirst }, ["fetch prompt", "waiter timed-out on time"]],
+      ["waiter during a slow fetch", { "/main.js": waiterFirst }, ["winner waiter prompt"]],
+      ["nested run during a waiter", { "/main.js": nested, "/child.js": "console.log('child ran');\n" }, ["child prompt", "child ok true", "waiter timed-out"]],
+    ] as const) {
+      const run = await runNestedFetchSandbox({ ...files }, []);
+      const label = `sandbox, ${name}`;
+      const lines = run.stdout.split("\n").filter((line) => line !== "");
+      if (run.timedOut || run.exitCode !== 0)
+        failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (JSON.stringify(lines) !== JSON.stringify(expected))
+        failures.push(`${label}: should print ${JSON.stringify(expected)}, got ${JSON.stringify(lines)}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
 });
 
 await section("Runner: a deadline that elapses while a fetch is pending ends the run, not the fetch...", async () => {
@@ -13636,34 +13575,32 @@ await section("Runner: a deadline that elapses while a fetch is pending ends the
       ].join("\n"),
     );
 
-    for (const mode of ["interpreted", "bytecode"]) {
-      const base = ["--source-type=module", "--allow-net=127.0.0.1", `--mode=${mode}`];
-      for (const [name, file] of [["awaited", awaited], ["unawaited", unawaited], ["crossed", crossed]]) {
-        const run = await spawn([RUNNER, file, "--timeout=500", ...base]);
-        if (run.exitCode !== 1 || !run.output.includes("file timed out after 500ms") || /caught|ran past|Invalid HTTP response/.test(run.output))
-          throw new Error(`Runner (${name}, ${mode}) should end with the timeout, got exit ${run.exitCode}: ${run.output}`);
-      }
-
-      const json = await spawn([RUNNER, awaited, "--timeout=500", "--output=json", ...base]);
-      const envelope = JSON.parse(json.output);
-      if (json.exitCode !== 1 || envelope.ok !== false || envelope.error?.type !== "TimeoutError")
-        throw new Error(`Runner (${mode}) should report a TimeoutError in the JSON envelope, got exit ${json.exitCode}: ${JSON.stringify(envelope.error)}`);
-
-      const signal = await spawn([RUNNER, signalled, "--timeout=10000", ...base]);
-      if (signal.exitCode !== 0 || !signal.output.includes("caught TimeoutError\ncontinued"))
-        throw new Error(`Runner (${mode}) should reject a request at its own signal's deadline and go on, got exit ${signal.exitCode}: ${signal.output}`);
-
-      // A child that is waiting on a fetch when the deadline elapses fails
-      // as a timeout, the same result a CPU-bound child gets.
-      const sandbox = await spawn([RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--timeout=500", ...base]);
-      if (!sandbox.output.includes('{"ok":false,"failureKind":"timeout","stdout":""}'))
-        throw new Error(`Sandbox child (${mode}) should fail with failureKind "timeout", got exit ${sandbox.exitCode}: ${sandbox.output}`);
-
-      const tests = await spawn([resolve(TESTRUNNER), "-P", suite, "--allow-net=127.0.0.1", "--test-timeout=500", "--no-progress", "--output=json", `--mode=${mode}`]);
-      const report = JSON.parse(tests.output).files[0];
-      if (report.passed !== 1 || report.failed !== 1 || !String(report.failedTests[0]).includes("TIMEOUT after 500ms"))
-        throw new Error(`TestRunner (${mode}) should time the waiting test out and run the next one, got ${JSON.stringify({ passed: report.passed, failed: report.failed, failures: report.failedTests })}`);
+    const base = ["--source-type=module", "--allow-net=127.0.0.1"];
+    for (const [name, file] of [["awaited", awaited], ["unawaited", unawaited], ["crossed", crossed]]) {
+      const run = await spawn([RUNNER, file, "--timeout=500", ...base]);
+      if (run.exitCode !== 1 || !run.output.includes("file timed out after 500ms") || /caught|ran past|Invalid HTTP response/.test(run.output))
+        throw new Error(`Runner (${name}) should end with the timeout, got exit ${run.exitCode}: ${run.output}`);
     }
+
+    const json = await spawn([RUNNER, awaited, "--timeout=500", "--output=json", ...base]);
+    const envelope = JSON.parse(json.output);
+    if (json.exitCode !== 1 || envelope.ok !== false || envelope.error?.type !== "TimeoutError")
+      throw new Error(`Runner should report a TimeoutError in the JSON envelope, got exit ${json.exitCode}: ${JSON.stringify(envelope.error)}`);
+
+    const signal = await spawn([RUNNER, signalled, "--timeout=10000", ...base]);
+    if (signal.exitCode !== 0 || !signal.output.includes("caught TimeoutError\ncontinued"))
+      throw new Error(`Runner should reject a request at its own signal's deadline and go on, got exit ${signal.exitCode}: ${signal.output}`);
+
+    // A child that is waiting on a fetch when the deadline elapses fails
+    // as a timeout, the same result a CPU-bound child gets.
+    const sandbox = await spawn([RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--timeout=500", ...base]);
+    if (!sandbox.output.includes('{"ok":false,"failureKind":"timeout","stdout":""}'))
+      throw new Error(`Sandbox child should fail with failureKind "timeout", got exit ${sandbox.exitCode}: ${sandbox.output}`);
+
+    const tests = await spawn([resolve(TESTRUNNER), "-P", suite, "--allow-net=127.0.0.1", "--test-timeout=500", "--no-progress", "--output=json"]);
+    const report = JSON.parse(tests.output).files[0];
+    if (report.passed !== 1 || report.failed !== 1 || !String(report.failedTests[0]).includes("TIMEOUT after 500ms"))
+      throw new Error(`TestRunner should time the waiting test out and run the next one, got ${JSON.stringify({ passed: report.passed, failed: report.failed, failures: report.failedTests })}`);
   } finally {
     server.stop(true);
     clean(tmp);
@@ -13710,20 +13647,17 @@ await section("Runner sandbox mode: a parent's fetch timeout observed during a n
       "  console.log('again:' + (again instanceof DOMException));",
       "}",
     ].join("\n");
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const run = await runNestedFetchSandbox(
-        { "/main.js": main, "/child.js": child },
-        mode,
-        [],
-      );
-      if (run.timedOut || run.exitCode !== 0)
-        throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-      // The first line proves the child's drain is what observed the
-      // timeout; without it the rest would pass vacuously.
-      for (const expected of ["child ok true, parent signal aborted true", "parent:TimeoutError true", "again:true"])
-        if (!run.stdout.includes(expected))
-          throw new Error(`${mode}: the parent's timeout should abort in its own realm, expected ${JSON.stringify(expected)}, got:\n${run.combined}`);
-    }
+    const run = await runNestedFetchSandbox(
+      { "/main.js": main, "/child.js": child },
+      [],
+    );
+    if (run.timedOut || run.exitCode !== 0)
+      throw new Error(`the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+    // The first line proves the child's drain is what observed the
+    // timeout; without it the rest would pass vacuously.
+    for (const expected of ["child ok true, parent signal aborted true", "parent:TimeoutError true", "again:true"])
+      if (!run.stdout.includes(expected))
+        throw new Error(`the parent's timeout should abort in its own realm, expected ${JSON.stringify(expected)}, got:\n${run.combined}`);
   } finally {
     server.stop(true);
   }
@@ -13738,13 +13672,9 @@ await section("Runner sandbox mode: a parent's fetch timeout observed during a n
 // "host-error". Everything the child steers — its own throw, a path it
 // named, a ceiling it ran into — must classify as its own fault or as the
 // limit it hit, or the distinction the field exists to draw is gone.
-//
-// Both execution modes, because the classification sits in the runner's
-// exception ladder and the executors raise through it differently.
 
 const runSandboxKinds = (
   tree: string,
-  mode: "interpreted" | "bytecode",
   extraArgs: string[] = [],
 ): { stdout: string; exitCode: number | null; combined: string } => {
   const proc = Bun.spawnSync(
@@ -13754,7 +13684,6 @@ const runSandboxKinds = (
       `${tree}=/`,
       "--entry=/main.js",
       "--source-type=module",
-      `--mode=${mode}`,
       ...extraArgs,
     ],
     { stdout: "pipe", stderr: "pipe" },
@@ -13802,13 +13731,11 @@ await section("Runner sandbox mode: guest-reachable failures never classify as h
       "copy:script-error",
       "nesting:resource-limit",
     ].join("\n");
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const run = runSandboxKinds(tree, mode);
-      if (run.exitCode !== 0)
-        throw new Error(`Sandbox mode ${mode} failure-kind run should exit 0, got ${run.exitCode}:\n${run.combined}`);
-      if (run.stdout !== expected)
-        throw new Error(`Sandbox mode ${mode} failure kinds should be ${JSON.stringify(expected)}, got:\n${run.stdout}`);
-    }
+    const run = runSandboxKinds(tree);
+    if (run.exitCode !== 0)
+      throw new Error(`Sandbox mode failure-kind run should exit 0, got ${run.exitCode}:\n${run.combined}`);
+    if (run.stdout !== expected)
+      throw new Error(`Sandbox mode failure kinds should be ${JSON.stringify(expected)}, got:\n${run.stdout}`);
   } finally {
     clean(tmp);
   }
@@ -13860,26 +13787,24 @@ await section("Runner sandbox mode: every host-set ceiling reports itself as one
       "/ok.js": 'console.log("child ran");\n',
     }, "quota-tree");
 
-    for (const mode of ["interpreted", "bytecode"] as const) {
-      const memory = runSandboxKinds(memoryTree, mode, ["--max-memory=8388608"]);
-      if (memory.stdout !== "memory:resource-limit:false")
-        throw new Error(`Sandbox mode ${mode} memory ceiling should classify as a resource limit, got:\n${memory.combined}`);
+    const memory = runSandboxKinds(memoryTree, ["--max-memory=8388608"]);
+    if (memory.stdout !== "memory:resource-limit:false")
+      throw new Error(`Sandbox mode memory ceiling should classify as a resource limit, got:\n${memory.combined}`);
 
-      // The parent shares the deadline it hands the child, so it may be out
-      // of time itself once the child is refused. Its output is captured
-      // either way; the exit code is not the assertion.
-      const timeout = runSandboxKinds(timeoutTree, mode, [
-        "--compat-while-loops",
-        "--timeout=300",
-      ]);
-      if (!containsLine(timeout.stdout, "timeout:timeout:false"))
-        throw new Error(`Sandbox mode ${mode} deadline should classify as a timeout, got:\n${timeout.combined}`);
+    // The parent shares the deadline it hands the child, so it may be out
+    // of time itself once the child is refused. Its output is captured
+    // either way; the exit code is not the assertion.
+    const timeout = runSandboxKinds(timeoutTree, [
+      "--compat-while-loops",
+      "--timeout=300",
+    ]);
+    if (!containsLine(timeout.stdout, "timeout:timeout:false"))
+      throw new Error(`Sandbox mode deadline should classify as a timeout, got:\n${timeout.combined}`);
 
-      const quota = runSandboxKinds(quotaTree, mode, ["--max-fs-nodes=32"]);
-      const expectedQuota = ["quota:resource-limit:false", "filler:filled:ENOSPC"].join("\n");
-      if (quota.stdout !== expectedQuota)
-        throw new Error(`Sandbox mode ${mode} filesystem quota should classify as a resource limit, got:\n${quota.combined}`);
-    }
+    const quota = runSandboxKinds(quotaTree, ["--max-fs-nodes=32"]);
+    const expectedQuota = ["quota:resource-limit:false", "filler:filled:ENOSPC"].join("\n");
+    if (quota.stdout !== expectedQuota)
+      throw new Error(`Sandbox mode filesystem quota should classify as a resource limit, got:\n${quota.combined}`);
   } finally {
     clean(tmp);
   }

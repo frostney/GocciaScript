@@ -20,8 +20,8 @@ const churn = () => {
 describe.runIf(hasGoccia)("object literal GC roots", () => {
   test("a converted computed key survives a collecting value expression", () => {
     // §13.2.5.5 converts the key before the value runs. The key string is
-    // produced inside the conversion, so nothing but the evaluator's own local
-    // refers to it while the value expression collects.
+    // produced inside the conversion, so nothing but an engine-internal
+    // temporary refers to it while the value expression collects.
     const target = {
       [{
         [Symbol.toPrimitive]() {
@@ -75,8 +75,8 @@ describe.runIf(hasGoccia)("object literal GC roots", () => {
       tail: "t",
     });
 
-    // The source exists only in the evaluator's local: the arrow's scope is
-    // gone by the time the copy starts.
+    // The source exists only in an engine-internal temporary: the arrow's
+    // scope is gone by the time the copy starts.
     const copy = { ...makeSource() };
 
     expect(copy.head).toBe("h");
