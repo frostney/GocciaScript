@@ -731,48 +731,6 @@ begin
   Result := TGocciaObjectValue(ATarget).HasSymbolPropertyInChain(ASymbol);
 end;
 
-function CreateProxyTrapDescriptorObject(
-  const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
-begin
-  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if ADescriptor is TGocciaPropertyDescriptorAccessor then
-  begin
-    if ADescriptor.HasGet then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-        Result.AssignProperty(PROP_GET,
-          TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
-      else
-        Result.AssignProperty(PROP_GET,
-          TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-    if ADescriptor.HasSet then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-        Result.AssignProperty(PROP_SET,
-          TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
-      else
-        Result.AssignProperty(PROP_SET,
-          TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-  end
-  else if ADescriptor is TGocciaPropertyDescriptorData then
-  begin
-    if ADescriptor.HasValue then
-      Result.AssignProperty(PROP_VALUE,
-        TGocciaPropertyDescriptorData(ADescriptor).Value);
-    if ADescriptor.HasWritableField then
-      Result.AssignProperty(PROP_WRITABLE,
-        TGocciaBooleanLiteralValue.Create(ADescriptor.Writable));
-  end;
-  if ADescriptor.HasEnumerableField then
-    Result.AssignProperty(PROP_ENUMERABLE,
-      TGocciaBooleanLiteralValue.Create(ADescriptor.Enumerable));
-  if ADescriptor.HasConfigurableField then
-    Result.AssignProperty(PROP_CONFIGURABLE,
-      TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
-end;
-
 // ES2026 §10.5.6 [[DefineOwnProperty]](P, Desc) steps 10-15
 procedure ValidateProxyDefineTrapResultFor(const APropertyLabel: string;
   const ATarget: TGocciaValue;
@@ -1788,7 +1746,7 @@ procedure TGocciaProxyValue.DefineProperty(const AName: string;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
-  DescObj: TGocciaObjectValue;
+  DescObj: TGocciaValue;
   TrapResult: TGocciaValue;
   Roots: TGocciaActiveRootFrame;
 begin
@@ -1802,7 +1760,7 @@ begin
     Trap := GetTrap(PROP_DEFINE_PROPERTY);
     if Assigned(Trap) then
     begin
-      DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
+      DescObj := FromPropertyDescriptor(ADescriptor);
       Roots.Add(DescObj);
       Args := TGocciaArgumentsCollection.Create;
       try
@@ -1837,7 +1795,7 @@ procedure TGocciaProxyValue.DefineSymbolProperty(
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
-  DescObj: TGocciaObjectValue;
+  DescObj: TGocciaValue;
   TrapResult: TGocciaValue;
   Roots: TGocciaActiveRootFrame;
 begin
@@ -1849,7 +1807,7 @@ begin
     Trap := GetTrap(PROP_DEFINE_PROPERTY);
     if Assigned(Trap) then
     begin
-      DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
+      DescObj := FromPropertyDescriptor(ADescriptor);
       Roots.Add(DescObj);
       Args := TGocciaArgumentsCollection.Create;
       try
@@ -1884,7 +1842,7 @@ function TGocciaProxyValue.TryDefineProperty(const AName: string;
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
-  DescObj: TGocciaObjectValue;
+  DescObj: TGocciaValue;
   TrapResult: TGocciaValue;
   Roots: TGocciaActiveRootFrame;
 begin
@@ -1899,7 +1857,7 @@ begin
       PushDefineTrapRoots(Roots, ADescriptor);
       Trap := GetTrap(PROP_DEFINE_PROPERTY);
       if Assigned(Trap) then
-        DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
+        DescObj := FromPropertyDescriptor(ADescriptor);
     except
       ADescriptor.Free;
       raise;
@@ -1946,7 +1904,7 @@ function TGocciaProxyValue.TryDefineSymbolProperty(
 var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
-  DescObj: TGocciaObjectValue;
+  DescObj: TGocciaValue;
   TrapResult: TGocciaValue;
   Roots: TGocciaActiveRootFrame;
 begin
@@ -1959,7 +1917,7 @@ begin
       PushDefineTrapRoots(Roots, ADescriptor);
       Trap := GetTrap(PROP_DEFINE_PROPERTY);
       if Assigned(Trap) then
-        DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
+        DescObj := FromPropertyDescriptor(ADescriptor);
     except
       ADescriptor.Free;
       raise;
