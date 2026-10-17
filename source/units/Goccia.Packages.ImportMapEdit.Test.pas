@@ -62,9 +62,9 @@ end;
 procedure TImportMapEditTests.TestReplacesAValueInPlace;
 begin
   Expect<string>(SetEntry(
-    '{ "mode":"bytecode",  "imports" : {"a":   "./a.js", "b": "./b.js"}}',
+    '{ "timeout":"5s",  "imports" : {"a":   "./a.js", "b": "./b.js"}}',
     'a', 'github:o/r@v2')).ToBe(
-    '{ "mode":"bytecode",  "imports" : {"a":   "github:o/r@v2", ' +
+    '{ "timeout":"5s",  "imports" : {"a":   "github:o/r@v2", ' +
     '"b": "./b.js"}}');
 end;
 
@@ -72,11 +72,11 @@ procedure TImportMapEditTests.TestAppendsKeepingIndentation;
 begin
   Expect<string>(SetEntry(
     '{' + NL + '    "imports": {' + NL + '        "@/": "./src/"' + NL +
-    '    },' + NL + '    "mode": "bytecode"' + NL + '}' + NL,
+    '    },' + NL + '    "timeout": "5s"' + NL + '}' + NL,
     'raylib', 'github:o/r@v1/x.ts')).ToBe(
     '{' + NL + '    "imports": {' + NL + '        "@/": "./src/",' + NL +
     '        "raylib": "github:o/r@v1/x.ts"' + NL +
-    '    },' + NL + '    "mode": "bytecode"' + NL + '}' + NL);
+    '    },' + NL + '    "timeout": "5s"' + NL + '}' + NL);
   Expect<string>(SetEntry('{"imports": {"a": "./a.js"}}', 'b', './b.js'))
     .ToBe('{"imports": {"a": "./a.js", "b": "./b.js"}}');
   Expect<string>(SetEntry('{"imports": {}}', 'b', './b.js'))
@@ -85,8 +85,8 @@ end;
 
 procedure TImportMapEditTests.TestCreatesImports;
 begin
-  Expect<string>(SetEntry('{' + NL + '  "mode": "bytecode"' + NL + '}' + NL,
-    'k', 'v')).ToBe('{' + NL + '  "mode": "bytecode",' + NL +
+  Expect<string>(SetEntry('{' + NL + '  "timeout": "5s"' + NL + '}' + NL,
+    'k', 'v')).ToBe('{' + NL + '  "timeout": "5s",' + NL +
     '  "imports": {' + NL + '    "k": "v"' + NL + '  }' + NL + '}' + NL);
   Expect<string>(NewImportMapText('k', 'v')).ToBe('{' + NL +
     '  "imports": {' + NL + '    "k": "v"' + NL + '  }' + NL + '}' + NL);
@@ -120,7 +120,7 @@ begin
   Expect<Integer>(Length(Entries)).ToBe(2);
   Expect<string>(Entries[0].Key).ToBe('ab');
   Expect<string>(Entries[0].Value).ToBe('v"1');
-  Expect<Boolean>(TryReadImportMapEntries('{"mode": "x"}', Entries, Error))
+  Expect<Boolean>(TryReadImportMapEntries('{"timeout": "x"}', Entries, Error))
     .ToBe(True);
   Expect<Integer>(Length(Entries)).ToBe(0);
 end;

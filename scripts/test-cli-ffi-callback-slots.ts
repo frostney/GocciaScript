@@ -129,35 +129,30 @@ if (!existsSync(FIXTURE_LIBRARY))
   );
 
 const scratch = mkdtemp("goccia-ffi-callback-slots-");
-let failures = 0;
+const problems: string[] = [];
+let output = "";
 
 try {
   const testFile = join(scratch, "callback-slots.js");
   writeFileSync(testFile, TEST_SOURCE);
 
-  for (const mode of ["interpreted", "bytecode"] as const) {
-    console.log(`FFI callback slot exhaustion and reuse (${mode})...`);
-    const outPath = join(scratch, `${mode}.json`);
-    const proc = Bun.spawnSync(
-      [
-        TESTRUNNER,
-        testFile,
-        `--allow-ffi=${FIXTURE_DIR}`,
-        `--mode=${mode}`,
-        "--no-progress",
-        `--output=${outPath}`,
-      ],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    const output = `${proc.stdout.toString()}${proc.stderr.toString()}`;
-    if (proc.exitCode !== 0 || !existsSync(outPath)) {
-      console.error(`  FAIL [${mode}]: exit code ${proc.exitCode}\n${output}`);
-      failures++;
-      continue;
-    }
-
+  console.log("FFI callback slot exhaustion and reuse...");
+  const outPath = join(scratch, "report.json");
+  const proc = Bun.spawnSync(
+    [
+      TESTRUNNER,
+      testFile,
+      `--allow-ffi=${FIXTURE_DIR}`,
+      "--no-progress",
+      `--output=${outPath}`,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  output = `${proc.stdout.toString()}${proc.stderr.toString()}`;
+  if (proc.exitCode !== 0 || !existsSync(outPath)) {
+    problems.push(`exit code ${proc.exitCode}`);
+  } else {
     const report = JSON.parse(readFileSync(outPath, "utf8")) as RunReport;
-    const problems: string[] = [];
     if (!report.ok) problems.push("report is not ok");
     // The check is only meaningful while the file has the process to itself.
     if (report.jobCount !== 1) problems.push(`jobCount ${report.jobCount}, expected 1`);
@@ -172,16 +167,11 @@ try {
       );
     if (report.assertions !== EXPECTED_ASSERTIONS)
       problems.push(`${report.assertions} assertions ran, expected ${EXPECTED_ASSERTIONS}`);
-
-    if (problems.length > 0) {
-      console.error(`  FAIL [${mode}]: ${problems.join("; ")}\n${output}`);
-      failures++;
-    }
   }
 } finally {
   clean(scratch);
 }
 
-if (failures > 0)
-  throw new Error(`FFI callback slot check failed in ${failures} mode(s)`);
+if (problems.length > 0)
+  throw new Error(`FFI callback slot check failed: ${problems.join("; ")}\n${output}`);
 console.log("FFI callback slot exhaustion and reuse OK");

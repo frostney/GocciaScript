@@ -443,8 +443,8 @@ type PlaygroundProps = {
   /** Per-runner-kind `--mode` support for each version tag, probed from the
    *  binaries' help text. The execution-mode toggle is shown only when the
    *  selected version's runner advertises `--mode`; the server makes the same
-   *  check before it sends the flag. An unknown tag (a locally built engine)
-   *  counts as supporting it. */
+   *  check before it sends the flag. Only releases up to 0.14 advertise it; an
+   *  unknown tag (a locally built engine) does not. */
   modeSupport?: PlaygroundModeSupport;
 };
 
@@ -617,7 +617,7 @@ export function Playground({
     ]
       .filter(Boolean)
       .join(" ");
-    // An unknown tag (a locally built engine) is a current one.
+    // An unknown tag is a locally built engine, named as the current binaries.
     const binary =
       runner === "test"
         ? (runnerNames?.[version]?.testRunner ?? "GocciaTestRunner")

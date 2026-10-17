@@ -74,10 +74,11 @@ export function buildEngineArgs(
   // doesn't recognize them, and that's the desired UX (the user toggled it).
   if (options.compatVar) args.push("--compat-var");
   if (options.compatFunction) args.push("--compat-function");
-  // Name the backend explicitly for both values: released engines default to
-  // the interpreter and newer ones to bytecode (#871), so leaving the flag
-  // off would make the result depend on the binary's own default. A binary
-  // that doesn't advertise `--mode` gets no mode flag at all.
+  // Name the backend explicitly for both values: releases up to 0.14 default
+  // to the interpreter (bytecode became the default after 0.14, in #871), so
+  // leaving the flag off would make the result depend on the binary's own
+  // default. A binary that doesn't advertise `--mode`, such as a 0.15+ build
+  // that removed it, gets no mode flag at all and runs bytecode.
   if (options.mode && supportsModeFlag(features, kind)) {
     args.push(`--mode=${options.mode}`);
   }

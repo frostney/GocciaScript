@@ -8,10 +8,7 @@ uses
   Classes,
   Generics.Collections,
 
-  Goccia.ControlFlow,
-  Goccia.Evaluator.Context,
-  Goccia.SourceSpan,
-  Goccia.Values.Primitives;
+  Goccia.SourceSpan;
 
 type
   { ADR 0134 static detection. What the parser found in a function's own code,
@@ -35,16 +32,13 @@ type
     property Column: Integer read GetColumn;
   end;
 
-  // Expressions — virtual Evaluate replaces the `is` dispatch chain in Goccia.Evaluator
   TGocciaExpression = class(TGocciaASTNode)
   private
     FParenthesized: Boolean;
   public
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; virtual; abstract;
     property Parenthesized: Boolean read FParenthesized write FParenthesized;
   end;
 
-  // Statements — virtual Execute replaces the `is` dispatch chain in Goccia.Evaluator
   TGocciaStatement = class(TGocciaASTNode)
   private
     FLabels: TStringList;
@@ -53,8 +47,6 @@ type
   public
     destructor Destroy; override;
     procedure AddLabel(const AName: string);
-    function HasLabel(const AName: string): Boolean;
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; virtual; abstract;
     property LabelCount: Integer read GetLabelCount;
     property Labels[const AIndex: Integer]: string read GetLabel;
   end;
@@ -73,9 +65,9 @@ type
       write FDirectEvalUsage;
   end;
 
-// Conservative pre-scan shared by the interpreter and the bytecode compiler to
-// decide whether a non-arrow function must materialize an implicit arguments
-// object (only relevant under --compat-arguments-object). The arguments object
+// Conservative pre-scan the bytecode compiler uses to decide whether a
+// non-arrow function must materialize an implicit arguments object (only
+// relevant under --compat-arguments-object). The arguments object
 // is observable only through the identifier `arguments` or through direct
 // `eval`, and a function's source text spans its whole body — including any
 // nested arrow functions, which share the enclosing `arguments`. A body that
@@ -149,11 +141,6 @@ begin
     FLabels.CaseSensitive := True;
   end;
   FLabels.Add(AName);
-end;
-
-function TGocciaStatement.HasLabel(const AName: string): Boolean;
-begin
-  Result := Assigned(FLabels) and (FLabels.IndexOf(AName) >= 0);
 end;
 
 { TGocciaProgram }

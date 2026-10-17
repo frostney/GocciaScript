@@ -5,7 +5,6 @@ unit Goccia.Arithmetic;
 interface
 
 uses
-  Goccia.Token,
   Goccia.Values.Primitives;
 
 function EvaluateAddition(const ALeft, ARight: TGocciaValue): TGocciaValue;
@@ -22,8 +21,6 @@ function EvaluateLeftShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 function EvaluateRightShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 function EvaluateUnsignedRightShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 function EvaluateBitwiseNot(const AOperand: TGocciaValue): TGocciaValue;
-function CompoundOperations(const ACurrentValue, ANewValue: TGocciaValue;
-  const AOperator: TGocciaTokenType): TGocciaValue;
 
 function IsStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 function IsNotStrictEqual(const ALeft, ARight: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -498,39 +495,6 @@ begin
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(PrimOperand).Value.BitwiseNot));
   Result := NumberValue(not ToInt32Value(PrimOperand));
-end;
-
-function CompoundOperations(const ACurrentValue, ANewValue: TGocciaValue;
-  const AOperator: TGocciaTokenType): TGocciaValue;
-begin
-  case AOperator of
-    gttPlusAssign:
-      Result := EvaluateAddition(ACurrentValue, ANewValue);
-    gttMinusAssign:
-      Result := EvaluateSubtraction(ACurrentValue, ANewValue);
-    gttStarAssign:
-      Result := EvaluateMultiplication(ACurrentValue, ANewValue);
-    gttSlashAssign:
-      Result := EvaluateDivision(ACurrentValue, ANewValue);
-    gttPercentAssign:
-      Result := EvaluateModulo(ACurrentValue, ANewValue);
-    gttPowerAssign:
-      Result := EvaluateExponentiation(ACurrentValue, ANewValue);
-    gttBitwiseAndAssign:
-      Result := EvaluateBitwiseAnd(ACurrentValue, ANewValue);
-    gttBitwiseOrAssign:
-      Result := EvaluateBitwiseOr(ACurrentValue, ANewValue);
-    gttBitwiseXorAssign:
-      Result := EvaluateBitwiseXor(ACurrentValue, ANewValue);
-    gttLeftShiftAssign:
-      Result := EvaluateLeftShift(ACurrentValue, ANewValue);
-    gttRightShiftAssign:
-      Result := EvaluateRightShift(ACurrentValue, ANewValue);
-    gttUnsignedRightShiftAssign:
-      Result := EvaluateUnsignedRightShift(ACurrentValue, ANewValue);
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
 end;
 
 function NumberValuesEqual(const ALeft, ARight: TGocciaNumberLiteralValue;

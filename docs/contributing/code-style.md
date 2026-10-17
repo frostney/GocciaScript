@@ -73,7 +73,7 @@ Source files live in four directories under `source/`, each with different namin
 
 Generated units should contain generated data, generated resource links, and the minimum schema needed to describe that data. Hand-authored lookup, decoding, validation, and other behavior belongs in `source/units/` or `source/shared/`, depending on ownership.
 
-**When to use `Goccia.*`:** Any unit that depends on or extends the GocciaScript engine (runtime values, evaluator, compiler, modules, etc.).
+**When to use `Goccia.*`:** Any unit that depends on or extends the GocciaScript engine (runtime values, compiler, VM, modules, etc.).
 
 **When to omit the prefix:** Generic data structures, utilities, and framework code that could be extracted to a standalone library. These live in `source/shared/` and use `{$I Shared.inc}` instead of `{$I Goccia.inc}`.
 
@@ -367,12 +367,12 @@ uses
 type
   // Type declarations (classes, interfaces, records, enums)
 
-// Free function declarations (for evaluator modules)
+// Free function declarations (for helper units)
 
 implementation
 
 uses
-  Goccia.Evaluator;
+  Goccia.Values.ErrorHelper;
 
 // Implementation
 
@@ -389,7 +389,8 @@ Units are organized by category using dot-separated names:
 |----------|---------|---------|
 | `Goccia.Values.*` | Value type hierarchy | `Primitives`, `ObjectValue`, `ArrayValue`, `ClassValue` |
 | `Goccia.Builtins.*` | Built-in object implementations | `Console`, `Math`, `JSON`, `GlobalObject` |
-| `Goccia.Evaluator.*` | Evaluator sub-modules | `Arithmetic`, `Bitwise`, `Comparison`, `Assignment` |
+| `Goccia.Compiler.*` | Bytecode compiler sub-modules | `Expressions`, `Statements`, `Scope`, `ConstantFolding` |
+| `Goccia.VM.*` | Bytecode VM sub-modules | `Registers`, `Closure`, `Upvalue`, `Exception` |
 | `Goccia.AST.*` | AST node definitions | `Node`, `Expressions`, `Statements` |
 | `Goccia.Arguments.*` | Function argument handling | `Collection`, `Converter`, `Validator` |
 
@@ -405,7 +406,7 @@ When a method only needs to expose elements for iteration, an indexed getter wit
 
 2. **OOP over everything** — Rely on type safety of specialized classes. Each concept gets its own class rather than using generic data structures.
 
-3. **Separation of concerns** — Each unit has a single, clear responsibility. The evaluator doesn't know about built-ins; the engine doesn't know about AST structure.
+3. **Separation of concerns** — Each unit has a single, clear responsibility. The parser doesn't know about built-ins; the engine doesn't know about AST structure.
 
 4. **Minimal public API** — Units expose only what's needed. Implementation details stay in the `implementation` section.
 

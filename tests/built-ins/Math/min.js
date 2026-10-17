@@ -40,3 +40,20 @@ test("Math.min has correct name and length", () => {
   expect(Math.min.name).toBe("min");
   expect(Math.min.length).toBe(2);
 });
+
+describe.runIf(typeof Goccia !== "undefined")("Math.min across a collection", () => {
+  // Reuses the memory a wrongly collected number leaves behind.
+  const churn = () => Array.from({ length: 4000 }, (_, i) => i + 0.5);
+  const fresh = (value) => ({ valueOf: () => [value][0] * 1 });
+  const collecting = (value) => ({
+    valueOf() {
+      Goccia.gc();
+      churn();
+      return value;
+    },
+  });
+
+  test("keeps an earlier coerced argument while a later valueOf collects", () => {
+    expect(Math.min(fresh(-9.5), collecting(1))).toBe(-9.5);
+  });
+});

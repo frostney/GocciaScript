@@ -157,7 +157,7 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
 | `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
 | `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
 | `error.message` | `string` | Error message text |
-| `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable. For a parse error, where parsing failed. For a thrown error, where the engine recorded the error was created, the location the human-readable `-->` line shows. A thrown value that is not an engine-created error has no location, and neither does an error the interpreter raises at the top level ([#1273](https://github.com/frostney/GocciaScript/issues/1273)) |
+| `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable. For a parse error, where parsing failed. For a thrown error, where the engine recorded the error was created, the location the human-readable `-->` line shows. A thrown value that is not an engine-created error has no location |
 | `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable, as for `error.line` |
 | `error.fileName` | `string \| null` | Source file path, or `null` if unavailable. For a thrown error with a recorded location, the file that location is in, which can be a module the input imported |
 | `timing` | `object` | Cumulative phase-level timings in nanoseconds (`*_ns`) |

@@ -102,3 +102,30 @@ test("throws TypeError when called on non-Set", () => {
   expect(() => add.call({}, 1)).toThrow(TypeError);
   expect(() => add.call(new Map(), 1)).toThrow(TypeError);
 });
+
+describe.runIf(typeof Goccia !== "undefined")("add across a collection", () => {
+  // Reuses the memory a wrongly collected object leaves behind.
+  const churn = () => Array.from({ length: 2000 }, (_, i) => [i + 0.25, { i }]);
+
+  test("re-adding an equal number keeps the member findable after a collection", () => {
+    const set = new Set();
+    const half = 0.5;
+    // Each product is a distinct number value equal to the first.
+    set.add(half * 3);
+    set.add(half * 3);
+    Goccia.gc();
+    churn();
+    expect(set.has(1.5)).toBe(true);
+    expect(set.size).toBe(1);
+    expect([...set]).toEqual([1.5]);
+  });
+
+  test("re-adding through the constructor keeps the member findable", () => {
+    const half = 0.5;
+    const set = new Set([half * 5, half * 5, half * 5]);
+    Goccia.gc();
+    churn();
+    expect(set.has(2.5)).toBe(true);
+    expect([...set]).toEqual([2.5]);
+  });
+});

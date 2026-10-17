@@ -25,7 +25,7 @@ type
     // FunctionName/FilePath are resolved lazily via the template resolver at
     // capture time, and FilePath carries only the module-path fallback used
     // when the template has no own source file. When Template is nil the frame
-    // carries its strings directly (interpreter and native callers).
+    // carries its strings directly (native callers).
     Template: Pointer;
     FunctionName: string;
     FilePath: string;
@@ -103,8 +103,8 @@ type
       otherwise stay on the frame and locate a later error at it. }
     procedure ClearTopFrameLocation;
     { Snapshot / restore the whole top frame, for a caller that stamps the
-      executing frame's location for the duration of a nested operation (an
-      interpreter `new` whose native constructor captures a trace) and must
+      executing frame's location for the duration of a nested operation (a
+      VM call or `new` whose native callee captures a trace) and must
       leave it exactly as it found it — otherwise the stamp leaks into the next
       statement's diagnostics. }
     function TryGetTopFrame(var AFrame: TGocciaCallFrame): Boolean;

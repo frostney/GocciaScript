@@ -6,7 +6,7 @@
 // into its released realm graph (a module import binding still pointing at the
 // released node:async_hooks module) and faulted in MarkRoots. This file plus a
 // sibling under the same unsafe-shadowrealm config reproduces the two-file,
-// one-worker warm-up that triggered it; both must run clean in both modes.
+// one-worker warm-up that triggered it; both must run clean.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
