@@ -88,6 +88,8 @@ type
     procedure TestToDoubleZero;
     procedure TestToDoublePositive;
     procedure TestToDoubleNegative;
+    procedure TestToDoubleFullMantissa;
+    procedure TestToDoubleFullMantissaNegative;
     procedure TestToInt64Zero;
     procedure TestToInt64Positive;
     procedure TestToInt64Negative;
@@ -292,6 +294,8 @@ begin
   Test('ToDouble zero', TestToDoubleZero);
   Test('ToDouble positive', TestToDoublePositive);
   Test('ToDouble negative', TestToDoubleNegative);
+  Test('ToDouble keeps a 53-bit mantissa above 2^63', TestToDoubleFullMantissa);
+  Test('ToDouble keeps a 53-bit mantissa below -2^63', TestToDoubleFullMantissaNegative);
   Test('ToInt64 zero', TestToInt64Zero);
   Test('ToInt64 positive', TestToInt64Positive);
   Test('ToInt64 negative', TestToInt64Negative);
@@ -859,6 +863,23 @@ end;
 procedure TBigIntegerTests.TestToDoubleNegative;
 begin
   Expect<Boolean>(TBigInteger.FromInt64(-42).ToDouble = -42.0).ToBe(True);
+end;
+
+procedure TBigIntegerTests.TestToDoubleFullMantissa;
+begin
+  // Both values exceed 2^63 and are exactly representable as Double, with
+  // significands wider than Single's 24 bits: (2^53 - 1) * 2^11 uses all 53,
+  // and 1728 * 10^19 (PT17280000000000S in nanoseconds) uses 49.
+  Expect<string>(TBigInteger.FromDouble(TBigInteger.FromDecimalString(
+    '18446744073709549568').ToDouble).ToString).ToBe('18446744073709549568');
+  Expect<string>(TBigInteger.FromDouble(TBigInteger.FromDecimalString(
+    '17280000000000000000000').ToDouble).ToString).ToBe('17280000000000000000000');
+end;
+
+procedure TBigIntegerTests.TestToDoubleFullMantissaNegative;
+begin
+  Expect<string>(TBigInteger.FromDouble(TBigInteger.FromDecimalString(
+    '-18446744073709549568').ToDouble).ToString).ToBe('-18446744073709549568');
 end;
 
 procedure TBigIntegerTests.TestToInt64Zero;

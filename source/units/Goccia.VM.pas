@@ -191,6 +191,13 @@ type
 
   TGocciaVM = class
   private
+    // FRegisters, FLocalCells and FArguments point into stacks that move
+    // when a frame needs more room or an idle stack shrinks, so guest code
+    // running on this VM can move them. Pascal does not say whether
+    // `FRegisters[A] := F(...)` takes the slot's address before or after
+    // calling F, and FPC 3.2.4-rc2 and trunk can take it first. A call that
+    // can run guest code is therefore evaluated into a local, and the local
+    // is stored (scripts/check-vm-stack-stores.ts).
     FRegisterStack: TGocciaRegisterArray;
     FRegisterBase: Integer;
     FRegisters: PGocciaRegister;
@@ -272,7 +279,6 @@ type
     FPendingNewTarget: TGocciaValue;
     FCurrentNewTarget: TGocciaValue;
     FCurrentAsyncPromise: TGocciaPromiseValue;
-    FActiveDecoratorSession: TObject;
     FGlobalBackedTopLevel: Boolean;
     FCoverageEnabled: Boolean;
     FProfilingOpcodes: Boolean;
@@ -555,11 +561,15 @@ type
       const ABoxedArguments: TGocciaArgumentsCollection;
       const ARegisterArguments: TGocciaRegisterArray;
       const AUseRegisters: Boolean);
-    procedure BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
-    procedure ApplyElementDecorator(const ADecoratorFn: TGocciaValue;
+    function BeginDecorators(
+      const AClassValue, ASuperValue: TGocciaValue): TGocciaValue;
+    procedure ApplyElementDecorator(
+      const ASessionValue, ADecoratorFn: TGocciaValue;
       const ADescriptor: string; const AComputedKey: TGocciaValue = nil);
-    procedure ApplyClassDecorator(const ADecoratorFn: TGocciaValue);
-    function FinishDecorators(const ACurrentValue: TGocciaValue): TGocciaValue;
+    procedure ApplyClassDecorator(
+      const ASessionValue, ADecoratorFn: TGocciaValue);
+    function FinishDecorators(
+      const ASessionValue, ACurrentValue: TGocciaValue): TGocciaValue;
     function GetSuperPropertyValue(const ASuperValue, AThisValue: TGocciaValue;
       const AName: string; const AUseSuperConstructor: Boolean): TGocciaValue;
     function GetSuperPropertyValueByKey(const ASuperValue, AThisValue,
@@ -2209,9 +2219,23 @@ type
 
   TGocciaBytecodeGeneratorObjectValue = class;
 
-  TGocciaVMDecoratorSession = class
+  { The decoration state of one evaluation of a decorated class (decorators
+    proposal, ClassDefinitionEvaluation): its metadata object, its extra
+    initializer lists and the class its class decorators have produced so
+    far. OP_BEGIN_DECORATORS creates it in a register of the frame defining
+    the class, and that class's other decorator opcodes name the register,
+    so a class defined and decorated while another is being decorated has
+    its own session. Script never sees it. The register roots it, also
+    across a generator's suspension, and a class definition that completes
+    abruptly leaves it for the collector. A bare value rather than an
+    object, so it carries no property storage. }
+  TGocciaVMDecoratorSession = class(TGocciaValue)
   public
     MetadataObject: TGocciaObjectValue;
+    // Managed by the garbage collector, not by the session: the
+    // addInitializer function of each decorator context made for a collector
+    // keeps it alive, and a decorator can keep its context after the session
+    // ends.
     MethodCollector: TGocciaInitializerCollector;
     FieldCollector: TGocciaInitializerCollector;
     StaticFieldCollector: TGocciaInitializerCollector;
@@ -2220,8 +2244,36 @@ type
     OriginalClassValue: TGocciaValue;
     StaticDecoratorInitializersRun: Boolean;
     constructor Create(const AMetadataObject: TGocciaObjectValue);
-    destructor Destroy; override;
-    procedure MarkReferences;
+    procedure MarkReferences; override;
+    function TypeName: string; override;
+    function TypeOf: string; override;
+    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
+    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
+    function ToStringLiteral: TGocciaStringLiteralValue; override;
+  end;
+
+  { context.access.get and context.access.has of a decorated private method
+    (decorators proposal, CreateDecoratorAccessObject): get(o) is
+    PrivateGet(o, #m), has(o) is PrivateElementFind(o, #m) <> empty, and
+    both throw a TypeError when o is not an Object. They read the method the
+    class holds now, so get returns a decorator's replacement. AKey is the
+    compiled key the instance method is stored under on the prototype, or
+    the runtime key of a static one in PrivateStaticMethods. }
+  TGocciaVMPrivateMethodAccessFunction = class(TGocciaNativeFunctionValue)
+  private
+    FVM: TGocciaVM;
+    FClassValue: TGocciaClassValue;
+    FKey: string;
+    FBrandKey: string;
+    FIsStatic: Boolean;
+    FIsHas: Boolean;
+    function HasBrand(const AObject: TGocciaValue): Boolean;
+    function Invoke(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    constructor Create(const AVM: TGocciaVM;
+      const AClassValue: TGocciaClassValue; const AKey: string;
+      const AIsStatic, AIsHas: Boolean);
   end;
 
   // Sealed: OP_CALL and OP_CALL_METHOD recognise a bytecode callee by an exact
@@ -2782,9 +2834,6 @@ begin
       FVM.FTempSavedStateRoots[I].ArgCount);
   end;
 
-  if Assigned(FVM.FActiveDecoratorSession) then
-    TGocciaVMDecoratorSession(FVM.FActiveDecoratorSession).MarkReferences;
-
   if Assigned(FVM.FCurrentModuleExports) then
     for ExportPair in FVM.FCurrentModuleExports do
       if Assigned(ExportPair.Value) then
@@ -3127,40 +3176,46 @@ begin
   StaticDecoratorInitializersRun := False;
 end;
 
-destructor TGocciaVMDecoratorSession.Destroy;
-begin
-  MethodCollector.Free;
-  FieldCollector.Free;
-  StaticFieldCollector.Free;
-  ClassCollector.Free;
-  inherited;
-end;
-
 procedure TGocciaVMDecoratorSession.MarkReferences;
-  procedure MarkCollector(const ACollector: TGocciaInitializerCollector);
-  var
-    Initializers: TArray<TGocciaValue>;
-    Initializer: TGocciaValue;
-  begin
-    if not Assigned(ACollector) then
-      Exit;
-    Initializers := ACollector.GetInitializers;
-    for Initializer in Initializers do
-      if Assigned(Initializer) then
-        Initializer.MarkReferences;
-  end;
-
 begin
+  if GCMarked then
+    Exit;
+  inherited;
   if Assigned(MetadataObject) then
     MetadataObject.MarkReferences;
   if Assigned(ClassValue) then
     ClassValue.MarkReferences;
   if Assigned(OriginalClassValue) and (OriginalClassValue <> ClassValue) then
     OriginalClassValue.MarkReferences;
-  MarkCollector(MethodCollector);
-  MarkCollector(FieldCollector);
-  MarkCollector(StaticFieldCollector);
-  MarkCollector(ClassCollector);
+  MethodCollector.MarkReferences;
+  FieldCollector.MarkReferences;
+  StaticFieldCollector.MarkReferences;
+  ClassCollector.MarkReferences;
+end;
+
+function TGocciaVMDecoratorSession.TypeName: string;
+begin
+  Result := 'decorator session';
+end;
+
+function TGocciaVMDecoratorSession.TypeOf: string;
+begin
+  Result := UNDEFINED_TYPE_NAME;
+end;
+
+function TGocciaVMDecoratorSession.ToBooleanLiteral: TGocciaBooleanLiteralValue;
+begin
+  Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+function TGocciaVMDecoratorSession.ToNumberLiteral: TGocciaNumberLiteralValue;
+begin
+  Result := TGocciaNumberLiteralValue.NaNValue;
+end;
+
+function TGocciaVMDecoratorSession.ToStringLiteral: TGocciaStringLiteralValue;
+begin
+  Result := TGocciaStringLiteralValue.Create('');
 end;
 
 procedure RunStaticDecoratorInitializersForSession(
@@ -6424,7 +6479,6 @@ begin
   // independent of which thread's call-stack instance ends up running.
   TGocciaCallStack.SetTemplateResolver(@VMTemplateTraceResolver);
   FArgumentPoolCount := 0;
-  FActiveDecoratorSession := nil;
   FLastClosureThisValue := RegisterUndefined;
   FCurrentConstructorSuperCalled := False;
   FPrivateInitializerReceiver := nil;
@@ -6483,12 +6537,6 @@ begin
   begin
     Freed := 0;
     ShrinkThreadStacks(Freed);
-  end;
-  if Assigned(FActiveDecoratorSession) then
-  begin
-    TGarbageCollector.Instance.RemoveTempRoot(
-      TGocciaVMDecoratorSession(FActiveDecoratorSession).MetadataObject);
-    FActiveDecoratorSession.Free;
   end;
   for I := 0 to FArgumentPoolCount - 1 do
     FArgumentPool[I].Free;
@@ -8136,9 +8184,10 @@ begin
 end;
 
 // How many more bytes the stacks may take now. Stacks that reached into the
-// pressure reserve would make every pressure check a full collection, each
-// marking every frame, so a deep recursion is refused at the line instead,
-// and the reserve is left for the RangeError and the handler that catches it.
+// pressure reserve would keep the collector running ever more often as the
+// headroom closes, each collection marking every frame, so a deep recursion
+// is refused at the line instead, and the reserve is left for the RangeError
+// and the handler that catches it.
 // Stacks no bigger than the reserve may still use it, up to the ceiling
 // itself, so that a program whose heap fills the ceiling can still make
 // calls.
@@ -12247,17 +12296,9 @@ var
 begin
   if (AFlags and 2) = 0 then
     Exit;
-  if Assigned(FActiveDecoratorSession) then
-  begin
-    if not (TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue is TGocciaClassValue) then
-      Exit;
-    ClassVal := TGocciaClassValue(
-      TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue);
-  end
-  else if AClassValue is TGocciaClassValue then
-    ClassVal := TGocciaClassValue(AClassValue)
-  else
+  if not (AClassValue is TGocciaClassValue) then
     Exit;
+  ClassVal := TGocciaClassValue(AClassValue);
   SourceName := BytecodePrivateSourceName(AName);
   if SourceName <> '' then
     ClassVal.DeclarePrivateName(SourceName, AName);
@@ -12313,12 +12354,15 @@ begin
     Target.DefineProperty(AName, Descriptor);
 end;
 
-procedure TGocciaVM.BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
+function TGocciaVM.BeginDecorators(
+  const AClassValue, ASuperValue: TGocciaValue): TGocciaValue;
 var
   ClassVal: TGocciaClassValue;
   SuperMetadata: TGocciaValue;
   Meta: TGocciaObjectValue;
+  Session: TGocciaVMDecoratorSession;
 begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not (AClassValue is TGocciaClassValue) then
     Exit;
 
@@ -12337,32 +12381,28 @@ begin
   else
     Meta := TGocciaObjectValue.Create;
 
-  TGarbageCollector.Instance.AddTempRoot(Meta);
-
-  if Assigned(FActiveDecoratorSession) then
-  begin
-    TGarbageCollector.Instance.RemoveTempRoot(
-      TGocciaVMDecoratorSession(FActiveDecoratorSession).MetadataObject);
-    FActiveDecoratorSession.Free;
-  end;
-
-  FActiveDecoratorSession := TGocciaVMDecoratorSession.Create(Meta);
-  TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue := ClassVal;
-  TGocciaVMDecoratorSession(FActiveDecoratorSession).OriginalClassValue :=
-    ClassVal;
+  // No guest code runs between here and the caller storing the session in
+  // its register, so nothing can collect Meta or the session before then.
+  Session := TGocciaVMDecoratorSession.Create(Meta);
+  Session.ClassValue := ClassVal;
+  Session.OriginalClassValue := ClassVal;
+  Result := Session;
 end;
 
-procedure TGocciaVM.ApplyClassDecorator(const ADecoratorFn: TGocciaValue);
+procedure TGocciaVM.ApplyClassDecorator(
+  const ASessionValue, ADecoratorFn: TGocciaValue);
 var
   Session: TGocciaVMDecoratorSession;
   ClassVal, DecoratorResult: TGocciaValue;
   ContextObject: TGocciaObjectValue;
+  AddInitializerFunction: TGocciaAddInitializerFunction;
   DecoratorArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
-  if not Assigned(FActiveDecoratorSession) then
+  if not (ASessionValue is TGocciaVMDecoratorSession) then
     Exit;
 
-  Session := TGocciaVMDecoratorSession(FActiveDecoratorSession);
+  Session := TGocciaVMDecoratorSession(ASessionValue);
   ClassVal := Session.ClassValue;
   if not (ClassVal is TGocciaClassValue) then
     Exit;
@@ -12376,17 +12416,25 @@ begin
   ContextObject.AssignProperty(PROP_NAME,
     TGocciaStringLiteralValue.Create(TGocciaClassValue(ClassVal).Name));
   ContextObject.AssignProperty(PROP_METADATA, Session.MetadataObject);
-  ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      Session.ClassCollector.AddInitializer, PROP_ADD_INITIALIZER, 1));
+  AddInitializerFunction := TGocciaAddInitializerFunction.Create(
+    Session.ClassCollector);
+  ContextObject.AssignProperty(PROP_ADD_INITIALIZER, AddInitializerFunction);
 
   DecoratorArgs := AcquireArguments(2);
   DecoratorArgs.Add(ClassVal);
   DecoratorArgs.Add(ContextObject);
+  // The decorator can delete addInitializer from its context, so the
+  // function stays rooted here until Finish has run.
+  Roots.Initialize;
+  Roots.Add(AddInitializerFunction);
   try
     DecoratorResult := DispatchCall(ADecoratorFn,
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    // Decorators proposal, ApplyDecoratorsToClassDefinition step 1.f:
+    // decorationState.[[Finished]] is set once the decorator has returned.
+    AddInitializerFunction.Finish;
   finally
+    Roots.Clear;
     ReleaseArguments(DecoratorArgs);
   end;
 
@@ -12399,7 +12447,95 @@ begin
   end;
 end;
 
-procedure TGocciaVM.ApplyElementDecorator(const ADecoratorFn: TGocciaValue;
+{ TGocciaVMPrivateMethodAccessFunction }
+
+constructor TGocciaVMPrivateMethodAccessFunction.Create(const AVM: TGocciaVM;
+  const AClassValue: TGocciaClassValue; const AKey: string;
+  const AIsStatic, AIsHas: Boolean);
+var
+  PrivateBrandToken: string;
+begin
+  if AIsHas then
+    inherited CreateWithoutPrototype(Invoke, PROP_HAS, 1)
+  else
+    inherited CreateWithoutPrototype(Invoke, PROP_GET, 1);
+  FVM := AVM;
+  FClassValue := AClassValue;
+  FKey := AKey;
+  FIsStatic := AIsStatic;
+  FIsHas := AIsHas;
+  // The brand key StampBytecodePrivateBrands gives each instance the class
+  // constructs (BuildPrivateStampPlan).
+  PrivateBrandToken := BytecodePrivateTokenForKey(AKey,
+    AClassValue.PrivateBrandToken);
+  FBrandKey := BytecodePrivateBrandKey(
+    NormalizeBytecodePrivateKey(AKey, PrivateBrandToken), PrivateBrandToken);
+  CapturedRoot := AClassValue;
+end;
+
+function TGocciaVMPrivateMethodAccessFunction.HasBrand(
+  const AObject: TGocciaValue): Boolean;
+var
+  BrandValue: TGocciaValue;
+begin
+  if FIsStatic then
+    Result := (AObject = FClassValue) and
+      FClassValue.HasOwnPrivateStaticMethod(FKey)
+  else
+    Result := FVM.TryGetRawPrivateValue(AObject, FBrandKey, BrandValue);
+end;
+
+function TGocciaVMPrivateMethodAccessFunction.Invoke(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Target: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  if AArgs.Length > 0 then
+    Target := AArgs.GetElement(0)
+  else
+    Target := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not (Target is TGocciaObjectValue) then
+  begin
+    if FIsHas and (Target is TGocciaSymbolValue) then
+      ThrowTypeErrorInRealm(Format(SErrorCannotUseInOperator,
+        [DisplayClassElementName(FKey),
+         TGocciaSymbolValue(Target).ToDisplayString.Value]),
+        SSuggestCheckNullBeforeAccess, FClassValue.CreationRealm)
+    else if FIsHas then
+      ThrowTypeErrorInRealm(Format(SErrorCannotUseInOperator,
+        [DisplayClassElementName(FKey), Target.ToStringLiteral.Value]),
+        SSuggestCheckNullBeforeAccess, FClassValue.CreationRealm)
+    else
+      ThrowTypeErrorInRealm(Format(SErrorPrivateFieldInaccessible,
+        [PrivateStorageSourceName(FKey)]), SSuggestPrivateFieldAccess,
+        FClassValue.CreationRealm);
+  end;
+
+  if FIsHas then
+  begin
+    if HasBrand(Target) then
+      Exit(TGocciaBooleanLiteralValue.TrueValue);
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
+  end;
+
+  if not HasBrand(Target) then
+    ThrowTypeErrorInRealm(Format(SErrorPrivateFieldInaccessible,
+      [PrivateStorageSourceName(FKey)]), SSuggestPrivateFieldAccess,
+      FClassValue.CreationRealm);
+  Result := nil;
+  if FIsStatic then
+    FClassValue.PrivateStaticMethods.TryGetValue(FKey, Result)
+  else if TryGetRawObjectPrivateDescriptor(FClassValue.Prototype, FKey,
+     Descriptor) and (Descriptor is TGocciaPropertyDescriptorData) then
+    Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+  if not Assigned(Result) then
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaVM.ApplyElementDecorator(
+  const ASessionValue, ADecoratorFn: TGocciaValue;
   const ADescriptor: string; const AComputedKey: TGocciaValue = nil);
 var
   Session: TGocciaVMDecoratorSession;
@@ -12414,10 +12550,13 @@ var
   AccessGetterHelper: TGocciaAccessGetter;
   AccessSetterHelper: TGocciaAccessSetter;
   Collector: TGocciaInitializerCollector;
+  AddInitializerFunction: TGocciaAddInitializerFunction;
   DecoratorArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
   KindStr: string;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   GetterValue, SetterValue, NewGetter, NewSetter, NewInit: TGocciaValue;
+  PrivateKey: string;
 
   function GetDecoratedDataProperty(const AIsStatic: Boolean;
     const AName: string; const AKey: TGocciaValue): TGocciaValue;
@@ -12455,26 +12594,136 @@ var
         Exit(Pair.Key);
   end;
 
+  { The compiled key a private instance method or accessor of the class is
+    stored under on its prototype (OP_CLASS_ADD_METHOD_CONST and
+    OP_DEFINE_ACCESSOR_CONST put it there, and a private reference finds it
+    by walking from the receiver), or '' when there is none. }
+  function PrivatePrototypeKey(const AName: string): string;
+  var
+    Pair: TGocciaPropertyMap.TKeyValuePair;
+  begin
+    Result := '';
+    if not Assigned(TGocciaClassValue(ClassVal).Prototype) then
+      Exit;
+    for Pair in TGocciaClassValue(ClassVal).Prototype.Properties do
+      if IsBytecodePrivateKey(Pair.Key) and
+         BytecodePrivateSourceNameEquals(Pair.Key, AName) then
+        Exit(Pair.Key);
+  end;
+
+  function PrivatePrototypeDescriptor(
+    const AKey: string): TGocciaPropertyDescriptor;
+  begin
+    Result := nil;
+    if AKey <> '' then
+      TryGetRawObjectPrivateDescriptor(TGocciaClassValue(ClassVal).Prototype,
+        AKey, Result);
+  end;
+
   function GetPrivateMethodValue(const AName: string;
     const AIsStatic: Boolean): TGocciaValue;
+  var
+    Descriptor: TGocciaPropertyDescriptor;
   begin
+    Result := nil;
     if AIsStatic then
-    begin
-      if not TGocciaClassValue(ClassVal).PrivateStaticMethods.TryGetValue(
-        PrivateStaticKey(AName), Result) then
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
+      TGocciaClassValue(ClassVal).PrivateStaticMethods.TryGetValue(
+        PrivateStaticKey(AName), Result)
     else
-      // A compiled class records no instance private method by name.
-      Result := nil;
+    begin
+      Descriptor := PrivatePrototypeDescriptor(PrivatePrototypeKey(AName));
+      if Descriptor is TGocciaPropertyDescriptorData then
+        Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+    end;
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 
   procedure DefinePrivateMethodValue(const AName: string;
     const AIsStatic: Boolean; const AValue: TGocciaValue);
+  var
+    Key: string;
+    Descriptor: TGocciaPropertyDescriptor;
   begin
     if AIsStatic then
+    begin
       TGocciaClassValue(ClassVal).AddPrivateStaticMethod(
         PrivateStaticKey(AName), AValue);
+      Exit;
+    end;
+    Key := PrivatePrototypeKey(AName);
+    Descriptor := PrivatePrototypeDescriptor(Key);
+    if Descriptor is TGocciaPropertyDescriptorData then
+      TGocciaClassValue(ClassVal).Prototype.DefineProperty(Key,
+        TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags));
+  end;
+
+  { A private getter (AIsSetter False) or setter of the class: an instance
+    one is an accessor descriptor on the prototype, a static one sits in the
+    class's private getter and setter tables under its runtime key. }
+  function GetPrivateAccessorHalf(const AName: string;
+    const AIsStatic, AIsSetter: Boolean): TGocciaValue;
+  var
+    Descriptor: TGocciaPropertyDescriptor;
+    RuntimeKey: string;
+  begin
+    Result := nil;
+    if AIsStatic then
+    begin
+      RuntimeKey := BytecodePrivateRuntimeKey(AName,
+        TGocciaClassValue(ClassVal).PrivateBrandToken);
+      if AIsSetter then
+        Result := TGocciaClassValue(ClassVal).GetOwnPrivatePropertySetter(
+          RuntimeKey)
+      else
+        Result := TGocciaClassValue(ClassVal).GetOwnPrivatePropertyGetter(
+          RuntimeKey);
+    end
+    else
+    begin
+      Descriptor := PrivatePrototypeDescriptor(PrivatePrototypeKey(AName));
+      if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        if AIsSetter then
+          Result := TGocciaPropertyDescriptorAccessor(Descriptor).Setter
+        else
+          Result := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+      end;
+    end;
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+
+  procedure DefinePrivateAccessorHalf(const AName: string;
+    const AIsStatic, AIsSetter: Boolean; const AValue: TGocciaValue);
+  var
+    Key, RuntimeKey: string;
+    Descriptor: TGocciaPropertyDescriptor;
+    Getter, Setter: TGocciaValue;
+  begin
+    if AIsStatic then
+    begin
+      RuntimeKey := BytecodePrivateRuntimeKey(AName,
+        TGocciaClassValue(ClassVal).PrivateBrandToken);
+      if AIsSetter then
+        TGocciaClassValue(ClassVal).AddPrivateSetter(RuntimeKey, AValue)
+      else
+        TGocciaClassValue(ClassVal).AddPrivateGetter(RuntimeKey, AValue);
+      Exit;
+    end;
+    Key := PrivatePrototypeKey(AName);
+    Descriptor := PrivatePrototypeDescriptor(Key);
+    if not (Descriptor is TGocciaPropertyDescriptorAccessor) then
+      Exit;
+    Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+    Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+    if AIsSetter then
+      Setter := AValue
+    else
+      Getter := AValue;
+    TGocciaClassValue(ClassVal).Prototype.DefineProperty(Key,
+      TGocciaPropertyDescriptorAccessor.Create(Getter, Setter,
+        Descriptor.Flags));
   end;
 
   { These three install a decorator's replacement. The decorators proposal
@@ -12621,10 +12870,10 @@ var
           ExistingGetter, ASetter, [pfConfigurable]));
   end;
 begin
-  if not Assigned(FActiveDecoratorSession) then
+  if not (ASessionValue is TGocciaVMDecoratorSession) then
     Exit;
 
-  Session := TGocciaVMDecoratorSession(FActiveDecoratorSession);
+  Session := TGocciaVMDecoratorSession(ASessionValue);
   ClassVal := Session.ClassValue;
   if not (ClassVal is TGocciaClassValue) then
     Exit;
@@ -12687,20 +12936,35 @@ begin
     'm':
       begin
         if IsPrivate then
-          ElementValue := GetPrivateMethodValue(Name, IsStatic)
+        begin
+          ElementValue := GetPrivateMethodValue(Name, IsStatic);
+          if IsStatic then
+            PrivateKey := PrivateStaticKey(Name)
+          else
+            PrivateKey := PrivatePrototypeKey(Name);
+          AccessObject.AssignProperty(PROP_GET,
+            TGocciaVMPrivateMethodAccessFunction.Create(Self,
+              TGocciaClassValue(ClassVal), PrivateKey, IsStatic, False));
+          AccessObject.AssignProperty(PROP_HAS,
+            TGocciaVMPrivateMethodAccessFunction.Create(Self,
+              TGocciaClassValue(ClassVal), PrivateKey, IsStatic, True));
+          ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
+        end
         else
+        begin
           ElementValue := GetDecoratedDataProperty(
             IsStatic, ElementName, ElementKey);
-        if ElementKey is TGocciaSymbolValue then
-          AccessGetterHelper := TGocciaAccessGetter.CreateWithKey(
-            ElementValue, ElementKey)
-        else
-          AccessGetterHelper := TGocciaAccessGetter.Create(
-            ElementValue, ElementName);
-        AccessObject.AssignProperty(PROP_GET,
-          TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            AccessGetterHelper.Get, PROP_GET, 0));
-        ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
+          if ElementKey is TGocciaSymbolValue then
+            AccessGetterHelper := TGocciaAccessGetter.CreateWithKey(
+              ElementValue, ElementKey)
+          else
+            AccessGetterHelper := TGocciaAccessGetter.Create(
+              ElementValue, ElementName);
+          AccessObject.AssignProperty(PROP_GET,
+            TGocciaNativeFunctionValue.CreateWithoutPrototype(
+              AccessGetterHelper.Get, PROP_GET, 0));
+          ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
+        end;
       end;
     'g':
       begin
@@ -12762,9 +13026,8 @@ begin
     Collector := Session.FieldCollector
   else
     Collector := Session.MethodCollector;
-  ContextObject.AssignProperty(PROP_ADD_INITIALIZER,
-    TGocciaNativeFunctionValue.CreateWithoutPrototype(
-      Collector.AddInitializer, PROP_ADD_INITIALIZER, 1));
+  AddInitializerFunction := TGocciaAddInitializerFunction.Create(Collector);
+  ContextObject.AssignProperty(PROP_ADD_INITIALIZER, AddInitializerFunction);
 
   case Kind of
     'm':
@@ -12772,7 +13035,7 @@ begin
     'g':
       begin
         if IsPrivate then
-          ElementValue := TGocciaClassValue(ClassVal).PrivatePropertyGetter[Name]
+          ElementValue := GetPrivateAccessorHalf(Name, IsStatic, False)
         else
         begin
           ExistingDescriptor := GetDecoratedAccessorDescriptor(
@@ -12787,7 +13050,7 @@ begin
     's':
       begin
         if IsPrivate then
-          ElementValue := TGocciaClassValue(ClassVal).PrivatePropertySetter[Name]
+          ElementValue := GetPrivateAccessorHalf(Name, IsStatic, True)
         else
         begin
           ExistingDescriptor := GetDecoratedAccessorDescriptor(
@@ -12824,10 +13087,18 @@ begin
   DecoratorArgs := AcquireArguments(2);
   DecoratorArgs.Add(ElementValue);
   DecoratorArgs.Add(ContextObject);
+  // The decorator can delete addInitializer from its context, so the
+  // function stays rooted here until Finish has run.
+  Roots.Initialize;
+  Roots.Add(AddInitializerFunction);
   try
     DecoratorResult := DispatchCall(ADecoratorFn,
       DecoratorArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+    // Decorators proposal, ApplyDecoratorsToElementDefinition step 5.k:
+    // decorationState.[[Finished]] is set once the decorator has returned.
+    AddInitializerFunction.Finish;
   finally
+    Roots.Clear;
     ReleaseArguments(DecoratorArgs);
   end;
 
@@ -12851,8 +13122,7 @@ begin
         if not DecoratorResult.IsCallable then
           ThrowTypeError(SErrorGetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsPrivate then
-          TGocciaClassValue(ClassVal).AddPrivateGetter(
-            Name, DecoratorResult)
+          DefinePrivateAccessorHalf(Name, IsStatic, False, DecoratorResult)
         else
           DefineDecoratedGetterProperty(
             IsStatic, ElementName, ElementKey, DecoratorResult);
@@ -12862,8 +13132,7 @@ begin
         if not DecoratorResult.IsCallable then
           ThrowTypeError(SErrorSetterDecoratorReturn, SSuggestDecoratorFunction);
         if IsPrivate then
-          TGocciaClassValue(ClassVal).AddPrivateSetter(
-            Name, DecoratorResult)
+          DefinePrivateAccessorHalf(Name, IsStatic, True, DecoratorResult)
         else
           DefineDecoratedSetterProperty(
             IsStatic, ElementName, ElementKey, DecoratorResult);
@@ -12906,7 +13175,8 @@ begin
   end;
 end;
 
-function TGocciaVM.FinishDecorators(const ACurrentValue: TGocciaValue): TGocciaValue;
+function TGocciaVM.FinishDecorators(
+  const ASessionValue, ACurrentValue: TGocciaValue): TGocciaValue;
 var
   Session: TGocciaVMDecoratorSession;
   ClassVal: TGocciaClassValue;
@@ -12914,17 +13184,12 @@ var
   I: Integer;
   InitArgs: TGocciaArgumentsCollection;
 begin
-  if not Assigned(FActiveDecoratorSession) then
+  if not (ASessionValue is TGocciaVMDecoratorSession) then
     Exit(ACurrentValue);
 
-  Session := TGocciaVMDecoratorSession(FActiveDecoratorSession);
+  Session := TGocciaVMDecoratorSession(ASessionValue);
   if not (Session.ClassValue is TGocciaClassValue) then
-  begin
-    TGarbageCollector.Instance.RemoveTempRoot(Session.MetadataObject);
-    FActiveDecoratorSession.Free;
-    FActiveDecoratorSession := nil;
     Exit(ACurrentValue);
-  end;
 
   RunStaticDecoratorInitializersForSession(Session);
   ClassVal := TGocciaClassValue(Session.ClassValue);
@@ -12933,8 +13198,11 @@ begin
     TGocciaPropertyDescriptorData.Create(
       Session.MetadataObject, [pfConfigurable]));
 
+  // Decorators proposal, InitializeInstanceElements: the initializers that
+  // method, getter and setter decorators add run on each instance once its
+  // private methods are installed and before its fields are defined.
   InitializerResults := Session.MethodCollector.GetInitializers;
-  ClassVal.AppendMethodInitializers(InitializerResults);
+  ClassVal.PrependMethodInitializers(InitializerResults);
   InitializerResults := Session.FieldCollector.GetInitializers;
   ClassVal.AppendFieldInitializers(InitializerResults);
 
@@ -12961,9 +13229,6 @@ begin
   end;
 
   Result := ClassVal;
-  TGarbageCollector.Instance.RemoveTempRoot(Session.MetadataObject);
-  FActiveDecoratorSession.Free;
-  FActiveDecoratorSession := nil;
 end;
 
 function TGocciaVM.GetSuperPropertyValue(const ASuperValue, AThisValue: TGocciaValue;
@@ -15865,6 +16130,11 @@ var
   OperandRoots: TGocciaActiveRootFrame;
   SavedConstructFrame: TGocciaCallFrame;
   SavedConstructFrameOk: Boolean;
+  // The result of a call that can run guest code, taken before it is stored
+  // into a register (see FRegisters).
+  GuestCallBoolean: Boolean;
+  GuestCallValue: TGocciaValue;
+  GuestCallRegister: TGocciaRegister;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin

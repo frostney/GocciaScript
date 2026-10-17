@@ -754,7 +754,7 @@ begin
         {$ELSE}
         raise EInvalidOpException.Create('64-bit FFI plan on i386')
         {$ENDIF};
-      fabiAAPCS64, fabiDarwinARM64:
+      fabiAAPCS64, fabiDarwinARM64, fabiWinARM64:
         {$IF defined(GOCCIA_CPU_64)}
         State.HiddenResult := AResult
         {$ELSE}

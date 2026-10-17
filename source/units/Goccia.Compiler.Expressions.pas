@@ -4356,6 +4356,30 @@ begin
   end;
 end;
 
+// ES2026 §8.6.2 BindingInitialization of a global-backed top-level `let` or
+// `const` pattern: InitializeReferencedBinding of each name happens as its
+// element completes (§8.6.3 IteratorBindingInitialization, §14.3.3.3
+// KeyedBindingInitialization), so the initializer of a later element reads
+// the global binding of an earlier one, while a later name stays in its
+// temporal dead zone.
+procedure EmitGlobalLexicalPatternDefine(const ACtx: TGocciaCompilationContext;
+  const AName: string);
+var
+  LocalIdx: Integer;
+  OpCode: TGocciaOpCode;
+begin
+  LocalIdx := ACtx.Scope.ResolveLocal(AName);
+  if LocalIdx < 0 then
+    Exit;
+  ACtx.Scope.MarkGlobalBacked(LocalIdx);
+  if ACtx.GlobalLexicalPatternIsConst then
+    OpCode := OP_DEFINE_GLOBAL_CONST_LONG
+  else
+    OpCode := OP_DEFINE_GLOBAL_LET_LONG;
+  EmitInstruction(ACtx, EncodeABx(OpCode, ACtx.Scope.GetLocal(LocalIdx).Slot,
+    ACtx.Template.AddConstantString(ACtx.Scope.GetLocal(LocalIdx).Name)));
+end;
+
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt16;
   const AAssignmentMode: Boolean);
@@ -4380,6 +4404,10 @@ begin
     IdentPat := TGocciaIdentifierDestructuringPattern(APattern);
     EmitBindingAssignmentFromRegister(ACtx, IdentPat.Name, ASrcReg,
       AAssignmentMode);
+    if (not AAssignmentMode) and
+       (ACtx.GlobalLexicalPatternScope = ACtx.Scope) and
+       (ACtx.Scope.Depth = 0) then
+      EmitGlobalLexicalPatternDefine(ACtx, IdentPat.Name);
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin

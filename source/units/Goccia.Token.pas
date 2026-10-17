@@ -54,6 +54,7 @@ type
     FContainsEscape: Boolean;
     FTemplateValue: TGocciaTemplateTokenValue;
     function GetLine: Integer;
+    function GetStartLine: Integer;
     function GetColumn: Integer;
     function GetEndColumn: Integer;
   public
@@ -67,7 +68,12 @@ type
       const AStartOffset, AEndOffset: Integer);
     property TokenType: TGocciaTokenType read FType;
     property Lexeme: string read FLexeme;
+    // Line is the line the token ends on and StartLine the one it starts on.
+    // They differ for a template literal or a string with a line continuation,
+    // so a line terminator separates two tokens when the first one's Line is
+    // before the second one's StartLine.
     property Line: Integer read GetLine;
+    property StartLine: Integer read GetStartLine;
     property Column: Integer read GetColumn;
     property EndColumn: Integer read GetEndColumn;
     property Span: TGocciaSourceSpan read FSpan;
@@ -105,6 +111,11 @@ end;
 function TGocciaToken.GetLine: Integer;
 begin
   Result := FSpan.EndLine;
+end;
+
+function TGocciaToken.GetStartLine: Integer;
+begin
+  Result := FSpan.StartLine;
 end;
 
 function TGocciaToken.GetColumn: Integer;

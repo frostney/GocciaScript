@@ -102,3 +102,42 @@ describe("Array.prototype.splice", () => {
     expect((2 ** 31 - 1) in obj).toBe(false);
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("splice across a collection", () => {
+  // Reuses the memory a wrongly collected object leaves behind.
+  const churn = () => Array.from({ length: 2000 }, (_, i) => [i, { i }]);
+
+  test("keeps the removed-elements array while an element getter collects", () => {
+    const source = {
+      length: 3,
+      0: "a",
+      get 1() {
+        Goccia.gc();
+        churn();
+        return "b";
+      },
+      get 2() {
+        Goccia.gc();
+        churn();
+        return "c";
+      },
+    };
+    const removed = Array.prototype.splice.call(source, 1, 2);
+    expect(removed).toEqual(["b", "c"]);
+    expect(source.length).toBe(1);
+    expect(1 in source).toBe(false);
+  });
+
+  test("keeps the removed-elements array on the sparse path", () => {
+    const source = {
+      length: 2 ** 31 + 2,
+      get 0() {
+        Goccia.gc();
+        churn();
+        return "first";
+      },
+    };
+    const removed = Array.prototype.splice.call(source, 0, 1);
+    expect(removed).toEqual(["first"]);
+  });
+});

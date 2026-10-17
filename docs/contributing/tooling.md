@@ -6,7 +6,7 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific), endian-dependent byte indexing
+- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
 
 ## Auto-Formatting
@@ -183,6 +183,15 @@ Result := D * 1000000.0;
 // FPC generates the correct 64-bit SCVTF instruction.
 Result := TGocciaNumberLiteralValue.Create(SomeInt64Value);
 ```
+
+Parameter passing is safe only when the parameter is declared `Double`. When the
+callee is overloaded over several floating-point types, an integer argument can
+resolve to the `Single` overload: FPC 3.2.4's `Math` unit overloads `Ldexp` for
+`Single` and `Double` (and `Extended` on targets that have it), and
+`Ldexp(Int64Var, N)` picks `Single`, which rounds the value to 24 significant
+bits (FPC 3.2.2 declares one `Ldexp`, for its `Float` type, and is unaffected).
+Assign the integer to a `Double` variable first and pass that, as
+`TBigInteger.ToDouble` does.
 
 This affects any code that converts `Int64` fields to `Double` for floating-point arithmetic. Note that `Int64 / Int64` is safe — FPC's `/` operator already returns `Extended` for integer operands, so no explicit promotion is needed for division.
 

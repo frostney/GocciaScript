@@ -1285,7 +1285,7 @@ begin
 end;
 {$ELSE}
 begin
-  if (APath <> '') and not ForceDirectories(APath) then
+  if (APath <> '') and not ForceHostDirectories(APath) then
     raise EGocciaTrustStoreError.CreateFmt('cannot create %s', [APath]);
 end;
 {$IFEND}

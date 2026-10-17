@@ -13,6 +13,7 @@ type
     fabiWin64,
     fabiAAPCS64,
     fabiDarwinARM64,
+    fabiWinARM64,
     fabiI386Win
   );
 
@@ -118,6 +119,8 @@ begin
   Result := fabiSysVX64;
   {$ELSEIF (defined(GOCCIA_CPU_AARCH64)) and defined(DARWIN)}
   Result := fabiDarwinARM64;
+  {$ELSEIF (defined(GOCCIA_CPU_AARCH64)) and defined(MSWINDOWS)}
+  Result := fabiWinARM64;
   {$ELSEIF (defined(GOCCIA_CPU_AARCH64))}
   Result := fabiAAPCS64;
   {$ELSEIF (defined(GOCCIA_CPU_X86)) and defined(MSWINDOWS)}
@@ -728,6 +731,67 @@ begin
   APlan.Placements[0] := Placement;
 end;
 
+{ Windows ARM64 passes every argument of a variadic function, fixed and
+  variadic alike, as if it were written to an "imaginary stack" of 8-byte
+  slots whose first 64 bytes are loaded into x0-x7: floating-point values and
+  HFAs get no special treatment, a composite larger than 16 bytes is passed by
+  pointer, and a composite that starts in x7 continues on the real stack. The
+  callee reads its tail through a char* va_list over the spilled registers and
+  the stack arguments, so the layout has to be contiguous. AImaginaryOffset is
+  the next free byte of that imaginary stack. See Microsoft's "Overview of
+  ARM64 ABI conventions", Addendum: Variadic functions. }
+procedure CompileWinARM64VariadicArgument(
+  var APlan: TGocciaFFIArgumentPlan;
+  var AImaginaryOffset, AGPRCount, AStackOffset, AScratchOffset: Integer);
+const
+  SLOT_SIZE = 8;
+  REGISTER_SLOT_COUNT = 8;
+  REGISTER_AREA_SIZE = SLOT_SIZE * REGISTER_SLOT_COUNT;
+  MAX_BY_VALUE_COMPOSITE_SIZE = 16;
+  INDIRECT_COPY_ALIGNMENT = 16;
+var
+  ValueSize, SlotStart, SlotEnd, Consumed, ChunkSize: Integer;
+begin
+  if APlan.TypeDescriptor.IsAggregate and
+     (APlan.TypeDescriptor.Size > MAX_BY_VALUE_COMPOSITE_SIZE) then
+  begin
+    APlan.Indirect := True;
+    APlan.IndirectCopyOffset := ScratchAppend(AScratchOffset,
+      APlan.TypeDescriptor.Size, INDIRECT_COPY_ALIGNMENT);
+    ValueSize := SizeOf(Pointer);
+  end
+  else
+    ValueSize := APlan.TypeDescriptor.Size;
+
+  SlotStart := AlignFFIOffset(AImaginaryOffset, SLOT_SIZE);
+  SlotEnd := SlotStart + AlignFFIOffset(ValueSize, SLOT_SIZE);
+  if SlotEnd - REGISTER_AREA_SIZE > MAX_FFI_AGGREGATE_SIZE then
+    raise EArgumentOutOfRangeException.Create('FFI call stack image exceeds limit');
+  AImaginaryOffset := SlotEnd;
+
+  Consumed := 0;
+  while (Consumed < ValueSize) and
+        (SlotStart + Consumed < REGISTER_AREA_SIZE) do
+  begin
+    ChunkSize := ValueSize - Consumed;
+    if ChunkSize > SLOT_SIZE then ChunkSize := SLOT_SIZE;
+    AppendPlacement(APlan.Placements, fpkGPR,
+      (SlotStart + Consumed) div SLOT_SIZE, -1, Consumed, ChunkSize);
+    Inc(Consumed, SLOT_SIZE);
+  end;
+  if Consumed < ValueSize then
+    AppendPlacement(APlan.Placements, fpkStack, -1,
+      SlotStart + Consumed - REGISTER_AREA_SIZE, Consumed,
+      ValueSize - Consumed);
+  if SlotEnd > REGISTER_AREA_SIZE then
+  begin
+    AGPRCount := REGISTER_SLOT_COUNT;
+    AStackOffset := SlotEnd - REGISTER_AREA_SIZE;
+  end
+  else
+    AGPRCount := SlotEnd div SLOT_SIZE;
+end;
+
 procedure CompileI386Return(var APlan: TGocciaFFIReturnPlan;
   var AStackOffset: Integer);
 begin
@@ -776,7 +840,7 @@ constructor TGocciaFFICompiledSignature.Create(const AABI: TGocciaFFIABI;
   const AVariadicStartIndex: Integer);
 var
   I, GPRCount, FPRCount, Position, StackOffset, ScratchOffset: Integer;
-  PackedOffset: Integer;
+  PackedOffset, ImaginaryOffset: Integer;
 begin
   inherited Create;
   if Length(AArguments) > MAX_FFI_ARGS then
@@ -798,11 +862,13 @@ begin
   StackOffset := 0;
   ScratchOffset := 0;
   PackedOffset := 0;
+  ImaginaryOffset := 0;
 
   case FABI of
     fabiSysVX64: CompileSysVReturn(FReturnPlan, GPRCount);
     fabiWin64: CompileWin64Return(FReturnPlan, Position);
-    fabiAAPCS64, fabiDarwinARM64: CompileARM64Return(FReturnPlan);
+    fabiAAPCS64, fabiDarwinARM64, fabiWinARM64:
+      CompileARM64Return(FReturnPlan);
     fabiI386Win: CompileI386Return(FReturnPlan, StackOffset);
   end;
 
@@ -844,11 +910,19 @@ begin
         else
           CompileARM64Argument(FArguments[I], GPRCount, FPRCount, StackOffset,
             ScratchOffset, True);
+      fabiWinARM64:
+        if FVariadicStartIndex >= 0 then
+          CompileWinARM64VariadicArgument(FArguments[I], ImaginaryOffset,
+            GPRCount, StackOffset, ScratchOffset)
+        else
+          CompileARM64Argument(FArguments[I], GPRCount, FPRCount, StackOffset,
+            ScratchOffset, False);
       fabiI386Win:
         CompileI386Argument(FArguments[I], StackOffset);
     end;
   end;
-  if FABI in [fabiSysVX64, fabiWin64, fabiAAPCS64, fabiDarwinARM64] then
+  if FABI in [fabiSysVX64, fabiWin64, fabiAAPCS64, fabiDarwinARM64,
+    fabiWinARM64] then
     FStackSize := AlignFFIOffset(StackOffset, 16)
   else
     FStackSize := AlignFFIOffset(StackOffset, 4);

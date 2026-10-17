@@ -170,6 +170,8 @@ resourcestring
   SSuggestBigIntInvalidIndex = 'bits must be a non-negative integer';
   SSuggestNotANumber = 'this method can only be called on a Number value or Number object';
   SSuggestDecoratorFunction = 'decorators must be expressions that evaluate to a function';
+  SSuggestAddInitializerDuringDecoration = 'call context.addInitializer while the decorator is running, not after it returns';
+  SSuggestAddInitializerFunction = 'pass a function to context.addInitializer';
   SSuggestDisposable = 'the value must have a [Symbol.dispose] method to be used with ''using''';
   SSuggestNotFunctionType = 'the value is not callable — only functions can be invoked';
   SSuggestNotConstructorType = 'only classes and constructor functions can be used with ''new''';
@@ -381,6 +383,9 @@ resourcestring
   // Runtime errors — GC memory limit
   SSuggestMemoryLimitExceeded = 'call Goccia.gc() to free unreachable objects, or increase the limit with --max-memory';
   SSuggestStackMemoryLimitExceeded = 'the call stack reached the memory limit; bound the recursion, or increase the limit with --max-memory';
+
+  // Syntax errors — nesting limit
+  SSuggestNestingLimitExceeded = 'Move deeply nested parts, or part of a long operator or call chain, into separate variables or functions';
 
   // Runtime errors — structuredClone
   SSuggestStructuredClone = 'only plain objects, arrays, primitives, and built-in types can be cloned';

@@ -80,3 +80,45 @@ test("toSpliced picks up high-index source past MaxInt via sparse iteration", ()
   expect(result.length).toBe(1);
   expect(result[0]).toBe('x');
 });
+
+describe.runIf(typeof Goccia !== "undefined")("toSpliced across a collection", () => {
+  // Reuses the memory a wrongly collected object leaves behind.
+  const churn = () => Array.from({ length: 2000 }, (_, i) => [i, { i }]);
+
+  test("keeps the result while an element getter collects", () => {
+    const source = {
+      length: 4,
+      0: "a",
+      get 1() {
+        Goccia.gc();
+        churn();
+        return "b";
+      },
+      2: "c",
+      get 3() {
+        Goccia.gc();
+        churn();
+        return "d";
+      },
+    };
+    expect(Array.prototype.toSpliced.call(source, 2, 1, "x", "y")).toEqual([
+      "a", "b", "x", "y", "d",
+    ]);
+  });
+
+  test("keeps the result on the sparse path while an element getter collects", () => {
+    const source = {
+      length: 2 ** 31 + 2,
+      0: "a",
+      get [2 ** 31 + 1]() {
+        Goccia.gc();
+        churn();
+        return "z";
+      },
+    };
+    const result = Array.prototype.toSpliced.call(source, 1, 2 ** 31 - 2);
+    expect(result.length).toBe(4);
+    expect(result[0]).toBe("a");
+    expect(result[3]).toBe("z");
+  });
+});

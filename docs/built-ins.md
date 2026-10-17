@@ -242,7 +242,7 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
 - `matchAll()` returns a lazy iterator that advances matches on demand per the specification.
 - The `u` flag enables Unicode-aware pattern matching. Unicode property escapes (`\p{Letter}`, `\P{ASCII}`, etc.) are matched against Unicode code point range tables. Unicode code point escapes (`\u{41}`, `\u{1F600}`) are converted to UTF-8 byte sequences. Supported: General_Category values by long or short name (`Letter`/`L`, `Nonspacing_Mark`/`Mn`), bare or as `General_Category=`/`gc=`; binary properties such as `ASCII`, `Alphabetic`, `Emoji` and `White_Space`; and `Script=`/`sc=` and `Script_Extensions=`/`scx=` values (`\p{sc=Greek}`). Unknown names throw `SyntaxError`. With `i`, Unicode-aware matching uses Unicode simple case folding, including single-code-point folds such as `ſ` to `s`, `K` to `k`, and `ẞ` to `ß`; it does not use full multi-code-point expansions such as `ß` to `ss`. The `u` flag enables correct `AdvanceStringIndex` for multi-byte UTF-8 sequences.
-- The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Under `v`, classes support nesting, difference (`[\p{L}--[a-z]]`), intersection (`&&`), string literals (`\q{abc|d}`), and properties of strings such as `\p{RGI_Emoji}`, which match multi-code-point sequences.
+- The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Under `v`, classes support nesting, difference (`[\p{L}--[a-z]]`), intersection (`&&`), string literals (`\q{abc|d}`), and properties of strings such as `\p{RGI_Emoji}`, which match multi-code-point sequences. Class syntax follows ECMA-262's `ClassSetExpression` grammar: `&&` and `--` join single operands (a character, a nested class, `\q{…}`, or an escape such as `\p{L}`), so a range or a run of characters goes in a nested class (`[[a-z]--[aeiou]]`), and a class mixing `&&` with `--` or with a union is a `SyntaxError`. In a class and inside `\q{…}`, an unescaped `( ) [ ] { } / - \ |` or a doubled punctuator such as `&&` or `!!` is a `SyntaxError`; escapes inside `\q{…}` mean what they mean elsewhere in the class (`\q{\x41}` is `A`). A negated class whose contents may contain strings (`[^\q{ab}]`, `[^\q{}]`) is a `SyntaxError`, decided from the syntax as the specification's MayContainStrings does.
 - The `d` flag (indices) is accepted and exposed through `.flags` and `.hasIndices`. Match arrays include `indices` entries as UTF-16 code unit `[start, end]` pairs, plus `indices.groups` for named captures.
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
@@ -591,7 +591,7 @@ Targets must satisfy ECMAScript `CanBeHeldWeakly`: objects and non-registered sy
 
 Implements the [ECMAScript FinalizationRegistry](https://tc39.es/ecma262/#sec-finalization-registry-objects).
 
-A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`.
+A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`. The registration stays in the registry until its cleanup job runs, so `unregister` can still remove it in the meantime, and then its callback never runs.
 
 | Method/Property | Description |
 |--------|-------------|
@@ -708,8 +708,8 @@ filesystem. This covers the listed `fs` surface, not the entire Node.js host or 
 | Method / Property | Description |
 |-------------------|-------------|
 | `fs.readFileSync(path, options?)` | Read text when `options` is `"utf8"` / `"utf-8"` or `{ encoding: "utf8" }`; otherwise returns `Uint8Array` |
-| `fs.writeFileSync(path, data)` | Write UTF-8 string data or bytes from `Uint8Array` |
-| `fs.appendFileSync(path, data)` | Append UTF-8 string data or bytes from `Uint8Array` |
+| `fs.writeFileSync(path, data)` | Write UTF-8 string data, or the bytes a TypedArray or `DataView` views (`byteLength` bytes from `byteOffset`) |
+| `fs.appendFileSync(path, data)` | Append UTF-8 string data, or the bytes a TypedArray or `DataView` views |
 | `fs.mkdirSync(path, options?)` | Create a directory; `{ recursive: true }` creates parents |
 | `fs.readdirSync(path)` | Return child names |
 | `fs.statSync(path)` | Return a Stats snapshot with `path`, `name`, `type`, `size`, `atimeMs`, `mtimeMs`, `ctimeMs`, `birthtimeMs`, lazy Date accessors, and type predicates |

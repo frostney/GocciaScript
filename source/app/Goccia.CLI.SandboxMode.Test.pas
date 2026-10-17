@@ -130,6 +130,11 @@ begin
     IncludeTrailingPathDelimiter(GetTempDir(False)) + 'goccia-sandbox-mode-' +
     IntToStr(Random(MaxInt))));
   ForceDirectories(FRoot);
+  { Canonical, because a confinement error names the config directory with
+    its links resolved: the temporary directory is a link on macOS
+    (/var -> /private/var), and on Windows it can be an 8.3 short name. }
+  if CanonicalHostPath(FRoot) <> '' then
+    FRoot := CanonicalHostPath(FRoot);
   EnsureConfigParsersRegistered;
   FPaths := TStringList.Create;
   WriteFile('project/main.js', 'console.log(1);');
