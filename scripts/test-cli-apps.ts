@@ -10806,6 +10806,32 @@ await section("Runner sandbox mode: --print prints the last value like host mode
   }
 });
 
+await section("Runner sandbox mode: without --print the last value is not copied out of the run...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // Copying a typed array walks it one index key at a time and is charged
+    // to the run, so a value host mode leaves alone used to exhaust the
+    // run's own memory budget after the program had finished.
+    writeFileSync(join(tmp, "bytes.js"), "new Uint8Array(262144);");
+    const bytes = runSandboxCli(["bytes.js", "--sandbox", "--max-memory=16MiB"], { cwd: tmp });
+    if (bytes.exitCode !== 0 || bytes.stdout !== "" || bytes.stderr !== "")
+      throw new Error(`A typed-array last value should cost nothing without --print, got (exit ${bytes.exitCode}):\n${bytes.stdout}${bytes.stderr}`);
+    // As in host mode, nothing reads the value, so none of its getters run.
+    writeFileSync(join(tmp, "getter.js"), 'const o = { get x() { console.log("getter ran"); return 1; } };\no;');
+    const getter = runSandboxCli(["getter.js", "--sandbox"], { cwd: tmp });
+    if (getter.exitCode !== 0 || getter.stdout !== "")
+      throw new Error(`The last value's getters should not run without --print, got (exit ${getter.exitCode}):\n${getter.stdout}${getter.stderr}`);
+    // A nested runScript still hands its child's value to the caller.
+    writeFileSync(join(tmp, "child.js"), "[1, { a: 2 }];");
+    writeFileSync(join(tmp, "parent.js"), 'import { runScript } from "goccia";\nconsole.log(JSON.stringify(runScript("/child.js").result));');
+    const nested = runSandboxCli(["--copy", "child.js", "--copy", "parent.js", "--entry", "/parent.js"], { cwd: tmp });
+    if (nested.exitCode !== 0 || nested.stdout !== '[1,{"a":2}]\n')
+      throw new Error(`runScript should return the child's last value, got (exit ${nested.exitCode}):\n${nested.stdout}${nested.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: --diff prints JSON with metadata, or unified...", async () => {
   const tmp = makeNativeTmp();
   try {

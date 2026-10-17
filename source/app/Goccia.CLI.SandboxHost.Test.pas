@@ -36,6 +36,7 @@ type
       const AParentHostEnvironment: TGocciaHostEnvironment);
     procedure TestEntryPathNamesNoHostProject;
     procedure TestNestedRunsAndReadOnlyPaths;
+    procedure TestRootResultCopiedOnlyWhenKept;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -49,6 +50,8 @@ begin
     TestEntryPathNamesNoHostProject);
   Test('A shared runScript child is refused under a read-only path, an ' +
     'isolated one writes its own copy', TestNestedRunsAndReadOnlyPaths);
+  Test('The root run''s last value is copied out only when kept; a ' +
+    'nested run''s always is', TestRootResultCopiedOnlyWhenKept);
 end;
 
 procedure TSandboxHostTests.BeforeEach;
@@ -159,6 +162,46 @@ begin
     Expect<Boolean>(Host.Context.Fs.Exists('/data/new.txt')).ToBe(False);
   finally
     Lines.Free;
+    Host.Free;
+  end;
+end;
+
+procedure TSandboxHostTests.TestRootResultCopiedOnlyWhenKept;
+const
+  MAIN_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'import { runScript } from "goccia";' + LineEnding +
+    'const child = runScript("/child.js");' + LineEnding +
+    'fs.writeFileSync("/out.txt", JSON.stringify(child.result));' +
+      LineEnding +
+    '[1, 2];' + LineEnding;
+var
+  Host: TGocciaSandboxHost;
+  RunResult: TGocciaSandboxRunResult;
+begin
+  Host := TGocciaSandboxHost.Create(DEFAULT_SANDBOX_BYTE_QUOTA,
+    DEFAULT_SANDBOX_NODE_QUOTA);
+  try
+    Host.Context.Fs.WriteAllText('/child.js', '[3, { a: 4 }];');
+    Host.Context.Fs.WriteAllText('/main.js', MAIN_SOURCE);
+    Host.OnConfigureEngine := InstallSandboxModules;
+
+    Expect<Boolean>(Host.KeepRootResult).ToBe(True);
+    RunResult := Host.Run('/main.js');
+    Expect<Boolean>(RunResult.Ok).ToBe(True);
+    Expect<Boolean>(Assigned(RunResult.ResultValue)).ToBe(True);
+    if Assigned(RunResult.ResultValue) then
+      Expect<string>(RunResult.ResultValue.ToStringLiteral.Value).ToBe(
+        '1,2');
+
+    Host.KeepRootResult := False;
+    RunResult := Host.Run('/main.js');
+    Expect<Boolean>(RunResult.Ok).ToBe(True);
+    Expect<Boolean>(Assigned(RunResult.ResultValue)).ToBe(False);
+    { The child's value still reaches the program that ran it. }
+    Expect<string>(Host.Context.Fs.ReadAllText('/out.txt')).ToBe(
+      '[3,{"a":4}]');
+  finally
     Host.Free;
   end;
 end;
