@@ -208,6 +208,8 @@ type
       const ATokenType: TGocciaTokenType): Boolean;
     function IsIdentifierBindingToken(
       const ATokenType: TGocciaTokenType): Boolean;
+    function IsLabelIdentifierToken(
+      const ATokenType: TGocciaTokenType): Boolean;
     function ConsumeLiteralPropertyName(const AMessage,
       ASuggestion: string): string;
     function ConsumeModuleExportName(const AMessage: string): TGocciaToken; overload;
@@ -1376,6 +1378,23 @@ begin
       Exit(True);
   end;
   Result := False;
+end;
+
+// ES2026 §13.1 LabelIdentifier : Identifier
+// ES2026 §13.1.1 Static Semantics: Early Errors
+// `as`, `from` and `async` are Identifiers everywhere; `let` and `static` are
+// Identifiers only outside strict mode code. `async` lexes as gttIdentifier.
+function TGocciaParser.IsLabelIdentifierToken(
+  const ATokenType: TGocciaTokenType): Boolean;
+begin
+  case ATokenType of
+    gttIdentifier, gttAs, gttFrom:
+      Result := True;
+    gttLet, gttStatic:
+      Result := EffectiveNonStrictModeEnabled;
+  else
+    Result := False;
+  end;
 end;
 
 // ES2026 §13.2.5 LiteralPropertyName:
@@ -5096,7 +5115,9 @@ begin
     Result := WithStatement
   else if Match(gttFunction) then
     Result := FunctionStatement(False, Check(gttStar))
-  else if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) then
+  // `async:` is a LabelledStatement, handled by the label branch below.
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and
+          not CheckNextWithLexicalGoal(gttColon, glgInputElementRegExp) then
   begin
     EnsureToken(FCurrent + 1, glgInputElementRegExp);
     if (FCurrent + 1 >= FTokens.Count) or
@@ -5166,7 +5187,9 @@ begin
     raise TGocciaSyntaxError.Create('Method definitions are only valid inside object literals or class bodies',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       'Wrap the method in an object literal or declare a function instead')
-  else if Check(gttIdentifier) and CheckNextWithLexicalGoal(gttColon, glgInputElementDiv) then
+  // ES2026 §14.13 LabelledStatement : LabelIdentifier : LabelledItem
+  else if IsLabelIdentifierToken(Peek.TokenType) and
+          CheckNextWithLexicalGoal(gttColon, glgInputElementDiv) then
   begin
     if FLabelStatementsEnabled then
       Result := LabeledStatement
@@ -10120,7 +10143,8 @@ begin
   Column := Previous.Column;
   TargetLabel := '';
 
-  if FLabelStatementsEnabled and Check(gttIdentifier) and
+  // ES2026 §14.9 BreakStatement : break [no LineTerminator here] LabelIdentifier ;
+  if FLabelStatementsEnabled and IsLabelIdentifierToken(Peek.TokenType) and
      (Previous.Line = Peek.Line) then
   begin
     TargetLabel := Advance.Lexeme;
@@ -10144,7 +10168,8 @@ begin
   Column := Previous.Column;
   TargetLabel := '';
 
-  if FLabelStatementsEnabled and Check(gttIdentifier) and
+  // ES2026 §14.8 ContinueStatement : continue [no LineTerminator here] LabelIdentifier ;
+  if FLabelStatementsEnabled and IsLabelIdentifierToken(Peek.TokenType) and
      (Previous.Line = Peek.Line) then
   begin
     TargetLabel := Advance.Lexeme;
