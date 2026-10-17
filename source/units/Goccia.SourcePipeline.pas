@@ -603,6 +603,14 @@ begin
           else
             Result.FParseTimeNanoseconds := 0;
           Result.FGeneratedSourceLines := CloneStringList(Lexer.SourceLines);
+          // #1704: Always clear source after parsing (including SourceCoordinates retained via AST)
+          Lexer.ClearSource;
+          // #1704: Clear the cloned source lines immediately to release large strings
+          if Assigned(Result.FGeneratedSourceLines) then
+          begin
+            Result.FGeneratedSourceLines.Clear;
+            FreeAndNil(Result.FGeneratedSourceLines);
+          end;
           if AOptions.CollectComments then
             Result.FComments := Lexer.TakeComments;
           if AOptions.CollectTokens then

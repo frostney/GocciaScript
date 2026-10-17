@@ -134,6 +134,9 @@ type
       recorded set is de-duplicated and ordered by start offset on the way
       out rather than on the way in. }
     function TakeComments: TGocciaCommentSpanArray;
+    { #1704: Explicitly release large source strings after parsing completes
+      to improve heap reuse for very large string literals. }
+    procedure ClearSource;
     property CollectComments: Boolean read FCollectComments
       write FCollectComments;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
@@ -154,7 +157,8 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Identifier,
   Goccia.Keywords.Contextual,
-  Goccia.Keywords.Reserved;
+  Goccia.Keywords.Reserved,
+  Goccia.Bytecode.Chunk;
 
 const
   // ES2026 §12.3 Line Terminators.
@@ -333,9 +337,24 @@ end;
 
 destructor TGocciaLexer.Destroy;
 begin
+  FSource := '';  // Clear source to release any large strings
   FTokens.Free;
   FSourceLines.Free;
   inherited;
+end;
+
+procedure TGocciaLexer.ClearSource;
+begin
+  FSource := '';
+  // #1704: Clear SourceCoordinates which is retained via AST/tokens/spans
+  if Assigned(FSourceCoordinates) then
+    FSourceCoordinates.ClearSource;
+  // #1704: Clear SourceLines which holds the split source and is cloned to PipelineResult
+  if Assigned(FSourceLines) then
+  begin
+    FSourceLines.Clear;
+    FreeAndNil(FSourceLines);
+  end;
 end;
 
 function TGocciaLexer.CreateCheckpoint: TGocciaLexerCheckpoint;

@@ -13,6 +13,7 @@ type
     procedure PositionAtOffset(const AOffset: Integer; out ALine,
       AColumn: Integer);
     function OffsetAtPosition(const ALine, AColumn: Integer): Integer;
+    procedure ClearSource;  // #1704: Clear large source after parsing
     property Source: string read GetSource;
   end;
 
@@ -26,6 +27,7 @@ type
     procedure PositionAtOffset(const AOffset: Integer; out ALine,
       AColumn: Integer);
     function OffsetAtPosition(const ALine, AColumn: Integer): Integer;
+    procedure ClearSource;  // #1704: Clear large source after parsing
   end;
 
   TGocciaSourceSpan = record
@@ -226,6 +228,12 @@ end;
 function TGocciaSourceCoordinates.GetSource: string;
 begin
   Result := FSource;
+end;
+
+procedure TGocciaSourceCoordinates.ClearSource;
+begin
+  // #1704: Clear source buffer after parsing to prevent retention via AST/tokens
+  FSource := '';
 end;
 
 procedure TGocciaSourceCoordinates.PositionAtOffset(const AOffset: Integer;

@@ -551,7 +551,6 @@ end;
 var
   GTemplateSiteIdLock: TGocciaCriticalSection;
   GNextTemplateSiteId: UInt64;
-
 function AllocateTemplateSiteId: UInt64;
 begin
   CriticalSectionEnter(GTemplateSiteIdLock);
@@ -624,9 +623,21 @@ begin
     FRegExpProgramCaches[I].Free;
   for I := 0 to High(FDirectEvalCodeCaches) do
     FDirectEvalCodeCaches[I].Free;
+    
+  // Explicitly clear the constants array strings BEFORE freeing the index
+  // to ensure proper release order: clear constants first (dropping their
+  // references), then free the string constant index (which shares buffers
+  // via COW), then let the constants array itself be auto-freed.
+  for I := 0 to FConstantCount - 1 do
+  begin
+    if FConstants[I].Kind = bckString then
+      FConstants[I].StringValue := '';
+  end;
+  
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
+  
   inherited;
 end;
 
