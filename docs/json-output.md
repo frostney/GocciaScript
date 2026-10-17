@@ -153,7 +153,7 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
 | `build` | `object` | Build identity, including `version`, `date`, `commit`, `os`, and `arch` |
 | `stdout` | `string` | Unformatted stdout-oriented console output; present even when empty |
 | `stderr` | `string` | Unformatted stderr-oriented console output; present even when empty |
-| `output` | `string[]` | Formatted console output split into lines |
+| `output` | `string[]` | Formatted console output split into lines: one element per line, empty lines included |
 | `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
 | `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
 | `error.message` | `string` | Error message text |

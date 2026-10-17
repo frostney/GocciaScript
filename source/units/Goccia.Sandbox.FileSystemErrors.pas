@@ -38,6 +38,7 @@ const
   ERRNO_ENOSPC = -4055;
   ERRNO_ENOTDIR = -4052;
   ERRNO_ENOTEMPTY = -4051;
+  ERRNO_EROFS = -4043;
 {$ELSE}
   ERRNO_EBUSY = -ESysEBUSY;
   ERRNO_EEXIST = -ESysEEXIST;
@@ -48,6 +49,7 @@ const
   ERRNO_ENOSPC = -ESysENOSPC;
   ERRNO_ENOTDIR = -ESysENOTDIR;
   ERRNO_ENOTEMPTY = -ESysENOTEMPTY;
+  ERRNO_EROFS = -ESysEROFS;
 {$ENDIF}
 
 type
@@ -107,6 +109,12 @@ begin
     Result.Code := 'ENOSPC';
     Result.Errno := ERRNO_ENOSPC;
     Result.Description := 'no space left on device';
+  end
+  else if AException is ESandboxFsReadOnly then
+  begin
+    Result.Code := 'EROFS';
+    Result.Errno := ERRNO_EROFS;
+    Result.Description := 'read-only file system';
   end
   else
   begin

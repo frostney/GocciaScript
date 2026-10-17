@@ -100,6 +100,28 @@ describe("TextEncoder.prototype.encode", () => {
     expect(result[2]).toBe(0xBD);
   });
 
+  test("unpaired surrogates inside a string are each encoded as U+FFFD", () => {
+    // a, lone high, b, lone low, reversed pair (two lone surrogates), lone high at the end
+    const result = enc.encode("a\uD800b\uDFFF\uDE00\uD83Dc\uD83D");
+    expect(Array.from(result)).toEqual([
+      0x61, 0xEF, 0xBF, 0xBD, 0x62, 0xEF, 0xBF, 0xBD, 0xEF, 0xBF, 0xBD, 0xEF, 0xBF, 0xBD, 0x63, 0xEF, 0xBF, 0xBD,
+    ]);
+  });
+
+  test("a lone high surrogate before a pair does not consume the pair", () => {
+    const result = enc.encode("\uD83D\uD83D\uDE00");
+    expect(Array.from(result)).toEqual([0xEF, 0xBF, 0xBD, 0xF0, 0x9F, 0x98, 0x80]);
+  });
+
+  test("encodes a long mixed string to exactly its UTF-8 length", () => {
+    // 1 + 2 + 3 + 4 bytes per repeat
+    const result = enc.encode("a\u00E9\u4E2D\uD83D\uDE00".repeat(10000));
+    expect(result.length).toBe(100000);
+    expect(Array.from(result.subarray(99990))).toEqual([
+      0x61, 0xC3, 0xA9, 0xE4, 0xB8, 0xAD, 0xF0, 0x9F, 0x98, 0x80,
+    ]);
+  });
+
   test("throws TypeError when called on a non-TextEncoder receiver", () => {
     expect(() => TextEncoder.prototype.encode.call({}, "x")).toThrow(TypeError);
   });

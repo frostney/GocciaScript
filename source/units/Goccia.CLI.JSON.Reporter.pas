@@ -205,6 +205,8 @@ begin
     '}';
 end;
 
+// One element per console line: every line a line feed ends, empty ones
+// included, then the text after the last line feed when there is any.
 function BuildCLIOutputJSON(const AOutputText: string): string;
 var
   I, StartIndex: Integer;
@@ -222,13 +224,10 @@ begin
       Line := Copy(AOutputText, StartIndex, I - StartIndex);
       if (Length(Line) > 0) and (Line[Length(Line)] = #13) then
         Delete(Line, Length(Line), 1);
-      if (Line <> '') or (I < Length(AOutputText)) then
-      begin
-        if not IsFirstLine then
-          Buffer.Append(',');
-        Buffer.Append(QuoteJSONString(Line));
-        IsFirstLine := False;
-      end;
+      if not IsFirstLine then
+        Buffer.Append(',');
+      Buffer.Append(QuoteJSONString(Line));
+      IsFirstLine := False;
       StartIndex := I + 1;
     end;
 

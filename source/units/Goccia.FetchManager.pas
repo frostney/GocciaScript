@@ -84,6 +84,8 @@ function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
 { The realm-less forms act on the current realm's engine. }
 procedure WaitForFetchIdle; overload;
 procedure WaitForFetchIdle(const ARealm: TGocciaRealm); overload;
+{ True while the engine owning ARealm has a request in flight. }
+function HasPendingFetches(const ARealm: TGocciaRealm): Boolean;
 procedure DiscardFetchCompletions; overload;
 procedure DiscardFetchCompletions(const ARealm: TGocciaRealm); overload;
 
@@ -1019,6 +1021,12 @@ begin
     while HasPendingFor(ARealm) and (PumpCompletions = 0) do
     begin
       CheckExecutionTimeoutNow;
+      CheckInstructionLimit;
+      { An Atomics.waitAsync timeout that falls due while a request is in
+        flight settles now, not once the response arrives: the drain above
+        runs its reactions. }
+      if PumpAtomicsWaitAsyncCompletions > 0 then
+        Break;
       Sleep(FETCH_POLL_INTERVAL_MS);
     end;
   until False;
@@ -1203,6 +1211,14 @@ begin
     Manager.WaitForIdle(ARealm)
   else
     DrainMicrotasksAndFetchCompletions;
+end;
+
+function HasPendingFetches(const ARealm: TGocciaRealm): Boolean;
+var
+  Manager: TGocciaFetchManager;
+begin
+  Manager := TGocciaFetchManager.Instance;
+  Result := Assigned(Manager) and Manager.HasPendingFor(ARealm);
 end;
 
 procedure DiscardFetchCompletions;

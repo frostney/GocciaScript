@@ -17,11 +17,18 @@ uses
   Goccia.AST.Statements,
   Goccia.Lexer,
   Goccia.Modules,
+  Goccia.NestingLimit,
   Goccia.SourceSpan,
   Goccia.Token,
   Goccia.Values.Primitives;
 
 type
+  // A level of nesting open in the parser; see TGocciaParser.LeaveNesting.
+  TGocciaNestingFrame = record
+    Links: Integer;
+    ChildHeight: Integer;
+  end;
+
   TGocciaParserWarning = record
     Message: string;
     Suggestion: string;
@@ -138,6 +145,13 @@ type
     FStrictModeActive: Boolean;
     FStrictModeSourceActive: Boolean;
     FAllowInExpression: Boolean;
+    // Levels of nesting open at the current token; see EnterNesting and
+    // Goccia.NestingLimit.
+    FNestingDepth: Integer;
+    // One per open level of nesting, FNestingFrames[0] for the top level:
+    // the chain links parsed directly in the level, and the greatest height
+    // of the levels it has closed (see LeaveNesting).
+    FNestingFrames: array[0..MAX_NESTING_DEPTH] of TGocciaNestingFrame;
     // How many conditional consequents (`c ? HERE : alt`) the AssignmentExpression
     // being parsed sits in, counting through the productions that continue it:
     // a conditional's alternate, an arrow's concise body and an assignment's
@@ -146,11 +160,26 @@ type
     // a return type if enough ':' follow its body to close those consequents
     // (see ReturnTypedArrowClosesConsequents).
     FConditionalConsequentDepth: Integer;
-    FParenthesizedExpressionDepth: Integer;
     // ADR 0134 static detection: what the function being parsed contains
     // so far (TGocciaDirectEvalUsage).
     FDirectEvalUsage: TGocciaDirectEvalUsage;
 
+    // Open one level of nesting, or raise the SyntaxError for nesting past
+    // MAX_NESTING_DEPTH. Every recursive production enters one before it
+    // recurses and leaves it after; a raise abandons the parse, and the
+    // public entry points start the count at zero. LeaveNesting also bounds
+    // the height of the tree the level built, by MAX_TREE_HEIGHT.
+    procedure EnterNesting; {$IFDEF FPC}inline;{$ENDIF}
+    procedure LeaveNesting; {$IFDEF FPC}inline;{$ENDIF}
+    procedure ResetNesting;
+    procedure RaiseNestingLimitExceeded;
+    procedure RaiseTreeHeightExceeded;
+    function NestedUnary: TGocciaExpression;
+    // A link of a chain the parser builds in a loop (`a + b + c`,
+    // `a.b().c`, `p as x as y`). The loop does not recurse, but the tree it
+    // builds is as tall as the chain is long, and every later pass walks it
+    // recursively, so the link counts toward the height of the open level.
+    procedure CountChainLink; {$IFDEF FPC}inline;{$ENDIF}
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure AddUnsupportedFeatureWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure PushPrivateClassContext;
@@ -219,6 +248,8 @@ type
     function IsIdentifierNameToken(
       const ATokenType: TGocciaTokenType): Boolean;
     function IsIdentifierBindingToken(
+      const ATokenType: TGocciaTokenType): Boolean;
+    function IsLabelIdentifierToken(
       const ATokenType: TGocciaTokenType): Boolean;
     function ConsumeLiteralPropertyName(const AMessage,
       ASuggestion: string): string;
@@ -294,6 +325,7 @@ type
 
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
+    function UnguardedPattern: TGocciaDestructuringPattern;
     function ParseArrayPattern: TGocciaArrayDestructuringPattern;
     function ParseObjectPattern: TGocciaObjectDestructuringPattern;
     function IsAssignmentPattern(const AExpr: TGocciaExpression): Boolean;
@@ -308,6 +340,7 @@ type
     function ParseMatchExpression: TGocciaMatchExpression;
     function ParseMatchPattern: TGocciaMatchPattern;
     function ParseMatchPatternOr: TGocciaMatchPattern;
+    function UnguardedMatchPatternOr: TGocciaMatchPattern;
     function ParseMatchPatternAnd: TGocciaMatchPattern;
     function ParseMatchPatternUnary: TGocciaMatchPattern;
     function ParseMatchPatternPostfix: TGocciaMatchPattern;
@@ -378,6 +411,7 @@ type
     function ArrowFunction(const AIsAsync: Boolean = False): TGocciaExpression;
     function Assignment: TGocciaExpression;
     function AssignmentInheritingConsequentDepth: TGocciaExpression;
+    function UnguardedAssignment: TGocciaExpression;
     function AssignmentAllowIn: TGocciaExpression;
     function AssignmentNoIn: TGocciaExpression;
     function ExpressionAllowIn: TGocciaExpression;
@@ -388,6 +422,7 @@ type
     // These return the base TGocciaStatement type; narrowing to specific subtypes
     // (e.g., TGocciaIfStatement) would improve type safety but requires updating all callers.
     function Statement: TGocciaStatement;
+    function UnguardedStatement: TGocciaStatement;
     function StatementWithoutDirectLabels: TGocciaStatement;
     function IterationBodyStatement: TGocciaStatement;
     function IsLabelledFunctionDeclaration(
@@ -467,6 +502,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Constants,
   Goccia.Error,
+  Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.FileExtensions,
   Goccia.Keywords.Contextual,
@@ -759,6 +795,100 @@ begin
   inherited;
 end;
 
+// Out of line: building the message needs managed temporaries, and the
+// callers of EnterNesting, which run for every expression and statement, stay
+// without the implicit exception frame those bring.
+procedure TGocciaParser.RaiseNestingLimitExceeded;
+var
+  Message: string;
+begin
+  if FNestingDepth > MAX_NESTING_DEPTH then
+    Message := Format(SErrorNestingLimitExceeded, [MAX_NESTING_DEPTH])
+  else
+    Message := SErrorNestingStackExhausted;
+  raise TGocciaSyntaxError.Create(Message, Peek.Line, Peek.Column, FFileName,
+    FSourceLines, SSuggestNestingLimitExceeded);
+end;
+
+procedure TGocciaParser.RaiseTreeHeightExceeded;
+begin
+  raise TGocciaSyntaxError.Create(
+    Format(SErrorTreeHeightExceeded, [MAX_TREE_HEIGHT]), Peek.Line,
+    Peek.Column, FFileName, FSourceLines, SSuggestNestingLimitExceeded);
+end;
+
+procedure TGocciaParser.ResetNesting;
+begin
+  FNestingDepth := 0;
+  FNestingFrames[0].Links := 0;
+  FNestingFrames[0].ChildHeight := 0;
+end;
+
+procedure TGocciaParser.EnterNesting;
+begin
+  Inc(FNestingDepth);
+  if NestingDepthExceeded(FNestingDepth) then
+    RaiseNestingLimitExceeded;
+  FNestingFrames[FNestingDepth].Links := 0;
+  FNestingFrames[FNestingDepth].ChildHeight := 0;
+end;
+
+// The height of the tree a level builds, counted bottom up: the tallest
+// level it closed, plus every chain link parsed directly in it, plus one for
+// the level. A path down from the level's node passes through some of its
+// links and then into at most one of the levels it closed, so this holds
+// however a chain continues after a nested level (`f(g(x).y.z).w`), which a
+// count of the links open at the current token would miss. Links of sibling
+// chains (`a.b + c.d`) are all counted, so the count can be above the real
+// height. A level can also add a few nodes of its own (an object literal and
+// its property, a class and its method); MAX_NESTING_DEPTH bounds how many
+// levels there are, and the limits are measured on such shapes.
+procedure TGocciaParser.LeaveNesting;
+var
+  Height: Integer;
+begin
+  Height := FNestingFrames[FNestingDepth].ChildHeight +
+    FNestingFrames[FNestingDepth].Links + 1;
+  Dec(FNestingDepth);
+  if Height > FNestingFrames[FNestingDepth].ChildHeight then
+  begin
+    FNestingFrames[FNestingDepth].ChildHeight := Height;
+    if Height > MAX_TREE_HEIGHT then
+      RaiseTreeHeightExceeded;
+  end;
+end;
+
+// The level's height only grows until LeaveNesting computes it, so checking
+// it here rejects the same trees, before anything walks the chain: the
+// parser itself recurses down a chain that is used as a template tag
+// (ExpressionIsOptionalChainTag), so that check must never see a chain taller
+// than the limit.
+//
+// A chain costs the parser no stack, but the passes after it recurse once
+// per link, some of them (the compiler's closure scan, freeing the tree)
+// without a stack check of their own. So, as EnterNesting does past
+// NESTING_UNCHECKED_DEPTH levels, every NESTING_UNCHECKED_DEPTH links the
+// level also checks that NATIVE_STACK_RESERVE of the native stack is left:
+// source parsed at the bottom of a deep native re-entry is refused here.
+procedure TGocciaParser.CountChainLink;
+begin
+  Inc(FNestingFrames[FNestingDepth].Links);
+  if FNestingFrames[FNestingDepth].ChildHeight +
+    FNestingFrames[FNestingDepth].Links + 1 > MAX_TREE_HEIGHT then
+    RaiseTreeHeightExceeded;
+  if (FNestingFrames[FNestingDepth].Links mod NESTING_UNCHECKED_DEPTH = 0) and
+    NativeStackNearlyExhausted then
+    RaiseNestingLimitExceeded;
+end;
+
+// The operand of a prefix operator: `!!!x` recurses once per operator.
+function TGocciaParser.NestedUnary: TGocciaExpression;
+begin
+  EnterNesting;
+  Result := Unary;
+  LeaveNesting;
+end;
+
 procedure TGocciaParser.AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
 begin
   Inc(FWarningCount);
@@ -1045,6 +1175,7 @@ end;
 
 function TGocciaParser.ParseExpressionUnchecked: TGocciaExpression;
 begin
+  ResetNesting;
   Inc(FSkipPrivateNameValidation);
   try
     Result := Expression;
@@ -1403,6 +1534,23 @@ begin
       Exit(True);
   end;
   Result := False;
+end;
+
+// ES2026 §13.1 LabelIdentifier : Identifier
+// ES2026 §13.1.1 Static Semantics: Early Errors
+// `as`, `from` and `async` are Identifiers everywhere; `let` and `static` are
+// Identifiers only outside strict mode code. `async` lexes as gttIdentifier.
+function TGocciaParser.IsLabelIdentifierToken(
+  const ATokenType: TGocciaTokenType): Boolean;
+begin
+  case ATokenType of
+    gttIdentifier, gttAs, gttFrom:
+      Result := True;
+    gttLet, gttStatic:
+      Result := EffectiveNonStrictModeEnabled;
+  else
+    Result := False;
+  end;
 end;
 
 // ES2026 §13.2.5 LiteralPropertyName:
@@ -1881,6 +2029,7 @@ begin
         Op.Line, Op.Column, FFileName, FSourceLines);
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Right,
       Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -1905,6 +2054,7 @@ begin
         Op.Line, Op.Column, FFileName, FSourceLines);
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Right,
       Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -1918,6 +2068,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       BitwiseOr, Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -1960,6 +2111,7 @@ begin
     else
       Result := TGocciaBinaryExpression.Create(
         Result, Op.TokenType, Right, Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -1979,6 +2131,7 @@ var
       Op := Previous;
       Pattern := ParseMatchPattern;
       Result := TGocciaIsExpression.Create(Result, Pattern, Op.Span);
+      CountChainLink;
     end;
   end;
 begin
@@ -2013,6 +2166,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Shift,
       Op.Span);
+    CountChainLink;
   end;
 
   ParseIsExpressions;
@@ -2059,6 +2213,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       Multiplication, Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -2072,6 +2227,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       Exponentiation, Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -2091,7 +2247,9 @@ begin
       raise TGocciaSyntaxError.Create(
         'Unary expressions must be parenthesized before exponentiation',
         Result.Line, Result.Column, FFileName, FSourceLines);
+    EnterNesting;
     Right := Exponentiation; // Right associative
+    LeaveNesting;
     Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
       Right, Operator.Span);
   end;
@@ -2123,7 +2281,7 @@ begin
         PrivateName, PrivateToken.Span);
     end
     else
-      Right := Unary;
+      Right := NestedUnary;
     Result := TGocciaAwaitExpression.Create(Right, Operator.Span);
     Exit;
   end;
@@ -2152,7 +2310,7 @@ begin
     gttNot, gttMinus, gttPlus, gttTypeof, gttVoid, gttBitwiseNot, gttDelete:
       begin
         Operator := Advance;
-        Right := Unary;
+        Right := NestedUnary;
         if (Operator.TokenType = gttDelete) and
            (Right is TGocciaIdentifierExpression) and
            not EffectiveNonStrictModeEnabled then
@@ -2166,7 +2324,7 @@ begin
       begin
         // Prefix increment/decrement (++x, --x)
         Operator := Advance;
-        Right := Unary;
+        Right := NestedUnary;
 
         // Only allow on identifiers and member expressions
         if not ((Right is TGocciaIdentifierExpression) or
@@ -2364,18 +2522,14 @@ begin
             Arguments.Free;
             raise;
           end;
+          CountChainLink;
         end;
-      gttDot, gttOptionalChaining:
+      gttDot, gttOptionalChaining, gttHash, gttLeftBracket:
         begin
+          // A link counts once its operands are parsed: an argument or a
+          // computed key is a sibling of the callee, not nested in its chain.
           Result := ParseMemberAccessSegment(Result, True);
-        end;
-      gttHash:
-        begin
-          Result := ParseMemberAccessSegment(Result, True);
-        end;
-      gttLeftBracket:
-        begin
-          Result := ParseMemberAccessSegment(Result, True);
+          CountChainLink;
         end;
       gttNot:
         begin
@@ -2432,6 +2586,7 @@ begin
           Line := Token.Line;
           Column := Token.Column;
           Result := ParseTaggedTemplate(Result, Token, Line, Column);
+          CountChainLink;
         end;
       gttLess:
         begin
@@ -2955,9 +3110,15 @@ begin
         end;
         // Parse the callee: class name with optional member access (e.g. new a.B.C())
         // but NOT call expressions — those belong to the outer Call loop.
+        // `new new new C` nests a Primary per `new`, and the callee's
+        // member chain is as deep as it is long.
+        EnterNesting;
         Expr := Primary;
         while Check(gttDot) or Check(gttLeftBracket) do
+        begin
           Expr := ParseMemberAccessSegment(Expr, False);
+          CountChainLink;
+        end;
         TryCollectNewExpressionTypeArguments;
         if Check(gttOptionalChaining) then
           raise TGocciaSyntaxError.Create(
@@ -2967,7 +3128,9 @@ begin
         begin
           Token := Advance;
           Expr := ParseTaggedTemplate(Expr, Token, Token.Line, Token.Column);
+          CountChainLink;
         end;
+        LeaveNesting;
         // Parse constructor arguments if present
         if Match(gttLeftParen) then
         begin
@@ -3134,32 +3297,21 @@ begin
     gttLeftParen:
       begin
         Advance;
-        Inc(FParenthesizedExpressionDepth);
-        if FParenthesizedExpressionDepth > 256 then
+        // The expression inside counts as a level of nesting (Assignment);
+        // an arrow function's body does too.
+        // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
+        if IsArrowFunction() then
+          Result := ArrowFunction
+        else
         begin
-          Dec(FParenthesizedExpressionDepth);
-          raise TGocciaSyntaxError.Create(
-            'Parenthesized expression nesting exceeds the supported limit',
-            Peek.Line, Peek.Column, FFileName, FSourceLines,
+          Expr := ExpressionAllowIn;
+          Consume(gttRightParen, 'Expected ")" after expression',
             SSuggestCloseParenExpression);
-        end;
-        try
-          // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
-          if IsArrowFunction() then
-            Result := ArrowFunction
+          Expr.Parenthesized := True;
+          if ExpressionContainsOptionalChain(Expr) then
+            Result := WrapOptionalChainParentheses(Expr)
           else
-          begin
-            Expr := ExpressionAllowIn;
-            Consume(gttRightParen, 'Expected ")" after expression',
-              SSuggestCloseParenExpression);
-            Expr.Parenthesized := True;
-            if ExpressionContainsOptionalChain(Expr) then
-              Result := WrapOptionalChainParentheses(Expr)
-            else
-              Result := Expr;
-          end;
-        finally
-          Dec(FParenthesizedExpressionDepth);
+            Result := Expr;
         end;
       end;
     gttFunction:
@@ -3454,7 +3606,16 @@ begin
   ValidateMatchPatternEarlyErrors(Result);
 end;
 
+// Every nested match pattern (an array or object element, a parenthesized
+// pattern, an extractor argument) is parsed from here.
 function TGocciaParser.ParseMatchPatternOr: TGocciaMatchPattern;
+begin
+  EnterNesting;
+  Result := UnguardedMatchPatternOr;
+  LeaveNesting;
+end;
+
+function TGocciaParser.UnguardedMatchPatternOr: TGocciaMatchPattern;
 var
   Patterns: TGocciaMatchPatternList;
   Line, Column: Integer;
@@ -3497,8 +3658,10 @@ begin
   if MatchContextualKeyword(KEYWORD_NOT) then
   begin
     Token := Previous;
+    EnterNesting;
     Result := TGocciaNotMatchPattern.Create(ParseMatchPatternUnary,
       Token.Span);
+    LeaveNesting;
   end
   else
     Result := ParseMatchPatternPostfix;
@@ -3527,6 +3690,7 @@ begin
         SSuggestProvideVariableName).Lexeme;
       Result := TGocciaAsMatchPattern.Create(Result, Name, DeclarationType,
         Token.Span);
+      CountChainLink;
     end
     else if Match(gttIf) then
     begin
@@ -3540,6 +3704,7 @@ begin
       Patterns.Add(Result);
       Patterns.Add(Guard);
       Result := TGocciaAndMatchPattern.Create(Patterns, Result.Span);
+      CountChainLink;
     end
     else
       Break;
@@ -3770,6 +3935,7 @@ begin
         RecordPrivateNameReference(PropertyName, Previous.Line, Previous.Column);
         Result := TGocciaPrivateMemberExpression.Create(Result, PropertyName,
           Token.Span);
+        CountChainLink;
         Continue;
       end;
 
@@ -3794,6 +3960,7 @@ begin
     end
     else
       Break;
+    CountChainLink;
   end;
 end;
 
@@ -4809,7 +4976,16 @@ begin
   end;
 end;
 
+// Every AssignmentExpression, including a conditional's branches, an arrow's
+// concise body and an assignment's right-hand side, is a level of nesting.
 function TGocciaParser.AssignmentInheritingConsequentDepth: TGocciaExpression;
+begin
+  EnterNesting;
+  Result := UnguardedAssignment;
+  LeaveNesting;
+end;
+
+function TGocciaParser.UnguardedAssignment: TGocciaExpression;
 var
   Left, Right: TGocciaExpression;
   Line, Column: Integer;
@@ -4991,6 +5167,13 @@ begin
 end;
 
 function TGocciaParser.Statement: TGocciaStatement;
+begin
+  EnterNesting;
+  Result := UnguardedStatement;
+  LeaveNesting;
+end;
+
+function TGocciaParser.UnguardedStatement: TGocciaStatement;
 var
   Line, Column: Integer;
   function FindMatchingToken(const AStart: Integer; const AOpen,
@@ -5128,7 +5311,9 @@ begin
     Result := WithStatement
   else if Match(gttFunction) then
     Result := FunctionStatement(False, Check(gttStar))
-  else if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) then
+  // `async:` is a LabelledStatement, handled by the label branch below.
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and
+          not CheckNextWithLexicalGoal(gttColon, glgInputElementRegExp) then
   begin
     EnsureToken(FCurrent + 1, glgInputElementRegExp);
     if (FCurrent + 1 >= FTokens.Count) or
@@ -5198,7 +5383,9 @@ begin
     raise TGocciaSyntaxError.Create('Method definitions are only valid inside object literals or class bodies',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       'Wrap the method in an object literal or declare a function instead')
-  else if Check(gttIdentifier) and CheckNextWithLexicalGoal(gttColon, glgInputElementDiv) then
+  // ES2026 §14.13 LabelledStatement : LabelIdentifier : LabelledItem
+  else if IsLabelIdentifierToken(Peek.TokenType) and
+          CheckNextWithLexicalGoal(gttColon, glgInputElementDiv) then
   begin
     if FLabelStatementsEnabled then
       Result := LabeledStatement
@@ -5313,6 +5500,21 @@ var
   end;
 begin
   LabelToken := Advance;
+  // ES2026 §13.1.1 Static Semantics: Early Errors — an escaped label names
+  // the decoded word, so an escaped reserved word (`en\u0075m`) is never a
+  // label and an escaped `let` or `static` is not one in strict mode code.
+  if LabelToken.ContainsEscape and
+     IsReservedKeywordName(LabelToken.Lexeme) then
+    raise TGocciaSyntaxError.Create(
+      'Keyword must not contain escaped characters',
+      LabelToken.Line, LabelToken.Column, FFileName, FSourceLines);
+  if (not EffectiveNonStrictModeEnabled) and
+     ((LabelToken.Lexeme = KEYWORD_LET) or
+      (LabelToken.Lexeme = KEYWORD_STATIC)) then
+    raise TGocciaSyntaxError.Create(
+      'Strict mode code must not use reserved word ''' + LabelToken.Lexeme +
+      ''' as a label',
+      LabelToken.Line, LabelToken.Column, FFileName, FSourceLines);
   if FActiveLabels.IndexOf(LabelToken.Lexeme) >= 0 then
     raise TGocciaSyntaxError.Create('Duplicate statement label',
       LabelToken.Line, LabelToken.Column, FFileName, FSourceLines,
@@ -5672,7 +5874,9 @@ begin
       case CurrentType of
         gttTemplateHead, gttTemplate:
           begin
+            EnterNesting;
             SkipTemplateLiteral;
+            LeaveNesting;
             NeedsOperand := False;
           end;
         gttLeftBrace:
@@ -6153,7 +6357,10 @@ begin
         BindingPattern := ParsePattern;
         BindingName := '';
       end
-      else if Check(gttIdentifier) or
+      // ES2026 §14.7.5 ForDeclaration : LetOrConst ForBinding
+      // ForBinding : BindingIdentifier, which includes `as`, `from` and
+      // (outside strict mode code) `static`.
+      else if IsIdentifierBindingToken(Peek.TokenType) or
               (IsVar and Check(gttLet) and EffectiveNonStrictModeEnabled) then
       begin
         if IsVar then
@@ -7128,6 +7335,8 @@ begin
     end
     else
       Break;
+    // A link counts once its arguments are parsed, as in Call.
+    CountChainLink;
   end;
 end;
 
@@ -7138,7 +7347,11 @@ begin
   begin
     Advance;
     SetLength(Result, Length(Result) + 1);
+    // Each decorator is a tree of its own: its chain links must not add up
+    // with those of the decorators beside it (see LeaveNesting).
+    EnterNesting;
     Result[High(Result)] := ParseDecoratorExpression;
+    LeaveNesting;
   end;
 end;
 
@@ -7877,7 +8090,10 @@ begin
   try
     if Match(gttExtends) then
     begin
+      // `class extends class extends ...` nests through the heritage.
+      EnterNesting;
       SuperClassExpression := Call;
+      LeaveNesting;
       if not Assigned(SuperClassExpression) then
         raise TGocciaSyntaxError.Create('Expected superclass expression',
           Previous.Line, Previous.Column, FFileName, FSourceLines,
@@ -8536,6 +8752,8 @@ var
   PrologueHasForbiddenEscape: Boolean;
   OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
+  // A parse that raised leaves its nesting open; this one starts at zero.
+  ResetNesting;
   SavedStrictModeActive := FStrictModeActive;
   SavedStrictModeSourceActive := FStrictModeSourceActive;
   OuterDirectEvalUsage := EnterDirectEvalScope;
@@ -9554,6 +9772,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       BitwiseXor, Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -9567,6 +9786,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       BitwiseAnd, Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -9580,6 +9800,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       Equality, Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -9593,6 +9814,7 @@ begin
     Op := Advance;
     Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
       Addition, Op.Span);
+    CountChainLink;
   end;
 end;
 
@@ -9712,7 +9934,15 @@ begin
   Result := (AExpr is TGocciaArrayExpression) or (AExpr is TGocciaObjectExpression);
 end;
 
+// Every nested binding pattern is parsed from here.
 function TGocciaParser.ParsePattern: TGocciaDestructuringPattern;
+begin
+  EnterNesting;
+  Result := UnguardedPattern;
+  LeaveNesting;
+end;
+
+function TGocciaParser.UnguardedPattern: TGocciaDestructuringPattern;
 var
   BindingToken: TGocciaToken;
 begin
@@ -9726,7 +9956,12 @@ begin
     Advance; // consume '{'
     Result := ParseObjectPattern;
   end
-  else if Check(gttIdentifier) then
+  // ES2026 §14.3.3 BindingElement : SingleNameBinding
+  // ES2026 §13.1 BindingIdentifier : Identifier
+  // Contextual words with their own token types (`as`, `from`, `static`)
+  // are Identifiers too; ValidateIdentifierBinding rejects the ones that
+  // are reserved in strict mode code.
+  else if IsIdentifierBindingToken(Peek.TokenType) then
   begin
     BindingToken := Advance;
     ValidateIdentifierBinding(BindingToken);
@@ -10214,7 +10449,8 @@ begin
   Column := Previous.Column;
   TargetLabel := '';
 
-  if FLabelStatementsEnabled and Check(gttIdentifier) and
+  // ES2026 §14.9 BreakStatement : break [no LineTerminator here] LabelIdentifier ;
+  if FLabelStatementsEnabled and IsLabelIdentifierToken(Peek.TokenType) and
      (Previous.Line = Peek.Line) then
   begin
     TargetLabel := Advance.Lexeme;
@@ -10238,7 +10474,8 @@ begin
   Column := Previous.Column;
   TargetLabel := '';
 
-  if FLabelStatementsEnabled and Check(gttIdentifier) and
+  // ES2026 §14.8 ContinueStatement : continue [no LineTerminator here] LabelIdentifier ;
+  if FLabelStatementsEnabled and IsLabelIdentifierToken(Peek.TokenType) and
      (Previous.Line = Peek.Line) then
   begin
     TargetLabel := Advance.Lexeme;

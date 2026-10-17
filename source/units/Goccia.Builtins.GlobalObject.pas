@@ -132,62 +132,6 @@ begin
   SetLength(APendingProperties, 0);
 end;
 
-// ES2026 §6.2.6.4 FromPropertyDescriptor(Desc)
-function FromPropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaObjectValue;
-begin
-  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if ADescriptor is TGocciaPropertyDescriptorData then
-  begin
-    if ADescriptor.HasValue then
-      Result.CreateDataPropertyOrThrow(PROP_VALUE,
-        TGocciaPropertyDescriptorData(ADescriptor).Value);
-    if ADescriptor.HasWritableField then
-    begin
-      if ADescriptor.Writable then
-        Result.CreateDataPropertyOrThrow(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
-      else
-        Result.CreateDataPropertyOrThrow(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
-    end;
-  end
-  else if ADescriptor is TGocciaPropertyDescriptorAccessor then
-  begin
-    if ADescriptor.HasGet then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
-        Result.CreateDataPropertyOrThrow(PROP_GET,
-          TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
-      else
-        Result.CreateDataPropertyOrThrow(PROP_GET,
-          TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-
-    if ADescriptor.HasSet then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
-        Result.CreateDataPropertyOrThrow(PROP_SET,
-          TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
-      else
-        Result.CreateDataPropertyOrThrow(PROP_SET,
-          TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-  end;
-
-  if ADescriptor.HasEnumerableField then
-  begin
-    if ADescriptor.Enumerable then
-      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      Result.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-  if ADescriptor.HasConfigurableField then
-  begin
-    if ADescriptor.Configurable then
-      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      Result.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-end;
-
 constructor TGocciaGlobalObject.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   Members: TGocciaMemberCollection;
