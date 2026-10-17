@@ -130,7 +130,11 @@ begin
   SetLength(Result, Count);
 end;
 
-function GetSetRecord(const AValue: TGocciaValue; const AMethodName: string): TGocciaSetRecord;
+// ARoots is the caller's frame: the has and keys methods go in it as they are
+// read, since either can come from a getter and the other getter, the size
+// conversion and every later has call can run a collection.
+function GetSetRecord(const AValue: TGocciaValue; const AMethodName: string;
+  var ARoots: TGocciaActiveRootFrame): TGocciaSetRecord;
 var
   RawSize: TGocciaValue;
   NumberSize: TGocciaNumberLiteralValue;
@@ -152,10 +156,12 @@ begin
     Result.Size := Trunc(NumberSize.Value);
 
   Result.HasMethod := Result.SetObject.GetProperty(PROP_HAS);
+  ARoots.Add(Result.HasMethod);
   if not Result.HasMethod.IsCallable then
     ThrowTypeError(Format(SErrorSetLikeHasNotCallable, [AMethodName]), SSuggestSetOperationArgType);
 
   Result.KeysMethod := Result.SetObject.GetProperty(PROP_KEYS);
+  ARoots.Add(Result.KeysMethod);
   if not Result.KeysMethod.IsCallable then
     ThrowTypeError(Format(SErrorSetLikeKeysNotCallable, [AMethodName]), SSuggestSetOperationArgType);
 end;
@@ -621,6 +627,13 @@ begin
     TGocciaSetValue(AThisValue).FStore.Count);
 end;
 
+// The set operations below each hold one TGocciaActiveRootFrame for the whole
+// call (issue #1679). GetSetRecord puts the other object's has and keys
+// methods in it, because a getter can hand back a function nothing else
+// holds and the next getter, the iterator or a has call can collect. The
+// result set and the keys iterator go in it too: both are held only by this
+// function while has, next and the iterator's getters run.
+
 // ES2026 §24.2.4.16 Set.prototype.union(other)
 function TGocciaSetValue.SetUnion(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -628,46 +641,37 @@ var
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
   NextValue, Item: TGocciaValue;
-  Done, WasResultRooted, WasIteratorRooted: Boolean;
+  Done: Boolean;
   Cursor: Integer;
-  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be the this value
   // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
     ThrowTypeError(SErrorSetUnionNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Step 4: Let otherRec be GetSetRecord(other)
-  OtherRecord := GetSetRecord(AArgs.GetElement(0), 'union');
-  // Step 5: Let resultSetData be a copy of O.[[SetData]]
-  ResultSet := TGocciaSetValue.Create;
-  GC := TGarbageCollector.Instance;
-  WasResultRooted := Assigned(GC) and GC.IsTempRoot(ResultSet);
-  if Assigned(GC) and not WasResultRooted then
-    GC.AddTempRoot(ResultSet);
+  Roots.Initialize;
   try
+    // Step 4: Let otherRec be GetSetRecord(other)
+    OtherRecord := GetSetRecord(AArgs.GetElement(0), 'union', Roots);
+    // Step 5: Let resultSetData be a copy of O.[[SetData]]
+    ResultSet := TGocciaSetValue.Create;
+    Roots.Add(ResultSet);
     // Step 4: Acquire the iterator before copying O.[[SetData]]. Getting the
     // iterator's next method may run user code that mutates O.
     Iterator := GetSetRecordKeysIterator(OtherRecord, 'union');
-    WasIteratorRooted := Assigned(GC) and GC.IsTempRoot(Iterator);
-    if Assigned(GC) and not WasIteratorRooted then
-      GC.AddTempRoot(Iterator);
-    try
-      // Step 5: Let resultSetData be a copy of O.[[SetData]].
-      Cursor := 0;
-      while ThisSet.NextItem(Cursor, Item) do
-        ResultSet.AddItem(Item);
-      // Step 7: For each element nextValue from keysIter, do
+    Roots.Add(Iterator);
+    // Step 5: Let resultSetData be a copy of O.[[SetData]].
+    Cursor := 0;
+    while ThisSet.NextItem(Cursor, Item) do
+      ResultSet.AddItem(Item);
+    // Step 7: For each element nextValue from keysIter, do
+    NextValue := Iterator.DirectNext(Done);
+    while not Done do
+    begin
+      // If nextValue is not already in resultSetData, append nextValue
+      ResultSet.AddItem(NextValue);
       NextValue := Iterator.DirectNext(Done);
-      while not Done do
-      begin
-        // If nextValue is not already in resultSetData, append nextValue
-        ResultSet.AddItem(NextValue);
-        NextValue := Iterator.DirectNext(Done);
-      end;
-    finally
-      if Assigned(GC) and not WasIteratorRooted then
-        GC.RemoveTempRoot(Iterator);
     end;
 
     // Step 8: Let result be OrdinaryObjectCreate(SetPrototype, « [[SetData]] »)
@@ -675,8 +679,7 @@ begin
     // Step 10: Return result
     Result := ResultSet;
   finally
-    if Assigned(GC) and not WasResultRooted then
-      GC.RemoveTempRoot(ResultSet);
+    Roots.Clear;
   end;
 end;
 
@@ -687,24 +690,22 @@ var
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
   NextValue, Item: TGocciaValue;
-  Done, WasResultRooted, WasIteratorRooted: Boolean;
+  Done: Boolean;
   Cursor: Integer;
-  GC: TGarbageCollector;
+  Roots, ItemRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be the this value
   // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
     ThrowTypeError(SErrorSetIntersectionNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Step 4: Let otherRec be GetSetRecord(other)
-  OtherRecord := GetSetRecord(AArgs.GetElement(0), 'intersection');
-  // Step 5: Let resultSetData be a new empty List
-  ResultSet := TGocciaSetValue.Create;
-  GC := TGarbageCollector.Instance;
-  WasResultRooted := Assigned(GC) and GC.IsTempRoot(ResultSet);
-  if Assigned(GC) and not WasResultRooted then
-    GC.AddTempRoot(ResultSet);
+  Roots.Initialize;
   try
+    // Step 4: Let otherRec be GetSetRecord(other)
+    OtherRecord := GetSetRecord(AArgs.GetElement(0), 'intersection', Roots);
+    // Step 5: Let resultSetData be a new empty List
+    ResultSet := TGocciaSetValue.Create;
+    Roots.Add(ResultSet);
     if ThisSet.Count <= OtherRecord.Size then
     begin
       // Step 5: Re-read the live SetData length after each user callback.
@@ -714,9 +715,19 @@ begin
       try
         Cursor := 0;
         while ThisSet.NextItem(Cursor, Item) do
-          // Step 6a: If SetDataHas(otherRec, e) is true, append e
-          if SetRecordHas(OtherRecord, Item) then
-            ResultSet.AddItem(Item);
+        begin
+          // Step 6a: If SetDataHas(otherRec, e) is true, append e. The has
+          // call can delete e from O, which leaves it held only here while
+          // has goes on running.
+          ItemRoots.Initialize;
+          try
+            ItemRoots.Add(Item);
+            if SetRecordHas(OtherRecord, Item) then
+              ResultSet.AddItem(Item);
+          finally
+            ItemRoots.Clear;
+          end;
+        end;
       finally
         ThisSet.ReleaseIterator;
       end;
@@ -724,20 +735,13 @@ begin
     else
     begin
       Iterator := GetSetRecordKeysIterator(OtherRecord, 'intersection');
-      WasIteratorRooted := Assigned(GC) and GC.IsTempRoot(Iterator);
-      if Assigned(GC) and not WasIteratorRooted then
-        GC.AddTempRoot(Iterator);
-      try
+      Roots.Add(Iterator);
+      NextValue := Iterator.DirectNext(Done);
+      while not Done do
+      begin
+        if ThisSet.ContainsValue(NextValue) then
+          ResultSet.AddItem(NextValue);
         NextValue := Iterator.DirectNext(Done);
-        while not Done do
-        begin
-          if ThisSet.ContainsValue(NextValue) then
-            ResultSet.AddItem(NextValue);
-          NextValue := Iterator.DirectNext(Done);
-        end;
-      finally
-        if Assigned(GC) and not WasIteratorRooted then
-          GC.RemoveTempRoot(Iterator);
       end;
     end;
 
@@ -746,8 +750,7 @@ begin
     // Step 9: Return result
     Result := ResultSet;
   finally
-    if Assigned(GC) and not WasResultRooted then
-      GC.RemoveTempRoot(ResultSet);
+    Roots.Clear;
   end;
 end;
 
@@ -758,29 +761,27 @@ var
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
   NextValue, Item: TGocciaValue;
-  Done, WasResultRooted, WasIteratorRooted: Boolean;
+  Done: Boolean;
   Cursor, I: Integer;
   Snapshot: TArray<TGocciaValue>;
-  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be the this value
   // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
     ThrowTypeError(SErrorSetDifferenceNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Step 4: Let otherRec be GetSetRecord(other)
-  OtherRecord := GetSetRecord(AArgs.GetElement(0), 'difference');
-  // Step 5: Let resultSetData be a copy of O.[[SetData]]
-  ResultSet := TGocciaSetValue.Create;
-  GC := TGarbageCollector.Instance;
-  WasResultRooted := Assigned(GC) and GC.IsTempRoot(ResultSet);
-  if Assigned(GC) and not WasResultRooted then
-    GC.AddTempRoot(ResultSet);
+  Roots.Initialize;
   try
+    // Step 4: Let otherRec be GetSetRecord(other)
+    OtherRecord := GetSetRecord(AArgs.GetElement(0), 'difference', Roots);
+    // Step 5: Let resultSetData be a copy of O.[[SetData]]
+    ResultSet := TGocciaSetValue.Create;
+    Roots.Add(ResultSet);
     if ThisSet.Count <= OtherRecord.Size then
     begin
       // Step 5/6: resultSetData is a copy of O.[[SetData]]; remove members that
-      // are in other. Copy into the temp-rooted ResultSet first so the snapshot
+      // are in other. Copy into the rooted ResultSet first so the snapshot
       // members stay reachable even if a SetRecordHas callback deletes one from
       // O and triggers a GC, then remove those present in other (§24.2.4.5).
       // Operating on the copy also means mutations to O during the callback do
@@ -800,19 +801,12 @@ begin
         ResultSet.AddItem(Item);
 
       Iterator := GetSetRecordKeysIterator(OtherRecord, 'difference');
-      WasIteratorRooted := Assigned(GC) and GC.IsTempRoot(Iterator);
-      if Assigned(GC) and not WasIteratorRooted then
-        GC.AddTempRoot(Iterator);
-      try
+      Roots.Add(Iterator);
+      NextValue := Iterator.DirectNext(Done);
+      while not Done do
+      begin
+        RemoveSetItem(ResultSet, NextValue);
         NextValue := Iterator.DirectNext(Done);
-        while not Done do
-        begin
-          RemoveSetItem(ResultSet, NextValue);
-          NextValue := Iterator.DirectNext(Done);
-        end;
-      finally
-        if Assigned(GC) and not WasIteratorRooted then
-          GC.RemoveTempRoot(Iterator);
       end;
     end;
 
@@ -821,8 +815,7 @@ begin
     // Step 9: Return result
     Result := ResultSet;
   finally
-    if Assigned(GC) and not WasResultRooted then
-      GC.RemoveTempRoot(ResultSet);
+    Roots.Clear;
   end;
 end;
 
@@ -833,49 +826,41 @@ var
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
   NextValue, Item: TGocciaValue;
-  Done, WasResultRooted, WasIteratorRooted: Boolean;
+  Done: Boolean;
   Cursor: Integer;
-  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be the this value
   // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
     ThrowTypeError(SErrorSetSymmetricDifferenceNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Step 4: Let otherRec be GetSetRecord(other)
-  OtherRecord := GetSetRecord(AArgs.GetElement(0), 'symmetricDifference');
-  // Step 5: Let resultSetData be a copy of O.[[SetData]]
-  ResultSet := TGocciaSetValue.Create;
-  GC := TGarbageCollector.Instance;
-  WasResultRooted := Assigned(GC) and GC.IsTempRoot(ResultSet);
-  if Assigned(GC) and not WasResultRooted then
-    GC.AddTempRoot(ResultSet);
+  Roots.Initialize;
   try
+    // Step 4: Let otherRec be GetSetRecord(other)
+    OtherRecord := GetSetRecord(AArgs.GetElement(0), 'symmetricDifference',
+      Roots);
+    // Step 5: Let resultSetData be a copy of O.[[SetData]]
+    ResultSet := TGocciaSetValue.Create;
+    Roots.Add(ResultSet);
     // Step 4: Acquire the iterator before copying O.[[SetData]]. Getting the
     // iterator's next method may run user code that mutates O.
     Iterator := GetSetRecordKeysIterator(OtherRecord, 'symmetricDifference');
-    WasIteratorRooted := Assigned(GC) and GC.IsTempRoot(Iterator);
-    if Assigned(GC) and not WasIteratorRooted then
-      GC.AddTempRoot(Iterator);
-    try
-      // Step 5: Let resultSetData be a copy of O.[[SetData]].
-      Cursor := 0;
-      while ThisSet.NextItem(Cursor, Item) do
-        ResultSet.AddItem(Item);
-      // Step 8: For each element nextValue from keysIter, do
+    Roots.Add(Iterator);
+    // Step 5: Let resultSetData be a copy of O.[[SetData]].
+    Cursor := 0;
+    while ThisSet.NextItem(Cursor, Item) do
+      ResultSet.AddItem(Item);
+    // Step 8: For each element nextValue from keysIter, do
+    NextValue := Iterator.DirectNext(Done);
+    while not Done do
+    begin
+      // If nextValue was in O.[[SetData]], remove it; otherwise append it
+      if ThisSet.ContainsValue(NextValue) then
+        RemoveSetItem(ResultSet, NextValue)
+      else
+        ResultSet.AddItem(NextValue);
       NextValue := Iterator.DirectNext(Done);
-      while not Done do
-      begin
-        // If nextValue was in O.[[SetData]], remove it; otherwise append it
-        if ThisSet.ContainsValue(NextValue) then
-          RemoveSetItem(ResultSet, NextValue)
-        else
-          ResultSet.AddItem(NextValue);
-        NextValue := Iterator.DirectNext(Done);
-      end;
-    finally
-      if Assigned(GC) and not WasIteratorRooted then
-        GC.RemoveTempRoot(Iterator);
     end;
 
     // Step 9: Let result be OrdinaryObjectCreate(SetPrototype, « [[SetData]] »)
@@ -883,8 +868,7 @@ begin
     // Step 11: Return result
     Result := ResultSet;
   finally
-    if Assigned(GC) and not WasResultRooted then
-      GC.RemoveTempRoot(ResultSet);
+    Roots.Clear;
   end;
 end;
 
@@ -896,38 +880,41 @@ var
   Item: TGocciaValue;
   Cursor: Integer;
   IsSubset: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be the this value
   // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
     ThrowTypeError(SErrorSetIsSubsetOfNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Step 4: Let otherRec be GetSetRecord(other)
-  OtherRecord := GetSetRecord(AArgs.GetElement(0), 'isSubsetOf');
-
-  // Step 5: If SetDataSize(O) > otherRec.[[Size]], return false (optimization)
-  if ThisSet.Count > OtherRecord.Size then
-  begin
-    Result := TGocciaBooleanLiteralValue.FalseValue;
-    Exit;
-  end;
-
-  IsSubset := True;
-  // Steps 5-7: Re-read the live SetData length after each user callback.
-  // Retaining the store preserves physical indices while newly appended
-  // members remain visible to the iteration.
-  ThisSet.RetainIterator;
+  Roots.Initialize;
   try
-    Cursor := 0;
-    while ThisSet.NextItem(Cursor, Item) do
-      // Step 6a: If SetDataHas(otherRec, e) is false, return false
-      if not SetRecordHas(OtherRecord, Item) then
-      begin
-        IsSubset := False;
-        Break;
-      end;
+    // Step 4: Let otherRec be GetSetRecord(other)
+    OtherRecord := GetSetRecord(AArgs.GetElement(0), 'isSubsetOf', Roots);
+
+    // Step 5: If SetDataSize(O) > otherRec.[[Size]], return false (optimization)
+    if ThisSet.Count > OtherRecord.Size then
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+    IsSubset := True;
+    // Steps 5-7: Re-read the live SetData length after each user callback.
+    // Retaining the store preserves physical indices while newly appended
+    // members remain visible to the iteration.
+    ThisSet.RetainIterator;
+    try
+      Cursor := 0;
+      while ThisSet.NextItem(Cursor, Item) do
+        // Step 6a: If SetDataHas(otherRec, e) is false, return false
+        if not SetRecordHas(OtherRecord, Item) then
+        begin
+          IsSubset := False;
+          Break;
+        end;
+    finally
+      ThisSet.ReleaseIterator;
+    end;
   finally
-    ThisSet.ReleaseIterator;
+    Roots.Clear;
   end;
 
   // Step 7: Return true
@@ -944,31 +931,26 @@ var
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
   NextValue: TGocciaValue;
-  Done, WasIteratorRooted: Boolean;
-  GC: TGarbageCollector;
+  Done: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be the this value
   // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
     ThrowTypeError(SErrorSetIsSupersetOfNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Step 4: Let otherRec be GetSetRecord(other)
-  OtherRecord := GetSetRecord(AArgs.GetElement(0), 'isSupersetOf');
-
-  // Step 5: If SetDataSize(O) < otherRec.[[Size]], return false (optimization)
-  if ThisSet.Count < OtherRecord.Size then
-  begin
-    Result := TGocciaBooleanLiteralValue.FalseValue;
-    Exit;
-  end;
-
-  // Step 6: Let keysIter be GetIteratorFromSetLike(otherRec)
-  Iterator := GetSetRecordKeysIterator(OtherRecord, 'isSupersetOf');
-  GC := TGarbageCollector.Instance;
-  WasIteratorRooted := Assigned(GC) and GC.IsTempRoot(Iterator);
-  if Assigned(GC) and not WasIteratorRooted then
-    GC.AddTempRoot(Iterator);
+  Roots.Initialize;
   try
+    // Step 4: Let otherRec be GetSetRecord(other)
+    OtherRecord := GetSetRecord(AArgs.GetElement(0), 'isSupersetOf', Roots);
+
+    // Step 5: If SetDataSize(O) < otherRec.[[Size]], return false (optimization)
+    if ThisSet.Count < OtherRecord.Size then
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
+
+    // Step 6: Let keysIter be GetIteratorFromSetLike(otherRec)
+    Iterator := GetSetRecordKeysIterator(OtherRecord, 'isSupersetOf');
+    Roots.Add(Iterator);
     // Step 7: For each element nextValue from keysIter, do
     NextValue := Iterator.DirectNext(Done);
     while not Done do
@@ -977,14 +959,12 @@ begin
       if not ThisSet.ContainsValue(NextValue) then
       begin
         Iterator.Close;
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-        Exit;
+        Exit(TGocciaBooleanLiteralValue.FalseValue);
       end;
       NextValue := Iterator.DirectNext(Done);
     end;
   finally
-    if Assigned(GC) and not WasIteratorRooted then
-      GC.RemoveTempRoot(Iterator);
+    Roots.Clear;
   end;
 
   // Step 8: Return true
@@ -998,64 +978,51 @@ var
   OtherRecord: TGocciaSetRecord;
   Iterator: TGocciaIteratorValue;
   NextValue, Item: TGocciaValue;
-  Done, WasIteratorRooted, IsDisjoint: Boolean;
+  Done: Boolean;
   Cursor: Integer;
-  GC: TGarbageCollector;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be the this value
   // Steps 2-3: If O does not have a [[SetData]] internal slot, throw a TypeError
   if not (AThisValue is TGocciaSetValue) then
     ThrowTypeError(SErrorSetIsDisjointFromNonSet, SSuggestSetThisType);
   ThisSet := TGocciaSetValue(AThisValue);
-  // Step 4: Let otherRec be GetSetRecord(other)
-  OtherRecord := GetSetRecord(AArgs.GetElement(0), 'isDisjointFrom');
+  Roots.Initialize;
+  try
+    // Step 4: Let otherRec be GetSetRecord(other)
+    OtherRecord := GetSetRecord(AArgs.GetElement(0), 'isDisjointFrom', Roots);
 
-  if ThisSet.Count <= OtherRecord.Size then
-  begin
-    IsDisjoint := True;
-    // Step 5: Re-read the live SetData length after each user callback.
-    ThisSet.RetainIterator;
-    try
-      Cursor := 0;
-      while ThisSet.NextItem(Cursor, Item) do
-        // Step 5a: If SetDataHas(otherRec, e) is true, return false
-        if SetRecordHas(OtherRecord, Item) then
-        begin
-          IsDisjoint := False;
-          Break;
-        end;
-    finally
-      ThisSet.ReleaseIterator;
-    end;
-    if not IsDisjoint then
+    if ThisSet.Count <= OtherRecord.Size then
     begin
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-      Exit;
-    end;
-  end
-  else
-  begin
-    Iterator := GetSetRecordKeysIterator(OtherRecord, 'isDisjointFrom');
-    GC := TGarbageCollector.Instance;
-    WasIteratorRooted := Assigned(GC) and GC.IsTempRoot(Iterator);
-    if Assigned(GC) and not WasIteratorRooted then
-      GC.AddTempRoot(Iterator);
-    try
+      // Step 5: Re-read the live SetData length after each user callback.
+      ThisSet.RetainIterator;
+      try
+        Cursor := 0;
+        while ThisSet.NextItem(Cursor, Item) do
+          // Step 5a: If SetDataHas(otherRec, e) is true, return false
+          if SetRecordHas(OtherRecord, Item) then
+            Exit(TGocciaBooleanLiteralValue.FalseValue);
+      finally
+        ThisSet.ReleaseIterator;
+      end;
+    end
+    else
+    begin
+      Iterator := GetSetRecordKeysIterator(OtherRecord, 'isDisjointFrom');
+      Roots.Add(Iterator);
       NextValue := Iterator.DirectNext(Done);
       while not Done do
       begin
         if ThisSet.ContainsValue(NextValue) then
         begin
           Iterator.Close;
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-          Exit;
+          Exit(TGocciaBooleanLiteralValue.FalseValue);
         end;
         NextValue := Iterator.DirectNext(Done);
       end;
-    finally
-      if Assigned(GC) and not WasIteratorRooted then
-        GC.RemoveTempRoot(Iterator);
     end;
+  finally
+    Roots.Clear;
   end;
 
   // Step 6: Return true
