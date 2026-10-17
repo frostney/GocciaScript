@@ -103,9 +103,9 @@ and of this change, bytecode, peak RSS from `/usr/bin/time`, collections from
 
 | Workload | Ceiling | Before: collections | Before: peak RSS | After: collections | After: peak RSS |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 300 × `new Array(100000)` dropped | 64 MiB | 0 | 340 MiB | 6 | 74 MiB |
-| 300 × `a.length = 100000` dropped | 64 MiB | 0 | 340 MiB | 6 | 74 MiB |
-| 2,000 × `new Array(100000)` dropped | 64 MiB | 4 | 565 MiB | 41 | 74 MiB |
+| 300 × `new Array(100000)` dropped | 64 MiB | 0 | 340 MiB | 6 | 72 MiB |
+| 300 × `a.length = 100000` dropped | 64 MiB | 0 | 340 MiB | 6 | 72 MiB |
+| 2,000 × `new Array(100000)` dropped | 64 MiB | 4 | 565 MiB | 43 | 72 MiB |
 | 300 push-built arrays of 100,000 | 64 MiB | 63 | 93 MiB | 63 | 93 MiB |
 | 1,000 small objects live, 2,000,000 allocated | 64 MiB | 26 | 73 MiB | 26 | 73 MiB |
 | same | 512 MiB | 2 | 548 MiB | 22 | 83 MiB |
