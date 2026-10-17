@@ -189,6 +189,7 @@ var
   Context: TGocciaSandboxContext;
   Lines: TStringList;
   Index: Integer;
+  Diff: string;
 begin
   Context := TGocciaSandboxContext.Create;
   Lines := TStringList.Create;
@@ -198,6 +199,7 @@ begin
     Context.Fs.MakeDirectory('/out');
     Context.Fs.WriteAllText('/out/w.txt', 'w');
     Context.Fs.AddReadOnlyPath('/data');
+    Context.CaptureBaseline;
 
     RunModule(Context, READ_ONLY_PROBE_SOURCE);
 
@@ -214,6 +216,10 @@ begin
     Expect<Boolean>(Context.Fs.Exists('/data/sub')).ToBe(True);
     Expect<string>(Context.Fs.ReadAllText('/out/copy.txt')).ToBe('original');
     Expect<string>(Context.Fs.ReadAllText('/out/w.txt')).ToBe('w');
+    { The refused writes changed nothing, so the diff does not list them. }
+    Diff := Context.DiffJson;
+    Expect<Boolean>(Pos('/out/copy.txt', Diff) > 0).ToBe(True);
+    Expect<Boolean>(Pos('/data', Diff) > 0).ToBe(False);
   finally
     Lines.Free;
     Context.Free;
