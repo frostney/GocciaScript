@@ -276,13 +276,6 @@ begin
   end;
 end;
 
-function SameBytes(const ALeft, ARight: TBytes): Boolean;
-begin
-  Result := (Length(ALeft) = Length(ARight)) and
-    ((Length(ALeft) = 0) or
-     CompareMem(@ALeft[0], @ARight[0], Length(ALeft)));
-end;
-
 { APath canonical where it exists, the missing rest appended, so a path
   that does not exist yet compares against a canonical root. }
 function CanonicalWithMissingTail(const APath: string): string;
@@ -810,8 +803,7 @@ begin
     for I := 0 to Paths.Count - 1 do
     begin
       if Assigned(ABaseline) and ABaseline.IsFile(Paths[I]) and
-         SameBytes(ABaseline.SnapshotReadAllBytes(Paths[I]),
-           FFs.SnapshotReadAllBytes(Paths[I])) then
+         ABaseline.SnapshotSameBytes(Paths[I], FFs, Paths[I]) then
         Continue;
 
       Result[Count].SandboxPath := Paths[I];

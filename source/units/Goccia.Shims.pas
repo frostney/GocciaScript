@@ -177,6 +177,10 @@ const
         '  return new Uint8Array(codePoints).toBase64();'#10 +
         '};'
     ),
+    // atob stays linear in its input: one regular expression checks the
+    // alphabet, and the decoded bytes become characters one 8 KiB slice per
+    // String.fromCharCode call, joined once. A callback per character or per
+    // byte made large inputs slow and memory-hungry (#1567).
     ( // WHATWG HTML spec §8.3 — legacy atob(data) via Uint8Array.fromBase64
       Name: 'atob';
       FileName: '<shim:atob>';
@@ -200,23 +204,21 @@ const
         '      "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
         '      "InvalidCharacterError"'#10 +
         '    );'#10 +
-        '  [...str].forEach((ch: string): void => {'#10 +
-        '    const c: number = ch.charCodeAt(0);'#10 +
-        '    if (!(c >= 65 && c <= 90) && !(c >= 97 && c <= 122) &&'#10 +
-        '        !(c >= 48 && c <= 57) && c !== 43 && c !== 47)'#10 +
-        '      throw new DOMException('#10 +
-        '        "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
-        '        "InvalidCharacterError"'#10 +
-        '      );'#10 +
-        '  });'#10 +
+        '  if (!/^[A-Za-z0-9+\/]*$/.test(str))'#10 +
+        '    throw new DOMException('#10 +
+        '      "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
+        '      "InvalidCharacterError"'#10 +
+        '    );'#10 +
         '  const remainder: number = str.length % 4;'#10 +
         '  if (remainder === 2) str += "==";'#10 +
         '  else if (remainder === 3) str += "=";'#10 +
         '  if (str === "") return "";'#10 +
-        '  return Uint8Array.fromBase64(str).reduce('#10 +
-        '    (acc: string, b: number): string => acc + String.fromCharCode(b),'#10 +
-        '    ""'#10 +
-        '  );'#10 +
+        '  const bytes: Uint8Array = Uint8Array.fromBase64(str);'#10 +
+        '  return Array.from('#10 +
+        '    { length: Math.ceil(bytes.length / 8192) },'#10 +
+        '    (_: unknown, i: number): string =>'#10 +
+        '      String.fromCharCode(...bytes.subarray(i * 8192, (i + 1) * 8192))'#10 +
+        '  ).join("");'#10 +
         '};'
     ),
     ( // ES2027 §19.2.5 — legacy parseInt via Number.parseInt
@@ -465,7 +467,7 @@ const
         '};'#10 +
         '// RFC 2822 section 4.3 zone names (UT, GMT, Z and the US zones) and numeric'#10 +
         '// offsets, alone or after GMT, UTC or UT: +h, +hh, +hhmm (the form toString'#10 +
-        '// writes) and +hh:mm. Letters are matched case-insensitively, as in V8.'#10 +
+        '// writes) and +h:m, +hh:mm. Letters are matched case-insensitively, as in V8.'#10 +
         'const legacyZoneOffsetHours: any = {'#10 +
         '  UT: 0, UTC: 0, GMT: 0, Z: 0, EST: -5, EDT: -4, CST: -6, CDT: -5,'#10 +
         '  MST: -7, MDT: -6, PST: -8, PDT: -7'#10 +
@@ -485,8 +487,9 @@ const
         '  const hourText: string = split ? body.slice(0, body.length - 2) : parts[0];'#10 +
         '  const minuteText: string = split ? body.slice(body.length - 2) : parts.length === 2 ? parts[1] : "00";'#10 +
         '  if (hourText.length < 1 || hourText.length > 2) return NaN;'#10 +
+        '  if (minuteText.length < 1 || minuteText.length > 2) return NaN;'#10 +
         '  const hour: number = parseExactDigits(hourText, hourText.length);'#10 +
-        '  const minute: number = parseExactDigits(minuteText, 2);'#10 +
+        '  const minute: number = parseExactDigits(minuteText, minuteText.length);'#10 +
         '  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;'#10 +
         '  const offset: number = (hour * 60 + minute) * 60000;'#10 +
         '  return sign === "+" ? offset : -offset;'#10 +

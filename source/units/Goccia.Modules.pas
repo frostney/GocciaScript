@@ -424,13 +424,21 @@ begin
   FValue := AValue;
 end;
 
+{ Marks what the binding holds without reading it. A local export is a
+  binding in its module environment, which is marked whole: GetValue would
+  raise the TDZ ReferenceError inside the collector while the module has not
+  yet initialized the binding (a module in an import cycle), and the error
+  would reach the guest code that triggered the collection. A forwarded
+  export belongs to its source module, which roots its own bindings
+  (TGocciaModuleRoots, SetEnvironment). See ADR 0133. }
 procedure TGocciaModuleExportBinding.MarkReferences;
-var
-  Value: TGocciaValue;
 begin
-  Value := GetValue;
-  if Assigned(Value) then
-    Value.MarkReferences;
+  if Assigned(FSourceModule) then
+    Exit;
+  if Assigned(FEnvironment) then
+    FEnvironment.MarkReferences
+  else if Assigned(FValue) then
+    FValue.MarkReferences;
 end;
 
 { TGocciaModuleImportBinding }
@@ -1608,10 +1616,20 @@ end;
 
 function TGocciaDeferredModuleNamespaceObject.TryDefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Namespace: TGocciaObjectValue;
 begin
   if AName = PROP_THEN then
     Exit(inherited TryDefineProperty(AName, ADescriptor));
-  Result := EnsureNamespaceObject.TryDefineProperty(AName, ADescriptor);
+  // The call takes ownership of ADescriptor, so it is freed here when the
+  // module's evaluation error stops the call before it reaches the namespace.
+  try
+    Namespace := EnsureNamespaceObject;
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+  Result := Namespace.TryDefineProperty(AName, ADescriptor);
 end;
 
 function TGocciaDeferredModuleNamespaceObject.DeleteProperty(

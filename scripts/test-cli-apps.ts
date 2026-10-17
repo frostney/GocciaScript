@@ -471,6 +471,30 @@ await section("Loader: compact-json omits build, memory, stdout, stderr...", asy
   if (typeof file.timing?.total_ns !== "number") throw new Error("compact-json per-file timing should be present");
 });
 
+await section("Loader: output keeps an empty last console line...", async () => {
+  // One element per console line, empty lines included, at the top level and
+  // in files[] alike.
+  const cases: { source: string; expected: string[] }[] = [
+    { source: 'console.log("a"); console.log("");\n', expected: ["a", ""] },
+    { source: 'console.log("a"); console.log(""); console.log("");\n', expected: ["a", "", ""] },
+    { source: 'console.log("a"); console.log(""); console.log("b");\n', expected: ["a", "", "b"] },
+    { source: 'console.log("");\n', expected: [""] },
+    { source: 'console.log("a\\n");\n', expected: ["a", ""] },
+    { source: "const quiet = 1;\n", expected: [] },
+  ];
+  for (const format of ["json", "compact-json"]) {
+    for (const { source, expected } of cases) {
+      const { exitCode, json, stderr } = runLoaderJson(source, [`--output=${format}`]);
+      const label = `${format} ${JSON.stringify(source.trim())}`;
+      if (exitCode !== 0) throw new Error(`${label} exited ${exitCode}: ${stderr}`);
+      if (JSON.stringify(json.output) !== JSON.stringify(expected))
+        throw new Error(`${label} output should be ${JSON.stringify(expected)}, got ${JSON.stringify(json.output)}`);
+      if (JSON.stringify(json.files?.[0]?.output) !== JSON.stringify(expected))
+        throw new Error(`${label} files[0].output should be ${JSON.stringify(expected)}, got ${JSON.stringify(json.files?.[0]?.output)}`);
+    }
+  }
+});
+
 await section("Loader: compact-json error path omits build, memory, stdout, stderr...", async () => {
   const { exitCode, json } = runLoaderJson("throw new Error('boom');\n", ["--output=compact-json"]);
   if (exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");
@@ -9211,6 +9235,249 @@ await section("Runner sandbox mode: fs errors are Node-shaped...", async () => {
   }
 });
 
+await section("Runner sandbox mode: fs writes a view's bytes, not one byte per element...", async () => {
+  // Node writes a TypedArray or DataView as the bytes it views: byteLength
+  // bytes from byteOffset. Each line prints the bytes written back. A plain
+  // ArrayBuffer and an out-of-bounds DataView throw a TypeError, as in Node,
+  // but write nothing (Node opens, so creates, the file first).
+  const tmp = makeNativeTmp();
+  try {
+    const kinds = [
+      ["Int8Array", 1], ["Uint8Array", 1], ["Uint8ClampedArray", 1],
+      ["Int16Array", 2], ["Uint16Array", 2], ["Float16Array", 2],
+      ["Int32Array", 4], ["Uint32Array", 4], ["Float32Array", 4],
+      ["Float64Array", 8], ["BigInt64Array", 8], ["BigUint64Array", 8],
+    ] as const;
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'const show = (label, path) => console.log(label + ":" + fs.readFileSync(path).join(","));',
+          'const pattern = new ArrayBuffer(64);',
+          'const all = new Uint8Array(pattern);',
+          'for (const i of all.keys()) all[i] = i;',
+          `for (const Kind of [${kinds.map(([name]) => name).join(", ")}]) {`,
+          '  fs.writeFileSync("/kind.bin", new Kind(pattern, 8, 2));',
+          '  show(Kind.name, "/kind.bin");',
+          '}',
+          'fs.writeFileSync("/zeros.bin", new Uint16Array(3));',
+          'show("zeros", "/zeros.bin");',
+          'fs.writeFileSync("/dataview.bin", new DataView(pattern, 2, 5));',
+          'show("dataview", "/dataview.bin");',
+          'fs.writeFileSync("/dataview-tail.bin", new DataView(pattern, 60));',
+          'show("dataview-tail", "/dataview-tail.bin");',
+          'fs.writeFileSync("/append.bin", new Uint16Array(pattern, 0, 1));',
+          'fs.appendFileSync("/append.bin", new Uint32Array(pattern, 4, 1));',
+          'show("append", "/append.bin");',
+          'await fs.promises.writeFile("/promise.bin", new Int16Array(pattern, 10, 2));',
+          'await fs.promises.appendFile("/promise.bin", new DataView(pattern, 20, 3));',
+          'show("promise", "/promise.bin");',
+          'const growable = new ArrayBuffer(2, { maxByteLength: 8 });',
+          'const tracking = new Uint16Array(growable);',
+          'const trackingView = new DataView(growable, 2);',
+          'tracking[0] = 0x0101;',
+          'growable.resize(8);',
+          'fs.writeFileSync("/grown.bin", tracking);',
+          'show("grown", "/grown.bin");',
+          'fs.writeFileSync("/grown-dataview.bin", trackingView);',
+          'show("grown-dataview", "/grown-dataview.bin");',
+          'const shrinking = new ArrayBuffer(16, { maxByteLength: 16 });',
+          'const fixed = new Uint32Array(shrinking, 4, 2);',
+          'const fixedView = new DataView(shrinking, 4, 8);',
+          'shrinking.resize(8);',
+          'fs.writeFileSync("/out-of-bounds.bin", fixed);',
+          'show("out-of-bounds", "/out-of-bounds.bin");',
+          'try { fs.writeFileSync("/out-of-bounds-dataview.bin", fixedView); console.log("out-of-bounds-dataview:written"); }',
+          'catch (error) { console.log("out-of-bounds-dataview:" + error.name + ":" + fs.existsSync("/out-of-bounds-dataview.bin")); }',
+          'const detachable = new ArrayBuffer(8);',
+          'const detached = new Float64Array(detachable);',
+          'const detachedView = new DataView(detachable);',
+          'detachable.transfer();',
+          'fs.writeFileSync("/detached.bin", detached);',
+          'show("detached", "/detached.bin");',
+          'try { fs.writeFileSync("/detached-dataview.bin", detachedView); console.log("detached-dataview:written"); }',
+          'catch (error) { console.log("detached-dataview:" + error.name + ":" + fs.existsSync("/detached-dataview.bin")); }',
+          'try { fs.writeFileSync("/buffer.bin", pattern); console.log("buffer:written"); }',
+          'catch (error) { console.log("buffer:" + error.name + ":" + fs.existsSync("/buffer.bin")); }',
+        ].join("\n"),
+      },
+    ]);
+
+    const range = (start: number, count: number) =>
+      Array.from({ length: count }, (_, index) => start + index).join(",");
+    const expected = [
+      ...kinds.map(([name, size]) => `${name}:${range(8, 2 * size)}`),
+      "zeros:0,0,0,0,0,0",
+      `dataview:${range(2, 5)}`,
+      `dataview-tail:${range(60, 4)}`,
+      `append:${range(0, 2)},${range(4, 4)}`,
+      `promise:${range(10, 4)},${range(20, 3)}`,
+      "grown:1,1,0,0,0,0,0,0",
+      "grown-dataview:0,0,0,0,0,0",
+      "out-of-bounds:",
+      "out-of-bounds-dataview:TypeError:false",
+      "detached:",
+      "detached-dataview:TypeError:false",
+      "buffer:TypeError:false",
+    ];
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode view write run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = stdout.split("\n");
+    if (JSON.stringify(actual) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode should write each view's bytes, expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: binary reads, writes, diffs and write-back keep every byte...", async () => {
+  // readFileSync hands the file's own bytes to its Uint8Array, writeFileSync
+  // copies a view's range at once, and the diff and write-back compare files
+  // in place a word at a time; sizes either side of a word reach the tail.
+  const tmp = makeNativeTmp();
+  try {
+    const bytesOf = (size: number, seed: number) =>
+      Buffer.from(Array.from({ length: size }, (_, index) => (index * 131 + seed * 17 + 7) & 0xff));
+    const sizes = [0, 1, 7, 8, 9, 16, 4099];
+    const files: Record<string, Buffer> = {
+      "last.bin": bytesOf(9, 1),
+      "word.bin": bytesOf(16, 2),
+      "same.bin": bytesOf(4099, 3),
+      "empty.bin": bytesOf(0, 4),
+      "short.bin": bytesOf(9, 5),
+    };
+    for (const size of sizes) files[`source-${size}.bin`] = bytesOf(size, size);
+    const tree = writeSandboxTree(
+      tmp,
+      Object.entries(files).map(([name, bytes]) => ({ path: `/${name}`, base64: bytes.toString("base64") })),
+    );
+    const script = join(tmp, "main.js");
+    writeFileSync(script, [
+      'import fs from "fs";',
+      `for (const size of [${sizes.join(", ")}]) {`,
+      '  const bytes = fs.readFileSync(`/data/source-${size}.bin`);',
+      '  fs.writeFileSync(`/data/copy-${size}.bin`, bytes);',
+      '}',
+      'const last = fs.readFileSync("/data/last.bin");',
+      'last[last.length - 1] ^= 1;',
+      'fs.writeFileSync("/data/last.bin", last);',
+      'const word = fs.readFileSync("/data/word.bin");',
+      'word[3] ^= 0x80;',
+      'fs.writeFileSync("/data/word.bin", word);',
+      'fs.writeFileSync("/data/same.bin", fs.readFileSync("/data/same.bin"));',
+      'fs.writeFileSync("/data/empty.bin", fs.readFileSync("/data/empty.bin"));',
+      'const short = fs.readFileSync("/data/short.bin");',
+      'fs.writeFileSync("/data/short.bin", short.subarray(0, short.length - 1));',
+      'console.log("done");',
+    ].join("\n"));
+
+    const diff = join(tmp, "diff.json");
+    const proc = Bun.spawnSync(
+      [RUNNER, script, "--copy-rw", `${tree}=/data`, "--source-type=module", `--diff-file=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stderr = normalizeLineEndings(proc.stderr.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode binary round trip should exit 0, got ${proc.exitCode}: ${stderr}`);
+    for (const size of sizes) {
+      const copied = readFileSync(join(tree, `copy-${size}.bin`));
+      if (!copied.equals(files[`source-${size}.bin`]))
+        throw new Error(`Sandbox mode should copy every byte of a ${size}-byte file, got ${copied.toString("hex")}`);
+    }
+    const expectedLast = Buffer.from(files["last.bin"]);
+    expectedLast[8] ^= 1;
+    const expectedWord = Buffer.from(files["word.bin"]);
+    expectedWord[3] ^= 0x80;
+    const expectedHost: [string, Buffer][] = [
+      ["last.bin", expectedLast],
+      ["word.bin", expectedWord],
+      ["same.bin", files["same.bin"]],
+      ["empty.bin", files["empty.bin"]],
+      ["short.bin", files["short.bin"].subarray(0, 8)],
+    ];
+    for (const [name, bytes] of expectedHost)
+      if (!readFileSync(join(tree, name)).equals(bytes))
+        throw new Error(`Sandbox mode write-back left ${name} as ${readFileSync(join(tree, name)).toString("hex")}`);
+
+    const written = stderr.split("\n")
+      .filter((line) => line.startsWith("write-back: ") && !line.includes("file(s) written"))
+      .map((line) => line.replace(/\\/g, "/").replace(/^.*\//, ""))
+      .sort();
+    const expectedWritten = [...sizes.map((size) => `copy-${size}.bin`), "last.bin", "short.bin", "word.bin"].sort();
+    if (JSON.stringify(written) !== JSON.stringify(expectedWritten))
+      throw new Error(`Sandbox mode should write back only changed files, expected ${JSON.stringify(expectedWritten)}, got ${JSON.stringify(written)}`);
+
+    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes
+      .map((change: any) => `${change.kind} ${change.path} ${change.oldBytes} ${change.newBytes}`)
+      .sort();
+    const expectedChanges = [
+      ...sizes.map((size) => `create /data/copy-${size}.bin 0 ${size}`),
+      "modify /data/last.bin 9 9",
+      "modify /data/short.bin 9 8",
+      "modify /data/word.bin 16 16",
+    ].sort();
+    if (JSON.stringify(changes) !== JSON.stringify(expectedChanges))
+      throw new Error(`Sandbox mode JSON diff should list each changed file once, expected ${JSON.stringify(expectedChanges)}, got ${JSON.stringify(changes)}`);
+
+    const unifiedDiff = join(tmp, "diff.diff");
+    const unifiedProc = Bun.spawnSync(
+      [RUNNER, script, "--copy", `${tree}=/data`, "--source-type=module", `--diff-file=${unifiedDiff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (unifiedProc.exitCode !== 0)
+      throw new Error(`Sandbox mode unified diff run should exit 0, got ${unifiedProc.exitCode}: ${unifiedProc.stderr.toString()}`);
+    const headers = normalizeLineEndings(readFileSync(unifiedDiff, "latin1"))
+      .split("\n")
+      .filter((line) => line.startsWith("+++ /data/"))
+      .map((line) => line.slice(4))
+      .sort();
+    // The first run wrote its changes back, so this run's baseline already
+    // holds the copies: rewriting them, same.bin and empty.bin with the same
+    // bytes changes nothing, while last.bin, word.bin and short.bin change
+    // again.
+    const expectedHeaders = ["/data/last.bin", "/data/short.bin", "/data/word.bin"];
+    if (JSON.stringify(headers) !== JSON.stringify(expectedHeaders))
+      throw new Error(`Sandbox mode unified diff should list each changed file once, expected ${JSON.stringify(expectedHeaders)}, got ${JSON.stringify(headers)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: readFileSync is refused at the memory limit with a RangeError...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      { path: "/big.bin", base64: Buffer.alloc(4 * 1024 * 1024, 7).toString("base64") },
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'try { fs.readFileSync("/big.bin"); console.log("read"); }',
+          'catch (error) { console.log(error.name); }',
+          'console.log(fs.readFileSync("/main.js", "utf8").length > 0);',
+        ].join("\n"),
+      },
+    ]);
+    for (const [limit, expected] of [["2MiB", "RangeError\ntrue"], ["64MiB", "read\ntrue"]]) {
+      const proc = Bun.spawnSync(
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--max-memory=${limit}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0 || stdout !== expected)
+        throw new Error(`Sandbox mode readFileSync under --max-memory=${limit} should print ${JSON.stringify(expected)} and exit 0, got ${proc.exitCode}: ${stdout} ${proc.stderr.toString()}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: aliases and import maps resolve sandbox module paths...", async () => {
   const tmp = makeNativeTmp();
   try {
@@ -13355,6 +13622,221 @@ await section("Runner sandbox mode: a parent's fetch that completes during a nes
   } finally {
     server.stop(true);
   }
+});
+
+await section("Runner: a fetch awaited after a top-level await that settles at once still completes (#1559)...", async () => {
+  // The entry's first await settles at once, so the rest of its body runs as
+  // a job inside the run's final idle wait. A fetch started there used to be
+  // left in flight when that wait returned: the run printed `a` and exited 0.
+  // Every path that runs the entry as an async module — sandbox mode, and
+  // host mode while the interpreter existed — dropped it.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      // Never already answered when the run first looks for pending work.
+      await Bun.sleep(50);
+      return new Response("hello", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const fetchTail = [
+    "console.log('a');",
+    `const response = await fetch('${url}');`,
+    "console.log('b ' + response.status + ' ' + (await response.text()));",
+    "console.log('c');",
+  ];
+  const completes = ["a", "b 200 hello", "c"];
+  const variants: { name: string; main: string; expected: string[]; hostToo: boolean }[] = [
+    { name: "await Promise.resolve()", main: ["await Promise.resolve();", ...fetchTail].join("\n"), expected: completes, hostToo: true },
+    { name: "await import('./j.js')", main: ["const j = (await import('./j.js')).default;", "console.log('j ' + j);", ...fetchTail].join("\n"), expected: ["j 42", ...completes], hostToo: true },
+    { name: "await import('fs')", main: ["const fs = (await import('fs')).default;", "console.log('fs ' + typeof fs.readFileSync);", ...fetchTail].join("\n"), expected: ["fs function", ...completes], hostToo: false },
+    {
+      name: "await main()",
+      main: ["const main = async () => {", "  await Promise.resolve();", ...fetchTail.map((line) => "  " + line), "};", "await main();"].join("\n"),
+      expected: completes,
+      hostToo: true,
+    },
+    {
+      name: "fetch().then() after await Promise.resolve()",
+      main: [
+        "await Promise.resolve();",
+        "console.log('a');",
+        `fetch('${url}').then((response) => console.log('b ' + response.status));`,
+        "console.log('c');",
+      ].join("\n"),
+      expected: ["a", "c", "b 200"],
+      hostToo: true,
+    },
+  ];
+  // Async spawns, so this process's event loop stays free to answer.
+  const spawnRunner = async (args: string[]) => {
+    const proc = Bun.spawn([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, 20_000);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      return { exitCode, stdout: normalizeLineEndings(stdout), combined: stdout + stderr, timedOut };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const runBoth = async (main: string, hostToo: boolean) => {
+    const tmp = makeNativeTmp();
+    try {
+      const tree = writeSandboxTree(tmp, { "/main.js": main, "/j.js": "export default 42;\n" });
+      const common = ["--source-type=module", "--allow-net=127.0.0.1"];
+      const runs = [{ path: "sandbox", run: await spawnRunner(["--copy", `${tree}=/`, "--entry=/main.js", ...common]) }];
+      if (hostToo)
+        runs.push({ path: "host", run: await spawnRunner([join(tree, "main.js"), ...common]) });
+      return runs;
+    } finally {
+      clean(tmp);
+    }
+  };
+  // The program's own output, without the host runner's timing report.
+  const programLines = (stdout: string) =>
+    stdout.split("\n").filter((line) => line !== "" && !line.startsWith("Running script") && !line.startsWith("  "));
+  // Every case runs, so one run names every path that drops the fetch.
+  const failures: string[] = [];
+  try {
+    for (const variant of variants) {
+      for (const { path, run } of await runBoth(variant.main, variant.hostToo)) {
+        const label = `${path}, ${variant.name}`;
+        const lines = programLines(run.stdout);
+        if (run.timedOut || run.exitCode !== 0)
+          failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+        else if (JSON.stringify(lines) !== JSON.stringify(variant.expected))
+          failures.push(`${label}: should print ${JSON.stringify(variant.expected)}, got ${JSON.stringify(lines)}`);
+      }
+    }
+    // A rejected fetch the entry awaits is still the entry's uncaught error.
+    const rejected = ["await Promise.resolve();", "console.log('a');", "await fetch('http://127.0.0.1:1/');", "console.log('unreachable');"].join("\n");
+    for (const { path, run } of await runBoth(rejected, true)) {
+      const label = `${path}, rejected fetch`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("TypeError: Failed to connect to 127.0.0.1:1") || lines[0] !== "a" || lines.includes("unreachable"))
+        failures.push(`${label}: should print a, then fail with the fetch's TypeError, got:\n${run.combined}`);
+    }
+    // An entry still waiting once nothing is left to settle it failed; it
+    // never reports a run that stopped partway as a success.
+    const unsettled = ["await Promise.resolve();", "console.log('a');", "await new Promise(() => {});", "console.log('unreachable');"].join("\n");
+    for (const { path, run } of await runBoth(unsettled, true)) {
+      const label = `${path}, unsettled top-level await`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("TypeError: await: Promise did not settle") || lines[0] !== "a" || lines.includes("unreachable"))
+        failures.push(`${label}: should print a, then fail with the unsettled-await TypeError, got:\n${run.combined}`);
+    }
+    // The entry waits on a promise a throwing reaction never settles: the
+    // rejection nothing handled is the run's error, not the unsettled await.
+    // Host mode awaits synchronously and fails at the await instead, so only
+    // the sandbox path runs this case.
+    const thrown = [
+      "await Promise.resolve();",
+      "console.log('a');",
+      `await new Promise(() => fetch('${url}').then(() => { throw new Error('boom'); }));`,
+      "console.log('unreachable');",
+    ].join("\n");
+    for (const { path, run } of await runBoth(thrown, false)) {
+      const label = `${path}, reaction that throws`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("Error: boom") || run.combined.includes("did not settle") || lines[0] !== "a")
+        failures.push(`${label}: should print a, then fail with the reaction's Error: boom, got:\n${run.combined}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
+});
+
+await section("Runner: the idle wait for an Atomics.waitAsync timeout neither delays nor is delayed by a fetch, and does not hold a nested run...", async () => {
+  // The scripts time each step from inside and print whether it was prompt.
+  // A waiter's timeout is what a slow fetch would have waited out, and the
+  // slow endpoint is what a slow waiter would have waited for.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (new URL(request.url).pathname === "/slow")
+        await Bun.sleep(1500);
+      return new Response("ok", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const prompt = (label: string, start: string) =>
+    `console.log('${label} ' + (Date.now() - ${start} < 2000 ? 'prompt' : 'late'));`;
+  // A job starts a fetch while a timed waiter is pending: the fetch's response
+  // is waited for first, not after the waiter's timeout, and the waiter still
+  // times out on time.
+  const fetchFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const waitStart = Date.now();",
+    "const waited = Atomics.waitAsync(view, 0, 0, 3000).value;",
+    "const fetchStart = Date.now();",
+    `await fetch('${url}');`,
+    prompt("fetch", "fetchStart"),
+    "const outcome = await waited;",
+    "console.log('waiter ' + outcome + ' ' + (Date.now() - waitStart < 4500 ? 'on time' : 'late'));",
+  ].join("\n");
+  // A waiter that falls due while a slow fetch is in flight settles then, not
+  // after the response, so it wins the race.
+  const waiterFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const raceStart = Date.now();",
+    "const winner = await Promise.race([",
+    "  Atomics.waitAsync(view, 0, 0, 100).value.then(() => 'waiter'),",
+    `  fetch('${url}slow').then(() => 'fetch'),`,
+    "]);",
+    "console.log('winner ' + winner + ' ' + (Date.now() - raceStart < 1000 ? 'prompt' : 'late'));",
+  ].join("\n");
+  // A nested run has no waiter of its own and ends without waiting out its
+  // caller's.
+  const nested = [
+    "import { runScript } from 'goccia';",
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "const waited = Atomics.waitAsync(view, 0, 0, 5000).value;",
+    "const childStart = Date.now();",
+    "const child = runScript('/child.js');",
+    prompt("child", "childStart"),
+    "console.log('child ok ' + child.ok);",
+    "console.log('waiter ' + (await waited));",
+  ].join("\n");
+  const failures: string[] = [];
+  try {
+    for (const [name, files, expected] of [
+      ["fetch during a waiter", { "/main.js": fetchFirst }, ["fetch prompt", "waiter timed-out on time"]],
+      ["waiter during a slow fetch", { "/main.js": waiterFirst }, ["winner waiter prompt"]],
+      ["nested run during a waiter", { "/main.js": nested, "/child.js": "console.log('child ran');\n" }, ["child prompt", "child ok true", "waiter timed-out"]],
+    ] as const) {
+      const run = await runNestedFetchSandbox({ ...files }, []);
+      const label = `sandbox, ${name}`;
+      const lines = run.stdout.split("\n").filter((line) => line !== "");
+      if (run.timedOut || run.exitCode !== 0)
+        failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (JSON.stringify(lines) !== JSON.stringify(expected))
+        failures.push(`${label}: should print ${JSON.stringify(expected)}, got ${JSON.stringify(lines)}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
 });
 
 await section("Runner: a deadline that elapses while a fetch is pending ends the run, not the fetch...", async () => {

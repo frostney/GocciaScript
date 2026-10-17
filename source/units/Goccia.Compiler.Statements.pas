@@ -911,6 +911,7 @@ var
   ProbeEndJumps: array of Integer;
   Probes: TArray<string>;
   ProbeEndCount: Integer;
+  PatternCtx: TGocciaCompilationContext;
 begin
   PrepareLexicalDeclarationLocals(ACtx, AStmt);
 
@@ -935,18 +936,22 @@ begin
       if IsTopLevelGlobalBacked and AStmt.IsVar then
         EmitGlobalDefinesForPattern(ACtx, Info.Pattern, False, True, False);
 
+      // A global-backed lexical pattern defines each global binding as its
+      // element completes (EmitGlobalLexicalPatternDefine).
+      PatternCtx := ACtx;
+      if IsTopLevelGlobalBacked and not AStmt.IsVar then
+      begin
+        PatternCtx.GlobalLexicalPatternScope := ACtx.Scope;
+        PatternCtx.GlobalLexicalPatternIsConst := AStmt.IsConst;
+      end;
       InitSlot := ACtx.Scope.AllocateRegister;
       try
         ACtx.CompileExpression(Info.Initializer, InitSlot);
-        EmitDestructuring(ACtx, Info.Pattern, InitSlot,
+        EmitDestructuring(PatternCtx, Info.Pattern, InitSlot,
           IsTopLevelGlobalBacked and AStmt.IsVar);
       finally
         ACtx.Scope.FreeRegister;
       end;
-
-      if IsTopLevelGlobalBacked and not AStmt.IsVar then
-        EmitGlobalDefinesForPattern(ACtx, Info.Pattern, AStmt.IsConst,
-          False, True);
       Continue;
     end;
 
@@ -6960,9 +6965,14 @@ begin
   end;
 end;
 
+// ASessionReg holds the decoration session OP_BEGIN_DECORATORS created for
+// this class definition. Each decorator opcode reads it from the register
+// after its decorator's, R[A+1], so it acts on this class even when the
+// decorator defines and decorates another class.
 procedure CompileDecoratorOrchestration(
   const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition;
+  const AClassReg, ASessionReg: UInt16;
+  const AClassDef: TGocciaClassDefinition;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I, J: Integer;
@@ -6971,7 +6981,7 @@ var
   ClassDecoRegs: array of UInt16;
   DescIdx: UInt16;
   Desc: string;
-  PairReg, ExtraReg: UInt16;
+  PairReg, ExtraReg, KeyReg: UInt16;
   HasElementDecorators: Boolean;
   ComputedKeyName: string;
   LocalIdx: Integer;
@@ -7037,6 +7047,7 @@ begin
       PairReg := ACtx.Scope.AllocateRegister;
       ExtraReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, DecoRegs[I][J], 0));
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, ASessionReg, 0));
       if Elem.IsComputed then
       begin
         ComputedKeyName := FindComputedFieldKeyLocalName(
@@ -7044,17 +7055,18 @@ begin
         LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
         if LocalIdx < 0 then
           raise Exception.Create('Compiler error: computed decorator element key was not captured');
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg,
+        // B = 0 means no computed key, so the key is copied into a register
+        // allocated after PairReg, which is never register 0.
+        KeyReg := ACtx.Scope.AllocateRegister;
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, KeyReg,
           ACtx.Scope.GetLocal(LocalIdx).Slot, 0));
         EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
-          PairReg, ExtraReg, UInt16(DescIdx)));
+          PairReg, KeyReg, UInt16(DescIdx)));
+        ACtx.Scope.FreeRegister;
       end
       else
-      begin
-        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
         EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
           PairReg, 0, UInt16(DescIdx)));
-      end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
@@ -7065,7 +7077,7 @@ begin
     PairReg := ACtx.Scope.AllocateRegister;
     ExtraReg := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, ClassDecoRegs[I], 0));
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, ASessionReg, 0));
     EmitInstruction(ACtx, EncodeABC(OP_APPLY_CLASS_DECORATOR, PairReg, 0, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -7084,11 +7096,14 @@ procedure CompileDecoratorAndAccessorPass(
   const ASuperReg: Integer;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
-  PairReg, ExtraReg: UInt16;
+  SessionReg, PairReg, ExtraReg: UInt16;
 begin
   if not HasDecoratorsOrAccessors(AClassDef) then
     Exit;
 
+  // The session register lives until OP_FINISH_DECORATORS. A class definition
+  // that completes abruptly leaves its session there for the collector.
+  SessionReg := ACtx.Scope.AllocateRegister;
   PairReg := ACtx.Scope.AllocateRegister;
   ExtraReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, AClassReg, 0));
@@ -7096,19 +7111,20 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, UInt16(ASuperReg), 0))
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_BEGIN_DECORATORS, PairReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_BEGIN_DECORATORS, PairReg, SessionReg, 0));
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 
-  CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef,
+  CompileDecoratorOrchestration(ACtx, AClassReg, SessionReg, AClassDef,
     AComputedFieldKeyLocals);
 
   PairReg := ACtx.Scope.AllocateRegister;
   ExtraReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, AClassReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, SessionReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_FINISH_DECORATORS, PairReg, 0, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AClassReg, PairReg, 0));
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
@@ -7688,6 +7704,7 @@ procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
 var
   SrcReg: UInt16;
   IsTopLevelGlobalBacked: Boolean;
+  PatternCtx: TGocciaCompilationContext;
 begin
   IsTopLevelGlobalBacked := TopLevelBindingIsGlobalBacked(ACtx, AStmt.IsVar);
 
@@ -7699,18 +7716,19 @@ begin
   if IsTopLevelGlobalBacked and AStmt.IsVar then
     EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False, True, False);
 
+  // A global-backed lexical pattern defines each global binding as its
+  // element completes (EmitGlobalLexicalPatternDefine).
+  PatternCtx := ACtx;
+  if IsTopLevelGlobalBacked and not AStmt.IsVar then
+  begin
+    PatternCtx.GlobalLexicalPatternScope := ACtx.Scope;
+    PatternCtx.GlobalLexicalPatternIsConst := AStmt.IsConst;
+  end;
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
-  EmitDestructuring(ACtx, AStmt.Pattern, SrcReg,
+  EmitDestructuring(PatternCtx, AStmt.Pattern, SrcReg,
     IsTopLevelGlobalBacked and AStmt.IsVar);
   ACtx.Scope.FreeRegister;
-
-  if IsTopLevelGlobalBacked then
-  begin
-    if not AStmt.IsVar then
-      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, AStmt.IsConst,
-        False, True);
-  end;
 end;
 
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;

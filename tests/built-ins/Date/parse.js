@@ -78,6 +78,8 @@ test("applies the offset a display date names", () => {
   expect(Date.parse("Sat, 15 Jun 2024 11:30:45 +0000")).toBe(utc);
   expect(Date.parse("Sat, 15 Jun 2024 11:30:45 -0700")).toBe(utc + 420 * minutes);
   expect(Date.parse("Sat Jun 15 2024 11:30:45 UTC+0200")).toBe(utc - 120 * minutes);
+  expect(Date.parse("Sat Jun 15 2024 11:30:45 GMT+2:3")).toBe(utc - 123 * minutes);
+  expect(Date.parse("Sat, 15 Jun 2024 11:30:45 GMT-02:3")).toBe(utc + 123 * minutes);
   expect(Number.isNaN(Date.parse("Sat Jun 15 2024 11:30:45 GMT+02000"))).toBe(true);
   expect(Number.isNaN(Date.parse("Sat Jun 15 2024 11:30:45 GMT+"))).toBe(true);
   expect(Number.isNaN(Date.parse("Sat Jun 15 2024 11:30:45 GMT+0200x"))).toBe(true);
@@ -140,4 +142,10 @@ test("reads back what toString writes for the last valid instant", () => {
   expect(Date.parse(date.toString())).toBe(8.64e15);
   expect(Date.parse(date.toUTCString())).toBe(8.64e15);
   expect(Date.parse(date.toISOString())).toBe(8.64e15);
+});
+
+test("returns NaN for a display date whose offset puts it past the time value range", () => {
+  expect(Date.parse("Sat, 13 Sep 275760 00:00:00 GMT")).toBe(8.64e15);
+  expect(Number.isNaN(Date.parse("Sat, 13 Sep 275760 00:00:00 -0700"))).toBe(true);
+  expect(Number.isNaN(Date.parse("Sat Sep 13 275760 00:00:00 EST"))).toBe(true);
 });

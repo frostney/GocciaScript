@@ -39,6 +39,19 @@ describe("FFILibrary.prototype.bind (variadic signatures)", () => {
     ).toBe(13.5);
   });
 
+  test("passes a floating-point fixed argument of a variadic function", () => {
+    const scaledSum = lib.bind("ffi_variadic_scaled_sum_f64", {
+      args: ["f64", "i32"],
+      variadic: true,
+      returns: "f64",
+    });
+
+    expect(
+      scaledSum(0.5, 3, FFI.varargs(["f64", "f32", "f64"], [1, 2.5, 6.5])),
+    ).toBe(5);
+    expect(scaledSum(2, 0, FFI.varargs([], []))).toBe(0);
+  });
+
   test("classifies aggregate values in a variadic tail", () => {
     const Point = FFI.struct({ x: "f64", y: "f64" });
     const OtherPoint = FFI.struct({ x: "f64", y: "f64" });
@@ -60,6 +73,22 @@ describe("FFILibrary.prototype.bind (variadic signatures)", () => {
         ),
       ),
     ).toBe(33);
+    // The fourth point starts in the last argument register, so on Windows
+    // ARM64 it is split between x7 and the stack.
+    expect(
+      checksum(
+        4,
+        FFI.varargs(
+          [Point, Point, Point, Point],
+          [
+            Point.create({ x: 1, y: 2 }),
+            Point.create({ x: 10, y: 20 }),
+            Point.create({ x: 100, y: 200 }),
+            Point.create({ x: 1000, y: 2000 }),
+          ],
+        ),
+      ),
+    ).toBe(3333);
     expect(() =>
       checksum(
         1,

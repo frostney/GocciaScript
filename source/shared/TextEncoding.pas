@@ -213,90 +213,117 @@ begin
   Result := (Ord(AChar) >= $DC00) and (Ord(AChar) <= $DFFF);
 end;
 
-procedure AppendUTF8CodePoint(var ABytes: TBytes; var ALength: Integer;
-  const ACodePoint: Cardinal);
+function IsPairAt(const AText: string; const AIndex: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if ACodePoint <= $7F then
-  begin
-    SetLength(ABytes, ALength + 1);
-    ABytes[ALength] := Byte(ACodePoint);
-    Inc(ALength);
-  end
-  else if ACodePoint <= $7FF then
-  begin
-    SetLength(ABytes, ALength + 2);
-    ABytes[ALength] := $C0 or Byte(ACodePoint shr 6);
-    ABytes[ALength + 1] := $80 or Byte(ACodePoint and $3F);
-    Inc(ALength, 2);
-  end
-  else if ACodePoint <= $FFFF then
-  begin
-    SetLength(ABytes, ALength + 3);
-    ABytes[ALength] := $E0 or Byte(ACodePoint shr 12);
-    ABytes[ALength + 1] := $80 or Byte((ACodePoint shr 6) and $3F);
-    ABytes[ALength + 2] := $80 or Byte(ACodePoint and $3F);
-    Inc(ALength, 3);
-  end
-  else
-  begin
-    SetLength(ABytes, ALength + 4);
-    ABytes[ALength] := $F0 or Byte(ACodePoint shr 18);
-    ABytes[ALength + 1] := $80 or Byte((ACodePoint shr 12) and $3F);
-    ABytes[ALength + 2] := $80 or Byte((ACodePoint shr 6) and $3F);
-    ABytes[ALength + 3] := $80 or Byte(ACodePoint and $3F);
-    Inc(ALength, 4);
-  end;
+  Result := IsHighSurrogate(AText[AIndex]) and (AIndex < Length(AText)) and
+    IsLowSurrogate(AText[AIndex + 1]);
 end;
 
-function EncodeUTF8(const AText: string; const AReplaceInvalid: Boolean;
-  out ABytes: TBytes; out AErrorOffset: Integer): Boolean;
+{ The number of UTF-8 bytes AText encodes to, and in AStop the index where
+  encoding stops: Length(AText) + 1, or the first unpaired surrogate when
+  AReplaceInvalid is False. A surrogate pair takes 4 bytes; an unpaired
+  surrogate is replaced by U+FFFD, 3 bytes. }
+function UTF8EncodedLength(const AText: string; const AReplaceInvalid: Boolean;
+  out AStop: Integer): SizeInt;
 var
-  CodePoint: Cardinal;
-  Index, OutputLength: Integer;
+  CodeUnit: Cardinal;
+  Index: Integer;
 begin
-  AErrorOffset := -1;
-  SetLength(ABytes, 0);
+  Result := 0;
   Index := 1;
-  OutputLength := 0;
   while Index <= Length(AText) do
   begin
-    if IsHighSurrogate(AText[Index]) then
+    CodeUnit := Ord(AText[Index]);
+    if CodeUnit <= $7F then
+      Inc(Result)
+    else if CodeUnit <= $7FF then
+      Inc(Result, 2)
+    else if IsPairAt(AText, Index) then
     begin
-      if (Index < Length(AText)) and IsLowSurrogate(AText[Index + 1]) then
-      begin
-        CodePoint := $10000 + (Cardinal(Ord(AText[Index]) - $D800) shl 10) +
-          Cardinal(Ord(AText[Index + 1]) - $DC00);
-        Inc(Index, 2);
-      end
-      else if AReplaceInvalid then
-      begin
-        CodePoint := $FFFD;
-        Inc(Index);
-      end
-      else
-      begin
-        AErrorOffset := Index - 1;
-        Exit(False);
-      end;
-    end
-    else if IsLowSurrogate(AText[Index]) then
-    begin
-      if not AReplaceInvalid then
-      begin
-        AErrorOffset := Index - 1;
-        Exit(False);
-      end;
-      CodePoint := $FFFD;
+      Inc(Result, 4);
       Inc(Index);
+    end
+    else if (CodeUnit >= $D800) and (CodeUnit <= $DFFF) and
+      not AReplaceInvalid then
+      Break
+    else
+      Inc(Result, 3);
+    Inc(Index);
+  end;
+  AStop := Index;
+end;
+
+{ Writes AText[1..AStop - 1] as UTF-8 into ABytes, which holds exactly the
+  length UTF8EncodedLength counted for that range. }
+procedure WriteUTF8(const AText: string; const AStop: Integer;
+  const ABytes: TBytes);
+var
+  CodePoint: Cardinal;
+  Index: Integer;
+  Output: SizeInt;
+begin
+  Output := 0;
+  Index := 1;
+  while Index < AStop do
+  begin
+    CodePoint := Ord(AText[Index]);
+    if CodePoint <= $7F then
+    begin
+      ABytes[Output] := Byte(CodePoint);
+      Inc(Output);
+      Inc(Index);
+      Continue;
+    end;
+    if IsPairAt(AText, Index) then
+    begin
+      CodePoint := $10000 + ((CodePoint - $D800) shl 10) +
+        Cardinal(Ord(AText[Index + 1]) - $DC00);
+      Inc(Index);
+    end
+    else if (CodePoint >= $D800) and (CodePoint <= $DFFF) then
+      CodePoint := $FFFD;
+    Inc(Index);
+    if CodePoint <= $7FF then
+    begin
+      ABytes[Output] := $C0 or Byte(CodePoint shr 6);
+      ABytes[Output + 1] := $80 or Byte(CodePoint and $3F);
+      Inc(Output, 2);
+    end
+    else if CodePoint <= $FFFF then
+    begin
+      ABytes[Output] := $E0 or Byte(CodePoint shr 12);
+      ABytes[Output + 1] := $80 or Byte((CodePoint shr 6) and $3F);
+      ABytes[Output + 2] := $80 or Byte(CodePoint and $3F);
+      Inc(Output, 3);
     end
     else
     begin
-      CodePoint := Ord(AText[Index]);
-      Inc(Index);
+      ABytes[Output] := $F0 or Byte(CodePoint shr 18);
+      ABytes[Output + 1] := $80 or Byte((CodePoint shr 12) and $3F);
+      ABytes[Output + 2] := $80 or Byte((CodePoint shr 6) and $3F);
+      ABytes[Output + 3] := $80 or Byte(CodePoint and $3F);
+      Inc(Output, 4);
     end;
-    AppendUTF8CodePoint(ABytes, OutputLength, CodePoint);
   end;
-  Result := True;
+end;
+
+{ Counts the output first and allocates it once. Growing the array per code
+  point copied it ever more often as it grew, so the cost per character rose
+  with the input's size (#1544). On an unpaired surrogate without
+  AReplaceInvalid, ABytes holds the bytes before it. }
+function EncodeUTF8(const AText: string; const AReplaceInvalid: Boolean;
+  out ABytes: TBytes; out AErrorOffset: Integer): Boolean;
+var
+  Stop: Integer;
+begin
+  ABytes := nil;
+  SetLength(ABytes, UTF8EncodedLength(AText, AReplaceInvalid, Stop));
+  WriteUTF8(AText, Stop, ABytes);
+  Result := Stop > Length(AText);
+  if Result then
+    AErrorOffset := -1
+  else
+    AErrorOffset := Stop - 1;
 end;
 
 function TryEncodeUTF8(const AText: string; out ABytes: TBytes;

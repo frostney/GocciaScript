@@ -400,6 +400,10 @@ The `ToPropertyDescriptor` helper (`Goccia.Values.ObjectPropertyDescriptor.pas`)
 - Rejects mixed data+accessor descriptors — a descriptor with both (`value` or `writable`) and (`get` or `set`) throws `TypeError`
 - Constructs the appropriate descriptor type based on which fields are present
 
+### FromPropertyDescriptor
+
+The reverse direction, `FromPropertyDescriptor` in the same unit, implements ES2026 §6.2.6.4: it turns a descriptor into the JavaScript object that `Object.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors` and `Reflect.getOwnPropertyDescriptor` return and that a Proxy `defineProperty` trap receives (`undefined` for no descriptor). Each field is made with `CreateDataPropertyOrThrow`, so it is an own data property and a setter inherited from `Object.prototype` never runs. No guest code runs while it reads the descriptor, so a caller may pass a descriptor still stored on the object it describes.
+
 ### Property Definition Merging
 
 When `Object.defineProperty` is called on an existing property, unspecified descriptor attributes are inherited from the existing descriptor rather than defaulting to `false`. For example, calling `Object.defineProperty(obj, "x", { enumerable: false })` on a property that is `configurable: true, writable: true` preserves those attributes. New properties use `false` as the default for all unspecified attributes, matching ECMAScript specification behavior.
@@ -481,7 +485,7 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **No enumeration surface** — WeakMap/WeakSet intentionally do not expose `size`, `clear`, `forEach`, iterators, `keys`, `values`, or `entries`.
 - **Shared prototype singleton** — Each weak collection has a per-engine shared prototype stored in a realm-owned slot. Prototype methods operate through `ThisValue`, matching the built-in method-host pattern.
 - **WeakRef kept objects** — WeakRef construction and `deref()` add the target to the GC kept-objects set. The set is cleared at host job checkpoints so repeated `deref()` calls in the same job are stable without making the target strongly reachable forever.
-- **FinalizationRegistry cleanup** — FinalizationRegistry marks cleanup callbacks and held values, but never marks registered targets or unregister tokens. Sweeping dead cells queues cleanup jobs through the microtask queue's finalization lane. Cleanup jobs run after normal microtasks and root their held values until execution.
+- **FinalizationRegistry cleanup** — FinalizationRegistry marks cleanup callbacks and held values, but never marks registered targets or unregister tokens. Sweeping visits the cells newest first; it empties each dead cell's target, moves the cell to the registry's pending cells and queues one cleanup job for it through the microtask queue's finalization lane. A pending cell is still a cell of the registry (ES2026 §9.9.3), so `unregister` removes it too. Each cleanup job takes the oldest pending cell left, if any, and calls the callback with its held value, so the callbacks for one collection run from the newest registration to the oldest. Taking a cell advances a head index instead of shifting the list, so draining n cleanup jobs costs O(n). The registry marks the held values of pending cells, and a queued job roots the registry through the job function's captured root until it runs.
 - **GC behavior** — WeakMap/WeakSet do not mark weak keys/values during normal `MarkReferences`. WeakMap's weak tracing hook marks a value only when its key is already live from outside the map, and sweeping removes entries whose keys remain unmarked. WeakSet sweeping removes unmarked members. WeakRef clears an unmarked target. FinalizationRegistry removes unmarked-target cells and schedules cleanup.
 
 ## Promises
