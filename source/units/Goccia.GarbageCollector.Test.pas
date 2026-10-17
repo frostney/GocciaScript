@@ -894,8 +894,12 @@ begin
     GC.MaxBytes := PreviousMaxBytes;
   end;
 
-  // Decided by the build, not by the override: an override that disagrees
-  // with the bracket must fail here.
+  // Decided by the build, not by the override. In a production build an
+  // override that disagrees with the frameless constructor fails here: the box
+  // it unregisters is missing from the charge, and FPC does not free it. A
+  // development build only checks that the ledger comes back clean: FPC
+  // destroys the box there whatever the override says. The bracket and the
+  // override are keyed to the one symbol for that reason.
   {$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}
   ExpectedKept := TGocciaNumberLiteralValue.InstanceSize;
   {$ELSE}
