@@ -51,4 +51,65 @@ describe("ASI return statement", () => {
     const fn = () => { return 100 }
     expect(fn()).toBe(100);
   });
+
+  // ES2026 §12.10.1: the restricted production looks for a LineTerminator
+  // between `return` and the next token. A line break inside a template
+  // literal or a string's LineContinuation is part of that token.
+  test("multi-line template on the return line is returned", () => {
+    const fn = () => {
+      return `a
+b`;
+    }
+    expect(fn()).toBe("a\nb");
+  });
+
+  test("multi-line template without a semicolon is returned", () => {
+    const fn = () => {
+      return `a
+`
+    }
+    expect(fn()).toBe("a\n");
+  });
+
+  test("template starting with a line break is the start of the expression", () => {
+    const c = "a"
+    const fn = () => {
+      return `
+` + c;
+    }
+    expect(fn()).toBe("\na");
+  });
+
+  test("template with a line break after a substitution is returned", () => {
+    const fn = () => {
+      return `${"a"}
+`;
+    }
+    expect(fn()).toBe("a\n");
+  });
+
+  test("template with a line break before its first substitution is returned", () => {
+    const b = "b"
+    const fn = () => {
+      return `a
+${b}`;
+    }
+    expect(fn()).toBe("a\nb");
+  });
+
+  test("string with a line continuation is returned", () => {
+    const fn = () => {
+      return "a\
+b";
+    }
+    expect(fn()).toBe("ab");
+  });
+
+  test("multi-line comment after return still ends the statement", () => {
+    const fn = () => {
+      return /*
+      */ 1;
+    }
+    expect(fn()).toBeUndefined();
+  });
 });
