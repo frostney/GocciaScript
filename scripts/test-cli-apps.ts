@@ -3983,6 +3983,61 @@ await section("Loader: --host-environment module controls time, zone, and random
   }
 });
 
+// CI runs in UTC, where a legacy date read as UTC and one read as local time
+// agree. Pinning the zone through a provider puts one zone on each side of UTC.
+await section("Loader: Date.parse reads legacy dates without an offset as local time...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const date = new Date(2024, 5, 15, 11, 30, 45);",
+      "[",
+      '  Date.parse("6/15/24"),',
+      '  Date.parse("2024/06/15"),',
+      '  Date.parse("Jun 15 2024"),',
+      '  Date.parse("Sat Jun 15 2024 11:30:45"),',
+      '  Date.parse("Sat, 15 Jun 2024 11:30:45"),',
+      '  Date.parse("Sat Jun 15 2024 11:30:45 GMT+0200"),',
+      '  Date.parse("2024-06-15"),',
+      '  Date.parse("2024-06-15T00:00"),',
+      "  Date.parse(date.toString()) === date.getTime(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "1718434800000|1718434800000|1718434800000|1718476245000|1718476245000|1718443845000|1718409600000|1718434800000|true",
+      ],
+      [
+        "Asia/Tokyo",
+        "1718377200000|1718377200000|1718377200000|1718418645000|1718418645000|1718443845000|1718409600000|1718377200000|true",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date.parse in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --host-environment errors withhold provider source...", async () => {
   const tmp = makeTmp();
   try {
