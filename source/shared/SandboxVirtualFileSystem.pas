@@ -959,9 +959,14 @@ begin
     DestParent := DestNode;
     LeafName := SourceNode.FName;
     DestNode := DestParent.FindChild(LeafName);
+    EnsureTreeWritable(ChildPath(DestParent, LeafName),
+      SourceNode.FKind = nkDirectory);
   end
   else
   begin
+    { Before the parent is resolved, so a read-only destination is EROFS
+      even when its parent is missing, as a write there is. }
+    EnsureTreeWritable(DestCanonical, SourceNode.FKind = nkDirectory);
     DestParent := ResolveParent(DestCanonical, LeafName);
     ValidateLeafName(LeafName);
   end;
@@ -970,8 +975,6 @@ begin
     raise ESandboxFsInvalidPath.CreateFmt(
       '%s: cannot move a directory into itself',
       [SourceNode.FullPath]);
-  EnsureTreeWritable(ChildPath(DestParent, LeafName),
-    SourceNode.FKind = nkDirectory);
 
   if Assigned(DestNode) then
   begin
@@ -1070,9 +1073,14 @@ begin
     DestParent := DestNode;
     LeafName := SourceNode.FName;
     DestNode := DestParent.FindChild(LeafName);
+    EnsureTreeWritable(ChildPath(DestParent, LeafName),
+      SourceNode.FKind = nkDirectory);
   end
   else
   begin
+    { Before the parent is resolved, so a read-only destination is EROFS
+      even when its parent is missing, as a write there is. }
+    EnsureTreeWritable(DestCanonical, SourceNode.FKind = nkDirectory);
     DestParent := ResolveParent(DestCanonical, LeafName);
     ValidateLeafName(LeafName);
   end;
@@ -1081,8 +1089,6 @@ begin
     raise ESandboxFsInvalidPath.CreateFmt(
       '%s: cannot copy a directory into itself',
       [SourceNode.FullPath]);
-  EnsureTreeWritable(ChildPath(DestParent, LeafName),
-    SourceNode.FKind = nkDirectory);
 
   ReplacedBytes := 0;
   ReplacedNodes := 0;

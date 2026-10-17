@@ -606,6 +606,11 @@ begin
   ExpectReadOnly(ProbeMove, '/work/w.txt', '/data/a.txt', '/data/a.txt');
   { Moving a writable directory that holds a read-only one. }
   ExpectReadOnly(ProbeMove, '/outer', '/moved');
+  { A missing parent under a read-only path is EROFS, as for a write. }
+  ExpectReadOnly(ProbeMove, '/work/w.txt', '/data/missing/w.txt',
+    '/data/missing/w.txt');
+  ExpectReadOnly(ProbeCopy, '/work/w.txt', '/data/missing/w.txt',
+    '/data/missing/w.txt');
 
   { Copying into a read-only path; reading one to copy it elsewhere is
     allowed. }
