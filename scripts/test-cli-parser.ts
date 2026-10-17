@@ -569,6 +569,58 @@ console.log("ASI and line breaks inside a token...");
     throw new Error(`throw with a multi-line template should throw the template, got: ${JSON.stringify(thrown.json)}`);
 }
 
+// -- [no LineTerminator here] restrictions ------------------------------------
+
+console.log("[no LineTerminator here] restrictions...");
+{
+  // ES2026 §15.5, §15.3, §15.9, §15.8 and §15.6: a line break is not allowed
+  // between `yield` and `*`, before an arrow's `=>`, or after the `async` of
+  // a method. The restriction holds with and without ASI.
+  const yieldStar = "const o = { *g() { yield\n* [1]; } };\n";
+  const beforeArrow: [string, string][] = [
+    ["const f = (a)\n=> 1;\n", "parenthesized arrow parameters"],
+    ["const f = ()\n=> 1;\n", "empty arrow parameters"],
+    ["const f = (a): number\n=> 1;\n", "arrow return type"],
+    ["const f = async (a)\n=> 1;\n", "async arrow parameters"],
+    ["const f = async x\n=> 1;\n", "async arrow binding identifier"],
+  ];
+  for (const flags of [[], ["--compat-asi"]]) {
+    const mode = flags.length > 0 ? " with --compat-asi" : "";
+    assertSyntaxError(yieldStar, `line break between yield and *${mode}`, flags, {
+      messageIncludes: 'Line break between "yield" and "*"',
+      line: 2,
+    });
+    for (const [source, desc] of beforeArrow)
+      assertSyntaxError(source, `line break before => after ${desc}${mode}`, flags, {
+        messageIncludes: 'Line break before "=>"',
+        line: 2,
+      });
+    // After a line break `async` is a property name, so the object literal is
+    // missing a comma.
+    assertSyntaxError(
+      "const o = { async\nm() { return 1; } };\n",
+      `line break after async in an object method${mode}`,
+      flags,
+      { line: 2 },
+    );
+    assertSyntaxError(
+      "const o = { async\n*m() {} };\n",
+      `line break after async in an object generator method${mode}`,
+      flags,
+      { line: 2 },
+    );
+  }
+
+  // In a class, `async` followed by a line break is a field: ASI ends it
+  // (tests/language/asi/class-members.js); without ASI it needs a semicolon.
+  assertSyntaxError(
+    "class C { async\nm() { return 1; } }\n",
+    "line break after async in a class method without ASI",
+    [],
+    { line: 2 },
+  );
+}
+
 // -- Unsupported/default-disabled syntax errors by default ----------------------
 
 console.log("Unsupported/default-disabled syntax errors by default...");

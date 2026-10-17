@@ -236,6 +236,7 @@ type
     function HasLineTerminatorBetween(const ABefore,
       AAfter: TGocciaToken): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function HasLineTerminatorBeforePeek: Boolean;
+    procedure RaiseLineTerminatorBeforeArrow;
     function IsIdentifierNameToken(
       const ATokenType: TGocciaTokenType): Boolean;
     function IsIdentifierBindingToken(
@@ -1416,6 +1417,14 @@ begin
   Result := HasLineTerminatorBetween(Previous, Peek);
 end;
 
+// ES2026 §15.3 / §15.9: an arrow's parameters and its `=>` share a line
+procedure TGocciaParser.RaiseLineTerminatorBeforeArrow;
+begin
+  raise TGocciaSyntaxError.Create('Line break before "=>" is not allowed',
+    Peek.Line, Peek.Column, FFileName, FSourceLines,
+    SSuggestArrowSameLine);
+end;
+
 // ES2026 §12.10 Automatic Semicolon Insertion
 procedure TGocciaParser.ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
 begin
@@ -2289,6 +2298,13 @@ begin
   if (FInGeneratorFunction > 0) and CheckUnescapedIdentifierKeyword(KEYWORD_YIELD) then
   begin
     Operator := Advance; // consume 'yield'
+    // ES2026 §15.5 yield [no LineTerminator here] * AssignmentExpression:
+    // after a line break `yield` ends, and `*` cannot start what follows.
+    if Check(gttStar) and HasLineTerminatorBetween(Operator, Peek) then
+      raise TGocciaSyntaxError.Create(
+        'Line break between "yield" and "*" is not allowed',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        SSuggestYieldDelegateSameLine);
     if Match(gttStar) then
       Result := TGocciaYieldExpression.Create(Assignment, True, Operator.Span)
     else if CheckSemicolonOrASI or Check(gttRightBrace) or
@@ -3189,6 +3205,10 @@ begin
           Token := Advance; // consume param identifier
           Name := Token.Lexeme;
           ValidateIdentifierBinding(Token);
+          // ES2026 §15.9 async [no LineTerminator here]
+          // AsyncArrowBindingIdentifier [no LineTerminator here] =>
+          if HasLineTerminatorBeforePeek then
+            RaiseLineTerminatorBeforeArrow;
           Consume(gttArrow, 'Expected "=>" in async arrow function',
             SSuggestArrowFunctionSyntax);
 
@@ -4204,8 +4224,12 @@ begin
     MemberStartLine := Peek.Line;
     MemberStartColumn := Peek.Column;
 
-    // Check for async method syntax
-    if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) then
+    // Check for async method syntax. ES2026 §15.8 / §15.6: AsyncMethod and
+    // AsyncGeneratorMethod are `async [no LineTerminator here] ...`; after a
+    // line break `async` is a property name.
+    if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) and
+       (FCurrent + 1 < FTokens.Count) and
+       not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
     begin
       Advance;
       IsAsync := True;
@@ -4910,6 +4934,11 @@ begin
       Advance;
       FnReturnType := CollectTypeAnnotation([gttArrow], '', '', False, True);
     end;
+
+    // ES2026 §15.3 ArrowParameters [no LineTerminator here] =>, and §15.9
+    // CoverCallExpressionAndAsyncArrowHead [no LineTerminator here] =>
+    if Check(gttArrow) and HasLineTerminatorBeforePeek then
+      RaiseLineTerminatorBeforeArrow;
 
     Consume(gttArrow, 'Expected "=>" in arrow function',
       SSuggestArrowFunctionSyntax);
@@ -8215,7 +8244,12 @@ begin
 
       IsAsync := False;
       IsGenerator := False;
-      if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      // ES2026 §15.8 / §15.6: AsyncMethod and AsyncGeneratorMethod are
+      // `async [no LineTerminator here] ...`; after a line break `async` is
+      // the element's name, a field that ASI ends before the next element.
+      if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) and
+         (FCurrent + 1 < FTokens.Count) and
+         not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
       begin
         Advance;
         IsAsync := True;
