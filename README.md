@@ -117,6 +117,9 @@ virtual filesystem:
 The documented method set never reaches the ambient host filesystem. See
 [Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)
 for supported options, return types, error shapes, and method-level deviations.
+An embedder can mark parts of the virtual filesystem read-only; a script's
+writes there fail with `EROFS` (see
+[Embedding — Sandbox filesystem](docs/embedding.md#sandbox-filesystem)).
 
 ## Runtime and toolchain features
 
