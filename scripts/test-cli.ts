@@ -3584,9 +3584,10 @@ console.log("--max-memory (a live set inside the pressure reserve does not colle
 console.log("--max-memory (a live set inside the pressure reserve gives up burst headroom)...");
 {
   // ADR 0141's trade-off, pinned. A plain value allocation over the ceiling
-  // is refused without collecting first, and the backed-off trigger lets up
-  // to half the remaining headroom fill with garbage before a checkpoint
-  // collects it. So a single native burst that fits in the headroom on its
+  // is refused without collecting first, and the backed-off trigger lets
+  // garbage fill half the remaining headroom before a collection is due, and
+  // more until the next checkpoint runs it. So a single native burst that
+  // fits in the headroom on its
   // own is refused once garbage sits in front of it, and fits again after
   // an explicit collection. Sizes are measured in the run, so the shape
   // holds whatever an object costs on the platform: the live set is parked

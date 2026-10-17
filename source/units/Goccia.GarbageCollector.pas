@@ -265,10 +265,11 @@ type
     // backed off above what the last full collection left live. Never above
     // MaxBytes: a plain value allocation that would pass the ceiling is
     // refused with the RangeError without collecting first, so only a
-    // checkpoint collection clears the garbage in front of it. Backed off, up
-    // to half the remaining headroom can hold garbage when a burst starts,
-    // which is the burst headroom a live set inside the reserve gives up
-    // (ADR 0141). ABytesAfterLastCollect is FBytesAfterLastCollect, read by
+    // checkpoint collection clears the garbage in front of it. Backed off, a
+    // collection is due once garbage fills half the remaining headroom, and
+    // it runs at the next checkpoint, so when a burst starts that half or
+    // more can hold garbage: the burst headroom a live set inside the reserve
+    // gives up (ADR 0141). ABytesAfterLastCollect is FBytesAfterLastCollect, read by
     // the caller with the live total.
     function TrackedTriggerBytes(const ABytesAllocated,
       ABytesAfterLastCollect: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}

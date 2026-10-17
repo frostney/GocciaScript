@@ -77,9 +77,13 @@ every checkpoint, as before.
 **A live set inside the reserve gives up burst headroom.** Before this
 change every checkpoint inside the reserve collected, so the plain
 allocations between two checkpoints could use all of the headroom `h` above
-the live set. With the back-off, up to `h / 2` of garbage can already sit in
-that headroom when a burst starts. A burst between two checkpoints that fits
-in `h` but not in what is left is refused with the `RangeError` where the
+the live set. With the back-off, a collection becomes due only once the
+garbage reaches `h / 2`, the trigger, and that is not a bound on the garbage:
+the VM tests the trigger only at its checkpoints, every 1,024 instructions,
+so whatever the script allocates between crossing the trigger and the next
+checkpoint adds to it. When a burst starts, `h / 2` of garbage or more can
+already sit in that headroom. A burst between two checkpoints that fits in
+`h` but not in what is left is refused with the `RangeError` where the
 earlier trigger ran it. The ceiling does not move, nothing allocates past it,
 a script whose live set is below the line is unaffected, and catching the
 error, calling `Goccia.gc()` and retrying succeeds. This is accepted in
