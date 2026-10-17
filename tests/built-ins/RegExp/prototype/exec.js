@@ -499,3 +499,28 @@ test("exec defines index, input and groups on the match array without calling se
   expect(Object.keys(match)).toEqual(["0", "index", "input", "groups"]);
   expect(all.map((m) => m.index)).toEqual([1, 3]);
 });
+
+describe.runIf(typeof Goccia !== "undefined")("exec memory charge", () => {
+  test("the match's input is the subject, not a charged copy of it", () => {
+    const subject = "hello world 12345 foo bar ".repeat(640);
+    const regex = /o(r)/;
+    Goccia.gc();
+    const before = Goccia.gc.bytesAllocated;
+    const kept = Array.from({ length: 200 }, () => regex.exec(subject));
+    Goccia.gc();
+    const perMatch = (Goccia.gc.bytesAllocated - before) / kept.length;
+
+    // The subject alone would charge subject.length * 2 bytes per match.
+    expect(perMatch).toBeLessThan(subject.length);
+    expect(kept[199].input).toBe(subject);
+    expect(kept[199].index).toBe(7);
+    expect(kept[199][1]).toBe("r");
+  });
+
+  test("a non-string argument becomes the match's input as a string", () => {
+    const match = /2/.exec(123);
+
+    expect(match.input).toBe("123");
+    expect(match.index).toBe(1);
+  });
+});

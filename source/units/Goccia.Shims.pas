@@ -177,6 +177,10 @@ const
         '  return new Uint8Array(codePoints).toBase64();'#10 +
         '};'
     ),
+    // atob stays linear in its input: one regular expression checks the
+    // alphabet, and the decoded bytes become characters one 8 KiB slice per
+    // String.fromCharCode call, joined once. A callback per character or per
+    // byte made large inputs slow and memory-hungry (#1567).
     ( // WHATWG HTML spec §8.3 — legacy atob(data) via Uint8Array.fromBase64
       Name: 'atob';
       FileName: '<shim:atob>';
@@ -200,23 +204,21 @@ const
         '      "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
         '      "InvalidCharacterError"'#10 +
         '    );'#10 +
-        '  [...str].forEach((ch: string): void => {'#10 +
-        '    const c: number = ch.charCodeAt(0);'#10 +
-        '    if (!(c >= 65 && c <= 90) && !(c >= 97 && c <= 122) &&'#10 +
-        '        !(c >= 48 && c <= 57) && c !== 43 && c !== 47)'#10 +
-        '      throw new DOMException('#10 +
-        '        "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
-        '        "InvalidCharacterError"'#10 +
-        '      );'#10 +
-        '  });'#10 +
+        '  if (!/^[A-Za-z0-9+\/]*$/.test(str))'#10 +
+        '    throw new DOMException('#10 +
+        '      "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
+        '      "InvalidCharacterError"'#10 +
+        '    );'#10 +
         '  const remainder: number = str.length % 4;'#10 +
         '  if (remainder === 2) str += "==";'#10 +
         '  else if (remainder === 3) str += "=";'#10 +
         '  if (str === "") return "";'#10 +
-        '  return Uint8Array.fromBase64(str).reduce('#10 +
-        '    (acc: string, b: number): string => acc + String.fromCharCode(b),'#10 +
-        '    ""'#10 +
-        '  );'#10 +
+        '  const bytes: Uint8Array = Uint8Array.fromBase64(str);'#10 +
+        '  return Array.from('#10 +
+        '    { length: Math.ceil(bytes.length / 8192) },'#10 +
+        '    (_: unknown, i: number): string =>'#10 +
+        '      String.fromCharCode(...bytes.subarray(i * 8192, (i + 1) * 8192))'#10 +
+        '  ).join("");'#10 +
         '};'
     ),
     ( // ES2027 §19.2.5 — legacy parseInt via Number.parseInt
