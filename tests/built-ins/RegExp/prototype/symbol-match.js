@@ -161,3 +161,31 @@ test("Symbol.match advances empty matches by the unicode property", () => {
   expect("\u{1F600}".match(regex).length).toBe(2);
   expect("\u{1F600}".match(/(?:)/g).length).toBe(3);
 });
+
+test("Symbol.match passes the subject to an own exec on a non-global RegExp", () => {
+  const regex = /a/;
+  const seen = [];
+  regex.exec = (value) => {
+    seen.push(value);
+    return null;
+  };
+
+  expect("xaz".match(regex)).toBe(null);
+  expect(seen).toEqual(["xaz"]);
+});
+
+describe.runIf(typeof Goccia !== "undefined")("Symbol.match memory charge", () => {
+  test("a non-global match does not charge another copy of the subject", () => {
+    const subject = "hello world 12345 foo bar ".repeat(640);
+    const regex = /o(r)/;
+    Goccia.gc();
+    const before = Goccia.gc.bytesAllocated;
+    const kept = Array.from({ length: 200 }, () => subject.match(regex));
+    Goccia.gc();
+    const perMatch = (Goccia.gc.bytesAllocated - before) / kept.length;
+
+    // The subject alone would charge subject.length * 2 bytes per match.
+    expect(perMatch).toBeLessThan(subject.length);
+    expect(kept[199].input).toBe(subject);
+  });
+});
