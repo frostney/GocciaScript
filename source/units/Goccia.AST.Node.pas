@@ -43,6 +43,8 @@ type
   TGocciaASTObject = class
   private
     FArena: TGocciaASTArena;
+    { Its slot in FArena, so leaving the arena costs O(1). }
+    FArenaIndex: Integer;
   protected
     { False for an object that owns its arena instead of belonging to one:
       TGocciaProgram. }
@@ -217,25 +219,25 @@ end;
 procedure TGocciaASTArena.Adopt(const AObject: TGocciaASTObject);
 begin
   AObject.FArena := Self;
-  FObjects.Add(AObject);
+  AObject.FArenaIndex := FObjects.Add(AObject);
 end;
 
 procedure TGocciaASTArena.Forget(const AObject: TGocciaASTObject);
 var
-  I: Integer;
+  Index: Integer;
 begin
-  { An explicit free is of an object the parser built a moment ago and
-    discarded, so it sits near the end. }
-  for I := FObjects.Count - 1 downto 0 do
-    if FObjects[I] = Pointer(AObject) then
-    begin
-      if I = FObjects.Count - 1 then
-        FObjects.Count := I
-      else
-        FObjects[I] := nil;
-      AObject.FArena := nil;
-      Exit;
-    end;
+  { By slot, not by search: a syntax error inside a long list frees each
+    element with the list, and a search from the end would scan past every
+    node built after it, quadratic in the size of the parse. }
+  Index := AObject.FArenaIndex;
+  if (Index < 0) or (Index >= FObjects.Count) or
+     (FObjects[Index] <> Pointer(AObject)) then
+    Exit;
+  if Index = FObjects.Count - 1 then
+    FObjects.Count := Index
+  else
+    FObjects[Index] := nil;
+  AObject.FArena := nil;
 end;
 
 function TGocciaASTArena.GetCount: Integer;

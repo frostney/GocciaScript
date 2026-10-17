@@ -7051,6 +7051,8 @@ begin
           SSuggestCloseBlock);
         Body := TGocciaBlockStatement.Create(Statements,
           SourceSpanAtPosition(BraceLine, BraceColumn));
+        // The block owns the list now, and the arena frees the block.
+        Statements := nil;
         Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, SourceSpanAtPosition(Line, Column));
         Result.IsAsync := AIsAsync;
         Result.IsGenerator := AIsGenerator;

@@ -29,6 +29,7 @@ type
 
     procedure TestArenaFreesWhatJoinedIt;
     procedure TestExplicitFreeLeavesTheArena;
+    procedure TestFreedSlotsStayDistinctAfterReuse;
     procedure TestNodeOutsideAnArenaIsTheCreatorsToFree;
     procedure TestParseHandsItsArenaToTheProgram;
     procedure TestFailedParseLeavesNoArenaActive;
@@ -49,6 +50,8 @@ begin
     TestArenaFreesWhatJoinedIt);
   Test('A node freed before its arena leaves it and is freed once',
     TestExplicitFreeLeavesTheArena);
+  Test('Nodes freed in creation order and a node created after a freed last one each leave once',
+    TestFreedSlotsStayDistinctAfterReuse);
   Test('A node created with no arena active joins none',
     TestNodeOutsideAnArenaIsTheCreatorsToFree);
   Test('A parse hands its arena to the program it returns',
@@ -98,6 +101,35 @@ begin
   Expect<Integer>(GCountedNodesDestroyed).ToBe(2);
   Arena.Free;
   Expect<Integer>(GCountedNodesDestroyed).ToBe(3);
+end;
+
+procedure TTestASTArena.TestFreedSlotsStayDistinctAfterReuse;
+var
+  Arena, Previous: TGocciaASTArena;
+  A, B, C, D: TCountedNode;
+begin
+  GCountedNodesDestroyed := 0;
+  Arena := TGocciaASTArena.Create;
+  Previous := ActivateASTArena(Arena);
+  try
+    A := TCountedNode.Create(TGocciaSourceSpan.Empty);
+    B := TCountedNode.Create(TGocciaSourceSpan.Empty);
+    C := TCountedNode.Create(TGocciaSourceSpan.Empty);
+    { The last slot is dropped, so D takes C's slot. }
+    C.Free;
+    Expect<Integer>(Arena.Count).ToBe(2);
+    D := TCountedNode.Create(TGocciaSourceSpan.Empty);
+  finally
+    RestoreASTArena(Previous);
+  end;
+  Expect<Integer>(Arena.Count).ToBe(3);
+  { First to last, as an owning list frees its elements. }
+  A.Free;
+  B.Free;
+  Expect<Integer>(GCountedNodesDestroyed).ToBe(3);
+  Arena.Free;
+  Expect<Integer>(GCountedNodesDestroyed).ToBe(4);
+  Expect<Boolean>(Assigned(D)).ToBe(True);
 end;
 
 procedure TTestASTArena.TestNodeOutsideAnArenaIsTheCreatorsToFree;

@@ -56,8 +56,10 @@ because none is read after compilation.
 that builds one marks it with `AsCallerOwned`. Every caller releases what it
 gets with `ReleaseDescriptor`, which frees a caller-owned descriptor and leaves
 a stored one alone. The release comes before anything that may replace the
-stored descriptor (a definition, a deletion), so a caller reads the fields it
-needs first. A caller that keeps a descriptor clones it, or takes a caller-owned
+stored descriptor: a definition or deletion, or guest code (a getter, a setter,
+a proxy trap) that may define or delete. A caller reads the fields it needs
+first, or, where the spec reads the descriptor after such code runs (the proxy
+invariant checks), keeps an owned copy with its values rooted. A caller that keeps a descriptor clones it, or takes a caller-owned
 one over with `TakeOwnership`. `HasOwnPropertyDescriptor`,
 `OwnPropertyIsEnumerable` and their symbol and key forms answer the common
 questions without handing a descriptor out.
@@ -88,7 +90,8 @@ one.
   builds AST nodes outside a parse frees them itself.
 - A new `GetOwnPropertyDescriptor` override that builds a descriptor marks it
   `AsCallerOwned`. A new caller of [[GetOwnProperty]] releases the result,
-  reading what it needs before any definition or deletion on that object.
+  reading what it needs before any definition or deletion on that object and
+  before any guest code runs.
 - A value's destructor still frees only what the value owns natively and never
   calls into another managed object: at teardown, as in any sweep, its peers
   may already be gone. Nothing may use a managed value after its thread's
