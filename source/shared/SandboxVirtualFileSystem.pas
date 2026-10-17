@@ -135,7 +135,8 @@ type
     function IsReadOnlyCanonical(const ACanonicalPath: string): Boolean;
     function HoldsReadOnlyCanonical(const ACanonicalPath: string): Boolean;
     procedure EnsureWritable(const ACanonicalPath: string);
-    procedure EnsureRemovable(const ACanonicalPath: string);
+    procedure EnsureTreeWritable(const ACanonicalPath: string;
+      const AIsDirectory: Boolean);
   public
     constructor Create(const AQuotaBytes: Int64;
       const ANodeQuota: Integer; const AClock: TSandboxFsClock = nil); overload;
@@ -166,9 +167,10 @@ type
     procedure Touch(const APath: string);
 
     { Marks APath (not empty) and everything under it read-only, whether or
-      not it exists yet. Writing, truncating, creating, touching, deleting, moving
-      or copying at or under it raises ESandboxFsReadOnly, and so does
-      deleting or moving a directory that holds it. Reads are unaffected.
+      not it exists yet. Writing, truncating, creating, touching, deleting,
+      moving or copying at or under it raises ESandboxFsReadOnly, and so do
+      deleting or moving a directory that holds it and moving or copying a
+      directory to where it would land under it. Reads are unaffected.
       Marks cannot be removed; forks keep them. }
     procedure AddReadOnlyPath(const APath: string);
     { Whether APath is at or under a read-only path. }
@@ -675,13 +677,14 @@ begin
       [ACanonicalPath]);
 end;
 
-{ For a path whose whole subtree changes: deleted, moved away, or replaced
-  by a moved or copied tree. }
-procedure TSandboxVirtualFileSystem.EnsureRemovable(
-  const ACanonicalPath: string);
+{ For a file or directory that is deleted, moved away, or moved or copied
+  in: a directory also changes everything below its path, so a read-only
+  path there refuses it too, whether that path exists or not. }
+procedure TSandboxVirtualFileSystem.EnsureTreeWritable(
+  const ACanonicalPath: string; const AIsDirectory: Boolean);
 begin
   if IsReadOnlyCanonical(ACanonicalPath) or
-    HoldsReadOnlyCanonical(ACanonicalPath) then
+    (AIsDirectory and HoldsReadOnlyCanonical(ACanonicalPath)) then
     raise ESandboxFsReadOnly.CreateFmt('%s: read-only file system',
       [ACanonicalPath]);
 end;
@@ -914,7 +917,7 @@ begin
   Node := RequireNode(APath);
   if Node = FRoot then
     raise ESandboxFsInvalidPath.Create('/: cannot delete the root');
-  EnsureRemovable(Node.FullPath);
+  EnsureTreeWritable(Node.FullPath, Node.FKind = nkDirectory);
   if (Node.FKind = nkDirectory) and (Node.FChildren.Count > 0) and
     not ARecursive then
     raise ESandboxFsNotEmpty.CreateFmt('%s: directory not empty',
@@ -941,7 +944,8 @@ begin
   SourceNode := RequireNode(ASource);
   if SourceNode = FRoot then
     raise ESandboxFsInvalidPath.Create('/: cannot move the root');
-  EnsureRemovable(SourceNode.FullPath);
+  EnsureTreeWritable(SourceNode.FullPath,
+    SourceNode.FKind = nkDirectory);
   if SubtreeHasOpenHandles(SourceNode) then
     raise ESandboxFsBusy.CreateFmt('%s: resource busy (open handle)',
       [SourceNode.FullPath]);
@@ -966,9 +970,8 @@ begin
     raise ESandboxFsInvalidPath.CreateFmt(
       '%s: cannot move a directory into itself',
       [SourceNode.FullPath]);
-  { The moved tree lands at the destination and below it, so a read-only
-    path below a destination that does not exist yet refuses it too. }
-  EnsureRemovable(ChildPath(DestParent, LeafName));
+  EnsureTreeWritable(ChildPath(DestParent, LeafName),
+    SourceNode.FKind = nkDirectory);
 
   if Assigned(DestNode) then
   begin
@@ -1078,7 +1081,8 @@ begin
     raise ESandboxFsInvalidPath.CreateFmt(
       '%s: cannot copy a directory into itself',
       [SourceNode.FullPath]);
-  EnsureRemovable(ChildPath(DestParent, LeafName));
+  EnsureTreeWritable(ChildPath(DestParent, LeafName),
+    SourceNode.FKind = nkDirectory);
 
   ReplacedBytes := 0;
   ReplacedNodes := 0;

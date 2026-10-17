@@ -688,6 +688,14 @@ begin
   ExpectReadOnly(ProbeCopyRecursive, '/tree', '/up/deep', '/up/deep');
   Expect<Boolean>(FFs.Exists('/up/deep')).ToBe(False);
   Expect<Boolean>(FFs.Exists('/tree/mark/f.txt')).ToBe(True);
+  { A file lands only at the destination, so it may go there, as a write
+    may. }
+  FFs.WriteAllText('/x.txt', 'x');
+  FFs.CopyPath('/x.txt', '/up/deep');
+  FFs.DeletePath('/up/deep');
+  FFs.MovePath('/x.txt', '/up/deep');
+  Expect<string>(FFs.ReadAllText('/up/deep')).ToBe('x');
+  FFs.DeletePath('/up/deep');
   { Next to the mark is still writable. }
   FFs.MovePath('/tree', '/up/other');
   Expect<Boolean>(FFs.Exists('/up/other/mark/f.txt')).ToBe(True);
