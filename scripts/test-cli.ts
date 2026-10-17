@@ -1469,6 +1469,12 @@ if (process.platform === "linux") {
   // heap manager's in-use total (ADR 0129). Both scripts keep little alive and
   // churn garbage far past the ceiling: a flat loop of short-lived objects and
   // arrays, and Promise jobs drained in batches. Linux only.
+  //
+  // The third drops 300 arrays made by `new Array(100000)`: about two
+  // registrations for 800 KB of element storage each, which is gated but not
+  // charged. With the heap sampled only every 1,024 registrations it reached
+  // 340 MiB resident with no collection (#1747); the gated growth now samples
+  // the heap as it is reported (ADR 0145).
   const ceiling = 64 * 1024 * 1024;
   // Bun's resourceUsage.maxRSS is getrusage's ru_maxrss, which Linux reports
   // in KiB; Bun 1.3 passes that through and Bun 1.4 converts it to bytes. The
@@ -1495,8 +1501,14 @@ if (process.platform === "linux") {
       "console.log('n', idx.length * 25);",
       "",
     ].join("\n"),
+    holes: [
+      "let last = null;",
+      "for (const _ of Array.from({ length: 300 })) { last = new Array(100000); }",
+      "console.log('n', last.length);",
+      "",
+    ].join("\n"),
   };
-  const expected = { flat: "n 250000", promise: "n 250000" };
+  const expected = { flat: "n 250000", promise: "n 250000", holes: "n 100000" };
   const dir = mkdtemp("goccia-rss-");
   try {
     for (const [name, src] of Object.entries(scripts)) {
@@ -1522,6 +1534,58 @@ if (process.platform === "linux") {
   }
 } else {
   console.log("  skipped: peak RSS is asserted on Linux only");
+}
+
+console.log("--max-memory (a small live set collects as the heap grows under a far ceiling)...");
+{
+  // #1749: both ceiling triggers sit one pressure reserve below the ceiling,
+  // so under a large ceiling a script that keeps 1,000 small objects alive
+  // grew towards it before its first collection: no collection and 1.6 GiB
+  // resident at 2 GiB. The heap trigger now also fires once the heap has
+  // grown to four times what the last collection left, and by at least
+  // 64 MiB (ADR 0145). This shorter run is checked for collections
+  // everywhere and for peak resident memory on Linux, where Bun reports it:
+  // before the growth trigger it made no collection and peaked near
+  // 490 MiB, with it 6 collections and about 82 MiB.
+  const src = [
+    "const outer = Array.from({ length: 600 }, (_, k) => k);",
+    "const inner = Array.from({ length: 1000 }, (_, k) => k);",
+    "let batch = [];",
+    "for (const i of outer) {",
+    "  batch = [];",
+    "  for (const j of inner) batch.push({ s: 'x' + (i * 1000 + j) });",
+    "}",
+    "console.log('kept', batch.length);",
+    "",
+  ].join("\n");
+  const MAX_PEAK_BYTES = 150 * 1024 * 1024;
+  const dir = mkdtemp("goccia-growth-");
+  try {
+    const path = join(dir, "growth.js");
+    writeFileSync(path, src);
+    const proc = Bun.spawnSync([RUNNER, path, "--max-memory=2GiB", "--output=json"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 120_000,
+    });
+    const out = proc.stdout.toString();
+    if (proc.exitCode !== 0 || !out.includes("kept 1000"))
+      throw new Error(`Growth run at --max-memory=2GiB should complete, got exit ${proc.exitCode}: ${out}${proc.stderr.toString()}`);
+    const collections = JSON.parse(out).memory?.gc?.collections;
+    if (typeof collections !== "number" || collections < 1)
+      throw new Error(`A small live set under a far ceiling should collect as the heap grows, got ${collections} collections`);
+    if (process.platform === "linux") {
+      const maxRSS = proc.resourceUsage?.maxRSS;
+      if (typeof maxRSS !== "number" || maxRSS <= 0)
+        throw new Error("Growth run: Bun reported no peak RSS for the child");
+      // ru_maxrss in KiB under Bun 1.3, bytes under Bun 1.4; see above.
+      const peak = maxRSS < 8_000_000 ? maxRSS * 1024 : maxRSS;
+      if (peak >= MAX_PEAK_BYTES)
+        throw new Error(`Growth run peaked at ${peak} bytes resident, at or above ${MAX_PEAK_BYTES}`);
+    }
+  } finally {
+    clean(dir);
+  }
 }
 
 console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");

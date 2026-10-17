@@ -216,17 +216,25 @@ type
     // scope bindings and allocator rounding are not charged — so a ceiling
     // compared only against it lets garbage grow to several times the
     // ceiling before a pressure collection runs. Every
-    // HEAP_SAMPLE_INTERVAL registrations SampleHeap reads the heap manager's
-    // in-use total; at or above HeapTriggerBytes it latches the same pending
+    // HEAP_SAMPLE_INTERVAL registrations, and after HEAP_SAMPLE_GROWTH_BYTES
+    // of reported native growth (NoteNativeGrowth), SampleHeap reads the heap
+    // manager's in-use total; at or above HeapTriggerBytes it latches the same pending
     // flag an external reservation uses, so the existing checkpoint (the VM
     // dispatch countdown) collects.
     // No collection site is added, and refusal still compares BytesAllocated.
     FHeapPressurePending: Boolean;
     FHeapSampleCountdown: Integer;
+    // Native storage growth reported through NoteNativeGrowth since the last
+    // heap sample (ADR 0145). A registration can come with far more heap
+    // than an object's few hundred bytes — `new Array(100000)` registers
+    // about two objects for 800 KB of element storage — so the sample also
+    // runs once this much growth has been reported.
+    FNativeGrowthSinceSample: Int64;
     // Heap-manager in-use bytes right after the most recent collection: what
     // survived plus everything the collector does not own. HeapTriggerBytes
     // backs off from it so a heap that cannot get under the ceiling collects
-    // once per growth step instead of at every checkpoint.
+    // once per growth step instead of at every checkpoint, and fires once the
+    // heap has grown by a factor over it (ADR 0145).
     FHeapAfterLastCollect: Int64;
     FHeapTriggeredCollections: Integer;
     // BytesAllocated right after the most recent full collection: what the
@@ -328,6 +336,14 @@ type
     procedure RegisterObject(const AObject: TGCManagedObject);
     procedure UnregisterObject(const AObject: TGCManagedObject);
     procedure RegisterRootSource(const ASource: TGCRootSource);
+    // Reports ABytes of native storage a value has just grown (array element
+    // storage, property storage), which no registration accounts for. Once
+    // the reported growth reaches the sampling step the heap is sampled, so
+    // the heap trigger sees storage-heavy allocation as it happens rather
+    // than every HEAP_SAMPLE_INTERVAL registrations (ADR 0145). It never
+    // collects and charges nothing: at most it latches the pending flag the
+    // next checkpoint tests, so it is safe from any allocation path.
+    procedure NoteNativeGrowth(const ABytes: Int64);
     procedure UnregisterRootSource(const ASource: TGCRootSource);
     procedure RegisterWeakContainer(const AObject: TGCManagedObject);
     procedure UnregisterWeakContainer(const AObject: TGCManagedObject);
@@ -477,6 +493,19 @@ const
   // between samples to well under a megabyte while keeping the read off the
   // per-allocation path.
   HEAP_SAMPLE_INTERVAL = 1024;
+  // Native storage growth (NoteNativeGrowth) between two heap samples, unless
+  // the pressure reserve is smaller. The same drift bound as above, for
+  // allocations whose heap cost is not proportional to their registrations.
+  HEAP_SAMPLE_GROWTH_BYTES = 1024 * 1024;
+  // The heap trigger also fires once the heap in use has reached
+  // HEAP_GROWTH_TRIGGER_FACTOR times what the last full collection left, and
+  // has grown by at least HEAP_GROWTH_TRIGGER_MIN_BYTES (ADR 0145). The floor
+  // keeps a small heap from collecting at every few megabytes of churn; the
+  // factor keeps collection work proportional to allocation for a large or
+  // growing live set. Measured on AWFY Havlak, which never collected before:
+  // a factor of 2 with a 32 MiB floor cost 36% more time, this choice 16%.
+  HEAP_GROWTH_TRIGGER_FACTOR = 4;
+  HEAP_GROWTH_TRIGGER_MIN_BYTES = 64 * 1024 * 1024;
 
 // The calling thread's heap-manager in-use bytes. The FPC heap manager keeps
 // its status per thread, matching the thread-local collector. Other compilers
@@ -781,6 +810,7 @@ begin
   FMemoryPressureCountdown := nil;
   FHeapPressurePending := False;
   FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+  FNativeGrowthSinceSample := 0;
   FHeapAfterLastCollect := 0;
   FHeapTriggeredCollections := 0;
   FBytesAfterLastCollect := 0;
@@ -1450,7 +1480,7 @@ end;
 
 function TGarbageCollector.HeapTriggerBytes: Int64;
 var
-  Reserve: Int64;
+  Growth, Reserve: Int64;
 begin
   Reserve := MemoryPressureReserve;
   Result := FMaxBytes - Reserve;
@@ -1467,6 +1497,30 @@ begin
       Reserve := FHeapAfterLastCollect div 2;
     Result := FHeapAfterLastCollect + Reserve;
   end;
+  // Growth trigger (ADR 0145): the heap has reached HEAP_GROWTH_TRIGGER_FACTOR
+  // times what the last full collection left, and has grown by at least
+  // HEAP_GROWTH_TRIGGER_MIN_BYTES. Under a large ceiling the line above is
+  // far off, and a script that keeps little alive would otherwise grow
+  // towards it before its first collection. It only ever lowers the trigger,
+  // and it sits at least the floor above that record, so a heap that cannot
+  // shrink does not collect more often.
+  Growth := FHeapAfterLastCollect * (HEAP_GROWTH_TRIGGER_FACTOR - 1);
+  if Growth < HEAP_GROWTH_TRIGGER_MIN_BYTES then
+    Growth := HEAP_GROWTH_TRIGGER_MIN_BYTES;
+  if FHeapAfterLastCollect + Growth < Result then
+    Result := FHeapAfterLastCollect + Growth;
+end;
+
+procedure TGarbageCollector.NoteNativeGrowth(const ABytes: Int64);
+var
+  Step: Int64;
+begin
+  Inc(FNativeGrowthSinceSample, ABytes);
+  Step := MemoryPressureReserve;
+  if Step > HEAP_SAMPLE_GROWTH_BYTES then
+    Step := HEAP_SAMPLE_GROWTH_BYTES;
+  if FNativeGrowthSinceSample >= Step then
+    SampleHeap;
 end;
 
 procedure TGarbageCollector.SampleHeap;
@@ -1474,6 +1528,7 @@ var
   HeapBytes: Int64;
 begin
   FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+  FNativeGrowthSinceSample := 0;
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring or
      FHeapPressurePending then
     Exit;
@@ -1504,6 +1559,7 @@ begin
   if AFull then
   begin
     FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+    FNativeGrowthSinceSample := 0;
     FHeapAfterLastCollect := CurrentHeapBytes;
   end;
 end;

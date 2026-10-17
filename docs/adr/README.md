@@ -150,3 +150,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0138 — Bytecode is the only way GocciaScript executes, and the engine owns its VM](0138-bytecode-is-the-only-way-gocciascript-executes.md)
 - [0141 — The tracked-bytes pressure trigger backs off above a live set that sits inside the reserve](0141-tracked-pressure-trigger-backs-off.md)
 - [0142 — A run waits until no extension has pending work, and an entry still pending then fails the run](0142-the-run-waits-until-no-extension-has-pending-work.md)
+- [0145 — The heap trigger follows growth since the last collection, and gated storage growth samples the heap](0145-heap-trigger-follows-growth-since-the-last-collection.md)

@@ -93,6 +93,9 @@ type
     procedure TestHeapTriggerKeepsGarbageNearTheCeiling;
     procedure TestHeapTriggerBacksOffAboveSurvivors;
     procedure TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
+    procedure TestHeapGrowthTriggersUnderAFarCeiling;
+    procedure TestHeapGrowthTriggerDoesNotRepeatOverRetainedHeap;
+    procedure TestNativeGrowthSamplesTheHeap;
     procedure TestNonCollectingChargeNeverCollectsOrLatches;
     procedure TestTrackedTriggerBacksOffAboveSurvivors;
     procedure TestTrackedTriggerReturnsAfterTrackedBytesAreReleased;
@@ -207,6 +210,12 @@ begin
     TestHeapTriggerBacksOffAboveSurvivors);
   Test('The heap trigger comes back down once heap it could not reclaim is freed',
     TestHeapTriggerReturnsAfterUnownedHeapIsFreed);
+  Test('Heap growth over what the last collection left triggers a collection under a far ceiling',
+    TestHeapGrowthTriggersUnderAFarCeiling);
+  Test('The growth trigger does not repeat over heap a collection cannot reclaim',
+    TestHeapGrowthTriggerDoesNotRepeatOverRetainedHeap);
+  Test('Reported native growth samples the heap between registrations',
+    TestNativeGrowthSamplesTheHeap);
   {$ENDIF}
   Test('A non-collecting charge neither collects nor latches pressure',
     TestNonCollectingChargeNeverCollectsOrLatches);
@@ -376,6 +385,125 @@ begin
   finally
     if Assigned(Retained) then
       FreeMem(Retained);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestHeapGrowthTriggersUnderAFarCeiling;
+const
+  { Far enough that the ceiling's own trigger never comes into reach. }
+  FAR_CEILING = Int64(64) * 1024 * 1024 * 1024;
+  GARBAGE_OBJECTS = 1500000;
+  SLACK = 2 * 1024 * 1024;
+var
+  GC: TGarbageCollector;
+  Growth: Int64;
+  HeapAfterCollect: Int64;
+  HeapCollectionsBefore: Integer;
+  PeakHeap: Int64;
+  PreviousMaxBytes: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := FAR_CEILING;
+  try
+    GC.Collect;
+    HeapAfterCollect := CurrentHeapBytes;
+    HeapCollectionsBefore := GC.HeapTriggeredCollections;
+
+    { Far more garbage than the growth floor. Before the growth trigger
+      nothing collected here, and the heap grew by all of it. }
+    PeakHeap := ChurnGarbage(GC, GARBAGE_OBJECTS);
+
+    Growth := HeapAfterCollect * (HEAP_GROWTH_TRIGGER_FACTOR - 1);
+    if Growth < HEAP_GROWTH_TRIGGER_MIN_BYTES then
+      Growth := HEAP_GROWTH_TRIGGER_MIN_BYTES;
+    Expect<Boolean>(GC.HeapTriggeredCollections > HeapCollectionsBefore)
+      .ToBe(True);
+    Expect<Boolean>(PeakHeap <= HeapAfterCollect + Growth + SLACK).ToBe(True);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestHeapGrowthTriggerDoesNotRepeatOverRetainedHeap;
+const
+  FAR_CEILING = Int64(64) * 1024 * 1024 * 1024;
+  { Heap the collector does not own and cannot reclaim, large enough that
+    the factor, not the floor, sets the step. }
+  RETAINED_BYTES = 48 * 1024 * 1024;
+  GARBAGE_OBJECTS = 1500000;
+  { A trigger with no record of the last collection would fire at every
+    checkpoint once the retained heap passed it: 23,437 checkpoints here.
+    The factor needs the garbage to reach several times the retained heap. }
+  MAX_HEAP_COLLECTIONS = 4;
+var
+  GC: TGarbageCollector;
+  HeapCollectionsBefore: Integer;
+  PreviousMaxBytes: Int64;
+  Retained: Pointer;
+begin
+  GC := TGarbageCollector.Instance;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := FAR_CEILING;
+  GetMem(Retained, RETAINED_BYTES);
+  try
+    FillChar(Retained^, RETAINED_BYTES, 0);
+    GC.Collect;
+    HeapCollectionsBefore := GC.HeapTriggeredCollections;
+    ChurnGarbage(GC, GARBAGE_OBJECTS);
+    Expect<Boolean>(GC.HeapTriggeredCollections - HeapCollectionsBefore <=
+      MAX_HEAP_COLLECTIONS).ToBe(True);
+  finally
+    FreeMem(Retained);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestNativeGrowthSamplesTheHeap;
+const
+  CEILING_ABOVE_HEAP = 16 * 1024 * 1024;
+  BLOCK_BYTES = 1024 * 1024;
+  BLOCK_COUNT = 32;
+var
+  Blocks: array[0..BLOCK_COUNT - 1] of Pointer;
+  GC: TGarbageCollector;
+  I: Integer;
+  PreviousMaxBytes: Int64;
+  Latched: Boolean;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := CurrentHeapBytes + CEILING_ABOVE_HEAP;
+  for I := 0 to BLOCK_COUNT - 1 do
+    Blocks[I] := nil;
+  Latched := False;
+  try
+    { Element storage grows the heap without registering anything: twice
+      the headroom, reported as it is allocated, and no object created. The
+      registration count alone would not sample the heap at all. }
+    for I := 0 to BLOCK_COUNT - 1 do
+    begin
+      GetMem(Blocks[I], BLOCK_BYTES);
+      FillChar(Blocks[I]^, BLOCK_BYTES, 0);
+      GC.NoteNativeGrowth(BLOCK_BYTES);
+      if GC.ExternalPressurePending then
+      begin
+        Latched := True;
+        Break;
+      end;
+    end;
+    Expect<Boolean>(Latched).ToBe(True);
+    { It latches, never collects: the checkpoint does that. }
+    Expect<Boolean>(CurrentHeapBytes <= GC.MaxBytes + BLOCK_BYTES).ToBe(True);
+  finally
+    for I := 0 to BLOCK_COUNT - 1 do
+      if Assigned(Blocks[I]) then
+        FreeMem(Blocks[I]);
     GC.MaxBytes := PreviousMaxBytes;
     GC.Collect;
   end;

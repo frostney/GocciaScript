@@ -156,7 +156,15 @@ var
   Budget: Int64;
 begin
   if CanAllocateNativeBytes(ABytes) then
+  begin
+    { Granted without a charge (ADR 0106), so no registration accounts for
+      it: report it to the heap trigger, which samples once enough such
+      growth has built up (ADR 0145). This never collects. }
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) and (ABytes > 0) then
+      GC.NoteNativeGrowth(ABytes);
     Exit;
+  end;
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
   begin
@@ -174,7 +182,10 @@ begin
       already opened their rooting window around the consult (see the contract
       above), so a value this call could be handed is one they have rooted. }
     if GC.TryCollectForLimitedBytes(ABytes) then
+    begin
+      GC.NoteNativeGrowth(ABytes);
       Exit;
+    end;
     Budget := GC.MaxBytes;
   end
   else
