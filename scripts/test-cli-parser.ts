@@ -276,6 +276,36 @@ console.log("Language early errors use the CLI parser...");
       args: ["--compat-label", "--compat-non-strict-mode"],
     },
     {
+      desc: "strict let label",
+      source: '"use strict"; let: {}\n',
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "strict static label",
+      source: '"use strict"; static: {}\n',
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "let label in default strict code",
+      source: "let: {}\n",
+      args: ["--compat-label"],
+    },
+    {
+      desc: "enum label in sloppy code",
+      source: "enum: {}\n",
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "escaped enum label in sloppy code",
+      source: "en\\u0075m: {}\n",
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "escaped let label in strict code",
+      source: '"use strict"; l\\u0065t: {}\n',
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
       desc: "break crossing an arrow-function boundary",
       source: "outer: while (true) { const fn = () => { break outer; }; }\n",
       args: ["--compat-label", "--compat-while-loops"],
@@ -510,6 +540,33 @@ console.log("ASI after do...while...");
     throw new Error(`do...while followed by newline should apply ASI, got: ${JSON.stringify(newline.json)}`);
   if (normalizeLineEndings(newline.json.output) !== "after\n")
     throw new Error(`Expected do...while newline ASI output after, got: ${newline.json.output}`);
+}
+
+// -- ASI and line breaks inside a token ---------------------------------------
+
+console.log("ASI and line breaks inside a token...");
+{
+  // ES2026 §12.10 rule 1 needs a LineTerminator between the offending token
+  // and the one before it. A string's LineContinuation is inside the token,
+  // so a string that starts on the same line is still an offending token.
+  assertSyntaxError(
+    'const a = 1 "x\\\ny";\n',
+    "string with a line continuation after an expression on its line",
+    ["--compat-asi"],
+    { messageIncludes: "Expected \";\"" },
+  );
+
+  const separated = runLoaderJson('const a = 1\n"x\\\ny";\nconsole.log(a);\n', ["--compat-asi"]);
+  if (separated.exitCode !== 0 || separated.json.ok !== true)
+    throw new Error(`A string on the next line should end the statement by ASI, got: ${JSON.stringify(separated.json)}`);
+  if (normalizeLineEndings(separated.json.output) !== "1\n")
+    throw new Error(`Expected ASI before a string on the next line to print 1, got: ${separated.json.output}`);
+
+  // `throw` followed on its own line by a template that spans lines throws the
+  // template; the error points at the throw statement, not at a line break.
+  const thrown = runLoaderJson("throw `a\nb`;\n", ["--compat-asi"]);
+  if (thrown.exitCode !== 1 || thrown.json.ok !== false || thrown.json.error?.type === "SyntaxError")
+    throw new Error(`throw with a multi-line template should throw the template, got: ${JSON.stringify(thrown.json)}`);
 }
 
 // -- Unsupported/default-disabled syntax errors by default ----------------------
@@ -1255,6 +1312,125 @@ console.log("Arrow in a ternary consequent under ASI...");
     "const r = 1 ? (x): number => x : 2 : 3;\n",
     "return-typed arrow consequent with a surplus ':' is rejected",
   );
+}
+
+// -- Nesting limit (#1500, #1501) ------------------------------------------------
+//
+// The parser, the bytecode compiler and the RegExp compiler are recursive
+// descent, and the production build has no stack check of its own: source or
+// a pattern nested deeply enough used to kill the process with SIGSEGV. Past
+// 1,024 levels of nesting, or a syntax tree taller than 4,096 levels counting
+// each link of an operator or call chain, the parser now reports a
+// SyntaxError through the ordinary error envelope. The JS suite covers each construct through
+// ShadowRealm.prototype.evaluate (tests/language/nesting-limit); these cases
+// check the top-level script path that no JS test can reach.
+
+console.log("Nesting limit...");
+{
+  const NESTING = "Nesting exceeds the supported limit of 1024 levels";
+  const HEIGHT = "counting each link of operator and call chains, exceeds the supported limit of 4096 levels";
+  const deep = 30000;
+  const shapes: Array<[string, string]> = [
+    ["arrays", `console.log(${"[".repeat(deep)}${"]".repeat(deep)}.length);\n`],
+    ["objects", `console.log(typeof ${"{ o: ".repeat(deep)}1${" }".repeat(deep)});\n`],
+    ["calls", `const id = (v) => v;\nconsole.log(${"id(".repeat(deep)}1${")".repeat(deep)});\n`],
+    ["templates", `console.log(${"`${".repeat(deep)}1${"}`".repeat(deep)});\n`],
+    ["blocks", `${"{ ".repeat(deep)}${"} ".repeat(deep)}\n`],
+    ["unary operators", `console.log(${"!".repeat(deep)}true);\n`],
+    ["conditionals", `console.log(${"true ? ".repeat(deep)}1${" : 0".repeat(deep)});\n`],
+    ["an addition chain", `console.log(1${" + 1".repeat(deep)});\n`],
+    ["a call chain", `const f = () => f;\nconsole.log(typeof f${"()".repeat(deep)});\n`],
+  ];
+  for (const [desc, source] of shapes)
+    assertSyntaxError(source, `${desc} nested ${deep} deep`, [], {
+      messageIncludes: desc.startsWith("an addition") || desc.startsWith("a call") ? HEIGHT : NESTING,
+      line: desc === "calls" || desc === "a call chain" ? 2 : 1,
+    });
+
+  // Below the limits the same shapes run: nested arrays, and a chain of
+  // 2,000 method calls, the shape of the Unicode tables in Babel's bundle.
+  const belowLimit: Array<[string, string, string]> = [
+    ["1,000 nested arrays", `console.log(${"[".repeat(1000)}${"]".repeat(1000)}.length);\n`, "1\n"],
+    ["2,000 chained method calls",
+      `const set = { n: 0, addRange(a, b) { this.n += b - a; return this; } };\n` +
+      `console.log(set${".addRange(1, 2)".repeat(2000)}.n);\n`, "2000\n"],
+  ];
+  for (const [desc, source, expected] of belowLimit) {
+    const res = runLoaderJson(source);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc} should run, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== expected)
+      throw new Error(`${desc} printed ${JSON.stringify(res.json.output)}`);
+  }
+
+  // A regular expression literal compiles its pattern when it is evaluated.
+  {
+    const { exitCode, json } = runLoaderJson(`/${"(".repeat(deep)}a${")".repeat(deep)}/.test("a");\n`);
+    if (exitCode !== 1 || json.error?.type !== "SyntaxError" ||
+        !String(json.error?.message).includes("nesting exceeds the supported limit of 1024 levels"))
+      throw new Error(`deep regular expression literal should be a SyntaxError, got exit ${exitCode} ${JSON.stringify(json.error)}`);
+  }
+
+  // Source parsed, and a pattern compiled, at the bottom of a recursion that
+  // has used up the native stack: the Array.prototype.map callbacks are native
+  // re-entries of the bytecode VM. The limit then comes from the stack that is
+  // left, still as a SyntaxError the script can catch.
+  //
+  // The recursion has to end because the native stack ran out, not at the
+  // default --max-stack of 2,200 calls: a re-entry here costs about 4 KiB in a
+  // production x86-64 build, so on a stack above about 9.5 MiB the call cap
+  // comes first and leaves megabytes of stack below it, and the expression
+  // then simply runs. A --max-stack far above what any test stack holds makes
+  // the native stack the limit on every platform and stack size; the VM's
+  // NATIVE_STACK_RESERVE check still ends the recursion before the stack
+  // overflows.
+  const LOW_STACK_ARGS = ["--max-stack=100000"];
+  const lowStack = (expression: string): string =>
+    "let result = \"none\";\n" +
+    "const down = () => { try { return [0].map(down)[0]; } catch (e) { if (result === \"none\") { " +
+    `try { result = String(${expression}); } catch (inner) { result = inner.constructor.name + ": " + inner.message; } ` +
+    "} return 0; } };\ndown();\nconsole.log(result);\n";
+  const lowStackCases: Array<[string, string, readonly string[]]> = [
+    ["new RegExp", `new RegExp("(".repeat(1000) + "a" + ")".repeat(1000)).test("a")`, []],
+    ["ShadowRealm.prototype.evaluate", `new ShadowRealm().evaluate("[".repeat(1000) + "]".repeat(1000) + ".length")`, ["--unsafe-shadowrealm"]],
+    // A chain costs the parser no stack but the passes after it recurse once
+    // per link, some without a stack check of their own (the compiler's
+    // closure scan of a loop body, freeing the tree).
+    ["a 4,000-link member chain", `new ShadowRealm().evaluate("const o = {}; o.o = o; typeof o" + ".o".repeat(4000))`, ["--unsafe-shadowrealm"]],
+    ["a 4,000-link member chain in a loop body", `new ShadowRealm().evaluate("const o = {}; o.o = o; for (const x of []) { o" + ".o".repeat(4000) + "; } 1")`, ["--unsafe-shadowrealm"]],
+  ];
+  for (const [desc, expression, args] of lowStackCases) {
+    const res = runLoaderJson(lowStack(expression), [...LOW_STACK_ARGS, ...args], { timeout: 60000 });
+    const printed = normalizeLineEndings(res.json.output);
+    if (res.exitCode !== 0 || !/^SyntaxError: .*native stack.*\n$/.test(printed))
+      throw new Error(`${desc} on a nearly exhausted native stack should throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+  }
+
+  // A pattern compiled on a shallow stack and matched both there and at the
+  // bottom of that recursion: matching recurses once per nested lookaround,
+  // and running out of stack there is the call stack's RangeError, not a
+  // SyntaxError (the pattern is valid) or a plain Error (as the step and
+  // backtrack limits are). The pattern consumes the "a" after its
+  // lookarounds, so every match is non-empty and the shallow result is
+  // distinct from no output. Each case reaches the VM through a different
+  // entry point.
+  const lowStackMatch = (flags: string, expression: string): string =>
+    `const re = new RegExp("(?=".repeat(1000) + "a" + ")".repeat(1000) + "a", "${flags}");\n` +
+    `console.log(String(${expression}));\n` +
+    lowStack(expression);
+  const lowStackMatchCases: Array<[string, string, string, string]> = [
+    ["RegExp.prototype.test", "", `re.test("a")`, "true"],
+    ["RegExp.prototype.exec", "", `re.exec("a")`, "a"],
+    ["String.prototype.search", "", `"aaa".search(re)`, "0"],
+    ["a global String.prototype.replace", "g", `"aaa".replace(re, "b")`, "bbb"],
+    ["a global String.prototype.match", "g", `"aaa".match(re)`, "a,a,a"],
+  ];
+  for (const [desc, flags, expression, matched] of lowStackMatchCases) {
+    const res = runLoaderJson(lowStackMatch(flags, expression), LOW_STACK_ARGS, { timeout: 60000 });
+    const printed = normalizeLineEndings(res.json.output);
+    if (res.exitCode !== 0 || printed !== `${matched}\nRangeError: Maximum call stack size exceeded\n`)
+      throw new Error(`${desc} with nested lookarounds should match on a shallow stack and throw a RangeError on a nearly exhausted native stack, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+  }
 }
 
 console.log("\nAll test-cli-parser.ts tests passed.");

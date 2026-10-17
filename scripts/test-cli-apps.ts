@@ -3983,6 +3983,61 @@ await section("Loader: --host-environment module controls time, zone, and random
   }
 });
 
+// CI runs in UTC, where a legacy date read as UTC and one read as local time
+// agree. Pinning the zone through a provider puts one zone on each side of UTC.
+await section("Loader: Date.parse reads legacy dates without an offset as local time...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const date = new Date(2024, 5, 15, 11, 30, 45);",
+      "[",
+      '  Date.parse("6/15/24"),',
+      '  Date.parse("2024/06/15"),',
+      '  Date.parse("Jun 15 2024"),',
+      '  Date.parse("Sat Jun 15 2024 11:30:45"),',
+      '  Date.parse("Sat, 15 Jun 2024 11:30:45"),',
+      '  Date.parse("Sat Jun 15 2024 11:30:45 GMT+0200"),',
+      '  Date.parse("2024-06-15"),',
+      '  Date.parse("2024-06-15T00:00"),',
+      "  Date.parse(date.toString()) === date.getTime(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "1718434800000|1718434800000|1718434800000|1718476245000|1718476245000|1718443845000|1718409600000|1718434800000|true",
+      ],
+      [
+        "Asia/Tokyo",
+        "1718377200000|1718377200000|1718377200000|1718418645000|1718418645000|1718443845000|1718409600000|1718377200000|true",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date.parse in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --host-environment errors withhold provider source...", async () => {
   const tmp = makeTmp();
   try {
@@ -9305,6 +9360,148 @@ await section("Runner sandbox mode: fs writes a view's bytes, not one byte per e
     const actual = stdout.split("\n");
     if (JSON.stringify(actual) !== JSON.stringify(expected))
       throw new Error(`Sandbox mode should write each view's bytes, expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: binary reads, writes, diffs and write-back keep every byte...", async () => {
+  // readFileSync hands the file's own bytes to its Uint8Array, writeFileSync
+  // copies a view's range at once, and the diff and write-back compare files
+  // in place a word at a time; sizes either side of a word reach the tail.
+  const tmp = makeNativeTmp();
+  try {
+    const bytesOf = (size: number, seed: number) =>
+      Buffer.from(Array.from({ length: size }, (_, index) => (index * 131 + seed * 17 + 7) & 0xff));
+    const sizes = [0, 1, 7, 8, 9, 16, 4099];
+    const files: Record<string, Buffer> = {
+      "last.bin": bytesOf(9, 1),
+      "word.bin": bytesOf(16, 2),
+      "same.bin": bytesOf(4099, 3),
+      "empty.bin": bytesOf(0, 4),
+      "short.bin": bytesOf(9, 5),
+    };
+    for (const size of sizes) files[`source-${size}.bin`] = bytesOf(size, size);
+    const tree = writeSandboxTree(
+      tmp,
+      Object.entries(files).map(([name, bytes]) => ({ path: `/${name}`, base64: bytes.toString("base64") })),
+    );
+    const script = join(tmp, "main.js");
+    writeFileSync(script, [
+      'import fs from "fs";',
+      `for (const size of [${sizes.join(", ")}]) {`,
+      '  const bytes = fs.readFileSync(`/data/source-${size}.bin`);',
+      '  fs.writeFileSync(`/data/copy-${size}.bin`, bytes);',
+      '}',
+      'const last = fs.readFileSync("/data/last.bin");',
+      'last[last.length - 1] ^= 1;',
+      'fs.writeFileSync("/data/last.bin", last);',
+      'const word = fs.readFileSync("/data/word.bin");',
+      'word[3] ^= 0x80;',
+      'fs.writeFileSync("/data/word.bin", word);',
+      'fs.writeFileSync("/data/same.bin", fs.readFileSync("/data/same.bin"));',
+      'fs.writeFileSync("/data/empty.bin", fs.readFileSync("/data/empty.bin"));',
+      'const short = fs.readFileSync("/data/short.bin");',
+      'fs.writeFileSync("/data/short.bin", short.subarray(0, short.length - 1));',
+      'console.log("done");',
+    ].join("\n"));
+
+    const diff = join(tmp, "diff.json");
+    const proc = Bun.spawnSync(
+      [RUNNER, script, "--copy-rw", `${tree}=/data`, "--source-type=module", `--diff-file=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stderr = normalizeLineEndings(proc.stderr.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode binary round trip should exit 0, got ${proc.exitCode}: ${stderr}`);
+    for (const size of sizes) {
+      const copied = readFileSync(join(tree, `copy-${size}.bin`));
+      if (!copied.equals(files[`source-${size}.bin`]))
+        throw new Error(`Sandbox mode should copy every byte of a ${size}-byte file, got ${copied.toString("hex")}`);
+    }
+    const expectedLast = Buffer.from(files["last.bin"]);
+    expectedLast[8] ^= 1;
+    const expectedWord = Buffer.from(files["word.bin"]);
+    expectedWord[3] ^= 0x80;
+    const expectedHost: [string, Buffer][] = [
+      ["last.bin", expectedLast],
+      ["word.bin", expectedWord],
+      ["same.bin", files["same.bin"]],
+      ["empty.bin", files["empty.bin"]],
+      ["short.bin", files["short.bin"].subarray(0, 8)],
+    ];
+    for (const [name, bytes] of expectedHost)
+      if (!readFileSync(join(tree, name)).equals(bytes))
+        throw new Error(`Sandbox mode write-back left ${name} as ${readFileSync(join(tree, name)).toString("hex")}`);
+
+    const written = stderr.split("\n")
+      .filter((line) => line.startsWith("write-back: ") && !line.includes("file(s) written"))
+      .map((line) => line.replace(/\\/g, "/").replace(/^.*\//, ""))
+      .sort();
+    const expectedWritten = [...sizes.map((size) => `copy-${size}.bin`), "last.bin", "short.bin", "word.bin"].sort();
+    if (JSON.stringify(written) !== JSON.stringify(expectedWritten))
+      throw new Error(`Sandbox mode should write back only changed files, expected ${JSON.stringify(expectedWritten)}, got ${JSON.stringify(written)}`);
+
+    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes
+      .map((change: any) => `${change.kind} ${change.path} ${change.oldBytes} ${change.newBytes}`)
+      .sort();
+    const expectedChanges = [
+      ...sizes.map((size) => `create /data/copy-${size}.bin 0 ${size}`),
+      "modify /data/last.bin 9 9",
+      "modify /data/short.bin 9 8",
+      "modify /data/word.bin 16 16",
+    ].sort();
+    if (JSON.stringify(changes) !== JSON.stringify(expectedChanges))
+      throw new Error(`Sandbox mode JSON diff should list each changed file once, expected ${JSON.stringify(expectedChanges)}, got ${JSON.stringify(changes)}`);
+
+    const unifiedDiff = join(tmp, "diff.diff");
+    const unifiedProc = Bun.spawnSync(
+      [RUNNER, script, "--copy", `${tree}=/data`, "--source-type=module", `--diff-file=${unifiedDiff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (unifiedProc.exitCode !== 0)
+      throw new Error(`Sandbox mode unified diff run should exit 0, got ${unifiedProc.exitCode}: ${unifiedProc.stderr.toString()}`);
+    const headers = normalizeLineEndings(readFileSync(unifiedDiff, "latin1"))
+      .split("\n")
+      .filter((line) => line.startsWith("+++ /data/"))
+      .map((line) => line.slice(4))
+      .sort();
+    // The first run wrote its changes back, so this run's baseline already
+    // holds the copies: rewriting them, same.bin and empty.bin with the same
+    // bytes changes nothing, while last.bin, word.bin and short.bin change
+    // again.
+    const expectedHeaders = ["/data/last.bin", "/data/short.bin", "/data/word.bin"];
+    if (JSON.stringify(headers) !== JSON.stringify(expectedHeaders))
+      throw new Error(`Sandbox mode unified diff should list each changed file once, expected ${JSON.stringify(expectedHeaders)}, got ${JSON.stringify(headers)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: readFileSync is refused at the memory limit with a RangeError...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      { path: "/big.bin", base64: Buffer.alloc(4 * 1024 * 1024, 7).toString("base64") },
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'try { fs.readFileSync("/big.bin"); console.log("read"); }',
+          'catch (error) { console.log(error.name); }',
+          'console.log(fs.readFileSync("/main.js", "utf8").length > 0);',
+        ].join("\n"),
+      },
+    ]);
+    for (const [limit, expected] of [["2MiB", "RangeError\ntrue"], ["64MiB", "read\ntrue"]]) {
+      const proc = Bun.spawnSync(
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--max-memory=${limit}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0 || stdout !== expected)
+        throw new Error(`Sandbox mode readFileSync under --max-memory=${limit} should print ${JSON.stringify(expected)} and exit 0, got ${proc.exitCode}: ${stdout} ${proc.stderr.toString()}`);
+    }
   } finally {
     clean(tmp);
   }

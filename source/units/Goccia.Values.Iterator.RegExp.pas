@@ -142,7 +142,7 @@ begin
       Result := FScanner.Exec(StartIndex, FSticky);
     except
       on E: ERegExpRuntimeError do
-        ThrowError(E.Message);
+        ThrowRegExpRuntimeError(E);
     end;
   finally
     // next() calls may be far apart, and an unfinished iterator may live

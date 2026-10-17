@@ -59,9 +59,17 @@ type
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     FDerivedConstructorThisGuard: Boolean;
     FTemplateDerivedConstructorThisGuards: TDictionary<TGocciaFunctionTemplate, Boolean>;
+    // Expressions and statements open in the walk over the tree; see
+    // EnterNesting.
+    FNestingDepth: Integer;
+    procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
+    procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt16);
+    procedure CompileExpressionNode(const AExpr: TGocciaExpression;
+      const ADest: UInt16);
     function DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
+    function CompileStatementNode(const AStmt: TGocciaStatement): Boolean;
     procedure DoCompileFunctionBody(const ABody: TGocciaASTNode);
     procedure DoSwapState(const ATemplate: TGocciaFunctionTemplate;
       const AScope: TGocciaCompilerScope);
@@ -149,6 +157,9 @@ type
       write FHideSourceText;
     property OptimizationOptions: TGocciaCompilerOptimizationOptions
       read FOptimizationOptions write FOptimizationOptions;
+    // Expressions and statements open in the walk over the tree: 0 after a
+    // compile that completed.
+    property NestingDepth: Integer read FNestingDepth;
   end;
 
 const
@@ -173,8 +184,12 @@ uses
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements,
+  Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
-  Goccia.Modules;
+  Goccia.Modules,
+  Goccia.NestingLimit;
 
 const
   // The first growth step of a compiler scope's locals table.
@@ -319,7 +334,47 @@ begin
     FDerivedConstructorThisGuard := False;
 end;
 
+// Out of line, for the same reason as the parser's: raising needs managed
+// temporaries.
+procedure TGocciaCompiler.RaiseNestingLimitExceeded(
+  const ANode: TGocciaASTNode);
+begin
+  raise TGocciaSyntaxError.Create(SErrorNestingStackExhausted,
+    ANode.Line, ANode.Column, FSourcePath, nil, SSuggestNestingLimitExceeded);
+end;
+
+// The parser bounds how tall a tree is (Goccia.NestingLimit), so a walk
+// over one fits the stack of a thread that starts it near the top. A compile
+// can also start deep in the native stack, inside native re-entries of the
+// VM: ShadowRealm.prototype.evaluate or eval called from a getter that
+// recursion has entered many times. Every expression and statement the
+// compiler visits passes through here and reports a SyntaxError, as the
+// parser does, once the native stack is nearly used up, before the walk runs
+// off its end.
+procedure TGocciaCompiler.EnterNesting(const ANode: TGocciaASTNode);
+begin
+  Inc(FNestingDepth);
+  if NestingStackExhausted(FNestingDepth) then
+    RaiseNestingLimitExceeded(ANode);
+end;
+
 procedure TGocciaCompiler.DoCompileExpression(
+  const AExpr: TGocciaExpression; const ADest: UInt16);
+begin
+  EnterNesting(AExpr);
+  CompileExpressionNode(AExpr, ADest);
+  Dec(FNestingDepth);
+end;
+
+function TGocciaCompiler.DoCompileStatement(
+  const AStmt: TGocciaStatement): Boolean;
+begin
+  EnterNesting(AStmt);
+  Result := CompileStatementNode(AStmt);
+  Dec(FNestingDepth);
+end;
+
+procedure TGocciaCompiler.CompileExpressionNode(
   const AExpr: TGocciaExpression; const ADest: UInt16);
 var
   Ctx: TGocciaCompilationContext;
@@ -431,7 +486,8 @@ begin
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
 end;
 
-function TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
+function TGocciaCompiler.CompileStatementNode(
+  const AStmt: TGocciaStatement): Boolean;
 var
   Ctx: TGocciaCompilationContext;
   PreviousLabelReentryStatement: TGocciaStatement;
@@ -1871,6 +1927,9 @@ var
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
 begin
+  // A compile that raised left the levels it had entered open; this one
+  // starts at the top of the tree.
+  FNestingDepth := 0;
   if Assigned(FNumericParameterProofs) then
     FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
