@@ -1320,6 +1320,11 @@ console.log("Nesting limit...");
   const lowStackCases: Array<[string, string, readonly string[]]> = [
     ["new RegExp", `new RegExp("(".repeat(1000) + "a" + ")".repeat(1000)).test("a")`, []],
     ["ShadowRealm.prototype.evaluate", `new ShadowRealm().evaluate("[".repeat(1000) + "]".repeat(1000) + ".length")`, ["--unsafe-shadowrealm"]],
+    // A chain costs the parser no stack but the passes after it recurse once
+    // per link, some without a stack check of their own (the compiler's
+    // closure scan of a loop body, freeing the tree).
+    ["a 4,000-link member chain", `new ShadowRealm().evaluate("const o = {}; o.o = o; typeof o" + ".o".repeat(4000))`, ["--unsafe-shadowrealm"]],
+    ["a 4,000-link member chain in a loop body", `new ShadowRealm().evaluate("const o = {}; o.o = o; for (const x of []) { o" + ".o".repeat(4000) + "; } 1")`, ["--unsafe-shadowrealm"]],
   ];
   for (const [desc, expression, args] of lowStackCases) {
     const res = runLoaderJson(lowStack(expression), [...LOW_STACK_ARGS, ...args], { timeout: 60000 });

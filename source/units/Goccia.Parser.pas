@@ -834,12 +834,22 @@ end;
 // parser itself recurses down a chain that is used as a template tag
 // (ExpressionIsOptionalChainTag), so that check must never see a chain taller
 // than the limit.
+//
+// A chain costs the parser no stack, but the passes after it recurse once
+// per link, some of them (the compiler's closure scan, freeing the tree)
+// without a stack check of their own. So, as EnterNesting does past
+// NESTING_UNCHECKED_DEPTH levels, every NESTING_UNCHECKED_DEPTH links the
+// level also checks that NATIVE_STACK_RESERVE of the native stack is left:
+// source parsed at the bottom of a deep native re-entry is refused here.
 procedure TGocciaParser.CountChainLink;
 begin
   Inc(FNestingFrames[FNestingDepth].Links);
   if FNestingFrames[FNestingDepth].ChildHeight +
     FNestingFrames[FNestingDepth].Links + 1 > MAX_TREE_HEIGHT then
     RaiseTreeHeightExceeded;
+  if (FNestingFrames[FNestingDepth].Links mod NESTING_UNCHECKED_DEPTH = 0) and
+    NativeStackNearlyExhausted then
+    RaiseNestingLimitExceeded;
 end;
 
 // The operand of a prefix operator: `!!!x` recurses once per operator.
