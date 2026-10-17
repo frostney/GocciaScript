@@ -23,6 +23,8 @@ type
     procedure TestAddAndRetrieve;
     procedure TestAddOverwritesExistingValue;
     procedure TestAddOverwritePreservesCount;
+    procedure TestTryAddInsertsAbsentKey;
+    procedure TestTryAddLeavesExistingEntryUntouched;
     procedure TestContainsKeyTrue;
     procedure TestContainsKeyFalse;
     procedure TestTryGetValueFound;
@@ -97,6 +99,8 @@ begin
   Test('Add and retrieve a value', TestAddAndRetrieve);
   Test('Add with existing key overwrites value', TestAddOverwritesExistingValue);
   Test('Add overwrite does not change count', TestAddOverwritePreservesCount);
+  Test('TryAdd inserts an absent key', TestTryAddInsertsAbsentKey);
+  Test('TryAdd leaves an existing entry untouched', TestTryAddLeavesExistingEntryUntouched);
   Test('ContainsKey returns True for existing key', TestContainsKeyTrue);
   Test('ContainsKey returns False for missing key', TestContainsKeyFalse);
   Test('TryGetValue returns True and value for existing key', TestTryGetValueFound);
@@ -272,6 +276,41 @@ begin
     Map.Add(5, 99);
     Map.Add(5, 200);
     Expect<Integer>(Map.Count).ToBe(1);
+  finally
+    Map.Free;
+  end;
+end;
+
+procedure TOrderedMapTests.TestTryAddInsertsAbsentKey;
+var
+  Map: TOrderedMap<Integer, string>;
+  V: string;
+begin
+  Map := TOrderedMap<Integer, string>.Create;
+  try
+    Expect<Boolean>(Map.TryAdd(1, 'first')).ToBe(True);
+    Expect<Boolean>(Map.TryGetValue(1, V)).ToBe(True);
+    Expect<string>(V).ToBe('first');
+    Expect<Integer>(Map.Count).ToBe(1);
+  finally
+    Map.Free;
+  end;
+end;
+
+procedure TOrderedMapTests.TestTryAddLeavesExistingEntryUntouched;
+var
+  Map: TOrderedMap<Integer, string>;
+  V: string;
+begin
+  Map := TOrderedMap<Integer, string>.Create;
+  try
+    Map.Add(1, 'first');
+    Map.Add(2, 'second');
+    Expect<Boolean>(Map.TryAdd(1, 'replacement')).ToBe(False);
+    Map.TryGetValue(1, V);
+    Expect<string>(V).ToBe('first');
+    Expect<Integer>(Map.Count).ToBe(2);
+    Expect<Integer>(Map.EntryAt(0).Key).ToBe(1);
   finally
     Map.Free;
   end;

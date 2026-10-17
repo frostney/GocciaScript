@@ -38,3 +38,21 @@ describe.runIf(hasMathClamp)("Math.clamp", () => {
     expect(() => Math.clamp(10, 5, 0)).toThrow(RangeError);
   });
 });
+
+describe.runIf(hasMathClamp && typeof Goccia !== "undefined")("Math.clamp across a collection", () => {
+  // Reuses the memory a wrongly collected number leaves behind.
+  const churn = () => Array.from({ length: 4000 }, (_, i) => i + 0.5);
+  const fresh = (value) => ({ valueOf: () => [value][0] * 1 });
+  const collecting = (value) => ({
+    valueOf() {
+      Goccia.gc();
+      churn();
+      return value;
+    },
+  });
+
+  test("keeps the coerced value and lower while upper's valueOf collects", () => {
+    expect(Math.clamp(fresh(5.5), fresh(0.5), collecting(10))).toBe(5.5);
+    expect(Math.clamp(fresh(-5), fresh(0.5), collecting(10))).toBe(0.5);
+  });
+});

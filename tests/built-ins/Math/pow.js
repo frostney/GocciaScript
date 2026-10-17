@@ -78,3 +78,20 @@ describe("Math.pow", () => {
     expect(Math.pow.length).toBe(2);
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("Math.pow across a collection", () => {
+  // Reuses the memory a wrongly collected number leaves behind.
+  const churn = () => Array.from({ length: 4000 }, (_, i) => i + 0.5);
+
+  test("keeps the coerced base while the exponent's valueOf collects", () => {
+    const base = { valueOf: () => [1, 2].length };
+    const exponent = {
+      valueOf() {
+        Goccia.gc();
+        churn();
+        return 3;
+      },
+    };
+    expect(Math.pow(base, exponent)).toBe(8);
+  });
+});

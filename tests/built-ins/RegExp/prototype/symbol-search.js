@@ -46,3 +46,40 @@ test("Symbol.search returns protocol result index as an observable property", ()
 
   expect(RegExp.prototype[Symbol.search].call(protocol, "abc")).toBe("position");
 });
+
+describe.runIf(typeof Goccia !== "undefined")("Symbol.search across a collection", () => {
+  // Reuses the memory a wrongly collected object leaves behind.
+  const churn = () => Array.from({ length: 2000 }, (_, i) => [i, { i }]);
+
+  test("restores a lastIndex object that only the search still holds", () => {
+    const protocol = {
+      lastIndex: { previous: ["kept"] },
+      exec() {
+        Goccia.gc();
+        churn();
+        return null;
+      },
+    };
+    expect(RegExp.prototype[Symbol.search].call(protocol, "abc")).toBe(-1);
+    expect(protocol.lastIndex.previous[0]).toBe("kept");
+  });
+
+  test("keeps the match result while the lastIndex read collects", () => {
+    let reads = 0;
+    const protocol = {
+      get lastIndex() {
+        reads += 1;
+        if (reads === 2) {
+          Goccia.gc();
+          churn();
+        }
+        return 0;
+      },
+      set lastIndex(value) {},
+      exec() {
+        return { index: [4, 5].length };
+      },
+    };
+    expect(RegExp.prototype[Symbol.search].call(protocol, "abc")).toBe(2);
+  });
+});
