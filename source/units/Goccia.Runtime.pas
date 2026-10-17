@@ -44,6 +44,8 @@ type
     function TryInjectModules(const AFormat: string;
       const AContent: string; const ABaseAddress: string): Boolean; virtual;
     procedure WaitForIdle; virtual;
+    { See TGocciaEngineExtension.HasPendingWork. }
+    function HasPendingWork: Boolean; virtual;
     procedure DiscardPending; virtual;
   end;
 
@@ -89,6 +91,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure WaitForIdle; override;
+    function HasPendingWork: Boolean; override;
     procedure DiscardPending; override;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; override;
@@ -250,6 +253,11 @@ end;
 
 procedure TGocciaRuntimeExtension.WaitForIdle;
 begin
+end;
+
+function TGocciaRuntimeExtension.HasPendingWork: Boolean;
+begin
+  Result := False;
 end;
 
 procedure TGocciaRuntimeExtension.DiscardPending;
@@ -523,6 +531,16 @@ var
 begin
   for I := 0 to FExtensions.Count - 1 do
     FExtensions[I].WaitForIdle;
+end;
+
+function TGocciaRuntimeCore.HasPendingWork: Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].HasPendingWork then
+      Exit(True);
+  Result := False;
 end;
 
 procedure TGocciaRuntimeCore.DiscardPending;

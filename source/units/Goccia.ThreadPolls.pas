@@ -24,6 +24,11 @@
                             function profiler is on, and restored on the way
                             out.
 
+  Collector mirrors the thread's TGarbageCollector.Instance, set and cleared
+  by TGarbageCollector.Initialize and Shutdown, so that a value allocation
+  reaches both the collector and the flags through one lookup. Instance keeps
+  its own thread variable; see TGarbageCollector.Instance for why.
+
   The thread variable is declared in the interface on purpose: other units
   reference it directly, where an accessor function would add a call to the
   lookup (FPC does not inline TGarbageCollector.Instance or CurrentRealm into
@@ -39,6 +44,7 @@ interface
 
 type
   TGocciaThreadPolls = packed record
+    Collector: Pointer;
     case Boolean of
       False: (
         TimeoutArmed: Boolean;

@@ -108,6 +108,8 @@ class C {
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
 
+**Unsettled top-level `await`:** A top-level `await` on a promise that nothing left in the run can settle fails the run with `TypeError: await: Promise did not settle after microtask drain`.
+
 ### Classes
 
 - Class declarations and expressions.
