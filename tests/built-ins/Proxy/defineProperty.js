@@ -120,8 +120,8 @@ describe("Proxy defineProperty trap", () => {
   });
 });
 
-// ES2026 §10.5.6 steps 11-15: targetDesc is a copy of the target's property as
-// step 11 read it, so a target isExtensible trap (step 12) that deletes the
+// ES2026 §10.5.6 steps 10-15: targetDesc is a copy of the target's property as
+// step 10 read it, so a target isExtensible trap (step 11) that deletes the
 // property does not change the checks. Expected values are from Node.js 24.
 describe("Proxy defineProperty reads the target's descriptor once", () => {
   test("a target proxy whose isExtensible trap deletes the property", () => {

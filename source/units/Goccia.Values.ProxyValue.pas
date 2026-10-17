@@ -773,7 +773,7 @@ begin
       TGocciaBooleanLiteralValue.Create(ADescriptor.Configurable));
 end;
 
-// ES2026 §10.5.6 [[DefineOwnProperty]](P, Desc) steps 11-15
+// ES2026 §10.5.6 [[DefineOwnProperty]](P, Desc) steps 10-15
 procedure ValidateProxyDefineTrapResultFor(const APropertyLabel: string;
   const ATarget: TGocciaValue;
   const ADescriptor, ATargetDesc: TGocciaPropertyDescriptor);
@@ -783,16 +783,16 @@ var
   TargetDesc: TGocciaPropertyDescriptor;
   Roots: TGocciaActiveRootFrame;
 begin
-  // Step 11: targetDesc, as a copy (see SnapshotTargetDescriptor).
+  // Step 10: targetDesc, as a copy (see SnapshotTargetDescriptor).
   TargetDesc := SnapshotTargetDescriptor(ATargetDesc);
   Roots.Initialize;
   try
     if Assigned(TargetDesc) then
       TargetDesc.PushRoots(Roots);
 
-    // Step 12: guest code when the target is a proxy with an isExtensible trap.
+    // Step 11: guest code when the target is a proxy with an isExtensible trap.
     ExtensibleTarget := ProxyTargetIsExtensible(ATarget);
-    // Step 13
+    // Steps 12-13
     SettingConfigFalse := ADescriptor.HasConfigurableField and
       not ADescriptor.Configurable;
 
@@ -1600,7 +1600,7 @@ begin
       Args.Free;
     end;
 
-    // Step 7: the trap must return an object or undefined (not null).
+    // Step 8: the trap must return an object or undefined (not null).
     if not (TrapResult is TGocciaUndefinedLiteralValue) and
        not (TrapResult is TGocciaObjectValue) then
       ThrowTypeError(SErrorProxyGetOwnReturnType, SSuggestProxyTrapReturnType);
@@ -1617,7 +1617,7 @@ begin
       Roots.Add(FTarget);
       Roots.Add(TrapResult);
 
-      // Step 8: targetDesc, as a copy (see SnapshotTargetDescriptor).
+      // Step 9: targetDesc, as a copy (see SnapshotTargetDescriptor).
       if FTarget is TGocciaObjectValue then
       begin
         TargetObject := TGocciaObjectValue(FTarget);
@@ -1627,7 +1627,7 @@ begin
           TargetDesc.PushRoots(Roots);
       end;
 
-      // Step 9: cannot hide a non-configurable property.
+      // Step 10: cannot hide a non-configurable property.
       if TrapResult is TGocciaUndefinedLiteralValue then
       begin
         if Assigned(TargetObject) then
@@ -1642,19 +1642,19 @@ begin
         Exit(nil);
       end;
 
-      // Step 10 comes before ToPropertyDescriptor (step 11).
+      // Step 11 comes before ToPropertyDescriptor (step 12).
       ExtensibleTarget := False;
       if Assigned(TargetObject) then
         ExtensibleTarget := ProxyTargetIsExtensible(FTarget);
 
-      // Steps 11-12
+      // Steps 12-13
       TrapDesc := ToPropertyDescriptor(TrapResult, TargetDesc);
       try
         CompletedDesc := CompleteProxyTrapPropertyDescriptor(TrapDesc);
       finally
         TrapDesc.Free;
       end;
-      // Steps 13-15
+      // Steps 14-16
       try
         if Assigned(TargetObject) then
           ValidateProxyGetOwnTrapDescriptor(AName, ExtensibleTarget,
@@ -1706,7 +1706,7 @@ begin
       Args.Free;
     end;
 
-    // Step 7
+    // Step 8
     if not (TrapResult is TGocciaUndefinedLiteralValue) and
        not (TrapResult is TGocciaObjectValue) then
       ThrowTypeError(SErrorProxyGetOwnReturnType, SSuggestProxyTrapReturnType);
@@ -1721,7 +1721,7 @@ begin
       Roots.Add(TrapResult);
       PropertyLabel := ASymbol.ToDisplayString.Value;
 
-      // Step 8
+      // Step 9
       if FTarget is TGocciaObjectValue then
       begin
         TargetObject := TGocciaObjectValue(FTarget);
@@ -1731,7 +1731,7 @@ begin
           TargetDesc.PushRoots(Roots);
       end;
 
-      // Step 9
+      // Step 10
       if TrapResult is TGocciaUndefinedLiteralValue then
       begin
         if Assigned(TargetObject) then
@@ -1746,19 +1746,19 @@ begin
         Exit(nil);
       end;
 
-      // Step 10
+      // Step 11
       ExtensibleTarget := False;
       if Assigned(TargetObject) then
         ExtensibleTarget := ProxyTargetIsExtensible(FTarget);
 
-      // Steps 11-12
+      // Steps 12-13
       TrapDesc := ToPropertyDescriptor(TrapResult, TargetDesc);
       try
         CompletedDesc := CompleteProxyTrapPropertyDescriptor(TrapDesc);
       finally
         TrapDesc.Free;
       end;
-      // Steps 13-15
+      // Steps 14-16
       try
         if Assigned(TargetObject) then
           ValidateProxyGetOwnTrapDescriptor(PropertyLabel, ExtensibleTarget,

@@ -171,9 +171,9 @@ describe("Proxy getOwnPropertyDescriptor trap", () => {
   });
 });
 
-// ES2026 §10.5.5 steps 7-11: the trap result's type is checked before the
+// ES2026 §10.5.5 steps 8-12: the trap result's type is checked before the
 // target is read, IsExtensible(target) runs before ToPropertyDescriptor, and
-// targetDesc is a copy of the target's property as step 8 read it. Guest code
+// targetDesc is a copy of the target's property as step 9 read it. Guest code
 // in either later step that deletes or redefines that property does not change
 // the checks. Expected values are from Node.js 24.
 describe("Proxy getOwnPropertyDescriptor reads the target's descriptor once", () => {
