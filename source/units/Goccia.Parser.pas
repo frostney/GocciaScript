@@ -204,6 +204,9 @@ type
     procedure ConsumeDoWhileSemicolonOrASI(
       const AMessage, ASuggestion: string);
     function CheckSemicolonOrASI: Boolean;
+    function HasLineTerminatorBetween(const ABefore,
+      AAfter: TGocciaToken): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    function HasLineTerminatorBeforePeek: Boolean;
     function IsIdentifierNameToken(
       const ATokenType: TGocciaTokenType): Boolean;
     function IsIdentifierBindingToken(
@@ -1264,6 +1267,24 @@ begin
   raise Error;
 end;
 
+// ES2026 §12.10 Rules of Automatic Semicolon Insertion: a LineTerminator
+// separates two adjacent tokens when the earlier one ends on a line before
+// the one the later one starts on. A token can span lines (a template literal,
+// a string with a LineContinuation); the LineTerminator inside it is part of
+// the token, so the check compares the earlier token's end line with the
+// later token's start line. A multi-line comment between them still counts.
+function TGocciaParser.HasLineTerminatorBetween(const ABefore,
+  AAfter: TGocciaToken): Boolean;
+begin
+  Result := ABefore.Line < AAfter.StartLine;
+end;
+
+// ES2026 §12.10 [no LineTerminator here] between the previous token and Peek
+function TGocciaParser.HasLineTerminatorBeforePeek: Boolean;
+begin
+  Result := HasLineTerminatorBetween(Previous, Peek);
+end;
+
 // ES2026 §12.10 Automatic Semicolon Insertion
 procedure TGocciaParser.ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
 begin
@@ -1286,7 +1307,7 @@ begin
   end;
 
   // ES2026 §12.10 rule 1: newline between previous and current token
-  if Previous.Line < Peek.Line then
+  if HasLineTerminatorBeforePeek then
     Exit;
 
   Consume(gttSemicolon, AMessage, ASuggestion);
@@ -1312,7 +1333,7 @@ begin
     Exit;
   end;
 
-  if (Previous.Line < Peek.Line) or
+  if HasLineTerminatorBeforePeek or
      (Previous.TokenType = gttRightParen) then
     Exit;
 
@@ -1329,7 +1350,7 @@ begin
     Exit(True);
   if not FAutomaticSemicolonInsertion then
     Exit(False);
-  Result := Previous.Line < Peek.Line;
+  Result := HasLineTerminatorBeforePeek;
 end;
 
 // ES2026 §16.2.2.1 Static Semantics: Early Errors for ModuleExportName
@@ -1508,7 +1529,7 @@ begin
   if NextToken.TokenType = gttLeftBracket then
     Exit(True);
 
-  if FAutomaticSemicolonInsertion and (Peek.Line < NextToken.Line) then
+  if FAutomaticSemicolonInsertion and HasLineTerminatorBetween(Peek, NextToken) then
     Exit(False);
 
   Result := IsIdentifierBindingToken(NextToken.TokenType) or
@@ -1536,7 +1557,7 @@ begin
   if NextToken.TokenType in [gttLeftBracket, gttLeftBrace] then
     Exit(True);
 
-  if FAutomaticSemicolonInsertion and (Peek.Line < NextToken.Line) then
+  if FAutomaticSemicolonInsertion and HasLineTerminatorBetween(Peek, NextToken) then
     Exit(False);
 
   Result := IsIdentifierBindingToken(NextToken.TokenType) and
@@ -1596,8 +1617,8 @@ begin
     (UsingToken.Lexeme = KEYWORD_USING) and
     not UsingToken.ContainsEscape and
     IsIdentifierBindingToken(BindingToken.TokenType) and
-    (AwaitToken.Line = UsingToken.Line) and
-    (UsingToken.Line = BindingToken.Line);
+    not HasLineTerminatorBetween(AwaitToken, UsingToken) and
+    not HasLineTerminatorBetween(UsingToken, BindingToken);
 end;
 
 procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
@@ -2005,7 +2026,7 @@ begin
             Peek.Line, Peek.Column, FFileName, FSourceLines);
       end;
     end
-    else if (Previous.Line = Peek.Line) and
+    else if not HasLineTerminatorBeforePeek and
       MatchContextualKeywordWithLexicalGoal(KEYWORD_SATISFIES,
         glgInputElementDiv) then
     begin
@@ -2363,14 +2384,14 @@ begin
           //
           // '!=' and '!==' lex as single tokens (gttLooseNotEqual /
           // gttNotEqual), so a comparison never reaches this branch.
-          if Peek.Line <> Previous.Line then
+          if HasLineTerminatorBeforePeek then
             Break;
 
           Advance;
         end;
       gttIncrement, gttDecrement:
         begin
-          if Peek.Line <> Previous.Line then
+          if HasLineTerminatorBeforePeek then
             Break;
 
           // Postfix increment/decrement (x++, x--)
@@ -2974,7 +2995,7 @@ begin
 
         // async arrow function: async (params) => body
         if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
-           (Token.Line = Peek.Line) and Check(gttLeftParen) then
+           not HasLineTerminatorBetween(Token, Peek) and Check(gttLeftParen) then
         begin
           Advance; // consume '('
           if IsArrowFunction() then
@@ -2994,7 +3015,8 @@ begin
         end
         // async single-param arrow: async x => body
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
-                (Token.Line = PeekWithLexicalGoal(glgInputElementDiv).Line) and
+                not HasLineTerminatorBetween(Token,
+                  PeekWithLexicalGoal(glgInputElementDiv)) and
                 IsIdentifierBindingToken(
                   PeekWithLexicalGoal(glgInputElementDiv).TokenType) and
                 CheckNextWithLexicalGoal(gttArrow, glgInputElementDiv) then
@@ -4798,7 +4820,7 @@ begin
   if Left is TGocciaIdentifierExpression then
   begin
     if CheckWithLexicalGoal(gttArrow, glgInputElementDiv) and
-       (Previous.Line = FTokens[FCurrent].Line) then
+       not HasLineTerminatorBetween(Previous, FTokens[FCurrent]) then
     begin
       Line := TGocciaIdentifierExpression(Left).Line;
       Column := TGocciaIdentifierExpression(Left).Column;
@@ -5147,7 +5169,7 @@ begin
   // 'using(' or 'using.x' is an expression (function call / member access).
   else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
           CheckNextIdentifierBindingWithLexicalGoal(glgInputElementDiv) and
-          (Peek.Line = FTokens[FCurrent + 1].Line) then
+          not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
     Result := UsingStatement
   // TC39 Explicit Resource Management: await using x = expr;
   // Detect only the declaration form here so script labels like `await:`
@@ -5321,7 +5343,7 @@ begin
   // name. Without this, ASI code such as `let x` / newline / `!fn()` would have
   // its leading-'!' expression statement swallowed as an assertion instead of
   // starting a new statement. Mirrors the break/continue label restriction.
-  Result := Check(gttNot) and (Previous.Line = Peek.Line);
+  Result := Check(gttNot) and not HasLineTerminatorBeforePeek;
   if not Result then
     Exit;
 
@@ -5503,16 +5525,16 @@ begin
   Expr := Expression;
 
   if (Expr is TGocciaCallExpression) and Check(gttLeftBrace) and
-     (Previous.Line = Peek.Line) then
+     not HasLineTerminatorBeforePeek then
     raise TGocciaSyntaxError.Create('Method definitions are only valid inside object literals or class bodies',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       'Wrap the method in an object literal or declare a function instead');
-  if Check(gttNumber) and (Previous.Line = Peek.Line) then
+  if Check(gttNumber) and not HasLineTerminatorBeforePeek then
     raise TGocciaSyntaxError.Create('Unexpected numeric literal after expression',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       'Insert an operator or separate the statements with a semicolon');
   if not Check(gttSemicolon) and not Check(gttRightBrace) and
-     not Check(gttEOF) and (Previous.Line = Peek.Line) then
+     not Check(gttEOF) and not HasLineTerminatorBeforePeek then
     raise TGocciaSyntaxError.Create('Expected ";" between expressions',
       Peek.Line, Peek.Column, FFileName, FSourceLines,
       'Insert a semicolon or place the next statement on a new line');
@@ -5851,7 +5873,7 @@ function TGocciaParser.TryConsumeAsyncFunction(
   const AAsyncLine, AAsyncColumn: Integer): TAsyncFunctionCheck;
 begin
   // 'async' and 'function' must be on the same line (no line terminator)
-  if not Check(gttFunction) or (Peek.Line <> AAsyncLine) then
+  if not Check(gttFunction) or HasLineTerminatorBeforePeek then
     Exit(afcNotMatched);
 
   Advance; // consume 'function'
@@ -6068,7 +6090,7 @@ begin
     // `for (using of iterable)` keeps `using` as the assignment target.
     if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
        CheckNextIdentifierBindingWithLexicalGoal(glgInputElementDiv) and
-       (Peek.Line = FTokens[FCurrent + 1].Line) and
+       not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) and
        (FTokens[FCurrent + 1].Lexeme <> KEYWORD_OF) then
     begin
       Advance; // consume 'using'
@@ -6564,7 +6586,7 @@ begin
   end
   else if CheckUnescapedIdentifierKeyword(KEYWORD_USING) and
           CheckNextIdentifierBindingWithLexicalGoal(glgInputElementDiv) and
-          (Peek.Line = FTokens[FCurrent + 1].Line) then
+          not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
   begin
     InitStmt := UsingStatement;
   end
@@ -6817,7 +6839,7 @@ begin
   Column := Previous.Column;
 
   // ES2026 §12.10.1 restricted production: throw [no LineTerminator here] Expression
-  if FAutomaticSemicolonInsertion and (Previous.Line < Peek.Line) then
+  if FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek then
     raise TGocciaSyntaxError.Create('Illegal newline after throw',
       Line, Column, FFileName, FSourceLines,
       'Move the throw expression to the same line as the throw keyword');
@@ -7543,7 +7565,7 @@ begin
       (Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
       (FCurrent + 1 < FTokens.Count) and
       (FTokens[FCurrent + 1].TokenType = gttFunction) and
-      (Peek.Line = FTokens[FCurrent + 1].Line));
+      not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]));
     DefaultValue := Expression;
     DefaultLocalName := GOCCIA_DEFAULT_EXPORT_BINDING;
     if DirectDefaultDeclaration then
@@ -7937,7 +7959,7 @@ begin
       if IsStatic and
          (Check(gttLeftParen) or Check(gttLess) or Check(gttAssign) or
           Check(gttSemicolon) or Check(gttColon) or Check(gttQuestion) or
-          (FAutomaticSemicolonInsertion and (Previous.Line < Peek.Line))) then
+          (FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek)) then
       begin
         IsStatic := False;
         MemberName := KEYWORD_STATIC;
@@ -7966,7 +7988,7 @@ begin
         EnsureToken(FCurrent + 1, glgInputElementRegExp);
       if CheckUnescapedIdentifierKeyword(KEYWORD_ACCESSOR) and
          (FCurrent + 1 < FTokens.Count) and
-         (FTokens[FCurrent + 1].Line = Peek.Line) and
+         not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) and
          not CheckNext(gttLeftParen) and not CheckNext(gttColon) and
          not CheckNext(gttLess) and
          not CheckNext(gttSemicolon) and not CheckNext(gttAssign) then
@@ -8001,14 +8023,14 @@ begin
       end
       else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_GET) and
         CheckNext(gttStar) and (FCurrent + 1 < FTokens.Count) and
-        (FTokens[FCurrent + 1].Line > Peek.Line) then
+        HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
       begin
         MemberName := Advance.Lexeme;
         PresetMemberName := True;
       end
       else if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_SET) and
         CheckNext(gttStar) and (FCurrent + 1 < FTokens.Count) and
-        (FTokens[FCurrent + 1].Line > Peek.Line) then
+        HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
       begin
         MemberName := Advance.Lexeme;
         PresetMemberName := True;
@@ -8769,7 +8791,7 @@ begin
             Dec(QuestionDepth);
           end;
       end;
-      if not NeedsOperand and (Token.Line > Previous.Line) and
+      if not NeedsOperand and HasLineTerminatorBetween(Previous, Token) and
          not ContinuesExpression(Token) then
         Exit;
     end;
@@ -9053,7 +9075,7 @@ begin
       // and so does a break *before* one, which is how TypeScript formats a
       // multi-line union: each member's '|' leads its own line.
       if FAutomaticSemicolonInsertion and (Result <> '') and
-         (Previous.Line < Peek.Line) and Assigned(PreviousTypeToken) and
+         HasLineTerminatorBeforePeek and Assigned(PreviousTypeToken) and
          not TypeOperatorExpectsOperand(PreviousTypeToken) and
          not TypeOperatorContinuesType(Peek) then
         Exit;
@@ -9370,7 +9392,7 @@ var
   // as statements starting with '|'.
   function IsAutomaticSemicolonPoint: Boolean;
   begin
-    Result := FAutomaticSemicolonInsertion and (Previous.Line < Peek.Line) and
+    Result := FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek and
       not (Previous.TokenType in [gttLess, gttComma, gttAssign]) and
       not TypeOperatorExpectsOperand(Previous) and
       not (Peek.TokenType in [gttGreater, gttRightShift,
@@ -10121,7 +10143,7 @@ begin
   TargetLabel := '';
 
   if FLabelStatementsEnabled and Check(gttIdentifier) and
-     (Previous.Line = Peek.Line) then
+     not HasLineTerminatorBeforePeek then
   begin
     TargetLabel := Advance.Lexeme;
     if FActiveLabels.IndexOf(TargetLabel) < 0 then
@@ -10145,7 +10167,7 @@ begin
   TargetLabel := '';
 
   if FLabelStatementsEnabled and Check(gttIdentifier) and
-     (Previous.Line = Peek.Line) then
+     not HasLineTerminatorBeforePeek then
   begin
     TargetLabel := Advance.Lexeme;
     if FActiveLabels.IndexOf(TargetLabel) < 0 then

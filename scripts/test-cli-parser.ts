@@ -496,6 +496,32 @@ console.log("ASI after do...while...");
     throw new Error(`Expected do...while newline ASI output after, got: ${newline.json.output}`);
 }
 
+// -- ASI and line breaks inside a token ---------------------------------------
+
+console.log("ASI and line breaks inside a token...");
+{
+  // ES2026 §12.10 rule 1 needs a LineTerminator between the offending token
+  // and the one before it. A string's LineContinuation is inside the token,
+  // so a string that starts on the same line is still an offending token.
+  assertSyntaxError(
+    'const a = 1 "x\\\ny";\n',
+    "string with a line continuation after an expression on its line",
+    ["--compat-asi"],
+  );
+
+  const separated = runLoaderJson('const a = 1\n"x\\\ny";\nconsole.log(a);\n', ["--compat-asi"]);
+  if (separated.exitCode !== 0 || separated.json.ok !== true)
+    throw new Error(`A string on the next line should end the statement by ASI, got: ${JSON.stringify(separated.json)}`);
+  if (normalizeLineEndings(separated.json.output) !== "1\n")
+    throw new Error(`Expected ASI before a string on the next line to print 1, got: ${separated.json.output}`);
+
+  // `throw` followed on its own line by a template that spans lines throws the
+  // template; the error points at the throw statement, not at a line break.
+  const thrown = runLoaderJson("throw `a\nb`;\n", ["--compat-asi"]);
+  if (thrown.exitCode !== 1 || thrown.json.ok !== false || thrown.json.error?.type === "SyntaxError")
+    throw new Error(`throw with a multi-line template should throw the template, got: ${JSON.stringify(thrown.json)}`);
+}
+
 // -- Unsupported/default-disabled syntax errors by default ----------------------
 
 console.log("Unsupported/default-disabled syntax errors by default...");
