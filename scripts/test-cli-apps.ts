@@ -658,6 +658,19 @@ await section("Loader: --print and --output=json convert the last value before i
   const dateJson = await runLoaderJsonAsync("new Date(0);\n");
   if (dateJson.exitCode !== 0 || dateJson.json.files?.[0]?.result !== "1970-01-01T00:00:00.000Z")
     throw new Error(`--output=json of a Date should report its ISO string, got (exit ${dateJson.exitCode}) ${JSON.stringify(dateJson.json.files?.[0]?.result)}\n${dateJson.stderr}`);
+
+  // Parallel workers print no value, so they do not convert one either: a
+  // toString that throws does not fail a --jobs run.
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "a.js"), '({ toString() { throw new Error("boom"); } });\n');
+    writeFileSync(join(tmp, "b.js"), "1;\n");
+    const proc = Bun.spawnSync([RUNNER, tmp, "--jobs=2", "--print"], { stdout: "pipe", stderr: "pipe" });
+    if (proc.exitCode !== 0)
+      throw new Error(`--jobs=2 --print should not convert values it does not print, got exit ${proc.exitCode}:\n${proc.stdout.toString()}${proc.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
 });
 
 await section("Loader: --print honored from goccia.json...", async () => {

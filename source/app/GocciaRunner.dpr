@@ -904,7 +904,7 @@ begin
 end;
 
 { Converts the run's last value for what will read it (--print, or the JSON
-  report) while its engine is still alive: the conversion can call the
+  report), and only then, while its engine is still alive: the conversion can call the
   value's own toString, valueOf or toJSON and the realm's built-ins, which
   must not run against a freed engine. The caller runs this inside the run's
   timeout and instruction limit, so a conversion that does not end is cut
@@ -919,7 +919,9 @@ begin
   try
     if IsJsonOutput then
       AReport.ResultJSON := SerializeScriptResult(AValue)
-    else if FPrint.Present and Assigned(AValue) then
+    { A parallel worker's human-readable report is not printed
+      (PrintHumanReadableResult), so neither is its value. }
+    else if FPrint.Present and not GIsWorkerThread and Assigned(AValue) then
     begin
       AReport.ResultText := AValue.ToStringLiteral.Value;
       AReport.HasResultText := True;
