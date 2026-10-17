@@ -1616,10 +1616,20 @@ end;
 
 function TGocciaDeferredModuleNamespaceObject.TryDefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Namespace: TGocciaObjectValue;
 begin
   if AName = PROP_THEN then
     Exit(inherited TryDefineProperty(AName, ADescriptor));
-  Result := EnsureNamespaceObject.TryDefineProperty(AName, ADescriptor);
+  // The call takes ownership of ADescriptor, so it is freed here when the
+  // module's evaluation error stops the call before it reaches the namespace.
+  try
+    Namespace := EnsureNamespaceObject;
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+  Result := Namespace.TryDefineProperty(AName, ADescriptor);
 end;
 
 function TGocciaDeferredModuleNamespaceObject.DeleteProperty(

@@ -92,6 +92,15 @@ describe("Date constructor", () => {
     expect(Number.isNaN(new Date(NaN).getTime())).toBe(true);
   });
 
+  test("a local time at the edge of the time value range clips instead of throwing", () => {
+    // 275760-09-13T00:00 local lies past the last valid instant in zones
+    // west of UTC, where TimeClip(UTC(finalDate)) must give NaN.
+    const value = new Date(275760, 8, 13).getTime();
+    expect(Number.isNaN(value) || Math.abs(value) <= 8.64e15).toBe(true);
+    expect(Number.isNaN(new Date(275760, 8, 14).getTime())).toBe(true);
+    expect(Number.isNaN(new Date(-271821, 3, 19).getTime())).toBe(true);
+  });
+
   test("year 0-99 maps to 1900-1999", () => {
     const d = new Date(95, 0, 1, 0, 0, 0, 0);
     expect(d.getFullYear()).toBe(1995);

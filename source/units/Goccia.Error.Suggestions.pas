@@ -384,6 +384,9 @@ resourcestring
   SSuggestMemoryLimitExceeded = 'call Goccia.gc() to free unreachable objects, or increase the limit with --max-memory';
   SSuggestStackMemoryLimitExceeded = 'the call stack reached the memory limit; bound the recursion, or increase the limit with --max-memory';
 
+  // Syntax errors — nesting limit
+  SSuggestNestingLimitExceeded = 'Move deeply nested parts, or part of a long operator or call chain, into separate variables or functions';
+
   // Runtime errors — structuredClone
   SSuggestStructuredClone = 'only plain objects, arrays, primitives, and built-in types can be cloned';
 

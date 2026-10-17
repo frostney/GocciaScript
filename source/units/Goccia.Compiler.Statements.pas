@@ -911,6 +911,7 @@ var
   ProbeEndJumps: array of Integer;
   Probes: TArray<string>;
   ProbeEndCount: Integer;
+  PatternCtx: TGocciaCompilationContext;
 begin
   PrepareLexicalDeclarationLocals(ACtx, AStmt);
 
@@ -935,18 +936,22 @@ begin
       if IsTopLevelGlobalBacked and AStmt.IsVar then
         EmitGlobalDefinesForPattern(ACtx, Info.Pattern, False, True, False);
 
+      // A global-backed lexical pattern defines each global binding as its
+      // element completes (EmitGlobalLexicalPatternDefine).
+      PatternCtx := ACtx;
+      if IsTopLevelGlobalBacked and not AStmt.IsVar then
+      begin
+        PatternCtx.GlobalLexicalPatternScope := ACtx.Scope;
+        PatternCtx.GlobalLexicalPatternIsConst := AStmt.IsConst;
+      end;
       InitSlot := ACtx.Scope.AllocateRegister;
       try
         ACtx.CompileExpression(Info.Initializer, InitSlot);
-        EmitDestructuring(ACtx, Info.Pattern, InitSlot,
+        EmitDestructuring(PatternCtx, Info.Pattern, InitSlot,
           IsTopLevelGlobalBacked and AStmt.IsVar);
       finally
         ACtx.Scope.FreeRegister;
       end;
-
-      if IsTopLevelGlobalBacked and not AStmt.IsVar then
-        EmitGlobalDefinesForPattern(ACtx, Info.Pattern, AStmt.IsConst,
-          False, True);
       Continue;
     end;
 
@@ -7699,6 +7704,7 @@ procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
 var
   SrcReg: UInt16;
   IsTopLevelGlobalBacked: Boolean;
+  PatternCtx: TGocciaCompilationContext;
 begin
   IsTopLevelGlobalBacked := TopLevelBindingIsGlobalBacked(ACtx, AStmt.IsVar);
 
@@ -7710,18 +7716,19 @@ begin
   if IsTopLevelGlobalBacked and AStmt.IsVar then
     EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False, True, False);
 
+  // A global-backed lexical pattern defines each global binding as its
+  // element completes (EmitGlobalLexicalPatternDefine).
+  PatternCtx := ACtx;
+  if IsTopLevelGlobalBacked and not AStmt.IsVar then
+  begin
+    PatternCtx.GlobalLexicalPatternScope := ACtx.Scope;
+    PatternCtx.GlobalLexicalPatternIsConst := AStmt.IsConst;
+  end;
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
-  EmitDestructuring(ACtx, AStmt.Pattern, SrcReg,
+  EmitDestructuring(PatternCtx, AStmt.Pattern, SrcReg,
     IsTopLevelGlobalBacked and AStmt.IsVar);
   ACtx.Scope.FreeRegister;
-
-  if IsTopLevelGlobalBacked then
-  begin
-    if not AStmt.IsVar then
-      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, AStmt.IsConst,
-        False, True);
-  end;
 end;
 
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
