@@ -7262,7 +7262,11 @@ begin
   begin
     Advance;
     SetLength(Result, Length(Result) + 1);
+    // Each decorator is a tree of its own: its chain links must not add up
+    // with those of the decorators beside it (see LeaveNesting).
+    EnterNesting;
     Result[High(Result)] := ParseDecoratorExpression;
+    LeaveNesting;
   end;
 end;
 

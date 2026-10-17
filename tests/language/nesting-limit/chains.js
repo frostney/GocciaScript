@@ -54,6 +54,16 @@ describe("chain length limit", () => {
     expectHeightError(`const o = () => o; o.o = o; typeof o${".o".repeat(300000)}\`x\``);
   });
 
+  test("a list of decorators does not add up to one chain", () => {
+    // Each decorator is its own tree, like the elements of an array.
+    const decorated = (count) =>
+      `const d = { f: (value) => value }; ${"@d.f ".repeat(count)}class C {} typeof C`;
+    expect(realm.evaluate(decorated(5000))).toBe("function");
+    const members = (count) =>
+      `const d = { f: (value) => value }; class C { ${"@d.f ".repeat(count)}m() {} } typeof C`;
+    expect(realm.evaluate(members(5000))).toBe("function");
+  });
+
   test("a chain of 2,000 method calls evaluates", () => {
     // The shape of regenerate's Unicode tables, which Babel bundles: a call
     // is two links, the member access and the call.
