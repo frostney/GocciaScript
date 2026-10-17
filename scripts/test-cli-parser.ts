@@ -1322,9 +1322,12 @@ console.log("Nesting limit...");
   // recursion: matching recurses once per nested lookaround, and running out
   // of stack there is the call stack's RangeError, not a SyntaxError (the
   // pattern is valid) or a plain Error (as the step and backtrack limits
-  // are). Each case reaches the VM through a different entry point.
+  // are). Each case reaches the VM through a different entry point. The
+  // trailing `a` makes the match consume a character: the lookarounds alone
+  // match the empty string, and whether a case matches or runs out of stack
+  // depends on how much native stack the platform leaves at the bottom.
   const lowStackMatch = (flags: string, expression: string): string =>
-    `const re = new RegExp("(?=".repeat(1000) + "a" + ")".repeat(1000), "${flags}");\n` +
+    `const re = new RegExp("(?=".repeat(1000) + "a" + ")".repeat(1000) + "a", "${flags}");\n` +
     lowStack(expression);
   const lowStackMatchCases: Array<[string, string, string, string]> = [
     ["RegExp.prototype.test", "", `re.test("a")`, "true"],
