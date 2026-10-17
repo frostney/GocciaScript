@@ -165,8 +165,8 @@ type
       const ARecursive: Boolean = False);
     procedure Touch(const APath: string);
 
-    { Marks APath and everything under it read-only, whether or not it
-      exists yet. Writing, truncating, creating, touching, deleting, moving
+    { Marks APath (not empty) and everything under it read-only, whether or
+      not it exists yet. Writing, truncating, creating, touching, deleting, moving
       or copying at or under it raises ESandboxFsReadOnly, and so does
       deleting or moving a directory that holds it. Reads are unaffected.
       Marks cannot be removed; forks keep them. }
@@ -675,6 +675,8 @@ begin
       [ACanonicalPath]);
 end;
 
+{ For a path whose whole subtree changes: deleted, moved away, or replaced
+  by a moved or copied tree. }
 procedure TSandboxVirtualFileSystem.EnsureRemovable(
   const ACanonicalPath: string);
 begin
@@ -688,6 +690,9 @@ procedure TSandboxVirtualFileSystem.AddReadOnlyPath(const APath: string);
 var
   Canonical: string;
 begin
+  { Normalize would read '' as the root and mark everything. }
+  if APath = '' then
+    raise ESandboxFsInvalidPath.Create('read-only path is empty');
   Canonical := Normalize(APath);
   if IsReadOnlyCanonical(Canonical) then
     Exit;
@@ -961,7 +966,9 @@ begin
     raise ESandboxFsInvalidPath.CreateFmt(
       '%s: cannot move a directory into itself',
       [SourceNode.FullPath]);
-  EnsureWritable(ChildPath(DestParent, LeafName));
+  { The moved tree lands at the destination and below it, so a read-only
+    path below a destination that does not exist yet refuses it too. }
+  EnsureRemovable(ChildPath(DestParent, LeafName));
 
   if Assigned(DestNode) then
   begin
@@ -1071,7 +1078,7 @@ begin
     raise ESandboxFsInvalidPath.CreateFmt(
       '%s: cannot copy a directory into itself',
       [SourceNode.FullPath]);
-  EnsureWritable(ChildPath(DestParent, LeafName));
+  EnsureRemovable(ChildPath(DestParent, LeafName));
 
   ReplacedBytes := 0;
   ReplacedNodes := 0;

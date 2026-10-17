@@ -58,6 +58,7 @@ type
     procedure ProbeMove;
     procedure ProbeCopy;
     procedure ProbeCopyRecursive;
+    procedure ProbeAddReadOnlyPath;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -499,6 +500,11 @@ begin
   FFs.CopyPath(FProbePath, FProbeOther, True);
 end;
 
+procedure TTestSandboxVirtualFileSystem.ProbeAddReadOnlyPath;
+begin
+  FFs.AddReadOnlyPath(FProbePath);
+end;
+
 procedure TTestSandboxVirtualFileSystem.TestReadOnlyPathsRefuseFileWrites;
 const
   PATHS: array[0..4] of string = ('/data/a.txt', '/data/sub/b.txt',
@@ -671,6 +677,25 @@ begin
   ExpectReadOnly(ProbeWriteAllText, '/later');
   FFs.MakeDirectory('/lat');
   Expect<Boolean>(FFs.Exists('/later')).ToBe(False);
+
+  { A tree moved or copied to a missing ancestor of a mark would create
+    entries under it. }
+  FFs.AddReadOnlyPath('/up/deep/mark');
+  FFs.MakeDirectory('/up');
+  FFs.MakeDirectory('/tree/mark', True);
+  FFs.WriteAllText('/tree/mark/f.txt', 'f');
+  ExpectReadOnly(ProbeMove, '/tree', '/up/deep', '/up/deep');
+  ExpectReadOnly(ProbeCopyRecursive, '/tree', '/up/deep', '/up/deep');
+  Expect<Boolean>(FFs.Exists('/up/deep')).ToBe(False);
+  Expect<Boolean>(FFs.Exists('/tree/mark/f.txt')).ToBe(True);
+  { Next to the mark is still writable. }
+  FFs.MovePath('/tree', '/up/other');
+  Expect<Boolean>(FFs.Exists('/up/other/mark/f.txt')).ToBe(True);
+
+  { An empty path would normalize to the root. }
+  Expect<string>(ProbeError(ProbeAddReadOnlyPath, '')).ToBe(
+    'ESandboxFsInvalidPath: read-only path is empty');
+  Expect<Boolean>(FFs.IsReadOnly('/lat')).ToBe(False);
 
   { Marking the root makes everything read-only. }
   RootFs := TSandboxVirtualFileSystem.Create(0, FClock);
