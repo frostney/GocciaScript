@@ -13,8 +13,11 @@
     - Fork - deep-clone the whole tree for run-and-discard execution
       (copy-on-write is the optimisation path once the semantics are
       proven; a deep copy keeps the baseline semantics simple)
+    - read-only paths (AddReadOnlyPath): subtrees an embedder marks so
+      that every mutation in them raises ESandboxFsReadOnly, the way a
+      read-only mount refuses writes
 
-  Deliberately unsupported: symlinks, permissions,
+  Deliberately unsupported: symlinks, per-file permissions,
   hard links, thread safety, POSIX unlink-while-open (deleting an
   open file raises ESandboxFsBusy instead). }
 
@@ -64,6 +67,8 @@ type
   ESandboxFsNotEmpty = class(ESandboxFsError);
   ESandboxFsBusy = class(ESandboxFsError);
   ESandboxFsQuotaExceeded = class(ESandboxFsError);
+  { A mutation at or under a read-only path (AddReadOnlyPath). }
+  ESandboxFsReadOnly = class(ESandboxFsError);
 
   TSandboxFsNode = class
   private
@@ -104,6 +109,7 @@ type
     FNodeCount: Integer;
     FClock: TSandboxFsClock;
     FRootClampCallback: TSandboxRootClampCallback;
+    FReadOnlyPaths: TStringArray;
     constructor CreateFork(const ASource: TSandboxVirtualFileSystem);
     function CurrentTime: TDateTime;
     function LookupNode(const ACanonicalPath: string): TSandboxFsNode;
@@ -126,6 +132,10 @@ type
     procedure GrowFile(const ANode: TSandboxFsNode; const ANewSize: Int64);
     procedure ValidateLeafName(const AName: string);
     function CreateFileNode(const ACanonicalPath: string): TSandboxFsNode;
+    function IsReadOnlyCanonical(const ACanonicalPath: string): Boolean;
+    function HoldsReadOnlyCanonical(const ACanonicalPath: string): Boolean;
+    procedure EnsureWritable(const ACanonicalPath: string);
+    procedure EnsureRemovable(const ACanonicalPath: string);
   public
     constructor Create(const AQuotaBytes: Int64;
       const ANodeQuota: Integer; const AClock: TSandboxFsClock = nil); overload;
@@ -154,6 +164,15 @@ type
     procedure CopyPath(const ASource, ADestination: string;
       const ARecursive: Boolean = False);
     procedure Touch(const APath: string);
+
+    { Marks APath and everything under it read-only, whether or not it
+      exists yet. Writing, truncating, creating, touching, deleting, moving
+      or copying at or under it raises ESandboxFsReadOnly, and so does
+      deleting or moving a directory that holds it. Reads are unaffected.
+      Marks cannot be removed; forks keep them. }
+    procedure AddReadOnlyPath(const APath: string);
+    { Whether APath is at or under a read-only path. }
+    function IsReadOnly(const APath: string): Boolean;
 
     procedure WriteAllBytes(const APath: string; const AData: TBytes);
     procedure WriteAllText(const APath: string; const AText: string);
@@ -289,6 +308,16 @@ begin
     end;
 end;
 
+{ The canonical path of the entry ALeafName in the directory AParent. }
+function ChildPath(const AParent: TSandboxFsNode;
+  const ALeafName: string): string;
+begin
+  if AParent.FParent = nil then
+    Result := PathSeparator + ALeafName
+  else
+    Result := AParent.FullPath + PathSeparator + ALeafName;
+end;
+
 { TSandboxFsNode }
 
 constructor TSandboxFsNode.Create(const AName: string;
@@ -394,6 +423,7 @@ begin
   FNodeQuota := ASource.FNodeQuota;
   FUsedBytes := ASource.FUsedBytes;
   FNodeCount := ASource.FNodeCount;
+  FReadOnlyPaths := Copy(ASource.FReadOnlyPaths);
 end;
 
 function TSandboxVirtualFileSystem.CurrentTime: TDateTime;
@@ -608,6 +638,68 @@ begin
   ANode.FSize := ANewSize;
 end;
 
+function TSandboxVirtualFileSystem.IsReadOnlyCanonical(
+  const ACanonicalPath: string): Boolean;
+var
+  ReadOnlyPath: string;
+begin
+  for ReadOnlyPath in FReadOnlyPaths do
+    if (ReadOnlyPath = PathSeparator) or (ACanonicalPath = ReadOnlyPath) or
+      (Copy(ACanonicalPath, 1, Length(ReadOnlyPath) + 1) =
+        ReadOnlyPath + PathSeparator) then
+      Exit(True);
+  Result := False;
+end;
+
+{ Whether a read-only path lies strictly below ACanonicalPath, so that
+  deleting or moving ACanonicalPath would take it along. }
+function TSandboxVirtualFileSystem.HoldsReadOnlyCanonical(
+  const ACanonicalPath: string): Boolean;
+var
+  ReadOnlyPath: string;
+begin
+  for ReadOnlyPath in FReadOnlyPaths do
+    if (ReadOnlyPath <> ACanonicalPath) and
+      ((ACanonicalPath = PathSeparator) or
+       (Copy(ReadOnlyPath, 1, Length(ACanonicalPath) + 1) =
+         ACanonicalPath + PathSeparator)) then
+      Exit(True);
+  Result := False;
+end;
+
+procedure TSandboxVirtualFileSystem.EnsureWritable(
+  const ACanonicalPath: string);
+begin
+  if IsReadOnlyCanonical(ACanonicalPath) then
+    raise ESandboxFsReadOnly.CreateFmt('%s: read-only file system',
+      [ACanonicalPath]);
+end;
+
+procedure TSandboxVirtualFileSystem.EnsureRemovable(
+  const ACanonicalPath: string);
+begin
+  if IsReadOnlyCanonical(ACanonicalPath) or
+    HoldsReadOnlyCanonical(ACanonicalPath) then
+    raise ESandboxFsReadOnly.CreateFmt('%s: read-only file system',
+      [ACanonicalPath]);
+end;
+
+procedure TSandboxVirtualFileSystem.AddReadOnlyPath(const APath: string);
+var
+  Canonical: string;
+begin
+  Canonical := Normalize(APath);
+  if IsReadOnlyCanonical(Canonical) then
+    Exit;
+  SetLength(FReadOnlyPaths, Length(FReadOnlyPaths) + 1);
+  FReadOnlyPaths[High(FReadOnlyPaths)] := Canonical;
+end;
+
+function TSandboxVirtualFileSystem.IsReadOnly(const APath: string): Boolean;
+begin
+  Result := IsReadOnlyCanonical(Normalize(APath));
+end;
+
 function TSandboxVirtualFileSystem.CreateFileNode(
   const ACanonicalPath: string): TSandboxFsNode;
 var
@@ -615,6 +707,7 @@ var
   LeafName: string;
   Time: TDateTime;
 begin
+  EnsureWritable(ACanonicalPath);
   EnsureNodeGrowth(1);
   Parent := ResolveParent(ACanonicalPath, LeafName);
   ValidateLeafName(LeafName);
@@ -719,6 +812,10 @@ begin
     end;
     Current := Next;
   end;
+  { A path under a read-only one is read-only too, so checking the deepest
+    path checks every directory this call would create. }
+  if MissingCount > 0 then
+    EnsureWritable(Canonical);
   EnsureNodeGrowth(MissingCount);
 
   Current := FRoot;
@@ -812,6 +909,7 @@ begin
   Node := RequireNode(APath);
   if Node = FRoot then
     raise ESandboxFsInvalidPath.Create('/: cannot delete the root');
+  EnsureRemovable(Node.FullPath);
   if (Node.FKind = nkDirectory) and (Node.FChildren.Count > 0) and
     not ARecursive then
     raise ESandboxFsNotEmpty.CreateFmt('%s: directory not empty',
@@ -838,6 +936,7 @@ begin
   SourceNode := RequireNode(ASource);
   if SourceNode = FRoot then
     raise ESandboxFsInvalidPath.Create('/: cannot move the root');
+  EnsureRemovable(SourceNode.FullPath);
   if SubtreeHasOpenHandles(SourceNode) then
     raise ESandboxFsBusy.CreateFmt('%s: resource busy (open handle)',
       [SourceNode.FullPath]);
@@ -862,6 +961,7 @@ begin
     raise ESandboxFsInvalidPath.CreateFmt(
       '%s: cannot move a directory into itself',
       [SourceNode.FullPath]);
+  EnsureWritable(ChildPath(DestParent, LeafName));
 
   if Assigned(DestNode) then
   begin
@@ -971,6 +1071,7 @@ begin
     raise ESandboxFsInvalidPath.CreateFmt(
       '%s: cannot copy a directory into itself',
       [SourceNode.FullPath]);
+  EnsureWritable(ChildPath(DestParent, LeafName));
 
   ReplacedBytes := 0;
   ReplacedNodes := 0;
@@ -1010,6 +1111,7 @@ begin
   Node := LookupNode(Canonical);
   if Assigned(Node) then
   begin
+    EnsureWritable(Canonical);
     Time := CurrentTime;
     Node.FAccessedAt := Time;
     Node.FModifiedAt := Time;
@@ -1125,6 +1227,8 @@ begin
   if Assigned(Node) and (Node.FKind = nkDirectory) then
     raise ESandboxFsIsADirectory.CreateFmt('%s: is a directory',
       [Canonical]);
+  if AMode <> omRead then
+    EnsureWritable(Canonical);
 
   if Node = nil then
   begin
@@ -1217,6 +1321,9 @@ begin
       [FNode.FullPath]);
   if ACount <= 0 then
     Exit(0);
+  { A handle opened before its path was marked read-only. }
+  if Length(FFs.FReadOnlyPaths) > 0 then
+    FFs.EnsureWritable(FNode.FullPath);
   if FMode = omAppend then
     FPosition := FNode.FSize;
   if FPosition + ACount > FNode.FSize then
@@ -1252,6 +1359,8 @@ begin
       [FNode.FullPath]);
   if ASize < 0 then
     raise ESandboxFsError.Create('truncate to a negative size');
+  if Length(FFs.FReadOnlyPaths) > 0 then
+    FFs.EnsureWritable(FNode.FullPath);
   if ASize > FNode.FSize then
     FFs.GrowFile(FNode, ASize)
   else

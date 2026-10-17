@@ -495,6 +495,7 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--allow-ffi` or `"allow-ffi"` in a config file's `permissions` block |
+| `TGocciaSandboxRuntimeExtension` | the import-only `"fs"` and `"goccia"` [sandbox modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas) over a `TGocciaSandboxContext`'s virtual filesystem | GocciaRunner's sandbox mode installs it; see [Sandbox filesystem](#sandbox-filesystem) |
 
 When embedding, grant `ffi` in the engine's capability set and call `InstallFFIIfGranted(Runtime)`; the extension refuses to attach without the grant, and `FFI.open` checks each library path against the `ffi` scopes.
 
@@ -512,6 +513,19 @@ end;
 ```
 
 Runtime globals and runtime modules can be reduced by installing only concrete extensions, for example `Runtime.Install(TGocciaConsoleRuntimeExtension.Create)`. An extension with host work of its own (a request, a timer, a callback from another thread) settles it in `WaitForIdle`, which the engine calls when a run has nothing else to do. A job the engine drains afterwards can start more of that work, so the engine repeats its round while any extension's `HasPendingWork` returns True ([ADR 0142](adr/0142-the-run-waits-until-no-extension-has-pending-work.md)). Return True only when `WaitForIdle` will block on that work or make progress on it; a True it does nothing about spins the engine thread. An extension that does not override `HasPendingWork` gets a single pass, so work a late job starts is not waited for. A wait inside `WaitForIdle` should call `CheckExecutionTimeoutNow` and `CheckInstructionLimit` between polls, so the run deadline and a host stop end it.
+
+#### Sandbox filesystem
+
+A script that imports `"fs"` under `TGocciaSandboxRuntimeExtension` sees only the context's in-memory `TSandboxVirtualFileSystem` (`Context.Fs`), which the embedder fills before the run. `Fs.AddReadOnlyPath(Path)` makes a path and everything under it read-only, whether or not it exists yet: every write from the script there, through any `fs` form or the `$` shell, fails at the call with an `Error` whose `code` is `"EROFS"` ([Sandbox filesystem errors](errors.md#sandbox-filesystem-errors)), and so does deleting or moving a directory that holds it. Reads are unaffected. Mark paths after filling them, because the marks refuse the embedder's own writes too; `Fs.IsReadOnly(Path)` reports whether a path is covered. [ADR 0144](adr/0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md) has the details.
+
+```pascal
+Context := TGocciaSandboxContext.Create;
+Context.Fs.MakeDirectory('/data', True);
+Context.Fs.WriteAllText('/data/input.json', InputJson);
+Context.Fs.MakeDirectory('/out');
+Context.Fs.AddReadOnlyPath('/data');
+Runtime.Install(TGocciaSandboxRuntimeExtension.Create(Context));
+```
 
 ### Preprocessors and Compatibility
 

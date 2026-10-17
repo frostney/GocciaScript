@@ -199,6 +199,7 @@ than claiming that the sandbox performed an operating-system call.
 | Directory is not empty | `ENOTEMPTY` | `directory not empty` |
 | File or directory is busy | `EBUSY` | `resource busy or locked` |
 | Sandbox byte quota exceeded | `ENOSPC` | `no space left on device` |
+| Write to a path the embedder marked read-only ([ADR 0144](adr/0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md)) | `EROFS` | `read-only file system` |
 | Unexpected unclassified filesystem failure (internal fallback) | `EIO` | `i/o error` |
 
 Messages follow Node's system-error wording:

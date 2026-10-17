@@ -22,8 +22,12 @@ type
     property Value: TDateTime read FValue write FValue;
   end;
 
+  TSandboxFsProbe = procedure of object;
+
   TTestSandboxVirtualFileSystem = class(TTestSuite)
   private
+    FProbePath: string;
+    FProbeOther: string;
     FClock: TDeterministicSandboxClock;
     FFs: TSandboxVirtualFileSystem;
     FClampCount: Integer;
@@ -34,6 +38,26 @@ type
     procedure ExpectTime(const AActual, AExpected: TDateTime);
     procedure HandleRootClamp(const APath, ABase,
       ACanonicalPath: string);
+    procedure PopulateReadOnlyTree;
+    function ProbeError(const AProbe: TSandboxFsProbe;
+      const APath: string; const AOther: string = ''): string;
+    procedure ExpectReadOnly(const AProbe: TSandboxFsProbe;
+      const APath: string; const AOther: string = '';
+      const AReportedPath: string = '');
+    procedure ProbeWriteAllBytes;
+    procedure ProbeWriteAllText;
+    procedure ProbeAppendAllText;
+    procedure ProbeOpenWrite;
+    procedure ProbeOpenReadWrite;
+    procedure ProbeOpenAppend;
+    procedure ProbeMakeDirectory;
+    procedure ProbeMakeDirectoryRecursive;
+    procedure ProbeTouch;
+    procedure ProbeDelete;
+    procedure ProbeDeleteRecursive;
+    procedure ProbeMove;
+    procedure ProbeCopy;
+    procedure ProbeCopyRecursive;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -49,6 +73,13 @@ type
     procedure TestDefaultQuotasAreBounded;
     procedure TestNodeQuotaRejectsAtomically;
     procedure TestRootClampCallback;
+    procedure TestReadOnlyPathsRefuseFileWrites;
+    procedure TestReadOnlyPathsRefuseCreatingAndTouching;
+    procedure TestReadOnlyPathsRefuseDeleting;
+    procedure TestReadOnlyPathsRefuseMovingAndCopying;
+    procedure TestReadOnlyPathsLeaveReadsAndOtherPaths;
+    procedure TestReadOnlyPathsCoverPathsNotYetCreated;
+    procedure TestReadOnlyPathsReachOpenHandlesAndForks;
   end;
 
 function TDeterministicSandboxClock.Now: TDateTime;
@@ -75,6 +106,20 @@ begin
   Test('Node quota rejects atomically', TestNodeQuotaRejectsAtomically);
   Test('Root clamp callback reports one attempted escape',
     TestRootClampCallback);
+  Test('Read-only paths refuse writes to existing and new files',
+    TestReadOnlyPathsRefuseFileWrites);
+  Test('Read-only paths refuse creating directories and touching',
+    TestReadOnlyPathsRefuseCreatingAndTouching);
+  Test('Read-only paths refuse deleting them, what they hold, and ' +
+    'their holders', TestReadOnlyPathsRefuseDeleting);
+  Test('Read-only paths refuse moving and copying at or into them',
+    TestReadOnlyPathsRefuseMovingAndCopying);
+  Test('Read-only paths leave reads and other paths alone',
+    TestReadOnlyPathsLeaveReadsAndOtherPaths);
+  Test('Read-only paths cover paths not created yet',
+    TestReadOnlyPathsCoverPathsNotYetCreated);
+  Test('Read-only paths reach open handles and forks',
+    TestReadOnlyPathsReachOpenHandlesAndForks);
 end;
 
 procedure TTestSandboxVirtualFileSystem.BeforeEach;
@@ -336,6 +381,374 @@ begin
   Expect<string>(FLastClampPath).ToBe('../../secret.txt');
   Expect<string>(FLastClampBase).ToBe('/work');
   Expect<string>(FLastCanonicalPath).ToBe('/secret.txt');
+end;
+
+{ /data is read-only and holds a.txt and sub/b.txt; /work and /database.txt
+  (which shares /data's prefix) stay writable, and /outer/inner, read-only,
+  lies inside the writable /outer. }
+procedure TTestSandboxVirtualFileSystem.PopulateReadOnlyTree;
+begin
+  FFs.MakeDirectory('/data/sub', True);
+  FFs.WriteAllText('/data/a.txt', 'a');
+  FFs.WriteAllText('/data/sub/b.txt', 'b');
+  FFs.MakeDirectory('/work');
+  FFs.WriteAllText('/work/w.txt', 'w');
+  FFs.WriteAllText('/database.txt', 'not data');
+  FFs.MakeDirectory('/outer/inner', True);
+  FFs.WriteAllText('/outer/other.txt', 'o');
+  FFs.WriteAllText('/outer/inner/f.txt', 'f');
+  FFs.AddReadOnlyPath('/data');
+  FFs.AddReadOnlyPath('/outer/inner');
+end;
+
+{ The class and message of the filesystem error the probe raised, or ''. }
+function TTestSandboxVirtualFileSystem.ProbeError(
+  const AProbe: TSandboxFsProbe; const APath, AOther: string): string;
+begin
+  FProbePath := APath;
+  FProbeOther := AOther;
+  Result := '';
+  try
+    AProbe;
+  except
+    on E: ESandboxFsError do
+      Result := E.ClassName + ': ' + E.Message;
+  end;
+end;
+
+procedure TTestSandboxVirtualFileSystem.ExpectReadOnly(
+  const AProbe: TSandboxFsProbe; const APath, AOther,
+  AReportedPath: string);
+var
+  Reported: string;
+begin
+  Reported := AReportedPath;
+  if Reported = '' then
+    Reported := APath;
+  Expect<string>(ProbeError(AProbe, APath, AOther)).ToBe(
+    'ESandboxFsReadOnly: ' + Reported + ': read-only file system');
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeWriteAllBytes;
+begin
+  FFs.WriteAllBytes(FProbePath, TBytes.Create(1, 2, 3));
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeWriteAllText;
+begin
+  FFs.WriteAllText(FProbePath, 'changed');
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeAppendAllText;
+begin
+  FFs.AppendAllText(FProbePath, 'more');
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeOpenWrite;
+begin
+  FFs.Open(FProbePath, omWrite).Free;
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeOpenReadWrite;
+begin
+  FFs.Open(FProbePath, omReadWrite).Free;
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeOpenAppend;
+begin
+  FFs.Open(FProbePath, omAppend).Free;
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeMakeDirectory;
+begin
+  FFs.MakeDirectory(FProbePath);
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeMakeDirectoryRecursive;
+begin
+  FFs.MakeDirectory(FProbePath, True);
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeTouch;
+begin
+  FFs.Touch(FProbePath);
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeDelete;
+begin
+  FFs.DeletePath(FProbePath);
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeDeleteRecursive;
+begin
+  FFs.DeletePath(FProbePath, True);
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeMove;
+begin
+  FFs.MovePath(FProbePath, FProbeOther);
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeCopy;
+begin
+  FFs.CopyPath(FProbePath, FProbeOther);
+end;
+
+procedure TTestSandboxVirtualFileSystem.ProbeCopyRecursive;
+begin
+  FFs.CopyPath(FProbePath, FProbeOther, True);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestReadOnlyPathsRefuseFileWrites;
+const
+  PATHS: array[0..4] of string = ('/data/a.txt', '/data/sub/b.txt',
+    '/data/new.txt', '/data/missing/new.txt', '/outer/inner/f.txt');
+var
+  UsedBefore: Int64;
+  NodesBefore: Integer;
+  Index: Integer;
+begin
+  PopulateReadOnlyTree;
+  UsedBefore := FFs.UsedBytes;
+  NodesBefore := FFs.NodeCount;
+  for Index := Low(PATHS) to High(PATHS) do
+  begin
+    ExpectReadOnly(ProbeWriteAllBytes, PATHS[Index]);
+    ExpectReadOnly(ProbeWriteAllText, PATHS[Index]);
+    ExpectReadOnly(ProbeAppendAllText, PATHS[Index]);
+    ExpectReadOnly(ProbeOpenWrite, PATHS[Index]);
+    ExpectReadOnly(ProbeOpenReadWrite, PATHS[Index]);
+    ExpectReadOnly(ProbeOpenAppend, PATHS[Index]);
+  end;
+  { A spelling through '..' or a relative path is refused under its
+    canonical name. }
+  ExpectReadOnly(ProbeWriteAllText, '/work/../data/./a.txt', '',
+    '/data/a.txt');
+  ExpectReadOnly(ProbeWriteAllText, 'data/sub/../c.txt', '', '/data/c.txt');
+
+  Expect<string>(FFs.ReadAllText('/data/a.txt')).ToBe('a');
+  Expect<string>(FFs.ReadAllText('/data/sub/b.txt')).ToBe('b');
+  Expect<string>(FFs.ReadAllText('/outer/inner/f.txt')).ToBe('f');
+  Expect<Boolean>(FFs.Exists('/data/new.txt')).ToBe(False);
+  Expect<Boolean>(FFs.Exists('/data/c.txt')).ToBe(False);
+  Expect<Int64>(FFs.UsedBytes).ToBe(UsedBefore);
+  Expect<Integer>(FFs.NodeCount).ToBe(NodesBefore);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestReadOnlyPathsRefuseCreatingAndTouching;
+var
+  NodesBefore: Integer;
+  ModifiedBefore: TDateTime;
+begin
+  FClock.Value := TimeAt(10);
+  PopulateReadOnlyTree;
+  NodesBefore := FFs.NodeCount;
+  ModifiedBefore := FFs.Stat('/data/a.txt').ModifiedAt;
+
+  FClock.Value := TimeAt(20);
+  ExpectReadOnly(ProbeMakeDirectory, '/data/new');
+  ExpectReadOnly(ProbeMakeDirectoryRecursive, '/data/x/y/z');
+  ExpectReadOnly(ProbeMakeDirectoryRecursive, '/outer/inner/deeper');
+  ExpectReadOnly(ProbeTouch, '/data/a.txt');
+  ExpectReadOnly(ProbeTouch, '/data/new.txt');
+  ExpectReadOnly(ProbeTouch, '/data/sub');
+
+  { Creating nothing is not a write: an existing directory still satisfies
+    a recursive mkdir, and a plain one still reports that it exists. }
+  FFs.MakeDirectory('/data', True);
+  FFs.MakeDirectory('/data/sub', True);
+  Expect<string>(ProbeError(ProbeMakeDirectory, '/data/sub')).ToBe(
+    'ESandboxFsExists: /data/sub: already exists');
+  { The writable part of a path is still created. }
+  FFs.MakeDirectory('/outer/new', True);
+
+  Expect<Integer>(FFs.NodeCount).ToBe(NodesBefore + 1);
+  Expect<Boolean>(FFs.Exists('/data/x')).ToBe(False);
+  ExpectTime(FFs.Stat('/data/a.txt').ModifiedAt, ModifiedBefore);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestReadOnlyPathsRefuseDeleting;
+begin
+  PopulateReadOnlyTree;
+  ExpectReadOnly(ProbeDelete, '/data/a.txt');
+  ExpectReadOnly(ProbeDeleteRecursive, '/data/sub');
+  ExpectReadOnly(ProbeDeleteRecursive, '/data');
+  ExpectReadOnly(ProbeDeleteRecursive, '/outer/inner');
+  { A writable directory that holds a read-only one cannot be deleted
+    either: the read-only one would go with it. }
+  ExpectReadOnly(ProbeDeleteRecursive, '/outer');
+
+  Expect<Boolean>(FFs.Exists('/data/a.txt')).ToBe(True);
+  Expect<Boolean>(FFs.Exists('/data/sub/b.txt')).ToBe(True);
+  Expect<Boolean>(FFs.Exists('/outer/inner/f.txt')).ToBe(True);
+  Expect<Boolean>(FFs.Exists('/outer/other.txt')).ToBe(True);
+
+  { Its writable contents can be. }
+  FFs.DeletePath('/outer/other.txt');
+  Expect<Boolean>(FFs.Exists('/outer/other.txt')).ToBe(False);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestReadOnlyPathsRefuseMovingAndCopying;
+begin
+  PopulateReadOnlyTree;
+  { Moving out of, within, or into a read-only path. }
+  ExpectReadOnly(ProbeMove, '/data/a.txt', '/work/a.txt');
+  ExpectReadOnly(ProbeMove, '/data/a.txt', '/data/c.txt');
+  ExpectReadOnly(ProbeMove, '/data', '/work/data');
+  ExpectReadOnly(ProbeMove, '/work/w.txt', '/data/w.txt', '/data/w.txt');
+  ExpectReadOnly(ProbeMove, '/work/w.txt', '/data/sub', '/data/sub/w.txt');
+  ExpectReadOnly(ProbeMove, '/work/w.txt', '/data/a.txt', '/data/a.txt');
+  { Moving a writable directory that holds a read-only one. }
+  ExpectReadOnly(ProbeMove, '/outer', '/moved');
+
+  { Copying into a read-only path; reading one to copy it elsewhere is
+    allowed. }
+  ExpectReadOnly(ProbeCopy, '/work/w.txt', '/data/w.txt', '/data/w.txt');
+  ExpectReadOnly(ProbeCopy, '/work/w.txt', '/data/a.txt', '/data/a.txt');
+  ExpectReadOnly(ProbeCopy, '/work/w.txt', '/data', '/data/w.txt');
+  ExpectReadOnly(ProbeCopyRecursive, '/work', '/data/work', '/data/work');
+  FFs.CopyPath('/data', '/copied', True);
+  FFs.CopyPath('/outer', '/outer-copy', True);
+
+  Expect<string>(FFs.ReadAllText('/data/a.txt')).ToBe('a');
+  Expect<Boolean>(FFs.Exists('/data/w.txt')).ToBe(False);
+  Expect<Boolean>(FFs.Exists('/data/c.txt')).ToBe(False);
+  Expect<Boolean>(FFs.Exists('/work/w.txt')).ToBe(True);
+  Expect<Boolean>(FFs.Exists('/outer/inner/f.txt')).ToBe(True);
+  { A copy is a new path, writable unless it is marked. }
+  Expect<string>(FFs.ReadAllText('/copied/sub/b.txt')).ToBe('b');
+  FFs.WriteAllText('/copied/sub/b.txt', 'changed');
+  FFs.WriteAllText('/outer-copy/inner/f.txt', 'changed');
+
+  FFs.MovePath('/work/w.txt', '/work/renamed.txt');
+  Expect<Boolean>(FFs.Exists('/work/renamed.txt')).ToBe(True);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestReadOnlyPathsLeaveReadsAndOtherPaths;
+var
+  Handle: TSandboxFsFile;
+begin
+  PopulateReadOnlyTree;
+  Expect<string>(FFs.ReadAllText('/data/a.txt')).ToBe('a');
+  Expect<Integer>(Length(FFs.ReadAllBytes('/data/sub/b.txt'))).ToBe(1);
+  Expect<Integer>(Length(FFs.List('/data'))).ToBe(2);
+  Expect<Int64>(FFs.Stat('/data/a.txt').Size).ToBe(1);
+  Expect<string>(FFs.SnapshotReadAllText('/data/a.txt')).ToBe('a');
+  Handle := FFs.Open('/data/a.txt', omRead);
+  try
+    Expect<string>(Handle.ReadText(10)).ToBe('a');
+  finally
+    Handle.Free;
+  end;
+
+  Expect<Boolean>(FFs.IsReadOnly('/data')).ToBe(True);
+  Expect<Boolean>(FFs.IsReadOnly('/data/sub/b.txt')).ToBe(True);
+  Expect<Boolean>(FFs.IsReadOnly('/data/missing')).ToBe(True);
+  Expect<Boolean>(FFs.IsReadOnly('/work/../data/a.txt')).ToBe(True);
+  Expect<Boolean>(FFs.IsReadOnly('/')).ToBe(False);
+  Expect<Boolean>(FFs.IsReadOnly('/dat')).ToBe(False);
+  Expect<Boolean>(FFs.IsReadOnly('/database.txt')).ToBe(False);
+  Expect<Boolean>(FFs.IsReadOnly('/outer')).ToBe(False);
+  Expect<Boolean>(FFs.IsReadOnly('/outer/inner/f.txt')).ToBe(True);
+
+  { A path that only shares the read-only path's prefix stays writable. }
+  FFs.WriteAllText('/database.txt', 'changed');
+  FFs.AppendAllText('/work/w.txt', '!');
+  FFs.MakeDirectory('/data2');
+  Expect<string>(FFs.ReadAllText('/database.txt')).ToBe('changed');
+  Expect<string>(FFs.ReadAllText('/work/w.txt')).ToBe('w!');
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestReadOnlyPathsCoverPathsNotYetCreated;
+var
+  RootFs: TSandboxVirtualFileSystem;
+  Message: string;
+begin
+  FFs.AddReadOnlyPath('later/../later/');
+  Expect<Boolean>(FFs.IsReadOnly('/later')).ToBe(True);
+  ExpectReadOnly(ProbeMakeDirectory, '/later');
+  ExpectReadOnly(ProbeMakeDirectoryRecursive, '/later/x');
+  ExpectReadOnly(ProbeWriteAllText, '/later');
+  FFs.MakeDirectory('/lat');
+  Expect<Boolean>(FFs.Exists('/later')).ToBe(False);
+
+  { Marking the root makes everything read-only. }
+  RootFs := TSandboxVirtualFileSystem.Create(0, FClock);
+  try
+    RootFs.WriteAllText('/file.txt', 'x');
+    RootFs.AddReadOnlyPath('/');
+    Expect<Boolean>(RootFs.IsReadOnly('/anything')).ToBe(True);
+    Message := '';
+    try
+      RootFs.MakeDirectory('/new');
+    except
+      on E: ESandboxFsReadOnly do
+        Message := E.Message;
+    end;
+    Expect<string>(Message).ToBe('/new: read-only file system');
+    Message := '';
+    try
+      RootFs.DeletePath('/file.txt');
+    except
+      on E: ESandboxFsReadOnly do
+        Message := E.Message;
+    end;
+    Expect<string>(Message).ToBe('/file.txt: read-only file system');
+  finally
+    RootFs.Free;
+  end;
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestReadOnlyPathsReachOpenHandlesAndForks;
+var
+  Handle: TSandboxFsFile;
+  Forked: TSandboxVirtualFileSystem;
+  Data: TBytes;
+  Message: string;
+begin
+  PopulateReadOnlyTree;
+  { A handle opened before its path was marked stops writing once it is. }
+  Handle := FFs.Open('/work/w.txt', omReadWrite);
+  try
+    FFs.AddReadOnlyPath('/work');
+    Data := TBytes.Create(65);
+    Message := '';
+    try
+      Handle.Write(Data[0], 1);
+    except
+      on E: ESandboxFsReadOnly do
+        Message := E.Message;
+    end;
+    Expect<string>(Message).ToBe('/work/w.txt: read-only file system');
+    Message := '';
+    try
+      Handle.Truncate(0);
+    except
+      on E: ESandboxFsReadOnly do
+        Message := E.Message;
+    end;
+    Expect<string>(Message).ToBe('/work/w.txt: read-only file system');
+  finally
+    Handle.Free;
+  end;
+  Expect<string>(FFs.ReadAllText('/work/w.txt')).ToBe('w');
+
+  Forked := FFs.Fork;
+  try
+    Expect<Boolean>(Forked.IsReadOnly('/data/a.txt')).ToBe(True);
+    Expect<Boolean>(Forked.IsReadOnly('/work')).ToBe(True);
+    Expect<Boolean>(Forked.IsReadOnly('/database.txt')).ToBe(False);
+    Message := '';
+    try
+      Forked.WriteAllText('/data/a.txt', 'changed');
+    except
+      on E: ESandboxFsReadOnly do
+        Message := E.Message;
+    end;
+    Expect<string>(Message).ToBe('/data/a.txt: read-only file system');
+  finally
+    Forked.Free;
+  end;
 end;
 
 begin

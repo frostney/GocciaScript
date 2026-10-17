@@ -42,6 +42,7 @@ const
   EXPECTED_ERRNO_ENOSPC = -4055;
   EXPECTED_ERRNO_ENOTDIR = -4052;
   EXPECTED_ERRNO_ENOTEMPTY = -4051;
+  EXPECTED_ERRNO_EROFS = -4043;
 {$ELSE}
   EXPECTED_ERRNO_EBUSY = -ESysEBUSY;
   EXPECTED_ERRNO_EEXIST = -ESysEEXIST;
@@ -52,6 +53,7 @@ const
   EXPECTED_ERRNO_ENOSPC = -ESysENOSPC;
   EXPECTED_ERRNO_ENOTDIR = -ESysENOTDIR;
   EXPECTED_ERRNO_ENOTEMPTY = -ESysENOTEMPTY;
+  EXPECTED_ERRNO_EROFS = -ESysEROFS;
 {$ENDIF}
 
 procedure TSandboxFileSystemErrorTests.SetupTests;
@@ -117,6 +119,9 @@ begin
   AssertMapping(ESandboxFsQuotaExceeded.Create('ignored'), 'ENOSPC',
     EXPECTED_ERRNO_ENOSPC,
     'no space left on device');
+  AssertMapping(ESandboxFsReadOnly.Create('ignored'), 'EROFS',
+    EXPECTED_ERRNO_EROFS,
+    'read-only file system');
 end;
 
 procedure TSandboxFileSystemErrorTests.TestCreatesSystemErrorProperties;
