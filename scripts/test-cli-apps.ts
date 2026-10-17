@@ -4167,6 +4167,11 @@ await section("Loader: Date toString writes the hours and minutes of a local mea
         "Asia/Tokyo",
         "Wed Jan 01 1800 00:00:00 GMT+0918|00:00:00 GMT+0918|0|Wed Jan 01 0020 09:18:59 GMT+0918|Sat Jun 15 2024 11:30:45 GMT+0900",
       ],
+      [
+        // Local mean time -00:01:15: a negative offset under an hour keeps its sign.
+        "Europe/London",
+        "Wed Jan 01 1800 00:00:00 GMT-0001|00:00:00 GMT-0001|0|Tue Dec 31 0019 23:58:45 GMT-0001|Sat Jun 15 2024 11:30:45 GMT+0100",
+      ],
     ];
     for (const [zone, expected] of cases) {
       const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
