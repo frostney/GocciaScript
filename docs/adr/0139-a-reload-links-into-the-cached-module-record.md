@@ -26,11 +26,11 @@ freed record was still in use:
   environment the cached record now read its exports from.
 
 Every reload also evaluates a module whose namespace object is already alive
-while its exports are uninitialized. Marking a namespace object read each
-export's value, and reading a binding in its temporal dead zone raises, so a
-collection during the reload's evaluation threw a `ReferenceError` out of the
-collector. A first load in an import cycle, or a module that imports its own
-namespace, could hit the same throw.
+while its exports are uninitialized. Marking a namespace object used to read
+each export's value, and reading a binding in its temporal dead zone raises,
+so a collection during the reload's evaluation threw a `ReferenceError` out of
+the collector. #1695 made an export binding mark its environment or value
+without reading it, which a reload relies on.
 
 ## Decision
 
@@ -45,10 +45,15 @@ reload links and evaluates the new version into that record:
   evaluation promise and modification time aside, and leaves the record empty
   for the new version. The record's root source marks what was set aside, and
   the old environment stays registered as a root until the reload ends.
-- When the new version has linked, `CommitReload` releases what was set aside
-  and retracts the old environment's root. When it fails to link,
-  `RollbackReload` puts the previous version back and the loader caches the
-  record again, still older than its source, so the next request retries.
+- A reload is linked inside the request that found the module in the cache,
+  and a module that request links after it, or the request's own check of
+  its imported names, can still fail. So the reload is committed only when
+  the outermost `LoadModule` or `LinkModuleRequest` has linked its whole
+  graph: `CommitReload` then releases what was set aside and retracts the old
+  environment's root. When the new version or anything else in that link
+  fails, `RollbackReload` puts the previous version back and the loader
+  caches the record again, still older than its source, so the next request
+  retries.
 
 A data module (JSON, text, bytes, or a format a runtime extension loads) is
 still built as a new record, because extensions create their own records.
@@ -56,10 +61,6 @@ Nothing but the reload refers to that record, and it holds only values, so
 `TGocciaModule.TakeExportsFrom` moves its bindings and table into the cached
 record before the loader frees it. The move transfers the environment's root
 rather than sharing it.
-
-Marking an export binding no longer reads it. A local binding marks its
-environment, a value binding its value, and a forwarded binding nothing, since
-its source module's roots mark what it forwards.
 
 ## Consequences
 
@@ -69,7 +70,8 @@ its source module's roots mark what it forwards.
 - Functions, classes and objects an earlier version created keep reading the
   environment they were created in. Once nothing references an old
   environment, the collector frees it with everything created in it.
-- A version that fails to link leaves the previous version in place. A version
+- A version that fails to link, or links inside a request that then fails,
+  leaves the previous version in place. A version
   that links and then throws while evaluating fails the way a first load does:
   the loader records the error and retires the record.
 - The engine keeps every version's compiled code for its lifetime, as it does
@@ -78,7 +80,8 @@ its source module's roots mark what it forwards.
 - `Goccia.Modules.Reload.Test` reloads modules repeatedly and collects
   garbage after every reload. It covers importers, old closures and
   class instances, changed exports, a module linked during a reload that
-  imports the reloading module, a reload that fails to link, JSON modules, and
-  the live object count across 200 reloads.
+  imports the reloading module, a reload that fails to link, a reload whose
+  enclosing link fails afterwards (a later import, or a static request's
+  missing name), JSON modules, and the live object count across 200 reloads.
   `tests/language/modules/namespace-collection-during-evaluation.js` collects
   while a module that imports its own namespace is still evaluating.

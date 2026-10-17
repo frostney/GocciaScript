@@ -110,6 +110,11 @@ type
     { The cached record each reload in progress links its new version into,
       by cache key (CheckForModuleReload). }
     FReloadTargets: TOrderedStringMap<TGocciaModule>;
+    { Reloaded records whose new version linked inside a link that has not
+      finished yet, by cache key. The outermost LoadModule or
+      LinkModuleRequest commits them once its whole graph linked, or rolls
+      them back when it fails (FinishPendingReloads). }
+    FPendingReloads: TOrderedStringMap<TGocciaModule>;
     FVirtualModules: TGocciaVirtualModuleRegistry;
     FWarnedVirtualCollisions: TOrderedStringMap<Boolean>;
     // This engine's own diagnostic source scope (its principal). Modules load
@@ -177,6 +182,7 @@ type
     function CaptureLoadStates: TList<TObject>;
     procedure DiscardLinkedModules(
       const APreservedStates: TList<TObject>);
+    procedure FinishPendingReloads(const ACommit: Boolean);
     procedure EvaluateLinkedModule(const AModule: TGocciaModule);
     function InstantiateModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
@@ -625,6 +631,7 @@ begin
   FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
   FRetiredModules := TGocciaModuleList.Create;
   FReloadTargets := TOrderedStringMap<TGocciaModule>.Create;
+  FPendingReloads := TOrderedStringMap<TGocciaModule>.Create;
   FVirtualModules := TGocciaVirtualModuleRegistry.Create;
   FWarnedVirtualCollisions := TOrderedStringMap<Boolean>.Create;
   FDiagnosticScope := TGocciaDiagnosticSourceScope.Create;
@@ -711,6 +718,7 @@ begin
   FModuleSourceValues.Free;
   FRetiredModules.Free;
   FReloadTargets.Free;
+  FPendingReloads.Free;
   FVirtualModules.Free;
   FWarnedVirtualCollisions.Free;
   FDiagnosticScope.Free;
@@ -1816,11 +1824,40 @@ begin
       LoadState := LoadStates[I];
       FModuleLoadStates.Remove(LoadState.ResolvedPath);
       FModules.Remove(LoadState.CacheKey);
-      RetireModule(LoadState.Module);
+      { A reloaded record goes back to its previous version and its cache
+        entry (FinishPendingReloads); only a record this link created
+        retires. }
+      if not FPendingReloads.ContainsKey(LoadState.CacheKey) then
+        RetireModule(LoadState.Module);
       LoadState.Free;
     end;
   finally
     LoadStates.Free;
+  end;
+  FinishPendingReloads(False);
+end;
+
+{ A reload's new version is only kept once the link that reached it finished:
+  a later module of the same graph can still fail to link, and then the
+  reloaded record must hold the version importers were reading, cached again
+  and still older than its source so the next request retries. }
+procedure TGocciaModuleLoader.FinishPendingReloads(const ACommit: Boolean);
+var
+  Pair: TOrderedStringMap<TGocciaModule>.TKeyValuePair;
+begin
+  if FPendingReloads.Count = 0 then
+    Exit;
+  try
+    for Pair in FPendingReloads do
+      if ACommit then
+        Pair.Value.CommitReload
+      else
+      begin
+        Pair.Value.RollbackReload;
+        FModules.AddOrSetValue(Pair.Key, Pair.Value);
+      end;
+  finally
+    FPendingReloads.Clear;
   end;
 end;
 
@@ -1846,7 +1883,10 @@ begin
       end;
 
       if IsOutermostLink then
+      begin
+        FinishPendingReloads(True);
         EvaluateLinkedModule(Result);
+      end;
     except
       if IsOutermostLink then
         DiscardLinkedModules(PreservedStates);
@@ -1901,6 +1941,8 @@ begin
               [Specifier, AImportNames[I]]),
             ALine, AColumn, AImportingFilePath, nil);
         end;
+      if IsOutermostLink then
+        FinishPendingReloads(True);
     except
       if IsOutermostLink then
         DiscardLinkedModules(PreservedStates);
@@ -2830,8 +2872,10 @@ begin
           LoadState.Status := mlsLinked;
           Result := Module;
           LoadSucceeded := True;
+          { Committed once the outermost link finishes, so a module of the
+            same graph that fails to link after this one rolls it back. }
           if Assigned(ReloadTarget) then
-            ReloadTarget.CommitReload;
+            FPendingReloads.AddOrSetValue(CacheKey, ReloadTarget);
           ProgramNode := nil;
           RequestedModules := nil;
         finally

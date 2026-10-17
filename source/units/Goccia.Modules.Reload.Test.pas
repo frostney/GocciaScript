@@ -74,6 +74,7 @@ type
       const AName: string): TGocciaValue;
     function CallExport(const AModule: TGocciaModule;
       const AName: string): TGocciaValue;
+    property Loader: TGocciaModuleLoader read FLoader;
   end;
 
   TModuleReloadTests = class(TTestSuite)
@@ -83,6 +84,8 @@ type
     procedure TestRepeatedReloadsKeepImportersAndOldClosures;
     procedure TestReloadLinkingAnImporterOfItselfBindsTheCachedModule;
     procedure TestReloadThatFailsToLinkKeepsThePreviousVersion;
+    procedure TestReloadWhoseEnclosingLinkFailsKeepsThePreviousVersion;
+    procedure TestReloadLinkedForAStaticRequestCommitsOnlyWhenItsNamesResolve;
     procedure TestRepeatedDataModuleReloadsReplaceTheCachedValues;
     procedure TestRepeatedReloadsDoNotGrowTheManagedHeap;
   end;
@@ -228,6 +231,10 @@ begin
     TestReloadLinkingAnImporterOfItselfBindsTheCachedModule);
   Test('A reload that fails to link keeps the previous version',
     TestReloadThatFailsToLinkKeepsThePreviousVersion);
+  Test('A reload whose enclosing link fails keeps the previous version',
+    TestReloadWhoseEnclosingLinkFailsKeepsThePreviousVersion);
+  Test('A reload linked for a static request commits only when its names resolve',
+    TestReloadLinkedForAStaticRequestCommitsOnlyWhenItsNamesResolve);
   Test('Repeated JSON module reloads replace the values importers read',
     TestRepeatedDataModuleReloadsReplaceTheCachedValues);
   Test('Two hundred reloads do not grow the managed heap',
@@ -431,6 +438,113 @@ begin
     Expect<string>(Fixture.CallExport(Importer, 'readValue')
       .ToStringLiteral.Value).ToBe('third');
     Expect<string>(Fixture.CallExport(Subject, 'read')
+      .ToStringLiteral.Value).ToBe('third');
+  finally
+    Fixture.Free;
+  end;
+end;
+
+{ The new version links, but the request that reached it fails afterwards:
+  a module nobody loaded yet imports the changed module and then one that
+  does not exist. The whole link fails, so the changed module keeps the
+  version before it, stays cached, and the next request reloads it. }
+procedure TModuleReloadTests.TestReloadWhoseEnclosingLinkFailsKeepsThePreviousVersion;
+const
+  CONSUMER_PATH = 'memory:/consumer.js';
+  IMPORTER_PATH = 'memory:/importer.js';
+  SUBJECT_PATH = 'memory:/subject.js';
+var
+  Failed: Boolean;
+  Fixture: TModuleReloadFixture;
+  Importer: TGocciaModule;
+  Subject: TGocciaModule;
+begin
+  Fixture := TModuleReloadFixture.Create;
+  try
+    Fixture.Define(SUBJECT_PATH,
+      'export const value = "first";' + sLineBreak +
+      'export function read() { return value; }');
+    Fixture.Define(IMPORTER_PATH,
+      'import { value } from "' + SUBJECT_PATH + '";' + sLineBreak +
+      'export const readValue = () => value;');
+    Importer := Fixture.Load(IMPORTER_PATH);
+    Subject := Fixture.Load(SUBJECT_PATH);
+
+    Fixture.Define(SUBJECT_PATH,
+      'export const value = "second";' + sLineBreak +
+      'export function read() { return value; }');
+    Fixture.Define(CONSUMER_PATH,
+      'import { value } from "' + SUBJECT_PATH + '";' + sLineBreak +
+      'import { missing } from "memory:/absent.js";' + sLineBreak +
+      'export const both = () => value + missing;');
+    Failed := False;
+    try
+      Fixture.Load(CONSUMER_PATH);
+    except
+      on Exception do
+        Failed := True;
+    end;
+    Expect<Boolean>(Failed).ToBe(True);
+    CollectGarbage;
+    Expect<string>(Fixture.CallExport(Importer, 'readValue')
+      .ToStringLiteral.Value).ToBe('first');
+    Expect<string>(Fixture.CallExport(Subject, 'read')
+      .ToStringLiteral.Value).ToBe('first');
+
+    Expect<Boolean>(Fixture.Load(SUBJECT_PATH) = Subject).ToBe(True);
+    CollectGarbage;
+    Expect<string>(Fixture.CallExport(Importer, 'readValue')
+      .ToStringLiteral.Value).ToBe('second');
+    Expect<string>(Fixture.CallExport(Subject, 'read')
+      .ToStringLiteral.Value).ToBe('second');
+  finally
+    Fixture.Free;
+  end;
+end;
+
+{ A program's static import links its module through LinkModuleRequest,
+  which then checks the imported names. A new version without a requested
+  name fails that check after it linked, and keeps the version before it; a
+  version with the name links and evaluates in the cached record. }
+procedure TModuleReloadTests.TestReloadLinkedForAStaticRequestCommitsOnlyWhenItsNamesResolve;
+const
+  IMPORTER_PATH = 'memory:/importer.js';
+  SUBJECT_PATH = 'memory:/subject.js';
+var
+  Failed: Boolean;
+  Fixture: TModuleReloadFixture;
+  Importer: TGocciaModule;
+  Subject: TGocciaModule;
+begin
+  Fixture := TModuleReloadFixture.Create;
+  try
+    Fixture.Define(SUBJECT_PATH, 'export const value = "first";');
+    Fixture.Define(IMPORTER_PATH,
+      'import { value } from "' + SUBJECT_PATH + '";' + sLineBreak +
+      'export const readValue = () => value;');
+    Importer := Fixture.Load(IMPORTER_PATH);
+    Subject := Fixture.Load(SUBJECT_PATH);
+
+    Fixture.Define(SUBJECT_PATH, 'export const renamed = "second";');
+    Failed := False;
+    try
+      Fixture.Loader.LinkModuleRequest(SUBJECT_PATH, RELOAD_ENTRY_PATH,
+        ['value'], 1, 1);
+    except
+      on Exception do
+        Failed := True;
+    end;
+    Expect<Boolean>(Failed).ToBe(True);
+    CollectGarbage;
+    Expect<string>(Fixture.CallExport(Importer, 'readValue')
+      .ToStringLiteral.Value).ToBe('first');
+
+    Fixture.Define(SUBJECT_PATH, 'export const value = "third";');
+    Expect<Boolean>(Fixture.Loader.EvaluateModule(
+      Fixture.Loader.LinkModuleRequest(SUBJECT_PATH, RELOAD_ENTRY_PATH,
+        ['value'], 1, 1)) = Subject).ToBe(True);
+    CollectGarbage;
+    Expect<string>(Fixture.CallExport(Importer, 'readValue')
       .ToStringLiteral.Value).ToBe('third');
   finally
     Fixture.Free;
