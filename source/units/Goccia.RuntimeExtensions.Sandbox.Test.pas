@@ -248,6 +248,10 @@ begin
     Context.Fs.MakeDirectory('/out');
     Context.Fs.AddReadOnlyPath('/data');
     Context.CaptureBaseline;
+    { The filesystem reads the wall clock, which moves in steps of about
+      16 ms on Windows: wait out a step so an access-time change would
+      show. }
+    Sleep(50);
 
     RunModule(Context, APPEND_SOURCE);
 
