@@ -170,6 +170,16 @@ console.log("Language early errors use the CLI parser...");
       args: [],
     },
     {
+      desc: "strict-mode reserved word static as an array-pattern binding",
+      source: "const [static] = [1];\n",
+      args: [],
+    },
+    {
+      desc: "strict-mode reserved word static as an object-pattern target",
+      source: "const { a: static } = { a: 1 };\n",
+      args: [],
+    },
+    {
       desc: "unicode escape with an invalid identifier-start character",
       source: "const \\u0031 = 7;\n",
       args: [],
