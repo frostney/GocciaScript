@@ -692,7 +692,7 @@ end;
 // Instance reads its own thread variable, not the GThreadPolls.Collector
 // mirror: with Instance reading the mirror, FPC 3.2.2 at -O4 dropped the VMT
 // load from a virtual call on the result (Instance.Collect in
-// Goccia.Threading.Init called through the object itself).
+// Goccia.Threading.Init called through the object itself; issue #1699).
 class function TGarbageCollector.Instance: TGarbageCollector;
 begin
   Result := GCThreadInstance;
