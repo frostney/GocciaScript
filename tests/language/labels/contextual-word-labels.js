@@ -71,15 +71,6 @@ describe("contextual words as labels", () => {
     expect(run()).toBe(3);
   });
 
-  test("let and static are not labels in strict code", () => {
-    expect(() => new Function('"use strict"; let: {}')).toThrow(SyntaxError);
-    expect(() => new Function('"use strict"; static: {}')).toThrow(SyntaxError);
-  });
-
-  test("enum is never a label", () => {
-    expect(() => new Function("enum: {}")).toThrow(SyntaxError);
-  });
-
   test("async still starts async functions and arrows", () => {
     const af = new Function(`
       async function f() { return 1; }
