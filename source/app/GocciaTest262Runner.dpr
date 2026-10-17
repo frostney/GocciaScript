@@ -981,6 +981,7 @@ begin
     begin
       if Descriptor is TGocciaPropertyDescriptorData then
         Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+      ReleaseDescriptor(Descriptor);
       Exit;
     end;
     Current := Current.Prototype;
@@ -2024,5 +2025,8 @@ begin
     end;
   finally
     App.Free;
+    { As TGocciaApplication.RunApplication does: the main thread's collector
+      destroys what it still manages (#1592). }
+    ShutdownThreadRuntime;
   end;
 end.

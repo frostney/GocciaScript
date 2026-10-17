@@ -79,6 +79,7 @@ type
     FParts: TObjectList<TGocciaExpression>; // Mix of string literals and expressions
   public
     constructor Create(const AParts: TObjectList<TGocciaExpression>; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Parts: TObjectList<TGocciaExpression> read FParts;
   end;
 
@@ -254,6 +255,7 @@ type
     constructor Create(const ACallee: TGocciaExpression;
       const AArguments: TObjectList<TGocciaExpression>; const ASpan: TGocciaSourceSpan;
       const AOptional: Boolean = False);
+    destructor Destroy; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
     property Optional: Boolean read FOptional;
@@ -284,6 +286,7 @@ type
   public
     constructor Create(const AElements: TObjectList<TGocciaExpression>;
       const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Elements: TObjectList<TGocciaExpression> read FElements;
   end;
 
@@ -449,6 +452,7 @@ type
   public
     constructor Create(const ACallee: TGocciaExpression;
       const AArguments: TObjectList<TGocciaExpression>; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
   end;
@@ -538,7 +542,7 @@ type
   end;
 
   // Property in object destructuring: key: pattern or key (shorthand)
-  TGocciaDestructuringProperty = class
+  TGocciaDestructuringProperty = class(TGocciaASTObject)
   private
     FKey: string;
     FPattern: TGocciaDestructuringPattern;
@@ -558,6 +562,7 @@ type
     FElements: TObjectList<TGocciaDestructuringPattern>;
   public
     constructor Create(const AElements: TObjectList<TGocciaDestructuringPattern>; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Elements: TObjectList<TGocciaDestructuringPattern> read FElements;
   end;
 
@@ -567,6 +572,7 @@ type
     FProperties: TObjectList<TGocciaDestructuringProperty>;
   public
     constructor Create(const AProperties: TObjectList<TGocciaDestructuringProperty>; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Properties: TObjectList<TGocciaDestructuringProperty> read FProperties;
   end;
 
@@ -628,7 +634,7 @@ type
     property Right: TGocciaExpression read FRight;
   end;
 
-  TGocciaObjectMatchProperty = class
+  TGocciaObjectMatchProperty = class(TGocciaASTObject)
   private
     FKey: string;
     FPattern: TGocciaMatchPattern;
@@ -680,6 +686,7 @@ type
     constructor Create(const AElements: TGocciaMatchPatternList;
       const ARestPattern: TGocciaMatchPattern; const AHasRestWildcard: Boolean;
       const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Elements: TGocciaMatchPatternList read FElements;
     property RestPattern: TGocciaMatchPattern read FRestPattern;
     property HasRestWildcard: Boolean read FHasRestWildcard;
@@ -692,6 +699,7 @@ type
   public
     constructor Create(const AProperties: TGocciaObjectMatchPropertyList;
       const ARestPattern: TGocciaMatchPattern; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Properties: TGocciaObjectMatchPropertyList read FProperties;
     property RestPattern: TGocciaMatchPattern read FRestPattern;
   end;
@@ -733,6 +741,7 @@ type
     FPatterns: TGocciaMatchPatternList;
   public
     constructor Create(const APatterns: TGocciaMatchPatternList; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Patterns: TGocciaMatchPatternList read FPatterns;
   end;
 
@@ -741,6 +750,7 @@ type
     FPatterns: TGocciaMatchPatternList;
   public
     constructor Create(const APatterns: TGocciaMatchPatternList; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Patterns: TGocciaMatchPatternList read FPatterns;
   end;
 
@@ -762,13 +772,14 @@ type
     constructor Create(const AMatcherExpression: TGocciaExpression;
       const AArguments: TGocciaMatchPatternList; const ARestPattern: TGocciaMatchPattern;
       const AHasRestWildcard: Boolean; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property MatcherExpression: TGocciaExpression read FMatcherExpression;
     property Arguments: TGocciaMatchPatternList read FArguments;
     property RestPattern: TGocciaMatchPattern read FRestPattern;
     property HasRestWildcard: Boolean read FHasRestWildcard;
   end;
 
-  TGocciaMatchClause = class
+  TGocciaMatchClause = class(TGocciaASTObject)
   private
     FPattern: TGocciaMatchPattern;
     FExpression: TGocciaExpression;
@@ -799,6 +810,7 @@ type
   public
     constructor Create(const ASubject: TGocciaExpression; const AClauses: TGocciaMatchClauseList;
       const ADefaultExpression: TGocciaExpression; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Subject: TGocciaExpression read FSubject;
     property Clauses: TGocciaMatchClauseList read FClauses;
     property DefaultExpression: TGocciaExpression read FDefaultExpression;
@@ -933,20 +945,18 @@ begin
   FValue := AValue;
   FSourceText := ASourceText;
   // Remove from GC -- the AST owns this value, not the garbage collector.
-  // Singletons (UndefinedValue, TrueValue, FalseValue) are pinned separately
-  // and safe to unregister (Remove is a no-op if not found).
-  if Assigned(FValue) and (TGarbageCollector.Instance <> nil) then
+  // A primitive singleton (undefined, true, ...) stays with the collector it
+  // was created in, which frees it when the main thread's runtime shuts down.
+  if Assigned(FValue) and (TGarbageCollector.Instance <> nil) and
+     not IsPrimitiveSingleton(FValue) then
     TGarbageCollector.Instance.UnregisterObject(FValue);
 end;
 
 destructor TGocciaLiteralExpression.Destroy;
 begin
-  // Free the owned value unless it's a singleton (singletons are process-lifetime)
-  if Assigned(FValue)
-     and (FValue <> TGocciaUndefinedLiteralValue.UndefinedValue)
-     and (FValue <> TGocciaBooleanLiteralValue.TrueValue)
-     and (FValue <> TGocciaBooleanLiteralValue.FalseValue)
-     and (FValue <> TGocciaNullLiteralValue.NullValue) then
+  // Free the owned value unless it is a primitive singleton, which the
+  // collector owns.
+  if Assigned(FValue) and not IsPrimitiveSingleton(FValue) then
     FValue.Free;
   inherited;
 end;
@@ -998,7 +1008,8 @@ end;
 
 destructor TGocciaTaggedTemplateExpression.Destroy;
 begin
-  FTag.Free;
+  if Assigned(FExpressions) then
+    FExpressions.OwnsObjects := False;
   FExpressions.Free;
   inherited;
 end;
@@ -1034,6 +1045,8 @@ end;
 
 destructor TGocciaSequenceExpression.Destroy;
 begin
+  if Assigned(FExpressions) then
+    FExpressions.OwnsObjects := False;
   FExpressions.Free;
   inherited;
 end;
@@ -1269,7 +1282,11 @@ end;
 
 destructor TGocciaObjectExpression.Destroy;
 begin
+  FProperties.Free;
   FPropertyInsertionOrder.Free;
+  FComputedProperties.Free;
+  FGetters.Free;
+  FSetters.Free;
   inherited Destroy;
 end;
 
@@ -1678,6 +1695,102 @@ function TGocciaImportCallExpression.HasLiteralSpecifier: Boolean;
 begin
   Result := (FSpecifier is TGocciaLiteralExpression) and
     (TGocciaLiteralExpression(FSpecifier).Value is TGocciaStringLiteralValue);
+end;
+
+destructor TGocciaTemplateWithInterpolationExpression.Destroy;
+begin
+  if Assigned(FParts) then
+    FParts.OwnsObjects := False;
+  FParts.Free;
+  inherited;
+end;
+
+destructor TGocciaCallExpression.Destroy;
+begin
+  if Assigned(FArguments) then
+    FArguments.OwnsObjects := False;
+  FArguments.Free;
+  inherited;
+end;
+
+destructor TGocciaArrayExpression.Destroy;
+begin
+  if Assigned(FElements) then
+    FElements.OwnsObjects := False;
+  FElements.Free;
+  inherited;
+end;
+
+destructor TGocciaNewExpression.Destroy;
+begin
+  if Assigned(FArguments) then
+    FArguments.OwnsObjects := False;
+  FArguments.Free;
+  inherited;
+end;
+
+destructor TGocciaArrayDestructuringPattern.Destroy;
+begin
+  if Assigned(FElements) then
+    FElements.OwnsObjects := False;
+  FElements.Free;
+  inherited;
+end;
+
+destructor TGocciaObjectDestructuringPattern.Destroy;
+begin
+  if Assigned(FProperties) then
+    FProperties.OwnsObjects := False;
+  FProperties.Free;
+  inherited;
+end;
+
+destructor TGocciaArrayMatchPattern.Destroy;
+begin
+  if Assigned(FElements) then
+    FElements.OwnsObjects := False;
+  FElements.Free;
+  inherited;
+end;
+
+destructor TGocciaObjectMatchPattern.Destroy;
+begin
+  if Assigned(FProperties) then
+    FProperties.OwnsObjects := False;
+  FProperties.Free;
+  inherited;
+end;
+
+destructor TGocciaAndMatchPattern.Destroy;
+begin
+  if Assigned(FPatterns) then
+    FPatterns.OwnsObjects := False;
+  FPatterns.Free;
+  inherited;
+end;
+
+destructor TGocciaOrMatchPattern.Destroy;
+begin
+  if Assigned(FPatterns) then
+    FPatterns.OwnsObjects := False;
+  FPatterns.Free;
+  inherited;
+end;
+
+destructor TGocciaExtractorMatchPattern.Destroy;
+begin
+  if Assigned(FArguments) then
+    FArguments.OwnsObjects := False;
+  FArguments.Free;
+  inherited;
+end;
+
+destructor TGocciaMatchExpression.Destroy;
+begin
+  if Assigned(FClauses) then
+    FClauses.OwnsObjects := False;
+  FClauses.Free;
+  inherited;
 end;
 
 initialization

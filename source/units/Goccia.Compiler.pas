@@ -1868,6 +1868,7 @@ var
   HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
+  SavedFinally: TObject;
 begin
   if Assigned(FNumericParameterProofs) then
     FNumericParameterProofs.Clear;
@@ -1917,6 +1918,10 @@ begin
   FCurrentScope.DeclareLocal('__receiver', False);
   FCurrentScope.GlobalBackedBindingsByName := FGlobalEvalVarEnvironment;
 
+  // A compile error inside a try statement leaves its pending-finally entry,
+  // which points into this program's tree; restoring drops it with the list,
+  // so no later compilation sees an entry whose tree has been freed.
+  SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
   try
     DiscoverProgramNumberBindings(AProgram, FCurrentScope,
       NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
@@ -2061,6 +2066,7 @@ begin
     FModule := nil;
     FCurrentTemplate := nil;
   finally
+    Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
     FCompletionRegister := -1;
     FreeAndNil(FCurrentScope);
     FTopLevelTemplate := nil;

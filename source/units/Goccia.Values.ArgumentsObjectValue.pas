@@ -226,12 +226,15 @@ function TGocciaMappedArgumentsObjectValue.GetPropertyWithContext(
   const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  IsData: Boolean;
   Index: Integer;
 begin
   if TryMappedIndex(AName, Index) then
   begin
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) and IsDataDescriptor(Descriptor) then
+    IsData := Assigned(Descriptor) and IsDataDescriptor(Descriptor);
+    ReleaseDescriptor(Descriptor);
+    if IsData then
       Exit(GetMappedValue(Index));
   end;
   Result := inherited GetPropertyWithContext(AName, AThisContext);

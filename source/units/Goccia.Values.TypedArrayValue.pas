@@ -843,6 +843,8 @@ function TGocciaTypedArrayValue.OrdinarySetIntegerIndexedElementWithReceiver(
 var
   Index: Integer;
   ReceiverDesc: TGocciaPropertyDescriptor;
+  ReceiverWritableData: Boolean;
+  ReceiverFlags: TPropertyFlags;
   ReceiverObj: TGocciaObjectValue;
   ReceiverTypedArray: TGocciaTypedArrayValue;
 begin
@@ -867,11 +869,17 @@ begin
   ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
   if Assigned(ReceiverDesc) then
   begin
-    if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
-       (not ReceiverDesc.Writable) then
+    // Read before the release: the definition below may replace a stored
+    // descriptor.
+    ReceiverWritableData :=
+      not (ReceiverDesc is TGocciaPropertyDescriptorAccessor) and
+      ReceiverDesc.Writable;
+    ReceiverFlags := ReceiverDesc.Flags;
+    ReleaseDescriptor(ReceiverDesc);
+    if not ReceiverWritableData then
       Exit(False);
     Exit(ReceiverObj.TryDefineProperty(AName,
-      TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
+      TGocciaPropertyDescriptorData.Create(AValue, ReceiverFlags)));
   end;
 
   Result := ReceiverObj.TryDefineProperty(AName,
@@ -1360,7 +1368,7 @@ begin
   begin
     if IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
       Exit(TGocciaPropertyDescriptorData.Create(GetElementAsValue(Index),
-        [pfEnumerable, pfConfigurable, pfWritable]));
+        [pfEnumerable, pfConfigurable, pfWritable]).AsCallerOwned);
     Exit(nil);
   end;
 

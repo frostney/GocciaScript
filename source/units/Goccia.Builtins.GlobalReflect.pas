@@ -219,9 +219,14 @@ begin
       ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
+  // Released before ToPropertyDescriptor, which reads nothing from it: the
+  // attribute getters it runs may delete or redefine the property, freeing a
+  // stored descriptor.
+  ReleaseDescriptor(ExistingDescriptor);
+
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
   DescriptorObject := TGocciaObjectValue(Attrs);
-  Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
+  Descriptor := ToPropertyDescriptor(DescriptorObject, nil);
 
   // Step 4: Return target.[[DefineOwnProperty]](key, desc) — returns boolean.
   // Validation failures become false; abrupt completions still propagate.
@@ -337,7 +342,13 @@ begin
   end;
 
   // Step 4: Return FromPropertyDescriptor(desc)
-  Result := FromPropertyDescriptor(Descriptor);
+  // FromPropertyDescriptor runs no guest code, so a caller-owned descriptor
+  // stays valid until it is released here.
+  try
+    Result := FromPropertyDescriptor(Descriptor);
+  finally
+    ReleaseDescriptor(Descriptor);
+  end;
 end;
 
 // ES2026 §28.1.7 Reflect.getPrototypeOf(target)
