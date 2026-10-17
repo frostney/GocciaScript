@@ -454,12 +454,13 @@ begin
   FValue := AValue;
 end;
 
-{ Marks what the binding holds without reading it: reading a local binding
-  in its temporal dead zone raises, and a collection runs whenever a module
-  body allocates, so a namespace object marked while its module is still
-  evaluating (a cycle, or any reload) would throw out of the collector. A
-  forwarded binding holds nothing of its own; its source module's roots mark
-  the value. }
+{ Marks what the binding holds without reading it. A local export is a
+  binding in its module environment, which is marked whole: GetValue would
+  raise the TDZ ReferenceError inside the collector while the module has not
+  yet initialized the binding (a module in an import cycle), and the error
+  would reach the guest code that triggered the collection. A forwarded
+  export belongs to its source module, which roots its own bindings
+  (TGocciaModuleRoots, SetEnvironment). See ADR 0133. }
 procedure TGocciaModuleExportBinding.MarkReferences;
 begin
   if Assigned(FSourceModule) then

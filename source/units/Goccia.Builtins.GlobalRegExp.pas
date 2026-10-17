@@ -1431,7 +1431,8 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  if MatchRegExpBuiltinObjectOnce(AThisValue, Input, MatchValue) then
+  if MatchRegExpBuiltinObjectOnce(AThisValue, Input, MatchValue,
+    ArgumentStringValue(AArgs)) then
     Result := MatchValue
   else
     Result := TGocciaNullLiteralValue.NullValue;
@@ -1454,9 +1455,15 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  if IsRegExpInstance(AThisValue) then
+  // ES2026 §22.2.6.16 step 4: RegExpExec(R, string). When it runs the
+  // built-in exec, only whether it matched is observable: skip the array.
+  if IsBuiltinExecRegExp(AThisValue) then
     Result := TGocciaBooleanLiteralValue.Create(
-      MatchRegExpObjectOnce(AThisValue, Input, MatchValue))
+      TestRegExpBuiltinObjectOnce(AThisValue, Input))
+  else if IsRegExpInstance(AThisValue) then
+    Result := TGocciaBooleanLiteralValue.Create(
+      MatchRegExpObjectOnce(AThisValue, Input, MatchValue,
+        ArgumentStringValue(AArgs)))
   else
   begin
     ExecMethod := TGocciaObjectValue(AThisValue).GetProperty(PROP_EXEC);
@@ -1464,7 +1471,10 @@ begin
       ThrowTypeError('RegExp exec property is not callable');
     CallArgs := TGocciaArgumentsCollection.Create;
     try
-      CallArgs.Add(TGocciaStringLiteralValue.Create(Input));
+      if Assigned(ArgumentStringValue(AArgs)) then
+        CallArgs.Add(ArgumentStringValue(AArgs))
+      else
+        CallArgs.Add(TGocciaStringLiteralValue.Create(Input));
       MatchValue := InvokeCallable(ExecMethod, CallArgs, AThisValue);
     finally
       CallArgs.Free;
@@ -1519,7 +1529,8 @@ begin
   Flags := GetRegExpFlagsProperty(RegexValue);
   if not HasRegExpFlag(Flags, 'g') then
   begin
-    if MatchRegExpObjectOnce(RegexValue, Input, MatchValue) then
+    if MatchRegExpObjectOnce(RegexValue, Input, MatchValue,
+      ArgumentStringValue(AArgs)) then
       Result := MatchValue
     else
       Result := TGocciaNullLiteralValue.NullValue;
@@ -1563,7 +1574,8 @@ begin
     MatchCount := 0;
     while True do
     begin
-      if not MatchRegExpObjectOnceResult(RegexValue, Input, Match) then
+      if not MatchRegExpObjectOnceResult(RegexValue, Input, Match,
+        ArgumentStringValue(AArgs)) then
       begin
         if MatchCount = 0 then
           Result := TGocciaNullLiteralValue.NullValue
@@ -1647,6 +1659,7 @@ var
   RegexValue, RetainedObject: TGocciaObjectValue;
   Results: TRegExpExecutionResults;
   MatchSlots: TRegExpMatchSlots;
+  CaptureRoots: TGocciaActiveRootFrame;
 
   procedure AppendReplacement(const APosition, AMatchLength: Integer;
     const AReplacement: string);
@@ -1702,7 +1715,8 @@ begin
     begin
       while True do
       begin
-        if not MatchRegExpObjectOnceResult(RegexValue, Input, Match) then
+        if not MatchRegExpObjectOnceResult(RegexValue, Input, Match,
+          ArgumentStringValue(AArgs)) then
           Break;
 
         EnsureRegExpExecutionResultCapacity(Results, ResultCount + 1);
@@ -1789,27 +1803,38 @@ begin
         Position := Results[I].MatchIndex(InputLength);
 
         SetLength(Captures, CaptureCount);
-        for CaptureNumber := 1 to CaptureCount do
-        begin
-          Captures[CaptureNumber - 1].Text := Results[I].CaptureText(
-            CaptureNumber, CaptureMatched);
-          if not CaptureMatched then
+        // A custom exec result reads each capture and then groups through
+        // Get, so a later capture's getter or toString, or the groups
+        // getter, can collect while the capture strings made so far are held
+        // only in Captures; they are not in CallArgs until the replacer call
+        // is being set up (issue #1679).
+        CaptureRoots.Initialize;
+        try
+          for CaptureNumber := 1 to CaptureCount do
           begin
-            Captures[CaptureNumber - 1].Value :=
-              TGocciaUndefinedLiteralValue.UndefinedValue;
-            Captures[CaptureNumber - 1].Matched := False;
-          end
-          else
-          begin
-            Captures[CaptureNumber - 1].Value :=
-              TGocciaStringLiteralValue.Create(Captures[CaptureNumber - 1].Text);
-            Captures[CaptureNumber - 1].Matched := True;
+            Captures[CaptureNumber - 1].Text := Results[I].CaptureText(
+              CaptureNumber, CaptureMatched);
+            if not CaptureMatched then
+            begin
+              Captures[CaptureNumber - 1].Value :=
+                TGocciaUndefinedLiteralValue.UndefinedValue;
+              Captures[CaptureNumber - 1].Matched := False;
+            end
+            else
+            begin
+              Captures[CaptureNumber - 1].Value :=
+                TGocciaStringLiteralValue.Create(Captures[CaptureNumber - 1].Text);
+              CaptureRoots.Add(Captures[CaptureNumber - 1].Value);
+              Captures[CaptureNumber - 1].Matched := True;
+            end;
           end;
-        end;
 
-        ReplacementString := GetRegExpReplacement(ReplaceValue,
-          CallArgs, ReplacementText, Matched, Input, InputValue,
-          Position, Captures, Results[I].NamedCapturesValue);
+          ReplacementString := GetRegExpReplacement(ReplaceValue,
+            CallArgs, ReplacementText, Matched, Input, InputValue,
+            Position, Captures, Results[I].NamedCapturesValue);
+        finally
+          CaptureRoots.Clear;
+        end;
         AppendReplacement(Position, MatchLength, ReplacementString);
       end;
 
@@ -1846,6 +1871,7 @@ var
   MatchValue: TGocciaValue;
   CurrentLastIndex, PreviousLastIndex: TGocciaValue;
   HasMatch: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   RegexValue := RequireRegExpObjectReceiver(AThisValue,
     'RegExp.prototype[Symbol.search]');
@@ -1855,17 +1881,34 @@ begin
   else
     Input := TGocciaUndefinedLiteralValue.UndefinedValue.ToStringLiteral.Value;
 
-  PreviousLastIndex := RegexValue.GetProperty(PROP_LAST_INDEX);
-  if not IsSameValue(PreviousLastIndex, TGocciaNumberLiteralValue.ZeroValue) then
-    RegexValue.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(0));
-  HasMatch := MatchRegExpObjectOnce(RegexValue, Input, MatchValue);
-  CurrentLastIndex := RegexValue.GetProperty(PROP_LAST_INDEX);
-  if not IsSameValue(CurrentLastIndex, PreviousLastIndex) then
-    RegexValue.SetProperty(PROP_LAST_INDEX, PreviousLastIndex);
-  if not HasMatch then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else
-    Result := TGocciaObjectValue(MatchValue).GetProperty(PROP_INDEX);
+  // The saved lastIndex is read again after the lastIndex store, exec and the
+  // second lastIndex read have run guest code, and the match result after the
+  // restoring store has; both are held only here (issue #1679).
+  Roots.Initialize;
+  try
+    // Step 4: Let previousLastIndex be ? Get(rx, "lastIndex").
+    PreviousLastIndex := RegexValue.GetProperty(PROP_LAST_INDEX);
+    Roots.Add(PreviousLastIndex);
+    // Step 5: If previousLastIndex is not +0𝔽, set lastIndex to +0𝔽.
+    if not IsSameValue(PreviousLastIndex, TGocciaNumberLiteralValue.ZeroValue) then
+      RegexValue.SetProperty(PROP_LAST_INDEX, TGocciaNumberLiteralValue.Create(0));
+    // Step 6: Let result be ? RegExpExec(rx, S).
+    HasMatch := MatchRegExpObjectOnce(RegexValue, Input, MatchValue,
+      ArgumentStringValue(AArgs));
+    if HasMatch then
+      Roots.Add(MatchValue);
+    // Steps 7-8: restore lastIndex when it changed.
+    CurrentLastIndex := RegexValue.GetProperty(PROP_LAST_INDEX);
+    if not IsSameValue(CurrentLastIndex, PreviousLastIndex) then
+      RegexValue.SetProperty(PROP_LAST_INDEX, PreviousLastIndex);
+    // Steps 9-10: Return -1 on no match, else ? Get(result, "index").
+    if not HasMatch then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else
+      Result := TGocciaObjectValue(MatchValue).GetProperty(PROP_INDEX);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 // ES2026 §22.2.6.14 RegExp.prototype [ @@split ] ( string, limit )
@@ -1916,7 +1959,8 @@ begin
 
     if UTF16CodeUnitLength(Input) = 0 then
     begin
-      if MatchRegExpObjectOnce(SplitterValue, Input, MatchValue) then
+      if MatchRegExpObjectOnce(SplitterValue, Input, MatchValue,
+        ArgumentStringValue(AArgs)) then
       begin
         Result := ResultArray;
         Exit;
@@ -1942,7 +1986,8 @@ begin
     begin
       SplitterValue.SetProperty(PROP_LAST_INDEX,
         TGocciaNumberLiteralValue.Create(SearchIndex));
-      if not MatchRegExpObjectOnce(SplitterValue, Input, MatchValue) then
+      if not MatchRegExpObjectOnce(SplitterValue, Input, MatchValue,
+        ArgumentStringValue(AArgs)) then
       begin
         SearchIndex := AdvanceUTF16StringIndex(Input, SearchIndex,
           UnicodeMatching);

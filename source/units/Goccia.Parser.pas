@@ -6121,7 +6121,10 @@ begin
         BindingPattern := ParsePattern;
         BindingName := '';
       end
-      else if Check(gttIdentifier) or
+      // ES2026 §14.7.5 ForDeclaration : LetOrConst ForBinding
+      // ForBinding : BindingIdentifier, which includes `as`, `from` and
+      // (outside strict mode code) `static`.
+      else if IsIdentifierBindingToken(Peek.TokenType) or
               (IsVar and Check(gttLet) and EffectiveNonStrictModeEnabled) then
       begin
         if IsVar then
@@ -9632,7 +9635,12 @@ begin
     Advance; // consume '{'
     Result := ParseObjectPattern;
   end
-  else if Check(gttIdentifier) then
+  // ES2026 §14.3.3 BindingElement : SingleNameBinding
+  // ES2026 §13.1 BindingIdentifier : Identifier
+  // Contextual words with their own token types (`as`, `from`, `static`)
+  // are Identifiers too; ValidateIdentifierBinding rejects the ones that
+  // are reserved in strict mode code.
+  else if IsIdentifierBindingToken(Peek.TokenType) then
   begin
     BindingToken := Advance;
     ValidateIdentifierBinding(BindingToken);

@@ -108,3 +108,23 @@ describe("Set.prototype.intersection", () => {
     expect(() => s.intersection([])).toThrow(TypeError);
   });
 });
+
+describe.runIf(typeof Goccia !== "undefined")("intersection across a collection", () => {
+  // Reuses the memory a wrongly collected object leaves behind.
+  const churn = () => Array.from({ length: 2000 }, (_, i) => [i, { i }]);
+
+  test("keeps a has method from a getter while the keys getter collects", () => {
+    const other = {
+      size: 10,
+      get has() {
+        return (value) => value === 1;
+      },
+      get keys() {
+        Goccia.gc();
+        churn();
+        return () => [].values();
+      },
+    };
+    expect([...new Set([1, 2]).intersection(other)]).toEqual([1]);
+  });
+});
