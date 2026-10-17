@@ -13299,6 +13299,221 @@ await section("Runner sandbox mode: a parent's fetch that completes during a nes
   }
 });
 
+await section("Runner: a fetch awaited after a top-level await that settles at once still completes (#1559)...", async () => {
+  // The entry's first await settles at once, so the rest of its body runs as
+  // a job inside the run's final idle wait. A fetch started there used to be
+  // left in flight when that wait returned: the run printed `a` and exited 0.
+  // Every path that runs the entry as an async module — sandbox mode, and
+  // host mode while the interpreter existed — dropped it.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      // Never already answered when the run first looks for pending work.
+      await Bun.sleep(50);
+      return new Response("hello", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const fetchTail = [
+    "console.log('a');",
+    `const response = await fetch('${url}');`,
+    "console.log('b ' + response.status + ' ' + (await response.text()));",
+    "console.log('c');",
+  ];
+  const completes = ["a", "b 200 hello", "c"];
+  const variants: { name: string; main: string; expected: string[]; hostToo: boolean }[] = [
+    { name: "await Promise.resolve()", main: ["await Promise.resolve();", ...fetchTail].join("\n"), expected: completes, hostToo: true },
+    { name: "await import('./j.js')", main: ["const j = (await import('./j.js')).default;", "console.log('j ' + j);", ...fetchTail].join("\n"), expected: ["j 42", ...completes], hostToo: true },
+    { name: "await import('fs')", main: ["const fs = (await import('fs')).default;", "console.log('fs ' + typeof fs.readFileSync);", ...fetchTail].join("\n"), expected: ["fs function", ...completes], hostToo: false },
+    {
+      name: "await main()",
+      main: ["const main = async () => {", "  await Promise.resolve();", ...fetchTail.map((line) => "  " + line), "};", "await main();"].join("\n"),
+      expected: completes,
+      hostToo: true,
+    },
+    {
+      name: "fetch().then() after await Promise.resolve()",
+      main: [
+        "await Promise.resolve();",
+        "console.log('a');",
+        `fetch('${url}').then((response) => console.log('b ' + response.status));`,
+        "console.log('c');",
+      ].join("\n"),
+      expected: ["a", "c", "b 200"],
+      hostToo: true,
+    },
+  ];
+  // Async spawns, so this process's event loop stays free to answer.
+  const spawnRunner = async (args: string[]) => {
+    const proc = Bun.spawn([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, 20_000);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      return { exitCode, stdout: normalizeLineEndings(stdout), combined: stdout + stderr, timedOut };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const runBoth = async (main: string, hostToo: boolean) => {
+    const tmp = makeNativeTmp();
+    try {
+      const tree = writeSandboxTree(tmp, { "/main.js": main, "/j.js": "export default 42;\n" });
+      const common = ["--source-type=module", "--allow-net=127.0.0.1"];
+      const runs = [{ path: "sandbox", run: await spawnRunner(["--copy", `${tree}=/`, "--entry=/main.js", ...common]) }];
+      if (hostToo)
+        runs.push({ path: "host", run: await spawnRunner([join(tree, "main.js"), ...common]) });
+      return runs;
+    } finally {
+      clean(tmp);
+    }
+  };
+  // The program's own output, without the host runner's timing report.
+  const programLines = (stdout: string) =>
+    stdout.split("\n").filter((line) => line !== "" && !line.startsWith("Running script") && !line.startsWith("  "));
+  // Every case runs, so one run names every path that drops the fetch.
+  const failures: string[] = [];
+  try {
+    for (const variant of variants) {
+      for (const { path, run } of await runBoth(variant.main, variant.hostToo)) {
+        const label = `${path}, ${variant.name}`;
+        const lines = programLines(run.stdout);
+        if (run.timedOut || run.exitCode !== 0)
+          failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+        else if (JSON.stringify(lines) !== JSON.stringify(variant.expected))
+          failures.push(`${label}: should print ${JSON.stringify(variant.expected)}, got ${JSON.stringify(lines)}`);
+      }
+    }
+    // A rejected fetch the entry awaits is still the entry's uncaught error.
+    const rejected = ["await Promise.resolve();", "console.log('a');", "await fetch('http://127.0.0.1:1/');", "console.log('unreachable');"].join("\n");
+    for (const { path, run } of await runBoth(rejected, true)) {
+      const label = `${path}, rejected fetch`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("TypeError: Failed to connect to 127.0.0.1:1") || lines[0] !== "a" || lines.includes("unreachable"))
+        failures.push(`${label}: should print a, then fail with the fetch's TypeError, got:\n${run.combined}`);
+    }
+    // An entry still waiting once nothing is left to settle it failed; it
+    // never reports a run that stopped partway as a success.
+    const unsettled = ["await Promise.resolve();", "console.log('a');", "await new Promise(() => {});", "console.log('unreachable');"].join("\n");
+    for (const { path, run } of await runBoth(unsettled, true)) {
+      const label = `${path}, unsettled top-level await`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("TypeError: await: Promise did not settle") || lines[0] !== "a" || lines.includes("unreachable"))
+        failures.push(`${label}: should print a, then fail with the unsettled-await TypeError, got:\n${run.combined}`);
+    }
+    // The entry waits on a promise a throwing reaction never settles: the
+    // rejection nothing handled is the run's error, not the unsettled await.
+    // Host mode awaits synchronously and fails at the await instead, so only
+    // the sandbox path runs this case.
+    const thrown = [
+      "await Promise.resolve();",
+      "console.log('a');",
+      `await new Promise(() => fetch('${url}').then(() => { throw new Error('boom'); }));`,
+      "console.log('unreachable');",
+    ].join("\n");
+    for (const { path, run } of await runBoth(thrown, false)) {
+      const label = `${path}, reaction that throws`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("Error: boom") || run.combined.includes("did not settle") || lines[0] !== "a")
+        failures.push(`${label}: should print a, then fail with the reaction's Error: boom, got:\n${run.combined}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
+});
+
+await section("Runner: the idle wait for an Atomics.waitAsync timeout neither delays nor is delayed by a fetch, and does not hold a nested run...", async () => {
+  // The scripts time each step from inside and print whether it was prompt.
+  // A waiter's timeout is what a slow fetch would have waited out, and the
+  // slow endpoint is what a slow waiter would have waited for.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (new URL(request.url).pathname === "/slow")
+        await Bun.sleep(1500);
+      return new Response("ok", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const prompt = (label: string, start: string) =>
+    `console.log('${label} ' + (Date.now() - ${start} < 2000 ? 'prompt' : 'late'));`;
+  // A job starts a fetch while a timed waiter is pending: the fetch's response
+  // is waited for first, not after the waiter's timeout, and the waiter still
+  // times out on time.
+  const fetchFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const waitStart = Date.now();",
+    "const waited = Atomics.waitAsync(view, 0, 0, 3000).value;",
+    "const fetchStart = Date.now();",
+    `await fetch('${url}');`,
+    prompt("fetch", "fetchStart"),
+    "const outcome = await waited;",
+    "console.log('waiter ' + outcome + ' ' + (Date.now() - waitStart < 4500 ? 'on time' : 'late'));",
+  ].join("\n");
+  // A waiter that falls due while a slow fetch is in flight settles then, not
+  // after the response, so it wins the race.
+  const waiterFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const raceStart = Date.now();",
+    "const winner = await Promise.race([",
+    "  Atomics.waitAsync(view, 0, 0, 100).value.then(() => 'waiter'),",
+    `  fetch('${url}slow').then(() => 'fetch'),`,
+    "]);",
+    "console.log('winner ' + winner + ' ' + (Date.now() - raceStart < 1000 ? 'prompt' : 'late'));",
+  ].join("\n");
+  // A nested run has no waiter of its own and ends without waiting out its
+  // caller's.
+  const nested = [
+    "import { runScript } from 'goccia';",
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "const waited = Atomics.waitAsync(view, 0, 0, 5000).value;",
+    "const childStart = Date.now();",
+    "const child = runScript('/child.js');",
+    prompt("child", "childStart"),
+    "console.log('child ok ' + child.ok);",
+    "console.log('waiter ' + (await waited));",
+  ].join("\n");
+  const failures: string[] = [];
+  try {
+    for (const [name, files, expected] of [
+      ["fetch during a waiter", { "/main.js": fetchFirst }, ["fetch prompt", "waiter timed-out on time"]],
+      ["waiter during a slow fetch", { "/main.js": waiterFirst }, ["winner waiter prompt"]],
+      ["nested run during a waiter", { "/main.js": nested, "/child.js": "console.log('child ran');\n" }, ["child prompt", "child ok true", "waiter timed-out"]],
+    ] as const) {
+      const run = await runNestedFetchSandbox({ ...files }, []);
+      const label = `sandbox, ${name}`;
+      const lines = run.stdout.split("\n").filter((line) => line !== "");
+      if (run.timedOut || run.exitCode !== 0)
+        failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (JSON.stringify(lines) !== JSON.stringify(expected))
+        failures.push(`${label}: should print ${JSON.stringify(expected)}, got ${JSON.stringify(lines)}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
+});
+
 await section("Runner: a deadline that elapses while a fetch is pending ends the run, not the fetch...", async () => {
   // A request's socket gives up when the run's deadline does. That used to
   // reach the script as a catchable `TypeError: Invalid HTTP response: no

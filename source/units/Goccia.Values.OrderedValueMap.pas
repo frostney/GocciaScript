@@ -57,6 +57,12 @@ type
     // value, so iteration (values/entries/forEach) observes the canonical form
     // (-0 as +0). Keeping this in the store means Set callers cannot forget to
     // canonicalize the value slot.
+    //
+    // An existing member is left exactly as it is (ES2026 §24.2.4.1 step 4
+    // returns before appending). It must not take the new value: a Set marks
+    // only the value slot, so a key the value no longer matches is reachable
+    // from nowhere, and the next lookup that probes it reads a freed object
+    // (issue #1679).
     procedure AddSetMember(const AValue: TGocciaValue);
 
     // Live, insertion-ordered cursor over active entries. ACursor is a
@@ -200,7 +206,7 @@ var
   Canonical: TGocciaValue;
 begin
   Canonical := CanonicalizeKey(AValue);
-  Add(Canonical, Canonical);
+  TryAdd(Canonical, Canonical);
 end;
 
 function TGocciaOrderedValueMap.NextEntry(var ACursor: Integer;
