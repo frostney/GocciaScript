@@ -453,6 +453,7 @@ type
   private
     FImports: TStringStringMap; // local name -> imported name
     FAttributeType: string;
+    FDuplicateBinding: string;
     FModulePath: string;
     FNamespaceName: string;
     FPhase: TGocciaImportCallPhase;
@@ -464,6 +465,12 @@ type
       const AAttributeType: string = '');
     property Imports: TStringStringMap read FImports;
     property AttributeType: string read FAttributeType;
+    // The first local name this declaration binds twice (two named imports
+    // with one local name, or a default binding and a named one), which
+    // Imports holds once. The source pipeline raises it as a Module early
+    // error (ES2026 §16.2.1.1).
+    property DuplicateBinding: string read FDuplicateBinding
+      write FDuplicateBinding;
     property ModulePath: string read FModulePath;
     property NamespaceName: string read FNamespaceName;
     property Phase: TGocciaImportCallPhase read FPhase;

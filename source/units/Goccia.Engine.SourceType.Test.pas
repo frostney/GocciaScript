@@ -252,6 +252,17 @@ begin
   Expect<string>(ParseError(
     'import * as ns from "./a.js";' + LineEnding + 'export const ns = 1;',
     stDetect)).ToBe('Identifier "ns" has already been declared');
+  { One declaration binding a name twice (ImportedBinding in
+    ImportsList, or the default binding and a named one). }
+  Expect<string>(ParseError(
+    'import { a as x, b as x } from "./a.js";', stModule))
+    .ToBe('Identifier "x" has already been declared');
+  Expect<string>(ParseError(
+    'import x, { a as x } from "./a.js";', stDetect))
+    .ToBe('Identifier "x" has already been declared');
+  Expect<string>(ParseError(
+    'import x, * as x from "./a.js";', stModule))
+    .ToBe('Identifier "x" has already been declared');
   { A Script has no such early error; its declarations meet at run time. }
   Expect<string>(ParseError(
     'import { n } from "./a.js";' + LineEnding + 'const n = 1;', stScript))

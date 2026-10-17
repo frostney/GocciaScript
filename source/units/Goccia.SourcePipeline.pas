@@ -423,6 +423,9 @@ begin
       if Stmt is TGocciaImportDeclaration then
       begin
         ImportDecl := TGocciaImportDeclaration(Stmt);
+        if ImportDecl.DuplicateBinding <> '' then
+          RaiseModuleRedeclaration(ImportDecl.DuplicateBinding, AFileName,
+            ASourceLines, ImportDecl.Line, ImportDecl.Column);
         AddImportedName(ImportDecl.NamespaceName);
         for ImportPair in ImportDecl.Imports do
           AddImportedName(ImportPair.Key);

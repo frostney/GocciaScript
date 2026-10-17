@@ -7424,10 +7424,20 @@ end;
 function TGocciaParser.ImportDeclaration: TGocciaStatement;
 var
   Imports: TStringStringMap;
-  AttributeType, ImportedName, LocalName, ModulePath, NamespaceName: string;
+  AttributeType, DuplicateBinding, ImportedName, LocalName, ModulePath,
+    NamespaceName: string;
   ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
   IsTypeOnlyBinding: Boolean;
+
+  { Imports keys on the local name, so a second binding of one name would
+    replace the first unseen: note it for the Module early error. }
+  procedure AddNamedImport(const ALocalName, AImportedName: string);
+  begin
+    if (DuplicateBinding = '') and Imports.ContainsKey(ALocalName) then
+      DuplicateBinding := ALocalName;
+    Imports.Add(ALocalName, AImportedName);
+  end;
 
   function ParseImportAttributeTypeIfPresent: string;
   var
@@ -7478,6 +7488,7 @@ var
       (FTokens[FCurrent + 2].TokenType = gttFrom);
   end;
 begin
+  DuplicateBinding := '';
   Line := Previous.Line;
   Column := Previous.Column;
 
@@ -7602,7 +7613,7 @@ begin
           LocalName := ImportedName;
 
         if not IsTypeOnlyBinding then
-          Imports.Add(LocalName, ImportedName);
+          AddNamedImport(LocalName, ImportedName);
 
         if not Match(gttComma) then
           Break;
@@ -7621,6 +7632,7 @@ begin
       SSuggestAddSemicolon);
     Result := TGocciaImportDeclaration.Create(Imports, ModulePath, SourceSpanAtPosition(Line, Column),
       '', icpEvaluation, AttributeType);
+    TGocciaImportDeclaration(Result).DuplicateBinding := DuplicateBinding;
     Exit;
   end;
 
@@ -7663,7 +7675,7 @@ begin
       LocalName := ImportedName;
 
     if not IsTypeOnlyBinding then
-      Imports.Add(LocalName, ImportedName);
+      AddNamedImport(LocalName, ImportedName);
 
     if not Match(gttComma) then
       Break;
@@ -7681,6 +7693,7 @@ begin
 
   Result := TGocciaImportDeclaration.Create(Imports, ModulePath, SourceSpanAtPosition(Line, Column),
     '', icpEvaluation, AttributeType);
+  TGocciaImportDeclaration(Result).DuplicateBinding := DuplicateBinding;
 end;
 
 function TGocciaParser.ExportDeclaration: TGocciaStatement;
