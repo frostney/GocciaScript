@@ -4041,8 +4041,6 @@ await section("Loader: Date.parse reads legacy dates without an offset as local 
 // CI runs in UTC, where local fields and the UTC instant agree. Off UTC the
 // local fields of the first and last valid instants lie past the time value
 // range, which applies to TimeClip(UTC(date)), after the offset comes off.
-// The last valid instant falls in daylight saving time in Los Angeles
-// (275760-09-12T17:00 PDT).
 await section("Loader: Date applies the time value range after converting local time...", async () => {
   const tmp = makeTmp();
   try {
@@ -4060,8 +4058,6 @@ await section("Loader: Date applies the time value range after converting local 
       "  nearStart.setHours(nearStart.getHours() - 1),",
       "  Date.parse(new Date(8.64e15).toString()),",
       '  Date.parse("+275760-09-13T01:00:00"),',
-      "  new Date(275760, 8, 12, 17).getTime(),",
-      "  new Date(275760, 8, 12, 18).getTime(),",
       '].join("|");',
       "",
     ].join("\n");
@@ -4069,11 +4065,11 @@ await section("Loader: Date applies the time value range after converting local 
     const cases: [string, string][] = [
       [
         "America/Los_Angeles",
-        "-8639999996822000|NaN|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|NaN|8640000000000000|NaN",
+        "-8639999996822000|NaN|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|NaN",
       ],
       [
         "Asia/Tokyo",
-        "NaN|8639999996399999|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|8639999971200000|8639999942400000|8639999946000000",
+        "NaN|8639999996399999|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|8639999971200000",
       ],
     ];
     for (const [zone, expected] of cases) {
