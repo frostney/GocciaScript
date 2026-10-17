@@ -453,7 +453,7 @@ const
         '};'#10 +
         '// RFC 2822 section 4.3 zone names (UT, GMT, Z and the US zones) and numeric'#10 +
         '// offsets, alone or after GMT, UTC or UT: +h, +hh, +hhmm (the form toString'#10 +
-        '// writes) and +hh:mm. Letters are matched case-insensitively, as in V8.'#10 +
+        '// writes) and +h:m, +hh:mm. Letters are matched case-insensitively, as in V8.'#10 +
         'const legacyZoneOffsetHours: any = {'#10 +
         '  UT: 0, UTC: 0, GMT: 0, Z: 0, EST: -5, EDT: -4, CST: -6, CDT: -5,'#10 +
         '  MST: -7, MDT: -6, PST: -8, PDT: -7'#10 +
@@ -473,8 +473,9 @@ const
         '  const hourText: string = split ? body.slice(0, body.length - 2) : parts[0];'#10 +
         '  const minuteText: string = split ? body.slice(body.length - 2) : parts.length === 2 ? parts[1] : "00";'#10 +
         '  if (hourText.length < 1 || hourText.length > 2) return NaN;'#10 +
+        '  if (minuteText.length < 1 || minuteText.length > 2) return NaN;'#10 +
         '  const hour: number = parseExactDigits(hourText, hourText.length);'#10 +
-        '  const minute: number = parseExactDigits(minuteText, 2);'#10 +
+        '  const minute: number = parseExactDigits(minuteText, minuteText.length);'#10 +
         '  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;'#10 +
         '  const offset: number = (hour * 60 + minute) * 60000;'#10 +
         '  return sign === "+" ? offset : -offset;'#10 +
@@ -498,7 +499,9 @@ const
         '  const fields: any[] = [year, month - 1, day, time[0], time[1], time[2], time[3]];'#10 +
         '  // Without an offset token the time is local, as for a legacy date.'#10 +
         '  if (!hasOffset) return makeDateEpochMillisecondsRaw(fields, Temporal.Now.timeZoneId(), false);'#10 +
-        '  return makeDateEpochMillisecondsRaw(fields, "UTC", false) - offset;'#10 +
+        '  // TimeClip applies to the UTC value, after the offset is removed.'#10 +
+        '  const utc: number = makeDateEpochMillisecondsRaw(fields, "UTC", false) - offset;'#10 +
+        '  return Math.abs(utc) > dateTimeClipLimit ? NaN : utc;'#10 +
         '};'#10 +
         'const parseISODateString = (text: string): any => {'#10 +
         '  let position: number = 0;'#10 +
