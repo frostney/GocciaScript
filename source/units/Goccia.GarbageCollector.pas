@@ -281,7 +281,11 @@ type
     // the caller with the live total.
     function TrackedTriggerBytes(const ABytesAllocated,
       ABytesAfterLastCollect: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}
-    procedure SampleHeap;
+    // APendingBytes is native storage the caller is about to allocate: the
+    // growth gate reports a request before the store allocates it, so a
+    // single large request would otherwise be sampled before it is in use
+    // and reset the count that would have sampled it afterwards.
+    procedure SampleHeap(const APendingBytes: Int64 = 0);
     // AFull is False for CollectYoung, which keeps every object older than
     // its watermark: what it leaves in use is not a measure of what a
     // collection cannot reclaim, so it moves neither the back-off baseline
@@ -336,8 +340,10 @@ type
     procedure RegisterObject(const AObject: TGCManagedObject);
     procedure UnregisterObject(const AObject: TGCManagedObject);
     procedure RegisterRootSource(const ASource: TGCRootSource);
-    // Reports ABytes of native storage a value has just grown (array element
-    // storage, property storage), which no registration accounts for. Once
+    // Reports ABytes of native storage a value is growing by (array element
+    // storage, property storage), which no registration accounts for. The
+    // growth gate reports a request before the store allocates it, so the
+    // sample counts ABytes as already in use. Once
     // the reported growth reaches the sampling step the heap is sampled, so
     // the heap trigger sees storage-heavy allocation as it happens rather
     // than every HEAP_SAMPLE_INTERVAL registrations (ADR 0145). It never
@@ -1520,10 +1526,10 @@ begin
   if Step > HEAP_SAMPLE_GROWTH_BYTES then
     Step := HEAP_SAMPLE_GROWTH_BYTES;
   if FNativeGrowthSinceSample >= Step then
-    SampleHeap;
+    SampleHeap(ABytes);
 end;
 
-procedure TGarbageCollector.SampleHeap;
+procedure TGarbageCollector.SampleHeap(const APendingBytes: Int64);
 var
   HeapBytes: Int64;
 begin
@@ -1538,7 +1544,7 @@ begin
   // baseline no longer holds, so the back-off must not keep the trigger up.
   if HeapBytes < FHeapAfterLastCollect then
     FHeapAfterLastCollect := HeapBytes;
-  if HeapBytes >= HeapTriggerBytes then
+  if HeapBytes + APendingBytes >= HeapTriggerBytes then
   begin
     // Rides the external-pressure latch so the collection checkpoint keeps
     // testing a single flag; FHeapPressurePending only

@@ -57,7 +57,10 @@ next checkpoint collects. No collection site is added.
 **Gated growth samples the heap.** `RequireNativeBytes` reports every granted
 request to `TGarbageCollector.NoteNativeGrowth`. Once the reported growth
 since the last sample reaches 1 MiB, or a pressure reserve if that is smaller,
-the collector samples the heap. It still charges nothing and never collects:
+the collector samples the heap. The gate is consulted before the store
+allocates, so the sample counts the request as already in use; otherwise one
+large request would be sampled before it existed and reset the count that
+would have caught it. It still charges nothing and never collects:
 gate-not-charge stays as ADR 0106 decided. Element storage that grows by
 appending (`push`, literal construction) does not pass the gate, so it is
 still sampled only through registrations; the measured push-built loop already
@@ -141,7 +144,9 @@ instructions.
 Coverage: `Goccia.GarbageCollector.Test` checks that heap growth triggers a
 collection under a far ceiling and keeps the heap within the growth step, that
 the growth trigger does not repeat over heap a collection cannot reclaim, and
-that reported native growth samples the heap with no registration.
+that reported native growth samples the heap with no registration,
+including one request larger than the headroom reported before it is
+allocated.
 `scripts/test-cli.ts` checks that 300 dropped `new Array(100000)` stay under
 twice a 64 MiB ceiling in resident memory on Linux, and that a small live set
 under a 2 GiB ceiling collects (everywhere) and stays under 150 MB resident

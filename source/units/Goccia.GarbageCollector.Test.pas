@@ -488,9 +488,10 @@ begin
       registration count alone would not sample the heap at all. }
     for I := 0 to BLOCK_COUNT - 1 do
     begin
+      { The gate reports a request before the store allocates it. }
+      GC.NoteNativeGrowth(BLOCK_BYTES);
       GetMem(Blocks[I], BLOCK_BYTES);
       FillChar(Blocks[I]^, BLOCK_BYTES, 0);
-      GC.NoteNativeGrowth(BLOCK_BYTES);
       if GC.ExternalPressurePending then
       begin
         Latched := True;
@@ -504,6 +505,19 @@ begin
     for I := 0 to BLOCK_COUNT - 1 do
       if Assigned(Blocks[I]) then
         FreeMem(Blocks[I]);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+
+  { One request larger than the headroom, reported before it is allocated:
+    the sample counts it as in use, or it would see the heap from before the
+    request, reset the count, and leave the allocation unsampled. }
+  GC.MaxBytes := CurrentHeapBytes + CEILING_ABOVE_HEAP;
+  try
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(False);
+    GC.NoteNativeGrowth(2 * CEILING_ABOVE_HEAP);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(True);
+  finally
     GC.MaxBytes := PreviousMaxBytes;
     GC.Collect;
   end;
