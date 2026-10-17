@@ -235,6 +235,8 @@ begin
     (FCurrentTemplate = FTopLevelTemplate);
   Result.GlobalBackedTopLevelLexicals := Result.GlobalBackedTopLevel and
     not FGlobalEvalVarEnvironment;
+  Result.GlobalLexicalPatternScope := nil;
+  Result.GlobalLexicalPatternIsConst := False;
   if FCurrentTemplate = FTopLevelTemplate then
     Result.CompletionRegister := FCompletionRegister
   else

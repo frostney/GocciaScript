@@ -294,8 +294,9 @@ jobs:
             echo "${name} built successfully for ${TARGET}"
           done
 
-          # Build test binaries
-          for src in $(find source/units source/shared -name '*.Test.pas'); do
+          # Build test binaries from every tree build.pas searches, so the
+          # source/app tests also run on the targets PR CI does not cover.
+          for src in $(find source/units source/shared source/app -name '*.Test.pas'); do
             name="$(basename "${src%.pas}")"
             echo ""
             echo "=== Building ${name} for ${TARGET} ==="

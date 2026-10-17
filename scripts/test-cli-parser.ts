@@ -139,6 +139,22 @@ console.log("Function parameter-list early errors...");
   }
 }
 
+console.log("Strict mode code rejects static as a pattern or for-head binding...");
+{
+  const cases = [
+    { desc: "static as an array-pattern element", source: "const [static] = [1];\n" },
+    { desc: "static as a rest element", source: "const [...static] = [1];\n" },
+    { desc: "static as an object-pattern target", source: "const { a: static } = { a: 1 };\n" },
+    { desc: "static as a for...of binding", source: "for (const static of [1]) {}\n" },
+  ] as const;
+
+  for (const { desc, source } of cases) {
+    assertSyntaxError(source, desc, [], {
+      messageIncludes: "must not bind reserved word 'static'",
+    });
+  }
+}
+
 // -- Migrated language early-error coverage ------------------------------------
 
 console.log("Language early errors use the CLI parser...");
