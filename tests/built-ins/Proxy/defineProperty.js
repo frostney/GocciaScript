@@ -237,4 +237,3 @@ describe("Proxy defineProperty trap descriptor with setters on Object.prototype"
     expect(get).toBe(getter);
   });
 });
-
