@@ -1781,6 +1781,9 @@ begin
     { Filtered to net by HonoredCapabilities. }
     Host.RootCapabilities := ResolveEngineCapabilities('');
     Host.OnConfigureEngine := ConfigureSandboxEngine;
+    { Only --print reads the root run's value; copying it out of the engine
+      is otherwise work charged to the run for nothing. }
+    Host.KeepRootResult := FPrint.Present;
 
     { A config-named read-write input carries the pin taken when the config
       was checked, so write-back reaches it only along that route. }

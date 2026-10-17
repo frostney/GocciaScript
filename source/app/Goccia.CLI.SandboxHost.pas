@@ -60,6 +60,7 @@ type
     FCurrentCapabilities: TGocciaCapabilities;
     FHasCurrentCapabilities: Boolean;
     FCurrentEngine: TGocciaEngine;
+    FKeepRootResult: Boolean;
 
     procedure ConfigureResolver(const AResolver: TGocciaSandboxModuleResolver);
     procedure CopyNestedInputs(const AParentContext,
@@ -105,6 +106,13 @@ type
       write FRootCapabilities;
     property OnConfigureEngine: TGocciaSandboxEngineConfigurator
       read FOnConfigureEngine write FOnConfigureEngine;
+    { Whether Run copies the root program's completion value into its
+      result's ResultValue (True by default). The copy walks the whole value,
+      and is charged to the run's own memory and time budget, so a caller
+      that never reads the value turns it off. A nested run's value is always
+      copied: runScript returns it to the calling program. }
+    property KeepRootResult: Boolean read FKeepRootResult
+      write FKeepRootResult;
   end;
 
 implementation
@@ -323,6 +331,7 @@ begin
   FInputs := TSandboxHostInputs.Create(FContext.Fs);
   FAliases := TStringList.Create;
   FRootCapabilities := TGocciaCapabilities.None;
+  FKeepRootResult := True;
 end;
 
 destructor TGocciaSandboxHost.Destroy;
@@ -524,22 +533,27 @@ begin
         PushInstructionLimitScope(FMaxInstructions);
         ScriptResult := Engine.Execute;
         ExecutionRealm := CurrentRealm;
-        { Cloning reads the run's result, and reading can run its getters.
-          The run's microtask scope has ended, so without one of its own for
-          the clone, a job a getter queued would run in the caller, and a
-          promise it left rejected would fail the caller. Both end with the
-          clone instead. }
-        MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
-        CloneScopeToken := 0;
-        if Assigned(MicrotaskQueue) then
-          CloneScopeToken := MicrotaskQueue.EnterScope;
-        try
-          SetCurrentRealm(CloneRealm);
-          Result.ResultValue := CloneResultValue(ScriptResult.Result);
-        finally
-          SetCurrentRealm(ExecutionRealm);
+        { ExecuteNested counts the depth before it calls here, so a depth of
+          zero is the root run. }
+        if (FRunScriptDepth > 0) or FKeepRootResult then
+        begin
+          { Cloning reads the run's result, and reading can run its getters.
+            The run's microtask scope has ended, so without one of its own for
+            the clone, a job a getter queued would run in the caller, and a
+            promise it left rejected would fail the caller. Both end with the
+            clone instead. }
+          MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
+          CloneScopeToken := 0;
           if Assigned(MicrotaskQueue) then
-            MicrotaskQueue.LeaveScope(CloneScopeToken);
+            CloneScopeToken := MicrotaskQueue.EnterScope;
+          try
+            SetCurrentRealm(CloneRealm);
+            Result.ResultValue := CloneResultValue(ScriptResult.Result);
+          finally
+            SetCurrentRealm(ExecutionRealm);
+            if Assigned(MicrotaskQueue) then
+              MicrotaskQueue.LeaveScope(CloneScopeToken);
+          end;
         end;
         Result.Ok := True;
         Result.ExitCode := 0;
