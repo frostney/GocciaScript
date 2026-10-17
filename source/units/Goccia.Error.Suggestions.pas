@@ -170,6 +170,8 @@ resourcestring
   SSuggestBigIntInvalidIndex = 'bits must be a non-negative integer';
   SSuggestNotANumber = 'this method can only be called on a Number value or Number object';
   SSuggestDecoratorFunction = 'decorators must be expressions that evaluate to a function';
+  SSuggestAddInitializerDuringDecoration = 'call context.addInitializer while the decorator is running, not after it returns';
+  SSuggestAddInitializerFunction = 'pass a function to context.addInitializer';
   SSuggestDisposable = 'the value must have a [Symbol.dispose] method to be used with ''using''';
   SSuggestNotFunctionType = 'the value is not callable — only functions can be invoked';
   SSuggestNotConstructorType = 'only classes and constructor functions can be used with ''new''';

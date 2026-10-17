@@ -47,16 +47,31 @@ procedure ReinitializeRegExpObject(const AValue: TGocciaValue;
   const APattern, AFlags: string);
 function GetRegExpInternalSource(const AValue: TGocciaValue): string;
 function GetRegExpInternalFlags(const AValue: TGocciaValue): string;
+{ The match functions below take an optional AInputValue: the string value
+  AInput came from, when the caller has one it keeps reachable. It becomes the
+  match array's "input" and a custom exec's argument, so a match does not
+  create, and charge the collector for, another copy of the subject. Without
+  it they create one string value per match. }
 function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
-  out AMatchArray: TGocciaValue): Boolean;
+  out AMatchArray: TGocciaValue;
+  const AInputValue: TGocciaValue = nil): Boolean;
 function MatchRegExpObjectOnceResult(const AValue: TGocciaValue;
-  const AInput: string; out AMatch: TGocciaRegExpExecutionResult): Boolean;
+  const AInput: string; out AMatch: TGocciaRegExpExecutionResult;
+  const AInputValue: TGocciaValue = nil): Boolean;
 function MatchRegExpBuiltinObjectOnce(const AValue: TGocciaValue;
-  const AInput: string; out AMatchArray: TGocciaValue): Boolean;
+  const AInput: string; out AMatchArray: TGocciaValue;
+  const AInputValue: TGocciaValue = nil): Boolean;
+{ Whether RegExpBuiltinExec(AValue, AInput) matches, with its lastIndex
+  update, but without building the match array: for RegExp.prototype.test
+  once IsBuiltinExecRegExp(AValue) has shown that RegExpExec runs the
+  built-in exec. }
+function TestRegExpBuiltinObjectOnce(const AValue: TGocciaValue;
+  const AInput: string): Boolean;
 function MatchRegExpObject(const AValue: TGocciaValue; const AInput: string;
   const AStartIndex: Integer; const ARequireStart, AUpdateLastIndex: Boolean;
   out AMatchArray: TGocciaValue; out AMatchIndex, AMatchEnd,
-  ANextIndex: Integer; const AUseCustomExec: Boolean = True): Boolean;
+  ANextIndex: Integer; const AUseCustomExec: Boolean = True;
+  const AInputValue: TGocciaValue = nil): Boolean;
 function HasUnicodeRegExpFlag(const AFlags: string): Boolean;
 function GetRegExpLastIndexLength(const AValue: TGocciaValue): Double;
 function GetClampedLastIndex(const AValue: TGocciaValue;
@@ -210,7 +225,8 @@ function MatchRegExpObjectResult(const AValue: TGocciaValue;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart, AUpdateLastIndex: Boolean;
   out AMatch: TGocciaRegExpExecutionResult; out AMatchIndex, AMatchEnd,
-  ANextIndex: Integer; const AUseCustomExec: Boolean = True): Boolean; forward;
+  ANextIndex: Integer; const AUseCustomExec: Boolean = True;
+  const AInputValue: TGocciaValue = nil): Boolean; forward;
 
 function GetRegExpProgramData(const AValue: TGocciaValue): TGocciaRegExpProgramData;
 begin
@@ -269,8 +285,9 @@ begin
 end;
 
 function TryRunRegExpCustomExec(const AValue: TGocciaValue;
-  const AInput: string; out AMatchArray: TGocciaValue; out AMatchIndex,
-  AMatchEnd, ANextIndex: Integer; out AHandled: Boolean): Boolean;
+  const AInput: string; const AInputValue: TGocciaValue;
+  out AMatchArray: TGocciaValue; out AMatchIndex, AMatchEnd,
+  ANextIndex: Integer; out AHandled: Boolean): Boolean;
 var
   ExecArgs: TGocciaArgumentsCollection;
   ExecMethod: TGocciaValue;
@@ -293,9 +310,12 @@ begin
     end;
 
     AHandled := True;
-    ExecArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(AInput)
-    ]);
+    if Assigned(AInputValue) then
+      ExecArgs := TGocciaArgumentsCollection.Create([AInputValue])
+    else
+      ExecArgs := TGocciaArgumentsCollection.Create([
+        TGocciaStringLiteralValue.Create(AInput)
+      ]);
     try
       ExecResult := InvokeCallable(ExecMethod, ExecArgs, Obj);
     finally
@@ -520,12 +540,6 @@ begin
     RemoveTempRootIfNeeded(IndicesRoot);
     RemoveTempRootIfNeeded(MatchArrayRoot);
   end;
-end;
-
-function BuildMatchArray(const AInput: string;
-  const AMatchResult: TGocciaRegExpMatchResult): TGocciaObjectValue;
-begin
-  Result := BuildMatchArrayWithInput(AInput, nil, AMatchResult);
 end;
 
 function BuildRegExpMatchArray(const AInputValue: TGocciaValue;
@@ -762,68 +776,75 @@ begin
   Result := GetRegExpProgramData(AValue).OriginalFlags;
 end;
 
-function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
-  out AMatchArray: TGocciaValue): Boolean;
+// ES2026 §22.2.7.2 RegExpBuiltinExec(regexp, string): where the match
+// starts, and whether it must start there. lastIndex is read first, then the
+// flags; lastIndex counts only under the g or y flag; past the end of AInput
+// the match fails.
+function BuiltinExecStartIndex(const AValue: TGocciaValue;
+  const AInput: string; out ASticky: Boolean): Integer;
 var
   Flags: string;
-  StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
   InputLength: Integer;
   LastIndex: Double;
+begin
+  LastIndex := GetRegExpLastIndexLength(AValue);
+  Flags := GetRegExpInternalFlags(AValue);
+  ASticky := HasRegExpFlag(Flags, 'y');
+  if not (HasRegExpFlag(Flags, 'g') or ASticky) then
+    Exit(0);
+  InputLength := RegExpInputCodeUnitLength(AInput);
+  if LastIndex > InputLength then
+  begin
+    if InputLength < MaxInt then
+      Result := InputLength + 1
+    else
+      Result := MaxInt;
+  end
+  else
+    Result := Trunc(LastIndex);
+end;
+
+// ES2026 §22.2.7.1 RegExpExec(regexp, string)
+function MatchRegExpObjectOnce(const AValue: TGocciaValue; const AInput: string;
+  out AMatchArray: TGocciaValue; const AInputValue: TGocciaValue): Boolean;
+var
+  MatchIndex, MatchEnd, NextIndex: Integer;
   HandledCustomExec: Boolean;
 begin
   if not IsRegExpInstance(AValue) then
   begin
     Result := MatchRegExpObject(AValue, AInput, 0, False, False, AMatchArray,
-      MatchIndex, MatchEnd, NextIndex);
+      MatchIndex, MatchEnd, NextIndex, True, AInputValue);
     Exit;
   end;
 
-  Result := TryRunRegExpCustomExec(AValue, AInput, AMatchArray, MatchIndex,
-    MatchEnd, NextIndex, HandledCustomExec);
+  Result := TryRunRegExpCustomExec(AValue, AInput, AInputValue, AMatchArray,
+    MatchIndex, MatchEnd, NextIndex, HandledCustomExec);
   if HandledCustomExec then
     Exit;
 
-  Flags := GetRegExpInternalFlags(AValue);
-  LastIndex := GetRegExpLastIndexLength(AValue);
-  if HasRegExpFlag(Flags, 'g') or HasRegExpFlag(Flags, 'y') then
-  begin
-    InputLength := RegExpInputCodeUnitLength(AInput);
-    if LastIndex > InputLength then
-    begin
-      if InputLength < MaxInt then
-        StartIndex := InputLength + 1
-      else
-        StartIndex := MaxInt;
-    end
-    else
-      StartIndex := Trunc(LastIndex);
-  end
-  else
-    StartIndex := 0;
-  Result := MatchRegExpObject(AValue, AInput, StartIndex,
-    HasRegExpFlag(Flags, 'y'), True, AMatchArray, MatchIndex,
-    MatchEnd, NextIndex, False);
+  Result := MatchRegExpBuiltinObjectOnce(AValue, AInput, AMatchArray,
+    AInputValue);
 end;
 
+// ES2026 §22.2.7.1 RegExpExec(regexp, string)
 function MatchRegExpObjectOnceResult(const AValue: TGocciaValue;
-  const AInput: string; out AMatch: TGocciaRegExpExecutionResult): Boolean;
+  const AInput: string; out AMatch: TGocciaRegExpExecutionResult;
+  const AInputValue: TGocciaValue): Boolean;
 var
   CustomMatch: TGocciaValue;
-  Flags: string;
-  StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
-  InputLength: Integer;
-  LastIndex: Double;
-  HandledCustomExec: Boolean;
+  MatchIndex, MatchEnd, NextIndex, StartIndex: Integer;
+  HandledCustomExec, Sticky: Boolean;
 begin
   if not IsRegExpInstance(AValue) then
   begin
     Result := MatchRegExpObjectResult(AValue, AInput, 0, False, False, AMatch,
-      MatchIndex, MatchEnd, NextIndex);
+      MatchIndex, MatchEnd, NextIndex, True, AInputValue);
     Exit;
   end;
 
-  Result := TryRunRegExpCustomExec(AValue, AInput, CustomMatch, MatchIndex,
-    MatchEnd, NextIndex, HandledCustomExec);
+  Result := TryRunRegExpCustomExec(AValue, AInput, AInputValue, CustomMatch,
+    MatchIndex, MatchEnd, NextIndex, HandledCustomExec);
   if HandledCustomExec then
   begin
     if Result then
@@ -831,73 +852,55 @@ begin
     Exit;
   end;
 
-  Flags := GetRegExpInternalFlags(AValue);
-  LastIndex := GetRegExpLastIndexLength(AValue);
-  if HasRegExpFlag(Flags, 'g') or HasRegExpFlag(Flags, 'y') then
-  begin
-    InputLength := RegExpInputCodeUnitLength(AInput);
-    if LastIndex > InputLength then
-    begin
-      if InputLength < MaxInt then
-        StartIndex := InputLength + 1
-      else
-        StartIndex := MaxInt;
-    end
-    else
-      StartIndex := Trunc(LastIndex);
-  end
-  else
-    StartIndex := 0;
-  Result := MatchRegExpObjectResult(AValue, AInput, StartIndex,
-    HasRegExpFlag(Flags, 'y'), True, AMatch, MatchIndex,
-    MatchEnd, NextIndex, False);
+  StartIndex := BuiltinExecStartIndex(AValue, AInput, Sticky);
+  Result := MatchRegExpObjectResult(AValue, AInput, StartIndex, Sticky, True,
+    AMatch, MatchIndex, MatchEnd, NextIndex, False);
 end;
 
+// ES2026 §22.2.7.2 RegExpBuiltinExec(regexp, string)
 function MatchRegExpBuiltinObjectOnce(const AValue: TGocciaValue;
-  const AInput: string; out AMatchArray: TGocciaValue): Boolean;
+  const AInput: string; out AMatchArray: TGocciaValue;
+  const AInputValue: TGocciaValue): Boolean;
 var
-  Flags: string;
-  StartIndex, MatchIndex, MatchEnd, NextIndex: Integer;
-  InputLength: Integer;
-  LastIndex: Double;
+  MatchIndex, MatchEnd, NextIndex, StartIndex: Integer;
+  Sticky: Boolean;
 begin
   if not IsRegExpInstance(AValue) then
     ThrowTypeError(SErrorRegExpExecNonRegExp);
 
-  Flags := GetRegExpInternalFlags(AValue);
-  LastIndex := GetRegExpLastIndexLength(AValue);
-  if HasRegExpFlag(Flags, 'g') or HasRegExpFlag(Flags, 'y') then
-  begin
-    InputLength := RegExpInputCodeUnitLength(AInput);
-    if LastIndex > InputLength then
-    begin
-      if InputLength < MaxInt then
-        StartIndex := InputLength + 1
-      else
-        StartIndex := MaxInt;
-    end
-    else
-      StartIndex := Trunc(LastIndex);
-  end
-  else
-    StartIndex := 0;
+  StartIndex := BuiltinExecStartIndex(AValue, AInput, Sticky);
+  Result := MatchRegExpObject(AValue, AInput, StartIndex, Sticky, True,
+    AMatchArray, MatchIndex, MatchEnd, NextIndex, False, AInputValue);
+end;
 
-  Result := MatchRegExpObject(AValue, AInput, StartIndex,
-    HasRegExpFlag(Flags, 'y'), True, AMatchArray, MatchIndex,
-    MatchEnd, NextIndex, False);
+// ES2026 §22.2.7.2 RegExpBuiltinExec(regexp, string), without the match array
+function TestRegExpBuiltinObjectOnce(const AValue: TGocciaValue;
+  const AInput: string): Boolean;
+var
+  MatchResult: TGocciaRegExpMatchResult;
+  MatchIndex, MatchEnd, NextIndex, StartIndex: Integer;
+  Sticky: Boolean;
+begin
+  if not IsRegExpInstance(AValue) then
+    ThrowTypeError(SErrorRegExpExecNonRegExp);
+
+  StartIndex := BuiltinExecStartIndex(AValue, AInput, Sticky);
+  Result := MatchRegExpNativeObject(AValue, AInput, StartIndex, Sticky, True,
+    MatchResult, MatchIndex, MatchEnd, NextIndex);
 end;
 
 function MatchRegExpObject(const AValue: TGocciaValue; const AInput: string;
   const AStartIndex: Integer; const ARequireStart, AUpdateLastIndex: Boolean;
   out AMatchArray: TGocciaValue; out AMatchIndex, AMatchEnd,
-  ANextIndex: Integer; const AUseCustomExec: Boolean): Boolean;
+  ANextIndex: Integer; const AUseCustomExec: Boolean;
+  const AInputValue: TGocciaValue): Boolean;
 var
   HandledCustomExec: Boolean;
   MatchResult: TGocciaRegExpMatchResult;
 begin
   if AUseCustomExec then
   begin
-    Result := TryRunRegExpCustomExec(AValue, AInput, AMatchArray,
+    Result := TryRunRegExpCustomExec(AValue, AInput, AInputValue, AMatchArray,
       AMatchIndex, AMatchEnd, ANextIndex, HandledCustomExec);
     if HandledCustomExec then
       Exit;
@@ -907,7 +910,7 @@ begin
     ARequireStart, AUpdateLastIndex, MatchResult, AMatchIndex, AMatchEnd,
     ANextIndex);
   if Result then
-    AMatchArray := BuildMatchArray(AInput, MatchResult)
+    AMatchArray := BuildMatchArrayWithInput(AInput, AInputValue, MatchResult)
   else
     AMatchArray := nil;
 end;
@@ -916,7 +919,8 @@ function MatchRegExpObjectResult(const AValue: TGocciaValue;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart, AUpdateLastIndex: Boolean;
   out AMatch: TGocciaRegExpExecutionResult; out AMatchIndex, AMatchEnd,
-  ANextIndex: Integer; const AUseCustomExec: Boolean): Boolean;
+  ANextIndex: Integer; const AUseCustomExec: Boolean;
+  const AInputValue: TGocciaValue): Boolean;
 var
   CustomMatch: TGocciaValue;
   HandledCustomExec: Boolean;
@@ -924,7 +928,7 @@ var
 begin
   if AUseCustomExec then
   begin
-    Result := TryRunRegExpCustomExec(AValue, AInput, CustomMatch,
+    Result := TryRunRegExpCustomExec(AValue, AInput, AInputValue, CustomMatch,
       AMatchIndex, AMatchEnd, ANextIndex, HandledCustomExec);
     if HandledCustomExec then
     begin

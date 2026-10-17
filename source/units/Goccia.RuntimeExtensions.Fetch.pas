@@ -22,6 +22,7 @@ type
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
     procedure WaitForIdle; override;
+    function HasPendingWork: Boolean; override;
     procedure DiscardPending; override;
 
     property BuiltinFetch: TGocciaGlobalFetch read FBuiltinFetch;
@@ -125,6 +126,12 @@ procedure TGocciaFetchRuntimeExtension.WaitForIdle;
 begin
   if Assigned(FBuiltinFetch) then
     WaitForFetchIdle(FBuiltinFetch.Realm);
+end;
+
+function TGocciaFetchRuntimeExtension.HasPendingWork: Boolean;
+begin
+  Result := Assigned(FBuiltinFetch) and
+    HasPendingFetches(FBuiltinFetch.Realm);
 end;
 
 procedure TGocciaFetchRuntimeExtension.DiscardPending;
