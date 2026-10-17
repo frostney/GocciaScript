@@ -5304,6 +5304,21 @@ var
   end;
 begin
   LabelToken := Advance;
+  // ES2026 §13.1.1 Static Semantics: Early Errors — an escaped label names
+  // the decoded word, so an escaped reserved word (`en\u0075m`) is never a
+  // label and an escaped `let` or `static` is not one in strict mode code.
+  if LabelToken.ContainsEscape and
+     IsReservedKeywordName(LabelToken.Lexeme) then
+    raise TGocciaSyntaxError.Create(
+      'Keyword must not contain escaped characters',
+      LabelToken.Line, LabelToken.Column, FFileName, FSourceLines);
+  if (not EffectiveNonStrictModeEnabled) and
+     ((LabelToken.Lexeme = KEYWORD_LET) or
+      (LabelToken.Lexeme = KEYWORD_STATIC)) then
+    raise TGocciaSyntaxError.Create(
+      'Strict mode code must not use reserved word ''' + LabelToken.Lexeme +
+      ''' as a label',
+      LabelToken.Line, LabelToken.Column, FFileName, FSourceLines);
   if FActiveLabels.IndexOf(LabelToken.Lexeme) >= 0 then
     raise TGocciaSyntaxError.Create('Duplicate statement label',
       LabelToken.Line, LabelToken.Column, FFileName, FSourceLines,

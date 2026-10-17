@@ -280,6 +280,16 @@ console.log("Language early errors use the CLI parser...");
       args: ["--compat-label", "--compat-non-strict-mode"],
     },
     {
+      desc: "escaped enum label in sloppy code",
+      source: "en\\u0075m: {}\n",
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "escaped let label in strict code",
+      source: '"use strict"; l\\u0065t: {}\n',
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
       desc: "break crossing an arrow-function boundary",
       source: "outer: while (true) { const fn = () => { break outer; }; }\n",
       args: ["--compat-label", "--compat-while-loops"],
