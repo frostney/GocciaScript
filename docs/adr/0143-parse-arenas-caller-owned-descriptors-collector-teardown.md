@@ -76,7 +76,10 @@ unable to tell which kind a virtual call returned.
 marked, as a collection does, repeating while destructors allocate.
 `ShutdownThreadRuntime` already freed each worker's collector after draining the
 thread-cleanup registry; `TGocciaApplication.RunApplication` now calls it on
-the main thread once the application has finished. The primitive singletons
+the main thread once the application has finished, through
+`ShutdownMainThreadRuntime`, which skips it when a thread pool abandoned a
+stalled worker: that worker still runs and reads the values the main thread's
+collector manages, so the process exits with them allocated. The primitive singletons
 stay with the main thread's collector: an AST literal no longer unregisters
 one.
 

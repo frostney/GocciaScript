@@ -214,8 +214,10 @@ nothing marked, as a collection does, and sweeps again while destructors
 register new objects. Each worker frees its collector in
 `ShutdownThreadRuntime` when it exits, after draining the thread-cleanup
 registry, and `TGocciaApplication.RunApplication` calls the same procedure on
-the main thread once the application has finished. A process therefore ends
-with nothing its collectors managed still allocated
+the main thread once the application has finished (`ShutdownMainThreadRuntime`,
+skipped when a thread pool abandoned a stalled worker, which still reads the
+main thread's values). A process therefore ends with nothing its collectors
+managed still allocated
 ([ADR 0143](adr/0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)).
 
 The sweep runs destructors in list order, as every sweep does. So a value's

@@ -2026,7 +2026,7 @@ begin
   finally
     App.Free;
     { As TGocciaApplication.RunApplication does: the main thread's collector
-      destroys what it still manages (#1592). }
-    ShutdownThreadRuntime;
+      destroys what it still manages (#1592), unless a worker was abandoned. }
+    ShutdownMainThreadRuntime;
   end;
 end.

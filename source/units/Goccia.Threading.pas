@@ -247,6 +247,14 @@ type
     be alive on the thread. }
   procedure ShutdownThreadRuntime;
 
+  { ShutdownThreadRuntime for the main thread once the application has
+    finished, unless a thread pool abandoned a stalled worker. An abandoned
+    worker is still running and still reads the process-wide values the main
+    thread's collector manages (the primitive singletons, the well-known
+    symbols, the shared prototypes), so freeing them would pull them from
+    under it; the process then exits with them still allocated instead. }
+  procedure ShutdownMainThreadRuntime;
+
 implementation
 
 uses
@@ -286,6 +294,17 @@ begin
     TGocciaCoverageTracker.Initialize;
     TGocciaCoverageTracker.Instance.Enabled := True;
   end;
+end;
+
+var
+  { Set by the main thread when a pool abandons a worker; never cleared,
+    because an abandoned worker is never joined. }
+  GWorkerAbandoned: Boolean = False;
+
+procedure ShutdownMainThreadRuntime;
+begin
+  if not GWorkerAbandoned then
+    ShutdownThreadRuntime;
 end;
 
 procedure ShutdownThreadRuntime;
@@ -665,6 +684,7 @@ begin
               Inc(StalledCount);
               FAbandoned[I] := True;
               AnyAbandoned := True;
+              GWorkerAbandoned := True;
             end;
 
         // Second pass: are all workers done (finished or abandoned)?
