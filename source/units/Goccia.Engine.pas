@@ -114,7 +114,13 @@ type
 
   TGocciaEngineExtension = class
   public
+    { Runs this extension's pending host work — a fetch in flight, a due
+      timer — until it has none left, settling the promises it owns. }
     procedure WaitForIdle; virtual;
+    { True while this extension still has host work WaitForIdle would wait
+      for. Guest code that runs after WaitForIdle returns, in a later
+      extension's pass or in a microtask, can start more. }
+    function HasPendingWork: Boolean; virtual;
     procedure DiscardPending; virtual;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; virtual;
@@ -345,6 +351,7 @@ type
     { The parse options of this engine's language profile. }
     function SourcePipelineOptions(
       const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
+    function ExtensionsHavePendingWork: Boolean;
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
@@ -600,6 +607,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
@@ -607,6 +615,7 @@ uses
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.InstructionLimit,
   Goccia.Keywords.Contextual,
   Goccia.MicrotaskQueue,
   Goccia.Platform,
@@ -614,6 +623,7 @@ uses
   Goccia.Scope.Declarations,
   Goccia.Scope.Redeclaration,
   Goccia.Spec,
+  Goccia.Timeout,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
@@ -647,6 +657,11 @@ threadvar
 
 procedure TGocciaEngineExtension.WaitForIdle;
 begin
+end;
+
+function TGocciaEngineExtension.HasPendingWork: Boolean;
+begin
+  Result := False;
 end;
 
 procedure TGocciaEngineExtension.DiscardPending;
@@ -2256,30 +2271,71 @@ begin
     FCapabilityAuditSink := nil;
 end;
 
+function TGocciaEngine.ExtensionsHavePendingWork: Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].HasPendingWork then
+      Exit(True);
+  Result := False;
+end;
+
+{ Runs the engine to idle: no host work in flight, no job queued. A job can
+  start host work after that extension's pass: in
+  `await Promise.resolve(); await fetch(url)` at the top of a module, the
+  fetch runs in the job that resumes the module. One round left that request
+  in flight and the run ended without it, so rounds repeat until one leaves
+  no extension with work. }
 procedure TGocciaEngine.WaitForRuntimeIdle;
 var
   I: Integer;
   Queue: TGocciaMicrotaskQueue;
   GC: TGarbageCollector;
+  Repeating: Boolean;
 begin
+  Repeating := False;
   try
-    for I := 0 to FExtensions.Count - 1 do
-      FExtensions[I].WaitForIdle;
-    GC := TGarbageCollector.Instance;
-    if Assigned(GC) then
-      GC.ClearKeptObjects;
-    Queue := TGocciaMicrotaskQueue.Instance;
     repeat
-      if PumpAtomicsWaitAsyncCompletions = 0 then
+      { A further round waits again: the deadline and a host's stop end it. }
+      if Repeating then
       begin
-        if Assigned(Queue) and Queue.HasPending then
-          Queue.DrainQueue
-        else
-          Break;
-      end
-      else if Assigned(Queue) and Queue.HasPending then
-        Queue.DrainQueue;
-    until False;
+        CheckExecutionTimeoutNow;
+        CheckInstructionLimit;
+      end;
+      Repeating := True;
+      for I := 0 to FExtensions.Count - 1 do
+        FExtensions[I].WaitForIdle;
+      GC := TGarbageCollector.Instance;
+      if Assigned(GC) then
+        GC.ClearKeptObjects;
+      Queue := TGocciaMicrotaskQueue.Instance;
+      repeat
+        if PumpAtomicsWaitAsyncCompletions = 0 then
+        begin
+          if Assigned(Queue) and Queue.HasPending then
+            Queue.DrainQueue
+          else if ExtensionsHavePendingWork then
+            { A job started host work after its extension's pass: the next
+              round waits on it before this loop sleeps for an Atomics
+              timeout. The fetch wait settles a waiter that falls due
+              meanwhile. }
+            Break
+          else if HasSelfSettlingAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
+          begin
+            { An Atomics.waitAsync timeout still to expire. The deadline and
+              a host's stop end the wait, as in every other engine wait. }
+            CheckExecutionTimeoutNow;
+            CheckInstructionLimit;
+            Sleep(1);
+          end
+          else
+            Break;
+        end
+        else if Assigned(Queue) and Queue.HasPending then
+          Queue.DrainQueue;
+      until False;
+    until not ExtensionsHavePendingWork;
   finally
     GC := TGarbageCollector.Instance;
     if Assigned(GC) then
@@ -3724,6 +3780,29 @@ begin
   UnregisterGlobalModuleProvider(AName);
 end;
 
+{ The entry's evaluation promise once the run is idle. Rejected, the entry
+  threw. Still pending, its top-level await waits on a promise that nothing
+  left in the run can settle: that fails the run as it does where the entry's
+  awaits run synchronously (Goccia.Values.Await.AwaitValue), never reporting
+  a run that stopped partway as a success. A rejection no handler took is
+  usually why — a reaction that threw instead of settling what the entry
+  awaits — so it is reported first, and under the throw policy it is the
+  run's error. }
+procedure RaiseUnlessEntryPromiseFulfilled(const AEngine: TGocciaEngine;
+  const APromise: TGocciaPromiseValue);
+begin
+  case APromise.State of
+    gpsRejected:
+      raise TGocciaThrowValue.Create(APromise.PromiseResult);
+    gpsPending:
+      begin
+        AEngine.RaiseUnhandledRejection;
+        ThrowTypeError(SErrorAwaitPromiseUnsettled,
+          SSuggestAwaitMicrotaskDrain);
+      end;
+  end;
+end;
+
 function TGocciaEngine.Execute: TGocciaScriptResult;
 var
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -3738,7 +3817,6 @@ var
   EntryModule: TGocciaModule;
   EntryModuleEvaluationStarted: Boolean;
   EntryRequestedModules: TGocciaModuleList;
-  EntryPromise: TGocciaPromiseValue;
   EntryLastModified: TDateTime;
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
@@ -3923,18 +4001,12 @@ begin
                   (RunModuleForSourceType). }
                 if EntryHasTopLevelAwait and
                    (ModuleResult is TGocciaPromiseValue) then
-                begin
-                  EntryPromise := TGocciaPromiseValue(ModuleResult);
-                  if EntryPromise.State = gpsRejected then
-                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-                end;
+                  RaiseUnlessEntryPromiseFulfilled(Self,
+                    TGocciaPromiseValue(ModuleResult));
                 if Assigned(EntryModule) and
                    (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
-                begin
-                  EntryPromise := TGocciaPromiseValue(EntryModule.EvaluationPromise);
-                  if EntryPromise.State = gpsRejected then
-                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-                end;
+                  RaiseUnlessEntryPromiseFulfilled(Self,
+                    TGocciaPromiseValue(EntryModule.EvaluationPromise));
                 RaiseUnhandledRejection;
                 FLastTiming.Result := ModuleResult;
               finally

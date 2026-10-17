@@ -253,10 +253,12 @@ end;
 procedure TGocciaValue.AfterConstruction;
 var
   GC: TGarbageCollector;
-  Polls: TGocciaThreadPolls;
+  Polls: PGocciaThreadPolls;
 begin
   inherited;
-  GC := TGarbageCollector.Instance;
+  // One thread-variable lookup reaches both the collector and the flags.
+  Polls := @GThreadPolls;
+  GC := TGarbageCollector(Polls^.Collector);
   if Assigned(GC) then
   begin
     GC.RegisterObject(Self);
@@ -272,9 +274,8 @@ begin
   // One thread-local read decides whether the allocation profiler, a timeout
   // or an instruction limit is armed on this thread; none is in an ordinary
   // run. See Goccia.ThreadPolls.
-  Polls := GThreadPolls;
-  if Polls.Any <> 0 then
-    RunAllocationPolls(Polls);
+  if Polls^.Any <> 0 then
+    RunAllocationPolls(Polls^);
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;

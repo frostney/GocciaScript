@@ -163,7 +163,10 @@ end;
 
 procedure TThreadPollsTests.TestFlagsShareOneWord;
 begin
-  Expect<Integer>(SizeOf(TGocciaThreadPolls)).ToBe(SizeOf(UInt32));
+  // Every flag sits inside Any: the record is the collector pointer and one
+  // word, so a flag added outside the word would grow it.
+  Expect<Integer>(SizeOf(TGocciaThreadPolls))
+    .ToBe(SizeOf(Pointer) + SizeOf(UInt32));
   Expect<Boolean>(GThreadPolls.Any = 0).ToBe(True);
 
   StartExecutionTimeout(60000);

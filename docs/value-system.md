@@ -402,6 +402,10 @@ The `ToPropertyDescriptor` helper (`Goccia.Values.ObjectPropertyDescriptor.pas`)
 - Rejects mixed data+accessor descriptors — a descriptor with both (`value` or `writable`) and (`get` or `set`) throws `TypeError`
 - Constructs the appropriate descriptor type based on which fields are present
 
+### FromPropertyDescriptor
+
+The reverse direction, `FromPropertyDescriptor` in the same unit, implements ES2026 §6.2.6.4: it turns a descriptor into the JavaScript object that `Object.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors` and `Reflect.getOwnPropertyDescriptor` return and that a Proxy `defineProperty` trap receives (`undefined` for no descriptor). Each field is made with `CreateDataPropertyOrThrow`, so it is an own data property and a setter inherited from `Object.prototype` never runs. No guest code runs while it reads the descriptor, so a caller may pass a descriptor still stored on the object it describes.
+
 ### Property Definition Merging
 
 When `Object.defineProperty` is called on an existing property, unspecified descriptor attributes are inherited from the existing descriptor rather than defaulting to `false`. For example, calling `Object.defineProperty(obj, "x", { enumerable: false })` on a property that is `configurable: true, writable: true` preserves those attributes. New properties use `false` as the default for all unspecified attributes, matching ECMAScript specification behavior.
