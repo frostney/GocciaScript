@@ -222,7 +222,8 @@ const findStores = (code: string): Store[] => {
   const stores: Store[] = [];
   const head = new RegExp(
     String.raw`\b(?:\w+\s*\.\s*)*(?:${STACK_FIELDS.join("|")})\s*\[`,
-    "g",
+    // Pascal identifiers are case-insensitive.
+    "gi",
   );
   for (const match of code.matchAll(head)) {
     const start = match.index!;
@@ -338,6 +339,8 @@ const selfTest = (): void => {
     { code: "FRegisters[A] := RegisterBoolean(GuestCallBoolean);", bad: false },
     { code: "FVM.FRegisters[I] := Obj.GetProperty(Name);", bad: true },
     { code: "Self.FRegisters[A] := Obj.GetProperty(Name);", bad: true },
+    { code: "fregisters[A] := Obj.GetProperty(Name);", bad: true },
+    { code: "Self.FLOCALCELLS[A] := Obj.GetProperty(Name);", bad: true },
     { code: "FRegisters[A] := RegisterToDouble(FRegisters[B]);", bad: true },
     { code: "FRegisters[A] := Iterator.Next;", bad: true },
     { code: "FRegisters[Next(A)] := RegisterUndefined;", bad: true },
