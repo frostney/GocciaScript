@@ -98,4 +98,16 @@ describe.runIf(typeof Goccia !== "undefined")("Symbol.search memory charge", () 
     // The subject alone would charge subject.length * 2 bytes.
     expect(perCall).toBeLessThan(subject.length);
   });
+
+  test("a string pattern does not charge another copy of the subject", () => {
+    const subject = "hello world 12345 foo bar ".repeat(640);
+    Goccia.gc();
+    const before = Goccia.gc.bytesAllocated;
+    for (const i of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+      expect(subject.search("or")).toBe(7);
+    }
+    const perCall = (Goccia.gc.bytesAllocated - before) / 10;
+
+    expect(perCall).toBeLessThan(subject.length);
+  });
 });

@@ -108,6 +108,49 @@ test("test calls a replaced RegExp.prototype.exec", () => {
   expect(seen).toEqual(["abc", "abc"]);
 });
 
+test("test calls exec defined on a RegExp subclass", () => {
+  const seen = [];
+  class Logged extends RegExp {
+    exec(value) {
+      seen.push(value);
+      return super.exec(value);
+    }
+  }
+
+  expect(new Logged("b").test("abc")).toBe(true);
+  expect(seen).toEqual(["abc"]);
+});
+
+test("test runs the exec it read before lastIndex's valueOf replaced it", () => {
+  const regex = /b/;
+  let replaced = 0;
+  regex.lastIndex = {
+    valueOf() {
+      regex.exec = () => {
+        replaced = replaced + 1;
+        return null;
+      };
+      return 0;
+    },
+  };
+
+  expect(regex.test("abc")).toBe(true);
+  expect(replaced).toBe(0);
+});
+
+test("test reads the flags after lastIndex", () => {
+  const regex = /b/y;
+  regex.lastIndex = {
+    valueOf() {
+      regex.compile("b");
+      return 0;
+    },
+  };
+
+  // compile drops the sticky flag before RegExpBuiltinExec reads the flags.
+  expect(regex.test("abc")).toBe(true);
+});
+
 describe.runIf(typeof Goccia !== "undefined")("test memory charge", () => {
   test("a match does not charge another copy of the subject", () => {
     const subject = "hello world 12345 foo bar ".repeat(640);
