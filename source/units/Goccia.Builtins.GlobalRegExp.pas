@@ -492,7 +492,8 @@ end;
 // A scanner loop keeps lastIndex in a local and writes the property only
 // when user code could next observe it. When a match raises, the property
 // gets the value the protocol's writes would have left, and the error
-// propagates: a VM limit as a JavaScript Error, anything else unchanged.
+// propagates: a VM limit as ThrowRegExpRuntimeError reports it, anything else
+// unchanged.
 procedure HandleRegExpScanError(const ARegExp: TGocciaObjectValue;
   const ALastIndex: Integer; const AError: Exception);
 var
@@ -514,7 +515,7 @@ begin
       GC.MemoryLimitFiring := WasFiring;
   end;
   if AError is ERegExpRuntimeError then
-    ThrowError(AError.Message);
+    ThrowRegExpRuntimeError(ERegExpRuntimeError(AError));
 end;
 
 // The global loop of RegExp.prototype[Symbol.replace] with a scanner. For a
@@ -643,7 +644,7 @@ begin
       end;
     except
       on E: ERegExpRuntimeError do
-        ThrowError(E.Message);
+        ThrowRegExpRuntimeError(E);
     end;
   finally
     Scanner.Free;

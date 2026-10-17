@@ -1800,8 +1800,12 @@ var
 begin
   Existing := nil;
   try
-    if FContext.Fs.Exists(APath) then
-      Existing := FContext.Fs.ReadAllBytes(APath);
+    { Opening for append refuses a read-only path before the existing
+      content is copied, and creates a missing file. An append writes; it
+      does not read, so it leaves the access time alone, and one refused
+      for a read-only path changes nothing at all. }
+    FContext.Fs.Open(APath, omAppend).Free;
+    Existing := FContext.Fs.SnapshotReadAllBytes(APath);
     SetLength(Combined, Length(Existing) + Length(AData));
     if Length(Existing) > 0 then
       Move(Existing[0], Combined[0], Length(Existing));

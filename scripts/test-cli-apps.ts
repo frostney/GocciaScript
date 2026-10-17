@@ -471,6 +471,30 @@ await section("Loader: compact-json omits build, memory, stdout, stderr...", asy
   if (typeof file.timing?.total_ns !== "number") throw new Error("compact-json per-file timing should be present");
 });
 
+await section("Loader: output keeps an empty last console line...", async () => {
+  // One element per console line, empty lines included, at the top level and
+  // in files[] alike.
+  const cases: { source: string; expected: string[] }[] = [
+    { source: 'console.log("a"); console.log("");\n', expected: ["a", ""] },
+    { source: 'console.log("a"); console.log(""); console.log("");\n', expected: ["a", "", ""] },
+    { source: 'console.log("a"); console.log(""); console.log("b");\n', expected: ["a", "", "b"] },
+    { source: 'console.log("");\n', expected: [""] },
+    { source: 'console.log("a\\n");\n', expected: ["a", ""] },
+    { source: "const quiet = 1;\n", expected: [] },
+  ];
+  for (const format of ["json", "compact-json"]) {
+    for (const { source, expected } of cases) {
+      const { exitCode, json, stderr } = runLoaderJson(source, [`--output=${format}`]);
+      const label = `${format} ${JSON.stringify(source.trim())}`;
+      if (exitCode !== 0) throw new Error(`${label} exited ${exitCode}: ${stderr}`);
+      if (JSON.stringify(json.output) !== JSON.stringify(expected))
+        throw new Error(`${label} output should be ${JSON.stringify(expected)}, got ${JSON.stringify(json.output)}`);
+      if (JSON.stringify(json.files?.[0]?.output) !== JSON.stringify(expected))
+        throw new Error(`${label} files[0].output should be ${JSON.stringify(expected)}, got ${JSON.stringify(json.files?.[0]?.output)}`);
+    }
+  }
+});
+
 await section("Loader: compact-json error path omits build, memory, stdout, stderr...", async () => {
   const { exitCode, json } = runLoaderJson("throw new Error('boom');\n", ["--output=compact-json"]);
   if (exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");
@@ -3954,6 +3978,61 @@ await section("Loader: --host-environment module controls time, zone, and random
       throw new Error(
         `Loader should reject conflicting host environment options, got: ${conflictOutput}`,
       );
+  } finally {
+    clean(tmp);
+  }
+});
+
+// CI runs in UTC, where a legacy date read as UTC and one read as local time
+// agree. Pinning the zone through a provider puts one zone on each side of UTC.
+await section("Loader: Date.parse reads legacy dates without an offset as local time...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const date = new Date(2024, 5, 15, 11, 30, 45);",
+      "[",
+      '  Date.parse("6/15/24"),',
+      '  Date.parse("2024/06/15"),',
+      '  Date.parse("Jun 15 2024"),',
+      '  Date.parse("Sat Jun 15 2024 11:30:45"),',
+      '  Date.parse("Sat, 15 Jun 2024 11:30:45"),',
+      '  Date.parse("Sat Jun 15 2024 11:30:45 GMT+0200"),',
+      '  Date.parse("2024-06-15"),',
+      '  Date.parse("2024-06-15T00:00"),',
+      "  Date.parse(date.toString()) === date.getTime(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "1718434800000|1718434800000|1718434800000|1718476245000|1718476245000|1718443845000|1718409600000|1718434800000|true",
+      ],
+      [
+        "Asia/Tokyo",
+        "1718377200000|1718377200000|1718377200000|1718418645000|1718418645000|1718443845000|1718409600000|1718377200000|true",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date.parse in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
   } finally {
     clean(tmp);
   }

@@ -53,6 +53,10 @@ const
   REGEXP_MAX_OPERAND = $FFFFFF;
   REGEXP_MAX_PROGRAM_LENGTH = REGEXP_MAX_OPERAND;
   SErrorRegExpTooLarge = 'Invalid regular expression: regular expression too large';
+  // A group, lookaround or nested class past Goccia.NestingLimit's
+  // MAX_NESTING_DEPTH.
+  SErrorRegExpNestingLimit = 'Invalid regular expression: nesting exceeds the supported limit of %d levels';
+  SErrorRegExpNestingStack = 'Invalid regular expression: nesting is too deep for the native stack that is left';
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
 { An instruction word for AOp with operand AOperand. Raises EConvertError
@@ -72,6 +76,7 @@ uses
   UnicodeICU,
 
   Goccia.Identifier,
+  Goccia.NestingLimit,
   Goccia.RegExp.Engine,
   Goccia.RegExp.UnicodeData;
 
@@ -113,6 +118,12 @@ type
     FPreScanCaptureCount: Integer;
     FPendingCodeUnit: Integer;
     FBackward: Boolean;
+    // Groups, lookarounds and nested classes open at the current position.
+    // Each is compiled by a recursive call, so the pattern compiles on the
+    // native stack as deep as it nests.
+    FNestingDepth: Integer;
+    procedure EnterNesting; {$IFDEF FPC}inline;{$ENDIF}
+    procedure LeaveNesting; {$IFDEF FPC}inline;{$ENDIF}
     function Peek: Char;
     function PeekAt(AOffset: Integer): Char;
     function AtEnd: Boolean;
@@ -404,6 +415,25 @@ end;
 procedure RaiseRegExpTooLarge;
 begin
   raise EConvertError.Create(SErrorRegExpTooLarge);
+end;
+
+procedure RaiseRegExpNestingLimit(const ADepth: Integer);
+begin
+  if ADepth > MAX_NESTING_DEPTH then
+    raise EConvertError.CreateFmt(SErrorRegExpNestingLimit, [MAX_NESTING_DEPTH]);
+  raise EConvertError.Create(SErrorRegExpNestingStack);
+end;
+
+procedure TRegExpCompiler.EnterNesting;
+begin
+  Inc(FNestingDepth);
+  if NestingDepthExceeded(FNestingDepth) then
+    RaiseRegExpNestingLimit(FNestingDepth);
+end;
+
+procedure TRegExpCompiler.LeaveNesting;
+begin
+  Dec(FNestingDepth);
 end;
 
 function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
@@ -1729,6 +1759,8 @@ var
   IsClassEscape: Boolean;
   EscContents: TRegExpClassContents;
 begin
+  // A nested class (`[[a]]` under the v flag) recurses.
+  EnterNesting;
   while not AtEnd and (Peek <> ']') do
   begin
     if (Peek = '&') and (PeekAt(1) = '&') then
@@ -1848,6 +1880,7 @@ begin
     else
       AddClassRange(AContents, Lo, Lo);
   end;
+  LeaveNesting;
 end;
 
 procedure TRegExpCompiler.EmitClassContents(
@@ -3277,6 +3310,8 @@ var
   JumpHoles: array of Integer;
   JumpCount, I: Integer;
 begin
+  // Every group and lookaround compiles its body from here.
+  EnterNesting;
   JumpCount := 0;
   SetLength(JumpHoles, 8);
   StartPC := CurrentPC;
@@ -3302,6 +3337,7 @@ begin
   end;
   for I := 0 to JumpCount - 1 do
     FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
+  LeaveNesting;
 end;
 
 procedure TRegExpCompiler.CompilePattern;
@@ -3371,6 +3407,13 @@ begin
     if FPattern[I] = '(' then
     begin
       Inc(AltStackDepth);
+      // Each named group copies the path of open groups down to it, so a deep
+      // nest of them would cost memory and time quadratic in the depth before
+      // the compiler's own nesting check. Every parenthesis counted here opens
+      // a group or lookaround the compiler nests into, so the limit is the
+      // same one.
+      if AltStackDepth > MAX_NESTING_DEPTH then
+        RaiseRegExpNestingLimit(AltStackDepth);
       if AltStackDepth >= Length(AltStack) then
         SetLength(AltStack, AltStackDepth * 2 + 4);
       AltStack[AltStackDepth] := 0;
