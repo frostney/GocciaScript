@@ -83,28 +83,8 @@ describe("atob", () => {
   });
 
   test("throws InvalidCharacterError for invalid base64 characters", () => {
-    expect(() => atob("!!!!")).toThrow();
-    expect(() => atob("====")).toThrow();
-    expect(() => atob("abc!")).toThrow();
-  });
-
-  test("throws InvalidCharacterError when length mod 4 = 1 after stripping", () => {
-    // Single valid base64 char after cleanup → mod 4 = 1
-    expect(() => atob("A")).toThrow();
-    expect(() => atob("AAAAA")).toThrow();
-  });
-
-  test("throws TypeError when called with no arguments", () => {
-    expect(() => atob()).toThrow();
-    const error = thrownBy(() => atob());
-    expect(error instanceof TypeError).toBe(true);
-    expect(error.message).toBe(
-      "Failed to execute 'atob': 1 argument required, but only 0 present."
-    );
-  });
-
-  test("reports invalid input as a DOMException InvalidCharacterError", () => {
-    // Character outside the base64 alphabet
+    expectInvalidCharacterError("!!!!");
+    expectInvalidCharacterError("====");
     expectInvalidCharacterError("abc!");
     expectInvalidCharacterError("YW-j");
     expectInvalidCharacterError("YW_j");
@@ -119,11 +99,21 @@ describe("atob", () => {
     expectInvalidCharacterError("YQ===");
     expectInvalidCharacterError("YQ=");
     expectInvalidCharacterError("Y===");
-    expectInvalidCharacterError("====");
-    // Length mod 4 = 1 after removing whitespace and padding
+  });
+
+  test("throws InvalidCharacterError when length mod 4 = 1 after stripping", () => {
+    // Single valid base64 char after cleanup → mod 4 = 1
     expectInvalidCharacterError("A");
     expectInvalidCharacterError("AAAAA");
     expectInvalidCharacterError("AAAAA===");
+  });
+
+  test("throws TypeError when called with no arguments", () => {
+    const error = thrownBy(() => atob());
+    expect(error instanceof TypeError).toBe(true);
+    expect(error.message).toBe(
+      "Failed to execute 'atob': 1 argument required, but only 0 present."
+    );
   });
 
   test("decodes every byte value across 8 KiB slice boundaries", () => {
