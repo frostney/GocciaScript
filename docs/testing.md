@@ -682,7 +682,7 @@ The primary assertion API uses a standalone generic `Expect<T>` function that re
 | `Expect<Boolean>(actual).ToBe(True)` | Assert value is `True` |
 | `Expect<Boolean>(actual).ToBe(False)` | Assert value is `False` |
 
-On failure, `ToBe` produces descriptive messages like `Expected "hello" to be "world"` or `Expected 3.14 to be 2.71`.
+On failure, `ToBe` produces descriptive messages like `Expected "hello" to be "world"` or `Expected 3.14 to be 2.71`. Strings of every kind (`string`, `AnsiString`, `WideString`, `ShortString`) appear in full, and `TestingPascalLibrary.Test.pas` checks these messages. The RTL's `Exception` stores its message as an `AnsiString` in the system code page, so on Windows a character outside that code page shows as `?`.
 
 `TTestSuite` also provides a `Fail(Message)` method to force a test failure with a custom message.
 

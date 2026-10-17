@@ -12,6 +12,10 @@ uses
 
 type
   ERegExpRuntimeError = class(Exception);
+  // Lookarounds nested deeper than the native stack left at the start of the
+  // match allows. The pattern itself is valid; the runtime reports it as the
+  // RangeError for any other exhausted call stack.
+  ERegExpStackExhausted = class(ERegExpRuntimeError);
 
   TRegExpInputUnits = array of Cardinal;
 
@@ -95,6 +99,7 @@ implementation
 uses
   TextSemantics,
 
+  Goccia.NestingLimit,
   Goccia.RegExp.UnicodeData,
   Goccia.ThreadCleanupRegistry,
   Goccia.Timeout;
@@ -104,6 +109,7 @@ const
   STEPS_PER_INPUT_BYTE = 100;
   DEFAULT_BACKTRACK_CAP = 10000000;
   SStepLimitExceeded = 'Maximum regular expression step count exceeded';
+  SErrorRegExpLookaroundStack = 'Maximum call stack size exceeded';
   MAX_RETAINED_BACKTRACK_ENTRIES = 1024;
   MEMO_INITIAL_CAPACITY = 64;
   MEMO_MAX_CAPACITY = 65536;
@@ -593,10 +599,23 @@ begin
     Result := MIN_STEP_LIMIT;
 end;
 
+// A lookaround runs its body by a recursive call, one per nesting level.
+// The compiler bounds how deeply lookarounds nest (Goccia.NestingLimit), but
+// a match can start deep in the native stack, in a callback that recursion
+// has re-entered many times; past NESTING_UNCHECKED_DEPTH levels the match
+// fails with ERegExpStackExhausted instead of running off the end of the
+// stack. Out of line: RunVM calls it only for lookarounds nested that deep.
+procedure CheckLookaroundStack;
+begin
+  if NativeStackNearlyExhausted then
+    raise ERegExpStackExhausted.Create(SErrorRegExpLookaroundStack);
+end;
+
 function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
   AStartPos: Integer; var ASlots: array of Integer;
   ASlotCount: Integer; var AStack: TBacktrackStack; AStartPC: Integer = 0;
-  AEndPos: PInteger = nil; ABackward: Boolean = False): Boolean;
+  AEndPos: PInteger = nil; ABackward: Boolean = False;
+  ALookDepth: Integer = 0): Boolean;
 var
   PC, InputPos: Integer;
   Instr: UInt32;
@@ -1351,8 +1370,10 @@ begin
           LookEnd := Bx and LOOK_TARGET_MASK;
           SetLength(LookSlots, SlotCount);
           Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
+          if ALookDepth >= NESTING_UNCHECKED_DEPTH then
+            CheckLookaroundStack;
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, LookStack, PC + 1, nil, False);
+            SlotCount, LookStack, PC + 1, nil, False, ALookDepth + 1);
           if Negated then
           begin
             if LookMatched then
@@ -1379,8 +1400,10 @@ begin
           LookEnd := Bx and LOOK_TARGET_MASK;
           SetLength(LookSlots, SlotCount);
           Move(ASlots[0], LookSlots[0], SlotCount * SizeOf(Integer));
+          if ALookDepth >= NESTING_UNCHECKED_DEPTH then
+            CheckLookaroundStack;
           LookMatched := RunVM(AProgram, AInput, InputPos, LookSlots,
-            SlotCount, LookStack, PC + 1, nil, True);
+            SlotCount, LookStack, PC + 1, nil, True, ALookDepth + 1);
           if Negated then
           begin
             if LookMatched then

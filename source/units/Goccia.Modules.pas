@@ -96,9 +96,26 @@ type
     procedure MarkRootReferences; override;
   end;
 
+  { What a module record held before a reload started linking a new version
+    of its source into it (TGocciaModule.BeginReload). }
+  TGocciaModuleReplacedState = class
+  private
+    FAmbiguousExports: TOrderedStringMap<Boolean>;
+    FAsyncCycleRoot: TGocciaModule;
+    FEnvironment: TGCManagedObject;
+    FEvaluationPromise: TGocciaValue;
+    FExportBindings: TGocciaModuleExportBindingMap;
+    FExportsTable: TGocciaValueMap;
+    FLastModified: TDateTime;
+    FStarExportNames: TOrderedStringMap<Boolean>;
+  public
+    destructor Destroy; override;
+  end;
+
   TGocciaModule = class
   private
     FRoots: TGocciaModuleRoots;
+    FReplacedState: TGocciaModuleReplacedState;
     FAmbiguousExports: TOrderedStringMap<Boolean>;
     FPath: string;
     FEnvironment: TGCManagedObject;
@@ -146,7 +163,20 @@ type
       const ASourceExportName: string): Boolean;
     procedure AddExportValue(const AExportName: string;
       const AValue: TGocciaValue);
-    procedure CopyExportsFrom(const ASourceModule: TGocciaModule);
+    { A reload links and evaluates the new version of a module's source into
+      the record importers, namespace objects and the running module body
+      already hold, so none of them is left pointing at a record the reload
+      replaced. BeginReload sets the record's exports, environment and
+      evaluation state aside and leaves it empty for the new version;
+      CommitReload releases what was set aside once the new version linked;
+      RollbackReload, for a version that failed to link, puts it back. }
+    procedure BeginReload;
+    procedure CommitReload;
+    procedure RollbackReload;
+    { Moves every export of ASourceModule, a record built to replace this
+      one's contents (a data module read again), into this record, leaving
+      ASourceModule empty so freeing it releases nothing this record uses. }
+    procedure TakeExportsFrom(const ASourceModule: TGocciaModule);
     procedure UpdateExportValue(const AExportName: string;
       const AValue: TGocciaValue);
     procedure ClearExports;
@@ -550,7 +580,21 @@ begin
   Result := FHasResolution;
 end;
 
-{ TGocciaModule }
+{ TGocciaModuleReplacedState }
+
+destructor TGocciaModuleReplacedState.Destroy;
+var
+  BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
+begin
+  if Assigned(FExportBindings) then
+    for BindingPair in FExportBindings do
+      BindingPair.Value.Free;
+  FAmbiguousExports.Free;
+  FExportBindings.Free;
+  FExportsTable.Free;
+  FStarExportNames.Free;
+  inherited;
+end;
 
 { TGocciaModuleRoots }
 
@@ -606,29 +650,44 @@ begin
   Result := FExportsTable;
 end;
 
-procedure TGocciaModule.MarkHeldValues;
+{ Only value bindings: reading a local binding could raise in its temporal
+  dead zone, and its environment scope is a root of its own. The export table
+  is marked as well: data modules (YAML, TOML, JSON5) write it without a
+  binding, and it keeps the snapshot a local export took when it was linked,
+  which a namespace object built later marks. }
+procedure MarkHeldExportValues(const AExportBindings: TGocciaModuleExportBindingMap;
+  const AExportsTable: TGocciaValueMap);
 var
   Binding: TGocciaModuleExportBinding;
   BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
   ExportPair: TGocciaValueMap.TKeyValuePair;
 begin
-  // Only value bindings: reading a local binding could raise in its temporal
-  // dead zone, and its environment scope is a root of its own. The export
-  // table is marked as well: data modules (YAML, TOML, JSON5) write it without
-  // a binding, and it keeps the snapshot a local export took when it was
-  // linked, which a namespace object built later marks.
-  for BindingPair in FExportBindings do
+  for BindingPair in AExportBindings do
   begin
     Binding := BindingPair.Value;
     if Assigned(Binding.FValue) and not Assigned(Binding.FSourceModule) and
        not Assigned(Binding.FEnvironment) then
       Binding.FValue.MarkReferences;
   end;
-  for ExportPair in FExportsTable do
+  for ExportPair in AExportsTable do
     if Assigned(ExportPair.Value) then
       ExportPair.Value.MarkReferences;
+end;
+
+procedure TGocciaModule.MarkHeldValues;
+begin
+  MarkHeldExportValues(FExportBindings, FExportsTable);
   if Assigned(FEvaluationPromise) then
     FEvaluationPromise.MarkReferences;
+  // What a reload set aside stays alive until the reload commits or rolls
+  // back; its environment stays registered as a root of its own until then.
+  if Assigned(FReplacedState) then
+  begin
+    MarkHeldExportValues(FReplacedState.FExportBindings,
+      FReplacedState.FExportsTable);
+    if Assigned(FReplacedState.FEvaluationPromise) then
+      FReplacedState.FEvaluationPromise.MarkReferences;
+  end;
 end;
 
 procedure TGocciaModule.InvalidateExportResolutions;
@@ -777,39 +836,120 @@ begin
   SetExportBinding(AExportName, TGocciaModuleExportBinding.CreateValue(AValue));
 end;
 
-procedure TGocciaModule.CopyExportsFrom(const ASourceModule: TGocciaModule);
+procedure TGocciaModule.BeginReload;
+begin
+  if Assigned(FReplacedState) then
+    raise Exception.CreateFmt('Module "%s" is already being reloaded',
+      [FPath]);
+  EnsureRoots;
+  InvalidateNamespaceObject;
+  FReplacedState := TGocciaModuleReplacedState.Create;
+  FReplacedState.FAmbiguousExports := FAmbiguousExports;
+  FReplacedState.FAsyncCycleRoot := FAsyncCycleRoot;
+  // Stays registered as a root until the reload ends, so RollbackReload can
+  // put it back whatever the collector ran in between.
+  FReplacedState.FEnvironment := FEnvironment;
+  FReplacedState.FEvaluationPromise := FEvaluationPromise;
+  FReplacedState.FExportBindings := FExportBindings;
+  FReplacedState.FExportsTable := FExportsTable;
+  FReplacedState.FLastModified := FLastModified;
+  FReplacedState.FStarExportNames := FStarExportNames;
+  FAmbiguousExports := TOrderedStringMap<Boolean>.Create;
+  FAsyncCycleRoot := nil;
+  FEnvironment := nil;
+  FEvaluationPromise := nil;
+  FExportBindings := TGocciaModuleExportBindingMap.Create;
+  FExportsTable := TGocciaValueMap.Create;
+  FStarExportNames := TOrderedStringMap<Boolean>.Create;
+end;
+
+procedure TGocciaModule.CommitReload;
 var
-  AmbiguousName: string;
-  Binding: TGocciaModuleExportBinding;
-  BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
-  StarName: string;
+  Replaced: TGocciaModuleReplacedState;
+begin
+  Replaced := FReplacedState;
+  if not Assigned(Replaced) then
+    Exit;
+  FReplacedState := nil;
+  // The record no longer roots the previous environment. Functions and
+  // instances the previous version created still reference it, and keep it
+  // alive for as long as they live.
+  if Assigned(Replaced.FEnvironment) and
+     (Replaced.FEnvironment <> FEnvironment) and
+     (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.RemoveRootObject(Replaced.FEnvironment);
+  Replaced.Free;
+end;
+
+procedure TGocciaModule.RollbackReload;
+var
+  Replaced: TGocciaModuleReplacedState;
+begin
+  Replaced := FReplacedState;
+  if not Assigned(Replaced) then
+    Exit;
+  FReplacedState := nil;
+  ClearExports;
+  if FEnvironment <> Replaced.FEnvironment then
+  begin
+    if Assigned(FEnvironment) and (TGarbageCollector.Instance <> nil) then
+      TGarbageCollector.Instance.RemoveRootObject(FEnvironment);
+    // Still registered as a root: BeginReload left it registered.
+    FEnvironment := Replaced.FEnvironment;
+  end;
+  FAmbiguousExports.Free;
+  FAmbiguousExports := Replaced.FAmbiguousExports;
+  Replaced.FAmbiguousExports := nil;
+  FExportBindings.Free;
+  FExportBindings := Replaced.FExportBindings;
+  Replaced.FExportBindings := nil;
+  FExportsTable.Free;
+  FExportsTable := Replaced.FExportsTable;
+  Replaced.FExportsTable := nil;
+  FStarExportNames.Free;
+  FStarExportNames := Replaced.FStarExportNames;
+  Replaced.FStarExportNames := nil;
+  FAsyncCycleRoot := Replaced.FAsyncCycleRoot;
+  FEvaluationPromise := Replaced.FEvaluationPromise;
+  FLastModified := Replaced.FLastModified;
+  Replaced.Free;
+  InvalidateNamespaceObject;
+end;
+
+procedure TGocciaModule.TakeExportsFrom(const ASourceModule: TGocciaModule);
+var
+  SwappedBindings: TGocciaModuleExportBindingMap;
+  SwappedNames: TOrderedStringMap<Boolean>;
+  SwappedTable: TGocciaValueMap;
 begin
   ClearExports;
-  if not Assigned(ASourceModule) then
+  if not Assigned(ASourceModule) or (ASourceModule = Self) then
     Exit;
+  EnsureRoots;
+
+  SwappedBindings := FExportBindings;
+  FExportBindings := ASourceModule.FExportBindings;
+  ASourceModule.FExportBindings := SwappedBindings;
+  SwappedTable := FExportsTable;
+  FExportsTable := ASourceModule.FExportsTable;
+  ASourceModule.FExportsTable := SwappedTable;
+  SwappedNames := FAmbiguousExports;
+  FAmbiguousExports := ASourceModule.FAmbiguousExports;
+  ASourceModule.FAmbiguousExports := SwappedNames;
+  SwappedNames := FStarExportNames;
+  FStarExportNames := ASourceModule.FStarExportNames;
+  ASourceModule.FStarExportNames := SwappedNames;
 
   if Assigned(ASourceModule.FEnvironment) then
-    SetEnvironment(ASourceModule.FEnvironment);
-
-  for BindingPair in ASourceModule.FExportBindings do
   begin
-    Binding := BindingPair.Value;
-    if Assigned(Binding.FSourceModule) then
-      AddExportForwarding(BindingPair.Key, Binding.FSourceModule,
-        Binding.FSourceExportName)
-    else if Assigned(Binding.FEnvironment) then
-      AddExportBinding(BindingPair.Key, Binding.FLocalName,
-        Binding.FEnvironment)
-    else
-      AddExportValue(BindingPair.Key, Binding.FValue);
+    SetEnvironment(ASourceModule.FEnvironment);
+    // The root is this record's now: freeing the source must not retract it.
+    ASourceModule.FEnvironment := nil;
   end;
 
-  for AmbiguousName in ASourceModule.FAmbiguousExports.Keys do
-    FAmbiguousExports.AddOrSetValue(AmbiguousName, True);
-  for StarName in ASourceModule.FStarExportNames.Keys do
-    FStarExportNames.AddOrSetValue(StarName, True);
-
   LastModified := ASourceModule.LastModified;
+  ASourceModule.InvalidateNamespaceObject;
+  InvalidateNamespaceObject;
 end;
 
 procedure TGocciaModule.UpdateExportValue(const AExportName: string;
@@ -1125,6 +1265,7 @@ var
   BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
 begin
   FreeAndNil(FRoots);
+  CommitReload;
   InvalidateNamespaceObject(True);
   SetEnvironment(nil);
   for BindingPair in FExportBindings do
@@ -1609,10 +1750,20 @@ end;
 
 function TGocciaDeferredModuleNamespaceObject.TryDefineProperty(
   const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Namespace: TGocciaObjectValue;
 begin
   if AName = PROP_THEN then
     Exit(inherited TryDefineProperty(AName, ADescriptor));
-  Result := EnsureNamespaceObject.TryDefineProperty(AName, ADescriptor);
+  // The call takes ownership of ADescriptor, so it is freed here when the
+  // module's evaluation error stops the call before it reaches the namespace.
+  try
+    Namespace := EnsureNamespaceObject;
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+  Result := Namespace.TryDefineProperty(AName, ADescriptor);
 end;
 
 function TGocciaDeferredModuleNamespaceObject.DeleteProperty(
