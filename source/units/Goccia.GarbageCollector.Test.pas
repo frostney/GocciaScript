@@ -12,6 +12,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.TestSetup,
+  Goccia.ThreadPolls,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -57,6 +58,20 @@ type
       const AChunkBytes: Int64; const AIterations: Integer);
   end;
 
+  { Starts, then stops, a collector of its own and records what this thread's
+    TGarbageCollector.Instance and its GThreadPolls.Collector mirror were at
+    each step. }
+  TOwnCollectorThread = class(TThread)
+  public
+    NoneAtStart: Boolean;
+    OwnAfterInitialize: TGarbageCollector;
+    MirrorAfterInitialize: Boolean;
+    OwnCountGrowth: Integer;
+    NoneAfterShutdown: Boolean;
+  protected
+    procedure Execute; override;
+  end;
+
   TTestGarbageCollector = class(TTestSuite)
   public
     procedure SetupTests; override;
@@ -74,6 +89,7 @@ type
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
     procedure TestCrossThreadReleaseKeepsAccountingExact;
     procedure TestRegisterObjectAdvancesEveryByteCounter;
+    procedure TestEachThreadHasItsOwnCollector;
     procedure TestHeapTriggerKeepsGarbageNearTheCeiling;
     procedure TestHeapTriggerBacksOffAboveSurvivors;
     procedure TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
@@ -130,6 +146,26 @@ begin
     FCollector.ReleaseExternalBytes(FChunkBytes);
 end;
 
+procedure TOwnCollectorThread.Execute;
+var
+  Before: Integer;
+begin
+  NoneAtStart := (TGarbageCollector.Instance = nil) and
+    (GThreadPolls.Collector = nil);
+  TGarbageCollector.Initialize;
+  try
+    OwnAfterInitialize := TGarbageCollector.Instance;
+    MirrorAfterInitialize := GThreadPolls.Collector = Pointer(OwnAfterInitialize);
+    Before := OwnAfterInitialize.ManagedObjectCount;
+    TGocciaNumberLiteralValue.Create(1.5);
+    OwnCountGrowth := OwnAfterInitialize.ManagedObjectCount - Before;
+  finally
+    TGarbageCollector.Shutdown;
+  end;
+  NoneAfterShutdown := (TGarbageCollector.Instance = nil) and
+    (GThreadPolls.Collector = nil);
+end;
+
 procedure TTestGarbageCollector.SetupTests;
 begin
   Test('CollectYoung traces references from old rooted objects',
@@ -158,6 +194,8 @@ begin
     TestCrossThreadReleaseKeepsAccountingExact);
   Test('Registering an object advances the live, total and peak byte counters',
     TestRegisterObjectAdvancesEveryByteCounter);
+  Test('Each thread allocates into its own collector, from Initialize to Shutdown',
+    TestEachThreadHasItsOwnCollector);
   { Heap-triggered collection reads the FPC heap manager's status; other
     compilers report no heap total, so the trigger is inert there. }
   {$IFDEF FPC}
@@ -952,6 +990,37 @@ begin
   { Sweep the remaining churn garbage; the ledger must balance to the byte. }
   GC.Collect;
   Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
+end;
+
+procedure TTestGarbageCollector.TestEachThreadHasItsOwnCollector;
+var
+  MainCollector: TGarbageCollector;
+  MainCount: Integer;
+  Worker: TOwnCollectorThread;
+begin
+  MainCollector := TGarbageCollector.Instance;
+  MainCount := MainCollector.ManagedObjectCount;
+  Worker := TOwnCollectorThread.Create(True);
+  try
+    Worker.Start;
+    Worker.WaitFor;
+    Expect<Boolean>(Worker.NoneAtStart).ToBe(True);
+    Expect<Boolean>(Assigned(Worker.OwnAfterInitialize)).ToBe(True);
+    Expect<Boolean>(Worker.OwnAfterInitialize = MainCollector).ToBe(False);
+    Expect<Boolean>(Worker.MirrorAfterInitialize).ToBe(True);
+    Expect<Integer>(Worker.OwnCountGrowth).ToBe(1);
+    Expect<Boolean>(Worker.NoneAfterShutdown).ToBe(True);
+  finally
+    Worker.Free;
+  end;
+
+  // The worker's allocation, Initialize and Shutdown left this thread's
+  // collector alone, and this thread still allocates into it.
+  Expect<Boolean>(TGarbageCollector.Instance = MainCollector).ToBe(True);
+  Expect<Boolean>(GThreadPolls.Collector = Pointer(MainCollector)).ToBe(True);
+  Expect<Integer>(MainCollector.ManagedObjectCount).ToBe(MainCount);
+  TGocciaNumberLiteralValue.Create(2.5);
+  Expect<Integer>(MainCollector.ManagedObjectCount).ToBe(MainCount + 1);
 end;
 
 begin
