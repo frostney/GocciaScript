@@ -114,6 +114,16 @@ describe("Number constructor", () => {
     expect(() => 42n * 1).toThrow(TypeError);
   });
 
+  test("Number(BigInt) keeps the full 53-bit significand above 2^63", () => {
+    // Exactly representable as Number: (2^53 - 1) * 2^11 uses all 53
+    // significand bits, 1728 * 10^19 uses 49; rounding to 24 bits would
+    // change both.
+    expect(BigInt(Number(18446744073709549568n))).toBe(18446744073709549568n);
+    expect(BigInt(Number(-18446744073709549568n))).toBe(-18446744073709549568n);
+    expect(BigInt(Number(17280000000000000000000n))).toBe(17280000000000000000000n);
+    expect(Number(18446744073709549568n)).toBe(18446744073709549568);
+  });
+
   test("Number(array) coerces via ToPrimitive, not element-wise", () => {
     expect(Number([])).toBe(0);
     expect(Number([42])).toBe(42);
