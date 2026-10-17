@@ -131,6 +131,8 @@ console.log("normalizeLineEndings() folds captures to LF...");
   assertEqual(normalizeLineEndings("a\nb\n"), "a\nb\n", "LF string is unchanged");
   assertEqual(normalizeLineEndings(["a", "b"]), "a\nb\n", "array joins with a trailing LF");
   assertEqual(normalizeLineEndings([]), "", "empty array yields an empty string");
+  assertEqual(normalizeLineEndings([""]), "\n", "one empty line yields one LF");
+  assertEqual(normalizeLineEndings(["a", ""]), "a\n\n", "an empty last line keeps its LF");
 
   // The two helpers compose: a normalized capture matches the same lines.
   assert(

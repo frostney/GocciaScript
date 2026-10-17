@@ -191,6 +191,13 @@ type
 
   TGocciaVM = class
   private
+    // FRegisters, FLocalCells and FArguments point into stacks that move
+    // when a frame needs more room or an idle stack shrinks, so guest code
+    // running on this VM can move them. Pascal does not say whether
+    // `FRegisters[A] := F(...)` takes the slot's address before or after
+    // calling F, and FPC 3.2.4-rc2 and trunk can take it first. A call that
+    // can run guest code is therefore evaluated into a local, and the local
+    // is stored (scripts/check-vm-stack-stores.ts).
     FRegisterStack: TGocciaRegisterArray;
     FRegisterBase: Integer;
     FRegisters: PGocciaRegister;
@@ -16095,6 +16102,11 @@ var
   OperandRoots: TGocciaActiveRootFrame;
   SavedConstructFrame: TGocciaCallFrame;
   SavedConstructFrameOk: Boolean;
+  // The result of a call that can run guest code, taken before it is stored
+  // into a register (see FRegisters).
+  GuestCallBoolean: Boolean;
+  GuestCallValue: TGocciaValue;
+  GuestCallRegister: TGocciaRegister;
 
   procedure CurrentInstructionDebugLocation(out ALine, AColumn: Integer);
   begin

@@ -314,19 +314,28 @@ const
         '  const clipped: number = Math.trunc(value);'#10 +
         '  if (timeZone === "UTC") return clipped;'#10 +
         '  const local = Temporal.Instant.fromEpochMilliseconds(clipped).toZonedDateTimeISO("UTC");'#10 +
-        '  return Temporal.ZonedDateTime.from({'#10 +
-        '    year: local.year, month: local.month, day: local.day,'#10 +
-        '    hour: local.hour, minute: local.minute, second: local.second,'#10 +
-        '    millisecond: local.millisecond, timeZone'#10 +
-        '  }).epochMilliseconds;'#10 +
+        '  // ES2026 §21.4.2.1 step 5.k: TimeClip(UTC(finalDate)). A local time whose'#10 +
+        '  // UTC instant lies outside the time value range is NaN, not a RangeError.'#10 +
+        '  let utc: number;'#10 +
+        '  try {'#10 +
+        '    utc = Temporal.ZonedDateTime.from({'#10 +
+        '      year: local.year, month: local.month, day: local.day,'#10 +
+        '      hour: local.hour, minute: local.minute, second: local.second,'#10 +
+        '      millisecond: local.millisecond, timeZone'#10 +
+        '    }).epochMilliseconds;'#10 +
+        '  } catch (e) {'#10 +
+        '    if (e instanceof RangeError) return NaN;'#10 +
+        '    throw e;'#10 +
+        '  }'#10 +
+        '  return Math.abs(utc) > dateTimeClipLimit ? NaN : utc;'#10 +
         '};'#10 +
+        '// ES2026 §21.4.3.2 Date.parse(string) leaves non-ISO formats to the'#10 +
+        '// implementation. A legacy date carries no UTC offset, so it is local'#10 +
+        '// midnight, as in V8, SpiderMonkey and JavaScriptCore.'#10 +
         'const makeLegacyDateEpochMilliseconds = (year: number, month: number, day: number): number => {'#10 +
         '  if (month < 1 || month > 12 || day < 1 || day > 31) return NaN;'#10 +
-        '  const fullYear: number = legacyDateFullYear(year);'#10 +
-        '  const starts: any[] = legacyDateIsLeapYear(fullYear) ? legacyDateLeapMonthStarts : legacyDateMonthStarts;'#10 +
-        '  const value: number = (legacyDateDayFromYear(fullYear) + starts[month - 1] + day - 1) * 86400000;'#10 +
-        '  if (!Number.isFinite(value) || Math.abs(value) > dateTimeClipLimit) return NaN;'#10 +
-        '  return value;'#10 +
+        '  return makeDateEpochMillisecondsRaw([legacyDateFullYear(year), month - 1, day, 0, 0, 0, 0],'#10 +
+        '    Temporal.Now.timeZoneId(), false);'#10 +
         '};'#10 +
         'const parseLegacyDateString = (text: string): any => {'#10 +
         '  const slashIndex: number = text.indexOf("/");'#10 +
@@ -442,37 +451,57 @@ const
         '  const offset: number = (hour * 60 + minute) * 60000;'#10 +
         '  return sign === "+" ? offset : -offset;'#10 +
         '};'#10 +
-        'const parseGMTOffsetMilliseconds = (token: string): number => {'#10 +
-        '  if (token === "GMT" || token === "UTC") return 0;'#10 +
-        '  if (token.slice(0, 3) !== "GMT") return NaN;'#10 +
-        '  const sign: string = token[3];'#10 +
-        '  const body: string = token.slice(4);'#10 +
+        '// RFC 2822 section 4.3 zone names (UT, GMT, Z and the US zones) and numeric'#10 +
+        '// offsets, alone or after GMT, UTC or UT: +h, +hh, +hhmm (the form toString'#10 +
+        '// writes) and +h:m, +hh:mm. Letters are matched case-insensitively, as in V8.'#10 +
+        'const legacyZoneOffsetHours: any = {'#10 +
+        '  UT: 0, UTC: 0, GMT: 0, Z: 0, EST: -5, EDT: -4, CST: -6, CDT: -5,'#10 +
+        '  MST: -7, MDT: -6, PST: -8, PDT: -7'#10 +
+        '};'#10 +
+        'const parseLegacyOffsetMilliseconds = (token: string): number => {'#10 +
+        '  const upper: string = token.toUpperCase();'#10 +
+        '  if (Object.hasOwn(legacyZoneOffsetHours, upper)) return legacyZoneOffsetHours[upper] * 3600000;'#10 +
+        '  let start: number = 0;'#10 +
+        '  if (upper.startsWith("GMT") || upper.startsWith("UTC")) start = 3;'#10 +
+        '  else if (upper.startsWith("UT")) start = 2;'#10 +
+        '  const sign: string = upper[start];'#10 +
+        '  if (sign !== "+" && sign !== "-") return NaN;'#10 +
+        '  const body: string = upper.slice(start + 1);'#10 +
         '  const parts: any[] = body.split(":");'#10 +
-        '  const hour: number = parseLegacyInteger(parts[0]);'#10 +
-        '  const minute: number = parts.length > 1 ? parseLegacyInteger(parts[1]) : 0;'#10 +
-        '  if ((sign !== "+" && sign !== "-") || !Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;'#10 +
+        '  if (parts.length > 2) return NaN;'#10 +
+        '  const split: boolean = parts.length === 1 && body.length > 2;'#10 +
+        '  const hourText: string = split ? body.slice(0, body.length - 2) : parts[0];'#10 +
+        '  const minuteText: string = split ? body.slice(body.length - 2) : parts.length === 2 ? parts[1] : "00";'#10 +
+        '  if (hourText.length < 1 || hourText.length > 2) return NaN;'#10 +
+        '  if (minuteText.length < 1 || minuteText.length > 2) return NaN;'#10 +
+        '  const hour: number = parseExactDigits(hourText, hourText.length);'#10 +
+        '  const minute: number = parseExactDigits(minuteText, minuteText.length);'#10 +
+        '  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;'#10 +
         '  const offset: number = (hour * 60 + minute) * 60000;'#10 +
         '  return sign === "+" ? offset : -offset;'#10 +
         '};'#10 +
         'const parseDisplayDateString = (text: string): any => {'#10 +
         '  const parts: any[] = text.split(" ");'#10 +
         '  if (parts.length < 5) return undefined;'#10 +
-        '  let year: number; let month: number; let day: number; let time: any; let offset: number;'#10 +
+        '  let month: number; let day: number;'#10 +
         '  if (String(parts[0]).indexOf(",") >= 0) {'#10 +
         '    day = parseLegacyInteger(parts[1]);'#10 +
         '    month = legacyDateMonthNumber(parts[2]);'#10 +
-        '    year = parseYearToken(parts[3]);'#10 +
-        '    time = parseTimeToken(parts[4]);'#10 +
-        '    offset = 0;'#10 +
         '  } else {'#10 +
         '    month = legacyDateMonthNumber(parts[1]);'#10 +
         '    day = parseLegacyInteger(parts[2]);'#10 +
-        '    year = parseYearToken(parts[3]);'#10 +
-        '    time = parseTimeToken(parts[4]);'#10 +
-        '    offset = parts.length > 5 ? parseGMTOffsetMilliseconds(parts[5]) : 0;'#10 +
         '  }'#10 +
+        '  const year: number = parseYearToken(parts[3]);'#10 +
+        '  const time: any = parseTimeToken(parts[4]);'#10 +
+        '  const hasOffset: boolean = parts.length > 5;'#10 +
+        '  const offset: number = hasOffset ? parseLegacyOffsetMilliseconds(parts[5]) : 0;'#10 +
         '  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) || time === undefined || !Number.isFinite(offset)) return undefined;'#10 +
-        '  return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], "UTC", false) - offset;'#10 +
+        '  const fields: any[] = [year, month - 1, day, time[0], time[1], time[2], time[3]];'#10 +
+        '  // Without an offset token the time is local, as for a legacy date.'#10 +
+        '  if (!hasOffset) return makeDateEpochMillisecondsRaw(fields, Temporal.Now.timeZoneId(), false);'#10 +
+        '  // TimeClip applies to the UTC value, after the offset is removed.'#10 +
+        '  const utc: number = makeDateEpochMillisecondsRaw(fields, "UTC", false) - offset;'#10 +
+        '  return Math.abs(utc) > dateTimeClipLimit ? NaN : utc;'#10 +
         '};'#10 +
         'const parseISODateString = (text: string): any => {'#10 +
         '  let position: number = 0;'#10 +

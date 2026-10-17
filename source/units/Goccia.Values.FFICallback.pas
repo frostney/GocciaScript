@@ -438,7 +438,7 @@ begin
     case FSignature.ABI of
       fabiSysVX64, fabiWin64:
         HiddenResultLocation := fhrGPR0;
-      fabiAAPCS64, fabiDarwinARM64:
+      fabiAAPCS64, fabiDarwinARM64, fabiWinARM64:
         HiddenResultLocation := fhrDedicated;
       fabiI386Win:
         HiddenResultLocation := fhrStack0;
@@ -575,7 +575,7 @@ begin
       {$IF defined(GOCCIA_CPU_64)}
       Result := Pointer(NativeUInt(AState.GPR[0]))
       {$ENDIF};
-    fabiAAPCS64, fabiDarwinARM64:
+    fabiAAPCS64, fabiDarwinARM64, fabiWinARM64:
       {$IF defined(GOCCIA_CPU_64)}
       Result := AState.HiddenResult
       {$ENDIF};
