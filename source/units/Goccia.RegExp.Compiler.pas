@@ -3407,6 +3407,13 @@ begin
     if FPattern[I] = '(' then
     begin
       Inc(AltStackDepth);
+      // Each named group copies the path of open groups down to it, so a deep
+      // nest of them would cost memory and time quadratic in the depth before
+      // the compiler's own nesting check. Every parenthesis counted here opens
+      // a group or lookaround the compiler nests into, so the limit is the
+      // same one.
+      if AltStackDepth > MAX_NESTING_DEPTH then
+        RaiseRegExpNestingLimit(AltStackDepth);
       if AltStackDepth >= Length(AltStack) then
         SetLength(AltStack, AltStackDepth * 2 + 4);
       AltStack[AltStackDepth] := 0;

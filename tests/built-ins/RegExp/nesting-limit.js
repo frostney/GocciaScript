@@ -45,6 +45,16 @@ describe("RegExp nesting limit", () => {
     expect(() => new RegExp("(?<outer>" + nested("(?:", ")", 1023) + ")")).toThrow(SyntaxError);
   });
 
+  test("nested groups that each have a name count the same way", () => {
+    // Each named group records the groups open around it, so a deep nest of
+    // them must be refused before that record is built.
+    const named = (depth) =>
+      Array.from({ length: depth }, (_, i) => `(?<g${i}>`).join("") + "a" + ")".repeat(depth);
+    expect(new RegExp(named(1023)).exec("a").groups.g1022).toBe("a");
+    expect(() => new RegExp(named(1024))).toThrow(SyntaxError);
+    expect(() => new RegExp(named(30000))).toThrow(SyntaxError);
+  });
+
   test("nested lookaheads and lookbehinds match up to the limit", () => {
     expect(new RegExp(nested("(?=", ")", 1023)).test("a")).toBe(true);
     expect(new RegExp(nested("(?<=", ")", 1023)).test("a")).toBe(true);

@@ -405,6 +405,12 @@ const CATALOG: Probe[] = [
     body: (d) => `report(() => new RegExp("(".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
   },
   {
+    id: "regexp-named-groups",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested named groups, each with its own name",
+    body: (d) => `report(() => new RegExp(Array.from({ length: ${d} }, (_, i) => "(?<g" + i + ">").join("") + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
     id: "regexp-noncapturing",
     growth: "linear",
     summary: "RegExp with DEPTH nested non-capturing groups",
