@@ -74,7 +74,7 @@ test("intersection of ASCII and Letter matches ASCII letters only", () => {
 });
 
 test("intersection of ranges", () => {
-  const re = new RegExp("[a-z&&a-f]", "v");
+  const re = new RegExp("[[a-z]&&[a-f]]", "v");
   expect(re.test("a")).toBe(true);
   expect(re.test("f")).toBe(true);
   expect(re.test("g")).toBe(false);
@@ -82,7 +82,7 @@ test("intersection of ranges", () => {
 });
 
 test("intersection of digit ranges", () => {
-  const re = new RegExp("[0-9&&[0-5]]", "v");
+  const re = new RegExp("[[0-9]&&[0-5]]", "v");
   expect(re.test("3")).toBe(true);
   expect(re.test("5")).toBe(true);
   expect(re.test("6")).toBe(false);
@@ -101,7 +101,7 @@ test("intersection with character class shorthand", () => {
 // --- Set subtraction (--) ---
 
 test("subtraction removes vowels from lowercase", () => {
-  const re = new RegExp("[a-z--[aeiou]]", "v");
+  const re = new RegExp("[[a-z]--[aeiou]]", "v");
   expect(re.test("b")).toBe(true);
   expect(re.test("c")).toBe(true);
   expect(re.test("z")).toBe(true);
@@ -113,7 +113,7 @@ test("subtraction removes vowels from lowercase", () => {
 });
 
 test("subtraction of digit ranges", () => {
-  const re = new RegExp("[0-9--[0-4]]", "v");
+  const re = new RegExp("[[0-9]--[0-4]]", "v");
   expect(re.test("5")).toBe(true);
   expect(re.test("9")).toBe(true);
   expect(re.test("0")).toBe(false);
@@ -277,7 +277,7 @@ test("v flag with String.match", () => {
 });
 
 test("v flag with String.replace", () => {
-  const re = new RegExp("[a-z--[aeiou]]", "gv");
+  const re = new RegExp("[[a-z]--[aeiou]]", "gv");
   const result = "hello".replace(re, "*");
   expect(result).toBe("*e**o");
 });
@@ -285,26 +285,26 @@ test("v flag with String.replace", () => {
 // --- Edge cases ---
 
 test("empty intersection yields no matches", () => {
-  const re = new RegExp("[a-z&&[0-9]]", "v");
+  const re = new RegExp("[[a-z]&&[0-9]]", "v");
   expect(re.test("a")).toBe(false);
   expect(re.test("5")).toBe(false);
 });
 
 test("subtracting everything yields no matches", () => {
-  const re = new RegExp("[a-z--[a-z]]", "v");
+  const re = new RegExp("[[a-z]--[a-z]]", "v");
   expect(re.test("a")).toBe(false);
   expect(re.test("m")).toBe(false);
 });
 
 test("intersection with same set is identity", () => {
-  const re = new RegExp("[a-z&&[a-z]]", "v");
+  const re = new RegExp("[[a-z]&&[a-z]]", "v");
   expect(re.test("a")).toBe(true);
   expect(re.test("z")).toBe(true);
   expect(re.test("A")).toBe(false);
 });
 
 test("subtraction of empty set is identity", () => {
-  const re = new RegExp("[a-z--[]]", "v");
+  const re = new RegExp("[[a-z]--[]]", "v");
   expect(re.test("a")).toBe(true);
   expect(re.test("z")).toBe(true);
 });
@@ -317,7 +317,7 @@ test("\\q{} with empty alternative", () => {
 // --- Chained operators ---
 
 test("chained intersection narrows progressively", () => {
-  const re = new RegExp("[a-z&&[a-m]&&[a-f]]", "v");
+  const re = new RegExp("[[a-z]&&[a-m]&&[a-f]]", "v");
   expect(re.test("a")).toBe(true);
   expect(re.test("f")).toBe(true);
   expect(re.test("g")).toBe(false);
@@ -326,7 +326,7 @@ test("chained intersection narrows progressively", () => {
 });
 
 test("chained subtraction removes multiple sets", () => {
-  const re = new RegExp("[a-z--[aeiou]--[xyz]]", "v");
+  const re = new RegExp("[[a-z]--[aeiou]--[xyz]]", "v");
   expect(re.test("b")).toBe(true);
   expect(re.test("w")).toBe(true);
   expect(re.test("a")).toBe(false);
@@ -336,8 +336,8 @@ test("chained subtraction removes multiple sets", () => {
 });
 
 test("mixing && and -- at the same level throws", () => {
-  expect(() => new RegExp("[a-z&&[a-f]--[abc]]", "v")).toThrow(SyntaxError);
-  expect(() => new RegExp("[a-z--[abc]&&[a-f]]", "v")).toThrow(SyntaxError);
+  expect(() => new RegExp("[[a-z]&&[a-f]--[abc]]", "v")).toThrow(SyntaxError);
+  expect(() => new RegExp("[[a-z]--[abc]&&[a-f]]", "v")).toThrow(SyntaxError);
 });
 
 // --- Nested negated classes ---
@@ -358,7 +358,7 @@ test("nested negated class in intersection", () => {
 });
 
 test("nested negated class in subtraction", () => {
-  const re = new RegExp("[a-z--[^b-y]]", "v");
+  const re = new RegExp("[[a-z]--[^b-y]]", "v");
   expect(re.test("b")).toBe(true);
   expect(re.test("y")).toBe(true);
   expect(re.test("a")).toBe(false);
@@ -391,7 +391,7 @@ test("v flag works in bytecode mode", () => {
 });
 
 test("set subtraction works in bytecode mode", () => {
-  const re = new RegExp("[a-z--[aeiou]]", "v");
+  const re = new RegExp("[[a-z]--[aeiou]]", "v");
   expect(re.test("b")).toBe(true);
   expect(re.test("a")).toBe(false);
 });
@@ -405,20 +405,20 @@ test("\\q{} works in bytecode mode", () => {
 // --- Nested set operators inside nested classes ---
 
 test("nested class with set operators", () => {
-  const re = new RegExp("[[a-z&&[a-f]]]", "v");
+  const re = new RegExp("[[[a-z]&&[a-f]]]", "v");
   expect(re.test("a")).toBe(true);
   expect(re.test("f")).toBe(true);
   expect(re.test("g")).toBe(false);
 });
 
 test("nested class with subtraction operator", () => {
-  const re = new RegExp("[[a-z--[aeiou]]]", "v");
+  const re = new RegExp("[[[a-z]--[aeiou]]]", "v");
   expect(re.test("b")).toBe(true);
   expect(re.test("a")).toBe(false);
 });
 
 test("deeply nested set operators", () => {
-  const re = new RegExp("[[[a-z&&[a-m]]&&[a-f]]]", "v");
+  const re = new RegExp("[[[[a-z]&&[a-m]]&&[a-f]]]", "v");
   expect(re.test("a")).toBe(true);
   expect(re.test("f")).toBe(true);
   expect(re.test("g")).toBe(false);

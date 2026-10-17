@@ -148,8 +148,14 @@ var
 begin
   P := @AValue;
   case PTypeInfo(TypeInfo(T))^.Kind of
-    tkSString, tkLString, tkAString, tkUString, tkWString:
-      Result := '"' + PString(P)^ + '"';
+    tkUString:
+      Result := '"' + string(PUnicodeString(P)^) + '"';
+    tkWString:
+      Result := '"' + string(PWideString(P)^) + '"';
+    tkLString, tkAString:
+      Result := '"' + string(PAnsiString(P)^) + '"';
+    tkSString:
+      Result := '"' + string(PShortString(P)^) + '"';
     tkFloat:
       begin
         FS := CreateInvariantFormatSettings;

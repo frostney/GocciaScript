@@ -108,6 +108,8 @@ class C {
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
 
+**Unsettled top-level `await`:** A top-level `await` on a promise that nothing left in the run can settle fails the run with `TypeError: await: Promise did not settle after microtask drain`.
+
 ### Classes
 
 - Class declarations and expressions.
@@ -447,6 +449,7 @@ Current gaps from full ECMAScript RegExp semantics:
 
 - The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
 - The `v` flag (Unicode sets) supports set notation: nested classes, intersection (`&&`), subtraction (`--`), string literals (`\q{…}`), and properties of strings such as `\p{RGI_Emoji}`.
+- Groups, lookarounds and nested `v`-flag classes may nest 1,023 levels deep (1,024 with the pattern itself); a deeper pattern is a `SyntaxError` (`Invalid regular expression: nesting exceeds the supported limit of 1024 levels`). See [Nesting Depth](#nesting-depth).
 - A match attempt stops with an `Error` at either of two engine limits: 100 steps per subject code unit, at least 10,000,000 (`Maximum regular expression step count exceeded`), or 10,000,000 backtrack entries (`Maximum regular expression backtrack stack size exceeded`). A greedy loop over one character, class or dot (`a*`, `.*`, `[a-z]+`) keeps one entry for its whole run; loops over wider bodies such as `(?:ab)*`, and any loop inside a lookbehind, keep one per iteration. See [ADR 0128](adr/0128-regexp-vm-resource-limits.md).
 
 ## TC39 Proposal Details
@@ -487,6 +490,8 @@ The storage is a private name of its own, so it is not an own property, and the 
 - Static method/getter/setter: during class definition, after static methods are placed.
 - Non-static method/getter/setter: during class construction, before field initialization.
 - Field/accessor: during construction, immediately after the decorated element is initialized.
+
+`addInitializer` throws a `TypeError` when its argument is not callable, and when it is called after its decorator has returned, for example through a context the decorator kept. Each decorator gets its own context, so a later decorator cannot add initializers through an earlier one's `addInitializer` either.
 
 **`Symbol.metadata`:** Each decorated class receives a `[Symbol.metadata]` property containing a null-prototype object. Metadata objects inherit from the parent class's metadata via prototype chain.
 
@@ -763,6 +768,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 - A semicolon is inserted when a newline separates the current and next token
 - A semicolon is inserted before `}` or at EOF
 - Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules
+- Only a newline between two tokens counts, including one inside a multi-line comment. A newline inside a token, such as a multi-line template literal or a string's line continuation, is part of that token: `return`, `throw` or `yield` followed on the same line by a template that spans lines returns, throws or yields the template
 
 ### Traditional `for(init; test; update)` Loop
 
@@ -865,6 +871,7 @@ When enabled, labels can target `break` and `continue` statements:
 
 - `break label;` exits the matching enclosing labeled statement, including labeled blocks, `switch`, `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
 - `continue label;` targets matching enclosing iteration statements only: `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
+- A label is any ECMAScript `LabelIdentifier`, including contextual words such as `as`, `from` and `async`. `let` and `static` are labels only in non-strict code (`--compat-non-strict-mode`); reserved words such as `enum` never are.
 
 With `--compat-function` and `--compat-non-strict-mode`, sloppy labeled function declarations follow the same Annex B compatibility rules as unlabeled block-level function declarations. Direct sloppy labeled function declarations are valid, but a labeled function declaration cannot be the immediate body of `if`, `else`, `with`, or an iteration statement; wrap it in a block if that legacy shape is required.
 
@@ -898,6 +905,12 @@ Number.isNaN(value);
 parseInt("10", 10);
 isNaN("abc"); // true, because the global form coerces
 ```
+
+### Nesting Depth
+
+**Limited to 1,024 levels of nesting and a syntax tree 4,096 levels tall.** ECMA-262 sets no limit on how deeply source nests, but parsing and compiling nested source recurses on the native stack, so every engine has one. GocciaScript counts a level of nesting for each nested statement; each expression in an operand position (an array element, a property value, a call argument, a template substitution, a parenthesized expression, an arrow body, a conditional branch, an assignment's right-hand side); and each prefix operator, `new`, `**` operand, `extends` clause, binding pattern and match pattern. Past 1,024 the parser reports `SyntaxError: Nesting exceeds the supported limit of 1024 levels`. Operator, member and call chains (`a + b + c`, `a.b().c`) are parsed in a loop and are not nesting, but the tree they build is as tall as the chain is long and every later pass walks it recursively. So the syntax tree of a statement may be at most 4,096 levels tall, counting each level of nesting and each link of a chain (a method call `.m()` is two links); a taller one is `SyntaxError: Nesting, counting each link of operator and call chains, exceeds the supported limit of 4096 levels`. The parser bounds the height from below each level up, adding all the links parsed directly inside the level, so chains that sit side by side in one expression (`a.b + c.d`) count together. Lists do not count: the statements of a block, array elements, call arguments and comma-separated expressions can be as long as memory allows. Both limits apply in the runner, the bundler and the test runner, where a deep or long enough program used to crash the process. Real code stays far below them: in the bundles the benchmarks run (Web Tooling, JetStream, are-we-fast-yet) and 542 distinct npm files, the deepest nesting is 172 levels and the tallest tree 1,339, from a chain of 658 `.addRange(a, b)` calls in the Unicode tables that Babel bundles.
+
+Source parsed, or a pattern compiled, where the native stack is already deep, such as `ShadowRealm.prototype.evaluate` or `new RegExp` at the bottom of a deep recursion, can run out of stack before 1,024 levels. It then fails with `SyntaxError: Nesting is too deep for the native stack that is left` instead of overflowing. Matching recurses once per nested lookaround, so a pattern compiled earlier and matched at the bottom of a deep recursion can run out of stack too; the match then throws `RangeError: Maximum call stack size exceeded`, as a call past the call stack limit does, since the pattern itself is valid. Regular expression patterns share the limit; see [Regular Expressions](#regular-expressions) and [Embedding — Call Stack Depth Limit](embedding.md#call-stack-depth-limit).
 
 ## Strictness Guarantees
 
