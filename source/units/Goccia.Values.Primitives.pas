@@ -20,10 +20,6 @@ type
   TGocciaValue = class(TGCManagedObject)
   public
     procedure AfterConstruction; override;
-    // False for a class whose constructors are compiled without an implicit
-    // exception frame: FPC then does not destroy the instance when
-    // AfterConstruction raises, so the GC must keep it registered.
-    class function ConstructorDestroysOnException: Boolean; virtual;
     function RuntimeCopy: TGocciaValue; virtual;
 
     function TypeName: string; virtual; abstract;
@@ -282,11 +278,6 @@ begin
     RunAllocationPolls(Polls^);
 end;
 
-class function TGocciaValue.ConstructorDestroysOnException: Boolean;
-begin
-  Result := True;
-end;
-
 function TGocciaValue.RuntimeCopy: TGocciaValue;
 begin
   // Default: return self (for singletons and complex values like objects/functions)
@@ -529,11 +520,13 @@ end;
 // frame FPC wraps a constructor in, a box costs no thread-variable lookups for
 // the frame; see ConstructorDestroysOnException.
 //
-// Exception-safe without the frame: the body cannot raise, NewInstance raises
-// before there is an instance, and everything TGocciaValue.AfterConstruction
-// can raise (the memory limit, a timeout, an instruction limit) comes after
-// RegisterObject, so a refused box stays registered and the next collection
-// frees it. A production build has no stack check in the prologues between.
+// Exception-safe without the frame: the body cannot raise, and NewInstance
+// raises before there is an instance. In TGocciaValue.AfterConstruction,
+// RegisterObject either registers the box or, when growing its list fails,
+// frees it before re-raising (TGarbageCollector.AppendManagedObjectGrowing);
+// everything raised after it (the memory limit, a timeout, an instruction
+// limit) leaves the box registered, and the next collection frees it. A
+// production build has no stack check in the prologues between.
 {$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}{$IMPLICITEXCEPTIONS OFF}{$ENDIF}
 constructor TGocciaNumberLiteralValue.Create(const AValue: Double);
 begin

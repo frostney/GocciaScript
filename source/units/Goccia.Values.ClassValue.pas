@@ -382,6 +382,8 @@ type
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
     procedure AssignPropertySlow(const AName: string; const AValue: TGocciaValue;
       const ACanCreate: Boolean);
+    procedure AddOwnDataPropertyGrowing(const AName: string;
+      const AValue: TGocciaValue);
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
@@ -2681,10 +2683,8 @@ end;
 // can run guest code, collect or hand back a descriptor it must free: it reads
 // a prototype only when that prototype keeps the ordinary [[Set]] and
 // [[GetOwnProperty]], and then only asks its map whether the name is there,
-// without materializing a lazy entry. An exception can therefore only come
-// from the final Add's growth gate, which DefineProperty, the slow path's
-// last step, reaches the same way; the frame this procedure no longer has
-// guarded nothing on that step.
+// without materializing a lazy entry. Its one store that can raise, a new
+// property that grows the map, is AddOwnDataPropertyGrowing's.
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
@@ -2721,10 +2721,34 @@ begin
 
   // OrdinarySet creates an own data property, which OrdinaryDefineOwnProperty
   // accepts as given; an instance of exactly this class has the ordinary
-  // DefineProperty, so the descriptor goes straight into the map.
+  // DefineProperty, so the descriptor goes straight into the map. When the
+  // map has room the Add allocates nothing and cannot raise, so the new
+  // descriptor is always stored; a store that grows the map goes through
+  // AddOwnDataPropertyGrowing, which frees it if the growth is refused.
   NoteIndexedOwnProperty(AName);
-  FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
-    [pfEnumerable, pfConfigurable, pfWritable]));
+  if FProperties.HasRoomForAdd then
+    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]))
+  else
+    AddOwnDataPropertyGrowing(AName, AValue);
+end;
+
+// The growing half of AssignProperty's new-property store. Its own procedure,
+// so that only a store that grows the map pays for the exception frame.
+procedure TGocciaInstanceValue.AddOwnDataPropertyGrowing(const AName: string;
+  const AValue: TGocciaValue);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]);
+  try
+    // A refused or failed growth leaves the map without the entry.
+    FProperties.Add(AName, Descriptor);
+  except
+    Descriptor.Free;
+    raise;
+  end;
 end;
 
 procedure TGocciaInstanceValue.AssignPropertySlow(const AName: string;
