@@ -42,7 +42,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 implementation
@@ -276,9 +276,8 @@ begin
   Result := REGEXP_STRING_ITERATOR_TAG;
 end;
 
-procedure TGocciaRegExpMatchAllIteratorValue.MarkReferences;
+procedure TGocciaRegExpMatchAllIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FRegExp) then
     FRegExp.MarkReferences;

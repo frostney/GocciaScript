@@ -41,7 +41,7 @@ type
     function ToStringTag: string; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     function TraceWeakReferences: Boolean; override;
     procedure SweepWeakReferences; override;
 
@@ -282,9 +282,8 @@ begin
   end;
 end;
 
-procedure TGocciaWeakMapValue.MarkReferences;
+procedure TGocciaWeakMapValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 end;
 

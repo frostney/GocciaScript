@@ -59,10 +59,24 @@ type
     FGCIndex: Integer;
     function GetGCMarked: Boolean;
     procedure SetGCMarked(const AValue: Boolean);
+  protected
+    // Marks what this object holds, by calling MarkReferences on each value it
+    // references. Never call it directly: the collector calls it exactly once
+    // per collection for every object it marks, after MarkReferences has
+    // marked the object itself and taken it off the mark stack (ADR 0147).
+    // So an override neither checks GCMarked nor recurses: it calls inherited,
+    // then MarkReferences on each child, which marks the child and pushes it.
+    procedure TraceReferences; virtual;
   public
     procedure BeforeDestruction; override;
     class procedure AdvanceMark; static; {$IFDEF FPC}inline;{$ENDIF}
-    procedure MarkReferences; virtual;
+    // Marks this object and everything reachable from it. Called while the
+    // collector is tracing (from a TraceReferences override or a root source
+    // during a collection), it only marks the object and pushes it on the
+    // collector's mark stack, so the native stack never grows with the depth
+    // of the object graph. Called anywhere else, it traces the whole subgraph
+    // before it returns, through the same stack.
+    procedure MarkReferences;
     function TraceWeakReferences: Boolean; virtual;
     procedure SweepWeakReferences; virtual;
     // Called by the GC sweep instead of Free. Default calls Free.
@@ -471,6 +485,18 @@ type
     // measurement phase and pass to CollectYoung for efficient
     // between-round collections.
     property Watermark: Integer read GetWatermark;
+
+    // The mark stack (ADR 0147). It is process-wide, like the mark epoch, and
+    // used only under the collect lock. MarkStackCapacity is its current
+    // length in entries; MarkStackOverflows counts the pushes it could not
+    // take because it could not grow, each of which the trace later recovers
+    // by rescanning the marked objects.
+    class function MarkStackCapacity: Integer;
+    class function MarkStackOverflows: Integer;
+    // Test hook: caps the mark stack at AEntries and sends every marked
+    // object through it rather than tracing any in place, so a test can drive
+    // the path a failed growth takes. 0 restores both.
+    class procedure LimitMarkStackForTesting(const AEntries: Integer);
   end;
 
 const
@@ -503,19 +529,26 @@ implementation
 
 uses
   SyncObjs,
+  SysUtils,
 
   Goccia.ThreadPolls
-  {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
-  ,
-  SysUtils
   {$IFDEF GC_TIMING}, TimingUtils{$ENDIF}
-  {$ENDIF}
   {$IFDEF GOCCIA_GC_STRESS}, heaptrc{$ENDIF};
 
 const
   // Slots pre-allocated for the active-root stack, and the unit it doubles
   // from. Deep enough that ordinary nesting never reallocates.
   ACTIVE_ROOT_STACK_INITIAL_CAPACITY = 256;
+  // Entries the mark stack is allocated with when the unit initializes and
+  // shrinks back to after every trace that grew it (32 KiB on 64-bit). It is
+  // never freed below this, so a trace always has this much stack even when
+  // the heap manager can give it nothing more.
+  MARK_STACK_RETAINED_CAPACITY = 4096;
+  // How many objects MarkReferences traces nested on the native stack before
+  // it spills to the mark stack. Each level is a MarkReferences frame and a
+  // TraceReferences override's, a few hundred bytes together, so the limit
+  // keeps a trace within tens of KiB of native stack.
+  MARK_RECURSION_LIMIT = 64;
 
 function CurrentHeapBytes: Int64;
 begin
@@ -558,8 +591,209 @@ var
   // per-collector FAccountingLock (see its declaration for the lock order).
   GCCollectLock: TGocciaCriticalSection;
 
+  // The mark stack (ADR 0147): the objects marked during a trace whose
+  // TraceReferences has not run yet. Marking pushes here instead of recursing
+  // into the child, so tracing a 30,000-class chain or a million-node list
+  // takes no more native stack than tracing one object. Process-wide like
+  // GCCurrentMark, and touched only under GCCollectLock: a trace marks in the
+  // global epoch, so two threads tracing at once would corrupt each other's
+  // marks whatever stack they used.
+  //
+  // An object is marked when it is pushed, so it is pushed at most once per
+  // collection and the stack never holds more entries than the collection
+  // marks objects: one pointer per live object at worst (a wide array whose
+  // elements are all unmarked), the same order as FManagedObjects, and like
+  // that list it is not charged to BytesAllocated. It is a depth-first
+  // frontier, so a deep chain keeps it at a handful of entries.
+  GCMarkStack: TGCManagedObjectArray;
+  GCMarkStackCount: Integer;
+  // How many entries a push may fill before it must grow the stack: its
+  // length, or less while a test caps it.
+  GCMarkStackLimit: Integer;
+  // 0, or the most entries LimitMarkStackForTesting lets the stack grow to.
+  GCMarkStackTestLimit: Integer;
+  // True while a trace runs: MarkReferences then marks the object and traces
+  // it in place or pushes it. False everywhere else, where MarkReferences
+  // starts a trace.
+  GCMarkTracing: Boolean;
+  // How many TraceReferences calls MarkReferences has nested on the native
+  // stack. Below GCMarkRecursionLimit an object is traced where it is marked;
+  // at the limit it goes on the mark stack, so a trace never nests deeper than
+  // the limit whatever the depth of the graph.
+  GCMarkDepth: Integer;
+  GCMarkRecursionLimit: Integer;
+  // True while Collect or CollectYoung holds GCCollectLock for its mark
+  // phase, so a trace started from a root does not take the lock again.
+  GCMarkPhaseLocked: Boolean;
+  // A push found the stack full and could not grow it: the object is marked
+  // but its TraceReferences has not run. The trace rescans before it ends.
+  GCMarkOverflowed: Boolean;
+  GCMarkOverflowCount: Integer;
+
 threadvar
   GCThreadInstance: TGarbageCollector;
+
+{ Mark stack }
+
+// Grows the mark stack. False when it cannot: the heap manager has nothing
+// for it, or a test caps it. Its own routine so that only a growing push pays
+// for the exception frame.
+function GrowMarkStack: Boolean;
+var
+  NewCapacity: Integer;
+begin
+  Result := False;
+  if Length(GCMarkStack) > High(Integer) div 2 then
+    Exit;
+  NewCapacity := Length(GCMarkStack) * 2;
+  if NewCapacity < MARK_STACK_RETAINED_CAPACITY then
+    NewCapacity := MARK_STACK_RETAINED_CAPACITY;
+  if (GCMarkStackTestLimit > 0) and (NewCapacity > GCMarkStackTestLimit) then
+    NewCapacity := GCMarkStackTestLimit;
+  if NewCapacity <= GCMarkStackLimit then
+    Exit;
+  if NewCapacity > Length(GCMarkStack) then
+  try
+    SetLength(GCMarkStack, NewCapacity);
+  except
+    on EOutOfMemory do
+      Exit;
+  end;
+  GCMarkStackLimit := NewCapacity;
+  Result := True;
+end;
+
+// Whether the calling thread's collector manages AObject, and the overflow
+// rescan, which walks that collector's list, will therefore find it.
+function IsManagedByCurrentCollector(const AObject: TGCManagedObject): Boolean;
+var
+  Collector: TGarbageCollector;
+  Index: Integer;
+begin
+  Collector := GCThreadInstance;
+  Index := AObject.FGCIndex;
+  Result := Assigned(Collector) and (Index >= 0) and
+    (Index < Collector.FManagedObjects.Count) and
+    (Collector.FManagedObjects[Index] = AObject);
+end;
+
+// A push the stack has no room for. AObject is already marked, so it must
+// either reach the stack or be traced some other way: dropping it would leave
+// what only it references unmarked, and the sweep would free live objects.
+// When the stack cannot grow, an object this thread's collector manages is
+// left for the rescan; any other object (a shared intrinsic another thread's
+// collector manages, or one no collector does) is traced here, recursively,
+// because the rescan could not find it. That recursion only happens while the
+// heap manager is refusing memory, and only through objects no collector of
+// this thread owns.
+procedure PushMarkedSlow(const AObject: TGCManagedObject);
+begin
+  if GrowMarkStack then
+  begin
+    GCMarkStack[GCMarkStackCount] := AObject;
+    Inc(GCMarkStackCount);
+    Exit;
+  end;
+  Inc(GCMarkOverflowCount);
+  if IsManagedByCurrentCollector(AObject) then
+    GCMarkOverflowed := True
+  else
+    AObject.TraceReferences;
+end;
+
+procedure DrainMarkStack;
+var
+  Obj: TGCManagedObject;
+begin
+  while GCMarkStackCount > 0 do
+  begin
+    Dec(GCMarkStackCount);
+    Obj := GCMarkStack[GCMarkStackCount];
+    Obj.TraceReferences;
+  end;
+end;
+
+// Recovers from an overflow: some marked objects of this thread's collector
+// were never traced. Tracing every marked object again pushes exactly the
+// children those left unmarked; for an object already traced it pushes
+// nothing. Each pass marks at least the objects that overflowed in the last
+// one, so the passes end. The stack drains after every object, so a pass
+// overflows again only when one object's subgraph outgrows the whole stack.
+procedure RescanMarkedObjects;
+var
+  Collector: TGarbageCollector;
+  I: Integer;
+  Obj: TGCManagedObject;
+begin
+  Collector := GCThreadInstance;
+  while GCMarkOverflowed do
+  begin
+    GCMarkOverflowed := False;
+    I := 0;
+    while I < Collector.FManagedObjects.Count do
+    begin
+      Obj := Collector.FManagedObjects[I];
+      if Assigned(Obj) and (Obj.FGCMark = GCCurrentMark) then
+      begin
+        Obj.TraceReferences;
+        DrainMarkStack;
+      end;
+      Inc(I);
+    end;
+  end;
+end;
+
+// Gives back what a trace grew the stack to, keeping the retained capacity.
+procedure ReleaseMarkStack;
+begin
+  GCMarkStackCount := 0;
+  if Length(GCMarkStack) > MARK_STACK_RETAINED_CAPACITY then
+  try
+    SetLength(GCMarkStack, MARK_STACK_RETAINED_CAPACITY);
+  except
+    on EOutOfMemory do
+      ; // Keeping the larger block costs nothing a later trace would not use.
+  end;
+  GCMarkStackLimit := Length(GCMarkStack);
+  if (GCMarkStackTestLimit > 0) and (GCMarkStackLimit > GCMarkStackTestLimit) then
+    GCMarkStackLimit := GCMarkStackTestLimit;
+end;
+
+// Traces everything reachable from AObject, which MarkReferences has just
+// marked. Caller holds GCCollectLock.
+procedure TraceFromLocked(const AObject: TGCManagedObject);
+begin
+  GCMarkTracing := True;
+  try
+    AObject.TraceReferences;
+    DrainMarkStack;
+    if GCMarkOverflowed then
+      RescanMarkedObjects;
+  finally
+    GCMarkTracing := False;
+    GCMarkOverflowed := False;
+    GCMarkStackCount := 0;
+    GCMarkDepth := 0;
+  end;
+end;
+
+procedure TraceFrom(const AObject: TGCManagedObject);
+begin
+  if GCMarkPhaseLocked then
+  begin
+    TraceFromLocked(AObject);
+    Exit;
+  end;
+  // Marking outside a collection (a test, or a host checking reachability):
+  // take the lock the stack is guarded by, and give back what it grew to.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    TraceFromLocked(AObject);
+    ReleaseMarkStack;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
+end;
 
 { TGCManagedObject }
 
@@ -583,7 +817,31 @@ end;
 
 procedure TGCManagedObject.MarkReferences;
 begin
+  if FGCMark = GCCurrentMark then
+    Exit;
   FGCMark := GCCurrentMark;
+  if not GCMarkTracing then
+    TraceFrom(Self)
+  else if GCMarkDepth < GCMarkRecursionLimit then
+  begin
+    // Most objects are leaves or sit a few links from one, so tracing them
+    // here costs one call where the stack would cost a push, a pop and the
+    // same call. GCMarkDepth bounds how far this nests.
+    Inc(GCMarkDepth);
+    TraceReferences;
+    Dec(GCMarkDepth);
+  end
+  else if GCMarkStackCount < GCMarkStackLimit then
+  begin
+    GCMarkStack[GCMarkStackCount] := Self;
+    Inc(GCMarkStackCount);
+  end
+  else
+    PushMarkedSlow(Self);
+end;
+
+procedure TGCManagedObject.TraceReferences;
+begin
 end;
 
 function TGCManagedObject.TraceWeakReferences: Boolean;
@@ -1336,15 +1594,22 @@ begin
       {$IFDEF GC_TIMING}
       StartNs := GetNanoseconds;
       {$ENDIF}
-      MarkRoots;
-      // The weak-reference passes are no-ops on every non-weak object, so
-      // skip both full-heap walks entirely while no weak container is tracked.
-      // A populated-then-emptied container stays tracked while live, so the
-      // passes still run for it (see docs/garbage-collector.md).
-      if FWeakContainers.Count > 0 then
-      begin
-        TraceWeakReferences;
-        SweepWeakReferences;
+      GCMarkPhaseLocked := True;
+      try
+        MarkRoots;
+        // The weak-reference passes are no-ops on every non-weak object, so
+        // skip both full-heap walks entirely while no weak container is
+        // tracked. A populated-then-emptied container stays tracked while
+        // live, so the passes still run for it (see
+        // docs/garbage-collector.md).
+        if FWeakContainers.Count > 0 then
+        begin
+          TraceWeakReferences;
+          SweepWeakReferences;
+        end;
+      finally
+        GCMarkPhaseLocked := False;
+        ReleaseMarkStack;
       end;
       {$IFDEF GC_TIMING}
       AfterMarkNs := GetNanoseconds;
@@ -1636,11 +1901,17 @@ begin
 
       TGCManagedObject.AdvanceMark;
 
-      MarkRoots;
-      if FWeakContainers.Count > 0 then
-      begin
-        TraceWeakReferences;
-        SweepWeakReferences;
+      GCMarkPhaseLocked := True;
+      try
+        MarkRoots;
+        if FWeakContainers.Count > 0 then
+        begin
+          TraceWeakReferences;
+          SweepWeakReferences;
+        end;
+      finally
+        GCMarkPhaseLocked := False;
+        ReleaseMarkStack;
       end;
 
       Collected := 0;
@@ -1980,6 +2251,38 @@ begin
 end;
 {$ENDIF}
 
+class function TGarbageCollector.MarkStackCapacity: Integer;
+begin
+  Result := Length(GCMarkStack);
+end;
+
+class function TGarbageCollector.MarkStackOverflows: Integer;
+begin
+  Result := GCMarkOverflowCount;
+end;
+
+class procedure TGarbageCollector.LimitMarkStackForTesting(
+  const AEntries: Integer);
+begin
+  CriticalSectionEnter(GCCollectLock);
+  try
+    if AEntries > 0 then
+    begin
+      GCMarkStackTestLimit := AEntries;
+      // Every push must reach the stack for the cap to be what is tested.
+      GCMarkRecursionLimit := 0;
+    end
+    else
+    begin
+      GCMarkStackTestLimit := 0;
+      GCMarkRecursionLimit := MARK_RECURSION_LIMIT;
+    end;
+    ReleaseMarkStack;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
+end;
+
 function TGarbageCollector.GetWatermark: Integer;
 begin
   Result := FManagedObjects.Count;
@@ -1993,6 +2296,10 @@ end;
 initialization
   CriticalSectionInit(GCCollectLock);
   GCCurrentMark := 1;
+  SetLength(GCMarkStack, MARK_STACK_RETAINED_CAPACITY);
+  GCMarkStackCount := 0;
+  GCMarkRecursionLimit := MARK_RECURSION_LIMIT;
+  GCMarkStackLimit := MARK_STACK_RETAINED_CAPACITY;
   {$IFDEF GOCCIA_GC_STRESS}
   // A GC-stress build links heaptrc (-gh, from ./build.pas --gc-stress). Keep
   // every released block out of reuse: heaptrc fills a freed block with $F0, so
@@ -2003,6 +2310,7 @@ initialization
 
 finalization
   CriticalSectionDone(GCCollectLock);
+  SetLength(GCMarkStack, 0);
   {$IFDEF GOCCIA_GC_STRESS}
   // Skip heaptrc's exit report. heaptrc is finalized after this unit and
   // checks useheaptrace first. Leaks are the memory-safety job's concern, not

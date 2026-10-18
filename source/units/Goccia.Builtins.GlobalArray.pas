@@ -84,7 +84,7 @@ type
     destructor Destroy; override;
     function ContinueJob(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 constructor TArrayFromAsyncSyncIteratorJob.Create(
@@ -250,9 +250,8 @@ begin
   end;
 end;
 
-procedure TArrayFromAsyncSyncIteratorJob.MarkReferences;
+procedure TArrayFromAsyncSyncIteratorJob.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FPromise) then
     FPromise.MarkReferences;
