@@ -65,11 +65,12 @@ A response over the ceiling rejects with `TypeError`.
 
 The capability set and the ceiling belong to one engine: embedders fix the set
 at engine construction and set `FetchMaxResponseBytes` on the engine. Each
-request carries them to the worker that performs it, so engines that share a
-thread — a sandbox `runScript` child inside its parent — neither see nor
-change each other's policy. An embedder can also give an engine its own
-transport, which answers that engine's requests instead of the network after
-these checks; see [Embedding — Fetch Transport](embedding.md#fetch-transport).
+request carries them to the worker or embedder transport that performs it, so
+engines that share a thread — a sandbox `runScript` child inside its parent —
+neither see nor change each other's policy. An embedder can also give an engine
+its own transport, which answers that engine's requests instead of the network
+after these checks; see [Embedding — Fetch
+Transport](embedding.md#fetch-transport).
 
 ### Threat model notes
 

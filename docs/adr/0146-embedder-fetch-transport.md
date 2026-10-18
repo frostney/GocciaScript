@@ -84,10 +84,12 @@ it and release its slot in the cap; a later answer is refused. An abort or a
 discard also cancels the responder, even when an answer was already taken
 but not yet settled: `IsCancelled` turns true, so a recording host can tell
 an answer the script never saw. A request that settled is not cancelled.
-The responder keeps the completion queue alive by reference, so an answer that arrives after its engine is gone
-is dropped, not delivered to freed state. A transport that raises from
-`Fetch` cancels its request and the fetch rejects with `TypeError`, as when a
-worker could not start.
+The responder keeps the completion queue alive by reference, so an answer
+that arrives after its engine is gone is dropped, not delivered to freed
+state. A transport that raises from `Fetch` cancels its request and the fetch
+rejects with `TypeError`, as when a worker could not start; the run's own
+timeout, instruction-limit, memory-limit and engine-integrity errors still
+propagate and end the run, as from any `fetch()` call.
 
 **`FetchOverNetwork` performs a request as the built-in client would.** A
 recording transport forwards to it from a thread of its own, wraps the

@@ -97,10 +97,11 @@ type
       deadline or the request's signal ends the wait. The wait runs no
       script and so consumes no instruction budget: it still stops for a
       budget already exhausted, but does not run one down. Must not run
-      script or call
-      into the engine. An exception raised here cancels the request and
-      rejects the fetch with TypeError (`fetch failed: <message>`), even if
-      the transport answered first. }
+      script or call into the engine. An exception raised here cancels the
+      request, even if the transport answered first: an ordinary exception
+      rejects the fetch with TypeError (`fetch failed: <message>`), while the
+      run's own timeout, instruction-limit, memory-limit and engine-integrity
+      errors propagate and end the run, as they do from any fetch() call. }
     procedure Fetch(const ARequest: TGocciaFetchTransportRequest;
       const AResponder: IGocciaFetchResponder);
   end;

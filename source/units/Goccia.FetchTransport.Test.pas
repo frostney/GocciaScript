@@ -128,6 +128,7 @@ type
     procedure TestFinalURLMustBeAURL;
     procedure TestAbortAfterAnswerCancels;
     procedure TestRacingAnswersOneWins;
+    procedure TestAnswerRacingDiscard;
     procedure TestEnginesKeepTheirOwnTransport;
     procedure TestThreadsKeepTheirOwnTransport;
     procedure TestRecorderSkipsRefusedAnswers;
@@ -357,6 +358,8 @@ begin
     TestAbortAfterAnswerCancels);
   Test('of two racing answers exactly one is taken',
     TestRacingAnswersOneWins);
+  Test('an answer racing a discard never settles the discarded request',
+    TestAnswerRacingDiscard);
   Test('engines on one thread each use only their own transport',
     TestEnginesKeepTheirOwnTransport);
   Test('engines on different threads each use only their own transport',
@@ -1035,6 +1038,68 @@ begin
     end;
   finally
     Engine.Free;
+    Source.Free;
+  end;
+end;
+
+{ An answer racing a discard never settles the discarded request, and
+  leaves another engine's pending request on the same thread alone. A stress
+  test: which side wins each round is up to the scheduler. }
+procedure TFetchTransportTests.TestAnswerRacingDiscard;
+const
+  ROUNDS = 100;
+var
+  Fake, OtherFake: TFakeTransport;
+  Transport, OtherTransport: IGocciaFetchTransport;
+  Source, OtherSource: TStringList;
+  Engine, Other: TGocciaEngine;
+  Promise, OtherPromise: TGocciaPromiseValue;
+  Gate: Longint;
+  Answer: TRacingAnswer;
+  Round: Integer;
+begin
+  Fake := TFakeTransport.Create(tmHold);
+  Transport := Fake;
+  OtherFake := TFakeTransport.Create(tmHold);
+  OtherTransport := OtherFake;
+  Source := TStringList.Create;
+  OtherSource := TStringList.Create;
+  Engine := CreateFetchEngine(Source, ApiCapabilities);
+  Other := CreateFetchEngine(OtherSource, ApiCapabilities);
+  OtherPromise := nil;
+  try
+    // Keeps the thread's completion queue in use across every round.
+    OtherPromise := StartTransportFetch(Other, OtherTransport);
+    for Round := 1 to ROUNDS do
+    begin
+      Promise := StartTransportFetch(Engine, Transport);
+      try
+        Gate := 0;
+        Answer := TRacingAnswer.Create(Fake.Responder, @Gate, True);
+        InterlockedExchange(Gate, 1);
+        GetRuntime(Engine).DiscardPending;
+        while not Answer.Finished do
+          ThreadSwitch;
+        Answer.WaitFor;
+        Answer.Free;
+        Expect<Boolean>(Fake.Responder.IsCancelled).ToBe(True);
+        TGocciaFetchManager.Instance.PumpCompletions;
+        Expect<Boolean>(Promise.State = gpsPending).ToBe(True);
+        Expect<Boolean>(OtherPromise.State = gpsPending).ToBe(True);
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Promise);
+      end;
+    end;
+    Expect<Boolean>(OtherFake.Responder.Respond(TextResponse(200, 'ok')))
+      .ToBe(True);
+    TGocciaFetchManager.Instance.PumpCompletions;
+    Expect<Boolean>(OtherPromise.State = gpsFulfilled).ToBe(True);
+  finally
+    if Assigned(OtherPromise) then
+      TGarbageCollector.Instance.RemoveTempRoot(OtherPromise);
+    Other.Free;
+    Engine.Free;
+    OtherSource.Free;
     Source.Free;
   end;
 end;
