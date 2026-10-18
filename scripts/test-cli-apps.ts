@@ -14388,6 +14388,78 @@ await section("Runner: a deadline that elapses while a fetch is pending ends the
   }
 });
 
+await section("Runner and TestRunner: a timeout that interrupts a blocking Atomics.wait ends the file like any other timeout...", async () => {
+  // The interrupted wait freed its waiter but left it in the process-wide
+  // waiter list (#1769). The runner then faulted when it shut its thread
+  // down, and the test runner's worker cleanup turned the timeout into an
+  // integrity fault that skipped every remaining file.
+  const tmp = makeTmp();
+  try {
+    const blocking = [
+      "const view = new Int32Array(new SharedArrayBuffer(4));",
+      "Atomics.wait(view, 0, 0, 25000);",
+      'console.log("ran past the " + "deadline");',
+      "",
+    ].join("\n");
+    const script = join(tmp, "wait.js");
+    writeFileSync(script, blocking);
+    const run = Bun.spawnSync([resolve(RUNNER), script, "--timeout=300"], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const runOutput = run.stdout.toString() + run.stderr.toString();
+    if (run.exitCode !== 1 || !runOutput.includes("file timed out after 300ms") || /Access violation|ran past the deadline/.test(runOutput))
+      throw new Error(`Runner should end the blocked wait with the timeout, got exit ${run.exitCode}: ${runOutput}`);
+
+    const json = Bun.spawnSync([resolve(RUNNER), script, "--timeout=300", "--output=json"], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const envelope = JSON.parse(json.stdout.toString());
+    if (json.exitCode !== 1 || envelope.ok !== false || envelope.error?.type !== "TimeoutError")
+      throw new Error(`Runner should report a TimeoutError in the JSON envelope, got exit ${json.exitCode}: ${json.stdout.toString()}${json.stderr.toString()}`);
+
+    const dir = join(tmp, "suite");
+    mkdirSync(dir);
+    writeFileSync(
+      join(dir, "a-wait.test.js"),
+      [
+        'describe("atomics wait", () => {',
+        '  test("blocks past the file timeout", () => {',
+        "    const view = new Int32Array(new SharedArrayBuffer(4));",
+        "    Atomics.wait(view, 0, 0, 25000);",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(dir, "b-next.test.js"),
+      'describe("next file", () => { test("runs", () => { expect(1 + 1).toBe(2); }); });\n',
+    );
+    for (const jobs of ["1", "2"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", dir, `--jobs=${jobs}`, "--timeout=300ms", "--no-progress", "--output=json"],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      const label = `TestRunner (--jobs=${jobs})`;
+      if (proc.exitCode !== 1 || output.includes("Integrity fault"))
+        throw new Error(`${label} should fail only the waiting file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
+      const files = JSON.parse(proc.stdout.toString())
+        .files.map((file: any) => ({
+          file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+          ok: file.ok,
+          passed: file.passed,
+          timedOut: String(file.errorMessage ?? "").includes("file timed out after 300ms"),
+        }))
+        .sort((a: any, b: any) => a.file.localeCompare(b.file));
+      const expected = [
+        { file: "a-wait.test.js", ok: false, passed: 0, timedOut: true },
+        { file: "b-next.test.js", ok: true, passed: 1, timedOut: false },
+      ];
+      if (JSON.stringify(files) !== JSON.stringify(expected))
+        throw new Error(`${label} should time the waiting file out and run the next one, got ${JSON.stringify(files)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a parent's fetch timeout observed during a nested runScript aborts in the parent's realm...", async () => {
   // The child's end-of-run drain is what notices the parent's expired
   // AbortSignal.timeout. The TimeoutError it creates must belong to the

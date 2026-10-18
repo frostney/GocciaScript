@@ -664,10 +664,11 @@ function TGocciaRuntime.Execute: TGocciaScriptResult;
 begin
   { An engine the runtime created backs a script's top-level bindings with
     the global object, as the CLI hosts configure theirs; module source keeps
-    them in its module scope. An engine the host passed in keeps its own
-    setting. }
+    them in its module scope. A detected entry is configured as a Script, and
+    Execute keeps one that turns out a Module off the global object. An
+    engine the host passed in keeps its own setting. }
   if FCreatedEngine then
-    FEngine.GlobalBackedTopLevel := FEngine.SourceType = stScript;
+    FEngine.GlobalBackedTopLevel := FEngine.SourceType <> stModule;
   Result := FEngine.Execute;
 end;
 

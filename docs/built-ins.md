@@ -999,11 +999,15 @@ Implements the [Encoding Standard TextEncoder](https://developer.mozilla.org/en-
 
 **GocciaScript differences:** None -- full standard compliance (UTF-8 only, with `encode` and `encodeInto`).
 
+`encodeInto`'s destination converts as Web IDL's `[AllowShared] Uint8Array`: a `Uint8Array` over a fixed-length `ArrayBuffer` or `SharedArrayBuffer`. A view of a resizable `ArrayBuffer` or a growable `SharedArrayBuffer` is a `TypeError`, because the signature has no `[AllowResizable]`.
+
 ### TextDecoder (`Goccia.RuntimeExtensions.TextEncoding.pas`, `Goccia.Values.TextDecoderValue.pas`)
 
 Implements the [Encoding Standard TextDecoder](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder). See [MDN TextDecoder reference](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder) for the full API.
 
 **GocciaScript differences:** Only `"utf-8"` encoding is supported. The `fatal` and `ignoreBOM` options are accepted.
+
+`decode`'s input converts as Web IDL's `AllowSharedBufferSource`: an `ArrayBuffer`, a `SharedArrayBuffer`, a typed array or a `DataView`. A resizable `ArrayBuffer`, a growable `SharedArrayBuffer` and every view of one are a `TypeError`, because the signature has no `[AllowResizable]`; `buffer.slice()` or `transferToFixedLength()` gives a fixed-length copy that decodes. A detached fixed-length buffer decodes as `""`.
 
 ### URL (`Goccia.Builtins.GlobalURL.pas`)
 

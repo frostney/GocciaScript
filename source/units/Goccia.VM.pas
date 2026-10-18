@@ -8724,7 +8724,8 @@ end;
 
 procedure TGocciaVM.SetRegister(const AIndex: Integer; const AValue: TGocciaValue);
 begin
-  EnsureRegisterCapacity(AIndex + 1);
+  if AIndex >= FRegisterCount then
+    EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := VMValueToRegisterFast(AValue);
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and
      Assigned(FLocalCells[AIndex]) then
@@ -8747,7 +8748,10 @@ end;
 procedure TGocciaVM.SetRegisterRaw(const AIndex: Integer;
   const AValue: TGocciaRegister);
 begin
-  EnsureRegisterCapacity(AIndex + 1);
+  // The window almost always holds the register already; only growth takes
+  // the call.
+  if AIndex >= FRegisterCount then
+    EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := AValue;
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and
      Assigned(FLocalCells[AIndex]) then
@@ -16166,7 +16170,6 @@ var
   IterResult: TGocciaValue;
   NextMethod: TGocciaValue;
   DoneFlag: Boolean;
-  Running: Boolean;
   Template: TGocciaFunctionTemplate;
   Constant: PGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
@@ -16595,10 +16598,9 @@ begin
         end;
       end;
     end;
-    Running := True;
     InstructionLimitState := CaptureInstructionLimitState;
     EscapingThrow := nil;
-    while Running and (Frame.IP < Template.CodeCount) do
+    while Frame.IP < Template.CodeCount do
     begin
       try
         UseProdDispatch := not FCoverageEnabled and not FProfilingOpcodes and
@@ -16609,16 +16611,22 @@ begin
           goto LInstrumentedLoopHead;
 
 LProdLoopHead:
-        if not (Running and (Frame.IP < Template.CodeCount)) then
+        if Frame.IP >= Template.CodeCount then
           goto LInnerLoopsDone;
         InstructionStartIP := Frame.IP;
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
 
-        WideA := 0;
-        WideB := 0;
-        WideC := 0;
-        if DecodeOp(Instruction) = Ord(OP_WIDE) then
+        // Every instruction passes through here; only an OP_WIDE prefix pays
+        // for the high operand bytes.
+        Op := DecodeOp(Instruction);
+        if Op <> Ord(OP_WIDE) then
+        begin
+          A := DecodeA(Instruction);
+          B := DecodeB(Instruction);
+          C := DecodeC(Instruction);
+        end
+        else
         begin
           WideA := UInt16(DecodeA(Instruction)) shl 8;
           WideB := UInt16(DecodeB(Instruction)) shl 8;
@@ -16627,16 +16635,15 @@ LProdLoopHead:
             raise Exception.Create('Truncated OP_WIDE bytecode prefix');
           Instruction := Template.GetInstructionUnchecked(Frame.IP);
           Inc(Frame.IP);
+          Op := DecodeOp(Instruction);
+          A := WideA or DecodeA(Instruction);
+          B := WideB or DecodeB(Instruction);
+          C := WideC or DecodeC(Instruction);
         end;
-
-        Op := DecodeOp(Instruction);
-        A := WideA or DecodeA(Instruction);
-        B := WideB or DecodeB(Instruction);
-        C := WideC or DecodeC(Instruction);
         goto LDispatchCase;
 
 LInstrumentedLoopHead:
-        if not (Running and (Frame.IP < Template.CodeCount)) then
+        if Frame.IP >= Template.CodeCount then
           goto LInnerLoopsDone;
         if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
            Assigned(AStopGenerator) then
