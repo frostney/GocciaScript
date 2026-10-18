@@ -32,4 +32,17 @@ describe("async object method", () => {
       expect(total).toBe(60);
     });
   });
+
+  test("a method named async may put its parameters on the next line", () => {
+    // ES2026 §15.8: only an `async` prefix needs the name on its line; this
+    // is a plain method named `async`
+    const obj = {
+      async
+      () {
+        return 1;
+      },
+    };
+
+    expect(obj.async()).toBe(1);
+  });
 });

@@ -79,6 +79,8 @@ resourcestring
   SSuggestAddColonAfterCase = 'Add '':'' after the case value';
   SSuggestAddColonAfterDefault = 'Add '':'' after default';
   SSuggestArrowFunctionSyntax = 'Arrow functions use ''=> '' after the parameter list';
+  SSuggestArrowSameLine = 'Put ''=>'' on the same line as the arrow function''s parameters';
+  SSuggestYieldDelegateSameLine = 'Put ''*'' on the same line as ''yield'' to delegate with yield*';
   SSuggestNamespaceImportAs = 'Namespace imports require ''as'' and a local name (e.g., import * as name from ...)';
   SSuggestAddFromAfterImport = 'Add ''from "module-path"'' after the import';
   SSuggestAddFromAfterImportList = 'Add ''from "module-path"'' after the import list';
