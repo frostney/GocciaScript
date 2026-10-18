@@ -16,6 +16,7 @@ uses
 
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
+  Goccia.FetchTransport,
   Goccia.Realm,
   Goccia.Values.AbortValue,
   Goccia.Values.PromiseValue;
@@ -37,6 +38,11 @@ type
       the engine discards its requests. }
     AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
     AuditSource: TGocciaCapabilityAuditSource;
+    { The engine's fetch transport (ADR 0146), or nil for the built-in
+      network client. A request handed to a transport makes no hop decisions
+      of its own: its audit trail is the dispatch and the name check fetch()
+      made before the hand-over. }
+    Transport: IGocciaFetchTransport;
   end;
 
   { One manager serves every engine on a thread: engines nest there (a sandbox
@@ -89,6 +95,16 @@ function HasPendingFetches(const ARealm: TGocciaRealm): Boolean;
 procedure DiscardFetchCompletions; overload;
 procedure DiscardFetchCompletions(const ARealm: TGocciaRealm); overload;
 
+{ Performs ARequest over the network exactly as fetch() does with no
+  transport installed — the net capability checked on every redirect hop and
+  against every resolved address, the response ceiling, the timeout — and
+  answers AResponder with the result. Blocking: a transport that forwards to
+  the network (to record what it answers, say) calls it from a thread of its
+  own. The hop decisions it makes are not audited. Where no network client
+  exists (the WASM lane) it answers with a network error. }
+procedure FetchOverNetwork(const ARequest: TGocciaFetchTransportRequest;
+  const AResponder: IGocciaFetchResponder);
+
 implementation
 
 // The DEFAULT WORKER BACKEND (TThread + HTTPClient + polling Sleep)
@@ -121,6 +137,7 @@ uses
 
 const
   FETCH_POLL_INTERVAL_MS = 1;
+  FETCH_NETWORK_UNAVAILABLE_ERROR = 'no fetch backend is available';
 
 {$IFNDEF LAKON}
 const
@@ -131,6 +148,28 @@ const
     the `abandoned:` tag tells this event apart from a destination check. }
   FETCH_ABANDONED_AUDIT_REASON = 'abandoned: the request was aborted; hop ' +
     'decisions its worker reports after the engine ends are not audited';
+  FETCH_TRANSPORT_INVALID_STATUS_ERROR =
+    'fetch transport answered an invalid status: %d';
+  FETCH_TRANSPORT_INVALID_HEADER_ERROR =
+    'fetch transport answered an invalid header';
+  FETCH_TRANSPORT_INVALID_STATUS_TEXT_ERROR =
+    'fetch transport answered an invalid status text';
+  { The built-in client's wording, so a transport's oversized answer reads
+    as the network's would. }
+  FETCH_RESPONSE_BODY_LIMIT_ERROR = 'HTTP response body exceeds %d byte limit';
+  { WHATWG Fetch: a response a fetch can settle with has a status in the
+    range 200 to 599 (the Response constructor's range; 1xx responses are
+    interim and never final). }
+  FETCH_MIN_RESPONSE_STATUS = 200;
+  FETCH_MAX_RESPONSE_STATUS = 599;
+  HTTP_STATUS_NO_CONTENT = 204;
+  HTTP_STATUS_RESET_CONTENT = 205;
+  HTTP_STATUS_NOT_MODIFIED = 304;
+  FETCH_METHOD_HEAD = 'HEAD';
+
+  EXCHANGE_OPEN = 0;
+  EXCHANGE_ANSWERED = 1;
+  EXCHANGE_CANCELLED = 2;
 
 type
   { One net decision a worker made for a hop, replayed to the audit sink on
@@ -188,6 +227,14 @@ type
     procedure Abandon;
   end;
 
+  { The manager's side of a request handed to a transport. The pending entry
+    holds it until the request settles, aborts or is discarded, which
+    cancels it; the transport holds it as its responder until it answers. }
+  IGocciaFetchExchange = interface(IGocciaFetchResponder)
+    { Runtime thread only. }
+    procedure Cancel;
+  end;
+
   TGocciaPendingFetch = record
     RequestID: Integer;
     AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
@@ -203,6 +250,25 @@ type
     // WHATWG DOM §3.2 abort algorithm registration for this request, removed
     // again whenever the pending entry leaves FPending.
     AbortAlgorithmHandle: Integer;
+    // A request handed to the engine's transport; nil for a worker's. The
+    // entry holds the request's worker slot, released with the exchange
+    // when the entry leaves FPending.
+    Exchange: IGocciaFetchExchange;
+  end;
+
+  { The destination check one network request applies on every hop, and the
+    decisions it made, for the audit trail. }
+  TGocciaFetchHopChecker = class
+  private
+    FCapabilities: TGocciaCapabilities;
+    FNameChecks: Integer;
+    FHopDecisions: array of TGocciaFetchHopDecision;
+    procedure RecordDecision(const AAllowed: Boolean;
+      const AHost, AReason: string);
+  public
+    constructor Create(const ACapabilities: TGocciaCapabilities);
+    function CheckDestination(const AHost: string; const APort: Integer;
+      const AResolvedAddress: string; out AReason: string): Boolean;
   end;
 
   TGocciaFetchWorker = class(TThread)
@@ -217,12 +283,6 @@ type
     FTimeoutMilliseconds: Integer;
     { The worker's own copy of the dispatching engine's policy. }
     FPolicy: TGocciaFetchPolicy;
-    FNameChecks: Integer;
-    FHopDecisions: array of TGocciaFetchHopDecision;
-    procedure RecordDecision(const AAllowed: Boolean;
-      const AHost, AReason: string);
-    function CheckDestination(const AHost: string; const APort: Integer;
-      const AResolvedAddress: string; out AReason: string): Boolean;
   protected
     procedure Execute; override;
   public
@@ -232,6 +292,31 @@ type
       const ATimeoutMilliseconds: Integer;
       const APolicy: TGocciaFetchPolicy);
     destructor Destroy; override;
+  end;
+
+  TGocciaFetchExchange = class(TInterfacedObject, IGocciaFetchExchange)
+  private
+    { Kept alive by this reference until the exchange goes, so an answer
+      given after the engine ended still has a queue to be dropped by. }
+    FState: TGocciaFetchState;
+    FRequestID: Integer;
+    FURL: string;
+    FIsHead: Boolean;
+    FMaxResponseBytes: Integer;
+    { EXCHANGE_OPEN until the first answer or the cancellation claims it. }
+    FSettled: Longint;
+    function Claim: Boolean;
+    procedure Post(const ACompletion: TGocciaFetchCompletion);
+  public
+    constructor Create(const AState: TGocciaFetchState;
+      const ARequestID: Integer; const AURL: string; const AIsHead: Boolean;
+      const AMaxResponseBytes: Integer);
+    destructor Destroy; override;
+    function Respond(const AResponse: THTTPResponse): Boolean;
+    function Fail(const AMessage: string;
+      const ADeniedScope: string = ''): Boolean;
+    function IsCancelled: Boolean;
+    procedure Cancel;
   end;
 
   TGocciaFetchManagerImpl = class(TGocciaFetchManager)
@@ -454,7 +539,16 @@ begin
   inherited;
 end;
 
-procedure TGocciaFetchWorker.RecordDecision(const AAllowed: Boolean;
+{ TGocciaFetchHopChecker }
+
+constructor TGocciaFetchHopChecker.Create(
+  const ACapabilities: TGocciaCapabilities);
+begin
+  inherited Create;
+  FCapabilities := ACapabilities;
+end;
+
+procedure TGocciaFetchHopChecker.RecordDecision(const AAllowed: Boolean;
   const AHost, AReason: string);
 begin
   SetLength(FHopDecisions, Length(FHopDecisions) + 1);
@@ -467,14 +561,14 @@ end;
   hop before the name is resolved and again to the address it resolved to.
   The first hop's name was already checked and audited synchronously by
   fetch() itself, so only later hops record a name decision. }
-function TGocciaFetchWorker.CheckDestination(const AHost: string;
+function TGocciaFetchHopChecker.CheckDestination(const AHost: string;
   const APort: Integer; const AResolvedAddress: string;
   out AReason: string): Boolean;
 begin
   if AResolvedAddress = '' then
   begin
     Inc(FNameChecks);
-    Result := FPolicy.Capabilities.AllowsNetHost(AHost, APort);
+    Result := FCapabilities.AllowsNetHost(AHost, APort);
     if Result then
       AReason := 'redirect target is allowed by the net capability'
     else
@@ -484,7 +578,7 @@ begin
     Exit;
   end;
 
-  Result := FPolicy.Capabilities.AllowsNetAddress(AHost, APort,
+  Result := FCapabilities.AllowsNetAddress(AHost, APort,
     AResolvedAddress);
   if Result then
     AReason := 'resolved to ' + AResolvedAddress +
@@ -495,42 +589,238 @@ begin
   RecordDecision(Result, AHost, AReason);
 end;
 
-procedure TGocciaFetchWorker.Execute;
+{ The built-in network request behind fetch(): fills ACompletion with the
+  response or the error, and with the hop decisions it made. }
+procedure PerformNetworkRequest(const AURL, AMethod: string;
+  const AHeaders: THTTPHeaders; const ATimeoutMilliseconds: Integer;
+  const ACapabilities: TGocciaCapabilities; const AMaxResponseBytes: Integer;
+  const ACompletion: TGocciaFetchCompletion);
 var
-  Completion: TGocciaFetchCompletion;
+  Checker: TGocciaFetchHopChecker;
   RequestPolicy: THTTPRequestPolicy;
 begin
-  Completion := TGocciaFetchCompletion.Create(FRequestID);
+  Checker := TGocciaFetchHopChecker.Create(ACapabilities);
   try
     RequestPolicy := DefaultHTTPPolicy;
-    RequestPolicy.MaxResponseBytes := FPolicy.MaxResponseBytes;
-    RequestPolicy.HostCheck := CheckDestination;
+    RequestPolicy.MaxResponseBytes := AMaxResponseBytes;
+    RequestPolicy.HostCheck := Checker.CheckDestination;
     try
-      if FMethod = 'HEAD' then
-        Completion.Response := HTTPHead(FURL, FHeaders, nil,
-          FTimeoutMilliseconds, RequestPolicy)
+      if AMethod = FETCH_METHOD_HEAD then
+        ACompletion.Response := HTTPHead(AURL, AHeaders, nil,
+          ATimeoutMilliseconds, RequestPolicy)
       else
-        Completion.Response := HTTPGet(FURL, FHeaders, nil,
-          FTimeoutMilliseconds, RequestPolicy);
-      Completion.Success := True;
+        ACompletion.Response := HTTPGet(AURL, AHeaders, nil,
+          ATimeoutMilliseconds, RequestPolicy);
+      ACompletion.Success := True;
     except
       on E: EHTTPDestinationDenied do
       begin
-        Completion.ErrorMessage := E.Message;
-        Completion.DeniedScope := E.Scope;
+        ACompletion.ErrorMessage := E.Message;
+        ACompletion.DeniedScope := E.Scope;
       end;
       on E: EHTTPError do
-        Completion.ErrorMessage := E.Message;
+        ACompletion.ErrorMessage := E.Message;
       on E: Exception do
-        Completion.ErrorMessage := 'fetch failed: ' + E.Message;
+        ACompletion.ErrorMessage := 'fetch failed: ' + E.Message;
     end;
-    Completion.HopDecisions := Copy(FHopDecisions, 0, Length(FHopDecisions));
+    ACompletion.HopDecisions := Copy(Checker.FHopDecisions, 0,
+      Length(Checker.FHopDecisions));
+  finally
+    Checker.Free;
+  end;
+end;
 
+procedure TGocciaFetchWorker.Execute;
+var
+  Completion: TGocciaFetchCompletion;
+begin
+  Completion := TGocciaFetchCompletion.Create(FRequestID);
+  try
+    PerformNetworkRequest(FURL, FMethod, FHeaders, FTimeoutMilliseconds,
+      FPolicy.Capabilities, FPolicy.MaxResponseBytes, Completion);
     if FState.PostCompletion(Completion) then
       Completion := nil;
   finally
     Completion.Free;
   end;
+end;
+
+{ TGocciaFetchExchange }
+
+constructor TGocciaFetchExchange.Create(const AState: TGocciaFetchState;
+  const ARequestID: Integer; const AURL: string; const AIsHead: Boolean;
+  const AMaxResponseBytes: Integer);
+begin
+  inherited Create;
+  FState := AState;
+  FState.AddRef;
+  FRequestID := ARequestID;
+  FURL := AURL;
+  FIsHead := AIsHead;
+  FMaxResponseBytes := AMaxResponseBytes;
+  FSettled := EXCHANGE_OPEN;
+end;
+
+destructor TGocciaFetchExchange.Destroy;
+begin
+  if Assigned(FState) then
+    FState.Release;
+  inherited;
+end;
+
+function TGocciaFetchExchange.Claim: Boolean;
+begin
+  Result := InterlockedCompareExchange(FSettled, EXCHANGE_ANSWERED,
+    EXCHANGE_OPEN) = EXCHANGE_OPEN;
+end;
+
+procedure TGocciaFetchExchange.Post(const ACompletion: TGocciaFetchCompletion);
+begin
+  // Refused once the engine discarded its requests: nothing will pop it.
+  if not FState.PostCompletion(ACompletion) then
+    ACompletion.Free;
+end;
+
+{ RFC 9110 §5.6.2: token = 1*tchar. }
+function IsHTTPToken(const AText: string): Boolean;
+var
+  I: Integer;
+begin
+  if AText = '' then
+    Exit(False);
+  for I := 1 to Length(AText) do
+    case AText[I] of
+      'a'..'z', 'A'..'Z', '0'..'9', '!', '#', '$', '%', '&', '''', '*', '+',
+      '-', '.', '^', '_', '`', '|', '~':
+        ;
+    else
+      Exit(False);
+    end;
+  Result := True;
+end;
+
+{ WHATWG Fetch: a header value contains no NUL, CR or LF. Status text is held
+  to the same rule, as a status line's reason phrase. }
+function HasForbiddenValueCharacter(const AText: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to Length(AText) do
+    if AText[I] in [#0, #10, #13] then
+      Exit(True);
+  Result := False;
+end;
+
+{ WHATWG Fetch: to normalize a header value, strip its leading and trailing
+  HTTP whitespace (tab and space here: CR and LF were refused above). }
+function NormalizeHeaderValue(const AValue: string): string;
+var
+  First, Last: Integer;
+begin
+  First := 1;
+  Last := Length(AValue);
+  while (First <= Last) and (AValue[First] in [#9, ' ']) do
+    Inc(First);
+  while (Last >= First) and (AValue[Last] in [#9, ' ']) do
+    Dec(Last);
+  Result := Copy(AValue, First, Last - First + 1);
+end;
+
+{ Why the engine refuses a transport's response, or '' when it takes it. }
+function TransportResponseError(const AResponse: THTTPResponse;
+  const AIsHead: Boolean; const AMaxResponseBytes: Integer): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  if (AResponse.StatusCode < FETCH_MIN_RESPONSE_STATUS) or
+     (AResponse.StatusCode > FETCH_MAX_RESPONSE_STATUS) then
+    Exit(Format(FETCH_TRANSPORT_INVALID_STATUS_ERROR,
+      [AResponse.StatusCode]));
+  if HasForbiddenValueCharacter(AResponse.StatusText) then
+    Exit(FETCH_TRANSPORT_INVALID_STATUS_TEXT_ERROR);
+  for I := 0 to High(AResponse.Headers) do
+    if not IsHTTPToken(AResponse.Headers[I].Name) or
+       HasForbiddenValueCharacter(AResponse.Headers[I].Value) then
+      Exit(FETCH_TRANSPORT_INVALID_HEADER_ERROR);
+  if (not AIsHead) and (Length(AResponse.Body) > AMaxResponseBytes) then
+    Exit(Format(FETCH_RESPONSE_BODY_LIMIT_ERROR, [AMaxResponseBytes]));
+end;
+
+{ WHATWG Fetch: a null body status is 101, 103, 204, 205 or 304; only the
+  last three can reach here. }
+function IsNullBodyStatus(const AStatus: Integer): Boolean;
+begin
+  Result := (AStatus = HTTP_STATUS_NO_CONTENT) or
+    (AStatus = HTTP_STATUS_RESET_CONTENT) or
+    (AStatus = HTTP_STATUS_NOT_MODIFIED);
+end;
+
+function TGocciaFetchExchange.Respond(const AResponse: THTTPResponse): Boolean;
+var
+  Completion: TGocciaFetchCompletion;
+  I, FragmentStart: Integer;
+begin
+  Result := Claim;
+  if not Result then
+    Exit;
+  Completion := TGocciaFetchCompletion.Create(FRequestID);
+  try
+    Completion.ErrorMessage := TransportResponseError(AResponse, FIsHead,
+      FMaxResponseBytes);
+    if Completion.ErrorMessage = '' then
+    begin
+      Completion.Success := True;
+      Completion.Response := AResponse;
+      // Private copies: dynamic arrays are shared, not copied on write, and
+      // the transport may go on using its own on another thread.
+      Completion.Response.Headers := Copy(AResponse.Headers);
+      for I := 0 to High(Completion.Response.Headers) do
+        Completion.Response.Headers[I].Value :=
+          NormalizeHeaderValue(Completion.Response.Headers[I].Value);
+      // WHATWG Fetch, HTTP-network fetch: a HEAD request's response and a
+      // null body status's have a null body, whatever the transport gave.
+      if FIsHead or IsNullBodyStatus(AResponse.StatusCode) then
+        Completion.Response.Body := nil
+      else
+        Completion.Response.Body := Copy(AResponse.Body);
+      if Completion.Response.FinalURL = '' then
+        Completion.Response.FinalURL := FURL;
+      // Response.url serializes the URL with its fragment excluded.
+      FragmentStart := Pos('#', Completion.Response.FinalURL);
+      if FragmentStart > 0 then
+        SetLength(Completion.Response.FinalURL, FragmentStart - 1);
+    end;
+  except
+    Completion.Free;
+    raise;
+  end;
+  Post(Completion);
+end;
+
+function TGocciaFetchExchange.Fail(const AMessage: string;
+  const ADeniedScope: string): Boolean;
+var
+  Completion: TGocciaFetchCompletion;
+begin
+  Result := Claim;
+  if not Result then
+    Exit;
+  Completion := TGocciaFetchCompletion.Create(FRequestID);
+  Completion.ErrorMessage := AMessage;
+  Completion.DeniedScope := ADeniedScope;
+  Post(Completion);
+end;
+
+function TGocciaFetchExchange.IsCancelled: Boolean;
+begin
+  Result := InterlockedCompareExchange(FSettled, EXCHANGE_CANCELLED,
+    EXCHANGE_CANCELLED) = EXCHANGE_CANCELLED;
+end;
+
+procedure TGocciaFetchExchange.Cancel;
+begin
+  InterlockedCompareExchange(FSettled, EXCHANGE_CANCELLED, EXCHANGE_OPEN);
 end;
 
 {$ENDIF}
@@ -596,8 +886,10 @@ procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
 var
   Pending: TGocciaPendingFetch;
   Worker: TGocciaFetchWorker;
+  Request: TGocciaFetchTransportRequest;
   Added, LimitAcquired, Rooted: Boolean;
-  RequestTimeoutMilliseconds, SignalTimeoutMilliseconds: Integer;
+  RequestTimeoutMilliseconds, SignalTimeoutMilliseconds, PendingIndex,
+    MaxResponseBytes: Integer;
 begin
   Worker := nil;
   Added := False;
@@ -634,6 +926,7 @@ begin
   Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
   Pending.Signal := ASignal;
+  Pending.Exchange := nil;
 
   try
     RequestTimeoutMilliseconds := RemainingExecutionTimeoutMilliseconds;
@@ -679,10 +972,29 @@ begin
       end;
     end;
 
-    Worker := TGocciaFetchWorker.Create(FState, FLimiter,
-      Pending.RequestID, AURL, AMethod, AHeaders,
-      RequestTimeoutMilliseconds, APolicy);
-    LimitAcquired := False;
+    if Assigned(APolicy.Transport) then
+    begin
+      MaxResponseBytes := APolicy.MaxResponseBytes;
+      if MaxResponseBytes <= 0 then
+        MaxResponseBytes := DEFAULT_MAX_RESPONSE_BODY_BYTES;
+      Request.Method := AMethod;
+      Request.URL := AURL;
+      Request.Headers := Copy(AHeaders);
+      Request.Body := nil;
+      Request.TimeoutMilliseconds := RequestTimeoutMilliseconds;
+      Request.MaxResponseBytes := MaxResponseBytes;
+      Request.Capabilities := APolicy.Capabilities;
+      Pending.Exchange := TGocciaFetchExchange.Create(FState,
+        Pending.RequestID, AURL, AMethod = FETCH_METHOD_HEAD,
+        MaxResponseBytes);
+    end
+    else
+    begin
+      Worker := TGocciaFetchWorker.Create(FState, FLimiter,
+        Pending.RequestID, AURL, AMethod, AHeaders,
+        RequestTimeoutMilliseconds, APolicy);
+      LimitAcquired := False;
+    end;
 
     if (TGarbageCollector.Instance <> nil) then
     begin
@@ -694,11 +1006,27 @@ begin
 
     FPending.Add(Pending);
     Added := True;
-    Worker.Start;
-    Worker := nil;
+    if Assigned(Pending.Exchange) then
+    begin
+      { The request is pending before the transport sees it, so an answer
+        given inside the call finds it at the next pump. From here the entry
+        holds the worker slot. }
+      LimitAcquired := False;
+      APolicy.Transport.Fetch(Request, Pending.Exchange);
+    end
+    else
+    begin
+      Worker.Start;
+      Worker := nil;
+    end;
   except
     if Added then
-      FPending.Delete(FPending.Count - 1);
+    begin
+      // The transport cannot reach FPending, but look the entry up anyway.
+      PendingIndex := FindPendingIndex(Pending.RequestID);
+      if PendingIndex >= 0 then
+        FPending.Delete(PendingIndex);
+    end;
     if Assigned(ASignal) and (Pending.AbortAlgorithmHandle <> 0) then
       ASignal.RemoveAbortAlgorithm(Pending.AbortAlgorithmHandle);
     if Rooted and (TGarbageCollector.Instance <> nil) then
@@ -708,6 +1036,14 @@ begin
         TGarbageCollector.Instance.RemoveTempRoot(ASignal);
     end;
     Worker.Free;
+    if Assigned(Pending.Exchange) then
+    begin
+      // A raising transport fails its request even when it answered first;
+      // fetch() rejects it. The entry is gone, so release its slot here.
+      Pending.Exchange.Cancel;
+      if Added then
+        LimitAcquired := True;
+    end;
     if LimitAcquired then
       FLimiter.ReleaseWorker;
     raise;
@@ -722,6 +1058,15 @@ begin
   // signal abort that brought us here.
   if Assigned(APending.Signal) and (APending.AbortAlgorithmHandle <> 0) then
     APending.Signal.RemoveAbortAlgorithm(APending.AbortAlgorithmHandle);
+
+  // A transport's request gives up its worker slot here, on this thread, so
+  // the cap counts exactly the requests a script still awaits. Its answer, if
+  // it comes after this, is ignored.
+  if Assigned(APending.Exchange) then
+  begin
+    APending.Exchange.Cancel;
+    FLimiter.ReleaseWorker;
+  end;
 
   if TGarbageCollector.Instance = nil then
     Exit;
@@ -744,7 +1089,9 @@ begin
 
   Pending := FPending[PendingIndex];
   FPending.Delete(PendingIndex);
-  KeepForAudit(Pending);
+  // A transport's request records no hop decisions, so it owes no audit.
+  if not Assigned(Pending.Exchange) then
+    KeepForAudit(Pending);
   try
     Pending.Promise.Reject(Pending.Signal.Reason);
   finally
@@ -1234,5 +1581,30 @@ begin
   if Assigned(Manager) then
     Manager.DiscardPending(ARealm);
 end;
+
+procedure FetchOverNetwork(const ARequest: TGocciaFetchTransportRequest;
+  const AResponder: IGocciaFetchResponder);
+{$IFNDEF LAKON}
+var
+  Completion: TGocciaFetchCompletion;
+begin
+  Completion := TGocciaFetchCompletion.Create(0);
+  try
+    PerformNetworkRequest(ARequest.URL, ARequest.Method, ARequest.Headers,
+      ARequest.TimeoutMilliseconds, ARequest.Capabilities,
+      ARequest.MaxResponseBytes, Completion);
+    if Completion.Success then
+      AResponder.Respond(Completion.Response)
+    else
+      AResponder.Fail(Completion.ErrorMessage, Completion.DeniedScope);
+  finally
+    Completion.Free;
+  end;
+end;
+{$ELSE}
+begin
+  AResponder.Fail(FETCH_NETWORK_UNAVAILABLE_ERROR);
+end;
+{$ENDIF}
 
 end.

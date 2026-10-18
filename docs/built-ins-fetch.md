@@ -67,7 +67,9 @@ The capability set and the ceiling belong to one engine: embedders fix the set
 at engine construction and set `FetchMaxResponseBytes` on the engine. Each
 request carries them to the worker that performs it, so engines that share a
 thread — a sandbox `runScript` child inside its parent — neither see nor
-change each other's policy.
+change each other's policy. An embedder can also give an engine its own
+transport, which answers that engine's requests instead of the network after
+these checks; see [Embedding — Fetch Transport](embedding.md#fetch-transport).
 
 ### Threat model notes
 
@@ -101,7 +103,7 @@ Requests run on fetch-specific background workers and settle promises on the own
 
 Host names resolve through the platform resolver (`getaddrinfo`), so the hosts file, nsswitch, stub resolvers, and IPv6 nameservers apply as they do for any other program on the machine. Connections are IPv4 only: the first IPv4 address is used, and a name with no IPv4 address rejects with `TypeError: Failed to resolve host: <name>`, followed by the resolver's reason when it gives one.
 
-Each host thread caps active fetch workers at 16; runtimes on the same thread share that cap. Additional calls reject their returned promise with `TypeError` until a worker finishes. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout. An engine waits for, and on failure discards, only the requests it started itself, so a nested engine ending leaves its parent's in-flight requests running. The run's own deadline is not a fetch error: when `--timeout` elapses while requests are pending, the run ends with the uncatchable [`TimeoutError`](json-output.md#timeouterror-in-json), and under `--test-timeout` the test that was waiting is marked as timed out, instead of a fetch promise rejecting with a network error. A request is given the deadline in force when it started, so one that outlives it — a fetch a test left behind — rejects later with `TypeError: HTTP request timed out`. That message applies to plain HTTP reads and to connecting; a stalled TLS read is ended by the run's deadline only.
+Each host thread caps active fetch workers at 16; runtimes on the same thread share that cap, and a request an embedder's transport has not yet answered counts against it. Additional calls reject their returned promise with `TypeError` until a worker finishes. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout. An engine waits for, and on failure discards, only the requests it started itself, so a nested engine ending leaves its parent's in-flight requests running. The run's own deadline is not a fetch error: when `--timeout` elapses while requests are pending, the run ends with the uncatchable [`TimeoutError`](json-output.md#timeouterror-in-json), and under `--test-timeout` the test that was waiting is marked as timed out, instead of a fetch promise rejecting with a network error. A request is given the deadline in force when it started, so one that outlives it — a fetch a test left behind — rejects later with `TypeError: HTTP request timed out`. That message applies to plain HTTP reads and to connecting; a stalled TLS read is ended by the run's deadline only.
 
 The focused subset has no `Request` object, streaming request or response body, or CORS processing.
 

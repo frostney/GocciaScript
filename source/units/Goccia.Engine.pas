@@ -45,6 +45,7 @@ uses
   Goccia.Diagnostics.SourceRegistry,
   Goccia.EvaluationContext,
   Goccia.ExecutionContext,
+  Goccia.FetchTransport,
   Goccia.HostEnvironment,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
@@ -215,6 +216,7 @@ type
     FCapabilities: TGocciaCapabilities;
     FProjectRoot: string;
     FFetchMaxResponseBytes: Integer;
+    FFetchTransport: IGocciaFetchTransport;
     FIsCapabilityChild: Boolean;
     FEffectiveCapabilitiesAudited: Boolean;
     FCapabilityProvenance: string;
@@ -520,6 +522,12 @@ type
       A setting, not a capability (ADR 0122). }
     property FetchMaxResponseBytes: Integer read FFetchMaxResponseBytes
       write FFetchMaxResponseBytes;
+    { The embedder's transport for this engine's fetch() requests, or nil
+      (the default) for the built-in network client. Read when each request
+      starts, so it can be set or replaced between runs; not inherited by
+      any other engine (ADR 0146). }
+    property FetchTransport: IGocciaFetchTransport read FFetchTransport
+      write FFetchTransport;
     property SourcePath: string read FSourcePath;
     { Read-only view of the entry source. Runtime extensions attach after
       Initialize has stored the source but before Execute parses it, which is

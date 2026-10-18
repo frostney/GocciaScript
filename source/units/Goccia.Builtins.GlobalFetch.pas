@@ -13,6 +13,7 @@ uses
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.FetchTransport,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives;
@@ -23,6 +24,10 @@ type
     runtime is attached. }
   TGocciaFetchMaxResponseBytesProvider = function: Integer of object;
 
+  { Returns the dispatching engine's fetch transport, or nil for the built-in
+    network client; read at request time for the same reason. }
+  TGocciaFetchTransportProvider = function: IGocciaFetchTransport of object;
+
   { One engine's fetch global. Everything that decides what this engine's
     requests may reach — its capability set and response ceiling — lives here,
     per engine, and travels with each request it starts. }
@@ -32,6 +37,7 @@ type
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
     FSourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
     FMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
+    FTransportProvider: TGocciaFetchTransportProvider;
     FRealm: TGocciaRealm;
     FAcquiredFetchManager: Boolean;
     function FetchCallback(const AArgs: TGocciaArgumentsCollection;
@@ -48,7 +54,8 @@ type
       const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
       const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
       const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
-      const ARealm: TGocciaRealm);
+      const ARealm: TGocciaRealm;
+      const ATransportProvider: TGocciaFetchTransportProvider = nil);
     destructor Destroy; override;
 
     property Capabilities: TGocciaCapabilities read FCapabilities;
@@ -94,7 +101,8 @@ constructor TGocciaGlobalFetch.Create(const AName: string;
   const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
   const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
   const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
-  const ARealm: TGocciaRealm);
+  const ARealm: TGocciaRealm;
+  const ATransportProvider: TGocciaFetchTransportProvider);
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -102,6 +110,7 @@ begin
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
   FSourcedAuditEmitter := ASourcedAuditEmitter;
   FMaxResponseBytesProvider := AMaxResponseBytesProvider;
+  FTransportProvider := ATransportProvider;
   FRealm := ARealm;
   TGocciaFetchManager.AcquireInstance;
   FAcquiredFetchManager := True;
@@ -315,6 +324,10 @@ begin
     Policy.MaxResponseBytes := FMaxResponseBytesProvider()
   else
     Policy.MaxResponseBytes := 0;
+  if Assigned(FTransportProvider) then
+    Policy.Transport := FTransportProvider()
+  else
+    Policy.Transport := nil;
   try
     Manager := TGocciaFetchManager.Instance;
     if not Assigned(Manager) then

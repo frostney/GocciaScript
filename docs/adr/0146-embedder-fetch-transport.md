@@ -1,0 +1,114 @@
+# 0146 - An embedder can answer an engine's fetch requests through its own transport
+
+**Date:** 2026-10-18
+**Area:** `runtime`, `embedding`
+**Related:** [ADR 0031](0031-fetch-only-async-io.md), [ADR 0122](0122-unified-capability-model.md), [ADR 0142](0142-the-run-waits-until-no-extension-has-pending-work.md)
+
+## Context
+
+`fetch()` always went to the network. Each thread's fetch manager started a
+worker thread per request, which ran the built-in HTTP client, and nothing
+between `fetch()` and that client could be replaced. A host that wants to
+record the responses a run received and later run the same script again
+against those recordings, without the network, had no seam to do it: it
+could only stand up a proxy and point the script at it, which changes the
+URLs the script sees and still needs a socket.
+
+The same seam serves hosts that route requests through their own client or
+policy, and test hosts that want deterministic answers.
+
+## Decision
+
+**An engine carries an optional transport, `TGocciaEngine.FetchTransport`
+(`IGocciaFetchTransport`, unit `Goccia.FetchTransport`).** With none, the
+default, nothing changes. With one, each request the engine's `fetch()`
+starts is handed to the transport instead of a worker thread.
+
+**The transport travels with the request, as the capability set does.** The
+fetch builtin reads it from its engine when a request starts and puts it in
+the request's `TGocciaFetchPolicy`, beside the capabilities and the response
+ceiling. The thread's manager is shared by every engine on the thread, so it
+holds no transport of its own; engines nested on one thread and engines on
+other threads each use their own. Children a host creates, such as a sandbox
+`runScript` child, get no transport unless the host gives them one.
+
+**Everything `fetch()` decides before network work still happens first.** The
+URL is parsed, the host is checked against the `net` capability by name and
+audited, the method must be `GET` or `HEAD`, an aborted signal rejects at
+once, and the per-thread cap of 16 requests in flight applies. The transport
+receives the method, the URL, the header list, an empty body (no supported
+method has one), the time left before the run's deadline or the signal's
+timeout, the resolved response ceiling, and the capability set.
+
+**The answer goes through a responder the engine owns
+(`IGocciaFetchResponder`).** `Respond` gives the final response, `Fail` a
+network error (`TypeError`) or, with a denied scope, a refusal by the
+capability (`PermissionDenied`), as the built-in client reports them. Either
+may be called inside `Fetch` or later from any thread; the first answer wins.
+The answer becomes a completion on the manager's queue, the same queue a
+worker posts to, and the promise settles at the engine's next completion
+pump on its own thread. So `fetch()` never settles inside the call, and the
+request stays in the engine's pending set until it is answered: the run waits
+for it as for a network request, bounded by the run deadline, the request's
+signal and the instruction budget.
+
+**The engine holds a transport's response to the rules a network response
+meets.** WHATWG Fetch gives a response a status from 200 to 599, header names
+that are tokens and values without NUL, CR or LF, a null body for `HEAD` and
+for a null body status, and a `url` without a fragment. Header values are
+normalized. A status, header or status text that breaks those rules, or a
+body over the response ceiling, rejects the fetch with `TypeError`, the way a
+malformed or oversized network response does.
+
+**A request leaves the pending set the same way whatever answers it.**
+Settling, an abort and a discard (the engine's run failed or it ended) remove
+it, release its slot in the cap, and cancel its responder: `IsCancelled`
+turns true and a later answer is refused. The responder keeps the completion
+queue alive by reference, so an answer that arrives after its engine is gone
+is dropped, not delivered to freed state. A transport that raises from
+`Fetch` cancels its request and the fetch rejects with `TypeError`, as when a
+worker could not start.
+
+**`FetchOverNetwork` performs a request as the built-in client would.** A
+recording transport forwards to it from a thread of its own, wraps the
+responder to record what it answers, and so applies the same redirect-hop and
+resolved-address checks, ceiling and timeout as a run without a transport.
+The worker uses the same routine.
+
+## Considered options
+
+- **A global or per-thread transport.** Rejected: engines on one thread may
+  belong to different runs, and a pooled worker thread runs many. The
+  transport is run state, so it lives with the engine, as the capability set
+  does.
+- **A synchronous callback returning the response.** Simpler for replay, but
+  a recording host must then block the engine thread on real I/O, and the
+  run could not apply its signal or deadline while it waited. The responder
+  serves both.
+- **Settling the promise inside the call when the transport answers
+  synchronously.** Rejected: WHATWG Fetch never settles a fetch inside the
+  `fetch()` call, and a script would observe a different order with and
+  without a transport.
+- **A transport that may decline a request back to the network.** Rejected:
+  a run would then depend on which requests a host forgot to answer.
+  Forwarding through `FetchOverNetwork` makes it explicit.
+- **Releasing a transport request's slot when it is answered.** Rejected: an
+  answer given inside `Fetch` would free the slot before the script could
+  observe it, so a replayed run could pass the cap where its recorded run
+  was refused. The slot is released when the request leaves the pending set,
+  on the engine's thread.
+
+## Consequences
+
+- A transport request records no redirect-hop or address decisions in the
+  capability audit; its trail is the dispatch and the name check `fetch()`
+  makes before the hand-over. A transport that does its own I/O is
+  responsible for those checks; `FetchOverNetwork` makes them but does not
+  audit them.
+- An abort cannot interrupt a transport's work; it sees the cancellation
+  through `IsCancelled`.
+- A transport's request URL is the string `fetch()` received, unnormalized.
+  A host that keys recordings by it chooses its own normalization.
+- The WASM lane still has no fetch manager, so `fetch()` stays unavailable
+  there with or without a transport, and `FetchOverNetwork` answers with a
+  network error.

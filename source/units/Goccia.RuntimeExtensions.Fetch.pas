@@ -9,6 +9,7 @@ uses
   Goccia.Builtins.GlobalEventTarget,
   Goccia.Builtins.GlobalFetch,
   Goccia.Engine,
+  Goccia.FetchTransport,
   Goccia.Runtime;
 
 type
@@ -18,6 +19,7 @@ type
     FBuiltinEventTarget: TGocciaGlobalEventTarget;
     FBuiltinFetch: TGocciaGlobalFetch;
     function EngineMaxResponseBytes: Integer;
+    function EngineFetchTransport: IGocciaFetchTransport;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
@@ -73,7 +75,7 @@ begin
     Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit,
     Runtime.Engine.EmitCapabilityAuditAt, EngineMaxResponseBytes,
-    Runtime.Engine.Realm);
+    Runtime.Engine.Realm, EngineFetchTransport);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;
@@ -109,6 +111,15 @@ begin
     Result := Runtime.Engine.FetchMaxResponseBytes
   else
     Result := 0;
+end;
+
+function TGocciaFetchRuntimeExtension.EngineFetchTransport:
+  IGocciaFetchTransport;
+begin
+  if Assigned(Runtime) then
+    Result := Runtime.Engine.FetchTransport
+  else
+    Result := nil;
 end;
 
 procedure TGocciaFetchRuntimeExtension.Detach;
