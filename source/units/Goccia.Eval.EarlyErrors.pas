@@ -272,6 +272,7 @@ var
   Pair: TPair<TGocciaExpression, TGocciaExpression>;
   I: Integer;
 begin
+  CheckEarlyErrorStack(AExpr);
   if not Assigned(AExpr) then
     Exit(False);
 
@@ -465,6 +466,7 @@ var
   Prop: TGocciaDestructuringProperty;
   I: Integer;
 begin
+  CheckEarlyErrorStack(APattern);
   if not Assigned(APattern) then
     Exit(False);
 
@@ -527,6 +529,7 @@ var
   UsingDecl: TGocciaUsingDeclaration;
   I, J: Integer;
 begin
+  CheckEarlyErrorStack(AStmt);
   if not Assigned(AStmt) then
     Exit(False);
 
