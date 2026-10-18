@@ -35,7 +35,10 @@ other threads each use their own. Children a host creates, such as a sandbox
 **Everything `fetch()` decides before network work still happens first.** The
 URL is parsed, the host is checked against the `net` capability by name and
 audited, the method must be `GET` or `HEAD`, an aborted signal rejects at
-once, and the per-thread cap of 16 requests in flight applies. The transport
+once, and the per-thread cap of 16 requests in flight applies. A request the
+built-in client would refuse to send, for an unsupported scheme or a control
+character in the request target or a header, fails with that client's
+`TypeError` through the promise and never reaches the transport. The transport
 receives the method, the URL, the header list, an empty body (no supported
 method has one), the time left before the run's deadline or the signal's
 timeout, the resolved response ceiling, and the capability set.
@@ -49,21 +52,25 @@ The answer becomes a completion on the manager's queue, the same queue a
 worker posts to, and the promise settles at the engine's next completion
 pump on its own thread. So `fetch()` never settles inside the call, and the
 request stays in the engine's pending set until it is answered: the run waits
-for it as for a network request, bounded by the run deadline, the request's
-signal and the instruction budget.
+for it as for a network request, until the run deadline or the request's
+signal ends the wait. The wait runs no instructions, so an instruction limit
+alone does not end it, as for a network request.
 
 **The engine holds a transport's response to the rules a network response
-meets.** WHATWG Fetch gives a response a status from 200 to 599, header names
-that are tokens and values without NUL, CR or LF, a null body for `HEAD` and
-for a null body status, and a `url` without a fragment. Header values are
-normalized. A status, header or status text that breaks those rules, or a
-body over the response ceiling, rejects the fetch with `TypeError`, the way a
-malformed or oversized network response does.
+meets.** WHATWG Fetch gives a response a status from 200 to 599, status text
+that is a reason phrase, header names that are tokens and values without NUL,
+CR or LF, a null body for `HEAD` and for a null body status, and a `url` that
+is a URL serialized without its fragment. Header values are normalized. A
+status, status text, header or final URL that breaks those rules, or a body
+the response keeps that is over the response ceiling, rejects the fetch with
+`TypeError`, the way a malformed or oversized network response does.
 
 **A request leaves the pending set the same way whatever answers it.**
 Settling, an abort and a discard (the engine's run failed or it ended) remove
-it, release its slot in the cap, and cancel its responder: `IsCancelled`
-turns true and a later answer is refused. The responder keeps the completion
+it and release its slot in the cap; a later answer is refused. An abort or a
+discard also cancels the responder, even when an answer was already taken
+but not yet settled: `IsCancelled` turns true, so a recording host can tell
+an answer the script never saw. A request that settled is not cancelled. The responder keeps the completion
 queue alive by reference, so an answer that arrives after its engine is gone
 is dropped, not delivered to freed state. A transport that raises from
 `Fetch` cancels its request and the fetch rejects with `TypeError`, as when a

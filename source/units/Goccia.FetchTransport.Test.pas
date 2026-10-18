@@ -57,7 +57,7 @@ const
 
 type
   TTransportMode = (tmAnswer, tmHold, tmAnswerLater, tmFail, tmDeny,
-    tmRaise);
+    tmRaise, tmAnswerThenRaise);
 
   { Answers on a thread of its own after ANSWER_DELAY_MS. }
   TDelayedAnswer = class(TThread)
@@ -79,6 +79,8 @@ type
     FResponse: THTTPResponse;
     FRequests: array of TGocciaFetchTransportRequest;
     FResponder: IGocciaFetchResponder;
+    FResponders: array of IGocciaFetchResponder;
+    FAnswerTaken: Boolean;
     FLater: TList;
   public
     constructor Create(const AMode: TTransportMode);
@@ -90,9 +92,16 @@ type
     { Joins the threads tmAnswerLater requests started; True when every
       answer they gave was taken. }
     function JoinLaterAnswers: Boolean;
+    { The responder of request AIndex. }
+    function ResponderAt(const AIndex: Integer): IGocciaFetchResponder;
+    property Mode: TTransportMode read FMode write FMode;
     property Response: THTTPResponse read FResponse write FResponse;
     property Responder: IGocciaFetchResponder read FResponder;
+    { What the last answer given inside Fetch returned. }
+    property AnswerTaken: Boolean read FAnswerTaken;
   end;
+
+  TGocciaPromiseArray = array of TGocciaPromiseValue;
 
   TFetchTransportTests = class(TTestSuite)
   private
@@ -112,6 +121,13 @@ type
     procedure TestRunDeadlineEndsWait;
     procedure TestPendingUntilAnswered;
     procedure TestRequestsShareWorkerCap;
+    procedure TestAbortFreesOneSlot;
+    procedure TestUnsendableRequestNeverReachesTransport;
+    procedure TestOversizedNullBodyIsDropped;
+    procedure TestStatusTextIsAReasonPhrase;
+    procedure TestFinalURLMustBeAURL;
+    procedure TestAbortAfterAnswerCancels;
+    procedure TestRacingAnswersOneWins;
     procedure TestEnginesKeepTheirOwnTransport;
     procedure TestThreadsKeepTheirOwnTransport;
     procedure TestRecordThenReplay;
@@ -173,9 +189,11 @@ begin
   SetLength(FRequests, Length(FRequests) + 1);
   FRequests[High(FRequests)] := ARequest;
   FResponder := AResponder;
+  SetLength(FResponders, Length(FResponders) + 1);
+  FResponders[High(FResponders)] := AResponder;
   case FMode of
     tmAnswer:
-      AResponder.Respond(FResponse);
+      FAnswerTaken := AResponder.Respond(FResponse);
     tmAnswerLater:
       FLater.Add(TDelayedAnswer.Create(AResponder, FResponse));
     tmFail:
@@ -184,7 +202,18 @@ begin
       AResponder.Fail('fetch destination not allowed', 'other.example');
     tmRaise:
       raise Exception.Create('transport down');
+    tmAnswerThenRaise:
+      begin
+        FAnswerTaken := AResponder.Respond(FResponse);
+        raise Exception.Create('transport down');
+      end;
   end;
+end;
+
+function TFakeTransport.ResponderAt(
+  const AIndex: Integer): IGocciaFetchResponder;
+begin
+  Result := FResponders[AIndex];
 end;
 
 function TFakeTransport.RequestCount: Integer;
@@ -311,8 +340,21 @@ begin
     TestRunDeadlineEndsWait);
   Test('an unanswered request is pending work until its answer is pumped',
     TestPendingUntilAnswered);
-  Test('transport requests share the per-thread cap and free their slots',
+  Test('transport requests share the per-thread cap and free each slot once',
     TestRequestsShareWorkerCap);
+  Test('an abort frees exactly the aborted request''s slot',
+    TestAbortFreesOneSlot);
+  Test('a request the built-in client would refuse never reaches the ' +
+    'transport', TestUnsendableRequestNeverReachesTransport);
+  Test('an oversized body of a null body status is dropped, not refused',
+    TestOversizedNullBodyIsDropped);
+  Test('status text must be a reason phrase', TestStatusTextIsAReasonPhrase);
+  Test('a final URL must be an absolute http(s) URL',
+    TestFinalURLMustBeAURL);
+  Test('an abort after a taken but unsettled answer cancels the request',
+    TestAbortAfterAnswerCancels);
+  Test('of two racing answers exactly one is taken',
+    TestRacingAnswersOneWins);
   Test('engines on one thread each use only their own transport',
     TestEnginesKeepTheirOwnTransport);
   Test('engines on different threads each use only their own transport',
@@ -402,9 +444,12 @@ begin
     .ToBe(DEFAULT_MAX_RESPONSE_BODY_BYTES);
   Expect<Boolean>(Request.Capabilities.AllowsNetHost(API_HOST, 80))
     .ToBe(True);
-  // The answer was taken, so the responder refuses a second one.
+  // The answer was taken and settled: a second one is refused, and the
+  // request was not cancelled.
+  Expect<Boolean>(Fake.AnswerTaken).ToBe(True);
   Expect<Boolean>(Fake.Responder.Respond(TextResponse(200, 'again')))
     .ToBe(False);
+  Expect<Boolean>(Fake.Responder.IsCancelled).ToBe(False);
 end;
 
 procedure TFetchTransportTests.TestHeadAnswerHasNoBody;
@@ -642,40 +687,310 @@ begin
   end;
 end;
 
+{ Starts one more request under the transport and says whether it was taken
+  (pending) or refused by the cap (rejected). Roots the promise in APromises
+  for the caller to unroot. }
+function StartCounted(const AEngine: TGocciaEngine;
+  const ATransport: IGocciaFetchTransport;
+  var APromises: TGocciaPromiseArray): Boolean;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  Promise := StartTransportFetch(AEngine, ATransport);
+  SetLength(APromises, Length(APromises) + 1);
+  APromises[High(APromises)] := Promise;
+  Result := Promise.State = gpsPending;
+  if not Result then
+    Expect<string>(TGocciaObjectValue(Promise.PromiseResult)
+      .GetProperty('message').ToStringLiteral.Value)
+      .ToBe('fetch worker limit exceeded');
+end;
+
+{ With the cap full, frees one slot through AFree and checks that exactly
+  one more request fits. }
 procedure TFetchTransportTests.TestRequestsShareWorkerCap;
 var
+  Fake: TFakeTransport;
   Transport: IGocciaFetchTransport;
   Source: TStringList;
   Engine: TGocciaEngine;
-  Promises: array of TGocciaPromiseValue;
+  Promises: TGocciaPromiseArray;
   I: Integer;
+  Raised: Boolean;
+  Policy: TGocciaFetchPolicy;
+  Headers: THTTPHeaders;
+  Raising: TGocciaPromiseValue;
 begin
-  Transport := TFakeTransport.Create(tmHold);
+  Fake := TFakeTransport.Create(tmHold);
+  Transport := Fake;
   Source := TStringList.Create;
   Engine := CreateFetchEngine(Source, ApiCapabilities);
   SetLength(Promises, 0);
   try
-    for I := 0 to WORKER_CAP do
-    begin
-      SetLength(Promises, Length(Promises) + 1);
-      Promises[High(Promises)] := StartTransportFetch(Engine, Transport);
-    end;
-    for I := 0 to WORKER_CAP - 1 do
-      Expect<Boolean>(Promises[I].State = gpsPending).ToBe(True);
-    Expect<Boolean>(Promises[WORKER_CAP].State = gpsRejected).ToBe(True);
-    Expect<string>(TGocciaObjectValue(Promises[WORKER_CAP].PromiseResult)
-      .GetProperty('message').ToStringLiteral.Value)
-      .ToBe('fetch worker limit exceeded');
+    for I := 1 to WORKER_CAP do
+      Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(True);
+    Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(False);
 
-    // Discarding the engine's requests frees their slots at once.
+    // Settlement frees exactly one slot.
+    Expect<Boolean>(Fake.ResponderAt(0).Respond(TextResponse(200, 'ok')))
+      .ToBe(True);
+    Expect<Integer>(TGocciaFetchManager.Instance.PumpCompletions).ToBe(1);
+    Expect<Boolean>(Promises[0].State = gpsFulfilled).ToBe(True);
+    Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(True);
+    Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(False);
+
+    // A transport that answers and then raises frees its slot once.
+    Expect<Boolean>(Fake.ResponderAt(1).Fail('gone')).ToBe(True);
+    Expect<Integer>(TGocciaFetchManager.Instance.PumpCompletions).ToBe(1);
+    Fake.Mode := tmAnswerThenRaise;
+    Raised := False;
+    Policy := Default(TGocciaFetchPolicy);
+    Policy.Capabilities := Engine.Capabilities;
+    Policy.Transport := Transport;
+    SetLength(Headers, 0);
+    Raising := TGocciaPromiseValue.Create;
+    TGarbageCollector.Instance.AddTempRoot(Raising);
+    try
+      try
+        TGocciaFetchManager.Instance.StartFetch(API_URL, 'GET', Headers,
+          Policy, Engine.Realm, Raising);
+      except
+        on E: Exception do
+          Raised := E.Message = 'transport down';
+      end;
+      Expect<Boolean>(Raised).ToBe(True);
+      Expect<Boolean>(Fake.AnswerTaken).ToBe(True);
+      Expect<Boolean>(Fake.Responder.IsCancelled).ToBe(True);
+      // Its answer is dropped at the pump; fetch() rejects it instead.
+      TGocciaFetchManager.Instance.PumpCompletions;
+      Expect<Boolean>(Raising.State = gpsPending).ToBe(True);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Raising);
+    end;
+    Fake.Mode := tmHold;
+    Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(True);
+    Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(False);
+
+    // A discard frees every slot the engine held, and no more.
     GetRuntime(Engine).DiscardPending;
-    SetLength(Promises, Length(Promises) + 1);
-    Promises[High(Promises)] := StartTransportFetch(Engine, Transport);
-    Expect<Boolean>(Promises[High(Promises)].State = gpsPending).ToBe(True);
+    for I := 1 to WORKER_CAP do
+      Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(True);
+    Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(False);
     GetRuntime(Engine).DiscardPending;
   finally
     for I := 0 to High(Promises) do
       TGarbageCollector.Instance.RemoveTempRoot(Promises[I]);
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+{ An abort frees exactly the aborted request's slot. }
+procedure TFetchTransportTests.TestAbortFreesOneSlot;
+var
+  Transport: IGocciaFetchTransport;
+begin
+  Transport := TFakeTransport.Create(tmHold);
+  Expect<string>(RunWithTransport(
+    'const controllers = Array.from({ length: ' + IntToStr(WORKER_CAP) +
+    ' }, () => new AbortController());' + sLineBreak +
+    'const settle = (signal) => fetch("' + API_URL + '", { signal })' +
+    '.then(() => "fulfilled", (error) => error.message);' + sLineBreak +
+    'controllers.forEach((controller) => settle(controller.signal));' +
+    sLineBreak +
+    'controllers[0].abort();' + sLineBreak +
+    'const spare = new AbortController();' + sLineBreak +
+    'const fits = settle(spare.signal);' + sLineBreak +
+    'const refused = settle(undefined);' + sLineBreak +
+    'controllers.forEach((controller) => controller.abort());' + sLineBreak +
+    'spare.abort();' + sLineBreak +
+    'Promise.all([fits, refused]).then((results) => {' +
+    ' globalThis.outcome = results.join("|"); });', Transport,
+    ApiCapabilities)).ToBe('This operation was aborted|' +
+    'fetch worker limit exceeded');
+end;
+
+procedure TFetchTransportTests.TestUnsendableRequestNeverReachesTransport;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  // ftp: passes the net check by host name; the client refuses the scheme.
+  Expect<string>(RunWithTransport(FetchScript('ftp://' + API_HOST + '/file'),
+    Transport, ApiCapabilities)).ToBe('TypeError: Unsupported scheme: ftp');
+  Expect<string>(RunWithTransport('fetch("' + API_URL +
+    '", { headers: { "x-bad": "a\u0001b" } })' + REPORT_OUTCOME, Transport,
+    ApiCapabilities)).ToBe('TypeError: Invalid HTTP header value');
+  Expect<Integer>(Fake.RequestCount).ToBe(0);
+end;
+
+procedure TFetchTransportTests.TestOversizedNullBodyIsDropped;
+const
+  CEILING = 4;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := TextResponse(204, 'hello');
+  Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
+    ApiCapabilities, CEILING)).ToBe('204|');
+end;
+
+procedure TFetchTransportTests.TestStatusTextIsAReasonPhrase;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+  Response: THTTPResponse;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Response := TextResponse(200, '');
+  Response.StatusText := 'O'#1'K';
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
+    ApiCapabilities))
+    .ToBe('TypeError: fetch transport answered an invalid status text');
+  Response.StatusText := 'OK'#127;
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
+    ApiCapabilities))
+    .ToBe('TypeError: fetch transport answered an invalid status text');
+  // Tab, space and text past ASCII (obs-text) are allowed.
+  Response.StatusText := 'All'#9'good '#$00E9;
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport('fetch("' + API_URL + '").then(' +
+    '(response) => { globalThis.outcome = response.statusText; });',
+    Transport, ApiCapabilities)).ToBe('All'#9'good '#$00E9);
+end;
+
+procedure TFetchTransportTests.TestFinalURLMustBeAURL;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+  Response: THTTPResponse;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Response := TextResponse(200, 'body');
+  Response.FinalURL := 'not a URL#fragment';
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
+    ApiCapabilities))
+    .ToBe('TypeError: fetch transport answered an invalid URL');
+  Response.FinalURL := 'http://' + API_HOST + '/moved#top';
+  Response.Redirected := True;
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport('fetch("' + API_URL + '").then(' +
+    '(response) => { globalThis.outcome = response.url + "|" +' +
+    ' response.redirected; });', Transport, ApiCapabilities))
+    .ToBe('http://' + API_HOST + '/moved|true');
+end;
+
+procedure TFetchTransportTests.TestAbortAfterAnswerCancels;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  // The answer is taken inside fetch(); the abort comes before any pump.
+  Expect<string>(RunWithTransport(
+    'const controller = new AbortController();' + sLineBreak +
+    'fetch("' + API_URL + '", { signal: controller.signal })' +
+    REPORT_OUTCOME + sLineBreak +
+    'controller.abort();', Transport, ApiCapabilities))
+    .ToBe('AbortError: This operation was aborted');
+  Expect<Boolean>(Fake.AnswerTaken).ToBe(True);
+  Expect<Boolean>(Fake.Responder.IsCancelled).ToBe(True);
+end;
+
+type
+  { One of two answers raced against each other on one responder. }
+  TRacingAnswer = class(TThread)
+  private
+    FResponder: IGocciaFetchResponder;
+    FGate: PLongint;
+    FRespond: Boolean;
+    FTaken: Boolean;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AResponder: IGocciaFetchResponder;
+      const AGate: PLongint; const ARespond: Boolean);
+    property Taken: Boolean read FTaken;
+  end;
+
+constructor TRacingAnswer.Create(const AResponder: IGocciaFetchResponder;
+  const AGate: PLongint; const ARespond: Boolean);
+begin
+  FResponder := AResponder;
+  FGate := AGate;
+  FRespond := ARespond;
+  inherited Create(False);
+end;
+
+procedure TRacingAnswer.Execute;
+begin
+  while InterlockedCompareExchange(FGate^, 0, 0) = 0 do
+    ThreadSwitch;
+  if FRespond then
+    FTaken := FResponder.Respond(TextResponse(200, 'responded'))
+  else
+    FTaken := FResponder.Fail('failed');
+  FResponder := nil;
+end;
+
+procedure TFetchTransportTests.TestRacingAnswersOneWins;
+const
+  ROUNDS = 50;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Promise: TGocciaPromiseValue;
+  Gate: Longint;
+  Responding, Failing: TRacingAnswer;
+  Round, Taken: Integer;
+begin
+  Fake := TFakeTransport.Create(tmHold);
+  Transport := Fake;
+  Source := TStringList.Create;
+  Engine := CreateFetchEngine(Source, ApiCapabilities);
+  try
+    for Round := 1 to ROUNDS do
+    begin
+      Promise := StartTransportFetch(Engine, Transport);
+      try
+        Gate := 0;
+        Responding := TRacingAnswer.Create(Fake.Responder, @Gate, True);
+        Failing := TRacingAnswer.Create(Fake.Responder, @Gate, False);
+        InterlockedExchange(Gate, 1);
+        // TThread.WaitFor alone sleeps in coarse steps.
+        while not (Responding.Finished and Failing.Finished) do
+          ThreadSwitch;
+        Responding.WaitFor;
+        Failing.WaitFor;
+        Taken := Ord(Responding.Taken) + Ord(Failing.Taken);
+        Expect<Integer>(Taken).ToBe(1);
+        Expect<Integer>(TGocciaFetchManager.Instance.PumpCompletions)
+          .ToBe(1);
+        if Responding.Taken then
+          Expect<Boolean>(Promise.State = gpsFulfilled).ToBe(True)
+        else
+          Expect<Boolean>(Promise.State = gpsRejected).ToBe(True);
+        Expect<Boolean>(Fake.Responder.IsCancelled).ToBe(False);
+        Responding.Free;
+        Failing.Free;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Promise);
+      end;
+    end;
+  finally
     Engine.Free;
     Source.Free;
   end;
@@ -1011,9 +1326,14 @@ begin
   Entry := Default(TTapeEntry);
   Entry.Fingerprint := FFingerprint;
   Entry.Succeeded := True;
+  // A private copy: the tape outlives the caller's arrays.
   Entry.Response := AResponse;
-  FTape.Add(Entry);
+  Entry.Response.Headers := Copy(AResponse.Headers);
+  Entry.Response.Body := Copy(AResponse.Body);
+  // Only an answer the engine took is part of the run.
   Result := FInner.Respond(AResponse);
+  if Result then
+    FTape.Add(Entry);
 end;
 
 function TRecordingResponder.Fail(const AMessage: string;
@@ -1025,8 +1345,9 @@ begin
   Entry.Fingerprint := FFingerprint;
   Entry.ErrorMessage := AMessage;
   Entry.DeniedScope := ADeniedScope;
-  FTape.Add(Entry);
   Result := FInner.Fail(AMessage, ADeniedScope);
+  if Result then
+    FTape.Add(Entry);
 end;
 
 function TRecordingResponder.IsCancelled: Boolean;

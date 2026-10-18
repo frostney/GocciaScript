@@ -19,7 +19,10 @@ type
   { One request a script made with fetch(), as the transport receives it.
     The engine has already applied everything fetch() decides before any
     network work: the URL parsed, the destination host allowed by the net
-    capability (and audited), the method checked. }
+    capability (and audited), the method checked. A request the built-in
+    client would refuse to send (an unsupported scheme, a control character
+    in the request target or a header) fails with that client's TypeError
+    and never reaches the transport. }
   TGocciaFetchTransportRequest = record
     { "GET" or "HEAD", upper case. }
     Method: string;
@@ -54,13 +57,15 @@ type
     pump, never inside the call. }
   IGocciaFetchResponder = interface
     { Answers with a response: the final one, after any redirects the
-      transport followed. AResponse.FinalURL empty means the request URL;
-      either way Response.url excludes its fragment. Header values lose
-      their leading and trailing tabs and spaces. The body of a HEAD
-      response or of a 204, 205 or 304 response is ignored. A status outside
-      200..599, a header name that is not a token, a header value or status
-      text with NUL, CR or LF, or a body over the ceiling rejects the fetch
-      with TypeError instead. The engine copies what it keeps. Returns False
+      transport followed. AResponse.FinalURL empty means the request URL,
+      otherwise it must be an absolute http(s) URL; either way Response.url
+      excludes its fragment. Header values lose their leading and trailing
+      tabs and spaces. The body of a HEAD response or of a 204, 205 or 304
+      response is ignored. A status outside 200..599, status text that is
+      not a reason phrase (tab, space, visible or non-ASCII characters), a
+      header name that is not a token, a header value with NUL, CR or LF, an
+      invalid final URL, or a body over the ceiling rejects the fetch with
+      TypeError instead. The engine copies what it keeps. Returns False
       when the request was already answered or cancelled. }
     function Respond(const AResponse: THTTPResponse): Boolean;
     { Answers with a network error: the fetch rejects with a TypeError whose
@@ -71,9 +76,11 @@ type
       cancelled. }
     function Fail(const AMessage: string;
       const ADeniedScope: string = ''): Boolean;
-    { True once the request no longer needs an answer: its signal aborted
-      it, or its engine ended and discarded it. A transport may stop its
-      work then; an answer it still gives is ignored. }
+    { True once the script will not see an answer: the request's signal
+      aborted it, its engine discarded it (the run failed or ended), or
+      Fetch raised. That holds even for an answer already taken but not yet
+      settled. A transport may stop its work then; an answer it still gives
+      is refused. A request that settled normally is not cancelled. }
     function IsCancelled: Boolean;
   end;
 
@@ -83,8 +90,10 @@ type
   IGocciaFetchTransport = interface
     { Called on the engine's thread, once per request, while the script's
       fetch() call runs. Answer through AResponder now or later, from any
-      thread; the run waits while the request is unanswered, subject to
-      its deadline and the request's signal. Must not run script or call
+      thread; the run waits while the request is unanswered. The wait ends
+      at the run's deadline or the request's signal; it executes no
+      instructions, so an instruction limit alone does not end it. Must not
+      run script or call
       into the engine. An exception raised here cancels the request and
       rejects the fetch with TypeError (`fetch failed: <message>`), even if
       the transport answered first. }

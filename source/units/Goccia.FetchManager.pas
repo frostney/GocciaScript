@@ -154,6 +154,8 @@ const
     'fetch transport answered an invalid header';
   FETCH_TRANSPORT_INVALID_STATUS_TEXT_ERROR =
     'fetch transport answered an invalid status text';
+  FETCH_TRANSPORT_INVALID_URL_ERROR =
+    'fetch transport answered an invalid URL';
   { The built-in client's wording, so a transport's oversized answer reads
     as the network's would. }
   FETCH_RESPONSE_BODY_LIMIT_ERROR = 'HTTP response body exceeds %d byte limit';
@@ -231,8 +233,12 @@ type
     holds it until the request settles, aborts or is discarded, which
     cancels it; the transport holds it as its responder until it answers. }
   IGocciaFetchExchange = interface(IGocciaFetchResponder)
-    { Runtime thread only. }
+    { Runtime thread only. An abort or a discard: no answer is wanted any
+      more, and IsCancelled says so. }
     procedure Cancel;
+    { Runtime thread only. The request settled: later answers are refused,
+      but it was not cancelled. }
+    procedure Close;
   end;
 
   TGocciaPendingFetch = record
@@ -305,6 +311,9 @@ type
     FMaxResponseBytes: Integer;
     { EXCHANGE_OPEN until the first answer or the cancellation claims it. }
     FSettled: Longint;
+    { Non-zero once an abort or a discard made any answer unwanted, even one
+      already given but not yet settled. }
+    FCancelled: Longint;
     function Claim: Boolean;
     procedure Post(const ACompletion: TGocciaFetchCompletion);
   public
@@ -317,6 +326,7 @@ type
       const ADeniedScope: string = ''): Boolean;
     function IsCancelled: Boolean;
     procedure Cancel;
+    procedure Close;
   end;
 
   TGocciaFetchManagerImpl = class(TGocciaFetchManager)
@@ -335,7 +345,10 @@ type
     function FindPendingIndex(const ARequestID: Integer): Integer;
     function RejectAbortedFetches: Integer;
     procedure AbortPendingFetch(const AToken: Int64);
-    procedure ReleasePendingRoots(const APending: TGocciaPendingFetch);
+    { ASettled: the entry leaves because its completion settled it, not
+      because an abort or a discard gave up on it. }
+    procedure ReleasePendingRoots(const APending: TGocciaPendingFetch;
+      const ASettled: Boolean = False);
     procedure SettleCompletion(const ACompletion: TGocciaFetchCompletion);
   public
     constructor Create;
@@ -659,6 +672,7 @@ begin
   FIsHead := AIsHead;
   FMaxResponseBytes := AMaxResponseBytes;
   FSettled := EXCHANGE_OPEN;
+  FCancelled := 0;
 end;
 
 destructor TGocciaFetchExchange.Destroy;
@@ -699,8 +713,7 @@ begin
   Result := True;
 end;
 
-{ WHATWG Fetch: a header value contains no NUL, CR or LF. Status text is held
-  to the same rule, as a status line's reason phrase. }
+{ WHATWG Fetch: a header value contains no NUL, CR or LF. }
 function HasForbiddenValueCharacter(const AText: string): Boolean;
 var
   I: Integer;
@@ -709,6 +722,24 @@ begin
     if AText[I] in [#0, #10, #13] then
       Exit(True);
   Result := False;
+end;
+
+{ WHATWG Fetch, initialize a response: status text matches RFC 9110's
+  reason-phrase, *( HTAB / SP / VCHAR / obs-text ). Characters past ASCII
+  stand for obs-text. }
+function IsReasonPhrase(const AText: string): Boolean;
+const
+  TAB_CHARACTER = #9;
+  FIRST_VISIBLE_OR_SPACE = ' ';
+  DELETE_CHARACTER = #127;
+var
+  I: Integer;
+begin
+  for I := 1 to Length(AText) do
+    if ((AText[I] < FIRST_VISIBLE_OR_SPACE) and
+        (AText[I] <> TAB_CHARACTER)) or (AText[I] = DELETE_CHARACTER) then
+      Exit(False);
+  Result := True;
 end;
 
 { WHATWG Fetch: to normalize a header value, strip its leading and trailing
@@ -726,6 +757,27 @@ begin
   Result := Copy(AValue, First, Last - First + 1);
 end;
 
+{ WHATWG Fetch: a null body status is 101, 103, 204, 205 or 304; only the
+  last three can reach here. }
+function IsNullBodyStatus(const AStatus: Integer): Boolean;
+begin
+  Result := (AStatus = HTTP_STATUS_NO_CONTENT) or
+    (AStatus = HTTP_STATUS_RESET_CONTENT) or
+    (AStatus = HTTP_STATUS_NOT_MODIFIED);
+end;
+
+{ An absolute http(s) URL, as a response's URL list holds. }
+function IsResponseURL(const AURL: string): Boolean;
+begin
+  try
+    ParseHTTPURL(AURL);
+    Result := True;
+  except
+    on EHTTPError do
+      Result := False;
+  end;
+end;
+
 { Why the engine refuses a transport's response, or '' when it takes it. }
 function TransportResponseError(const AResponse: THTTPResponse;
   const AIsHead: Boolean; const AMaxResponseBytes: Integer): string;
@@ -737,23 +789,18 @@ begin
      (AResponse.StatusCode > FETCH_MAX_RESPONSE_STATUS) then
     Exit(Format(FETCH_TRANSPORT_INVALID_STATUS_ERROR,
       [AResponse.StatusCode]));
-  if HasForbiddenValueCharacter(AResponse.StatusText) then
+  if not IsReasonPhrase(AResponse.StatusText) then
     Exit(FETCH_TRANSPORT_INVALID_STATUS_TEXT_ERROR);
   for I := 0 to High(AResponse.Headers) do
     if not IsHTTPToken(AResponse.Headers[I].Name) or
        HasForbiddenValueCharacter(AResponse.Headers[I].Value) then
       Exit(FETCH_TRANSPORT_INVALID_HEADER_ERROR);
-  if (not AIsHead) and (Length(AResponse.Body) > AMaxResponseBytes) then
+  if (AResponse.FinalURL <> '') and not IsResponseURL(AResponse.FinalURL) then
+    Exit(FETCH_TRANSPORT_INVALID_URL_ERROR);
+  // A body the response will not keep is not held to the ceiling.
+  if (not AIsHead) and (not IsNullBodyStatus(AResponse.StatusCode)) and
+     (Length(AResponse.Body) > AMaxResponseBytes) then
     Exit(Format(FETCH_RESPONSE_BODY_LIMIT_ERROR, [AMaxResponseBytes]));
-end;
-
-{ WHATWG Fetch: a null body status is 101, 103, 204, 205 or 304; only the
-  last three can reach here. }
-function IsNullBodyStatus(const AStatus: Integer): Boolean;
-begin
-  Result := (AStatus = HTTP_STATUS_NO_CONTENT) or
-    (AStatus = HTTP_STATUS_RESET_CONTENT) or
-    (AStatus = HTTP_STATUS_NOT_MODIFIED);
 end;
 
 function TGocciaFetchExchange.Respond(const AResponse: THTTPResponse): Boolean;
@@ -814,11 +861,16 @@ end;
 
 function TGocciaFetchExchange.IsCancelled: Boolean;
 begin
-  Result := InterlockedCompareExchange(FSettled, EXCHANGE_CANCELLED,
-    EXCHANGE_CANCELLED) = EXCHANGE_CANCELLED;
+  Result := InterlockedCompareExchange(FCancelled, 0, 0) <> 0;
 end;
 
 procedure TGocciaFetchExchange.Cancel;
+begin
+  InterlockedExchange(FCancelled, 1);
+  InterlockedCompareExchange(FSettled, EXCHANGE_CANCELLED, EXCHANGE_OPEN);
+end;
+
+procedure TGocciaFetchExchange.Close;
 begin
   InterlockedCompareExchange(FSettled, EXCHANGE_CANCELLED, EXCHANGE_OPEN);
 end;
@@ -879,6 +931,25 @@ begin
   inherited;
 end;
 
+{ Why the built-in client would refuse to send this request — an
+  unsupported scheme, a malformed URL, a control character in the request
+  target or a header — in its words, or '' when it would send it. }
+function TransportRequestError(const AURL: string;
+  const AHeaders: THTTPHeaders): string;
+var
+  Parsed: THTTPParsedURL;
+begin
+  Result := '';
+  try
+    Parsed := ParseHTTPURL(AURL);
+    ValidateHTTPRequestText(Parsed.Path, 'request target', False);
+    ValidateHTTPRequestHeaders(AHeaders);
+  except
+    on E: EHTTPError do
+      Result := E.Message;
+  end;
+end;
+
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
   const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
   const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
@@ -890,6 +961,7 @@ var
   Added, LimitAcquired, Rooted: Boolean;
   RequestTimeoutMilliseconds, SignalTimeoutMilliseconds, PendingIndex,
     MaxResponseBytes: Integer;
+  RequestError: string;
 begin
   Worker := nil;
   Added := False;
@@ -1010,9 +1082,15 @@ begin
     begin
       { The request is pending before the transport sees it, so an answer
         given inside the call finds it at the next pump. From here the entry
-        holds the worker slot. }
+        holds the worker slot. A request the built-in client would refuse to
+        send never reaches the transport; it fails the same way, through the
+        promise. }
       LimitAcquired := False;
-      APolicy.Transport.Fetch(Request, Pending.Exchange);
+      RequestError := TransportRequestError(AURL, AHeaders);
+      if RequestError <> '' then
+        Pending.Exchange.Fail(RequestError)
+      else
+        APolicy.Transport.Fetch(Request, Pending.Exchange);
     end
     else
     begin
@@ -1051,7 +1129,7 @@ begin
 end;
 
 procedure TGocciaFetchManagerImpl.ReleasePendingRoots(
-  const APending: TGocciaPendingFetch);
+  const APending: TGocciaPendingFetch; const ASettled: Boolean);
 begin
   // The pending entry is leaving FPending, so its abort algorithm must go with
   // it. This is a no-op when the algorithm list was already emptied by the
@@ -1064,7 +1142,10 @@ begin
   // it comes after this, is ignored.
   if Assigned(APending.Exchange) then
   begin
-    APending.Exchange.Cancel;
+    if ASettled then
+      APending.Exchange.Close
+    else
+      APending.Exchange.Cancel;
     FLimiter.ReleaseWorker;
   end;
 
@@ -1293,7 +1374,7 @@ begin
     if (TGocciaMicrotaskQueue.Instance <> nil) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
   finally
-    ReleasePendingRoots(Pending);
+    ReleasePendingRoots(Pending, True);
   end;
 end;
 
