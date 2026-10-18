@@ -213,11 +213,14 @@ jobs:
 
       - name: Run suite under Valgrind memcheck
         # A full suite run under memcheck is slow; --error-exitcode makes any
-        # invalid access fail the job rather than scroll past.
+        # invalid access fail the job rather than scroll past. The suppression
+        # file covers the runtime library's aligned over-reads; its header
+        # says what that gives up.
         run: |
           valgrind \
             --tool=memcheck \
             --error-exitcode=42 \
+            --suppressions=scripts/valgrind/fpc-rtl.supp \
             --errors-for-leak-kinds=none \
             --leak-check=no \
             --track-origins=yes \

@@ -313,7 +313,7 @@ JavaScript suite under two tools that answer different questions:
 | Tool | Catches | Invocation |
 |------|---------|-----------|
 | **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr` |
-| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 ./build/GocciaTestRunner -P tests` |
+| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P tests` |
 
 `DIR` is a unit-output directory of your own (CI uses
 `build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own
@@ -323,6 +323,11 @@ and create the directory first, because `fpc` writes into a `-FU` directory but
 will not create one; against a missing directory it fails with
 `Can't create object file: … (error code: 2)` (on external-assembler targets
 such as macOS the message is `Can't create assembler file: …` instead).
+
+`scripts/valgrind/fpc-rtl.supp` suppresses memcheck's report on the Free
+Pascal runtime's `IndexByte` and `IndexWord`, which read whole aligned 16-byte
+blocks past the end of a buffer and ignore what they find there. The file's
+header explains the over-read and what the suppression gives up.
 
 Both run on Linux only. Valgrind slows the suite by roughly an order of
 magnitude, which is why neither runs per-PR. Findings upload as artifacts with

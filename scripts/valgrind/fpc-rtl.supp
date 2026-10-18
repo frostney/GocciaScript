@@ -1,0 +1,29 @@
+# Valgrind memcheck suppressions for the Free Pascal runtime library (FPC 3.2.2,
+# x86_64). Pass with --suppressions=scripts/valgrind/fpc-rtl.supp; the
+# scheduled memory-safety job in .github/workflows/fuzz.yml does.
+#
+# IndexByte and IndexWord (rtl/x86_64/x86_64.inc) scan with aligned 16-byte
+# SSE2 loads (movdqa), compare the whole block (pcmpeqb/pcmpeqw, pmovmskb) and
+# branch on any match before they drop a match at or past the length. The last
+# load reaches past the end of the buffer; it stays inside one aligned 16-byte
+# block, so it never crosses into another page and cannot fault, and bytes past
+# the end never decide the result. Memcheck still reports the branch when those
+# bytes are undefined, for example the slack after a string's terminator in a
+# block FPC's heap manager reused without telling Valgrind (#1776).
+#
+# What this gives up: only these two routines as the faulting frame, and only
+# the branch, are suppressed. Undefined bytes inside the searched range are
+# hidden too when the search finds nothing, because the "not found" result is
+# a constant and memcheck does not follow definedness through a branch; any
+# other read of those bytes (a copy that is later branched on, a comparison,
+# a hash, output) still reports.
+{
+   fpc-rtl-indexbyte-aligned-overread
+   Memcheck:Cond
+   fun:SYSTEM_$$_INDEXBYTE$*
+}
+{
+   fpc-rtl-indexword-aligned-overread
+   Memcheck:Cond
+   fun:SYSTEM_$$_INDEXWORD$*
+}
