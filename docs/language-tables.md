@@ -58,8 +58,8 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 | `queueMicrotask` | [HTML §8.4](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-queuemicrotask) | Supported |
 | `URL`, `URL.parse`, `URL.canParse` | [WHATWG URL §4](https://url.spec.whatwg.org/#url-class) | Supported |
 | `URLSearchParams` | [WHATWG URL §6](https://url.spec.whatwg.org/#urlsearchparams) | Supported |
-| `TextEncoder` | [WHATWG Encoding §8.3](https://encoding.spec.whatwg.org/#textencoder) | Supported |
-| `TextDecoder` | [WHATWG Encoding §8.2](https://encoding.spec.whatwg.org/#textdecoder) | Supported |
+| `TextEncoder` | [WHATWG Encoding §7.4](https://encoding.spec.whatwg.org/#interface-textencoder) | Supported |
+| `TextDecoder` | [WHATWG Encoding §7.2](https://encoding.spec.whatwg.org/#interface-textdecoder) | Supported |
 | `performance.now`, `timeOrigin` | [High Resolution Time](https://w3c.github.io/hr-time/#dom-performance-now) | Supported |
 | `EventTarget`, `Event` | [WHATWG DOM §2](https://dom.spec.whatwg.org/#events) | Supported subset (single-target dispatch; no propagation) |
 | `AbortController`, `AbortSignal` | [WHATWG DOM §3](https://dom.spec.whatwg.org/#aborting-ongoing-activities) | Supported subset (fetch-scoped; `abort` event and `onabort`; no `any`) |
