@@ -357,12 +357,17 @@ begin
   Result := FByteLength = AUTO_BYTE_LENGTH;
 end;
 
+// ES2026 §25.1.3.2 ArrayBufferByteLength(arrayBuffer, order). A growable
+// SharedArrayBuffer's block is longer than its byte length.
 function TGocciaDataViewValue.GetBufferByteLength: Integer;
 begin
   if IsDetachedBuffer then
     Exit(0);
   SyncBufferData;
-  Result := Length(FBufferData);
+  if FBufferValue is TGocciaSharedArrayBufferValue then
+    Result := TGocciaSharedArrayBufferValue(FBufferValue).ByteLength
+  else
+    Result := Length(FBufferData);
 end;
 
 // ES2026 §25.3.1.4 IsViewOutOfBounds(viewRecord)
@@ -418,8 +423,7 @@ begin
     ThrowTypeError(SErrorCannotUseDetachedDataView, SSuggestArrayBufferDetached);
 
   FBufferValue := BufferArg;
-  SyncBufferData;
-  BufferByteLength := Length(FBufferData);
+  BufferByteLength := GetBufferByteLength;
   if Offset > BufferByteLength then
     ThrowRangeError(SErrorInvalidDataViewOffset, SSuggestTypedArrayLength);
 

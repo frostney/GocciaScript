@@ -28,6 +28,10 @@ function GetGocciaThreadId: TThreadID; {$IFDEF FPC}inline;{$ENDIF}
 function AtomicIncrementInt32(var AValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 function AtomicDecrementInt32(var AValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 function AtomicExchangeInt32(var AValue: Integer; const ANewValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
+{ Stores ANewValue in AValue when AValue equals AComparand, as one atomic
+  step with a full barrier, and returns the value AValue held before. }
+function AtomicCompareExchangeInt32(var AValue: Integer;
+  const ANewValue, AComparand: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 procedure ReadMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
 procedure WriteMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
 
@@ -103,6 +107,16 @@ begin
   Result := System.InterlockedExchange(AValue, ANewValue);
   {$ELSE}
   Result := TInterlocked.Exchange(AValue, ANewValue);
+  {$ENDIF}
+end;
+
+function AtomicCompareExchangeInt32(var AValue: Integer;
+  const ANewValue, AComparand: Integer): Integer;
+begin
+  {$IFDEF FPC}
+  Result := System.InterlockedCompareExchange(AValue, ANewValue, AComparand);
+  {$ELSE}
+  Result := TInterlocked.CompareExchange(AValue, ANewValue, AComparand);
   {$ENDIF}
 end;
 

@@ -1143,6 +1143,82 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
   }
 });
 
+await section("test262 runner: a growable SharedArrayBuffer keeps one block while another agent writes...", async () => {
+  // #1767: ES2026 §25.2.5.3 SharedArrayBuffer.prototype.grow makes more of
+  // the same Shared Data Block visible. A grow that moved the bytes to a new
+  // block left the other agent's Atomics.add writing into the old one, and
+  // those increments were lost.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "built-ins");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(tests, "sab-grow-agents.js"), [
+      "/*---",
+      "features: [SharedArrayBuffer, Atomics, resizable-arraybuffer]",
+      "---*/",
+      "const ITERATIONS = 20000;",
+      "const STEP = 8;",
+      "const MAX = 65536;",
+      "const sab = new SharedArrayBuffer(8, { maxByteLength: MAX });",
+      "const counters = new Int32Array(sab, 0, 2);",
+      "Atomics.store(counters, 1, 12345);",
+      "$262.agent.start(`",
+      "  $262.agent.receiveBroadcast((sab) => {",
+      "    const counters = new Int32Array(sab, 0, 2);",
+      "    for (const _ of Array.from({ length: ${ITERATIONS} })) Atomics.add(counters, 0, 1);",
+      "    $262.agent.report(\"done\");",
+      "    $262.agent.leaving();",
+      "  });",
+      "`);",
+      "$262.agent.broadcast(sab);",
+      "let size = 8;",
+      "for (const _ of Array.from({ length: ITERATIONS })) {",
+      "  Atomics.add(counters, 0, 1);",
+      "  if (size + STEP <= MAX) { size += STEP; sab.grow(size); }",
+      "}",
+      "let report = null;",
+      "for (const _ of Array.from({ length: 60000 })) {",
+      "  report = $262.agent.getReport();",
+      "  if (report !== null) break;",
+      "  $262.agent.sleep(1);",
+      "}",
+      "if (report !== \"done\") throw new Error(\"agent did not finish: \" + report);",
+      "const total = Atomics.load(counters, 0);",
+      "if (total !== 2 * ITERATIONS) throw new Error(\"lost increments: \" + total + \" of \" + 2 * ITERATIONS);",
+      "if (Atomics.load(counters, 1) !== 12345) throw new Error(\"a value written before the grows was lost\");",
+      "if (sab.byteLength !== size) throw new Error(\"byteLength \" + sab.byteLength + \", expected \" + size);",
+      "if (!new Uint8Array(sab, 8).every((b) => b === 0)) throw new Error(\"grown bytes are not zero\");",
+      "",
+    ].join("\n"));
+    const out = join(tmp, "sab-grow-agents.json");
+    const proc = Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "built-ins",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const result = report.results?.[0];
+    if (proc.exitCode !== 0 || result?.status !== "PASS") {
+      throw new Error(
+        `growing a SharedArrayBuffer under another agent should keep its writes, got exit ${proc.exitCode}, ` +
+        `${result?.status}: ${JSON.stringify(result)}\n${proc.stderr.toString()}`,
+      );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("test262 runner: negative tests need the expected error in the expected phase...", async () => {
   // #1571: a parse or resolution negative passes only when the source is
   // rejected before evaluation with negative.type. A body that runs reaches

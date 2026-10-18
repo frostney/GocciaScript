@@ -27,6 +27,8 @@ Implements the [ECMAScript SharedArrayBuffer](https://developer.mozilla.org/en-U
 
 **Full standard compliance.** `SharedArrayBuffer` is a distinct type (not an instance of `ArrayBuffer`). It is fixed-length by default, or growable when constructed with `maxByteLength` (`growable`, `maxByteLength`, `grow`); it has no `resize`, `transfer`, or detachment. SharedArrayBuffer instances are cloneable via `structuredClone`.
 
+**Growing.** A growable buffer keeps one data block from construction to collection, so every agent that holds it sees every other agent's writes, `Atomics` included, before and after a grow. The block is allocated at `maxByteLength` bytes when the buffer is constructed, all zero, and `grow` only makes more of it visible. It never allocates or moves the bytes. **Memory accounting:** a growable buffer is charged `maxByteLength` bytes against the memory limit when it is constructed, because that is what it allocates, and a fixed-length buffer is charged its byte length. A `maxByteLength` larger than the limit allows is a `RangeError` at construction, as ECMA-262's AllocateSharedArrayBuffer allows ("if it is impossible to create a new Shared Data Block value consisting of allocLength bytes").
+
 ## Atomics (`Goccia.Builtins.Atomics.pas`)
 
 Implements the [ECMAScript Atomics](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics) namespace for integer TypedArray views.
