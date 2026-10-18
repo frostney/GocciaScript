@@ -1461,7 +1461,8 @@ var
   Magic: array[0..3] of AnsiChar;
   Version: Word;
   Hash: string;
-  Count, I: Cardinal;
+  Count: Cardinal;
+  I: Integer;
   Path, Tag: string;
   PayloadLength: Cardinal;
   Roots: TRestoreRoots;
@@ -1508,7 +1509,7 @@ begin
   if Count > Cardinal(FBuiltins.Count) then
     Refuse('more built-in references than built-ins');
   SetLength(FBuiltinObjects, Count);
-  for I := 0 to Count - 1 do
+  for I := 0 to Integer(Count) - 1 do
   begin
     Path := ReadStr;
     FBuiltinObjects[I] := FBuiltins.FindPath(Path);
@@ -1529,7 +1530,7 @@ begin
   FRoots := Roots;
 
   // Pass 1: allocate.
-  for I := 0 to Count - 1 do
+  for I := 0 to Integer(Count) - 1 do
   begin
     FPayloadLimit := AStream.Size;
     Tag := ReadStr;
@@ -1549,7 +1550,7 @@ begin
   BodyStart := AStream.Position;
 
   // Pass 2: fill.
-  for I := 0 to Count - 1 do
+  for I := 0 to Integer(Count) - 1 do
   begin
     AStream.Position := FPayloadStart[I];
     FPayloadLimit := FPayloadEnd[I];
@@ -1559,7 +1560,7 @@ begin
   end;
 
   // Pass 3: finish.
-  for I := 0 to Count - 1 do
+  for I := 0 to Integer(Count) - 1 do
   begin
     AStream.Position := FPayloadStart[I];
     FPayloadLimit := FPayloadEnd[I];

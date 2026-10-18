@@ -2931,6 +2931,12 @@ type
       const AObject: TGCManagedObject); override;
   end;
 
+{ The maps a class holds are specialized in two units (TGocciaValueMap in
+  Goccia.Values.Primitives, TOrderedStringMap<TGocciaValue> here), which FPC
+  emits as two VMTs. The development build's object check refuses a virtual
+  call through the other unit's type, so these helpers run without it: both
+  specializations have the same layout and code. }
+{$PUSH}{$OBJECTCHECKS OFF}
 procedure WriteValueMap(const W: TGocciaHeapSnapshotWriter;
   const AMap: TOrderedStringMap<TGocciaValue>);
 var
@@ -2956,7 +2962,12 @@ var
   Count, I: Cardinal;
   Key: string;
 begin
-  AMap.Clear;
+  // The map belongs to a freshly allocated shell and is empty. Clear is
+  // virtual, and the development build's object check refuses the call when
+  // the map was specialized in another unit (TGocciaValueMap), so the shell's
+  // emptiness is checked through the non-virtual count instead.
+  if AMap.CountFast <> 0 then
+    R.Refuse('a restored class map is not empty');
   Count := R.ReadU32;
   for I := 1 to Count do
   begin
@@ -2990,7 +3001,12 @@ var
   Count, I: Cardinal;
   Key: string;
 begin
-  AMap.Clear;
+  // The map belongs to a freshly allocated shell and is empty. Clear is
+  // virtual, and the development build's object check refuses the call when
+  // the map was specialized in another unit (TGocciaValueMap), so the shell's
+  // emptiness is checked through the non-virtual count instead.
+  if AMap.CountFast <> 0 then
+    R.Refuse('a restored class map is not empty');
   Count := R.ReadU32;
   for I := 1 to Count do
   begin
@@ -2998,6 +3014,8 @@ begin
     AMap.Add(Key, R.MapPrivateKey(R.ReadStr));
   end;
 end;
+
+{$POP}
 
 procedure TGocciaClassValue.SnapshotWriteClassFields(const AWriter: TObject);
 var

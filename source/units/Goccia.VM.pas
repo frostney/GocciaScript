@@ -817,13 +817,13 @@ uses
   Goccia.Decorators,
   Goccia.DisposalTracker,
   Goccia.EngineFault,
-  Goccia.HeapSnapshot.Codec,
   Goccia.Error,
   Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
+  Goccia.HeapSnapshot.Codec,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
@@ -17238,7 +17238,8 @@ end;
 procedure ReadSnapshotClosure(const R: TGocciaHeapSnapshotReader;
   const AClosure: TGocciaBytecodeClosure);
 var
-  Count, I: Cardinal;
+  Count: Cardinal;
+  I: Integer;
   Cell: TGCManagedObject;
   Scope: TGCManagedObject;
 begin
@@ -17247,7 +17248,7 @@ begin
   Count := R.ReadU32;
   if Count <> Cardinal(AClosure.UpvalueCount) then
     R.Refuse('closure upvalue count changed');
-  for I := 0 to Count - 1 do
+  for I := 0 to Integer(Count) - 1 do
   begin
     Cell := R.ReadRef;
     if Assigned(Cell) and not (Cell is TGocciaBytecodeCell) then

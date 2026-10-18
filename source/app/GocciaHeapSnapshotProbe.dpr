@@ -245,6 +245,9 @@ begin
     TGocciaBytecodeModule(FModule), FModuleScope);
   try
     StartNs := GetNanoseconds;
+    // Intrinsics the run created on first use (an array iterator's
+    // prototype, for one) join the built-in table under their realm slot.
+    ExtendBuiltinTableWithLateSlots(FBuiltins, FEngine, Writer.LateSlots);
     Writer.Serialize(PendingValues, Stream);
     SerializeNs := GetNanoseconds - StartNs;
     StartNs := GetNanoseconds;
@@ -265,6 +268,7 @@ procedure TProbeHost.RestoreSnapshot(const AModuleScope: TGocciaScope;
   const AModule: TObject);
 var
   Reader: TGocciaHeapSnapshotReader;
+  LateSlots: TGocciaLateSlotRestorer;
   Stream: TMemoryStream;
   Promises: TArray<TGocciaValue>;
   I: Integer;
@@ -273,8 +277,10 @@ begin
   Stream := TMemoryStream.Create;
   Reader := TGocciaHeapSnapshotReader.Create(FBuiltins,
     TGocciaBytecodeModule(AModule), AModuleScope);
+  LateSlots := TGocciaLateSlotRestorer.Create(FBuiltins, FEngine);
   try
     Reader.Context := FEngine.VM;
+    Reader.LateSlotResolver := LateSlots.Resolve;
     Stream.LoadFromFile(FSnapshotPath);
     StartNs := GetNanoseconds;
     Promises := Reader.Restore(Stream);
@@ -288,6 +294,7 @@ begin
       FPending.Add(TGocciaPromiseValue(Promises[I]));
     end;
   finally
+    LateSlots.Free;
     Reader.Free;
     Stream.Free;
   end;
@@ -413,6 +420,8 @@ begin
     on E: Exception do
     begin
       WriteLn(ErrOutput, 'Error: ', E.ClassName, ': ', E.Message);
+      if GetEnvironmentVariable('GOCCIA_HEAP_SNAPSHOT_TRACE') <> '' then
+        DumpExceptionBackTrace(ErrOutput);
       ExitCode := 1;
     end;
   end;
