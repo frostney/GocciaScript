@@ -547,7 +547,8 @@ to standard error.
 
 Standard output carries only what the guest prints — `--print` prints the last
 value, `undefined` included, as in host mode — followed by a printed diff.
-There is no timing banner. The `write-back:` report goes to standard error.
+Without `--print` the last value is not read at all: it is not copied out of
+the engine after the run, and its getters do not run. There is no timing banner. The `write-back:` report goes to standard error.
 
 Diff output is explicit. JSON is the default format; it always includes a
 separate `metadataChanges` array whose per-path `changes` object contains only

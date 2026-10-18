@@ -772,6 +772,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 - A semicolon is inserted when a newline separates the current and next token
 - A semicolon is inserted before `}` or at EOF
 - Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules
+- Only a newline between two tokens counts, including one inside a multi-line comment. A newline inside a token, such as a multi-line template literal or a string's line continuation, is part of that token: `return`, `throw` or `yield` followed on the same line by a template that spans lines returns, throws or yields the template
 
 ### Traditional `for(init; test; update)` Loop
 

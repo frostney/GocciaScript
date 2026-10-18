@@ -1261,7 +1261,9 @@ begin
 
   FInjectedGlobals := TStringList.Create;
   // Owns the lazy materializers (shims, runtime namespaces) whose factory
-  // closures back lazy global properties; freed in the destructor.
+  // closures back lazy global properties, and the plain objects whose methods
+  // back native functions (the TypedArray statics, Uint8Array encoding);
+  // freed in the destructor.
   FLazyThunks := Contnrs.TObjectList.Create(True);
   RegisterDefaultShimNames(FShims);
   PinSingletons;
@@ -1849,6 +1851,7 @@ begin
   FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
     TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
   TypedArrayStatic := TGocciaTypedArrayStaticFrom.Create;
+  FLazyThunks.Add(TypedArrayStatic);
   FTypedArrayIntrinsic.DefineProperty(PROP_FROM,
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
@@ -1991,6 +1994,7 @@ begin
   if AKind = takUint8 then
   begin
     Encoding := TGocciaUint8ArrayEncoding.Create;
+    FLazyThunks.Add(Encoding);
 
     // Static methods on Uint8Array constructor
     TAConstructor.DefineProperty(PROP_FROM_BASE64,

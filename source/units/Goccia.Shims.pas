@@ -288,7 +288,11 @@ const
         'const legacyDateDayFromYear = (year: number): number =>'#10 +
         '  365 * (year - 1970) + Math.floor((year - 1969) / 4) -'#10 +
         '  Math.floor((year - 1901) / 100) + Math.floor((year - 1601) / 400);'#10 +
-        'const makeDateEpochMillisecondsRaw = (args: any[], timeZone: string, adjustTwoDigitYear: boolean): number => {'#10 +
+        '// TimeClip(UTC(MakeDate(fields))): the time value of the fields read as local'#10 +
+        '// time in timeZone, or NaN outside the range. With timeZone "UTC", the fields'#10 +
+        '// are read at offsetMilliseconds (a string with an explicit offset); other'#10 +
+        '// zones ignore it.'#10 +
+        'const makeDateEpochMillisecondsRaw = (args: any[], timeZone: string, adjustTwoDigitYear: boolean, offsetMilliseconds: number = 0): number => {'#10 +
         '  if (args.length === 0) return NaN;'#10 +
         '  const yearValue: number = toDateInteger(args[0]);'#10 +
         '  const monthValue: number = toDateInteger(args.length > 1 ? args[1] : 0);'#10 +
@@ -309,13 +313,23 @@ const
         '  const starts: any[] = legacyDateIsLeapYear(year) ? legacyDateLeapMonthStarts : legacyDateMonthStarts;'#10 +
         '  const dayNumber: number = legacyDateDayFromYear(year) + starts[month] + dayValue - 1;'#10 +
         '  const timeWithinDay: number = ((hour * 3600000 + minute * 60000) + second * 1000) + millisecond;'#10 +
-        '  const value: number = dayNumber * 86400000 + timeWithinDay;'#10 +
-        '  if (!Number.isFinite(value) || Math.abs(value) > dateTimeClipLimit) return NaN;'#10 +
-        '  const clipped: number = Math.trunc(value);'#10 +
-        '  if (timeZone === "UTC") return clipped;'#10 +
-        '  const local = Temporal.Instant.fromEpochMilliseconds(clipped).toZonedDateTimeISO("UTC");'#10 +
-        '  // ES2026 §21.4.2.1 step 5.k: TimeClip(UTC(finalDate)). A local time whose'#10 +
-        '  // UTC instant lies outside the time value range is NaN, not a RangeError.'#10 +
+        '  const value: number = Math.trunc(dayNumber * 86400000 + timeWithinDay);'#10 +
+        '  if (!Number.isFinite(value)) return NaN;'#10 +
+        '  // ES2026 §21.4.2.1 step 5.k: TimeClip(UTC(finalDate)). The time value range'#10 +
+        '  // applies to the UTC instant, after the zone or offset is taken off, so a'#10 +
+        '  // local time just outside the range can still name a valid instant.'#10 +
+        '  if (timeZone === "UTC") {'#10 +
+        '    const utcValue: number = value - offsetMilliseconds;'#10 +
+        '    return Math.abs(utcValue) > dateTimeClipLimit ? NaN : utcValue;'#10 +
+        '  }'#10 +
+        '  // A zone offset is less than a day, so a local time a day or more outside'#10 +
+        '  // the range cannot name a valid instant. Within that day, read the fields'#10 +
+        '  // from an instant one day nearer the epoch and add the day back.'#10 +
+        '  if (Math.abs(value) >= dateTimeClipLimit + 86400000) return NaN;'#10 +
+        '  const shift: number = value > dateTimeClipLimit ? 86400000 : value < -dateTimeClipLimit ? -86400000 : 0;'#10 +
+        '  let local: any = Temporal.Instant.fromEpochMilliseconds(value - shift).toZonedDateTimeISO("UTC");'#10 +
+        '  if (shift !== 0) local = local.toPlainDateTime().add({ milliseconds: shift });'#10 +
+        '  // A local time whose UTC instant lies outside the range is NaN, not a RangeError.'#10 +
         '  let utc: number;'#10 +
         '  try {'#10 +
         '    utc = Temporal.ZonedDateTime.from({'#10 +
@@ -499,9 +513,7 @@ const
         '  const fields: any[] = [year, month - 1, day, time[0], time[1], time[2], time[3]];'#10 +
         '  // Without an offset token the time is local, as for a legacy date.'#10 +
         '  if (!hasOffset) return makeDateEpochMillisecondsRaw(fields, Temporal.Now.timeZoneId(), false);'#10 +
-        '  // TimeClip applies to the UTC value, after the offset is removed.'#10 +
-        '  const utc: number = makeDateEpochMillisecondsRaw(fields, "UTC", false) - offset;'#10 +
-        '  return Math.abs(utc) > dateTimeClipLimit ? NaN : utc;'#10 +
+        '  return makeDateEpochMillisecondsRaw(fields, "UTC", false, offset);'#10 +
         '};'#10 +
         'const parseISODateString = (text: string): any => {'#10 +
         '  let position: number = 0;'#10 +
@@ -552,7 +564,7 @@ const
         '  const parsedOffset: any = parseISOOffsetMilliseconds(offsetPart);'#10 +
         '  if (parsedOffset === undefined) return NaN;'#10 +
         '  offset = parsedOffset;'#10 +
-        '  return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], "UTC", false) - offset;'#10 +
+        '  return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], "UTC", false, offset);'#10 +
         '};'#10 +
         'const parseDateStringToEpoch = (str: any): number => {'#10 +
         '  const text: string = String(str).trim();'#10 +
@@ -614,7 +626,15 @@ const
         'const __GocciaDateISOYearString = (year: number): string =>'#10 +
         '  year >= 0 && year <= 9999 ? __GocciaDatePad(year, 4) :'#10 +
         '    (year < 0 ? "-" : "+") + __GocciaDatePad(year, 6);'#10 +
-        'const __GocciaDateOffsetString = (offset: string): string => offset.replace(":", "");'#10 +
+        '// ES2026 §21.4.4.41.3 TimeZoneString: the offset in whole milliseconds,'#10 +
+        '// written as sign, hours and minutes. The seconds of a local mean time'#10 +
+        '// offset such as -07:52:58 stay in the local time but not in the string.'#10 +
+        'const __GocciaDateOffsetString = (offsetNanoseconds: number): string => {'#10 +
+        '  const offset: number = Math.trunc(offsetNanoseconds / 1000000);'#10 +
+        '  const absOffset: number = Math.abs(offset);'#10 +
+        '  return (offset >= 0 ? "+" : "-") + __GocciaDatePad(Math.floor(absOffset / 3600000), 2) +'#10 +
+        '    __GocciaDatePad(Math.floor(absOffset / 60000) % 60, 2);'#10 +
+        '};'#10 +
         'const __GocciaDateFromSingleArgument = (value: any): number => {'#10 +
         '  if (typeof value === "number") return __GocciaDateTimeClip(value);'#10 +
         '  if (__GocciaDateHasSlot(value)) return __GocciaDateGetSlot(value);'#10 +
@@ -830,7 +850,7 @@ const
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
         '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + __GocciaDatePad(z.day, 2) + " " +'#10 +
-        '      __GocciaDateYearString(z.year) + " " + __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offset);'#10 +
+        '      __GocciaDateYearString(z.year) + " " + __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offsetNanoseconds);'#10 +
         '  }'#10 +
         '  toDateString(): string {'#10 +
         '    Date.#require(this);'#10 +
@@ -844,7 +864,7 @@ const
         '    Date.#require(this);'#10 +
         '    const z = Date.#local(this);'#10 +
         '    if (!z) return "Invalid Date";'#10 +
-        '    return __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offset);'#10 +
+        '    return __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offsetNanoseconds);'#10 +
         '  }'#10 +
         '  toUTCString(): string {'#10 +
         '    Date.#require(this);'#10 +
@@ -1066,12 +1086,10 @@ var
 threadvar
   { One parsed program per DEFAULT_SHIMS entry, filled on first use, so a
     thread parses each shim once however many engines load it. Each engine
-    compiles the program itself. A parsed program is never
-    released while the thread's engines run, and TGocciaProgram.Free releases only the program node, not
-    the statements under it. Parsing per engine leaked the shim ASTs of every
-    engine: about 1.1 MB per engine that used Date on 64-bit. The test runner
-    builds one engine per file, and its snapshot formatter uses Date in every
-    one. }
+    compiles the program itself. The programs stay while the thread's engines
+    run and are freed, whole trees included, when its runtime shuts down
+    (ReleaseShimProgramCache). The test runner builds one engine per file, and
+    its snapshot formatter uses Date in every one. }
   GShimPrograms: array of TGocciaProgram;
 
 function DefaultShimCount: Integer;
@@ -1096,9 +1114,8 @@ procedure ReleaseShimProgramCache;
 var
   I: Integer;
 begin
-  { Frees the program nodes only; the statements under them stay (see
-    GShimPrograms), as they did when every engine parsed its own shims. By
-    the time a thread's runtime shuts down no engine on it is running. }
+  { Each program frees its tree with it (ADR 0143). By the time a thread's
+    runtime shuts down no engine on it is running. }
   for I := 0 to High(GShimPrograms) do
     GShimPrograms[I].Free;
   SetLength(GShimPrograms, 0);
@@ -1288,8 +1305,12 @@ var
 begin
   Descriptor := (LoadShimValue(FLoader, FShimIndex) as TGocciaObjectValue)
     .GetOwnPropertyDescriptor(FExportKey);
-  AGetter := (Descriptor as TGocciaPropertyDescriptorAccessor).Getter;
-  ASetter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+  try
+    AGetter := (Descriptor as TGocciaPropertyDescriptorAccessor).Getter;
+    ASetter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+  finally
+    ReleaseDescriptor(Descriptor);
+  end;
 end;
 
 initialization

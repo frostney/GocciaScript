@@ -38,6 +38,11 @@ jobs:
       - name: Check formatting
         run: ./format.pas --check
 
+      - name: Check VM stack-slot stores
+        run: |
+          npx tsx scripts/check-vm-stack-stores.ts --self-test
+          npx tsx scripts/check-vm-stack-stores.ts
+
       - name: Build all
         run: ./build.pas --prod
 
