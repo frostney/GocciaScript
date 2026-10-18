@@ -732,18 +732,24 @@ class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
 var
   ModuleOptions: TGocciaSourcePipelineOptions;
   ParseAsModule: Boolean;
+  DetectLexTime, DetectParseTime: Int64;
 begin
   Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
     ADeclaredPrivateNames, ParseAsModule);
   if not ParseAsModule then
     Exit;
   { Only a detected Module under --compat-non-strict-mode parses twice: the
-    first parse was sloppy, and sloppy code is not a strict Module's. }
+    first parse was sloppy, and sloppy code is not a strict Module's. The
+    reported lex and parse times cover both passes. }
+  DetectLexTime := Result.FLexTimeNanoseconds;
+  DetectParseTime := Result.FParseTimeNanoseconds;
   Result.Free;
   ModuleOptions := AOptions;
   ModuleOptions.SourceType := stModule;
   Result := ParseSourceWithGoal(ASource, AFileName, ModuleOptions,
     ADeclaredPrivateNames, ParseAsModule);
+  Inc(Result.FLexTimeNanoseconds, DetectLexTime);
+  Inc(Result.FParseTimeNanoseconds, DetectParseTime);
 end;
 
 class function TGocciaSourcePipeline.ParseModuleSource(const ASource: string;
