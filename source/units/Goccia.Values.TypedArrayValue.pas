@@ -45,6 +45,7 @@ type
 
     procedure InitializePrototype;
     procedure SyncBufferData;
+    function GetBufferData: TBytes;
     function GetLength: Integer;
     function GetByteLength: Integer;
     function GetObservableByteOffset: Integer;
@@ -117,7 +118,12 @@ type
       const AKind: TGocciaTypedArrayKind): TGocciaObjectValue;
 
     property BufferValue: TGocciaValue read FBufferValue;
-    property BufferData: TBytes read FBufferData;
+    // The buffer's current data block, read again on every access: resize,
+    // grow and detach give the buffer a new block, so a block read before one
+    // of them is stale. BufferData and Length describe the same block while no
+    // script code runs between the two reads; a caller that runs script code
+    // in between measures again. A per-byte loop reads it once before the loop.
+    property BufferData: TBytes read GetBufferData;
     property ByteOffset: Integer read FByteOffset;
     property Length: Integer read GetLength;
     property Kind: TGocciaTypedArrayKind read FKind;
@@ -414,10 +420,30 @@ end;
 
 procedure TGocciaTypedArrayValue.SyncBufferData;
 begin
+  // Assign only when the buffer has a new block: the usual case is the same
+  // block, and assigning a dynamic array adjusts two reference counts.
   if FBufferValue is TGocciaArrayBufferValue then
-    FBufferData := TGocciaArrayBufferValue(FBufferValue).Data
+  begin
+    if Pointer(FBufferData) <> Pointer(TGocciaArrayBufferValue(FBufferValue).Data) then
+      FBufferData := TGocciaArrayBufferValue(FBufferValue).Data;
+  end
   else if FBufferValue is TGocciaSharedArrayBufferValue then
-    FBufferData := TGocciaSharedArrayBufferValue(FBufferValue).Data;
+  begin
+    if Pointer(FBufferData) <>
+       Pointer(TGocciaSharedArrayBufferValue(FBufferValue).Data) then
+      FBufferData := TGocciaSharedArrayBufferValue(FBufferValue).Data;
+  end;
+end;
+
+// ArrayBuffer.prototype.resize, SharedArrayBuffer.prototype.grow and detaching
+// give the buffer a new data block, and FBufferData keeps naming the old one
+// until SyncBufferData runs. Every reader outside this unit gets the block
+// through here, so it never copies Length's elements out of a smaller, older
+// block.
+function TGocciaTypedArrayValue.GetBufferData: TBytes;
+begin
+  SyncBufferData;
+  Result := FBufferData;
 end;
 
 function TGocciaTypedArrayValue.GetLength: Integer;
@@ -843,6 +869,8 @@ function TGocciaTypedArrayValue.OrdinarySetIntegerIndexedElementWithReceiver(
 var
   Index: Integer;
   ReceiverDesc: TGocciaPropertyDescriptor;
+  ReceiverWritableData: Boolean;
+  ReceiverFlags: TPropertyFlags;
   ReceiverObj: TGocciaObjectValue;
   ReceiverTypedArray: TGocciaTypedArrayValue;
 begin
@@ -867,11 +895,17 @@ begin
   ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
   if Assigned(ReceiverDesc) then
   begin
-    if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
-       (not ReceiverDesc.Writable) then
+    // Read before the release: the definition below may replace a stored
+    // descriptor.
+    ReceiverWritableData :=
+      not (ReceiverDesc is TGocciaPropertyDescriptorAccessor) and
+      ReceiverDesc.Writable;
+    ReceiverFlags := ReceiverDesc.Flags;
+    ReleaseDescriptor(ReceiverDesc);
+    if not ReceiverWritableData then
       Exit(False);
     Exit(ReceiverObj.TryDefineProperty(AName,
-      TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
+      TGocciaPropertyDescriptorData.Create(AValue, ReceiverFlags)));
   end;
 
   Result := ReceiverObj.TryDefineProperty(AName,
@@ -1360,7 +1394,7 @@ begin
   begin
     if IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
       Exit(TGocciaPropertyDescriptorData.Create(GetElementAsValue(Index),
-        [pfEnumerable, pfConfigurable, pfWritable]));
+        [pfEnumerable, pfConfigurable, pfWritable]).AsCallerOwned);
     Exit(nil);
   end;
 

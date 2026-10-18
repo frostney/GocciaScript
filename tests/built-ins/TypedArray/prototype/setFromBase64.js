@@ -158,4 +158,47 @@ describe("Uint8Array.prototype.setFromBase64", () => {
     expect(getterCalls).toBe(0);
     expect(target[0]).toBe(1);
   });
+
+  test("writes into a length-tracking view after its buffer grew", () => {
+    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    rab.resize(8);
+    expect(view.setFromBase64("AQIDBAUGBwg=")).toEqual({ read: 12, written: 8 });
+    expect(Array.from(new Uint8Array(rab))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  test("writes into the bytes the view holds after the options getter grew the buffer", () => {
+    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    const options = {
+      get alphabet() {
+        rab.resize(8);
+        return "base64";
+      },
+    };
+    expect(view.setFromBase64("AQIDBAUGBwg=", options)).toEqual({ read: 12, written: 8 });
+    expect(Array.from(new Uint8Array(rab))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  test("writes no more than the view holds after the options getter shrank the buffer", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    const options = {
+      get alphabet() {
+        rab.resize(2);
+        return "base64";
+      },
+    };
+    expect(view.setFromBase64("AQIDBAUGBwg=", options)).toEqual({ read: 0, written: 0 });
+    expect(Array.from(view)).toEqual([0, 0]);
+  });
+
+  test("writes complete chunks into a length-tracking view after its buffer shrank", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    view.fill(9);
+    rab.resize(4);
+    expect(view.setFromBase64("AQIDBAUGBwg=")).toEqual({ read: 4, written: 3 });
+    expect(Array.from(view)).toEqual([1, 2, 3, 9]);
+  });
 });

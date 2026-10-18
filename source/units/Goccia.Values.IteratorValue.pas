@@ -375,7 +375,7 @@ begin
     ThrowTypeError('Iterator accessor setter requires an object receiver');
   if AThisValue = AHome then
     ThrowTypeError('Cannot assign Iterator intrinsic accessor on its home object');
-  if not Assigned(TGocciaObjectValue(AThisValue).GetOwnPropertyDescriptor(APropertyKey)) then
+  if not TGocciaObjectValue(AThisValue).HasOwnPropertyDescriptor(APropertyKey) then
     TGocciaObjectValue(AThisValue).CreateDataPropertyOrThrow(APropertyKey, AValue)
   else
     TGocciaObjectValue(AThisValue).AssignProperty(APropertyKey, AValue);
@@ -390,7 +390,7 @@ begin
     ThrowTypeError('Iterator accessor setter requires an object receiver');
   if AThisValue = AHome then
     ThrowTypeError('Cannot assign Iterator intrinsic accessor on its home object');
-  if not Assigned(TGocciaObjectValue(AThisValue).GetOwnSymbolPropertyDescriptor(ASymbol)) then
+  if not TGocciaObjectValue(AThisValue).HasOwnSymbolPropertyDescriptor(ASymbol) then
     TGocciaObjectValue(AThisValue).CreateDataPropertyOrThrow(ASymbol, AValue)
   else
     TGocciaObjectValue(AThisValue).AssignSymbolProperty(ASymbol, AValue);
@@ -1886,7 +1886,6 @@ const
   ZIP_MODE_STRICT = 'strict';
 var
   IterablesArg, OptionsArg, ModeVal, PaddingOption, PropValue: TGocciaValue;
-  Descriptor: TGocciaPropertyDescriptor;
   InnerIterator: TGocciaIteratorValue;
   AllKeys, Keys: TArray<TGocciaValue>;
   Iterators: array of TGocciaIteratorValue;
@@ -1967,9 +1966,8 @@ begin
     try
       for I := 0 to High(AllKeys) do
       begin
-        Descriptor := TGocciaObjectValue(IterablesArg).OwnPropertyDescriptorForKey(
-          AllKeys[I]);
-        if not Assigned(Descriptor) or not Descriptor.Enumerable then
+        if not TGocciaObjectValue(IterablesArg).OwnPropertyIsEnumerableForKey(
+          AllKeys[I]) then
           Continue;
         PropValue := GetPropertyByKey(TGocciaObjectValue(IterablesArg),
           AllKeys[I]);

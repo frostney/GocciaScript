@@ -338,7 +338,7 @@ ordinary build collects only under memory pressure, so it usually is not.
 | Defined by `-dGOCCIA_GC_STRESS` | Effect |
 |---|---|
 | `Goccia.VM.pas` | The memory-pressure checkpoint in the dispatch loop runs every 8 instructions instead of every 1,025 and forces a full collection each time. |
-| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: the known leaks (#1592) make it hundreds of megabytes per process. |
+| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: leaks are the memory-safety job's concern. |
 
 `--gc-stress` adds `-gh` and the define to the development flags. It compiles
 into `build/compiled/gc-stress/` and writes binaries to `build/gc-stress/`, so

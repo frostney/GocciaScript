@@ -119,8 +119,8 @@ function CreateExecutionContext(const ARealm: TGocciaRealm;
 
 // The stable, thread-owned reference an execution context stores in place of
 // its source path (nil for the empty path). Equal paths give the same
-// reference, which stays valid for the life of the process, so a caller that
-// pushes many contexts for one path can look it up once.
+// reference, which stays valid until the thread's runtime shuts down, so a
+// caller that pushes many contexts for one path can look it up once.
 function InternSourcePath(const ASourcePath: string): Pointer;
 
 function RunningExecutionContext: TGocciaExecutionContext; {$IFDEF FPC}inline;{$ENDIF}
@@ -129,7 +129,9 @@ function HasRunningExecutionContext: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.ThreadCleanupRegistry;
 
 type
   PGocciaInternedSourcePath = ^TGocciaInternedSourcePath;
@@ -448,11 +450,27 @@ begin
   FPopped := True;
 end;
 
-initialization
-
-finalization
+{ The calling thread's context stack and interned source paths, released when
+  its runtime shuts down (Goccia.ThreadCleanupRegistry): every engine on the
+  thread is gone by then, so no context still refers to a path. }
+procedure ReleaseExecutionContextThreadState;
+var
+  Node, Next: PGocciaInternedSourcePath;
+begin
   SetLength(GExecutionContextState.Entries, 0);
   GExecutionContextState.Capacity := 0;
   GExecutionContextState.Count := 0;
+  Node := GInternedSourcePaths;
+  GInternedSourcePaths := nil;
+  while Node <> nil do
+  begin
+    Next := Node.Next;
+    Dispose(Node);
+    Node := Next;
+  end;
+end;
+
+initialization
+  RegisterThreadvarCleanup(@ReleaseExecutionContextThreadState);
 
 end.
