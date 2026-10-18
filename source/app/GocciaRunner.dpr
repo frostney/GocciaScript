@@ -38,6 +38,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.MicrotaskQueue,
   Goccia.HostEnvironment,
   Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
@@ -908,14 +909,24 @@ end;
   value's own toString, valueOf or toJSON and the realm's built-ins, which
   must not run against a freed engine. The caller runs this inside the run's
   timeout and instruction limit, so a conversion that does not end is cut
-  off like the run, and an error it throws is the run's. }
+  off like the run, and an error it throws is the run's. The run's microtask
+  work has already been drained, so the conversion gets a microtask scope of
+  its own, as the sandbox host's does: a job it queues, or a promise it
+  leaves rejected, is discarded with that scope rather than left on the
+  thread's queue for the next file's run after this engine is freed. }
 procedure TRunnerApp.CaptureResultValue(const AValue: TGocciaValue;
   var AReport: TScriptExecutionReport);
 var
   Root: TGocciaTempRoot;
+  MicrotaskQueue: TGocciaMicrotaskQueue;
+  ScopeToken: Integer;
 begin
   InitializeTempRoot(Root);
   AddTempRootIfNeeded(Root, AValue);
+  MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
+  ScopeToken := 0;
+  if Assigned(MicrotaskQueue) then
+    ScopeToken := MicrotaskQueue.EnterScope;
   try
     if IsJsonOutput then
       AReport.ResultJSON := SerializeScriptResult(AValue)
@@ -927,6 +938,8 @@ begin
       AReport.HasResultText := True;
     end;
   finally
+    if Assigned(MicrotaskQueue) then
+      MicrotaskQueue.LeaveScope(ScopeToken);
     RemoveTempRootIfNeeded(Root);
   end;
 end;
