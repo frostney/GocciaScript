@@ -61,4 +61,33 @@ describe("FFI pointer arguments with ArrayBuffer", () => {
     expect(() => isNull(42)).toThrow(TypeError);
     expect(() => isNull("hello")).toThrow(TypeError);
   });
+
+  test("TypedArray passes the buffer's current block after the buffer grew", () => {
+    const writeI32 = lib.bind("write_i32", { args: ["pointer", "i32"], returns: "void" });
+
+    const rab = new ArrayBuffer(4, { maxByteLength: 64 });
+    const view = new Int32Array(rab);
+    rab.resize(64);
+    writeI32(view, 321);
+    expect(new Int32Array(rab)[0]).toBe(321);
+    expect(view.length).toBe(16);
+  });
+
+  test("TypedArray past the end of its shrunk buffer passes a null pointer", () => {
+    const isNull = lib.bind("is_null", { args: ["pointer"], returns: "i32" });
+
+    const rab = new ArrayBuffer(16, { maxByteLength: 16 });
+    const view = new Int32Array(rab, 8, 2);
+    rab.resize(4);
+    expect(isNull(view)).toBe(1);
+  });
+
+  test("TypedArray over a detached buffer passes a null pointer", () => {
+    const isNull = lib.bind("is_null", { args: ["pointer"], returns: "i32" });
+
+    const rab = new ArrayBuffer(16, { maxByteLength: 16 });
+    const view = new Int32Array(rab);
+    rab.transfer();
+    expect(isNull(view)).toBe(1);
+  });
 });

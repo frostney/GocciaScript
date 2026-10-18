@@ -4038,6 +4038,64 @@ await section("Loader: Date.parse reads legacy dates without an offset as local 
   }
 });
 
+// CI runs in UTC, where local fields and the UTC instant agree. Off UTC the
+// local fields of the first and last valid instants lie past the time value
+// range, which applies to TimeClip(UTC(date)), after the offset comes off.
+await section("Loader: Date applies the time value range after converting local time...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const local = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(),",
+      "  d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds()).getTime();",
+      "const nearEnd = new Date(8.64e15 - 3600000);",
+      "const nearStart = new Date(-8.64e15 + 3600000);",
+      "[",
+      "  new Date(1970, 0, -99999999, 0, -420, 0, 0).getTime(),",
+      "  new Date(1970, 0, 100000001, 0, 480, 0, -1).getTime(),",
+      "  local(new Date(8.64e15)),",
+      "  local(new Date(-8.64e15)),",
+      "  nearEnd.setHours(nearEnd.getHours() + 1),",
+      "  nearStart.setHours(nearStart.getHours() - 1),",
+      "  Date.parse(new Date(8.64e15).toString()),",
+      '  Date.parse("+275760-09-13T01:00:00"),',
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "-8639999996822000|NaN|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|NaN",
+      ],
+      [
+        "Asia/Tokyo",
+        "NaN|8639999996399999|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|8639999971200000",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date range in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --host-environment errors withhold provider source...", async () => {
   const tmp = makeTmp();
   try {
@@ -4081,9 +4139,154 @@ await section("Loader: --host-environment errors withhold provider source...", a
   }
 });
 
+// CI runs in UTC, whose offset has no seconds. Before standard time most zones
+// used local mean time (America/Los_Angeles -07:52:58, Asia/Tokyo +09:18:59);
+// toString and toTimeString write only the hours and minutes of it.
+await section("Loader: Date toString writes the hours and minutes of a local mean time offset...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const date = new Date(1800, 0, 1);",
+      "[",
+      "  date.toString(),",
+      "  date.toTimeString(),",
+      "  date.getSeconds(),",
+      '  new Date("0020-01-01T00:00:00Z").toString(),',
+      "  new Date(2024, 5, 15, 11, 30, 45).toString(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone),
+    // without the optional zone name V8 appends.
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "Wed Jan 01 1800 00:00:00 GMT-0752|00:00:00 GMT-0752|0|Tue Dec 31 0019 16:07:02 GMT-0752|Sat Jun 15 2024 11:30:45 GMT-0700",
+      ],
+      [
+        "Asia/Tokyo",
+        "Wed Jan 01 1800 00:00:00 GMT+0918|00:00:00 GMT+0918|0|Wed Jan 01 0020 09:18:59 GMT+0918|Sat Jun 15 2024 11:30:45 GMT+0900",
+      ],
+      [
+        // Local mean time -00:01:15: a negative offset under an hour keeps its sign.
+        "Europe/London",
+        "Wed Jan 01 1800 00:00:00 GMT-0001|00:00:00 GMT-0001|0|Tue Dec 31 0019 23:58:45 GMT-0001|Sat Jun 15 2024 11:30:45 GMT+0100",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date toString in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --global option...", async () => {
   const { json } = runLoaderJson("x + y;\n", ["--global", "x=10", "--global", "y=20"]);
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
+});
+
+await section("Loader: Date local time keeps a zone's daylight saving time after 2037...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "[",
+      "  new Date(2049, 4, 1).getTime(),",
+      "  new Date(2038, 6, 1, 12).getTimezoneOffset(),",
+      "  new Date(2038, 0, 15, 12).getTimezoneOffset(),",
+      "  new Date(2040, 2, 11, 2, 30).getHours(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      ["America/Los_Angeles", "2503465200000|420|480|3"],
+      ["Australia/Sydney", "2503404000000|-600|-660|2"],
+      ["Europe/Dublin", "2503436400000|-60|0|2"],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date local time in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: a TZif file with only a footer rule follows it at every instant...", async () => {
+  const tmp = makeTmp();
+  try {
+    // A minimal version 2 TZif file with no transitions and one local time
+    // type, so the footer rule governs every instant. GOCCIA_TZDIR is read
+    // before system zoneinfo and Windows ICU, so every platform reads it.
+    const block = (): number[] => {
+      const bytes = [...Buffer.from("TZif2"), ...new Array(15).fill(0)];
+      const int32 = (value: number) =>
+        bytes.push((value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255);
+      // isutcnt, isstdcnt, leapcnt, timecnt, typecnt, charcnt
+      for (const count of [0, 0, 0, 0, 1, 4]) int32(count);
+      int32(-28800);
+      bytes.push(0, 0, ...Buffer.from("PST"), 0);
+      return bytes;
+    };
+    mkdirSync(join(tmp, "America"));
+    writeFileSync(
+      join(tmp, "America", "Los_Angeles"),
+      Uint8Array.from([...block(), ...block(), ...Buffer.from("\nPST8PDT,M3.2.0,M11.1.0\n")]),
+    );
+    const source = [
+      'const at = (instant) => Temporal.Instant.from(instant).toZonedDateTimeISO("America/Los_Angeles");',
+      'const max = new Temporal.ZonedDateTime(8640000000000000000000n, "America/Los_Angeles");',
+      "[",
+      // The rule's offset even where full data has local mean time (-07:52:58).
+      '  at("1850-07-01T12:00:00Z").offset,',
+      '  at("2030-01-15T12:00:00Z").offset,',
+      '  at("2030-07-01T12:00:00Z").offset,',
+      "  max.offset,",
+      '  max.getTimeZoneTransition("previous").toInstant().toString(),',
+      '  String(max.getTimeZoneTransition("next")),',
+      '].join("|");',
+      "",
+    ].join("\n");
+    const expected = "-07:00|-08:00|-07:00|-07:00|+275760-03-09T10:00:00Z|null";
+    const result = runLoaderJson(source, [], { env: { ...process.env, GOCCIA_TZDIR: tmp } });
+    const actual = result.json.files?.[0]?.result;
+    if (result.exitCode !== 0 || actual !== expected)
+      throw new Error(`Slim TZif rule expected ${expected}, got ${actual}${result.stderr}`);
+  } finally {
+    clean(tmp);
+  }
 });
 
 await section("Loader: ShadowRealm.importValue inherits the host module aliases...", async () => {
@@ -9000,6 +9203,79 @@ await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs..
   }
 });
 
+await section("Runner sandbox mode: fs writes the bytes a view holds after its buffer was resized...", async () => {
+  // A length-tracking Uint8Array over a grown buffer writes the bytes the
+  // buffer holds now, zeros past its old end, not bytes past the end of the
+  // buffer's previous data block; a shrunk one its new length; a view past the
+  // end of its shrunk buffer and a view of a detached buffer write nothing.
+  // Each line matches Node.
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'const show = (label, path) => console.log(label + ":" + fs.readFileSync(path).join(","));',
+          'const showGrown = (label, path) => {',
+          '  const bytes = fs.readFileSync(path);',
+          '  console.log(label + ":" + bytes.length + ":" + bytes.slice(0, 4).join(",") + ":" + bytes.slice(4).every((b) => b === 0));',
+          '};',
+          'const grown = () => {',
+          '  const rab = new ArrayBuffer(4, { maxByteLength: 4096 });',
+          '  const view = new Uint8Array(rab);',
+          '  view.fill(7);',
+          '  rab.resize(4096);',
+          '  return view;',
+          '};',
+          'fs.writeFileSync("/grown.bin", grown());',
+          'showGrown("grown", "/grown.bin");',
+          'fs.writeFileSync("/append.bin", "");',
+          'fs.appendFileSync("/append.bin", grown());',
+          'showGrown("append", "/append.bin");',
+          'await fs.promises.writeFile("/promise.bin", grown());',
+          'showGrown("promise", "/promise.bin");',
+          'const shrinking = new ArrayBuffer(8, { maxByteLength: 8 });',
+          'const tracking = new Uint8Array(shrinking);',
+          'const fixed = new Uint8Array(shrinking, 0, 8);',
+          'tracking.fill(9);',
+          'shrinking.resize(2);',
+          'fs.writeFileSync("/shrunk.bin", tracking);',
+          'show("shrunk", "/shrunk.bin");',
+          'fs.writeFileSync("/out-of-bounds.bin", fixed);',
+          'show("out-of-bounds", "/out-of-bounds.bin");',
+          'const detachable = new ArrayBuffer(8, { maxByteLength: 8 });',
+          'const detached = new Uint8Array(detachable);',
+          'detachable.transfer();',
+          'fs.writeFileSync("/detached.bin", detached);',
+          'show("detached", "/detached.bin");',
+        ].join("\n"),
+      },
+    ]);
+
+    const expected = [
+      "grown:4096:7,7,7,7:true",
+      "append:4096:7,7,7,7:true",
+      "promise:4096:7,7,7,7:true",
+      "shrunk:9,9",
+      "out-of-bounds:",
+      "detached:",
+    ];
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode resized-view write run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = stdout.split("\n");
+    if (JSON.stringify(actual) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode fs should write the bytes a resized view holds, got: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metadata...", async () => {
   const tmp = makeNativeTmp();
   try {
@@ -10801,6 +11077,32 @@ await section("Runner sandbox mode: --print prints the last value like host mode
     const undef = runSandboxCli(["empty.js", "--sandbox", "--print"], { cwd: tmp });
     if (undef.exitCode !== 0 || undef.stdout !== "undefined\n")
       throw new Error(`Sandbox mode --print should print undefined, got (exit ${undef.exitCode}):\n${undef.stdout}${undef.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: without --print the last value is not copied out of the run...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // Copying a typed array walks it one index key at a time and is charged
+    // to the run, so a value host mode leaves alone used to exhaust the
+    // run's own memory budget after the program had finished.
+    writeFileSync(join(tmp, "bytes.js"), "new Uint8Array(262144);");
+    const bytes = runSandboxCli(["bytes.js", "--sandbox", "--max-memory=16MiB"], { cwd: tmp });
+    if (bytes.exitCode !== 0 || bytes.stdout !== "" || bytes.stderr !== "")
+      throw new Error(`A typed-array last value should cost nothing without --print, got (exit ${bytes.exitCode}):\n${bytes.stdout}${bytes.stderr}`);
+    // As in host mode, nothing reads the value, so none of its getters run.
+    writeFileSync(join(tmp, "getter.js"), 'const o = { get x() { console.log("getter ran"); return 1; } };\no;');
+    const getter = runSandboxCli(["getter.js", "--sandbox"], { cwd: tmp });
+    if (getter.exitCode !== 0 || getter.stdout !== "")
+      throw new Error(`The last value's getters should not run without --print, got (exit ${getter.exitCode}):\n${getter.stdout}${getter.stderr}`);
+    // A nested runScript still hands its child's value to the caller.
+    writeFileSync(join(tmp, "child.js"), "[1, { a: 2 }];");
+    writeFileSync(join(tmp, "parent.js"), 'import { runScript } from "goccia";\nconsole.log(JSON.stringify(runScript("/child.js").result));');
+    const nested = runSandboxCli(["--copy", "child.js", "--copy", "parent.js", "--entry", "/parent.js"], { cwd: tmp });
+    if (nested.exitCode !== 0 || nested.stdout !== '[1,{"a":2}]\n')
+      throw new Error(`runScript should return the child's last value, got (exit ${nested.exitCode}):\n${nested.stdout}${nested.stderr}`);
   } finally {
     clean(tmp);
   }

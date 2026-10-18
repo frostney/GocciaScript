@@ -1228,7 +1228,10 @@ begin
         begin
           ItemText := Trim(Copy(AText, ItemStart, I - ItemStart));
           if ItemText = '' then
+          begin
+            Result.Free;
             raise EGocciaYAMLParseError.Create('Invalid flow collection entry.');
+          end;
           Result.Add(ItemText);
           ItemStart := I + 1;
         end;

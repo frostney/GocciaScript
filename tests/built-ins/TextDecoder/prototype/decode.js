@@ -140,4 +140,46 @@ describe("TextDecoder.prototype.decode", () => {
     const bytes = new Int8Array([72, 101, 108, 108, 111]); // Hello
     expect(dec.decode(bytes)).toBe("Hello");
   });
+
+  test("decodes a length-tracking view after its buffer grew, reading zeros past the old end", () => {
+    const rab = new ArrayBuffer(4, { maxByteLength: 4096 });
+    const view = new Uint8Array(rab);
+    view.fill(65);
+    rab.resize(4096);
+    const text = dec.decode(view);
+    expect(text.length).toBe(4096);
+    expect(text.slice(0, 4)).toBe("AAAA");
+    expect(text.slice(4)).toBe("\0".repeat(4092));
+  });
+
+  test("decodes the bytes a multi-byte length-tracking view holds after its buffer grew", () => {
+    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
+    const view = new Uint16Array(rab);
+    view[0] = 0x4241;
+    rab.resize(6);
+    expect(dec.decode(view)).toBe("AB\0\0\0\0");
+  });
+
+  test("decodes a length-tracking view after its buffer shrank", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    view.fill(66);
+    rab.resize(3);
+    expect(dec.decode(view)).toBe("BBB");
+  });
+
+  test("decodes a view past the end of its shrunk buffer as an empty string", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab, 0, 8);
+    rab.resize(3);
+    expect(dec.decode(view)).toBe("");
+  });
+
+  test("decodes a view of a detached buffer as an empty string", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    view.fill(66);
+    rab.transfer();
+    expect(dec.decode(view)).toBe("");
+  });
 });
