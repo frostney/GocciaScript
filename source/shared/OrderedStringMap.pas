@@ -131,7 +131,10 @@ type
     // nothing else in the engine can see it. Threading it here rather than
     // having callers root before every Add is what keeps the cost on the
     // O(log Count) growth path instead of the per-store one.
-    procedure RequireStorageBytes(const ABytes: Int64;
+    //
+    // ANewBytes is the block being allocated, the part of ABytes that is not
+    // in use yet; a gate that reports growth to a heap sampler reports it.
+    procedure RequireStorageBytes(const ABytes, ANewBytes: Int64;
       const APendingValue: TValue); virtual;
     function GetCount: Integer; override;
     function GetValue(const AKey: string): TValue; override;
@@ -269,8 +272,8 @@ end;
 
 { Resize }
 
-procedure TOrderedStringMap<TValue>.RequireStorageBytes(const ABytes: Int64;
-  const APendingValue: TValue);
+procedure TOrderedStringMap<TValue>.RequireStorageBytes(const ABytes,
+  ANewBytes: Int64; const APendingValue: TValue);
 begin
   // No budget at this layer; see the declaration.
 end;
@@ -282,7 +285,7 @@ var
 begin
   Transient := AOldBytes + ANewBytes;
   if Transient >= GATED_GROWTH_MIN_BYTES then
-    RequireStorageBytes(Transient, APendingValue);
+    RequireStorageBytes(Transient, ANewBytes, APendingValue);
 end;
 
 procedure TOrderedStringMap<TValue>.Grow(const APendingValue: TValue);

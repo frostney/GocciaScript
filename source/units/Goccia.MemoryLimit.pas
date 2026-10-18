@@ -109,8 +109,14 @@ function CanAllocateNativeBytes(const ABytes: Int64): Boolean;
   TGocciaShapedPropertyMap.RequireStorageBytes and
   TGocciaElementList.RequireStorageBytes each open a TGocciaActiveRootFrame
   over the store's owner and its pending value and call the budget from inside
-  it. That is why nothing is passed here to protect. }
-procedure RequireNativeBytes(const ABytes: Int64);
+  it. That is why nothing is passed here to protect.
+
+  A granted request is reported to the heap trigger as AGrowthBytes, the part
+  of ABytes not in use yet (ADR 0145): a property map's gate asks about the
+  block it allocates plus the one it replaces, which the heap already holds.
+  The one-argument form reports all of ABytes. }
+procedure RequireNativeBytes(const ABytes: Int64); overload;
+procedure RequireNativeBytes(const ABytes, AGrowthBytes: Int64); overload;
 
 implementation
 
@@ -151,6 +157,11 @@ begin
 end;
 
 procedure RequireNativeBytes(const ABytes: Int64);
+begin
+  RequireNativeBytes(ABytes, ABytes);
+end;
+
+procedure RequireNativeBytes(const ABytes, AGrowthBytes: Int64);
 var
   GC: TGarbageCollector;
   Budget: Int64;
@@ -161,8 +172,8 @@ begin
       it: report it to the heap trigger, which samples once enough such
       growth has built up (ADR 0145). This never collects. }
     GC := TGarbageCollector.Instance;
-    if Assigned(GC) and (ABytes > 0) then
-      GC.NoteNativeGrowth(ABytes);
+    if Assigned(GC) and (AGrowthBytes > 0) then
+      GC.NoteNativeGrowth(AGrowthBytes);
     Exit;
   end;
   GC := TGarbageCollector.Instance;
@@ -183,7 +194,8 @@ begin
       above), so a value this call could be handed is one they have rooted. }
     if GC.TryCollectForLimitedBytes(ABytes) then
     begin
-      GC.NoteNativeGrowth(ABytes);
+      if AGrowthBytes > 0 then
+        GC.NoteNativeGrowth(AGrowthBytes);
       Exit;
     end;
     Budget := GC.MaxBytes;
