@@ -325,9 +325,10 @@ will not create one; against a missing directory it fails with
 such as macOS the message is `Can't create assembler file: …` instead).
 
 `scripts/valgrind/fpc-rtl.supp` suppresses memcheck's report on the Free
-Pascal runtime's `IndexByte` and `IndexWord`, which read whole aligned 16-byte
-blocks past the end of a buffer and ignore what they find there. The file's
-header explains the over-read and what the suppression gives up.
+Pascal runtime's `IndexByte` and `IndexWord`, whose aligned 16-byte loads can
+read past the end of a buffer and ignore what they find there. The file's
+header explains the over-read and what the suppression gives up, including the
+undefined values it hides inside those two routines.
 
 Both run on Linux only. Valgrind slows the suite by roughly an order of
 magnitude, which is why neither runs per-PR. Findings upload as artifacts with

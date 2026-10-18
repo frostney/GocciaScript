@@ -217,6 +217,10 @@ jobs:
         # file covers the runtime library's aligned over-reads; its header
         # says what that gives up.
         run: |
+          fpc_version=$(fpc -iV)
+          if [ "$fpc_version" != "3.2.2" ]; then
+            echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's IndexByte and IndexWord; this job runs FPC $fpc_version"
+          fi
           valgrind \
             --tool=memcheck \
             --error-exitcode=42 \
