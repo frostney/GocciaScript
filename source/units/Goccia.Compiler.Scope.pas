@@ -75,6 +75,11 @@ type
     // This local's entry in the template's debug locals, which name the
     // binding in a temporal-dead-zone error; -1 before a template is attached.
     DebugLocalIndex: Integer;
+    // The newest older local of the same name, or -1: the binding this one
+    // hides. Following these links visits only the locals of one name, so
+    // dropping a block's binding or finding a name's var stays constant time
+    // however many other locals the function has.
+    ShadowedLocal: Integer;
   end;
 
   PGocciaCompilerLocal = ^TGocciaCompilerLocal;
@@ -151,8 +156,10 @@ type
     FTemplate: TGocciaFunctionTemplate;
     FUpvaluesSeeded: Boolean;
     procedure EnsureLocalIndex;
+    function NewestLocalNamed(const AName: string): Integer;
     procedure RecordDebugLocal(const AIndex: Integer);
-    procedure RestoreLocalIndexBinding(const ARemovedName: string);
+    procedure ForgetTopLocalName;
+    procedure RelinkLocalNames;
   public
     constructor Create(const AParent: TGocciaCompilerScope;
       const ADepth: Integer);
@@ -167,6 +174,13 @@ type
       const AIsConst: Boolean): UInt16;
     function DeclareVarLocal(const AName: string): UInt16;
     function ResolveLocal(const AName: string): Integer;
+    { The oldest local named AName in register ASlot, suspended or not, or
+      -1. }
+    function FindLocalBySlot(const AName: string;
+      const ASlot: UInt16): Integer;
+    { The oldest local named AName at the function's top level (depth 0),
+      suspended or not, or -1. }
+    function FindVarLocalIndex(const AName: string): Integer;
     function ResolveUpvalue(const AName: string): Integer;
     function AddUpvalue(const AName: string; const AIndex: UInt16;
       const AIsLocal: Boolean; const AIsConst: Boolean = False;
@@ -401,24 +415,68 @@ begin
     FLocalIndex.Add(FLocals[I].Name, I);
 end;
 
-procedure TGocciaCompilerScope.RestoreLocalIndexBinding(
-  const ARemovedName: string);
+function TGocciaCompilerScope.NewestLocalNamed(const AName: string): Integer;
 var
   I: Integer;
+begin
+  if Assigned(FLocalIndex) then
+  begin
+    if not FLocalIndex.TryGetValue(AName, Result) then
+      Result := -1;
+    Exit;
+  end;
+  // Without the index there are fewer than COMPILER_LOCAL_INDEX_THRESHOLD
+  // locals to scan.
+  for I := FLocalCount - 1 downto 0 do
+    if FLocals[I].Name = AName then
+      Exit(I);
+  Result := -1;
+end;
+
+// The top local has just been popped (it is at FLocalCount): its name now
+// reaches the local it hid, if any.
+procedure TGocciaCompilerScope.ForgetTopLocalName;
+var
+  Shadowed: Integer;
 begin
   if not Assigned(FLocalIndex) then
     Exit;
 
-  FLocalIndex.Remove(ARemovedName);
-  for I := FLocalCount - 1 downto 0 do
-    if FLocals[I].Name = ARemovedName then
-    begin
-      FLocalIndex.Add(ARemovedName, I);
-      Break;
-    end;
+  Shadowed := FLocals[FLocalCount].ShadowedLocal;
+  if Shadowed >= 0 then
+    FLocalIndex.Add(FLocals[FLocalCount].Name, Shadowed)
+  else
+    FLocalIndex.Remove(FLocals[FLocalCount].Name);
 
   if FLocalCount < COMPILER_LOCAL_INDEX_THRESHOLD then
     FreeAndNil(FLocalIndex);
+end;
+
+// Recomputes every local's ShadowedLocal and the index from the names, after
+// a local below the top changed its name.
+procedure TGocciaCompilerScope.RelinkLocalNames;
+var
+  I, Previous: Integer;
+  Newest: TOrderedStringMap<Integer>;
+begin
+  Newest := TOrderedStringMap<Integer>.Create(FLocalCount * 2);
+  try
+    for I := 0 to FLocalCount - 1 do
+    begin
+      if Newest.TryGetValue(FLocals[I].Name, Previous) then
+        FLocals[I].ShadowedLocal := Previous
+      else
+        FLocals[I].ShadowedLocal := -1;
+      Newest.Add(FLocals[I].Name, I);
+    end;
+  finally
+    Newest.Free;
+  end;
+  if Assigned(FLocalIndex) then
+  begin
+    FreeAndNil(FLocalIndex);
+    EnsureLocalIndex;
+  end;
 end;
 
 constructor TGocciaCompilerScope.Create(const AParent: TGocciaCompilerScope;
@@ -510,6 +568,7 @@ begin
   FLocals[FLocalCount].ImportExportName := '';
   FLocals[FLocalCount].ExportNameCount := 0;
   SetLength(FLocals[FLocalCount].ExportNames, 0);
+  FLocals[FLocalCount].ShadowedLocal := NewestLocalNamed(AName);
   RecordDebugLocal(FLocalCount);
   Result := UInt16(FNextSlot);
   EnsureLocalIndex;
@@ -523,17 +582,22 @@ end;
 
 function TGocciaCompilerScope.DeclareVarLocal(const AName: string): UInt16;
 var
-  I: Integer;
+  I, Oldest: Integer;
 begin
   // Check if already declared at var/function scope (var redeclaration is allowed).
   // Block-scoped declarations with the same name must not capture var writes.
-  for I := 0 to FLocalCount - 1 do
-    if (FLocals[I].Name = AName) and (FLocals[I].Depth = 0) then
-    begin
-      if FLocals[I].Slot = FDirectEvalSyntheticArgumentsSlot then
-        Continue;
-      Exit(FLocals[I].Slot);
-    end;
+  // The oldest such local is the var's.
+  Oldest := -1;
+  I := NewestLocalNamed(AName);
+  while I >= 0 do
+  begin
+    if (FLocals[I].Depth = 0) and
+       (FLocals[I].Slot <> FDirectEvalSyntheticArgumentsSlot) then
+      Oldest := I;
+    I := FLocals[I].ShadowedLocal;
+  end;
+  if Oldest >= 0 then
+    Exit(FLocals[Oldest].Slot);
 
   // Declare at depth 0 so EndScope never pops it
   if FNextSlot >= High(UInt16) then
@@ -570,6 +634,7 @@ begin
   FLocals[FLocalCount].ImportExportName := '';
   FLocals[FLocalCount].ExportNameCount := 0;
   SetLength(FLocals[FLocalCount].ExportNames, 0);
+  FLocals[FLocalCount].ShadowedLocal := NewestLocalNamed(AName);
   RecordDebugLocal(FLocalCount);
   Result := UInt16(FNextSlot);
   EnsureLocalIndex;
@@ -600,6 +665,35 @@ begin
       Exit(I);
     end;
   Result := -1;
+end;
+
+function TGocciaCompilerScope.FindLocalBySlot(const AName: string;
+  const ASlot: UInt16): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  I := NewestLocalNamed(AName);
+  while I >= 0 do
+  begin
+    if FLocals[I].Slot = ASlot then
+      Result := I;
+    I := FLocals[I].ShadowedLocal;
+  end;
+end;
+
+function TGocciaCompilerScope.FindVarLocalIndex(const AName: string): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  I := NewestLocalNamed(AName);
+  while I >= 0 do
+  begin
+    if FLocals[I].Depth = 0 then
+      Result := I;
+    I := FLocals[I].ShadowedLocal;
+  end;
 end;
 
 function TGocciaCompilerScope.ResolveUpvalue(const AName: string): Integer;
@@ -790,14 +884,11 @@ end;
 
 procedure TGocciaCompilerScope.EndScope(out AClosedLocals: TArray<UInt16>;
   out AClosedCount: Integer);
-var
-  RemovedName: string;
 begin
   SetLength(AClosedLocals, 0);
   AClosedCount := 0;
   while (FLocalCount > 0) and (FLocals[FLocalCount - 1].Depth = FDepth) do
   begin
-    RemovedName := FLocals[FLocalCount - 1].Name;
     Dec(FLocalCount);
     if FLocals[FLocalCount].DebugLocalIndex >= 0 then
       FTemplate.DebugInfo.SetLocalEndPC(FLocals[FLocalCount].DebugLocalIndex,
@@ -810,7 +901,7 @@ begin
       Inc(AClosedCount);
     end;
     Dec(FNextSlot);
-    RestoreLocalIndexBinding(RemovedName);
+    ForgetTopLocalName;
   end;
   SetLength(AClosedLocals, AClosedCount);
   Dec(FDepth);
@@ -841,13 +932,9 @@ end;
 
 procedure TGocciaCompilerScope.RenameLocal(const AIndex: Integer;
   const ANewName: string);
-var
-  OldName: string;
 begin
-  OldName := FLocals[AIndex].Name;
   FLocals[AIndex].Name := ANewName;
-  RestoreLocalIndexBinding(OldName);
-  RestoreLocalIndexBinding(ANewName);
+  RelinkLocalNames;
 end;
 
 procedure TGocciaCompilerScope.MarkLocalInitialized(const AIndex: Integer);

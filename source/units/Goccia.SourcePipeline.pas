@@ -304,15 +304,32 @@ begin
     #10 + ABodySource + #10 + '})';
 end;
 
-procedure AddNameOnce(const ANames: TUnicodeStringList;
+type
+  { The names a module's top level declares, each once, in the order the
+    module first declares it, so an early error names the same binding the
+    source order would. A hash map rather than a list: each check is one
+    lookup, so the module's early errors cost time linear in its
+    declarations instead of quadratic. }
+  TModuleDeclaredNames = TOrderedStringMap<Boolean>;
+
+  { Where an import declaration binds a name, for the early error that
+    reports a later conflict at that declaration. }
+  TModuleImportBindingSite = record
+    Line: Integer;
+    Column: Integer;
+  end;
+
+  TModuleImportBindingSites = TOrderedStringMap<TModuleImportBindingSite>;
+
+procedure AddNameOnce(const ANames: TModuleDeclaredNames;
   const AName: string);
 begin
-  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
-    ANames.Add(AName);
+  if AName <> '' then
+    ANames.Add(AName, True);
 end;
 
 procedure CollectTopLevelModuleDeclarationNames(const AStmt: TGocciaStatement;
-  const AVarNames, ALexicalNames: TUnicodeStringList);
+  const AVarNames, ALexicalNames: TModuleDeclaredNames);
 var
   I, J: Integer;
   Names: TUnicodeStringList;
@@ -387,35 +404,35 @@ procedure ValidateModuleEarlyErrors(const AProgram: TGocciaProgram;
 var
   I: Integer;
   ImportDecl: TGocciaImportDeclaration;
-  ImportedNames: TUnicodeStringList;
-  ImportLines, ImportColumns: array of Integer;
+  ImportedNames: TModuleImportBindingSites;
+  ImportedPair: TModuleImportBindingSites.TKeyValuePair;
   ImportPair: TStringStringMap.TKeyValuePair;
-  LexicalNames: TUnicodeStringList;
+  LexicalNames: TModuleDeclaredNames;
   Stmt: TGocciaStatement;
-  VarName: string;
-  VarNames: TUnicodeStringList;
+  VarPair: TModuleDeclaredNames.TKeyValuePair;
+  VarNames: TModuleDeclaredNames;
 
   procedure AddImportedName(const AName: string);
+  var
+    Site: TModuleImportBindingSite;
   begin
     if AName = '' then
       Exit;
-    if ImportedNames.IndexOf(AName) >= 0 then
+    if ImportedNames.ContainsKey(AName) then
       RaiseModuleRedeclaration(AName, AFileName, ASourceLines,
         ImportDecl.Line, ImportDecl.Column);
-    ImportedNames.Add(AName);
-    SetLength(ImportLines, ImportedNames.Count);
-    SetLength(ImportColumns, ImportedNames.Count);
-    ImportLines[ImportedNames.Count - 1] := ImportDecl.Line;
-    ImportColumns[ImportedNames.Count - 1] := ImportDecl.Column;
+    Site.Line := ImportDecl.Line;
+    Site.Column := ImportDecl.Column;
+    ImportedNames.Add(AName, Site);
   end;
 
 begin
   if not Assigned(AProgram) then
     Exit;
 
-  VarNames := TUnicodeStringList.Create;
-  LexicalNames := TUnicodeStringList.Create;
-  ImportedNames := TUnicodeStringList.Create;
+  VarNames := TModuleDeclaredNames.Create;
+  LexicalNames := TModuleDeclaredNames.Create;
+  ImportedNames := TModuleImportBindingSites.Create;
   try
     for I := 0 to AProgram.Body.Count - 1 do
     begin
@@ -434,14 +451,14 @@ begin
         CollectTopLevelModuleDeclarationNames(Stmt, VarNames, LexicalNames);
     end;
 
-    for VarName in VarNames do
-      if LexicalNames.IndexOf(VarName) >= 0 then
-        RaiseModuleRedeclaration(VarName, AFileName, ASourceLines);
-    for I := 0 to ImportedNames.Count - 1 do
-      if (LexicalNames.IndexOf(ImportedNames[I]) >= 0) or
-         (VarNames.IndexOf(ImportedNames[I]) >= 0) then
-        RaiseModuleRedeclaration(ImportedNames[I], AFileName, ASourceLines,
-          ImportLines[I], ImportColumns[I]);
+    for VarPair in VarNames do
+      if LexicalNames.ContainsKey(VarPair.Key) then
+        RaiseModuleRedeclaration(VarPair.Key, AFileName, ASourceLines);
+    for ImportedPair in ImportedNames do
+      if LexicalNames.ContainsKey(ImportedPair.Key) or
+         VarNames.ContainsKey(ImportedPair.Key) then
+        RaiseModuleRedeclaration(ImportedPair.Key, AFileName, ASourceLines,
+          ImportedPair.Value.Line, ImportedPair.Value.Column);
   finally
     ImportedNames.Free;
     LexicalNames.Free;

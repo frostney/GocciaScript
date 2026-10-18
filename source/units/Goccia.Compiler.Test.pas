@@ -9,8 +9,10 @@ uses
   SysUtils,
 
   NumberBits,
+  StringBuffer,
   TestingPascalLibrary,
   TextSemantics,
+  TimingUtils,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
@@ -32,6 +34,18 @@ uses
   Goccia.TestSetup,
   Goccia.Token,
   Goccia.Values.Primitives;
+
+const
+  { Top-level declarations per compile in the linear-time tests: enough that
+    a step costing time quadratic in them (a scan of every earlier local per
+    declaration, about 5 s here for script consts) is far past the bound,
+    and few enough to stay under the 65,535-entry constant pool. }
+  LINEAR_DECLARATION_COUNT = 15000;
+  LINEAR_TRIALS = 3;
+  { Each kind compiles its declarations with a few times the work of a
+    module-level `const`; the slack absorbs a busy machine. }
+  LINEAR_COMPILE_RATIO = 4;
+  LINEAR_SLACK_NANOSECONDS = 20 * 1000 * 1000;
 
 type
   TTestCompiler = class(TTestSuite)
@@ -89,6 +103,17 @@ type
     procedure TestCompileVariable;
     procedure TestCompileFunction;
     procedure TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
+    function CompileNanoseconds(const ALinePattern: string;
+      const AGlobalBackedTopLevel: Boolean;
+      const ACount: Integer = LINEAR_DECLARATION_COUNT): Int64;
+    procedure ExpectTopLevelCompileLinear(const ABaseline: Int64;
+      const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
+    procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
+    procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
+    procedure TestEndingABlockRestoresTheBindingItShadowed;
+    procedure TestVarAndSlotLookupsFindTheOldestLocal;
+    procedure TestFloatConstantsArePooledByBitPattern;
+    procedure TestDistinctFloatConstantsCompileInLinearTime;
     procedure TestThisPropertyReadUsesLocalRegister;
     procedure TestThisPropertyReadRetainsDerivedGuard;
     procedure TestLocalPropertyReadUsesFusedOpcode;
@@ -202,6 +227,18 @@ begin
   Test('Compile function', TestCompileFunction);
   Test('Anonymous derived class in a block keeps later locals apart',
     TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart);
+  Test('Script top-level declarations compile in linear time',
+    TestScriptTopLevelDeclarationsCompileInLinearTime);
+  Test('Module top-level declarations compile in linear time',
+    TestModuleTopLevelDeclarationsCompileInLinearTime);
+  Test('Ending a block restores the binding it shadowed',
+    TestEndingABlockRestoresTheBindingItShadowed);
+  Test('Var and slot lookups find the oldest local of a name',
+    TestVarAndSlotLookupsFindTheOldestLocal);
+  Test('Float constants are pooled by bit pattern',
+    TestFloatConstantsArePooledByBitPattern);
+  Test('Distinct float constants compile in linear time',
+    TestDistinctFloatConstantsCompileInLinearTime);
   Test('Initialized const operands skip OP_GET_LOCAL',
     TestInitializedConstOperandsSkipGetLocal);
   Test('Const operands before the declaration keep OP_GET_LOCAL',
@@ -792,6 +829,215 @@ begin
     Expect<Boolean>(Module.TopLevel.FunctionCount > 0).ToBe(True);
   finally
     Module.Free;
+  end;
+end;
+
+{ The fastest of LINEAR_TRIALS compiles of ACount top-level declarations,
+  each ALinePattern formatted with its index; the parse is not timed. }
+function TTestCompiler.CompileNanoseconds(const ALinePattern: string;
+  const AGlobalBackedTopLevel: Boolean; const ACount: Integer): Int64;
+var
+  Source: TStringBuffer;
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  ParserOptions: TGocciaParserOptions;
+  ProgramNode: TGocciaProgram;
+  Compiler: TGocciaCompiler;
+  Module: TGocciaBytecodeModule;
+  SourceText: string;
+  SourceLines: TStringList;
+  Start, Elapsed: Int64;
+  I, Trial: Integer;
+begin
+  Source := TStringBuffer.Create;
+  for I := 0 to ACount - 1 do
+    Source.Append(Format(ALinePattern, [I]) + LineEnding);
+  SourceText := Source.ToString;
+
+  Result := High(Int64);
+  for Trial := 1 to LINEAR_TRIALS do
+  begin
+    Lexer := TGocciaLexer.Create(SourceText, '<test>');
+    SourceLines := CreateTextLines(SourceText);
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+    Compiler := TGocciaCompiler.Create('<test>');
+    ProgramNode := nil;
+    Module := nil;
+    try
+      ParserOptions := Parser.Options;
+      ParserOptions.VarDeclarationsEnabled := True;
+      ParserOptions.FunctionDeclarationsEnabled := True;
+      Parser.ApplyOptions(ParserOptions);
+      ProgramNode := Parser.Parse;
+      Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
+      Start := GetNanoseconds;
+      Module := Compiler.Compile(ProgramNode);
+      Elapsed := GetNanoseconds - Start;
+    finally
+      Module.Free;
+      Compiler.Free;
+      ProgramNode.Free;
+      Parser.Free;
+      SourceLines.Free;
+      Lexer.Free;
+    end;
+    if Elapsed < Result then
+      Result := Elapsed;
+  end;
+end;
+
+{ A kind of top-level declaration against ABaseline, the compile of as many
+  module-level `const`s on the same machine: a wall-clock bound would depend
+  on the machine, a ratio does not. }
+procedure TTestCompiler.ExpectTopLevelCompileLinear(const ABaseline: Int64;
+  const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
+var
+  Elapsed: Int64;
+begin
+  Elapsed := CompileNanoseconds(ALinePattern, AGlobalBackedTopLevel);
+  if Elapsed > LINEAR_COMPILE_RATIO * ABaseline + LINEAR_SLACK_NANOSECONDS then
+    Fail(Format('%d declarations "%s" took %d ms to compile against %d ms ' +
+      'for module-level consts', [LINEAR_DECLARATION_COUNT, ALinePattern,
+      Elapsed div 1000000, ABaseline div 1000000]));
+  Expect<Boolean>(Elapsed <=
+    LINEAR_COMPILE_RATIO * ABaseline + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+end;
+
+procedure TTestCompiler.TestScriptTopLevelDeclarationsCompileInLinearTime;
+var
+  Baseline: Int64;
+begin
+  Baseline := CompileNanoseconds('const a%0:d = %0:d;', False);
+  ExpectTopLevelCompileLinear(Baseline, 'const a%0:d = %0:d;', True);
+  ExpectTopLevelCompileLinear(Baseline, 'let a%0:d = %0:d;', True);
+  ExpectTopLevelCompileLinear(Baseline, 'var a%0:d = %0:d;', True);
+  ExpectTopLevelCompileLinear(Baseline, 'function a%0:d() {}', True);
+  ExpectTopLevelCompileLinear(Baseline, 'class A%0:d {}', True);
+end;
+
+procedure TTestCompiler.TestModuleTopLevelDeclarationsCompileInLinearTime;
+var
+  Baseline: Int64;
+begin
+  Baseline := CompileNanoseconds('const a%0:d = %0:d;', False);
+  ExpectTopLevelCompileLinear(Baseline, 'let a%0:d = %0:d;', False);
+  ExpectTopLevelCompileLinear(Baseline, 'var a%0:d = %0:d;', False);
+  ExpectTopLevelCompileLinear(Baseline, 'function a%0:d() {}', False);
+  ExpectTopLevelCompileLinear(Baseline, 'class A%0:d {}', False);
+end;
+
+{ Each a distinct number outside the immediate range, so each takes its own
+  constant pool entry, against as many consts of one small integer. Near the
+  pool's 65,535 entries, so a scan of the pool per number (about 3 s here)
+  is far past the bound. }
+procedure TTestCompiler.TestDistinctFloatConstantsCompileInLinearTime;
+const
+  FLOAT_COUNT = 50000;
+var
+  Baseline, Elapsed: Int64;
+begin
+  Baseline := CompileNanoseconds('const a%0:d = 1;', False, FLOAT_COUNT);
+  Elapsed := CompileNanoseconds('const a%0:d = %0:d.5;', False, FLOAT_COUNT);
+  if Elapsed > LINEAR_COMPILE_RATIO * Baseline + LINEAR_SLACK_NANOSECONDS then
+    Fail(Format('%d distinct float constants took %d ms to compile against ' +
+      '%d ms for one repeated integer', [FLOAT_COUNT, Elapsed div 1000000,
+      Baseline div 1000000]));
+  Expect<Boolean>(Elapsed <=
+    LINEAR_COMPILE_RATIO * Baseline + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+end;
+
+{ More locals than COMPILER_LOCAL_INDEX_THRESHOLD, so names resolve through
+  the scope's index, which a block's end must point back at the binding the
+  block hid. }
+procedure TTestCompiler.TestEndingABlockRestoresTheBindingItShadowed;
+var
+  Scope: TGocciaCompilerScope;
+  Closed: TArray<UInt16>;
+  ClosedCount, I: Integer;
+begin
+  Scope := TGocciaCompilerScope.Create(nil, 0);
+  try
+    for I := 0 to 99 do
+      Scope.DeclareLocal('x' + IntToStr(I), False);
+
+    Scope.BeginScope;
+    Scope.DeclareLocal('x5', True);
+    Scope.DeclareLocal('fresh', True);
+    Scope.BeginScope;
+    Scope.DeclareLocal('x5', True);
+    Expect<Integer>(Scope.ResolveLocal('x5')).ToBe(102);
+    Scope.EndScope(Closed, ClosedCount);
+    Expect<Integer>(Scope.ResolveLocal('x5')).ToBe(100);
+    Scope.EndScope(Closed, ClosedCount);
+    Expect<Integer>(Scope.ResolveLocal('x5')).ToBe(5);
+    Expect<Integer>(Scope.ResolveLocal('fresh')).ToBe(-1);
+
+    // A renamed local keeps its place under its new name only.
+    Scope.RenameLocal(7, 'renamed');
+    Expect<Integer>(Scope.ResolveLocal('x7')).ToBe(-1);
+    Expect<Integer>(Scope.ResolveLocal('renamed')).ToBe(7);
+    Scope.BeginScope;
+    Scope.DeclareLocal('renamed', True);
+    Expect<Integer>(Scope.ResolveLocal('renamed')).ToBe(100);
+    Scope.EndScope(Closed, ClosedCount);
+    Expect<Integer>(Scope.ResolveLocal('renamed')).ToBe(7);
+  finally
+    Scope.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestVarAndSlotLookupsFindTheOldestLocal;
+var
+  Scope: TGocciaCompilerScope;
+  Closed: TArray<UInt16>;
+  ClosedCount, I: Integer;
+  VarSlot, BlockSlot: UInt16;
+begin
+  Scope := TGocciaCompilerScope.Create(nil, 0);
+  try
+    for I := 0 to 99 do
+      Scope.DeclareLocal('x' + IntToStr(I), False);
+
+    VarSlot := Scope.DeclareVarLocal('v');
+    Scope.BeginScope;
+    BlockSlot := Scope.DeclareLocal('v', False);
+    // A var redeclared inside the block is still the function's var.
+    Expect<Integer>(Scope.DeclareVarLocal('v')).ToBe(VarSlot);
+    Expect<Integer>(Scope.FindLocalBySlot('v', VarSlot)).ToBe(100);
+    Expect<Integer>(Scope.FindLocalBySlot('v', BlockSlot)).ToBe(101);
+    Expect<Integer>(Scope.FindLocalBySlot('v', 3)).ToBe(-1);
+    Scope.EndScope(Closed, ClosedCount);
+    Expect<Integer>(Scope.DeclareVarLocal('x3')).ToBe(
+      Scope.GetLocal(3).Slot);
+    Expect<Integer>(Scope.LocalCount).ToBe(101);
+  finally
+    Scope.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestFloatConstantsArePooledByBitPattern;
+var
+  Template: TGocciaFunctionTemplate;
+  PositiveZero, NegativeZeroIndex, FirstNaN: UInt16;
+begin
+  Template := TGocciaFunctionTemplate.Create('<test>');
+  try
+    Expect<Integer>(Template.AddConstantFloat(1.5)).ToBe(0);
+    Expect<Integer>(Template.AddConstantFloat(2.5)).ToBe(1);
+    Expect<Integer>(Template.AddConstantFloat(1.5)).ToBe(0);
+    PositiveZero := Template.AddConstantFloat(0.0);
+    NegativeZeroIndex := Template.AddConstantFloat(NegativeZero);
+    // SameValue tells the zeros apart, so the pool does too.
+    Expect<Boolean>(PositiveZero <> NegativeZeroIndex).ToBe(True);
+    Expect<Integer>(Template.AddConstantFloat(NegativeZero))
+      .ToBe(NegativeZeroIndex);
+    FirstNaN := Template.AddConstantFloat(NaN);
+    Expect<Integer>(Template.AddConstantFloat(-NaN)).ToBe(FirstNaN);
+    // A string constant between them takes its own entry.
+    Expect<Integer>(Template.AddConstantString('1.5')).ToBe(FirstNaN + 1);
+    Expect<Integer>(Template.AddConstantFloat(2.5)).ToBe(1);
+  finally
+    Template.Free;
   end;
 end;
 

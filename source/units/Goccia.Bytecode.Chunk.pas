@@ -8,6 +8,7 @@ uses
   Generics.Collections,
 
   CriticalSections,
+  HashMap,
   OrderedStringMap,
 
   Goccia.Bytecode.Debug,
@@ -336,6 +337,11 @@ type
     FModuleEnvironmentBinding: string;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
+    // The float constants by bit pattern (every NaN under one key), so adding
+    // one is a lookup rather than a scan of the pool: a function with many
+    // distinct numbers, such as a module of many numeric consts, compiles in
+    // time linear in them.
+    FFloatConstantIndex: THashMap<UInt64, UInt16>;
     // Runtime-only cache for immutable string constants. ECMAScript strings
     // have no observable identity, so reusing one pinned wrapper avoids
     // repeatedly charging the same ref-counted Pascal backing store.
@@ -580,6 +586,7 @@ begin
   FConstantCount := 0;
   FFunctions := TObjectList<TGocciaFunctionTemplate>.Create(True);
   FStringConstantIndex := TOrderedStringMap<UInt16>.Create;
+  FFloatConstantIndex := THashMap<UInt64, UInt16>.Create;
   FDirectEvalEnvironmentCount := 0;
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
@@ -625,6 +632,7 @@ begin
   for I := 0 to High(FDirectEvalCodeCaches) do
     FDirectEvalCodeCaches[I].Free;
   FStringConstantIndex.Free;
+  FFloatConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
   inherited;
@@ -828,18 +836,19 @@ end;
 
 function TGocciaFunctionTemplate.AddConstantFloat(
   const AValue: Double): UInt16;
+const
+  CANONICAL_NAN_BITS = UInt64($7FF8000000000000);
 var
-  I: Integer;
-  ValueIsNaN: Boolean;
+  Key: UInt64;
 begin
-  ValueIsNaN := FloatBitsAreNaN(AValue);
-  for I := 0 to FConstantCount - 1 do
-    if (FConstants[I].Kind = bckFloat) and
-       (FloatBitsAreNaN(FConstants[I].FloatValue) = ValueIsNaN) then
-    begin
-      if ValueIsNaN or (FConstants[I].FloatValue = AValue) then
-        Exit(UInt16(I));
-    end;
+  // By bit pattern, so +0 and -0 stay apart (an equality test would merge
+  // them); every NaN reads the same, so they share one entry.
+  if FloatBitsAreNaN(AValue) then
+    Key := CANONICAL_NAN_BITS
+  else
+    Key := DoubleToBits(AValue);
+  if FFloatConstantIndex.TryGetValue(Key, Result) then
+    Exit;
 
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
@@ -848,6 +857,7 @@ begin
   FConstants[FConstantCount].Kind := bckFloat;
   FConstants[FConstantCount].FloatValue := AValue;
   Result := UInt16(FConstantCount);
+  FFloatConstantIndex.Add(Key, Result);
   Inc(FConstantCount);
 end;
 
