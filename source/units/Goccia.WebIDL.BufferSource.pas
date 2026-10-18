@@ -132,6 +132,19 @@ begin
     Result := nil;
 end;
 
+// ES2026 §25.1.3.2 ArrayBufferByteLength(arrayBuffer, order): measured from
+// the buffer, not from its data block, which a SharedArrayBuffer may
+// allocate past its byte length.
+function ArrayBufferByteLength(const ABuffer: TGocciaValue): Integer;
+begin
+  if ABuffer is TGocciaArrayBufferValue then
+    Result := System.Length(TGocciaArrayBufferValue(ABuffer).Data)
+  else if ABuffer is TGocciaSharedArrayBufferValue then
+    Result := TGocciaSharedArrayBufferValue(ABuffer).ByteLength
+  else
+    Result := 0;
+end;
+
 function IsDetachedBuffer(const ABuffer: TGocciaValue): Boolean;
 begin
   Result := (ABuffer is TGocciaArrayBufferValue) and
@@ -171,7 +184,7 @@ begin
   begin
     ArrayBuffer := ASource;
     Offset := 0;
-    ByteLength := System.Length(BufferData(ASource));
+    ByteLength := ArrayBufferByteLength(ASource);
   end;
 
   // Step 7: a detached buffer holds no bytes.
@@ -183,6 +196,7 @@ begin
   // rather than read past the block.
   Data := BufferData(ArrayBuffer);
   if (ByteLength <= 0) or (Offset < 0) or
+     (Int64(Offset) + ByteLength > ArrayBufferByteLength(ArrayBuffer)) or
      (Int64(Offset) + ByteLength > System.Length(Data)) then
     Exit;
   SetLength(Result, ByteLength);

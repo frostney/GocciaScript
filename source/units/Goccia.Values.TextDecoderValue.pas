@@ -301,7 +301,12 @@ begin
     Dec(DataLen, MIN_BOM_LENGTH);
   end;
 
-  Bytes := Copy(Data, Offset, DataLen);
+  // The copy above is already this call's own snapshot; take a second one
+  // only to drop the BOM.
+  if Offset = 0 then
+    Bytes := Data
+  else
+    Bytes := Copy(Data, Offset, DataLen);
 
   // WHATWG Encoding §7.2 decode() step 5: fatal vs. replacement decoding.
   if Obj.FFatal then

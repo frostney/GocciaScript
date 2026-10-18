@@ -230,10 +230,8 @@ begin
   if AArgs.Length < 2 then
     ThrowTypeError(SErrorTextEncoderEncodeIntoArgs, SSuggestTextEncoderEncodeIntoArgs);
 
-  if AArgs.GetElement(0) is TGocciaUndefinedLiteralValue then
-    Source := ''
-  else
-    Source := AArgs.GetElement(0).ToStringLiteral.Value;
+  // source is a required USVString: undefined converts to "undefined".
+  Source := AArgs.GetElement(0).ToStringLiteral.Value;
 
   // Web IDL converts the arguments in order, so source's toString has run
   // before destination converts to [AllowShared] Uint8Array, which has no

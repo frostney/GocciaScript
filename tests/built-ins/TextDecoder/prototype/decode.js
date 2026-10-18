@@ -210,6 +210,10 @@ describe("TextDecoder.prototype.decode", () => {
     expect(() => dec.decode(new Uint8Array(growable()))).toThrow(TypeError);
   });
 
+  test("throws TypeError for a fixed-length view of a growable SharedArrayBuffer", () => {
+    expect(() => dec.decode(new Uint8Array(growable(), 0, 2))).toThrow(TypeError);
+  });
+
   test("throws TypeError for a growable SharedArrayBuffer itself", () => {
     expect(() => dec.decode(growable())).toThrow(TypeError);
   });

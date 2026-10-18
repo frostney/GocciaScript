@@ -51,6 +51,12 @@ describe("TextEncoder.prototype.encodeInto", () => {
     expect(result.written).toBe(4);
   });
 
+  test("converts an undefined source to the string \"undefined\"", () => {
+    const dest = new Uint8Array(16);
+    expect(enc.encodeInto(undefined, dest)).toEqual({ read: 9, written: 9 });
+    expect(new TextDecoder().decode(dest.subarray(0, 9))).toBe("undefined");
+  });
+
   test("result object has read and written properties", () => {
     const dest = new Uint8Array(5);
     const result = enc.encodeInto("abc", dest);
@@ -111,6 +117,12 @@ describe("TextEncoder.prototype.encodeInto", () => {
   test("throws TypeError for a Uint8Array over a growable SharedArrayBuffer", () => {
     const gsab = new SharedArrayBuffer(4, { maxByteLength: 16 });
     expect(() => enc.encodeInto("ok", new Uint8Array(gsab))).toThrow(TypeError);
+    expect(Array.from(new Uint8Array(gsab))).toEqual([0, 0, 0, 0]);
+  });
+
+  test("throws TypeError for a fixed-length view of a growable SharedArrayBuffer", () => {
+    const gsab = new SharedArrayBuffer(4, { maxByteLength: 16 });
+    expect(() => enc.encodeInto("ok", new Uint8Array(gsab, 0, 2))).toThrow(TypeError);
     expect(Array.from(new Uint8Array(gsab))).toEqual([0, 0, 0, 0]);
   });
 
