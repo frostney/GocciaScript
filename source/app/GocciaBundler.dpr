@@ -189,8 +189,9 @@ begin
     Compiler := TGocciaCompiler.Create(AFileName);
     try
       Compiler.StrictTypes := EffectiveStrictTypes;
+      { The goal the parse settled for a detected entry (ADR 0140). }
       Compiler.NonStrictMode := (cfNonStrictMode in EffectiveCompatibility) and
-        (EffectiveSourceType = stScript);
+        (SourcePipelineResult.SourceType = stScript);
       Compiler.ArgumentsObjectEnabled :=
         cfArgumentsObject in EffectiveCompatibility;
       CompiledModule := Compiler.Compile(SourcePipelineResult.ProgramNode);
