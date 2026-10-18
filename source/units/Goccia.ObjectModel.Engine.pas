@@ -69,15 +69,19 @@ begin
 
     // Clone the descriptor to avoid shared ownership between source and target.
     // Use non-enumerable flags per ES §17 for built-in static methods.
-    if Descriptor is TGocciaPropertyDescriptorData then
-      TGocciaObjectValue(AConstructor).DefineProperty(Key,
-        TGocciaPropertyDescriptorData.Create(
-          TGocciaPropertyDescriptorData(Descriptor).Value,
-          TGocciaPropertyDescriptorData(Descriptor).Flags))
-    else
-      raise EGocciaObjectModelError.CreateFmt(
-        'Static source for %s contains unsupported accessor property "%s"',
-        [AConstructor.Name, Key]);
+    try
+      if Descriptor is TGocciaPropertyDescriptorData then
+        TGocciaObjectValue(AConstructor).DefineProperty(Key,
+          TGocciaPropertyDescriptorData.Create(
+            TGocciaPropertyDescriptorData(Descriptor).Value,
+            TGocciaPropertyDescriptorData(Descriptor).Flags))
+      else
+        raise EGocciaObjectModelError.CreateFmt(
+          'Static source for %s contains unsupported accessor property "%s"',
+          [AConstructor.Name, Key]);
+    finally
+      ReleaseDescriptor(Descriptor);
+    end;
   end;
 
   for Symbol in ASource.GetOwnSymbols do
@@ -86,21 +90,25 @@ begin
     if not Assigned(Descriptor) then
       Continue;
 
-    if Descriptor is TGocciaPropertyDescriptorData then
-      AConstructor.DefineSymbolProperty(Symbol,
-        TGocciaPropertyDescriptorData.Create(
-          TGocciaPropertyDescriptorData(Descriptor).Value,
-          Descriptor.Flags))
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-      AConstructor.DefineSymbolProperty(Symbol,
-        TGocciaPropertyDescriptorAccessor.Create(
-          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-          Descriptor.Flags))
-    else
-      raise EGocciaObjectModelError.CreateFmt(
-        'Static source for %s has unsupported symbol descriptor',
-        [AConstructor.Name]);
+    try
+      if Descriptor is TGocciaPropertyDescriptorData then
+        AConstructor.DefineSymbolProperty(Symbol,
+          TGocciaPropertyDescriptorData.Create(
+            TGocciaPropertyDescriptorData(Descriptor).Value,
+            Descriptor.Flags))
+      else if Descriptor is TGocciaPropertyDescriptorAccessor then
+        AConstructor.DefineSymbolProperty(Symbol,
+          TGocciaPropertyDescriptorAccessor.Create(
+            TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+            TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+            Descriptor.Flags))
+      else
+        raise EGocciaObjectModelError.CreateFmt(
+          'Static source for %s has unsupported symbol descriptor',
+          [AConstructor.Name]);
+    finally
+      ReleaseDescriptor(Descriptor);
+    end;
   end;
 end;
 

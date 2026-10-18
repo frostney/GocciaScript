@@ -192,8 +192,7 @@ test("assignment to a nullish computed target still evaluates the right-hand sid
 });
 
 test("the nullish read message is the V8-shaped wording", () => {
-  // Pinned so wording regressions and interpreter/bytecode divergence both fail
-  // here rather than silently drifting; this file runs under both engines.
+  // Pinned so wording regressions fail here rather than silently drifting.
   const { error } = capture((key) => {
     const base = null;
     return base[key];

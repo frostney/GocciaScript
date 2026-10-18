@@ -61,6 +61,13 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+{ True while AOwner (one engine's Atomics) has an async waiter on this thread
+  that settles without an Atomics.notify: one already notified, or one with a
+  timeout. A waiter with no timeout that nothing notifies never settles. An
+  engine nested on the thread does not wait out its caller's waiters. }
+function HasSelfSettlingAtomicsWaitAsyncWaiters(
+  const AOwner: TGocciaAtomics): Boolean;
+
 implementation
 
 uses
@@ -345,13 +352,32 @@ begin
   Result := Trunc(CountNumber);
 end;
 
+// ES2026 §23.2.4.4 ValidateTypedArray(O, order): a detached view, or one past
+// the end of its shrunk buffer (IsTypedArrayOutOfBounds), is a TypeError.
+// Only a resizable ArrayBuffer can shrink under a view; a fixed-length one
+// keeps its length until it is detached, and a SharedArrayBuffer only grows.
+procedure EnsureAtomicTypedArrayInBounds(const ATypedArray: TGocciaTypedArrayValue;
+  const AMethodName: string);
+var
+  Buffer: TGocciaArrayBufferValue;
+begin
+  if not (ATypedArray.BufferValue is TGocciaArrayBufferValue) then
+    Exit;
+  Buffer := TGocciaArrayBufferValue(ATypedArray.BufferValue);
+  if Buffer.Detached then
+    ThrowTypeError(Format(SErrorCannotUseDetachedTypedArray,
+      ['Atomics.' + AMethodName]));
+  if (Buffer.MaxByteLength >= 0) and IsTypedArrayOutOfBounds(ATypedArray) then
+    ThrowTypeError(AtomicsErrorMessage(AMethodName,
+      'typedArray is out of bounds of its ArrayBuffer'));
+end;
+
 procedure EnsureAtomicTypedArrayUsable(const ATypedArray: TGocciaTypedArrayValue;
   const AMethodName: string; AWriteAccess: Boolean);
 begin
-  if (ATypedArray.BufferValue is TGocciaArrayBufferValue) and
-     TGocciaArrayBufferValue(ATypedArray.BufferValue).Detached then
-    ThrowTypeError(Format(SErrorCannotUseDetachedTypedArray,
-      ['Atomics.' + AMethodName]));
+  // ES2026 §25.4.3.1 ValidateIntegerTypedArray(typedArray, waitable) step 1:
+  // ? ValidateTypedArray(typedArray, unordered)
+  EnsureAtomicTypedArrayInBounds(ATypedArray, AMethodName);
   if AWriteAccess and (ATypedArray.BufferValue is TGocciaArrayBufferValue) and
      TGocciaArrayBufferValue(ATypedArray.BufferValue).Immutable then
     ThrowTypeError(AtomicsErrorMessage(AMethodName,
@@ -444,21 +470,46 @@ begin
   AByteOffset := ATypedArray.ByteOffset + AIndex * Bpe;
 end;
 
-function ReadNumberElement(ATypedArray: TGocciaTypedArrayValue;
-  AByteOffset: Integer): Double;
+// ES2026 §25.4.3.4 RevalidateAtomicAccess(typedArray, byteIndexInBuffer)
+// The index was validated against the length measured before ToIndex and the
+// value conversions, which run script code that can shrink or detach the
+// buffer. Run after the last conversion and before the element is touched;
+// it returns the buffer's current block, which the access reads and writes.
+function RevalidateAtomicAccess(const ATypedArray: TGocciaTypedArrayValue;
+  const AByteIndexInBuffer: Integer; const AMethodName: string): TBytes;
+var
+  ElementSize: Integer;
 begin
-  Result := ReadBinaryNumberElement(ATypedArray.BufferData, AByteOffset,
-    BinaryKindForTypedArray(ATypedArray.Kind), ATOMICS_LITTLE_ENDIAN);
+  // Steps 1-3: a detached or out-of-bounds view is a TypeError.
+  EnsureAtomicTypedArrayInBounds(ATypedArray, AMethodName);
+  // Step 5: an element past the buffer's current byte length is a RangeError.
+  // ES2026 compares byteIndexInBuffer; the current draft compares the
+  // element's last byte, which also rejects an element that only partly
+  // fits, so this compares the last byte. Only a length-tracking view of a
+  // shrunk buffer gets here: a fixed-length view that is in bounds still
+  // holds every element it had.
+  ElementSize := TGocciaTypedArrayValue.BytesPerElement(ATypedArray.Kind);
+  Result := ATypedArray.BufferData;
+  if Int64(AByteIndexInBuffer) + ElementSize > System.Length(Result) then
+    ThrowRangeError(AtomicsErrorMessage(AMethodName,
+      SErrorInvalidTypedArrayIndex));
 end;
 
-procedure WriteNumberElement(ATypedArray: TGocciaTypedArrayValue;
-  AByteOffset: Integer; AValue: Double);
-var
-  BufferData: TBytes;
+{ The element helpers take the block the caller read after its last argument
+  conversion: RevalidateAtomicAccess's result, or BufferData for a wait on a
+  SharedArrayBuffer, which cannot shrink. }
+function ReadNumberElement(const ABlock: TBytes;
+  AKind: TGocciaTypedArrayKind; AByteOffset: Integer): Double;
 begin
-  BufferData := ATypedArray.BufferData;
-  WriteBinaryNumberElement(BufferData, AByteOffset,
-    BinaryKindForTypedArray(ATypedArray.Kind), AValue, ATOMICS_LITTLE_ENDIAN);
+  Result := ReadBinaryNumberElement(ABlock, AByteOffset,
+    BinaryKindForTypedArray(AKind), ATOMICS_LITTLE_ENDIAN);
+end;
+
+procedure WriteNumberElement(var ABlock: TBytes;
+  AKind: TGocciaTypedArrayKind; AByteOffset: Integer; AValue: Double);
+begin
+  WriteBinaryNumberElement(ABlock, AByteOffset, BinaryKindForTypedArray(AKind),
+    AValue, ATOMICS_LITTLE_ENDIAN);
 end;
 
 function ConvertNumberForKind(AKind: TGocciaTypedArrayKind;
@@ -487,20 +538,17 @@ begin
   Result := Floor(NumberValue);
 end;
 
-function ReadBigIntRawElement(ATypedArray: TGocciaTypedArrayValue;
-  AByteOffset: Integer): Int64;
+function ReadBigIntRawElement(const ABlock: TBytes;
+  AKind: TGocciaTypedArrayKind; AByteOffset: Integer): Int64;
 begin
-  Result := ReadBinaryBigIntElement(ATypedArray.BufferData, AByteOffset,
-    BinaryKindForTypedArray(ATypedArray.Kind), ATOMICS_LITTLE_ENDIAN);
+  Result := ReadBinaryBigIntElement(ABlock, AByteOffset,
+    BinaryKindForTypedArray(AKind), ATOMICS_LITTLE_ENDIAN);
 end;
 
-procedure WriteBigIntRawElement(ATypedArray: TGocciaTypedArrayValue;
-  AByteOffset: Integer; AValue: Int64);
-var
-  BufferData: TBytes;
+procedure WriteBigIntRawElement(var ABlock: TBytes; AByteOffset: Integer;
+  AValue: Int64);
 begin
-  BufferData := ATypedArray.BufferData;
-  WriteBinaryBigIntElement(BufferData, AByteOffset, AValue, ATOMICS_LITTLE_ENDIAN);
+  WriteBinaryBigIntElement(ABlock, AByteOffset, AValue, ATOMICS_LITTLE_ENDIAN);
 end;
 
 function ToBigIntValueForAtomics(const AValue: TGocciaValue): TBigInteger;
@@ -642,9 +690,11 @@ begin
   Result := Int64(NewValue);
 end;
 
+// ES2026 §25.4.3.17 AtomicReadModifyWrite(typedArray, index, value, op)
 function AtomicReadModifyWrite(const AArgs: TGocciaArgumentsCollection;
   const AMethodName: string; AOperation: TGocciaAtomicsOperation): TGocciaValue;
 var
+  Block: TBytes;
   Buffer: TGocciaValue;
   ByteOffset: Integer;
   Index: Integer;
@@ -656,28 +706,37 @@ var
   OperandNumber: Double;
   TypedArray: TGocciaTypedArrayValue;
 begin
+  // Step 1: ValidateAtomicAccessOnIntegerTypedArray(typedArray, index)
   ValidateAtomicAccess(AArgs, AMethodName, False, True, TypedArray, Buffer, Index,
     ByteOffset);
+  // Step 2: convert the operand before the element is read; ToBigInt and
+  // ToIntegerOrInfinity can run script code.
+  OperandBigIntRaw := 0;
+  OperandNumber := 0;
+  if IsBigIntKind(TypedArray.Kind) then
+    OperandBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind,
+      GetArgumentOrUndefined(AArgs, 2))
+  else
+    OperandNumber := ToIntegerOrInfinityNumber(GetArgumentOrUndefined(AArgs,
+      2));
+  // Step 3: RevalidateAtomicAccess(typedArray, byteIndexInBuffer)
+  Block := RevalidateAtomicAccess(TypedArray, ByteOffset, AMethodName);
 
   CriticalSectionEnter(GAtomicsLock);
   try
     if IsBigIntKind(TypedArray.Kind) then
     begin
-      OldBigIntRaw := ReadBigIntRawElement(TypedArray, ByteOffset);
-      OperandBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind,
-        GetArgumentOrUndefined(AArgs, 2));
+      OldBigIntRaw := ReadBigIntRawElement(Block, TypedArray.Kind, ByteOffset);
       NewBigIntRaw := ApplyBigIntOperation(AOperation, OldBigIntRaw,
         OperandBigIntRaw);
-      WriteBigIntRawElement(TypedArray, ByteOffset, NewBigIntRaw);
+      WriteBigIntRawElement(Block, ByteOffset, NewBigIntRaw);
       Result := BigIntValueFromRaw(TypedArray.Kind, OldBigIntRaw);
     end
     else
     begin
-      OldNumber := ReadNumberElement(TypedArray, ByteOffset);
-      OperandNumber := ToIntegerOrInfinityNumber(GetArgumentOrUndefined(AArgs,
-        2));
+      OldNumber := ReadNumberElement(Block, TypedArray.Kind, ByteOffset);
       NewNumber := ApplyNumberOperation(AOperation, OldNumber, OperandNumber);
-      WriteNumberElement(TypedArray, ByteOffset, NewNumber);
+      WriteNumberElement(Block, TypedArray.Kind, ByteOffset, NewNumber);
       Result := TGocciaNumberLiteralValue.Create(OldNumber);
     end;
   finally
@@ -794,6 +853,30 @@ begin
     Waiters := GetAtomicsWaiters;
     for I := 0 to Waiters.Count - 1 do
       if Waiters[I].Async and (Waiters[I].OwnerThreadId = GetGocciaThreadId) then
+        Exit(True);
+  finally
+    CriticalSectionLeave(GAtomicsLock);
+  end;
+end;
+
+function HasSelfSettlingAtomicsWaitAsyncWaiters(
+  const AOwner: TGocciaAtomics): Boolean;
+var
+  I: Integer;
+  OwnerThreadId: TThreadID;
+  Waiters: TObjectList<TAtomicsWaiter>;
+begin
+  Result := False;
+  if (GAtomicsAsyncWaiterCount = 0) or not Assigned(AOwner) then
+    Exit;
+  OwnerThreadId := GetGocciaThreadId;
+  CriticalSectionEnter(GAtomicsLock);
+  try
+    Waiters := GetAtomicsWaiters;
+    for I := 0 to Waiters.Count - 1 do
+      if Waiters[I].Async and (Waiters[I].Owner = AOwner) and
+         (Waiters[I].OwnerThreadId = OwnerThreadId) and
+         (Waiters[I].Ready or Waiters[I].HasDeadline) then
         Exit(True);
   finally
     CriticalSectionLeave(GAtomicsLock);
@@ -1053,9 +1136,11 @@ begin
   Result := AtomicReadModifyWrite(AArgs, 'and', aoAnd);
 end;
 
+// ES2026 §25.4.6 Atomics.compareExchange(typedArray, index, expectedValue, replacementValue)
 function TGocciaAtomics.AtomicsCompareExchange(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Block: TBytes;
   Buffer: TGocciaValue;
   ByteOffset: Integer;
   ExpectedBigIntRaw: Int64;
@@ -1069,29 +1154,44 @@ var
 begin
   ValidateAtomicAccess(AArgs, 'compareExchange', False, True, TypedArray, Buffer,
     Index, ByteOffset);
+  // Steps 4-5: convert both operands, which can run script code, before
+  // revalidating and reading the element.
+  ExpectedBigIntRaw := 0;
+  ReplacementBigIntRaw := 0;
+  ExpectedNumber := 0;
+  ReplacementNumber := 0;
+  if IsBigIntKind(TypedArray.Kind) then
+  begin
+    ExpectedBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind,
+      GetArgumentOrUndefined(AArgs, 2));
+    ReplacementBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind,
+      GetArgumentOrUndefined(AArgs, 3));
+  end
+  else
+  begin
+    ExpectedNumber := ConvertNumberForKind(TypedArray.Kind,
+      GetArgumentOrUndefined(AArgs, 2));
+    ReplacementNumber := ToIntegerOrInfinityNumber(GetArgumentOrUndefined(
+      AArgs, 3));
+  end;
+  // Step 6: RevalidateAtomicAccess(typedArray, byteIndexInBuffer)
+  Block := RevalidateAtomicAccess(TypedArray, ByteOffset, 'compareExchange');
 
   CriticalSectionEnter(GAtomicsLock);
   try
     if IsBigIntKind(TypedArray.Kind) then
     begin
-      ExpectedBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind,
-        GetArgumentOrUndefined(AArgs, 2));
-      ReplacementBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind,
-        GetArgumentOrUndefined(AArgs, 3));
-      OldBigIntRaw := ReadBigIntRawElement(TypedArray, ByteOffset);
+      OldBigIntRaw := ReadBigIntRawElement(Block, TypedArray.Kind, ByteOffset);
       if OldBigIntRaw = ExpectedBigIntRaw then
-        WriteBigIntRawElement(TypedArray, ByteOffset, ReplacementBigIntRaw);
+        WriteBigIntRawElement(Block, ByteOffset, ReplacementBigIntRaw);
       Result := BigIntValueFromRaw(TypedArray.Kind, OldBigIntRaw);
     end
     else
     begin
-      ExpectedNumber := ConvertNumberForKind(TypedArray.Kind,
-        GetArgumentOrUndefined(AArgs, 2));
-      ReplacementNumber := ToIntegerOrInfinityNumber(GetArgumentOrUndefined(
-        AArgs, 3));
-      OldNumber := ReadNumberElement(TypedArray, ByteOffset);
+      OldNumber := ReadNumberElement(Block, TypedArray.Kind, ByteOffset);
       if OldNumber = ExpectedNumber then
-        WriteNumberElement(TypedArray, ByteOffset, ReplacementNumber);
+        WriteNumberElement(Block, TypedArray.Kind, ByteOffset,
+          ReplacementNumber);
       Result := TGocciaNumberLiteralValue.Create(OldNumber);
     end;
   finally
@@ -1115,9 +1215,11 @@ begin
     (Size = 4) or (Size = 8));
 end;
 
+// ES2026 §25.4.9 Atomics.load(typedArray, index)
 function TGocciaAtomics.AtomicsLoad(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Block: TBytes;
   Buffer: TGocciaValue;
   ByteOffset: Integer;
   Index: Integer;
@@ -1125,15 +1227,18 @@ var
 begin
   ValidateAtomicAccess(AArgs, 'load', False, False, TypedArray, Buffer, Index,
     ByteOffset);
+  // Step 2: RevalidateAtomicAccess(typedArray, byteIndexInBuffer); ToIndex
+  // can have shrunk or detached the buffer.
+  Block := RevalidateAtomicAccess(TypedArray, ByteOffset, 'load');
 
   CriticalSectionEnter(GAtomicsLock);
   try
     if IsBigIntKind(TypedArray.Kind) then
       Result := BigIntValueFromRaw(TypedArray.Kind,
-        ReadBigIntRawElement(TypedArray, ByteOffset))
+        ReadBigIntRawElement(Block, TypedArray.Kind, ByteOffset))
     else
-      Result := TGocciaNumberLiteralValue.Create(ReadNumberElement(TypedArray,
-        ByteOffset));
+      Result := TGocciaNumberLiteralValue.Create(ReadNumberElement(Block,
+        TypedArray.Kind, ByteOffset));
   finally
     CriticalSectionLeave(GAtomicsLock);
   end;
@@ -1243,9 +1348,11 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+// ES2026 §25.4.11 Atomics.store(typedArray, index, value)
 function TGocciaAtomics.AtomicsStore(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Block: TBytes;
   Buffer: TGocciaValue;
   ByteOffset: Integer;
   Index: Integer;
@@ -1256,23 +1363,34 @@ var
 begin
   ValidateAtomicAccess(AArgs, 'store', False, True, TypedArray, Buffer, Index,
     ByteOffset);
+  // Step 2: convert the value, which can run script code.
+  NewBigIntRaw := 0;
+  NewNumber := 0;
+  if IsBigIntKind(TypedArray.Kind) then
+  begin
+    NewBigIntValue := ToBigIntValueForAtomics(GetArgumentOrUndefined(AArgs,
+      2));
+    NewBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind, NewBigIntValue);
+  end
+  else
+  begin
+    NewNumber := ToIntegerOrInfinityNumber(GetArgumentOrUndefined(AArgs, 2));
+    if NewNumber = 0 then
+      NewNumber := 0.0;
+  end;
+  // Step 3: RevalidateAtomicAccess(typedArray, byteIndexInBuffer)
+  Block := RevalidateAtomicAccess(TypedArray, ByteOffset, 'store');
 
   CriticalSectionEnter(GAtomicsLock);
   try
     if IsBigIntKind(TypedArray.Kind) then
     begin
-      NewBigIntValue := ToBigIntValueForAtomics(GetArgumentOrUndefined(AArgs,
-        2));
-      NewBigIntRaw := ConvertBigIntRawForKind(TypedArray.Kind, NewBigIntValue);
-      WriteBigIntRawElement(TypedArray, ByteOffset, NewBigIntRaw);
+      WriteBigIntRawElement(Block, ByteOffset, NewBigIntRaw);
       Result := TGocciaBigIntValue.Create(NewBigIntValue);
     end
     else
     begin
-      NewNumber := ToIntegerOrInfinityNumber(GetArgumentOrUndefined(AArgs, 2));
-      if NewNumber = 0 then
-        NewNumber := 0.0;
-      WriteNumberElement(TypedArray, ByteOffset, NewNumber);
+      WriteNumberElement(Block, TypedArray.Kind, ByteOffset, NewNumber);
       Result := TGocciaNumberLiteralValue.Create(NewNumber);
     end;
   finally
@@ -1289,6 +1407,7 @@ end;
 function TGocciaAtomics.AtomicsWait(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Block: TBytes;
   Buffer: TGocciaSharedArrayBufferValue;
   ByteOffset: Integer;
   ExpectedBigIntRaw: Int64;
@@ -1312,12 +1431,15 @@ begin
 
   CriticalSectionEnter(GAtomicsLock);
   try
+    // A SharedArrayBuffer only grows, so the index is still inside the
+    // block the value conversion above may have replaced; read that block.
+    Block := TypedArray.BufferData;
     if TypedArray.Kind = takBigInt64 then
-      WaitValueMatches := ReadBigIntRawElement(TypedArray, ByteOffset) =
-        ExpectedBigIntRaw
+      WaitValueMatches := ReadBigIntRawElement(Block, TypedArray.Kind,
+        ByteOffset) = ExpectedBigIntRaw
     else
-      WaitValueMatches := ReadNumberElement(TypedArray, ByteOffset) =
-        ExpectedNumber;
+      WaitValueMatches := ReadNumberElement(Block, TypedArray.Kind,
+        ByteOffset) = ExpectedNumber;
 
     if not WaitValueMatches then
       Exit(TGocciaStringLiteralValue.Create(ATOMICS_WAIT_NOT_EQUAL));
@@ -1351,6 +1473,7 @@ end;
 function TGocciaAtomics.AtomicsWaitAsync(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
+  Block: TBytes;
   Buffer: TGocciaSharedArrayBufferValue;
   ByteOffset: Integer;
   DeadlineMilliseconds: UInt64;
@@ -1376,12 +1499,15 @@ begin
 
   CriticalSectionEnter(GAtomicsLock);
   try
+    // A SharedArrayBuffer only grows, so the index is still inside the
+    // block the value conversion above may have replaced; read that block.
+    Block := TypedArray.BufferData;
     if TypedArray.Kind = takBigInt64 then
-      WaitValueMatches := ReadBigIntRawElement(TypedArray, ByteOffset) =
-        ExpectedBigIntRaw
+      WaitValueMatches := ReadBigIntRawElement(Block, TypedArray.Kind,
+        ByteOffset) = ExpectedBigIntRaw
     else
-      WaitValueMatches := ReadNumberElement(TypedArray, ByteOffset) =
-        ExpectedNumber;
+      WaitValueMatches := ReadNumberElement(Block, TypedArray.Kind,
+        ByteOffset) = ExpectedNumber;
 
     if not WaitValueMatches then
       Exit(CreateWaitAsyncResult(False,

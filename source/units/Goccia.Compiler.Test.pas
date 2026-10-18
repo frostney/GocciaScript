@@ -88,6 +88,7 @@ type
     procedure TestCompileArithmetic;
     procedure TestCompileVariable;
     procedure TestCompileFunction;
+    procedure TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
     procedure TestThisPropertyReadUsesLocalRegister;
     procedure TestThisPropertyReadRetainsDerivedGuard;
     procedure TestLocalPropertyReadUsesFusedOpcode;
@@ -129,6 +130,7 @@ type
     procedure TestBinaryRoundTripConstants;
     procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
+    procedure TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
     procedure TestConstantFoldsSpecialNumbers;
@@ -198,6 +200,8 @@ begin
   Test('Compile arithmetic', TestCompileArithmetic);
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
+  Test('Anonymous derived class in a block keeps later locals apart',
+    TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart);
   Test('Initialized const operands skip OP_GET_LOCAL',
     TestInitializedConstOperandsSkipGetLocal);
   Test('Const operands before the declaration keep OP_GET_LOCAL',
@@ -275,6 +279,8 @@ begin
   Test('Binary loader rejects malformed artifacts',
     TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
+  Test('A compile after compiles that raised starts at nesting depth 0',
+    TestCompileAfterRaisedCompileStartsAtNestingDepthZero);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
   Test('Constant folds BigInt', TestConstantFoldsBigInt);
   Test('Constant folds special numbers', TestConstantFoldsSpecialNumbers);
@@ -784,6 +790,57 @@ begin
   try
     Expect<Boolean>(Assigned(Module)).ToBe(True);
     Expect<Boolean>(Module.TopLevel.FunctionCount > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+// Issue #1666: the hidden `__super__` local of an anonymous class with a
+// heritage was declared in the enclosing block and its register released
+// twice, so a register allocated after the block was one a live local still
+// held: the returned arrow was created into `c`'s register.
+procedure TTestCompiler.TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I, ClosureReg: Integer;
+
+  function SlotOf(const AName: string): Integer;
+  var
+    I: Integer;
+  begin
+    Result := -1;
+    for I := 0 to Func.DebugInfo.LocalCount - 1 do
+      if Func.DebugInfo.GetLocalInfo(I).Name = AName then
+        Exit(Func.DebugInfo.GetLocalInfo(I).Slot);
+  end;
+
+begin
+  Module := CompileSource(
+    'const f = () => {' + LineEnding +
+    '  let a = 1;' + LineEnding +
+    '  { const K = class extends Object {}; }' + LineEnding +
+    '  let b = 2;' + LineEnding +
+    '  let c = 3;' + LineEnding +
+    '  return () => a + b + c;' + LineEnding +
+    '};');
+  try
+    Func := Module.TopLevel.GetFunction(0);
+    Expect<Boolean>(Assigned(Func.DebugInfo)).ToBe(True);
+    Expect<Boolean>(SlotOf('a') >= 0).ToBe(True);
+    Expect<Boolean>(SlotOf('b') >= 0).ToBe(True);
+    Expect<Boolean>(SlotOf('c') >= 0).ToBe(True);
+    Expect<Boolean>(SlotOf('b') <> SlotOf('a')).ToBe(True);
+    Expect<Boolean>(SlotOf('c') <> SlotOf('a')).ToBe(True);
+    Expect<Boolean>(SlotOf('c') <> SlotOf('b')).ToBe(True);
+    ClosureReg := -1;
+    for I := 0 to Func.CodeCount - 1 do
+      if TGocciaOpCode(DecodeOp(Func.GetInstruction(I))) = OP_CLOSURE then
+        ClosureReg := DecodeA(Func.GetInstruction(I));
+    Expect<Boolean>(ClosureReg >= 0).ToBe(True);
+    Expect<Boolean>(ClosureReg <> SlotOf('a')).ToBe(True);
+    Expect<Boolean>(ClosureReg <> SlotOf('b')).ToBe(True);
+    Expect<Boolean>(ClosureReg <> SlotOf('c')).ToBe(True);
   finally
     Module.Free;
   end;
@@ -2237,6 +2294,89 @@ begin
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeAx(OP_JUMP, -2));
   ExpectRejected(Template);
+end;
+
+// A compile that raises leaves the levels it had entered open. A compiler
+// reused after it must not start the next walk from them: repeated failures
+// would otherwise push every later walk past NESTING_UNCHECKED_DEPTH, where
+// each node pays a native-stack check.
+procedure TTestCompiler.TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
+var
+  Compiler: TGocciaCompiler;
+  Module: TGocciaBytecodeModule;
+  Attempt: Integer;
+  Raised: Boolean;
+
+  function ParseSource(const ASource: string;
+    const ANonStrictMode: Boolean): TGocciaProgram;
+  var
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    SourceLines: TStringList;
+    ParserOptions: TGocciaParserOptions;
+  begin
+    Lexer := TGocciaLexer.Create(ASource, '<test>');
+    SourceLines := CreateTextLines(ASource);
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+    try
+      ParserOptions := Parser.Options;
+      ParserOptions.NonStrictModeEnabled := ANonStrictMode;
+      Parser.ApplyOptions(ParserOptions);
+      Result := Parser.Parse;
+    finally
+      Parser.Free;
+      SourceLines.Free;
+      Lexer.Free;
+    end;
+  end;
+
+  procedure CompileProgram(const ASource: string;
+    const ANonStrictParse: Boolean);
+  var
+    ProgramNode: TGocciaProgram;
+  begin
+    ProgramNode := ParseSource(ASource, ANonStrictParse);
+    try
+      Module := Compiler.Compile(ProgramNode);
+    finally
+      ProgramNode.Free;
+    end;
+  end;
+
+begin
+  Compiler := TGocciaCompiler.Create('<test>');
+  try
+    // The parser accepts `with` in non-strict code; the compiler, strict,
+    // rejects it five levels into the walk: the declaration, the arrow, the
+    // if, its block and the `with` itself.
+    Compiler.NonStrictMode := False;
+    for Attempt := 1 to 3 do
+    begin
+      Raised := False;
+      Module := nil;
+      try
+        CompileProgram(
+          'const outer = () => { if (true) { with ({}) {} } };', True);
+      except
+        on E: TGocciaSyntaxError do
+          Raised := True;
+      end;
+      Module.Free;
+      Expect<Boolean>(Raised).ToBe(True);
+      Expect<Boolean>(Compiler.NestingDepth > 0).ToBe(True);
+    end;
+
+    Module := nil;
+    CompileProgram('const a = (1 + (2 + 3)); a;', False);
+    try
+      Expect<Boolean>(Assigned(Module)).ToBe(True);
+      Expect<Integer>(Compiler.NestingDepth).ToBe(0);
+    finally
+      Module.Free;
+    end;
+  finally
+    Compiler.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestUndeclaredPrivateNameRaisesSyntaxError;

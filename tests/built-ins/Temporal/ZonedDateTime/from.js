@@ -86,4 +86,27 @@ describe.runIf(isTemporal)("Temporal.ZonedDateTime.from", () => {
     expect(zdt.epochNanoseconds).toBe(iso.epochNanoseconds);
     expect(zdt.calendarId).toBe("islamic-civil");
   });
+
+  test("disambiguation resolves a daylight-saving gap after 2037", () => {
+    const from = (disambiguation) => Temporal.ZonedDateTime.from(
+      "2040-03-11T02:30[America/Los_Angeles]", { disambiguation }).toString();
+    expect(from("compatible")).toBe("2040-03-11T03:30:00-07:00[America/Los_Angeles]");
+    expect(from("earlier")).toBe("2040-03-11T01:30:00-08:00[America/Los_Angeles]");
+    expect(from("later")).toBe("2040-03-11T03:30:00-07:00[America/Los_Angeles]");
+    expect(() => from("reject")).toThrow(RangeError);
+  });
+
+  test("disambiguation resolves a daylight-saving fold after 2037", () => {
+    const from = (disambiguation) => Temporal.ZonedDateTime.from(
+      "2040-11-04T01:30[America/Los_Angeles]", { disambiguation }).toString();
+    expect(from("compatible")).toBe("2040-11-04T01:30:00-07:00[America/Los_Angeles]");
+    expect(from("earlier")).toBe("2040-11-04T01:30:00-07:00[America/Los_Angeles]");
+    expect(from("later")).toBe("2040-11-04T01:30:00-08:00[America/Los_Angeles]");
+    expect(() => from("reject")).toThrow(RangeError);
+  });
+
+  test("a wall-clock time in a negative daylight-saving gap after 2037 moves forward", () => {
+    expect(Temporal.ZonedDateTime.from("2040-03-25T01:30[Europe/Dublin]").toString())
+      .toBe("2040-03-25T02:30:00+01:00[Europe/Dublin]");
+  });
 });

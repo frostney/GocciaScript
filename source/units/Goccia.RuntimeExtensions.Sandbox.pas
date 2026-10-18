@@ -149,6 +149,8 @@ uses
   Goccia.Base64,
   Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
@@ -158,7 +160,9 @@ uses
   Goccia.Shims,
   Goccia.UncatchableFault,
   Goccia.Utils,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
+  Goccia.Values.DataViewValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -166,6 +170,7 @@ uses
   Goccia.Values.NativeFunctionCallback,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
+  Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.TypedArrayValue,
   Goccia.VM.Exception;
 
@@ -513,23 +518,78 @@ begin
   Result := False;
 end;
 
+// A Uint8Array over ABytes itself: the new ArrayBuffer adopts the array and
+// charges the memory limit as an allocation of the same length would, so the
+// bytes are neither zero-filled nor copied. The caller must not use ABytes
+// afterwards.
 function BytesToUint8Array(const ABytes: TBytes): TGocciaTypedArrayValue;
 var
-  Data: TBytes;
-  I: Integer;
+  Buffer: TGocciaArrayBufferValue;
 begin
-  Result := TGocciaTypedArrayValue.Create(takUint8, Length(ABytes));
-  Data := Result.BufferData;
-  for I := 0 to High(ABytes) do
-    Data[Result.ByteOffset + I] := ABytes[I];
+  if Length(ABytes) > High(Integer) then
+    ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
+  Buffer := TGocciaArrayBufferValue.CreateFromBytes(ABytes);
+  Result := TGocciaTypedArrayValue.Create(takUint8, Buffer, 0,
+    Length(ABytes));
+end;
+
+function ArrayBufferViewBufferData(const ABuffer: TGocciaValue): TBytes;
+begin
+  if ABuffer is TGocciaArrayBufferValue then
+    Result := TGocciaArrayBufferValue(ABuffer).Data
+  else if ABuffer is TGocciaSharedArrayBufferValue then
+    Result := TGocciaSharedArrayBufferValue(ABuffer).Data
+  else
+    Result := nil;
+end;
+
+// The bytes a TypedArray or DataView views, as Node writes them: the view's
+// byte length from its byte offset, not one byte per element. An
+// out-of-bounds or detached TypedArray has no bytes; such a DataView throws,
+// as its byteLength getter does. The length is read before the buffer data,
+// so a view whose resizable buffer grew copies from the current data rather
+// than the smaller one it last saw.
+function TryGetArrayBufferViewBytes(const AValue: TGocciaValue;
+  out ABytes: TBytes): Boolean;
+var
+  TA: TGocciaTypedArrayValue;
+  View: TGocciaDataViewValue;
+  Data: TBytes;
+  Offset, ByteLength: Integer;
+begin
+  ABytes := nil;
+  if AValue is TGocciaTypedArrayValue then
+  begin
+    TA := TGocciaTypedArrayValue(AValue);
+    ByteLength := TA.Length * TGocciaTypedArrayValue.BytesPerElement(TA.Kind);
+    Data := TA.BufferData;
+    Offset := TA.ByteOffset;
+  end
+  else if AValue is TGocciaDataViewValue then
+  begin
+    View := TGocciaDataViewValue(AValue);
+    Data := ArrayBufferViewBufferData(View.BufferValue);
+    Offset := View.ByteOffset;
+    if View.IsOutOfBounds then
+      ThrowTypeError(SErrorCannotUseDetachedDataView,
+        SSuggestArrayBufferDetached);
+    if View.IsLengthTracking then
+      ByteLength := System.Length(Data) - Offset
+    else
+      ByteLength := View.ByteLengthSlot;
+  end
+  else
+    Exit(False);
+
+  SetLength(ABytes, ByteLength);
+  if ByteLength > 0 then
+    Move(Data[Offset], ABytes[0], ByteLength);
+  Result := True;
 end;
 
 function ValueToBytes(const AValue: TGocciaValue; const AMethod: string): TBytes;
 var
   Text: string;
-  TA: TGocciaTypedArrayValue;
-  Data: TBytes;
-  I: Integer;
 begin
   if AValue is TGocciaStringLiteralValue then
   begin
@@ -538,17 +598,10 @@ begin
     Exit;
   end;
 
-  if AValue is TGocciaTypedArrayValue then
-  begin
-    TA := TGocciaTypedArrayValue(AValue);
-    Data := TA.BufferData;
-    SetLength(Result, TA.Length);
-    for I := 0 to TA.Length - 1 do
-      Result[I] := Data[TA.ByteOffset + I];
+  if TryGetArrayBufferViewBytes(AValue, Result) then
     Exit;
-  end;
 
-  ThrowTypeError(AMethod + ' requires string or Uint8Array data');
+  ThrowTypeError(AMethod + ' requires string, TypedArray or DataView data');
   Result := nil;
 end;
 
@@ -1302,7 +1355,7 @@ var
   Fraction: Double;
   RoundedMilliseconds: Double;
 begin
-  DateConstructor := GetDateIntrinsic(Runtime.Engine.Executor);
+  DateConstructor := GetDateIntrinsic(Runtime.Engine.ShimLoader);
   Fraction := Frac(AMilliseconds);
   RoundedMilliseconds := AMilliseconds - Fraction;
   if Fraction >= 0.5 then
@@ -1751,8 +1804,12 @@ var
 begin
   Existing := nil;
   try
-    if FContext.Fs.Exists(APath) then
-      Existing := FContext.Fs.ReadAllBytes(APath);
+    { Opening for append refuses a read-only path before the existing
+      content is copied, and creates a missing file. An append writes; it
+      does not read, so it leaves the access time alone, and one refused
+      for a read-only path changes nothing at all. }
+    FContext.Fs.Open(APath, omAppend).Free;
+    Existing := FContext.Fs.SnapshotReadAllBytes(APath);
     SetLength(Combined, Length(Existing) + Length(AData));
     if Length(Existing) > 0 then
       Move(Existing[0], Combined[0], Length(Existing));

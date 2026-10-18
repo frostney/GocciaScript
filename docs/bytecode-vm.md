@@ -1,29 +1,26 @@
 # Bytecode VM
 
-*For contributors working on the bytecode executor and VM.*
+*For contributors working on the bytecode compiler and VM.*
 
 ## Executive Summary
 
-- **Two execution modes** — bytecode VM (default) and tree-walk interpreter (`--mode=interpreted`), sharing the same source pipeline, runtime objects, and GC
-- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; a module's top-level function declarations are compiled closures, created from their templates while the module is linked
+- **The only way GocciaScript executes** — every CLI entry point and every embedded engine compiles to bytecode and runs it on the VM; GocciaScript 0.15.0 removed the tree-walk interpreter ([ADR 0138](adr/0138-bytecode-is-the-only-way-gocciascript-executes.md))
+- **Engine-owned VM** — `TGocciaEngine` drives the compiler and its own `TGocciaVM`; a module's top-level function declarations are compiled closures, created from their templates while the module is linked
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic arithmetic/bitwise and class helpers (128-145, with 146-166 unused), and semantic/helper instructions from 167 up: module and async orchestration plus later additions, including fused superinstructions
 - **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
 
 ## Overview
 
-GocciaScript has two execution modes:
+GocciaScript executes source one way: AST compilation to Goccia bytecode, then execution on the engine's `TGocciaVM`. The tree-walk interpreter was removed in 0.15.0 ([#875](https://github.com/frostney/GocciaScript/issues/875)).
 
-- **Interpreter mode**: tree-walk execution over the AST via `TGocciaInterpreterExecutor`
-- **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM` via `TGocciaBytecodeExecutor`
+The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, lazy shims), compiles what it runs, and runs it on a VM it owns (see [Architecture](architecture.md#execution-architecture)). The engine compiles each bootstrap shim when it is first used, so the shims' functions, `Date` and `Date.prototype` included, are VM closures ([Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)). Optional runtime globals are attached through runtime extensions. All eval code is compiled and run on the VM ([ADR 0134](adr/0134-direct-eval-compiles-as-a-closure-of-its-call-site.md)): a direct `eval` as a closure of its call site, and eval code whose variable environment is the realm's global environment — an indirect `eval` call and `ShadowRealm.prototype.evaluate` — through `TGocciaEngine.EvaluateGlobalEval`.
 
-Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, lazy shims) and delegates execution to whichever executor is configured. The bytecode executor compiles each bootstrap shim when it is first used, so the shims' functions, `Date` and `Date.prototype` included, are VM closures ([Core Patterns § Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)). Optional runtime globals are attached through runtime extensions. The `TGocciaBytecodeExecutor` unit itself depends only on the compiler and VM. All eval code is compiled and run on the VM ([ADR 0134](adr/0134-direct-eval-compiles-as-a-closure-of-its-call-site.md)): a direct `eval` as a closure of its call site, and eval code whose variable environment is the realm's global environment — an indirect `eval` call and `ShadowRealm.prototype.evaluate` — through `TGocciaEngine.EvaluateGlobalEval`.
+A module's environment is initialized while it is linked (ES2026 §16.2.1.7.3.1 InitializeEnvironment; [ADR 0136](adr/0136-module-function-declarations-are-compiled-while-linking.md)), before any module body runs, and its function declarations are created there, so a module in an import cycle can call them first. The module loader hands that step to the engine (`TGocciaModuleLoader.InstantiateModuleFunctions`), which compiles the whole module at that point, with `PreinitializedTopLevelFunctions` set, and creates each top-level function declaration, an `export default function` included, from its compiled template (`TGocciaFunctionTemplate.ModuleEnvironmentBinding`, `TGocciaVM.InstantiateModuleFunction`). The module body, compiled in the same pass and run later, reads each function from the environment instead of creating it again. A function created while linking has no module-body frame to capture, so it reads every top-level binding of its module by name from the module environment, imports included (`TGocciaCompilerScope.ImportUpvaluesByName`). Linking binds a module's evaluation-phase imports there, `TGocciaEngine.Execute` binds the entry's as each requested module loads, and a source-phase or deferred import is bound when its declaration runs. `scripts/differential/l-modulefndecl.test.js` checks that the three callable forms of an imported module and of the entry file agree.
 
-A module's environment is initialized while it is linked (ES2026 §16.2.1.7.3.1 InitializeEnvironment; [ADR 0136](adr/0136-module-function-declarations-are-compiled-while-linking.md)), before any module body runs, and its function declarations are created there, so a module in an import cycle can call them first. The module loader hands that step to the executor (`TGocciaModuleLoader.InstantiateModuleFunctions`). `TGocciaBytecodeExecutor` compiles the whole module at that point, with `PreinitializedTopLevelFunctions` set, and creates each top-level function declaration, an `export default function` included, from its compiled template (`TGocciaFunctionTemplate.ModuleEnvironmentBinding`, `TGocciaVM.InstantiateModuleFunction`). The module body, compiled in the same pass and run later, reads each function from the environment instead of creating it again, so no function of a module tree-walks in bytecode mode. A function created while linking has no module-body frame to capture, so it reads every top-level binding of its module by name from the module environment, imports included (`TGocciaCompilerScope.ImportUpvaluesByName`). Linking binds a module's evaluation-phase imports there, `TGocciaEngine.Execute` binds the entry's as each requested module loads, and a source-phase or deferred import is bound when its declaration runs. `TGocciaClassValue.UsesOwnInstantiation` and `TryConstructOnReceiver` still route construction of a compiled class back to the VM for classes the evaluator builds, which only the interpreter executor creates. `scripts/differential/l-modulefndecl.test.js` checks that the three callable forms of an imported module and of the entry file agree.
+The program the engine runs itself — the entry file or a REPL input — is linked by no module loader. The compiler therefore records its static imports and re-exports, in source order, in the bytecode module's request table, and the engine links each one through `TGocciaModuleLoader.LinkModuleRequest` before the program runs (ES2026 §16.2.1.6.1.2 Link()). A name that does not resolve is a `SyntaxError` before any module of the graph evaluates; the program's own `OP_IMPORT`s then evaluate the linked modules, re-exported ones included. For a module-source entry, once the last of them has evaluated, the entry waits for each linked module whose evaluation is asynchronous (top-level `await`, or an asynchronous dependency of its own) before its body runs, and fails with the error of one that failed (ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation). It has no continuation of its own to defer, so `TGocciaVM.AwaitModuleDependencies` waits as `await` does in a frame that cannot suspend, running microtasks and real-mode timers, with the jobs it runs counted as from the top level for `--max-stack`.
 
-The program the executor runs itself — the entry file or a REPL input — is linked by no module loader. The compiler therefore records its static imports and re-exports, in source order, in the bytecode module's request table, and `TGocciaBytecodeExecutor` links each one through `TGocciaModuleLoader.LinkModuleRequest` before the program runs (ES2026 §16.2.1.6.1.2 Link()). A name that does not resolve is a `SyntaxError` before any module of the graph evaluates; the program's own `OP_IMPORT`s then evaluate the linked modules, re-exported ones included.
-
-A module-source entry is also a Module Record of its own. Before its requests are linked, `TGocciaEngine.RunModuleForSourceType` registers it with the module loader under its resolved path, stamped with its file's modification time, and marks it evaluating, as `Execute` does for the interpreter. An import that resolves to the entry's own file — directly or through a cycle — therefore gets the entry back instead of evaluating the file a second time (ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation). The compiler records the entry's exports in the bytecode module's export table, and `TGocciaBytecodeExecutor` binds them before any import evaluates, as InitializeEnvironment (§16.2.1.7.3.1) does. It binds the local exports before the entry's requests are linked, as `Execute` does, so a module in a cycle with the entry that does `export * from` the entry forwards them: a `let`, `const`, `class` or default-expression export is in its temporal dead zone until its declaration runs, a `var` export is `undefined`, and a function declaration — an anonymous `export default function` included — is hoisted and callable. Re-exports and exported imports bind to their linked modules once the requests are linked. The program's `OP_EXPORT`s initialize and update the local bindings, so a module in a cycle with the entry reads them live. If the entry's run fails, the loader keeps its thrown value as the entry's evaluation error, so a later import throws it again (§16.2.1.6.1.3 Evaluate); an entry that fails before evaluating leaves the cache. A script-source entry is a Script, not a Module Record, so an import of its own file loads that file as a separate module.
+A module-source entry is also a Module Record of its own. Before its requests are linked, `TGocciaEngine.RunModuleForSourceType` registers it with the module loader under its resolved path, stamped with its file's modification time, and marks it evaluating. An import that resolves to the entry's own file — directly or through a cycle — therefore gets the entry back instead of evaluating the file a second time (ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation). The compiler records the entry's exports in the bytecode module's export table, and the engine binds them before any import evaluates, as InitializeEnvironment (§16.2.1.7.3.1) does. It binds the local exports (`InitializeEntryLocalExports`) before the entry's requests are linked, so a module in a cycle with the entry that does `export * from` the entry forwards them: a `let`, `const`, `class` or default-expression export is in its temporal dead zone until its declaration runs, a `var` export is `undefined`, and a function declaration — an anonymous `export default function` included — is hoisted and callable. Re-exports and exported imports bind to their linked modules once the requests are linked (`InitializeEntryLinkedExports`). The program's `OP_EXPORT`s initialize and update the local bindings, so a module in a cycle with the entry reads them live. If the entry's run fails, the loader keeps its thrown value as the entry's evaluation error, so a later import throws it again (§16.2.1.6.1.3 Evaluate); an entry that fails before evaluating leaves the cache. A script-source entry is a Script, not a Module Record, so an import of its own file loads that file as a separate module.
 
 ## Pipeline
 
@@ -45,7 +42,7 @@ Public bytecode artifacts use the `.gbc` extension.
 | VM execution | `Goccia.VM.pas` |
 | Frames / closures / upvalues | `Goccia.VM.CallFrame.pas`, `Goccia.VM.Closure.pas`, `Goccia.VM.Upvalue.pas` |
 | Direct eval code cache | `Goccia.VM.DirectEvalCodeCache.pas` |
-| Bytecode executor | `Goccia.Executor.Bytecode.pas` (`TGocciaBytecodeExecutor`) |
+| Compile and run | `Goccia.Engine.pas` (`TGocciaEngine`) |
 | Numeric proof / lowering | `Goccia.Compiler.NumericProof.pas`, `Goccia.Compiler.NumericBindings.pas`, `Goccia.Compiler.Expressions.pas` |
 | Opcode name lookup | `Goccia.Bytecode.OpCodeNames.pas` |
 | Profiler | `Goccia.Profiler.pas`, `Goccia.Profiler.Report.pas` |
@@ -53,13 +50,13 @@ Public bytecode artifacts use the `.gbc` extension.
 ## Core Design
 
 - The register file uses tagged values that keep scalars unboxed until they cross a runtime boundary (see [Design Direction](architecture.md#design-direction)).
-- The VM uses the same value classes as the interpreter: arrays, objects, classes, promises, functions, symbols, enums, and built-ins.
+- The VM uses the same value classes as the built-ins and host code: arrays, objects, classes, promises, functions, symbols, enums, and built-ins.
 - `undefined`, `null`, booleans, and hole values use shared singleton objects.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
 - The VM is integrated with the shared garbage collector and shared call stack.
 - Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit of nested calls (CLI default 2 200, `--max-stack=N`). The outermost frame, the program's top level or a function the host calls while no script runs (a promise job, a test), is not a nested call and does not count. Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. The memory ceiling then bounds the recursion: the VM's stacks and the call records it pushes are charged to `--max-memory` and shrink back once idle, and a growth that does not fit is settled or refused with the same `RangeError` at the next instruction boundary. [Garbage Collector § Memory Ceiling](garbage-collector.md#memory-ceiling) lists what is charged. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
 - A call the VM enters natively (`ExecuteClosureRegistersInternal`: constructors, async functions, generator resume, accessors, Proxy traps, callbacks from built-ins) is checked against the same limit, and against the native stack it costs: the VM throws the same `RangeError` once less than `NATIVE_STACK_RESERVE` of the thread's stack is left. See [Embedding — Call Stack Depth Limit](embedding.md#call-stack-depth-limit). A throw that leaves a native entry is raised after the dispatch loop's `except` block has ended, not inside it: on i386-win32 FPC runs an `except` block on top of the stack the exception was raised on, so a throw raised inside it would keep the stack of every entry it unwinds through until it is caught.
-- Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)), so the compiler never takes a call's result type from one: arithmetic on the call uses the generic opcodes, and a binding initialized from it gets no inferred type. See [Type Annotations](type-annotations.md).
+- Type enforcement is opt-in. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced ([#1276](https://github.com/frostney/GocciaScript/issues/1276)), so the compiler never takes a call's result type from one: arithmetic on the call uses the generic opcodes, and a binding initialized from it gets no inferred type. See [Type Annotations](type-annotations.md).
 - Like the outermost frame, an imported module's top level is not a nested call. It runs above the frame of whatever evaluates it (the importer's top level, or a call that read a deferred namespace), and `TGocciaVM.ExecuteImportedModule` gives its frame that frame's depth instead of one more, so `--max-stack` counts only the calls live below it. Because the frame below can hold exception handlers at the same depth, an exception unwinding in a native VM entry matches only the handlers that entry installed.
 
 ## Opcode Layout
@@ -185,7 +182,7 @@ Cached pointers (scope, shape) are compared for identity only and never derefere
 
 Computed property access (`OP_ARRAY_GET`/`OP_ARRAY_SET`, `OP_GET_INDEX`/`OP_SET_INDEX`, `OP_DEL_INDEX`) shares one key-classification and receiver-dispatch implementation (`ClassifyPropertyKey` plus the `ExecGet/ExecSet/ExecDeleteComputedProperty` cores in `Goccia.VM.pas`); per-opcode semantic differences are explicit `TGocciaComputedAccessOptions`, not divergent copies. The get and set cores are `ExecGetComputedPropertyGeneric` and `ExecSetComputedPropertyGeneric`; `ExecGetComputedProperty` and `ExecSetComputedProperty` reach them only after trying the element accesses that need no property key, because the cores hold [managed locals](core-patterns.md#managed-locals-on-hot-paths). A dense `TGocciaArrayValue` element at an integer-register index is read there directly, and `OP_ARRAY_SET` overwrites one through `TrySetDenseElementFast`, which declines when the array holds any descriptor, is frozen, or has a hole at that index; a hole, an out-of-range index, or any other key takes the core. A non-BigInt `TGocciaTypedArrayValue` receiver at an array-index key takes an unboxed element fast path (`TryReadIndexedScalar`/`TryWriteIndexedScalar`): reads move the element straight into a register scalar and numeric-scalar writes store it directly, so neither allocates the heap `TGocciaNumberLiteralValue` or index-name string the generic object branch would. Mutable fixed-length `ArrayBuffer` views additionally retain their constructor-proven data block and length, checking only detachment and the element index on each access; resizable, shared, and immutable backing buffers retain the general synchronization path. BigInt kinds, non-index keys, and non-scalar write values fall through to the boxed path; an out-of-range or detached **read** does too (yielding `undefined`). A non-BigInt scalar **write**, however, keeps its integer-indexed exotic semantics in place even for an out-of-range index or immutable backing buffer — the store is skipped and reported as successful, never boxed. All value semantics are preserved, including the observable `ToNumber` ordering of integer-indexed `[[Set]]`.
 
-The current optimization target is reducing bytecode-mode suite time further without diverging interpreter and bytecode semantics.
+The current optimization target is reducing suite time further without changing observable semantics.
 
 Numeric call-derived proof is deliberately closed-world. It applies only to a
 simple, const-bound local arrow with no escape, optional call, default/rest/
@@ -223,7 +220,8 @@ The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Cov
 
 ## Runtime Error Diagnostics
 
-A runtime fault must read identically in both execution modes. This machinery
+A runtime fault names what the author wrote (the callee, the binding, the
+source position) rather than what the VM's registers hold. This machinery
 keeps that true:
 
 - **Call-site descriptors.** `TGocciaFunctionTemplate` carries a runtime-only
@@ -236,14 +234,12 @@ keeps that true:
   text), not a per-instruction runtime cost. The VM reads the table only when
   the callee turns out not to be callable or constructable, so
   `obj.missingMethod()` reports `obj.missingMethod is not a function` rather
-  than `undefined is not a function`. The evaluator derives the same descriptor
-  straight from the AST, and both modes format the message and suggestion
-  through the same functions. The table is **not** serialised to `.gbc`: a
+  than `undefined is not a function`. The table is **not** serialised to `.gbc`: a
   module loaded from binary bytecode falls back to the runtime-type-name form of
   the message (see the note below).
 - **Binding names.** A temporal-dead-zone `ReferenceError` reads
   `Cannot access 'x' before initialization` and a const assignment reads
-  `Assignment to constant variable 'x'`, as in the evaluator. The compiler
+  `Assignment to constant variable 'x'`. The compiler
   records each local's name, slot and live PC range in the template's debug
   locals (`TGocciaCompilerScope.AttachTemplate`, closed at `EndScope`), and
   upvalue descriptors already carry names; the VM's hole checks look the name up
@@ -334,8 +330,8 @@ keeps that true:
 - **Executing-engine scope, enforced again at render.** Each engine's module
   loader owns one scope, identified by a durable process-monotonic principal;
   registration targets the loader's own scope, and capture targets the scope the
-  engine activates around its execution (`RunModuleForSourceType` for bytecode,
-  `Execute`/`ExecuteProgram` for the interpreter) — and around every cross-engine
+  engine activates around its execution (`Execute`, `ExecuteProgram`,
+  `RunModuleForSourceType` and `CallAsRun`) — and around every cross-engine
   transition (`ActivateRealmExecutionContext` for a ShadowRealm `evaluate`/
   `importValue`/wrapped function activates the child scope and restores it on
   return). The excerpt is additionally stamped with its principal and re-checked
@@ -382,7 +378,7 @@ execution path.
 
 ## Instruction Limit
 
-The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, execution uses the instrumented loop: the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When the budget is inactive, production dispatch omits that poll entirely. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.
+The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, execution uses the instrumented loop: the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When the budget is inactive, production dispatch omits that poll entirely. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API.
 
 ## Binary Format
 
@@ -415,7 +411,7 @@ bodies' key prefixes, and, for a call in a computed class key, the register
 of the class being defined (ADR 0134).
 
 The VM parses the source, raises the eval's early errors, and has the
-executor compile it with `TGocciaCompiler.CompileDirectEval`: the record
+engine compile it with `TGocciaCompiler.CompileDirectEval`: the record
 rebuilds the calling function's scope, a caller local at its register and a
 caller upvalue at its index, and the eval code compiles as an arrow function
 nested there, so its upvalue descriptors name the caller's cells and `this`,
@@ -473,17 +469,17 @@ opcodes must stay below it.
 
 ## Current Status
 
-- Every entry point runs the Goccia VM by default; `--mode=interpreted` selects the tree-walk interpreter until it is removed.
-- The full JavaScript suite passes in bytecode mode.
+- Every entry point runs the Goccia VM; GocciaScript 0.15.0 removed `--mode` and the `"mode"` config key ([Build System — Execution Mode](build-system.md#execution-mode)).
+- The full JavaScript suite passes.
 - The old generic VM/runtime bridge has been removed from the active build.
 
 ## Design Rationale
 
-GocciaScript includes a bytecode executor built specifically for GocciaScript. The current VM is not a language-agnostic subsystem: it executes directly on `TGocciaValue`, shares the same runtime objects as the interpreter, and uses a Goccia-owned opcode surface.
+GocciaScript executes on a bytecode VM built specifically for GocciaScript. The VM is not a language-agnostic subsystem: it executes directly on `TGocciaValue`, shares its runtime objects with the built-ins and host code, and uses a Goccia-owned opcode surface.
 
 ### Why a Bytecode VM?
 
-The tree-walk interpreter directly evaluates AST nodes via recursive function calls. This is simple and debuggable, but carries overhead from VMT dispatch on every AST node, deep call stacks for nested expressions, and no opportunity for instruction-level optimization. A bytecode VM trades compilation cost for faster execution: flat instruction dispatch, register-based operands, and a compact in-memory representation.
+A tree-walk interpreter, which GocciaScript also had until 0.15.0, evaluates AST nodes via recursive function calls. This is simple and debuggable, but carries overhead from VMT dispatch on every AST node, deep call stacks for nested expressions, and no opportunity for instruction-level optimization. A bytecode VM trades compilation cost for faster execution: flat instruction dispatch, register-based operands, and a compact in-memory representation.
 
 ### Why Register-Based?
 
@@ -497,15 +493,15 @@ The solution is a split opcode space with three tiers:
 - **Non-core generic range (128–166):** generic arithmetic and bitwise operations that are still explicit bytecode but handle mixed or untyped operands, plus a few class/object definition helpers.
 - **Semantic helper range (167–255):** language-level orchestration operations such as imports/exports, dynamic import, `import.meta`, await, and resource disposal, plus opcodes added later — including fused superinstructions on hot paths — so the range is no longer only cold code.
 
-This split keeps the dispatch surface organized while still allowing the bytecode executor to be explicitly Goccia-specific.
+This split keeps the dispatch surface organized while still allowing the VM to be explicitly Goccia-specific.
 
 ### Why Shared Runtime Values?
 
-The VM shares the `TGocciaValue` object model with the interpreter rather than maintaining a second value representation. Registers use `TGocciaRegister` — a tagged variant record (`Goccia.VM.Registers.pas`) that keeps booleans, integers, and floats unboxed as scalars. Values only cross into `TGocciaValue` when they leave the register file (e.g., property access, function calls, GC marking).
+The VM shares the `TGocciaValue` object model with the built-ins and host code rather than maintaining a VM-only value representation. Registers use `TGocciaRegister` — a tagged variant record (`Goccia.VM.Registers.pas`) that keeps booleans, integers, and floats unboxed as scalars. Values only cross into `TGocciaValue` when they leave the register file (e.g., property access, function calls, GC marking).
 
 That choice removes:
 
-- conversion layers between interpreter values and VM values
+- conversion layers between VM values and the values built-ins and hosts see
 - duplicate object models for arrays, objects, classes, and promises
 - bridge-only GC root management
 - bytecode/runtime disagreement over `undefined`, `null`, and sparse array holes
@@ -523,11 +519,13 @@ Language features are compiled into compact bytecode instruction sequences rathe
 - **Increment/decrement (`++`/`--`)** — The compiler emits fused numeric update opcodes for increment/decrement sites. Prefix or discarded-result sites use `OP_INC_NUMERIC`/`OP_DEC_NUMERIC`; postfix sites with distinct result and storage registers use `OP_POST_INC_NUMERIC`/`OP_POST_DEC_NUMERIC` so the old numeric value is produced while the binding/property value is updated. A postfix update whose result belongs in the updated local's own register, as in `(a = a++) => a` or `var x = x++`, produces it in a temporary and moves it into the local after the store. All variants preserve BigInt, convert other inputs through `ToNumeric`, and keep the read/convert/write side effects required by ES2026 §13.4.4.1. They operate on a local's own register without a preceding `OP_GET_LOCAL`, so they perform its TDZ check themselves: a register still holding the hole throws `ReferenceError`. That check sits on the non-numeric path, so an update of a number costs nothing extra. An update of a `const` reads and converts its operand in the same way, on a temporary register, and throws the assignment `TypeError` where the store would be.
 - **Traditional `for` lexical bindings** — `let`/`const` loop initializers keep the full per-iteration environment path whenever closures, direct eval, suspension, destructuring, pattern matching, `with`, `using`, or nested declaration boundaries can observe binding identity. Plain generated/counting loops share the loop lexical scope and avoid the otherwise redundant copy-in/copy-out sequence. Each copy of a binding into the next iteration's environment (ES2026 §14.7.4.4 CreatePerIterationEnvironment) reads the binding's last value: where a closure may have captured the binding, which may have written its cell and left the register stale, the copy uses `OP_GET_LOCAL`, and otherwise it stays a plain `OP_MOVE`. That covers closures created in the initializer, the test, the body and the update, and the counted-loop fast path.
 
+- **Decorators** — A decorated class definition, or one with an `accessor`, compiles to `OP_BEGIN_DECORATORS`, one `OP_APPLY_ELEMENT_DECORATOR_CONST` or `OP_APPLY_CLASS_DECORATOR` per decorator, and `OP_FINISH_DECORATORS`. `OP_BEGIN_DECORATORS` creates the class's decoration session (its metadata object, its extra initializer lists and the class its class decorators have returned so far) in a register the compiler allocates for the definition, and the later opcodes read it from the register after their decorator's (`R[A+1]`). The VM keeps no decoration state of its own, so a decorator that defines and decorates another class, directly, in a static block or in a generator it steps, gives that class its own session, and a generator or async function that suspends in a decorator expression keeps its session in its saved registers. A class definition that throws leaves its session to the collector.
+
 This keeps the emitted bytecode compact and makes opcode additions deliberate instead of reactive.
 
 ### Compatibility Scope Helpers
 
-Compatibility features that alter identifier lookup still compile to explicit VM state instead of falling back to interpreter behavior.
+Compatibility features that alter identifier lookup compile to explicit VM state.
 
 - **`arguments` object** — With `--compat-arguments-object` enabled, function templates snapshot the current call arguments in the frame. `--compat-non-strict-mode` does not enable this helper by itself. `OP_CREATE_ARGUMENTS` materializes the object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume. Operand `B` selects mapped semantics for sloppy simple parameter lists and operand `C` carries the formal parameter count; the VM forces those parameter locals into cells so indexed properties alias parameter bindings even if the object escapes. Strict functions, modules, and non-simple parameter lists use unmapped arguments objects.
 - **Function-level `var` bindings** — With `--compat-var`, the compiler hoists a function body's vars (and, in non-strict code, a block function's Annex B var binding) into registers, and the body starts with one `OP_LOAD_UNDEFINED` per hoisted var (ES2026 §10.2.11 step 29.c.i.3). A new register window is cleared, but the call copies every argument into the registers after `this`, so arguments past the last parameter land in the first vars' registers, and destructuring a parameter uses the registers above the parameters as temporaries. A var named like a parameter keeps the parameter's value, and the name of a body function declaration is skipped because its function object is stored there before the body runs. A body without a var emits nothing extra.
@@ -570,7 +568,7 @@ The VM has no property-flag primitives of its own; integrity levels belong to th
 
 - `Freeze` and `Seal` follow ES2026 §7.3.15 SetIntegrityLevel: prevent extensions, then redefine each own key with `[[Configurable]]: false` (and `[[Writable]]: false` for data properties when freezing).
 - `TestIntegrityFrozen` / `TestIntegritySealed` follow §7.3.16 TestIntegrityLevel.
-- Objects with their own storage override some of these methods — `TGocciaArrayValue`, `TGocciaModuleNamespaceObject`, and the VM's `TGocciaVMLiteralObjectValue` among them — and the VM reaches them through the same virtual calls as the interpreter.
+- Objects with their own storage override some of these methods — `TGocciaArrayValue`, `TGocciaModuleNamespaceObject`, and the VM's `TGocciaVMLiteralObjectValue` among them — and the VM reaches them through the same virtual calls as the built-ins.
 
 ### Spread Calling Consolidation
 
@@ -584,8 +582,7 @@ During code review, the following findings were investigated and determined to b
 
 ## Related documents
 
-- [Architecture](architecture.md) — Shared source pipeline and both execution modes at a glance
-- [Interpreter](interpreter.md) — Tree-walk execution (`Goccia.Interpreter`, `Goccia.Evaluator.*`)
+- [Architecture](architecture.md) — Source pipeline, engine layers, scopes, errors and the microtask queue
 - [Core patterns](core-patterns.md) — Recurring Pascal conventions
 - [GocciaScript Context](../CONTEXT.md) — Canonical project terminology
 
@@ -593,5 +590,6 @@ During code review, the following findings were investigated and determined to b
 
 - Do not add new bytecode/runtime concepts under old generic naming.
 - Prefer `TGoccia*` bytecode and VM types in new code.
-- Keep interpreter and bytecode semantics aligned through shared runtime objects, not conversion layers.
+- Keep the VM and the built-ins on shared runtime objects, not conversion layers.
+- Evaluate a call that can run guest code into a local before storing its result into a register, local cell or argument slot. Guest code can move those stacks, and Pascal leaves open whether `FRegisters[A] := F(...)` takes the slot's address before calling `F`; FPC 3.2.4-rc2 and trunk can take it first, which writes the result into the freed block. `scripts/check-vm-stack-stores.ts` rejects such a store.
 - Allocate an exception handler's register before compiling the region it protects. A throw skips the `OP_CLOSE_UPVALUE` instructions of the scopes it leaves, so when it reaches a handler the VM detaches the closure cell of every local slot above that handler's register.

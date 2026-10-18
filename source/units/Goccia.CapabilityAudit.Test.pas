@@ -12,9 +12,6 @@ uses
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Engine,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.Modules,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Sandbox,
@@ -176,14 +173,12 @@ end;
 procedure TCapabilityAuditTests.TestSinkFailurePropagates;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
   ErrorMessage: string;
   Raised: Boolean;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create('audit-test.js', Source, Executor);
+  Engine := TGocciaEngine.Create('audit-test.js', Source);
   try
     Engine.CapabilityAuditSink := FailingSink;
     FSinkInvocationCount := 0;
@@ -206,13 +201,12 @@ begin
     Expect<Boolean>(Pos('"layers"', ErrorMessage) > 0).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
 
 procedure TCapabilityAuditTests.TestSandboxPromiseCannotCatchSinkFailure;
-  procedure RunWithExecutor(const AExecutor: TGocciaExecutor);
+  procedure Run;
   var
     Source: TStringList;
     Engine: TGocciaEngine;
@@ -226,7 +220,7 @@ procedure TCapabilityAuditTests.TestSandboxPromiseCannotCatchSinkFailure;
       '  await fs.promises.readFile("../../missing.txt", "utf8");' +
       sLineBreak +
       '} catch (e) {}';
-    Engine := TGocciaEngine.Create('/audit-promise-test.js', Source, AExecutor);
+    Engine := TGocciaEngine.Create('/audit-promise-test.js', Source);
     Context := TGocciaSandboxContext.Create;
     try
       Engine.SourceType := stModule;
@@ -247,19 +241,16 @@ procedure TCapabilityAuditTests.TestSandboxPromiseCannotCatchSinkFailure;
     finally
       Engine.Free;
       Context.Free;
-      AExecutor.Free;
       Source.Free;
     end;
   end;
 begin
-  RunWithExecutor(TGocciaInterpreterExecutor.Create);
-  RunWithExecutor(TGocciaBytecodeExecutor.Create);
+  Run;
 end;
 
 procedure TCapabilityAuditTests.TestVMAsyncIteratorCannotCatchSinkFailure;
 var
   Source: TStringList;
-  Executor: TGocciaBytecodeExecutor;
   Engine: TGocciaEngine;
   Raised: Boolean;
 begin
@@ -275,9 +266,7 @@ begin
     'try {' + sLineBreak +
     '  for await (const value of iterable) {}' + sLineBreak +
     '} catch (e) {}';
-  Executor := TGocciaBytecodeExecutor.Create;
-  Engine := TGocciaEngine.Create('/audit-async-iterator-test.js', Source,
-    Executor);
+  Engine := TGocciaEngine.Create('/audit-async-iterator-test.js', Source);
   try
     Engine.SourceType := stModule;
     Engine.CapabilityAuditSink := FailingSink;
@@ -294,7 +283,6 @@ begin
     Expect<Boolean>(Raised).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -302,7 +290,6 @@ end;
 procedure TCapabilityAuditTests.TestFailedRuntimeInstallRestoresRootClampCallback;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
   Runtime: TGocciaRuntimeCore;
   Context: TGocciaSandboxContext;
@@ -310,8 +297,7 @@ var
   Raised: Boolean;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create('audit-attach-test.js', Source, Executor);
+  Engine := TGocciaEngine.Create('audit-attach-test.js', Source);
   Context := TGocciaSandboxContext.Create;
   try
     Runtime := AttachRuntime(Engine);
@@ -333,7 +319,6 @@ begin
   finally
     Engine.Free;
     Context.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -341,7 +326,6 @@ end;
 procedure TCapabilityAuditTests.TestSandboxDetachRestoresExistingModules;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
   Runtime: TGocciaRuntimeCore;
   Context: TGocciaSandboxContext;
@@ -351,8 +335,7 @@ var
   CurrentModule: TGocciaModule;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create('audit-detach-test.js', Source, Executor);
+  Engine := TGocciaEngine.Create('audit-detach-test.js', Source);
   Context := TGocciaSandboxContext.Create;
   ExistingFsModule := TGocciaModule.Create('existing-fs');
   ExistingGocciaModule := TGocciaModule.Create('existing-goccia');
@@ -377,7 +360,6 @@ begin
     ExistingGocciaModule.Free;
     ExistingFsModule.Free;
     Context.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -385,15 +367,13 @@ end;
 procedure TCapabilityAuditTests.TestEffectiveCapabilitiesEmittedOnce;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
   Capabilities: TGocciaCapabilities;
 begin
   FRecordedEvents := TStringList.Create;
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
   Capabilities := TGocciaCapabilities.None.Allow(gcNet, 'example.com');
-  Engine := TGocciaEngine.Create('audit-effective.js', Source, Executor,
+  Engine := TGocciaEngine.Create('audit-effective.js', Source,
     Capabilities);
   try
     Engine.CapabilityAuditSink := RecordingSink;
@@ -404,7 +384,6 @@ begin
       Capabilities.ToJSON);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
     FRecordedEvents.Free;
     FRecordedEvents := nil;
@@ -414,13 +393,11 @@ end;
 procedure TCapabilityAuditTests.TestEffectiveCapabilitiesPrecedeFirstEvent;
 var
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
 begin
   FRecordedEvents := TStringList.Create;
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create('audit-effective-first.js', Source, Executor);
+  Engine := TGocciaEngine.Create('audit-effective-first.js', Source);
   try
     Engine.CapabilityAuditSink := RecordingSink;
     Engine.EmitCapabilityAudit(gckFFIOpen, gcdDeny, 'lib', 'no grant');
@@ -431,7 +408,6 @@ begin
     Expect<string>(FRecordedEvents[1]).ToBe('ffi.open|deny|lib');
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
     FRecordedEvents.Free;
     FRecordedEvents := nil;
@@ -441,21 +417,18 @@ end;
 procedure TCapabilityAuditTests.TestChildContextDoesNotRepeatEffectiveSet;
 var
   Source, ChildSource: TStringList;
-  Executor, ChildExecutor: TGocciaInterpreterExecutor;
   Engine, Child: TGocciaEngine;
 begin
   FRecordedEvents := TStringList.Create;
   Source := TStringList.Create;
   ChildSource := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
-  ChildExecutor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create('audit-parent.js', Source, Executor);
+  Engine := TGocciaEngine.Create('audit-parent.js', Source);
   Child := nil;
   try
     Engine.CapabilityAuditSink := RecordingSink;
     Engine.AuditEffectiveCapabilities;
     Child := TGocciaEngine.Create('audit-child.js', ChildSource,
-      ChildExecutor, Engine.Capabilities);
+      Engine.Capabilities);
     Child.ConfigureCapabilityAuditAsChildOf(Engine);
     Child.AuditEffectiveCapabilities;
     Child.EmitCapabilityAudit(gckFFIOpen, gcdDeny, 'lib', 'no grant');
@@ -464,8 +437,6 @@ begin
   finally
     Child.Free;
     Engine.Free;
-    ChildExecutor.Free;
-    Executor.Free;
     ChildSource.Free;
     Source.Free;
     FRecordedEvents.Free;
@@ -517,7 +488,6 @@ procedure TCapabilityAuditTests.TestNodeModulesResolutionEmitsImportAudit;
 var
   Root, EntryPath: string;
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
 begin
   Root := TestProjectRoot('node-modules');
@@ -525,8 +495,7 @@ begin
   FRecordedEvents := TStringList.Create;
   Source := TStringList.Create;
   Source.Text := 'import { value } from "pkg"; value;';
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create(EntryPath, Source, Executor,
+  Engine := TGocciaEngine.Create(EntryPath, Source,
     TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE));
   try
     Engine.SourceType := stModule;
@@ -537,7 +506,6 @@ begin
       'import.node-modules|allow|pkg') >= 0).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
     FRecordedEvents.Free;
     FRecordedEvents := nil;
@@ -549,7 +517,6 @@ procedure TCapabilityAuditTests.TestUngrantedNodeModulesEmitsDeny;
 var
   Root, EntryPath, ErrorMessage: string;
   Source: TStringList;
-  Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
 begin
   Root := TestProjectRoot('node-modules-denied');
@@ -557,8 +524,7 @@ begin
   FRecordedEvents := TStringList.Create;
   Source := TStringList.Create;
   Source.Text := 'import { value } from "pkg"; value;';
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create(EntryPath, Source, Executor);
+  Engine := TGocciaEngine.Create(EntryPath, Source);
   try
     Engine.SourceType := stModule;
     AttachRuntime(Engine);
@@ -576,7 +542,6 @@ begin
       'import.node-modules|deny|pkg') >= 0).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
     FRecordedEvents.Free;
     FRecordedEvents := nil;

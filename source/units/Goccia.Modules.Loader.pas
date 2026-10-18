@@ -18,7 +18,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Error.ThrowErrorCallback,
-  Goccia.Evaluator.Context,
+  Goccia.EvaluationContext,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -42,8 +42,8 @@ type
     declarations of a module-form program: bind every top-level function
     declaration of AProgram, an `export default function` included, to a
     function object in AContext.Scope, the module environment, before any
-    module body runs. The executor creates the functions as it runs code, so
-    the bytecode executor compiles the program here and leaves it in
+    module body runs. The engine creates the functions as compiled
+    closures, so it compiles the program here and leaves it in
     AContext.CompiledModule for its module body evaluator. }
   TGocciaModuleFunctionInstantiator = procedure(const AProgram: TGocciaProgram;
     var AContext: TGocciaEvaluationContext) of object;
@@ -107,6 +107,14 @@ type
     FModuleLoadStates: TOrderedStringMap<TObject>;
     FModuleSourceValues: TOrderedStringMap<TGocciaValue>;
     FRetiredModules: TGocciaModuleList;
+    { The cached record each reload in progress links its new version into,
+      by cache key (CheckForModuleReload). }
+    FReloadTargets: TOrderedStringMap<TGocciaModule>;
+    { Reloaded records whose new version linked inside a link that has not
+      finished yet, by cache key. The outermost LoadModule or
+      LinkModuleRequest commits them once its whole graph linked, or rolls
+      them back when it fails (FinishPendingReloads). }
+    FPendingReloads: TOrderedStringMap<TGocciaModule>;
     FVirtualModules: TGocciaVirtualModuleRegistry;
     FWarnedVirtualCollisions: TOrderedStringMap<Boolean>;
     // This engine's own diagnostic source scope (its principal). Modules load
@@ -171,11 +179,10 @@ type
     function IsHostRequest(const ASpecifier,
       AImportingFilePath: string): Boolean;
 
-    procedure CopyModuleContents(const ASourceModule,
-      ATargetModule: TGocciaModule);
     function CaptureLoadStates: TList<TObject>;
     procedure DiscardLinkedModules(
       const APreservedStates: TList<TObject>);
+    procedure FinishPendingReloads(const ACommit: Boolean);
     procedure EvaluateLinkedModule(const AModule: TGocciaModule);
     function InstantiateModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
@@ -254,6 +261,10 @@ type
       AImportingFilePath: string; const AImportNames: array of string;
       const ALine, AColumn: Integer): TGocciaModule;
     function EvaluateModule(const AModule: TGocciaModule): TGocciaModule;
+    class function EvaluationWaitPromise(const ARequestedModule,
+      AImporter: TGocciaModule): TGocciaPromiseValue; static;
+    class function AllEvaluationsSettled(
+      const APromises: TList<TGocciaPromiseValue>): TGocciaPromiseValue; static;
     function LoadModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
     { Host enrollment entry point. Ownership is stamped on the resolved root and
@@ -619,6 +630,8 @@ begin
   FModuleLoadStates := TOrderedStringMap<TObject>.Create;
   FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
   FRetiredModules := TGocciaModuleList.Create;
+  FReloadTargets := TOrderedStringMap<TGocciaModule>.Create;
+  FPendingReloads := TOrderedStringMap<TGocciaModule>.Create;
   FVirtualModules := TGocciaVirtualModuleRegistry.Create;
   FWarnedVirtualCollisions := TOrderedStringMap<Boolean>.Create;
   FDiagnosticScope := TGocciaDiagnosticSourceScope.Create;
@@ -704,6 +717,8 @@ begin
   FModules.Free;
   FModuleSourceValues.Free;
   FRetiredModules.Free;
+  FReloadTargets.Free;
+  FPendingReloads.Free;
   FVirtualModules.Free;
   FWarnedVirtualCollisions.Free;
   FDiagnosticScope.Free;
@@ -1614,7 +1629,7 @@ procedure TGocciaModuleLoader.BindRuntime(const AGlobalScope: TGocciaGlobalScope
 begin
   if Assigned(FGlobalScope) and (FGlobalScope <> AGlobalScope) then
     raise Exception.Create(
-      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine/executor.');
+      'TGocciaModuleLoader instances are single-runtime; create a new loader per engine.');
   FGlobalScope := AGlobalScope;
   FOnError := AOnError;
 end;
@@ -1663,10 +1678,8 @@ end;
 
 // ES2026 §16.2.1.7.3.1 InitializeEnvironment: while linking a module, a named
 // import whose ResolveExport result is null or ambiguous is a SyntaxError. The
-// tree-walking interpreter also enforces this lazily as it evaluates each
-// import declaration (Goccia.AST.Statements), but the bytecode compiler resolves
-// import bindings at their use sites, so missing names must be rejected here at
-// link time to keep both engines in lockstep (ADR 0014). Source modules still
+// bytecode compiler resolves import bindings at their use sites, so missing
+// names must be rejected here at link time (ADR 0014). Source modules still
 // mid-evaluation in a cycle are skipped via IsEvaluatingModulePath, matching the
 // re-export validation in RegisterStaticModuleExports.
 procedure TGocciaModuleLoader.ValidateStaticNamedImports(
@@ -1776,12 +1789,6 @@ begin
   RetireModule(AModule);
 end;
 
-procedure TGocciaModuleLoader.CopyModuleContents(const ASourceModule,
-  ATargetModule: TGocciaModule);
-begin
-  ATargetModule.CopyExportsFrom(ASourceModule);
-end;
-
 procedure TGocciaModuleLoader.RetireModule(const AModule: TGocciaModule);
 begin
   if Assigned(AModule) and (FRetiredModules.IndexOf(AModule) < 0) then
@@ -1817,11 +1824,40 @@ begin
       LoadState := LoadStates[I];
       FModuleLoadStates.Remove(LoadState.ResolvedPath);
       FModules.Remove(LoadState.CacheKey);
-      RetireModule(LoadState.Module);
+      { A reloaded record goes back to its previous version and its cache
+        entry (FinishPendingReloads); only a record this link created
+        retires. }
+      if not FPendingReloads.ContainsKey(LoadState.CacheKey) then
+        RetireModule(LoadState.Module);
       LoadState.Free;
     end;
   finally
     LoadStates.Free;
+  end;
+  FinishPendingReloads(False);
+end;
+
+{ A reload's new version is only kept once the link that reached it finished:
+  a later module of the same graph can still fail to link, and then the
+  reloaded record must hold the version importers were reading, cached again
+  and still older than its source so the next request retries. }
+procedure TGocciaModuleLoader.FinishPendingReloads(const ACommit: Boolean);
+var
+  Pair: TOrderedStringMap<TGocciaModule>.TKeyValuePair;
+begin
+  if FPendingReloads.Count = 0 then
+    Exit;
+  try
+    for Pair in FPendingReloads do
+      if ACommit then
+        Pair.Value.CommitReload
+      else
+      begin
+        Pair.Value.RollbackReload;
+        FModules.AddOrSetValue(Pair.Key, Pair.Value);
+      end;
+  finally
+    FPendingReloads.Clear;
   end;
 end;
 
@@ -1847,7 +1883,10 @@ begin
       end;
 
       if IsOutermostLink then
+      begin
+        FinishPendingReloads(True);
         EvaluateLinkedModule(Result);
+      end;
     except
       if IsOutermostLink then
         DiscardLinkedModules(PreservedStates);
@@ -1902,6 +1941,8 @@ begin
               [Specifier, AImportNames[I]]),
             ALine, AColumn, AImportingFilePath, nil);
         end;
+      if IsOutermostLink then
+        FinishPendingReloads(True);
     except
       if IsOutermostLink then
         DiscardLinkedModules(PreservedStates);
@@ -1923,6 +1964,64 @@ begin
   Result := AModule;
   if FLinkingDepth = 0 then
     EvaluateLinkedModule(AModule);
+end;
+
+{ The promise AImporter waits on before it executes, for one module it
+  requested (ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation step 11.c): the
+  promise of the asynchronous cycle the requested module belongs to, unless
+  the importer is that cycle's root, or else the requested module's own
+  evaluation promise. Nil when the requested module evaluated
+  synchronously. }
+class function TGocciaModuleLoader.EvaluationWaitPromise(
+  const ARequestedModule, AImporter: TGocciaModule): TGocciaPromiseValue;
+var
+  WaitModule: TGocciaModule;
+begin
+  Result := nil;
+  if not Assigned(ARequestedModule) then
+    Exit;
+
+  WaitModule := ARequestedModule.AsyncCycleRoot;
+  if Assigned(WaitModule) and (WaitModule <> AImporter) and
+     (WaitModule.EvaluationPromise is TGocciaPromiseValue) then
+    Exit(TGocciaPromiseValue(WaitModule.EvaluationPromise));
+
+  if ARequestedModule.EvaluationPromise is TGocciaPromiseValue then
+    Result := TGocciaPromiseValue(ARequestedModule.EvaluationPromise);
+end;
+
+{ A promise that fulfills once every one of APromises has fulfilled and
+  rejects with the first rejection, as an importer's
+  [[PendingAsyncDependencies]] count down (ES2026 §16.2.1.6.1.3.4
+  AsyncModuleExecutionFulfilled, §16.2.1.6.1.3.5
+  AsyncModuleExecutionRejected). Nil for none; the promise itself for one. }
+class function TGocciaModuleLoader.AllEvaluationsSettled(
+  const APromises: TList<TGocciaPromiseValue>): TGocciaPromiseValue;
+var
+  AggregatePromise: TGocciaPromiseValue;
+  FulfillHandler: TGocciaNativeFunctionValue;
+  I: Integer;
+  RejectHandler: TGocciaNativeFunctionValue;
+  WaitState: TGocciaModuleEvaluationWaitState;
+begin
+  Result := nil;
+  if (not Assigned(APromises)) or (APromises.Count = 0) then
+    Exit;
+  if APromises.Count = 1 then
+    Exit(APromises[0]);
+
+  AggregatePromise := TGocciaPromiseValue.Create;
+  WaitState := TGocciaModuleEvaluationWaitState.Create(AggregatePromise,
+    APromises.Count);
+  FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    WaitState.Fulfill, '<module-dependency-fulfill>', 1);
+  FulfillHandler.CapturedRoot := WaitState;
+  RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+    WaitState.Reject, '<module-dependency-reject>', 1);
+  RejectHandler.CapturedRoot := WaitState;
+  for I := 0 to APromises.Count - 1 do
+    APromises[I].InvokeThen(FulfillHandler, RejectHandler);
+  Result := AggregatePromise;
 end;
 
 function TGocciaModuleLoader.LoadHostModule(const AModulePath,
@@ -1974,38 +2073,16 @@ procedure TGocciaModuleLoader.EvaluateLinkedModule(
   const AModule: TGocciaModule);
 var
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  AggregatePromise: TGocciaPromiseValue;
   DeferredBody: TGocciaDeferredModuleBody;
   DeferredHandler: TGocciaNativeFunctionValue;
   EvalPromise: TGocciaPromiseValue;
-  FulfillHandler: TGocciaNativeFunctionValue;
   I: Integer;
   LoadState: TGocciaModuleLoadState;
   LoadStateObject: TObject;
   PendingDependencyPromise: TGocciaPromiseValue;
   PendingPromises: TList<TGocciaPromiseValue>;
   ProgramConsumed: Boolean;
-  RejectHandler: TGocciaNativeFunctionValue;
   Succeeded: Boolean;
-  WaitState: TGocciaModuleEvaluationWaitState;
-
-  function WaitPromiseFor(
-    const ARequestedModule: TGocciaModule): TGocciaPromiseValue;
-  var
-    WaitModule: TGocciaModule;
-  begin
-    Result := nil;
-    if not Assigned(ARequestedModule) then
-      Exit;
-
-    WaitModule := ARequestedModule.AsyncCycleRoot;
-    if Assigned(WaitModule) and (WaitModule <> AModule) and
-       (WaitModule.EvaluationPromise is TGocciaPromiseValue) then
-      Exit(TGocciaPromiseValue(WaitModule.EvaluationPromise));
-
-    if ARequestedModule.EvaluationPromise is TGocciaPromiseValue then
-      Result := TGocciaPromiseValue(ARequestedModule.EvaluationPromise);
-  end;
 
   procedure DrainRequestedModuleEvaluationPromises;
   var
@@ -2016,7 +2093,8 @@ var
     try
       for J := 0 to LoadState.RequestedModules.Count - 1 do
       begin
-        EvalPromise := WaitPromiseFor(LoadState.RequestedModules[J]);
+        EvalPromise := EvaluationWaitPromise(LoadState.RequestedModules[J],
+          AModule);
         if not Assigned(EvalPromise) then
           Continue;
 
@@ -2031,26 +2109,7 @@ var
         end;
       end;
 
-      if PendingPromises.Count = 0 then
-        Exit;
-      if PendingPromises.Count = 1 then
-      begin
-        PendingDependencyPromise := PendingPromises[0];
-        Exit;
-      end;
-
-      AggregatePromise := TGocciaPromiseValue.Create;
-      WaitState := TGocciaModuleEvaluationWaitState.Create(AggregatePromise,
-        PendingPromises.Count);
-      FulfillHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        WaitState.Fulfill, '<module-dependency-fulfill>', 1);
-      FulfillHandler.CapturedRoot := WaitState;
-      RejectHandler := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        WaitState.Reject, '<module-dependency-reject>', 1);
-      RejectHandler.CapturedRoot := WaitState;
-      for J := 0 to PendingPromises.Count - 1 do
-        PendingPromises[J].InvokeThen(FulfillHandler, RejectHandler);
-      PendingDependencyPromise := AggregatePromise;
+      PendingDependencyPromise := AllEvaluationsSettled(PendingPromises);
     finally
       PendingPromises.Free;
     end;
@@ -2167,6 +2226,7 @@ var
   PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
   ReExportDecl: TGocciaReExportDeclaration;
+  ReloadTarget: TGocciaModule;
   RequestedModules: TGocciaModuleList;
   RequestedModulePath: string;
   PackageRoot, ResolvedPath: string;
@@ -2738,8 +2798,23 @@ begin
       RequestedModules := TGocciaModuleList.Create;
       LoadState := nil;
       try
-        Module := TGocciaModule.Create(ResolvedPath);
-        Module.IsHostOwned := IsHostOwned;
+        { A reload links the new version into the record already cached:
+          importers, namespace objects and code the previous version left
+          running hold that record, and the evaluation context, the load
+          state and every module this link binds to it must name the same
+          one. }
+        if FReloadTargets.TryGetValue(CacheKey, ReloadTarget) then
+        begin
+          FReloadTargets.Remove(CacheKey);
+          Module := ReloadTarget;
+          Module.BeginReload;
+        end
+        else
+        begin
+          ReloadTarget := nil;
+          Module := TGocciaModule.Create(ResolvedPath);
+          Module.IsHostOwned := IsHostOwned;
+        end;
         Module.LastModified := Content.LastModified;
         FModules.Add(CacheKey, Module);
         FLoadingModules.AddOrSetValue(CacheKey, True);
@@ -2766,8 +2841,6 @@ begin
           Context.ResolveModuleURL := ResolveModuleURL;
           Context.CurrentFilePath := ResolvedPath;
           Context.CurrentModule := Module;
-          Context.CoverageEnabled := False;
-          Context.StrictTypes := FStrictTypesEnabled;
           Context.NonStrictMode := False;
           Context.CompatibilityNonStrictMode := False;
           Context.DisposalTracker := nil;
@@ -2775,8 +2848,8 @@ begin
           PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
           if not Assigned(FInstantiateModuleFunctions) then
             raise EInvalidOperation.Create(
-              'The module loader has no function instantiator; attach an ' +
-              'executor before loading modules');
+              'The module loader has no function instantiator; attach it ' +
+              'to an engine before loading modules');
           FInstantiateModuleFunctions(ProgramNode, Context);
           if GetVarEnabled then
             HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
@@ -2799,6 +2872,10 @@ begin
           LoadState.Status := mlsLinked;
           Result := Module;
           LoadSucceeded := True;
+          { Committed once the outermost link finishes, so a module of the
+            same graph that fails to link after this one rolls it back. }
+          if Assigned(ReloadTarget) then
+            FPendingReloads.AddOrSetValue(CacheKey, ReloadTarget);
           ProgramNode := nil;
           RequestedModules := nil;
         finally
@@ -2815,7 +2892,11 @@ begin
               RequestedModules := nil;
             end;
             FModules.Remove(CacheKey);
-            Module.Free;
+            if Module = ReloadTarget then
+              { CheckForModuleReload caches the record again, as it was. }
+              Module.RollbackReload
+            else
+              Module.Free;
           end;
         end;
       finally
@@ -3352,7 +3433,15 @@ end;
   reload failure reaches script through the import rejection path and must
   name the written specifier, not the resolved host path (ADR 0108), and the
   read check judges the same request the first load judged. ACacheKey only
-  names the cache entry to take out and put back. }
+  names the cache entry to take out and put back.
+
+  AModule stays the module's record. A JavaScript module's new version links
+  into it in place (InstantiateModule, through FReloadTargets), and the
+  request that reached the cache evaluates it there. A data module is built
+  again as a new record holding only values, which AModule takes over before
+  the new record is freed. A version that fails to load leaves AModule
+  cached as it was, still older than its source, so the next request tries
+  again. }
 procedure TGocciaModuleLoader.CheckForModuleReload(const AModule: TGocciaModule;
   const ACacheKey, AModuleRequest, AImportingFilePath: string);
 var
@@ -3370,17 +3459,22 @@ begin
       ReloadCacheKey := AModule.Path;
 
     FModules.Remove(ReloadCacheKey);
+    FReloadTargets.AddOrSetValue(ReloadCacheKey, AModule);
     try
-      ReloadedModule := LoadModule(AModuleRequest, AImportingFilePath);
-    except
-      FModules.AddOrSetValue(ReloadCacheKey, AModule);
-      raise;
+      try
+        ReloadedModule := LoadModule(AModuleRequest, AImportingFilePath);
+      except
+        FModules.AddOrSetValue(ReloadCacheKey, AModule);
+        raise;
+      end;
+    finally
+      FReloadTargets.Remove(ReloadCacheKey);
     end;
 
     if ReloadedModule <> AModule then
     begin
       try
-        CopyModuleContents(ReloadedModule, AModule);
+        AModule.TakeExportsFrom(ReloadedModule);
       finally
         FModules.Remove(ReloadCacheKey);
         FModules.AddOrSetValue(ReloadCacheKey, AModule);

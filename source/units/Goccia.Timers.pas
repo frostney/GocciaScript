@@ -23,8 +23,7 @@
   in here was probed against the pinned Vitest 4.1.10 rather than read off its
   documentation. See docs/adr/0113-deterministic-virtual-timer-queue.md.
 
-  The queue is shared machinery: it sits below both executors, so the
-  interpreter and the bytecode VM get identical behaviour by construction. }
+  The queue is shared machinery that sits below the bytecode VM. }
 
 unit Goccia.Timers;
 
@@ -323,6 +322,10 @@ procedure DiscardRealTimers;
 { Bounded real-mode drain the host runs where a program would otherwise be
   finished. Returns False when the bound stopped it with timers still runnable. }
 function DrainRealTimersForHost: Boolean;
+
+{ True when DrainRealTimersForHost has a timeout to run: real mode, the current
+  realm's queue, intervals left out as that drain leaves them. }
+function HasRealTimeoutsForHost: Boolean;
 
 { An exception a real-mode timer threw, for the host to attribute. }
 function TakeUncaughtTimerError(out AValue: TGocciaValue): Boolean;
@@ -842,8 +845,8 @@ end;
 procedure TGocciaTimerQueue.DiscardTimers;
 begin
   { Drop the queue but keep any uncaught error: the engine's own idle teardown
-    (DiscardRuntimePending) runs this before an interpreted run's test runner
-    gets to call TakeUncaughtTimerError, so clearing it here loses a throwing
+    (DiscardRuntimePending) runs this before the test runner's later runTests
+    call gets to call TakeUncaughtTimerError, so clearing it here loses a throwing
     module-scope timer and lets the file pass. The error is cleared on read
     (TakeUncaughtError) or at the engine boundary (ResetForEngine), which is the
     point at which a leftover value would otherwise reach the next engine. }
@@ -1470,6 +1473,15 @@ begin
     Exit(True);
   Queue.DrainRealTimers;
   Result := not Assigned(Queue.FirstRealTimer(True));
+end;
+
+function HasRealTimeoutsForHost: Boolean;
+var
+  Queue: TGocciaTimerQueue;
+begin
+  Queue := OwningQueueForCurrentRealm;
+  Result := Assigned(Queue) and (not Queue.Faking) and
+    Assigned(Queue.FirstRealTimer(True));
 end;
 
 function TakeUncaughtTimerError(out AValue: TGocciaValue): Boolean;

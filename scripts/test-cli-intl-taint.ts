@@ -64,21 +64,13 @@ throw new Error("${SENTINEL}");
 const tmp = `${import.meta.dir}/../build/.intl-taint-cli.js`;
 await Bun.write(tmp, script);
 
-let failures = 0;
-for (const mode of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-  const label = mode[0] === "--mode=bytecode" ? "bytecode" : "interpreter";
-  console.log(`Intl taint robustness (${label})...`);
-  const res = await $`${BARE} ${tmp} ${mode} 2>&1`.nothrow();
-  const out = res.text();
-  if (!out.includes(SENTINEL)) {
-    console.error(`  FAIL [${label}]: a tainted Intl access threw before the sentinel:\n${out}`);
-    failures++;
-  }
-}
+console.log("Intl taint robustness...");
+const res = await $`${BARE} ${tmp} 2>&1`.nothrow();
+const out = res.text();
 
 await $`rm -f ${tmp}`.nothrow();
 
-if (failures > 0) {
-  throw new Error(`Intl taint robustness failed in ${failures} mode(s)`);
+if (!out.includes(SENTINEL)) {
+  throw new Error(`Intl taint robustness failed: a tainted Intl access threw before the sentinel:\n${out}`);
 }
 console.log("Intl taint robustness OK");

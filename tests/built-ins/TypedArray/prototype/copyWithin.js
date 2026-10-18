@@ -55,6 +55,22 @@ describe("TypedArray.prototype.copyWithin", () => {
     expect(ta[3]).toBe(4n);
     expect(ta[4]).toBe(5n);
   });
+
+  test("copies overlapping ranges forwards and backwards", () => {
+    const up = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    up.copyWithin(2, 0, 4);
+    expect(Array.from(up)).toEqual([1, 2, 1, 2, 3, 4]);
+    const down = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    down.copyWithin(0, 2);
+    expect(Array.from(down)).toEqual([3, 4, 5, 6, 5, 6]);
+  });
+
+  test("copies within a view at a byte offset", () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const words = new Uint16Array(bytes.buffer, 2, 3);
+    words.copyWithin(1, 0, 2);
+    expect(Array.from(bytes)).toEqual([1, 2, 3, 4, 3, 4, 5, 6]);
+  });
 });
 
 describe("TypedArray.prototype.copyWithin non-finite arguments", () => {

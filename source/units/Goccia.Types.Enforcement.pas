@@ -18,14 +18,13 @@ function TypeAnnotationToLocalType(const AAnnotation: string): TGocciaLocalType;
 
 { Infer a strict type from an initializer AST expression.  Returns
   sltUntyped for everything that is not a self-evident literal /
-  reference constructor.  Matches the heuristics used by the
-  bytecode compiler so the interpreter and bytecode VM agree on
+  reference constructor.  The bytecode compiler uses it to decide
   which untyped declarations have an inferred type. }
 function InferLocalType(const AExpr: TGocciaExpression): TGocciaLocalType;
 
 { Throw a TypeError when AValue does not satisfy the AExpected strict
-  type.  Used by both the bytecode VM (OP_CHECK_TYPE) and the
-  interpreter to provide a single source of truth for strict-types
+  type.  Used by both the bytecode VM (OP_CHECK_TYPE) and typed scope
+  bindings to provide a single source of truth for strict-types
   enforcement. }
 procedure EnforceStrictType(const AValue: TGocciaValue;
   const AExpected: TGocciaLocalType);
@@ -105,7 +104,8 @@ begin
     Result := sltReference;
 end;
 
-// ES2026 Types-as-comments: runtime guard shared by interpreter and bytecode VM.
+// ES2026 Types-as-comments: runtime guard shared by the bytecode VM and
+// typed scope bindings.
 procedure EnforceStrictType(const AValue: TGocciaValue;
   const AExpected: TGocciaLocalType);
 begin

@@ -13,8 +13,6 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Bytecode.Chunk,
-  Goccia.ControlFlow,
-  Goccia.Evaluator.Context,
   Goccia.Modules,
   Goccia.SourceSpan,
   Goccia.Values.Primitives;
@@ -36,7 +34,6 @@ type
     FExpression: TGocciaExpression;
   public
     constructor Create(const AExpression: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Expression: TGocciaExpression read FExpression;
   end;
 
@@ -49,7 +46,6 @@ type
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
       const AIsConst: Boolean; const ASpan: TGocciaSourceSpan;
       const AIsVar: Boolean = False);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Variables: TArray<TGocciaVariableInfo> read FVariables;
     property IsConst: Boolean read FIsConst;
     property IsVar: Boolean read FIsVar;
@@ -63,7 +59,6 @@ type
     constructor Create(const AName: string;
       const AFunctionExpression: TGocciaFunctionExpression;
       const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Name: string read FName;
     property FunctionExpression: TGocciaFunctionExpression read FFunctionExpression;
   end;
@@ -77,7 +72,6 @@ type
     FTypeAnnotation: string;
   public
     constructor Create(const APattern: TGocciaDestructuringPattern; const AInitializer: TGocciaExpression; const AIsConst: Boolean; const ASpan: TGocciaSourceSpan; const AIsVar: Boolean = False);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Pattern: TGocciaDestructuringPattern read FPattern;
     property Initializer: TGocciaExpression read FInitializer;
     property IsConst: Boolean read FIsConst;
@@ -91,7 +85,7 @@ type
   public
     constructor Create(const ANodes: TObjectList<TGocciaASTNode>;
       const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    destructor Destroy; override;
     property Nodes: TObjectList<TGocciaASTNode> read FNodes;
   end;
 
@@ -103,7 +97,6 @@ type
   public
     constructor Create(const ACondition: TGocciaExpression;
       const AConsequent, AAlternate: TGocciaStatement; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Condition: TGocciaExpression read FCondition;
     property Consequent: TGocciaStatement read FConsequent;
     property Alternate: TGocciaStatement read FAlternate;
@@ -118,7 +111,6 @@ type
   public
     constructor Create(const AInit: TGocciaStatement; const ACondition: TGocciaExpression;
       const AUpdate: TGocciaExpression; const ABody: TGocciaStatement; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Init: TGocciaStatement read FInit;
     property Condition: TGocciaExpression read FCondition;
     property Update: TGocciaExpression read FUpdate;
@@ -131,7 +123,6 @@ type
     FBody: TGocciaStatement;        // Loop body
   public
     constructor Create(const ACondition: TGocciaExpression; const ABody: TGocciaStatement; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Condition: TGocciaExpression read FCondition;
     property Body: TGocciaStatement read FBody;
   end;
@@ -142,7 +133,6 @@ type
     FCondition: TGocciaExpression;  // Loop condition (checked after body)
   public
     constructor Create(const ABody: TGocciaStatement; const ACondition: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Body: TGocciaStatement read FBody;
     property Condition: TGocciaExpression read FCondition;
   end;
@@ -154,7 +144,6 @@ type
   public
     constructor Create(const AObjectExpression: TGocciaExpression;
       const ABody: TGocciaStatement; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property ObjectExpression: TGocciaExpression read FObjectExpression;
     property Body: TGocciaStatement read FBody;
   end;
@@ -179,7 +168,6 @@ type
       const AAssignmentTarget: TGocciaDestructuringPattern = nil;
       const AIsUsing: Boolean = False;
       const AIsAwaitUsing: Boolean = False);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property IsConst: Boolean read FIsConst;
     property IsVar: Boolean read FIsVar write FIsVar;
     property BindingName: string read FBindingName;
@@ -207,7 +195,6 @@ type
       const AObjectExpression: TGocciaExpression; const ABody: TGocciaStatement;
       const ASpan: TGocciaSourceSpan;
       const AAssignmentTarget: TGocciaDestructuringPattern = nil);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property IsConst: Boolean read FIsConst;
     property IsVar: Boolean read FIsVar write FIsVar;
     property BindingName: string read FBindingName;
@@ -219,7 +206,6 @@ type
 
   TGocciaForAwaitOfStatement = class(TGocciaForOfStatement)
   public
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
   end;
 
   TGocciaReturnStatement = class(TGocciaStatement)
@@ -228,7 +214,6 @@ type
     FHasExpression: Boolean;
   public
     constructor Create(const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property HasExpression: Boolean read FHasExpression;
     property Value: TGocciaExpression read FValue;
   end;
@@ -238,7 +223,6 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Value: TGocciaExpression read FValue;
   end;
 
@@ -256,7 +240,6 @@ type
       const ACatchBlock, AFinallyBlock: TGocciaBlockStatement; const ASpan: TGocciaSourceSpan;
       const ACatchPattern: TGocciaMatchPattern = nil;
       const ACatchBindingPattern: TGocciaDestructuringPattern = nil);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Block: TGocciaBlockStatement read FBlock;
     property CatchParam: string read FCatchParam;
     property CatchBlock: TGocciaBlockStatement read FCatchBlock;
@@ -282,7 +265,6 @@ type
   public
     constructor Create(const AName: string; const AParameters: TGocciaParameterArray;
       const ABody: TGocciaASTNode; const AIsStatic: Boolean; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName write FName;
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
@@ -362,7 +344,7 @@ type
   TGocciaFieldOrderEntryArray = array of TGocciaFieldOrderEntry;
 
   // Shared class definition structure
-  TGocciaClassDefinition = class
+  TGocciaClassDefinition = class(TGocciaASTObject)
   public
     FName: string;
     FSuperClass: string;
@@ -428,8 +410,6 @@ type
     FClassDefinition: TGocciaClassDefinition;
   public
     constructor Create(const AClassDefinition: TGocciaClassDefinition; const ASpan: TGocciaSourceSpan);
-    destructor Destroy; override;
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
 
@@ -438,8 +418,6 @@ type
     FClassDefinition: TGocciaClassDefinition;
   public
     constructor Create(const AClassDefinition: TGocciaClassDefinition; const ASpan: TGocciaSourceSpan);
-    destructor Destroy; override;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
 
@@ -456,7 +434,6 @@ type
   public
     constructor Create(const AName: string; const AMembers: TArray<TGocciaEnumMember>;
       const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Name: string read FName;
     property Members: TArray<TGocciaEnumMember> read FMembers;
   end;
@@ -467,7 +444,6 @@ type
   public
     constructor Create(const ADeclaration: TGocciaEnumDeclaration;
       const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Declaration: TGocciaEnumDeclaration read FDeclaration;
   end;
 
@@ -485,7 +461,7 @@ type
       const ANamespaceName: string = '';
       const APhase: TGocciaImportCallPhase = icpEvaluation;
       const AAttributeType: string = '');
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    destructor Destroy; override;
     property Imports: TStringStringMap read FImports;
     property AttributeType: string read FAttributeType;
     property ModulePath: string read FModulePath;
@@ -499,7 +475,7 @@ type
   public
     constructor Create(const AExportsTable: TStringStringMap;
       const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    destructor Destroy; override;
     property ExportsTable: TStringStringMap read FExportsTable;
   end;
 
@@ -512,7 +488,6 @@ type
     constructor Create(const AExpression: TGocciaExpression;
       const ALocalName: string; const AIsDirectDeclaration: Boolean;
       const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Expression: TGocciaExpression read FExpression;
     property IsDirectDeclaration: Boolean read FIsDirectDeclaration;
     property LocalName: string read FLocalName;
@@ -524,7 +499,6 @@ type
   public
     constructor Create(const ADeclaration: TGocciaVariableDeclaration;
       const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Declaration: TGocciaVariableDeclaration read FDeclaration;
   end;
 
@@ -534,8 +508,6 @@ type
   public
     constructor Create(const ADeclaration: TGocciaDestructuringDeclaration;
       const ASpan: TGocciaSourceSpan);
-    destructor Destroy; override;
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Declaration: TGocciaDestructuringDeclaration read FDeclaration;
   end;
 
@@ -545,7 +517,6 @@ type
   public
     constructor Create(const ADeclaration: TGocciaFunctionDeclaration;
       const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Declaration: TGocciaFunctionDeclaration read FDeclaration;
   end;
 
@@ -555,8 +526,6 @@ type
   public
     constructor Create(const ADeclaration: TGocciaClassDeclaration;
       const ASpan: TGocciaSourceSpan);
-    destructor Destroy; override;
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Declaration: TGocciaClassDeclaration read FDeclaration;
   end;
 
@@ -573,7 +542,7 @@ type
       const AIsStarExport: Boolean = False;
       const ANamespaceName: string = '';
       const AAttributeType: string = '');
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
+    destructor Destroy; override;
     property AttributeType: string read FAttributeType;
     property ExportsTable: TStringStringMap read FExportsTable;
     property IsStarExport: Boolean read FIsStarExport;
@@ -584,7 +553,6 @@ type
   TGocciaEmptyStatement = class(TGocciaStatement)
   public
     constructor Create(const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
   end;
 
   TGocciaCaseClause = class(TGocciaASTNode)
@@ -605,7 +573,6 @@ type
   public
     constructor Create(const ADiscriminant: TGocciaExpression; const ACases: TObjectList<TGocciaCaseClause>; const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Discriminant: TGocciaExpression read FDiscriminant;
     property Cases: TObjectList<TGocciaCaseClause> read FCases;
   end;
@@ -616,7 +583,6 @@ type
   public
     constructor Create(const ASpan: TGocciaSourceSpan;
       const ATargetLabel: string = '');
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property TargetLabel: string read FTargetLabel;
   end;
 
@@ -626,7 +592,6 @@ type
   public
     constructor Create(const ASpan: TGocciaSourceSpan;
       const ATargetLabel: string = '');
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property TargetLabel: string read FTargetLabel;
   end;
 
@@ -637,7 +602,6 @@ type
   public
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
       const AIsAwait: Boolean; const ASpan: TGocciaSourceSpan);
-    function Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow; override;
     property Variables: TArray<TGocciaVariableInfo> read FVariables;
     property IsAwait: Boolean read FIsAwait;
   end;
@@ -651,22 +615,11 @@ uses
   SysUtils,
 
   Goccia.Constants,
-  Goccia.Error,
-  Goccia.Evaluator,
   Goccia.Execution.CallSite,
   Goccia.GarbageCollector,
-  Goccia.Generator.Continuation,
   Goccia.Keywords.Reserved,
-  Goccia.Scope,
-  Goccia.Scope.BindingMap,
-  Goccia.Token,
-  Goccia.Types.Enforcement,
-  Goccia.Values.ClassValue,
   Goccia.Values.Error,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.ToObject;
+  Goccia.Values.ObjectPropertyDescriptor;
 
 function CreateModuleNamespaceObject(const AModule: TGocciaModule): TGocciaValue;
 begin
@@ -840,8 +793,6 @@ end;
   end;
 
   destructor TGocciaClassDefinition.Destroy;
-  var
-    I: Integer;
   begin
     FMethods.Free;
     FStaticMethods.Free;
@@ -852,15 +803,9 @@ end;
     FStaticProperties.Free;
     FInstanceProperties.Free;
     FPrivateInstanceProperties.Free;
-    FSuperClassExpression.Free;
     FInstancePropertyTypes.Free;
-    if Assigned(FPrivateMethods) then
-      FPrivateMethods.Free;
-    if Assigned(FPrivateStaticProperties) then
-      FPrivateStaticProperties.Free;
-    for I := 0 to High(FElements) do
-      if (FElements[I].Kind = cekStaticBlock) and Assigned(FElements[I].StaticBlockBody) then
-        FElements[I].StaticBlockBody.Free;
+    FPrivateMethods.Free;
+    FPrivateStaticProperties.Free;
     inherited;
   end;
 
@@ -985,24 +930,12 @@ end;
     FClassDefinition := AClassDefinition;
   end;
 
-  destructor TGocciaClassDeclaration.Destroy;
-  begin
-    FClassDefinition.Free;
-    inherited;
-  end;
-
   { TGocciaClassExpression }
 
   constructor TGocciaClassExpression.Create(const AClassDefinition: TGocciaClassDefinition; const ASpan: TGocciaSourceSpan);
   begin
     inherited Create(ASpan);
     FClassDefinition := AClassDefinition;
-  end;
-
-  destructor TGocciaClassExpression.Destroy;
-  begin
-    FClassDefinition.Free;
-    inherited;
   end;
 
   { TGocciaEnumDeclaration }
@@ -1079,12 +1012,6 @@ end;
     FDeclaration := ADeclaration;
   end;
 
-  destructor TGocciaExportDestructuringDeclaration.Destroy;
-  begin
-    FDeclaration.Free;
-    inherited;
-  end;
-
   { TGocciaExportFunctionDeclaration }
 
   constructor TGocciaExportFunctionDeclaration.Create(
@@ -1103,12 +1030,6 @@ end;
   begin
     inherited Create(ASpan);
     FDeclaration := ADeclaration;
-  end;
-
-  destructor TGocciaExportClassDeclaration.Destroy;
-  begin
-    FDeclaration.Free;
-    inherited;
   end;
 
   { TGocciaReExportDeclaration }
@@ -1173,7 +1094,8 @@ end;
 
   destructor TGocciaCaseClause.Destroy;
   begin
-    FTest.Free;
+    if Assigned(FConsequent) then
+      FConsequent.OwnsObjects := False;
     FConsequent.Free;
     inherited;
   end;
@@ -1189,7 +1111,8 @@ end;
 
   destructor TGocciaSwitchStatement.Destroy;
   begin
-    FDiscriminant.Free;
+    if Assigned(FCases) then
+      FCases.OwnsObjects := False;
     FCases.Free;
     inherited;
   end;
@@ -1214,518 +1137,6 @@ end;
 
   { Execute / Evaluate overrides }
 
-  function TGocciaExpressionStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := TGocciaControlFlow.Normal(EvaluateExpression(Expression, AContext));
-  end;
-
-  function TGocciaVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  var
-    I: Integer;
-    Value: TGocciaValue;
-    ResolvedObjectBinding: TGocciaObjectValue;
-    ResolvedScopeBinding, VarScope: TGocciaScope;
-    HasRealStrictInit: Boolean;
-    AnnotationType, TypeHint: TGocciaLocalType;
-    Continuation: TGocciaGeneratorContinuation;
-  begin
-    Result := TGocciaControlFlow.Empty;
-    Continuation := CurrentGeneratorContinuation;
-    if Assigned(Continuation) then
-      I := Continuation.GetStatementIndex(Self)
-    else
-      I := 0;
-    while I < Length(Variables) do
-    begin
-      ResolvedObjectBinding := nil;
-      ResolvedScopeBinding := nil;
-      if Variables[I].IsPattern or Assigned(Variables[I].Pattern) then
-      begin
-        try
-          Value := EvaluateExpression(Variables[I].Initializer, AContext);
-        except
-          on E: EGocciaGeneratorYield do
-          begin
-            if Assigned(Continuation) then
-              Continuation.SaveStatementIndex(Self, I);
-            raise;
-          end;
-          else
-          begin
-            if Assigned(Continuation) then
-              Continuation.ClearStatementIndex(Self);
-            raise;
-          end;
-        end;
-
-        if IsVar then
-          AssignVariablePattern(Variables[I].Pattern, Value, AContext)
-        else if IsConst then
-          AssignPattern(Variables[I].Pattern, Value, AContext, True, dtConst)
-        else
-          AssignPattern(Variables[I].Pattern, Value, AContext, True, dtLet);
-
-        if Assigned(Continuation) then
-          Continuation.SaveStatementIndex(Self, I + 1);
-        Inc(I);
-        Continue;
-      end;
-
-      if IsVar and Variables[I].HasInitializer then
-      begin
-        if not AContext.InEvalCode then
-        begin
-          VarScope := AContext.Scope.FindFunctionOrModuleScope;
-          if not Assigned(VarScope) or
-             not VarScope.ContainsOwnVarBinding(Variables[I].Name) then
-            AContext.Scope.DefineVariableBinding(Variables[I].Name,
-              TGocciaUndefinedLiteralValue.UndefinedValue, False);
-        end;
-        AContext.Scope.ResolveAssignmentTarget(Variables[I].Name,
-          ResolvedObjectBinding, ResolvedScopeBinding);
-      end;
-      try
-        Value := EvaluateNamedExpression(Variables[I].Initializer, AContext,
-          Variables[I].Name);
-      except
-        on E: EGocciaGeneratorYield do
-        begin
-          if Assigned(Continuation) then
-            Continuation.SaveStatementIndex(Self, I);
-          raise;
-        end;
-        else
-        begin
-          if Assigned(Continuation) then
-            Continuation.ClearStatementIndex(Self);
-          raise;
-        end;
-      end;
-
-      { Strict-types enforcement: when --strict-types is enabled, an
-        explicit type annotation (e.g. `let x: number = ...`) is
-        enforced on the initial value, and an inferred type from a
-        primitive-literal initializer locks the binding's type.  An
-        implicit-undefined initializer (parser-emitted for `let x;`)
-        records the type hint without enforcing on the placeholder
-        value, matching the bytecode compiler's behaviour. }
-      TypeHint := sltUntyped;
-      if AContext.StrictTypes then
-      begin
-        AnnotationType := TypeAnnotationToLocalType(Variables[I].TypeAnnotation);
-        HasRealStrictInit := Assigned(Variables[I].Initializer)
-          and not ((Variables[I].Initializer is TGocciaLiteralExpression)
-            and (TGocciaLiteralExpression(Variables[I].Initializer).Value
-              is TGocciaUndefinedLiteralValue));
-
-        if AnnotationType <> sltUntyped then
-          TypeHint := AnnotationType
-        else if (Variables[I].TypeAnnotation = '') and HasRealStrictInit then
-          TypeHint := InferLocalType(Variables[I].Initializer);
-
-        if (TypeHint <> sltUntyped) and HasRealStrictInit then
-          EnforceStrictType(Value, TypeHint);
-      end;
-
-      if IsVar then
-      begin
-        if Variables[I].HasInitializer then
-        begin
-          if Assigned(ResolvedObjectBinding) then
-          begin
-            if AContext.NonStrictMode then
-              ResolvedObjectBinding.AssignPropertyWithReceiver(
-                Variables[I].Name, Value, ResolvedObjectBinding)
-            else
-              ResolvedObjectBinding.AssignProperty(Variables[I].Name, Value);
-          end
-          else if Assigned(ResolvedScopeBinding) then
-            ResolvedScopeBinding.AssignBinding(Variables[I].Name, Value, Line,
-              Column, AContext.NonStrictMode)
-          else
-            AContext.Scope.AssignBinding(Variables[I].Name, Value, Line,
-              Column, AContext.NonStrictMode);
-        end
-        else
-        begin
-          if not AContext.InEvalCode then
-            AContext.Scope.DefineVariableBinding(Variables[I].Name, Value,
-              Variables[I].HasInitializer);
-        end;
-      end
-      else if IsConst then
-        AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttConst)
-      else
-        AContext.Scope.DefineFromToken(Variables[I].Name, Value, gttLet);
-
-      if TypeHint <> sltUntyped then
-      begin
-        // var bindings are hoisted to the nearest function/module/global scope
-        // by DefineVariableBinding; record the type hint on that scope so the
-        // hint sticks to the actual binding rather than silently no-oping when
-        // SetOwnBindingTypeHint cannot find the name on AContext.Scope.
-        if IsVar then
-          AContext.Scope.FindFunctionOrModuleScope.SetOwnBindingTypeHint(
-            Variables[I].Name, TypeHint)
-        else
-          AContext.Scope.SetOwnBindingTypeHint(Variables[I].Name, TypeHint);
-      end;
-      if Assigned(Continuation) then
-        Continuation.SaveStatementIndex(Self, I + 1);
-      Inc(I);
-    end;
-    if Assigned(Continuation) then
-      Continuation.ClearStatementIndex(Self);
-  end;
-
-  function TGocciaDestructuringDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    EvaluateDestructuringDeclaration(Self, AContext);
-    Result := TGocciaControlFlow.Empty;
-  end;
-
-  function TGocciaBlockStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateBlock(Self, AContext);
-  end;
-
-  function TGocciaIfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateIf(Self, AContext);
-  end;
-
-  function TGocciaForStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateFor(Self, AContext);
-  end;
-
-  function TGocciaWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateWhile(Self, AContext);
-  end;
-
-  function TGocciaDoWhileStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateDoWhile(Self, AContext);
-  end;
-
-  function TGocciaWithStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  var
-    WithContext: TGocciaEvaluationContext;
-    WithObject: TGocciaObjectValue;
-    WithScope: TGocciaWithScope;
-    GC: TGarbageCollector;
-  begin
-    if not AContext.NonStrictMode then
-      raise TGocciaSyntaxError.Create(
-        '''with'' statements are not allowed in strict mode',
-        Line, Column, AContext.CurrentFilePath, nil);
-
-    WithObject := ToObject(EvaluateExpression(ObjectExpression, AContext));
-    WithScope := TGocciaWithScope.Create(AContext.Scope, WithObject);
-    GC := TGarbageCollector.Instance;
-    if Assigned(GC) then
-      GC.AddTempRoot(WithScope);
-    try
-      WithContext := AContext;
-      WithContext.Scope := WithScope;
-      Result := EvaluateStatement(Body, WithContext).UpdateEmpty(
-        TGocciaUndefinedLiteralValue.UndefinedValue);
-    finally
-      if Assigned(GC) then
-        GC.RemoveTempRoot(WithScope);
-    end;
-  end;
-
-  function TGocciaForOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateForOf(Self, AContext);
-  end;
-
-  function TGocciaForInStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateForIn(Self, AContext);
-  end;
-
-  function TGocciaForAwaitOfStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateForAwaitOf(Self, AContext);
-  end;
-
-  function TGocciaReturnStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  var
-    ReturnValue: TGocciaValue;
-  begin
-    if Self.HasExpression and Assigned(Self.Value) then
-    begin
-      ReturnValue := EvaluateExpression(Self.Value, AContext);
-      if ReturnValue = nil then
-        ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
-    else
-      ReturnValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Result := TGocciaControlFlow.Return(ReturnValue, Self.HasExpression);
-  end;
-
-  function TGocciaThrowStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  var
-    ThrowValue: TGocciaValue;
-  begin
-    ThrowValue := EvaluateExpression(Self.Value, AContext);
-    raise TGocciaThrowValue.Create(ThrowValue);
-  end;
-
-  function TGocciaTryStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateTry(Self, AContext);
-  end;
-
-  function TGocciaSwitchStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := EvaluateSwitch(Self, AContext);
-  end;
-
-  function TGocciaBreakStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := TGocciaControlFlow.Break(FTargetLabel);
-  end;
-
-  function TGocciaContinueStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := TGocciaControlFlow.Continue(FTargetLabel);
-  end;
-
-  function TGocciaClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    EvaluateClass(Self, AContext);
-    Result := TGocciaControlFlow.Empty;
-  end;
-
-  function TGocciaEnumDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := TGocciaControlFlow.Normal(EvaluateEnumDeclaration(Self, AContext));
-  end;
-
-  function TGocciaExportEnumDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := TGocciaControlFlow.Normal(EvaluateEnumDeclaration(Declaration, AContext));
-  end;
-
-  function TGocciaImportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  var
-    DeferredLoader: TLoadDeferredModuleCallback;
-    Module: TGocciaModule;
-    ImportPair: TStringStringMap.TKeyValuePair;
-    NamespaceObject: TGocciaValue;
-    PreviousCallSite: TGocciaCallSite;
-    SourceLoader: TLoadModuleSourceCallback;
-    Value: TGocciaValue;
-
-    procedure BindImportValue(const AName: string; const AValue: TGocciaValue);
-    begin
-      if AContext.Scope.ContainsOwnLexicalBinding(AName) then
-        AContext.Scope.ForceUpdateBinding(AName, AValue)
-      else
-        AContext.Scope.DefineLexicalBinding(AName, AValue, dtConst);
-    end;
-
-    function ExecuteImport: TGocciaControlFlow;
-    begin
-      Result := TGocciaControlFlow.Empty;
-
-      if Phase = icpDefer then
-      begin
-        if NamespaceName = '' then
-        begin
-          AContext.OnError('Deferred imports require a namespace binding',
-            Line, Column);
-          Exit;
-        end;
-        DeferredLoader := AContext.LoadDeferredModule;
-        if (not Assigned(DeferredLoader)) and Assigned(AContext.Scope) then
-          DeferredLoader := AContext.Scope.LoadDeferredModule;
-        if not Assigned(DeferredLoader) then
-        begin
-          AContext.OnError('Deferred module loader is not available.',
-            Line, Column);
-          Exit;
-        end;
-
-        NamespaceObject := DeferredLoader(EncodeImportSpecifierAttribute(
-          ModulePath, AttributeType), AContext.CurrentFilePath);
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
-        try
-          BindImportValue(NamespaceName, NamespaceObject);
-        finally
-          if (TGarbageCollector.Instance <> nil) then
-            TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
-        end;
-        Exit;
-      end;
-
-      if Phase = icpSource then
-      begin
-        SourceLoader := AContext.LoadModuleSource;
-        if (not Assigned(SourceLoader)) and Assigned(AContext.Scope) then
-          SourceLoader := AContext.Scope.LoadModuleSource;
-        if not Assigned(SourceLoader) then
-        begin
-          AContext.OnError('Module source loader is not available.',
-            Line, Column);
-          Exit;
-        end;
-
-        Value := SourceLoader(EncodeImportSpecifierAttribute(
-          ModulePath, AttributeType), AContext.CurrentFilePath);
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.AddTempRoot(Value);
-        try
-          for ImportPair in Imports do
-            BindImportValue(ImportPair.Key, Value);
-        finally
-          if (TGarbageCollector.Instance <> nil) then
-            TGarbageCollector.Instance.RemoveTempRoot(Value);
-        end;
-        Exit;
-      end;
-
-      Module := AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
-        AttributeType), AContext.CurrentFilePath);
-      for ImportPair in Imports do
-      begin
-        if Module.CanResolveExport(ImportPair.Value) then
-          AContext.Scope.CreateImportBinding(ImportPair.Key, Module,
-            ImportPair.Value)
-        else
-        begin
-          AContext.OnError(Format('Module "%s" has no export named "%s"',
-            [ModulePath, ImportPair.Value]), Line, Column);
-        end;
-      end;
-
-      if NamespaceName <> '' then
-      begin
-        NamespaceObject := CreateModuleNamespaceObject(Module);
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
-        try
-          BindImportValue(NamespaceName, NamespaceObject);
-        finally
-          if (TGarbageCollector.Instance <> nil) then
-            TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
-        end;
-      end;
-    end;
-
-  begin
-    { The declaration is the call site of what loading it decides or refuses,
-      as it is for a module's linked imports and for OP_IMPORT. }
-    EnterGocciaCallSite(AContext.CurrentFilePath, Line, Column,
-      PreviousCallSite);
-    try
-      Result := ExecuteImport;
-    finally
-      LeaveGocciaCallSite(PreviousCallSite);
-    end;
-  end;
-
-  function TGocciaExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := TGocciaControlFlow.Empty;
-  end;
-
-  function TGocciaFunctionDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    // Function declarations are no-ops at runtime: their bindings and function
-    // values are installed by HoistFunctionDeclarations before statement execution.
-    Result := TGocciaControlFlow.Empty;
-  end;
-
-  function TGocciaExportDefaultDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  var
-    DeclarationType: TGocciaDeclarationType;
-    Value: TGocciaValue;
-  begin
-    if IsDirectDeclaration and (Expression is TGocciaFunctionExpression) and
-       (LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
-       AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
-      Exit(TGocciaControlFlow.Empty);
-
-    Value := EvaluateNamedExpression(Expression, AContext, KEYWORD_DEFAULT);
-
-    if AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
-      AContext.Scope.ForceUpdateBinding(LocalName, Value)
-    else
-    begin
-      if IsDirectDeclaration and (LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
-         (((Expression is TGocciaFunctionExpression) and
-         (TGocciaFunctionExpression(Expression).Name = LocalName)) or
-         ((Expression is TGocciaClassExpression) and
-         (TGocciaClassExpression(Expression).ClassDefinition.Name =
-         LocalName))) then
-        DeclarationType := dtLet
-      else
-        DeclarationType := dtConst;
-      AContext.Scope.DefineLexicalBinding(LocalName, Value, DeclarationType,
-        False, Line, Column);
-    end;
-    Result := TGocciaControlFlow.Empty;
-  end;
-
-  function TGocciaExportVariableDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := Declaration.Execute(AContext);
-  end;
-
-  function TGocciaExportDestructuringDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := Declaration.Execute(AContext);
-  end;
-
-  function TGocciaExportFunctionDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := Declaration.Execute(AContext);
-  end;
-
-  function TGocciaExportClassDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := Declaration.Execute(AContext);
-  end;
-
-  function TGocciaReExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  var
-    PreviousCallSite: TGocciaCallSite;
-  begin
-    if Assigned(AContext.LoadModule) then
-    begin
-      EnterGocciaCallSite(AContext.CurrentFilePath, Line, Column,
-        PreviousCallSite);
-      try
-        AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
-          AttributeType), AContext.CurrentFilePath);
-      finally
-        LeaveGocciaCallSite(PreviousCallSite);
-      end;
-    end;
-    Result := TGocciaControlFlow.Empty;
-  end;
-
-  function TGocciaEmptyStatement.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
-  begin
-    Result := TGocciaControlFlow.Empty;
-  end;
-
-  function TGocciaClassMethod.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-  begin
-    Result := EvaluateClassMethod(Self, AContext);
-  end;
-
-  function TGocciaClassExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-  begin
-    Result := EvaluateClassExpression(Self, AContext);
-  end;
-
   { TGocciaUsingDeclaration }
 
   constructor TGocciaUsingDeclaration.Create(const AVariables: TArray<TGocciaVariableInfo>;
@@ -1736,9 +1147,30 @@ end;
     FIsAwait := AIsAwait;
   end;
 
-  function TGocciaUsingDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  destructor TGocciaBlockStatement.Destroy;
   begin
-    Result := EvaluateUsingDeclaration(Self, AContext);
+    if Assigned(FNodes) then
+      FNodes.OwnsObjects := False;
+    FNodes.Free;
+    inherited;
+  end;
+
+  destructor TGocciaImportDeclaration.Destroy;
+  begin
+    FImports.Free;
+    inherited;
+  end;
+
+  destructor TGocciaExportDeclaration.Destroy;
+  begin
+    FExportsTable.Free;
+    inherited;
+  end;
+
+  destructor TGocciaReExportDeclaration.Destroy;
+  begin
+    FExportsTable.Free;
+    inherited;
   end;
 
 end.

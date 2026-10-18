@@ -48,7 +48,6 @@ type
   private
     FContext: TGocciaSandboxContext;
     FInputs: TSandboxHostInputs;
-    FBytecode: Boolean;
     FTimeoutMilliseconds: Integer;
     FMaxInstructions: Int64;
     FImportMapPath: string;
@@ -61,6 +60,7 @@ type
     FCurrentCapabilities: TGocciaCapabilities;
     FHasCurrentCapabilities: Boolean;
     FCurrentEngine: TGocciaEngine;
+    FKeepRootResult: Boolean;
 
     procedure ConfigureResolver(const AResolver: TGocciaSandboxModuleResolver);
     procedure CopyNestedInputs(const AParentContext,
@@ -95,9 +95,6 @@ type
 
     property Context: TGocciaSandboxContext read FContext;
     property Inputs: TSandboxHostInputs read FInputs;
-    { Runs guest scripts in the bytecode VM; True unless the host turns it off
-      for interpreted mode. }
-    property Bytecode: Boolean read FBytecode write FBytecode;
     property TimeoutMilliseconds: Integer read FTimeoutMilliseconds
       write FTimeoutMilliseconds;
     property MaxInstructions: Int64 read FMaxInstructions
@@ -109,6 +106,13 @@ type
       write FRootCapabilities;
     property OnConfigureEngine: TGocciaSandboxEngineConfigurator
       read FOnConfigureEngine write FOnConfigureEngine;
+    { Whether Run copies the root program's completion value into its
+      result's ResultValue (True by default). The copy walks the whole value,
+      and is charged to the run's own memory and time budget, so a caller
+      that never reads the value turns it off. A nested run's value is always
+      copied: runScript returns it to the calling program. }
+    property KeepRootResult: Boolean read FKeepRootResult
+      write FKeepRootResult;
   end;
 
 implementation
@@ -121,9 +125,6 @@ uses
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
@@ -330,7 +331,7 @@ begin
   FInputs := TSandboxHostInputs.Create(FContext.Fs);
   FAliases := TStringList.Create;
   FRootCapabilities := TGocciaCapabilities.None;
-  FBytecode := True;
+  FKeepRootResult := True;
 end;
 
 destructor TGocciaSandboxHost.Destroy;
@@ -440,8 +441,6 @@ function TGocciaSandboxHost.ExecuteInContext(
 var
   Source: TStringList;
   OutputLines: TStringList;
-  Executor: TGocciaExecutor;
-  BytecodeExecutor: TGocciaBytecodeExecutor;
   Resolver: TGocciaSandboxModuleResolver;
   Provider: TGocciaSandboxModuleContentProvider;
   Engine: TGocciaEngine;
@@ -481,7 +480,6 @@ begin
   Resolver := TGocciaSandboxModuleResolver.Create(AContext.Fs, SANDBOX_ROOT);
   Provider := TGocciaSandboxModuleContentProvider.Create(AContext.Fs);
   Engine := nil;
-  Executor := nil;
   CloneRealm := CurrentRealm;
   PreviousOutputLines := FCurrentOutputLines;
   PreviousHostEnvironment := FCurrentHostEnvironment;
@@ -500,17 +498,9 @@ begin
       else
         EngineCapabilities := FRootCapabilities;
 
-      if FBytecode then
-      begin
-        BytecodeExecutor := TGocciaBytecodeExecutor.Create;
-        BytecodeExecutor.GlobalBackedTopLevel := True;
-        Executor := BytecodeExecutor;
-      end
-      else
-        Executor := TGocciaInterpreterExecutor.Create;
-
-      Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor,
+      Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver,
         EngineCapabilities);
+      Engine.GlobalBackedTopLevel := True;
       { The entry is a sandbox path, so the project the engine derives from
         it names a host directory that has nothing to do with the run (for
         /tmp/x.js, the host's /tmp). No host directory is exempt from the
@@ -543,22 +533,27 @@ begin
         PushInstructionLimitScope(FMaxInstructions);
         ScriptResult := Engine.Execute;
         ExecutionRealm := CurrentRealm;
-        { Cloning reads the run's result, and reading can run its getters.
-          The run's microtask scope has ended, so without one of its own for
-          the clone, a job a getter queued would run in the caller, and a
-          promise it left rejected would fail the caller. Both end with the
-          clone instead. }
-        MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
-        CloneScopeToken := 0;
-        if Assigned(MicrotaskQueue) then
-          CloneScopeToken := MicrotaskQueue.EnterScope;
-        try
-          SetCurrentRealm(CloneRealm);
-          Result.ResultValue := CloneResultValue(ScriptResult.Result);
-        finally
-          SetCurrentRealm(ExecutionRealm);
+        { ExecuteNested counts the depth before it calls here, so a depth of
+          zero is the root run. }
+        if (FRunScriptDepth > 0) or FKeepRootResult then
+        begin
+          { Cloning reads the run's result, and reading can run its getters.
+            The run's microtask scope has ended, so without one of its own for
+            the clone, a job a getter queued would run in the caller, and a
+            promise it left rejected would fail the caller. Both end with the
+            clone instead. }
+          MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
+          CloneScopeToken := 0;
           if Assigned(MicrotaskQueue) then
-            MicrotaskQueue.LeaveScope(CloneScopeToken);
+            CloneScopeToken := MicrotaskQueue.EnterScope;
+          try
+            SetCurrentRealm(CloneRealm);
+            Result.ResultValue := CloneResultValue(ScriptResult.Result);
+          finally
+            SetCurrentRealm(ExecutionRealm);
+            if Assigned(MicrotaskQueue) then
+              MicrotaskQueue.LeaveScope(CloneScopeToken);
+          end;
         end;
         Result.Ok := True;
         Result.ExitCode := 0;
@@ -618,8 +613,8 @@ begin
       end;
       { The same guest throw, as the bytecode VM delivers it. Without this
         branch a bytecode run reported an uncaught throw as a host fault and
-        printed the bare message where the interpreter printed the frame —
-        the guest picking both the classification and the format. }
+        printed the bare message instead of the frame — the guest picking
+        both the classification and the format. }
       on E: EGocciaBytecodeThrow do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
@@ -643,7 +638,6 @@ begin
       Result.ErrorOutput := Result.ErrorMessage + sLineBreak;
   finally
     Engine.Free;
-    Executor.Free;
     Resolver.Free;
     Provider.Free;
     FCurrentHostEnvironment := PreviousHostEnvironment;

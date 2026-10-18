@@ -12,6 +12,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.TestSetup,
+  Goccia.ThreadPolls,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -57,11 +58,26 @@ type
       const AChunkBytes: Int64; const AIterations: Integer);
   end;
 
+  { Starts, then stops, a collector of its own and records what this thread's
+    TGarbageCollector.Instance and its GThreadPolls.Collector mirror were at
+    each step. }
+  TOwnCollectorThread = class(TThread)
+  public
+    NoneAtStart: Boolean;
+    OwnAfterInitialize: TGarbageCollector;
+    MirrorAfterInitialize: Boolean;
+    OwnCountGrowth: Integer;
+    NoneAfterShutdown: Boolean;
+  protected
+    procedure Execute; override;
+  end;
+
   TTestGarbageCollector = class(TTestSuite)
   public
     procedure SetupTests; override;
 
     procedure TestCollectYoungTracesOldToYoungReferences;
+    procedure TestDestroyFreesEveryManagedObject;
     procedure TestReservationCollectsAndRetries;
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
@@ -74,10 +90,13 @@ type
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
     procedure TestCrossThreadReleaseKeepsAccountingExact;
     procedure TestRegisterObjectAdvancesEveryByteCounter;
+    procedure TestEachThreadHasItsOwnCollector;
     procedure TestHeapTriggerKeepsGarbageNearTheCeiling;
     procedure TestHeapTriggerBacksOffAboveSurvivors;
     procedure TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
     procedure TestNonCollectingChargeNeverCollectsOrLatches;
+    procedure TestTrackedTriggerBacksOffAboveSurvivors;
+    procedure TestTrackedTriggerReturnsAfterTrackedBytesAreReleased;
   end;
 
 var
@@ -130,10 +149,32 @@ begin
     FCollector.ReleaseExternalBytes(FChunkBytes);
 end;
 
+procedure TOwnCollectorThread.Execute;
+var
+  Before: Integer;
+begin
+  NoneAtStart := (TGarbageCollector.Instance = nil) and
+    (GThreadPolls.Collector = nil);
+  TGarbageCollector.Initialize;
+  try
+    OwnAfterInitialize := TGarbageCollector.Instance;
+    MirrorAfterInitialize := GThreadPolls.Collector = Pointer(OwnAfterInitialize);
+    Before := OwnAfterInitialize.ManagedObjectCount;
+    TGocciaNumberLiteralValue.Create(1.5);
+    OwnCountGrowth := OwnAfterInitialize.ManagedObjectCount - Before;
+  finally
+    TGarbageCollector.Shutdown;
+  end;
+  NoneAfterShutdown := (TGarbageCollector.Instance = nil) and
+    (GThreadPolls.Collector = nil);
+end;
+
 procedure TTestGarbageCollector.SetupTests;
 begin
   Test('CollectYoung traces references from old rooted objects',
     TestCollectYoungTracesOldToYoungReferences);
+  Test('Destroying a collector frees every object it still manages',
+    TestDestroyFreesEveryManagedObject);
   Test('External reservation collects and retries',
     TestReservationCollectsAndRetries);
   Test('External reservation collects past the pressure reserve',
@@ -158,6 +199,8 @@ begin
     TestCrossThreadReleaseKeepsAccountingExact);
   Test('Registering an object advances the live, total and peak byte counters',
     TestRegisterObjectAdvancesEveryByteCounter);
+  Test('Each thread allocates into its own collector, from Initialize to Shutdown',
+    TestEachThreadHasItsOwnCollector);
   { Heap-triggered collection reads the FPC heap manager's status; other
     compilers report no heap total, so the trigger is inert there. }
   {$IFDEF FPC}
@@ -170,12 +213,16 @@ begin
   {$ENDIF}
   Test('A non-collecting charge neither collects nor latches pressure',
     TestNonCollectingChargeNeverCollectsOrLatches);
+  Test('The tracked trigger backs off above a live set inside the reserve',
+    TestTrackedTriggerBacksOffAboveSurvivors);
+  Test('Released tracked bytes bring the tracked trigger back to the line',
+    TestTrackedTriggerReturnsAfterTrackedBytesAreReleased);
 end;
 
 const
-  { Registrations between two simulated safe points. The interpreter checks
-    after every expression and the VM every 1024 instructions, so a checkpoint
-    per few dozen allocations is the realistic shape. }
+  { Registrations between two simulated safe points. The VM checks every
+    1024 instructions, so a checkpoint per few dozen allocations is the
+    realistic shape. }
   CHECKPOINT_INTERVAL = 64;
 
 { Allocates ACount unreachable objects, passing a pressure checkpoint every
@@ -379,6 +426,165 @@ begin
   finally
     if ChargedBytes > 0 then
       GC.ReleaseExternalBytes(ChargedBytes);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestTrackedTriggerBacksOffAboveSurvivors;
+const
+  CEILING_HEADROOM = 4 * 1024 * 1024;
+  SMALL_CHARGE = 1024;
+  GARBAGE_OBJECTS = 500;
+var
+  BaselineBytes, Ceiling, Charged, Garbage, Line, Request, Reserve,
+    Survivors, Trigger: Int64;
+  CollectionsBefore, I: Integer;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+
+  procedure Charge(const ABytes: Int64);
+  begin
+    Expect<Boolean>(GC.TryReserveExternalBytes(ABytes)).ToBe(True);
+    Inc(Charged, ABytes);
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  Charged := 0;
+  try
+    BaselineBytes := GC.BytesAllocated;
+    Ceiling := BaselineBytes + CEILING_HEADROOM;
+    GC.MaxBytes := Ceiling;
+    Reserve := GC.MemoryPressureReserve;
+    Line := Ceiling - Reserve;
+    { The live set must be able to sit below the line for the reset arm. }
+    Expect<Boolean>(Line > BaselineBytes).ToBe(True);
+
+    { External bytes are released explicitly, never by a collection, so this
+      ballast is a live set no sweep can reclaim: a quarter of the reserve
+      past the line, the shape of a script whose working set fits but sits
+      close to its ceiling. }
+    Charge(Line + Reserve div 4 - BaselineBytes);
+    GC.Collect;
+    Survivors := GC.BytesAllocated;
+    Expect<Boolean>(Survivors >= Line).ToBe(True);
+
+    { That collection could not get below the line, and nothing has been
+      allocated since, so another one could free nothing. Without the
+      back-off every checkpoint collected here (once per 1,024 VM
+      instructions) and every charged reservation latched a collection. }
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Charge(SMALL_CHARGE);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(False);
+    CollectionsBefore := GC.TotalCollections;
+    GC.CollectForMemoryPressure(nil);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore);
+
+    { Collections still follow allocation: halfway from the survivors to the
+      ceiling, the trigger fires again, and a charge that reaches it latches
+      the checkpoint's collection. }
+    Trigger := Survivors + (Ceiling - Survivors) div 2;
+    Charge(Trigger - 1 - GC.BytesAllocated);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(False);
+    Charge(1);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(True);
+    GC.CollectForMemoryPressure(nil);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore + 1);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+
+    { The back-off only delays the checkpoint. A reservation that does not
+      fit still forces a collection before it is refused, so garbage made
+      while the trigger is backed off is found and the request fits. }
+    GChildDestructorCount := 0;
+    Garbage := GC.BytesAllocated;
+    for I := 1 to GARBAGE_OBJECTS do
+      GC.RegisterObject(TChildManaged.Create);
+    Garbage := GC.BytesAllocated - Garbage;
+    Request := Ceiling - GC.BytesAllocated + Garbage div 2;
+    Charge(Request);
+    Expect<Integer>(GChildDestructorCount).ToBe(GARBAGE_OBJECTS);
+    Expect<Boolean>(GC.BytesAllocated <= Ceiling).ToBe(True);
+    { And the ceiling holds: what no collection can make room for is refused. }
+    Expect<Boolean>(GC.TryReserveExternalBytes(
+      Ceiling - GC.BytesAllocated + 1)).ToBe(False);
+    Expect<Boolean>(GC.BytesAllocated <= Ceiling).ToBe(True);
+
+    { Once a collection gets the live set back under the line, the trigger
+      is the line again: reaching it latches at once. }
+    GC.ReleaseExternalBytes(Charged);
+    Charged := 0;
+    GC.Collect;
+    Expect<Boolean>(GC.BytesAllocated < Line).ToBe(True);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Charge(Line - GC.BytesAllocated);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(True);
+  finally
+    if Charged > 0 then
+      GC.ReleaseExternalBytes(Charged);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestTrackedTriggerReturnsAfterTrackedBytesAreReleased;
+const
+  CEILING_HEADROOM = 4 * 1024 * 1024;
+var
+  BaselineBytes, Ceiling, Charged, Line, Reserve, Survivors: Int64;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+
+  procedure Charge(const ABytes: Int64);
+  begin
+    Expect<Boolean>(GC.TryReserveExternalBytes(ABytes)).ToBe(True);
+    Inc(Charged, ABytes);
+  end;
+
+  procedure Release(const ABytes: Int64);
+  begin
+    GC.ReleaseExternalBytes(ABytes);
+    Dec(Charged, ABytes);
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  Charged := 0;
+  try
+    BaselineBytes := GC.BytesAllocated;
+    Ceiling := BaselineBytes + CEILING_HEADROOM;
+    GC.MaxBytes := Ceiling;
+    Reserve := GC.MemoryPressureReserve;
+    Line := Ceiling - Reserve;
+    Expect<Boolean>(Line - Reserve div 4 > BaselineBytes).ToBe(True);
+
+    { A collection that cannot get below the line backs the trigger off. }
+    Charge(Line + Reserve div 4 - BaselineBytes);
+    GC.Collect;
+    Survivors := GC.BytesAllocated;
+    Expect<Boolean>(Survivors >= Line).ToBe(True);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+
+    { The script then releases half its ballast without a collection, and
+      grows back before any checkpoint runs. The release stays on record:
+      the trigger is the line again, not halfway from the old survivors to
+      the ceiling. }
+    Release(Survivors - (Line - Reserve div 4));
+    Expect<Boolean>(GC.BytesAllocated < Line).ToBe(True);
+    Charge(Line - 1 - GC.BytesAllocated);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Charge(1);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
+  finally
+    if Charged > 0 then
+      GC.ReleaseExternalBytes(Charged);
     GC.MaxBytes := PreviousMaxBytes;
     GC.Collect;
   end;
@@ -863,6 +1069,43 @@ begin
   end;
 end;
 
+{ #1592: a collector that goes away destroys what it still manages, roots,
+  pins and temp roots included, instead of leaking it. A thread's runtime
+  shutdown and the main thread's end of run rely on this. }
+procedure TTestGarbageCollector.TestDestroyFreesEveryManagedObject;
+var
+  GC: TGarbageCollector;
+  Parent: TParentManaged;
+  Pinned, TempRooted: TChildManaged;
+begin
+  GParentDestructorCount := 0;
+  GChildDestructorCount := 0;
+  GC := TGarbageCollector.Create;
+  try
+    Parent := TParentManaged.Create;
+    GC.RegisterObject(Parent);
+    GC.AddRootObject(Parent);
+    Parent.Child := TChildManaged.Create;
+    GC.RegisterObject(Parent.Child);
+    Pinned := TChildManaged.Create;
+    GC.RegisterObject(Pinned);
+    GC.PinObject(Pinned);
+    TempRooted := TChildManaged.Create;
+    GC.RegisterObject(TempRooted);
+    GC.AddTempRoot(TempRooted);
+
+    GC.Collect;
+    Expect<Integer>(GC.ManagedObjectCount).ToBe(4);
+    Expect<Integer>(GParentDestructorCount).ToBe(0);
+    Expect<Integer>(GChildDestructorCount).ToBe(0);
+  finally
+    GC.Free;
+  end;
+
+  Expect<Integer>(GParentDestructorCount).ToBe(1);
+  Expect<Integer>(GChildDestructorCount).ToBe(3);
+end;
+
 procedure TTestGarbageCollector.TestCollectYoungTracesOldToYoungReferences;
 var
   GC: TGarbageCollector;
@@ -952,6 +1195,37 @@ begin
   { Sweep the remaining churn garbage; the ledger must balance to the byte. }
   GC.Collect;
   Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
+end;
+
+procedure TTestGarbageCollector.TestEachThreadHasItsOwnCollector;
+var
+  MainCollector: TGarbageCollector;
+  MainCount: Integer;
+  Worker: TOwnCollectorThread;
+begin
+  MainCollector := TGarbageCollector.Instance;
+  MainCount := MainCollector.ManagedObjectCount;
+  Worker := TOwnCollectorThread.Create(True);
+  try
+    Worker.Start;
+    Worker.WaitFor;
+    Expect<Boolean>(Worker.NoneAtStart).ToBe(True);
+    Expect<Boolean>(Assigned(Worker.OwnAfterInitialize)).ToBe(True);
+    Expect<Boolean>(Worker.OwnAfterInitialize = MainCollector).ToBe(False);
+    Expect<Boolean>(Worker.MirrorAfterInitialize).ToBe(True);
+    Expect<Integer>(Worker.OwnCountGrowth).ToBe(1);
+    Expect<Boolean>(Worker.NoneAfterShutdown).ToBe(True);
+  finally
+    Worker.Free;
+  end;
+
+  // The worker's allocation, Initialize and Shutdown left this thread's
+  // collector alone, and this thread still allocates into it.
+  Expect<Boolean>(TGarbageCollector.Instance = MainCollector).ToBe(True);
+  Expect<Boolean>(GThreadPolls.Collector = Pointer(MainCollector)).ToBe(True);
+  Expect<Integer>(MainCollector.ManagedObjectCount).ToBe(MainCount);
+  TGocciaNumberLiteralValue.Create(2.5);
+  Expect<Integer>(MainCollector.ManagedObjectCount).ToBe(MainCount + 1);
 end;
 
 begin

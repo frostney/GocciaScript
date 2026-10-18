@@ -28,6 +28,10 @@ type
     function StoreLazyPropertyDescriptor(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor;
       out ABlockedByExtensibility: Boolean): Boolean;
+    // MaterializeOwnLazyProperty for a define whose pending ADescriptor, a
+    // plain class the collector does not trace, holds the value.
+    function MaterializeOwnLazyPropertyForDefine(const AName: string;
+      const ACurrent, ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
   protected
     FProperties: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
@@ -46,6 +50,12 @@ type
       materializes into when it is a lazy placeholder, and return the entry. }
     function MaterializeOwnLazyProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+    { MaterializeOwnLazyProperty for a store that holds AValue and AReceiver
+      only natively. Materializing a lazy entry loads a shim, which runs
+      bytecode and can collect, so that happens with both of them rooted. }
+    function MaterializeOwnLazyPropertyHolding(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor;
+      const AValue, AReceiver: TGocciaValue): TGocciaPropertyDescriptor;
     // ES2026 §10.1.8.1 OrdinaryGet step 2: the lookup once this object has no
     // own property AName. For a subclass that reads its own properties itself.
     function GetPropertyFromPrototype(const AName: string;
@@ -105,6 +115,11 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; virtual;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; virtual;
+    { GetOwnPropertyDescriptor for a [[Set]] that holds AValue and AReceiver
+      only natively: a lazy entry is materialized with both rooted (see
+      MaterializeOwnLazyPropertyHolding). }
+    function GetOwnPropertyDescriptorHolding(const AName: string;
+      const AValue, AReceiver: TGocciaValue): TGocciaPropertyDescriptor; {$IFDEF FPC}inline;{$ENDIF}
     function HasProperty(const AName: string): Boolean; virtual;
     function HasOwnProperty(const AName: string): Boolean; virtual;
     function DeleteProperty(const AName: string): Boolean; virtual;
@@ -122,6 +137,15 @@ type
     function OwnPropertyKeyValues: TArray<TGocciaValue>;
     function OwnPropertyDescriptorForKey(
       const AKey: TGocciaValue): TGocciaPropertyDescriptor;
+    { [[GetOwnProperty]] questions answered without handing the descriptor
+      out, so the caller has nothing to release. }
+    function HasOwnPropertyDescriptor(const AName: string): Boolean;
+    function HasOwnSymbolPropertyDescriptor(
+      const ASymbol: TGocciaSymbolValue): Boolean;
+    function OwnPropertyIsEnumerable(const AName: string): Boolean;
+    function OwnSymbolPropertyIsEnumerable(
+      const ASymbol: TGocciaSymbolValue): Boolean;
+    function OwnPropertyIsEnumerableForKey(const AKey: TGocciaValue): Boolean;
     procedure DefineOwnPropertyOrThrowForKey(
       const AKey: TGocciaValue;
       const ADescriptor: TGocciaPropertyDescriptor);
@@ -250,6 +274,10 @@ type
 // for [[Set]] only for such an object; any other (a Proxy, a typed array) has
 // to be asked through AssignPropertyWithReceiver itself.
 function UsesOrdinarySet(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+// True while AObject answers a string-keyed [[GetOwnProperty]] with
+// TGocciaObjectValue's own GetOwnPropertyDescriptor, which reads only the
+// property map.
+function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 { One native call into AObject's own [[Get]], [[HasProperty]] or [[Set]]. A
   prototype walk makes it when its next object does not keep the ordinary
@@ -358,7 +386,7 @@ begin
   Result := TMethod(Method).Code = @TGocciaObjectValue.GetPropertyWithContext;
 end;
 
-function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean;
 var
   Method: TGocciaGetOwnPropertyMethod;
 begin
@@ -555,7 +583,15 @@ begin
     Descriptor := AParent.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
-      AValue := PropertyValueFromDescriptor(Descriptor, AReceiver);
+      { Only a descriptor built for the answer needs the finally. }
+      if Descriptor.CallerOwned then
+        try
+          AValue := PropertyValueFromDescriptor(Descriptor, AReceiver);
+        finally
+          Descriptor.Free;
+        end
+      else
+        AValue := PropertyValueFromDescriptor(Descriptor, AReceiver);
       Exit(True);
     end;
     if InheritsGet(AParent) then
@@ -591,6 +627,7 @@ begin
     (not Descriptor.Enumerable) and
     (not Descriptor.Configurable) and
     (not TGocciaPropertyDescriptorData(Descriptor).Writable);
+  ReleaseDescriptor(Descriptor);
 end;
 
 function TryParseArrayIndexKey(const AKey: string; out AIndex: UInt64): Boolean;
@@ -860,6 +897,56 @@ begin
   Result := Goccia.Values.ObjectValue.OwnPropertyDescriptorForKey(Self, AKey);
 end;
 
+function TGocciaObjectValue.HasOwnPropertyDescriptor(
+  const AName: string): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := GetOwnPropertyDescriptor(AName);
+  Result := Assigned(Descriptor);
+  ReleaseDescriptor(Descriptor);
+end;
+
+function TGocciaObjectValue.HasOwnSymbolPropertyDescriptor(
+  const ASymbol: TGocciaSymbolValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := GetOwnSymbolPropertyDescriptor(ASymbol);
+  Result := Assigned(Descriptor);
+  ReleaseDescriptor(Descriptor);
+end;
+
+function TGocciaObjectValue.OwnPropertyIsEnumerable(
+  const AName: string): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := GetOwnPropertyDescriptor(AName);
+  Result := Assigned(Descriptor) and Descriptor.Enumerable;
+  ReleaseDescriptor(Descriptor);
+end;
+
+function TGocciaObjectValue.OwnSymbolPropertyIsEnumerable(
+  const ASymbol: TGocciaSymbolValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := GetOwnSymbolPropertyDescriptor(ASymbol);
+  Result := Assigned(Descriptor) and Descriptor.Enumerable;
+  ReleaseDescriptor(Descriptor);
+end;
+
+function TGocciaObjectValue.OwnPropertyIsEnumerableForKey(
+  const AKey: TGocciaValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := OwnPropertyDescriptorForKey(AKey);
+  Result := Assigned(Descriptor) and Descriptor.Enumerable;
+  ReleaseDescriptor(Descriptor);
+end;
+
 procedure TGocciaObjectValue.DefineOwnPropertyOrThrowForKey(
   const AKey: TGocciaValue;
   const ADescriptor: TGocciaPropertyDescriptor);
@@ -904,6 +991,68 @@ begin
   end;
   FProperties.Add(AName, Result);
   LazyDescriptor.Free;
+end;
+
+function TGocciaObjectValue.MaterializeOwnLazyPropertyHolding(
+  const AName: string; const ADescriptor: TGocciaPropertyDescriptor;
+  const AValue, AReceiver: TGocciaValue): TGocciaPropertyDescriptor;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  if ADescriptor.ClassType <> TGocciaLazyPropertyDescriptorData then
+    Exit(ADescriptor);
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    Roots.Add(AValue);
+    Roots.Add(AReceiver);
+    Result := MaterializeOwnLazyProperty(AName, ADescriptor);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+function TGocciaObjectValue.MaterializeOwnLazyPropertyForDefine(
+  const AName: string;
+  const ACurrent, ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  if ACurrent.ClassType <> TGocciaLazyPropertyDescriptorData then
+    Exit(ACurrent);
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    ADescriptor.PushRoots(Roots);
+    Result := MaterializeOwnLazyProperty(AName, ACurrent);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+function TGocciaObjectValue.GetOwnPropertyDescriptorHolding(
+  const AName: string;
+  const AValue, AReceiver: TGocciaValue): TGocciaPropertyDescriptor;
+var
+  Method: TGocciaGetOwnPropertyMethod;
+begin
+  // An object that keeps the ordinary [[GetOwnProperty]] is answered from the
+  // map directly. Any other answers through its own method, after a lazy
+  // entry has been materialized here, so its fallback to the map finds it
+  // built.
+  Method := GetOwnPropertyDescriptor;
+  if TMethod(Method).Code <> @TGocciaObjectValue.GetOwnPropertyDescriptor then
+  begin
+    if FProperties.TryGetValue(AName, Result) and
+       (Result.ClassType = TGocciaLazyPropertyDescriptorData) then
+      MaterializeOwnLazyPropertyHolding(AName, Result, AValue, AReceiver);
+    Exit(GetOwnPropertyDescriptor(AName));
+  end;
+  if not FProperties.TryGetValue(AName, Result) then
+    Exit(nil);
+  if Result.ClassType = TGocciaLazyPropertyDescriptorData then
+    Result := MaterializeOwnLazyPropertyHolding(AName, Result, AValue,
+      AReceiver);
 end;
 
 procedure TGocciaObjectValue.MaterializeAllLazyStringProperties;
@@ -983,7 +1132,7 @@ begin
   FProperties := TGocciaShapedPropertyMap.Create(APropertyCapacity);
   // Rooting for the property-store path lives on the map, at the growth gate:
   // that is the one point in a store that can collect, and the map is the only
-  // thing every entry path — evaluator, native builder, class field, spread —
+  // thing every entry path — VM store, native builder, class field, spread —
   // passes through. The map needs a way back to the value that holds it so the
   // properties already stored stay reachable across a collection taken there.
   TGocciaShapedPropertyMap(FProperties).Owner := Self;
@@ -1179,6 +1328,7 @@ begin
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;
+    ReleaseDescriptor(Descriptor);
   finally
     if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
@@ -1377,13 +1527,16 @@ end;
 procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Setter: TGocciaValue;
+  Writable: Boolean;
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
-    Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
+    Descriptor := MaterializeOwnLazyPropertyHolding(AName, Descriptor, AValue,
+      Self);
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
       Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
@@ -1421,18 +1574,20 @@ begin
       AssignThroughExoticParent(Proto, AName, AValue);
       Exit;
     end;
-    Descriptor := Proto.GetOwnPropertyDescriptor(AName);
+    Descriptor := Proto.GetOwnPropertyDescriptorHolding(AName, AValue, Self);
     if Assigned(Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
         Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-        if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
+        Setter := Accessor.Setter;
+        ReleaseDescriptor(Descriptor);
+        if Assigned(Setter) and Setter.IsCallable then
         begin
           Args := TGocciaArgumentsCollection.Create;
           try
             Args.Add(AValue);
-            InvokeCallable(Accessor.Setter, Args, Self);
+            InvokeCallable(Setter, Args, Self);
           finally
             Args.Free;
           end;
@@ -1442,10 +1597,13 @@ begin
       end
       else if Descriptor is TGocciaPropertyDescriptorData then
       begin
-        if not TGocciaPropertyDescriptorData(Descriptor).Writable then
+        Writable := TGocciaPropertyDescriptorData(Descriptor).Writable;
+        ReleaseDescriptor(Descriptor);
+        if not Writable then
           ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
         Break;
       end;
+      ReleaseDescriptor(Descriptor);
     end;
     Proto := Proto.FPrototype;
   end;
@@ -1464,6 +1622,9 @@ end;
 function TGocciaObjectValue.AssignPropertyWithReceiver(const AName: string; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean;
 var
   OwnDesc, ReceiverDesc: TGocciaPropertyDescriptor;
+  OwnWritable, ReceiverWritableData: Boolean;
+  ReceiverFlags: TPropertyFlags;
+  Setter: TGocciaValue;
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   ReceiverObj: TGocciaObjectValue;
@@ -1474,7 +1635,8 @@ begin
   // procedure, a counted call when it answers [[Set]] itself.
   Current := Self;
   repeat
-    OwnDesc := Current.GetOwnPropertyDescriptor(AName);
+    OwnDesc := Current.GetOwnPropertyDescriptorHolding(AName, AValue,
+      AReceiver);
     if Assigned(OwnDesc) then
       Break;
     Parent := Current.FPrototype;
@@ -1492,16 +1654,23 @@ begin
     if not (AReceiver is TGocciaObjectValue) then
       Exit(False);
     ReceiverObj := TGocciaObjectValue(AReceiver);
-    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
+    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptorHolding(AName, AValue,
+      AReceiver);
     if Assigned(ReceiverDesc) then
     begin
+      // Read before the release: the definition below may replace a stored
+      // descriptor.
+      ReceiverWritableData :=
+        not (ReceiverDesc is TGocciaPropertyDescriptorAccessor) and
+        ReceiverDesc.Writable;
+      ReceiverFlags := ReceiverDesc.Flags;
+      ReleaseDescriptor(ReceiverDesc);
       // Step 2d: Receiver already has own property P
-      if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
-         (not ReceiverDesc.Writable) then
+      if not ReceiverWritableData then
         Exit(False);
       // Step 2d.iii-iv: Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })
       Exit(ReceiverObj.TryDefineProperty(AName,
-        TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
+        TGocciaPropertyDescriptorData.Create(AValue, ReceiverFlags)));
     end;
     // Step 2e: CreateDataProperty(Receiver, P, V)
     Exit(ReceiverObj.TryDefineProperty(AName,
@@ -1511,26 +1680,34 @@ begin
 
   if OwnDesc is TGocciaPropertyDescriptorData then
   begin
+    OwnWritable := OwnDesc.Writable;
+    ReleaseDescriptor(OwnDesc);
     // Step 2a: If ownDesc.[[Writable]] is false, return false
-    if not OwnDesc.Writable then
+    if not OwnWritable then
       Exit(False);
     // Step 2b: If Receiver is not an Object, return false
     if not (AReceiver is TGocciaObjectValue) then
       Exit(False);
     ReceiverObj := TGocciaObjectValue(AReceiver);
     // Step 2c: Let existingDescriptor be Receiver.[[GetOwnProperty]](P)
-    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
+    ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptorHolding(AName, AValue,
+      AReceiver);
     if Assigned(ReceiverDesc) then
     begin
+      // Read before the release: the definition below may replace a stored
+      // descriptor.
+      ReceiverWritableData :=
+        not (ReceiverDesc is TGocciaPropertyDescriptorAccessor) and
+        ReceiverDesc.Writable;
+      ReceiverFlags := ReceiverDesc.Flags;
+      ReleaseDescriptor(ReceiverDesc);
       // Step 2d.i: If IsAccessorDescriptor(existingDescriptor), return false
-      if ReceiverDesc is TGocciaPropertyDescriptorAccessor then
-        Exit(False);
       // Step 2d.ii: If existingDescriptor.[[Writable]] is false, return false
-      if not ReceiverDesc.Writable then
+      if not ReceiverWritableData then
         Exit(False);
       // Step 2d.iii-iv: Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })
       Exit(ReceiverObj.TryDefineProperty(AName,
-        TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
+        TGocciaPropertyDescriptorData.Create(AValue, ReceiverFlags)));
     end
     else
     begin
@@ -1543,14 +1720,16 @@ begin
 
   // Step 3-7: Accessor descriptor
   Accessor := TGocciaPropertyDescriptorAccessor(OwnDesc);
+  Setter := Accessor.Setter;
+  ReleaseDescriptor(OwnDesc);
   // Step 4-5: If setter is undefined, return false
-  if not Assigned(Accessor.Setter) or not Accessor.Setter.IsCallable then
+  if not Assigned(Setter) or not Setter.IsCallable then
     Exit(False);
   // Step 6: Call(setter, Receiver, « V »)
   Args := TGocciaArgumentsCollection.Create;
   try
     Args.Add(AValue);
-    InvokeCallable(Accessor.Setter, Args, AReceiver);
+    InvokeCallable(Setter, Args, AReceiver);
   finally
     Args.Free;
   end;
@@ -1764,7 +1943,8 @@ begin
   Current := nil;
   FProperties.TryGetValue(AName, Current);
   if Assigned(Current) then
-    Current := MaterializeOwnLazyProperty(AName, Current);
+    Current := MaterializeOwnLazyPropertyForDefine(AName, Current,
+      ADescriptor);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -1805,7 +1985,8 @@ begin
   Current := nil;
   FProperties.TryGetValue(AName, Current);
   if Assigned(Current) then
-    Current := MaterializeOwnLazyProperty(AName, Current);
+    Current := MaterializeOwnLazyPropertyForDefine(AName, Current,
+      ADescriptor);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -2092,7 +2273,6 @@ end;
 
 function TGocciaObjectValue.GetEnumerablePropertyValues: TArray<TGocciaValue>;
 var
-  Descriptor: TGocciaPropertyDescriptor;
   Names: TArray<string>;
   Values: TArray<TGocciaValue>;
   I, Count: Integer;
@@ -2103,8 +2283,7 @@ begin
 
   for I := 0 to High(Names) do
   begin
-    Descriptor := GetOwnPropertyDescriptor(Names[I]);
-    if Assigned(Descriptor) and Descriptor.Enumerable then
+    if OwnPropertyIsEnumerable(Names[I]) then
     begin
       Values[Count] := GetProperty(Names[I]);
       Inc(Count);
@@ -2117,7 +2296,6 @@ end;
 
 function TGocciaObjectValue.GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>;
 var
-  Descriptor: TGocciaPropertyDescriptor;
   Entries: TArray<TPair<string, TGocciaValue>>;
   Names: TArray<string>;
   I, Count: Integer;
@@ -2129,8 +2307,7 @@ begin
 
   for I := 0 to High(Names) do
   begin
-    Descriptor := GetOwnPropertyDescriptor(Names[I]);
-    if Assigned(Descriptor) and Descriptor.Enumerable then
+    if OwnPropertyIsEnumerable(Names[I]) then
     begin
       Entry.Key := Names[I];
       Entry.Value := GetProperty(Names[I]);
@@ -2320,6 +2497,9 @@ end;
 function TGocciaObjectValue.AssignSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean;
 var
   OwnDesc, ReceiverDesc: TGocciaPropertyDescriptor;
+  OwnWritable, ReceiverWritableData: Boolean;
+  ReceiverFlags: TPropertyFlags;
+  Setter: TGocciaValue;
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   ReceiverObj: TGocciaObjectValue;
@@ -2349,13 +2529,19 @@ begin
     ReceiverDesc := ReceiverObj.GetOwnSymbolPropertyDescriptor(ASymbol);
     if Assigned(ReceiverDesc) then
     begin
+      // Read before the release: the definition below may replace a stored
+      // descriptor.
+      ReceiverWritableData :=
+        not (ReceiverDesc is TGocciaPropertyDescriptorAccessor) and
+        ReceiverDesc.Writable;
+      ReceiverFlags := ReceiverDesc.Flags;
+      ReleaseDescriptor(ReceiverDesc);
       // Step 2d: Receiver already has own property P
-      if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
-         (not ReceiverDesc.Writable) then
+      if not ReceiverWritableData then
         Exit(False);
       // Step 2d.iii-iv: Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })
       Exit(ReceiverObj.TryDefineSymbolProperty(ASymbol,
-        TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
+        TGocciaPropertyDescriptorData.Create(AValue, ReceiverFlags)));
     end;
     // Step 2e: CreateDataProperty(Receiver, P, V)
     Exit(ReceiverObj.TryDefineSymbolProperty(ASymbol,
@@ -2365,8 +2551,10 @@ begin
 
   if OwnDesc is TGocciaPropertyDescriptorData then
   begin
+    OwnWritable := OwnDesc.Writable;
+    ReleaseDescriptor(OwnDesc);
     // Step 2a: If ownDesc.[[Writable]] is false, return false
-    if not OwnDesc.Writable then
+    if not OwnWritable then
       Exit(False);
     // Step 2b: If Receiver is not an Object, return false
     if not (AReceiver is TGocciaObjectValue) then
@@ -2376,15 +2564,20 @@ begin
     ReceiverDesc := ReceiverObj.GetOwnSymbolPropertyDescriptor(ASymbol);
     if Assigned(ReceiverDesc) then
     begin
+      // Read before the release: the definition below may replace a stored
+      // descriptor.
+      ReceiverWritableData :=
+        not (ReceiverDesc is TGocciaPropertyDescriptorAccessor) and
+        ReceiverDesc.Writable;
+      ReceiverFlags := ReceiverDesc.Flags;
+      ReleaseDescriptor(ReceiverDesc);
       // Step 2d.i: If IsAccessorDescriptor(existingDescriptor), return false
-      if ReceiverDesc is TGocciaPropertyDescriptorAccessor then
-        Exit(False);
       // Step 2d.ii: If existingDescriptor.[[Writable]] is false, return false
-      if not ReceiverDesc.Writable then
+      if not ReceiverWritableData then
         Exit(False);
       // Step 2d.iii-iv: Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })
       Exit(ReceiverObj.TryDefineSymbolProperty(ASymbol,
-        TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
+        TGocciaPropertyDescriptorData.Create(AValue, ReceiverFlags)));
     end
     else
     begin
@@ -2397,14 +2590,16 @@ begin
 
   // Step 3-7: Accessor descriptor
   Accessor := TGocciaPropertyDescriptorAccessor(OwnDesc);
+  Setter := Accessor.Setter;
+  ReleaseDescriptor(OwnDesc);
   // Step 4-5: If setter is undefined, return false
-  if not Assigned(Accessor.Setter) or not Accessor.Setter.IsCallable then
+  if not Assigned(Setter) or not Setter.IsCallable then
     Exit(False);
   // Step 6: Call(setter, Receiver, « V »)
   Args := TGocciaArgumentsCollection.Create;
   try
     Args.Add(AValue);
-    InvokeCallable(Accessor.Setter, Args, AReceiver);
+    InvokeCallable(Setter, Args, AReceiver);
   finally
     Args.Free;
   end;
@@ -2579,6 +2774,8 @@ begin
     else
       NewDescriptor := TGocciaPropertyDescriptor.Create([],
         [pdfConfigurable]);
+    // Released before the definition, which may replace a stored one.
+    ReleaseDescriptor(Descriptor);
     Self.DefineOwnPropertyOrThrowForKey(Keys[I], NewDescriptor);
   end;
   FFrozen := True;
@@ -2616,6 +2813,7 @@ end;
 function TGocciaObjectValue.TestIntegrityFrozen: Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  IsFrozenProperty: Boolean;
   ExtensibleCheck: Boolean;
   I: Integer;
   Keys: TArray<TGocciaValue>;
@@ -2636,9 +2834,10 @@ begin
     Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
     if not Assigned(Descriptor) then
       Continue;
-    if Descriptor.Configurable then
-      Exit(False);
-    if IsDataDescriptor(Descriptor) and Descriptor.Writable then
+    IsFrozenProperty := not Descriptor.Configurable and
+      not (IsDataDescriptor(Descriptor) and Descriptor.Writable);
+    ReleaseDescriptor(Descriptor);
+    if not IsFrozenProperty then
       Exit(False);
   end;
 
@@ -2650,6 +2849,7 @@ end;
 function TGocciaObjectValue.TestIntegritySealed: Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  IsConfigurable: Boolean;
   ExtensibleCheck: Boolean;
   I: Integer;
   Keys: TArray<TGocciaValue>;
@@ -2668,7 +2868,9 @@ begin
   for I := 0 to High(Keys) do
   begin
     Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
-    if Assigned(Descriptor) and Descriptor.Configurable then
+    IsConfigurable := Assigned(Descriptor) and Descriptor.Configurable;
+    ReleaseDescriptor(Descriptor);
+    if IsConfigurable then
       Exit(False);
   end;
 

@@ -6,7 +6,6 @@ interface
 
 uses
   Goccia.Arguments.Collection,
-  Goccia.Scope,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.VM.Upvalue;
@@ -14,12 +13,8 @@ uses
 // ES2026 §10.4.4.6 CreateUnmappedArgumentsObject(argumentsList).
 function CreateUnmappedArgumentsObject(
   const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
-// ES2026 §10.4.4.7 CreateMappedArgumentsObject(func, formals, argumentsList, env).
-function CreateMappedArgumentsObject(
-  const AArguments: TGocciaArgumentsCollection;
-  const AParameterNames: array of string;
-  const AEnvironment: TGocciaScope;
-  const ACallee: TGocciaValue): TGocciaObjectValue;
+// ES2026 §10.4.4.7 CreateMappedArgumentsObject(func, formals, argumentsList, env),
+// with each mapped formal's environment binding held in its bytecode cell.
 function CreateMappedBytecodeArgumentsObject(
   const AArguments: TGocciaArgumentsCollection;
   const AParameterCells: array of TGocciaBytecodeCell;
@@ -42,7 +37,6 @@ uses
 
 type
   TGocciaArgumentMapping = record
-    ParameterName: string;
     ParameterCell: TGocciaBytecodeCell;
   end;
 
@@ -53,7 +47,6 @@ type
 
   TGocciaMappedArgumentsObjectValue = class(TGocciaArgumentsObjectValue)
   private
-    FEnvironment: TGocciaScope;
     FMappings: array of TGocciaArgumentMapping;
 
     function TryMappedIndex(const AName: string; out AIndex: Integer): Boolean;
@@ -63,10 +56,6 @@ type
     procedure ApplyDefineMapping(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor);
   public
-    constructor CreateForScope(const AArguments: TGocciaArgumentsCollection;
-      const AParameterNames: array of string;
-      const AEnvironment: TGocciaScope;
-      const ACallee: TGocciaValue);
     constructor CreateForCells(const AArguments: TGocciaArgumentsCollection;
       const AParameterCells: array of TGocciaBytecodeCell;
       const ACallee: TGocciaValue);
@@ -154,44 +143,6 @@ end;
 
 { TGocciaMappedArgumentsObjectValue }
 
-constructor TGocciaMappedArgumentsObjectValue.CreateForScope(
-  const AArguments: TGocciaArgumentsCollection;
-  const AParameterNames: array of string;
-  const AEnvironment: TGocciaScope;
-  const ACallee: TGocciaValue);
-var
-  I, J: Integer;
-  AlreadyMapped: Boolean;
-  ParameterName: string;
-begin
-  inherited Create(TGocciaObjectValue.SharedObjectPrototype,
-    AArguments.Length + 3);
-  FEnvironment := AEnvironment;
-  DefineArgumentsIndexedProperties(Self, AArguments);
-  DefineArgumentsLengthAndIterator(Self, AArguments);
-  DefineProperty(PROP_CALLEE,
-    TGocciaPropertyDescriptorData.Create(
-      CompleteCalleeValue(ACallee), [pfWritable, pfConfigurable]));
-
-  SetLength(FMappings, AArguments.Length);
-  for I := High(AParameterNames) downto 0 do
-  begin
-    if I >= AArguments.Length then
-      Continue;
-    ParameterName := AParameterNames[I];
-    AlreadyMapped := False;
-    for J := I + 1 to High(AParameterNames) do
-      if AParameterNames[J] = ParameterName then
-      begin
-        AlreadyMapped := True;
-        Break;
-      end;
-    if AlreadyMapped then
-      Continue;
-    FMappings[I].ParameterName := ParameterName;
-  end;
-end;
-
 constructor TGocciaMappedArgumentsObjectValue.CreateForCells(
   const AArguments: TGocciaArgumentsCollection;
   const AParameterCells: array of TGocciaBytecodeCell;
@@ -221,8 +172,7 @@ function TGocciaMappedArgumentsObjectValue.TryMappedIndex(
 begin
   Result := TryStrToInt(AName, AIndex) and (AIndex >= 0) and
     (AIndex < Length(FMappings)) and (IntToStr(AIndex) = AName) and
-    ((FMappings[AIndex].ParameterName <> '') or
-     Assigned(FMappings[AIndex].ParameterCell));
+    Assigned(FMappings[AIndex].ParameterCell);
 end;
 
 function TGocciaMappedArgumentsObjectValue.GetMappedValue(
@@ -232,8 +182,6 @@ begin
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   if Assigned(FMappings[AIndex].ParameterCell) then
     Exit(RegisterToValue(FMappings[AIndex].ParameterCell.Value));
-  if Assigned(FEnvironment) and (FMappings[AIndex].ParameterName <> '') then
-    Exit(FEnvironment.GetValue(FMappings[AIndex].ParameterName));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -243,12 +191,7 @@ begin
   if (AIndex < 0) or (AIndex >= Length(FMappings)) then
     Exit;
   if Assigned(FMappings[AIndex].ParameterCell) then
-  begin
     FMappings[AIndex].ParameterCell.Value := ValueToRegister(AValue);
-    Exit;
-  end;
-  if Assigned(FEnvironment) and (FMappings[AIndex].ParameterName <> '') then
-    FEnvironment.ForceUpdateBinding(FMappings[AIndex].ParameterName, AValue);
 end;
 
 procedure TGocciaMappedArgumentsObjectValue.DeleteMappedValue(
@@ -256,7 +199,6 @@ procedure TGocciaMappedArgumentsObjectValue.DeleteMappedValue(
 begin
   if (AIndex < 0) or (AIndex >= Length(FMappings)) then
     Exit;
-  FMappings[AIndex].ParameterName := '';
   FMappings[AIndex].ParameterCell := nil;
 end;
 
@@ -284,12 +226,15 @@ function TGocciaMappedArgumentsObjectValue.GetPropertyWithContext(
   const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  IsData: Boolean;
   Index: Integer;
 begin
   if TryMappedIndex(AName, Index) then
   begin
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) and IsDataDescriptor(Descriptor) then
+    IsData := Assigned(Descriptor) and IsDataDescriptor(Descriptor);
+    ReleaseDescriptor(Descriptor);
+    if IsData then
       Exit(GetMappedValue(Index));
   end;
   Result := inherited GetPropertyWithContext(AName, AThisContext);
@@ -420,8 +365,6 @@ begin
   if GCMarked then
     Exit;
   inherited MarkReferences;
-  if Assigned(FEnvironment) then
-    FEnvironment.MarkReferences;
   for I := 0 to High(FMappings) do
     if Assigned(FMappings[I].ParameterCell) then
       FMappings[I].ParameterCell.MarkReferences;
@@ -444,16 +387,6 @@ begin
       Thrower,
       Thrower,
       []));
-end;
-
-function CreateMappedArgumentsObject(
-  const AArguments: TGocciaArgumentsCollection;
-  const AParameterNames: array of string;
-  const AEnvironment: TGocciaScope;
-  const ACallee: TGocciaValue): TGocciaObjectValue;
-begin
-  Result := TGocciaMappedArgumentsObjectValue.CreateForScope(
-    AArguments, AParameterNames, AEnvironment, ACallee);
 end;
 
 function CreateMappedBytecodeArgumentsObject(

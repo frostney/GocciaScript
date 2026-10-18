@@ -1,10 +1,9 @@
-// Interpreter-run (compat-function) functions that perform the disposal, so the
-// interpreter's DisposeTrackedResources / DisposeTrackedResourcesAsync ladders
-// handle a throw from the (VM-compiled) resource's dispose method. Two
+// Module functions that perform the disposal, so a throw from the resource's
+// dispose method is handled by their `using` / `await using` disposal. Two
 // resources are tracked so the test can observe that disposal CONTINUES past a
-// thrown boundary exception (the throwing resource is declared last, so LIFO
-// disposal runs it first). If the ladder failed to catch the bytecode throw it
-// would escape immediately and the tracker would never be disposed.
+// thrown exception (the throwing resource is declared last, so LIFO disposal
+// runs it first). If disposal failed to catch the bytecode throw it would
+// escape immediately and the tracker would never be disposed.
 export async function disposeSync(tracker, thrower) {
   {
     using t = tracker;

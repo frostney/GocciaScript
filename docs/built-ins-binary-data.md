@@ -17,7 +17,7 @@ Implements the [ECMAScript ArrayBuffer](https://developer.mozilla.org/en-US/docs
 
 **Full standard compliance** — includes resizable buffers (`maxByteLength`), `transfer`, and `transferToFixedLength`.
 
-**Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are refused: TypedArray indexed assignment is silently ignored, while `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, and `DataView` setters throw `TypeError`. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
+**Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are refused: TypedArray indexed assignment is silently ignored, while `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, and `DataView` setters throw `TypeError`. `slice`, `map`, `filter`, `TypedArray.from`, and `TypedArray.of` also throw `TypeError` when the species or `this` constructor returns a view of an immutable buffer, including the source's own buffer; `subarray` only reads, so its result may view one. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
 
 Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances are cloneable via `structuredClone`, and so are typed arrays and `DataView`, each keeping its kind, byte offset and length (see [Global Constants, Functions, and Error Constructors](built-ins.md#global-constants-functions-and-error-constructors-gocciabuiltinsglobalspas)).
 
@@ -34,6 +34,8 @@ Implements the [ECMAScript Atomics](https://developer.mozilla.org/en-US/docs/Web
 Supported operations: `add`, `and`, `compareExchange`, `exchange`, `isLockFree`, `load`, `notify`, `or`, `pause`, `store`, `sub`, `wait`, `waitAsync`, and `xor`.
 
 Atomic operations accept an integer TypedArray over an `ArrayBuffer` or a `SharedArrayBuffer`. `wait`, `waitAsync`, and `notify` require `Int32Array` or `BigInt64Array` views, and `wait` and `waitAsync` also require a `SharedArrayBuffer` (`notify` on a non-shared view returns `0`).
+
+A view that is detached or past the end of its shrunk resizable buffer is a `TypeError` before the index is converted. `load`, `store`, `compareExchange` and the read-modify-write operations convert every argument first, then check the access again (RevalidateAtomicAccess) before they touch the element, because a `valueOf` can resize or detach the buffer: a view that is now detached or out of bounds is a `TypeError`, and an element past the end of a shrunk length-tracking view is a `RangeError`, so nothing is read or written. V8 throws a `TypeError` in that last case too; ECMA-262 specifies the `RangeError`.
 
 ## DataView (`Goccia.Values.DataViewValue.pas`)
 

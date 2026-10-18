@@ -16,6 +16,9 @@ uses
   Goccia.CLI.SandboxHost,
   Goccia.Engine,
   Goccia.HostEnvironment,
+  Goccia.Modules,
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.Sandbox,
   Goccia.Sandbox.Context,
   Goccia.TestSetup;
 
@@ -27,7 +30,13 @@ type
       const AContext: TGocciaSandboxContext; const AEntryPath: string;
       const AParentEngine: TGocciaEngine;
       const AParentHostEnvironment: TGocciaHostEnvironment);
+    procedure InstallSandboxModules(const AEngine: TGocciaEngine;
+      const AContext: TGocciaSandboxContext; const AEntryPath: string;
+      const AParentEngine: TGocciaEngine;
+      const AParentHostEnvironment: TGocciaHostEnvironment);
     procedure TestEntryPathNamesNoHostProject;
+    procedure TestNestedRunsAndReadOnlyPaths;
+    procedure TestRootResultCopiedOnlyWhenKept;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -39,6 +48,10 @@ procedure TSandboxHostTests.SetupTests;
 begin
   Test('A sandbox entry path does not make a host directory the project',
     TestEntryPathNamesNoHostProject);
+  Test('A shared runScript child is refused under a read-only path, an ' +
+    'isolated one writes its own copy', TestNestedRunsAndReadOnlyPaths);
+  Test('The root run''s last value is copied out only when kept; a ' +
+    'nested run''s always is', TestRootResultCopiedOnlyWhenKept);
 end;
 
 procedure TSandboxHostTests.BeforeEach;
@@ -82,6 +95,112 @@ begin
     Expect<Boolean>(RunResult.Ok).ToBe(True);
     Expect<Integer>(FProjectRoots.Count).ToBe(1);
     Expect<string>(FProjectRoots[0]).ToBe('');
+  finally
+    Host.Free;
+  end;
+end;
+
+procedure TSandboxHostTests.InstallSandboxModules(
+  const AEngine: TGocciaEngine; const AContext: TGocciaSandboxContext;
+  const AEntryPath: string; const AParentEngine: TGocciaEngine;
+  const AParentHostEnvironment: TGocciaHostEnvironment);
+begin
+  AEngine.SourceType := stModule;
+  AttachRuntime(AEngine).Install(
+    TGocciaSandboxRuntimeExtension.Create(AContext));
+end;
+
+procedure TSandboxHostTests.TestNestedRunsAndReadOnlyPaths;
+const
+  CHILD_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'fs.writeFileSync("/data/a.txt", "child");' + LineEnding +
+    'fs.writeFileSync("/data/new.txt", "child");' + LineEnding;
+  MAIN_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'import { runScript } from "goccia";' + LineEnding +
+    'const shared = runScript("/child.js");' + LineEnding +
+    'const isolated = runScript("/child.js", ' +
+      '{ sandbox: true, copy: ["/child.js", "/data"] });' + LineEnding +
+    'fs.writeFileSync("/out/log.txt", [' + LineEnding +
+    '  "shared " + shared.ok + " " + shared.failureKind + " " + ' +
+      'shared.error.includes("EROFS"),' + LineEnding +
+    '  "isolated " + isolated.ok + " " + isolated.failureKind,' +
+      LineEnding +
+    '].join("\n"));' + LineEnding;
+var
+  Host: TGocciaSandboxHost;
+  RunResult: TGocciaSandboxRunResult;
+  Lines: TStringList;
+begin
+  Host := TGocciaSandboxHost.Create(DEFAULT_SANDBOX_BYTE_QUOTA,
+    DEFAULT_SANDBOX_NODE_QUOTA);
+  Lines := TStringList.Create;
+  try
+    Host.Context.Fs.MakeDirectory('/data');
+    Host.Context.Fs.WriteAllText('/data/a.txt', 'original');
+    Host.Context.Fs.MakeDirectory('/out');
+    Host.Context.Fs.WriteAllText('/child.js', CHILD_SOURCE);
+    Host.Context.Fs.WriteAllText('/main.js', MAIN_SOURCE);
+    Host.Context.Fs.AddReadOnlyPath('/data');
+    Host.OnConfigureEngine := InstallSandboxModules;
+
+    RunResult := Host.Run('/main.js');
+    Expect<Boolean>(RunResult.Ok).ToBe(True);
+    Lines.Text := Host.Context.Fs.ReadAllText('/out/log.txt');
+    Expect<Integer>(Lines.Count).ToBe(2);
+    if Lines.Count = 2 then
+    begin
+      { The shared child runs on the caller's filesystem and is refused;
+        the isolated child's copies carry no marks, and its writes stay in
+        its own filesystem. }
+      Expect<string>(Lines[0]).ToBe('shared false script-error true');
+      Expect<string>(Lines[1]).ToBe('isolated true none');
+    end;
+    Expect<string>(Host.Context.Fs.ReadAllText('/data/a.txt')).ToBe(
+      'original');
+    Expect<Boolean>(Host.Context.Fs.Exists('/data/new.txt')).ToBe(False);
+  finally
+    Lines.Free;
+    Host.Free;
+  end;
+end;
+
+procedure TSandboxHostTests.TestRootResultCopiedOnlyWhenKept;
+const
+  MAIN_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'import { runScript } from "goccia";' + LineEnding +
+    'const child = runScript("/child.js");' + LineEnding +
+    'fs.writeFileSync("/out.txt", JSON.stringify(child.result));' +
+      LineEnding +
+    '[1, 2];' + LineEnding;
+var
+  Host: TGocciaSandboxHost;
+  RunResult: TGocciaSandboxRunResult;
+begin
+  Host := TGocciaSandboxHost.Create(DEFAULT_SANDBOX_BYTE_QUOTA,
+    DEFAULT_SANDBOX_NODE_QUOTA);
+  try
+    Host.Context.Fs.WriteAllText('/child.js', '[3, { a: 4 }];');
+    Host.Context.Fs.WriteAllText('/main.js', MAIN_SOURCE);
+    Host.OnConfigureEngine := InstallSandboxModules;
+
+    Expect<Boolean>(Host.KeepRootResult).ToBe(True);
+    RunResult := Host.Run('/main.js');
+    Expect<Boolean>(RunResult.Ok).ToBe(True);
+    Expect<Boolean>(Assigned(RunResult.ResultValue)).ToBe(True);
+    if Assigned(RunResult.ResultValue) then
+      Expect<string>(RunResult.ResultValue.ToStringLiteral.Value).ToBe(
+        '1,2');
+
+    Host.KeepRootResult := False;
+    RunResult := Host.Run('/main.js');
+    Expect<Boolean>(RunResult.Ok).ToBe(True);
+    Expect<Boolean>(Assigned(RunResult.ResultValue)).ToBe(False);
+    { The child's value still reaches the program that ran it. }
+    Expect<string>(Host.Context.Fs.ReadAllText('/out.txt')).ToBe(
+      '[3,{"a":4}]');
   finally
     Host.Free;
   end;

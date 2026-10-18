@@ -28,19 +28,11 @@
   "probes": [
     {
       "id": "deburr-combining-marks",
-      "file": "deburr-combining-marks.mjs",
-      "knownBytecodeDivergence": {
-        "errorPattern": "^ReferenceError: Cannot access '.+' before initialization$",
-        "reason": "Transitive module imports can throw before initialization; this is classified separately from library semantics."
-      }
+      "file": "deburr-combining-marks.mjs"
     },
     {
       "id": "ordinal-words",
-      "file": "ordinal-words.mjs",
-      "knownBytecodeDivergence": {
-        "errorPattern": "^ReferenceError: Cannot access '.+' before initialization$",
-        "reason": "Transitive module imports can throw before initialization; this is classified separately from library semantics."
-      }
+      "file": "ordinal-words.mjs"
     },
     {
       "id": "invariant-true",
@@ -48,19 +40,11 @@
     },
     {
       "id": "empty-unzip-with",
-      "file": "empty-unzip-with.mjs",
-      "knownBytecodeDivergence": {
-        "errorPattern": "^ReferenceError: Cannot access '.+' before initialization$",
-        "reason": "Transitive module imports can throw before initialization; this is classified separately from library semantics."
-      }
+      "file": "empty-unzip-with.mjs"
     },
     {
       "id": "large-array-sorted-index",
-      "file": "large-array-sorted-index.mjs",
-      "knownBytecodeDivergence": {
-        "errorPattern": "^ReferenceError: Cannot access '.+' before initialization$",
-        "reason": "Transitive module imports can throw before initialization; this is classified separately from library semantics."
-      }
+      "file": "large-array-sorted-index.mjs"
     }
   ],
   "environmentProbe": "environment.mjs"

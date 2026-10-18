@@ -228,6 +228,19 @@ double ffi_variadic_promotions(const char* label, ...) {
   return result;
 }
 
+double ffi_variadic_scaled_sum_f64(double scale, int32_t count, ...) {
+  double result = 0.0;
+  int32_t index;
+  va_list args;
+
+  va_start(args, count);
+  for (index = 0; index < count; index++) {
+    result += va_arg(args, double);
+  }
+  va_end(args);
+  return result * scale;
+}
+
 // -- FFI v2 callbacks ------------------------------------------------------
 
 typedef int32_t (*ffi_v2_i32_callback)(int32_t value);

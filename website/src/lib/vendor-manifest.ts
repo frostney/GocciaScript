@@ -118,22 +118,39 @@ export function isFlagSupported(
   return features[kind].includes(name);
 }
 
-/** The execution backends a binary's `--mode` flag selects between. */
+/** The execution backends the `--mode` flag of a release up to 0.14 selects
+ *  between. GocciaScript 0.15.0 removed the flag and the tree-walk
+ *  interpreter, so a newer binary only runs bytecode. */
 export type ExecutionMode = "interpreted" | "bytecode";
 
 /** The backend the website runs when the request names none (#871). */
 export const DEFAULT_EXECUTION_MODE: ExecutionMode = "bytecode";
 
-/** Whether a binary advertises `--mode`, so its backend is selectable. The
- *  playground shows its execution-mode toggle only for such binaries, and the
- *  API sends `--mode` only to them; any other binary runs its built-in
- *  default. A missing feature set is a locally built (current) engine that was
- *  never probed, so it counts as supporting the flag. */
+/** Whether a binary advertises `--mode`, so its backend is selectable. Only
+ *  releases up to 0.14 do: 0.15.0 removed the option and exits with status 2
+ *  when it is passed. The playground shows its execution-mode toggle only for
+ *  such binaries, and the API sends `--mode` only to them; any other binary
+ *  runs bytecode. A missing feature set is a locally built engine that was
+ *  never probed. It is built from this repository, which has no `--mode`, so
+ *  it does not count as supporting the flag. */
 export function supportsModeFlag(
   features: VendorFeatureSet | undefined,
   kind: "loader" | "testRunner",
 ): boolean {
+  if (!features) return false;
   return isFlagSupported(features, "--mode", kind);
+}
+
+/** The backend a binary actually runs for a request: the requested mode (or
+ *  the default) when the binary takes `--mode`, and bytecode otherwise, since
+ *  a binary without the option ignores the request's mode. */
+export function effectiveExecutionMode(
+  requested: ExecutionMode | undefined,
+  features: VendorFeatureSet | undefined,
+  kind: "loader" | "testRunner",
+): ExecutionMode {
+  if (!supportsModeFlag(features, kind)) return "bytecode";
+  return requested ?? DEFAULT_EXECUTION_MODE;
 }
 
 /** The flags that refuse every host read, including imports from the

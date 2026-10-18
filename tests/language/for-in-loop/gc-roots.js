@@ -17,8 +17,9 @@ const churn = () => {
 
 describe.runIf(hasGoccia)("for-in iteration head GC roots", () => {
   test("a key survives a collecting assignment target", () => {
-    // The key string is constructed for this iteration and held only by the
-    // evaluator's locals until the assignment target lands it somewhere.
+    // The key string is constructed for this iteration and held only by
+    // engine-internal temporaries until the assignment target lands it
+    // somewhere.
     const source = { alpha: 1, beta: 2 };
     const sink = {};
     const seen = [];

@@ -831,7 +831,7 @@ begin
 
   Result := CreateStringIndexDescriptor(FPrimitive, AName);
   if Assigned(Result) then
-    Exit;
+    Exit(Result.AsCallerOwned);
 
   if AName = PROP_LENGTH then
   begin
@@ -839,7 +839,7 @@ begin
     Result := TGocciaPropertyDescriptorData.Create(
       TGocciaNumberLiteralValue.Create(
         UTF16CodeUnitLength(FPrimitive.ToStringLiteral.Value)),
-      []);
+      []).AsCallerOwned;
     Exit;
   end;
 end;
@@ -2079,9 +2079,13 @@ begin
     begin
       if not MatchMethod.IsCallable then
         ThrowTypeError(SErrorSymbolMatchNotCallable, SSuggestWellKnownSymbolCallable);
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // S is the this value itself when it already is a string.
+      if AThisValue is TGocciaStringLiteralValue then
+        CallArgs := TGocciaArgumentsCollection.Create([AThisValue])
+      else
+        CallArgs := TGocciaArgumentsCollection.Create([
+          TGocciaStringLiteralValue.Create(StringValue)
+        ]);
       try
         Result := InvokeCallable(MatchMethod, CallArgs, RegexValue);
       finally
@@ -2192,9 +2196,13 @@ begin
     begin
       if not MatchAllMethod.IsCallable then
         ThrowTypeError(SErrorSymbolMatchAllNotCallable, SSuggestWellKnownSymbolCallable);
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // S is the this value itself when it already is a string.
+      if AThisValue is TGocciaStringLiteralValue then
+        CallArgs := TGocciaArgumentsCollection.Create([AThisValue])
+      else
+        CallArgs := TGocciaArgumentsCollection.Create([
+          TGocciaStringLiteralValue.Create(StringValue)
+        ]);
       try
         Result := InvokeCallable(MatchAllMethod, CallArgs, RegexValue);
       finally
@@ -2268,9 +2276,13 @@ begin
     begin
       if not SearchMethod.IsCallable then
         ThrowTypeError(SErrorSymbolSearchNotCallable, SSuggestWellKnownSymbolCallable);
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // S is the this value itself when it already is a string.
+      if AThisValue is TGocciaStringLiteralValue then
+        CallArgs := TGocciaArgumentsCollection.Create([AThisValue])
+      else
+        CallArgs := TGocciaArgumentsCollection.Create([
+          TGocciaStringLiteralValue.Create(StringValue)
+        ]);
       try
         Result := InvokeCallable(SearchMethod, CallArgs, RegexValue);
       finally

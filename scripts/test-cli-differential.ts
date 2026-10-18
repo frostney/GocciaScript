@@ -2,27 +2,24 @@
 /**
  * test-cli-differential.ts
  *
- * Differential suite runner: goccia-interpreted vs goccia-bytecode vs vitest
- * vs bun.
+ * Differential suite runner: goccia vs vitest vs bun.
  *
- * Each differential suite under `scripts/differential/` runs under the two
- * goccia modes and under the external runtimes its classification names; per-file
- * counts and failed-test name sets are diffed. A gating disagreement exits 1
- * (0 when everything agrees), so this gates CI directly.
+ * Each differential suite under `scripts/differential/` runs under goccia and
+ * under the external runtimes its classification names; per-file counts and
+ * failed-test name sets are diffed. A gating disagreement exits 1 (0 when
+ * everything agrees), so this gates CI directly.
  *
- * Three invariants:
- * 1. **Mode parity** — interpreter and bytecode must agree on the *set of
- *    failed test names*, and on the pass/fail counts. Counts alone are not
- *    enough: the two modes can fail the same number of different tests.
- * 2. **Vitest as the semantic oracle** — goccia's testing API targets Vitest as
+ * Two invariants:
+ * 1. **Vitest as the semantic oracle** — goccia's testing API targets Vitest as
  *    an exact drop-in, so for differential suites about testing-API semantics
  *    (matchers, hook and describe accounting) Vitest decides. The failed-test
- *    name set must match, the pass/fail/skip counts must match both goccia modes,
- *    and the two runtimes must agree on whether the *file* failed — that last
- *    one is how a suite-level error (throwing describe, failed
- *    beforeAll/afterAll) is compared without depending on goccia's
- *    goccia-specific `suiteErrors` field.
- * 3. **Bun as the ECMAScript oracle** — for language and runtime differential
+ *    name set must match, the pass/fail/skip counts must match goccia's, and
+ *    the two runtimes must agree on whether the *file* failed — that last one
+ *    is how a suite-level error (throwing describe, failed beforeAll/afterAll)
+ *    is compared without depending on goccia's goccia-specific `suiteErrors`
+ *    field. Counts are compared alongside the name set because agreeing on
+ *    which tests fail is not the same as running the same tests.
+ * 2. **Bun as the ECMAScript oracle** — for language and runtime differential
  *    suites (syntax, modules, builtins) bun is a sound oracle and gates. For
  *    testing-API suites it is *advisory*: a 223-probe three-way audit found
  *    bun and vitest disagreeing on 30 of 178 matcher probes in both directions,
@@ -40,7 +37,8 @@
  * - A differential suite that reaches for goccia-only globals (`mock`,
  *   `spyOn`) — or that asserts a deliberate divergence from both external
  *   runtimes — is named `*.goccia.test.js` and is classified `skip` for both
- *   external runtimes, so only mode parity is checked for it.
+ *   external runtimes. No oracle runs it, so it must pass under goccia: its
+ *   tests assert goccia's own deliberate behaviour.
  * - A differential suite that needs a goccia capability the default profile
  *   seals (today: `--allow-import=node_modules`) names it in its classification's
  *   `gocciaFlags`. The flag reaches only that suite, so enabling a capability
@@ -157,8 +155,8 @@ const CLASSIFICATION: Record<string, Classification> = {
   // The two node_modules behaviours no external runtime shares: the
   // "module"-field preference (Node ignores the field; bun resolves that
   // package to its CommonJS "main") and the named CommonJS refusal (bun just
-  // loads the CommonJS file). Both are deliberate and documented, so only mode
-  // parity is checked.
+  // loads the CommonJS file). Both are deliberate and documented, so no oracle
+  // runs it and goccia must pass it.
   "n-nodemods.goccia.test.js": {
     kind: "language",
     bun: "skip",
@@ -181,18 +179,16 @@ const CLASSIFICATION: Record<string, Classification> = {
   // Members named `call`, `apply` and `bind` that are not the
   // `Function.prototype` intrinsics — the shape a name-matching call fast path
   // confuses: both a user-defined `bind` and `Reflect.apply` installed as a
-  // function's own `apply` were hijacked into the intrinsic in bytecode mode
-  // only, until the fast paths matched on intrinsic identity instead of on the
-  // callee name. Bun gates: this is property lookup and call semantics,
+  // function's own `apply` were hijacked into the intrinsic, until the fast
+  // paths matched on intrinsic identity instead of on the callee name. Bun gates: this is property lookup and call semantics,
   // and the testing API is incidental. Vitest is skipped for the same reason as
   // the other language suites.
   "p-callintrinsics.test.js": { kind: "language", bun: "gate", vitest: "skip" },
   // Construction through the abstract Construct operation rather than through
   // `new` — Reflect.construct, a proxy without a construct trap, a bound class
   // — where the instance elements are the half a second construction path
-  // drops: every field, private field, and method initializer went missing in
-  // interpreted mode until that path was routed into the same instantiation
-  // `new` uses. Bun gates: this is ECMAScript class construction semantics,
+  // drops: every field, private field, and method initializer went missing
+  // until that path was routed into the same instantiation `new` uses. Bun gates: this is ECMAScript class construction semantics,
   // and the testing API is incidental. Vitest is skipped for the same reason as
   // the other language suites.
   "q-reflectconstruct.test.js": { kind: "language", bun: "gate", vitest: "skip" },
@@ -211,7 +207,7 @@ type Verdict = {
   failed: number;
   /** `null` when the runtime's output does not report skips. */
   skipped: number | null;
-  /** Every failed entry, including goccia's suite-level ones. Mode parity. */
+  /** Every failed entry, including goccia's suite-level ones. */
   failedNames: Set<string>;
   /** Test-level failures only — the dimension vitest also reports. */
   failedTestNames: Set<string>;
@@ -223,10 +219,9 @@ type Run = { verdict: Verdict | null; error: string | null };
 const scratch = mkdtemp("goccia-differential-");
 
 /** Runs one file under goccia and reads back its JSON result envelope. */
-function gocciaResults(path: string, bytecode: boolean, extraFlags: string[] = []): Run {
-  const mode = [bytecode ? "--mode=bytecode" : "--mode=interpreted"];
-  const outPath = join(scratch, `${basename(path)}${bytecode ? ".bc" : ".it"}.json`);
-  const proc = Bun.spawnSync([GOCCIA_BIN, path, `--output=${outPath}`, ...GFLAGS, ...extraFlags, ...mode], {
+function gocciaResults(path: string, extraFlags: string[] = []): Run {
+  const outPath = join(scratch, `${basename(path)}.json`);
+  const proc = Bun.spawnSync([GOCCIA_BIN, path, `--output=${outPath}`, ...GFLAGS, ...extraFlags], {
     stdout: "pipe",
     stderr: "pipe",
     timeout: TIMEOUT_MS,
@@ -419,7 +414,7 @@ const sameNames = (a: Set<string>, b: Set<string>): boolean =>
   a.size === b.size && [...a].every((v) => b.has(v));
 
 /**
- * Diffs an external runtime against both goccia modes and returns one line per
+ * Diffs an external runtime against goccia and returns one line per
  * disagreement. `label` names the runtime in the messages, and `options` turns
  * off the dimensions a given runtime's output cannot report. The caller decides
  * whether the result gates or is advisory.
@@ -427,53 +422,50 @@ const sameNames = (a: Set<string>, b: Set<string>): boolean =>
 function compareOracle(
   label: string,
   oracle: Run,
-  modes: [string, Run][],
+  goccia: Run,
   options: { compareSkipped: boolean; compareFileFailed: boolean },
 ): string[] {
   const disagree: string[] = [];
   if (oracle.error) return [`${label} load/exec failure (${oracle.error})`];
 
-  const reference = modes[0][1].verdict!;
-  if (!sameNames(reference.failedTestNames, oracle.verdict!.failedTestNames)) {
-    const onlyGoccia = difference(reference.failedTestNames, oracle.verdict!.failedTestNames);
-    const onlyOracle = difference(oracle.verdict!.failedTestNames, reference.failedTestNames);
+  const reference = goccia.verdict!;
+  const o = oracle.verdict!;
+  if (!sameNames(reference.failedTestNames, o.failedTestNames)) {
+    const onlyGoccia = difference(reference.failedTestNames, o.failedTestNames);
+    const onlyOracle = difference(o.failedTestNames, reference.failedTestNames);
     if (onlyGoccia.length > 0) disagree.push(`goccia-only fails: ${JSON.stringify(onlyGoccia)}`);
     if (onlyOracle.length > 0)
       disagree.push(`${label}-only fails: ${JSON.stringify(onlyOracle)}`);
   }
   // Agreeing on which tests fail is not the same as running the same tests,
-  // so hold the oracle's counts against both goccia modes, not just one.
-  for (const [modeLabel, run] of modes) {
-    const v = run.verdict!;
-    const o = oracle.verdict!;
-    if (v.passed !== o.passed || v.failed !== o.failed)
-      disagree.push(`${label} counts differ from ${modeLabel}: ${label}=${fmt(oracle)} ${modeLabel}=${fmt(run)}`);
-    // Both sides must actually report skips before a difference means
-    // anything: goccia carries `null` for an envelope without the field, and
-    // comparing that against a number printed a divergence whose message
-    // read `goccia=nulls`. The file-verdict comparison below already guards
-    // both sides the same way.
-    else if (
-      options.compareSkipped &&
-      v.skipped !== null &&
-      o.skipped !== null &&
-      v.skipped !== o.skipped
-    )
-      disagree.push(
-        `${label} skip counts differ from ${modeLabel}: ${label}=${o.skipped}s ${modeLabel}=${v.skipped}s`,
-      );
-  }
+  // so hold the oracle's counts against goccia's too.
+  if (reference.passed !== o.passed || reference.failed !== o.failed)
+    disagree.push(`${label} counts differ from goccia: ${label}=${fmt(oracle)} goccia=${fmt(goccia)}`);
+  // Both sides must actually report skips before a difference means
+  // anything: goccia carries `null` for an envelope without the field, and
+  // comparing that against a number printed a divergence whose message
+  // read `goccia=nulls`. The file-verdict comparison below already guards
+  // both sides the same way.
+  else if (
+    options.compareSkipped &&
+    reference.skipped !== null &&
+    o.skipped !== null &&
+    reference.skipped !== o.skipped
+  )
+    disagree.push(
+      `${label} skip counts differ from goccia: ${label}=${o.skipped}s goccia=${reference.skipped}s`,
+    );
   if (
     options.compareFileFailed &&
     reference.fileFailed !== null &&
-    oracle.verdict!.fileFailed !== null &&
-    reference.fileFailed !== oracle.verdict!.fileFailed
+    o.fileFailed !== null &&
+    reference.fileFailed !== o.fileFailed
   )
     // Neither runtime names a suite-level error the other can match, so file
     // failure is the dimension that carries it: goccia clears `ok`, vitest
     // fails the file, and disagreeing means one of them swallowed the error.
     disagree.push(
-      `${label} file verdict differs: ${label}=${oracle.verdict!.fileFailed ? "failed" : "ok"} goccia=${reference.fileFailed ? "failed" : "ok"}`,
+      `${label} file verdict differs: ${label}=${o.fileFailed ? "failed" : "ok"} goccia=${reference.fileFailed ? "failed" : "ok"}`,
     );
   return disagree;
 }
@@ -510,8 +502,7 @@ for (const path of files) {
   const name = basename(path);
   const classification = CLASSIFICATION[name];
   const gocciaFlags = classification?.gocciaFlags ?? [];
-  const it = gocciaResults(path, false, gocciaFlags);
-  const bc = gocciaResults(path, true, gocciaFlags);
+  const goccia = gocciaResults(path, gocciaFlags);
 
   if (!classification) {
     console.log(
@@ -531,35 +522,21 @@ for (const path of files) {
   const disagree: string[] = [];
   const advisory: string[] = [];
 
-  if (it.error || bc.error) {
+  if (goccia.error) {
     disagree.push("goccia load/exec failure");
+  } else if (classification.bun === "skip" && classification.vitest === "skip") {
+    // No oracle runs this suite: its tests assert goccia's own deliberate
+    // behaviour, so every one of them must pass.
+    const failed = [...goccia.verdict!.failedNames].sort();
+    if (failed.length > 0 || goccia.verdict!.fileFailed)
+      disagree.push(`goccia-only suite failed: ${JSON.stringify(failed)}`);
   } else {
-    // Mode parity is a name-set comparison first: the two modes failing the
-    // same *number* of different tests is a divergence that a count-only check
-    // reports as agreement. The counts are still compared, because a failed-name
-    // set cannot reveal a test that ran in one mode and not the other.
-    const onlyInterp = difference(it.verdict!.failedNames, bc.verdict!.failedNames);
-    const onlyBytecode = difference(bc.verdict!.failedNames, it.verdict!.failedNames);
-    if (onlyInterp.length > 0)
-      disagree.push(`MODE-PARITY BROKEN: interp-only fails: ${JSON.stringify(onlyInterp)}`);
-    if (onlyBytecode.length > 0)
-      disagree.push(`MODE-PARITY BROKEN: bytecode-only fails: ${JSON.stringify(onlyBytecode)}`);
-    if (it.verdict!.passed !== bc.verdict!.passed || it.verdict!.failed !== bc.verdict!.failed)
-      disagree.push(`MODE-PARITY BROKEN: counts interp=${fmt(it)} bytecode=${fmt(bc)}`);
-  }
-
-  // An oracle can only be read once goccia itself agrees with goccia.
-  if (disagree.length === 0) {
-    const modes: [string, Run][] = [
-      ["interp", it],
-      ["bytecode", bc],
-    ];
     for (const [label, run, role] of [
       ["vitest", vt, classification.vitest],
       ["bun", bn, classification.bun],
     ] as [string, Run, Role][]) {
       if (role === "skip") continue;
-      const messages = compareOracle(label, run, modes, {
+      const messages = compareOracle(label, run, goccia, {
         // Bun's human summary does not give a per-file skip count or a file
         // verdict, so those dimensions are vitest-only.
         compareSkipped: label === "vitest",
@@ -574,7 +551,7 @@ for (const path of files) {
   const advisoryMarker =
     advisory.length > 0 ? `  ~~~ ADVISORY(non-gating): ${advisory.join("; ")}` : "";
   console.log(
-    `${name.padEnd(28)} [${classification.kind}] interp=${fmt(it)}  bytecode=${fmt(bc)}  vitest=${fmt(vt)}  bun=${fmt(bn)}${marker}${advisoryMarker}`,
+    `${name.padEnd(28)} [${classification.kind}] goccia=${fmt(goccia)}  vitest=${fmt(vt)}  bun=${fmt(bn)}${marker}${advisoryMarker}`,
   );
   if (disagree.length > 0) findings.push(name);
   else if (advisory.length > 0) advisories.push(name);

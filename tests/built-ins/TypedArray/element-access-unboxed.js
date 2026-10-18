@@ -1,5 +1,5 @@
 // Regression coverage for unboxed typed-array element reads and writes: the
-// results must stay observably identical in both execution modes.
+// fast path must stay observably identical to ordinary element access.
 
 describe("TypedArray unboxed element fast path", () => {
   describe("signed zero round-trips", () => {

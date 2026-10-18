@@ -128,7 +128,6 @@ type
       out AError: string): Boolean;
     procedure CollectPaths(const AFs: TSandboxVirtualFileSystem;
       const APath: string; const APaths: TStrings);
-    function BytesEqual(const ALeft, ARight: TBytes): Boolean;
     function JsonEscape(const AValue: string): string;
     procedure AppendJsonChange(const ABuilder: TStrings; var AFirst: Boolean;
       const AKind, APath: string; const AOldBytes, ANewBytes: Int64);
@@ -173,11 +172,6 @@ const
     'host-error',
     'child-process-crash'
   );
-
-function BytesLength(const ABytes: TBytes): Int64;
-begin
-  Result := Length(ABytes);
-end;
 
 function SandboxFailureKindName(
   const AKind: TGocciaSandboxFailureKind): string;
@@ -431,19 +425,6 @@ begin
     CollectPaths(AFs, Entries[I].Path, APaths);
 end;
 
-function TGocciaSandboxContext.BytesEqual(const ALeft,
-  ARight: TBytes): Boolean;
-var
-  I: Integer;
-begin
-  if Length(ALeft) <> Length(ARight) then
-    Exit(False);
-  for I := 0 to High(ALeft) do
-    if ALeft[I] <> ARight[I] then
-      Exit(False);
-  Result := True;
-end;
-
 function TGocciaSandboxContext.JsonEscape(const AValue: string): string;
 var
   I: Integer;
@@ -575,8 +556,6 @@ var
   Path: string;
   CurrentStat: TSandboxFsStat;
   BaselineStat: TSandboxFsStat;
-  CurrentBytes: TBytes;
-  BaselineBytes: TBytes;
 begin
   Builder := TStringList.Create;
   CurrentPaths := TStringList.Create;
@@ -618,11 +597,9 @@ begin
 
       if CurrentStat.Kind = nkFile then
       begin
-        CurrentBytes := FFs.SnapshotReadAllBytes(Path);
-        BaselineBytes := FBaseline.SnapshotReadAllBytes(Path);
-        if not BytesEqual(CurrentBytes, BaselineBytes) then
+        if not FFs.SnapshotSameBytes(Path, FBaseline, Path) then
           AppendJsonChange(Builder, First, 'modify', Path,
-            BytesLength(BaselineBytes), BytesLength(CurrentBytes));
+            BaselineStat.Size, CurrentStat.Size);
       end;
     end;
 
@@ -690,8 +667,7 @@ begin
       if (Path = '/') or (not FFs.IsFile(Path)) then
         Continue;
       if Assigned(FBaseline) and FBaseline.IsFile(Path) and
-         BytesEqual(FBaseline.SnapshotReadAllBytes(Path),
-           FFs.SnapshotReadAllBytes(Path)) then
+         FBaseline.SnapshotSameBytes(Path, FFs, Path) then
         Continue;
       Result := Result + '--- ' + Path + sLineBreak;
       Result := Result + '+++ ' + Path + sLineBreak;

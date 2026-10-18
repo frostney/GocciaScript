@@ -8,9 +8,9 @@ unit Goccia.Shims;
 
   Each shim's Source is a valid GocciaScript module with a single named export.
   LoadShimValue evaluates the module in a child scope through the engine's
-  executor and returns the exported value, which the engine binds into the
-  global scope. The bytecode executor compiles the shim, so every function it
-  defines is a VM closure; no interpreter is involved.
+  shim loader and returns the exported value, which the engine binds into the
+  global scope. The engine compiles the shim, so every function it defines is
+  a VM closure.
 
   A default shim is parsed once per thread runtime and its program is reused by
   every engine that thread builds; see "Shimmed Legacy Globals" in
@@ -23,11 +23,28 @@ interface
 uses
   Classes,
 
-  Goccia.Executor,
+  Goccia.AST.Node,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
 type
+  { Runs a bootstrap shim's module program in AScope, the shim's own module
+    environment under the global scope, leaving the shim's top-level
+    bindings, its export included, in AScope. AFileName names the shim in
+    stack frames. TGocciaEngine provides one; see TGocciaShimLoader. }
+  TGocciaShimEvaluator = procedure(const AProgram: TGocciaProgram;
+    const AScope: TGocciaScope; const AFileName: string) of object;
+
+  { How one engine loads its shims: its realm, its global environment, and
+    the evaluator that runs a shim program on its VM
+    (TGocciaEngine.ShimLoader). }
+  TGocciaShimLoader = record
+    Realm: TGocciaRealm;
+    GlobalScope: TGocciaScope;
+    Evaluate: TGocciaShimEvaluator;
+  end;
+
   TGocciaShimDefinition = record
     Name: string;      // Exported name (must match the export in Source)
     FileName: string;  // Virtual filename for error reporting
@@ -54,15 +71,15 @@ type
   TGocciaShimPrototypeMembers = array of TGocciaShimPrototypeMember;
 
   { Defers a single name-bound shim's lex/parse/evaluate until the global is
-    first touched.  Holds the executor and shim definition; Materialize
+    first touched.  Holds the shim loader and shim definition; Materialize
     matches the of-object lazy factory the engine registers on globalThis.
     The engine owns the materializer for its lifetime. }
   TGocciaShimMaterializer = class
   private
-    FExecutor: TGocciaExecutor;
+    FLoader: TGocciaShimLoader;
     FShimIndex: Integer;
   public
-    constructor Create(const AExecutor: TGocciaExecutor;
+    constructor Create(const ALoader: TGocciaShimLoader;
       const AShimIndex: Integer);
     function Materialize: TGocciaValue;
   end;
@@ -73,11 +90,11 @@ type
     materializer for its lifetime. }
   TGocciaShimMemberMaterializer = class
   private
-    FExecutor: TGocciaExecutor;
+    FLoader: TGocciaShimLoader;
     FShimIndex: Integer;
     FExportKey: string;
   public
-    constructor Create(const AExecutor: TGocciaExecutor;
+    constructor Create(const ALoader: TGocciaShimLoader;
       const AShimIndex: Integer; const AExportKey: string);
     function Materialize: TGocciaValue;
     procedure MaterializeAccessor(out AGetter, ASetter: TGocciaValue);
@@ -103,15 +120,15 @@ procedure RegisterDefaultShimNames(const AShims: TStringList);
 function CreateShimScope(const AGlobalScope: TGocciaScope;
   const AName: string): TGocciaScope;
 
-{ Evaluate default shim AShimIndex (see DefaultShim) with AExecutor, in a
+{ Evaluate default shim AShimIndex (see DefaultShim) with ALoader, in a
   child scope of its global scope, and return its exported value. A shim is
   evaluated once per realm; later calls return the realm's export. }
-function LoadShimValue(const AExecutor: TGocciaExecutor;
+function LoadShimValue(const ALoader: TGocciaShimLoader;
   const AShimIndex: Integer): TGocciaValue;
 
 { Return the realm's original Date constructor without consulting the mutable
   global property.  Materializes the Date shim on first use. }
-function GetDateIntrinsic(const AExecutor: TGocciaExecutor): TGocciaValue;
+function GetDateIntrinsic(const ALoader: TGocciaShimLoader): TGocciaValue;
 
 { Drop the calling thread's cached shim programs. Registered with
   Goccia.ThreadCleanupRegistry, so a thread's runtime shutdown releases them;
@@ -126,9 +143,7 @@ implementation
 uses
   SysUtils,
 
-  Goccia.AST.Node,
   Goccia.ExecutionContext,
-  Goccia.Realm,
   Goccia.SourcePipeline,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.DateData,
@@ -162,6 +177,10 @@ const
         '  return new Uint8Array(codePoints).toBase64();'#10 +
         '};'
     ),
+    // atob stays linear in its input: one regular expression checks the
+    // alphabet, and the decoded bytes become characters one 8 KiB slice per
+    // String.fromCharCode call, joined once. A callback per character or per
+    // byte made large inputs slow and memory-hungry (#1567).
     ( // WHATWG HTML spec §8.3 — legacy atob(data) via Uint8Array.fromBase64
       Name: 'atob';
       FileName: '<shim:atob>';
@@ -185,23 +204,21 @@ const
         '      "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
         '      "InvalidCharacterError"'#10 +
         '    );'#10 +
-        '  [...str].forEach((ch: string): void => {'#10 +
-        '    const c: number = ch.charCodeAt(0);'#10 +
-        '    if (!(c >= 65 && c <= 90) && !(c >= 97 && c <= 122) &&'#10 +
-        '        !(c >= 48 && c <= 57) && c !== 43 && c !== 47)'#10 +
-        '      throw new DOMException('#10 +
-        '        "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
-        '        "InvalidCharacterError"'#10 +
-        '      );'#10 +
-        '  });'#10 +
+        '  if (!/^[A-Za-z0-9+\/]*$/.test(str))'#10 +
+        '    throw new DOMException('#10 +
+        '      "Failed to execute ''atob'': The string to be decoded is not correctly encoded.",'#10 +
+        '      "InvalidCharacterError"'#10 +
+        '    );'#10 +
         '  const remainder: number = str.length % 4;'#10 +
         '  if (remainder === 2) str += "==";'#10 +
         '  else if (remainder === 3) str += "=";'#10 +
         '  if (str === "") return "";'#10 +
-        '  return Uint8Array.fromBase64(str).reduce('#10 +
-        '    (acc: string, b: number): string => acc + String.fromCharCode(b),'#10 +
-        '    ""'#10 +
-        '  );'#10 +
+        '  const bytes: Uint8Array = Uint8Array.fromBase64(str);'#10 +
+        '  return Array.from('#10 +
+        '    { length: Math.ceil(bytes.length / 8192) },'#10 +
+        '    (_: unknown, i: number): string =>'#10 +
+        '      String.fromCharCode(...bytes.subarray(i * 8192, (i + 1) * 8192))'#10 +
+        '  ).join("");'#10 +
         '};'
     ),
     ( // ES2027 §19.2.5 — legacy parseInt via Number.parseInt
@@ -271,7 +288,11 @@ const
         'const legacyDateDayFromYear = (year: number): number =>'#10 +
         '  365 * (year - 1970) + Math.floor((year - 1969) / 4) -'#10 +
         '  Math.floor((year - 1901) / 100) + Math.floor((year - 1601) / 400);'#10 +
-        'const makeDateEpochMillisecondsRaw = (args: any[], timeZone: string, adjustTwoDigitYear: boolean): number => {'#10 +
+        '// TimeClip(UTC(MakeDate(fields))): the time value of the fields read as local'#10 +
+        '// time in timeZone, or NaN outside the range. With timeZone "UTC", the fields'#10 +
+        '// are read at offsetMilliseconds (a string with an explicit offset); other'#10 +
+        '// zones ignore it.'#10 +
+        'const makeDateEpochMillisecondsRaw = (args: any[], timeZone: string, adjustTwoDigitYear: boolean, offsetMilliseconds: number = 0): number => {'#10 +
         '  if (args.length === 0) return NaN;'#10 +
         '  const yearValue: number = toDateInteger(args[0]);'#10 +
         '  const monthValue: number = toDateInteger(args.length > 1 ? args[1] : 0);'#10 +
@@ -292,24 +313,43 @@ const
         '  const starts: any[] = legacyDateIsLeapYear(year) ? legacyDateLeapMonthStarts : legacyDateMonthStarts;'#10 +
         '  const dayNumber: number = legacyDateDayFromYear(year) + starts[month] + dayValue - 1;'#10 +
         '  const timeWithinDay: number = ((hour * 3600000 + minute * 60000) + second * 1000) + millisecond;'#10 +
-        '  const value: number = dayNumber * 86400000 + timeWithinDay;'#10 +
-        '  if (!Number.isFinite(value) || Math.abs(value) > dateTimeClipLimit) return NaN;'#10 +
-        '  const clipped: number = Math.trunc(value);'#10 +
-        '  if (timeZone === "UTC") return clipped;'#10 +
-        '  const local = Temporal.Instant.fromEpochMilliseconds(clipped).toZonedDateTimeISO("UTC");'#10 +
-        '  return Temporal.ZonedDateTime.from({'#10 +
-        '    year: local.year, month: local.month, day: local.day,'#10 +
-        '    hour: local.hour, minute: local.minute, second: local.second,'#10 +
-        '    millisecond: local.millisecond, timeZone'#10 +
-        '  }).epochMilliseconds;'#10 +
+        '  const value: number = Math.trunc(dayNumber * 86400000 + timeWithinDay);'#10 +
+        '  if (!Number.isFinite(value)) return NaN;'#10 +
+        '  // ES2026 §21.4.2.1 step 5.k: TimeClip(UTC(finalDate)). The time value range'#10 +
+        '  // applies to the UTC instant, after the zone or offset is taken off, so a'#10 +
+        '  // local time just outside the range can still name a valid instant.'#10 +
+        '  if (timeZone === "UTC") {'#10 +
+        '    const utcValue: number = value - offsetMilliseconds;'#10 +
+        '    return Math.abs(utcValue) > dateTimeClipLimit ? NaN : utcValue;'#10 +
+        '  }'#10 +
+        '  // A zone offset is less than a day, so a local time a day or more outside'#10 +
+        '  // the range cannot name a valid instant. Within that day, read the fields'#10 +
+        '  // from an instant one day nearer the epoch and add the day back.'#10 +
+        '  if (Math.abs(value) >= dateTimeClipLimit + 86400000) return NaN;'#10 +
+        '  const shift: number = value > dateTimeClipLimit ? 86400000 : value < -dateTimeClipLimit ? -86400000 : 0;'#10 +
+        '  let local: any = Temporal.Instant.fromEpochMilliseconds(value - shift).toZonedDateTimeISO("UTC");'#10 +
+        '  if (shift !== 0) local = local.toPlainDateTime().add({ milliseconds: shift });'#10 +
+        '  // A local time whose UTC instant lies outside the range is NaN, not a RangeError.'#10 +
+        '  let utc: number;'#10 +
+        '  try {'#10 +
+        '    utc = Temporal.ZonedDateTime.from({'#10 +
+        '      year: local.year, month: local.month, day: local.day,'#10 +
+        '      hour: local.hour, minute: local.minute, second: local.second,'#10 +
+        '      millisecond: local.millisecond, timeZone'#10 +
+        '    }).epochMilliseconds;'#10 +
+        '  } catch (e) {'#10 +
+        '    if (e instanceof RangeError) return NaN;'#10 +
+        '    throw e;'#10 +
+        '  }'#10 +
+        '  return Math.abs(utc) > dateTimeClipLimit ? NaN : utc;'#10 +
         '};'#10 +
+        '// ES2026 §21.4.3.2 Date.parse(string) leaves non-ISO formats to the'#10 +
+        '// implementation. A legacy date carries no UTC offset, so it is local'#10 +
+        '// midnight, as in V8, SpiderMonkey and JavaScriptCore.'#10 +
         'const makeLegacyDateEpochMilliseconds = (year: number, month: number, day: number): number => {'#10 +
         '  if (month < 1 || month > 12 || day < 1 || day > 31) return NaN;'#10 +
-        '  const fullYear: number = legacyDateFullYear(year);'#10 +
-        '  const starts: any[] = legacyDateIsLeapYear(fullYear) ? legacyDateLeapMonthStarts : legacyDateMonthStarts;'#10 +
-        '  const value: number = (legacyDateDayFromYear(fullYear) + starts[month - 1] + day - 1) * 86400000;'#10 +
-        '  if (!Number.isFinite(value) || Math.abs(value) > dateTimeClipLimit) return NaN;'#10 +
-        '  return value;'#10 +
+        '  return makeDateEpochMillisecondsRaw([legacyDateFullYear(year), month - 1, day, 0, 0, 0, 0],'#10 +
+        '    Temporal.Now.timeZoneId(), false);'#10 +
         '};'#10 +
         'const parseLegacyDateString = (text: string): any => {'#10 +
         '  const slashIndex: number = text.indexOf("/");'#10 +
@@ -425,37 +465,55 @@ const
         '  const offset: number = (hour * 60 + minute) * 60000;'#10 +
         '  return sign === "+" ? offset : -offset;'#10 +
         '};'#10 +
-        'const parseGMTOffsetMilliseconds = (token: string): number => {'#10 +
-        '  if (token === "GMT" || token === "UTC") return 0;'#10 +
-        '  if (token.slice(0, 3) !== "GMT") return NaN;'#10 +
-        '  const sign: string = token[3];'#10 +
-        '  const body: string = token.slice(4);'#10 +
+        '// RFC 2822 section 4.3 zone names (UT, GMT, Z and the US zones) and numeric'#10 +
+        '// offsets, alone or after GMT, UTC or UT: +h, +hh, +hhmm (the form toString'#10 +
+        '// writes) and +h:m, +hh:mm. Letters are matched case-insensitively, as in V8.'#10 +
+        'const legacyZoneOffsetHours: any = {'#10 +
+        '  UT: 0, UTC: 0, GMT: 0, Z: 0, EST: -5, EDT: -4, CST: -6, CDT: -5,'#10 +
+        '  MST: -7, MDT: -6, PST: -8, PDT: -7'#10 +
+        '};'#10 +
+        'const parseLegacyOffsetMilliseconds = (token: string): number => {'#10 +
+        '  const upper: string = token.toUpperCase();'#10 +
+        '  if (Object.hasOwn(legacyZoneOffsetHours, upper)) return legacyZoneOffsetHours[upper] * 3600000;'#10 +
+        '  let start: number = 0;'#10 +
+        '  if (upper.startsWith("GMT") || upper.startsWith("UTC")) start = 3;'#10 +
+        '  else if (upper.startsWith("UT")) start = 2;'#10 +
+        '  const sign: string = upper[start];'#10 +
+        '  if (sign !== "+" && sign !== "-") return NaN;'#10 +
+        '  const body: string = upper.slice(start + 1);'#10 +
         '  const parts: any[] = body.split(":");'#10 +
-        '  const hour: number = parseLegacyInteger(parts[0]);'#10 +
-        '  const minute: number = parts.length > 1 ? parseLegacyInteger(parts[1]) : 0;'#10 +
-        '  if ((sign !== "+" && sign !== "-") || !Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;'#10 +
+        '  if (parts.length > 2) return NaN;'#10 +
+        '  const split: boolean = parts.length === 1 && body.length > 2;'#10 +
+        '  const hourText: string = split ? body.slice(0, body.length - 2) : parts[0];'#10 +
+        '  const minuteText: string = split ? body.slice(body.length - 2) : parts.length === 2 ? parts[1] : "00";'#10 +
+        '  if (hourText.length < 1 || hourText.length > 2) return NaN;'#10 +
+        '  if (minuteText.length < 1 || minuteText.length > 2) return NaN;'#10 +
+        '  const hour: number = parseExactDigits(hourText, hourText.length);'#10 +
+        '  const minute: number = parseExactDigits(minuteText, minuteText.length);'#10 +
+        '  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;'#10 +
         '  const offset: number = (hour * 60 + minute) * 60000;'#10 +
         '  return sign === "+" ? offset : -offset;'#10 +
         '};'#10 +
         'const parseDisplayDateString = (text: string): any => {'#10 +
         '  const parts: any[] = text.split(" ");'#10 +
         '  if (parts.length < 5) return undefined;'#10 +
-        '  let year: number; let month: number; let day: number; let time: any; let offset: number;'#10 +
+        '  let month: number; let day: number;'#10 +
         '  if (String(parts[0]).indexOf(",") >= 0) {'#10 +
         '    day = parseLegacyInteger(parts[1]);'#10 +
         '    month = legacyDateMonthNumber(parts[2]);'#10 +
-        '    year = parseYearToken(parts[3]);'#10 +
-        '    time = parseTimeToken(parts[4]);'#10 +
-        '    offset = 0;'#10 +
         '  } else {'#10 +
         '    month = legacyDateMonthNumber(parts[1]);'#10 +
         '    day = parseLegacyInteger(parts[2]);'#10 +
-        '    year = parseYearToken(parts[3]);'#10 +
-        '    time = parseTimeToken(parts[4]);'#10 +
-        '    offset = parts.length > 5 ? parseGMTOffsetMilliseconds(parts[5]) : 0;'#10 +
         '  }'#10 +
+        '  const year: number = parseYearToken(parts[3]);'#10 +
+        '  const time: any = parseTimeToken(parts[4]);'#10 +
+        '  const hasOffset: boolean = parts.length > 5;'#10 +
+        '  const offset: number = hasOffset ? parseLegacyOffsetMilliseconds(parts[5]) : 0;'#10 +
         '  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) || time === undefined || !Number.isFinite(offset)) return undefined;'#10 +
-        '  return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], "UTC", false) - offset;'#10 +
+        '  const fields: any[] = [year, month - 1, day, time[0], time[1], time[2], time[3]];'#10 +
+        '  // Without an offset token the time is local, as for a legacy date.'#10 +
+        '  if (!hasOffset) return makeDateEpochMillisecondsRaw(fields, Temporal.Now.timeZoneId(), false);'#10 +
+        '  return makeDateEpochMillisecondsRaw(fields, "UTC", false, offset);'#10 +
         '};'#10 +
         'const parseISODateString = (text: string): any => {'#10 +
         '  let position: number = 0;'#10 +
@@ -506,7 +564,7 @@ const
         '  const parsedOffset: any = parseISOOffsetMilliseconds(offsetPart);'#10 +
         '  if (parsedOffset === undefined) return NaN;'#10 +
         '  offset = parsedOffset;'#10 +
-        '  return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], "UTC", false) - offset;'#10 +
+        '  return makeDateEpochMillisecondsRaw([year, month - 1, day, time[0], time[1], time[2], time[3]], "UTC", false, offset);'#10 +
         '};'#10 +
         'const parseDateStringToEpoch = (str: any): number => {'#10 +
         '  const text: string = String(str).trim();'#10 +
@@ -568,7 +626,15 @@ const
         'const __GocciaDateISOYearString = (year: number): string =>'#10 +
         '  year >= 0 && year <= 9999 ? __GocciaDatePad(year, 4) :'#10 +
         '    (year < 0 ? "-" : "+") + __GocciaDatePad(year, 6);'#10 +
-        'const __GocciaDateOffsetString = (offset: string): string => offset.replace(":", "");'#10 +
+        '// ES2026 §21.4.4.41.3 TimeZoneString: the offset in whole milliseconds,'#10 +
+        '// written as sign, hours and minutes. The seconds of a local mean time'#10 +
+        '// offset such as -07:52:58 stay in the local time but not in the string.'#10 +
+        'const __GocciaDateOffsetString = (offsetNanoseconds: number): string => {'#10 +
+        '  const offset: number = Math.trunc(offsetNanoseconds / 1000000);'#10 +
+        '  const absOffset: number = Math.abs(offset);'#10 +
+        '  return (offset >= 0 ? "+" : "-") + __GocciaDatePad(Math.floor(absOffset / 3600000), 2) +'#10 +
+        '    __GocciaDatePad(Math.floor(absOffset / 60000) % 60, 2);'#10 +
+        '};'#10 +
         'const __GocciaDateFromSingleArgument = (value: any): number => {'#10 +
         '  if (typeof value === "number") return __GocciaDateTimeClip(value);'#10 +
         '  if (__GocciaDateHasSlot(value)) return __GocciaDateGetSlot(value);'#10 +
@@ -784,7 +850,7 @@ const
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
         '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + __GocciaDatePad(z.day, 2) + " " +'#10 +
-        '      __GocciaDateYearString(z.year) + " " + __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offset);'#10 +
+        '      __GocciaDateYearString(z.year) + " " + __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offsetNanoseconds);'#10 +
         '  }'#10 +
         '  toDateString(): string {'#10 +
         '    Date.#require(this);'#10 +
@@ -798,7 +864,7 @@ const
         '    Date.#require(this);'#10 +
         '    const z = Date.#local(this);'#10 +
         '    if (!z) return "Invalid Date";'#10 +
-        '    return __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offset);'#10 +
+        '    return __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offsetNanoseconds);'#10 +
         '  }'#10 +
         '  toUTCString(): string {'#10 +
         '    Date.#require(this);'#10 +
@@ -1019,15 +1085,11 @@ var
 
 threadvar
   { One parsed program per DEFAULT_SHIMS entry, filled on first use, so a
-    thread parses each shim once however many engines load it. The bytecode
-    executor compiles the program per engine; the interpreter executor
-    evaluates it, and the functions it defines then keep pointing into the
-    AST. A parsed program is therefore never released while the thread's
-    engines run, and TGocciaProgram.Free releases only the program node, not
-    the statements under it. Parsing per engine leaked the shim ASTs of every
-    engine: about 1.1 MB per engine that used Date on 64-bit. The test runner
-    builds one engine per file, and its snapshot formatter uses Date in every
-    one. }
+    thread parses each shim once however many engines load it. Each engine
+    compiles the program itself. The programs stay while the thread's engines
+    run and are freed, whole trees included, when its runtime shuts down
+    (ReleaseShimProgramCache). The test runner builds one engine per file, and
+    its snapshot formatter uses Date in every one. }
   GShimPrograms: array of TGocciaProgram;
 
 function DefaultShimCount: Integer;
@@ -1052,9 +1114,8 @@ procedure ReleaseShimProgramCache;
 var
   I: Integer;
 begin
-  { Frees the program nodes only; the statements under them stay (see
-    GShimPrograms), as they did when every engine parsed its own shims. By
-    the time a thread's runtime shuts down no engine on it is running. }
+  { Each program frees its tree with it (ADR 0143). By the time a thread's
+    runtime shuts down no engine on it is running. }
   for I := 0 to High(GShimPrograms) do
     GShimPrograms[I].Free;
   SetLength(GShimPrograms, 0);
@@ -1100,7 +1161,7 @@ begin
   Result.ArgumentsObjectEnabled := True;
 end;
 
-function LoadShimValue(const AExecutor: TGocciaExecutor;
+function LoadShimValue(const ALoader: TGocciaShimLoader;
   const AShimIndex: Integer): TGocciaValue;
 var
   CachedValue: TObject;
@@ -1111,12 +1172,12 @@ var
 begin
   { A lazy shim member can be touched from code of another realm (a
     test262 $262.createRealm global, say): the shim belongs to the realm of
-    the engine whose executor loads it, so that realm is the current one
+    the engine whose loader loads it, so that realm is the current one
     while the shim loads and registers what it provides. }
   RealmScope := nil;
-  if Assigned(AExecutor.Realm) and (CurrentRealm <> AExecutor.Realm) then
+  if Assigned(ALoader.Realm) and (CurrentRealm <> ALoader.Realm) then
     RealmScope := TGocciaExecutionContextScope.Create(CreateExecutionContext(
-      AExecutor.Realm, AExecutor.GlobalScope,
+      ALoader.Realm, ALoader.GlobalScope,
       DEFAULT_SHIMS[AShimIndex].FileName));
   try
     CachedValue := CurrentRealm.GetSlot(GShimExportSlots[AShimIndex]);
@@ -1132,7 +1193,7 @@ begin
       GShimPrograms[AShimIndex] := ProgramNode;
     end;
 
-    ShimScope := CreateShimScope(AExecutor.GlobalScope,
+    ShimScope := CreateShimScope(ALoader.GlobalScope,
       DEFAULT_SHIMS[AShimIndex].Name);
     if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
     begin
@@ -1144,7 +1205,7 @@ begin
       ShimScope.DefineLexicalBinding('__GocciaSetForeignDateValue',
         ForeignSetter, dtConst);
     end;
-    AExecutor.EvaluateShim(ProgramNode, ShimScope,
+    ALoader.Evaluate(ProgramNode, ShimScope,
       DEFAULT_SHIMS[AShimIndex].FileName);
     Result := ShimScope.GetValue(DEFAULT_SHIMS[AShimIndex].Name);
     CurrentRealm.SetSlot(GShimExportSlots[AShimIndex], Result);
@@ -1161,13 +1222,13 @@ begin
   end;
 end;
 
-function GetDateIntrinsic(const AExecutor: TGocciaExecutor): TGocciaValue;
+function GetDateIntrinsic(const ALoader: TGocciaShimLoader): TGocciaValue;
 var
   I: Integer;
 begin
   for I := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
     if DEFAULT_SHIMS[I].Name = DATE_SHIM_NAME then
-      Exit(LoadShimValue(AExecutor, I));
+      Exit(LoadShimValue(ALoader, I));
   raise Exception.Create('Date shim is not registered');
 end;
 
@@ -1208,31 +1269,31 @@ begin
 end;
 
 constructor TGocciaShimMaterializer.Create(
-  const AExecutor: TGocciaExecutor; const AShimIndex: Integer);
+  const ALoader: TGocciaShimLoader; const AShimIndex: Integer);
 begin
   inherited Create;
-  FExecutor := AExecutor;
+  FLoader := ALoader;
   FShimIndex := AShimIndex;
 end;
 
 function TGocciaShimMaterializer.Materialize: TGocciaValue;
 begin
-  Result := LoadShimValue(FExecutor, FShimIndex);
+  Result := LoadShimValue(FLoader, FShimIndex);
 end;
 
 constructor TGocciaShimMemberMaterializer.Create(
-  const AExecutor: TGocciaExecutor; const AShimIndex: Integer;
+  const ALoader: TGocciaShimLoader; const AShimIndex: Integer;
   const AExportKey: string);
 begin
   inherited Create;
-  FExecutor := AExecutor;
+  FLoader := ALoader;
   FShimIndex := AShimIndex;
   FExportKey := AExportKey;
 end;
 
 function TGocciaShimMemberMaterializer.Materialize: TGocciaValue;
 begin
-  Result := LoadShimValue(FExecutor, FShimIndex);
+  Result := LoadShimValue(FLoader, FShimIndex);
   if FExportKey <> '' then
     Result := (Result as TGocciaObjectValue).GetProperty(FExportKey);
 end;
@@ -1242,10 +1303,14 @@ procedure TGocciaShimMemberMaterializer.MaterializeAccessor(out AGetter,
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  Descriptor := (LoadShimValue(FExecutor, FShimIndex) as TGocciaObjectValue)
+  Descriptor := (LoadShimValue(FLoader, FShimIndex) as TGocciaObjectValue)
     .GetOwnPropertyDescriptor(FExportKey);
-  AGetter := (Descriptor as TGocciaPropertyDescriptorAccessor).Getter;
-  ASetter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+  try
+    AGetter := (Descriptor as TGocciaPropertyDescriptorAccessor).Getter;
+    ASetter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+  finally
+    ReleaseDescriptor(Descriptor);
+  end;
 end;
 
 initialization

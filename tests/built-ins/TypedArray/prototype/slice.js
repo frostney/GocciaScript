@@ -99,6 +99,124 @@ describe("TypedArray.prototype.slice", () => {
     expect(() => ta.slice()).toThrow(TypeError);
   });
 
+  test("converts when species returns another element type", () => {
+    const ta = new Uint8Array([1, 200, 255]);
+    ta.constructor = { [Symbol.species]: Int8Array };
+    const result = ta.slice();
+    expect(result instanceof Int8Array).toBe(true);
+    expect(Array.from(result)).toEqual([1, -56, -1]);
+  });
+
+  test("copies bytes in ascending order into a species view of the same buffer", () => {
+    const ta = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    ta.constructor = {
+      [Symbol.species]: class {
+        constructor(length) {
+          return new Uint8Array(ta.buffer, 1, length);
+        }
+      }
+    };
+    ta.slice(0, 4);
+    expect(Array.from(ta)).toEqual([1, 1, 1, 1, 1, 6, 7, 8]);
+  });
+
+  test("copies into a species view below the source on the same buffer", () => {
+    const ta = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    ta.constructor = {
+      [Symbol.species]: class {
+        constructor(length) {
+          return new Uint8Array(ta.buffer, 0, length);
+        }
+      }
+    };
+    ta.slice(2, 6);
+    expect(Array.from(ta)).toEqual([3, 4, 5, 6, 5, 6, 7, 8]);
+  });
+
+  test("keeps a non-canonical NaN bit pattern", () => {
+    const bytes = [1, 0, 0, 0, 0, 0, 0xf8, 0x7f];
+    const result = new Float64Array(new Uint8Array(bytes).buffer).slice();
+    expect(Array.from(new Uint8Array(result.buffer))).toEqual(bytes);
+  });
+
+  test("copies only what remains when start coercion shrinks a resizable buffer", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 16 });
+    const ta = new Uint8Array(rab);
+    ta.set([1, 2, 3, 4, 5, 6, 7, 8]);
+    const start = {
+      valueOf() {
+        rab.resize(4);
+        return 1;
+      }
+    };
+    expect(Array.from(ta.slice(start, 6))).toEqual([2, 3, 4, 0, 0]);
+  });
+
+  test("copies a SharedArrayBuffer view", () => {
+    const ta = new Uint8Array(new SharedArrayBuffer(4));
+    ta.set([1, 2, 3, 4]);
+    expect(Array.from(ta.slice(1, 3))).toEqual([2, 3]);
+  });
+
+  test("throws when species returns a view of the source's own immutable buffer", () => {
+    const buffer = new Uint8Array([1, 2, 3, 4, 0, 0, 0, 0]).buffer.transferToImmutable();
+    const ta = new Uint8Array(buffer);
+    ta.constructor = {
+      [Symbol.species]: class {
+        constructor(length) {
+          return new Uint8Array(buffer, 4, length);
+        }
+      },
+    };
+
+    expect(() => ta.slice(0, 4)).toThrow(TypeError);
+    expect(Array.from(new Uint8Array(buffer))).toEqual([1, 2, 3, 4, 0, 0, 0, 0]);
+  });
+
+  test("throws when species returns another element type over the source's own immutable buffer", () => {
+    const buffer = new Uint8Array([1, 2, 3, 4, 0, 0, 0, 0]).buffer.transferToImmutable();
+    const ta = new Uint8Array(buffer);
+    ta.constructor = {
+      [Symbol.species]: class {
+        constructor(length) {
+          return new Int8Array(buffer, 4, length);
+        }
+      },
+    };
+
+    expect(() => ta.slice(0, 4)).toThrow(TypeError);
+    expect(Array.from(new Uint8Array(buffer))).toEqual([1, 2, 3, 4, 0, 0, 0, 0]);
+  });
+
+  test("throws for an empty slice when species returns an immutable view", () => {
+    const buffer = new Uint8Array([1, 2]).buffer.transferToImmutable();
+    const ta = new Uint8Array(buffer);
+    ta.constructor = {
+      [Symbol.species]: class {
+        constructor(length) {
+          return new Uint8Array(buffer, 0, length);
+        }
+      },
+    };
+
+    expect(() => ta.slice(0, 0)).toThrow(TypeError);
+  });
+
+  test("throws when species returns a view of a different immutable buffer", () => {
+    const immutable = new Uint8Array([9, 9]).buffer.transferToImmutable();
+    const ta = new Uint8Array([1, 2]);
+    ta.constructor = {
+      [Symbol.species]: class {
+        constructor(length) {
+          return new Uint8Array(immutable, 0, length);
+        }
+      },
+    };
+
+    expect(() => ta.slice()).toThrow(TypeError);
+    expect(Array.from(new Uint8Array(immutable))).toEqual([9, 9]);
+  });
+
   test("throws on detached buffer", () => {
     const ta = new Int32Array([1, 2, 3]);
     ta.buffer.transfer();

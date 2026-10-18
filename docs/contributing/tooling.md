@@ -6,8 +6,8 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific), endian-dependent byte indexing
-- **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of depth limits in each execution mode
+- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing
+- **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
 
 ## Auto-Formatting
 
@@ -184,6 +184,15 @@ Result := D * 1000000.0;
 Result := TGocciaNumberLiteralValue.Create(SomeInt64Value);
 ```
 
+Parameter passing is safe only when the parameter is declared `Double`. When the
+callee is overloaded over several floating-point types, an integer argument can
+resolve to the `Single` overload: FPC 3.2.4's `Math` unit overloads `Ldexp` for
+`Single` and `Double` (and `Extended` on targets that have it), and
+`Ldexp(Int64Var, N)` picks `Single`, which rounds the value to 24 significant
+bits (FPC 3.2.2 declares one `Ldexp`, for its `Float` type, and is unaffected).
+Assign the integer to a `Double` variable first and pass that, as
+`TBigInteger.ToDouble` does.
+
 This affects any code that converts `Int64` fields to `Double` for floating-point arithmetic. Note that `Int64 / Int64` is safe — FPC's `/` operator already returns `Extended` for integer operands, so no explicit promotion is needed for division.
 
 ### Endian-Dependent Byte Indexing
@@ -208,8 +217,8 @@ This works because `DoubleToBits` copies the whole `Double` into a `UInt64`, so 
 
 ## Fuzzing and Memory Safety
 
-`GocciaFuzzHarness` drives a single input through lex, parse, and **both**
-executors under tight instruction, timeout, memory, and stack bounds. It exists
+`GocciaFuzzHarness` drives a single input through lex, parse, bytecode
+compilation, and the VM under tight instruction, timeout, memory, and stack bounds. It exists
 because the engine is a from-scratch, manually memory-managed implementation
 whose stated purpose is running adversarial input — see
 [VISION.md](../../VISION.md).
@@ -227,7 +236,7 @@ nonzero. That is what makes a nonzero exit a finding rather than noise.
 ./build/GocciaFuzzHarness --verbose path/to/input.js
 ```
 
-Read from stdin with `-`. `--verbose` prints the per-executor classification;
+Read from stdin with `-`. `--verbose` prints the classification;
 without it the harness is silent and communicates only through its exit code,
 which is what `afl-fuzz` needs.
 
@@ -329,14 +338,13 @@ ordinary build collects only under memory pressure, so it usually is not.
 | Defined by `-dGOCCIA_GC_STRESS` | Effect |
 |---|---|
 | `Goccia.VM.pas` | The memory-pressure checkpoint in the dispatch loop runs every 8 instructions instead of every 1,025 and forces a full collection each time. |
-| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: the known leaks (#1592) make it hundreds of megabytes per process. |
+| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: leaks are the memory-safety job's concern. |
 
 `--gc-stress` adds `-gh` and the define to the development flags. It compiles
 into `build/compiled/gc-stress/` and writes binaries to `build/gc-stress/`, so
 it never shares FPC units with an ordinary build. It cannot be combined with
-`--prod`. Only the bytecode VM is stressed; the interpreter's pressure checks
-are not per-instruction. Without the define, both units compile to the same
-machine code as before.
+`--prod`. Without the define, both units compile to the same machine code as
+before.
 
 ```bash
 ./build.pas --gc-stress testrunner test262runner
@@ -376,7 +384,7 @@ chains, native-trap nests, deep prototype chains, deep recursion, deeply nested
 values through `JSON`, `structuredClone`, `join` and `flat`, deep syntactic
 nesting, and recovery after a caught `RangeError`. Where the fuzz harness asks
 whether one input breaks the engine, the probe asks where its depth limits are
-and what happens past them, in each execution mode the runner supports.
+and what happens past them.
 
 It is **manual-only**. Nothing in CI, Lefthook, or the nightly runs it. Run it
 when you change recursion, stack limits, Proxy forwarding, the parser's
@@ -384,18 +392,12 @@ nesting, or the collector, and when you investigate a depth crash.
 
 ```bash
 ./build.pas --prod runner
-bun scripts/depth-probe.ts build/GocciaRunner            # the whole catalog, every mode
+bun scripts/depth-probe.ts build/GocciaRunner            # the whole catalog
 npx tsx scripts/depth-probe.ts build/GocciaRunner --list  # probes, growth class, default depths
 bun scripts/depth-probe.ts build/GocciaRunner --probe=proxy-getOwnPropertyDescriptor --depth=30000
 bun scripts/depth-probe.ts build/GocciaRunner --fuzz --count=200 --keep
-bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17 --mode=bytecode
+bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17
 ```
-
-`--modes` chooses the execution modes (default `interpreted,bytecode`;
-`--mode=NAME` is one of them). Before probing, the tool runs a trivial program
-in each mode: a mode the runner rejects is listed as skipped rather than
-counted as a finding, so the tool keeps working against a runner with fewer
-executors.
 
 Probe production and development builds separately: the production build
 compiles without FPC's stack checking (`-Ct`), so a native stack overflow that

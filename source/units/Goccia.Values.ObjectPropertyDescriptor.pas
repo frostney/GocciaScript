@@ -25,10 +25,21 @@ type
   );
   TPropertyDescriptorFields = set of TPropertyDescriptorField;
 
+  { Ownership (ADR 0143). [[GetOwnProperty]] — GetOwnPropertyDescriptor,
+    GetOwnSymbolPropertyDescriptor, OwnPropertyDescriptorForKey — answers
+    either with the descriptor the object stores, which the object owns, or
+    with one it builds for a property it does not store (an array element, a
+    function's length, a proxy trap's result). A built one is marked
+    CallerOwned, and whoever asked releases what it got with
+    ReleaseDescriptor once it is done with it, whichever kind it is. A caller
+    that keeps a descriptor it was handed (stores it in a property map, say)
+    keeps a clone, or takes a CallerOwned one over by clearing the mark with
+    TakeOwnership. }
   TGocciaPropertyDescriptor = class
   private
     FFlags: TPropertyFlags;
     FFields: TPropertyDescriptorFields;
+    FCallerOwned: Boolean;
     function GetEnumerable: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function GetConfigurable: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function GetWritable: Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -58,6 +69,12 @@ type
     // this method exists to close.
     procedure PushRoots(var AFrame: TGocciaActiveRootFrame); virtual;
 
+    { Marks a descriptor built to answer [[GetOwnProperty]]; returns Self. }
+    function AsCallerOwned: TGocciaPropertyDescriptor; {$IFDEF FPC}inline;{$ENDIF}
+    { Clears the mark, for a caller that keeps the descriptor; returns Self. }
+    function TakeOwnership: TGocciaPropertyDescriptor; {$IFDEF FPC}inline;{$ENDIF}
+
+    property CallerOwned: Boolean read FCallerOwned;
     property Flags: TPropertyFlags read FFlags;
     property Fields: TPropertyDescriptorFields read FFields;
     property Enumerable: Boolean read GetEnumerable;
@@ -146,10 +163,20 @@ function ToPropertyDescriptor(
   const ADescriptorObject: TGocciaValue;
   const AExistingDescriptor: TGocciaPropertyDescriptor
 ): TGocciaPropertyDescriptor;
+// ES2026 §6.2.6.4 FromPropertyDescriptor(Desc)
+// Returns undefined for nil, otherwise a fresh ordinary object (a
+// TGocciaObjectValue) whose fields are own data properties made with
+// CreateDataPropertyOrThrow. That runs no guest code, so ADescriptor may be a
+// stored descriptor that guest code could otherwise free while it is read.
+function FromPropertyDescriptor(
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaValue;
 function IsDataDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 function IsAccessorDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 function IsGenericDescriptor(const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 function ClonePropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
+{ Frees ADescriptor when it is CallerOwned; a stored descriptor is left alone.
+  Accepts nil. }
+procedure ReleaseDescriptor(const ADescriptor: TGocciaPropertyDescriptor); {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -210,6 +237,24 @@ end;
 function TGocciaPropertyDescriptor.GetHasSet: Boolean;
 begin
   Result := pdfSet in FFields;
+end;
+
+function TGocciaPropertyDescriptor.AsCallerOwned: TGocciaPropertyDescriptor;
+begin
+  FCallerOwned := True;
+  Result := Self;
+end;
+
+function TGocciaPropertyDescriptor.TakeOwnership: TGocciaPropertyDescriptor;
+begin
+  FCallerOwned := False;
+  Result := Self;
+end;
+
+procedure ReleaseDescriptor(const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  if Assigned(ADescriptor) and ADescriptor.FCallerOwned then
+    ADescriptor.Free;
 end;
 
 procedure TGocciaPropertyDescriptor.MarkValues;
@@ -398,6 +443,80 @@ begin
   else
     Result := TGocciaPropertyDescriptor.Create(ADescriptor.Flags,
       ADescriptor.Fields);
+end;
+
+// ES2026 §6.2.6.4 FromPropertyDescriptor(Desc)
+function FromPropertyDescriptor(
+  const ADescriptor: TGocciaPropertyDescriptor): TGocciaValue;
+var
+  DescObj: TGocciaObjectValue;
+begin
+  // Step 1: If Desc is undefined, return undefined.
+  if ADescriptor = nil then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+  // Step 2: Let obj be OrdinaryObjectCreate(%Object.prototype%).
+  DescObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  // Steps 4-9: CreateDataPropertyOrThrow for each field Desc has. A fresh
+  // ordinary object has no setter to run, so no guest code runs here.
+  if ADescriptor is TGocciaPropertyDescriptorData then
+  begin
+    // Step 4: [[Value]]
+    if ADescriptor.HasValue then
+      DescObj.CreateDataPropertyOrThrow(PROP_VALUE,
+        TGocciaPropertyDescriptorData(ADescriptor).Value);
+    // Step 5: [[Writable]]
+    if ADescriptor.HasWritableField then
+    begin
+      if ADescriptor.Writable then
+        DescObj.CreateDataPropertyOrThrow(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
+      else
+        DescObj.CreateDataPropertyOrThrow(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
+    end;
+  end
+  else if ADescriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    // Step 6: [[Get]]
+    if ADescriptor.HasGet then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) then
+        DescObj.CreateDataPropertyOrThrow(PROP_GET,
+          TGocciaPropertyDescriptorAccessor(ADescriptor).Getter)
+      else
+        DescObj.CreateDataPropertyOrThrow(PROP_GET,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+    // Step 7: [[Set]]
+    if ADescriptor.HasSet then
+    begin
+      if Assigned(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter) then
+        DescObj.CreateDataPropertyOrThrow(PROP_SET,
+          TGocciaPropertyDescriptorAccessor(ADescriptor).Setter)
+      else
+        DescObj.CreateDataPropertyOrThrow(PROP_SET,
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+    end;
+  end;
+
+  // Step 8: [[Enumerable]]
+  if ADescriptor.HasEnumerableField then
+  begin
+    if ADescriptor.Enumerable then
+      DescObj.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      DescObj.CreateDataPropertyOrThrow(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
+  // Step 9: [[Configurable]]
+  if ADescriptor.HasConfigurableField then
+  begin
+    if ADescriptor.Configurable then
+      DescObj.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
+    else
+      DescObj.CreateDataPropertyOrThrow(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
+  end;
+
+  // Step 10: Return obj.
+  Result := DescObj;
 end;
 
 // ES2026 §6.2.5.5 ToPropertyDescriptor(Obj)

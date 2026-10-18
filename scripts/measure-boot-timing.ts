@@ -2,14 +2,13 @@
 /**
  * measure-boot-timing.ts
  *
- * Measure empty-script engine-boot wall-clock for GocciaRunner in both
- * execution modes and emit a small JSON summary the PR suite-timing comment
- * renders.
+ * Measure empty-script engine-boot wall-clock for GocciaRunner and emit a
+ * small JSON summary the PR suite-timing comment renders. The timing sits
+ * under a `bytecode` key, the shape that comment reads.
  *
  * Boot wall-clock on a shared runner is dominated by a fixed process /
  * dynamic-loader floor, so we report the min (least-contended run) alongside
- * the median over many runs rather than a single timing. The two modes are
- * measured back-to-back so transient load affects both alike.
+ * the median over many runs rather than a single timing.
  *
  * Run: bun run scripts/measure-boot-timing.ts <loader> <output.json>
  * Env: BOOT_TIMING_RUNS (default 60), BOOT_TIMING_WARMUP (default 10)
@@ -38,17 +37,16 @@ function intEnv(name: string, fallback: number, min: number): number {
 const runs = intEnv("BOOT_TIMING_RUNS", 60, 1);
 const warmup = intEnv("BOOT_TIMING_WARMUP", 10, 0);
 
-interface ModeTiming {
+interface BootTiming {
   minMs: number;
   medianMs: number;
 }
 
-function measure(script: string, modeArgs: string[]): ModeTiming {
+function measure(script: string): BootTiming {
   const samples: number[] = [];
-  const label = modeArgs.join(" ");
   for (let i = 0; i < warmup + runs; i++) {
     const start = Bun.nanoseconds();
-    const result = Bun.spawnSync([loader, script, ...modeArgs], {
+    const result = Bun.spawnSync([loader, script], {
       stdout: "ignore",
       stderr: "ignore",
     });
@@ -56,7 +54,7 @@ function measure(script: string, modeArgs: string[]): ModeTiming {
     // A crashed/non-zero child run is not a valid boot sample — fail rather than
     // write boot-timing.json from bogus timings.
     if (result.exitCode !== 0) {
-      throw new Error(`loader exited ${result.exitCode} measuring boot (${label})`);
+      throw new Error(`loader exited ${result.exitCode} measuring boot`);
     }
     if (i >= warmup) samples.push(elapsedMs);
   }
@@ -78,8 +76,7 @@ try {
   const report = {
     runs,
     warmup,
-    interpreted: measure(script, ["--mode=interpreted"]),
-    bytecode: measure(script, ["--mode=bytecode"]),
+    bytecode: measure(script),
   };
 
   const json = JSON.stringify(report, null, 2);

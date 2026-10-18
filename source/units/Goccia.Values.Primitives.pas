@@ -173,6 +173,10 @@ type
   end;
 
   procedure PinPrimitiveSingletons;
+  { True when AValue is one of the process-wide primitive singletons
+    (undefined, null, true, false, NaN, 0, 1, -0, Infinity, -Infinity).
+    Never creates one. }
+  function IsPrimitiveSingleton(const AValue: TGocciaValue): Boolean;
 
   // ES2026 §6.1.6.1.20 Number::toString(x)
   function FormatDouble(AValue: Double): string;
@@ -249,10 +253,12 @@ end;
 procedure TGocciaValue.AfterConstruction;
 var
   GC: TGarbageCollector;
-  Polls: TGocciaThreadPolls;
+  Polls: PGocciaThreadPolls;
 begin
   inherited;
-  GC := TGarbageCollector.Instance;
+  // One thread-variable lookup reaches both the collector and the flags.
+  Polls := @GThreadPolls;
+  GC := TGarbageCollector(Polls^.Collector);
   if Assigned(GC) then
   begin
     GC.RegisterObject(Self);
@@ -268,9 +274,8 @@ begin
   // One thread-local read decides whether the allocation profiler, a timeout
   // or an instruction limit is armed on this thread; none is in an ordinary
   // run. See Goccia.ThreadPolls.
-  Polls := GThreadPolls;
-  if Polls.Any <> 0 then
-    RunAllocationPolls(Polls);
+  if Polls^.Any <> 0 then
+    RunAllocationPolls(Polls^);
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;
@@ -311,6 +316,21 @@ end;
 
 
 { Utility functions }
+
+function IsPrimitiveSingleton(const AValue: TGocciaValue): Boolean;
+begin
+  Result := Assigned(AValue) and (
+    (Pointer(AValue) = Pointer(TGocciaUndefinedLiteralValue.FUndefinedValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNullLiteralValue.FNullValue)) or
+    (Pointer(AValue) = Pointer(TGocciaBooleanLiteralValue.FTrueValue)) or
+    (Pointer(AValue) = Pointer(TGocciaBooleanLiteralValue.FFalseValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FNaNValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FZeroValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FOneValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FNegativeZeroValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FInfinityValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FNegativeInfinityValue)));
+end;
 
 procedure PinPrimitiveSingletons;
 begin

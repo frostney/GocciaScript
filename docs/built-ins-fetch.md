@@ -20,7 +20,7 @@ The `options` object supports:
 - `headers`: a plain object or `Headers` instance;
 - `signal`: an `AbortSignal`, `null`, or `undefined`.
 
-Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux.
+Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
 
 ### Network capability
 
@@ -61,8 +61,7 @@ accepted sizes:
   --max-fetch-bytes=1MiB
 ```
 
-A response over the ceiling rejects with `TypeError`. Both checks and the
-ceiling apply identically in interpreter and bytecode modes.
+A response over the ceiling rejects with `TypeError`.
 
 The capability set and the ceiling belong to one engine: embedders fix the set
 at engine construction and set `FetchMaxResponseBytes` on the engine. Each
@@ -99,6 +98,8 @@ refused rather than parsed.
 ### Runtime behavior and limits
 
 Requests run on fetch-specific background workers and settle promises on the owning runtime thread. `await fetch(...)` synchronously waits by pumping fetch completions; the Promise microtask queue is not a general I/O event loop.
+
+Host names resolve through the platform resolver (`getaddrinfo`), so the hosts file, nsswitch, stub resolvers, and IPv6 nameservers apply as they do for any other program on the machine. Connections are IPv4 only: the first IPv4 address is used, and a name with no IPv4 address rejects with `TypeError: Failed to resolve host: <name>`, followed by the resolver's reason when it gives one.
 
 Each host thread caps active fetch workers at 16; runtimes on the same thread share that cap. Additional calls reject their returned promise with `TypeError` until a worker finishes. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout. An engine waits for, and on failure discards, only the requests it started itself, so a nested engine ending leaves its parent's in-flight requests running. The run's own deadline is not a fetch error: when `--timeout` elapses while requests are pending, the run ends with the uncatchable [`TimeoutError`](json-output.md#timeouterror-in-json), and under `--test-timeout` the test that was waiting is marked as timed out, instead of a fetch promise rejecting with a network error. A request is given the deadline in force when it started, so one that outlives it — a fetch a test left behind — rejects later with `TypeError: HTTP request timed out`. That message applies to plain HTTP reads and to connecting; a stalled TLS read is ended by the run's deadline only.
 

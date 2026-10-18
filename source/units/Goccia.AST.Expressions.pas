@@ -14,7 +14,6 @@ uses
 
   Goccia.AST.Node,
   Goccia.Error.CallDiagnostics,
-  Goccia.Evaluator.Context,
   Goccia.Modules,
   Goccia.Scope.BindingMap,
   Goccia.SourceSpan,
@@ -53,7 +52,6 @@ type
     constructor Create(const AValue: TGocciaValue; const ASpan: TGocciaSourceSpan;
       const ASourceText: string = '');
     destructor Destroy; override;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Value: TGocciaValue read FValue;
     property SourceText: string read FSourceText;
   end;
@@ -63,7 +61,6 @@ type
     FValue: string;
   public
     constructor Create(const AValue: string; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Value: string read FValue;
   end;
 
@@ -73,7 +70,6 @@ type
     FFlags: string;
   public
     constructor Create(const APattern, AFlags: string; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Pattern: string read FPattern;
     property Flags: string read FFlags;
   end;
@@ -83,7 +79,7 @@ type
     FParts: TObjectList<TGocciaExpression>; // Mix of string literals and expressions
   public
     constructor Create(const AParts: TObjectList<TGocciaExpression>; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    destructor Destroy; override;
     property Parts: TObjectList<TGocciaExpression> read FParts;
   end;
 
@@ -101,8 +97,6 @@ type
     FCookedValid: TGocciaTemplateCookedValid;
     FExpressions: TObjectList<TGocciaExpression>;
     FTemplateSiteId: UInt64;
-    // ES2026 §13.2.8.3: cached per-call-site template object (nil until first evaluation)
-    FTemplateObject: TGocciaValue;
   public
     constructor Create(const ATag: TGocciaExpression;
       const ACookedStrings, ARawStrings: TGocciaTemplateStrings;
@@ -110,18 +104,12 @@ type
       const AExpressions: TObjectList<TGocciaExpression>;
       const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
-    // Update the call-site template object cache: no-op when AValue equals the
-    // current cached value; otherwise unpins the old value, pins AValue, and
-    // stores it.  Passing nil clears and unpins the cache.
-    procedure SetCachedTemplateObject(const AValue: TGocciaValue);
     property Tag: TGocciaExpression read FTag;
     property CookedStrings: TGocciaTemplateStrings read FCookedStrings;
     property RawStrings: TGocciaTemplateStrings read FRawStrings;
     property CookedValid: TGocciaTemplateCookedValid read FCookedValid;
     property Expressions: TObjectList<TGocciaExpression> read FExpressions;
     property TemplateSiteId: UInt64 read FTemplateSiteId;
-    property TemplateObject: TGocciaValue read FTemplateObject;
   end;
 
   TGocciaIdentifierExpression = class(TGocciaExpression)
@@ -129,7 +117,6 @@ type
     FName: string;
   public
     constructor Create(const AName: string; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
   end;
 
@@ -141,7 +128,6 @@ type
   public
     constructor Create(const ALeft: TGocciaExpression; const AOperator: TGocciaTokenType;
       const ARight: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Left: TGocciaExpression read FLeft;
     property Operator: TGocciaTokenType read FOperator;
     property Right: TGocciaExpression read FRight;
@@ -154,7 +140,6 @@ type
     constructor Create(const AExpressions: TObjectList<TGocciaExpression>;
       const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Expressions: TObjectList<TGocciaExpression> read FExpressions;
   end;
 
@@ -165,7 +150,6 @@ type
   public
     constructor Create(const AOperator: TGocciaTokenType; const AOperand: TGocciaExpression;
       const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Operator: TGocciaTokenType read FOperator;
     property Operand: TGocciaExpression read FOperand;
   end;
@@ -178,7 +162,6 @@ type
   public
     constructor Create(const AName: string; const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan;
       const AInferName: Boolean = True);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
     property Value: TGocciaExpression read FValue;
     property InferName: Boolean read FInferName;
@@ -191,7 +174,6 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APropertyName: string; const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyName: string read FPropertyName;
     property Value: TGocciaExpression read FValue;
@@ -204,7 +186,6 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APropertyExpression: TGocciaExpression; const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyExpression: TGocciaExpression read FPropertyExpression;
     property Value: TGocciaExpression read FValue;
@@ -219,7 +200,6 @@ type
   public
     constructor Create(const AName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression;
       const ASpan: TGocciaSourceSpan; const AInferName: Boolean = True);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
     property Operator: TGocciaTokenType read FOperator;
     property Value: TGocciaExpression read FValue;
@@ -234,7 +214,6 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APropertyName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyName: string read FPropertyName;
     property Operator: TGocciaTokenType read FOperator;
@@ -249,7 +228,6 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APropertyExpression: TGocciaExpression; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyExpression: TGocciaExpression read FPropertyExpression;
     property Operator: TGocciaTokenType read FOperator;
@@ -263,7 +241,6 @@ type
     FIsPrefix: Boolean;
   public
     constructor Create(const AOperand: TGocciaExpression; const AOperator: TGocciaTokenType; const AIsPrefix: Boolean; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Operand: TGocciaExpression read FOperand;
     property Operator: TGocciaTokenType read FOperator;
     property IsPrefix: Boolean read FIsPrefix;
@@ -278,7 +255,7 @@ type
     constructor Create(const ACallee: TGocciaExpression;
       const AArguments: TObjectList<TGocciaExpression>; const ASpan: TGocciaSourceSpan;
       const AOptional: Boolean = False);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    destructor Destroy; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
     property Optional: Boolean read FOptional;
@@ -299,7 +276,6 @@ type
     property ObjectExpr: TGocciaExpression read FObject;
     property PropertyName: string read FProperty;
     property PropertyExpression: TGocciaExpression read FPropertyExpression;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Computed: Boolean read FComputed;
     property Optional: Boolean read FOptional;
   end;
@@ -310,7 +286,7 @@ type
   public
     constructor Create(const AElements: TObjectList<TGocciaExpression>;
       const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    destructor Destroy; override;
     property Elements: TObjectList<TGocciaExpression> read FElements;
   end;
 
@@ -374,7 +350,6 @@ type
     property ComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>> read FComputedPropertiesInOrder;
     property Getters: TGocciaGetterExpressionMap read FGetters;
     property Setters: TGocciaSetterExpressionMap read FSetters;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property PropertySourceOrder: TArray<TGocciaPropertySourceOrder> read FPropertySourceOrder;
     function GetPropertyNamesInOrder: TStringList;
   end;
@@ -392,7 +367,6 @@ type
       const ASpan: TGocciaSourceSpan);
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ReturnType: string read FReturnType write FReturnType;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property SourceText: string read FSourceText write FSourceText;
@@ -415,7 +389,6 @@ type
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
       const ASpan: TGocciaSourceSpan);
     property Parameters: TGocciaParameterArray read FParameters;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
     property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
@@ -437,7 +410,6 @@ type
     FFunctionExpression: TGocciaFunctionExpression;
   public
     constructor Create(const AFunctionExpression: TGocciaFunctionExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property FunctionExpression: TGocciaFunctionExpression read FFunctionExpression;
   end;
 
@@ -448,7 +420,6 @@ type
   public
     constructor Create(const AOperand: TGocciaExpression; const AIsDelegate: Boolean;
       const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Operand: TGocciaExpression read FOperand;
     property IsDelegate: Boolean read FIsDelegate;
   end;
@@ -458,7 +429,6 @@ type
     FOperand: TGocciaExpression;
   public
     constructor Create(const AOperand: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Operand: TGocciaExpression read FOperand;
   end;
 
@@ -470,7 +440,6 @@ type
   public
     constructor Create(const ACondition, AConsequent, AAlternate: TGocciaExpression;
       const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Condition: TGocciaExpression read FCondition;
     property Consequent: TGocciaExpression read FConsequent;
     property Alternate: TGocciaExpression read FAlternate;
@@ -483,29 +452,25 @@ type
   public
     constructor Create(const ACallee: TGocciaExpression;
       const AArguments: TObjectList<TGocciaExpression>; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    destructor Destroy; override;
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
   end;
 
   TGocciaThisExpression = class(TGocciaExpression)
   public
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   TGocciaSuperExpression = class(TGocciaExpression)
   public
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   TGocciaImportMetaExpression = class(TGocciaExpression)
   public
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   TGocciaNewTargetExpression = class(TGocciaExpression)
   public
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   TGocciaImportCallExpression = class(TGocciaExpression)
@@ -516,7 +481,6 @@ type
   public
     constructor Create(const ASpecifier: TGocciaExpression; const AOptions: TGocciaExpression;
       const APhase: TGocciaImportCallPhase; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Specifier: TGocciaExpression read FSpecifier;
     property Options: TGocciaExpression read FOptions;
     property Phase: TGocciaImportCallPhase read FPhase;
@@ -529,7 +493,6 @@ type
   TGocciaHoleExpression = class(TGocciaExpression)
   public
     constructor Create(const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   TGocciaSpreadExpression = class(TGocciaExpression)
@@ -537,7 +500,6 @@ type
     FArgument: TGocciaExpression;
   public
     constructor Create(const AArgument: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Argument: TGocciaExpression read FArgument;
   end;
 
@@ -549,7 +511,6 @@ type
     FDirectEvalUsage: TGocciaDirectEvalUsage;
   public
     constructor Create(const ABody: TGocciaASTNode; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Body: TGocciaASTNode read FBody;
     property SourceText: string read FSourceText write FSourceText;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
@@ -567,7 +528,6 @@ type
   public
     constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ASpan: TGocciaSourceSpan); overload;
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode; const ASpan: TGocciaSourceSpan); overload;
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Parameter: string read FParameter;
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
@@ -579,11 +539,10 @@ type
   // Destructuring pattern base class - complete definition
   TGocciaDestructuringPattern = class(TGocciaExpression)
   public
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
   end;
 
   // Property in object destructuring: key: pattern or key (shorthand)
-  TGocciaDestructuringProperty = class
+  TGocciaDestructuringProperty = class(TGocciaASTObject)
   private
     FKey: string;
     FPattern: TGocciaDestructuringPattern;
@@ -603,7 +562,7 @@ type
     FElements: TObjectList<TGocciaDestructuringPattern>;
   public
     constructor Create(const AElements: TObjectList<TGocciaDestructuringPattern>; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    destructor Destroy; override;
     property Elements: TObjectList<TGocciaDestructuringPattern> read FElements;
   end;
 
@@ -613,7 +572,7 @@ type
     FProperties: TObjectList<TGocciaDestructuringProperty>;
   public
     constructor Create(const AProperties: TObjectList<TGocciaDestructuringProperty>; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    destructor Destroy; override;
     property Properties: TObjectList<TGocciaDestructuringProperty> read FProperties;
   end;
 
@@ -623,7 +582,6 @@ type
     FArgument: TGocciaDestructuringPattern;
   public
     constructor Create(const AArgument: TGocciaDestructuringPattern; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Argument: TGocciaDestructuringPattern read FArgument;
   end;
 
@@ -634,7 +592,6 @@ type
     FRight: TGocciaExpression;
   public
     constructor Create(const ALeft: TGocciaDestructuringPattern; const ARight: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Left: TGocciaDestructuringPattern read FLeft;
     property Right: TGocciaExpression read FRight;
   end;
@@ -645,7 +602,6 @@ type
     FName: string;
   public
     constructor Create(const AName: string; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Name: string read FName;
   end;
 
@@ -655,7 +611,6 @@ type
     FExpression: TGocciaMemberExpression;
   public
     constructor Create(const AExpression: TGocciaMemberExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Expression: TGocciaMemberExpression read FExpression;
   end;
 
@@ -665,7 +620,6 @@ type
     FExpression: TGocciaPrivateMemberExpression;
   public
     constructor Create(const AExpression: TGocciaPrivateMemberExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Expression: TGocciaPrivateMemberExpression read FExpression;
   end;
 
@@ -676,12 +630,11 @@ type
     FRight: TGocciaExpression;
   public
     constructor Create(const ALeft: TGocciaDestructuringPattern; const ARight: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Left: TGocciaDestructuringPattern read FLeft;
     property Right: TGocciaExpression read FRight;
   end;
 
-  TGocciaObjectMatchProperty = class
+  TGocciaObjectMatchProperty = class(TGocciaASTObject)
   private
     FKey: string;
     FPattern: TGocciaMatchPattern;
@@ -707,12 +660,10 @@ type
   TGocciaValueMatchPattern = class(TGocciaMatchPattern)
   private
     FExpression: TGocciaExpression;
-    FUseSameValueZero: Boolean;
   public
     constructor Create(const AExpression: TGocciaExpression;
-      const AUseSameValueZero: Boolean; const ASpan: TGocciaSourceSpan);
+      const ASpan: TGocciaSourceSpan);
     property Expression: TGocciaExpression read FExpression;
-    property UseSameValueZero: Boolean read FUseSameValueZero;
   end;
 
   TGocciaBindingMatchPattern = class(TGocciaMatchPattern)
@@ -735,6 +686,7 @@ type
     constructor Create(const AElements: TGocciaMatchPatternList;
       const ARestPattern: TGocciaMatchPattern; const AHasRestWildcard: Boolean;
       const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Elements: TGocciaMatchPatternList read FElements;
     property RestPattern: TGocciaMatchPattern read FRestPattern;
     property HasRestWildcard: Boolean read FHasRestWildcard;
@@ -747,6 +699,7 @@ type
   public
     constructor Create(const AProperties: TGocciaObjectMatchPropertyList;
       const ARestPattern: TGocciaMatchPattern; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Properties: TGocciaObjectMatchPropertyList read FProperties;
     property RestPattern: TGocciaMatchPattern read FRestPattern;
   end;
@@ -788,6 +741,7 @@ type
     FPatterns: TGocciaMatchPatternList;
   public
     constructor Create(const APatterns: TGocciaMatchPatternList; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Patterns: TGocciaMatchPatternList read FPatterns;
   end;
 
@@ -796,6 +750,7 @@ type
     FPatterns: TGocciaMatchPatternList;
   public
     constructor Create(const APatterns: TGocciaMatchPatternList; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Patterns: TGocciaMatchPatternList read FPatterns;
   end;
 
@@ -817,13 +772,14 @@ type
     constructor Create(const AMatcherExpression: TGocciaExpression;
       const AArguments: TGocciaMatchPatternList; const ARestPattern: TGocciaMatchPattern;
       const AHasRestWildcard: Boolean; const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property MatcherExpression: TGocciaExpression read FMatcherExpression;
     property Arguments: TGocciaMatchPatternList read FArguments;
     property RestPattern: TGocciaMatchPattern read FRestPattern;
     property HasRestWildcard: Boolean read FHasRestWildcard;
   end;
 
-  TGocciaMatchClause = class
+  TGocciaMatchClause = class(TGocciaASTObject)
   private
     FPattern: TGocciaMatchPattern;
     FExpression: TGocciaExpression;
@@ -842,7 +798,6 @@ type
   public
     constructor Create(const ASubject: TGocciaExpression; const APattern: TGocciaMatchPattern;
       const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property Subject: TGocciaExpression read FSubject;
     property Pattern: TGocciaMatchPattern read FPattern;
   end;
@@ -855,7 +810,7 @@ type
   public
     constructor Create(const ASubject: TGocciaExpression; const AClauses: TGocciaMatchClauseList;
       const ADefaultExpression: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
+    destructor Destroy; override;
     property Subject: TGocciaExpression read FSubject;
     property Clauses: TGocciaMatchClauseList read FClauses;
     property DefaultExpression: TGocciaExpression read FDefaultExpression;
@@ -868,7 +823,6 @@ type
     FOptional: Boolean;
   public
     constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const ASpan: TGocciaSourceSpan; const AOptional: Boolean = False);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PrivateName: string read FPrivateName;
     property Optional: Boolean read FOptional;
@@ -881,7 +835,6 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PrivateName: string read FPrivateName;
     property Value: TGocciaExpression read FValue;
@@ -895,7 +848,6 @@ type
     FValue: TGocciaExpression;
   public
     constructor Create(const AObject: TGocciaExpression; const APrivateName: string; const AOperator: TGocciaTokenType; const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
-    function Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue; override;
     property ObjectExpr: TGocciaExpression read FObject;
     property PrivateName: string read FPrivateName;
     property Operator: TGocciaTokenType read FOperator;
@@ -905,9 +857,9 @@ type
   TGocciaDecoratorList = array of TGocciaExpression;
 
 { Describes a call/new callee for the shared "not callable"/"not a constructor"
-  diagnostics. The tree-walk evaluator calls this at the throw site; the
-  bytecode compiler calls it once per call site and stores the result on the
-  function template, so the VM produces the same text without the AST. AKind
+  diagnostics. The bytecode compiler calls this once per call site and stores
+  the result on the function template, so the VM produces the text without
+  the AST. AKind
   carries a tagged-template site through to the shared suggestion. }
 function CalleeDescriptorFor(const ACallee: TGocciaExpression;
   const AKind: TGocciaCalleeKind = cckPlain): TGocciaCalleeDescriptor;
@@ -917,37 +869,15 @@ implementation
 uses
   SysUtils,
 
-  Goccia.Arithmetic,
-  Goccia.AST.Statements,
-  Goccia.Constants.ErrorNames,
-  Goccia.Coverage,
-  Goccia.EngineFault,
-  Goccia.Error,
-  Goccia.Error.Messages,
-  Goccia.Error.Suggestions,
-  Goccia.Evaluator,
-  Goccia.Evaluator.Assignment,
-  Goccia.Evaluator.PatternMatching,
   Goccia.Execution.CallSite,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
-  Goccia.MemoryLimit,
   Goccia.RegExp.Runtime,
-  Goccia.Scope,
   Goccia.Timeout,
   Goccia.Values.BigIntValue,
-  Goccia.Values.ClassHelper,
-  Goccia.Values.ClassValue,
   Goccia.Values.Error,
-  Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
-  Goccia.Values.FunctionValue,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.PromiseValue,
-  Goccia.Values.SymbolValue,
-  Goccia.Values.ToPrimitive,
-  Goccia.VM.Exception;
+  Goccia.Values.PromiseValue;
 
 var
   GTemplateSiteIdLock: TGocciaCriticalSection;
@@ -1006,45 +936,6 @@ begin
   end;
 end;
 
-function IsNullishAssignmentValue(const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
-begin
-  Result := not Assigned(AValue) or
-            (AValue is TGocciaUndefinedLiteralValue) or
-            (AValue is TGocciaNullLiteralValue);
-end;
-
-function IsAnonymousFunctionNameExpression(
-  const AExpression: TGocciaExpression): Boolean;
-begin
-  Result := (AExpression is TGocciaArrowFunctionExpression) or
-    ((AExpression is TGocciaFunctionExpression) and
-     (TGocciaFunctionExpression(AExpression).Name = '')) or
-    ((AExpression is TGocciaClassExpression) and
-     (TGocciaClassExpression(AExpression).ClassDefinition.Name = ''));
-end;
-
-// ES2026 §8.4.5 NamedEvaluation: an anonymous class is named inside its
-// evaluation, before its static elements run; a function once it exists.
-function EvaluateWithInferredName(const AExpression: TGocciaExpression;
-  const AContext: TGocciaEvaluationContext; const AName: string): TGocciaValue;
-begin
-  if IsAnonymousClassExpression(AExpression) then
-    Exit(EvaluateNamedExpression(AExpression, AContext, AName));
-
-  Result := AExpression.Evaluate(AContext);
-  if IsAnonymousFunctionNameExpression(AExpression) and
-     (Result is TGocciaFunctionValue) then
-    TGocciaFunctionValue(Result).SetInferredName(AName);
-end;
-
-function NormalizeAssignmentValue(const AValue: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
-begin
-  if Assigned(AValue) then
-    Result := AValue
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
 { TGocciaLiteralExpression }
 
 constructor TGocciaLiteralExpression.Create(const AValue: TGocciaValue;
@@ -1054,20 +945,18 @@ begin
   FValue := AValue;
   FSourceText := ASourceText;
   // Remove from GC -- the AST owns this value, not the garbage collector.
-  // Singletons (UndefinedValue, TrueValue, FalseValue) are pinned separately
-  // and safe to unregister (Remove is a no-op if not found).
-  if Assigned(FValue) and (TGarbageCollector.Instance <> nil) then
+  // A primitive singleton (undefined, true, ...) stays with the collector it
+  // was created in, which frees it when the main thread's runtime shuts down.
+  if Assigned(FValue) and (TGarbageCollector.Instance <> nil) and
+     not IsPrimitiveSingleton(FValue) then
     TGarbageCollector.Instance.UnregisterObject(FValue);
 end;
 
 destructor TGocciaLiteralExpression.Destroy;
 begin
-  // Free the owned value unless it's a singleton (singletons are process-lifetime)
-  if Assigned(FValue)
-     and (FValue <> TGocciaUndefinedLiteralValue.UndefinedValue)
-     and (FValue <> TGocciaBooleanLiteralValue.TrueValue)
-     and (FValue <> TGocciaBooleanLiteralValue.FalseValue)
-     and (FValue <> TGocciaNullLiteralValue.NullValue) then
+  // Free the owned value unless it is a primitive singleton, which the
+  // collector owns.
+  if Assigned(FValue) and not IsPrimitiveSingleton(FValue) then
     FValue.Free;
   inherited;
 end;
@@ -1119,25 +1008,10 @@ end;
 
 destructor TGocciaTaggedTemplateExpression.Destroy;
 begin
-  FTag.Free;
+  if Assigned(FExpressions) then
+    FExpressions.OwnsObjects := False;
   FExpressions.Free;
-  // Release the GC pin so the template object can be collected once no live
-  // references remain.  Guard against the GC already having been shut down.
-  if Assigned(FTemplateObject) and (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.UnpinObject(FTemplateObject);
   inherited;
-end;
-
-// ES2026 §13.2.8.3 GetTemplateObject(templateLiteral)
-procedure TGocciaTaggedTemplateExpression.SetCachedTemplateObject(const AValue: TGocciaValue);
-begin
-  if AValue = FTemplateObject then
-    Exit;
-  if Assigned(FTemplateObject) and (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.UnpinObject(FTemplateObject);
-  if Assigned(AValue) and (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.PinObject(AValue);
-  FTemplateObject := AValue;
 end;
 
 { TGocciaIdentifierExpression }
@@ -1171,6 +1045,8 @@ end;
 
 destructor TGocciaSequenceExpression.Destroy;
 begin
+  if Assigned(FExpressions) then
+    FExpressions.OwnsObjects := False;
   FExpressions.Free;
   inherited;
 end;
@@ -1406,7 +1282,11 @@ end;
 
 destructor TGocciaObjectExpression.Destroy;
 begin
+  FProperties.Free;
   FPropertyInsertionOrder.Free;
+  FComputedProperties.Free;
+  FGetters.Free;
+  FSetters.Free;
   inherited Destroy;
 end;
 
@@ -1660,11 +1540,10 @@ end;
 { TGocciaValueMatchPattern }
 
 constructor TGocciaValueMatchPattern.Create(const AExpression: TGocciaExpression;
-  const AUseSameValueZero: Boolean; const ASpan: TGocciaSourceSpan);
+  const ASpan: TGocciaSourceSpan);
 begin
   inherited Create(ASpan);
   FExpression := AExpression;
-  FUseSameValueZero := AUseSameValueZero;
 end;
 
 { TGocciaBindingMatchPattern }
@@ -1802,809 +1681,6 @@ begin
   FDefaultExpression := ADefaultExpression;
 end;
 
-{ Evaluate overrides }
-
-function TGocciaLiteralExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := Value.RuntimeCopy;
-end;
-
-function TGocciaTemplateLiteralExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateTemplateLiteral(Self, AContext);
-end;
-
-// ES2026 §13.2.7.1 Runtime Semantics: Evaluation
-function TGocciaRegexLiteralExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := CreateRegExpObject(FPattern, FFlags);
-end;
-
-function TGocciaTemplateWithInterpolationExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateTemplateWithInterpolation(Self, AContext);
-end;
-
-// ES2026 §13.3.11 Runtime Semantics: Evaluation — Tagged Templates
-function TGocciaTaggedTemplateExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateTaggedTemplate(Self, AContext);
-end;
-
-function TGocciaIdentifierExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := AContext.Scope.GetValue(Name);
-end;
-
-function TGocciaBinaryExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateBinary(Self, AContext);
-end;
-
-// ES2026 §13.16 Comma Operator (,)
-function TGocciaSequenceExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  I: Integer;
-begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  for I := 0 to FExpressions.Count - 1 do
-    Result := EvaluateExpression(FExpressions[I], AContext);
-end;
-
-function TGocciaUnaryExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateUnary(Self, AContext);
-end;
-
-function TGocciaAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  ObjectBinding: TGocciaObjectValue;
-  ScopeBinding: TGocciaScope;
-begin
-  AContext.Scope.ResolveAssignmentTarget(Name, ObjectBinding, ScopeBinding);
-  if InferName then
-    Result := EvaluateWithInferredName(Value, AContext, Name)
-  else
-    Result := Value.Evaluate(AContext);
-
-  if Assigned(ObjectBinding) then
-  begin
-    if AContext.NonStrictMode then
-      ObjectBinding.AssignPropertyWithReceiver(Name, Result, ObjectBinding)
-    else
-      ObjectBinding.AssignProperty(Name, Result);
-    Exit;
-  end;
-
-  ScopeBinding.AssignBinding(Name, Result, Line, Column,
-    AContext.NonStrictMode);
-end;
-
-function TGocciaPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  Obj: TGocciaValue;
-  Roots: TGocciaActiveRootFrame;
-begin
-  { Every value below outlives at least one collecting safe point while it is
-    held only in a native Pascal local, and the collector marks explicit roots —
-    never the native stack. See the block comment on the computed sibling for
-    the full argument; the shape is identical. }
-  Roots.Initialize;
-  try
-    if ObjectExpr is TGocciaSuperExpression then
-    begin
-      Result := Value.Evaluate(AContext);
-      { The key literal is constructed after the RHS exists, and constructing it
-        can collect. }
-      Roots.Add(Result);
-      AssignSuperProperty(AContext,
-        TGocciaStringLiteralValue.Create(PropertyName), Result);
-      Exit;
-    end;
-
-    Obj := ObjectExpr.Evaluate(AContext);
-    Roots.Add(Obj);
-    Result := Value.Evaluate(AContext);
-    Roots.Add(Result);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
-      AContext.NonStrictMode);
-  finally
-    Roots.Clear;
-  end;
-end;
-
-function TGocciaComputedPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  Obj, PropertyValue: TGocciaValue;
-  PropName: string;
-  Roots: TGocciaActiveRootFrame;
-begin
-  { Rooting, not bookkeeping. `a[b] = c` holds three GC-managed values in native
-    Pascal locals across code that can allocate: the base, the unconverted key,
-    and the assigned value. Evaluating `c` pushes a call frame, a scope and an
-    arguments object, all of which charge the memory ceiling and can trip
-    CollectForMemoryPressure — and the collector marks explicit roots only, so a
-    key such as `"k" + i` with no other reference is swept while the local still
-    points at it. ToPropertyKeyForBase then dispatches a virtual call through the
-    freed instance: EObjectCheck under `$OBJECTCHECKS ON`, an unchecked read into
-    reclaimed memory in a production build. The value has the same exposure — the
-    property map grows through the gate before the store completes, and
-    ToPropertyKeyForBase can run a guest [Symbol.toPrimitive], which is arbitrary
-    collecting script code.
-
-    The frame, not one TGocciaTempRoot per value: temp roots are a set, so two
-    locals holding the *same* object share a single entry and whichever record
-    drops it first unroots it for both. `p[tmp[0]] = tmp.pop()` makes the key and
-    the value that same object. The frame is a stack of pushes, so duplicates
-    cost an entry each and nothing is released before Clear. }
-  Roots.Initialize;
-  try
-    if ObjectExpr is TGocciaSuperExpression then
-    begin
-      PropertyValue := PropertyExpression.Evaluate(AContext);
-      Roots.Add(PropertyValue);
-      Result := Value.Evaluate(AContext);
-      Roots.Add(Result);
-      AssignSuperProperty(AContext, PropertyValue, Result);
-      Exit;
-    end;
-
-    Obj := ObjectExpr.Evaluate(AContext);
-    Roots.Add(Obj);
-    // ES2026 §13.3.3 stores the UNCONVERTED key in the Reference Record, and its
-    // NOTE calls out this exact form: for `a[b] = c`, ToPropertyKey is not performed
-    // until after evaluation of `c`. So evaluate the key expression, then the RHS,
-    // and only then apply §6.2.5.6 PutValue step 3.a (nullish base throws) followed
-    // by step 3.c (ToPropertyKey).
-    PropertyValue := PropertyExpression.Evaluate(AContext);
-    Roots.Add(PropertyValue);
-    Result := Value.Evaluate(AContext);
-    Roots.Add(Result);
-    PropertyValue := ToPropertyKeyForBase(Obj, PropertyValue, True);
-    if PropertyValue is TGocciaSymbolValue then
-    begin
-      { The symbol has to survive the store: assigning to an accessor property
-        runs a guest setter. The string branch below needs no root — PropName is
-        extracted with no safe point in between. }
-      Roots.Add(PropertyValue);
-      AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyValue),
-        Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
-    end
-    else
-    begin
-      PropName := TGocciaStringLiteralValue(PropertyValue).Value;
-      AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column,
-        AContext.NonStrictMode);
-    end;
-  finally
-    Roots.Clear;
-  end;
-end;
-
-// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
-function TGocciaCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  CurrentValue, RhsValue: TGocciaValue;
-  ObjectBinding: TGocciaObjectValue;
-  ScopeBinding: TGocciaScope;
-  Roots: TGocciaActiveRootFrame;
-
-  procedure AssignResolvedTarget(const AValue: TGocciaValue);
-  begin
-    if Assigned(ObjectBinding) then
-    begin
-      if AContext.NonStrictMode then
-        ObjectBinding.AssignPropertyWithReceiver(Name, AValue, ObjectBinding)
-      else
-        ObjectBinding.AssignProperty(Name, AValue);
-      Exit;
-    end;
-
-    ScopeBinding.AssignBinding(Name, AValue, Line, Column,
-      AContext.NonStrictMode);
-  end;
-begin
-  AContext.Scope.ResolveAssignmentTarget(Name, ObjectBinding, ScopeBinding);
-  if Assigned(ObjectBinding) then
-    CurrentValue := NormalizeAssignmentValue(ObjectBinding.GetProperty(Name))
-  else
-    CurrentValue := ScopeBinding.GetValue(Name);
-
-  // ES2026 §13.15.2 step 3: ??=
-  if Operator = gttNullishCoalescingAssign then
-  begin
-    if not IsNullishAssignmentValue(CurrentValue) then
-      Exit(CurrentValue);
-
-    if InferName then
-      Result := EvaluateWithInferredName(Value, AContext, Name)
-    else
-      Result := Value.Evaluate(AContext);
-    AssignResolvedTarget(Result);
-    Exit;
-  end;
-
-  // ES2026 §13.15.2 step 3: &&=
-  if Operator = gttLogicalAndAssign then
-  begin
-    if not CurrentValue.ToBooleanLiteral.Value then
-      Exit(CurrentValue);
-
-    if InferName then
-      Result := EvaluateWithInferredName(Value, AContext, Name)
-    else
-      Result := Value.Evaluate(AContext);
-    AssignResolvedTarget(Result);
-    Exit;
-  end;
-
-  // ES2026 §13.15.2 step 3: ||=
-  if Operator = gttLogicalOrAssign then
-  begin
-    if CurrentValue.ToBooleanLiteral.Value then
-      Exit(CurrentValue);
-
-    if InferName then
-      Result := EvaluateWithInferredName(Value, AContext, Name)
-    else
-      Result := Value.Evaluate(AContext);
-    AssignResolvedTarget(Result);
-    Exit;
-  end;
-
-  { The old value is only reachable through the binding it was read from, and
-    the RHS can rebind it: `x += (x = 0, "c".repeat(9000))` overwrites the slot
-    and then allocates, so without a root the operand of the addition is swept
-    before CompoundOperations reads it. The RHS and the result need the same
-    protection across the arithmetic — which can run a guest `valueOf` — and
-    across the store, which can run a guest setter. }
-  Roots.Initialize;
-  try
-    Roots.Add(CurrentValue);
-    RhsValue := Value.Evaluate(AContext);
-    Roots.Add(RhsValue);
-    Result := Goccia.Arithmetic.CompoundOperations(
-        CurrentValue, RhsValue, Operator);
-    Roots.Add(Result);
-    AssignResolvedTarget(Result);
-  finally
-    Roots.Clear;
-  end;
-end;
-
-// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
-function TGocciaPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
-  Roots: TGocciaActiveRootFrame;
-begin
-  { Same exposure as TGocciaComputedPropertyAssignmentExpression: the base, the
-    key literal, the read-back current value and the RHS sit in native locals
-    across `Value.Evaluate`, a getter call, or a property-map growth — each a
-    collecting safe point that marks explicit roots only. Only the values still
-    read after such a point are rooted: the short-circuit predicates consume the
-    current value before anything can collect, while the arithmetic branches
-    carry it across the RHS and hand it to the store. }
-  Roots.Initialize;
-  try
-    if ObjectExpr is TGocciaSuperExpression then
-    begin
-      PropertyKeyValue := TGocciaStringLiteralValue.Create(PropertyName);
-      Roots.Add(PropertyKeyValue);
-      CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
-        PropertyKeyValue));
-      { Unlike the non-super paths, the arithmetic branch below still holds the
-        current value across `Value.Evaluate`. }
-      Roots.Add(CurrentValue);
-      if Operator = gttNullishCoalescingAssign then
-      begin
-        if not IsNullishAssignmentValue(CurrentValue) then
-          Exit(CurrentValue);
-
-        Result := Value.Evaluate(AContext);
-        Roots.Add(Result);
-        AssignSuperProperty(AContext, PropertyKeyValue, Result);
-        Exit;
-      end;
-
-      if Operator = gttLogicalAndAssign then
-      begin
-        if not CurrentValue.ToBooleanLiteral.Value then
-          Exit(CurrentValue);
-
-        Result := Value.Evaluate(AContext);
-        Roots.Add(Result);
-        AssignSuperProperty(AContext, PropertyKeyValue, Result);
-        Exit;
-      end;
-
-      if Operator = gttLogicalOrAssign then
-      begin
-        if CurrentValue.ToBooleanLiteral.Value then
-          Exit(CurrentValue);
-
-        Result := Value.Evaluate(AContext);
-        Roots.Add(Result);
-        AssignSuperProperty(AContext, PropertyKeyValue, Result);
-        Exit;
-      end;
-
-      RhsValue := Value.Evaluate(AContext);
-      Roots.Add(RhsValue);
-      Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
-        Operator);
-      Roots.Add(Result);
-      AssignSuperProperty(AContext, PropertyKeyValue, Result);
-      Exit;
-    end;
-
-    Obj := ObjectExpr.Evaluate(AContext);
-    Roots.Add(Obj);
-    // ES2026 §13.15.2 step 3: GetValue(lref) runs exactly once here, before the
-    // RHS, and feeds both the short-circuit predicates and the arithmetic.
-    if not ReadPropertyCompoundAssignmentValue(Obj, PropertyName,
-      AContext.OnError, Line, Column, CurrentValue) then
-      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-
-    // ES2026 §13.15.2 step 3: ??=
-    if Operator = gttNullishCoalescingAssign then
-    begin
-      if not IsNullishAssignmentValue(CurrentValue) then
-        Exit(CurrentValue);
-
-      Result := Value.Evaluate(AContext);
-      Roots.Add(Result);
-      AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
-        AContext.NonStrictMode);
-      Exit;
-    end;
-
-    // ES2026 §13.15.2 step 3: &&=
-    if Operator = gttLogicalAndAssign then
-    begin
-      if not CurrentValue.ToBooleanLiteral.Value then
-        Exit(CurrentValue);
-
-      Result := Value.Evaluate(AContext);
-      Roots.Add(Result);
-      AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
-        AContext.NonStrictMode);
-      Exit;
-    end;
-
-    // ES2026 §13.15.2 step 3: ||=
-    if Operator = gttLogicalOrAssign then
-    begin
-      if CurrentValue.ToBooleanLiteral.Value then
-        Exit(CurrentValue);
-
-      Result := Value.Evaluate(AContext);
-      Roots.Add(Result);
-      AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
-        AContext.NonStrictMode);
-      Exit;
-    end;
-
-    { The current value is now the only copy of what step 3 read — a getter's
-      result is reachable from nothing else, and the RHS can overwrite the
-      property — so it has to survive `Value.Evaluate` and the arithmetic. }
-    Roots.Add(CurrentValue);
-    RhsValue := Value.Evaluate(AContext);
-    Roots.Add(RhsValue);
-    Result := PerformPropertyCompoundAssignment(Obj, PropertyName, CurrentValue,
-      RhsValue, Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
-  finally
-    Roots.Clear;
-  end;
-end;
-
-// ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
-function TGocciaComputedPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
-  BoxedValue: TGocciaObjectValue;
-  PropName: string;
-  Roots: TGocciaActiveRootFrame;
-
-  function ShortCircuits: Boolean;
-  begin
-    case Operator of
-      gttNullishCoalescingAssign: Result := not IsNullishAssignmentValue(CurrentValue);
-      gttLogicalAndAssign: Result := not CurrentValue.ToBooleanLiteral.Value;
-      gttLogicalOrAssign: Result := CurrentValue.ToBooleanLiteral.Value;
-    else
-      Result := False;
-    end;
-  end;
-
-  function IsShortCircuitOperator: Boolean;
-  begin
-    Result := Operator in [gttNullishCoalescingAssign, gttLogicalAndAssign, gttLogicalOrAssign];
-  end;
-
-  function ReadSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue): TGocciaValue;
-  begin
-    { This is the read step, so a nullish base fails as a read — the store's
-      set-flavored message would misattribute the failure (and diverge from the
-      VM, which reports the read). Matches ReadPropertyCompoundAssignmentValue
-      on the string-key path. }
-    if AObj is TGocciaNullLiteralValue then
-      ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [ASymbol.ToDisplayString.Value]),
-        SSuggestCheckNullBeforeAccess)
-    else if AObj is TGocciaUndefinedLiteralValue then
-      ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [ASymbol.ToDisplayString.Value]),
-        SSuggestCheckNullBeforeAccess);
-
-    if AObj is TGocciaClassValue then
-      Result := TGocciaClassValue(AObj).GetSymbolProperty(ASymbol)
-    else if AObj is TGocciaObjectValue then
-      Result := TGocciaObjectValue(AObj).GetSymbolProperty(ASymbol)
-    else if AObj is TGocciaSymbolValue then
-    begin
-      if TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue then
-        Result := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
-          .GetSymbolPropertyWithReceiver(ASymbol, AObj)
-      else
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
-    else
-    begin
-      BoxedValue := AObj.Box;
-      if Assigned(BoxedValue) then
-        Result := BoxedValue.GetSymbolPropertyWithReceiver(ASymbol, AObj)
-      else
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end;
-  end;
-
-begin
-  { Same exposure as TGocciaComputedPropertyAssignmentExpression, with one extra
-    crossing: the key is converted before the RHS is evaluated here, so the
-    converted key — not just the raw one — has to survive `Value.Evaluate`. The
-    raw key is rooted before the conversion as well: ToPropertyKey's first call
-    allocates the hint string it passes to a guest [Symbol.toPrimitive], and
-    that allocation can collect the key it is about to convert. }
-  Roots.Initialize;
-  try
-    if ObjectExpr is TGocciaSuperExpression then
-    begin
-      PropertyKeyValue := PropertyExpression.Evaluate(AContext);
-      Roots.Add(PropertyKeyValue);
-      PropertyKeyValue := ToPropertyKey(PropertyKeyValue);
-      Roots.Add(PropertyKeyValue);
-      CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
-        PropertyKeyValue));
-      { The arithmetic branch below holds the current value across
-        `Value.Evaluate`; the non-super branches do not (see below). }
-      Roots.Add(CurrentValue);
-
-      if IsShortCircuitOperator then
-      begin
-        if ShortCircuits then
-          Exit(CurrentValue);
-
-        Result := Value.Evaluate(AContext);
-        Roots.Add(Result);
-        AssignSuperProperty(AContext, PropertyKeyValue, Result);
-        Exit;
-      end;
-
-      RhsValue := Value.Evaluate(AContext);
-      Roots.Add(RhsValue);
-      Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
-        Operator);
-      Roots.Add(Result);
-      AssignSuperProperty(AContext, PropertyKeyValue, Result);
-      Exit;
-    end;
-
-    Obj := ObjectExpr.Evaluate(AContext);
-    Roots.Add(Obj);
-    // ES2026 §13.15.2 compound assignment reads through §6.2.5.5 GetValue, whose
-    // step 3.a base check precedes the step 3.c ToPropertyKey conversion.
-    PropertyKeyValue := PropertyExpression.Evaluate(AContext);
-    Roots.Add(PropertyKeyValue);
-    PropertyKeyValue := ToPropertyKeyForBase(Obj, PropertyKeyValue);
-    if PropertyKeyValue is TGocciaSymbolValue then
-    begin
-      { A symbol key survives the read, the RHS and the store; a string key is
-        consumed by the PropName extraction below with nothing collecting in
-        between. The current value is only rooted on the arithmetic branches:
-        the short-circuit predicates read it before anything can collect, while
-        the arithmetic carries it across the RHS and hands it to the store. }
-      Roots.Add(PropertyKeyValue);
-      // ES2026 §13.15.2 step 3: GetValue(lref) runs exactly once here, before
-      // the RHS, and feeds both the short-circuit predicates and the arithmetic.
-      CurrentValue := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
-        TGocciaSymbolValue(PropertyKeyValue)));
-
-      if IsShortCircuitOperator then
-      begin
-        if ShortCircuits then
-          Exit(CurrentValue);
-
-        Result := Value.Evaluate(AContext);
-        Roots.Add(Result);
-        AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
-          Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
-        Exit;
-      end;
-
-      Roots.Add(CurrentValue);
-      RhsValue := Value.Evaluate(AContext);
-      Roots.Add(RhsValue);
-      Result := PerformSymbolPropertyCompoundAssignment(Obj,
-        TGocciaSymbolValue(PropertyKeyValue), CurrentValue, RhsValue, Operator,
-        AContext.OnError, Line, Column, AContext.NonStrictMode);
-      Exit;
-    end;
-
-    PropName := TGocciaStringLiteralValue(PropertyKeyValue).Value;
-    if not ReadPropertyCompoundAssignmentValue(Obj, PropName, AContext.OnError,
-      Line, Column, CurrentValue) then
-      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-
-    if IsShortCircuitOperator then
-    begin
-      if ShortCircuits then
-        Exit(CurrentValue);
-
-      Result := Value.Evaluate(AContext);
-      Roots.Add(Result);
-      AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column,
-        AContext.NonStrictMode);
-      Exit;
-    end;
-
-    Roots.Add(CurrentValue);
-    RhsValue := Value.Evaluate(AContext);
-    Roots.Add(RhsValue);
-    Result := PerformPropertyCompoundAssignment(Obj, PropName, CurrentValue,
-      RhsValue, Operator, AContext.OnError, Line, Column,
-      AContext.NonStrictMode);
-  finally
-    Roots.Clear;
-  end;
-end;
-
-function ToNumericValue(const AValue: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
-begin
-  Result := ToPrimitive(AValue, tphNumber);
-  if not (Result is TGocciaBigIntValue) then
-    Result := Result.ToNumberLiteral;
-end;
-
-function TGocciaIncrementExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  Obj, OldValue, NewValue, PropertyKeyValue: TGocciaValue;
-  MemberExpr: TGocciaMemberExpression;
-  PrivateExpr: TGocciaPrivateMemberExpression;
-  PropName: string;
-  Roots: TGocciaActiveRootFrame;
-begin
-  { `makeObj()[f()]++` holds the base in a native local while the key expression
-    runs and while ToPropertyKeyForBase converts it — both arbitrary guest code —
-    and then holds the old value across the numeric conversion, the increment's
-    own allocation and the store. Nothing else references any of them, so each
-    has to be an explicit root; the identifier form below reads and writes a
-    binding that roots the value itself. }
-  Roots.Initialize;
-  try
-    if Operand is TGocciaIdentifierExpression then
-    begin
-      PropName := TGocciaIdentifierExpression(Operand).Name;
-      OldValue := ToNumericValue(AContext.Scope.GetValue(PropName));
-      NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-      AContext.Scope.AssignBinding(PropName, NewValue, Line, Column,
-        AContext.NonStrictMode);
-      if IsPrefix then
-        Result := NewValue
-      else
-        Result := OldValue;
-    end
-    else if Operand is TGocciaMemberExpression then
-    begin
-      MemberExpr := TGocciaMemberExpression(Operand);
-      if MemberExpr.ObjectExpr is TGocciaSuperExpression then
-      begin
-        if MemberExpr.Computed then
-        begin
-          PropertyKeyValue := MemberExpr.PropertyExpression.Evaluate(AContext);
-          Roots.Add(PropertyKeyValue);
-          PropertyKeyValue := ToPropertyKey(PropertyKeyValue);
-        end
-        else
-          PropertyKeyValue := TGocciaStringLiteralValue.Create(
-            MemberExpr.PropertyName);
-        Roots.Add(PropertyKeyValue);
-        OldValue := ToNumericValue(NormalizeAssignmentValue(
-          GetSuperProperty(AContext, PropertyKeyValue)));
-        Roots.Add(OldValue);
-        NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-        Roots.Add(NewValue);
-        AssignSuperProperty(AContext, PropertyKeyValue, NewValue);
-        if IsPrefix then
-          Result := NewValue
-        else
-          Result := OldValue;
-        Exit;
-      end;
-
-      Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
-      Roots.Add(Obj);
-      if MemberExpr.Computed then
-      begin
-        // ES2026 §13.4.2/§13.4.3 UpdateExpression reads via §6.2.5.5 GetValue, whose
-        // step 3.a base check precedes the step 3.c ToPropertyKey conversion.
-        PropertyKeyValue := MemberExpr.PropertyExpression.Evaluate(AContext);
-        Roots.Add(PropertyKeyValue);
-        PropertyKeyValue := ToPropertyKeyForBase(Obj, PropertyKeyValue);
-        Roots.Add(PropertyKeyValue);
-        if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
-        begin
-          if Obj is TGocciaClassValue then
-            OldValue := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue))
-          else
-            OldValue := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
-          if OldValue = nil then
-            OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-          Roots.Add(OldValue);
-          OldValue := ToNumericValue(OldValue);
-          Roots.Add(OldValue);
-          NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-          Roots.Add(NewValue);
-          AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
-            NewValue, AContext.OnError, Line, Column, AContext.NonStrictMode);
-          if IsPrefix then
-            Result := NewValue
-          else
-            Result := OldValue;
-          Exit;
-        end;
-        PropName := PropertyKeyValue.ToStringLiteral.Value;
-      end
-      else
-        PropName := MemberExpr.PropertyName;
-      OldValue := Obj.GetProperty(PropName);
-      if OldValue = nil then
-        OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Roots.Add(OldValue);
-      OldValue := ToNumericValue(OldValue);
-      Roots.Add(OldValue);
-      NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-      Roots.Add(NewValue);
-      AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column,
-        AContext.NonStrictMode);
-      if IsPrefix then
-        Result := NewValue
-      else
-        Result := OldValue;
-    end
-    else if Operand is TGocciaPrivateMemberExpression then
-    begin
-      PrivateExpr := TGocciaPrivateMemberExpression(Operand);
-      OldValue := ToNumericValue(EvaluatePrivateMember(PrivateExpr, AContext,
-        Obj));
-      { The receiver comes back from the read and is used by the store, with the
-        increment's allocation in between. }
-      Roots.Add(Obj);
-      Roots.Add(OldValue);
-      NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-      Roots.Add(NewValue);
-      AssignPrivateMemberValue(Obj, PrivateExpr.PrivateName, NewValue, AContext,
-        Line, Column);
-      if IsPrefix then
-        Result := NewValue
-      else
-        Result := OldValue;
-    end
-    else
-    begin
-      AContext.OnError('Invalid target for increment/decrement', Line, Column);
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end;
-  finally
-    Roots.Clear;
-  end;
-end;
-
-function TGocciaCallExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateCall(Self, AContext);
-end;
-
-function TGocciaMemberExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateMember(Self, AContext);
-end;
-
-function TGocciaArrayExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateArray(Self, AContext);
-end;
-
-function TGocciaObjectExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateObject(Self, AContext);
-end;
-
-function TGocciaFunctionExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateFunctionExpression(Self, AContext);
-end;
-
-function TGocciaObjectMethodDefinition.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateFunctionExpression(FFunctionExpression, AContext);
-end;
-
-function TGocciaAwaitExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateAwait(Self, AContext);
-end;
-
-function TGocciaYieldExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateYield(Self, AContext);
-end;
-
-function TGocciaArrowFunctionExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateArrowFunction(Self, AContext);
-end;
-
-function TGocciaConditionalExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  ConditionResult: Boolean;
-begin
-  ConditionResult := Condition.Evaluate(AContext).ToBooleanLiteral.Value;
-  if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
-  begin
-    if ConditionResult then
-      TGocciaCoverageTracker.Instance.RecordBranchHit(
-        AContext.CurrentFilePath, Line, Column, 0)
-    else
-      TGocciaCoverageTracker.Instance.RecordBranchHit(
-        AContext.CurrentFilePath, Line, Column, 1);
-  end;
-  if ConditionResult then
-    Result := Consequent.Evaluate(AContext)
-  else
-    Result := Alternate.Evaluate(AContext);
-end;
-
-function TGocciaNewExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateNewExpression(Self, AContext);
-end;
-
-function TGocciaThisExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := AContext.Scope.ThisValue;
-end;
-
-function TGocciaSuperExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := AContext.Scope.FindSuperClass;
-  if not Assigned(Result) then
-    ThrowTypeError('super can only be used in a class method');
-end;
-
-// ES2026 §13.3.12.1 ImportMeta : import . meta
-function TGocciaImportMetaExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := GetOrCreateImportMeta(AContext.CurrentFilePath,
-    AContext.ResolveModuleURL);
-end;
-
-// ES2026 §13.3.12.1 NewTarget : new . target
-function TGocciaNewTargetExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := AContext.Scope.FindNewTarget;
-  if not Assigned(Result) then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
 constructor TGocciaImportCallExpression.Create(const ASpecifier: TGocciaExpression;
   const AOptions: TGocciaExpression; const APhase: TGocciaImportCallPhase;
   const ASpan: TGocciaSourceSpan);
@@ -2621,220 +1697,100 @@ begin
     (TGocciaLiteralExpression(FSpecifier).Value is TGocciaStringLiteralValue);
 end;
 
-// ES2026 §13.3.10.1 Runtime Semantics: Evaluation — ImportCall
-function TGocciaImportCallExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-var
-  AttributeType: string;
-  ModuleRequest: string;
-  DeferredLoader: TLoadDeferredModuleCallback;
-  HasAttributeType: Boolean;
-  SourceLoader: TLoadModuleSourceCallback;
-  OptionsValue: TGocciaValue;
-  SpecifierString: string;
-  SpecifierValue: TGocciaValue;
-  Module: TGocciaModule;
-  Promise: TGocciaPromiseValue;
-  GC: TGarbageCollector;
-  PreviousCallSite: TGocciaCallSite;
+destructor TGocciaTemplateWithInterpolationExpression.Destroy;
 begin
-  Promise := TGocciaPromiseValue.Create;
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    GC.AddTempRoot(Promise);
-  try
-    try
-      // ES2026 §13.3.10.1 step 3: Evaluate specifier
-      SpecifierValue := EvaluateExpression(FSpecifier, AContext);
-      SpecifierString := ToPrimitive(SpecifierValue, tphString).ToStringLiteral.Value;
-      OptionsValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Assigned(FOptions) then
-        OptionsValue := EvaluateExpression(FOptions, AContext);
-      TryReadImportAttributeType(OptionsValue, AttributeType,
-        HasAttributeType);
-      if HasAttributeType and (AttributeType <> 'json') and
-         (AttributeType <> 'text') and (AttributeType <> 'bytes') then
-        raise TGocciaTypeError.Create(
-          'Unsupported import attribute type "' + AttributeType + '"',
-          Line, Column, '', nil,
-          'Use type "json", "text", or "bytes" for import attributes.');
-
-      ModuleRequest := EncodeImportSpecifierAttribute(SpecifierString,
-        AttributeType);
-      if not HasLiteralSpecifier then
-        ModuleRequest := MarkComputedImportSpecifier(ModuleRequest);
-
-      { The import() is the call site of whatever its load decides or refuses
-        (audit events, PermissionDenied), in both executors. }
-      EnterGocciaCallSite(AContext.CurrentFilePath, Line, Column,
-        PreviousCallSite);
-      try
-        case FPhase of
-          icpSource:
-            begin
-              SourceLoader := AContext.LoadModuleSource;
-              if (not Assigned(SourceLoader)) and Assigned(AContext.Scope) then
-                SourceLoader := AContext.Scope.LoadModuleSource;
-              if not Assigned(SourceLoader) then
-                raise Exception.Create('Module source loader is not available.');
-              Promise.Resolve(SourceLoader(ModuleRequest,
-                AContext.CurrentFilePath));
-            end;
-          icpDefer:
-            begin
-              DeferredLoader := AContext.LoadDeferredModule;
-              if (not Assigned(DeferredLoader)) and Assigned(AContext.Scope) then
-                DeferredLoader := AContext.Scope.LoadDeferredModule;
-              if not Assigned(DeferredLoader) then
-                raise Exception.Create('Deferred module loader is not available.');
-              Promise.Resolve(DeferredLoader(ModuleRequest,
-                AContext.CurrentFilePath));
-            end;
-        else
-          // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
-          Module := AContext.LoadModule(ModuleRequest,
-            AContext.CurrentFilePath);
-          // ES2026 §13.3.10.3 ContinueDynamicImport: import() settles from
-          // the module's evaluation promise, so a module whose top-level
-          // await is still running holds it back and one whose top-level
-          // await threw rejects it, as in the VM twin.
-          if Assigned(Module) and
-             (Module.EvaluationPromise is TGocciaPromiseValue) then
-            SettlePromiseFromPromise(Promise,
-              TGocciaPromiseValue(Module.EvaluationPromise),
-              Module.GetNamespaceObject)
-          else
-            // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
-            Promise.Resolve(Module.GetNamespaceObject);
-        end;
-      finally
-        LeaveGocciaCallSite(PreviousCallSite);
-      end;
-    except
-      { A module whose top-level compiled code throws surfaces here as
-        EGocciaBytecodeThrow; its ThrownValue is the guest completion, so
-        reject import() with that identity to match the VM twin
-        (TGocciaVMDynamicImportStartValue.Call) rather than a synthesized
-        Error. }
-      on E: EGocciaBytecodeThrow do
-        Promise.Reject(E.ThrownValue);
-      on E: TGocciaThrowValue do
-        Promise.Reject(E.Value);
-      on E: TGocciaSyntaxError do
-        Promise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message));
-      on E: TGocciaTypeError do
-        Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E.Message));
-      on E: TGocciaReferenceError do
-        Promise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME, E.Message));
-      on E: TGocciaTimeoutError do
-        raise;
-      on E: TGocciaInstructionLimitError do
-        raise;
-      on E: TGocciaMemoryLimitError do
-        raise;
-      on E: Exception do
-      begin
-        if IsEngineIntegrityFault(E) then
-          raise;
-        Promise.Reject(CreateImportCallErrorObject(ERROR_NAME, E.Message,
-          AContext.CurrentFilePath, Line, Column));
-      end;
-    end;
-    Result := Promise;
-  finally
-    if Assigned(GC) then
-      GC.RemoveTempRoot(Promise);
-  end;
+  if Assigned(FParts) then
+    FParts.OwnsObjects := False;
+  FParts.Free;
+  inherited;
 end;
 
-function TGocciaHoleExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaCallExpression.Destroy;
 begin
-  Result := nil;
+  if Assigned(FArguments) then
+    FArguments.OwnsObjects := False;
+  FArguments.Free;
+  inherited;
 end;
 
-function TGocciaSpreadExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaArrayExpression.Destroy;
 begin
-  AContext.OnError('Unexpected spread syntax', Line, Column);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FElements) then
+    FElements.OwnsObjects := False;
+  FElements.Free;
+  inherited;
 end;
 
-function TGocciaGetterExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaNewExpression.Destroy;
 begin
-  Result := EvaluateGetter(Self, AContext);
+  if Assigned(FArguments) then
+    FArguments.OwnsObjects := False;
+  FArguments.Free;
+  inherited;
 end;
 
-function TGocciaSetterExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaArrayDestructuringPattern.Destroy;
 begin
-  Result := EvaluateSetter(Self, AContext);
+  if Assigned(FElements) then
+    FElements.OwnsObjects := False;
+  FElements.Free;
+  inherited;
 end;
 
-function TGocciaDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaObjectDestructuringPattern.Destroy;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FProperties) then
+    FProperties.OwnsObjects := False;
+  FProperties.Free;
+  inherited;
 end;
 
-function TGocciaArrayDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaArrayMatchPattern.Destroy;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FElements) then
+    FElements.OwnsObjects := False;
+  FElements.Free;
+  inherited;
 end;
 
-function TGocciaObjectDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaObjectMatchPattern.Destroy;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FProperties) then
+    FProperties.OwnsObjects := False;
+  FProperties.Free;
+  inherited;
 end;
 
-function TGocciaRestDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaAndMatchPattern.Destroy;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FPatterns) then
+    FPatterns.OwnsObjects := False;
+  FPatterns.Free;
+  inherited;
 end;
 
-function TGocciaAssignmentDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaOrMatchPattern.Destroy;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FPatterns) then
+    FPatterns.OwnsObjects := False;
+  FPatterns.Free;
+  inherited;
 end;
 
-function TGocciaIdentifierDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaExtractorMatchPattern.Destroy;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FArguments) then
+    FArguments.OwnsObjects := False;
+  FArguments.Free;
+  inherited;
 end;
 
-function TGocciaMemberExpressionDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
+destructor TGocciaMatchExpression.Destroy;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-function TGocciaPrivateMemberExpressionDestructuringPattern.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-function TGocciaDestructuringAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateDestructuringAssignment(Self, AContext);
-end;
-
-function TGocciaIsExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateIsExpression(Self, AContext);
-end;
-
-function TGocciaMatchExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluateMatchExpression(Self, AContext);
-end;
-
-function TGocciaPrivateMemberExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluatePrivateMember(Self, AContext);
-end;
-
-function TGocciaPrivatePropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluatePrivatePropertyAssignment(Self, AContext);
-end;
-
-function TGocciaPrivatePropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
-begin
-  Result := EvaluatePrivatePropertyCompoundAssignment(Self, AContext);
+  if Assigned(FClauses) then
+    FClauses.OwnsObjects := False;
+  FClauses.Free;
+  inherited;
 end;
 
 initialization

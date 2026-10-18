@@ -23,7 +23,7 @@ GocciaScript supports the standard ECMAScript error constructors plus the CLI-on
 | [`Error`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error) | Generic errors; base class for all error types | [Error](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error) |
 | [`TypeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError) | Property access on `null`/`undefined`, calling a non-function, reassigning `const`, calling a constructor without `new` | [TypeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError) |
 | [`ReferenceError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ReferenceError) | Accessing an undeclared variable, using a variable before initialization (TDZ) | [ReferenceError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ReferenceError) |
-| [`RangeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) | Invalid array length, negative `ArrayBuffer` size, out-of-range numeric conversions, call stack depth exceeded (`--max-stack`, or in bytecode mode the call stack reaching `--max-memory`) | [RangeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) |
+| [`RangeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) | Invalid array length, negative `ArrayBuffer` size, out-of-range numeric conversions, call stack depth exceeded (`--max-stack`, or the call stack reaching `--max-memory`) | [RangeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) |
 | [`SyntaxError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SyntaxError) | Invalid syntax detected by the parser or lexer; also throwable at runtime via `new SyntaxError(...)` | [SyntaxError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SyntaxError) |
 | [`URIError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/URIError) | Malformed URI passed to `encodeURI`, `decodeURI`, `encodeURIComponent`, or `decodeURIComponent` | [URIError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/URIError) |
 | [`AggregateError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) | Multiple errors wrapped together; used by `Promise.any` when all promises reject | [AggregateError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) |
@@ -33,7 +33,7 @@ GocciaScript supports the standard ECMAScript error constructors plus the CLI-on
 | `MemoryLimitError` | A *gated* growth point -- array element storage or object property storage -- was refused by the `--max-memory` budget after a forced collection failed to make room. Charged allocations under the same budget throw a catchable `RangeError` instead (CLI only; not a JS-visible constructor) | -- |
 
 The last three are resource ceilings rather than in-language errors. Script
-`try`/`catch` cannot observe them in either execution mode: they unwind past
+`try`/`catch` cannot observe them: they unwind past
 every handler to the host, because a ceiling the guest can catch is a ceiling
 the guest can ignore in a loop. Allocation sites that charge the budget
 against an owning value (string payloads, `ArrayBuffer`) still throw an
@@ -134,11 +134,7 @@ TypeError: Cannot read properties of undefined (reading 'x')
 
 A failed property read is located at the property whose read failed, where V8 reports it (see [Stack Traces](#stack-traces)).
 
-Runtime errors can carry a suggestion too. Reading or assigning an undeclared name prints `Suggestion: check the spelling or declare the variable with const, let, or var before use` in both modes, and the `ReferenceError` is always the realm's own, even when the global `ReferenceError` has been replaced. A `RangeError` from the call stack reaching `--max-memory` in bytecode mode is located at the call that needed the larger stack, as an ordinary stack overflow is.
-
-Locations are not yet consistent between the two modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)):
-
-- In interpreter mode, some top-level runtime errors lack a location. A top-level `ReferenceError` prints `--> :0:0` with no file name or source excerpt, and a top-level `TypeError` such as `const a = null; a.x;` prints no `-->` line at all. Bytecode mode shows the file, line, and excerpt for both.
+Runtime errors can carry a suggestion too. Reading or assigning an undeclared name prints `Suggestion: check the spelling or declare the variable with const, let, or var before use`, and the `ReferenceError` is always the realm's own, even when the global `ReferenceError` has been replaced. A `RangeError` from the call stack reaching `--max-memory` is located at the call that needed the larger stack, as an ordinary stack overflow is.
 
 Stdin input uses `<stdin>` as the filename and retains full source context for error display. If source context is not available (e.g., errors originating inside native function callbacks without a JavaScript source location), GocciaScript falls back to displaying the stack trace string.
 
@@ -203,6 +199,7 @@ than claiming that the sandbox performed an operating-system call.
 | Directory is not empty | `ENOTEMPTY` | `directory not empty` |
 | File or directory is busy | `EBUSY` | `resource busy or locked` |
 | Sandbox byte quota exceeded | `ENOSPC` | `no space left on device` |
+| Write to a path the embedder marked read-only ([ADR 0144](adr/0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md)) | `EROFS` | `read-only file system` |
 | Unexpected unclassified filesystem failure (internal fallback) | `EIO` | `i/o error` |
 
 Messages follow Node's system-error wording:
@@ -264,8 +261,7 @@ RuntimeError: Module not found: "./missing.js"
 ```
 
 The `-->` line names the importing file, as its path was passed on the command
-line, at the import declaration that asked for the module. Both modes print
-this output.
+line, at the import declaration that asked for the module.
 
 A failed `import()` that nothing catches is located at the `import()` call, with
 a code frame:
@@ -280,7 +276,7 @@ Error: Module not found: "./nope.js"
    4 | load();
 ```
 
-Both locations come from the call site that both modes enter while the load
+Both locations come from the call site the engine enters while the load
 runs, the one a `PermissionDenied` from the same load reports. `--output=json`
 reports the same `line` and `column`.
 
@@ -384,7 +380,7 @@ try {
 }
 ```
 
-In bytecode mode this prints:
+This prints:
 
 ```text
 TypeError: Cannot read properties of null (reading 'x')
@@ -396,7 +392,7 @@ TypeError: Cannot read properties of null (reading 'x')
 
 The first frame is where the error happened. Every other frame is at the call that frame is making: `middle` at its call to `inner` on line 5, and `<module>`, the script's top level, at its call to `outer`. Node prints the same positions; it names the top-level frame `Object.<anonymous>`.
 
-Positions follow V8's rules, in both modes:
+Positions follow V8's rules:
 
 | Construct | Located at | Example |
 |-----------|-----------|---------|
@@ -406,9 +402,9 @@ Positions follow V8's rules, in both modes:
 | A tagged template | The template | ``tag`text` `` at the backtick |
 | A failed property read | The property name, or the `[` of a computed read | `obj.x` at `x`, `obj["x"]` at `[` |
 
-V8 decides a call's position by the token before its `(`, so a reserved-word property name such as `catch`, `default` or `delete`, and a private name, leave the call at its `(`. The same position is what an audit event and a `PermissionDenied` error report for the call. Interpreter mode lists no `<module>` frame, and each frame there shows the site where that function was called (`middle` at `8:3`, inside `outer`) rather than its own call to the next frame ([#1273](https://github.com/frostney/GocciaScript/issues/1273)).
+V8 decides a call's position by the token before its `(`, so a reserved-word property name such as `catch`, `default` or `delete`, and a private name, leave the call at its `(`. The same position is what an audit event and a `PermissionDenied` error report for the call.
 
-A trace lists at most 100 frames, the innermost ones. A deeper stack ends with one `... N more frames` line, indented like the `at` lines (`... 1 more frame` for one), so a stack-overflow `RangeError` still shows where the recursion is: at the default `--max-stack` of 2,200, `const f = () => { f(); }; f();` gives the header, 100 `at f` lines and `... 2101 more frames`. Frames past the limit are neither named nor formatted; only their line and column numbers are read, as bytecode mode works out every frame's position from the instruction pointers the VM saved. Without the limit, building the trace of a stack-overflow `RangeError` took most of a deep recursion's run time. A stack of up to 100 frames renders as it always has. The limit applies to every error that captures a stack, in both modes, and is fixed (`STACK_TRACE_FRAME_LIMIT` in `Goccia.CallStack`); GocciaScript has no `Error.stackTraceLimit`, which is a V8 extension. JavaScriptCore's default `Error.stackTraceLimit` is also 100, SpiderMonkey keeps 128 frames and V8 10.
+A trace lists at most 100 frames, the innermost ones. A deeper stack ends with one `... N more frames` line, indented like the `at` lines (`... 1 more frame` for one), so a stack-overflow `RangeError` still shows where the recursion is: at the default `--max-stack` of 2,200, `const f = () => { f(); }; f();` gives the header, 100 `at f` lines and `... 2101 more frames`. Frames past the limit are neither named nor formatted; only their line and column numbers are read, as the VM works out every frame's position from the instruction pointers the VM saved. Without the limit, building the trace of a stack-overflow `RangeError` took most of a deep recursion's run time. A stack of up to 100 frames renders as it always has. The limit applies to every error that captures a stack and is fixed (`STACK_TRACE_FRAME_LIMIT` in `Goccia.CallStack`); GocciaScript has no `Error.stackTraceLimit`, which is a V8 extension. JavaScriptCore's default `Error.stackTraceLimit` is also 100, SpiderMonkey keeps 128 frames and V8 10.
 
 ## Error.cause
 

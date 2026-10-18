@@ -56,4 +56,27 @@ describe("Uint8Array.prototype.toHex", () => {
     const view = new Uint8Array(buffer, 2, 3);
     expect(view.toHex()).toBe("aabbcc");
   });
+
+  test("encodes a length-tracking view after its buffer grew, with zeros past the old end", () => {
+    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    view.fill(255);
+    rab.resize(8);
+    expect(view.toHex()).toBe("ffff000000000000");
+  });
+
+  test("encodes a length-tracking view after its buffer shrank", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    view.fill(9);
+    rab.resize(3);
+    expect(view.toHex()).toBe("090909");
+  });
+
+  test("throws TypeError for a view past the end of its shrunk buffer", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab, 0, 8);
+    rab.resize(3);
+    expect(() => view.toHex()).toThrow(TypeError);
+  });
 });
