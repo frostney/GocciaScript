@@ -925,6 +925,8 @@ begin
         SourcePipelineResult.RegisterCoverageSource(AFileName);
 
         CompileStart := GetNanoseconds;
+        { The goal the parse settled for a detected entry (ADR 0140). }
+        Engine.SourceType := SourcePipelineResult.SourceType;
         Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
         CompileEnd := GetNanoseconds;
         Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;

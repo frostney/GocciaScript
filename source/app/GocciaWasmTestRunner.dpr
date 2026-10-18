@@ -159,7 +159,7 @@ begin
   end;
   if IsModuleSourceFileName(AFileName) then
     Exit(Goccia.Engine.stModule);
-  Result := Goccia.Engine.stScript;
+  Result := Goccia.Engine.stDetect;
 end;
 
 procedure DisableRuntimeConsole(const AEngine: TGocciaEngine);
@@ -290,7 +290,7 @@ begin
         Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
         { As GocciaTestRunner configures its engines. }
         Engine.GlobalBackedTopLevel :=
-          Engine.SourceType = Goccia.Engine.stScript;
+          Engine.SourceType <> Goccia.Engine.stModule;
         ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);
         Engine.Compatibility := Compatibility;
         Engine.StrictTypes :=

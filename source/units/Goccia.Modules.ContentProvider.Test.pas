@@ -104,6 +104,7 @@ type
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestFailedCycleKeepsLiveBindings;
+    procedure TestEntryNamedByProviderPathIsOneRecordInACycle;
     procedure TestReloadedModuleRetargetsCachedImport;
     procedure TestReloadedDataModuleFailureNamesSpecifier;
     procedure TestEngineReportsJSONLModuleLineNumbers;
@@ -215,6 +216,8 @@ begin
     TestEngineRetriesModuleAfterFailedLoad);
   Test('Failed module cycles keep surviving live bindings valid',
     TestFailedCycleKeepsLiveBindings);
+  Test('An entry the provider names by an unexpanded path is one record in a cycle',
+    TestEntryNamedByProviderPathIsOneRecordInACycle);
   Test('Reloads retarget cached import bindings',
     TestReloadedModuleRetargetsCachedImport);
   Test('Reloaded data module failures name the specifier, not the host path',
@@ -606,6 +609,57 @@ end;
 procedure TModuleContentProviderTests.TestFailedCycleKeepsLiveBindings;
 begin
   AssertFailedCycleKeepsLiveBindings;
+end;
+
+{ A provider can name its files by paths ExpandFileName would rewrite (the
+  sandbox's `/`-rooted paths on Windows; `memory:/` names here). An import of
+  the entry's file resolves to that name, so the entry is registered under it
+  and the cycle evaluates the entry once (ADR 0140, #1626). Registered only
+  under the expanded path, the import loaded a second copy, which read `y`
+  in its temporal dead zone. }
+procedure TModuleContentProviderTests.TestEntryNamedByProviderPathIsOneRecordInACycle;
+const
+  ENTRY_PATH = 'memory:/cycle-entry.js';
+  PEER_PATH = 'memory:/cycle-peer.js';
+  ENTRY_SOURCE =
+    'import { y } from "' + PEER_PATH + '";' + LineEnding +
+    'export const h = () => "h";' + LineEnding +
+    'y + ":" + h();';
+var
+  Engine: TGocciaEngine;
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TMemoryModuleContentProvider;
+  Resolver: TInMemoryModuleResolver;
+  Source: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.AddModule(ENTRY_PATH, ENTRY_SOURCE);
+    Provider.AddModule(PEER_PATH,
+      'import { h } from "' + ENTRY_PATH + '";' + LineEnding +
+      'export const y = "y";' + LineEnding +
+      'export const z = () => h();');
+    Source.Text := ENTRY_SOURCE;
+    Expect<Boolean>(ExpandFileName(ENTRY_PATH) <> ENTRY_PATH).ToBe(True);
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      try
+        Expect<string>(Engine.Execute.Result.ToStringLiteral.Value).ToBe('y:h');
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
 end;
 
 procedure TModuleContentProviderTests.TestReloadedModuleRetargetsCachedImport;

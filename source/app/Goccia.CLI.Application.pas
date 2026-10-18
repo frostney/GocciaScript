@@ -988,7 +988,8 @@ end;
 
 { Resolve --source-type / config "source-type" into the engine's
   TGocciaSourceType enum.  Priority: CLI option > per-file config > root
-  config > file-extension default (.mjs is module) > default (script).
+  config > file-extension default (.mjs and .mts are module) > default
+  (detected from the source: ADR 0140).
 
   CLI option and root config values are validated by TEnumOption.Apply
   before they reach this function (invalid values raise TParseError
@@ -1001,7 +1002,7 @@ function DefaultSourceTypeForFileName(
 begin
   if IsModuleSourceFileName(AFileName) then
     Exit(Goccia.Engine.stModule);
-  Result := Goccia.Engine.stScript;
+  Result := Goccia.Engine.stDetect;
 end;
 
 function ResolveSourceTypeOption(
@@ -1094,7 +1095,8 @@ begin
   if not Assigned(AEngineOptions) then
     Exit;
 
-  { source-type: CLI option > per-file config > root config > .mjs > script }
+  { source-type: CLI option > per-file config > root config > .mjs/.mts >
+    detected }
   AEngine.SourceType := ResolveSourceTypeOption(
     AEngineOptions.SourceType, AFileConfig, AFileName);
 
@@ -2280,8 +2282,10 @@ begin
       ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName,
         Verdict.AcceptedUnsafe);
     ApplyVirtualModulesToEngine(Result, FileConfigPath);
+    { A detected entry is configured as a Script; the engine keeps the top
+      level of one that turns out a Module off the global object. }
     Result.GlobalBackedTopLevel :=
-      Result.SourceType = Goccia.Engine.stScript;
+      Result.SourceType <> Goccia.Engine.stModule;
   except
     Result.Free;
     raise;
