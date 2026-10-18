@@ -61,4 +61,28 @@ describe("TextEncoder.prototype.encodeInto", () => {
   test("throws TypeError when destination is not a Uint8Array", () => {
     expect(() => enc.encodeInto("hi", new Int8Array(10))).toThrow(TypeError);
   });
+
+  test("writes into a length-tracking view after its buffer grew", () => {
+    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    rab.resize(8);
+    expect(new TextEncoder().encodeInto("abcdefgh", view)).toEqual({ read: 8, written: 8 });
+    expect(Array.from(new Uint8Array(rab))).toEqual([97, 98, 99, 100, 101, 102, 103, 104]);
+  });
+
+  test("writes only the length a view has after its buffer shrank", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    rab.resize(4);
+    expect(new TextEncoder().encodeInto("abcdefgh", view)).toEqual({ read: 4, written: 4 });
+    expect(Array.from(view)).toEqual([97, 98, 99, 100]);
+  });
+
+  test("writes nothing into a view past the end of its shrunk buffer", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab, 0, 8);
+    rab.resize(4);
+    expect(new TextEncoder().encodeInto("abcdefgh", view)).toEqual({ read: 0, written: 0 });
+    expect(Array.from(new Uint8Array(rab))).toEqual([0, 0, 0, 0]);
+  });
 });

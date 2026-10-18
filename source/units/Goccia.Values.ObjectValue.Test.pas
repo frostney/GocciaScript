@@ -42,6 +42,9 @@ type
     procedure TestPrototype;
     procedure TestPrototypeChain;
     procedure TestProxyDefineTrapSeesMaterializedLazyValue;
+    procedure TestStoredDescriptorIsNotCallerOwned;
+    procedure TestSynthesizedDescriptorIsCallerOwned;
+    procedure TestHasOwnPropertyDescriptorAnswersBothKinds;
   end;
 
 function ContainsFragment(const AText, AFragment: string): Boolean;
@@ -99,6 +102,12 @@ begin
   Test('Prototype Chain', TestPrototypeChain);
   Test('Proxy Define Trap Sees Materialized Lazy Value',
     TestProxyDefineTrapSeesMaterializedLazyValue);
+  Test('A stored descriptor is not caller-owned and survives a release',
+    TestStoredDescriptorIsNotCallerOwned);
+  Test('A synthesized descriptor is caller-owned',
+    TestSynthesizedDescriptorIsCallerOwned);
+  Test('HasOwnPropertyDescriptor answers for stored and synthesized properties',
+    TestHasOwnPropertyDescriptorAnswersBothKinds);
 end;
 
 procedure TTestObjectValue.TestCasting;
@@ -304,6 +313,79 @@ begin
 
     Expect<string>(FTrapSeenValue).ToBe('materialized');
     Expect<Integer>(FLazyFactoryCalls).ToBe(1);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Realm.Free;
+  end;
+end;
+
+{ #1592: [[GetOwnProperty]] hands out either the descriptor the object stores
+  or one it builds, and only the built one is the caller's to free. }
+procedure TTestObjectValue.TestStoredDescriptorIsNotCallerOwned;
+var
+  Descriptor, Again: TGocciaPropertyDescriptor;
+  ObjectValue: TGocciaObjectValue;
+begin
+  ObjectValue := SimpleObject;
+  Descriptor := ObjectValue.GetOwnPropertyDescriptor('name');
+  Expect<Boolean>(Assigned(Descriptor)).ToBe(True);
+  Expect<Boolean>(Descriptor.CallerOwned).ToBe(False);
+  ReleaseDescriptor(Descriptor);
+  Again := ObjectValue.GetOwnPropertyDescriptor('name');
+  Expect<Boolean>(Again = Descriptor).ToBe(True);
+  Expect<string>(TGocciaPropertyDescriptorData(Again).Value.ToStringLiteral.Value)
+    .ToBe('John');
+end;
+
+procedure TTestObjectValue.TestSynthesizedDescriptorIsCallerOwned;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  FunctionValue: TGocciaNativeFunctionValue;
+  PreviousRealm: TGocciaRealm;
+  Realm: TGocciaRealm;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('object-value-descriptor-ownership-test');
+  SetCurrentRealm(Realm);
+  try
+    FunctionValue := TGocciaNativeFunctionValue.Create(RecordDefinePropertyTrap,
+      'probe', 3);
+    Descriptor := FunctionValue.GetOwnPropertyDescriptor(PROP_LENGTH);
+    Expect<Boolean>(Assigned(Descriptor)).ToBe(True);
+    Expect<Boolean>(Descriptor.CallerOwned).ToBe(True);
+    Expect<Double>(TGocciaPropertyDescriptorData(Descriptor).Value
+      .ToNumberLiteral.Value).ToBe(3);
+    ReleaseDescriptor(Descriptor);
+    { A caller that keeps one takes it over; a release then leaves it. }
+    Descriptor := FunctionValue.GetOwnPropertyDescriptor(PROP_LENGTH)
+      .TakeOwnership;
+    Expect<Boolean>(Descriptor.CallerOwned).ToBe(False);
+    ReleaseDescriptor(Descriptor);
+    Expect<Double>(TGocciaPropertyDescriptorData(Descriptor).Value
+      .ToNumberLiteral.Value).ToBe(3);
+    Descriptor.Free;
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Realm.Free;
+  end;
+end;
+
+procedure TTestObjectValue.TestHasOwnPropertyDescriptorAnswersBothKinds;
+var
+  FunctionValue: TGocciaNativeFunctionValue;
+  PreviousRealm: TGocciaRealm;
+  Realm: TGocciaRealm;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('object-value-has-descriptor-test');
+  SetCurrentRealm(Realm);
+  try
+    FunctionValue := TGocciaNativeFunctionValue.Create(RecordDefinePropertyTrap,
+      'probe', 1);
+    Expect<Boolean>(FunctionValue.HasOwnPropertyDescriptor(PROP_NAME)).ToBe(True);
+    Expect<Boolean>(FunctionValue.HasOwnPropertyDescriptor('missing'))
+      .ToBe(False);
+    Expect<Boolean>(SimpleObject.OwnPropertyIsEnumerable('age')).ToBe(True);
   finally
     SetCurrentRealm(PreviousRealm);
     Realm.Free;

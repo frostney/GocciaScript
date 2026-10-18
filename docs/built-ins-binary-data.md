@@ -35,6 +35,8 @@ Supported operations: `add`, `and`, `compareExchange`, `exchange`, `isLockFree`,
 
 Atomic operations accept an integer TypedArray over an `ArrayBuffer` or a `SharedArrayBuffer`. `wait`, `waitAsync`, and `notify` require `Int32Array` or `BigInt64Array` views, and `wait` and `waitAsync` also require a `SharedArrayBuffer` (`notify` on a non-shared view returns `0`).
 
+A view that is detached or past the end of its shrunk resizable buffer is a `TypeError` before the index is converted. `load`, `store`, `compareExchange` and the read-modify-write operations convert every argument first, then check the access again (RevalidateAtomicAccess) before they touch the element, because a `valueOf` can resize or detach the buffer: a view that is now detached or out of bounds is a `TypeError`, and an element past the end of a shrunk length-tracking view is a `RangeError`, so nothing is read or written. V8 throws a `TypeError` in that last case too; ECMA-262 specifies the `RangeError`.
+
 ## DataView (`Goccia.Values.DataViewValue.pas`)
 
 Implements the [ECMAScript DataView](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/DataView). DataView instances provide endian-aware typed reads and writes over `ArrayBuffer` and `SharedArrayBuffer` storage.

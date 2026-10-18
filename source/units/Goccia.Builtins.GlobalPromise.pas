@@ -1408,13 +1408,13 @@ begin
   end;
 end;
 
-function GetPromiseKeyedDescriptor(const AObject: TGocciaObjectValue;
-  const AKey: TPromiseKeyRecord): TGocciaPropertyDescriptor;
+function PromiseKeyedPropertyIsEnumerable(const AObject: TGocciaObjectValue;
+  const AKey: TPromiseKeyRecord): Boolean;
 begin
   if AKey.IsSymbol then
-    Result := AObject.GetOwnSymbolPropertyDescriptor(AKey.Symbol)
+    Result := AObject.OwnSymbolPropertyIsEnumerable(AKey.Symbol)
   else
-    Result := AObject.GetOwnPropertyDescriptor(AKey.Name);
+    Result := AObject.OwnPropertyIsEnumerable(AKey.Name);
 end;
 
 function GetPromiseKeyedValue(const AObject: TGocciaObjectValue;
@@ -1448,7 +1448,6 @@ var
   ResultObject: TGocciaObjectValue;
   State: TPromiseKeyedState;
   Keys: TPromiseKeyRecordArray;
-  Descriptor: TGocciaPropertyDescriptor;
   PromiseResolve, PromiseLike: TGocciaValue;
   AlreadyCalled: TPromiseAlreadyCalledCell;
   FulfillHandler: TPromiseKeyedFulfillHandler;
@@ -1487,8 +1486,7 @@ begin
       Keys := GetPromiseKeyedOwnKeys(InputObject);
       for I := 0 to High(Keys) do
       begin
-        Descriptor := GetPromiseKeyedDescriptor(InputObject, Keys[I]);
-        if not Assigned(Descriptor) or not Descriptor.Enumerable then
+        if not PromiseKeyedPropertyIsEnumerable(InputObject, Keys[I]) then
           Continue;
 
         CreatePromiseKeyedPlaceholder(ResultObject, Keys[I]);
