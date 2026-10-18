@@ -15425,7 +15425,7 @@ begin
   FRegisters := @FRegisterStack[FRegisterBase];
   // The window is not cleared, so it can still hold references that an
   // earlier frame left there; the collector does not mark closed numeric
-  // windows (TGocciaVMStackRoot.MarkReferences). The proof admits only
+  // windows (TGocciaVMStackRoot.TraceReferences). The proof admits only
   // scalar-number expressions, numeric predicates, and direct self-calls, so
   // the frame writes each register before reading it and stores only scalars
   // and the pinned NaN, infinity and -0 values.

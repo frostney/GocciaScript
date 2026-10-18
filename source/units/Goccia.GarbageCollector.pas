@@ -61,21 +61,26 @@ type
     procedure SetGCMarked(const AValue: Boolean);
   protected
     // Marks what this object holds, by calling MarkReferences on each value it
-    // references. Never call it directly: the collector calls it exactly once
-    // per collection for every object it marks, after MarkReferences has
-    // marked the object itself and taken it off the mark stack (ADR 0147).
-    // So an override neither checks GCMarked nor recurses: it calls inherited,
-    // then MarkReferences on each child, which marks the child and pushes it.
+    // references (ADR 0147). Never call it directly: MarkReferences calls it
+    // once the object is marked, in place or after taking the object off the
+    // mark stack. So an override calls inherited and then MarkReferences on
+    // each child, and never tests GCMarked on itself: the object is already
+    // marked, and that guard would skip the whole body. It runs once per
+    // collection, and again for every marked object when a mark stack that
+    // could not grow forces a rescan, so it must be idempotent.
     procedure TraceReferences; virtual;
   public
     procedure BeforeDestruction; override;
     class procedure AdvanceMark; static; {$IFDEF FPC}inline;{$ENDIF}
-    // Marks this object and everything reachable from it. Called while the
-    // collector is tracing (from a TraceReferences override or a root source
-    // during a collection), it only marks the object and pushes it on the
-    // collector's mark stack, so the native stack never grows with the depth
-    // of the object graph. Called anywhere else, it traces the whole subgraph
-    // before it returns, through the same stack.
+    // Marks this object and everything reachable from it. Inside a trace
+    // (from a TraceReferences override), it marks the object and traces it in
+    // place while fewer than 64 traces are nested, or pushes it on the mark
+    // stack, so native stack use does not grow with the depth of the object
+    // graph; everything is marked by the time the outermost call returns.
+    // Outside a trace (a root, a root source, a weak hook) it starts one.
+    // Marking shares process-wide state with every collector, so it runs only
+    // in a collection, on the collecting thread, or on a thread while no
+    // other thread collects (a test, a single-threaded host).
     procedure MarkReferences;
     function TraceWeakReferences: Boolean; virtual;
     procedure SweepWeakReferences; virtual;
@@ -683,9 +688,9 @@ end;
 // When the stack cannot grow, an object this thread's collector manages is
 // left for the rescan; any other object (a shared intrinsic another thread's
 // collector manages, or one no collector does) is traced here, recursively,
-// because the rescan could not find it. That recursion only happens while the
-// heap manager is refusing memory, and only through objects no collector of
-// this thread owns.
+// because the rescan could not find it. That recursion is the one place native
+// stack use still follows the graph: it nests once per such object along a
+// chain of them, and only while the heap manager is refusing memory.
 procedure PushMarkedSlow(const AObject: TGCManagedObject);
 begin
   if GrowMarkStack then

@@ -219,7 +219,7 @@ begin
 end;
 ```
 
-**TraceReferences** -- Mark all `TGocciaValue` references held by this object. The collector calls it once per collection, after marking the object, so it has no `GCMarked` guard ([ADR 0147](adr/0147-marking-spills-to-an-explicit-mark-stack.md)):
+**TraceReferences** -- Mark all `TGocciaValue` references held by this object. The collector calls it after marking the object, so it has no `GCMarked` guard, and it may run more than once in a collection, so it must be idempotent ([ADR 0147](adr/0147-marking-spills-to-an-explicit-mark-stack.md)):
 
 ```pascal
 procedure TGocciaYourValue.TraceReferences;

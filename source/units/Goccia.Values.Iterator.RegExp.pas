@@ -22,7 +22,7 @@ type
     // code, so its lastIndex can live in FLastIndex between scanner matches.
     FMatcherIsPrivate: Boolean;
     FScanner: TGocciaRegExpScanner;
-    // Not traced: cleared at every collection (see MarkReferences).
+    // Not traced: cleared at every collection (see TraceReferences).
     FInputValue: TGocciaStringLiteralValue;
     FLastIndex: Integer;
     FLastIndexPending: Boolean;
@@ -164,7 +164,7 @@ begin
   else
     FLastIndex := FScanner.MatchEnd;
   FLastIndexPending := True;
-  // FInputValue is not marked (see MarkReferences), so a collection while
+  // FInputValue is not marked (see TraceReferences), so a collection while
   // the match array is built could free it: root it until the array holds it.
   if not Assigned(FInputValue) then
     FInputValue := TGocciaStringLiteralValue.Create(FInput);

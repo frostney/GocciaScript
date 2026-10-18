@@ -41,7 +41,7 @@ end;
 ```
 
 - **`AfterConstruction` / `BeforeDestruction`** — Every value auto-registers with the thread-local `TGarbageCollector.Instance` upon creation and unregisters before destruction so root sets cannot retain stale object pointers. A value the memory limit refuses in `AfterConstruction` is unregistered there, unless its constructor has no implicit exception frame (a number box in a production build; see [Managed Locals on Hot Paths](core-patterns.md#managed-locals-on-hot-paths)): FPC then does not destroy it, and it stays registered until a collection frees it.
-- **`MarkReferences` / `TraceReferences`** — `MarkReferences` is not virtual: it sets `FGCMark := GCCurrentMark` (marking the object as alive for the current collection) and returns at once when the object is already marked, so a cycle ends at the mark. `AdvanceMark` increments the shared `GCCurrentMark` while the collector lock is held. A newly marked object's `TraceReferences` runs once per collection: subclasses override it to mark the values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaBytecodeFunctionValue` marks its closure's home object and upvalue cells, `TGocciaArrayValue` marks its elements) by calling `MarkReferences` on each. See [Mark stack](#mark-stack) for where that call runs.
+- **`MarkReferences` / `TraceReferences`** — `MarkReferences` is not virtual: it sets `FGCMark := GCCurrentMark` (marking the object as alive for the current collection) and returns at once when the object is already marked, so a cycle ends at the mark. `AdvanceMark` increments the shared `GCCurrentMark` while the collector lock is held. A newly marked object's `TraceReferences` runs once per collection, and again only during an [overflow rescan](#mark-stack), so it must be idempotent: subclasses override it to mark the values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaBytecodeFunctionValue` marks its closure's home object and upvalue cells, `TGocciaArrayValue` marks its elements) by calling `MarkReferences` on each. See [Mark stack](#mark-stack) for where that call runs.
 - **`TraceWeakReferences` / `SweepWeakReferences`** — Optional hooks for weak containers and weak references. The default implementations do nothing. WeakMap uses `TraceWeakReferences` as an ephemeron pass: if a key is already marked by normal roots, its value is marked, but the key is never marked by the map. WeakMap and WeakSet use `SweepWeakReferences` to remove entries whose keys/values remain unmarked. WeakRef clears an unmarked target, and FinalizationRegistry removes dead cells while enqueueing cleanup jobs for their held values.
 - **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers reuse the special-value singletons (`0`, `1`, `NaN`, `±Infinity`, `-0`) and otherwise create a fresh instance, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 
@@ -109,13 +109,16 @@ fault in a production one).
   overflowed. Each pass marks at least the objects that overflowed in the one
   before, so the passes end. An object the rescan cannot find (a shared
   intrinsic another thread's collector manages, or one no collector manages)
-  is traced where its push failed instead, the only recursion left, and only
-  while the heap manager is refusing memory.
+  is traced where its push failed instead. That is the only recursion left: it
+  nests once per such object along a chain of them, and only while the heap
+  manager is refusing memory.
 - **Roots and weak hooks.** A `MarkReferences` call outside a running trace (a
-  root, a root source, a weak container's `TraceWeakReferences`, or a host
-  checking reachability between collections) starts a trace and returns once
-  everything reachable from the object is marked, as the recursive walk did.
-  Outside a collection it takes the collect lock itself.
+  root, a root source, a weak container's `TraceWeakReferences`) starts a trace
+  and returns once everything reachable from the object is marked, as the
+  recursive walk did. The stack and the flags are process-wide, like the mark
+  epoch, so marking runs only inside a collection on the collecting thread, or
+  on a thread while no other thread collects (a unit test); outside a
+  collection the trace takes the collect lock itself.
 
 `TGarbageCollector.LimitMarkStackForTesting` caps the stack and turns off
 tracing in place, so the unit tests drive both overflow paths;

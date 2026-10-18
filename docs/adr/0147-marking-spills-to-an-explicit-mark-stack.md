@@ -28,10 +28,11 @@ run where they did not, so
 `MarkReferences` is no longer virtual. It marks the object, returns at once
 if it was already marked, and otherwise has the object traced. The overrides
 become `TraceReferences`, a protected virtual that the collector calls once
-per marked object per collection. It calls `MarkReferences` on each child and
-has no `GCMarked` guard, since the object is already marked when it runs.
-Every one of the 126 overrides was renamed and lost its guard, and the call
-sites stayed `Child.MarkReferences`. A branch that still declares
+per marked object per collection (and again in an overflow rescan, so it must
+be idempotent). It calls `MarkReferences` on each child and has no `GCMarked`
+guard, since the object is already marked when it runs. All 126 overrides were
+renamed and the 125 that had the guard lost it, and the call sites stayed
+`Child.MarkReferences`. A branch that still declares
 `MarkReferences; override;` therefore fails to compile instead of recursing
 silently.
 
@@ -39,7 +40,7 @@ While a trace runs, `MarkReferences` traces the object in place as long as
 fewer than 64 `TraceReferences` calls are nested (`MARK_RECURSION_LIMIT`), and
 otherwise pushes it on the mark stack, which the trace drains before it
 returns. Native stack use is bounded by 64 levels whatever the depth of the
-graph.
+graph, except in the out-of-memory fallback below.
 
 - **The stack.** One process-wide array, used only under the collect lock, as
   the mark epoch is. An object is marked when it is pushed, so it is pushed at
@@ -53,14 +54,15 @@ graph.
   the trace rescans: it calls `TraceReferences` again on every marked object
   in that collector's list, draining after each, and repeats while a pass
   overflowed. Each pass marks at least what overflowed in the one before, so
-  the passes end. An object that list does not hold (a shared intrinsic of
-  another thread's collector, or one no collector manages) is traced where
-  its push failed instead. That is the only recursion left, and it happens
-  only while the heap manager is refusing memory.
-- **Calls outside a trace.** A root, a root source, a weak container's
-  `TraceWeakReferences` hook, or a host checking reachability starts a trace,
-  and gets back a fully marked subgraph, as before. Outside a collection the
-  call takes the collect lock itself.
+  the passes end. Objects outside that list are traced at the failed push,
+  so native depth follows the graph again along chains of such objects, but
+  only in that out-of-memory case.
+- **Calls outside a trace.** A root, a root source or a weak container's
+  `TraceWeakReferences` hook starts a trace, and gets back a fully marked
+  subgraph, as before. The stack and its flags are process-wide like the mark
+  epoch, so marking runs only inside a collection on the collecting thread, or
+  while no other thread collects (a unit test); outside a collection the trace
+  takes the collect lock itself.
 
 ## Considered options
 
@@ -97,7 +99,15 @@ at eea3db7f and of this change. Full-collection pause, median of 11
 | 200,000 closures | 46-47 ms | 29-38 ms |
 | chain of 5,000 objects | 0.98 ms | 0.77-0.86 ms |
 
-Throughput on the repository benchmarks: see the pull request.
+Throughput with collections in the loop, a live tree of 2^17 nodes and
+3,000,000 short-lived objects under `--max-memory=64MiB` (50 collections in
+both builds), three interleaved runs: 9.82-9.96 s on `main`, 9.31-9.54 s with
+this change. On `benchmarks/`, `main` and this change ran side by side per
+file, three rounds: the geometric mean of the 441 ratios is 1.000 (+0.03%),
+with a median run-to-run spread of 3.6%. The largest file-level difference,
+Map and Set `forEach` at about -10%, runs no collector code; a standalone loop
+of it with no collection differs by 2-4%, which is code placement rather than
+marking.
 
 A cycle ends at the mark, so no override needs a guard. An override that
 tests `GCMarked` on itself is now a bug, because it skips its whole body.
