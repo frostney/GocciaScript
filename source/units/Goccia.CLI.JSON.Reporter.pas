@@ -82,7 +82,7 @@ function BuildCLIReportJSON(const AOk: Boolean; const AOutputText,
 function SerializeScriptResult(const AValue: TGocciaValue): string;
 function ExceptionToCLIJSONErrorInfo(const E: Exception): TCLIJSONErrorInfo;
 function BuildCLIScriptFileSuccessJSON(const AFileName: string;
-  const AValue: TGocciaValue; const AOutputText, AStdoutText,
+  const AResultJSON: string; const AOutputText, AStdoutText,
   AStderrText: string; const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
   const ACompact: Boolean = False): string;
@@ -91,7 +91,7 @@ function BuildCLIScriptFileErrorJSON(const AFileName, AOutputText,
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
   const ACompact: Boolean = False): string;
-function BuildCLIScriptSuccessJSON(const AFileName: string; const AValue: TGocciaValue;
+function BuildCLIScriptSuccessJSON(const AFileName, AResultJSON: string;
   const AOutputText, AStdoutText, AStderrText: string;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
@@ -611,7 +611,7 @@ begin
   Result.Message := E.Message;
 end;
 
-function BuildCLIScriptSuccessJSON(const AFileName: string; const AValue: TGocciaValue;
+function BuildCLIScriptSuccessJSON(const AFileName, AResultJSON: string;
   const AOutputText, AStdoutText, AStderrText: string;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
@@ -620,7 +620,7 @@ function BuildCLIScriptSuccessJSON(const AFileName: string; const AValue: TGocci
 begin
   Result := BuildCLIReportJSON(True, AOutputText, AStdoutText, AStderrText,
     'null', ATiming, AMemoryStats, AWorkerCount, AAvailableWorkerCount,
-    BuildCLIScriptFileSuccessJSON(AFileName, AValue, AOutputText,
+    BuildCLIScriptFileSuccessJSON(AFileName, AResultJSON, AOutputText,
       AStdoutText, AStderrText, ATiming, AMemoryStats, ACompact),
     '', ACompact);
 end;
@@ -641,7 +641,7 @@ begin
 end;
 
 function BuildCLIScriptFileSuccessJSON(const AFileName: string;
-  const AValue: TGocciaValue; const AOutputText, AStdoutText,
+  const AResultJSON: string; const AOutputText, AStdoutText,
   AStderrText: string; const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
   const ACompact: Boolean): string;
@@ -656,7 +656,7 @@ begin
     '{' +
       BuildCLIFileBaseJSON(AFileName, True, AOutputText, AStdoutText,
         AStderrText, 'null', ATiming, MemoryJSON, ACompact) + ',' +
-      '"result":' + SerializeScriptResult(AValue) +
+      '"result":' + AResultJSON +
     '}';
 end;
 
