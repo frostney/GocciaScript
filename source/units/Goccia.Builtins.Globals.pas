@@ -1341,7 +1341,8 @@ function CloneSharedArrayBuffer(const ABuf: TGocciaSharedArrayBufferValue;
 var
   Len: Integer;
 begin
-  Len := Length(ABuf.Data);
+  // A growable buffer's block is longer than its contents.
+  Len := ABuf.ByteLength;
   Result := TGocciaSharedArrayBufferValue.Create(Len);
   RegisterClone(ABuf, Result, AMemory);
 

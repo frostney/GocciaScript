@@ -490,7 +490,8 @@ begin
   // holds every element it had.
   ElementSize := TGocciaTypedArrayValue.BytesPerElement(ATypedArray.Kind);
   Result := ATypedArray.BufferData;
-  if Int64(AByteIndexInBuffer) + ElementSize > System.Length(Result) then
+  if Int64(AByteIndexInBuffer) + ElementSize >
+     ATypedArray.BufferByteLength then
     ThrowRangeError(AtomicsErrorMessage(AMethodName,
       SErrorInvalidTypedArrayIndex));
 end;
@@ -1431,8 +1432,8 @@ begin
 
   CriticalSectionEnter(GAtomicsLock);
   try
-    // A SharedArrayBuffer only grows, so the index is still inside the
-    // block the value conversion above may have replaced; read that block.
+    // A SharedArrayBuffer only grows, and keeps its block when it does, so
+    // the index is still inside the block after the value conversion above.
     Block := TypedArray.BufferData;
     if TypedArray.Kind = takBigInt64 then
       WaitValueMatches := ReadBigIntRawElement(Block, TypedArray.Kind,
@@ -1507,8 +1508,8 @@ begin
 
   CriticalSectionEnter(GAtomicsLock);
   try
-    // A SharedArrayBuffer only grows, so the index is still inside the
-    // block the value conversion above may have replaced; read that block.
+    // A SharedArrayBuffer only grows, and keeps its block when it does, so
+    // the index is still inside the block after the value conversion above.
     Block := TypedArray.BufferData;
     if TypedArray.Kind = takBigInt64 then
       WaitValueMatches := ReadBigIntRawElement(Block, TypedArray.Kind,

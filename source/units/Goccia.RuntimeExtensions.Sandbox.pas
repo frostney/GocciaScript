@@ -533,6 +533,17 @@ begin
     Length(ABytes));
 end;
 
+// A growable SharedArrayBuffer's block is longer than its byte length.
+function ArrayBufferViewBufferByteLength(const ABuffer: TGocciaValue): Integer;
+begin
+  if ABuffer is TGocciaArrayBufferValue then
+    Result := System.Length(TGocciaArrayBufferValue(ABuffer).Data)
+  else if ABuffer is TGocciaSharedArrayBufferValue then
+    Result := TGocciaSharedArrayBufferValue(ABuffer).ByteLength
+  else
+    Result := 0;
+end;
+
 function ArrayBufferViewBufferData(const ABuffer: TGocciaValue): TBytes;
 begin
   if ABuffer is TGocciaArrayBufferValue then
@@ -574,7 +585,7 @@ begin
       ThrowTypeError(SErrorCannotUseDetachedDataView,
         SSuggestArrayBufferDetached);
     if View.IsLengthTracking then
-      ByteLength := System.Length(Data) - Offset
+      ByteLength := ArrayBufferViewBufferByteLength(View.BufferValue) - Offset
     else
       ByteLength := View.ByteLengthSlot;
   end
