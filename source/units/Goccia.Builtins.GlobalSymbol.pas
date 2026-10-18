@@ -40,8 +40,11 @@ type
   end;
 
 
-// Heap snapshot prototype: the thread's Symbol.for registry.
-function SharedSymbolRegistry: TOrderedStringMap<TGocciaSymbolValue>;
+// Heap snapshot prototype: Symbol.for(AKey) without a call. The registry
+// is used from this unit only: its map type is specialized here, and the
+// development build's object check refuses a virtual call through another
+// unit's specialization.
+function SharedRegisteredSymbol(const AKey: string): TGocciaSymbolValue;
 
 implementation
 
@@ -72,6 +75,20 @@ begin
   if not Assigned(GSharedSymbolRegistry) then
     GSharedSymbolRegistry := TOrderedStringMap<TGocciaSymbolValue>.Create;
   Result := GSharedSymbolRegistry;
+end;
+
+function SharedRegisteredSymbol(const AKey: string): TGocciaSymbolValue;
+var
+  Registry: TOrderedStringMap<TGocciaSymbolValue>;
+begin
+  Registry := SharedSymbolRegistry;
+  if Registry.TryGetValue(AKey, Result) then
+    Exit;
+  Result := TGocciaSymbolValue.Create(AKey);
+  Result.Registered := True;
+  if TGarbageCollector.Instance <> nil then
+    TGarbageCollector.Instance.PinObject(Result);
+  Registry.Add(AKey, Result);
 end;
 
 constructor TGocciaGlobalSymbol.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);

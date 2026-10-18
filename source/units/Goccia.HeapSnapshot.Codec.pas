@@ -36,7 +36,10 @@ uses
 
 const
   HEAP_SNAPSHOT_MAGIC = 'GHS1';
-  HEAP_SNAPSHOT_FORMAT_VERSION = 2;
+  HEAP_SNAPSHOT_FORMAT_VERSION = 3;
+  // Separates the segments of a built-in's path; no property key or symbol
+  // description of a built-in contains it.
+  HEAP_SNAPSHOT_PATH_SEPARATOR = #31;
 
   // Value tags.
   HSV_NIL = 0;
@@ -86,6 +89,7 @@ type
     FIndex: THashMap<TGCManagedObject, Integer>;
     FByPath: TDictionary<string, Integer>;
     FFingerprints: array of UInt64;
+    FFingerprintCount: Integer;
     FEmptySlots: TList<Integer>;
     function GetCount: Integer;
   public
@@ -164,7 +168,10 @@ type
     property LateSlots: TStringList read FLateSlots;
   end;
 
-  TGocciaLateSlotResolver = procedure(const ASlotNames: TStrings) of object;
+  // Finds the built-in a path names, adding it to the reader's table; nil
+  // when the path names nothing.
+  TGocciaBuiltinPathResolve = function(const APath: string): TGCManagedObject
+    of object;
 
   TGocciaHeapSnapshotReader = class
   private
@@ -182,7 +189,7 @@ type
     FRoots: TObject;
     FBrandTokens: TDictionary<string, string>;
     FContext: TObject;
-    FLateSlotResolver: TGocciaLateSlotResolver;
+    FBuiltinResolve: TGocciaBuiltinPathResolve;
     procedure CollectTemplates(const ATemplate: TGocciaFunctionTemplate);
     function GetObjectCount: Integer;
     procedure Need(const ACount: Int64);
@@ -216,8 +223,8 @@ type
     property ObjectCount: Integer read GetObjectCount;
     // Engine-side context for codecs that need it (the VM).
     property Context: TObject read FContext write FContext;
-    property LateSlotResolver: TGocciaLateSlotResolver
-      read FLateSlotResolver write FLateSlotResolver;
+    property BuiltinResolve: TGocciaBuiltinPathResolve
+      read FBuiltinResolve write FBuiltinResolve;
   end;
 
 procedure RegisterSnapshotCodec(const AClass: TClass;
@@ -252,13 +259,12 @@ uses
   Math,
 
   BigInteger,
-  OrderedStringMap,
   SHA256,
 
   Goccia.Builtins.GlobalSymbol,
   Goccia.Bytecode.Binary,
-  Goccia.RegExp.Runtime,
   Goccia.HeapSnapshot.Census,
+  Goccia.RegExp.Runtime,
   Goccia.Values.BigIntValue,
   Goccia.Values.HoleValue;
 
@@ -466,6 +472,7 @@ begin
   FByPath.Clear;
   FEmptySlots.Clear;
   SetLength(FFingerprints, 0);
+  FFingerprintCount := 0;
 end;
 
 function TGocciaHeapSnapshotBuiltinTable.GetCount: Integer;
@@ -539,6 +546,10 @@ function TGocciaHeapSnapshotBuiltinTable.ComputeFingerprint(
     if not Assigned(AValue) then
       Exit('nil');
     Index := IndexOf(AValue);
+    // An entry numbered after the fingerprints were taken was materialized
+    // since: it hashes as the lazy member it replaced.
+    if (Index >= FFingerprintCount) and (FFingerprintCount > 0) then
+      Exit('L');
     if Index >= 0 then
       Exit('#' + IntToStr(Index));
     if AValue is TGocciaStringLiteralValue then
@@ -556,7 +567,7 @@ var
   Symbols: TArray<TGocciaSymbolValue>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
-  Text: string;
+  Text, Getter, Setter: string;
 begin
   Result := UInt64(14695981039346656037);
   if not (FObjects[AIndex] is TGocciaObjectValue) then
@@ -567,15 +578,28 @@ begin
   for Pair in Obj.Properties do
   begin
     Descriptor := Pair.Value;
-    Text := Pair.Key + '|' + IntToStr(Byte(Descriptor.Flags)) + '|';
-    if Descriptor is TGocciaPropertyDescriptorAccessor then
-      Text := Text + Identity(TGocciaPropertyDescriptorAccessor(
-        Descriptor).Getter) + '/' + Identity(
-        TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
-    else if Descriptor is TGocciaLazyPropertyDescriptorData then
-      Text := Text + 'lazy'
+    Text := Pair.Key + '|';
+    if Descriptor is TGocciaLazyPropertyDescriptorData then
+      Text := Text + 'L'
+    else if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      Getter := Identity(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+      Setter := Identity(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+      if ((Getter = 'L') or (Getter = 'nil')) and
+         ((Setter = 'L') or (Setter = 'nil')) and (Getter + Setter <> 'nilnil') then
+        Text := Text + 'L'
+      else
+        Text := Text + IntToStr(Byte(Descriptor.Flags)) + '|' + Getter + '/' +
+          Setter;
+    end
     else if Descriptor is TGocciaPropertyDescriptorData then
-      Text := Text + Identity(TGocciaPropertyDescriptorData(Descriptor).Value);
+    begin
+      Getter := Identity(TGocciaPropertyDescriptorData(Descriptor).Value);
+      if Getter = 'L' then
+        Text := Text + 'L'
+      else
+        Text := Text + IntToStr(Byte(Descriptor.Flags)) + '|' + Getter;
+    end;
     Result := FNV1a(Result, Text);
   end;
   Symbols := Obj.GetOwnSymbols;
@@ -597,9 +621,11 @@ procedure TGocciaHeapSnapshotBuiltinTable.RecordFingerprints;
 var
   I: Integer;
 begin
+  FFingerprintCount := 0;
   SetLength(FFingerprints, FObjects.Count);
   for I := 0 to FObjects.Count - 1 do
     FFingerprints[I] := ComputeFingerprint(I);
+  FFingerprintCount := FObjects.Count;
 end;
 
 function TGocciaHeapSnapshotBuiltinTable.DirtyPaths: TStringList;
@@ -1249,9 +1275,6 @@ function TGocciaHeapSnapshotReader.ReadRef: TGCManagedObject;
 var
   Tag: Byte;
   Index: Cardinal;
-  Key: string;
-  Symbol: TGocciaSymbolValue;
-  Registry: TOrderedStringMap<TGocciaSymbolValue>;
 begin
   Tag := ReadU8;
   case Tag of
@@ -1290,18 +1313,7 @@ begin
     HSV_MODULE_SCOPE:
       Result := FModuleScope;
     HSV_REGISTERED_SYMBOL:
-      begin
-        Key := ReadStr;
-        Registry := SharedSymbolRegistry;
-        if not Registry.TryGetValue(Key, Symbol) then
-        begin
-          Symbol := TGocciaSymbolValue.Create(Key);
-          Symbol.Registered := True;
-          TGarbageCollector.Instance.PinObject(Symbol);
-          Registry.Add(Key, Symbol);
-        end;
-        Result := Symbol;
-      end;
+      Result := SharedRegisteredSymbol(ReadStr);
   else
     Refuse('bad value tag ' + IntToStr(Tag));
     Result := nil;
@@ -1499,7 +1511,6 @@ var
   Binding: TLexicalBinding;
   Pending: TList<TGocciaValue>;
   BodyStart: Int64;
-  LateSlots: TStringList;
 begin
   FIn := AStream;
   FPayloadLimit := AStream.Size;
@@ -1517,28 +1528,21 @@ begin
   Count := ReadU32;
   if Count > 4096 then
     Refuse('too many late intrinsics');
-  LateSlots := TStringList.Create;
-  try
-    for I := 1 to Count do
-      LateSlots.Add(ReadStr);
-    if LateSlots.Count > 0 then
-    begin
-      if not Assigned(FLateSlotResolver) then
-        Refuse('late intrinsics without a resolver');
-      FLateSlotResolver(LateSlots);
-    end;
-  finally
-    LateSlots.Free;
-  end;
+  // Informational: the late realm slots resolve through their paths.
+  for I := 1 to Count do
+    ReadStr;
 
   Count := ReadU32;
-  if Count > Cardinal(FBuiltins.Count) then
-    Refuse('more built-in references than built-ins');
+  if Count > (AStream.Size - AStream.Position) div 4 then
+    Refuse('more built-in references than the snapshot holds');
   SetLength(FBuiltinObjects, Count);
   for I := 0 to Integer(Count) - 1 do
   begin
     Path := ReadStr;
-    FBuiltinObjects[I] := FBuiltins.FindPath(Path);
+    if Assigned(FBuiltinResolve) then
+      FBuiltinObjects[I] := FBuiltinResolve(Path)
+    else
+      FBuiltinObjects[I] := FBuiltins.FindPath(Path);
     if not Assigned(FBuiltinObjects[I]) then
       Refuse('unknown built-in ' + Path);
   end;
