@@ -781,6 +781,12 @@ type
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
     property ProfilingOpcodes: Boolean read FProfilingOpcodes write FProfilingOpcodes;
     property ProfilingFunctions: Boolean read FProfilingFunctions write FProfilingFunctions;
+    // Heap snapshot prototype: at an idle point, with no bytecode frame
+    // running, clears what the last frames left in the register, cell and
+    // argument stacks. Those slots are still marked, so without this they
+    // keep garbage alive that no script value reaches. False when a frame
+    // is running.
+    function ReleaseIdleScratch: Boolean;
   end;
 
 
@@ -17115,6 +17121,32 @@ begin
 
   AResult := ClassValue.Instantiate(AArguments, ANewTarget);
   Result := True;
+end;
+
+function TGocciaVM.ReleaseIdleScratch: Boolean;
+var
+  I, Limit: Integer;
+begin
+  Result := (FFrameStackCount = 0) and (FClosedNumericFrameStackCount = 0) and
+    (FFrameDepth = 0);
+  if not Result then
+    Exit;
+  Limit := FRegisterBase + FRegisterCount;
+  if Limit > Length(FRegisterStack) then
+    Limit := Length(FRegisterStack);
+  for I := 0 to Limit - 1 do
+    FRegisterStack[I] := RegisterUndefined;
+  Limit := FLocalCellBase + FLocalCellCount;
+  if Limit > Length(FLocalCellStack) then
+    Limit := Length(FLocalCellStack);
+  for I := 0 to Limit - 1 do
+    FLocalCellStack[I] := nil;
+  Limit := FArgumentBase + FArgCount;
+  if Limit > Length(FArgumentStack) then
+    Limit := Length(FArgumentStack);
+  for I := 0 to Limit - 1 do
+    FArgumentStack[I] := RegisterUndefined;
+  FLastClosureThisValue := RegisterUndefined;
 end;
 
 { Heap snapshot prototype: codecs for the VM's own classes. }

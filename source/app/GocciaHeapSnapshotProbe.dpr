@@ -296,6 +296,10 @@ var
   LiveBytes: Int64;
 begin
   PauseMs := ElapsedMs;
+  // The stacks keep what the last frames left in them; at an idle point no
+  // frame needs it.
+  if not FEngine.VM.ReleaseIdleScratch then
+    raise EGocciaHeapSnapshotRefused.Create('a bytecode frame is running');
   // The census collects first, so the byte count is what survives.
   Census := TGocciaHeapCensus.Create;
   try
