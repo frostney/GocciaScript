@@ -58,12 +58,11 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
-  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
-  Goccia.Values.TypedArrayValue;
+  Goccia.WebIDL.BufferSource;
 
 var
   GTextDecoderSharedSlot: TGocciaRealmOwnedSlotId;
@@ -119,7 +118,7 @@ begin
     FPrototype := Shared.Prototype;
 end;
 
-// WHATWG Encoding §8.1 new TextDecoder([label [, options]])
+// WHATWG Encoding §7.2 new TextDecoder([label [, options]])
 procedure TGocciaTextDecoderValue.InitializeNativeFromArguments(
   const AArguments: TGocciaArgumentsCollection);
 var
@@ -218,7 +217,7 @@ begin
   // No additional TGocciaValue fields — FEncoding is a plain Pascal string.
 end;
 
-// WHATWG Encoding §8.2.1 get TextDecoder.prototype.encoding
+// WHATWG Encoding §7.1 get TextDecoder.prototype.encoding
 function TGocciaTextDecoderValue.EncodingGetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -230,7 +229,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(Obj.FEncoding);
 end;
 
-// WHATWG Encoding §8.2.2 get TextDecoder.prototype.fatal
+// WHATWG Encoding §7.1 get TextDecoder.prototype.fatal
 function TGocciaTextDecoderValue.FatalGetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -245,7 +244,7 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-// WHATWG Encoding §8.2.3 get TextDecoder.prototype.ignoreBOM
+// WHATWG Encoding §7.1 get TextDecoder.prototype.ignoreBOM
 function TGocciaTextDecoderValue.IgnoreBOMGetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -260,9 +259,11 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-// WHATWG Encoding §8.2.4 TextDecoder.prototype.decode([input [, options]])
+// WHATWG Encoding §7.2 TextDecoder.prototype.decode(input, options)
 function TGocciaTextDecoderValue.Decode(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+const
+  DECODE_INPUT_CONTEXT = 'TextDecoder.prototype.decode: input';
 var
   Obj: TGocciaTextDecoderValue;
   InputArg: TGocciaValue;
@@ -281,27 +282,14 @@ begin
     Exit;
   end;
 
+  // Web IDL: input is an optional AllowSharedBufferSource without
+  // [AllowResizable]; the conversion throws before any byte is read.
   InputArg := AArgs.GetElement(0);
+  ConvertToAllowSharedBufferSource(InputArg, DECODE_INPUT_CONTEXT,
+    SSuggestTextDecoderThisType);
+  Data := GetCopyOfBytesHeldByBufferSource(InputArg);
   Offset := 0;
-  DataLen := 0;
-
-  // Extract raw bytes and byte-range from the buffer source.
-  if InputArg is TGocciaTypedArrayValue then
-  begin
-    Data := TGocciaTypedArrayValue(InputArg).BufferData;
-    Offset := TGocciaTypedArrayValue(InputArg).ByteOffset;
-    DataLen := TGocciaTypedArrayValue(InputArg).Length *
-      TGocciaTypedArrayValue.BytesPerElement(
-        TGocciaTypedArrayValue(InputArg).Kind);
-  end
-  else if InputArg is TGocciaArrayBufferValue then
-  begin
-    Data := TGocciaArrayBufferValue(InputArg).Data;
-    Offset := 0;
-    DataLen := Length(Data);
-  end
-  else
-    ThrowTypeError(SErrorTextDecoderDecodeInputType, SSuggestTextDecoderThisType);
+  DataLen := Length(Data);
 
   // Strip the UTF-8 BOM (EF BB BF) unless ignoreBOM is true.
   if not Obj.FIgnoreBOM and (DataLen >= MIN_BOM_LENGTH) and
@@ -313,11 +301,9 @@ begin
     Dec(DataLen, MIN_BOM_LENGTH);
   end;
 
-  SetLength(Bytes, DataLen);
-  if DataLen > 0 then
-    Move(Data[Offset], Bytes[0], DataLen);
+  Bytes := Copy(Data, Offset, DataLen);
 
-  // WHATWG Encoding §8.2.4 step 5: fatal vs. replacement decoding.
+  // WHATWG Encoding §7.2 decode() step 5: fatal vs. replacement decoding.
   if Obj.FFatal then
   begin
     if not TryDecodeUTF8(Bytes, Decoded, ErrorOffset) then

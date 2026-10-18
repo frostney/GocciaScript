@@ -399,6 +399,9 @@ resourcestring
   // Runtime errors — TextEncoder
   SSuggestTextEncoderEncodeIntoArgs = 'encodeInto requires a string source and a Uint8Array destination';
 
+  // Runtime errors — Web IDL buffer sources
+  SSuggestBufferSourceNotFixedLength = 'Copy the bytes into a fixed-length buffer first, for example with buffer.slice(), buffer.transferToFixedLength() or new Uint8Array(view)';
+
   // Runtime errors — read-only property
   SSuggestReadOnlyProperty = 'the property is read-only and cannot be assigned to';
 

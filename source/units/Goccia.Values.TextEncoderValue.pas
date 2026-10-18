@@ -52,7 +52,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
-  Goccia.Values.TypedArrayValue;
+  Goccia.Values.TypedArrayValue,
+  Goccia.WebIDL.BufferSource;
 
 var
   GTextEncoderSharedSlot: TGocciaRealmOwnedSlotId;
@@ -168,7 +169,7 @@ begin
   inherited;
 end;
 
-// WHATWG Encoding §8.3.1 get TextEncoder.prototype.encoding
+// WHATWG Encoding §7.3 get TextEncoder.prototype.encoding
 function TGocciaTextEncoderValue.EncodingGetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
@@ -180,7 +181,7 @@ begin
   Result := TGocciaStringLiteralValue.Create(ENCODING_UTF8);
 end;
 
-// WHATWG Encoding §8.3.2 TextEncoder.prototype.encode(input = '')
+// WHATWG Encoding §7.4 TextEncoder.prototype.encode(input = '')
 function TGocciaTextEncoderValue.Encode(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -210,9 +211,11 @@ begin
   Result := NewTA;
 end;
 
-// WHATWG Encoding §8.3.3 TextEncoder.prototype.encodeInto(source, destination)
+// WHATWG Encoding §7.4 TextEncoder.prototype.encodeInto(source, destination)
 function TGocciaTextEncoderValue.EncodeInto(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+const
+  ENCODE_INTO_DESTINATION_CONTEXT = 'TextEncoder.prototype.encodeInto: destination';
 var
   Source: string;
   Dest: TGocciaTypedArrayValue;
@@ -232,17 +235,17 @@ begin
   else
     Source := AArgs.GetElement(0).ToStringLiteral.Value;
 
-  if not (AArgs.GetElement(1) is TGocciaTypedArrayValue) then
-    ThrowTypeError(SErrorTextEncoderEncodeIntoDestType, SSuggestTextEncoderEncodeIntoArgs);
-  Dest := TGocciaTypedArrayValue(AArgs.GetElement(1));
-  if Dest.Kind <> takUint8 then
-    ThrowTypeError(SErrorTextEncoderEncodeIntoDestType, SSuggestTextEncoderEncodeIntoArgs);
+  // Web IDL converts the arguments in order, so source's toString has run
+  // before destination converts to [AllowShared] Uint8Array, which has no
+  // [AllowResizable] and so refuses a view of a resizable or growable buffer.
+  Dest := ConvertToAllowSharedUint8Array(AArgs.GetElement(1),
+    ENCODE_INTO_DESTINATION_CONTEXT, SSuggestTextEncoderEncodeIntoArgs);
 
   // Convert source to USVString bytes (lone surrogates normalized to U+FFFD).
   Bytes := StringToUTF8Bytes(Source);
-  // The source's conversion above may have resized the destination's buffer;
-  // no script code runs from here on, so the block and the length read once
-  // describe every byte the loop writes.
+  // The buffer is fixed-length, and the source's conversion above can only
+  // have detached it; no script code runs from here on, so the block and the
+  // length read once describe every byte the loop writes.
   Data := Dest.BufferData;
   DestLen := Dest.Length;
   Offset := Dest.ByteOffset;

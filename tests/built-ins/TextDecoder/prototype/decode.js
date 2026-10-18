@@ -141,45 +141,133 @@ describe("TextDecoder.prototype.decode", () => {
     expect(dec.decode(bytes)).toBe("Hello");
   });
 
-  test("decodes a length-tracking view after its buffer grew, reading zeros past the old end", () => {
-    const rab = new ArrayBuffer(4, { maxByteLength: 4096 });
+  // Web IDL §3.2.26: decode's input is an AllowSharedBufferSource without
+  // [AllowResizable], so a resizable ArrayBuffer, a growable
+  // SharedArrayBuffer and every view of one are a TypeError, whatever has
+  // happened to the buffer since it was created.
+  const hiBang = (buffer) => {
+    new Uint8Array(buffer).set([104, 105, 33, 33]);
+    return buffer;
+  };
+  const resizable = () => hiBang(new ArrayBuffer(4, { maxByteLength: 16 }));
+  const growable = () => hiBang(new SharedArrayBuffer(4, { maxByteLength: 16 }));
+
+  test("throws TypeError for a Uint8Array over a resizable ArrayBuffer", () => {
+    expect(() => dec.decode(new Uint8Array(resizable()))).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a fixed-length view of a resizable ArrayBuffer", () => {
+    expect(() => dec.decode(new Uint8Array(resizable(), 0, 2))).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a resizable ArrayBuffer itself", () => {
+    expect(() => dec.decode(resizable())).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a DataView over a resizable ArrayBuffer", () => {
+    expect(() => dec.decode(new DataView(resizable()))).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a Uint16Array over a resizable ArrayBuffer", () => {
+    expect(() => dec.decode(new Uint16Array(resizable()))).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a view after its resizable buffer grew", () => {
+    const rab = resizable();
     const view = new Uint8Array(rab);
-    view.fill(65);
-    rab.resize(4096);
-    const text = dec.decode(view);
-    expect(text.length).toBe(4096);
-    expect(text.slice(0, 4)).toBe("AAAA");
-    expect(text.slice(4)).toBe("\0".repeat(4092));
+    rab.resize(16);
+    expect(() => dec.decode(view)).toThrow(TypeError);
   });
 
-  test("decodes the bytes a multi-byte length-tracking view holds after its buffer grew", () => {
-    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
-    const view = new Uint16Array(rab);
-    view[0] = 0x4241;
-    rab.resize(6);
-    expect(dec.decode(view)).toBe("AB\0\0\0\0");
-  });
-
-  test("decodes a length-tracking view after its buffer shrank", () => {
-    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+  test("throws TypeError for a view after its resizable buffer shrank", () => {
+    const rab = resizable();
     const view = new Uint8Array(rab);
-    view.fill(66);
-    rab.resize(3);
-    expect(dec.decode(view)).toBe("BBB");
+    rab.resize(2);
+    expect(() => dec.decode(view)).toThrow(TypeError);
   });
 
-  test("decodes a view past the end of its shrunk buffer as an empty string", () => {
-    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
-    const view = new Uint8Array(rab, 0, 8);
-    rab.resize(3);
-    expect(dec.decode(view)).toBe("");
+  test("throws TypeError for a view out of bounds of its shrunk resizable buffer", () => {
+    const rab = resizable();
+    const view = new Uint8Array(rab, 2, 2);
+    rab.resize(1);
+    expect(() => dec.decode(view)).toThrow(TypeError);
   });
 
-  test("decodes a view of a detached buffer as an empty string", () => {
-    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+  test("throws TypeError for a view of a detached resizable buffer", () => {
+    const rab = resizable();
     const view = new Uint8Array(rab);
-    view.fill(66);
     rab.transfer();
+    expect(() => dec.decode(view)).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a detached resizable buffer itself", () => {
+    const rab = resizable();
+    rab.transfer();
+    expect(() => dec.decode(rab)).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a Uint8Array over a growable SharedArrayBuffer", () => {
+    expect(() => dec.decode(new Uint8Array(growable()))).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a growable SharedArrayBuffer itself", () => {
+    expect(() => dec.decode(growable())).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a DataView over a growable SharedArrayBuffer", () => {
+    expect(() => dec.decode(new DataView(growable()))).toThrow(TypeError);
+  });
+
+  test("throws TypeError for a view after its growable buffer grew", () => {
+    const gsab = growable();
+    const view = new Uint8Array(gsab);
+    gsab.grow(8);
+    expect(() => dec.decode(view)).toThrow(TypeError);
+  });
+
+  test("decodes a resizable buffer's bytes once copied to a fixed-length buffer", () => {
+    expect(dec.decode(resizable().slice(0))).toBe("hi!!");
+    expect(dec.decode(resizable().transferToFixedLength())).toBe("hi!!");
+  });
+
+  // The same conversion accepts every fixed-length member of the union.
+  test("decodes a Uint8Array over a fixed-length ArrayBuffer", () => {
+    expect(dec.decode(new Uint8Array(hiBang(new ArrayBuffer(4))))).toBe("hi!!");
+  });
+
+  test("decodes a fixed-length SharedArrayBuffer", () => {
+    expect(dec.decode(hiBang(new SharedArrayBuffer(4)))).toBe("hi!!");
+  });
+
+  test("decodes a Uint8Array over a fixed-length SharedArrayBuffer", () => {
+    expect(dec.decode(new Uint8Array(hiBang(new SharedArrayBuffer(4))))).toBe("hi!!");
+  });
+
+  test("decodes a DataView over a fixed-length ArrayBuffer", () => {
+    expect(dec.decode(new DataView(hiBang(new ArrayBuffer(4))))).toBe("hi!!");
+  });
+
+  test("decodes the range a DataView covers", () => {
+    expect(dec.decode(new DataView(hiBang(new ArrayBuffer(4)), 1, 2))).toBe("i!");
+  });
+
+  test("decodes a DataView over a fixed-length SharedArrayBuffer", () => {
+    expect(dec.decode(new DataView(hiBang(new SharedArrayBuffer(4)), 0, 2))).toBe("hi");
+  });
+
+  test("decodes a view of a detached fixed-length buffer as an empty string", () => {
+    const buffer = hiBang(new ArrayBuffer(4));
+    const view = new Uint8Array(buffer);
+    const dataView = new DataView(buffer);
+    buffer.transfer();
     expect(dec.decode(view)).toBe("");
+    expect(dec.decode(dataView)).toBe("");
+    expect(dec.decode(buffer)).toBe("");
+  });
+
+  test("throws TypeError for null and plain objects", () => {
+    expect(() => dec.decode(null)).toThrow(TypeError);
+    expect(() => dec.decode({ byteLength: 4 })).toThrow(TypeError);
+    expect(() => dec.decode([104, 105])).toThrow(TypeError);
   });
 });
