@@ -122,6 +122,7 @@ uses
   HTTPClient,
 
   Goccia.Error.Suggestions,
+  Goccia.URL.Parser,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.ResponseValue,
@@ -168,6 +169,9 @@ const
   HTTP_STATUS_RESET_CONTENT = 205;
   HTTP_STATUS_NOT_MODIFIED = 304;
   FETCH_METHOD_HEAD = 'HEAD';
+  HTTP_SCHEME = 'http';
+  HTTPS_SCHEME = 'https';
+  LAST_BYTE_CHARACTER = #$00FF;
 
   EXCHANGE_OPEN = 0;
   EXCHANGE_ANSWERED = 1;
@@ -713,20 +717,22 @@ begin
   Result := True;
 end;
 
-{ WHATWG Fetch: a header value contains no NUL, CR or LF. }
+{ WHATWG Fetch: a header value is a byte sequence with no NUL, CR or LF.
+  Text reaches the engine isomorphically decoded, so a character past U+00FF
+  stands for no byte. }
 function HasForbiddenValueCharacter(const AText: string): Boolean;
 var
   I: Integer;
 begin
   for I := 1 to Length(AText) do
-    if AText[I] in [#0, #10, #13] then
+    if (AText[I] in [#0, #10, #13]) or (AText[I] > LAST_BYTE_CHARACTER) then
       Exit(True);
   Result := False;
 end;
 
 { WHATWG Fetch, initialize a response: status text matches RFC 9110's
-  reason-phrase, *( HTAB / SP / VCHAR / obs-text ). Characters past ASCII
-  stand for obs-text. }
+  reason-phrase, *( HTAB / SP / VCHAR / obs-text ), as bytes: characters
+  U+0080 to U+00FF stand for obs-text, and none past them is a byte. }
 function IsReasonPhrase(const AText: string): Boolean;
 const
   TAB_CHARACTER = #9;
@@ -737,7 +743,8 @@ var
 begin
   for I := 1 to Length(AText) do
     if ((AText[I] < FIRST_VISIBLE_OR_SPACE) and
-        (AText[I] <> TAB_CHARACTER)) or (AText[I] = DELETE_CHARACTER) then
+        (AText[I] <> TAB_CHARACTER)) or (AText[I] = DELETE_CHARACTER) or
+       (AText[I] > LAST_BYTE_CHARACTER) then
       Exit(False);
   Result := True;
 end;
@@ -766,16 +773,21 @@ begin
     (AStatus = HTTP_STATUS_NOT_MODIFIED);
 end;
 
-{ An absolute http(s) URL, as a response's URL list holds. }
-function IsResponseURL(const AURL: string): Boolean;
+{ WHATWG Fetch: Response.url is the response's URL serialized with its
+  fragment excluded. True, with that serialization, when AURL parses
+  (WHATWG URL) as an http(s) URL. }
+function TrySerializeResponseURL(const AURL: string;
+  out ASerialized: string): Boolean;
+var
+  Parsed: TGocciaURLRecord;
 begin
-  try
-    ParseHTTPURL(AURL);
-    Result := True;
-  except
-    on EHTTPError do
-      Result := False;
-  end;
+  Parsed := ParseURL(AURL);
+  Result := Parsed.IsValid and
+    ((Parsed.Scheme = HTTP_SCHEME) or (Parsed.Scheme = HTTPS_SCHEME));
+  if Result then
+    ASerialized := SerializeURL(Parsed, True)
+  else
+    ASerialized := '';
 end;
 
 { Why the engine refuses a transport's response, or '' when it takes it. }
@@ -783,6 +795,7 @@ function TransportResponseError(const AResponse: THTTPResponse;
   const AIsHead: Boolean; const AMaxResponseBytes: Integer): string;
 var
   I: Integer;
+  Serialized: string;
 begin
   Result := '';
   if (AResponse.StatusCode < FETCH_MIN_RESPONSE_STATUS) or
@@ -795,7 +808,8 @@ begin
     if not IsHTTPToken(AResponse.Headers[I].Name) or
        HasForbiddenValueCharacter(AResponse.Headers[I].Value) then
       Exit(FETCH_TRANSPORT_INVALID_HEADER_ERROR);
-  if (AResponse.FinalURL <> '') and not IsResponseURL(AResponse.FinalURL) then
+  if (AResponse.FinalURL <> '') and
+     not TrySerializeResponseURL(AResponse.FinalURL, Serialized) then
     Exit(FETCH_TRANSPORT_INVALID_URL_ERROR);
   // A body the response will not keep is not held to the ceiling.
   if (not AIsHead) and (not IsNullBodyStatus(AResponse.StatusCode)) and
@@ -807,6 +821,7 @@ function TGocciaFetchExchange.Respond(const AResponse: THTTPResponse): Boolean;
 var
   Completion: TGocciaFetchCompletion;
   I, FragmentStart: Integer;
+  SerializedURL: string;
 begin
   Result := Claim;
   if not Result then
@@ -833,10 +848,18 @@ begin
         Completion.Response.Body := Copy(AResponse.Body);
       if Completion.Response.FinalURL = '' then
         Completion.Response.FinalURL := FURL;
-      // Response.url serializes the URL with its fragment excluded.
-      FragmentStart := Pos('#', Completion.Response.FinalURL);
-      if FragmentStart > 0 then
-        SetLength(Completion.Response.FinalURL, FragmentStart - 1);
+      if TrySerializeResponseURL(Completion.Response.FinalURL,
+        SerializedURL) then
+        Completion.Response.FinalURL := SerializedURL
+      else
+      begin
+        // Only the request URL can get here (a transport's own final URL
+        // was checked above): one the client accepts but the URL parser
+        // does not. Keep it, without its fragment.
+        FragmentStart := Pos('#', Completion.Response.FinalURL);
+        if FragmentStart > 0 then
+          SetLength(Completion.Response.FinalURL, FragmentStart - 1);
+      end;
     end;
   except
     Completion.Free;
@@ -866,8 +889,10 @@ end;
 
 procedure TGocciaFetchExchange.Cancel;
 begin
-  InterlockedExchange(FCancelled, 1);
+  // Claim first, so a responder that reads IsCancelled as true can never
+  // still have an answer taken.
   InterlockedCompareExchange(FSettled, EXCHANGE_CANCELLED, EXCHANGE_OPEN);
+  InterlockedExchange(FCancelled, 1);
 end;
 
 procedure TGocciaFetchExchange.Close;

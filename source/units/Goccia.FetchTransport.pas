@@ -58,14 +58,15 @@ type
   IGocciaFetchResponder = interface
     { Answers with a response: the final one, after any redirects the
       transport followed. AResponse.FinalURL empty means the request URL,
-      otherwise it must be an absolute http(s) URL; either way Response.url
-      excludes its fragment. Header values lose their leading and trailing
+      otherwise it must parse (WHATWG URL) as an http(s) URL; Response.url is
+      its serialization without the fragment. Header values lose their leading and trailing
       tabs and spaces. The body of a HEAD response or of a 204, 205 or 304
-      response is ignored. A status outside 200..599, status text that is
-      not a reason phrase (tab, space, visible or non-ASCII characters), a
-      header name that is not a token, a header value with NUL, CR or LF, an
-      invalid final URL, or a body over the ceiling rejects the fetch with
-      TypeError instead. The engine copies what it keeps. Returns False
+      response is ignored. Header values and status text are bytes, one per
+      character up to U+00FF. A status outside 200..599, status text that is
+      not a reason phrase (tab, space, visible ASCII, U+0080..U+00FF), a
+      header name that is not a token, a header value with NUL, CR, LF or a
+      character past U+00FF, an invalid final URL, or a body over the ceiling
+      rejects the fetch with TypeError instead. The engine copies what it keeps. Returns False
       when the request was already answered or cancelled. }
     function Respond(const AResponse: THTTPResponse): Boolean;
     { Answers with a network error: the fetch rejects with a TypeError whose
@@ -90,10 +91,11 @@ type
   IGocciaFetchTransport = interface
     { Called on the engine's thread, once per request, while the script's
       fetch() call runs. Answer through AResponder now or later, from any
-      thread; the run waits while the request is unanswered. The wait ends
-      at the run's deadline or the request's signal; it executes no
-      instructions, so an instruction limit alone does not end it. Must not
-      run script or call
+      thread; the run waits while the request is unanswered. The run's
+      deadline or the request's signal ends the wait. The wait runs no
+      script and so consumes no instruction budget: it still stops for a
+      budget already exhausted, but does not run one down. Must not run
+      script or call
       into the engine. An exception raised here cancels the request and
       rejects the fetch with TypeError (`fetch failed: <message>`), even if
       the transport answered first. }

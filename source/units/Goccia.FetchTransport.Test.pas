@@ -130,6 +130,7 @@ type
     procedure TestRacingAnswersOneWins;
     procedure TestEnginesKeepTheirOwnTransport;
     procedure TestThreadsKeepTheirOwnTransport;
+    procedure TestRecorderSkipsRefusedAnswers;
     procedure TestRecordThenReplay;
   public
     procedure SetupTests; override;
@@ -359,6 +360,8 @@ begin
     TestEnginesKeepTheirOwnTransport);
   Test('engines on different threads each use only their own transport',
     TestThreadsKeepTheirOwnTransport);
+  Test('the test embedder records only answers the engine took',
+    TestRecorderSkipsRefusedAnswers);
   Test('a run recorded through the network replays without it',
     TestRecordThenReplay);
 end;
@@ -553,6 +556,18 @@ begin
   Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
     ApiCapabilities))
     .ToBe('TypeError: fetch transport answered an invalid header');
+  // A header value is bytes: U+00FF passes, U+0100 does not.
+  Response.Headers[0].Name := 'x-latin';
+  Response.Headers[0].Value := 'a'#$0100;
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
+    ApiCapabilities))
+    .ToBe('TypeError: fetch transport answered an invalid header');
+  Response.Headers[0].Value := 'a'#$00FF;
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport('fetch("' + API_URL + '").then(' +
+    '(response) => { globalThis.outcome = response.headers.get(' +
+    '"x-latin"); });', Transport, ApiCapabilities)).ToBe('a'#$00FF);
 end;
 
 procedure TFetchTransportTests.TestOversizedBodyRejects;
@@ -706,8 +721,8 @@ begin
       .ToBe('fetch worker limit exceeded');
 end;
 
-{ With the cap full, frees one slot through AFree and checks that exactly
-  one more request fits. }
+{ With the cap full, frees slots through each exit path and checks that
+  exactly as many more requests fit. }
 procedure TFetchTransportTests.TestRequestsShareWorkerCap;
 var
   Fake: TFakeTransport;
@@ -720,11 +735,15 @@ var
   Policy: TGocciaFetchPolicy;
   Headers: THTTPHeaders;
   Raising: TGocciaPromiseValue;
+  OtherSource: TStringList;
+  Other: TGocciaEngine;
 begin
   Fake := TFakeTransport.Create(tmHold);
   Transport := Fake;
   Source := TStringList.Create;
+  OtherSource := TStringList.Create;
   Engine := CreateFetchEngine(Source, ApiCapabilities);
+  Other := CreateFetchEngine(OtherSource, ApiCapabilities);
   SetLength(Promises, 0);
   try
     for I := 1 to WORKER_CAP do
@@ -771,16 +790,24 @@ begin
     Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(True);
     Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(False);
 
-    // A discard frees every slot the engine held, and no more.
+    // A discard (also what a failed run or its deadline does) frees the
+    // slots its engine held, and no more: another engine on the thread keeps
+    // the rest of the cap filled.
     GetRuntime(Engine).DiscardPending;
-    for I := 1 to WORKER_CAP do
-      Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(True);
+    for I := 1 to WORKER_CAP - 1 do
+      Expect<Boolean>(StartCounted(Other, Transport, Promises)).ToBe(True);
+    Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(True);
     Expect<Boolean>(StartCounted(Engine, Transport, Promises)).ToBe(False);
     GetRuntime(Engine).DiscardPending;
+    Expect<Boolean>(StartCounted(Other, Transport, Promises)).ToBe(True);
+    Expect<Boolean>(StartCounted(Other, Transport, Promises)).ToBe(False);
+    GetRuntime(Other).DiscardPending;
   finally
     for I := 0 to High(Promises) do
       TGarbageCollector.Instance.RemoveTempRoot(Promises[I]);
+    Other.Free;
     Engine.Free;
+    OtherSource.Free;
     Source.Free;
   end;
 end;
@@ -859,12 +886,18 @@ begin
   Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
     ApiCapabilities))
     .ToBe('TypeError: fetch transport answered an invalid status text');
-  // Tab, space and text past ASCII (obs-text) are allowed.
-  Response.StatusText := 'All'#9'good '#$00E9;
+  // No character past U+00FF stands for a byte.
+  Response.StatusText := 'OK '#$0100;
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
+    ApiCapabilities))
+    .ToBe('TypeError: fetch transport answered an invalid status text');
+  // Tab, space and U+0080..U+00FF (obs-text) are allowed.
+  Response.StatusText := 'All'#9'good '#$00E9#$00FF;
   Fake.Response := Response;
   Expect<string>(RunWithTransport('fetch("' + API_URL + '").then(' +
     '(response) => { globalThis.outcome = response.statusText; });',
-    Transport, ApiCapabilities)).ToBe('All'#9'good '#$00E9);
+    Transport, ApiCapabilities)).ToBe('All'#9'good '#$00E9#$00FF);
 end;
 
 procedure TFetchTransportTests.TestFinalURLMustBeAURL;
@@ -881,7 +914,15 @@ begin
   Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
     ApiCapabilities))
     .ToBe('TypeError: fetch transport answered an invalid URL');
-  Response.FinalURL := 'http://' + API_HOST + '/moved#top';
+  // WHATWG URL: a space is a forbidden host code point.
+  Response.FinalURL := 'http://bad host/';
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
+    ApiCapabilities))
+    .ToBe('TypeError: fetch transport answered an invalid URL');
+  // Serialized as a URL: scheme and host lower-cased, the default port and
+  // dot segments gone, the fragment excluded.
+  Response.FinalURL := 'HTTP://API.Example:80/a/../moved#top';
   Response.Redirected := True;
   Fake.Response := Response;
   Expect<string>(RunWithTransport('fetch("' + API_URL + '").then(' +
@@ -1150,7 +1191,7 @@ end;
 
 { A test embedder's record and replay. The recording transport forwards each
   request to the network through FetchOverNetwork on a thread of its own and
-  keeps every answer on a tape, under the request's fingerprint, in the
+  keeps every answer the engine took on a tape, under the request's fingerprint, in the
   order it was given; the replay transport answers each request from the
   tape, in that order, without the network. }
 type
@@ -1323,6 +1364,10 @@ function TRecordingResponder.Respond(const AResponse: THTTPResponse): Boolean;
 var
   Entry: TTapeEntry;
 begin
+  // Only an answer the engine took is part of the run.
+  Result := FInner.Respond(AResponse);
+  if not Result then
+    Exit;
   Entry := Default(TTapeEntry);
   Entry.Fingerprint := FFingerprint;
   Entry.Succeeded := True;
@@ -1330,10 +1375,7 @@ begin
   Entry.Response := AResponse;
   Entry.Response.Headers := Copy(AResponse.Headers);
   Entry.Response.Body := Copy(AResponse.Body);
-  // Only an answer the engine took is part of the run.
-  Result := FInner.Respond(AResponse);
-  if Result then
-    FTape.Add(Entry);
+  FTape.Add(Entry);
 end;
 
 function TRecordingResponder.Fail(const AMessage: string;
@@ -1341,13 +1383,14 @@ function TRecordingResponder.Fail(const AMessage: string;
 var
   Entry: TTapeEntry;
 begin
+  Result := FInner.Fail(AMessage, ADeniedScope);
+  if not Result then
+    Exit;
   Entry := Default(TTapeEntry);
   Entry.Fingerprint := FFingerprint;
   Entry.ErrorMessage := AMessage;
   Entry.DeniedScope := ADeniedScope;
-  Result := FInner.Fail(AMessage, ADeniedScope);
-  if Result then
-    FTape.Add(Entry);
+  FTape.Add(Entry);
 end;
 
 function TRecordingResponder.IsCancelled: Boolean;
@@ -1481,6 +1524,42 @@ begin
   end;
 end;
 {$ENDIF}
+
+procedure TFetchTransportTests.TestRecorderSkipsRefusedAnswers;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Promise: TGocciaPromiseValue;
+  Tape: TTape;
+  Recorder: IGocciaFetchResponder;
+begin
+  Fake := TFakeTransport.Create(tmHold);
+  Transport := Fake;
+  Source := TStringList.Create;
+  Engine := CreateFetchEngine(Source, ApiCapabilities);
+  Tape := TTape.Create;
+  try
+    Promise := StartTransportFetch(Engine, Transport);
+    try
+      Recorder := TRecordingResponder.Create(Fake.Responder, Tape, 'key');
+      // The engine gave up on the request before any answer came.
+      GetRuntime(Engine).DiscardPending;
+      Expect<Boolean>(Recorder.IsCancelled).ToBe(True);
+      Expect<Boolean>(Recorder.Respond(TextResponse(200, 'late'))).ToBe(False);
+      Expect<Boolean>(Recorder.Fail('late')).ToBe(False);
+      Expect<Integer>(Tape.Count).ToBe(0);
+      Recorder := nil;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
+    end;
+  finally
+    Tape.Free;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
 
 procedure TFetchTransportTests.TestRecordThenReplay;
 {$IFDEF UNIX}

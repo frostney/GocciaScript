@@ -53,14 +53,17 @@ worker posts to, and the promise settles at the engine's next completion
 pump on its own thread. So `fetch()` never settles inside the call, and the
 request stays in the engine's pending set until it is answered: the run waits
 for it as for a network request, until the run deadline or the request's
-signal ends the wait. The wait runs no instructions, so an instruction limit
-alone does not end it, as for a network request.
+signal ends the wait. As for a network request, the wait runs no script and
+consumes no instruction budget, so an instruction limit stops it only when
+the budget was already exhausted.
 
 **The engine holds a transport's response to the rules a network response
 meets.** WHATWG Fetch gives a response a status from 200 to 599, status text
 that is a reason phrase, header names that are tokens and values without NUL,
 CR or LF, a null body for `HEAD` and for a null body status, and a `url` that
-is a URL serialized without its fragment. Header values are normalized. A
+is a URL serialized without its fragment. Header values and status text are
+byte sequences, so a character past U+00FF is refused, and the final URL is
+parsed with the WHATWG URL parser and exposed as its serialization. Header values are normalized. A
 status, status text, header or final URL that breaks those rules, or a body
 the response keeps that is over the response ceiling, rejects the fetch with
 `TypeError`, the way a malformed or oversized network response does.
