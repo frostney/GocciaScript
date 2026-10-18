@@ -429,8 +429,14 @@ begin
 
   HasByteLength := (AArguments.Length > 2) and
     not (AArguments.GetElement(2) is TGocciaUndefinedLiteralValue);
-  BufferIsResizable := (BufferArg is TGocciaArrayBufferValue) and
-    (TGocciaArrayBufferValue(BufferArg).MaxByteLength >= 0);
+  // ES2026 §25.3.2.1 steps 7-8: IsFixedLengthArrayBuffer(buffer) is false for
+  // a resizable ArrayBuffer and a growable SharedArrayBuffer alike, and a
+  // view of either without a byteLength tracks the buffer's length.
+  BufferIsResizable :=
+    ((BufferArg is TGocciaArrayBufferValue) and
+     (TGocciaArrayBufferValue(BufferArg).MaxByteLength >= 0)) or
+    ((BufferArg is TGocciaSharedArrayBufferValue) and
+     (TGocciaSharedArrayBufferValue(BufferArg).MaxByteLength >= 0));
 
   if HasByteLength then
   begin

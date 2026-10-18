@@ -19,17 +19,17 @@ type
   { A SharedArrayBuffer keeps one data block from construction to collection,
     as every agent that holds it must read and write the same memory. A
     growable buffer's block is allocated at [[ArrayBufferMaxByteLength]] bytes
-    (ES2026 §25.2.2.1 AllocateSharedArrayBuffer step 5), all zero; grow only
-    raises FByteLength, the bytes the buffer exposes, and never moves the
-    block. Nothing writes past FByteLength, so the bytes a grow exposes are
-    still zero. }
+    (ES2026 §25.2.2.1 AllocateSharedArrayBuffer steps 6-7); grow only raises
+    FByteLength, the bytes the buffer exposes, and never moves the block.
+    Script code never reaches past FByteLength, but native code given an FFI
+    pointer can, so grow zeroes the bytes it exposes before it exposes them. }
   TGocciaSharedArrayBufferValue = class(TGocciaInstanceValue)
   private
     const NO_MAX_BYTE_LENGTH = -1;
   private
     FData: TBytes;
-    // [[ArrayBufferByteLengthData]]: read by every agent, raised only by
-    // grow's compare-and-exchange.
+    // [[ArrayBufferByteLengthData]]: read by every agent through
+    // AtomicLoadInt32, raised only by grow's compare-and-exchange.
     FByteLength: Integer;
     FMaxByteLength: Integer;
     FHasPendingAllocation: Boolean;
@@ -96,6 +96,9 @@ uses
 
 var
   GSharedArrayBufferSharedSlot: TGocciaRealmOwnedSlotId;
+  // Serializes grows, so the bytes one grow zeroes are never bytes another
+  // grow has already exposed.
+  GSharedArrayBufferGrowLock: TGocciaCriticalSection;
 
 function GetSharedArrayBufferShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -204,8 +207,7 @@ end;
 // [[ArrayBufferByteLengthData]], which another agent's grow may raise.
 function TGocciaSharedArrayBufferValue.GetByteLength: Integer;
 begin
-  Result := FByteLength;
-  ReadMemoryBarrier;
+  Result := AtomicLoadInt32(FByteLength);
 end;
 
 // ES2026 §25.2.5.5 get SharedArrayBuffer.prototype.maxByteLength, steps 4-5:
@@ -231,7 +233,7 @@ var
   Delta: Int64;
   GC: TGarbageCollector;
 begin
-  // ES2026 §25.2.2.1 AllocateSharedArrayBuffer steps 4-5: a growable buffer's
+  // ES2026 §25.2.2.1 AllocateSharedArrayBuffer steps 6-7: a growable buffer's
   // block holds maxByteLength bytes.
   if AMaxByteLength >= 0 then
     AllocLength := AMaxByteLength
@@ -555,29 +557,40 @@ begin
   else
     NewByteLength := ToSharedArrayBufferIndex(AArgs.GetElement(0));
 
-  // Steps 9-11: a compare-and-exchange loop on [[ArrayBufferByteLengthData]],
-  // so racing grows are totally ordered and none is lost. The block already
-  // holds maxByteLength zero bytes (AllocateBlock), so a grow allocates
-  // nothing and moves nothing (the step 11.e NOTE): the bytes every agent
-  // wrote before it stay where they are.
-  CurrentByteLength := Buf.GetByteLength;
-  repeat
-    // Step 11.b: growing to the current length does nothing.
-    if NewByteLength = CurrentByteLength then
-      Break;
-    // Step 11.c: a SharedArrayBuffer never shrinks, nor passes its maximum.
-    if (NewByteLength < CurrentByteLength) or
-       (NewByteLength > Buf.FMaxByteLength) then
-      ThrowRangeError(SErrorInvalidSharedArrayBufferLength,
-        SSuggestArrayLengthRange);
-    // Steps 11.f-h: publish the new length unless another agent changed it
-    // first; then retry against the length that agent set.
-    ReadByteLength := AtomicCompareExchangeInt32(Buf.FByteLength,
-      NewByteLength, CurrentByteLength);
-    if ReadByteLength = CurrentByteLength then
-      Break;
-    CurrentByteLength := ReadByteLength;
-  until False;
+  // Steps 10-12: a compare-and-exchange loop on
+  // [[ArrayBufferByteLengthData]], so racing grows are totally ordered and
+  // none is lost. The block already holds maxByteLength bytes (AllocateBlock),
+  // so a grow allocates nothing and moves nothing (the step 12.g NOTE): the
+  // bytes every agent wrote before it stay where they are. Grows also hold
+  // GSharedArrayBufferGrowLock, so the bytes a grow zeroes are not yet
+  // visible to any agent; script code never writes past the length, and
+  // zeroing clears whatever native code wrote there.
+  CriticalSectionEnter(GSharedArrayBufferGrowLock);
+  try
+    // Step 10: read the current length, seq-cst.
+    CurrentByteLength := Buf.GetByteLength;
+    repeat
+      // Step 12.c: growing to the current length does nothing.
+      if NewByteLength = CurrentByteLength then
+        Break;
+      // Step 12.d: a SharedArrayBuffer never shrinks, nor passes its maximum.
+      if (NewByteLength < CurrentByteLength) or
+         (NewByteLength > Buf.FMaxByteLength) then
+        ThrowRangeError(SErrorInvalidSharedArrayBufferLength,
+          SSuggestArrayLengthRange);
+      FillChar(Buf.FData[CurrentByteLength],
+        NewByteLength - CurrentByteLength, 0);
+      // Steps 12.h-j: publish the new length unless the length changed
+      // first; then retry against the length that was read.
+      ReadByteLength := AtomicCompareExchangeInt32(Buf.FByteLength,
+        NewByteLength, CurrentByteLength);
+      if ReadByteLength = CurrentByteLength then
+        Break;
+      CurrentByteLength := ReadByteLength;
+    until False;
+  finally
+    CriticalSectionLeave(GSharedArrayBufferGrowLock);
+  end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -650,5 +663,9 @@ end;
 
 initialization
   GSharedArrayBufferSharedSlot := RegisterRealmOwnedSlot('SharedArrayBuffer.shared');
+  CriticalSectionInit(GSharedArrayBufferGrowLock);
+
+finalization
+  CriticalSectionDone(GSharedArrayBufferGrowLock);
 
 end.

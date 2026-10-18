@@ -660,10 +660,10 @@ Self-references in initializers are supported via a child scope that binds each 
 
 `TGocciaDataViewValue` extends `TGocciaInstanceValue` (`Goccia.Values.DataViewValue.pas`). It provides endian-aware typed reads and writes over `ArrayBuffer` or `SharedArrayBuffer` storage.
 
-- **Internal storage** — `FBufferValue: TGocciaValue` stores the underlying buffer, `FBufferData: TBytes` mirrors the current backing byte array, `FByteOffset: Integer` stores the view offset, and `FByteLength: Integer` stores either a fixed byte length or the auto-length sentinel for resizable ArrayBuffer views.
+- **Internal storage** — `FBufferValue: TGocciaValue` stores the underlying buffer, `FBufferData: TBytes` mirrors the current backing byte array, `FByteOffset: Integer` stores the view offset, and `FByteLength: Integer` stores either a fixed byte length or the auto-length sentinel for a view created without a byte length over a resizable ArrayBuffer or a growable SharedArrayBuffer.
 - **Shared prototype singleton** — All DataView instances within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a realm slot. Prototype methods are registered once during `InitializePrototype`.
 - **Element access** — DataView and TypedArray raw byte encoding use `Goccia.BinaryData`, which centralizes endian-aware integer, BigInt, Float16, Float32, and Float64 serialization.
-- **Detached and out-of-bounds checks** — Accessors and prototype methods reject detached ArrayBuffers and views that no longer fit after a resizable ArrayBuffer shrink. Auto-length views over resizable ArrayBuffers compute byte length from the current backing buffer.
+- **Detached and out-of-bounds checks** — Accessors and prototype methods reject detached ArrayBuffers and views that no longer fit after a resizable ArrayBuffer shrink. Auto-length views compute their byte length from the buffer's current byte length (ArrayBufferByteLength), never from the backing array's length.
 - **GC integration** — `MarkReferences` marks `FBufferValue`, preserving the viewed ArrayBuffer or SharedArrayBuffer.
 
 ## TypedArray

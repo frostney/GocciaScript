@@ -123,9 +123,9 @@ type
     function BufferByteLength: Integer;
 
     property BufferValue: TGocciaValue read FBufferValue;
-    // The buffer's current data block, read again on every access: resize,
-    // grow and detach give the buffer a new block, so a block read before one
-    // of them is stale. BufferData and Length describe the same block while no
+    // The buffer's current data block, read again on every access: resize
+    // and detach give an ArrayBuffer a new block, so a block read before one
+    // of them is stale (a SharedArrayBuffer keeps its block when it grows). BufferData and Length describe the same block while no
     // script code runs between the two reads; a caller that runs script code
     // in between measures again. A per-byte loop reads it once before the loop.
     property BufferData: TBytes read GetBufferData;
@@ -440,9 +440,9 @@ begin
   end;
 end;
 
-// ArrayBuffer.prototype.resize, SharedArrayBuffer.prototype.grow and detaching
-// give the buffer a new data block, and FBufferData keeps naming the old one
-// until SyncBufferData runs. Every reader outside this unit gets the block
+// ArrayBuffer.prototype.resize and detaching give an ArrayBuffer a new data
+// block, and FBufferData keeps naming the old one until SyncBufferData runs
+// (a SharedArrayBuffer keeps one block, grown or not). Every reader outside this unit gets the block
 // through here, so it never copies Length's elements out of a smaller, older
 // block.
 function TGocciaTypedArrayValue.GetBufferData: TBytes;
