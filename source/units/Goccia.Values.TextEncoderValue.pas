@@ -187,7 +187,7 @@ var
   Input: string;
   Bytes: TBytes;
   NewTA: TGocciaTypedArrayValue;
-  I: Integer;
+  Data: TBytes;
 begin
   if not (AThisValue is TGocciaTextEncoderValue) then
     ThrowTypeError(Format(SErrorTextEncoderIllegalInvocation,
@@ -203,8 +203,10 @@ begin
   // and return the resulting Uint8Array.
   Bytes := StringToUTF8Bytes(Input);
   NewTA := TGocciaTypedArrayValue.Create(takUint8, Length(Bytes));
-  for I := 0 to Length(Bytes) - 1 do
-    NewTA.BufferData[NewTA.ByteOffset + I] := Bytes[I];
+  // The new array owns its block, which holds exactly Length(Bytes) bytes.
+  Data := NewTA.BufferData;
+  if Length(Bytes) > 0 then
+    Move(Bytes[0], Data[NewTA.ByteOffset], Length(Bytes));
   Result := NewTA;
 end;
 
@@ -214,8 +216,8 @@ function TGocciaTextEncoderValue.EncodeInto(const AArgs: TGocciaArgumentsCollect
 var
   Source: string;
   Dest: TGocciaTypedArrayValue;
-  Bytes: TBytes;
-  I, J, SeqLen, Written, Read, DestLen: Integer;
+  Bytes, Data: TBytes;
+  I, J, SeqLen, Written, Read, DestLen, Offset: Integer;
   ResultObj: TGocciaObjectValue;
 begin
   if not (AThisValue is TGocciaTextEncoderValue) then
@@ -238,7 +240,12 @@ begin
 
   // Convert source to USVString bytes (lone surrogates normalized to U+FFFD).
   Bytes := StringToUTF8Bytes(Source);
+  // The source's conversion above may have resized the destination's buffer;
+  // no script code runs from here on, so the block and the length read once
+  // describe every byte the loop writes.
+  Data := Dest.BufferData;
   DestLen := Dest.Length;
+  Offset := Dest.ByteOffset;
   Written := 0;
   Read := 0;
   I := 0;
@@ -250,7 +257,7 @@ begin
     if Written + SeqLen > DestLen then Break;
 
     for J := 0 to SeqLen - 1 do
-      Dest.BufferData[Dest.ByteOffset + Written + J] := Bytes[I + J];
+      Data[Offset + Written + J] := Bytes[I + J];
 
     Inc(Written, SeqLen);
     Inc(I, SeqLen);

@@ -204,6 +204,20 @@ begin
   Result := S;
 end;
 
+{ FindAllFiles returns a list the caller owns (#1592). }
+procedure AddFoundFiles(const AFiles: TStringList; const ADirectory,
+  AExtension: string);
+var
+  Found: TStringList;
+begin
+  Found := FindAllFiles(ADirectory, AExtension);
+  try
+    AFiles.AddStrings(Found);
+  finally
+    Found.Free;
+  end;
+end;
+
 procedure PrintSourceStats;
 var
   Files: TStringList;
@@ -214,11 +228,11 @@ begin
 
   Files := TStringList.Create;
   try
-    Files.AddStrings(FindAllFiles('source/units', '.pas'));
-    Files.AddStrings(FindAllFiles('source/shared', '.pas'));
-    Files.AddStrings(FindAllFiles('source/app', '.pas'));
-    Files.AddStrings(FindAllFiles('source/app', '.dpr'));
-    Files.AddStrings(FindAllFiles('source/units', '.inc'));
+    AddFoundFiles(Files, 'source/units', '.pas');
+    AddFoundFiles(Files, 'source/shared', '.pas');
+    AddFoundFiles(Files, 'source/app', '.pas');
+    AddFoundFiles(Files, 'source/app', '.dpr');
+    AddFoundFiles(Files, 'source/units', '.inc');
 
     for K := 0 to Files.Count - 1 do
     begin
@@ -449,26 +463,30 @@ begin
   WriteLn('Building Tests...');
   AllUnitFiles := TStringList.Create;
   TestFiles := TStringList.Create;
+  try
+    AddFoundFiles(AllUnitFiles, 'source/units', '.pas');
+    AddFoundFiles(AllUnitFiles, 'source/shared', '.pas');
+    AddFoundFiles(AllUnitFiles, 'source/app', '.pas');
 
-  AllUnitFiles.AddStrings(FindAllFiles('source/units', '.pas'));
-  AllUnitFiles.AddStrings(FindAllFiles('source/shared', '.pas'));
-  AllUnitFiles.AddStrings(FindAllFiles('source/app', '.pas'));
+    for K := 0 to AllUnitFiles.Count - 1 do
+    begin
+      if Pos('.Test.pas', AllUnitFiles[K]) > 0 then
+        TestFiles.Add(AllUnitFiles[K]);
+    end;
 
-  for K := 0 to AllUnitFiles.Count - 1 do
-  begin
-    if Pos('.Test.pas', AllUnitFiles[K]) > 0 then
-      TestFiles.Add(AllUnitFiles[K]);
-  end;
+    for K := 0 to TestFiles.Count - 1 do
+    begin
+      UnitOutputDirectory := TestUnitOutputDirectory(TestFiles[K]);
 
-  for K := 0 to TestFiles.Count - 1 do
-  begin
-    UnitOutputDirectory := TestUnitOutputDirectory(TestFiles[K]);
-
-    if not RunCommand('fpc', FPCArgs(TestFiles[K],
-        EnsureUnitOutputDirectory(UnitOutputDirectory)), Output) then
-      PrintBuildFailureAndExit(Output, 'Test build failed: ' + TestFiles[K],
-        'tests');
-    WriteLn(Output);
+      if not RunCommand('fpc', FPCArgs(TestFiles[K],
+          EnsureUnitOutputDirectory(UnitOutputDirectory)), Output) then
+        PrintBuildFailureAndExit(Output, 'Test build failed: ' + TestFiles[K],
+          'tests');
+      WriteLn(Output);
+    end;
+  finally
+    TestFiles.Free;
+    AllUnitFiles.Free;
   end;
 
   WriteLn('Tests built successfully');
@@ -586,11 +604,11 @@ begin
 
   Files := TStringList.Create;
   try
-    Files.AddStrings(FindAllFiles('build/compiled', '.ppu'));
-    Files.AddStrings(FindAllFiles('build/compiled', '.o'));
-    Files.AddStrings(FindAllFiles('build/compiled', '.or'));
-    Files.AddStrings(FindAllFiles('build/compiled', '.res'));
-    Files.AddStrings(FindAllFiles('build/compiled', '.reslst'));
+    AddFoundFiles(Files, 'build/compiled', '.ppu');
+    AddFoundFiles(Files, 'build/compiled', '.o');
+    AddFoundFiles(Files, 'build/compiled', '.or');
+    AddFoundFiles(Files, 'build/compiled', '.res');
+    AddFoundFiles(Files, 'build/compiled', '.reslst');
 
     for K := 0 to Files.Count - 1 do
       DeleteFile(Files[K]);

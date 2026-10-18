@@ -68,6 +68,11 @@ type
     // Called by the GC sweep instead of Free. Default calls Free.
     // Override to return the object to a pool instead of deallocating.
     procedure Recycle; virtual;
+    // False for a class whose constructors are compiled without an implicit
+    // exception frame: FPC then does not destroy the instance when
+    // AfterConstruction raises, so the collector must keep it registered, or
+    // free it itself when it could not register it.
+    class function ConstructorDestroysOnException: Boolean; virtual;
     property GCMarked: Boolean read GetGCMarked write SetGCMarked;
     property GCIndex: Integer read FGCIndex write FGCIndex;
   end;
@@ -77,7 +82,10 @@ type
     // Every value allocation registers here. The collector's list owns
     // nothing and has no OnNotify handler, so an append within capacity skips
     // the generic Add's capacity bookkeeping and virtual Notify dispatch.
-    function Append(const AObject: TGCManagedObject): Integer; inline;
+    // False, with nothing appended, when the list is full: an append that
+    // must grow the list is the caller's, because the growth can raise.
+    function TryAppend(const AObject: TGCManagedObject;
+      out AIndex: Integer): Boolean; inline;
   end;
   // Backing store for the active-root stack only. A bare array rather than
   // TGCManagedObjectList because that stack is pushed and popped once per
@@ -318,6 +326,8 @@ type
     procedure TraceWeakReferences;
     procedure SweepWeakReferences;
     procedure SweepObjects;
+    function AppendManagedObjectGrowing(const AObject: TGCManagedObject): Integer;
+    procedure ReleaseAllManagedObjects;
   public
     class function Instance: TGarbageCollector; {$IFDEF FPC}inline;{$ENDIF}
     class procedure Initialize;
@@ -596,6 +606,11 @@ begin
   Free;
 end;
 
+class function TGCManagedObject.ConstructorDestroysOnException: Boolean;
+begin
+  Result := True;
+end;
+
 procedure TGCManagedObject.BeforeDestruction;
 var
   GC: TGarbageCollector;
@@ -708,21 +723,22 @@ end;
 
 { TGCManagedObjectList }
 
-function TGCManagedObjectList.Append(const AObject: TGCManagedObject): Integer;
+function TGCManagedObjectList.TryAppend(const AObject: TGCManagedObject;
+  out AIndex: Integer): Boolean;
 begin
   {$IFDEF FPC}
   // FLength and FItems are FPC rtl-generics internals; other compilers take
-  // the generic Add.
-  Result := FLength;
-  if Result < Length(FItems) then
+  // the growing path for every append.
+  AIndex := FLength;
+  Result := AIndex < Length(FItems);
+  if Result then
   begin
-    FItems[Result] := AObject;
-    FLength := Result + 1;
-  end
-  else
-    Result := Add(AObject);
+    FItems[AIndex] := AObject;
+    FLength := AIndex + 1;
+  end;
   {$ELSE}
-  Result := Add(AObject);
+  AIndex := -1;
+  Result := False;
   {$ENDIF}
 end;
 
@@ -750,9 +766,12 @@ end;
 
 class procedure TGarbageCollector.Shutdown;
 begin
-  GThreadPolls.Collector := nil;
+  // The mirror stays set while the collector frees what it manages, so a
+  // value a destructor allocates still registers and is freed by a later
+  // pass; Destroy clears it once nothing can register any more.
   GCThreadInstance.Free;
   GCThreadInstance := nil;
+  GThreadPolls.Collector := nil;
 end;
 
 constructor TGarbageCollector.Create;
@@ -807,6 +826,9 @@ begin
   {$IFDEF GC_TIMING}
   PrintTimingSummary;
   {$ENDIF}
+  ReleaseAllManagedObjects;
+  if GThreadPolls.Collector = Self then
+    GThreadPolls.Collector := nil;
   // Root sources are not owned and can outlive the collector (a pooled argument
   // collection freed during engine tear-down, for instance). Drop their
   // back-pointer so their destructors do not unregister into freed memory.
@@ -829,15 +851,37 @@ begin
   inherited;
 end;
 
+// The list is full, so the append grows it, which can fail. A failure leaves
+// AObject unregistered, inside its AfterConstruction. FPC destroys an instance
+// whose constructor has the implicit exception frame; one whose constructor
+// has none (ConstructorDestroysOnException) nobody else can reach, so it is
+// freed here. It holds no managed field and nothing refers to it yet, and
+// neither AfterConstruction nor the constructor touches it after this raise.
+// Its own procedure, so that only a growing append pays for the frame.
+function TGarbageCollector.AppendManagedObjectGrowing(
+  const AObject: TGCManagedObject): Integer;
+begin
+  try
+    Result := FManagedObjects.Add(AObject);
+  except
+    if not AObject.ConstructorDestroysOnException then
+      AObject.FreeInstance;
+    raise;
+  end;
+end;
+
 procedure TGarbageCollector.RegisterObject(
   const AObject: TGCManagedObject);
 var
+  Index: Integer;
   Size: Int64;
 begin
   // The list and the allocation counter are owner-thread-confined; the byte
   // totals race a cross-thread ReleaseExternalBytes and take the accounting
   // lock — see FAccountingLock for the full confinement and ordering rules.
-  AObject.GCIndex := FManagedObjects.Append(AObject);
+  if not FManagedObjects.TryAppend(AObject, Index) then
+    Index := AppendManagedObjectGrowing(AObject);
+  AObject.GCIndex := Index;
   Inc(FAllocationsSinceLastGC);
   Dec(FHeapSampleCountdown);
   if FHeapSampleCountdown <= 0 then
@@ -1236,6 +1280,48 @@ begin
   if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
     FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
   FTotalCollected := FTotalCollected + Collected;
+end;
+
+{ Destroys every object this collector still manages: a collection in which
+  nothing is reachable. Runs from Destroy, so a thread's (or the process's)
+  last collector frees the values that outlived every engine on it instead of
+  leaking them (#1592). The destructors run in list order, as in any sweep,
+  so the rule a sweep already relies on holds here too: a value's destructor
+  frees what it owns natively and never calls into another managed object,
+  which may already be gone. Roots are dropped first; pins, temp roots and
+  root objects protect nothing once the collector itself is going away. A
+  destructor that allocates registers a new object, which the next pass
+  frees. }
+procedure TGarbageCollector.ReleaseAllManagedObjects;
+const
+  MAX_RELEASE_PASSES = 16;
+var
+  Pass: Integer;
+begin
+  FPinnedObjects.Clear;
+  FTempRoots.Clear;
+  FQueuedRoots.Clear;
+  FKeptObjects.Clear;
+  FRootObjects.Clear;
+  FActiveRootCount := 0;
+  CriticalSectionEnter(GCCollectLock);
+  try
+    FCollecting := True;
+    try
+      Pass := 0;
+      while (FManagedObjects.Count > 0) and (Pass < MAX_RELEASE_PASSES) do
+      begin
+        { A fresh epoch: no object carries its mark, so the sweep frees all. }
+        TGCManagedObject.AdvanceMark;
+        SweepObjects;
+        Inc(Pass);
+      end;
+    finally
+      FCollecting := False;
+    end;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
 end;
 
 procedure TGarbageCollector.Collect;
@@ -1931,10 +2017,9 @@ finalization
   CriticalSectionDone(GCCollectLock);
   {$IFDEF GOCCIA_GC_STRESS}
   // Skip heaptrc's exit report. heaptrc is finalized after this unit and
-  // checks useheaptrace first. With the known leaks (#1592) the report runs to
-  // hundreds of megabytes and about 15 seconds per process, and leaks are the
-  // memory-safety job's concern, not this build's: heaptrc still halts on a
-  // double free or a corrupted block at the moment it happens.
+  // checks useheaptrace first. Leaks are the memory-safety job's concern, not
+  // this build's: heaptrc still halts on a double free or a corrupted block at
+  // the moment it happens.
   useheaptrace := False;
   {$ENDIF}
 

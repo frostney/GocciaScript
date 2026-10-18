@@ -200,6 +200,7 @@ begin
     if NextDescriptor is TGocciaPropertyDescriptorData then
       CurrentRealm.SetSlot(GArrayIteratorNextSlot,
         TGocciaPropertyDescriptorData(NextDescriptor).Value);
+    ReleaseDescriptor(NextDescriptor);
   end;
 end;
 
@@ -209,6 +210,7 @@ var
   ArrayPrototype, IteratorPrototype: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   Intrinsic: TGocciaValue;
+  IsIntrinsic: Boolean;
 begin
   Result := False;
   if not (AArray is TGocciaArrayValue) then
@@ -228,9 +230,11 @@ begin
   Intrinsic := GetIntrinsicArrayValuesForRealm(Realm);
   Descriptor := ArrayPrototype.GetOwnSymbolPropertyDescriptor(
     TGocciaSymbolValue.WellKnownIterator);
-  if not Assigned(Intrinsic) or
-     not (Descriptor is TGocciaPropertyDescriptorData) or
-     (TGocciaPropertyDescriptorData(Descriptor).Value <> Intrinsic) then
+  IsIntrinsic := Assigned(Intrinsic) and
+    (Descriptor is TGocciaPropertyDescriptorData) and
+    (TGocciaPropertyDescriptorData(Descriptor).Value = Intrinsic);
+  ReleaseDescriptor(Descriptor);
+  if not IsIntrinsic then
     Exit;
 
   // GetIteratorFromMethod step: Get(iterator, "next") on a fresh array
@@ -246,6 +250,7 @@ begin
   Result := Assigned(Intrinsic) and
     (Descriptor is TGocciaPropertyDescriptorData) and
     (TGocciaPropertyDescriptorData(Descriptor).Value = Intrinsic);
+  ReleaseDescriptor(Descriptor);
 end;
 
 constructor TGocciaArrayIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);

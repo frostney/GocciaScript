@@ -164,6 +164,7 @@ begin
     Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter
   else
     Getter := nil;
+  ReleaseDescriptor(Descriptor);
   // A miss here would silently send every read of AName through the getter
   // call: still correct, so no behaviour test could notice.
   Assert(Getter is TGocciaNativeFunctionValue,

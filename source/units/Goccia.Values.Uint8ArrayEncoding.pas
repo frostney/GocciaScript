@@ -200,6 +200,22 @@ end;
 
 { ---- Base64 encoding ---- }
 
+{ ALength bytes of AData from AOffset as lowercase hex. The caller passes the
+  view's current block (BufferData) and its length measured on that block. }
+function EncodeHex(const AData: TBytes; const AOffset, ALength: Integer): string;
+var
+  I: Integer;
+  B: Byte;
+begin
+  SetLength(Result, ALength * 2);
+  for I := 0 to ALength - 1 do
+  begin
+    B := AData[AOffset + I];
+    Result[I * 2 + 1] := HEX_CHARS[B shr 4];
+    Result[I * 2 + 2] := HEX_CHARS[B and $0F];
+  end;
+end;
+
 function EncodeBase64(const AData: TBytes; const AOffset, ALength: Integer;
   const AAlphabet: string; const AOmitPadding: Boolean): string;
 var
@@ -578,22 +594,14 @@ function TGocciaUint8ArrayEncoding.ToHex(const AArgs: TGocciaArgumentsCollection
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
-  I, Offset: Integer;
-  Hex: string;
-  B: Byte;
 begin
   TA := RequireUint8Array(AThisValue, 'Uint8Array.prototype.toHex');
   EnsureUint8ArrayInBounds(TA, 'Uint8Array.prototype.toHex');
 
-  SetLength(Hex, TA.Length * 2);
-  Offset := TA.ByteOffset;
-  for I := 0 to TA.Length - 1 do
-  begin
-    B := TA.BufferData[Offset + I];
-    Hex[I * 2 + 1] := HEX_CHARS[B shr 4];
-    Hex[I * 2 + 2] := HEX_CHARS[B and $0F];
-  end;
-  Result := TGocciaStringLiteralValue.Create(Hex);
+  // No script code runs from here on: the block and the length describe
+  // every byte the loop reads.
+  Result := TGocciaStringLiteralValue.Create(
+    EncodeHex(TA.BufferData, TA.ByteOffset, TA.Length));
 end;
 
 // ES2026 §5.1.3 Uint8Array.prototype.setFromBase64(string [, options])
@@ -604,8 +612,9 @@ var
   Input, Alphabet, LastChunkHandling: string;
   Options: TGocciaValue;
   DecResult: TBase64DecodeResult;
-  Written, I: Integer;
+  Written, I, Offset: Integer;
   ResultObj: TGocciaObjectValue;
+  Data: TBytes;
 begin
   TA := RequireUint8Array(AThisValue, 'Uint8Array.prototype.setFromBase64');
   EnsureUint8ArrayWritable(TA, 'Uint8Array.prototype.setFromBase64');
@@ -638,8 +647,13 @@ begin
   if Written > TA.Length then
     Written := TA.Length;
 
+  // The options were read above and may have resized the buffer; nothing
+  // after EnsureUint8ArrayInBounds runs script code, so the current block
+  // holds ByteOffset + Written bytes.
+  Data := TA.BufferData;
+  Offset := TA.ByteOffset;
   for I := 0 to Written - 1 do
-    TA.BufferData[TA.ByteOffset + I] := DecResult.Bytes[I];
+    Data[Offset + I] := DecResult.Bytes[I];
 
   if DecResult.Error <> bdeNone then
     RaiseBase64DecodeError(DecResult.Error);
@@ -661,9 +675,10 @@ function TGocciaUint8ArrayEncoding.SetFromHex(const AArgs: TGocciaArgumentsColle
 var
   TA: TGocciaTypedArrayValue;
   Input: string;
-  I, Written, Hi, Lo: Integer;
+  I, Written, Hi, Lo, Offset, Len: Integer;
   ResultObj: TGocciaObjectValue;
   CharsRead: Integer;
+  Data: TBytes;
 begin
   TA := RequireUint8Array(AThisValue, 'Uint8Array.prototype.setFromHex');
   EnsureUint8ArrayWritable(TA, 'Uint8Array.prototype.setFromHex');
@@ -678,16 +693,21 @@ begin
   if (Length(Input) mod 2) <> 0 then
     ThrowSyntaxError(SErrorInvalidHexOddLength, SSuggestHexFormat);
 
+  // No script code runs from here on: the block and the length read once
+  // describe every byte the loop writes.
+  Data := TA.BufferData;
+  Len := TA.Length;
+  Offset := TA.ByteOffset;
   Written := 0;
   CharsRead := 0;
   I := 1;
-  while (I + 1 <= Length(Input)) and (Written < TA.Length) do
+  while (I + 1 <= Length(Input)) and (Written < Len) do
   begin
     Hi := HexCharToNibble(Input[I]);
     Lo := HexCharToNibble(Input[I + 1]);
     if (Hi < 0) or (Lo < 0) then
       ThrowSyntaxError(SErrorInvalidHexCharacter, SSuggestHexFormat);
-    TA.BufferData[TA.ByteOffset + Written] := Byte((Hi shl 4) or Lo);
+    Data[Offset + Written] := Byte((Hi shl 4) or Lo);
     Inc(Written);
     Inc(I, 2);
     CharsRead := I - 1;
@@ -715,7 +735,7 @@ var
   Options: TGocciaValue;
   DecResult: TBase64DecodeResult;
   NewTA: TGocciaTypedArrayValue;
-  I: Integer;
+  Data: TBytes;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorFromBase64RequiresString, SSuggestStringArgRequired);
@@ -743,8 +763,10 @@ begin
     RaiseBase64DecodeError(DecResult.Error);
 
   NewTA := TGocciaTypedArrayValue.Create(takUint8, DecResult.ByteLength);
-  for I := 0 to DecResult.ByteLength - 1 do
-    NewTA.BufferData[NewTA.ByteOffset + I] := DecResult.Bytes[I];
+  // The new array owns its block, which holds exactly ByteLength bytes.
+  Data := NewTA.BufferData;
+  if DecResult.ByteLength > 0 then
+    Move(DecResult.Bytes[0], Data[NewTA.ByteOffset], DecResult.ByteLength);
 
   Result := NewTA;
 end;
@@ -754,8 +776,9 @@ function TGocciaUint8ArrayEncoding.FromHex(const AArgs: TGocciaArgumentsCollecti
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Input: string;
-  I, ByteLen, Hi, Lo: Integer;
+  I, ByteLen, Hi, Lo, Offset: Integer;
   NewTA: TGocciaTypedArrayValue;
+  Data: TBytes;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError(SErrorFromHexRequiresString, SSuggestStringArgRequired);
@@ -769,6 +792,9 @@ begin
 
   ByteLen := Length(Input) div 2;
   NewTA := TGocciaTypedArrayValue.Create(takUint8, ByteLen);
+  // The new array owns its block, which holds exactly ByteLen bytes.
+  Data := NewTA.BufferData;
+  Offset := NewTA.ByteOffset;
 
   for I := 0 to ByteLen - 1 do
   begin
@@ -776,7 +802,7 @@ begin
     Lo := HexCharToNibble(Input[I * 2 + 2]);
     if (Hi < 0) or (Lo < 0) then
       ThrowSyntaxError(SErrorInvalidHexCharacter, SSuggestHexFormat);
-    NewTA.BufferData[NewTA.ByteOffset + I] := Byte((Hi shl 4) or Lo);
+    Data[Offset + I] := Byte((Hi shl 4) or Lo);
   end;
 
   Result := NewTA;

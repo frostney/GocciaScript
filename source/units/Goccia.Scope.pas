@@ -387,6 +387,7 @@ var
   ExistingBinding: TLexicalBinding;
   GlobalObject: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
+  IsConfigurable: Boolean;
   Error: TGocciaSyntaxError;
 begin
   if (FScopeKind = skGlobal) and ContainsOwnVarBinding(AName) then
@@ -414,7 +415,9 @@ begin
     begin
       GlobalObject := TGocciaObjectValue(FThisValue);
       Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
-      if (not Assigned(Descriptor)) or Descriptor.Configurable then
+      IsConfigurable := (not Assigned(Descriptor)) or Descriptor.Configurable;
+      ReleaseDescriptor(Descriptor);
+      if IsConfigurable then
         FLexicalBindings.Remove(AName)
       else
       begin
@@ -658,6 +661,7 @@ begin
   GlobalObject := TGocciaObjectValue(FThisValue);
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
   Result := Assigned(Descriptor) and not Descriptor.Configurable;
+  ReleaseDescriptor(Descriptor);
 end;
 
 // ES2026 §9.1.1.4.17 CanDeclareGlobalVar(N)
@@ -685,10 +689,9 @@ begin
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
   if not Assigned(Descriptor) then
     Exit(GlobalObject.Extensible);
-  if Descriptor.Configurable then
-    Exit(True);
-  Result := IsDataDescriptor(Descriptor) and Descriptor.Writable and
-    Descriptor.Enumerable;
+  Result := Descriptor.Configurable or (IsDataDescriptor(Descriptor) and
+    Descriptor.Writable and Descriptor.Enumerable);
+  ReleaseDescriptor(Descriptor);
 end;
 
 // ES2026 §9.1.1.4.18 CreateGlobalVarBinding(N, D)
@@ -723,6 +726,7 @@ procedure TGocciaScope.CreateGlobalFunctionBinding(const AName: string;
   const AValue: TGocciaValue; const ACanDelete: Boolean);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  IsNonConfigurable: Boolean;
   Flags: TPropertyFlags;
   GlobalObject: TGocciaObjectValue;
 begin
@@ -736,7 +740,9 @@ begin
     RegisterGlobalVarDeclaration(AName);
   GlobalObject := TGocciaObjectValue(FThisValue);
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) and not Descriptor.Configurable then
+  IsNonConfigurable := Assigned(Descriptor) and not Descriptor.Configurable;
+  ReleaseDescriptor(Descriptor);
+  if IsNonConfigurable then
   begin
     GlobalObject.AssignProperty(AName, AValue);
     Exit;
@@ -1044,6 +1050,7 @@ begin
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
   Result := Assigned(Descriptor) and IsDataDescriptor(Descriptor) and
     Descriptor.Writable;
+  ReleaseDescriptor(Descriptor);
 end;
 
 function TGocciaScope.TryGetGlobalBuiltInObjectBinding(const AName: string;

@@ -33,7 +33,11 @@
   prototype received a freed string, and the first collection that marked it
   faulted. The script therefore reads each prototype's tag and then collects
   inside the realm (Goccia.gc), which marks every value the later realm's
-  prototypes reach. }
+  prototypes reach.
+
+  Engines run back-to-back must also give back what each one parsed: a second
+  test holds the heap flat across engines that each run a large source string
+  literal (#1704). }
 
 program Goccia.SharedPrototypeRealmReuse.Test;
 
@@ -116,12 +120,15 @@ type
     procedure SetupTests; override;
 
     procedure TestSharedPrototypeSurvivesRealmTeardownAndCollect;
+    procedure TestSourceLiteralIsFreedWithItsEngine;
   end;
 
 procedure TRealmReuseTests.SetupTests;
 begin
   Test('shared-prototype types stay correct across realm teardown + GC collect on one thread',
     TestSharedPrototypeSurvivesRealmTeardownAndCollect);
+  Test('a source string literal is freed with its engine, so engines run back-to-back do not grow the heap',
+    TestSourceLiteralIsFreedWithItsEngine);
 end;
 
 procedure TRealmReuseTests.TestSharedPrototypeSurvivesRealmTeardownAndCollect;
@@ -196,6 +203,40 @@ begin
     for J := 0 to FpcStompCount - 1 do
       FreeMem(FpcStomp[J]);
   end;
+end;
+
+{ #1704: a parse's tree, and the lexemes and source text it kept, outlived its
+  engine, so each engine that ran a script with a large string literal left
+  several times the literal's size allocated. The tree is freed with its
+  program now (ADR 0143). The heap in use after a warm-up must stay flat across
+  more engines; before the fix it grew by about 675 KB per engine here. }
+procedure TRealmReuseTests.TestSourceLiteralIsFreedWithItsEngine;
+const
+  LITERAL_LENGTH = 100000;
+  WARM_UP_ENGINES = 3;
+  MEASURED_ENGINES = 20;
+  // Less than one literal's worth for all measured engines together.
+  MAX_GROWTH_BYTES = LITERAL_LENGTH;
+var
+  Script: string;
+  I: Integer;
+  Before, After: PtrUInt;
+
+  procedure RunOne(const AIndex: Integer);
+  begin
+    TGocciaEngine.RunScript(Script, '<literal-' + IntToStr(AIndex) + '>');
+    TGarbageCollector.Instance.Collect;
+  end;
+
+begin
+  Script := 'const s = "' + StringOfChar('x', LITERAL_LENGTH) + '";';
+  for I := 1 to WARM_UP_ENGINES do
+    RunOne(I);
+  Before := GetFPCHeapStatus.CurrHeapUsed;
+  for I := 1 to MEASURED_ENGINES do
+    RunOne(WARM_UP_ENGINES + I);
+  After := GetFPCHeapStatus.CurrHeapUsed;
+  Expect<Boolean>(After < Before + MAX_GROWTH_BYTES).ToBe(True);
 end;
 
 begin

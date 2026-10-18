@@ -77,6 +77,7 @@ type
     procedure SetupTests; override;
 
     procedure TestCollectYoungTracesOldToYoungReferences;
+    procedure TestDestroyFreesEveryManagedObject;
     procedure TestReservationCollectsAndRetries;
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
@@ -89,6 +90,7 @@ type
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
     procedure TestCrossThreadReleaseKeepsAccountingExact;
     procedure TestRegisterObjectAdvancesEveryByteCounter;
+    procedure TestValueRefusedByTheLimitIsReclaimedOnce;
     procedure TestEachThreadHasItsOwnCollector;
     procedure TestHeapTriggerKeepsGarbageNearTheCeiling;
     procedure TestHeapTriggerBacksOffAboveSurvivors;
@@ -172,6 +174,8 @@ procedure TTestGarbageCollector.SetupTests;
 begin
   Test('CollectYoung traces references from old rooted objects',
     TestCollectYoungTracesOldToYoungReferences);
+  Test('Destroying a collector frees every object it still manages',
+    TestDestroyFreesEveryManagedObject);
   Test('External reservation collects and retries',
     TestReservationCollectsAndRetries);
   Test('External reservation collects past the pressure reserve',
@@ -196,6 +200,8 @@ begin
     TestCrossThreadReleaseKeepsAccountingExact);
   Test('Registering an object advances the live, total and peak byte counters',
     TestRegisterObjectAdvancesEveryByteCounter);
+  Test('A value refused by the memory limit is reclaimed exactly once',
+    TestValueRefusedByTheLimitIsReclaimedOnce);
   Test('Each thread allocates into its own collector, from Initialize to Shutdown',
     TestEachThreadHasItsOwnCollector);
   { Heap-triggered collection reads the FPC heap manager's status; other
@@ -843,6 +849,73 @@ begin
     TChildManaged.InstanceSize);
 end;
 
+// In a production build a number box's constructor has no implicit
+// exception frame, so when the limit refuses it FPC does not destroy it: it
+// must stay registered for the collector to free, and the number's refusal
+// leaves exactly one box more charged than the object's. An object's
+// constructor has the frame (and so does the number's in a development
+// build), so FPC destroys it and it must already be unregistered. Both
+// refusals charge the same RangeError besides. The final collection must
+// free everything either way.
+procedure TTestGarbageCollector.TestValueRefusedByTheLimitIsReclaimedOnce;
+var
+  GC: TGarbageCollector;
+  Baseline: Integer;
+  LiveBefore, PreviousMaxBytes, BeforeRefusals, AfterNumber,
+    AfterObject, ExpectedKept: Int64;
+
+  function Refuses(const AIsNumber: Boolean): Boolean;
+  begin
+    Result := False;
+    try
+      if AIsNumber then
+        TGocciaNumberLiteralValue.Create(1.5)
+      else
+        TGocciaObjectValue.Create(nil);
+    except
+      Result := True;
+    end;
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  Baseline := GC.ManagedObjectCount;
+  LiveBefore := GC.BytesAllocated;
+  PreviousMaxBytes := GC.MaxBytes;
+  // Any allocation now exceeds the limit (zero would mean no limit).
+  GC.MaxBytes := LiveBefore + 1;
+  try
+    // A first refusal also builds what every later RangeError reuses.
+    Refuses(False);
+    BeforeRefusals := GC.BytesAllocated;
+    Expect<Boolean>(Refuses(True)).ToBe(True);
+    AfterNumber := GC.BytesAllocated;
+    Expect<Boolean>(Refuses(False)).ToBe(True);
+    AfterObject := GC.BytesAllocated;
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+
+  // Decided by the build, not by the override. In a production build an
+  // override that disagrees with the frameless constructor fails here: the box
+  // it unregisters is missing from the charge, and FPC does not free it. A
+  // development build only checks that the ledger comes back clean: FPC
+  // destroys the box there whatever the override says. The bracket and the
+  // override are keyed to the one symbol for that reason.
+  {$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}
+  ExpectedKept := TGocciaNumberLiteralValue.InstanceSize;
+  {$ELSE}
+  ExpectedKept := 0;
+  {$ENDIF}
+  Expect<Int64>((AfterNumber - BeforeRefusals) - (AfterObject - AfterNumber))
+    .ToBe(ExpectedKept);
+
+  GC.Collect;
+  Expect<Int64>(GC.BytesAllocated).ToBe(LiveBefore);
+  Expect<Boolean>(GC.ManagedObjectCount <= Baseline).ToBe(True);
+end;
+
 procedure TTestGarbageCollector.TestReservationCollectsAndRetries;
 var
   BaselineBytes: Int64;
@@ -1064,6 +1137,43 @@ begin
       GC.ReleaseExternalBytes(BALLAST_BYTES);
     GC.MaxBytes := PreviousMaxBytes;
   end;
+end;
+
+{ #1592: a collector that goes away destroys what it still manages, roots,
+  pins and temp roots included, instead of leaking it. A thread's runtime
+  shutdown and the main thread's end of run rely on this. }
+procedure TTestGarbageCollector.TestDestroyFreesEveryManagedObject;
+var
+  GC: TGarbageCollector;
+  Parent: TParentManaged;
+  Pinned, TempRooted: TChildManaged;
+begin
+  GParentDestructorCount := 0;
+  GChildDestructorCount := 0;
+  GC := TGarbageCollector.Create;
+  try
+    Parent := TParentManaged.Create;
+    GC.RegisterObject(Parent);
+    GC.AddRootObject(Parent);
+    Parent.Child := TChildManaged.Create;
+    GC.RegisterObject(Parent.Child);
+    Pinned := TChildManaged.Create;
+    GC.RegisterObject(Pinned);
+    GC.PinObject(Pinned);
+    TempRooted := TChildManaged.Create;
+    GC.RegisterObject(TempRooted);
+    GC.AddTempRoot(TempRooted);
+
+    GC.Collect;
+    Expect<Integer>(GC.ManagedObjectCount).ToBe(4);
+    Expect<Integer>(GParentDestructorCount).ToBe(0);
+    Expect<Integer>(GChildDestructorCount).ToBe(0);
+  finally
+    GC.Free;
+  end;
+
+  Expect<Integer>(GParentDestructorCount).ToBe(1);
+  Expect<Integer>(GChildDestructorCount).ToBe(3);
 end;
 
 procedure TTestGarbageCollector.TestCollectYoungTracesOldToYoungReferences;

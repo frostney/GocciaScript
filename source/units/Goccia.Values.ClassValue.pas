@@ -385,6 +385,10 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
+    procedure AssignPropertySlow(const AName: string; const AValue: TGocciaValue;
+      const ACanCreate: Boolean);
+    procedure AddOwnDataPropertyGrowing(const AName: string;
+      const AValue: TGocciaValue);
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
@@ -1075,6 +1079,7 @@ begin
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
     ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+  ReleaseDescriptor(ExistingDescriptor);
 
   inherited DefineProperty(AName,
     TGocciaPropertyDescriptorAccessor.Create(
@@ -1095,6 +1100,7 @@ begin
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
     ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+  ReleaseDescriptor(ExistingDescriptor);
 
   inherited DefineProperty(AName,
     TGocciaPropertyDescriptorAccessor.Create(
@@ -1182,6 +1188,7 @@ begin
     if Getter is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(Getter);
   end;
+  ReleaseDescriptor(Descriptor);
 end;
 
 function TGocciaClassValue.GetStaticPropertySetter(const AName: string): TGocciaFunctionBase;
@@ -1197,6 +1204,7 @@ begin
     if Setter is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(Setter);
   end;
+  ReleaseDescriptor(Descriptor);
 end;
 
 procedure TGocciaClassValue.AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
@@ -1849,6 +1857,7 @@ begin
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
+      ReleaseDescriptor(Descriptor);
       Result := inherited GetPropertyWithContext(AName, AThisContext);
       Exit;
     end;
@@ -1871,6 +1880,7 @@ begin
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
+      ReleaseDescriptor(Descriptor);
       Result := inherited GetPropertyWithContext(AName, AThisContext);
       Exit;
     end;
@@ -1902,8 +1912,12 @@ begin
   if FProperties.ContainsKey(AName) then
     Exit;
   Descriptor := GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) then
-    FProperties.Add(AName, Descriptor);
+  if not Assigned(Descriptor) then
+    Exit;
+  if Descriptor.CallerOwned then
+    FProperties.Add(AName, Descriptor.TakeOwnership)
+  else
+    FProperties.Add(AName, ClonePropertyDescriptor(Descriptor));
 end;
 
 procedure TGocciaClassValue.DefineProperty(const AName: string;
@@ -1916,7 +1930,8 @@ begin
       ADescriptor.Free;
       Exit;
     end;
-    ADescriptor.Free;
+    // The base contract: a definition that throws leaves the descriptor to
+    // its caller, which frees it. Freeing it here as well freed it twice.
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
       SSuggestCannotDeleteNonConfigurable);
   end;
@@ -1965,7 +1980,8 @@ end;
 function TGocciaClassValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
 begin
   if AName = PROP_PROTOTYPE then
-    Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
+    Result := TGocciaPropertyDescriptorData.Create(FClassPrototype,
+      []).AsCallerOwned
   else if AName = PROP_NAME then
   begin
     // Check if .name was explicitly set (e.g. static name = 'Custom')
@@ -1975,10 +1991,11 @@ begin
       // Synthesize from FName: { writable: false, enumerable: false, configurable: true }
       if (FName = '') or (FName = '<anonymous>') then
         Result := TGocciaPropertyDescriptorData.Create(
-          TGocciaStringLiteralValue.Create(''), [pfConfigurable])
+          TGocciaStringLiteralValue.Create(''), [pfConfigurable]).AsCallerOwned
       else
         Result := TGocciaPropertyDescriptorData.Create(
-          TGocciaStringLiteralValue.Create(FName), [pfConfigurable]);
+          TGocciaStringLiteralValue.Create(FName),
+          [pfConfigurable]).AsCallerOwned;
     end;
   end
   else if AName = PROP_LENGTH then
@@ -1989,7 +2006,8 @@ begin
     Result := inherited GetOwnPropertyDescriptor(AName);
     if not Assigned(Result) and not FLengthDeleted then
       Result := TGocciaPropertyDescriptorData.Create(
-        TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable]);
+        TGocciaNumberLiteralValue.Create(GetClassLength),
+        [pfConfigurable]).AsCallerOwned;
   end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
@@ -2079,9 +2097,12 @@ end;
 function TGocciaClassValue.DeleteProperty(const AName: string): Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  HasDescriptor: Boolean;
 begin
   Descriptor := inherited GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) then
+  HasDescriptor := Assigned(Descriptor);
+  ReleaseDescriptor(Descriptor);
+  if HasDescriptor then
   begin
     Result := inherited DeleteProperty(AName);
     if Result then
@@ -2678,9 +2699,89 @@ begin
   Result := GetPropertyFromPrototype(AName, AThisContext);
 end;
 
+// The two stores that need nothing but the maps: a writable own data
+// property, and a new own property behind a prototype chain that holds none
+// of the name. Kept free of managed locals so that they pay no exception
+// frame; everything else is AssignPropertySlow, which walks again from the
+// start.
+//
+// The fast path allocates nothing before its last step and calls nothing that
+// can run guest code, collect or hand back a descriptor it must free: it reads
+// a prototype only when that prototype keeps the ordinary [[Set]] and
+// [[GetOwnProperty]], and then only asks its map whether the name is there,
+// without materializing a lazy entry. Its one store that can raise, a new
+// property that grows the map, is AddOwnDataPropertyGrowing's.
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Proto: TGocciaObjectValue;
+begin
+  if FProperties.TryGetValue(AName, Descriptor) then
+  begin
+    if (Descriptor.ClassType = TGocciaPropertyDescriptorData) and
+       TGocciaPropertyDescriptorData(Descriptor).Writable then
+      TGocciaPropertyDescriptorData(Descriptor).Value := AValue
+    else
+      AssignPropertySlow(AName, AValue, ACanCreate);
+    Exit;
+  end;
+
+  Proto := FPrototype;
+  while Assigned(Proto) do
+  begin
+    if not UsesOrdinarySet(Proto) or not InheritsGetOwnProperty(Proto) or
+       Proto.Properties.ContainsKey(AName) then
+    begin
+      AssignPropertySlow(AName, AValue, ACanCreate);
+      Exit;
+    end;
+    Proto := Proto.Prototype;
+  end;
+
+  if not ACanCreate or not FExtensible or
+     (ClassType <> TGocciaInstanceValue) then
+  begin
+    AssignPropertySlow(AName, AValue, ACanCreate);
+    Exit;
+  end;
+
+  // OrdinarySet creates an own data property, which OrdinaryDefineOwnProperty
+  // accepts as given; an instance of exactly this class has the ordinary
+  // DefineProperty, so the descriptor goes straight into the map. When the
+  // map has room the Add allocates nothing and cannot raise, so the new
+  // descriptor is always stored; a store that grows the map goes through
+  // AddOwnDataPropertyGrowing, which frees it if the growth is refused.
+  NoteIndexedOwnProperty(AName);
+  if FProperties.HasRoomForAdd then
+    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]))
+  else
+    AddOwnDataPropertyGrowing(AName, AValue);
+end;
+
+// The growing half of AssignProperty's new-property store. Its own procedure,
+// so that only a store that grows the map pays for the exception frame.
+procedure TGocciaInstanceValue.AddOwnDataPropertyGrowing(const AName: string;
+  const AValue: TGocciaValue);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]);
+  try
+    // A refused or failed growth leaves the map without the entry.
+    FProperties.Add(AName, Descriptor);
+  except
+    Descriptor.Free;
+    raise;
+  end;
+end;
+
+procedure TGocciaInstanceValue.AssignPropertySlow(const AName: string;
+  const AValue: TGocciaValue; const ACanCreate: Boolean);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Setter: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
 begin
@@ -2718,18 +2819,19 @@ begin
          Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) and
          TGocciaPropertyDescriptorAccessor(Descriptor).Setter.IsCallable then
       begin
+        // Released before the call: the setter may delete or redefine the
+        // property, which frees a stored descriptor.
+        Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+        ReleaseDescriptor(Descriptor);
         Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
         try
           Args.Add(AValue);
           // A setter is any callable, a callable Proxy included; only a
           // function object takes the direct path.
-          if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionBase then
-            TGocciaFunctionBase(
-              TGocciaPropertyDescriptorAccessor(Descriptor).Setter).Call(
-              Args, Self)
+          if Setter is TGocciaFunctionBase then
+            TGocciaFunctionBase(Setter).Call(Args, Self)
           else
-            InvokeCallable(TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-              Args, Self);
+            InvokeCallable(Setter, Args, Self);
         finally
           Args.Free;
         end;
@@ -2737,11 +2839,16 @@ begin
       end
       else if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
+        ReleaseDescriptor(Descriptor);
         ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
       else if (Descriptor is TGocciaPropertyDescriptorData) and
               (not TGocciaPropertyDescriptorData(Descriptor).Writable) then
+      begin
+        ReleaseDescriptor(Descriptor);
         ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
+      end;
+      ReleaseDescriptor(Descriptor);
     end;
     Proto := Proto.Prototype;
   end;
