@@ -820,10 +820,12 @@ begin
 
   if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
     Result := TGocciaPropertyDescriptorData.Create(
-      TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable])
+      TGocciaNumberLiteralValue.Create(GetFunctionLength),
+      [pfConfigurable]).AsCallerOwned
   else if (AName = PROP_NAME) and FHasOwnNameProperty then
     Result := TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable])
+      TGocciaStringLiteralValue.Create(GetFunctionName),
+      [pfConfigurable]).AsCallerOwned
   else
     Result := nil;
 end;

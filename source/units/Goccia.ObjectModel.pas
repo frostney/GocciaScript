@@ -825,11 +825,15 @@ begin
       begin
         AliasDescriptor := TargetObject.GetOwnPropertyDescriptor(
           Def.AliasTargetName);
-        if not (AliasDescriptor is TGocciaPropertyDescriptorData) then
-          raise EGocciaObjectModelError.CreateFmt(
-            'Cannot register %s: target "%s" is not an existing data property',
-            [KindToString(Def.Kind), Def.AliasTargetName]);
-        AliasValue := TGocciaPropertyDescriptorData(AliasDescriptor).Value;
+        try
+          if not (AliasDescriptor is TGocciaPropertyDescriptorData) then
+            raise EGocciaObjectModelError.CreateFmt(
+              'Cannot register %s: target "%s" is not an existing data property',
+              [KindToString(Def.Kind), Def.AliasTargetName]);
+          AliasValue := TGocciaPropertyDescriptorData(AliasDescriptor).Value;
+        finally
+          ReleaseDescriptor(AliasDescriptor);
+        end;
         if Def.Kind = gmkPropertyAlias then
           TargetObject.DefineProperty(Def.ExposedName,
             TGocciaPropertyDescriptorData.Create(AliasValue,
@@ -863,14 +867,23 @@ begin
   begin
     Descriptor := SourceObject.GetOwnPropertyDescriptor(Key);
     if Assigned(Descriptor) then
-      TargetObject.DefineProperty(Key, ClonePropertyDescriptor(Descriptor));
+      try
+        TargetObject.DefineProperty(Key, ClonePropertyDescriptor(Descriptor));
+      finally
+        ReleaseDescriptor(Descriptor);
+      end;
   end;
 
   for Symbol in SourceObject.GetOwnSymbols do
   begin
     Descriptor := SourceObject.GetOwnSymbolPropertyDescriptor(Symbol);
     if Assigned(Descriptor) then
-      TargetObject.DefineSymbolProperty(Symbol, ClonePropertyDescriptor(Descriptor));
+      try
+        TargetObject.DefineSymbolProperty(Symbol,
+          ClonePropertyDescriptor(Descriptor));
+      finally
+        ReleaseDescriptor(Descriptor);
+      end;
   end;
 end;
 

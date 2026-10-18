@@ -174,6 +174,19 @@ begin
   ThrowTypeError(Message, SSuggestFFIUsage);
 end;
 
+{ The address of a typed array's first element in the buffer's current data
+  block, or nil when the view has no element there: a detached buffer, a view
+  past the end of its shrunk buffer, or an empty view. }
+function TypedArrayDataPointer(const AArray: TGocciaTypedArrayValue): Pointer;
+var
+  Data: TBytes;
+begin
+  if AArray.Length = 0 then
+    Exit(nil);
+  Data := AArray.BufferData;
+  Result := @Data[AArray.ByteOffset];
+end;
+
 function PointerFromFFIValue(const AValue: TGocciaValue;
   const AArgumentIndex: Integer): Pointer;
 begin
@@ -199,13 +212,7 @@ begin
       Result := @TGocciaSharedArrayBufferValue(AValue).Data[0];
   end
   else if AValue is TGocciaTypedArrayValue then
-  begin
-    if Length(TGocciaTypedArrayValue(AValue).BufferData) = 0 then
-      Result := nil
-    else
-      Result := @TGocciaTypedArrayValue(AValue).BufferData[
-        TGocciaTypedArrayValue(AValue).ByteOffset];
-  end
+    Result := TypedArrayDataPointer(TGocciaTypedArrayValue(AValue))
   else if AValue is TGocciaFFIAggregateValue then
     Result := TGocciaFFIAggregateValue(AValue).DataPointer
   else if AValue is TGocciaNullLiteralValue then

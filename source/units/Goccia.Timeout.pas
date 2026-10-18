@@ -71,6 +71,7 @@ implementation
 uses
   TimingUtils,
 
+  Goccia.ThreadCleanupRegistry,
   Goccia.ThreadPolls;
 
 const
@@ -215,5 +216,15 @@ begin
     Exit(High(Integer));
   Result := Integer((RemainingNs + 999999) div 1000000);
 end;
+
+{ The calling thread's scope stack, released when its runtime shuts down. }
+procedure ReleaseTimeoutStack;
+begin
+  SetLength(GTimeoutStack, 0);
+  GTimeoutDepth := 0;
+end;
+
+initialization
+  RegisterThreadvarCleanup(@ReleaseTimeoutStack);
 
 end.
