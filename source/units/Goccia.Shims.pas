@@ -626,7 +626,15 @@ const
         'const __GocciaDateISOYearString = (year: number): string =>'#10 +
         '  year >= 0 && year <= 9999 ? __GocciaDatePad(year, 4) :'#10 +
         '    (year < 0 ? "-" : "+") + __GocciaDatePad(year, 6);'#10 +
-        'const __GocciaDateOffsetString = (offset: string): string => offset.replace(":", "");'#10 +
+        '// ES2026 §21.4.4.41.3 TimeZoneString: the offset in whole milliseconds,'#10 +
+        '// written as sign, hours and minutes. The seconds of a local mean time'#10 +
+        '// offset such as -07:52:58 stay in the local time but not in the string.'#10 +
+        'const __GocciaDateOffsetString = (offsetNanoseconds: number): string => {'#10 +
+        '  const offset: number = Math.trunc(offsetNanoseconds / 1000000);'#10 +
+        '  const absOffset: number = Math.abs(offset);'#10 +
+        '  return (offset >= 0 ? "+" : "-") + __GocciaDatePad(Math.floor(absOffset / 3600000), 2) +'#10 +
+        '    __GocciaDatePad(Math.floor(absOffset / 60000) % 60, 2);'#10 +
+        '};'#10 +
         'const __GocciaDateFromSingleArgument = (value: any): number => {'#10 +
         '  if (typeof value === "number") return __GocciaDateTimeClip(value);'#10 +
         '  if (__GocciaDateHasSlot(value)) return __GocciaDateGetSlot(value);'#10 +
@@ -842,7 +850,7 @@ const
         '    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];'#10 +
         '    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];'#10 +
         '    return days[z.dayOfWeek % 7] + " " + months[z.month - 1] + " " + __GocciaDatePad(z.day, 2) + " " +'#10 +
-        '      __GocciaDateYearString(z.year) + " " + __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offset);'#10 +
+        '      __GocciaDateYearString(z.year) + " " + __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offsetNanoseconds);'#10 +
         '  }'#10 +
         '  toDateString(): string {'#10 +
         '    Date.#require(this);'#10 +
@@ -856,7 +864,7 @@ const
         '    Date.#require(this);'#10 +
         '    const z = Date.#local(this);'#10 +
         '    if (!z) return "Invalid Date";'#10 +
-        '    return __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offset);'#10 +
+        '    return __GocciaDatePad(z.hour, 2) + ":" + __GocciaDatePad(z.minute, 2) + ":" + __GocciaDatePad(z.second, 2) + " GMT" + __GocciaDateOffsetString(z.offsetNanoseconds);'#10 +
         '  }'#10 +
         '  toUTCString(): string {'#10 +
         '    Date.#require(this);'#10 +
