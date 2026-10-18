@@ -1,0 +1,8 @@
+{
+  "compat-function": true,
+  "permissions": {
+    "allow-read": [
+      "../../../../fixtures/modules"
+    ]
+  }
+}

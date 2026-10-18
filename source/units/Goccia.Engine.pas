@@ -100,6 +100,7 @@ const
 
   stScript = Goccia.SourcePipeline.stScript;
   stModule = Goccia.SourcePipeline.stModule;
+  stDetect = Goccia.SourcePipeline.stDetect;
 
 type
 
@@ -168,7 +169,9 @@ type
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
     const DefaultCompatibility: TGocciaCompatibilityFlags = [];
     const DefaultWarningUnsupportedFeatures = False;
-    const DefaultSourceType: TGocciaSourceType = stScript;
+    { ADR 0140: an entry whose file name does not name its goal is a Module
+      when it has a top-level import or export declaration. }
+    const DefaultSourceType: TGocciaSourceType = stDetect;
   private
     { The realm's global environment. The engine owns it. }
     FGlobalScope: TGocciaGlobalScope;
@@ -496,7 +499,8 @@ type
       declarations on the global object, lexical declarations in its
       declarative record, so later programs on the engine see them. False by
       default, which keeps them in the program's own frame. The CLI hosts set
-      it to SourceType = stScript. }
+      it to SourceType <> stModule; CompileModule and Execute clear it for a
+      run whose goal settles on Module (ADR 0140). }
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     { How this engine loads its bootstrap shims; GetDateIntrinsic takes it. }
@@ -549,6 +553,12 @@ type
       write SetExperimentalJSModuleSourceEnabled;
     property WarningUnsupportedFeatures: Boolean
       read FWarningUnsupportedFeatures write SetWarningUnsupportedFeatures;
+    { The entry's goal. stDetect (the default unless the file name is .mjs or
+      .mts) leaves it to the source (ADR 0140): Execute settles it for each
+      run. A host that parses the entry itself assigns the goal its parse
+      settled (TGocciaSourcePipelineResult.SourceType) before CompileModule
+      and RunModuleForSourceType, which run anything but stModule as a
+      Script. }
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
     property StrictTypes: Boolean read FStrictTypes write SetStrictTypes;
     property Shims: TStringList read FShims;
@@ -2946,13 +2956,24 @@ end;
 function TGocciaEngine.CompileModule(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
+  SavedGlobalBackedTopLevel: Boolean;
   FloatingPointState: TGocciaFloatingPointState;
 begin
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    // Module source is always strict.
-    Result := CompileProgram(AProgram,
-      (FSourceType <> stModule) and (cfNonStrictMode in FCompatibility));
+    { A host configures GlobalBackedTopLevel before the parse settles a
+      detected goal (ADR 0140), so a Module's top level is kept off the global
+      object here. }
+    SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
+    if FSourceType = stModule then
+      FGlobalBackedTopLevel := False;
+    try
+      // Module source is always strict.
+      Result := CompileProgram(AProgram,
+        (FSourceType <> stModule) and (cfNonStrictMode in FCompatibility));
+    finally
+      FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    end;
     FRetainedModules.Add(Result);
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
@@ -3634,6 +3655,28 @@ begin
   end;
 end;
 
+{ The path an entry module is registered and stamped under: the one the
+  loader's resolver gives an import of the entry's file. That is the expanded
+  host path, unless the content provider knows the file only by the name the
+  host gave it. The sandbox's virtual filesystem names files by `/`-rooted
+  paths on every platform, and its resolver answers an import of `./cyc.js`
+  with `/cyc.js`, while on Windows ExpandFileName turns `/cyc.js` into a drive
+  path the filesystem does not have. Registered under that, the entry was
+  missed by an import of its own file, which loaded a second copy of it. }
+function EntryModulePath(const ALoader: TGocciaModuleLoader;
+  const ASourcePath: string): string;
+var
+  Provider: TGocciaModuleContentProvider;
+begin
+  Result := ExpandFileName(ASourcePath);
+  if Result = ASourcePath then
+    Exit;
+  Provider := ALoader.ContentProvider;
+  if Assigned(Provider) and Provider.Exists(ASourcePath) and
+     not Provider.Exists(Result) then
+    Result := ASourcePath;
+end;
+
 function TGocciaEngine.RunModuleForSourceType(
   const AModule: TGocciaBytecodeModule;
   const AFileName: string): TGocciaValue;
@@ -3642,6 +3685,7 @@ var
   EntryModule: TGocciaModule;
   ModuleScope: TGocciaScope;
   PrevScope: TGocciaDiagnosticSourceScope;
+  SavedGlobalBackedTopLevel: Boolean;
   SavedRuntimeModule: TGocciaModule;
 begin
   // Entry for an already compiled module (Execute parses and compiles the
@@ -3667,13 +3711,17 @@ begin
         VM's current runtime module it gets the program's exports
         (InitializeEntryLocalExports and InitializeEntryLinkedExports, then
         OP_EXPORT). }
-      EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
+      EntryModule := TGocciaModule.Create(
+        EntryModulePath(FModuleLoader, AFileName));
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then
         EntryModule.LastModified := EntryLastModified;
       FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
       SavedRuntimeModule := FVM.CurrentRuntimeModule;
       FVM.CurrentRuntimeModule := EntryModule;
+      { As CompileModule: the Module's top level is not global-backed. }
+      SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
+      FGlobalBackedTopLevel := False;
       FModuleLoader.BeginEvaluatingModulePath(EntryModule.Path);
       try
         try
@@ -3690,6 +3738,7 @@ begin
       finally
         FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
         FVM.CurrentRuntimeModule := SavedRuntimeModule;
+        FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
       end;
     end
     else
@@ -3813,6 +3862,7 @@ end;
 
 function TGocciaEngine.Execute: TGocciaScriptResult;
 var
+  RunSourceType: TGocciaSourceType;
   PipelineOptions: TGocciaSourcePipelineOptions;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   PipelineResult: TGocciaSourcePipelineResult;
@@ -3857,6 +3907,11 @@ begin
     PipelineOptions := SourcePipelineOptions(FSourceType);
     PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
       PipelineOptions);
+    { The goal this run has: FSourceType, or the one the parse settled for
+      stDetect (ADR 0140). FSourceType keeps the setting, so a long-lived
+      engine settles each Execute's source on its own. }
+    RunSourceType := PipelineResult.SourceType;
+    PipelineOptions.SourceType := RunSourceType;
     FLastTiming.LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
     FLastTiming.ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
     PrintSourcePipelineWarnings(PipelineResult);
@@ -3893,7 +3948,7 @@ begin
         MicrotaskScopeToken := MicrotaskQueue.EnterScope;
         OwnsMicrotaskScope := True;
       end;
-      if FSourceType = stModule then
+      if RunSourceType = stModule then
       begin
         // ES2026 §16.2.1.6.4: a Module Environment Record's
         // [[ThisValue]] is undefined.  Run the entry program in a
@@ -3920,7 +3975,8 @@ begin
         if Assigned(FModuleLoader) then
         begin
           EntryRequestedModules := TGocciaModuleList.Create;
-          EntryModule := TGocciaModule.Create(ExpandFileName(FSourcePath));
+          EntryModule := TGocciaModule.Create(
+            EntryModulePath(FModuleLoader, FSourcePath));
           { Stamp the entry with its file's modification time, as the
             loader stamps every module it loads. Unstamped, a later
             import of the entry's own path took it for a changed file
@@ -4154,9 +4210,10 @@ var
 begin
   Engine := TGocciaEngine.Create(AFileName, ASource);
   try
-    { Script source keeps its top-level bindings on the global object;
-      a module file name (.mjs) gives module source, which does not. }
-    Engine.GlobalBackedTopLevel := Engine.SourceType = stScript;
+    { Script source keeps its top-level bindings on the global object; a
+      Module (an .mjs name, or a detected one, ADR 0140) does not, which
+      Execute arranges for itself. }
+    Engine.GlobalBackedTopLevel := Engine.SourceType <> stModule;
     Result := Engine.Execute;
   finally
     Engine.Free;

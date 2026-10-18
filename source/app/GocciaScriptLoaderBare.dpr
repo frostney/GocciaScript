@@ -112,7 +112,8 @@ begin
   WriteLn(AOut, '  --strict-types                Enforce type annotations at runtime');
   WriteLn(AOut, '  --warning-unsupported-features');
   WriteLn(AOut, '                                Warn and recover for unsupported/default-disabled syntax');
-  WriteLn(AOut, '  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
+  WriteLn(AOut, '  --source-type=script|module   Load entry as script source or module source (default: module if the');
+  WriteLn(AOut, '                                source has a top-level import or export; .mjs and .mts infer module)');
   WriteLn(AOut, '  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn(AOut, '  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn(AOut, '  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
@@ -277,7 +278,7 @@ begin
   AOptions.UnsafeShadowRealm := False;
   AOptions.Deterministic := False;
   AOptions.Print := False;
-  AOptions.SourceType := stScript;
+  AOptions.SourceType := stDetect;
   AOptions.SourceTypeExplicit := False;
   AOptions.FileName := STDIN_PATH_MARKER;
   AOptions.FileNameExplicit := False;
@@ -400,7 +401,7 @@ begin
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
   if AOptions.UnsafeShadowRealm then
     EnableShadowRealm(AEngine);
-  AEngine.GlobalBackedTopLevel := AOptions.SourceType = stScript;
+  AEngine.GlobalBackedTopLevel := AOptions.SourceType <> stModule;
 end;
 
 procedure RegisterBareGlobals(const AEngine: TGocciaEngine;

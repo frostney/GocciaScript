@@ -47,6 +47,12 @@ type
     InheritedStrictMode: Boolean;
     ModuleSource: Boolean;
     ImportMetaAllowed: Boolean;
+    { Parse source whose goal is not chosen yet (ADR 0140): as Script, while
+      recording whether a top-level statement is an import or export
+      declaration. The goal-dependent errors, import.meta and a `with`
+      statement, are held until Parse returns, which settles the goal and
+      raises the one that applies. }
+    DetectModuleGoal: Boolean;
     LabelStatementsEnabled: Boolean;
     ForInLoopsEnabled: Boolean;
     WarningUnsupportedFeatures: Boolean;
@@ -127,6 +133,12 @@ type
     FInheritedStrictMode: Boolean;
     FModuleSource: Boolean;
     FImportMetaAllowed: Boolean;
+    FDetectModuleGoal: Boolean;
+    FModuleSyntaxDetected: Boolean;
+    FDeferredImportMetaLine: Integer;
+    FDeferredImportMetaColumn: Integer;
+    FDeferredWithLine: Integer;
+    FDeferredWithColumn: Integer;
     FLabelStatementsEnabled: Boolean;
     FForInLoopsEnabled: Boolean;
     FWarningUnsupportedFeatures: Boolean;
@@ -236,6 +248,7 @@ type
     function HasLineTerminatorBetween(const ABefore,
       AAfter: TGocciaToken): Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function HasLineTerminatorBeforePeek: Boolean;
+    procedure RaiseLineTerminatorBeforeArrow;
     function IsIdentifierNameToken(
       const ATokenType: TGocciaTokenType): Boolean;
     function IsIdentifierBindingToken(
@@ -253,6 +266,10 @@ type
       const ALexicalGoal: TGocciaLexicalGoal): Boolean;
     function CheckEscapedIdentifierKeyword(const AKeyword: string): Boolean;
     function EffectiveNonStrictModeEnabled: Boolean;
+    function IsModuleDeclarationStart: Boolean;
+    procedure RaiseImportMetaOutsideModuleError(const ALine, AColumn: Integer);
+    procedure RaiseModuleWithStatementError(const ALine, AColumn: Integer);
+    procedure SettleDetectedModuleGoal;
     function IsLexicalDeclarationStart: Boolean;
     function IsForHeadLexicalDeclarationStart: Boolean;
     function StatementIsDirective(const AStatement: TGocciaStatement;
@@ -470,6 +487,9 @@ type
     procedure ApplyOptions(const AOptions: TGocciaParserOptions);
     function Options: TGocciaParserOptions;
     property WarningCount: Integer read FWarningCount;
+    { With DetectModuleGoal: whether the last Parse found a top-level import
+      or export declaration, so the source is a Module. }
+    property ModuleSyntaxDetected: Boolean read FModuleSyntaxDetected;
   end;
 
 implementation
@@ -512,6 +532,12 @@ const
   ARROW_RETURN_TYPE_TERMINATORS: array[0..5] of TGocciaTokenType = (
     gttArrow, gttSemicolon, gttComma,
     gttRightParen, gttRightBracket, gttRightBrace);
+
+const
+  SWithStatementNeedsNonStrictMode =
+    '''with'' statements require --compat-non-strict-mode';
+  SSuggestWithStatementNonStrictMode =
+    'Use explicit property access, or enable --compat-non-strict-mode';
 
 // Tokens that can never appear at the top level of a call-site type argument
 // list, and so disqualify the type-argument reading of a `<...>` span. See
@@ -742,6 +768,7 @@ begin
   FInheritedStrictMode := AOptions.InheritedStrictMode;
   FModuleSource := AOptions.ModuleSource;
   FImportMetaAllowed := AOptions.ImportMetaAllowed;
+  FDetectModuleGoal := AOptions.DetectModuleGoal;
   FLabelStatementsEnabled := AOptions.LabelStatementsEnabled;
   FForInLoopsEnabled := AOptions.ForInLoopsEnabled;
   FWarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
@@ -759,6 +786,7 @@ begin
   Result.InheritedStrictMode := FInheritedStrictMode;
   Result.ModuleSource := FModuleSource;
   Result.ImportMetaAllowed := FImportMetaAllowed;
+  Result.DetectModuleGoal := FDetectModuleGoal;
   Result.LabelStatementsEnabled := FLabelStatementsEnabled;
   Result.ForInLoopsEnabled := FForInLoopsEnabled;
   Result.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
@@ -1420,6 +1448,14 @@ end;
 function TGocciaParser.HasLineTerminatorBeforePeek: Boolean;
 begin
   Result := HasLineTerminatorBetween(Previous, Peek);
+end;
+
+// ES2026 §15.3 / §15.9: an arrow's parameters and its `=>` share a line
+procedure TGocciaParser.RaiseLineTerminatorBeforeArrow;
+begin
+  raise TGocciaSyntaxError.Create('Line break before "=>" is not allowed',
+    Peek.Line, Peek.Column, FFileName, FSourceLines,
+    SSuggestArrowSameLine);
 end;
 
 // ES2026 §12.10 Automatic Semicolon Insertion
@@ -2295,6 +2331,13 @@ begin
   if (FInGeneratorFunction > 0) and CheckUnescapedIdentifierKeyword(KEYWORD_YIELD) then
   begin
     Operator := Advance; // consume 'yield'
+    // ES2026 §15.5 yield [no LineTerminator here] * AssignmentExpression:
+    // after a line break `yield` ends, and `*` cannot start what follows.
+    if Check(gttStar) and HasLineTerminatorBetween(Operator, Peek) then
+      raise TGocciaSyntaxError.Create(
+        'Line break between "yield" and "*" is not allowed',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        SSuggestYieldDelegateSameLine);
     if Match(gttStar) then
       Result := TGocciaYieldExpression.Create(Assignment, True, Operator.Span)
     else if CheckSemicolonOrASI or Check(gttRightBrace) or
@@ -3053,11 +3096,16 @@ begin
           if CheckUnescapedIdentifierKeyword(KEYWORD_META) then
           begin
             // ES2026 §13.3.12 MetaProperty — import.meta
-            if not FImportMetaAllowed then
-              raise TGocciaSyntaxError.Create(
-                'import.meta is only allowed in module code',
-                Token.Line, Token.Column, FFileName, FSourceLines,
-                SSuggestImportMetaSyntax);
+            if FDetectModuleGoal and not FImportMetaAllowed then
+            begin
+              if FDeferredImportMetaLine = 0 then
+              begin
+                FDeferredImportMetaLine := Token.Line;
+                FDeferredImportMetaColumn := Token.Column;
+              end;
+            end
+            else if not FImportMetaAllowed then
+              RaiseImportMetaOutsideModuleError(Token.Line, Token.Column);
             Advance;
             Result := TGocciaImportMetaExpression.Create(Token.Span);
           end
@@ -3210,6 +3258,10 @@ begin
           Token := Advance; // consume param identifier
           Name := Token.Lexeme;
           ValidateIdentifierBinding(Token);
+          // ES2026 §15.9 async [no LineTerminator here]
+          // AsyncArrowBindingIdentifier [no LineTerminator here] =>
+          if HasLineTerminatorBeforePeek then
+            RaiseLineTerminatorBeforeArrow;
           Consume(gttArrow, 'Expected "=>" in async arrow function',
             SSuggestArrowFunctionSyntax);
 
@@ -4260,8 +4312,12 @@ begin
       MemberStartLine := Peek.Line;
       MemberStartColumn := Peek.Column;
 
-      // Check for async method syntax
-      if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) then
+      // Check for async method syntax. ES2026 §15.8 / §15.6: AsyncMethod and
+      // AsyncGeneratorMethod are `async [no LineTerminator here] ...`; after a
+      // line break `async` is a property name.
+      if CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttLeftParen) and
+         (FCurrent + 1 < FTokens.Count) and
+         not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
       begin
         Advance;
         IsAsync := True;
@@ -4978,6 +5034,11 @@ begin
       Advance;
       FnReturnType := CollectTypeAnnotation([gttArrow], '', '', False, True);
     end;
+
+    // ES2026 §15.3 ArrowParameters [no LineTerminator here] =>, and §15.9
+    // CoverCallExpressionAndAsyncArrowHead [no LineTerminator here] =>
+    if Check(gttArrow) and HasLineTerminatorBeforePeek then
+      RaiseLineTerminatorBeforeArrow;
 
     Consume(gttArrow, 'Expected "=>" in arrow function',
       SSuggestArrowFunctionSyntax);
@@ -7006,14 +7067,16 @@ begin
   if not FNonStrictModeEnabled then
   begin
     if FModuleSource then
-      raise TGocciaSyntaxError.Create(
-        '''with'' statements are not allowed in strict mode',
-        Line, Column, FFileName, FSourceLines,
-        'Use explicit property access; modules are always strict');
+      RaiseModuleWithStatementError(Line, Column);
 
-    AddUnsupportedFeatureWarning('''with'' statements require --compat-non-strict-mode',
-      'Use explicit property access, or enable --compat-non-strict-mode',
-      Line, Column);
+    if FDetectModuleGoal and (FDeferredWithLine = 0) then
+    begin
+      FDeferredWithLine := Line;
+      FDeferredWithColumn := Column;
+    end;
+    if not (FDetectModuleGoal and not FWarningUnsupportedFeatures) then
+      AddUnsupportedFeatureWarning(SWithStatementNeedsNonStrictMode,
+        SSuggestWithStatementNonStrictMode, Line, Column);
     SkipBalancedParens;
     SkipStatementOrBlock;
     Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column));
@@ -7486,10 +7549,20 @@ end;
 function TGocciaParser.ImportDeclaration: TGocciaStatement;
 var
   Imports: TStringStringMap;
-  AttributeType, ImportedName, LocalName, ModulePath, NamespaceName: string;
+  AttributeType, DuplicateBinding, ImportedName, LocalName, ModulePath,
+    NamespaceName: string;
   ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
   IsTypeOnlyBinding: Boolean;
+
+  { Imports keys on the local name, so a second binding of one name would
+    replace the first unseen: note it for the Module early error. }
+  procedure AddNamedImport(const ALocalName, AImportedName: string);
+  begin
+    if (DuplicateBinding = '') and Imports.ContainsKey(ALocalName) then
+      DuplicateBinding := ALocalName;
+    Imports.Add(ALocalName, AImportedName);
+  end;
 
   function ParseImportAttributeTypeIfPresent: string;
   var
@@ -7540,6 +7613,7 @@ var
       (FTokens[FCurrent + 2].TokenType = gttFrom);
   end;
 begin
+  DuplicateBinding := '';
   Line := Previous.Line;
   Column := Previous.Column;
 
@@ -7670,7 +7744,7 @@ begin
             LocalName := ImportedName;
 
           if not IsTypeOnlyBinding then
-            Imports.Add(LocalName, ImportedName);
+            AddNamedImport(LocalName, ImportedName);
 
           if not Match(gttComma) then
             Break;
@@ -7693,6 +7767,7 @@ begin
     end;
     Result := TGocciaImportDeclaration.Create(Imports, ModulePath, SourceSpanAtPosition(Line, Column),
       '', icpEvaluation, AttributeType);
+    TGocciaImportDeclaration(Result).DuplicateBinding := DuplicateBinding;
     Exit;
   end;
 
@@ -7740,7 +7815,7 @@ begin
         LocalName := ImportedName;
 
       if not IsTypeOnlyBinding then
-        Imports.Add(LocalName, ImportedName);
+        AddNamedImport(LocalName, ImportedName);
 
       if not Match(gttComma) then
         Break;
@@ -7762,6 +7837,7 @@ begin
     Imports.Free;
     raise;
   end;
+  TGocciaImportDeclaration(Result).DuplicateBinding := DuplicateBinding;
 end;
 
 function TGocciaParser.ExportDeclaration: TGocciaStatement;
@@ -8315,7 +8391,12 @@ begin
 
       IsAsync := False;
       IsGenerator := False;
-      if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) then
+      // ES2026 §15.8 / §15.6: AsyncMethod and AsyncGeneratorMethod are
+      // `async [no LineTerminator here] ...`; after a line break `async` is
+      // the element's name, a field that ASI ends before the next element.
+      if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) and
+         (FCurrent + 1 < FTokens.Count) and
+         not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
       begin
         Advance;
         IsAsync := True;
@@ -8796,6 +8877,56 @@ begin
   InstancePropertyTypes.Free;
 end;
 
+{ The statement at the current token is an ImportDeclaration or an
+  ExportDeclaration (ES2026 §16.2 ModuleItem), the dispatch Statement makes:
+  `import(` and `import.` begin an expression statement instead. }
+function TGocciaParser.IsModuleDeclarationStart: Boolean;
+begin
+  if Check(gttExport) then
+    Exit(True);
+  Result := Check(gttImport) and not CheckNext(gttDot) and
+    not CheckNext(gttLeftParen);
+end;
+
+procedure TGocciaParser.RaiseImportMetaOutsideModuleError(const ALine,
+  AColumn: Integer);
+begin
+  raise TGocciaSyntaxError.Create(
+    'import.meta is only allowed in module code',
+    ALine, AColumn, FFileName, FSourceLines, SSuggestImportMetaSyntax);
+end;
+
+procedure TGocciaParser.RaiseModuleWithStatementError(const ALine,
+  AColumn: Integer);
+begin
+  raise TGocciaSyntaxError.Create(
+    '''with'' statements are not allowed in strict mode',
+    ALine, AColumn, FFileName, FSourceLines,
+    'Use explicit property access; modules are always strict');
+end;
+
+{ ADR 0140: a source parsed with DetectModuleGoal is a Module when a
+  top-level statement is an import or export declaration, and a Script
+  otherwise. The errors that depend on the goal were held while parsing;
+  raise the one the settled goal makes an error. }
+procedure TGocciaParser.SettleDetectedModuleGoal;
+begin
+  if FModuleSyntaxDetected then
+  begin
+    if FDeferredWithLine > 0 then
+      RaiseModuleWithStatementError(FDeferredWithLine, FDeferredWithColumn);
+    Exit;
+  end;
+  if FDeferredImportMetaLine > 0 then
+    RaiseImportMetaOutsideModuleError(FDeferredImportMetaLine,
+      FDeferredImportMetaColumn);
+  // With --warning-unsupported-features the warning was recorded in place.
+  if (FDeferredWithLine > 0) and not FWarningUnsupportedFeatures then
+    AddUnsupportedFeatureWarning(SWithStatementNeedsNonStrictMode,
+      SSuggestWithStatementNonStrictMode, FDeferredWithLine,
+      FDeferredWithColumn);
+end;
+
 function TGocciaParser.Parse: TGocciaProgram;
 var
   Arena, PreviousArena: TGocciaASTArena;
@@ -8841,6 +8972,11 @@ begin
   FStrictModeActive := FInheritedStrictMode or not FNonStrictModeEnabled;
   FStrictModeSourceActive := FInheritedStrictMode;
   FHasTopLevelAwait := False;
+  FModuleSyntaxDetected := False;
+  FDeferredImportMetaLine := 0;
+  FDeferredImportMetaColumn := 0;
+  FDeferredWithLine := 0;
+  FDeferredWithColumn := 0;
   InDirectivePrologue := True;
   PrologueHasForbiddenEscape := False;
   Statements := TObjectList<TGocciaStatement>.Create(False);
@@ -8848,6 +8984,9 @@ begin
     try
       while not IsAtEnd do
       begin
+        if FDetectModuleGoal and not FModuleSyntaxDetected and
+           IsModuleDeclarationStart then
+          FModuleSyntaxDetected := True;
         Stmt := Statement;
         Statements.Add(Stmt);
         if InDirectivePrologue then
@@ -8872,6 +9011,8 @@ begin
         end;
       end;
 
+      if FDetectModuleGoal then
+        SettleDetectedModuleGoal;
       Result := TGocciaProgram.Create(Statements);
       Result.HasTopLevelAwait := FHasTopLevelAwait;
       Result.DirectEvalUsage := FDirectEvalUsage;
