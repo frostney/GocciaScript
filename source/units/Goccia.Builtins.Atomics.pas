@@ -1457,12 +1457,20 @@ begin
   end;
 
   try
-    WaitResult := WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
-    CriticalSectionEnter(GAtomicsLock);
     try
-      RemoveWaiter(Waiter);
+      WaitResult := WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
     finally
-      CriticalSectionLeave(GAtomicsLock);
+      // Leave the waiter list as it was before the wait on every exit,
+      // including the instruction limit or execution timeout raising inside
+      // the wait: the waiter is freed below, and a waiter left in the list
+      // would be read, written and freed again by Atomics.notify, the owner's
+      // destructor and the thread's shutdown.
+      CriticalSectionEnter(GAtomicsLock);
+      try
+        RemoveWaiter(Waiter);
+      finally
+        CriticalSectionLeave(GAtomicsLock);
+      end;
     end;
     Result := TGocciaStringLiteralValue.Create(WaitResult);
   finally
