@@ -37,6 +37,8 @@ Annex B is not a general compatibility target before 1.0. ECMA-262 describes Ann
 | `--compat-for-in-loop` | `for...in` property enumeration | Use `Object.keys()` / `Object.entries()` with `for...of` |
 | `--compat-while-loops` | `while` and `do...while` | Use `for...of`, iterators, or array methods when possible |
 
+`--compat-non-strict-mode`, the mapped `arguments` object, and the global-object binding of a top-level `var` apply to script source only. An entry with a top-level `import` or `export` declaration is module source unless `--source-type=script` names it, so those behaviours do not apply to it; see [Entry source type](#modules).
+
 Runtime type enforcement (`--strict-types`) is a GocciaScript extension separate from ECMAScript compatibility. The TC39 proposal gives annotations no runtime effect by default; the extension enforces supported annotations and inferred primitive contracts at runtime. It is not a static structural checker.
 
 `--warning-unsupported-features` is also separate from ECMAScript compatibility. It changes parser diagnostics for disabled syntax from hard errors back into the historical warning/recovery path, but it does not enable `var`, `function`, loose equality, labels, legacy loops, `for...in`, or `with` semantics. Use the matching `--compat-*` flag when code needs those semantics.
@@ -188,7 +190,9 @@ const fn = async () => {
 
 ### Modules
 
-ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`; `.mjs` and `.mts` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. A module is evaluated once: an import that resolves to a module-source entry file, directly or through an import cycle, gets the entry's own module record, which is already evaluating. A script-source entry is not a module, so an import of its own file loads that file as a separate module, which evaluates once on its own. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery. Bare specifiers such as `import "zod"` resolve against `node_modules` only when the `import` capability grants it (`--allow-import=node_modules`); see [Module Resolution](module-resolution.md) for the resolution order, the supported `exports` subset, and the deviations from Node.
+ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`. Structured-data imports are also supported for `.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. A module is evaluated once: an import that resolves to a module-source entry file, directly or through an import cycle, gets the entry's own module record, which is already evaluating. A script-source entry is not a module, so an import of its own file loads that file as a separate module, which evaluates once on its own. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery. Bare specifiers such as `import "zod"` resolve against `node_modules` only when the `import` capability grants it (`--allow-import=node_modules`); see [Module Resolution](module-resolution.md) for the resolution order, the supported `exports` subset, and the deviations from Node.
+
+**Entry source type.** An imported module is always module source. An entry file is module source when it is `.mjs` or `.mts`, when `--source-type=module` or `"source-type": "module"` names it, or, with no source type named, when it has a top-level `import` or `export` declaration ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). Any other entry is script source, and so is any entry run with `--source-type=script` or `"source-type": "script"`, which keep accepting `import` and `export` declarations. A dynamic `import()` or an `import.meta` reference does not make an entry module source; `import.meta` in a script-source entry stays a `SyntaxError`. An entry that becomes module source this way behaves as an imported module: its top-level `var` and function declarations are not properties of `globalThis`, top-level `this` is `undefined`, `import.meta` is available, and it is strict, so the script-only compatibility behaviour (`--compat-non-strict-mode`, mapped `arguments`, Annex B block functions, and the global `var` binding of `--compat-var`) does not apply to it. Name `--source-type=script` to keep that behaviour for such a file. Node.js detects module syntax the same way for an ambiguous `.js` file, except that it also counts `import.meta`, top-level `await` and a lexical redeclaration of a CommonJS wrapper name (`require`, `module`, `exports`, `__filename` or `__dirname`).
 
 Hosts can supply ordinary ES modules through virtual-module configuration. See
 [Virtual Module Configuration](virtual-modules.md) for the complete reference.
@@ -275,7 +279,7 @@ import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx,
 
 Side-effect imports (`import "module";`) are supported and evaluate the dependency for its side effects. Wildcard re-exports (`export * from "module";`) are supported and forward named exports from the dependency; as in ECMAScript, they do not forward the dependency's default export.
 
-`import.meta` (ES2026 §13.3.12) is supported in module source and provides per-module metadata. Module source means an imported module, an `.mjs`/`.mts` entry, or an entry run with `--source-type=module`; in a default `.js` script entry, `import.meta` is a `SyntaxError`. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
+`import.meta` (ES2026 §13.3.12) is supported in module source and provides per-module metadata. Module source means an imported module, an `.mjs`/`.mts` entry, an entry with a top-level `import` or `export` declaration, or an entry run with `--source-type=module` (see [Entry source type](#modules)); in a script-source entry, `import.meta` is a `SyntaxError`. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
 
 - **`import.meta.url`** — the current module's canonical address. Filesystem modules use a `file://` URL for the absolute path (e.g., `file:///Users/me/project/src/main.js`); virtual modules preserve configured addresses such as `host:config`.
 - **`import.meta.resolve(specifier)`** — a synchronous function that resolves a module specifier relative to the current module through the ordinary module loader. Filesystem targets return `file://` URLs, while virtual targets preserve their canonical configured addresses. Throws `TypeError` if called without arguments.
@@ -934,7 +938,7 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 | Context | `this` value |
 |---------|-------------|
 | Module level (module source) | `undefined` |
-| Script top level (default `.js` entry) | `globalThis` |
+| Script top level (`.js` entry without `import`/`export`, or `--source-type=script`) | `globalThis` |
 | Arrow function | Inherited from lexical (enclosing) scope |
 | Shorthand method (`method() {}`) | Call-site object (the receiver) |
 | Class method | Call-site object (the instance) |
@@ -946,7 +950,7 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 Arrow functions **never** receive their own `this` — they always inherit from their defining scope:
 
 ```javascript
-// Module source (.mjs, --source-type=module, or an imported module)
+// Module source (.mjs, an entry with import/export, --source-type=module, or an imported module)
 const obj = {
   value: 42,
   arrow: () => typeof this,     // "undefined" — arrow inherits module-level this ("object" in a script, where this is globalThis)

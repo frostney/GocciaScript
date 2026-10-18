@@ -374,6 +374,8 @@ begin
 
           CompileStart := GetNanoseconds;
           try
+            { The goal the parse settled for a detected entry (ADR 0140). }
+            Engine.SourceType := SourcePipelineResult.SourceType;
             Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
             CompileEnd := GetNanoseconds;
           finally
@@ -503,6 +505,8 @@ begin
 
         CompileStart := GetNanoseconds;
         try
+          { The goal the parse settled for a detected entry (ADR 0140). }
+          Engine.SourceType := SourcePipelineResult.SourceType;
           Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
           CompileEnd := GetNanoseconds;
         finally
