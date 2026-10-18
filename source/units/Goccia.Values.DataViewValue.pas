@@ -357,12 +357,17 @@ begin
   Result := FByteLength = AUTO_BYTE_LENGTH;
 end;
 
+// ES2026 §25.1.3.2 ArrayBufferByteLength(arrayBuffer, order). A growable
+// SharedArrayBuffer's block is longer than its byte length.
 function TGocciaDataViewValue.GetBufferByteLength: Integer;
 begin
   if IsDetachedBuffer then
     Exit(0);
   SyncBufferData;
-  Result := Length(FBufferData);
+  if FBufferValue is TGocciaSharedArrayBufferValue then
+    Result := TGocciaSharedArrayBufferValue(FBufferValue).ByteLength
+  else
+    Result := Length(FBufferData);
 end;
 
 // ES2026 §25.3.1.4 IsViewOutOfBounds(viewRecord)
@@ -418,15 +423,20 @@ begin
     ThrowTypeError(SErrorCannotUseDetachedDataView, SSuggestArrayBufferDetached);
 
   FBufferValue := BufferArg;
-  SyncBufferData;
-  BufferByteLength := Length(FBufferData);
+  BufferByteLength := GetBufferByteLength;
   if Offset > BufferByteLength then
     ThrowRangeError(SErrorInvalidDataViewOffset, SSuggestTypedArrayLength);
 
   HasByteLength := (AArguments.Length > 2) and
     not (AArguments.GetElement(2) is TGocciaUndefinedLiteralValue);
-  BufferIsResizable := (BufferArg is TGocciaArrayBufferValue) and
-    (TGocciaArrayBufferValue(BufferArg).MaxByteLength >= 0);
+  // ES2026 §25.3.2.1 steps 7-8: IsFixedLengthArrayBuffer(buffer) is false for
+  // a resizable ArrayBuffer and a growable SharedArrayBuffer alike, and a
+  // view of either without a byteLength tracks the buffer's length.
+  BufferIsResizable :=
+    ((BufferArg is TGocciaArrayBufferValue) and
+     (TGocciaArrayBufferValue(BufferArg).MaxByteLength >= 0)) or
+    ((BufferArg is TGocciaSharedArrayBufferValue) and
+     (TGocciaSharedArrayBufferValue(BufferArg).MaxByteLength >= 0));
 
   if HasByteLength then
   begin

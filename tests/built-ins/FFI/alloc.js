@@ -33,6 +33,18 @@ describe("FFI pointer arguments with ArrayBuffer", () => {
     expect(start[0]).toBe(0);
   });
 
+  test("a SharedArrayBuffer grow exposes zero bytes even where native code wrote past its length", () => {
+    const writeI32 = lib.bind("write_i32", { args: ["pointer", "i32"], returns: "void" });
+
+    // The buffer reserves maxByteLength bytes; the C function writes four of
+    // them, three past byteLength, where no script can reach.
+    const sab = new SharedArrayBuffer(1, { maxByteLength: 8 });
+    writeI32(sab, 0x01020304);
+    expect(new Uint8Array(sab)[0]).toBe(4);
+    sab.grow(8);
+    expect(Array.from(new Uint8Array(sab))).toEqual([4, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
   test("passes null as pointer argument", () => {
     const isNull = lib.bind("is_null", { args: ["pointer"], returns: "i32" });
     expect(isNull(null)).toBe(1);
