@@ -11,10 +11,12 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Realm,
   Goccia.TestSetup,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.TypedArrayValue;
 
 type
@@ -34,6 +36,8 @@ type
     procedure TestSlotNamesAreReadThroughThePrototype;
     procedure TestUnmarkedNativeGetterIsCalled;
     procedure TestStampedGetterIsAnsweredWithoutACall;
+    procedure TestBufferDataFollowsAResize;
+    procedure TestBufferDataFollowsAGrow;
   end;
 
 procedure TTestTypedArrayValue.SetupTests;
@@ -46,6 +50,10 @@ begin
     TestUnmarkedNativeGetterIsCalled);
   Test('a getter stamped as the length getter is answered from the slots',
     TestStampedGetterIsAnsweredWithoutACall);
+  Test('BufferData is the current block after a resize or a detach, read before Length',
+    TestBufferDataFollowsAResize);
+  Test('BufferData is the current block after a SharedArrayBuffer grows',
+    TestBufferDataFollowsAGrow);
 end;
 
 function TTestTypedArrayValue.GetterKind(const APrototype: TGocciaObjectValue;
@@ -200,6 +208,93 @@ begin
     Expect<Double>(TypedArray.GetProperty(PROP_LENGTH)
       .ToNumberLiteral.Value).ToBe(5);
     Expect<Integer>(FGetterCalls).ToBe(0);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Realm.Free;
+  end;
+end;
+
+procedure ResizeBuffer(const ABuffer: TGocciaArrayBufferValue;
+  const ANewLength: Integer);
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  Args := TGocciaArgumentsCollection.Create(
+    [TGocciaNumberLiteralValue.Create(ANewLength)]);
+  try
+    ABuffer.ArrayBufferResize(Args, ABuffer);
+  finally
+    Args.Free;
+  end;
+end;
+
+{ resize gives the buffer a new data block. A view that last synced before it
+  must not hand a native reader the old one: the reader would copy Length's
+  elements, measured on the new block, out of the old, smaller one. Nothing
+  reads Length or an element between the resize and BufferData here, so only
+  the accessor itself can refresh the block. }
+procedure TTestTypedArrayValue.TestBufferDataFollowsAResize;
+var
+  Buffer: TGocciaArrayBufferValue;
+  PreviousRealm: TGocciaRealm;
+  Realm: TGocciaRealm;
+  Tracking, Fixed: TGocciaTypedArrayValue;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('typed-array-buffer-data-resize');
+  SetCurrentRealm(Realm);
+  try
+    Buffer := TGocciaArrayBufferValue.Create(4, 4096);
+    Tracking := TGocciaTypedArrayValue.Create(takUint8, Buffer);
+    Fixed := TGocciaTypedArrayValue.Create(takUint16, Buffer, 0, 2);
+    Expect<Integer>(System.Length(Tracking.BufferData)).ToBe(4);
+
+    ResizeBuffer(Buffer, 4096);
+    Expect<Integer>(System.Length(Tracking.BufferData)).ToBe(4096);
+    Expect<Boolean>(Pointer(Tracking.BufferData) = Pointer(Buffer.Data))
+      .ToBe(True);
+    Expect<Integer>(Tracking.Length).ToBe(4096);
+
+    ResizeBuffer(Buffer, 2);
+    Expect<Integer>(System.Length(Fixed.BufferData)).ToBe(2);
+    Expect<Integer>(Fixed.Length).ToBe(0);
+
+    Buffer.Detach;
+    Expect<Integer>(System.Length(Tracking.BufferData)).ToBe(0);
+    Expect<Integer>(Tracking.Length).ToBe(0);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Realm.Free;
+  end;
+end;
+
+procedure TTestTypedArrayValue.TestBufferDataFollowsAGrow;
+var
+  Args: TGocciaArgumentsCollection;
+  Buffer: TGocciaSharedArrayBufferValue;
+  PreviousRealm: TGocciaRealm;
+  Realm: TGocciaRealm;
+  Tracking: TGocciaTypedArrayValue;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('typed-array-buffer-data-grow');
+  SetCurrentRealm(Realm);
+  try
+    Buffer := TGocciaSharedArrayBufferValue.Create(4, 4096);
+    Tracking := TGocciaTypedArrayValue.Create(takInt32, Buffer);
+    Expect<Integer>(System.Length(Tracking.BufferData)).ToBe(4);
+
+    Args := TGocciaArgumentsCollection.Create(
+      [TGocciaNumberLiteralValue.Create(4096)]);
+    try
+      Buffer.SharedArrayBufferGrow(Args, Buffer);
+    finally
+      Args.Free;
+    end;
+    Expect<Integer>(System.Length(Tracking.BufferData)).ToBe(4096);
+    Expect<Boolean>(Pointer(Tracking.BufferData) = Pointer(Buffer.Data))
+      .ToBe(True);
+    Expect<Integer>(Tracking.Length).ToBe(1024);
   finally
     SetCurrentRealm(PreviousRealm);
     Realm.Free;
