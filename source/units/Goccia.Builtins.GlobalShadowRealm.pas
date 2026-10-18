@@ -406,6 +406,37 @@ begin
   Result := Instance;
 end;
 
+{ The message of an error the eval realm threw as a script value: an early
+  error the eval checks raise as a SyntaxError object of that realm, whose
+  text is its own `message`, not the Pascal exception's (AFallback, usually
+  empty). Only the stored data property is read, so no ECMAScript code runs
+  (no getter, no proxy trap, no toString), and only the string crosses into
+  the caller realm, never the object. }
+function ThrownErrorMessage(const AValue: TGocciaValue;
+  const AFallback: string): string;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  ErrorObject: TGocciaObjectValue;
+begin
+  Result := AFallback;
+  if not (AValue is TGocciaObjectValue) then
+    Exit;
+  ErrorObject := TGocciaObjectValue(AValue);
+  if not ErrorObject.HasErrorData or
+     not InheritsGetOwnProperty(ErrorObject) then
+    Exit;
+  Descriptor := ErrorObject.GetOwnPropertyDescriptor(PROP_MESSAGE);
+  try
+    if (Descriptor is TGocciaPropertyDescriptorData) and
+       (TGocciaPropertyDescriptorData(Descriptor).Value is
+         TGocciaStringLiteralValue) then
+      Result := TGocciaStringLiteralValue(
+        TGocciaPropertyDescriptorData(Descriptor).Value).Value;
+  finally
+    ReleaseDescriptor(Descriptor);
+  end;
+end;
+
 // TC39 ShadowRealm §3.4.1 ShadowRealm.prototype.evaluate ( sourceText )
 // (delegates to PerformShadowRealmEval §3.1.3)
 function TGocciaShadowRealmHost.Evaluate(
@@ -461,12 +492,12 @@ begin
       on E: TGocciaThrowValue do
       begin
         Threw := True;
-        ErrorMessage := E.Message;
+        ErrorMessage := ThrownErrorMessage(E.Value, E.Message);
       end;
       on E: EGocciaBytecodeThrow do
       begin
         Threw := True;
-        ErrorMessage := E.Message;
+        ErrorMessage := ThrownErrorMessage(E.ThrownValue, E.Message);
       end;
       on E: TGocciaError do
       begin
