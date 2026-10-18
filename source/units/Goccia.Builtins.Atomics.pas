@@ -490,7 +490,8 @@ begin
   // holds every element it had.
   ElementSize := TGocciaTypedArrayValue.BytesPerElement(ATypedArray.Kind);
   Result := ATypedArray.BufferData;
-  if Int64(AByteIndexInBuffer) + ElementSize > System.Length(Result) then
+  if Int64(AByteIndexInBuffer) + ElementSize >
+     ATypedArray.BufferByteLength then
     ThrowRangeError(AtomicsErrorMessage(AMethodName,
       SErrorInvalidTypedArrayIndex));
 end;
@@ -1431,8 +1432,8 @@ begin
 
   CriticalSectionEnter(GAtomicsLock);
   try
-    // A SharedArrayBuffer only grows, so the index is still inside the
-    // block the value conversion above may have replaced; read that block.
+    // A SharedArrayBuffer only grows, and keeps its block when it does, so
+    // the index is still inside the block after the value conversion above.
     Block := TypedArray.BufferData;
     if TypedArray.Kind = takBigInt64 then
       WaitValueMatches := ReadBigIntRawElement(Block, TypedArray.Kind,
@@ -1457,12 +1458,20 @@ begin
   end;
 
   try
-    WaitResult := WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
-    CriticalSectionEnter(GAtomicsLock);
     try
-      RemoveWaiter(Waiter);
+      WaitResult := WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
     finally
-      CriticalSectionLeave(GAtomicsLock);
+      // Leave the waiter list as it was before the wait on every exit,
+      // including the instruction limit or execution timeout raising inside
+      // the wait: the waiter is freed below, and a waiter left in the list
+      // would be read, written and freed again by Atomics.notify, the owner's
+      // destructor and the thread's shutdown.
+      CriticalSectionEnter(GAtomicsLock);
+      try
+        RemoveWaiter(Waiter);
+      finally
+        CriticalSectionLeave(GAtomicsLock);
+      end;
     end;
     Result := TGocciaStringLiteralValue.Create(WaitResult);
   finally
@@ -1499,8 +1508,8 @@ begin
 
   CriticalSectionEnter(GAtomicsLock);
   try
-    // A SharedArrayBuffer only grows, so the index is still inside the
-    // block the value conversion above may have replaced; read that block.
+    // A SharedArrayBuffer only grows, and keeps its block when it does, so
+    // the index is still inside the block after the value conversion above.
     Block := TypedArray.BufferData;
     if TypedArray.Kind = takBigInt64 then
       WaitValueMatches := ReadBigIntRawElement(Block, TypedArray.Kind,

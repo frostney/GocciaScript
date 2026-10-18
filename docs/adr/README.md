@@ -149,6 +149,7 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0137 — Bootstrap shims load on first use through the engine's executor, and a bytecode engine builds no interpreter](0137-bootstrap-shims-load-on-first-use-through-the-executor.md)
 - [0138 — Bytecode is the only way GocciaScript executes, and the engine owns its VM](0138-bytecode-is-the-only-way-gocciascript-executes.md)
 - [0139 — A reload links its new version into the cached module record](0139-a-reload-links-into-the-cached-module-record.md)
+- [0140 — An entry with a top-level import or export runs as a Module unless a source type is named](0140-an-entry-with-module-syntax-runs-as-a-module.md)
 - [0141 — The tracked-bytes pressure trigger backs off above a live set that sits inside the reserve](0141-tracked-pressure-trigger-backs-off.md)
 - [0142 — A run waits until no extension has pending work, and an entry still pending then fails the run](0142-the-run-waits-until-no-extension-has-pending-work.md)
 - [0143 — A parse's arena owns its tree, a descriptor built for [[GetOwnProperty]] is its caller's, and a collector frees what it still manages](0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)

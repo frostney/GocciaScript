@@ -68,6 +68,11 @@ type
     // Called by the GC sweep instead of Free. Default calls Free.
     // Override to return the object to a pool instead of deallocating.
     procedure Recycle; virtual;
+    // False for a class whose constructors are compiled without an implicit
+    // exception frame: FPC then does not destroy the instance when
+    // AfterConstruction raises, so the collector must keep it registered, or
+    // free it itself when it could not register it.
+    class function ConstructorDestroysOnException: Boolean; virtual;
     property GCMarked: Boolean read GetGCMarked write SetGCMarked;
     property GCIndex: Integer read FGCIndex write FGCIndex;
   end;
@@ -77,7 +82,10 @@ type
     // Every value allocation registers here. The collector's list owns
     // nothing and has no OnNotify handler, so an append within capacity skips
     // the generic Add's capacity bookkeeping and virtual Notify dispatch.
-    function Append(const AObject: TGCManagedObject): Integer; inline;
+    // False, with nothing appended, when the list is full: an append that
+    // must grow the list is the caller's, because the growth can raise.
+    function TryAppend(const AObject: TGCManagedObject;
+      out AIndex: Integer): Boolean; inline;
   end;
   // Backing store for the active-root stack only. A bare array rather than
   // TGCManagedObjectList because that stack is pushed and popped once per
@@ -329,6 +337,7 @@ type
     procedure TraceWeakReferences;
     procedure SweepWeakReferences;
     procedure SweepObjects;
+    function AppendManagedObjectGrowing(const AObject: TGCManagedObject): Integer;
     procedure ReleaseAllManagedObjects;
   public
     class function Instance: TGarbageCollector; {$IFDEF FPC}inline;{$ENDIF}
@@ -626,6 +635,11 @@ begin
   Free;
 end;
 
+class function TGCManagedObject.ConstructorDestroysOnException: Boolean;
+begin
+  Result := True;
+end;
+
 procedure TGCManagedObject.BeforeDestruction;
 var
   GC: TGarbageCollector;
@@ -738,21 +752,22 @@ end;
 
 { TGCManagedObjectList }
 
-function TGCManagedObjectList.Append(const AObject: TGCManagedObject): Integer;
+function TGCManagedObjectList.TryAppend(const AObject: TGCManagedObject;
+  out AIndex: Integer): Boolean;
 begin
   {$IFDEF FPC}
   // FLength and FItems are FPC rtl-generics internals; other compilers take
-  // the generic Add.
-  Result := FLength;
-  if Result < Length(FItems) then
+  // the growing path for every append.
+  AIndex := FLength;
+  Result := AIndex < Length(FItems);
+  if Result then
   begin
-    FItems[Result] := AObject;
-    FLength := Result + 1;
-  end
-  else
-    Result := Add(AObject);
+    FItems[AIndex] := AObject;
+    FLength := AIndex + 1;
+  end;
   {$ELSE}
-  Result := Add(AObject);
+  AIndex := -1;
+  Result := False;
   {$ENDIF}
 end;
 
@@ -866,15 +881,37 @@ begin
   inherited;
 end;
 
+// The list is full, so the append grows it, which can fail. A failure leaves
+// AObject unregistered, inside its AfterConstruction. FPC destroys an instance
+// whose constructor has the implicit exception frame; one whose constructor
+// has none (ConstructorDestroysOnException) nobody else can reach, so it is
+// freed here. It holds no managed field and nothing refers to it yet, and
+// neither AfterConstruction nor the constructor touches it after this raise.
+// Its own procedure, so that only a growing append pays for the frame.
+function TGarbageCollector.AppendManagedObjectGrowing(
+  const AObject: TGCManagedObject): Integer;
+begin
+  try
+    Result := FManagedObjects.Add(AObject);
+  except
+    if not AObject.ConstructorDestroysOnException then
+      AObject.FreeInstance;
+    raise;
+  end;
+end;
+
 procedure TGarbageCollector.RegisterObject(
   const AObject: TGCManagedObject);
 var
+  Index: Integer;
   Size: Int64;
 begin
   // The list and the allocation counter are owner-thread-confined; the byte
   // totals race a cross-thread ReleaseExternalBytes and take the accounting
   // lock — see FAccountingLock for the full confinement and ordering rules.
-  AObject.GCIndex := FManagedObjects.Append(AObject);
+  if not FManagedObjects.TryAppend(AObject, Index) then
+    Index := AppendManagedObjectGrowing(AObject);
+  AObject.GCIndex := Index;
   Inc(FAllocationsSinceLastGC);
   Dec(FHeapSampleCountdown);
   if FHeapSampleCountdown <= 0 then

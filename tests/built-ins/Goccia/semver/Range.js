@@ -13,4 +13,27 @@ describe("semver.Range", () => {
     expect(range.test("1.5.0")).toBe(true);
     expect(range.test("2.0.0")).toBe(false);
   });
+
+  test("the any comparator of a wildcard range carries the range's options", () => {
+    const options = { loose: true, includePrerelease: true };
+    const comparator = new semver.Range("*", options).set[0][0];
+    expect(comparator.value).toBe("");
+    expect(comparator.loose).toBe(true);
+    expect(comparator.options).toEqual({
+      loose: true,
+      includePrerelease: true,
+      rtl: false,
+    });
+  });
+
+  test("the any comparator of an empty range carries the default options", () => {
+    const comparator = new semver.Range("").set[0][0];
+    expect(comparator.value).toBe("");
+    expect(comparator.loose).toBe(false);
+    expect(comparator.options).toEqual({
+      loose: false,
+      includePrerelease: false,
+      rtl: false,
+    });
+  });
 });

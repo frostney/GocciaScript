@@ -592,7 +592,6 @@ resourcestring
   SErrorTextDecoderFatalIllegalInvocation = 'TextDecoder.prototype.fatal: illegal invocation';
   SErrorTextDecoderIgnoreBOMIllegalInvocation = 'TextDecoder.prototype.ignoreBOM: illegal invocation';
   SErrorTextDecoderDecodeIllegalInvocation = 'TextDecoder.prototype.decode: illegal invocation';
-  SErrorTextDecoderDecodeInputType = 'TextDecoder.prototype.decode: input must be an ArrayBuffer or ArrayBufferView';
   SErrorTextDecoderDecodeInvalidUTF8 = 'TextDecoder.prototype.decode: invalid UTF-8 byte sequence';
 
   // SharedArrayBuffer errors
@@ -687,7 +686,12 @@ resourcestring
   // TextEncoder errors
   SErrorTextEncoderIllegalInvocation = '%s: illegal invocation';
   SErrorTextEncoderEncodeIntoArgs = 'TextEncoder.prototype.encodeInto requires source and destination arguments';
-  SErrorTextEncoderEncodeIntoDestType = 'TextEncoder.prototype.encodeInto: destination must be a Uint8Array';
+  SErrorTextEncoderEncodeIntoImmutable = 'TextEncoder.prototype.encodeInto: destination is backed by an immutable ArrayBuffer';
+
+  // Web IDL buffer source conversion errors (Goccia.WebIDL.BufferSource)
+  SErrorBufferSourceType = '%s must be an ArrayBuffer, SharedArrayBuffer or ArrayBufferView';
+  SErrorBufferSourceUint8ArrayType = '%s must be a Uint8Array';
+  SErrorBufferSourceNotFixedLength = '%s must not be backed by a resizable ArrayBuffer or a growable SharedArrayBuffer';
 
   // Promise prototype errors
   SErrorPromiseThenNonPromise = 'Promise.prototype.then called on non-Promise';

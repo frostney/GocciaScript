@@ -36,7 +36,7 @@ type
       const AParentHostEnvironment: TGocciaHostEnvironment);
     procedure TestEntryPathNamesNoHostProject;
     procedure TestNestedRunsAndReadOnlyPaths;
-    procedure TestRootResultCopiedOnlyWhenKept;
+    procedure TestRootResultPrintedOnlyWhenAsked;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -50,8 +50,9 @@ begin
     TestEntryPathNamesNoHostProject);
   Test('A shared runScript child is refused under a read-only path, an ' +
     'isolated one writes its own copy', TestNestedRunsAndReadOnlyPaths);
-  Test('The root run''s last value is copied out only when kept; a ' +
-    'nested run''s always is', TestRootResultCopiedOnlyWhenKept);
+  Test('The root run''s last value is converted for printing only when ' +
+    'asked, in its own realm; a nested run''s is always copied',
+    TestRootResultPrintedOnlyWhenAsked);
 end;
 
 procedure TSandboxHostTests.BeforeEach;
@@ -166,7 +167,7 @@ begin
   end;
 end;
 
-procedure TSandboxHostTests.TestRootResultCopiedOnlyWhenKept;
+procedure TSandboxHostTests.TestRootResultPrintedOnlyWhenAsked;
 const
   MAIN_SOURCE =
     'import fs from "fs";' + LineEnding +
@@ -174,7 +175,7 @@ const
     'const child = runScript("/child.js");' + LineEnding +
     'fs.writeFileSync("/out.txt", JSON.stringify(child.result));' +
       LineEnding +
-    '[1, 2];' + LineEnding;
+    '({ a: [1, 2], toString() { return `a=${this.a}`; } });' + LineEnding;
 var
   Host: TGocciaSandboxHost;
   RunResult: TGocciaSandboxRunResult;
@@ -186,17 +187,19 @@ begin
     Host.Context.Fs.WriteAllText('/main.js', MAIN_SOURCE);
     Host.OnConfigureEngine := InstallSandboxModules;
 
-    Expect<Boolean>(Host.KeepRootResult).ToBe(True);
+    Expect<Boolean>(Host.PrintRootResult).ToBe(False);
     RunResult := Host.Run('/main.js');
     Expect<Boolean>(RunResult.Ok).ToBe(True);
-    Expect<Boolean>(Assigned(RunResult.ResultValue)).ToBe(True);
-    if Assigned(RunResult.ResultValue) then
-      Expect<string>(RunResult.ResultValue.ToStringLiteral.Value).ToBe(
-        '1,2');
+    Expect<Boolean>(RunResult.HasResultText).ToBe(False);
+    Expect<Boolean>(Assigned(RunResult.ResultValue)).ToBe(False);
 
-    Host.KeepRootResult := False;
+    { The object's own toString runs in the run's realm, before its engine
+      is freed; a copy made afterwards had no prototype to find it on. }
+    Host.PrintRootResult := True;
     RunResult := Host.Run('/main.js');
     Expect<Boolean>(RunResult.Ok).ToBe(True);
+    Expect<Boolean>(RunResult.HasResultText).ToBe(True);
+    Expect<string>(RunResult.ResultText).ToBe('a=1,2');
     Expect<Boolean>(Assigned(RunResult.ResultValue)).ToBe(False);
     { The child's value still reaches the program that ran it. }
     Expect<string>(Host.Context.Fs.ReadAllText('/out.txt')).ToBe(

@@ -117,10 +117,15 @@ type
     class function GetKindPrototype(
       const AKind: TGocciaTypedArrayKind): TGocciaObjectValue;
 
+    { The viewed buffer's current byte length: ArrayBufferByteLength, 0 for a
+      detached buffer. A growable SharedArrayBuffer's block is longer than
+      this; bound every access by it, never by the block's length. }
+    function BufferByteLength: Integer;
+
     property BufferValue: TGocciaValue read FBufferValue;
-    // The buffer's current data block, read again on every access: resize,
-    // grow and detach give the buffer a new block, so a block read before one
-    // of them is stale. BufferData and Length describe the same block while no
+    // The buffer's current data block, read again on every access: resize
+    // and detach give an ArrayBuffer a new block, so a block read before one
+    // of them is stale (a SharedArrayBuffer keeps its block when it grows). BufferData and Length describe the same block while no
     // script code runs between the two reads; a caller that runs script code
     // in between measures again. A per-byte loop reads it once before the loop.
     property BufferData: TBytes read GetBufferData;
@@ -435,15 +440,28 @@ begin
   end;
 end;
 
-// ArrayBuffer.prototype.resize, SharedArrayBuffer.prototype.grow and detaching
-// give the buffer a new data block, and FBufferData keeps naming the old one
-// until SyncBufferData runs. Every reader outside this unit gets the block
+// ArrayBuffer.prototype.resize and detaching give an ArrayBuffer a new data
+// block, and FBufferData keeps naming the old one until SyncBufferData runs
+// (a SharedArrayBuffer keeps one block, grown or not). Every reader outside this unit gets the block
 // through here, so it never copies Length's elements out of a smaller, older
 // block.
 function TGocciaTypedArrayValue.GetBufferData: TBytes;
 begin
   SyncBufferData;
   Result := FBufferData;
+end;
+
+// ES2026 §25.1.3.2 ArrayBufferByteLength(arrayBuffer, order)
+function TGocciaTypedArrayValue.BufferByteLength: Integer;
+begin
+  if (FBufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(FBufferValue).Detached then
+    Exit(0);
+  SyncBufferData;
+  if FBufferValue is TGocciaSharedArrayBufferValue then
+    Result := TGocciaSharedArrayBufferValue(FBufferValue).ByteLength
+  else
+    Result := System.Length(FBufferData);
 end;
 
 function TGocciaTypedArrayValue.GetLength: Integer;
@@ -455,11 +473,10 @@ begin
      TGocciaArrayBufferValue(FBufferValue).Detached then
     Exit(0);
 
-  SyncBufferData;
   if FAutoLength then
   begin
     BPE := BytesPerElement(FKind);
-    AvailableBytes := System.Length(FBufferData) - FByteOffset;
+    AvailableBytes := BufferByteLength - FByteOffset;
     if AvailableBytes <= 0 then
       Exit(0);
     Exit(AvailableBytes div BPE);
@@ -495,9 +512,8 @@ begin
      TGocciaArrayBufferValue(FBufferValue).Detached then
     Exit(False);
 
-  SyncBufferData;
   RequiredBytes := Int64(FByteOffset) + Int64(ALength) * Int64(BytesPerElement(FKind));
-  Result := RequiredBytes <= System.Length(FBufferData);
+  Result := RequiredBytes <= BufferByteLength;
 end;
 
 function TGocciaTypedArrayValue.HasValidElementIndex(const AIndex: Integer): Boolean;
@@ -1001,7 +1017,7 @@ begin
   if ALength >= 0 then
     FLength := ALength
   else
-    FLength := (System.Length(ASharedBuffer.Data) - AByteOffset) div BPE;
+    FLength := (ASharedBuffer.ByteLength - AByteOffset) div BPE;
 
   InitializePrototype;
   Shared := GetTypedArrayShared;
@@ -1561,8 +1577,7 @@ begin
   if IsDetachedTypedArray(AArray) then
     Exit(True);
 
-  AArray.SyncBufferData;
-  BufferByteLength := System.Length(AArray.FBufferData);
+  BufferByteLength := AArray.BufferByteLength;
   if AArray.FAutoLength then
     Exit(AArray.FByteOffset > BufferByteLength);
 
@@ -1599,8 +1614,8 @@ begin
   ASource.SyncBufferData;
   ATarget.SyncBufferData;
   if (ASourceByteIndex < 0) or (ATargetByteIndex < 0) or
-     (Int64(ASourceByteIndex) + AByteCount > System.Length(ASource.FBufferData)) or
-     (Int64(ATargetByteIndex) + AByteCount > System.Length(ATarget.FBufferData)) then
+     (Int64(ASourceByteIndex) + AByteCount > ASource.BufferByteLength) or
+     (Int64(ATargetByteIndex) + AByteCount > ATarget.BufferByteLength) then
     Exit(False);
   Move(ASource.FBufferData[ASourceByteIndex],
     ATarget.FBufferData[ATargetByteIndex], AByteCount);
@@ -3546,7 +3561,7 @@ begin
     else
       ElemLen := -1;
 
-    BufferByteLength := System.Length(SAB.Data);
+    BufferByteLength := SAB.ByteLength;
     if ByteOff > BufferByteLength then
       ThrowRangeError(SErrorTypedArrayStartOffsetBounds, SSuggestTypedArrayLength);
 

@@ -163,6 +163,11 @@ type
     // Non-virtual live-entry count for hot validation paths (the Count
     // property dispatches through TBaseMap's virtual GetCount).
     function CountFast: Integer; {$IFDEF FPC}inline;{$ENDIF}
+    // True when Add of one more key would neither grow nor compact the
+    // storage: it then allocates nothing, consults no growth gate and cannot
+    // raise. A caller holding an unstored value it would otherwise have to
+    // free on a refusal can store it without an exception frame.
+    function HasRoomForAdd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     // Entry-index access for version-validated inline caches: look up an
     // entry index once, then re-read its value directly while EntryVersion
     // is unchanged.
@@ -365,7 +370,8 @@ constructor TOrderedStringMap<TValue>.Create(AInitialCapacity: Integer);
 var
   I: Integer;
 begin
-  inherited Create;
+  // No inherited call: it would reach TObject.Create, which is empty but, as a
+  // constructor, costs an exception frame on every object's property map.
   FCount := 0;
   FDeletedCount := 0;
   FEntryCount := 0;
@@ -394,6 +400,15 @@ begin
 end;
 
 { Core operations }
+
+function TOrderedStringMap<TValue>.HasRoomForAdd: Boolean;
+begin
+  // The conditions Add tests before it claims a slot, all false.
+  Result := (FBucketCount > 0) and
+    ((FEntryCount + 1) * 100 <= FBucketCount * LOAD_FACTOR_PERCENT) and
+    not DeletedSlotsNeedCompaction and
+    (FEntryCount < Length(FEntries));
+end;
 
 function TOrderedStringMap<TValue>.CountFast: Integer;
 begin

@@ -327,6 +327,8 @@ type
     FASCIIStringValues: array[0..127] of TGocciaStringLiteralValue;
     function CachedASCIIStringValue(
       const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
+    function CreateCachedASCIIStringValue(
+      const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
     function ConstantToValue(const AConstant: TGocciaBytecodeConstant): TGocciaValue;
     // ES2026 §13.2.8.3 GetTemplateObject — lazy-build helper for bckTemplateObject constants.
     function BuildTemplateObjectConstant(const ATemplate: TGocciaFunctionTemplate;
@@ -595,6 +597,8 @@ type
     function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
+    procedure SetPropertyValueGeneric(const AObject: TGocciaValue;
+      const AKey: string; const AValue: TGocciaValue);
     { DefinePropertyOrThrow of a data property for a field, a computed
       literal key or a class element: the descriptor is the target's once the
       definition succeeds and is freed when it throws (a frozen receiver, a
@@ -6553,13 +6557,20 @@ begin
   inherited;
 end;
 
+// Kept free of managed locals: the string temporary Chr makes would cost
+// every OP_LOAD_CHAR an exception frame, cache hits included.
 function TGocciaVM.CachedASCIIStringValue(
   const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
 begin
   Result := FASCIIStringValues[ACodeUnit];
-  if Assigned(Result) then
-    Exit;
+  if not Assigned(Result) then
+    Result := CreateCachedASCIIStringValue(ACodeUnit);
+end;
 
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+function TGocciaVM.CreateCachedASCIIStringValue(
+  const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
+begin
   Result := TGocciaStringLiteralValue.Create(Chr(ACodeUnit));
   if (TGarbageCollector.Instance <> nil) then
   begin
@@ -6567,6 +6578,11 @@ begin
     FASCIIStringValues[ACodeUnit] := Result;
   end;
 end;
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
 
 procedure TGocciaVM.EnsureStackRootRegistered;
 var
@@ -8708,7 +8724,8 @@ end;
 
 procedure TGocciaVM.SetRegister(const AIndex: Integer; const AValue: TGocciaValue);
 begin
-  EnsureRegisterCapacity(AIndex + 1);
+  if AIndex >= FRegisterCount then
+    EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := VMValueToRegisterFast(AValue);
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and
      Assigned(FLocalCells[AIndex]) then
@@ -8731,7 +8748,10 @@ end;
 procedure TGocciaVM.SetRegisterRaw(const AIndex: Integer;
   const AValue: TGocciaRegister);
 begin
-  EnsureRegisterCapacity(AIndex + 1);
+  // The window almost always holds the register already; only growth takes
+  // the call.
+  if AIndex >= FRegisterCount then
+    EnsureRegisterCapacity(AIndex + 1);
   FRegisters[AIndex] := AValue;
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and
      Assigned(FLocalCells[AIndex]) then
@@ -14015,7 +14035,19 @@ begin
   end;
 end;
 
+// An ordinary object under a public key goes straight to its [[Set]]. This
+// procedure keeps no managed locals, so that store pays no exception frame;
+// private names, primitives and nullish targets take the generic core.
 procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
+  const AKey: string; const AValue: TGocciaValue);
+begin
+  if (AObject is TGocciaObjectValue) and not IsBytecodePrivateKey(AKey) then
+    AObject.SetProperty(AKey, AValue)
+  else
+    SetPropertyValueGeneric(AObject, AKey, AValue);
+end;
+
+procedure TGocciaVM.SetPropertyValueGeneric(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 var
   Current: TGocciaObjectValue;
@@ -16138,7 +16170,6 @@ var
   IterResult: TGocciaValue;
   NextMethod: TGocciaValue;
   DoneFlag: Boolean;
-  Running: Boolean;
   Template: TGocciaFunctionTemplate;
   Constant: PGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
@@ -16567,10 +16598,9 @@ begin
         end;
       end;
     end;
-    Running := True;
     InstructionLimitState := CaptureInstructionLimitState;
     EscapingThrow := nil;
-    while Running and (Frame.IP < Template.CodeCount) do
+    while Frame.IP < Template.CodeCount do
     begin
       try
         UseProdDispatch := not FCoverageEnabled and not FProfilingOpcodes and
@@ -16581,16 +16611,22 @@ begin
           goto LInstrumentedLoopHead;
 
 LProdLoopHead:
-        if not (Running and (Frame.IP < Template.CodeCount)) then
+        if Frame.IP >= Template.CodeCount then
           goto LInnerLoopsDone;
         InstructionStartIP := Frame.IP;
         Instruction := Template.GetInstructionUnchecked(Frame.IP);
         Inc(Frame.IP);
 
-        WideA := 0;
-        WideB := 0;
-        WideC := 0;
-        if DecodeOp(Instruction) = Ord(OP_WIDE) then
+        // Every instruction passes through here; only an OP_WIDE prefix pays
+        // for the high operand bytes.
+        Op := DecodeOp(Instruction);
+        if Op <> Ord(OP_WIDE) then
+        begin
+          A := DecodeA(Instruction);
+          B := DecodeB(Instruction);
+          C := DecodeC(Instruction);
+        end
+        else
         begin
           WideA := UInt16(DecodeA(Instruction)) shl 8;
           WideB := UInt16(DecodeB(Instruction)) shl 8;
@@ -16599,16 +16635,15 @@ LProdLoopHead:
             raise Exception.Create('Truncated OP_WIDE bytecode prefix');
           Instruction := Template.GetInstructionUnchecked(Frame.IP);
           Inc(Frame.IP);
+          Op := DecodeOp(Instruction);
+          A := WideA or DecodeA(Instruction);
+          B := WideB or DecodeB(Instruction);
+          C := WideC or DecodeC(Instruction);
         end;
-
-        Op := DecodeOp(Instruction);
-        A := WideA or DecodeA(Instruction);
-        B := WideB or DecodeB(Instruction);
-        C := WideC or DecodeC(Instruction);
         goto LDispatchCase;
 
 LInstrumentedLoopHead:
-        if not (Running and (Frame.IP < Template.CodeCount)) then
+        if Frame.IP >= Template.CodeCount then
           goto LInnerLoopsDone;
         if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
            Assigned(AStopGenerator) then

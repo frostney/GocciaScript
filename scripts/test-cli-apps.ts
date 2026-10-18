@@ -620,6 +620,59 @@ await section("Loader: --print emits 'undefined' when result is undefined...", a
     throw new Error(`Loader --print should emit "undefined" (matches node -p), got: ${out}`);
 });
 
+await section("Loader: --print and --output=json convert the last value before its engine is freed...", async () => {
+  // The conversion can run the value's own methods and the realm's
+  // built-ins, so it happens while the run's engine is alive. Converting
+  // after the engine was freed ended in "Range check error" for these, and
+  // in an access violation for a toJSON value.
+  const printOf = (source: string) => {
+    const proc = Bun.spawnSync([RUNNER, "--print"], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      exitCode: proc.exitCode,
+      lines: normalizeLineEndings(proc.stdout.toString()).split("\n").filter((l) => !l.startsWith("Running script") && !l.trimStart().startsWith("Lex:") && l !== ""),
+      stderr: proc.stderr.toString(),
+    };
+  };
+  const cases: Array<[string, string, string[]]> = [
+    ["own toString", '({ toString() { return "custom"; } });\n', ["custom"]],
+    ["toString that logs", 'const x = { toString: () => { console.log("side"); return "y"; } };\nx;\n', ["side", "y"]],
+    ["Symbol.toPrimitive", '({ [Symbol.toPrimitive]: () => "prim" });\n', ["prim"]],
+    ["arrow function", "(() => 1);\n", ["() => 1"]],
+  ];
+  for (const [label, source, expected] of cases) {
+    const run = printOf(source);
+    if (run.exitCode !== 0 || JSON.stringify(run.lines) !== JSON.stringify(expected))
+      throw new Error(`--print of ${label} should print ${JSON.stringify(expected)}, got (exit ${run.exitCode}) ${JSON.stringify(run.lines)}\n${run.stderr}`);
+  }
+  const date = printOf("new Date(0);\n");
+  if (date.exitCode !== 0 || date.lines.length !== 1 || !/^\w{3} \w{3} \d{2} 19(69|70) \d{2}:\d{2}:\d{2} GMT[+-]\d{4}/.test(date.lines[0]))
+    throw new Error(`--print of a Date should print its string, got (exit ${date.exitCode}) ${JSON.stringify(date.lines)}\n${date.stderr}`);
+
+  const toJson = await runLoaderJsonAsync("({ toJSON() { return 7; } });\n");
+  if (toJson.exitCode !== 0 || toJson.json.files?.[0]?.result !== 7)
+    throw new Error(`--output=json of a toJSON value should report 7, got (exit ${toJson.exitCode}) ${JSON.stringify(toJson.json.files?.[0]?.result)}\n${toJson.stderr}`);
+  const dateJson = await runLoaderJsonAsync("new Date(0);\n");
+  if (dateJson.exitCode !== 0 || dateJson.json.files?.[0]?.result !== "1970-01-01T00:00:00.000Z")
+    throw new Error(`--output=json of a Date should report its ISO string, got (exit ${dateJson.exitCode}) ${JSON.stringify(dateJson.json.files?.[0]?.result)}\n${dateJson.stderr}`);
+
+  // Parallel workers print no value, so they do not convert one either: a
+  // toString that throws does not fail a --jobs run.
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "a.js"), '({ toString() { throw new Error("boom"); } });\n');
+    writeFileSync(join(tmp, "b.js"), "1;\n");
+    const proc = Bun.spawnSync([RUNNER, tmp, "--jobs=2", "--print"], { stdout: "pipe", stderr: "pipe" });
+    if (proc.exitCode !== 0)
+      throw new Error(`--jobs=2 --print should not convert values it does not print, got exit ${proc.exitCode}:\n${proc.stdout.toString()}${proc.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --print honored from goccia.json...", async () => {
   const tmp = makeTmp();
   try {
@@ -1138,6 +1191,164 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     }
     if (engineFaultJson.results?.[0]?.status !== "FAIL")
       throw new Error(`engine execution fault should be FAIL, got ${engineFaultJson.results?.[0]?.status}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 runner: a growable SharedArrayBuffer keeps one block while other agents write and grow it...", async () => {
+  // #1767: ES2026 §25.2.5.3 SharedArrayBuffer.prototype.grow makes more of
+  // the same Shared Data Block visible, and racing grows are totally ordered.
+  // A grow that moved the bytes to a new block left another agent's
+  // Atomics.add writing into the old one, and those increments were lost.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "built-ins");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    // Waits, a bounded number of times, until state[index] holds value.
+    const waitFor = [
+      "const waitFor = (state, index, value) => {",
+      "  for (const _ of Array.from({ length: 60000 })) {",
+      "    if (Atomics.load(state, index) === value) return;",
+      "    $262.agent.sleep(1);",
+      "  }",
+      "  throw new Error(\"timed out waiting for state \" + index + \" = \" + value);",
+      "};",
+    ].join("\n");
+    // The main agent grows the buffer while a second agent, whose view was
+    // built before the first grow, keeps adding through it.
+    writeFileSync(join(tests, "sab-grow-keeps-writes.js"), [
+      "/*---",
+      "features: [SharedArrayBuffer, Atomics, resizable-arraybuffer]",
+      "---*/",
+      waitFor,
+      "const ITERATIONS = 20000;",
+      "const STEP = 8;",
+      "const MAX = 65536;",
+      "const sab = new SharedArrayBuffer(16, { maxByteLength: MAX });",
+      "// [0] the counter, [1] a value written before any grow,",
+      "// [2] the agent's phase, [3] the main agent's phase.",
+      "const state = new Int32Array(sab, 0, 4);",
+      "Atomics.store(state, 1, 12345);",
+      "$262.agent.start(`",
+      "  $262.agent.receiveBroadcast((sab) => {",
+      "    " + waitFor.split("\n").join("\n    "),
+      "    const state = new Int32Array(sab, 0, 4);",
+      "    const iterations = Array.from({ length: ${ITERATIONS} });",
+      "    Atomics.store(state, 2, 1);",
+      "    waitFor(state, 3, 1);",
+      "    for (const _ of iterations) Atomics.add(state, 0, 1);",
+      "    Atomics.store(state, 2, 2);",
+      "    $262.agent.report(\"done\");",
+      "    $262.agent.leaving();",
+      "  });",
+      "`);",
+      "$262.agent.broadcast(sab);",
+      "// Built before the agent starts adding, so the grows overlap its adds.",
+      "const ticks = Array.from({ length: 200000 });",
+      "waitFor(state, 2, 1);",
+      "let size = 16 + STEP;",
+      "sab.grow(size);",
+      "Atomics.store(state, 3, 1);",
+      "let mainAdds = 0;",
+      "for (const _ of ticks) {",
+      "  if (Atomics.load(state, 2) === 2) break;",
+      "  Atomics.add(state, 0, 1);",
+      "  mainAdds++;",
+      "  if (size + STEP <= MAX) { size += STEP; sab.grow(size); }",
+      "}",
+      "let report = null;",
+      "for (const _ of Array.from({ length: 60000 })) {",
+      "  report = $262.agent.getReport();",
+      "  if (report !== null) break;",
+      "  $262.agent.sleep(1);",
+      "}",
+      "if (report !== \"done\") throw new Error(\"agent did not finish: \" + report);",
+      "const total = Atomics.load(state, 0);",
+      "if (total !== ITERATIONS + mainAdds) throw new Error(\"lost increments: \" + total + \" of \" + (ITERATIONS + mainAdds));",
+      "if (Atomics.load(state, 1) !== 12345) throw new Error(\"a value written before the grows was lost\");",
+      "if (sab.byteLength !== size) throw new Error(\"byteLength \" + sab.byteLength + \", expected \" + size);",
+      "if (!new Uint8Array(sab, 16).every((b) => b === 0)) throw new Error(\"grown bytes are not zero\");",
+      "",
+    ].join("\n"));
+    // Two agents race to grow one buffer through the same lengths: a grow
+    // that returns leaves the buffer at least that long, and the length
+    // never decreases.
+    writeFileSync(join(tests, "sab-racing-grows.js"), [
+      "/*---",
+      "features: [SharedArrayBuffer, Atomics, resizable-arraybuffer]",
+      "---*/",
+      "const MAX = 32768;",
+      "const sab = new SharedArrayBuffer(8, { maxByteLength: MAX });",
+      "for (const _ of [0, 1]) {",
+      "  $262.agent.start(`",
+      "    $262.agent.receiveBroadcast((sab) => {",
+      "      const state = new Int32Array(sab, 0, 2);",
+      "      const steps = Array.from({ length: ${MAX / 8} }, (_, i) => i + 1);",
+      "      Atomics.add(state, 0, 1);",
+      "      for (const _ of Array.from({ length: 60000 })) {",
+      "        if (Atomics.load(state, 0) === 2) break;",
+      "        $262.agent.sleep(1);",
+      "      }",
+      "      let last = 0;",
+      "      let problem = \"\";",
+      "      for (const step of steps) {",
+      "        const target = step * 8;",
+      "        try {",
+      "          sab.grow(target);",
+      "          if (sab.byteLength < target) problem = \"grow(\" + target + \") left byteLength \" + sab.byteLength;",
+      "        } catch (e) {",
+      "          // A grow may fail only because another grow already passed target.",
+      "          // grow belongs to the main agent's realm, so its RangeError does too.",
+      "          if (e.name !== \"RangeError\" || sab.byteLength <= target) problem = String(e);",
+      "        }",
+      "        const length = sab.byteLength;",
+      "        if (length < last) problem = \"byteLength went from \" + last + \" to \" + length;",
+      "        last = length;",
+      "        if (problem !== \"\") break;",
+      "      }",
+      "      $262.agent.report(problem === \"\" ? \"done\" : problem);",
+      "      $262.agent.leaving();",
+      "    });",
+      "  `);",
+      "}",
+      "$262.agent.broadcast(sab);",
+      "const reports = [];",
+      "for (const _ of Array.from({ length: 60000 })) {",
+      "  const report = $262.agent.getReport();",
+      "  if (report !== null) reports.push(report);",
+      "  if (reports.length === 2) break;",
+      "  $262.agent.sleep(1);",
+      "}",
+      "if (reports.length !== 2 || reports.some((r) => r !== \"done\")) throw new Error(\"agents reported \" + JSON.stringify(reports));",
+      "if (sab.byteLength !== MAX) throw new Error(\"byteLength \" + sab.byteLength + \", expected \" + MAX);",
+      "",
+    ].join("\n"));
+    const out = join(tmp, "sab-grow-agents.json");
+    const proc = Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "built-ins",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const results = report.results ?? [];
+    if (proc.exitCode !== 0 || results.length !== 2 ||
+        results.some((result: { status: string }) => result.status !== "PASS")) {
+      throw new Error(
+        `growing a SharedArrayBuffer under other agents should keep their writes and grows, got exit ${proc.exitCode}: ` +
+        `${JSON.stringify(results)}\n${proc.stderr.toString()}`,
+      );
+    }
   } finally {
     clean(tmp);
   }
@@ -11082,6 +11293,49 @@ await section("Runner sandbox mode: --print prints the last value like host mode
   }
 });
 
+await section("Runner sandbox mode: --print converts any last value as host mode does...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // The root value used to be copied out of the run without a realm, so
+    // an object lost its prototype and printed an empty "Error:", and a
+    // BigInt or Symbol became undefined.
+    const cases: Array<[string, string, string]> = [
+      ["object", "({ a: 1 });", "[object Object]\n"],
+      ["nested object", '({ a: [1, { b: 2 }], c: "x" });', "[object Object]\n"],
+      ["typed array", "new Uint8Array(3);", "0,0,0\n"],
+      ["Map", "new Map([[1, 2]]);", "[object Map]\n"],
+      ["arrow function", "(() => 1);", "() => 1\n"],
+      ["BigInt", "10n;", "10\n"],
+      ["array", "[1, 2, 3];", "1,2,3\n"],
+      ["own toString", '({ toString() { return "custom"; } });', "custom\n"],
+      ["toString that logs", 'const x = { toString: () => { console.log("side"); return "y"; } };\nx;', "side\ny\n"],
+    ];
+    for (const [label, source, expected] of cases) {
+      writeFileSync(join(tmp, "value.js"), source);
+      const run = runSandboxCli(["value.js", "--sandbox", "--print"], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout !== expected || run.stderr !== "")
+        throw new Error(`Sandbox --print of ${label} should print ${JSON.stringify(expected)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    // A Symbol has no string conversion, in host mode either: the run fails
+    // with the TypeError.
+    writeFileSync(join(tmp, "symbol.js"), 'Symbol("s");');
+    const symbol = runSandboxCli(["symbol.js", "--sandbox", "--print"], { cwd: tmp });
+    if (symbol.exitCode !== 1 || symbol.stdout !== "" || !symbol.stderr.includes("TypeError: Cannot convert a Symbol value to a string"))
+      throw new Error(`Sandbox --print of a Symbol should fail with the TypeError, got (exit ${symbol.exitCode}):\n${symbol.stdout}${symbol.stderr}`);
+    // The conversion is part of the run, under its limits.
+    writeFileSync(join(tmp, "forever.js"), [
+      "const forever = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 0 }) }) };",
+      'const x = { toString: () => { for (const _ of forever) {} return "never"; } };',
+      "x;",
+    ].join("\n"));
+    const forever = runSandboxCli(["forever.js", "--sandbox", "--print", "--max-instructions=100000"], { cwd: tmp });
+    if (forever.exitCode !== 1 || forever.stdout !== "" || !forever.stderr.includes("instruction limit"))
+      throw new Error(`A conversion that never ends should hit the run's instruction limit, got (exit ${forever.exitCode}):\n${forever.stdout}${forever.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: without --print the last value is not copied out of the run...", async () => {
   const tmp = makeNativeTmp();
   try {
@@ -14227,6 +14481,78 @@ await section("Runner: a deadline that elapses while a fetch is pending ends the
       throw new Error(`TestRunner should time the waiting test out and run the next one, got ${JSON.stringify({ passed: report.passed, failed: report.failed, failures: report.failedTests })}`);
   } finally {
     server.stop(true);
+    clean(tmp);
+  }
+});
+
+await section("Runner and TestRunner: a timeout that interrupts a blocking Atomics.wait ends the file like any other timeout...", async () => {
+  // The interrupted wait freed its waiter but left it in the process-wide
+  // waiter list (#1769). The runner then faulted when it shut its thread
+  // down, and the test runner's worker cleanup turned the timeout into an
+  // integrity fault that skipped every remaining file.
+  const tmp = makeTmp();
+  try {
+    const blocking = [
+      "const view = new Int32Array(new SharedArrayBuffer(4));",
+      "Atomics.wait(view, 0, 0, 25000);",
+      'console.log("ran past the " + "deadline");',
+      "",
+    ].join("\n");
+    const script = join(tmp, "wait.js");
+    writeFileSync(script, blocking);
+    const run = Bun.spawnSync([resolve(RUNNER), script, "--timeout=300"], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const runOutput = run.stdout.toString() + run.stderr.toString();
+    if (run.exitCode !== 1 || !runOutput.includes("file timed out after 300ms") || /Access violation|ran past the deadline/.test(runOutput))
+      throw new Error(`Runner should end the blocked wait with the timeout, got exit ${run.exitCode}: ${runOutput}`);
+
+    const json = Bun.spawnSync([resolve(RUNNER), script, "--timeout=300", "--output=json"], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const envelope = JSON.parse(json.stdout.toString());
+    if (json.exitCode !== 1 || envelope.ok !== false || envelope.error?.type !== "TimeoutError")
+      throw new Error(`Runner should report a TimeoutError in the JSON envelope, got exit ${json.exitCode}: ${json.stdout.toString()}${json.stderr.toString()}`);
+
+    const dir = join(tmp, "suite");
+    mkdirSync(dir);
+    writeFileSync(
+      join(dir, "a-wait.test.js"),
+      [
+        'describe("atomics wait", () => {',
+        '  test("blocks past the file timeout", () => {',
+        "    const view = new Int32Array(new SharedArrayBuffer(4));",
+        "    Atomics.wait(view, 0, 0, 25000);",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(dir, "b-next.test.js"),
+      'describe("next file", () => { test("runs", () => { expect(1 + 1).toBe(2); }); });\n',
+    );
+    for (const jobs of ["1", "2"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", dir, `--jobs=${jobs}`, "--timeout=300ms", "--no-progress", "--output=json"],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      const label = `TestRunner (--jobs=${jobs})`;
+      if (proc.exitCode !== 1 || output.includes("Integrity fault"))
+        throw new Error(`${label} should fail only the waiting file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
+      const files = JSON.parse(proc.stdout.toString())
+        .files.map((file: any) => ({
+          file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+          ok: file.ok,
+          passed: file.passed,
+          timedOut: String(file.errorMessage ?? "").includes("file timed out after 300ms"),
+        }))
+        .sort((a: any, b: any) => a.file.localeCompare(b.file));
+      const expected = [
+        { file: "a-wait.test.js", ok: false, passed: 0, timedOut: true },
+        { file: "b-next.test.js", ok: true, passed: 1, timedOut: false },
+      ];
+      if (JSON.stringify(files) !== JSON.stringify(expected))
+        throw new Error(`${label} should time the waiting file out and run the next one, got ${JSON.stringify(files)}`);
+    }
+  } finally {
     clean(tmp);
   }
 });

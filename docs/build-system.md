@@ -104,7 +104,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaRunner
 printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
 ```
 
-`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`. The timing banner's `Total` (and `timing.total_ns` in JSON) is end to end: from before the engine is created to the end of the run, so it includes engine boot as well as the lex, parse, compile, and execute phases listed beside it.
+`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`. In `GocciaRunner`, host and sandbox mode alike, the value is converted while the run's engine is still alive and counts as part of the run: a `toString`, `valueOf`, `Symbol.toPrimitive` or `toJSON` it calls runs under `--timeout` and `--max-instructions`, and an error it throws fails the run like the script's own (a Symbol, which has no string form, fails `--print` with a `TypeError`). The timing banner's `Total` (and `timing.total_ns` in JSON) is end to end: from before the engine is created to the end of the run, so it includes engine boot as well as the lex, parse, compile, and execute phases listed beside it.
 
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
 
@@ -323,7 +323,7 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
-`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source; other script extensions default to script source.
+`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source, and any other entry, stdin included, is module source when it has a top-level `import` or `export` declaration and script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). `"source-type": "script"` keeps such an entry script source. The REPL runs script source unless `--source-type=module` names otherwise, and a `.gbc` entry, which has no source to detect from, runs as script source unless `--source-type=module` names it.
 
 ```json
 {
@@ -547,8 +547,8 @@ to standard error.
 
 Standard output carries only what the guest prints — `--print` prints the last
 value, `undefined` included, as in host mode — followed by a printed diff.
-Without `--print` the last value is not read at all: it is not copied out of
-the engine after the run, and its getters do not run. There is no timing banner. The `write-back:` report goes to standard error.
+Without `--print` the last value is not read at all, and its getters do not
+run. There is no timing banner. The `write-back:` report goes to standard error.
 
 Diff output is explicit. JSON is the default format; it always includes a
 separate `metadataChanges` array whose per-path `changes` object contains only

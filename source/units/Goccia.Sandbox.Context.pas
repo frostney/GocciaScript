@@ -105,7 +105,13 @@ type
     FailureKind: TGocciaSandboxFailureKind;
     Diff: string;
     DiffRequested: Boolean;
+    { A nested run's completion value, copied into the calling program's
+      realm; nil for the root run. }
     ResultValue: TGocciaValue;
+    { The root run's completion value as --print shows it, when the host was
+      asked for it (TGocciaSandboxHost.PrintRootResult). }
+    ResultText: string;
+    HasResultText: Boolean;
   end;
 
   TGocciaSandboxRunScriptCallback = function(

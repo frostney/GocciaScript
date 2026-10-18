@@ -1195,9 +1195,10 @@ var
   Working, VersionText: string;
 begin
   Working := CollapseWhitespace(Trim(AComparator));
-  Result.Operator := '';
-  Result.IsAny := False;
-  Result.Value := '';
+  // Every exit, including the two any-comparator ones below, returns a fully
+  // initialised record that carries the options it was parsed with.
+  Result := Default(TGocciaSemverComparator);
+  Result.Semver.Options := AOptions;
 
   if Working = '' then
   begin
@@ -1589,9 +1590,7 @@ begin
   if Count = 0 then
   begin
     SetLength(Result, 1);
-    Result[0].IsAny := True;
-    Result[0].Operator := '';
-    Result[0].Value := '';
+    Result[0] := ParseComparator('', AOptions);
   end;
 end;
 

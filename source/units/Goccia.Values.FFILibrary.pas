@@ -206,7 +206,7 @@ begin
   end
   else if AValue is TGocciaSharedArrayBufferValue then
   begin
-    if Length(TGocciaSharedArrayBufferValue(AValue).Data) = 0 then
+    if TGocciaSharedArrayBufferValue(AValue).ByteLength = 0 then
       Result := nil
     else
       Result := @TGocciaSharedArrayBufferValue(AValue).Data[0];

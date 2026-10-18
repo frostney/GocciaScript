@@ -79,6 +79,8 @@ resourcestring
   SSuggestAddColonAfterCase = 'Add '':'' after the case value';
   SSuggestAddColonAfterDefault = 'Add '':'' after default';
   SSuggestArrowFunctionSyntax = 'Arrow functions use ''=> '' after the parameter list';
+  SSuggestArrowSameLine = 'Put ''=>'' on the same line as the arrow function''s parameters';
+  SSuggestYieldDelegateSameLine = 'Put ''*'' on the same line as ''yield'' to delegate with yield*';
   SSuggestNamespaceImportAs = 'Namespace imports require ''as'' and a local name (e.g., import * as name from ...)';
   SSuggestAddFromAfterImport = 'Add ''from "module-path"'' after the import';
   SSuggestAddFromAfterImportList = 'Add ''from "module-path"'' after the import list';
@@ -324,6 +326,7 @@ resourcestring
 
   // Runtime errors — TextDecoder/TextEncoder
   SSuggestTextDecoderThisType = 'TextDecoder methods must be called on a TextDecoder instance';
+  SSuggestTextDecoderDecodeInput = 'pass an ArrayBuffer, SharedArrayBuffer, typed array or DataView';
   SSuggestTextEncoderThisType = 'TextEncoder methods must be called on a TextEncoder instance';
 
   // Runtime errors — SharedArrayBuffer
@@ -398,6 +401,10 @@ resourcestring
 
   // Runtime errors — TextEncoder
   SSuggestTextEncoderEncodeIntoArgs = 'encodeInto requires a string source and a Uint8Array destination';
+  SSuggestTextEncoderEncodeIntoImmutable = 'an immutable ArrayBuffer cannot be written; encode into a Uint8Array over a mutable buffer';
+
+  // Runtime errors — Web IDL buffer sources
+  SSuggestBufferSourceNotFixedLength = 'Copy the bytes into a fixed-length buffer first: buffer.slice() for a buffer, new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice() for a view';
 
   // Runtime errors — read-only property
   SSuggestReadOnlyProperty = 'the property is read-only and cannot be assigned to';

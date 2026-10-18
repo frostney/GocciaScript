@@ -16,6 +16,23 @@ describe("get DataView.prototype.byteLength", () => {
     expect(view.byteLength).toBe(9);
   });
 
+  test("auto-length view tracks a growable SharedArrayBuffer", () => {
+    const buffer = new SharedArrayBuffer(4, { maxByteLength: 16 });
+    const view = new DataView(buffer, 1);
+    expect(view.byteLength).toBe(3);
+    buffer.grow(10);
+    expect(view.byteLength).toBe(9);
+    expect(view.getUint8(8)).toBe(0);
+  });
+
+  test("a view with a byteLength keeps it after a SharedArrayBuffer grows", () => {
+    const buffer = new SharedArrayBuffer(4, { maxByteLength: 16 });
+    const view = new DataView(buffer, 0, 2);
+    buffer.grow(16);
+    expect(view.byteLength).toBe(2);
+    expect(() => view.getUint8(2)).toThrow(RangeError);
+  });
+
   test("can be shadowed by an own property", () => {
     const view = new DataView(new ArrayBuffer(8), 2, 4);
     Object.defineProperty(view, "byteLength", { value: 99 });

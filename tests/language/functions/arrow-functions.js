@@ -113,6 +113,31 @@ describe("arrow functions", () => {
     expect(results).toEqual([10, 20, 30]);
   });
 
+  test("line breaks inside the parameters and after the arrow", async () => {
+    // ES2026 §15.3 / §15.9: only the line before `=>` is restricted
+    const add = (
+      a,
+      b
+    ) =>
+      a + b;
+    expect(add(2, 3)).toBe(5);
+
+    const double = x =>
+      x * 2;
+    expect(double(4)).toBe(8);
+
+    const addAsync = async (
+      a,
+      b
+    ) =>
+      a + b;
+    expect(await addAsync(2, 3)).toBe(5);
+
+    const doubleAsync = async x =>
+      x * 2;
+    expect(await doubleAsync(4)).toBe(8);
+  });
+
   test("support object and array destructuring parameters", () => {
     const getX = ({ x }) => x;
     const first = ([a]) => a;
