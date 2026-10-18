@@ -1406,6 +1406,31 @@ console.log("Nesting limit...");
       throw new Error(`${desc} on a nearly exhausted native stack should throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
   }
 
+  // The same chains evaluated a few native re-entries above the bottom of
+  // that recursion. Where the recursion ends inside a re-entry's frame
+  // depends on the frames below the run, so the room left above the reserve
+  // differs by build and platform; with a few re-entries of room the checked
+  // passes can accept a chain that an unchecked one then runs off the end of
+  // the stack. Whatever the room, the chain either evaluates or is the
+  // native-stack SyntaxError, never a crash.
+  const aboveBottom = (levels: number, expression: string): string =>
+    "let maxDepth = 0;\n" +
+    "const measure = (d) => { maxDepth = d; try { return [d + 1].map(measure)[0]; } catch (e) { return 0; } };\n" +
+    "measure(1);\n" +
+    `const target = maxDepth - ${levels};\n` +
+    "let result = \"none\";\n" +
+    "const down = (d) => { if (d >= target) { " +
+    `try { result = String(${expression}); } catch (inner) { result = inner.constructor.name + ": " + inner.message; } ` +
+    "return 0; } return [d + 1].map(down)[0]; };\ndown(1);\nconsole.log(result);\n";
+  for (const [desc, expression, args] of lowStackCases.slice(2)) {
+    for (const levels of [2, 4, 16]) {
+      const res = runLoaderJson(aboveBottom(levels, expression), [...LOW_STACK_ARGS, ...args], { timeout: 60000 });
+      const printed = normalizeLineEndings(res.json.output);
+      if (res.exitCode !== 0 || !/^(object|1|SyntaxError: .*native stack.*)\n$/.test(printed))
+        throw new Error(`${desc} ${levels} re-entries above a nearly exhausted native stack should evaluate or throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+    }
+  }
+
   // A pattern compiled on a shallow stack and matched both there and at the
   // bottom of that recursion: matching recurses once per nested lookaround,
   // and running out of stack there is the call stack's RangeError, not a

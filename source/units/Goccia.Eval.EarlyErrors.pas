@@ -90,8 +90,35 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
+  Goccia.NestingLimit,
   Goccia.Token,
   Goccia.Values.ErrorHelper;
+
+{ The passes below recurse once per level of the tree, and a member or call
+  chain costs the parser no stack, so on an already deep native stack (eval
+  reached from deep recursion) a long chain could run them off its end. They
+  stop with the SyntaxError the parser and the compiler give when less than
+  NATIVE_STACK_RESERVE of the stack is left. }
+procedure RaiseEarlyErrorStackExhausted(const ANode: TGocciaASTNode);
+var
+  Line, Column: Integer;
+begin
+  Line := 0;
+  Column := 0;
+  if Assigned(ANode) then
+  begin
+    Line := ANode.Line;
+    Column := ANode.Column;
+  end;
+  raise TGocciaSyntaxError.Create(SErrorNestingStackExhausted, Line, Column,
+    '', nil, SSuggestNestingLimitExceeded);
+end;
+
+procedure CheckEarlyErrorStack(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
+begin
+  if NativeStackNearlyExhausted then
+    RaiseEarlyErrorStackExhausted(ANode);
+end;
 
 procedure AddUniqueEvalName(const ANames: TUnicodeStringList;
   const AName: string);
@@ -660,6 +687,7 @@ var
       (AStatement is TGocciaFunctionDeclaration);
   end;
 begin
+  CheckEarlyErrorStack(AStmt);
   if not Assigned(AStmt) then
     Exit;
 
@@ -823,6 +851,7 @@ var
   Pair: TPair<TGocciaExpression, TGocciaExpression>;
   I: Integer;
 begin
+  CheckEarlyErrorStack(AExpr);
   if not Assigned(AExpr) then
     Exit;
 
@@ -1077,6 +1106,7 @@ var
   Prop: TGocciaDestructuringProperty;
   I: Integer;
 begin
+  CheckEarlyErrorStack(APattern);
   if not Assigned(APattern) then
     Exit;
 
@@ -1221,6 +1251,7 @@ var
   WithStmt: TGocciaWithStatement;
   I, J: Integer;
 begin
+  CheckEarlyErrorStack(AStmt);
   if not Assigned(AStmt) then
     Exit;
 
@@ -1363,6 +1394,7 @@ var
   UnaryExpr: TGocciaUnaryExpression;
   I: Integer;
 begin
+  CheckEarlyErrorStack(AExpr);
   if not Assigned(AExpr) then
     Exit;
 
@@ -1581,6 +1613,7 @@ var
   RestPattern: TGocciaRestDestructuringPattern;
   I: Integer;
 begin
+  CheckEarlyErrorStack(APattern);
   if not Assigned(APattern) then
     Exit;
 
