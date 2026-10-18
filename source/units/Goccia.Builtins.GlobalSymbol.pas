@@ -39,6 +39,10 @@ type
     property GlobalRegistry: TOrderedStringMap<TGocciaSymbolValue> read FGlobalRegistry;
   end;
 
+
+// Heap snapshot prototype: the thread's Symbol.for registry.
+function SharedSymbolRegistry: TOrderedStringMap<TGocciaSymbolValue>;
+
 implementation
 
 uses

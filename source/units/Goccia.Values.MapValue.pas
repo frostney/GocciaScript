@@ -73,6 +73,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -651,7 +652,72 @@ begin
   end;
 end;
 
+{ Heap snapshot prototype }
+
+type
+  TMapSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TMapSnapshotCodec.Tag: string;
+begin
+  Result := 'map';
+end;
+
+procedure TMapSnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+var
+  M: TGocciaMapValue;
+  Pair: TGocciaOrderedValueMap.TKeyValuePair;
+  Count: Integer;
+begin
+  M := TGocciaMapValue(AObject);
+  M.SnapshotWriteInstanceFields(AWriter);
+  Count := 0;
+  for Pair in M.FStore do
+    Inc(Count);
+  AWriter.WriteU32(Count);
+  for Pair in M.FStore do
+  begin
+    AWriter.WriteValue(Pair.Key);
+    AWriter.WriteValue(Pair.Value);
+  end;
+  AWriter.WriteObjectCore(M);
+end;
+
+function TMapSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaMapValue.Create;
+end;
+
+procedure TMapSnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+var
+  M: TGocciaMapValue;
+  Count, I: Cardinal;
+  Key: TGocciaValue;
+begin
+  M := TGocciaMapValue(AObject);
+  M.SnapshotReadInstanceFields(AReader);
+  Count := AReader.ReadU32;
+  for I := 1 to Count do
+  begin
+    Key := AReader.ReadValue;
+    M.FStore.SetEntry(Key, AReader.ReadValue);
+  end;
+  AReader.ReadObjectCore(M);
+end;
+
 initialization
+  RegisterSnapshotCodec(TGocciaMapValue, TMapSnapshotCodec.Create);
   GMapSharedSlot := RegisterRealmOwnedSlot('Map.shared');
 
 end.

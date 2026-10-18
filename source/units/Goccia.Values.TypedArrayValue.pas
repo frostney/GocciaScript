@@ -220,6 +220,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.NativeLimits,
   Goccia.Scope,
   Goccia.ThreadCleanupRegistry,
@@ -3914,7 +3915,91 @@ begin
       '%' + TGocciaTypedArrayValue.KindName(Kind) + '.prototype%');
 end;
 
+{ Heap snapshot prototype }
+
+type
+  TTypedArraySnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+    procedure Finish(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TTypedArraySnapshotCodec.Tag: string;
+begin
+  Result := 'typed-array';
+end;
+
+procedure TTypedArraySnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  T: TGocciaTypedArrayValue;
+begin
+  T := TGocciaTypedArrayValue(AObject);
+  if not (T.FBufferValue is TGocciaArrayBufferValue) then
+    AWriter.Refuse('a typed array over a SharedArrayBuffer');
+  AWriter.WriteU8(Ord(T.FKind));
+  AWriter.WriteValue(T.FBufferValue);
+  AWriter.WriteI32(T.FByteOffset);
+  AWriter.WriteI32(T.FLength);
+  AWriter.WriteBool(T.FAutoLength);
+  AWriter.WriteBool(T.FUsesFixedLengthIndexedStorage);
+  T.SnapshotWriteInstanceFields(AWriter);
+  AWriter.WriteObjectCore(T);
+end;
+
+function TTypedArraySnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+var
+  Kind: Byte;
+begin
+  Kind := AReader.ReadU8;
+  if Kind > Ord(High(TGocciaTypedArrayKind)) then
+    AReader.Refuse('bad typed array kind');
+  Result := TGocciaTypedArrayValue.Create(TGocciaTypedArrayKind(Kind), 0);
+end;
+
+procedure TTypedArraySnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  T: TGocciaTypedArrayValue;
+  Buffer: TGocciaValue;
+begin
+  T := TGocciaTypedArrayValue(AObject);
+  AReader.ReadU8;
+  Buffer := AReader.ReadValue;
+  if not (Buffer is TGocciaArrayBufferValue) then
+    AReader.Refuse('typed array buffer is not an ArrayBuffer');
+  T.FBufferValue := Buffer;
+  T.FByteOffset := AReader.ReadI32;
+  T.FLength := AReader.ReadI32;
+  T.FAutoLength := AReader.ReadBool;
+  T.FUsesFixedLengthIndexedStorage := AReader.ReadBool;
+  T.SnapshotReadInstanceFields(AReader);
+  AReader.ReadObjectCore(T);
+end;
+
+procedure TTypedArraySnapshotCodec.Finish(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  T: TGocciaTypedArrayValue;
+begin
+  T := TGocciaTypedArrayValue(AObject);
+  T.SyncBufferData;
+  if (T.FByteOffset < 0) or (T.FLength < 0) or
+     (Int64(T.FByteOffset) + Int64(T.FLength) * T.FElementSize >
+      Length(T.FBufferData)) then
+    AReader.Refuse('typed array outside its buffer');
+end;
+
 initialization
+  RegisterSnapshotCodec(TGocciaTypedArrayValue, TTypedArraySnapshotCodec.Create);
   RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTypedArraySharedSlot := RegisterRealmOwnedSlot('TypedArray.shared');
   GUint8PrototypeSlot := RegisterRealmSlot('Uint8Array.prototype');

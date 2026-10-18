@@ -20,6 +20,7 @@ uses
   Goccia.EvaluationContext,
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Census,
   Goccia.Intrinsics.FunctionObjects,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
@@ -768,6 +769,12 @@ type
     property ProfilingFunctions: Boolean read FProfilingFunctions write FProfilingFunctions;
   end;
 
+
+// Heap snapshot prototype: creates the realm's lazily built function-object
+// intrinsics (AsyncFunction, GeneratorFunction, AsyncGeneratorFunction and
+// their prototypes) so a built-in table can number them.
+procedure EnsureVMFunctionObjectIntrinsics;
+
 implementation
 
 uses
@@ -796,6 +803,7 @@ uses
   Goccia.Decorators,
   Goccia.DisposalTracker,
   Goccia.EngineFault,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Error,
   Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
@@ -957,6 +965,21 @@ begin
     TGocciaFunctionBase.GetSharedPrototype,
     TGocciaObjectValue.SharedObjectPrototype,
     IteratorPrototype);
+end;
+
+function VMGeneratorObjectPrototype(
+  const AKind: TGocciaFunctionObjectIntrinsicKind;
+  const ARealm: TGocciaRealm = nil): TGocciaObjectValue; forward;
+
+procedure EnsureVMFunctionObjectIntrinsics;
+var
+  Kind: TGocciaFunctionObjectIntrinsicKind;
+begin
+  for Kind := Low(TGocciaFunctionObjectIntrinsicKind) to
+      High(TGocciaFunctionObjectIntrinsicKind) do
+    VMFunctionObjectPrototype(Kind);
+  VMGeneratorObjectPrototype(foikGenerator);
+  VMGeneratorObjectPrototype(foikAsyncGenerator);
 end;
 
 function VMGeneratorObjectPrototype(
@@ -2299,6 +2322,8 @@ type
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     function IsConstructable: Boolean; override;
     procedure MarkReferences; override;
+    procedure SnapshotWriteFlags(const AWriter: TGocciaHeapSnapshotWriter);
+    procedure SnapshotReadFlags(const AReader: TGocciaHeapSnapshotReader);
   end;
 
   TGocciaVMSyncDisposeFallbackValue = class(TGocciaFunctionBase)
@@ -16570,6 +16595,12 @@ LDispatchCase:
 {$I Goccia.VM.DispatchCase.inc}
         if FMemoryPressureCheckCountdown = 0 then
         begin
+          if GHeapCensusAwaitPending then
+          begin
+            GHeapCensusAwaitPending := False;
+            if Assigned(GHeapCensusAwaitHook) then
+              GHeapCensusAwaitHook();
+          end;
           if Assigned(GC) then
             GC.CollectForMemoryPressure(nil,
               MEMORY_PRESSURE_CHECK_FORCES_COLLECTION);
@@ -16966,8 +16997,578 @@ begin
   Result := True;
 end;
 
+{ Heap snapshot prototype: codecs for the VM's own classes. }
+
+type
+  TVMFunctionSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+  TVMCellSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+  TVMContinuationSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+    procedure Finish(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+  TVMAwaitHandlerSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+  TVMLiteralObjectSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+  TVMClassSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function SnapshotVM(const AReader: TGocciaHeapSnapshotReader): TGocciaVM;
+begin
+  if not (AReader.Context is TGocciaVM) then
+    AReader.Refuse('no VM to restore into');
+  Result := TGocciaVM(AReader.Context);
+end;
+
+function SnapshotObject(const AReader: TGocciaHeapSnapshotReader;
+  const AValue: TGocciaValue; const AWhat: string): TGocciaObjectValue;
+begin
+  if Assigned(AValue) and not (AValue is TGocciaObjectValue) then
+    AReader.Refuse(AWhat + ' is not an object');
+  Result := TGocciaObjectValue(AValue);
+end;
+
+// Template and upvalue count first: allocation needs them.
+procedure WriteSnapshotClosure(const W: TGocciaHeapSnapshotWriter;
+  const AClosure: TGocciaBytecodeClosure);
+var
+  I: Integer;
+begin
+  W.WriteTemplate(AClosure.Template);
+  W.WriteU32(AClosure.UpvalueCount);
+  for I := 0 to AClosure.UpvalueCount - 1 do
+    W.WriteRef(AClosure.GetUpvalue(I));
+  W.WriteValue(AClosure.HomeObject);
+  W.WriteValue(AClosure.HomeClass);
+  W.WriteValue(AClosure.PrivateClass);
+  W.WriteValue(AClosure.FunctionValue);
+  W.WriteRef(AClosure.GlobalScope);
+  W.WriteValue(AClosure.NewTarget);
+  W.WriteBool(AClosure.AllowsNewTarget);
+end;
+
+function ReadSnapshotClosureHeader(
+  const R: TGocciaHeapSnapshotReader): TGocciaBytecodeClosure;
+var
+  Template: TGocciaFunctionTemplate;
+  Count: Cardinal;
+begin
+  Template := R.ReadTemplate;
+  Count := R.ReadU32;
+  if Count > 65535 then
+    R.Refuse('too many upvalues');
+  Result := TGocciaBytecodeClosure.Create(Template, Count);
+end;
+
+procedure ReadSnapshotClosure(const R: TGocciaHeapSnapshotReader;
+  const AClosure: TGocciaBytecodeClosure);
+var
+  Count, I: Cardinal;
+  Cell: TGCManagedObject;
+  Scope: TGCManagedObject;
+begin
+  if R.ReadTemplate <> AClosure.Template then
+    R.Refuse('closure template changed');
+  Count := R.ReadU32;
+  if Count <> Cardinal(AClosure.UpvalueCount) then
+    R.Refuse('closure upvalue count changed');
+  for I := 0 to Count - 1 do
+  begin
+    Cell := R.ReadRef;
+    if Assigned(Cell) and not (Cell is TGocciaBytecodeCell) then
+      R.Refuse('upvalue is not a cell');
+    AClosure.SetUpvalue(I, TGocciaBytecodeCell(Cell));
+  end;
+  AClosure.HomeObject := SnapshotObject(R, R.ReadValue, 'home object');
+  AClosure.HomeClass := SnapshotObject(R, R.ReadValue, 'home class');
+  AClosure.PrivateClass := SnapshotObject(R, R.ReadValue, 'private class');
+  AClosure.FunctionValue := R.ReadValue;
+  Scope := R.ReadRef;
+  if Assigned(Scope) and not (Scope is TGocciaScope) then
+    R.Refuse('closure scope is not a scope');
+  AClosure.GlobalScope := TGocciaScope(Scope);
+  AClosure.NewTarget := R.ReadValue;
+  AClosure.AllowsNewTarget := R.ReadBool;
+end;
+
+procedure WriteSnapshotRegisters(const W: TGocciaHeapSnapshotWriter;
+  const ARegisters: TGocciaRegisterArray; const ACount: Integer);
+var
+  I: Integer;
+begin
+  W.WriteU32(ACount);
+  for I := 0 to ACount - 1 do
+    W.WriteRegister(ARegisters[I]);
+end;
+
+function ReadSnapshotRegisters(const R: TGocciaHeapSnapshotReader;
+  var ARegisters: TGocciaRegisterArray): Integer;
+var
+  I: Integer;
+begin
+  Result := R.ReadU32;
+  if Result > 65536 then
+    R.Refuse('too many registers');
+  SetLength(ARegisters, Result);
+  for I := 0 to Result - 1 do
+    ARegisters[I] := R.ReadRegister;
+end;
+
+procedure TGocciaBytecodeFunctionValue.SnapshotWriteFlags(
+  const AWriter: TGocciaHeapSnapshotWriter);
+begin
+  AWriter.WriteBool(FStrictThis);
+  AWriter.WriteBool(FStrictCode);
+  AWriter.WriteBool(FHasOwnLengthProperty);
+  AWriter.WriteBool(FHasOwnNameProperty);
+end;
+
+procedure TGocciaBytecodeFunctionValue.SnapshotReadFlags(
+  const AReader: TGocciaHeapSnapshotReader);
+begin
+  FStrictThis := AReader.ReadBool;
+  FStrictCode := AReader.ReadBool;
+  FHasOwnLengthProperty := AReader.ReadBool;
+  FHasOwnNameProperty := AReader.ReadBool;
+  FCreationRealm := CurrentRealm;
+end;
+
+{ TVMFunctionSnapshotCodec }
+
+function TVMFunctionSnapshotCodec.Tag: string;
+begin
+  Result := 'vm.function';
+end;
+
+procedure TVMFunctionSnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+var
+  F: TGocciaBytecodeFunctionValue;
+begin
+  F := TGocciaBytecodeFunctionValue(AObject);
+  WriteSnapshotClosure(AWriter, F.FClosure);
+  F.SnapshotWriteFlags(AWriter);
+  AWriter.WriteValue(F.FConstructClassValue);
+  AWriter.WriteObjectCore(F);
+end;
+
+function TVMFunctionSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaBytecodeFunctionValue.Create(SnapshotVM(AReader),
+    ReadSnapshotClosureHeader(AReader));
+end;
+
+procedure TVMFunctionSnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+var
+  F: TGocciaBytecodeFunctionValue;
+begin
+  F := TGocciaBytecodeFunctionValue(AObject);
+  ReadSnapshotClosure(AReader, F.FClosure);
+  F.SnapshotReadFlags(AReader);
+  F.FConstructClassValue := AReader.ReadValue;
+  AReader.ReadObjectCore(F);
+end;
+
+{ TVMCellSnapshotCodec }
+
+function TVMCellSnapshotCodec.Tag: string;
+begin
+  Result := 'vm.cell';
+end;
+
+procedure TVMCellSnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+begin
+  AWriter.WriteRegister(TGocciaBytecodeCell(AObject).Value);
+end;
+
+function TVMCellSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaBytecodeCell.Create(RegisterUndefined);
+end;
+
+procedure TVMCellSnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+begin
+  TGocciaBytecodeCell(AObject).Value := AReader.ReadRegister;
+end;
+
+{ TVMContinuationSnapshotCodec }
+
+function TVMContinuationSnapshotCodec.Tag: string;
+begin
+  Result := 'vm.continuation';
+end;
+
+procedure TVMContinuationSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  G: TGocciaBytecodeGeneratorObjectValue;
+  I: Integer;
+begin
+  G := TGocciaBytecodeGeneratorObjectValue(AObject);
+  if G.FDelegateActive then
+    AWriter.Refuse('a generator inside yield* is not supported yet');
+  if G.FYieldPending then
+    AWriter.Refuse('a generator with a pending yield');
+  if G.FState = bgsExecuting then
+    AWriter.Refuse('a running generator');
+  WriteSnapshotClosure(AWriter, G.FClosure);
+  AWriter.WriteRegister(G.FThisValue);
+  WriteSnapshotRegisters(AWriter, G.FArguments, Length(G.FArguments));
+  AWriter.WriteU8(Ord(G.FState));
+  AWriter.WriteU8(Ord(G.FResumeKind));
+  AWriter.WriteRegister(G.FResumeValue);
+  AWriter.WriteU16(G.FResumeRegister);
+  AWriter.WriteValue(G.FReturnSentinel);
+  AWriter.WriteValue(G.FReturnValue);
+  AWriter.WriteBool(G.FReturnRequiresAwait);
+  AWriter.WriteBool(G.FReturnResumeValueAwaited);
+  AWriter.WriteBool(G.FHasContinuation);
+  AWriter.WriteI32(G.FContinuationIP);
+  WriteSnapshotRegisters(AWriter, G.FContinuationRegisters,
+    G.FContinuationRegisterCount);
+  AWriter.WriteU32(G.FContinuationLocalCellCount);
+  for I := 0 to G.FContinuationLocalCellCount - 1 do
+    AWriter.WriteRef(G.FContinuationLocalCells[I]);
+  AWriter.WriteU32(Length(G.FContinuationHandlers));
+  for I := 0 to High(G.FContinuationHandlers) do
+  begin
+    AWriter.WriteI32(G.FContinuationHandlers[I].CatchIP);
+    AWriter.WriteU16(G.FContinuationHandlers[I].CatchRegister);
+    AWriter.WriteU8(Ord(G.FContinuationHandlers[I].Kind));
+  end;
+  AWriter.WriteBool(G.FIgnoreNextResume);
+  AWriter.WriteBool(G.FLastResumeResultIsIteratorResult);
+  AWriter.WriteValue(G.FAwaitOnFulfilled);
+  AWriter.WriteValue(G.FAwaitOnRejected);
+  AWriter.WriteObjectCore(G);
+end;
+
+function TVMContinuationSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+var
+  Closure: TGocciaBytecodeClosure;
+  NoArguments: TGocciaRegisterArray;
+begin
+  Closure := ReadSnapshotClosureHeader(AReader);
+  try
+    SetLength(NoArguments, 0);
+    Result := TGocciaBytecodeGeneratorObjectValue.CreateRegisters(
+      SnapshotVM(AReader), Closure, RegisterUndefined, NoArguments, False);
+  finally
+    Closure.Free;
+  end;
+end;
+
+procedure TVMContinuationSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  G: TGocciaBytecodeGeneratorObjectValue;
+  Count, I: Cardinal;
+  Cell: TGCManagedObject;
+  Kind: Byte;
+  Value: TGocciaValue;
+begin
+  G := TGocciaBytecodeGeneratorObjectValue(AObject);
+  ReadSnapshotClosure(AReader, G.FClosure);
+  G.FThisValue := AReader.ReadRegister;
+  ReadSnapshotRegisters(AReader, G.FArguments);
+  Kind := AReader.ReadU8;
+  if Kind > Ord(High(TGocciaBytecodeGeneratorState)) then
+    AReader.Refuse('bad generator state');
+  G.FState := TGocciaBytecodeGeneratorState(Kind);
+  Kind := AReader.ReadU8;
+  if Kind > Ord(High(TGocciaBytecodeGeneratorResumeKind)) then
+    AReader.Refuse('bad resume kind');
+  G.FResumeKind := TGocciaBytecodeGeneratorResumeKind(Kind);
+  G.FResumeValue := AReader.ReadRegister;
+  G.FResumeRegister := AReader.ReadU16;
+  G.FReturnSentinel := AReader.ReadValue;
+  G.FReturnValue := AReader.ReadValue;
+  G.FReturnRequiresAwait := AReader.ReadBool;
+  G.FReturnResumeValueAwaited := AReader.ReadBool;
+  G.FHasContinuation := AReader.ReadBool;
+  G.FContinuationIP := AReader.ReadI32;
+  if (G.FContinuationIP < 0) or
+     (G.FContinuationIP > G.FClosure.Template.CodeCount) then
+    AReader.Refuse('continuation IP outside its template');
+  G.FContinuationRegisterCount := ReadSnapshotRegisters(AReader,
+    G.FContinuationRegisters);
+  if G.FContinuationRegisterCount > G.FClosure.Template.MaxRegisters then
+    AReader.Refuse('continuation has more registers than its template');
+  Count := AReader.ReadU32;
+  if Count > Cardinal(G.FClosure.Template.MaxRegisters) then
+    AReader.Refuse('continuation has more cells than its template');
+  SetLength(G.FContinuationLocalCells, Count);
+  for I := 1 to Count do
+  begin
+    Cell := AReader.ReadRef;
+    if Assigned(Cell) and not (Cell is TGocciaBytecodeCell) then
+      AReader.Refuse('local cell is not a cell');
+    G.FContinuationLocalCells[I - 1] := TGocciaBytecodeCell(Cell);
+  end;
+  G.FContinuationLocalCellCount := Count;
+  Count := AReader.ReadU32;
+  if Count > 4096 then
+    AReader.Refuse('too many handlers');
+  SetLength(G.FContinuationHandlers, Count);
+  for I := 1 to Count do
+  begin
+    G.FContinuationHandlers[I - 1].CatchIP := AReader.ReadI32;
+    G.FContinuationHandlers[I - 1].CatchRegister := AReader.ReadU16;
+    Kind := AReader.ReadU8;
+    if Kind > Ord(High(TGocciaBytecodeHandlerKind)) then
+      AReader.Refuse('bad handler kind');
+    G.FContinuationHandlers[I - 1].Kind := TGocciaBytecodeHandlerKind(Kind);
+    G.FContinuationHandlers[I - 1].FrameDepth := 0;
+    if (G.FContinuationHandlers[I - 1].CatchIP < 0) or
+       (G.FContinuationHandlers[I - 1].CatchIP >
+        G.FClosure.Template.CodeCount) then
+      AReader.Refuse('handler IP outside its template');
+  end;
+  G.FIgnoreNextResume := AReader.ReadBool;
+  G.FLastResumeResultIsIteratorResult := AReader.ReadBool;
+  Value := AReader.ReadValue;
+  if Assigned(Value) and not (Value is TGocciaVMAsyncAwaitContinuationValue) then
+    AReader.Refuse('await handler of the wrong class');
+  G.FAwaitOnFulfilled := TGocciaVMAsyncAwaitContinuationValue(Value);
+  Value := AReader.ReadValue;
+  if Assigned(Value) and not (Value is TGocciaVMAsyncAwaitContinuationValue) then
+    AReader.Refuse('await handler of the wrong class');
+  G.FAwaitOnRejected := TGocciaVMAsyncAwaitContinuationValue(Value);
+  AReader.ReadObjectCore(G);
+end;
+
+procedure TVMContinuationSnapshotCodec.Finish(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  G: TGocciaBytecodeGeneratorObjectValue;
+  FrameBytes: Int64;
+  GC: TGarbageCollector;
+begin
+  // Charge the restored frame as CaptureContinuation charged the original.
+  G := TGocciaBytecodeGeneratorObjectValue(AObject);
+  FrameBytes := Int64(G.FContinuationRegisterCount) * SizeOf(TGocciaRegister) +
+    Int64(G.FContinuationLocalCellCount) * SizeOf(TGocciaBytecodeCell) +
+    Int64(Length(G.FArguments)) * SizeOf(TGocciaRegister) +
+    Int64(Length(G.FContinuationHandlers)) *
+      SizeOf(TGocciaBytecodeHandlerEntry);
+  GC := TGarbageCollector.Instance;
+  if (FrameBytes > 0) and Assigned(GC) then
+  begin
+    if not GC.TryChargeExternalBytes(FrameBytes) then
+      AReader.Refuse('the restored frame does not fit the memory limit');
+    G.FContinuationChargeCollector := GC;
+    G.FContinuationChargedBytes := FrameBytes;
+  end;
+end;
+
+{ TVMAwaitHandlerSnapshotCodec }
+
+function TVMAwaitHandlerSnapshotCodec.Tag: string;
+begin
+  Result := 'vm.await-handler';
+end;
+
+procedure TVMAwaitHandlerSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  H: TGocciaVMAsyncAwaitContinuationValue;
+begin
+  H := TGocciaVMAsyncAwaitContinuationValue(AObject);
+  AWriter.WriteValue(H.FContinuation);
+  AWriter.WriteValue(H.FPromise);
+  AWriter.WriteU8(Ord(H.FResumeKind));
+  AWriter.WriteBool(H.FAsyncGeneratorResult);
+  AWriter.WriteObjectCore(H);
+end;
+
+function TVMAwaitHandlerSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaVMAsyncAwaitContinuationValue.Create(SnapshotVM(AReader),
+    nil, nil, bgrkNext);
+end;
+
+procedure TVMAwaitHandlerSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  H: TGocciaVMAsyncAwaitContinuationValue;
+  Value: TGocciaValue;
+  Kind: Byte;
+begin
+  H := TGocciaVMAsyncAwaitContinuationValue(AObject);
+  Value := AReader.ReadValue;
+  if not (Value is TGocciaBytecodeGeneratorObjectValue) then
+    AReader.Refuse('await handler without a continuation');
+  H.FContinuation := TGocciaBytecodeGeneratorObjectValue(Value);
+  Value := AReader.ReadValue;
+  if not (Value is TGocciaPromiseValue) then
+    AReader.Refuse('await handler without a promise');
+  H.FPromise := TGocciaPromiseValue(Value);
+  Kind := AReader.ReadU8;
+  if Kind > Ord(High(TGocciaBytecodeGeneratorResumeKind)) then
+    AReader.Refuse('bad resume kind');
+  H.FResumeKind := TGocciaBytecodeGeneratorResumeKind(Kind);
+  H.FAsyncGeneratorResult := AReader.ReadBool;
+  AReader.ReadObjectCore(H);
+end;
+
+{ TVMLiteralObjectSnapshotCodec }
+
+function TVMLiteralObjectSnapshotCodec.Tag: string;
+begin
+  Result := 'vm.literal-object';
+end;
+
+procedure TVMLiteralObjectSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+begin
+  AWriter.WriteBool(TGocciaVMLiteralObjectValue(AObject).FFastLiteralMode);
+  AWriter.WriteObjectCore(TGocciaObjectValue(AObject));
+end;
+
+function TVMLiteralObjectSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaVMLiteralObjectValue.Create;
+end;
+
+procedure TVMLiteralObjectSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+begin
+  TGocciaVMLiteralObjectValue(AObject).FFastLiteralMode := AReader.ReadBool;
+  AReader.ReadObjectCore(TGocciaObjectValue(AObject));
+end;
+
+{ TVMClassSnapshotCodec }
+
+function TVMClassSnapshotCodec.Tag: string;
+begin
+  Result := 'vm.class';
+end;
+
+procedure TVMClassSnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+var
+  C: TGocciaVMClassValue;
+  I: Integer;
+begin
+  C := TGocciaVMClassValue(AObject);
+  C.SnapshotWriteClassFields(AWriter);
+  AWriter.WriteValue(C.FConstructorValue);
+  AWriter.WriteValue(C.FNativeInstanceNewTarget);
+  AWriter.WriteValue(C.FOuterPrivateClass);
+  AWriter.WriteU32(Length(C.FRuntimeKeyedPrivateKeys));
+  for I := 0 to High(C.FRuntimeKeyedPrivateKeys) do
+    AWriter.WriteStr(C.FRuntimeKeyedPrivateKeys[I]);
+end;
+
+function TVMClassSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+var
+  OldToken, Name: string;
+  C: TGocciaVMClassValue;
+begin
+  OldToken := AReader.ReadStr;
+  Name := AReader.ReadStr;
+  C := TGocciaVMClassValue.Create(SnapshotVM(AReader), Name, nil);
+  AReader.MapBrandToken(OldToken, C.PrivateBrandToken);
+  Result := C;
+end;
+
+procedure TVMClassSnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+var
+  C: TGocciaVMClassValue;
+  Value: TGocciaValue;
+  Count, I: Cardinal;
+begin
+  C := TGocciaVMClassValue(AObject);
+  C.SnapshotReadClassFields(AReader);
+  C.FConstructorValue := AReader.ReadValue;
+  C.FNativeInstanceNewTarget := AReader.ReadValue;
+  Value := AReader.ReadValue;
+  if Assigned(Value) and not (Value is TGocciaClassValue) then
+    AReader.Refuse('outer private class is not a class');
+  C.FOuterPrivateClass := TGocciaClassValue(Value);
+  Count := AReader.ReadU32;
+  SetLength(C.FRuntimeKeyedPrivateKeys, Count);
+  for I := 1 to Count do
+    C.FRuntimeKeyedPrivateKeys[I - 1] := AReader.ReadStr;
+end;
+
 initialization
   RegisterFunctionConstructRedirectHook(RedirectBytecodeClassConstruct);
   RegisterOrdinaryObjectClass(TGocciaVMLiteralObjectValue);
+  RegisterSnapshotCodec(TGocciaBytecodeFunctionValue,
+    TVMFunctionSnapshotCodec.Create);
+  RegisterSnapshotCodec(TGocciaBytecodeCell, TVMCellSnapshotCodec.Create);
+  RegisterSnapshotCodec(TGocciaBytecodeGeneratorObjectValue,
+    TVMContinuationSnapshotCodec.Create);
+  RegisterSnapshotCodec(TGocciaVMAsyncAwaitContinuationValue,
+    TVMAwaitHandlerSnapshotCodec.Create);
+  RegisterSnapshotCodec(TGocciaVMLiteralObjectValue,
+    TVMLiteralObjectSnapshotCodec.Create);
+  RegisterSnapshotCodec(TGocciaVMClassValue, TVMClassSnapshotCodec.Create);
 
 end.

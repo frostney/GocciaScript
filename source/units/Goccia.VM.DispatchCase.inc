@@ -3278,6 +3278,13 @@
             AwaitContinuation.FState := bgsSuspendedYield;
             AttachAwaitContinuation(Self, AwaitContinuation, GetRegister(B),
               Template.IsGenerator);
+            // Heap snapshot prototype: sample the live classes at the next
+            // instruction boundary.
+            if Assigned(GHeapCensusAwaitHook) then
+            begin
+              GHeapCensusAwaitPending := True;
+              FMemoryPressureCheckCountdown := 0;
+            end;
             // A caller that asked for it learns of the suspension from the
             // flag, and the entry returns through the same teardown an
             // exception would take, without one.

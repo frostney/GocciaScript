@@ -142,6 +142,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -1013,7 +1014,16 @@ begin
     FSource.MarkReferences;
 end;
 
+procedure MaterializeArrayIteratorPrototype;
+begin
+  EnsureArrayIteratorPrototype;
+end;
+
 initialization
+  RegisterSnapshotSlotMaterializer('ArrayIterator.prototype',
+    MaterializeArrayIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('%ArrayIteratorPrototype%.next',
+    MaterializeArrayIteratorPrototype);
   GArrayIteratorPrototypeSlot := RegisterRealmSlot('ArrayIterator.prototype');
   GArrayIteratorNextSlot := RegisterRealmSlot('%ArrayIteratorPrototype%.next');
   GStringIteratorPrototypeSlot := RegisterRealmSlot('StringIterator.prototype');

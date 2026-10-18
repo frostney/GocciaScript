@@ -141,6 +141,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -4833,7 +4834,68 @@ begin
   Result := TGocciaArrayIteratorValue.Create(ToObject(AThisValue), akValues);
 end;
 
+{ Heap snapshot prototype }
+
+type
+  TArraySnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TArraySnapshotCodec.Tag: string;
+begin
+  Result := 'array';
+end;
+
+procedure TArraySnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+var
+  A: TGocciaArrayValue;
+  I: Integer;
+begin
+  A := TGocciaArrayValue(AObject);
+  A.SnapshotWriteInstanceFields(AWriter);
+  AWriter.WriteI64(A.FLength);
+  AWriter.WriteBool(A.FLengthWritable);
+  AWriter.WriteU32(A.FElements.Count);
+  for I := 0 to A.FElements.Count - 1 do
+    AWriter.WriteValue(A.FElements[I]);
+  AWriter.WriteObjectCore(A);
+end;
+
+function TArraySnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaArrayValue.Create;
+end;
+
+procedure TArraySnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+var
+  A: TGocciaArrayValue;
+  Count, I: Cardinal;
+begin
+  A := TGocciaArrayValue(AObject);
+  A.SnapshotReadInstanceFields(AReader);
+  A.FLength := AReader.ReadI64;
+  A.FLengthWritable := AReader.ReadBool;
+  Count := AReader.ReadU32;
+  if Int64(Count) > A.FLength then
+    AReader.Refuse('array has more elements than its length');
+  A.FElements.Clear;
+  for I := 1 to Count do
+    A.FElements.Add(AReader.ReadValue);
+  AReader.ReadObjectCore(A);
+end;
+
 initialization
+  RegisterSnapshotCodec(TGocciaArrayValue, TArraySnapshotCodec.Create);
   GArrayPrototypeSlot := RegisterRealmSlot('Array.prototype');
   GArrayMethodHostSlot := RegisterRealmSlot('Array.prototype.methodHost');
   GArrayValuesSlot := RegisterRealmSlot('%Array.prototype.values%');

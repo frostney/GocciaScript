@@ -29,6 +29,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Census,
   Goccia.InstructionLimit,
   Goccia.JSON.Utils,
   Goccia.Modules.NodeResolution,
@@ -1007,6 +1008,33 @@ begin
   Result := AEngine.RunModuleForSourceType(AModule, AFileName);
 end;
 
+threadvar
+  GCensusBaseline: TGocciaHeapBaseline;
+  GCensusFile: string;
+  GCensusAwaitCount: Integer;
+
+{ Heap snapshot prototype: census at the 1st, 2nd, 4th, ... 64th await that
+  suspends an async body while a file runs. }
+procedure CensusAtAwait;
+var
+  Census: TGocciaHeapCensus;
+begin
+  Inc(GCensusAwaitCount);
+  if not Assigned(GCensusBaseline) then
+    Exit;
+  if (GCensusAwaitCount > 64) or
+     ((GCensusAwaitCount and (GCensusAwaitCount - 1)) <> 0) then
+    Exit;
+  Census := TGocciaHeapCensus.Create;
+  try
+    Census.Take(GCensusBaseline);
+    AppendCensusLine(Census.ToJson(GCensusFile,
+      'await-' + IntToStr(GCensusAwaitCount)));
+  finally
+    Census.Free;
+  end;
+end;
+
 function TTestRunnerApp.RunGocciaScriptBytecode(const AFileName: string;
   APreloadedSource: TStringList): TTestFileResult;
 var
@@ -1024,7 +1052,10 @@ var
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   PlainThrowDetail: string;
+  CensusBaseline: TGocciaHeapBaseline;
+  Census: TGocciaHeapCensus;
 begin
+  CensusBaseline := nil;
   ScriptResult := CreateDefaultScriptResult;
   ResultValue := nil;
   GC := TGarbageCollector.Instance;
@@ -1101,12 +1132,44 @@ begin
                 held one frame of the call stack limit for every test. It
                 still ends like the file's run did: what the tests leave
                 pending runs, and a rejection they leave fails the file. }
+              if CensusDirectory <> '' then
+              begin
+                CensusBaseline := TGocciaHeapBaseline.Create;
+                CensusBaseline.Capture;
+                GCensusBaseline := CensusBaseline;
+                GCensusFile := AFileName;
+                GCensusAwaitCount := 0;
+                GHeapCensusAwaitHook := @CensusAtAwait;
+              end;
               RunBytecodeTestModule(Engine, Module, AFileName);
+              if Assigned(CensusBaseline) then
+              begin
+                Census := TGocciaHeapCensus.Create;
+                try
+                  Census.Take(CensusBaseline);
+                  AppendCensusLine(Census.ToJson(AFileName, 'module-idle'));
+                finally
+                  Census.Free;
+                end;
+              end;
               ResultValue := RunRegisteredTests(Engine, True);
               if Assigned(GC) and Assigned(ResultValue) then
               begin
                 GC.AddTempRoot(ResultValue);
                 ResultValueRooted := True;
+              end;
+              if Assigned(CensusBaseline) then
+              begin
+                Census := TGocciaHeapCensus.Create;
+                try
+                  Census.Take(CensusBaseline);
+                  AppendCensusLine(Census.ToJson(AFileName, 'tests-done'));
+                finally
+                  Census.Free;
+                end;
+                GHeapCensusAwaitHook := nil;
+                GCensusBaseline := nil;
+                FreeAndNil(CensusBaseline);
               end;
             finally
               ClearExecutionTimeout;
@@ -1130,6 +1193,9 @@ begin
           Result.Timing.FileName := AFileName;
           Result.ErrorMessage := '';
       finally
+        GHeapCensusAwaitHook := nil;
+        GCensusBaseline := nil;
+        FreeAndNil(CensusBaseline);
         Engine.Free;
       end;
     except

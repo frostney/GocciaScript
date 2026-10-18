@@ -112,6 +112,12 @@ function RegisterRealmSlot(const AName: string): TGocciaRealmSlotId;
 // realm-bounded lifetime.
 function RegisterRealmOwnedSlot(const AName: string): TGocciaRealmOwnedSlotId;
 
+// Heap snapshot prototype: the registered slots, for naming intrinsics.
+function RealmSlotCount: Integer;
+function RealmSlotName(const ASlotId: TGocciaRealmSlotId): string;
+function RealmOwnedSlotCount: Integer;
+function RealmOwnedSlotName(const ASlotId: TGocciaRealmOwnedSlotId): string;
+
 // Returns the realm currently active on this worker thread, or nil if no
 // engine is initialized.  Production code paths that rely on intrinsics
 // (value constructors, ExposePrototype, InitializePrototype, ...) require a
@@ -186,6 +192,26 @@ begin
   finally
     CriticalSectionLeave(GSlotLock);
   end;
+end;
+
+function RealmSlotCount: Integer;
+begin
+  Result := GSlotCount;
+end;
+
+function RealmSlotName(const ASlotId: TGocciaRealmSlotId): string;
+begin
+  Result := GSlotNames[ASlotId];
+end;
+
+function RealmOwnedSlotCount: Integer;
+begin
+  Result := GOwnedSlotCount;
+end;
+
+function RealmOwnedSlotName(const ASlotId: TGocciaRealmOwnedSlotId): string;
+begin
+  Result := GOwnedSlotNames[ASlotId];
 end;
 
 function CurrentRealm: TGocciaRealm; {$IFDEF FPC}inline;{$ENDIF}

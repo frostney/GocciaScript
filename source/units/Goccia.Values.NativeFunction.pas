@@ -87,6 +87,10 @@ type
     property CapturedRoot: TGocciaValue read FCapturedRoot write FCapturedRoot;
     property IntrinsicKind: TGocciaNativeIntrinsicKind
       read FIntrinsicKind write FIntrinsicKind;
+    // Heap snapshot prototype: AWriter and AReader are the snapshot writer
+    // and reader.
+    procedure SnapshotWriteState(const AWriter: TObject);
+    procedure SnapshotReadState(const AReader: TObject);
   end;
 
 { Stamps AKind on the native getter of APrototype's own accessor AName, so
@@ -128,6 +132,8 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Values.ObjectPropertyDescriptor;
 
 var
@@ -317,7 +323,105 @@ begin
   Result := FName;
 end;
 
+{ Heap snapshot prototype }
+
+type
+  TNativeFunctionSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+procedure TGocciaNativeFunctionValue.SnapshotWriteState(const AWriter: TObject);
+var
+  W: TGocciaHeapSnapshotWriter;
+  CallbackName: string;
+begin
+  W := TGocciaHeapSnapshotWriter(AWriter);
+  if Assigned(TMethod(FConstructCallback).Code) then
+    W.Refuse('native function "' + FName + '" with a construct callback');
+  if FDirectEvalHost then
+    W.Refuse('the direct-eval host function');
+  CallbackName := SnapshotNativeCallbackName(TMethod(FFunction).Code);
+  if CallbackName = '' then
+    W.Refuse('native function "' + FName + '" with an unregistered callback');
+  if TMethod(FFunction).Data <> Pointer(FCapturedRoot) then
+    W.Refuse('native function "' + FName +
+      '" bound to something other than its captured root');
+  W.WriteStr(CallbackName);
+  W.WriteValue(FCapturedRoot);
+  W.WriteStr(FName);
+  W.WriteI32(FArity);
+  W.WriteBool(FNotConstructable);
+  W.WriteU8(Ord(FIntrinsicKind));
+  W.WriteBool(FStrictThis);
+  W.WriteBool(FStrictCode);
+  W.WriteBool(FHasOwnLengthProperty);
+  W.WriteBool(FHasOwnNameProperty);
+  W.WriteObjectCore(Self);
+end;
+
+procedure TGocciaNativeFunctionValue.SnapshotReadState(const AReader: TObject);
+var
+  R: TGocciaHeapSnapshotReader;
+  Code: Pointer;
+  Kind: Byte;
+begin
+  R := TGocciaHeapSnapshotReader(AReader);
+  Code := SnapshotNativeCallbackCode(R.ReadStr);
+  if not Assigned(Code) then
+    R.Refuse('unknown native callback');
+  FCapturedRoot := R.ReadValue;
+  if not Assigned(FCapturedRoot) then
+    R.Refuse('native function without its captured root');
+  TMethod(FFunction).Code := Code;
+  TMethod(FFunction).Data := Pointer(FCapturedRoot);
+  FName := R.ReadStr;
+  FArity := R.ReadI32;
+  FNotConstructable := R.ReadBool;
+  Kind := R.ReadU8;
+  if Kind > Ord(High(TGocciaNativeIntrinsicKind)) then
+    R.Refuse('bad intrinsic kind');
+  FIntrinsicKind := TGocciaNativeIntrinsicKind(Kind);
+  FStrictThis := R.ReadBool;
+  FStrictCode := R.ReadBool;
+  FHasOwnLengthProperty := R.ReadBool;
+  FHasOwnNameProperty := R.ReadBool;
+  FCreationRealm := CurrentRealm;
+  R.ReadObjectCore(Self);
+end;
+
+function TNativeFunctionSnapshotCodec.Tag: string;
+begin
+  Result := 'native-function';
+end;
+
+procedure TNativeFunctionSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+begin
+  TGocciaNativeFunctionValue(AObject).SnapshotWriteState(AWriter);
+end;
+
+function TNativeFunctionSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(nil, '', 0);
+end;
+
+procedure TNativeFunctionSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+begin
+  TGocciaNativeFunctionValue(AObject).SnapshotReadState(AReader);
+end;
+
 initialization
+  RegisterSnapshotCodec(TGocciaNativeFunctionValue,
+    TNativeFunctionSnapshotCodec.Create);
   GEvalFunctionSlot := RegisterRealmSlot('eval');
 
 end.

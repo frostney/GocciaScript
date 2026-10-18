@@ -165,6 +165,12 @@ type
     function Contains(const AName: string): Boolean; virtual;
     function GetOwnBindingNames: TGocciaStringArray; virtual;
     function GetOwnVarBindingNames: TGocciaStringArray; virtual;
+    // Heap snapshot prototype: an own lexical binding record as stored, and
+    // its replacement in place (the entry keeps its position).
+    function TryGetOwnLexicalBindingRaw(const AName: string;
+      out ABinding: TLexicalBinding): Boolean;
+    procedure SetOwnLexicalBindingRaw(const AName: string;
+      const ABinding: TLexicalBinding);
 
     // Walk the parent chain to find the nearest function/module/global scope (for var hoisting)
     function FindFunctionOrModuleScope: TGocciaScope;
@@ -1323,6 +1329,18 @@ end;
 function TGocciaScope.GetOwnBindingNames: TGocciaStringArray;
 begin
   Result := BindingNamesToArray(FLexicalBindings);
+end;
+
+function TGocciaScope.TryGetOwnLexicalBindingRaw(const AName: string;
+  out ABinding: TLexicalBinding): Boolean;
+begin
+  Result := FLexicalBindings.TryGetValue(AName, ABinding);
+end;
+
+procedure TGocciaScope.SetOwnLexicalBindingRaw(const AName: string;
+  const ABinding: TLexicalBinding);
+begin
+  FLexicalBindings.Add(AName, ABinding);
 end;
 
 function TGocciaScope.GetOwnVarBindingNames: TGocciaStringArray;

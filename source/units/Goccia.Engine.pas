@@ -162,6 +162,17 @@ type
     for the first and a TypeError for the second. }
   TGocciaGlobalEvalStage = (gesCompile, gesRun);
 
+  TGocciaEngine = class;
+
+  { Heap snapshot prototype: called once an entry module's environment is
+    instantiated and its body compiled, right before the body would run.
+    AModule is the compiled entry module (a TGocciaBytecodeModule). A host
+    that sets ASkipBody restores the module's state itself; the run then
+    continues with the idle drain as if the body had returned. }
+  TGocciaEntryModuleReadyEvent = procedure(const AEngine: TGocciaEngine;
+    const AModuleScope: TGocciaScope; const AModule: TObject;
+    var ASkipBody: Boolean) of object;
+
   TGocciaEngine = class
   public
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
@@ -254,6 +265,7 @@ type
     FAsyncContextToken: Integer;
     FLastTiming: TGocciaScriptResult;
     FLastSourceMap: TGocciaSourceMap;
+    FOnEntryModuleReady: TGocciaEntryModuleReadyEvent;
     procedure NotifyUnhandledRejections;
     procedure SetStrictTypes(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
@@ -561,6 +573,9 @@ type
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
     property GocciaGlobal: TGocciaObjectValue read FGocciaGlobal;
     property Realm: TGocciaRealm read FRealm;
+    property VM: TGocciaVM read FVM;
+    property OnEntryModuleReady: TGocciaEntryModuleReadyEvent
+      read FOnEntryModuleReady write FOnEntryModuleReady;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property UnhandledRejections: TGocciaUnhandledRejectionMode
       read FUnhandledRejections write FUnhandledRejections;
@@ -3822,6 +3837,7 @@ var
   MicrotaskScopeToken: Integer;
   NestedRun, OwnsMicrotaskScope: Boolean;
   PreviousRunningEngine: TGocciaEngine;
+  SkipEntryBody: Boolean;
 begin
   // Bind runtime-error code-frame capture to THIS engine's source scope for the
   // duration of its execution, restoring the caller's on exit. The previous
@@ -3972,9 +3988,16 @@ begin
           GC.AddTempRoot(ModuleScope);
         try
           try
-            ModuleResult := EvaluateModuleBody(
-              PipelineResult.ProgramNode, ModuleContext,
-              ModuleProgramConsumed);
+            SkipEntryBody := False;
+            if Assigned(FOnEntryModuleReady) then
+              FOnEntryModuleReady(Self, ModuleScope,
+                ModuleContext.CompiledModule, SkipEntryBody);
+            if SkipEntryBody then
+              ModuleProgramConsumed := False
+            else
+              ModuleResult := EvaluateModuleBody(
+                PipelineResult.ProgramNode, ModuleContext,
+                ModuleProgramConsumed);
             if Assigned(EntryModule) then
               RegisterEntrySyntheticDefaultExports(EntryModule,
                 PipelineResult.ProgramNode, ModuleScope);

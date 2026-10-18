@@ -181,6 +181,11 @@ type
     property SourceText: string read FSourceText write FSourceText;
     property CreationRealm: TGocciaRealm read FCreationRealm;
     property PrivateBrandToken: string read FPrivateBrandToken;
+    // Heap snapshot prototype: the class's own state (AWriter and AReader
+    // are the snapshot writer and reader). The brand token and name come
+    // first so a reader can create the class before filling it.
+    procedure SnapshotWriteClassFields(const AWriter: TObject);
+    procedure SnapshotReadClassFields(const AReader: TObject);
     property SuperClass: TGocciaClassValue read FSuperClass write FSuperClass;
     property NativeSuperConstructor: TGocciaObjectValue read FNativeSuperConstructor write FNativeSuperConstructor;
     property Prototype: TGocciaObjectValue read FClassPrototype;
@@ -386,6 +391,9 @@ type
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure MarkReferences; override;
+    // Heap snapshot prototype: the class link and private elements.
+    procedure SnapshotWriteInstanceFields(const AWriter: TObject);
+    procedure SnapshotReadInstanceFields(const AReader: TObject);
 
     property ClassValue: TGocciaClassValue read FClass write FClass;
   end;
@@ -488,6 +496,7 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.HeapSnapshot.Codec,
   Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
   Goccia.Timeout,
@@ -2801,7 +2810,223 @@ begin
 end;
 
 
+{ Heap snapshot prototype }
+
+type
+  TInstanceSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+procedure WriteValueMap(const W: TGocciaHeapSnapshotWriter;
+  const AMap: TOrderedStringMap<TGocciaValue>);
+var
+  Pair: TGocciaValueMap.TKeyValuePair;
+  Count: Integer;
+begin
+  Count := 0;
+  if Assigned(AMap) then
+    for Pair in AMap do
+      Inc(Count);
+  W.WriteU32(Count);
+  if Assigned(AMap) then
+    for Pair in AMap do
+    begin
+      W.WriteStr(Pair.Key);
+      W.WriteValue(Pair.Value);
+    end;
+end;
+
+procedure ReadValueMap(const R: TGocciaHeapSnapshotReader;
+  const AMap: TOrderedStringMap<TGocciaValue>);
+var
+  Count, I: Cardinal;
+  Key: string;
+begin
+  AMap.Clear;
+  Count := R.ReadU32;
+  for I := 1 to Count do
+  begin
+    Key := R.MapPrivateKey(R.ReadStr);
+    AMap.Add(Key, R.ReadValue);
+  end;
+end;
+
+procedure WriteStringMap(const W: TGocciaHeapSnapshotWriter;
+  const AMap: TStringStringMap);
+var
+  Pair: TStringStringMap.TKeyValuePair;
+  Count: Integer;
+begin
+  Count := 0;
+  if Assigned(AMap) then
+    for Pair in AMap do
+      Inc(Count);
+  W.WriteU32(Count);
+  if Assigned(AMap) then
+    for Pair in AMap do
+    begin
+      W.WriteStr(Pair.Key);
+      W.WriteStr(Pair.Value);
+    end;
+end;
+
+procedure ReadStringMap(const R: TGocciaHeapSnapshotReader;
+  const AMap: TStringStringMap);
+var
+  Count, I: Cardinal;
+  Key: string;
+begin
+  AMap.Clear;
+  Count := R.ReadU32;
+  for I := 1 to Count do
+  begin
+    Key := R.MapPrivateKey(R.ReadStr);
+    AMap.Add(Key, R.MapPrivateKey(R.ReadStr));
+  end;
+end;
+
+procedure TGocciaClassValue.SnapshotWriteClassFields(const AWriter: TObject);
+var
+  W: TGocciaHeapSnapshotWriter;
+  I: Integer;
+begin
+  W := TGocciaHeapSnapshotWriter(AWriter);
+  W.WriteStr(FPrivateBrandToken);
+  W.WriteStr(FName);
+  if (Length(FDecoratorFieldInitializers) > 0) or
+     (Length(FStaticDecoratorFieldInitializers) > 0) then
+    W.Refuse('decorated class fields are not supported yet');
+  W.WriteValue(FSuperClass);
+  W.WriteValue(FClassPrototype);
+  WriteValueMap(W, FStaticMethods);
+  WriteValueMap(W, FPrivateStaticProperties);
+  WriteValueMap(W, FPrivateStaticMethods);
+  WriteValueMap(W, FPrivateGetters);
+  WriteValueMap(W, FPrivateSetters);
+  WriteStringMap(W, FDeclaredPrivateNames);
+  W.WriteBool(Assigned(FDeclaredPrivateKeyNames));
+  if Assigned(FDeclaredPrivateKeyNames) then
+    WriteStringMap(W, FDeclaredPrivateKeyNames);
+  W.WriteValue(FNativeSuperConstructor);
+  W.WriteU32(Length(FMethodInitializers));
+  for I := 0 to High(FMethodInitializers) do
+    W.WriteValue(FMethodInitializers[I]);
+  W.WriteU32(Length(FFieldInitializers));
+  for I := 0 to High(FFieldInitializers) do
+    W.WriteValue(FFieldInitializers[I]);
+  W.WriteBool(FNameDeleted);
+  W.WriteBool(FLengthDeleted);
+  W.WriteU32(FPrivateNamesVersion);
+  W.WriteStr(FSourceText);
+  W.WriteObjectCore(Self);
+end;
+
+procedure TGocciaClassValue.SnapshotReadClassFields(const AReader: TObject);
+var
+  R: TGocciaHeapSnapshotReader;
+  Value: TGocciaValue;
+  Count, I: Cardinal;
+begin
+  R := TGocciaHeapSnapshotReader(AReader);
+  R.ReadStr; // brand token, mapped at allocation
+  FName := R.ReadStr;
+  Value := R.ReadValue;
+  if Assigned(Value) and not (Value is TGocciaClassValue) then
+    R.Refuse('superclass is not a class');
+  FSuperClass := TGocciaClassValue(Value);
+  Value := R.ReadValue;
+  if not (Value is TGocciaObjectValue) then
+    R.Refuse('class prototype is not an object');
+  FClassPrototype := TGocciaObjectValue(Value);
+  ReadValueMap(R, FStaticMethods);
+  ReadValueMap(R, FPrivateStaticProperties);
+  ReadValueMap(R, FPrivateStaticMethods);
+  ReadValueMap(R, FPrivateGetters);
+  ReadValueMap(R, FPrivateSetters);
+  ReadStringMap(R, FDeclaredPrivateNames);
+  if R.ReadBool then
+  begin
+    if not Assigned(FDeclaredPrivateKeyNames) then
+      FDeclaredPrivateKeyNames := TStringStringMap.Create;
+    ReadStringMap(R, FDeclaredPrivateKeyNames);
+  end;
+  Value := R.ReadValue;
+  if Assigned(Value) and not (Value is TGocciaObjectValue) then
+    R.Refuse('native super constructor is not an object');
+  FNativeSuperConstructor := TGocciaObjectValue(Value);
+  Count := R.ReadU32;
+  SetLength(FMethodInitializers, Count);
+  for I := 1 to Count do
+    FMethodInitializers[I - 1] := R.ReadValue;
+  Count := R.ReadU32;
+  SetLength(FFieldInitializers, Count);
+  for I := 1 to Count do
+    FFieldInitializers[I - 1] := R.ReadValue;
+  FNameDeleted := R.ReadBool;
+  FLengthDeleted := R.ReadBool;
+  FPrivateNamesVersion := R.ReadU32 + 1;
+  FSourceText := R.ReadStr;
+  FCreationRealm := CurrentRealm;
+  R.ReadObjectCore(Self);
+end;
+
+procedure TGocciaInstanceValue.SnapshotWriteInstanceFields(
+  const AWriter: TObject);
+begin
+  TGocciaHeapSnapshotWriter(AWriter).WriteValue(FClass);
+  WriteValueMap(TGocciaHeapSnapshotWriter(AWriter), FPrivateProperties);
+end;
+
+procedure TGocciaInstanceValue.SnapshotReadInstanceFields(
+  const AReader: TObject);
+var
+  R: TGocciaHeapSnapshotReader;
+  Value: TGocciaValue;
+begin
+  R := TGocciaHeapSnapshotReader(AReader);
+  Value := R.ReadValue;
+  if Assigned(Value) and not (Value is TGocciaClassValue) then
+    R.Refuse('instance class is not a class');
+  FClass := TGocciaClassValue(Value);
+  if not Assigned(FPrivateProperties) then
+    FPrivateProperties := TGocciaValueMap.Create;
+  ReadValueMap(R, FPrivateProperties);
+end;
+
+function TInstanceSnapshotCodec.Tag: string;
+begin
+  Result := 'instance';
+end;
+
+procedure TInstanceSnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+begin
+  TGocciaInstanceValue(AObject).SnapshotWriteInstanceFields(AWriter);
+  AWriter.WriteObjectCore(TGocciaObjectValue(AObject));
+end;
+
+function TInstanceSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaInstanceValue.Create;
+end;
+
+procedure TInstanceSnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+begin
+  TGocciaInstanceValue(AObject).SnapshotReadInstanceFields(AReader);
+  AReader.ReadObjectCore(TGocciaObjectValue(AObject));
+end;
+
 initialization
   RegisterOrdinaryObjectClass(TGocciaInstanceValue);
+  RegisterSnapshotCodec(TGocciaInstanceValue, TInstanceSnapshotCodec.Create);
 
 end.

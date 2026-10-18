@@ -96,6 +96,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
@@ -871,7 +872,86 @@ begin
   Result := NewBuf;
 end;
 
+{ Heap snapshot prototype }
+
+type
+  TArrayBufferSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TArrayBufferSnapshotCodec.Tag: string;
+begin
+  Result := 'array-buffer';
+end;
+
+procedure TArrayBufferSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  B: TGocciaArrayBufferValue;
+  I: Integer;
+begin
+  B := TGocciaArrayBufferValue(AObject);
+  if B.FHasPendingAllocation then
+    AWriter.Refuse('an ArrayBuffer under construction');
+  AWriter.WriteU32(Length(B.FData));
+  AWriter.WriteI32(B.FMaxByteLength);
+  AWriter.WriteBool(B.FDetached);
+  AWriter.WriteBool(B.FImmutable);
+  for I := 0 to High(B.FData) do
+    AWriter.WriteU8(B.FData[I]);
+  B.SnapshotWriteInstanceFields(AWriter);
+  AWriter.WriteObjectCore(B);
+end;
+
+function TArrayBufferSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+var
+  ByteLength: Cardinal;
+  MaxByteLength: Integer;
+begin
+  ByteLength := AReader.ReadU32;
+  MaxByteLength := AReader.ReadI32;
+  if ByteLength > Cardinal(High(Integer)) then
+    AReader.Refuse('ArrayBuffer too large');
+  if MaxByteLength >= 0 then
+  begin
+    if Int64(ByteLength) > MaxByteLength then
+      AReader.Refuse('ArrayBuffer longer than its maximum');
+    Result := TGocciaArrayBufferValue.Create(ByteLength, MaxByteLength);
+  end
+  else
+    Result := TGocciaArrayBufferValue.Create(ByteLength);
+end;
+
+procedure TArrayBufferSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  B: TGocciaArrayBufferValue;
+  ByteLength, I: Cardinal;
+begin
+  B := TGocciaArrayBufferValue(AObject);
+  ByteLength := AReader.ReadU32;
+  AReader.ReadI32;
+  if ByteLength <> Cardinal(Length(B.FData)) then
+    AReader.Refuse('ArrayBuffer length changed');
+  B.FDetached := AReader.ReadBool;
+  B.FImmutable := AReader.ReadBool;
+  for I := 1 to ByteLength do
+    B.FData[I - 1] := AReader.ReadU8;
+  B.SnapshotReadInstanceFields(AReader);
+  AReader.ReadObjectCore(B);
+end;
+
 initialization
+  RegisterSnapshotCodec(TGocciaArrayBufferValue,
+    TArrayBufferSnapshotCodec.Create);
   GArrayBufferSharedSlot := RegisterRealmOwnedSlot('ArrayBuffer.shared');
 
 end.

@@ -170,6 +170,14 @@ type
 
     procedure MarkReferences; override;
 
+    // Heap snapshot prototype: restore an object's raw state without the
+    // [[DefineOwnProperty]] validation. The object takes ownership of
+    // ADescriptor.
+    procedure DefineSymbolPropertyRaw(const ASymbol: TGocciaSymbolValue;
+      const ADescriptor: TGocciaPropertyDescriptor);
+    procedure SetIntegrityRaw(const AExtensible, AFrozen, ASealed,
+      AHasEverHadIndexedOwnProperty: Boolean);
+
     property Properties: TGocciaPropertyMap read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
@@ -2279,6 +2287,30 @@ begin
 
   FSymbolDescriptors.AddOrSetValue(ASymbol, Applied);
   ADescriptor.Free;
+end;
+
+procedure TGocciaObjectValue.DefineSymbolPropertyRaw(
+  const ASymbol: TGocciaSymbolValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Current: TGocciaPropertyDescriptor;
+begin
+  EnsureSymbolStorage;
+  Current := nil;
+  if FSymbolDescriptors.TryGetValue(ASymbol, Current) then
+    Current.Free
+  else
+    FSymbolInsertionOrder.Add(ASymbol);
+  FSymbolDescriptors.AddOrSetValue(ASymbol, ADescriptor);
+end;
+
+procedure TGocciaObjectValue.SetIntegrityRaw(const AExtensible, AFrozen,
+  ASealed, AHasEverHadIndexedOwnProperty: Boolean);
+begin
+  FExtensible := AExtensible;
+  FFrozen := AFrozen;
+  FSealed := ASealed;
+  FHasEverHadIndexedOwnProperty := AHasEverHadIndexedOwnProperty;
 end;
 
 // ES2026 §10.1.6.1 OrdinaryDefineOwnProperty — symbol variant

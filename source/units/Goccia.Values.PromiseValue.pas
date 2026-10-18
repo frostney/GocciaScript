@@ -151,6 +151,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -1296,7 +1297,149 @@ begin
   Result := 'Promise';
 end;
 
+{ Heap snapshot prototype }
+
+type
+  TPromiseSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+  TPromiseCapabilitySnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TPromiseSnapshotCodec.Tag: string;
+begin
+  Result := 'promise';
+end;
+
+procedure TPromiseSnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+var
+  P: TGocciaPromiseValue;
+  I: Integer;
+begin
+  P := TGocciaPromiseValue(AObject);
+  if (P.FState = gpsRejected) and not P.FIsHandled then
+    AWriter.Refuse('a rejected promise nothing handles');
+  AWriter.WriteU8(Ord(P.FState));
+  AWriter.WriteValue(P.FResult);
+  AWriter.WriteBool(P.FAlreadyResolved);
+  AWriter.WriteBool(P.FIsHandled);
+  if Assigned(P.FReactions) then
+  begin
+    AWriter.WriteU32(P.FReactions.Count);
+    for I := 0 to P.FReactions.Count - 1 do
+    begin
+      if Assigned(P.FReactions[I].Context) then
+        AWriter.Refuse('a promise reaction with an async context');
+      AWriter.WriteValue(P.FReactions[I].OnFulfilled);
+      AWriter.WriteValue(P.FReactions[I].OnRejected);
+      AWriter.WriteValue(P.FReactions[I].ResultPromise);
+    end;
+  end
+  else
+    AWriter.WriteU32(0);
+  AWriter.WriteObjectCore(P);
+end;
+
+function TPromiseSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaPromiseValue.Create;
+end;
+
+procedure TPromiseSnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+var
+  P: TGocciaPromiseValue;
+  State: Byte;
+  Count, I: Cardinal;
+  Reaction: TGocciaPromiseReaction;
+begin
+  P := TGocciaPromiseValue(AObject);
+  State := AReader.ReadU8;
+  if State > Ord(High(TGocciaPromiseState)) then
+    AReader.Refuse('bad promise state');
+  P.FState := TGocciaPromiseState(State);
+  P.FResult := AReader.ReadValue;
+  P.FAlreadyResolved := AReader.ReadBool;
+  P.FIsHandled := AReader.ReadBool;
+  Count := AReader.ReadU32;
+  if (Count > 0) and (P.FState <> gpsPending) then
+    AReader.Refuse('a settled promise with reactions');
+  for I := 1 to Count do
+  begin
+    Reaction := Default(TGocciaPromiseReaction);
+    Reaction.OnFulfilled := AReader.ReadValue;
+    Reaction.OnRejected := AReader.ReadValue;
+    Reaction.ResultPromise := AReader.ReadValue;
+    Reaction.Context := nil;
+    Reaction.Scope := P.FScope;
+    if not Assigned(P.FReactions) then
+      P.FReactions := TList<TGocciaPromiseReaction>.Create;
+    P.FReactions.Add(Reaction);
+  end;
+  AReader.ReadObjectCore(P);
+end;
+
+function TPromiseCapabilitySnapshotCodec.Tag: string;
+begin
+  Result := 'promise.capability';
+end;
+
+procedure TPromiseCapabilitySnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  C: TGocciaPromiseReactionCapability;
+begin
+  C := TGocciaPromiseReactionCapability(AObject);
+  AWriter.WriteValue(C.FPromise);
+  AWriter.WriteValue(C.FResolve);
+  AWriter.WriteValue(C.FReject);
+  AWriter.WriteObjectCore(C);
+end;
+
+function TPromiseCapabilitySnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaPromiseReactionCapability.Create(nil, nil, nil);
+end;
+
+procedure TPromiseCapabilitySnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  C: TGocciaPromiseReactionCapability;
+begin
+  C := TGocciaPromiseReactionCapability(AObject);
+  C.FPromise := AReader.ReadValue;
+  C.FResolve := AReader.ReadValue;
+  C.FReject := AReader.ReadValue;
+  AReader.ReadObjectCore(C);
+end;
+
 initialization
+  RegisterSnapshotCodec(TGocciaPromiseValue, TPromiseSnapshotCodec.Create);
+  RegisterSnapshotCodec(TGocciaPromiseReactionCapability,
+    TPromiseCapabilitySnapshotCodec.Create);
+  RegisterSnapshotNativeCallback('promise.resolve',
+    @TGocciaPromiseValue.DoResolve);
+  RegisterSnapshotNativeCallback('promise.reject',
+    @TGocciaPromiseValue.DoReject);
   GPromiseSharedSlot := RegisterRealmOwnedSlot('Promise.shared');
   GPromiseDefaultConstructorSlot := RegisterRealmSlot('Promise.defaultConstructor');
 

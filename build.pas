@@ -406,6 +406,22 @@ begin
   WriteLn('');
 end;
 
+procedure BuildHeapSnapshotProbe;
+var
+  Output: string;
+begin
+  WriteLn('');
+  WriteLn('Building GocciaHeapSnapshotProbe...');
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaHeapSnapshotProbe.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('heapsnapshotprobe'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaHeapSnapshotProbe build failed',
+      'heapsnapshotprobe');
+  WriteLn(Output);
+  WriteLn('GocciaHeapSnapshotProbe built successfully');
+  WriteLn('');
+end;
+
 procedure BuildFuzzHarness;
 var
   Output: string;
@@ -591,6 +607,8 @@ begin
     BuildREPL
   else if ATrigger = 'runner' then
     BuildRunner
+  else if ATrigger = 'heapsnapshotprobe' then
+    BuildHeapSnapshotProbe
   else if ATrigger = 'loaderbare' then
     BuildScriptLoaderBare
   else if ATrigger = 'fuzzharness' then
