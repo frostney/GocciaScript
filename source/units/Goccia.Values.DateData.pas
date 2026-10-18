@@ -250,6 +250,7 @@ function CreateDateObject(const ATimeValue: Double): TGocciaObjectValue;
 var
   DateConstructor: TObject;
   Descriptor: TGocciaPropertyDescriptor;
+  Prototype: TGocciaObjectValue;
   Store: TGocciaWeakMapValue;
   Root: TGocciaTempRoot;
 begin
@@ -264,14 +265,18 @@ begin
   // reading its descriptor runs nothing and always finds %Date.prototype%.
   Descriptor := TGocciaObjectValue(DateConstructor).GetOwnPropertyDescriptor(
     PROP_PROTOTYPE);
-  if not (Descriptor is TGocciaPropertyDescriptorData) or
-     not (TGocciaPropertyDescriptorData(Descriptor).Value is
-       TGocciaObjectValue) then
+  if (Descriptor is TGocciaPropertyDescriptorData) and
+     (TGocciaPropertyDescriptorData(Descriptor).Value is TGocciaObjectValue) then
+    Prototype := TGocciaObjectValue(
+      TGocciaPropertyDescriptorData(Descriptor).Value)
+  else
+    Prototype := nil;
+  ReleaseDescriptor(Descriptor);
+  if not Assigned(Prototype) then
     Exit;
   // What `new Date(t)` builds before its body runs: an ordinary object with
   // %Date.prototype%. The body's only lasting effect is the slot store.
-  Result := TGocciaObjectValue.Create(TGocciaObjectValue(
-    TGocciaPropertyDescriptorData(Descriptor).Value));
+  Result := TGocciaObjectValue.Create(Prototype);
   InitializeTempRoot(Root);
   AddTempRootIfNeeded(Root, Result);
   try

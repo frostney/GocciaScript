@@ -595,6 +595,16 @@ type
     function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
+    { DefinePropertyOrThrow of a data property for a field, a computed
+      literal key or a class element: the descriptor is the target's once the
+      definition succeeds and is freed when it throws (a frozen receiver, a
+      proxy trap, a class's own "prototype"). }
+    procedure DefineOwnDataProperty(const ATarget: TGocciaObjectValue;
+      const AName: string; const AValue: TGocciaValue;
+      const AFlags: TPropertyFlags);
+    procedure DefineOwnDataSymbolProperty(
+      const ATarget: TGocciaObjectValue; const ASymbol: TGocciaSymbolValue;
+      const AValue: TGocciaValue; const AFlags: TPropertyFlags);
     procedure SetPropertyValueLoose(const AObject: TGocciaValue;
       const AKey: string; const AValue: TGocciaValue);
     procedure SetSymbolPropertyValueLoose(const AObject: TGocciaValue;
@@ -836,6 +846,7 @@ uses
   Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NativeFunctionCallback,
   Goccia.Values.ProxyValue,
   Goccia.Values.Shape,
   Goccia.Values.StringObjectValue,
@@ -1752,7 +1763,6 @@ end;
 procedure VMCopyDataProperties(const ATarget: TGocciaObjectValue;
   const ASource: TGocciaValue; const AExclusionKeys: TGocciaArrayValue);
 var
-  Descriptor: TGocciaPropertyDescriptor;
   Key: TGocciaValue;
   KeyName: string;
   Keys: TArray<TGocciaValue>;
@@ -1788,8 +1798,7 @@ begin
       if Key is TGocciaSymbolValue then
       begin
         SymbolKey := TGocciaSymbolValue(Key);
-        Descriptor := SourceObject.GetOwnSymbolPropertyDescriptor(SymbolKey);
-        if Assigned(Descriptor) and Descriptor.Enumerable then
+        if SourceObject.OwnSymbolPropertyIsEnumerable(SymbolKey) then
         begin
           Value := SourceObject.GetSymbolProperty(SymbolKey);
           DefineSymbolDataPropertyOnObject(ATarget, SymbolKey, Value);
@@ -1798,8 +1807,7 @@ begin
       else
       begin
         KeyName := Key.ToStringLiteral.Value;
-        Descriptor := SourceObject.GetOwnPropertyDescriptor(KeyName);
-        if Assigned(Descriptor) and Descriptor.Enumerable then
+        if SourceObject.OwnPropertyIsEnumerable(KeyName) then
         begin
           Value := SourceObject.GetProperty(KeyName);
           DefineDataPropertyOnObject(ATarget, KeyName, Value);
@@ -2995,7 +3003,6 @@ function TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast(
   const AName: string; const AValue: TGocciaValue): Boolean;
 var
   Current: TGocciaObjectValue;
-  Descriptor: TGocciaPropertyDescriptor;
   ChainDepth: Integer;
 begin
   if not FFastLiteralMode then
@@ -3021,12 +3028,9 @@ begin
     // collection there would free AValue, which only the caller holds.
     if Current.Properties.ContainsKey(AName) then
       Exit(False);
-    if not InheritsGetOwnProperty(Current) then
-    begin
-      Descriptor := Current.GetOwnPropertyDescriptor(AName);
-      if Assigned(Descriptor) then
-        Exit(False);
-    end;
+    if not InheritsGetOwnProperty(Current) and
+       Current.HasOwnPropertyDescriptor(AName) then
+      Exit(False);
     Current := Current.Prototype;
   end;
 
@@ -6543,6 +6547,9 @@ begin
   SetLength(FArgumentPool, 0);
   SetLength(FTempSavedStateRoots, 0);
   FHandlerStack.Free;
+  { Created on demand when a module body resumed after its ExecuteModule
+    returned (top-level await) exports a binding. }
+  FCurrentModuleExports.Free;
   inherited;
 end;
 
@@ -7599,6 +7606,7 @@ begin
   if Descriptor is TGocciaPropertyDescriptorAccessor then
     if TGocciaPropertyDescriptorAccessor(Descriptor).Getter is TGocciaFunctionBase then
       Getter := TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+  ReleaseDescriptor(Descriptor);
 
   if Assigned(Getter) then
   begin
@@ -7636,6 +7644,7 @@ begin
   if Descriptor is TGocciaPropertyDescriptorAccessor then
     if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionBase then
       Setter := TGocciaFunctionBase(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+  ReleaseDescriptor(Descriptor);
 
   if Assigned(Setter) then
   begin
@@ -10241,7 +10250,6 @@ function TGocciaVM.TryForInEntryKey(const AEntry: TGocciaValue;
 var
   EntryObj, Owner: TGocciaObjectValue;
   OwnerValue, KeyValue: TGocciaValue;
-  Descriptor: TGocciaPropertyDescriptor;
 begin
   AKey := '';
   if not (AEntry is TGocciaObjectValue) then
@@ -10256,8 +10264,7 @@ begin
 
   Owner := TGocciaObjectValue(OwnerValue);
   AKey := TGocciaStringLiteralValue(KeyValue).Value;
-  Descriptor := Owner.GetOwnPropertyDescriptor(AKey);
-  Result := Assigned(Descriptor) and Descriptor.Enumerable;
+  Result := Owner.OwnPropertyIsEnumerable(AKey);
 end;
 
 function TGocciaVM.PromiseResolveIntrinsic(
@@ -10699,6 +10706,7 @@ begin
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
     ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+  ReleaseDescriptor(ExistingDescriptor);
   TargetObject.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
     AGetter, ExistingSetter, DescriptorFlags));
 end;
@@ -10733,6 +10741,7 @@ begin
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
     ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+  ReleaseDescriptor(ExistingDescriptor);
   TargetObject.DefineProperty(AName, TGocciaPropertyDescriptorAccessor.Create(
     ExistingGetter, ASetter, DescriptorFlags));
 end;
@@ -10796,6 +10805,7 @@ begin
       if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
          Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
         ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+      ReleaseDescriptor(ExistingDescriptor);
       TGocciaVMClassValue(ATarget).Prototype.DefineSymbolProperty(
         TGocciaSymbolValue(AKey),
         TGocciaPropertyDescriptorAccessor.Create(
@@ -10811,6 +10821,7 @@ begin
       if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
          Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
         ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+      ReleaseDescriptor(ExistingDescriptor);
       TGocciaObjectValue(ATarget).DefineSymbolProperty(
         TGocciaSymbolValue(AKey),
         TGocciaPropertyDescriptorAccessor.Create(
@@ -10841,6 +10852,7 @@ begin
       if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
          Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
         ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+      ReleaseDescriptor(ExistingDescriptor);
       TGocciaVMClassValue(ATarget).Prototype.DefineSymbolProperty(
         TGocciaSymbolValue(AKey),
         TGocciaPropertyDescriptorAccessor.Create(
@@ -10856,6 +10868,7 @@ begin
       if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
          Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
         ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+      ReleaseDescriptor(ExistingDescriptor);
       TGocciaObjectValue(ATarget).DefineSymbolProperty(
         TGocciaSymbolValue(AKey),
         TGocciaPropertyDescriptorAccessor.Create(
@@ -10882,6 +10895,7 @@ begin
     if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
        Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
       ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+    ReleaseDescriptor(ExistingDescriptor);
     TGocciaClassValue(ATarget).DefineSymbolProperty(
       TGocciaSymbolValue(AKey),
       TGocciaPropertyDescriptorAccessor.Create(
@@ -10907,6 +10921,7 @@ begin
     if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
        Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
       ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+    ReleaseDescriptor(ExistingDescriptor);
     TGocciaClassValue(ATarget).DefineSymbolProperty(
       TGocciaSymbolValue(AKey),
       TGocciaPropertyDescriptorAccessor.Create(
@@ -11605,14 +11620,18 @@ begin
         // A private data element on the prototype is a method. Its copy is
         // not writable, so SetPropertyValue rejects assigning to it instead
         // of treating it as a field (ES2026 §7.3.31 PrivateSet step 3).
-        if PrototypeDescriptor is TGocciaPropertyDescriptorData then
-          DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
-            TGocciaPropertyDescriptorData.Create(
-              TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
-              PrototypeDescriptor.Flags - [pfWritable]))
-        else if Assigned(PrototypeDescriptor) then
-          DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
-            ClonePropertyDescriptor(PrototypeDescriptor));
+        try
+          if PrototypeDescriptor is TGocciaPropertyDescriptorData then
+            DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
+              TGocciaPropertyDescriptorData.Create(
+                TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
+                PrototypeDescriptor.Flags - [pfWritable]))
+          else if Assigned(PrototypeDescriptor) then
+            DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
+              ClonePropertyDescriptor(PrototypeDescriptor));
+        finally
+          ReleaseDescriptor(PrototypeDescriptor);
+        end;
       end;
     end;
   finally
@@ -12325,6 +12344,7 @@ begin
       ExistingDescriptor := Target.GetOwnPropertyDescriptor(AName);
     if ExistingDescriptor is TGocciaPropertyDescriptorAccessor then
       Getter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+    ReleaseDescriptor(ExistingDescriptor);
     Setter := AFunction;
   end
   else
@@ -12332,10 +12352,17 @@ begin
 
   Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter,
     [pfEnumerable, pfConfigurable]);
-  if AKey is TGocciaSymbolValue then
-    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
-  else
-    Target.DefineProperty(AName, Descriptor);
+  // A definition that throws (a static accessor named "prototype") leaves the
+  // descriptor to its caller.
+  try
+    if AKey is TGocciaSymbolValue then
+      Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+    else
+      Target.DefineProperty(AName, Descriptor);
+  except
+    Descriptor.Free;
+    raise;
+  end;
 end;
 
 function TGocciaVM.BeginDecorators(
@@ -12429,6 +12456,18 @@ begin
       ThrowTypeError(SErrorClassDecoratorReturn, SSuggestDecoratorFunction);
     Session.ClassValue := DecoratorResult;
   end;
+end;
+
+{ A decorator context's access.get or access.set function. AHost, the object
+  whose method it calls, is its CapturedRoot, so the function keeps its host
+  alive and the collector frees both together. }
+function CreateDecoratorAccessFunction(
+  const ACallback: TGocciaNativeFunctionCallback; const AHost: TGocciaValue;
+  const AName: string; const AArity: Integer): TGocciaNativeFunctionValue;
+begin
+  Result := TGocciaNativeFunctionValue.CreateWithoutPrototype(ACallback, AName,
+    AArity);
+  Result.CapturedRoot := AHost;
 end;
 
 { TGocciaVMPrivateMethodAccessFunction }
@@ -12794,6 +12833,7 @@ var
     if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
        Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
       ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+    ReleaseDescriptor(ExistingDescriptor);
 
     if KeyValue is TGocciaSymbolValue then
       TargetObject.DefineSymbolProperty(
@@ -12841,6 +12881,7 @@ var
     if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
        Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
       ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+    ReleaseDescriptor(ExistingDescriptor);
 
     if KeyValue is TGocciaSymbolValue then
       TargetObject.DefineSymbolProperty(
@@ -12945,8 +12986,8 @@ begin
             AccessGetterHelper := TGocciaAccessGetter.Create(
               ElementValue, ElementName);
           AccessObject.AssignProperty(PROP_GET,
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(
-              AccessGetterHelper.Get, PROP_GET, 0));
+            CreateDecoratorAccessFunction(
+              AccessGetterHelper.Get, AccessGetterHelper, PROP_GET, 0));
           ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
         end;
       end;
@@ -12960,8 +13001,8 @@ begin
           else
             AccessGetterHelper := TGocciaAccessGetter.Create(nil, ElementName);
           AccessObject.AssignProperty(PROP_GET,
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(
-              AccessGetterHelper.Get, PROP_GET, 0));
+            CreateDecoratorAccessFunction(
+              AccessGetterHelper.Get, AccessGetterHelper, PROP_GET, 0));
           ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
         end;
       end;
@@ -12975,8 +13016,8 @@ begin
           else
             AccessSetterHelper := TGocciaAccessSetter.Create(ElementName);
           AccessObject.AssignProperty(PROP_SET,
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(
-              AccessSetterHelper.SetValue, PROP_SET, 1));
+            CreateDecoratorAccessFunction(
+              AccessSetterHelper.SetValue, AccessSetterHelper, PROP_SET, 1));
           ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
         end;
       end;
@@ -12995,11 +13036,11 @@ begin
           AccessSetterHelper := TGocciaAccessSetter.Create(ElementName);
         end;
         AccessObject.AssignProperty(PROP_GET,
-          TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            AccessGetterHelper.Get, PROP_GET, 0));
+          CreateDecoratorAccessFunction(
+            AccessGetterHelper.Get, AccessGetterHelper, PROP_GET, 0));
         AccessObject.AssignProperty(PROP_SET,
-          TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            AccessSetterHelper.SetValue, PROP_SET, 1));
+          CreateDecoratorAccessFunction(
+            AccessSetterHelper.SetValue, AccessSetterHelper, PROP_SET, 1));
         ContextObject.AssignProperty(PROP_ACCESS, AccessObject);
       end;
   end;
@@ -13029,6 +13070,7 @@ begin
              Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
             ElementValue :=
               TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+          ReleaseDescriptor(ExistingDescriptor);
         end;
       end;
     's':
@@ -13044,6 +13086,7 @@ begin
              Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
             ElementValue :=
               TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+          ReleaseDescriptor(ExistingDescriptor);
         end;
       end;
     'f':
@@ -13062,6 +13105,7 @@ begin
           SetterValue := TGocciaPropertyDescriptorAccessor(
             ExistingDescriptor).Setter;
         end;
+        ReleaseDescriptor(ExistingDescriptor);
         AutoAccessorValue.AssignProperty(PROP_GET, GetterValue);
         AutoAccessorValue.AssignProperty(PROP_SET, SetterValue);
         ElementValue := AutoAccessorValue;
@@ -13686,6 +13730,7 @@ var
   PrivateName: string;
   BrandKey: string;
   BrandValue: TGocciaValue;
+  Getter: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
 begin
   if (AObject is TGocciaNullLiteralValue) or
@@ -13734,35 +13779,42 @@ begin
       while Assigned(Current) do
       begin
         Descriptor := PrivateKeyOwnDescriptor(Current, AKey);
-        if Descriptor is TGocciaPropertyDescriptorAccessor then
-        begin
-          if not TryGetRawPrivateValue(
-            AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
-            BrandValue) then
-            ThrowBytecodePrivateTypeError(AKey,
-              SErrorPrivateFieldInaccessible);
-          if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
+        try
+          if Descriptor is TGocciaPropertyDescriptorAccessor then
           begin
-            EmptyArgs := TGocciaArgumentsCollection.Create;
-            try
-              Exit(InvokeFunctionValue(
-                TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-                EmptyArgs, AObject));
-            finally
-              EmptyArgs.Free;
+            // Released before the getter runs, which could replace the
+            // descriptor; the finally below then has nothing to release.
+            Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+            ReleaseDescriptor(Descriptor);
+            Descriptor := nil;
+            if not TryGetRawPrivateValue(
+              AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
+              BrandValue) then
+              ThrowBytecodePrivateTypeError(AKey,
+                SErrorPrivateFieldInaccessible);
+            if Assigned(Getter) then
+            begin
+              EmptyArgs := TGocciaArgumentsCollection.Create;
+              try
+                Exit(InvokeFunctionValue(Getter, EmptyArgs, AObject));
+              finally
+                EmptyArgs.Free;
+              end;
             end;
-          end;
-          ThrowBytecodePrivateTypeError(AKey,
-            SErrorPrivateGetterMissing);
-        end;
-        if Descriptor is TGocciaPropertyDescriptorData then
-        begin
-          if not TryGetRawPrivateValue(
-            AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
-            BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              SErrorPrivateFieldInaccessible);
-          Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
+              SErrorPrivateGetterMissing);
+          end;
+          if Descriptor is TGocciaPropertyDescriptorData then
+          begin
+            if not TryGetRawPrivateValue(
+              AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
+              BrandValue) then
+              ThrowBytecodePrivateTypeError(AKey,
+                SErrorPrivateFieldInaccessible);
+            Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
+          end;
+        finally
+          ReleaseDescriptor(Descriptor);
         end;
         Current := Current.Prototype;
       end;
@@ -13933,17 +13985,50 @@ begin
   end;
 end;
 
+procedure TGocciaVM.DefineOwnDataProperty(
+  const ATarget: TGocciaObjectValue; const AName: string;
+  const AValue: TGocciaValue; const AFlags: TPropertyFlags);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, AFlags);
+  try
+    ATarget.DefineProperty(AName, Descriptor);
+  except
+    Descriptor.Free;
+    raise;
+  end;
+end;
+
+procedure TGocciaVM.DefineOwnDataSymbolProperty(
+  const ATarget: TGocciaObjectValue; const ASymbol: TGocciaSymbolValue;
+  const AValue: TGocciaValue; const AFlags: TPropertyFlags);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue, AFlags);
+  try
+    ATarget.DefineSymbolProperty(ASymbol, Descriptor);
+  except
+    Descriptor.Free;
+    raise;
+  end;
+end;
+
 procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 var
   Current: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
+  StoppedAtData: Boolean;
+  Setter: TGocciaValue;
   SetterArgs: TGocciaArgumentsCollection;
   PrivateName: string;
   BoxedValue: TGocciaObjectValue;
   BrandKey: string;
   ExistingValue: TGocciaValue;
 begin
+  StoppedAtData := False;
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
       [DisplayClassElementName(AKey)]),
@@ -13991,43 +14076,51 @@ begin
       while Assigned(Current) do
       begin
         Descriptor := PrivateKeyOwnDescriptor(Current, AKey);
-        if (Descriptor is TGocciaPropertyDescriptorAccessor) and
-           Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
-        begin
-          if not TryGetRawPrivateValue(
-            AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
-            ExistingValue) then
-            ThrowBytecodePrivateTypeError(AKey,
-              SErrorPrivateFieldInaccessible);
-          SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
-          try
-            InvokeFunctionValue(
-              TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-              SetterArgs, AObject);
-          finally
-            SetterArgs.Free;
-          end;
-          Exit;
-        end;
-        if Descriptor is TGocciaPropertyDescriptorData then
-        begin
-          // Only the private methods StampBytecodePrivateBrands copies onto
-          // a receiver that is not a class instance are not writable.
-          if not Descriptor.Writable then
+        try
+          if (Descriptor is TGocciaPropertyDescriptorAccessor) and
+             Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
           begin
-            if TryGetRawPrivateValue(AObject,
-               ResolveBytecodePrivateBrandKey(AKey, AObject),
-               ExistingValue) then
+            // Released before the setter runs, which could replace the
+            // descriptor; the finally below then has nothing to release.
+            Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+            ReleaseDescriptor(Descriptor);
+            Descriptor := nil;
+            if not TryGetRawPrivateValue(
+              AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
+              ExistingValue) then
               ThrowBytecodePrivateTypeError(AKey,
-                SErrorPrivateMethodNotWritable);
-            ThrowBytecodePrivateTypeError(AKey,
-              SErrorPrivateFieldInaccessible);
+                SErrorPrivateFieldInaccessible);
+            SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
+            try
+              InvokeFunctionValue(Setter, SetterArgs, AObject);
+            finally
+              SetterArgs.Free;
+            end;
+            Exit;
           end;
-          Break;
+          if Descriptor is TGocciaPropertyDescriptorData then
+          begin
+            // Only the private methods StampBytecodePrivateBrands copies onto
+            // a receiver that is not a class instance are not writable.
+            if not Descriptor.Writable then
+            begin
+              if TryGetRawPrivateValue(AObject,
+                 ResolveBytecodePrivateBrandKey(AKey, AObject),
+                 ExistingValue) then
+                ThrowBytecodePrivateTypeError(AKey,
+                  SErrorPrivateMethodNotWritable);
+              ThrowBytecodePrivateTypeError(AKey,
+                SErrorPrivateFieldInaccessible);
+            end;
+            StoppedAtData := True;
+            Break;
+          end;
+          if Descriptor is TGocciaPropertyDescriptorAccessor then
+            ThrowBytecodePrivateTypeError(AKey,
+              SErrorPrivateSetterMissing);
+        finally
+          ReleaseDescriptor(Descriptor);
         end;
-        if Descriptor is TGocciaPropertyDescriptorAccessor then
-          ThrowBytecodePrivateTypeError(AKey,
-            SErrorPrivateSetterMissing);
         Current := Current.Prototype;
       end;
     end;
@@ -14043,8 +14136,7 @@ begin
       // The walk stopped at a private data element the receiver does not hold
       // as a field: a private method, which cannot be assigned once the
       // receiver carries the class brand (ES2026 §7.3.31 PrivateSet step 3).
-      if (AObject is TGocciaObjectValue) and
-         (Descriptor is TGocciaPropertyDescriptorData) and
+      if StoppedAtData and
          TryGetRawPrivateValue(AObject,
            ResolveBytecodePrivateBrandKey(AKey, AObject), ExistingValue) then
         ThrowBytecodePrivateTypeError(AKey, SErrorPrivateMethodNotWritable);

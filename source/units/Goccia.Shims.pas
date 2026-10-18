@@ -1086,12 +1086,10 @@ var
 threadvar
   { One parsed program per DEFAULT_SHIMS entry, filled on first use, so a
     thread parses each shim once however many engines load it. Each engine
-    compiles the program itself. A parsed program is never
-    released while the thread's engines run, and TGocciaProgram.Free releases only the program node, not
-    the statements under it. Parsing per engine leaked the shim ASTs of every
-    engine: about 1.1 MB per engine that used Date on 64-bit. The test runner
-    builds one engine per file, and its snapshot formatter uses Date in every
-    one. }
+    compiles the program itself. The programs stay while the thread's engines
+    run and are freed, whole trees included, when its runtime shuts down
+    (ReleaseShimProgramCache). The test runner builds one engine per file, and
+    its snapshot formatter uses Date in every one. }
   GShimPrograms: array of TGocciaProgram;
 
 function DefaultShimCount: Integer;
@@ -1116,9 +1114,8 @@ procedure ReleaseShimProgramCache;
 var
   I: Integer;
 begin
-  { Frees the program nodes only; the statements under them stay (see
-    GShimPrograms), as they did when every engine parsed its own shims. By
-    the time a thread's runtime shuts down no engine on it is running. }
+  { Each program frees its tree with it (ADR 0143). By the time a thread's
+    runtime shuts down no engine on it is running. }
   for I := 0 to High(GShimPrograms) do
     GShimPrograms[I].Free;
   SetLength(GShimPrograms, 0);
@@ -1308,8 +1305,12 @@ var
 begin
   Descriptor := (LoadShimValue(FLoader, FShimIndex) as TGocciaObjectValue)
     .GetOwnPropertyDescriptor(FExportKey);
-  AGetter := (Descriptor as TGocciaPropertyDescriptorAccessor).Getter;
-  ASetter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+  try
+    AGetter := (Descriptor as TGocciaPropertyDescriptorAccessor).Getter;
+    ASetter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+  finally
+    ReleaseDescriptor(Descriptor);
+  end;
 end;
 
 initialization

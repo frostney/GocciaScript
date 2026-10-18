@@ -12,7 +12,10 @@ uses
   Goccia.Values.Primitives;
 
 type
-  TGocciaImportMetaResolveHelper = class(TGCManagedObject)
+  { Hosts import.meta.resolve. A managed value that the resolve function
+    keeps as its CapturedRoot: a bare TGCManagedObject is never registered
+    with the collector, so nothing ever freed it (#1592). }
+  TGocciaImportMetaResolveHelper = class(TGocciaObjectValue)
   private
     FModuleFilePath: string;
     FResolveModuleURL: TResolveModuleURLCallback;
@@ -179,7 +182,7 @@ constructor TGocciaImportMetaResolveHelper.Create(
   const AModuleFilePath: string;
   const AResolveModuleURL: TResolveModuleURLCallback);
 begin
-  inherited Create;
+  inherited Create(nil);
   FModuleFilePath := AModuleFilePath;
   FResolveModuleURL := AResolveModuleURL;
 end;
@@ -260,6 +263,7 @@ begin
     Resolver);
   ResolveFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     ResolveHelper.Resolve, PROP_RESOLVE, 1);
+  TGocciaNativeFunctionValue(ResolveFunction).CapturedRoot := ResolveHelper;
   MetaObject.AssignProperty(PROP_RESOLVE, ResolveFunction);
 
   // ES2026 §13.3.12.1 step 4e: cache on module record

@@ -85,6 +85,7 @@ type
   public
     constructor Create(const ANodes: TObjectList<TGocciaASTNode>;
       const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property Nodes: TObjectList<TGocciaASTNode> read FNodes;
   end;
 
@@ -343,7 +344,7 @@ type
   TGocciaFieldOrderEntryArray = array of TGocciaFieldOrderEntry;
 
   // Shared class definition structure
-  TGocciaClassDefinition = class
+  TGocciaClassDefinition = class(TGocciaASTObject)
   public
     FName: string;
     FSuperClass: string;
@@ -409,7 +410,6 @@ type
     FClassDefinition: TGocciaClassDefinition;
   public
     constructor Create(const AClassDefinition: TGocciaClassDefinition; const ASpan: TGocciaSourceSpan);
-    destructor Destroy; override;
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
 
@@ -418,7 +418,6 @@ type
     FClassDefinition: TGocciaClassDefinition;
   public
     constructor Create(const AClassDefinition: TGocciaClassDefinition; const ASpan: TGocciaSourceSpan);
-    destructor Destroy; override;
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
 
@@ -462,6 +461,7 @@ type
       const ANamespaceName: string = '';
       const APhase: TGocciaImportCallPhase = icpEvaluation;
       const AAttributeType: string = '');
+    destructor Destroy; override;
     property Imports: TStringStringMap read FImports;
     property AttributeType: string read FAttributeType;
     property ModulePath: string read FModulePath;
@@ -475,6 +475,7 @@ type
   public
     constructor Create(const AExportsTable: TStringStringMap;
       const ASpan: TGocciaSourceSpan);
+    destructor Destroy; override;
     property ExportsTable: TStringStringMap read FExportsTable;
   end;
 
@@ -507,7 +508,6 @@ type
   public
     constructor Create(const ADeclaration: TGocciaDestructuringDeclaration;
       const ASpan: TGocciaSourceSpan);
-    destructor Destroy; override;
     property Declaration: TGocciaDestructuringDeclaration read FDeclaration;
   end;
 
@@ -526,7 +526,6 @@ type
   public
     constructor Create(const ADeclaration: TGocciaClassDeclaration;
       const ASpan: TGocciaSourceSpan);
-    destructor Destroy; override;
     property Declaration: TGocciaClassDeclaration read FDeclaration;
   end;
 
@@ -543,6 +542,7 @@ type
       const AIsStarExport: Boolean = False;
       const ANamespaceName: string = '';
       const AAttributeType: string = '');
+    destructor Destroy; override;
     property AttributeType: string read FAttributeType;
     property ExportsTable: TStringStringMap read FExportsTable;
     property IsStarExport: Boolean read FIsStarExport;
@@ -793,8 +793,6 @@ end;
   end;
 
   destructor TGocciaClassDefinition.Destroy;
-  var
-    I: Integer;
   begin
     FMethods.Free;
     FStaticMethods.Free;
@@ -805,15 +803,9 @@ end;
     FStaticProperties.Free;
     FInstanceProperties.Free;
     FPrivateInstanceProperties.Free;
-    FSuperClassExpression.Free;
     FInstancePropertyTypes.Free;
-    if Assigned(FPrivateMethods) then
-      FPrivateMethods.Free;
-    if Assigned(FPrivateStaticProperties) then
-      FPrivateStaticProperties.Free;
-    for I := 0 to High(FElements) do
-      if (FElements[I].Kind = cekStaticBlock) and Assigned(FElements[I].StaticBlockBody) then
-        FElements[I].StaticBlockBody.Free;
+    FPrivateMethods.Free;
+    FPrivateStaticProperties.Free;
     inherited;
   end;
 
@@ -938,24 +930,12 @@ end;
     FClassDefinition := AClassDefinition;
   end;
 
-  destructor TGocciaClassDeclaration.Destroy;
-  begin
-    FClassDefinition.Free;
-    inherited;
-  end;
-
   { TGocciaClassExpression }
 
   constructor TGocciaClassExpression.Create(const AClassDefinition: TGocciaClassDefinition; const ASpan: TGocciaSourceSpan);
   begin
     inherited Create(ASpan);
     FClassDefinition := AClassDefinition;
-  end;
-
-  destructor TGocciaClassExpression.Destroy;
-  begin
-    FClassDefinition.Free;
-    inherited;
   end;
 
   { TGocciaEnumDeclaration }
@@ -1032,12 +1012,6 @@ end;
     FDeclaration := ADeclaration;
   end;
 
-  destructor TGocciaExportDestructuringDeclaration.Destroy;
-  begin
-    FDeclaration.Free;
-    inherited;
-  end;
-
   { TGocciaExportFunctionDeclaration }
 
   constructor TGocciaExportFunctionDeclaration.Create(
@@ -1056,12 +1030,6 @@ end;
   begin
     inherited Create(ASpan);
     FDeclaration := ADeclaration;
-  end;
-
-  destructor TGocciaExportClassDeclaration.Destroy;
-  begin
-    FDeclaration.Free;
-    inherited;
   end;
 
   { TGocciaReExportDeclaration }
@@ -1126,7 +1094,8 @@ end;
 
   destructor TGocciaCaseClause.Destroy;
   begin
-    FTest.Free;
+    if Assigned(FConsequent) then
+      FConsequent.OwnsObjects := False;
     FConsequent.Free;
     inherited;
   end;
@@ -1142,7 +1111,8 @@ end;
 
   destructor TGocciaSwitchStatement.Destroy;
   begin
-    FDiscriminant.Free;
+    if Assigned(FCases) then
+      FCases.OwnsObjects := False;
     FCases.Free;
     inherited;
   end;
@@ -1175,6 +1145,32 @@ end;
     inherited Create(ASpan);
     FVariables := AVariables;
     FIsAwait := AIsAwait;
+  end;
+
+  destructor TGocciaBlockStatement.Destroy;
+  begin
+    if Assigned(FNodes) then
+      FNodes.OwnsObjects := False;
+    FNodes.Free;
+    inherited;
+  end;
+
+  destructor TGocciaImportDeclaration.Destroy;
+  begin
+    FImports.Free;
+    inherited;
+  end;
+
+  destructor TGocciaExportDeclaration.Destroy;
+  begin
+    FExportsTable.Free;
+    inherited;
+  end;
+
+  destructor TGocciaReExportDeclaration.Destroy;
+  begin
+    FExportsTable.Free;
+    inherited;
   end;
 
 end.
