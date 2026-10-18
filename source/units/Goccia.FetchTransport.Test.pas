@@ -51,6 +51,8 @@ const
   THREAD_COUNT = 4;
   REQUESTS_PER_THREAD = 3;
   SETTLE_DEADLINE_MS = 10000;
+  LOOPBACK_ORIGIN_SKIP_REASON =
+    'the loopback origin uses BSD sockets, which only Unix builds link';
   REPORT_OUTCOME = '.then((response) => response.text().then((body) => {' +
     ' globalThis.outcome = response.status + "|" + body; }),' +
     ' (error) => { globalThis.outcome = error.name + ": " + error.message; });';
@@ -366,10 +368,17 @@ begin
     TestThreadsKeepTheirOwnTransport);
   Test('the test embedder records only answers the engine took',
     TestRecorderSkipsRefusedAnswers);
+  {$IFDEF UNIX}
   Test('a forwarded response reads as the built-in client''s does',
     TestForwardedMatchesDirect);
   Test('a run recorded through the network replays without it',
     TestRecordThenReplay);
+  {$ELSE}
+  Skip('a forwarded response reads as the built-in client''s does',
+    TestForwardedMatchesDirect, LOOPBACK_ORIGIN_SKIP_REASON);
+  Skip('a run recorded through the network replays without it',
+    TestRecordThenReplay, LOOPBACK_ORIGIN_SKIP_REASON);
+  {$ENDIF}
 end;
 
 procedure TFetchTransportTests.TestWithoutTransportUsesNetwork;
@@ -1673,7 +1682,7 @@ begin
 end;
 {$ELSE}
 begin
-  // The loopback origin uses BSD sockets.
+  // Registered as skipped on this platform.
 end;
 {$ENDIF}
 
@@ -1734,8 +1743,7 @@ begin
 end;
 {$ELSE}
 begin
-  // The loopback origin uses BSD sockets; the transport itself is covered by
-  // the tests above on every platform.
+  // Registered as skipped on this platform.
 end;
 {$ENDIF}
 
