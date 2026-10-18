@@ -8069,11 +8069,25 @@ begin
   else if AExpr is TGocciaCallExpression then
   begin
     CallExpr := TGocciaCallExpression(AExpr);
-    if CallExpr.Optional or ExpressionContainsOptionalChain(CallExpr.Callee) then
-      Exit(True);
-    for I := 0 to CallExpr.Arguments.Count - 1 do
-      if ExpressionContainsOptionalChain(CallExpr.Arguments[I]) then
+    case CallExpr.OptionalChainPresence of
+      ocpPresent:
         Exit(True);
+      ocpAbsent:
+        Exit(False);
+    end;
+    Result := CallExpr.Optional or
+      ExpressionContainsOptionalChain(CallExpr.Callee);
+    I := 0;
+    while not Result and (I < CallExpr.Arguments.Count) do
+    begin
+      Result := ExpressionContainsOptionalChain(CallExpr.Arguments[I]);
+      Inc(I);
+    end;
+    if Result then
+      CallExpr.OptionalChainPresence := ocpPresent
+    else
+      CallExpr.OptionalChainPresence := ocpAbsent;
+    Exit;
   end
   else if AExpr is TGocciaSequenceExpression then
   begin

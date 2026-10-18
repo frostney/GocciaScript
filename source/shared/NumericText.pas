@@ -18,6 +18,10 @@ function TryTextToUInt64(const AText: string; out AValue: UInt64): Boolean;
 // before delegating the decimal value conversion here.
 function DecimalTextToNumber(const AText: string): Double;
 
+// DecimalTextToNumber without its fast path: every value goes through the
+// exact rational conversion. The unit tests compare the two.
+function ExactDecimalTextToNumber(const AText: string): Double;
+
 // Decimal text of an integer, written as UTF-16 code units directly.
 // SysUtils.IntToStr returns an AnsiString, and assigning that to a
 // UnicodeString converts through the widestring manager (iconv on Unix):
@@ -58,6 +62,14 @@ const
   DOUBLE_SUBNORMAL_SHIFT = 1074;
   RYU_DOUBLE_POWER_OF_FIVE_BIT_COUNT = 125;
   RYU_POWER_OF_FIVE_TABLE_SIZE = 26;
+  // Clinger's fast path: 19 digits always fit a UInt64; 2^53 is the largest
+  // integer below which every integer is a binary64 value; 10^22 is the
+  // largest exact binary64 power of ten (5^22 < 2^53); 10^15 is the largest
+  // power of ten whose product with a significand of 1 stays below 2^53.
+  FAST_PATH_MAXIMUM_DIGITS = 19;
+  EXACT_DOUBLE_INTEGER_LIMIT = UInt64(1) shl 53;
+  EXACT_POWER_OF_TEN_LIMIT = 22;
+  EXACT_INTEGER_POWER_OF_TEN_LIMIT = 15;
 
 type
   TRyuDecimal = record
@@ -716,10 +728,19 @@ begin
     Result := BitsToDouble(UInt64($7FF0000000000000));
 end;
 
+function IsDecimalDigit(const AChar: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  // A comparison, not `AChar in ['0'..'9']`: Char is WideChar here, and a set
+  // test on a WideChar converts it to an AnsiChar through the widestring
+  // manager, allocating a string per character.
+  Result := (AChar >= '0') and (AChar <= '9');
+end;
+
 function TryDecimalComponents(const AText: string; out ANegative: Boolean;
   out ADigits: string; out ADecimalExponent: Int64): Boolean;
 var
-  Index, FractionDigits, LeadingZeroIndex, TrailingZeroIndex: Integer;
+  Index, IntegerStart, FractionStart, FractionDigits, LeadingZeroIndex,
+  TrailingZeroIndex: Integer;
   ExponentNegative, HasExponent: Boolean;
   ExponentValue: Int64;
   Character: Char;
@@ -742,21 +763,20 @@ begin
       Inc(Index);
   end;
 
-  while (Index <= Length(AText)) and (AText[Index] in ['0'..'9']) do
-  begin
-    ADigits := ADigits + AText[Index];
+  IntegerStart := Index;
+  while (Index <= Length(AText)) and IsDecimalDigit(AText[Index]) do
     Inc(Index);
-  end;
+  ADigits := Copy(AText, IntegerStart, Index - IntegerStart);
 
   if (Index <= Length(AText)) and (AText[Index] = '.') then
   begin
     Inc(Index);
-    while (Index <= Length(AText)) and (AText[Index] in ['0'..'9']) do
-    begin
-      ADigits := ADigits + AText[Index];
-      Inc(FractionDigits);
+    FractionStart := Index;
+    while (Index <= Length(AText)) and IsDecimalDigit(AText[Index]) do
       Inc(Index);
-    end;
+    FractionDigits := Index - FractionStart;
+    if FractionDigits > 0 then
+      ADigits := ADigits + Copy(AText, FractionStart, FractionDigits);
   end;
 
   if ADigits = '' then
@@ -776,9 +796,9 @@ begin
       ExponentNegative := AText[Index] = '-';
       Inc(Index);
     end;
-    if (Index > Length(AText)) or not (AText[Index] in ['0'..'9']) then
+    if (Index > Length(AText)) or not IsDecimalDigit(AText[Index]) then
       Exit;
-    while (Index <= Length(AText)) and (AText[Index] in ['0'..'9']) do
+    while (Index <= Length(AText)) and IsDecimalDigit(AText[Index]) do
     begin
       Character := AText[Index];
       if ExponentValue < DECIMAL_EXPONENT_CLAMP then
@@ -998,8 +1018,64 @@ begin
   ANumber := IntegerValue.ToDouble;
 end;
 
-// ES2026 §7.1.4.1.2 Runtime Semantics: StringNumericValue.
-function DecimalTextToNumber(const AText: string): Double;
+// 10^k = 5^k * 2^k. For k <= EXACT_POWER_OF_TEN_LIMIT both factors, and so
+// the product, are exact binary64 values: no step rounds. Each integer reaches
+// Double by assignment, not by mixed arithmetic (docs/contributing/tooling.md,
+// "Int64 to Double Conversion on FPC 3.2.2").
+function ExactPowerOfTen(const AExponent: Integer): Double;
+var
+  PowerOfTwo: Double;
+begin
+  Result := RYU_SMALL_POWER_OF_FIVE[AExponent];
+  PowerOfTwo := UInt64(1) shl AExponent;
+  Result := Result * PowerOfTwo;
+end;
+
+// Clinger's fast path (W. D. Clinger, "How to Read Floating Point Numbers
+// Accurately", PLDI 1990). A significand of at most 2^53 and a power of ten up
+// to 10^22 are exact binary64 values, so a single IEEE-754 multiplication or
+// division by the power rounds the exact value once, to nearest, ties to
+// even: the value StringNumericValue specifies. The x87 FPU of an i386 build
+// rounds to a 64-bit significand first and could round twice, so there only
+// an exact product is taken. Anything else takes the exact rational path.
+function TryFastDecimalToNumber(const ADigits: string;
+  const ADecimalExponent: Int64; const ANegative: Boolean;
+  out ANumber: Double): Boolean;
+var
+  Significand: UInt64;
+  Index: Integer;
+begin
+  Result := False;
+  ANumber := 0.0;
+  if Length(ADigits) > FAST_PATH_MAXIMUM_DIGITS then
+    Exit;
+  Significand := 0;
+  for Index := 1 to Length(ADigits) do
+    Significand := Significand * 10 + UInt64(Ord(ADigits[Index]) - Ord('0'));
+  if Significand > EXACT_DOUBLE_INTEGER_LIMIT then
+    Exit;
+  if (ADecimalExponent > EXACT_POWER_OF_TEN_LIMIT) or
+     (ADecimalExponent < -EXACT_POWER_OF_TEN_LIMIT) then
+    Exit;
+  {$IF NOT (DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_AARCH64))}
+  if (ADecimalExponent < 0) or (ADecimalExponent > EXACT_INTEGER_POWER_OF_TEN_LIMIT) or
+     (Significand > EXACT_DOUBLE_INTEGER_LIMIT div
+       (RYU_SMALL_POWER_OF_FIVE[ADecimalExponent] shl ADecimalExponent)) then
+    Exit;
+  {$ENDIF}
+
+  ANumber := Significand;
+  if ADecimalExponent > 0 then
+    ANumber := ANumber * ExactPowerOfTen(Integer(ADecimalExponent))
+  else if ADecimalExponent < 0 then
+    ANumber := ANumber / ExactPowerOfTen(Integer(-ADecimalExponent));
+  if ANegative then
+    ANumber := -ANumber;
+  Result := True;
+end;
+
+function DecimalTextToNumberWith(const AText: string;
+  const AAllowFastPath: Boolean): Double;
 var
   Negative: Boolean;
   Digits: string;
@@ -1011,6 +1087,10 @@ begin
   if Digits = '' then
     Exit(SignedZero(Negative));
 
+  if AAllowFastPath and TryFastDecimalToNumber(Digits, DecimalExponent,
+     Negative, Result) then
+    Exit;
+
   DecimalOrder := Int64(Length(Digits)) + DecimalExponent - 1;
   if DecimalOrder > 308 then
     Exit(SignedInfinity(Negative));
@@ -1018,6 +1098,17 @@ begin
     Exit(SignedZero(Negative));
 
   Result := ExactDecimalToNumber(Digits, Integer(DecimalExponent), Negative);
+end;
+
+// ES2026 §7.1.4.1.2 Runtime Semantics: StringNumericValue.
+function DecimalTextToNumber(const AText: string): Double;
+begin
+  Result := DecimalTextToNumberWith(AText, True);
+end;
+
+function ExactDecimalTextToNumber(const AText: string): Double;
+begin
+  Result := DecimalTextToNumberWith(AText, False);
 end;
 
 // ES2026 §7.1.4.1.1 StringToNumber ( str )

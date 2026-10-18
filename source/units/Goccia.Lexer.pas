@@ -82,7 +82,7 @@ type
     function IsValidEscapedIdentifierText(const AText: string;
       const AAtStart: Boolean): Boolean;
     function TryReadIdentifierCodePoint(out ACodePoint: Cardinal;
-      out AText: string; out AByteLength: Integer): Boolean;
+      out AByteLength: Integer): Boolean;
     procedure AddToken(const ATokenType: TGocciaTokenType); overload;
     procedure AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
       const AContainsEscape: Boolean = False); overload;
@@ -1452,11 +1452,10 @@ begin
 end;
 
 function TGocciaLexer.TryReadIdentifierCodePoint(out ACodePoint: Cardinal;
-  out AText: string; out AByteLength: Integer): Boolean;
+  out AByteLength: Integer): Boolean;
 begin
   Result := False;
   ACodePoint := 0;
-  AText := '';
   AByteLength := 0;
 
   if IsAtEnd then
@@ -1465,14 +1464,11 @@ begin
   if Ord(FSource[FCurrent]) <= $7F then
   begin
     ACodePoint := Ord(FSource[FCurrent]);
-    AText := FSource[FCurrent];
     AByteLength := 1;
     Exit(True);
   end;
 
   Result := TryReadCodePointAt(FSource, FCurrent, ACodePoint, AByteLength);
-  if Result then
-    AText := Copy(FSource, FCurrent, AByteLength);
 end;
 
 function TGocciaLexer.IsValidEscapedIdentifierText(const AText: string;
@@ -1501,7 +1497,6 @@ procedure TGocciaLexer.ScanIdentifier;
 var
   ByteLength: Integer;
   CodePoint: Cardinal;
-  IdentifierText: string;
   SB: TStringBuffer;
   EscapedText: string;
   Text: string;
@@ -1523,10 +1518,15 @@ begin
       SB.Append(EscapedText);
       HadEscape := True;
     end
-    else if TryReadIdentifierCodePoint(CodePoint, IdentifierText,
-       ByteLength) and IsSourceIdentifierPartCodePoint(CodePoint) then
+    else if TryReadIdentifierCodePoint(CodePoint, ByteLength) and
+       IsSourceIdentifierPartCodePoint(CodePoint) then
     begin
-      SB.Append(IdentifierText);
+      // Appended from the source in place: a one-character string per
+      // identifier character would be an allocation per character.
+      if ByteLength = 1 then
+        SB.AppendChar(FSource[FCurrent])
+      else
+        SB.Append(Copy(FSource, FCurrent, ByteLength));
       Inc(FCurrent, ByteLength);
       Inc(FColumn, ByteLength);
     end
@@ -1563,7 +1563,6 @@ var
   ByteLength: Integer;
   C: Char;
   CodePoint: Cardinal;
-  IdentifierText: string;
 begin
   FStart := FCurrent;
   FStartColumn := FColumn;
@@ -1754,7 +1753,7 @@ begin
     begin
       Dec(FCurrent);
       Dec(FColumn);
-      if TryReadIdentifierCodePoint(CodePoint, IdentifierText, ByteLength) and
+      if TryReadIdentifierCodePoint(CodePoint, ByteLength) and
          IsSourceIdentifierStartCodePoint(CodePoint) then
         ScanIdentifier
       else
