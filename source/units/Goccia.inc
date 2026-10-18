@@ -36,3 +36,13 @@
   TGarbageCollector measures mark and sweep phase durations per
   collection and prints a summary on destruction. }
 {.$DEFINE GC_TIMING}
+
+{ The constructors every value or property allocation runs are compiled
+  without an implicit exception frame in production builds (see
+  docs/core-patterns.md, "Managed Locals on Hot Paths"). Only there: a
+  development build checks the stack in each routine's prologue (-Ct), and an
+  overflow raised in a prologue after the instance was allocated would leak it
+  without the frame. }
+{$IF DEFINED(FPC) AND DEFINED(PRODUCTION)}
+{$DEFINE GOCCIA_FRAMELESS_CONSTRUCTORS}
+{$ENDIF}
