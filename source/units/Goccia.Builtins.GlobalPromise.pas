@@ -56,6 +56,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
@@ -2144,5 +2145,185 @@ begin
     Roots.Clear;
   end;
 end;
+
+{ Heap snapshot prototype: Promise.all's per-call state and its element
+  functions. The other combinators (allSettled, any, race, the keyed forms)
+  follow the same pattern and are not covered yet. }
+
+type
+  TPromiseAllStateSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+  TPromiseAllHandlerSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+    procedure Finish(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+  TPromiseAllRejectHandlerSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function SnapshotAllState(const AReader: TGocciaHeapSnapshotReader):
+  TPromiseAllState;
+var
+  Value: TGocciaValue;
+begin
+  Value := AReader.ReadValue;
+  if not (Value is TPromiseAllState) then
+    AReader.Refuse('a Promise.all handler without its state');
+  Result := TPromiseAllState(Value);
+end;
+
+function TPromiseAllStateSnapshotCodec.Tag: string;
+begin
+  Result := 'promise.all.state';
+end;
+
+procedure TPromiseAllStateSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  S: TPromiseAllState;
+begin
+  S := TPromiseAllState(AObject);
+  AWriter.WriteValue(S.FResults);
+  AWriter.WriteI32(S.FRemaining);
+  AWriter.WriteValue(S.FResultPromise);
+  AWriter.WriteValue(S.FResolve);
+  AWriter.WriteValue(S.FReject);
+  AWriter.WriteBool(S.FSettled);
+  AWriter.WriteObjectCore(S);
+end;
+
+function TPromiseAllStateSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TPromiseAllState.Create(nil, nil, nil, 0);
+end;
+
+procedure TPromiseAllStateSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  S: TPromiseAllState;
+  Value: TGocciaValue;
+begin
+  S := TPromiseAllState(AObject);
+  Value := AReader.ReadValue;
+  if not (Value is TGocciaArrayValue) then
+    AReader.Refuse('Promise.all results are not an array');
+  S.FResults := TGocciaArrayValue(Value);
+  S.FRemaining := AReader.ReadI32;
+  S.FResultPromise := AReader.ReadValue;
+  S.FResolve := AReader.ReadValue;
+  S.FReject := AReader.ReadValue;
+  S.FSettled := AReader.ReadBool;
+  AReader.ReadObjectCore(S);
+end;
+
+function TPromiseAllHandlerSnapshotCodec.Tag: string;
+begin
+  Result := 'promise.all.fulfill';
+end;
+
+procedure TPromiseAllHandlerSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  H: TPromiseAllHandler;
+begin
+  H := TPromiseAllHandler(AObject);
+  AWriter.WriteValue(H.FState);
+  AWriter.WriteI32(H.FIndex);
+  AWriter.WriteBool(H.FAlreadyCalled);
+  AWriter.WriteObjectCore(H);
+end;
+
+function TPromiseAllHandlerSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TPromiseAllHandler.Create(nil, 0);
+end;
+
+procedure TPromiseAllHandlerSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  H: TPromiseAllHandler;
+begin
+  H := TPromiseAllHandler(AObject);
+  H.FState := SnapshotAllState(AReader);
+  H.FIndex := AReader.ReadI32;
+  if H.FIndex < 0 then
+    AReader.Refuse('a Promise.all handler index below zero');
+  H.FAlreadyCalled := AReader.ReadBool;
+  AReader.ReadObjectCore(H);
+end;
+
+procedure TPromiseAllHandlerSnapshotCodec.Finish(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  H: TPromiseAllHandler;
+begin
+  // The state is filled by now.
+  H := TPromiseAllHandler(AObject);
+  if H.FIndex >= H.FState.Results.Elements.Count then
+    AReader.Refuse('a Promise.all handler index outside its results');
+end;
+
+function TPromiseAllRejectHandlerSnapshotCodec.Tag: string;
+begin
+  Result := 'promise.all.reject';
+end;
+
+procedure TPromiseAllRejectHandlerSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+begin
+  AWriter.WriteValue(TPromiseAllRejectHandler(AObject).FState);
+  AWriter.WriteObjectCore(TPromiseAllRejectHandler(AObject));
+end;
+
+function TPromiseAllRejectHandlerSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TPromiseAllRejectHandler.Create(nil);
+end;
+
+procedure TPromiseAllRejectHandlerSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+begin
+  TPromiseAllRejectHandler(AObject).FState := SnapshotAllState(AReader);
+  AReader.ReadObjectCore(TPromiseAllRejectHandler(AObject));
+end;
+
+initialization
+  RegisterSnapshotCodec(TPromiseAllState, TPromiseAllStateSnapshotCodec.Create);
+  RegisterSnapshotCodec(TPromiseAllHandler,
+    TPromiseAllHandlerSnapshotCodec.Create);
+  RegisterSnapshotCodec(TPromiseAllRejectHandler,
+    TPromiseAllRejectHandlerSnapshotCodec.Create);
+  RegisterSnapshotNativeCallback('promise.all.fulfill',
+    @TPromiseAllHandler.Invoke);
+  RegisterSnapshotNativeCallback('promise.all.reject',
+    @TPromiseAllRejectHandler.Invoke);
 
 end.

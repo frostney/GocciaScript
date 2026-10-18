@@ -1019,9 +1019,84 @@ begin
     FSource.MarkReferences;
 end;
 
+{ Heap snapshot prototype }
+
 procedure MaterializeArrayIteratorPrototype;
 begin
   EnsureArrayIteratorPrototype;
+end;
+
+procedure MaterializeStringIteratorPrototype;
+begin
+  TGocciaStringIteratorValue.EnsureConcreteIteratorPrototype(
+    GStringIteratorPrototypeSlot, 'String Iterator');
+end;
+
+procedure MaterializeMapIteratorPrototype;
+begin
+  TGocciaMapIteratorValue.EnsureConcreteIteratorPrototype(
+    GMapIteratorPrototypeSlot, 'Map Iterator');
+end;
+
+procedure MaterializeSetIteratorPrototype;
+begin
+  TGocciaSetIteratorValue.EnsureConcreteIteratorPrototype(
+    GSetIteratorPrototypeSlot, 'Set Iterator');
+end;
+
+type
+  TArrayIteratorSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TArrayIteratorSnapshotCodec.Tag: string;
+begin
+  Result := 'array-iterator';
+end;
+
+procedure TArrayIteratorSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  It: TGocciaArrayIteratorValue;
+begin
+  It := TGocciaArrayIteratorValue(AObject);
+  AWriter.WriteValue(It.FSource);
+  AWriter.WriteI32(It.FIndex);
+  AWriter.WriteU8(Ord(It.FKind));
+  AWriter.WriteBool(It.FDone);
+  AWriter.WriteObjectCore(It);
+end;
+
+function TArrayIteratorSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaArrayIteratorValue.Create(nil, akValues);
+end;
+
+procedure TArrayIteratorSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  It: TGocciaArrayIteratorValue;
+  Kind: Byte;
+begin
+  It := TGocciaArrayIteratorValue(AObject);
+  It.FSource := AReader.ReadValue;
+  It.FIndex := AReader.ReadI32;
+  if It.FIndex < 0 then
+    AReader.Refuse('array iterator index below zero');
+  Kind := AReader.ReadU8;
+  if Kind > Ord(High(TGocciaArrayIteratorKind)) then
+    AReader.Refuse('bad array iterator kind');
+  It.FKind := TGocciaArrayIteratorKind(Kind);
+  It.FDone := AReader.ReadBool;
+  AReader.ReadObjectCore(It);
 end;
 
 initialization
@@ -1029,6 +1104,14 @@ initialization
     MaterializeArrayIteratorPrototype);
   RegisterSnapshotSlotMaterializer('%ArrayIteratorPrototype%.next',
     MaterializeArrayIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('StringIterator.prototype',
+    MaterializeStringIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('MapIterator.prototype',
+    MaterializeMapIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('SetIterator.prototype',
+    MaterializeSetIteratorPrototype);
+  RegisterSnapshotCodec(TGocciaArrayIteratorValue,
+    TArrayIteratorSnapshotCodec.Create);
   GArrayIteratorPrototypeSlot := RegisterRealmSlot('ArrayIterator.prototype');
   GArrayIteratorNextSlot := RegisterRealmSlot('%ArrayIteratorPrototype%.next');
   GStringIteratorPrototypeSlot := RegisterRealmSlot('StringIterator.prototype');

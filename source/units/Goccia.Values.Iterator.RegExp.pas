@@ -54,6 +54,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.RegExp.Runtime,
   Goccia.RegExp.VM,
@@ -291,7 +292,17 @@ begin
   FInputValue := nil;
 end;
 
+{ Heap snapshot prototype }
+
+procedure MaterializeRegExpStringIteratorPrototype;
+begin
+  TGocciaRegExpMatchAllIteratorValue.EnsureConcreteIteratorPrototype(
+    GRegExpStringIteratorPrototypeSlot, REGEXP_STRING_ITERATOR_TAG);
+end;
+
 initialization
+  RegisterSnapshotSlotMaterializer('RegExpStringIterator.prototype',
+    MaterializeRegExpStringIteratorPrototype);
   GRegExpStringIteratorPrototypeSlot := RegisterRealmSlot(
     'RegExpStringIterator.prototype');
 

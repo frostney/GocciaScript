@@ -4864,7 +4864,11 @@ var
 begin
   A := TGocciaArrayValue(AObject);
   A.SnapshotWriteInstanceFields(AWriter);
-  AWriter.WriteI64(A.FLength);
+  // FLength trails the element count until something reads the length.
+  if A.FLength < A.FElements.Count then
+    AWriter.WriteI64(A.FElements.Count)
+  else
+    AWriter.WriteI64(A.FLength);
   AWriter.WriteBool(A.FLengthWritable);
   AWriter.WriteU32(A.FElements.Count);
   for I := 0 to A.FElements.Count - 1 do

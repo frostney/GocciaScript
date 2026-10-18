@@ -73,6 +73,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -1029,7 +1030,65 @@ begin
   Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
 
+{ Heap snapshot prototype }
+
+type
+  TSetSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TSetSnapshotCodec.Tag: string;
+begin
+  Result := 'set';
+end;
+
+procedure TSetSnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+var
+  S: TGocciaSetValue;
+  Pair: TGocciaOrderedValueMap.TKeyValuePair;
+  Count: Integer;
+begin
+  S := TGocciaSetValue(AObject);
+  S.SnapshotWriteInstanceFields(AWriter);
+  Count := 0;
+  for Pair in S.FStore do
+    Inc(Count);
+  AWriter.WriteU32(Count);
+  for Pair in S.FStore do
+    AWriter.WriteValue(Pair.Key);
+  AWriter.WriteObjectCore(S);
+end;
+
+function TSetSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaSetValue.Create;
+end;
+
+procedure TSetSnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+var
+  S: TGocciaSetValue;
+  Count, I: Cardinal;
+begin
+  S := TGocciaSetValue(AObject);
+  S.SnapshotReadInstanceFields(AReader);
+  Count := AReader.ReadU32;
+  for I := 1 to Count do
+    S.FStore.AddSetMember(AReader.ReadValue);
+  AReader.ReadObjectCore(S);
+end;
+
 initialization
+  RegisterSnapshotCodec(TGocciaSetValue, TSetSnapshotCodec.Create);
   GSetSharedSlot := RegisterRealmOwnedSlot('Set.shared');
 
 end.

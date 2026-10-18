@@ -36,7 +36,7 @@ uses
 
 const
   HEAP_SNAPSHOT_MAGIC = 'GHS1';
-  HEAP_SNAPSHOT_FORMAT_VERSION = 1;
+  HEAP_SNAPSHOT_FORMAT_VERSION = 2;
 
   // Value tags.
   HSV_NIL = 0;
@@ -257,6 +257,7 @@ uses
 
   Goccia.Builtins.GlobalSymbol,
   Goccia.Bytecode.Binary,
+  Goccia.RegExp.Runtime,
   Goccia.HeapSnapshot.Census,
   Goccia.Values.BigIntValue,
   Goccia.Values.HoleValue;
@@ -890,10 +891,17 @@ var
   Symbols: TArray<TGocciaSymbolValue>;
   I: Integer;
 begin
+  // An error keeps its captured stack text; a RegExp keeps its source and
+  // flags, and a restore compiles the program again.
+  WriteBool(AObject.HasErrorData);
   if AObject.HasErrorData then
-    Refuse('error objects are not supported yet');
+    WriteStr(AObject.ErrorStack);
+  WriteBool(AObject.HasRegExpData);
   if AObject.HasRegExpData then
-    Refuse('RegExp objects are not supported yet');
+  begin
+    WriteStr(GetRegExpInternalSource(AObject));
+    WriteStr(GetRegExpInternalFlags(AObject));
+  end;
   WriteValue(AObject.Prototype);
   WriteBool(AObject.Extensible);
   WriteBool(AObject.Frozen);
@@ -1390,12 +1398,30 @@ var
   Existing: TGocciaPropertyDescriptor;
   Symbol: TGocciaValue;
   Pair: TGocciaPropertyMap.TKeyValuePair;
+  RegExpSource, RegExpFlags: string;
 begin
   // Drop what the allocating constructor defined; the snapshot has the
   // object's own properties.
   for Pair in AObject.Properties do
     Pair.Value.Free;
   AObject.Properties.Clear;
+  if ReadBool then
+  begin
+    AObject.HasErrorData := True;
+    AObject.ErrorStack := ReadStr;
+  end;
+  if ReadBool then
+  begin
+    RegExpSource := ReadStr;
+    RegExpFlags := ReadStr;
+    AObject.HasRegExpData := True;
+    try
+      ReinitializeRegExpObject(AObject, RegExpSource, RegExpFlags);
+    except
+      on E: Exception do
+        Refuse('a RegExp does not compile: ' + E.Message);
+    end;
+  end;
   Proto := ReadValue;
   if Assigned(Proto) and not (Proto is TGocciaObjectValue) then
     Refuse('prototype is not an object');
