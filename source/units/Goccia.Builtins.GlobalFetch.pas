@@ -77,6 +77,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Execution.CallSite,
   Goccia.FetchManager,
+  Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.Timeout,
@@ -227,6 +228,7 @@ var
   Policy: TGocciaFetchPolicy;
   Manager: TGocciaFetchManager;
   CallSite: TGocciaCallSite;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Extract URL
   if AArgs.Length = 0 then
@@ -304,49 +306,59 @@ begin
     ThrowTypeError(Format(SErrorFetchUnsupportedMethod, [Method]),
       SSuggestFetchUsage);
 
-  // Perform the request
+  // Perform the request. The promise is held only here until it is
+  // returned: the manager roots it only while the request is pending, and a
+  // failed start (a transport that raised) leaves it to be rejected below,
+  // after allocations that are collection safe points.
   Promise := TGocciaPromiseValue.Create;
-  if Assigned(FCapabilityAuditEmitter) then
-    FCapabilityAuditEmitter(gckNetDispatch, gcdAllow, URLStr,
-      'fetch dispatch is allowed');
-  Policy.Capabilities := FCapabilities;
-  Policy.AuditEmitter := FSourcedAuditEmitter;
-  { The worker's decisions are delivered later, from whatever code is
-    running then; attribute them to this fetch() call. }
-  Policy.AuditSource := Default(TGocciaCapabilityAuditSource);
-  if CurrentGocciaCallSite(CallSite) then
-  begin
-    Policy.AuditSource.FilePath := CallSite.FilePath;
-    Policy.AuditSource.Line := CallSite.Line;
-    Policy.AuditSource.Column := CallSite.Column;
-  end;
-  if Assigned(FMaxResponseBytesProvider) then
-    Policy.MaxResponseBytes := FMaxResponseBytesProvider()
-  else
-    Policy.MaxResponseBytes := 0;
-  if Assigned(FTransportProvider) then
-    Policy.Transport := FTransportProvider()
-  else
-    Policy.Transport := nil;
+  Roots.Initialize;
   try
-    Manager := TGocciaFetchManager.Instance;
-    if not Assigned(Manager) then
-      raise Exception.Create(FETCH_BACKEND_UNAVAILABLE_ERROR);
-    Manager.StartFetch(URLStr, Method, RequestHeaders, Policy, FRealm,
-      Promise, Signal);
-  except
-    on E: TGocciaTimeoutError do
-      raise;
-    on E: TGocciaInstructionLimitError do
-      raise;
-    on E: TGocciaMemoryLimitError do
-      raise;
-    on E: Exception do
+    Roots.Add(Promise);
+    if Assigned(FCapabilityAuditEmitter) then
+      FCapabilityAuditEmitter(gckNetDispatch, gcdAllow, URLStr,
+        'fetch dispatch is allowed');
+    Policy.Capabilities := FCapabilities;
+    Policy.AuditEmitter := FSourcedAuditEmitter;
+    { The worker's decisions are delivered later, from whatever code is
+      running then; attribute them to this fetch() call. }
+    Policy.AuditSource := Default(TGocciaCapabilityAuditSource);
+    if CurrentGocciaCallSite(CallSite) then
     begin
-      if IsEngineIntegrityFault(E) then
-        raise;
-      Promise.Reject(CreateErrorObject('TypeError', 'fetch failed: ' + E.Message));
+      Policy.AuditSource.FilePath := CallSite.FilePath;
+      Policy.AuditSource.Line := CallSite.Line;
+      Policy.AuditSource.Column := CallSite.Column;
     end;
+    if Assigned(FMaxResponseBytesProvider) then
+      Policy.MaxResponseBytes := FMaxResponseBytesProvider()
+    else
+      Policy.MaxResponseBytes := 0;
+    if Assigned(FTransportProvider) then
+      Policy.Transport := FTransportProvider()
+    else
+      Policy.Transport := nil;
+    try
+      Manager := TGocciaFetchManager.Instance;
+      if not Assigned(Manager) then
+        raise Exception.Create(FETCH_BACKEND_UNAVAILABLE_ERROR);
+      Manager.StartFetch(URLStr, Method, RequestHeaders, Policy, FRealm,
+        Promise, Signal);
+    except
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaInstructionLimitError do
+        raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
+      on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
+        Promise.Reject(CreateErrorObject('TypeError',
+          'fetch failed: ' + E.Message));
+      end;
+    end;
+  finally
+    Roots.Clear;
   end;
 
   Result := Promise;

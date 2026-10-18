@@ -60,21 +60,31 @@ the budget was already exhausted.
 **The engine holds a transport's response to the rules a network response
 meets.** WHATWG Fetch gives a response a status from 200 to 599, status text
 that is a reason phrase, header names that are tokens and values without NUL,
-CR or LF, a null body for `HEAD` and for a null body status, and a `url` that
-is a URL serialized without its fragment. Header values and status text are
-byte sequences, so a character past U+00FF is refused, and the final URL is
-parsed with the WHATWG URL parser and exposed as its serialization. Header values are normalized. A
-status, status text, header or final URL that breaks those rules, or a body
-the response keeps that is over the response ceiling, rejects the fetch with
-`TypeError`, the way a malformed or oversized network response does.
+CR or LF, and a null body for `HEAD` and for a null body status. Header
+values and status text are byte sequences, so a character past U+00FF is
+refused, and header values are normalized. A status, status text or header
+that breaks those rules, a final URL that is not an absolute http(s) URL, or
+a body the response keeps that is over the response ceiling, rejects the
+fetch with `TypeError`, the way a malformed or oversized network response
+does.
+
+**`Response.url` reads as the built-in client reports it.** The final URL a
+transport gives is exposed as given, and the request URL as `fetch()`
+received it when it gives none, as the built-in client exposes a redirect's
+`Location` and the request URL. WHATWG Fetch serializes the URL without its
+fragment; the built-in client does not yet
+([#1786](https://github.com/frostney/GocciaScript/issues/1786)), and the
+transport path follows it, so a script reads the same `url` with or without
+a transport and a recorded run replays to the same value. Fixing both paths
+together is that issue's work.
 
 **A request leaves the pending set the same way whatever answers it.**
 Settling, an abort and a discard (the engine's run failed or it ended) remove
 it and release its slot in the cap; a later answer is refused. An abort or a
 discard also cancels the responder, even when an answer was already taken
 but not yet settled: `IsCancelled` turns true, so a recording host can tell
-an answer the script never saw. A request that settled is not cancelled. The responder keeps the completion
-queue alive by reference, so an answer that arrives after its engine is gone
+an answer the script never saw. A request that settled is not cancelled.
+The responder keeps the completion queue alive by reference, so an answer that arrives after its engine is gone
 is dropped, not delivered to freed state. A transport that raises from
 `Fetch` cancels its request and the fetch rejects with `TypeError`, as when a
 worker could not start.
@@ -83,7 +93,11 @@ worker could not start.
 recording transport forwards to it from a thread of its own, wraps the
 responder to record what it answers, and so applies the same redirect-hop and
 resolved-address checks, ceiling and timeout as a run without a transport.
-The worker uses the same routine.
+The worker uses the same routine. What it answers then meets the response
+rules above; a conforming server's response passes them unchanged, so a
+forwarded response reads as a direct one does. Only what a non-conforming
+server sends, such as a status outside 200 to 599, is refused where the
+built-in client would pass it on.
 
 ## Considered options
 
@@ -102,6 +116,11 @@ The worker uses the same routine.
 - **A transport that may decline a request back to the network.** Rejected:
   a run would then depend on which requests a host forgot to answer.
   Forwarding through `FetchOverNetwork` makes it explicit.
+- **Serializing a transport's final URL to the WHATWG form while the
+  built-in client keeps reporting the raw string.** Rejected: `url` would
+  then depend on whether a transport is installed, and a run recorded
+  through the network would read differently from the same run without a
+  transport. Both paths change together under #1786.
 - **Releasing a transport request's slot when it is answered.** Rejected: an
   answer given inside `Fetch` would free the slot before the script could
   observe it, so a replayed run could pass the cap where its recorded run

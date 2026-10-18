@@ -100,8 +100,10 @@ procedure DiscardFetchCompletions(const ARealm: TGocciaRealm); overload;
   against every resolved address, the response ceiling, the timeout — and
   answers AResponder with the result. Blocking: a transport that forwards to
   the network (to record what it answers, say) calls it from a thread of its
-  own. The hop decisions it makes are not audited. Where no network client
-  exists (the WASM lane) it answers with a network error. }
+  own. The hop decisions it makes are not audited. Its answer passes the
+  responder's rules, which a conforming server's response meets unchanged.
+  Where no network client exists (the WASM lane) it answers with a network
+  error. }
 procedure FetchOverNetwork(const ARequest: TGocciaFetchTransportRequest;
   const AResponder: IGocciaFetchResponder);
 
@@ -122,7 +124,6 @@ uses
   HTTPClient,
 
   Goccia.Error.Suggestions,
-  Goccia.URL.Parser,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.ResponseValue,
@@ -169,8 +170,6 @@ const
   HTTP_STATUS_RESET_CONTENT = 205;
   HTTP_STATUS_NOT_MODIFIED = 304;
   FETCH_METHOD_HEAD = 'HEAD';
-  HTTP_SCHEME = 'http';
-  HTTPS_SCHEME = 'https';
   LAST_BYTE_CHARACTER = #$00FF;
 
   EXCHANGE_OPEN = 0;
@@ -694,8 +693,10 @@ end;
 
 procedure TGocciaFetchExchange.Post(const ACompletion: TGocciaFetchCompletion);
 begin
-  // Refused once the engine discarded its requests: nothing will pop it.
-  if not FState.PostCompletion(ACompletion) then
+  // An answer taken just before an abort or a discard is not queued once the
+  // cancellation is visible; the queue also refuses it once the engine
+  // discarded its requests. Either way nothing would settle it.
+  if IsCancelled or not FState.PostCompletion(ACompletion) then
     ACompletion.Free;
 end;
 
@@ -773,21 +774,17 @@ begin
     (AStatus = HTTP_STATUS_NOT_MODIFIED);
 end;
 
-{ WHATWG Fetch: Response.url is the response's URL serialized with its
-  fragment excluded. True, with that serialization, when AURL parses
-  (WHATWG URL) as an http(s) URL. }
-function TrySerializeResponseURL(const AURL: string;
-  out ASerialized: string): Boolean;
-var
-  Parsed: TGocciaURLRecord;
+{ A URL the built-in client could have reported as a response's final URL:
+  an absolute http(s) URL its own parser accepts. }
+function IsClientResponseURL(const AURL: string): Boolean;
 begin
-  Parsed := ParseURL(AURL);
-  Result := Parsed.IsValid and
-    ((Parsed.Scheme = HTTP_SCHEME) or (Parsed.Scheme = HTTPS_SCHEME));
-  if Result then
-    ASerialized := SerializeURL(Parsed, True)
-  else
-    ASerialized := '';
+  try
+    ParseHTTPURL(AURL);
+    Result := True;
+  except
+    on EHTTPError do
+      Result := False;
+  end;
 end;
 
 { Why the engine refuses a transport's response, or '' when it takes it. }
@@ -795,7 +792,6 @@ function TransportResponseError(const AResponse: THTTPResponse;
   const AIsHead: Boolean; const AMaxResponseBytes: Integer): string;
 var
   I: Integer;
-  Serialized: string;
 begin
   Result := '';
   if (AResponse.StatusCode < FETCH_MIN_RESPONSE_STATUS) or
@@ -809,7 +805,7 @@ begin
        HasForbiddenValueCharacter(AResponse.Headers[I].Value) then
       Exit(FETCH_TRANSPORT_INVALID_HEADER_ERROR);
   if (AResponse.FinalURL <> '') and
-     not TrySerializeResponseURL(AResponse.FinalURL, Serialized) then
+     not IsClientResponseURL(AResponse.FinalURL) then
     Exit(FETCH_TRANSPORT_INVALID_URL_ERROR);
   // A body the response will not keep is not held to the ceiling.
   if (not AIsHead) and (not IsNullBodyStatus(AResponse.StatusCode)) and
@@ -820,8 +816,7 @@ end;
 function TGocciaFetchExchange.Respond(const AResponse: THTTPResponse): Boolean;
 var
   Completion: TGocciaFetchCompletion;
-  I, FragmentStart: Integer;
-  SerializedURL: string;
+  I: Integer;
 begin
   Result := Claim;
   if not Result then
@@ -846,20 +841,10 @@ begin
         Completion.Response.Body := nil
       else
         Completion.Response.Body := Copy(AResponse.Body);
+      { Response.url is the final URL as the built-in client reports it,
+        so a run reads the same with and without a transport. }
       if Completion.Response.FinalURL = '' then
         Completion.Response.FinalURL := FURL;
-      if TrySerializeResponseURL(Completion.Response.FinalURL,
-        SerializedURL) then
-        Completion.Response.FinalURL := SerializedURL
-      else
-      begin
-        // Only the request URL can get here (a transport's own final URL
-        // was checked above): one the client accepts but the URL parser
-        // does not. Keep it, without its fragment.
-        FragmentStart := Pos('#', Completion.Response.FinalURL);
-        if FragmentStart > 0 then
-          SetLength(Completion.Response.FinalURL, FragmentStart - 1);
-      end;
     end;
   except
     Completion.Free;

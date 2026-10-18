@@ -131,6 +131,7 @@ type
     procedure TestEnginesKeepTheirOwnTransport;
     procedure TestThreadsKeepTheirOwnTransport;
     procedure TestRecorderSkipsRefusedAnswers;
+    procedure TestForwardedMatchesDirect;
     procedure TestRecordThenReplay;
   public
     procedure SetupTests; override;
@@ -317,7 +318,7 @@ begin
   Test('a transport receives the request and answers it synchronously',
     TestSynchronousAnswer);
   Test('a HEAD answer has no body', TestHeadAnswerHasNoBody);
-  Test('a 204 answer has no body and Response.url excludes the fragment',
+  Test('a 204 answer has no body and Response.url defaults to the request URL',
     TestNullBodyStatusAndFragment);
   Test('an answer from another thread keeps the run waiting for it',
     TestLaterAnswerKeepsRunWaiting);
@@ -350,7 +351,7 @@ begin
   Test('an oversized body of a null body status is dropped, not refused',
     TestOversizedNullBodyIsDropped);
   Test('status text must be a reason phrase', TestStatusTextIsAReasonPhrase);
-  Test('a final URL must be an absolute http(s) URL',
+  Test('a final URL must be an http(s) URL the client accepts',
     TestFinalURLMustBeAURL);
   Test('an abort after a taken but unsettled answer cancels the request',
     TestAbortAfterAnswerCancels);
@@ -362,6 +363,8 @@ begin
     TestThreadsKeepTheirOwnTransport);
   Test('the test embedder records only answers the engine took',
     TestRecorderSkipsRefusedAnswers);
+  Test('a forwarded response reads as the built-in client''s does',
+    TestForwardedMatchesDirect);
   Test('a run recorded through the network replays without it',
     TestRecordThenReplay);
 end;
@@ -476,12 +479,12 @@ begin
   Fake := TFakeTransport.Create(tmAnswer);
   Transport := Fake;
   Fake.Response := TextResponse(204, 'ignored');
-  Expect<string>(RunWithTransport('fetch("' + API_URL + '#part")' +
+  // No final URL: Response.url is the request URL.
+  Expect<string>(RunWithTransport('fetch("' + API_URL + '")' +
     '.then((response) => response.text().then((body) => {' +
     ' globalThis.outcome = response.status + "|" + body + "|" +' +
     ' response.url; }));', Transport, ApiCapabilities))
     .ToBe('204||' + API_URL);
-  Expect<string>(Fake.Request(0).URL).ToBe(API_URL + '#part');
 end;
 
 procedure TFetchTransportTests.TestLaterAnswerKeepsRunWaiting;
@@ -914,15 +917,14 @@ begin
   Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
     ApiCapabilities))
     .ToBe('TypeError: fetch transport answered an invalid URL');
-  // WHATWG URL: a space is a forbidden host code point.
-  Response.FinalURL := 'http://bad host/';
+  // The built-in client follows http(s) only.
+  Response.FinalURL := 'ftp://' + API_HOST + '/moved';
   Fake.Response := Response;
   Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
     ApiCapabilities))
     .ToBe('TypeError: fetch transport answered an invalid URL');
-  // Serialized as a URL: scheme and host lower-cased, the default port and
-  // dot segments gone, the fragment excluded.
-  Response.FinalURL := 'HTTP://API.Example:80/a/../moved#top';
+  // Reported as given, as the built-in client reports a redirect's target.
+  Response.FinalURL := 'http://' + API_HOST + '/moved';
   Response.Redirected := True;
   Fake.Response := Response;
   Expect<string>(RunWithTransport('fetch("' + API_URL + '").then(' +
@@ -1467,21 +1469,26 @@ type
   private
     FListener: TSocket;
     FConnections: Integer;
+    FSameReply: Boolean;
     FPort: Word;
   protected
     procedure Execute; override;
   public
-    constructor Create(const AConnections: Integer);
+    { ASameReply: answer every connection as the first. }
+    constructor Create(const AConnections: Integer;
+      const ASameReply: Boolean = False);
     destructor Destroy; override;
     property Port: Word read FPort;
   end;
 
-constructor TLoopbackOrigin.Create(const AConnections: Integer);
+constructor TLoopbackOrigin.Create(const AConnections: Integer;
+  const ASameReply: Boolean);
 var
   Address: TInetSockAddr;
   AddressLength: TSockLen;
 begin
   FConnections := AConnections;
+  FSameReply := ASameReply;
   FListener := fpSocket(AF_INET, SOCK_STREAM, 0);
   FillChar(Address, SizeOf(Address), 0);
   Address.sin_family := AF_INET;
@@ -1506,7 +1513,7 @@ var
   Client: TSocket;
   Buffer: array[0..4095] of Byte;
   Body, Reply: AnsiString;
-  I: Integer;
+  I, Sequence: Integer;
 begin
   for I := 1 to FConnections do
   begin
@@ -1514,9 +1521,13 @@ begin
     if Client < 0 then
       Exit;
     fpRecv(Client, @Buffer[0], SizeOf(Buffer), 0);
-    Body := 'response-' + AnsiString(IntToStr(I));
+    if FSameReply then
+      Sequence := 1
+    else
+      Sequence := I;
+    Body := 'response-' + AnsiString(IntToStr(Sequence));
     Reply := 'HTTP/1.1 200 OK'#13#10'Content-Type: text/plain'#13#10 +
-      'X-Sequence: ' + AnsiString(IntToStr(I)) + #13#10 +
+      'X-Sequence: ' + AnsiString(IntToStr(Sequence)) + #13#10 +
       'Content-Length: ' + AnsiString(IntToStr(Length(Body))) + #13#10 +
       'Connection: close'#13#10#13#10 + Body;
     fpSend(Client, PAnsiChar(Reply), Length(Reply), 0);
@@ -1560,6 +1571,46 @@ begin
     Source.Free;
   end;
 end;
+
+{ What a script reads from a response is the same whether the built-in
+  client fetched it or a transport forwarded it through FetchOverNetwork. }
+procedure TFetchTransportTests.TestForwardedMatchesDirect;
+{$IFDEF UNIX}
+var
+  Origin: TLoopbackOrigin;
+  Tape: TTape;
+  Script, Direct, Forwarded: string;
+  Capabilities: TGocciaCapabilities;
+  Transport: IGocciaFetchTransport;
+begin
+  Tape := TTape.Create;
+  Origin := TLoopbackOrigin.Create(2, True);
+  try
+    Script := 'fetch("http://' + LOOPBACK_HOST + ':' + IntToStr(Origin.Port) +
+      '/Path/?q=1#frag", { headers: { "X-Trace": "abc" } })' +
+      '.then((r) => r.text().then((body) => { globalThis.outcome = [' +
+      'r.status, r.statusText, r.ok, r.url, r.redirected, r.type,' +
+      ' [...r.headers].join(";"), body].join("|"); }),' +
+      ' (e) => { globalThis.outcome = e.name + ": " + e.message; });';
+    Capabilities := TGocciaCapabilities.None.Allow(gcNet, LOOPBACK_HOST)
+      .Allow(gcNet, NET_PRIVATE_SCOPE);
+    Direct := RunWithTransport(Script, nil, Capabilities);
+    Transport := TRecordingTransport.Create(Tape);
+    Forwarded := RunWithTransport(Script, Transport, Capabilities);
+    Transport := nil;
+    Origin.WaitFor;
+    Expect<Boolean>(Pos('200|OK|true|', Direct) = 1).ToBe(True);
+    Expect<string>(Forwarded).ToBe(Direct);
+  finally
+    Origin.Free;
+    Tape.Free;
+  end;
+end;
+{$ELSE}
+begin
+  // The loopback origin uses BSD sockets.
+end;
+{$ENDIF}
 
 procedure TFetchTransportTests.TestRecordThenReplay;
 {$IFDEF UNIX}
