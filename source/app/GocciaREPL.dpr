@@ -56,6 +56,16 @@ type
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
 
+{ Every input line runs in one global environment that the lines share,
+  which only Script source has. An input line is not an entry file, so its
+  goal is not detected from its source (ADR 0140): without an explicit
+  --source-type the REPL runs Script, as it always has. }
+procedure KeepScriptGoal(const AEngine: TGocciaEngine);
+begin
+  if AEngine.SourceType = Goccia.Engine.stDetect then
+    AEngine.SourceType := Goccia.Engine.stScript;
+end;
+
 procedure TREPLApp.Configure;
 begin
   AddEngineOptions;
@@ -146,6 +156,7 @@ begin
   try
     Eng := CreateEngine(REPL_FILE_NAME, Source);
     try
+      KeepScriptGoal(Eng);
       while True do
       begin
         ReadResult := Editor.ReadLine('> ', Line);
