@@ -113,6 +113,11 @@ tells it apart from a destination check. Decisions
 that do arrive while the engine still runs follow it as usual. The log never
 silently stops at an aborted request's `net.dispatch`.
 
+A request an embedder's [fetch transport](embedding.md#fetch-transport)
+answers makes no hop decisions the engine sees: its events are the
+`net.dispatch` and the `net.fetch` name check `fetch()` records before handing
+it over, and an abort adds no `abandoned:` event.
+
 ## Embedding
 
 The sink is a Pascal method callback:

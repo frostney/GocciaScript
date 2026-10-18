@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1010 -->
+<!-- doc-length-limit: 1060 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -6,7 +6,7 @@
 ## Executive Summary
 
 - **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders; the engine compiles to bytecode and runs it on a VM of its own
-- **Sandboxing** — Fix what the engine may reach with an immutable [capability set](permissions.md) (`None` by default); choose runtime extensions explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
+- **Sandboxing** — Fix what the engine may reach with an immutable [capability set](permissions.md) (`None` by default); choose runtime extensions explicitly; answer `fetch` through a [transport](#fetch-transport) of your own; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
@@ -908,6 +908,51 @@ Engine.Execute;  // microtasks drain before Execute returns
 ```
 
 For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block. Engines can also nest on a thread: an `Execute` that starts while a different engine's run is in progress (a sandbox `runScript` child, or another engine's `Execute` called from a native callback) drains and discards only its own jobs and leaves the enclosing engine's jobs queued, while a nested `ExecuteProgram` or `RunModule` drains the queue it was called in. [Architecture — Synchronous Microtask Queue](architecture.md#synchronous-microtask-queue) describes the scopes behind this.
+
+## Fetch Transport
+
+By default an engine's `fetch()` requests go to the network. Set `Engine.FetchTransport` to an `IGocciaFetchTransport` (unit `Goccia.FetchTransport`) to answer them yourself, for example to record a run's responses and replay them later without the network ([ADR 0146](adr/0146-embedder-fetch-transport.md)). The transport belongs to the engine: it is read when each request starts, so it can be replaced between runs, and no other engine on the thread, nested or not, and no engine on another thread uses it. A child engine the host creates (a sandbox `runScript` child) needs its own.
+
+`fetch()` still makes every decision it makes before network work: the URL, the `net` capability's name check and its audit event, `GET`/`HEAD` only, an already-aborted signal, and the cap of 16 requests in flight per thread. A request the built-in client would refuse to send (an unsupported scheme, a control character in the request target or a header) rejects with that client's `TypeError` and never reaches the transport. The transport's `Fetch` then receives a `TGocciaFetchTransportRequest` (method, URL as `fetch()` received it, header list, an empty body, the milliseconds left before the run's deadline or the signal's timeout, the response ceiling, the capability set) and an `IGocciaFetchResponder`:
+
+- `Respond(Response)` answers with a `THTTPResponse` (`HTTPTypes`); `FinalURL` becomes `Response.url` as given, as the built-in client reports a redirect's target, and must be an absolute http(s) URL; empty means the request URL as `fetch()` received it. `Fail(Message)` rejects the fetch with `TypeError: Message`; `Fail(Message, Scope)` rejects it with `PermissionDenied` for that net scope.
+- Answer inside `Fetch` or later, from any thread; the first answer wins and each call returns whether it was taken. The promise settles at the engine's next completion pump, never inside the `fetch()` call, and the run waits for an unanswered request as for a network one. The run deadline or the request's signal ends that wait. The wait runs no script and consumes no instruction budget, so an instruction limit stops it only when the budget was already exhausted.
+- An abort, or the engine discarding its requests when a run fails or ends, cancels the request, even after an answer was taken but before it settled: `IsCancelled` turns true and a later answer is refused. An exception from `Fetch` cancels the request too: an ordinary exception rejects the fetch with `TypeError: fetch failed: <message>`, while the run's timeout, instruction-limit, memory-limit and engine-integrity errors propagate and end the run.
+- A response is held to the rules a network response meets: status 200 to 599, status text that is a reason phrase (tab, space, visible ASCII, U+0080 to U+00FF), header names that are tokens, header values without NUL, CR, LF or any character past U+00FF (header values and status text are bytes), a body within the ceiling; a `HEAD`, 204, 205 or 304 response has no body, whatever its size. Anything else rejects with `TypeError`.
+
+`Fetch` runs on the engine's thread and must not run script or call into the engine. To forward a request to the network, as a recording transport does, call `FetchOverNetwork(Request, Responder)` (`Goccia.FetchManager`) from a thread of your own: it applies the redirect-hop and resolved-address checks, ceiling and timeout of a run without a transport, and does not audit those hop decisions. Its answer passes through the rules above, which a conforming server's response meets unchanged, so a forwarded response reads as a direct one.
+
+A replay transport answers from its recording, keyed by a fingerprint of the request, in recorded order (`TTape` and `Fingerprint` are the host's own):
+
+```pascal
+type
+  TReplayTransport = class(TInterfacedObject, IGocciaFetchTransport)
+  private
+    FTape: TTape;
+  public
+    constructor Create(const ATape: TTape);
+    procedure Fetch(const ARequest: TGocciaFetchTransportRequest;
+      const AResponder: IGocciaFetchResponder);
+  end;
+
+procedure TReplayTransport.Fetch(const ARequest: TGocciaFetchTransportRequest;
+  const AResponder: IGocciaFetchResponder);
+var
+  Entry: TTapeEntry;
+begin
+  if not FTape.TakeNext(Fingerprint(ARequest), Entry) then
+    AResponder.Fail('no recorded response for ' + ARequest.URL)
+  else if Entry.Succeeded then
+    AResponder.Respond(Entry.Response)
+  else
+    AResponder.Fail(Entry.ErrorMessage, Entry.DeniedScope);
+end;
+
+Engine.FetchTransport := TReplayTransport.Create(Tape);
+Engine.Execute;
+```
+
+The recording side wraps the responder it is given in one that passes each `Respond` or `Fail` on and appends it to the tape only when the engine took it (the call returned True), and hands the request and that wrapper to `FetchOverNetwork` on a worker thread. A taken answer whose responder then reports `IsCancelled` was never seen by the script. `source/units/Goccia.FetchTransport.Test.pas` records a run against a loopback server this way and replays it.
 
 ## Garbage Collector
 
