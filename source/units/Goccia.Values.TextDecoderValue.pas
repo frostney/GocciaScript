@@ -286,7 +286,7 @@ begin
   // [AllowResizable]; the conversion throws before any byte is read.
   InputArg := AArgs.GetElement(0);
   ConvertToAllowSharedBufferSource(InputArg, DECODE_INPUT_CONTEXT,
-    SSuggestTextDecoderThisType);
+    SSuggestTextDecoderDecodeInput);
   Data := GetCopyOfBytesHeldByBufferSource(InputArg);
   Offset := 0;
   DataLen := Length(Data);

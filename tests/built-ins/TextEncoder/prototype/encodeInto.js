@@ -154,6 +154,12 @@ describe("TextEncoder.prototype.encodeInto", () => {
     expect(enc.encodeInto(source, view)).toEqual({ read: 0, written: 0 });
   });
 
+  test("throws TypeError for a view of an immutable ArrayBuffer and writes nothing", () => {
+    const buffer = new ArrayBuffer(4).transferToImmutable();
+    expect(() => enc.encodeInto("ok", new Uint8Array(buffer))).toThrow(TypeError);
+    expect(Array.from(new Uint8Array(buffer))).toEqual([0, 0, 0, 0]);
+  });
+
   test("throws TypeError for a Uint8ClampedArray, a DataView and an ArrayBuffer", () => {
     expect(() => enc.encodeInto("ok", new Uint8ClampedArray(4))).toThrow(TypeError);
     expect(() => enc.encodeInto("ok", new DataView(new ArrayBuffer(4)))).toThrow(TypeError);

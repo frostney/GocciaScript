@@ -48,6 +48,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -238,6 +239,13 @@ begin
   // [AllowResizable] and so refuses a view of a resizable or growable buffer.
   Dest := ConvertToAllowSharedUint8Array(AArgs.GetElement(1),
     ENCODE_INTO_DESTINATION_CONTEXT, SSuggestTextEncoderEncodeIntoArgs);
+  // Immutable ArrayBuffers proposal: an immutable buffer's bytes never
+  // change, so a write through a view of one is refused before any byte is
+  // written, as DataView setters and Atomics refuse it.
+  if (Dest.BufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(Dest.BufferValue).Immutable then
+    ThrowTypeError(SErrorTextEncoderEncodeIntoImmutable,
+      SSuggestTextEncoderEncodeIntoImmutable);
 
   // Convert source to USVString bytes (lone surrogates normalized to U+FFFD).
   Bytes := StringToUTF8Bytes(Source);

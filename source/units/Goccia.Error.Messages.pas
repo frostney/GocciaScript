@@ -686,6 +686,7 @@ resourcestring
   // TextEncoder errors
   SErrorTextEncoderIllegalInvocation = '%s: illegal invocation';
   SErrorTextEncoderEncodeIntoArgs = 'TextEncoder.prototype.encodeInto requires source and destination arguments';
+  SErrorTextEncoderEncodeIntoImmutable = 'TextEncoder.prototype.encodeInto: destination is backed by an immutable ArrayBuffer';
 
   // Web IDL buffer source conversion errors (Goccia.WebIDL.BufferSource)
   SErrorBufferSourceType = '%s must be an ArrayBuffer, SharedArrayBuffer or ArrayBufferView';
