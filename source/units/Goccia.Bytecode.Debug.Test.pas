@@ -110,36 +110,50 @@ end;
 procedure TDebugInfoTests.TestLookupsTakeLogarithmicTime;
 const
   ENTRY_COUNT = 50000;
+  TRIALS = 3;
   LOOKUP_TO_BUILD_RATIO = 50;
   SLACK_NANOSECONDS = 20 * 1000 * 1000;
 var
   Info: TGocciaDebugInfo;
-  BuildTime, LookupTime, Start: Int64;
-  I: Integer;
+  BuildTime, LookupTime, Start, Elapsed: Int64;
+  I, Trial: Integer;
   Checksum: Int64;
 begin
-  Info := TGocciaDebugInfo.Create('<test>');
-  try
-    Start := GetNanoseconds;
-    for I := 0 to ENTRY_COUNT - 1 do
-      Info.AddLineMapping(UInt32(I) * 3, UInt32(I) + 1, 1);
-    BuildTime := GetNanoseconds - Start;
+  // The fastest of TRIALS builds and of TRIALS lookup passes, so a pause on
+  // a shared machine inflates neither side.
+  BuildTime := High(Int64);
+  LookupTime := High(Int64);
+  for Trial := 1 to TRIALS do
+  begin
+    Info := TGocciaDebugInfo.Create('<test>');
+    try
+      Start := GetNanoseconds;
+      for I := 0 to ENTRY_COUNT - 1 do
+        Info.AddLineMapping(UInt32(I) * 3, UInt32(I) + 1, 1);
+      Elapsed := GetNanoseconds - Start;
+      if Elapsed < BuildTime then
+        BuildTime := Elapsed;
 
-    Checksum := 0;
-    Start := GetNanoseconds;
-    for I := 0 to ENTRY_COUNT - 1 do
-      Inc(Checksum, Info.GetLineForPC(UInt32(I) * 3 + 1));
-    LookupTime := GetNanoseconds - Start;
+      Checksum := 0;
+      Start := GetNanoseconds;
+      for I := 0 to ENTRY_COUNT - 1 do
+        Inc(Checksum, Info.GetLineForPC(UInt32(I) * 3 + 1));
+      Elapsed := GetNanoseconds - Start;
+      if Elapsed < LookupTime then
+        LookupTime := Elapsed;
 
-    Expect<Int64>(Checksum).ToBe(Int64(ENTRY_COUNT) * (ENTRY_COUNT + 1) div 2);
-    if LookupTime > LOOKUP_TO_BUILD_RATIO * BuildTime + SLACK_NANOSECONDS then
-      Fail(Format('%d lookups took %d ms against %d ms to build the map',
-        [ENTRY_COUNT, LookupTime div 1000000, BuildTime div 1000000]));
-    Expect<Boolean>(LookupTime <=
-      LOOKUP_TO_BUILD_RATIO * BuildTime + SLACK_NANOSECONDS).ToBe(True);
-  finally
-    Info.Free;
+      Expect<Int64>(Checksum).ToBe(
+        Int64(ENTRY_COUNT) * (ENTRY_COUNT + 1) div 2);
+    finally
+      Info.Free;
+    end;
   end;
+
+  if LookupTime > LOOKUP_TO_BUILD_RATIO * BuildTime + SLACK_NANOSECONDS then
+    Fail(Format('%d lookups took %d ms against %d ms to build the map',
+      [ENTRY_COUNT, LookupTime div 1000000, BuildTime div 1000000]));
+  Expect<Boolean>(LookupTime <=
+    LOOKUP_TO_BUILD_RATIO * BuildTime + SLACK_NANOSECONDS).ToBe(True);
 end;
 
 begin

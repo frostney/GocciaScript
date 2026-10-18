@@ -836,15 +836,13 @@ end;
 
 function TGocciaFunctionTemplate.AddConstantFloat(
   const AValue: Double): UInt16;
-const
-  CANONICAL_NAN_BITS = UInt64($7FF8000000000000);
 var
   Key: UInt64;
 begin
   // By bit pattern, so +0 and -0 stay apart (an equality test would merge
   // them); every NaN reads the same, so they share one entry.
   if FloatBitsAreNaN(AValue) then
-    Key := CANONICAL_NAN_BITS
+    Key := CANONICAL_FLOAT64_NAN_BITS
   else
     Key := DoubleToBits(AValue);
   if FFloatConstantIndex.TryGetValue(Key, Result) then

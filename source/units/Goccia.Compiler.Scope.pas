@@ -469,13 +469,15 @@ begin
         FLocals[I].ShadowedLocal := -1;
       Newest.Add(FLocals[I].Name, I);
     end;
+    // Newest now maps each name to its newest local, which is the index.
+    if Assigned(FLocalIndex) then
+    begin
+      FLocalIndex.Free;
+      FLocalIndex := Newest;
+      Newest := nil;
+    end;
   finally
     Newest.Free;
-  end;
-  if Assigned(FLocalIndex) then
-  begin
-    FreeAndNil(FLocalIndex);
-    EnsureLocalIndex;
   end;
 end;
 
@@ -648,22 +650,18 @@ end;
 
 function TGocciaCompilerScope.ResolveLocal(const AName: string): Integer;
 var
-  I, Newest: Integer;
+  I: Integer;
 begin
-  // The index knows only the newest local of a name. When that one is
-  // suspended, the scan goes on to an older one.
-  Newest := FLocalCount - 1;
-  if Assigned(FLocalIndex) and
-     not FLocalIndex.TryGetValue(AName, Newest) then
-    Exit(-1);
-
-  for I := Newest downto 0 do
-    if (FLocals[I].Name = AName) and (FLocals[I].SuspendCount = 0) then
-    begin
-      if FGlobalBackedBindingsByName and FLocals[I].IsGlobalBacked then
-        Continue;
+  // The newest local of the name, or, when that one is suspended or resolves
+  // by name, the next older one: the links visit only locals of this name.
+  I := NewestLocalNamed(AName);
+  while I >= 0 do
+  begin
+    if (FLocals[I].SuspendCount = 0) and
+       not (FGlobalBackedBindingsByName and FLocals[I].IsGlobalBacked) then
       Exit(I);
-    end;
+    I := FLocals[I].ShadowedLocal;
+  end;
   Result := -1;
 end;
 

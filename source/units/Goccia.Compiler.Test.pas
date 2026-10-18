@@ -113,6 +113,7 @@ type
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
     procedure TestFloatConstantsArePooledByBitPattern;
+    procedure TestSkippedLocalsResolveInConstantTime;
     procedure TestDistinctFloatConstantsCompileInLinearTime;
     procedure TestThisPropertyReadUsesLocalRegister;
     procedure TestThisPropertyReadRetainsDerivedGuard;
@@ -153,6 +154,7 @@ type
     procedure TestBinaryRoundTripFunctionDeclarationPosition;
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
+    procedure TestBinaryRoundTripKeepsBothZeros;
     procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
     procedure TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
@@ -237,6 +239,8 @@ begin
     TestVarAndSlotLookupsFindTheOldestLocal);
   Test('Float constants are pooled by bit pattern',
     TestFloatConstantsArePooledByBitPattern);
+  Test('Locals a name skips resolve in constant time',
+    TestSkippedLocalsResolveInConstantTime);
   Test('Distinct float constants compile in linear time',
     TestDistinctFloatConstantsCompileInLinearTime);
   Test('Initialized const operands skip OP_GET_LOCAL',
@@ -313,6 +317,8 @@ begin
     TestBinaryRoundTripFunctionDeclarationPosition);
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
+  Test('Binary round-trip keeps +0 and -0 apart',
+    TestBinaryRoundTripKeepsBothZeros);
   Test('Binary loader rejects malformed artifacts',
     TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
@@ -911,6 +917,7 @@ begin
   ExpectTopLevelCompileLinear(Baseline, 'const a%0:d = %0:d;', True);
   ExpectTopLevelCompileLinear(Baseline, 'let a%0:d = %0:d;', True);
   ExpectTopLevelCompileLinear(Baseline, 'var a%0:d = %0:d;', True);
+  ExpectTopLevelCompileLinear(Baseline, 'var a%0:d;', True);
   ExpectTopLevelCompileLinear(Baseline, 'function a%0:d() {}', True);
   ExpectTopLevelCompileLinear(Baseline, 'class A%0:d {}', True);
 end;
@@ -1013,6 +1020,61 @@ begin
   finally
     Scope.Free;
   end;
+end;
+
+{ A non-strict global eval resolves its global-backed locals by name
+  (GlobalBackedBindingsByName), so ResolveLocal passes over each one. Passing
+  over a local must lead only to an older local of the same name, not to every
+  older local: resolving each of many names costs about the same either way. }
+procedure TTestCompiler.TestSkippedLocalsResolveInConstantTime;
+const
+  NAME_COUNT = 20000;
+
+  function ResolveAllNanoseconds(const AByName: Boolean): Int64;
+  var
+    Scope: TGocciaCompilerScope;
+    Start, Elapsed: Int64;
+    I, Trial, Found: Integer;
+  begin
+    Result := High(Int64);
+    for Trial := 1 to LINEAR_TRIALS do
+    begin
+      Scope := TGocciaCompilerScope.Create(nil, 0);
+      try
+        for I := 0 to NAME_COUNT - 1 do
+        begin
+          Scope.DeclareLocal('a' + IntToStr(I), False);
+          Scope.MarkGlobalBacked(I);
+        end;
+        Scope.GlobalBackedBindingsByName := AByName;
+        Found := 0;
+        Start := GetNanoseconds;
+        for I := 0 to NAME_COUNT - 1 do
+          if Scope.ResolveLocal('a' + IntToStr(I)) >= 0 then
+            Inc(Found);
+        Elapsed := GetNanoseconds - Start;
+        if AByName then
+          Expect<Integer>(Found).ToBe(0)
+        else
+          Expect<Integer>(Found).ToBe(NAME_COUNT);
+      finally
+        Scope.Free;
+      end;
+      if Elapsed < Result then
+        Result := Elapsed;
+    end;
+  end;
+
+var
+  Direct, ByName: Int64;
+begin
+  Direct := ResolveAllNanoseconds(False);
+  ByName := ResolveAllNanoseconds(True);
+  if ByName > LINEAR_COMPILE_RATIO * Direct + LINEAR_SLACK_NANOSECONDS then
+    Fail(Format('%d names resolving by name took %d ms against %d ms',
+      [NAME_COUNT, ByName div 1000000, Direct div 1000000]));
+  Expect<Boolean>(ByName <=
+    LINEAR_COMPILE_RATIO * Direct + LINEAR_SLACK_NANOSECONDS).ToBe(True);
 end;
 
 procedure TTestCompiler.TestFloatConstantsArePooledByBitPattern;
@@ -2332,6 +2394,52 @@ begin
   finally
     Stream.Free;
     Module.Free;
+  end;
+end;
+
+{ The loader adds each constant again in order, so a pool holding both zeros
+  must come back with the same entries at the same indices, which the
+  instructions name. Source compiles +0 to an immediate load, so it is added
+  to the pool directly. }
+procedure TTestCompiler.TestBinaryRoundTripKeepsBothZeros;
+var
+  Original, Loaded: TGocciaBytecodeModule;
+  TempFile: string;
+  I: Integer;
+  OrigConst, LoadConst: TGocciaBytecodeConstant;
+begin
+  Original := CompileSource('const a = -0; const b = 1.5; const c = -1.5;');
+  try
+    Original.TopLevel.AddConstantString('between');
+    Original.TopLevel.AddConstantFloat(0.0);
+    Original.TopLevel.AddConstantFloat(NegativeZero);
+    TempFile := GetTempFileName + '.gbc';
+    try
+      SaveModuleToFile(Original, TempFile);
+      Loaded := LoadModuleFromFile(TempFile);
+      try
+        Expect<Integer>(Loaded.TopLevel.ConstantCount).ToBe(
+          Original.TopLevel.ConstantCount);
+        for I := 0 to Original.TopLevel.ConstantCount - 1 do
+        begin
+          OrigConst := Original.TopLevel.GetConstant(I);
+          LoadConst := Loaded.TopLevel.GetConstant(I);
+          Expect<Integer>(Ord(LoadConst.Kind)).ToBe(Ord(OrigConst.Kind));
+          if OrigConst.Kind = bckFloat then
+            Expect<UInt64>(DoubleToBits(LoadConst.FloatValue)).ToBe(
+              DoubleToBits(OrigConst.FloatValue));
+        end;
+        for I := 0 to Original.TopLevel.CodeCount - 1 do
+          Expect<UInt32>(Loaded.TopLevel.GetInstruction(I)).ToBe(
+            Original.TopLevel.GetInstruction(I));
+      finally
+        Loaded.Free;
+      end;
+    finally
+      DeleteFile(TempFile);
+    end;
+  finally
+    Original.Free;
   end;
 end;
 

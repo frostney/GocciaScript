@@ -151,13 +151,15 @@ begin
 end;
 
 function EarlyErrorOf(const ASource: string;
-  const ACompatibility: TGocciaCompatibilityFlags; out ALine: Integer): string;
+  const ACompatibility: TGocciaCompatibilityFlags;
+  out ALine, AColumn: Integer): string;
 var
   Lines: TStringList;
   Options: TGocciaSourcePipelineOptions;
 begin
   Result := '';
-  ALine := 0;
+  ALine := -1;
+  AColumn := -1;
   Lines := TStringList.Create;
   try
     Lines.Text := ASource;
@@ -171,6 +173,7 @@ begin
       begin
         Result := E.Message;
         ALine := E.Line;
+        AColumn := E.Column;
       end;
     end;
   finally
@@ -184,30 +187,35 @@ end;
 procedure TSourcePipelineTests.
   TestModuleEarlyErrorNamesTheFirstImportInSourceOrder;
 var
-  Line: Integer;
+  Line, Column: Integer;
 begin
   Expect<string>(EarlyErrorOf(
     'const c = 0;' + LineEnding +
     'import { b } from "./m.js";' + LineEnding +
     'import { a } from "./m.js";' + LineEnding +
     'const a = 1;' + LineEnding +
-    'const b = 2;', [], Line))
+    'const b = 2;', [], Line, Column))
     .ToBe('Identifier "b" has already been declared');
+  // At the import declaration that binds it.
   Expect<Integer>(Line).ToBe(2);
+  Expect<Integer>(Column).ToBe(1);
 end;
 
 { Two vars conflict with lexical declarations: the error names the var
   declared first. }
 procedure TSourcePipelineTests.TestModuleEarlyErrorNamesTheFirstVarInSourceOrder;
 var
-  Line: Integer;
+  Line, Column: Integer;
 begin
   Expect<string>(EarlyErrorOf(
     'const a = 1;' + LineEnding +
     'const b = 2;' + LineEnding +
     'var b = 3;' + LineEnding +
-    'var a = 4;', [cfVar], Line))
+    'var a = 4;', [cfVar], Line, Column))
     .ToBe('Identifier "b" has already been declared');
+  // A var conflict has no position of its own.
+  Expect<Integer>(Line).ToBe(0);
+  Expect<Integer>(Column).ToBe(0);
 end;
 
 begin
