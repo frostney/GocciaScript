@@ -26,9 +26,10 @@ Point-in-time investigation of snapshotting a paused run's heap at an idle point
   prototype has no codec for (module namespaces, error objects, async
   generators, async context, test-runner natives). The prototype covers the
   core language; the long tail is the built-in library.
-- Estimate to production quality: about 20 agent-days (range 15-25), plus a
-  standing cost on every future built-in. A coverage-gated first version that
-  always falls back to replay is about 10 agent-days.
+- The prototype took about 1.2 agent hours of active work. Estimate to
+  production quality: about 30 agent hours (range 20-45), plus a standing
+  cost on every future built-in. A coverage-gated first version that always
+  falls back to replay is about 13 agent hours (range 9-20).
 - Recommendation: keep replay as the guarantee and do not productize
   snapshots yet. Measure how long real resumes take to replay; build the
   coverage-gated version only if a meaningful share of resumes replay for
@@ -287,41 +288,63 @@ samples, 117 distinct classes were alive; the prototype has codecs for 21.
 
 ## Effort Estimate to Production Quality
 
-An agent-day here is one agent's focused working day, including building,
-tests, the repository's gates and one review round. The prototype itself (the
-initial work-in-progress commit plus the session that made it build, added
-the codecs above, the lazy built-in table, the harness and these
-measurements) was about two agent-days.
+Effort is counted in agent hours: the active time of one agent session,
+with idle gaps over 10 minutes (stalls, waiting for input) removed. Helper
+agents an agent starts in parallel are counted separately.
 
-| # | Piece | Agent-days |
-| ---: | --- | ---: |
-| 1 | Engine API instead of probe hooks: take a snapshot at an idle point, restore with a source provider, map pending host calls to the embedder's ids, release idle scratch inside the VM; wire into the out-of-process sandbox protocol | 1.5 |
-| 2 | Format: engine build identity and per-codec schema versions, string table and shared property keys, bulk byte copies, streaming writer and reader, optional host-side compression | 1.5 |
-| 3 | Built-in naming: fingerprints for members materialized during the run, materializers for every lazy realm slot, decide refusal versus differences for changed built-ins | 1 |
-| 4 | Object model: wrapper objects, `TGocciaErrorObjectValue` with its source principal, `Date`, bound functions, Proxy, `arguments`, classes extending native constructors, decorators and static blocks, dictionary-mode and sparse arrays | 2 |
-| 5 | Control state: `yield*`, async generators, async-from-sync iterators, every built-in iterator and iterator helper, `using` and `DisposableStack` | 2 |
-| 6 | Promise machinery: the remaining combinators, `finally`, thenable jobs, rejection tracking, async context and `AsyncLocalStorage` | 1 |
-| 7 | Multi-module programs: records, namespaces, deferred namespaces, `import.meta`, dynamic import, per-module bytecode hashes, link order | 2 |
-| 8 | Weak collections and finalization, Map and Set iterator cursors across tombstones, `SharedArrayBuffer` (refuse or copy), `DataView` | 1 |
-| 9 | Temporal values (8 kinds) and Intl objects (10 kinds) | 1.5 |
-| 10 | Host objects: timers, fetch objects, `AbortController`, text codecs; explicit refusal for FFI | 1 |
-| 11 | Run state: random and clock state, engine options and flags recorded and checked, memory charged during restore | 0.5 |
-| 12 | Hardening: the reader treated as untrusted input (semantic checks of instruction pointers, register and handler counts), a fuzzer over mutated real snapshots under heaptrc, GC-stress runs | 2 |
-| 13 | A round-trip lane over the whole test suite (snapshot at every idle and sampled await point, restore, compare), and fixing what it finds | 2.5 |
-| 14 | ADR, embedding documentation, review rounds | 1 |
-| | **Total** | **20.5** |
+The prototype took about 1.2 agent hours across two sessions:
 
-A range of 15-25 agent-days is honest: item 13 is where the long tail
-surfaces, and its size is unknown until the lane runs. Beyond the one-time
-work, every built-in class added later needs a codec or an explicit refusal,
-and every change to a codec-covered class's fields needs its codec and schema
-version updated: a standing cost of roughly 10-20% on built-in work.
+| Session | Work | Active time |
+| --- | --- | ---: |
+| First | Explored the engine, wrote the format, the built-in table, the census and the first codecs (the work-in-progress commit; never built) | 31 min, plus 23 min in four parallel exploration helpers |
+| Second | Merged `main`, made it build and restore, added the remaining codecs, the lazy built-in table and path resolution, the idle-scratch release, the harness, the workloads, these measurements and this note | 41 min |
+| | **Total** | **72 min (95 min counting the helpers)** |
 
-A coverage-gated first version is about 10 agent-days: items 1, 2, 3, 11,
-half of 12 and 13, plus the promise combinators, the built-in iterators,
-error objects and async generators. It covers single-module programs on the
-core language and refuses everything else, which the embedder answers by
-replaying.
+The estimate below starts from the rate measured in the second session, at
+prototype quality: about 5 minutes per codec for a class with plain fields
+(`Set`, the array iterator), 5-10 minutes when it has cross-object state
+(`Promise.all`), and 15-30 minutes for a subsystem (the lazy built-in table
+and its resolver). That rate already includes builds, failed builds and
+debugging. Production quality multiplies it by about 2.5: a test or fixture
+per codec (about +50%), a second agent's review and the fixes it asks for
+(about +50%), the edge cases the prototype refuses instead of handling (about
++25%), and pull request and CI overhead (about +25%). Runs that are long by
+nature (fuzzing, GC-stress, the round-trip lane) are added at their own
+length.
+
+| # | Piece | Prototype rate, min | Agent hours |
+| ---: | --- | ---: | ---: |
+| 1 | Engine API instead of probe hooks: take a snapshot at an idle point, restore with a source provider, map pending host calls to the embedder's ids, release idle scratch inside the VM; wire into the out-of-process sandbox protocol | 30 | 1.25 |
+| 2 | Format: engine build identity and per-codec schema versions, string table and shared property keys, bulk byte copies, streaming writer and reader, optional host-side compression | 30 | 1.25 |
+| 3 | Built-in naming: fingerprints for members materialized during the run, materializers for every lazy realm slot, decide refusal versus differences for changed built-ins | 25 | 1 |
+| 4 | Object model: wrapper objects, `TGocciaErrorObjectValue` with its source principal, `Date`, bound functions, Proxy, `arguments`, classes extending native constructors, decorators and static blocks, dictionary-mode and sparse arrays | 70 | 3 |
+| 5 | Control state: `yield*`, async generators, async-from-sync iterators, every built-in iterator and iterator helper, `using` and `DisposableStack` | 80 | 3.25 |
+| 6 | Promise machinery: the remaining combinators, `finally`, thenable jobs, rejection tracking, async context and `AsyncLocalStorage` | 40 | 1.75 |
+| 7 | Multi-module programs: records, namespaces, deferred namespaces, `import.meta`, dynamic import, per-module bytecode hashes, link order | 60 | 2.5 |
+| 8 | Weak collections and finalization, Map and Set iterator cursors across tombstones, `SharedArrayBuffer` (refuse or copy), `DataView` | 30 | 1.25 |
+| 9 | Temporal values (8 kinds) and Intl objects (10 kinds) | 90 | 3.75 |
+| 10 | Host objects: timers, fetch objects, `AbortController`, text codecs; explicit refusal for FFI | 30 | 1.25 |
+| 11 | Run state: random and clock state, engine options and flags recorded and checked, memory charged during restore | 15 | 0.5 |
+| 12 | Hardening: the reader treated as untrusted input (semantic checks of instruction pointers, register and handler counts), a fuzzer over mutated real snapshots under heaptrc, GC-stress runs (1.5 hours of runs included) | 40 | 3.25 |
+| 13 | A round-trip lane over the whole test suite (snapshot at every idle and sampled await point, restore, compare), and fixing what it finds (3 hours of fixes included) | 30 | 4.25 |
+| 14 | ADR, embedding documentation, review rounds | | 2 |
+| | **Total** | **570** | **about 30** |
+
+The total is about 30 agent hours, 25 times the prototype, with a range of
+20-45: a multiplier between 2 and 4 moves the coded pieces by about ±8
+hours, and item 13 is where the long tail surfaces, its size unknown until
+the lane runs. Pieces 4-10 are independent of each other, so parallel
+sessions could bring the elapsed time to roughly 12-15 hours. Beyond the
+one-time work, every built-in class added later needs a codec or an explicit
+refusal, and every change to a codec-covered class's fields needs its codec
+and schema version updated: a standing cost of roughly 10-20% on built-in
+work.
+
+A coverage-gated first version is about 13 agent hours (range 9-20): items
+1, 2, 3 and 11, half of 12 and 13, the promise combinators, the built-in
+iterators, error objects and async generators, and a smaller documentation
+and review share. It covers single-module programs on the core language and
+refuses everything else, which the embedder answers by replaying.
 
 ## Risks
 
@@ -358,7 +381,7 @@ work before its pause than it keeps alive. Before deciding:
    pause point.
 2. If a meaningful share replays for more than about 100 ms, where a
    snapshot measured at least 5x faster, build the coverage-gated first
-   version (about 10 agent-days) behind an engine option, with the round-trip
+   version (about 13 agent hours) behind an engine option, with the round-trip
    lane from the start and replay as the answer to every refusal.
 3. Extend coverage by what refusals in real traffic show, not by the full
    list above.
