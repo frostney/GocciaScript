@@ -1418,6 +1418,7 @@ var
   Waiter: TAtomicsWaiter;
   WaitValueMatches: Boolean;
   WaitResult: string;
+  WasNotified: Boolean;
 begin
   ValidateAtomicsWaitAccess(AArgs, 'wait', TypedArray, Buffer, Index,
     ByteOffset);
@@ -1456,14 +1457,30 @@ begin
     CriticalSectionLeave(GAtomicsLock);
   end;
 
+  WasNotified := False;
   try
-    WaitResult := WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
-    CriticalSectionEnter(GAtomicsLock);
     try
-      RemoveWaiter(Waiter);
+      WaitResult := WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
     finally
-      CriticalSectionLeave(GAtomicsLock);
+      // Leave the waiter list as it was before the wait on every exit,
+      // including the instruction limit or execution timeout raising inside
+      // the wait: the waiter is freed below, and a waiter left in the list
+      // would be read, written and freed again by Atomics.notify, the owner's
+      // destructor and the thread's shutdown.
+      CriticalSectionEnter(GAtomicsLock);
+      try
+        WasNotified := not Waiter.InList;
+        RemoveWaiter(Waiter);
+      finally
+        CriticalSectionLeave(GAtomicsLock);
+      end;
     end;
+    // ES2026 §25.4.3.14 DoWait(mode, ta, index, value, timeout) step 29:
+    // return waiterRecord.[[Result]], which stays "ok" unless the wait timed
+    // out while the waiter was still in the list. An Atomics.notify that
+    // removed it after the wait stopped watching has counted it as woken.
+    if WasNotified then
+      WaitResult := ATOMICS_WAIT_OK;
     Result := TGocciaStringLiteralValue.Create(WaitResult);
   finally
     Waiter.Free;
