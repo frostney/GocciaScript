@@ -313,6 +313,8 @@ type
       read FEvaluateModuleBody write FEvaluateModuleBody;
     property InstantiateModuleFunctions: TGocciaModuleFunctionInstantiator
       read FInstantiateModuleFunctions write FInstantiateModuleFunctions;
+    { Heap snapshot prototype: every module the loader caches, by key. }
+    property CachedModules: TOrderedStringMap<TGocciaModule> read FModules;
     property GlobalModules: TOrderedStringMap<TGocciaModule>
       read FGlobalModules;
     property Preprocessors: TGocciaPreprocessors

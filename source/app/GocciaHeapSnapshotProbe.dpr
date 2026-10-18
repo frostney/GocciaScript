@@ -27,6 +27,21 @@ program GocciaHeapSnapshotProbe;
     --no-accounting   skip the check that every live object was serialized
     --compat          enable the compatibility flags the AWFY lane uses
                       (traditional for, while, for-in, function)
+    --sandbox=DIR     run FILE (a sandbox path such as /main.js) in a
+                      sandbox whose file system is a copy of DIR, with the
+                      loader runtime profile (console, fs, goccia:* modules),
+                      as a sandboxed embedder runs it
+    --tools=a,b.c     with --sandbox: a global `tools` object whose
+                      functions (dotted names nest) are host calls
+    --ast, --vitest   with --sandbox: install goccia:ast, or vitest and timers
+    --deterministic   with --sandbox: the deterministic host profile
+    --compat-all      with --sandbox: every compatibility flag (var,
+                      function, ASI, loose equality, ...)
+
+  With --sandbox, the modules the entry imports are evaluated again on
+  restore and what they hold is named like a built-in, not written: a
+  prototype shortcut for programs whose imported modules keep no state the
+  run changes.
 
   Measurements go to standard error as lines that start with "stats " and
   carry one JSON object. Times are milliseconds from the start of the
@@ -44,7 +59,19 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Bytecode.Module,
+  Goccia.Capabilities,
+  Goccia.CLI.SandboxHost,
   Goccia.Engine,
+  Goccia.HostEnvironment,
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.AST,
+  Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.Sandbox,
+  Goccia.RuntimeExtensions.Timers,
+  Goccia.RuntimeExtensions.VitestCompat,
+  Goccia.RuntimeProfiles.Loader,
+  Goccia.Sandbox.Context,
+  Goccia.Values.ObjectValue,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Census,
@@ -88,6 +115,8 @@ type
     FModule: TObject;
     FBuiltins: TGocciaHeapSnapshotBuiltinTable;
     FBuiltinTableMs: Double;
+    FToolNames: TStringList;
+    FAst, FVitest, FDeterministic, FCompatAll, FSandboxed: Boolean;
     procedure AnswerAll;
     procedure TakeSnapshot;
     procedure RestoreSnapshot(const AModuleScope: TGocciaScope;
@@ -105,6 +134,11 @@ type
       const AModuleScope: TGocciaScope; const AModule: TObject;
       var ASkipBody: Boolean);
     procedure CaptureBaseline;
+    procedure ConsoleLine(const AMethod, ALine: string);
+    procedure ConfigureSandboxEngine(const AEngine: TGocciaEngine;
+      const AContext: TGocciaSandboxContext; const AEntryPath: string;
+      const AParentEngine: TGocciaEngine;
+      const AParentHostEnvironment: TGocciaHostEnvironment);
     procedure Pause;
     procedure Discard;
     property Pending: TList<TGocciaPromiseValue> read FPending;
@@ -113,6 +147,11 @@ type
       write FBuiltins;
     property BuiltinTableMs: Double read FBuiltinTableMs write FBuiltinTableMs;
     property PauseCount: Integer read FPauseCount;
+    property ToolNames: TStringList read FToolNames;
+    property Ast: Boolean read FAst write FAst;
+    property Vitest: Boolean read FVitest write FVitest;
+    property Deterministic: Boolean read FDeterministic write FDeterministic;
+    property CompatAll: Boolean read FCompatAll write FCompatAll;
   end;
 
 var
@@ -165,12 +204,14 @@ begin
   FSnapshotPause := ASnapshotPause;
   FAccounting := AAccounting;
   FPending := TList<TGocciaPromiseValue>.Create;
+  FToolNames := TStringList.Create;
 end;
 
 destructor TProbeHost.Destroy;
 begin
   Discard;
   FPending.Free;
+  FToolNames.Free;
   FBaseline.Free;
   inherited;
 end;
@@ -220,6 +261,117 @@ begin
   TGarbageCollector.Instance.AddTempRoot(Promise);
   FPending.Add(Promise);
   Result := Promise;
+end;
+
+procedure TProbeHost.ConsoleLine(const AMethod, ALine: string);
+begin
+  WriteLn(ALine);
+end;
+
+{ As a sandboxed embedder configures its engine: the loader runtime profile,
+  the sandbox's fs, optional modules, and `tools` whose functions are host
+  calls. The probe's own hooks go on last, then the built-in table and the
+  baseline, so everything installed here counts as engine state. }
+procedure TProbeHost.ConfigureSandboxEngine(const AEngine: TGocciaEngine;
+  const AContext: TGocciaSandboxContext; const AEntryPath: string;
+  const AParentEngine: TGocciaEngine;
+  const AParentHostEnvironment: TGocciaHostEnvironment);
+var
+  Runtime: TGocciaRuntimeCore;
+  ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  Extension: TProbeExtension;
+  Root, Node, Child: TGocciaObjectValue;
+  Existing: TGocciaValue;
+  I, P: Integer;
+  Name, Part, Rest: string;
+  StartNs: Int64;
+begin
+  if Assigned(AParentEngine) then
+    raise Exception.Create('the probe does not support nested runs');
+  Runtime := AttachRuntime(AEngine);
+  ApplyLoaderRuntimeProfile(Runtime);
+  Runtime.Install(TGocciaSandboxRuntimeExtension.Create(AContext));
+  if FAst then
+    Runtime.Install(TGocciaASTRuntimeExtension.Create);
+  if FVitest then
+  begin
+    Runtime.Install(TGocciaTimersRuntimeExtension.Create);
+    Runtime.Install(TGocciaVitestCompatRuntimeExtension.Create);
+  end;
+  AEngine.SuppressWarnings := True;
+  ConsoleExtension := TGocciaConsoleRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
+  if Assigned(ConsoleExtension) then
+  begin
+    ConsoleExtension.BuiltinConsole.Enabled := True;
+    ConsoleExtension.BuiltinConsole.OutputCallback := ConsoleLine;
+  end;
+  AEngine.SourceType := stModule;
+  AEngine.GlobalBackedTopLevel := False;
+  if FDeterministic then
+    AEngine.HostEnvironment.UseDeterministicProfile;
+  if FCompatAll then
+  begin
+    // the full compatibility set a sandboxed embedder's compat switch enables
+    AEngine.Compatibility := [cfASI, cfVar, cfFunction, cfTraditionalFor,
+      cfWhileLoops, cfLooseEquality, cfNonStrictMode, cfArgumentsObject,
+      cfLabel, cfForIn];
+    AEngine.LabelStatementsEnabled := True;
+    AEngine.ForInLoopsEnabled := True;
+  end;
+  FSandboxed := True;
+  if FToolNames.Count > 0 then
+  begin
+    Root := TGocciaObjectValue.Create;
+    for I := 0 to FToolNames.Count - 1 do
+    begin
+      Node := Root;
+      Rest := FToolNames[I];
+      repeat
+        P := Pos('.', Rest);
+        if P = 0 then
+        begin
+          Part := Rest;
+          Rest := '';
+        end
+        else
+        begin
+          Part := Copy(Rest, 1, P - 1);
+          Rest := Copy(Rest, P + 1, MaxInt);
+        end;
+        if Rest = '' then
+          Node.AssignProperty(Part,
+            TGocciaNativeFunctionValue.Create(HostCall, Part, -1))
+        else
+        begin
+          Existing := Node.GetProperty(Part);
+          if Existing is TGocciaObjectValue then
+            Child := TGocciaObjectValue(Existing)
+          else
+          begin
+            Child := TGocciaObjectValue.Create;
+            Node.AssignProperty(Part, Child);
+          end;
+          Node := Child;
+        end;
+      until Rest = '';
+    end;
+    AEngine.GlobalScope.DefineLexicalBinding('tools', Root, dtConst);
+  end;
+  FEngine := AEngine;
+  Extension := TProbeExtension.Create;
+  Extension.Host := Self;
+  AEngine.AddExtension(Extension);
+  AEngine.OnEntryModuleReady := EntryModuleReady;
+  if FMode in [pmSnapshot, pmRestore] then
+  begin
+    StartNs := GetNanoseconds;
+    FBuiltins := TGocciaHeapSnapshotBuiltinTable.Create;
+    BuildBuiltinTable(FBuiltins, AEngine);
+    FBuiltinTableMs := (GetNanoseconds - StartNs) / 1e6;
+  end;
+  // the baseline and the module roots wait for the entry module: what the
+  // other modules hold once evaluated is named, not written (EntryModuleReady)
 end;
 
 procedure TProbeHost.AnswerAll;
@@ -276,6 +428,15 @@ procedure TProbeHost.EntryModuleReady(const AEngine: TGocciaEngine;
 begin
   FModuleScope := AModuleScope;
   FModule := AModule;
+  if FSandboxed then
+  begin
+    // every other module has been evaluated: its state is named like a
+    // built-in, and the census and the accounting count from here
+    if Assigned(FBuiltins) then
+      AddModuleRoots(FBuiltins, AEngine, AModule);
+    if FMode in [pmCensus, pmSnapshot] then
+      CaptureBaseline;
+  end;
   if FMode = pmRestore then
   begin
     RestoreSnapshot(AModuleScope, AModule);
@@ -418,7 +579,10 @@ var
   FileName, SnapshotPath, Arg: string;
   Answer: Double;
   SnapshotPause, I, FirstOption: Integer;
-  Accounting, Compat: Boolean;
+  Accounting, Compat, Ast, Vitest, Deterministic, CompatAllFlag: Boolean;
+  SandboxDir, ToolList: string;
+  Sandbox: TGocciaSandboxHost;
+  SandboxResult: TGocciaSandboxRunResult;
   Source: TStringList;
   Host: TProbeHost;
   Engine: TGocciaEngine;
@@ -449,6 +613,12 @@ begin
   SnapshotPause := 1;
   Accounting := True;
   Compat := False;
+  Ast := False;
+  Vitest := False;
+  Deterministic := False;
+  CompatAllFlag := False;
+  SandboxDir := '';
+  ToolList := '';
   for I := FirstOption to ParamCount do
   begin
     Arg := ParamStr(I);
@@ -460,8 +630,65 @@ begin
       Accounting := False
     else if Arg = '--compat' then
       Compat := True
+    else if Copy(Arg, 1, 10) = '--sandbox=' then
+      SandboxDir := Copy(Arg, 11, MaxInt)
+    else if Copy(Arg, 1, 8) = '--tools=' then
+      ToolList := Copy(Arg, 9, MaxInt)
+    else if Arg = '--ast' then
+      Ast := True
+    else if Arg = '--vitest' then
+      Vitest := True
+    else if Arg = '--deterministic' then
+      Deterministic := True
+    else if Arg = '--compat-all' then
+      CompatAllFlag := True
     else
       raise Exception.Create('Unknown option: ' + Arg);
+  end;
+
+  if SandboxDir <> '' then
+  begin
+    Host := TProbeHost.Create(Mode, Answer, SnapshotPath, SnapshotPause,
+      Accounting);
+    Sandbox := TGocciaSandboxHost.Create(256 * 1024 * 1024, 100000);
+    try
+      Host.ToolNames.StrictDelimiter := True;
+      Host.ToolNames.Delimiter := ',';
+      if ToolList <> '' then
+        Host.ToolNames.DelimitedText := ToolList;
+      Host.Ast := Ast;
+      Host.Vitest := Vitest;
+      Host.Deterministic := Deterministic;
+      Host.CompatAll := CompatAllFlag;
+      Sandbox.KeepRootResult := False;
+      Sandbox.TimeoutMilliseconds := 600000;
+      Sandbox.OnConfigureEngine := Host.ConfigureSandboxEngine;
+      Sandbox.CopyIn(SandboxDir, '/', False);
+      Sandbox.CaptureBaseline;
+      SandboxResult := Sandbox.Run(FileName);
+      if (Mode = pmSnapshot) and (SandboxResult.ErrorMessage = 'snapshot taken') then
+        Result := 0
+      else if not SandboxResult.Ok then
+      begin
+        WriteLn(ErrOutput, 'Error: ', SandboxResult.ErrorMessage);
+        Result := 1;
+      end
+      else if Mode = pmSnapshot then
+      begin
+        WriteLn(ErrOutput, 'Error: the run ended after ',
+          Host.PauseCount, ' pause(s), before pause ', SnapshotPause);
+        Result := 1;
+      end;
+      if (Result = 0) and (Mode in [pmRun, pmRestore]) then
+        Stats('{"event":"end","pauses":' + IntToStr(Host.PauseCount) +
+          ',"ms":' + Ms(ElapsedMs) + '}');
+    finally
+      Host.Discard;
+      Sandbox.Free;
+      Host.Builtins.Free;
+      Host.Free;
+    end;
+    Exit;
   end;
 
   Source := TStringList.Create;

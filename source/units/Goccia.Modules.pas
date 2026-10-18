@@ -182,6 +182,9 @@ type
     procedure ClearExports;
     function CanResolveExport(const AExportName: string): Boolean;
     function GetExportNames: TArray<string>;
+    { Heap snapshot prototype: the module's environment (its module scope),
+      nil for a host module. }
+    property Environment: TGCManagedObject read FEnvironment;
     function GetNamespaceObject: TGocciaObjectValue;
     function HasExport(const AExportName: string): Boolean;
     procedure InvalidateNamespaceObject(const ADetachModule: Boolean = False);

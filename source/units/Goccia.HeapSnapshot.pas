@@ -46,6 +46,15 @@ type
 
 procedure BuildBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
   const AEngine: TGocciaEngine);
+// Names what every module but the entry holds once those modules have been
+// evaluated: a host module's namespace and exports, and a source module's
+// namespace, environment and its bindings. A restore evaluates the same
+// modules again before the entry and resolves these names in them, so their
+// state is treated like built-ins: not written, refused when the run changed
+// a primitive in it (the fingerprints are recorded again here). The entry
+// module is AEntry.
+procedure AddModuleRoots(const ATable: TGocciaHeapSnapshotBuiltinTable;
+  const AEngine: TGocciaEngine; const AEntry: TObject);
 // Walks the table again for members the run materialized since it was
 // built, and adds the realm slots filled since and what they reach;
 // ALateSlots receives the names of those slots.
@@ -57,7 +66,10 @@ implementation
 uses
   SysUtils,
 
+  OrderedStringMap,
+
   Goccia.Builtins.Base,
+  Goccia.Modules,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -296,6 +308,85 @@ begin
   WalkFrom(ATable, Start);
 end;
 
+procedure AddModule(const ATable: TGocciaHeapSnapshotBuiltinTable;
+  const AKey: string; const AModule: TGocciaModule);
+var
+  Names: TArray<string>;
+  ScopeNames: TGocciaStringArray;
+  Binding: TLexicalBinding;
+  Value: TGocciaValue;
+  I: Integer;
+  Root: string;
+begin
+  Root := Seg('%module', AKey);
+  AddValue(ATable, AModule.GetNamespaceObject, Seg(Root, '%namespace'));
+  Names := AModule.GetExportNames;
+  for I := 0 to High(Names) do
+    if AModule.TryGetExportValue(Names[I], Value) then
+      AddValue(ATable, Value, Seg(Seg(Root, '%export'), Names[I]));
+  if AModule.Environment is TGocciaScope then
+  begin
+    ATable.Add(AModule.Environment, Seg(Root, '%scope'));
+    ScopeNames := TGocciaScope(AModule.Environment).GetOwnBindingNames;
+    for I := 0 to High(ScopeNames) do
+      if TGocciaScope(AModule.Environment).TryGetOwnLexicalBindingRaw(
+           ScopeNames[I], Binding) and Binding.Initialized then
+        AddValue(ATable, Binding.Value, Seg(Seg(Root, '%binding'),
+          ScopeNames[I]));
+  end;
+end;
+
+procedure AddModuleRoots(const ATable: TGocciaHeapSnapshotBuiltinTable;
+  const AEngine: TGocciaEngine; const AEntry: TObject);
+var
+  Pair: TOrderedStringMap<TGocciaModule>.TKeyValuePair;
+  Start: Integer;
+begin
+  Start := ATable.Count;
+  for Pair in AEngine.ModuleLoader.GlobalModules do
+    AddModule(ATable, Pair.Key, Pair.Value);
+  for Pair in AEngine.ModuleLoader.CachedModules do
+    if (TObject(Pair.Value) <> AEntry) and
+       (Pair.Value.Environment <> nil) then
+      AddModule(ATable, Pair.Key, Pair.Value);
+  WalkFrom(ATable, Start);
+  ATable.RecordFingerprints;
+end;
+
+function ResolveModuleRoot(const AEngine: TGocciaEngine;
+  const AParts: TStringArray; out AConsumed: Integer): TGCManagedObject;
+var
+  Module: TGocciaModule;
+  Value: TGocciaValue;
+  Binding: TLexicalBinding;
+begin
+  Result := nil;
+  AConsumed := Length(AParts);
+  if Length(AParts) < 3 then
+    Exit;
+  if not AEngine.ModuleLoader.GlobalModules.TryGetValue(AParts[1], Module) and
+     not AEngine.ModuleLoader.CachedModules.TryGetValue(AParts[1], Module) then
+    Exit;
+  AConsumed := 3;
+  if AParts[2] = '%namespace' then
+    Exit(Module.GetNamespaceObject);
+  if AParts[2] = '%scope' then
+    Exit(Module.Environment);
+  if Length(AParts) < 4 then
+    Exit;
+  AConsumed := 4;
+  if AParts[2] = '%export' then
+  begin
+    if Module.TryGetExportValue(AParts[3], Value) then
+      Exit(Value);
+    Exit;
+  end;
+  if (AParts[2] = '%binding') and (Module.Environment is TGocciaScope) and
+     TGocciaScope(Module.Environment).TryGetOwnLexicalBindingRaw(AParts[3],
+       Binding) and Binding.Initialized then
+    Exit(Binding.Value);
+end;
+
 { TGocciaBuiltinPathResolver }
 
 constructor TGocciaBuiltinPathResolver.Create(
@@ -487,7 +578,10 @@ begin
       Name := Parts[1];
     if Length(Parts) > 2 then
       Which := Parts[2];
-    Result := ResolveRoot(FEngine, Parts[0], Name, Which, Consumed);
+    if Parts[0] = '%module' then
+      Result := ResolveModuleRoot(FEngine, Parts, Consumed)
+    else
+      Result := ResolveRoot(FEngine, Parts[0], Name, Which, Consumed);
     I := Consumed;
   end;
   while Assigned(Result) and (I <= High(Parts)) do
