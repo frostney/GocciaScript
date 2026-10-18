@@ -23,6 +23,7 @@ program GocciaHeapSnapshotProbe;
 
   Options:
     --answer=X        the number every host call is answered with (3)
+    --answer-json=J   every host call is answered with this JSON value instead
     --pause=N         the pause a snapshot is taken at (1)
     --no-accounting   skip the check that every live object was serialized
     --compat          enable the compatibility flags the AWFY lane uses
@@ -59,6 +60,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Bytecode.Module,
+  Goccia.JSON,
   Goccia.Capabilities,
   Goccia.CLI.SandboxHost,
   Goccia.Engine,
@@ -103,6 +105,7 @@ type
   private
     FMode: TProbeMode;
     FAnswer: Double;
+    FAnswerJson: string;
     FSnapshotPath: string;
     FSnapshotPause: Integer;
     FAccounting: Boolean;
@@ -152,6 +155,7 @@ type
     property Vitest: Boolean read FVitest write FVitest;
     property Deterministic: Boolean read FDeterministic write FDeterministic;
     property CompatAll: Boolean read FCompatAll write FCompatAll;
+    property AnswerJson: string read FAnswerJson write FAnswerJson;
   end;
 
 var
@@ -374,6 +378,18 @@ begin
   // other modules hold once evaluated is named, not written (EntryModuleReady)
 end;
 
+function ParseAnswer(const AJson: string): TGocciaValue;
+var
+  Parser: TGocciaJSONParser;
+begin
+  Parser := TGocciaJSONParser.Create;
+  try
+    Result := Parser.Parse(AJson);
+  finally
+    Parser.Free;
+  end;
+end;
+
 procedure TProbeHost.AnswerAll;
 var
   Calls: array of TGocciaPromiseValue;
@@ -387,7 +403,10 @@ begin
   FPending.Clear;
   for I := 0 to High(Calls) do
   begin
-    Calls[I].Resolve(TGocciaNumberLiteralValue.Create(FAnswer));
+    if FAnswerJson <> '' then
+      Calls[I].Resolve(ParseAnswer(FAnswerJson))
+    else
+      Calls[I].Resolve(TGocciaNumberLiteralValue.Create(FAnswer));
     GC.RemoveTempRoot(Calls[I]);
   end;
 end;
@@ -451,17 +470,21 @@ var
   Writer: TGocciaHeapSnapshotWriter;
   Stream: TMemoryStream;
   Census: TGocciaHeapCensus;
-  PauseMs, SerializeMs, AccountingMs, WriteMs: Double;
-  StartNs: Int64;
+  PauseMs, SerializeMs, AccountingMs, WriteMs, ReleaseMs, CensusMs: Double;
+  StartNs, ReleaseNs: Int64;
   LiveObjects: Integer;
   LiveBytes: Int64;
 begin
   PauseMs := ElapsedMs;
   // The stacks keep what the last frames left in them; at an idle point no
   // frame needs it.
+  ReleaseNs := GetNanoseconds;
   if not FEngine.VM.ReleaseIdleScratch then
     raise EGocciaHeapSnapshotRefused.Create('a bytecode frame is running');
-  // The census collects first, so the byte count is what survives.
+  ReleaseMs := (GetNanoseconds - ReleaseNs) / 1e6;
+  // The census collects first, so the byte count is what survives. It is
+  // the measurement's own work, timed apart from the snapshot's.
+  StartNs := GetNanoseconds;
   Census := TGocciaHeapCensus.Create;
   try
     Census.Take(FBaseline);
@@ -470,6 +493,7 @@ begin
     Census.Free;
   end;
   LiveBytes := TGarbageCollector.Instance.BytesAllocated - FBaselineBytes;
+  CensusMs := (GetNanoseconds - StartNs) / 1e6;
 
   SetLength(PendingValues, FPending.Count);
   for I := 0 to FPending.Count - 1 do
@@ -505,7 +529,11 @@ begin
       ',"builtinTableMs":' + Ms(FBuiltinTableMs) +
       ',"serializeMs":' + Ms(SerializeMs) +
       ',"accountingMs":' + Ms(AccountingMs) +
-      ',"writeFileMs":' + Ms(WriteMs) + '}');
+      ',"writeFileMs":' + Ms(WriteMs) +
+      ',"releaseMs":' + Ms(ReleaseMs) +
+      ',"censusMs":' + Ms(CensusMs) +
+      // what taking a snapshot costs the paused run: everything but the census
+      ',"snapshotMs":' + Ms(ReleaseMs + SerializeMs + AccountingMs + WriteMs) + '}');
   finally
     Writer.Free;
     Stream.Free;
@@ -580,6 +608,7 @@ var
   Answer: Double;
   SnapshotPause, I, FirstOption: Integer;
   Accounting, Compat, Ast, Vitest, Deterministic, CompatAllFlag: Boolean;
+  AnswerJsonArg: string;
   SandboxDir, ToolList: string;
   Sandbox: TGocciaSandboxHost;
   SandboxResult: TGocciaSandboxRunResult;
@@ -617,6 +646,7 @@ begin
   Vitest := False;
   Deterministic := False;
   CompatAllFlag := False;
+  AnswerJsonArg := '';
   SandboxDir := '';
   ToolList := '';
   for I := FirstOption to ParamCount do
@@ -642,6 +672,8 @@ begin
       Deterministic := True
     else if Arg = '--compat-all' then
       CompatAllFlag := True
+    else if Copy(Arg, 1, 14) = '--answer-json=' then
+      AnswerJsonArg := Copy(Arg, 15, MaxInt)
     else
       raise Exception.Create('Unknown option: ' + Arg);
   end;
@@ -660,6 +692,7 @@ begin
       Host.Vitest := Vitest;
       Host.Deterministic := Deterministic;
       Host.CompatAll := CompatAllFlag;
+      Host.AnswerJson := AnswerJsonArg;
       Sandbox.KeepRootResult := False;
       Sandbox.TimeoutMilliseconds := 600000;
       Sandbox.OnConfigureEngine := Host.ConfigureSandboxEngine;
