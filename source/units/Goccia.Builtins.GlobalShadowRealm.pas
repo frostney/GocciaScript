@@ -32,6 +32,7 @@ uses
   Classes,
   Generics.Collections,
   Math,
+  SysUtils,
 
   OrderedStringMap,
 
@@ -451,6 +452,7 @@ var
   Stage: TGocciaGlobalEvalStage;
   Threw: Boolean;
   ErrorMessage: string;
+  ThrownValue: TGocciaValue;
 begin
   // PerformShadowRealmEval runs with the caller realm current. That caller
   // realm is this evaluate method's realm (FEngine) — not the ambient realm of
@@ -489,20 +491,18 @@ begin
         TGocciaStringLiteralValue(SourceValue).Value, '<shadow-realm-eval>',
         Stage);
     except
-      on E: TGocciaThrowValue do
+      on E: Exception do
       begin
+        // A guest throw carries its value (UnwrapThrownValue knows the
+        // carriers); an engine error carries its message; anything else is
+        // not the source's completion and propagates.
+        if UnwrapThrownValue(E, ThrownValue) then
+          ErrorMessage := ThrownErrorMessage(ThrownValue, E.Message)
+        else if E is TGocciaError then
+          ErrorMessage := E.Message
+        else
+          raise;
         Threw := True;
-        ErrorMessage := ThrownErrorMessage(E.Value, E.Message);
-      end;
-      on E: EGocciaBytecodeThrow do
-      begin
-        Threw := True;
-        ErrorMessage := ThrownErrorMessage(E.ThrownValue, E.Message);
-      end;
-      on E: TGocciaError do
-      begin
-        Threw := True;
-        ErrorMessage := E.Message;
       end;
     end;
 
