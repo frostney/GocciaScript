@@ -108,10 +108,17 @@ type
     which a pointer-keyed table cannot do once a dead stack's address is
     reused. }
   TGocciaDisposableStackObjectValue = class(TGocciaObjectValue)
+  public
+    { Frees the instance's slot with it. Before #1592 a slot lived until its
+      thread shut down, and a new stack at a dead one's address replaced the
+      dead one's slot without freeing it. }
+    destructor Destroy; override;
   end;
 
   TAsyncDisposableStackDisposeJob = class(TGocciaObjectValue)
   private
+    { The stack whose slot FSlot is: marked, so the slot outlives the job. }
+    FStack: TGocciaValue;
     FSlot: PDisposableStackSlot;
     FIndex: Integer;
     FCurrentError: TGocciaValue;
@@ -121,8 +128,8 @@ type
     procedure Drain;
     procedure ScheduleAwait(const AValue: TGocciaValue);
   public
-    constructor Create(const ASlot: PDisposableStackSlot;
-      const APromise: TGocciaPromiseValue);
+    constructor Create(const AStack: TGocciaValue;
+      const ASlot: PDisposableStackSlot; const APromise: TGocciaPromiseValue);
     function AwaitFulfilled(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function AwaitRejected(const AArgs: TGocciaArgumentsCollection;
@@ -137,6 +144,24 @@ threadvar
 var
   GDisposableStackPrototypeSlot: TGocciaRealmSlotId;
   GAsyncDisposableStackPrototypeSlot: TGocciaRealmSlotId;
+
+procedure FreeDisposableStackSlot(const ASlot: PDisposableStackSlot);
+begin
+  ASlot^.Tracker.Free;
+  Dispose(ASlot);
+end;
+
+destructor TGocciaDisposableStackObjectValue.Destroy;
+var
+  Slot: PDisposableStackSlot;
+begin
+  if Assigned(GSlotMap) and GSlotMap.TryGetValue(Self, Slot) then
+  begin
+    GSlotMap.Remove(Self);
+    FreeDisposableStackSlot(Slot);
+  end;
+  inherited;
+end;
 
 function EnsureSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
 begin
@@ -165,10 +190,11 @@ begin
       SSuggestDisposableStackThisType);
 end;
 
-constructor TAsyncDisposableStackDisposeJob.Create(
+constructor TAsyncDisposableStackDisposeJob.Create(const AStack: TGocciaValue;
   const ASlot: PDisposableStackSlot; const APromise: TGocciaPromiseValue);
 begin
   inherited Create(nil);
+  FStack := AStack;
   FSlot := ASlot;
   FIndex := ASlot^.Tracker.Count - 1;
   FResultPromise := APromise;
@@ -316,6 +342,8 @@ begin
     FCurrentError.MarkReferences;
   if Assigned(FResultPromise) then
     FResultPromise.MarkReferences;
+  if Assigned(FStack) then
+    FStack.MarkReferences;
 end;
 
 procedure TAsyncDisposableStackDisposeJob.Start;
@@ -715,7 +743,7 @@ begin
       else
         Slot^.Disposed := True;
 
-      Job := TAsyncDisposableStackDisposeJob.Create(Slot, Promise);
+      Job := TAsyncDisposableStackDisposeJob.Create(AThisValue, Slot, Promise);
       Roots.Add(Job);
       Job.Start;
     except
@@ -938,10 +966,7 @@ begin
   if Assigned(GSlotMap) then
   begin
     for Pair in GSlotMap do
-    begin
-      Pair.Value^.Tracker.Free;
-      Dispose(Pair.Value);
-    end;
+      FreeDisposableStackSlot(Pair.Value);
     GSlotMap.Free;
     GSlotMap := nil;
   end;

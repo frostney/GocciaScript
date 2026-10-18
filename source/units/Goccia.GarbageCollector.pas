@@ -326,6 +326,7 @@ type
     procedure SweepWeakReferences;
     procedure SweepObjects;
     function AppendManagedObjectGrowing(const AObject: TGCManagedObject): Integer;
+    procedure ReleaseAllManagedObjects;
   public
     class function Instance: TGarbageCollector; {$IFDEF FPC}inline;{$ENDIF}
     class procedure Initialize;
@@ -759,9 +760,12 @@ end;
 
 class procedure TGarbageCollector.Shutdown;
 begin
-  GThreadPolls.Collector := nil;
+  // The mirror stays set while the collector frees what it manages, so a
+  // value a destructor allocates still registers and is freed by a later
+  // pass; Destroy clears it once nothing can register any more.
   GCThreadInstance.Free;
   GCThreadInstance := nil;
+  GThreadPolls.Collector := nil;
 end;
 
 constructor TGarbageCollector.Create;
@@ -816,6 +820,9 @@ begin
   {$IFDEF GC_TIMING}
   PrintTimingSummary;
   {$ENDIF}
+  ReleaseAllManagedObjects;
+  if GThreadPolls.Collector = Self then
+    GThreadPolls.Collector := nil;
   // Root sources are not owned and can outlive the collector (a pooled argument
   // collection freed during engine tear-down, for instance). Drop their
   // back-pointer so their destructors do not unregister into freed memory.
@@ -1267,6 +1274,48 @@ begin
   if FManagedObjects.Capacity > 4 * WriteIdx + 256 then
     FManagedObjects.Capacity := WriteIdx + (WriteIdx div 2);
   FTotalCollected := FTotalCollected + Collected;
+end;
+
+{ Destroys every object this collector still manages: a collection in which
+  nothing is reachable. Runs from Destroy, so a thread's (or the process's)
+  last collector frees the values that outlived every engine on it instead of
+  leaking them (#1592). The destructors run in list order, as in any sweep,
+  so the rule a sweep already relies on holds here too: a value's destructor
+  frees what it owns natively and never calls into another managed object,
+  which may already be gone. Roots are dropped first; pins, temp roots and
+  root objects protect nothing once the collector itself is going away. A
+  destructor that allocates registers a new object, which the next pass
+  frees. }
+procedure TGarbageCollector.ReleaseAllManagedObjects;
+const
+  MAX_RELEASE_PASSES = 16;
+var
+  Pass: Integer;
+begin
+  FPinnedObjects.Clear;
+  FTempRoots.Clear;
+  FQueuedRoots.Clear;
+  FKeptObjects.Clear;
+  FRootObjects.Clear;
+  FActiveRootCount := 0;
+  CriticalSectionEnter(GCCollectLock);
+  try
+    FCollecting := True;
+    try
+      Pass := 0;
+      while (FManagedObjects.Count > 0) and (Pass < MAX_RELEASE_PASSES) do
+      begin
+        { A fresh epoch: no object carries its mark, so the sweep frees all. }
+        TGCManagedObject.AdvanceMark;
+        SweepObjects;
+        Inc(Pass);
+      end;
+    finally
+      FCollecting := False;
+    end;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
 end;
 
 procedure TGarbageCollector.Collect;
@@ -1956,10 +2005,9 @@ finalization
   CriticalSectionDone(GCCollectLock);
   {$IFDEF GOCCIA_GC_STRESS}
   // Skip heaptrc's exit report. heaptrc is finalized after this unit and
-  // checks useheaptrace first. With the known leaks (#1592) the report runs to
-  // hundreds of megabytes and about 15 seconds per process, and leaks are the
-  // memory-safety job's concern, not this build's: heaptrc still halts on a
-  // double free or a corrupted block at the moment it happens.
+  // checks useheaptrace first. Leaks are the memory-safety job's concern, not
+  // this build's: heaptrc still halts on a double free or a corrupted block at
+  // the moment it happens.
   useheaptrace := False;
   {$ENDIF}
 

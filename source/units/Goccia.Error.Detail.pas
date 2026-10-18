@@ -67,14 +67,18 @@ begin
     Descriptor := Current.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
-      if Descriptor is TGocciaPropertyDescriptorData then
-      begin
-        Value := TGocciaPropertyDescriptorData(Descriptor).Value;
-        if Value is TGocciaStringLiteralValue then
+      try
+        if Descriptor is TGocciaPropertyDescriptorData then
         begin
-          AValue := TGocciaStringLiteralValue(Value).Value;
-          Exit(True);
+          Value := TGocciaPropertyDescriptorData(Descriptor).Value;
+          if Value is TGocciaStringLiteralValue then
+          begin
+            AValue := TGocciaStringLiteralValue(Value).Value;
+            Exit(True);
+          end;
         end;
+      finally
+        ReleaseDescriptor(Descriptor);
       end;
       Exit(False);
     end;

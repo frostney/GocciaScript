@@ -219,6 +219,7 @@ constructor TGocciaMockFunctionValue.CreateSpy(const ATarget: TGocciaObjectValue
   const AMethodName: string);
 var
   OriginalValue: TGocciaValue;
+  OwnDescriptor: TGocciaPropertyDescriptor;
 begin
   OriginalValue := ATarget.GetProperty(AMethodName);
 
@@ -229,8 +230,12 @@ begin
   FSpyOriginalValue := OriginalValue;
 
   // Capture whether this is an own property and its descriptor for proper restore
-  FSpyOriginalDescriptor := ClonePropertyDescriptor(
-    ATarget.GetOwnPropertyDescriptor(AMethodName));
+  OwnDescriptor := ATarget.GetOwnPropertyDescriptor(AMethodName);
+  try
+    FSpyOriginalDescriptor := ClonePropertyDescriptor(OwnDescriptor);
+  finally
+    ReleaseDescriptor(OwnDescriptor);
+  end;
   FSpyWasOwnProperty := Assigned(FSpyOriginalDescriptor);
 
   // Spy passes through to original by default

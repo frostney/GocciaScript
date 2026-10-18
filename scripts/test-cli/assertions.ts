@@ -31,7 +31,7 @@ export const containsLine = (s: string, value: string): boolean => {
 export function runLoaderJson(
   source: string,
   extraArgs?: string[],
-  opts?: { bin?: string; timeout?: number },
+  opts?: { bin?: string; timeout?: number; env?: Record<string, string | undefined> },
 ): { exitCode: number; json: any; stderr: string } {
   const hasOutputFlag = extraArgs?.some((a) => a.startsWith("--output="));
   const spawnOpts: {
@@ -39,12 +39,14 @@ export function runLoaderJson(
     stdout: "pipe";
     stderr: "pipe";
     timeout?: number;
+    env?: Record<string, string | undefined>;
   } = {
     stdin: new TextEncoder().encode(source),
     stdout: "pipe",
     stderr: "pipe",
   };
   if (opts?.timeout != null) spawnOpts.timeout = opts.timeout;
+  if (opts?.env != null) spawnOpts.env = opts.env;
   const proc = Bun.spawnSync(
     [
       opts?.bin ?? RUNNER,

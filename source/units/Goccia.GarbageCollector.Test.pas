@@ -77,6 +77,7 @@ type
     procedure SetupTests; override;
 
     procedure TestCollectYoungTracesOldToYoungReferences;
+    procedure TestDestroyFreesEveryManagedObject;
     procedure TestReservationCollectsAndRetries;
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
@@ -173,6 +174,8 @@ procedure TTestGarbageCollector.SetupTests;
 begin
   Test('CollectYoung traces references from old rooted objects',
     TestCollectYoungTracesOldToYoungReferences);
+  Test('Destroying a collector frees every object it still manages',
+    TestDestroyFreesEveryManagedObject);
   Test('External reservation collects and retries',
     TestReservationCollectsAndRetries);
   Test('External reservation collects past the pressure reserve',
@@ -1134,6 +1137,43 @@ begin
       GC.ReleaseExternalBytes(BALLAST_BYTES);
     GC.MaxBytes := PreviousMaxBytes;
   end;
+end;
+
+{ #1592: a collector that goes away destroys what it still manages, roots,
+  pins and temp roots included, instead of leaking it. A thread's runtime
+  shutdown and the main thread's end of run rely on this. }
+procedure TTestGarbageCollector.TestDestroyFreesEveryManagedObject;
+var
+  GC: TGarbageCollector;
+  Parent: TParentManaged;
+  Pinned, TempRooted: TChildManaged;
+begin
+  GParentDestructorCount := 0;
+  GChildDestructorCount := 0;
+  GC := TGarbageCollector.Create;
+  try
+    Parent := TParentManaged.Create;
+    GC.RegisterObject(Parent);
+    GC.AddRootObject(Parent);
+    Parent.Child := TChildManaged.Create;
+    GC.RegisterObject(Parent.Child);
+    Pinned := TChildManaged.Create;
+    GC.RegisterObject(Pinned);
+    GC.PinObject(Pinned);
+    TempRooted := TChildManaged.Create;
+    GC.RegisterObject(TempRooted);
+    GC.AddTempRoot(TempRooted);
+
+    GC.Collect;
+    Expect<Integer>(GC.ManagedObjectCount).ToBe(4);
+    Expect<Integer>(GParentDestructorCount).ToBe(0);
+    Expect<Integer>(GChildDestructorCount).ToBe(0);
+  finally
+    GC.Free;
+  end;
+
+  Expect<Integer>(GParentDestructorCount).ToBe(1);
+  Expect<Integer>(GChildDestructorCount).ToBe(3);
 end;
 
 procedure TTestGarbageCollector.TestCollectYoungTracesOldToYoungReferences;

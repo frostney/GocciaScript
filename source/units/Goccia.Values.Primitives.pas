@@ -174,6 +174,10 @@ type
   end;
 
   procedure PinPrimitiveSingletons;
+  { True when AValue is one of the process-wide primitive singletons
+    (undefined, null, true, false, NaN, 0, 1, -0, Infinity, -Infinity).
+    Never creates one. }
+  function IsPrimitiveSingleton(const AValue: TGocciaValue): Boolean;
 
   // ES2026 §6.1.6.1.20 Number::toString(x)
   function FormatDouble(AValue: Double): string;
@@ -316,6 +320,21 @@ end;
 
 
 { Utility functions }
+
+function IsPrimitiveSingleton(const AValue: TGocciaValue): Boolean;
+begin
+  Result := Assigned(AValue) and (
+    (Pointer(AValue) = Pointer(TGocciaUndefinedLiteralValue.FUndefinedValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNullLiteralValue.FNullValue)) or
+    (Pointer(AValue) = Pointer(TGocciaBooleanLiteralValue.FTrueValue)) or
+    (Pointer(AValue) = Pointer(TGocciaBooleanLiteralValue.FFalseValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FNaNValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FZeroValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FOneValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FNegativeZeroValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FInfinityValue)) or
+    (Pointer(AValue) = Pointer(TGocciaNumberLiteralValue.FNegativeInfinityValue)));
+end;
 
 procedure PinPrimitiveSingletons;
 begin

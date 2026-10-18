@@ -72,7 +72,9 @@ uses
   SysUtils,
 
   ICU,
-  TextEncoding;
+  TextEncoding,
+
+  Goccia.ThreadCleanupRegistry;
 
 const
   ICU_SUCCESS = 0;
@@ -3416,6 +3418,9 @@ initialization
   CriticalSectionInit(CalendarICULock);
   CalendarICULoadAttempted := False;
   CalendarICUAvailable := False;
+  { TemporalCalendarCache is a threadvar: each worker closes its own ICU
+    calendars and drops their ids when its runtime shuts down (#1592). }
+  RegisterThreadvarCleanup(@CloseCachedTemporalCalendars);
 
 finalization
   CloseCachedTemporalCalendars;
