@@ -42,15 +42,18 @@ uses
 
   HashMap,
 
+  Goccia.Bytecode.Chunk,
+  Goccia.Bytecode.Module,
   Goccia.GarbageCollector,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.VM.Registers;
 
 const
   HEAP_SNAPSHOT_MAGIC: array[0..3] of AnsiChar = ('G', 'H', 'S', 'N');
-  HEAP_SNAPSHOT_FORMAT_VERSION = 1;
+  HEAP_SNAPSHOT_FORMAT_VERSION = 2;
 
   // Separates the segments of a built-in's name; no property key or symbol
   // description of a built-in contains it.
@@ -233,6 +236,38 @@ type
     property FingerprintCount: Integer read FFingerprintCount;
   end;
 
+  { The compiled modules whose function templates a snapshot can refer to,
+    each named by the SHA-256 of its bytecode, and each template by its
+    depth-first index in its module. A restoring engine supplies its own
+    compiled modules; a template refers to the module with the same hash. }
+  TGocciaSnapshotTemplateList = TList<TGocciaFunctionTemplate>;
+  TGocciaSnapshotTemplateLists = TObjectList<TGocciaSnapshotTemplateList>;
+
+  TGocciaSnapshotTemplateTable = class
+  private
+    FModules: TList<TGocciaBytecodeModule>;
+    FHashes: TList<string>;
+    FByHash: TDictionary<string, Integer>;
+    FTemplates: THashMap<TGocciaFunctionTemplate, Int64>;
+    FTemplateLists: TGocciaSnapshotTemplateLists;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    // Adds AModule and numbers its templates; a module already in the table,
+    // or one with the same bytecode, is not added again, and neither is one
+    // the bytecode format cannot write (eval code): its functions refuse.
+    procedure AddModule(const AModule: TGocciaBytecodeModule);
+    // AModule's index and ATemplate's index in it; False for a template of no
+    // module in the table.
+    function TryIdentify(const ATemplate: TGocciaFunctionTemplate;
+      out AModule, AIndex: Integer): Boolean;
+    function ModuleHash(const AModule: Integer): string;
+    function FindModule(const AHash: string): Integer;
+    function TemplateAt(const AModule, AIndex: Integer): TGocciaFunctionTemplate;
+    function TemplateCount(const AModule: Integer): Integer;
+    function ModuleCount: Integer;
+  end;
+
   TGocciaHeapSnapshotWriter = class
   private
     FBuiltins: TGocciaHeapSnapshotBuiltinTable;
@@ -249,6 +284,10 @@ type
     FCurrentId: Integer;
     FBuildIdentity: string;
     FReservedBytes: Int64;
+    FTemplates: TGocciaSnapshotTemplateTable;
+    // The modules the snapshot refers to, in the order first referred to.
+    FModuleRefs: TList<Integer>;
+    FModuleRefIndex: THashMap<Integer, Integer>;
     procedure Reserve(const ABytes: Int64);
     function GetObjectCount: Integer;
     function GetBuiltinRefCount: Integer;
@@ -276,6 +315,11 @@ type
     // An ordinary object's own state: prototype, extensibility, integrity,
     // and its own string- and symbol-keyed properties in their order.
     procedure WriteObjectCore(const AObject: TGocciaObjectValue);
+    // A function template: its module and its index there. Refuses one of a
+    // module the template table does not hold.
+    procedure WriteTemplate(const ATemplate: TGocciaFunctionTemplate);
+    // A VM register: its kind and its scalar or value.
+    procedure WriteRegister(const ARegister: TGocciaRegister);
     // Polls the run's execution limits; codecs call it once per item in
     // every loop whose length the run controls.
     procedure Poll;
@@ -301,6 +345,10 @@ type
     property BuiltinRefCount: Integer read GetBuiltinRefCount;
     // The engine build a snapshot names; a reader refuses another.
     property BuildIdentity: string read FBuildIdentity write FBuildIdentity;
+    // The modules whose templates the snapshot can refer to; the caller owns
+    // it. Without one, a function refuses.
+    property Templates: TGocciaSnapshotTemplateTable read FTemplates
+      write FTemplates;
   end;
 
   // Finds the built-in a name refers to, adding it to the reader's table;
@@ -342,6 +390,9 @@ type
     FBuiltinVerify: TGocciaBuiltinVerify;
     FBuildIdentity: string;
     FContext: TObject;
+    FTemplates: TGocciaSnapshotTemplateTable;
+    // The snapshot's modules, as indexes into FTemplates.
+    FModuleMap: array of Integer;
     function GetObjectCount: Integer;
     procedure Need(const ACount: Int64);
     function ReadCount(const ALimit: Int64; const AMinBytesEach: Int64;
@@ -379,6 +430,10 @@ type
     // the current payload: refuses one the payload cannot hold.
     function ReadItemCount(const AMinBytesEach: Integer): Integer;
     procedure ReadObjectCore(const AObject: TGocciaObjectValue);
+    // A function template the snapshot refers to, in this engine's module of
+    // the same bytecode.
+    function ReadTemplate: TGocciaFunctionTemplate;
+    function ReadRegister: TGocciaRegister;
     // Polls the run's execution limits; codecs call it once per item in
     // every loop whose length follows the input.
     procedure Poll;
@@ -396,6 +451,10 @@ type
       read FBuiltinVerify write FBuiltinVerify;
     // The engine build this reader accepts.
     property BuildIdentity: string read FBuildIdentity write FBuildIdentity;
+    // This engine's compiled modules; the caller owns it. A snapshot naming a
+    // module it does not hold is refused.
+    property Templates: TGocciaSnapshotTemplateTable read FTemplates
+      write FTemplates;
     // Engine-side context for codecs that need it.
     property Context: TObject read FContext write FContext;
   end;
@@ -433,6 +492,7 @@ uses
   SHA256,
 
   Goccia.Builtins.GlobalSymbol,
+  Goccia.Bytecode.Binary,
   Goccia.Constants.PropertyNames,
   Goccia.NativeLimits,
   Goccia.Values.ArrayValue,
@@ -1121,6 +1181,140 @@ begin
   end;
 end;
 
+{ TGocciaSnapshotTemplateTable }
+
+constructor TGocciaSnapshotTemplateTable.Create;
+begin
+  inherited Create;
+  FModules := TList<TGocciaBytecodeModule>.Create;
+  FHashes := TList<string>.Create;
+  FByHash := TDictionary<string, Integer>.Create;
+  FTemplates := THashMap<TGocciaFunctionTemplate, Int64>.Create;
+  FTemplateLists := TGocciaSnapshotTemplateLists.Create(True);
+end;
+
+destructor TGocciaSnapshotTemplateTable.Destroy;
+begin
+  FModules.Free;
+  FHashes.Free;
+  FByHash.Free;
+  FTemplates.Free;
+  FTemplateLists.Free;
+  inherited;
+end;
+
+// The SHA-256 of a module's bytecode as the bytecode format writes it.
+function ModuleBytecodeHash(const AModule: TGocciaBytecodeModule): string;
+var
+  Writer: TGocciaBytecodeWriter;
+  Stream: TMemoryStream;
+  Bytes: TBytes;
+begin
+  Stream := TMemoryStream.Create;
+  Writer := TGocciaBytecodeWriter.Create(Stream);
+  try
+    Writer.WriteModule(AModule);
+    SetLength(Bytes, Stream.Size);
+    if Stream.Size > 0 then
+      Move(Stream.Memory^, Bytes[0], Stream.Size);
+    Result := SHA256Hex(Bytes);
+  finally
+    Writer.Free;
+    Stream.Free;
+  end;
+end;
+
+procedure TGocciaSnapshotTemplateTable.AddModule(
+  const AModule: TGocciaBytecodeModule);
+var
+  Hash: string;
+  ModuleIndex, I: Integer;
+  List: TGocciaSnapshotTemplateList;
+  Pending: TGocciaSnapshotTemplateList;
+  Template: TGocciaFunctionTemplate;
+begin
+  if not Assigned(AModule) or FModules.Contains(AModule) then
+    Exit;
+  try
+    Hash := ModuleBytecodeHash(AModule);
+  except
+    // Eval code has no bytecode file form, so no name another engine
+    // shares: the snapshot cannot name its functions.
+    on E: Exception do
+      Exit;
+  end;
+  if FByHash.ContainsKey(Hash) then
+    Exit;
+  ModuleIndex := FModules.Count;
+  FModules.Add(AModule);
+  FHashes.Add(Hash);
+  FByHash.Add(Hash, ModuleIndex);
+  List := TGocciaSnapshotTemplateList.Create;
+  FTemplateLists.Add(List);
+  // Depth first, the top level first and each template's children in
+  // order, with an explicit stack: the same numbering in every engine that
+  // compiled the same bytecode.
+  Pending := TGocciaSnapshotTemplateList.Create;
+  try
+    Pending.Add(AModule.TopLevel);
+    while Pending.Count > 0 do
+    begin
+      Template := Pending[Pending.Count - 1];
+      Pending.Delete(Pending.Count - 1);
+      if not Assigned(Template) then
+        Continue;
+      if not FTemplates.ContainsKey(Template) then
+        FTemplates.Add(Template, (Int64(ModuleIndex) shl 32) or List.Count);
+      List.Add(Template);
+      for I := Template.FunctionCount - 1 downto 0 do
+        Pending.Add(Template.GetFunction(I));
+    end;
+  finally
+    Pending.Free;
+  end;
+end;
+
+function TGocciaSnapshotTemplateTable.TryIdentify(
+  const ATemplate: TGocciaFunctionTemplate; out AModule, AIndex: Integer): Boolean;
+var
+  Key: Int64;
+begin
+  Result := FTemplates.TryGetValue(ATemplate, Key);
+  if Result then
+  begin
+    AModule := Integer(Key shr 32);
+    AIndex := Integer(Key and $FFFFFFFF);
+  end;
+end;
+
+function TGocciaSnapshotTemplateTable.ModuleHash(const AModule: Integer): string;
+begin
+  Result := FHashes[AModule];
+end;
+
+function TGocciaSnapshotTemplateTable.FindModule(const AHash: string): Integer;
+begin
+  if not FByHash.TryGetValue(AHash, Result) then
+    Result := -1;
+end;
+
+function TGocciaSnapshotTemplateTable.TemplateAt(const AModule,
+  AIndex: Integer): TGocciaFunctionTemplate;
+begin
+  Result := FTemplateLists[AModule][AIndex];
+end;
+
+function TGocciaSnapshotTemplateTable.TemplateCount(
+  const AModule: Integer): Integer;
+begin
+  Result := FTemplateLists[AModule].Count;
+end;
+
+function TGocciaSnapshotTemplateTable.ModuleCount: Integer;
+begin
+  Result := FModules.Count;
+end;
+
 { TGocciaHeapSnapshotWriter }
 
 constructor TGocciaHeapSnapshotWriter.Create(
@@ -1139,10 +1333,14 @@ begin
   FCodecIndex := THashMap<TGocciaSnapshotCodec, Integer>.Create;
   FCurrentId := -1;
   FBuildIdentity := HeapSnapshotBuildIdentity;
+  FModuleRefs := TList<Integer>.Create;
+  FModuleRefIndex := THashMap<Integer, Integer>.Create;
 end;
 
 destructor TGocciaHeapSnapshotWriter.Destroy;
 begin
+  FModuleRefs.Free;
+  FModuleRefIndex.Free;
   FIds.Free;
   FObjects.Free;
   FParents.Free;
@@ -1462,6 +1660,40 @@ begin
   end;
 end;
 
+procedure TGocciaHeapSnapshotWriter.WriteTemplate(
+  const ATemplate: TGocciaFunctionTemplate);
+var
+  Module, Index, RefIndex: Integer;
+begin
+  if not Assigned(FTemplates) or
+     not FTemplates.TryIdentify(ATemplate, Module, Index) then
+    Refuse('a function whose code is in no module the snapshot can name');
+  if not FModuleRefIndex.TryGetValue(Module, RefIndex) then
+  begin
+    RefIndex := FModuleRefs.Count;
+    FModuleRefs.Add(Module);
+    FModuleRefIndex.Add(Module, RefIndex);
+  end;
+  WriteU32(RefIndex);
+  WriteU32(Index);
+end;
+
+procedure TGocciaHeapSnapshotWriter.WriteRegister(
+  const ARegister: TGocciaRegister);
+begin
+  WriteU8(Ord(ARegister.Kind));
+  case ARegister.Kind of
+    grkBoolean:
+      WriteBool(ARegister.BoolValue);
+    grkInt:
+      WriteI64(ARegister.IntValue);
+    grkFloat:
+      WriteDouble(ARegister.FloatValue);
+    grkObject:
+      WriteValue(ARegister.ObjectValue);
+  end;
+end;
+
 procedure TGocciaHeapSnapshotWriter.Serialize(
   const ARoots: array of TGCManagedObject; const AStream: TStream);
 var
@@ -1469,7 +1701,8 @@ var
   I, Index: Integer;
   Codec: TGocciaSnapshotCodec;
   Obj: TGCManagedObject;
-  PathIndexes, LatePathIndexes, LateFingerprintIndexes: array of Integer;
+  PathIndexes, LatePathIndexes, LateFingerprintIndexes,
+    ModuleHashIndexes: array of Integer;
   LateFingerprints: array of string;
 begin
   RootsOut := TGocciaChargedMemoryStream.Create;
@@ -1526,6 +1759,9 @@ begin
     end;
     for I := 0 to FCodecs.Count - 1 do
       StringIndex(FCodecs[I].Tag);
+    SetLength(ModuleHashIndexes, FModuleRefs.Count);
+    for I := 0 to FModuleRefs.Count - 1 do
+      ModuleHashIndexes[I] := StringIndex(FTemplates.ModuleHash(FModuleRefs[I]));
 
     // Header, codecs, strings, built-in names, objects, roots.
     FOut := AStream;
@@ -1550,6 +1786,9 @@ begin
       WriteU32(LatePathIndexes[I]);
       WriteU32(LateFingerprintIndexes[I]);
     end;
+    WriteU32(Length(ModuleHashIndexes));
+    for I := 0 to High(ModuleHashIndexes) do
+      WriteU32(ModuleHashIndexes[I]);
     WriteU32(FObjects.Count);
     AStream.CopyFrom(ObjectsOut, 0);
     AStream.CopyFrom(RootsOut, 0);
@@ -1938,6 +2177,42 @@ begin
     Refuse('an accessor half that is not a function');
 end;
 
+function TGocciaHeapSnapshotReader.ReadTemplate: TGocciaFunctionTemplate;
+var
+  Module, Index: Cardinal;
+begin
+  Module := ReadU32;
+  Index := ReadU32;
+  if Module >= Cardinal(Length(FModuleMap)) then
+    Refuse('a module reference out of range');
+  if Index >= Cardinal(FTemplates.TemplateCount(FModuleMap[Module])) then
+    Refuse('a function template out of range');
+  Result := FTemplates.TemplateAt(FModuleMap[Module], Index);
+end;
+
+function TGocciaHeapSnapshotReader.ReadRegister: TGocciaRegister;
+var
+  Kind: Byte;
+begin
+  Kind := ReadU8;
+  if Kind > Ord(High(TGocciaRegisterKind)) then
+    Refuse('an unknown register kind');
+  Result := Default(TGocciaRegister);
+  Result.Kind := TGocciaRegisterKind(Kind);
+  case Result.Kind of
+    grkBoolean:
+      Result.BoolValue := ReadBool;
+    grkInt:
+      Result.IntValue := ReadI64;
+    grkFloat:
+      Result.FloatValue := ReadDouble;
+    // A register may hold the hole: it marks a binding still in its
+    // temporal dead zone.
+    grkObject:
+      Result.ObjectValue := ReadElementValue;
+  end;
+end;
+
 function TGocciaHeapSnapshotReader.ReadValue: TGocciaValue;
 begin
   Result := ReadValueOrHole;
@@ -2211,6 +2486,22 @@ begin
       Refuse('the run changed the built-in ' + StringReplace(Path,
         HEAP_SNAPSHOT_PATH_SEPARATOR, '.', [rfReplaceAll]) +
         ', or this engine does not build it the same way');
+  end;
+
+  // The modules whose templates the snapshot's functions run.
+  Count := ReadCount(FLimits.MaxCodecs, 4, 'modules');
+  Reserve(Count, SizeOf(Integer));
+  SetLength(FModuleMap, Count);
+  for I := 0 to Count - 1 do
+  begin
+    Poll;
+    Path := ReadStr;
+    if Assigned(FTemplates) then
+      FModuleMap[I] := FTemplates.FindModule(Path)
+    else
+      FModuleMap[I] := -1;
+    if FModuleMap[I] < 0 then
+      Refuse('a function whose module this engine has not compiled');
   end;
 
   // The object table.
