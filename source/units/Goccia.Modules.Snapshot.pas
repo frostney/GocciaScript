@@ -233,8 +233,13 @@ begin
       AReader.Refuse('the module ' + APath + ' is not the one the snapshot ' +
         'ran');
     ACompiledNow := True;
+    // Its text stays until the restore commits: charged like the reader's
+    // own tables, before it is kept.
     if HasSource then
+    begin
+      AReader.ReserveItems(Length(Source.Text), SizeOf(Char));
       ASources.Add(Source);
+    end;
   end;
   Result := AReader.Templates.ModuleAt(Index);
 end;
@@ -352,8 +357,9 @@ begin
     Keys[I] := FKeys[FRestored[I]];
   FEngine.ModuleLoader.CacheRestoredModules(FRestored, Keys,
     FSources.ToArray);
-  // The loader owns them now.
+  // The loader owns them now, and has recorded the sources.
   FRestored.Clear;
+  FSources.Clear;
 end;
 
 end.

@@ -101,6 +101,7 @@ type
     procedure TestChangedSourceOverRetainedBytecodeReloads;
     procedure TestChangedEntryFileReloads;
     procedure TestStoppedCacheLeavesNoRecords;
+    procedure TestSourceTextIsCharged;
     procedure TestUncheckedChainStopsResolution;
     procedure TestEveryTruncationRefuses;
     procedure TestMutantsRefuseOrRestore;
@@ -418,6 +419,8 @@ begin
     TestChangedEntryFileReloads);
   Test('A restore stopped while it caches its records leaves none behind',
     TestStoppedCacheLeavesNoRecords);
+  Test('The source text a restore keeps until it commits is charged',
+    TestSourceTextIsCharged);
   Test('A collection during the restore follows no unchecked forwarding chain',
     TestUncheckedChainStopsResolution);
   Test('Every truncation of a module snapshot is refused',
@@ -1078,6 +1081,44 @@ begin
   Expect<Boolean>(High > 16).ToBe(True);
   for Limit := High - 16 to High - 1 do
     Expect<Boolean>(RestoresWithin(Limit)).ToBe(False);
+end;
+
+procedure THeapSnapshotModulesTests.TestSourceTextIsCharged;
+const
+  COMMENT_BYTES = 4 * 1024 * 1024;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Run: TModuleRun;
+  GC: TGarbageCollector;
+  Previous: Int64;
+begin
+  // A module of a large comment and a tiny body: its bytecode is small, but
+  // the restore keeps its text for diagnostics until it commits.
+  Define('comment.js', '/*' + StringOfChar('x', COMMENT_BYTES) + '*/ ' +
+    'export const c = 1;');
+  Define('commentmain.js', 'import { c } from "./comment.js"; ' +
+    'capture({ c: () => c });');
+  Bytes := SnapshotEntry('commentmain.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RoundTripEntry('commentmain.js', Bytes,
+    'String(restored.c())')).ToBe('1');
+  // Room for everything but the text.
+  Run := TModuleRun.Create(PathOf('commentmain.js'));
+  GC := TGarbageCollector.Instance;
+  Previous := GC.MaxBytes;
+  try
+    GC.Collect;
+    GC.MaxBytes := GC.BytesAllocated + COMMENT_BYTES div 2;
+    try
+      Refusal := RestoreInto(Run, Bytes);
+    finally
+      GC.MaxBytes := Previous;
+    end;
+    Expect<Boolean>(Pos('memory', Refusal) > 0).ToBe(True);
+  finally
+    Run.Free;
+  end;
 end;
 
 procedure THeapSnapshotModulesTests.TestUncheckedChainStopsResolution;
