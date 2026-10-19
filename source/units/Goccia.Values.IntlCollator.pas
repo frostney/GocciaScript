@@ -29,7 +29,7 @@ type
     constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
     function CompareStrings(const AString1, AString2: string): Integer;
   published
@@ -67,7 +67,7 @@ type
     function Compare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const ACollator: TGocciaIntlCollatorValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function GetIntlCollatorShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
@@ -101,9 +101,8 @@ begin
   Result := FCollator.IntlCollatorCompare(AArgs, FCollator);
 end;
 
-procedure TGocciaIntlCollatorBoundCompareValue.MarkReferences;
+procedure TGocciaIntlCollatorBoundCompareValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FCollator) then
     FCollator.MarkReferences;
@@ -428,9 +427,8 @@ begin
   Result := 'Object';
 end;
 
-procedure TGocciaIntlCollatorValue.MarkReferences;
+procedure TGocciaIntlCollatorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FBoundCompare) then
     FBoundCompare.MarkReferences;

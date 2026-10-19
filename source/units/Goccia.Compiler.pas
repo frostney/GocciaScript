@@ -1309,15 +1309,20 @@ begin
       ABlockFunctionVarBindings, True, ASkipUninitializedVars);
 end;
 
-procedure AddUniqueVarName(const ANames: TUnicodeStringList;
+type
+  { Names once each, in the order first seen: a hash map, so collecting a
+    script's many `var x;` declarations is linear in them. }
+  TUniqueVarNames = TOrderedStringMap<Boolean>;
+
+procedure AddUniqueVarName(const ANames: TUniqueVarNames;
   const AName: string);
 begin
-  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
-    ANames.Add(AName);
+  if AName <> '' then
+    ANames.Add(AName, True);
 end;
 
 procedure CollectUninitializedVarDeclarations(const ANode: TGocciaASTNode;
-  const ANames: TUnicodeStringList);
+  const ANames: TUniqueVarNames);
 var
   Block: TGocciaBlockStatement;
   DoWhileStmt: TGocciaDoWhileStatement;
@@ -1434,13 +1439,19 @@ procedure EmitUninitializedTopLevelGlobalVarDeclarations(
 var
   I: Integer;
   Names: TUnicodeStringList;
+  Pair: TUniqueVarNames.TKeyValuePair;
+  UniqueNames: TUniqueVarNames;
 begin
   Names := TUnicodeStringList.Create;
+  UniqueNames := TUniqueVarNames.Create;
   try
     for I := 0 to AStatements.Count - 1 do
-      CollectUninitializedVarDeclarations(AStatements[I], Names);
+      CollectUninitializedVarDeclarations(AStatements[I], UniqueNames);
+    for Pair in UniqueNames do
+      Names.Add(Pair.Key);
     EmitHoistedGlobalVarDeclarationsForNames(ACtx, Names);
   finally
+    UniqueNames.Free;
     Names.Free;
   end;
 end;

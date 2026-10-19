@@ -71,7 +71,7 @@ type
     FDefaultValue: TGocciaValue;
     FStorageName: string;
   public
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property DefaultValue: TGocciaValue read FDefaultValue write FDefaultValue;
     property StorageName: string read FStorageName write FStorageName;
   end;
@@ -83,7 +83,7 @@ type
     FContext: TGocciaAsyncContextSnapshot;
     FAsyncId: Double;
   public
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Context: TGocciaAsyncContextSnapshot read FContext write FContext;
     property AsyncId: Double read FAsyncId write FAsyncId;
   end;
@@ -103,7 +103,7 @@ type
       const AUsesCallerTarget: Boolean);
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaAsyncHooksNamespaceHost = class
@@ -200,9 +200,8 @@ end;
 
 { TGocciaAsyncLocalStorageValue }
 
-procedure TGocciaAsyncLocalStorageValue.MarkReferences;
+procedure TGocciaAsyncLocalStorageValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FDefaultValue) then
     FDefaultValue.MarkReferences;
@@ -210,9 +209,8 @@ end;
 
 { TGocciaAsyncResourceValue }
 
-procedure TGocciaAsyncResourceValue.MarkReferences;
+procedure TGocciaAsyncResourceValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FContext) then
     FContext.MarkReferences;
@@ -291,9 +289,8 @@ begin
   end;
 end;
 
-procedure TGocciaAsyncBoundFunction.MarkReferences;
+procedure TGocciaAsyncBoundFunction.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FTarget) then
     FTarget.MarkReferences;

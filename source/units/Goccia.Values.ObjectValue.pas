@@ -177,7 +177,7 @@ type
     function TestIntegrityFrozen: Boolean; virtual;
     function TestIntegritySealed: Boolean; virtual;
 
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     property Properties: TGocciaPropertyMap read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
@@ -1452,12 +1452,11 @@ begin
   inherited;
 end;
 
-procedure TGocciaObjectValue.MarkReferences;
+procedure TGocciaObjectValue.TraceReferences;
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   SymPair: TSymbolDescriptorMap.TKeyValuePair;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FPrototype) then

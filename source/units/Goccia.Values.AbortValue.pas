@@ -74,7 +74,7 @@ type
     procedure RemoveAbortAlgorithm(const AHandle: Integer);
     procedure RunPendingAbortAlgorithms;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
     property Reason: TGocciaValue read FReason;
@@ -93,7 +93,7 @@ type
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
     property Signal: TGocciaAbortSignalValue read FSignal;
@@ -494,10 +494,8 @@ begin
   Result := CONSTRUCTOR_ABORT_SIGNAL;
 end;
 
-procedure TGocciaAbortSignalValue.MarkReferences;
+procedure TGocciaAbortSignalValue.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FReason) then
     FReason.MarkReferences;
@@ -602,10 +600,8 @@ begin
   Result := CONSTRUCTOR_ABORT_CONTROLLER;
 end;
 
-procedure TGocciaAbortControllerValue.MarkReferences;
+procedure TGocciaAbortControllerValue.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FSignal) then
     FSignal.MarkReferences;

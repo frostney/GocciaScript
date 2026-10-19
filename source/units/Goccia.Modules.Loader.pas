@@ -437,7 +437,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function Reject(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaDeferredModuleBody = class(TGocciaObjectValue)
@@ -458,7 +458,7 @@ type
     destructor Destroy; override;
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaModuleLoadStatus = (mlsLinking, mlsLinked, mlsEvaluating);
@@ -520,10 +520,8 @@ begin
   FResultPromise.Reject(AArgs.GetElement(0));
 end;
 
-procedure TGocciaModuleEvaluationWaitState.MarkReferences;
+procedure TGocciaModuleEvaluationWaitState.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FResultPromise) then
     FResultPromise.MarkReferences;
@@ -607,10 +605,8 @@ begin
   end;
 end;
 
-procedure TGocciaDeferredModuleBody.MarkReferences;
+procedure TGocciaDeferredModuleBody.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FContext.Scope) then
     FContext.Scope.MarkReferences;

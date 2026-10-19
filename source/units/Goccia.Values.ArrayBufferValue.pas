@@ -59,7 +59,7 @@ type
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     procedure Detach;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
@@ -515,9 +515,8 @@ begin
   SetDataLength(0);
 end;
 
-procedure TGocciaArrayBufferValue.MarkReferences;
+procedure TGocciaArrayBufferValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 end;
 

@@ -436,7 +436,7 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 
 **[CONTRIBUTING.md](CONTRIBUTING.md)** is the **contributing guide for all contributors** (humans and AI): workflow, mandatory rules, testing, FreePascal code style, `./format.pas`, editor setup, build/run quick reference, and the documentation index.
 
-**[AGENTS.md](AGENTS.md)** (and **CLAUDE.md**, which points to it) is **only for AI assistants**—how to use the repo and defer to CONTRIBUTING. It is not a second contributing guide and should stay short.
+**[AGENTS.md](AGENTS.md)** (and **[CLAUDE.md](CLAUDE.md)**, which imports it with `@AGENTS.md`) is **only for AI assistants**—how to use the repo and defer to CONTRIBUTING. It is not a second contributing guide and should stay short.
 
 ## License
 

@@ -47,7 +47,7 @@ type
     constructor Create(const AOnFinally, AConstructor: TGocciaValue;
       const AIsFulfill: Boolean);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaPromiseReactionCapability = class(TGocciaObjectValue)
@@ -60,7 +60,7 @@ type
     constructor Create(const APromise, AResolve, AReject: TGocciaValue);
     procedure Resolve(const AValue: TGocciaValue);
     procedure Reject(const AValue: TGocciaValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Promise: TGocciaValue read FPromise;
   end;
 
@@ -101,7 +101,7 @@ type
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
 
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
 
@@ -221,7 +221,7 @@ type
   public
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Resolve: TGocciaValue read FResolve;
     property Reject: TGocciaValue read FReject;
   end;
@@ -233,7 +233,7 @@ type
   public
     constructor Create(const AOriginalValue: TGocciaValue; const AIsFulfill: Boolean);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function TPromiseCapabilityExecutor.Invoke(
@@ -253,9 +253,8 @@ begin
   FReject := AArgs.GetElement(1);
 end;
 
-procedure TPromiseCapabilityExecutor.MarkReferences;
+procedure TPromiseCapabilityExecutor.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FResolve) then
     FResolve.MarkReferences;
@@ -526,9 +525,8 @@ begin
   CallCapability(FReject, AValue);
 end;
 
-procedure TGocciaPromiseReactionCapability.MarkReferences;
+procedure TGocciaPromiseReactionCapability.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FPromise) then
     FPromise.MarkReferences;
@@ -556,9 +554,8 @@ begin
     raise TGocciaThrowValue.Create(FOriginalValue);
 end;
 
-procedure TGocciaFinallyPassthrough.MarkReferences;
+procedure TGocciaFinallyPassthrough.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FOriginalValue) then
     FOriginalValue.MarkReferences;
@@ -615,9 +612,8 @@ begin
   end;
 end;
 
-procedure TGocciaPromiseFinallyWrapper.MarkReferences;
+procedure TGocciaPromiseFinallyWrapper.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FOnFinally) then
     FOnFinally.MarkReferences;
@@ -641,7 +637,7 @@ type
       const AValue: TGocciaValue);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaPromiseForwardReject = class(TGocciaFunctionBase)
@@ -654,7 +650,7 @@ type
     constructor Create(const ATarget: TGocciaPromiseValue);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 { TGocciaPromiseForwardFulfill }
@@ -686,9 +682,8 @@ begin
     FTarget.Resolve(FValue);
 end;
 
-procedure TGocciaPromiseForwardFulfill.MarkReferences;
+procedure TGocciaPromiseForwardFulfill.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FTarget) then
     FTarget.MarkReferences;
@@ -728,9 +723,8 @@ begin
     FTarget.Reject(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
-procedure TGocciaPromiseForwardReject.MarkReferences;
+procedure TGocciaPromiseForwardReject.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FTarget) then
     FTarget.MarkReferences;
@@ -824,12 +818,11 @@ begin
   inherited;
 end;
 
-procedure TGocciaPromiseValue.MarkReferences;
+procedure TGocciaPromiseValue.TraceReferences;
 var
   I: Integer;
   Reaction: TGocciaPromiseReaction;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FResult) then

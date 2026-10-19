@@ -77,7 +77,7 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function Construct(const AArguments: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function IsConstructable: Boolean; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property NativeFunction: TGocciaNativeFunctionCallback read FFunction;
     property ConstructCallback: TGocciaNativeConstructorCallback read FConstructCallback write FConstructCallback;
     property Name: string read FName;
@@ -296,9 +296,8 @@ begin
   Result := not FNotConstructable;
 end;
 
-procedure TGocciaNativeFunctionValue.MarkReferences;
+procedure TGocciaNativeFunctionValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FCapturedRoot) then
     FCapturedRoot.MarkReferences;

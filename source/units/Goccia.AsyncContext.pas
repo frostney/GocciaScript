@@ -48,7 +48,7 @@ type
     constructor Create;
     function TryGetStore(const AKey: TGocciaValue;
       out AStore: TGocciaValue): Boolean;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 { The snapshot in effect on this thread, or nil when no binding is in effect.
@@ -183,11 +183,10 @@ begin
     AStore := FStores[Index];
 end;
 
-procedure TGocciaAsyncContextSnapshot.MarkReferences;
+procedure TGocciaAsyncContextSnapshot.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
 
   for I := 0 to FCount - 1 do

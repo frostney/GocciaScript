@@ -3665,6 +3665,37 @@ console.log("--max-memory (loop pressure reclaims)...");
   if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Loop pressure should report collections, got ${json.memory?.gc?.collections}`);
 }
 
+console.log("--max-memory (a pressure collection marks deep live chains without native recursion)...");
+{
+  // The collector marked recursively, one native frame per object, so a
+  // pressure collection taken while a deep chain was alive ran out of native
+  // stack: a segmentation fault in a production build, here at the first
+  // collection after the chains are built. It marks from an explicit mark
+  // stack now (ADR 0147). The churn allocates far past the ceiling, so the
+  // VM's checkpoints collect with both chains live; no Goccia.gc() call.
+  const src = [
+    "let head = { end: true };",
+    "for (const _ of Array.from({ length: 300000 })) head = { child: head };",
+    "class Base { base = 'base'; }",
+    "let Leaf = Base;",
+    "for (const _ of Array.from({ length: 30000 })) { const Parent = Leaf; Leaf = class extends Parent {}; }",
+    "let n = 0;",
+    "for (const _ of Array.from({ length: 1000 })) n += Array.from({ length: 500 }, (_, i) => ({ i })).length;",
+    "let cur = head;",
+    "let links = 0;",
+    "for (const _ of Array.from({ length: 300000 })) { cur = cur.child; links++; }",
+    "[links, cur.end, new Leaf().base, n];",
+    "",
+  ].join("\n");
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=128MiB"], { timeout: 120_000 });
+  if (exitCode !== 0)
+    throw new Error(`Deep chains under pressure should exit 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (JSON.stringify(json.files?.[0]?.result) !== '[300000,true,"base",500000]')
+    throw new Error(`Deep chains under pressure should survive every collection, got ${JSON.stringify(json.files?.[0]?.result)}`);
+  if ((json.memory?.gc?.collections ?? 0) <= 0)
+    throw new Error(`Deep chains under pressure should collect, got ${json.memory?.gc?.collections}`);
+}
+
 console.log("--max-memory (a live set inside the pressure reserve does not collect at every checkpoint)...");
 {
   // #1673: the tracked-bytes trigger fires once BytesAllocated reaches the
