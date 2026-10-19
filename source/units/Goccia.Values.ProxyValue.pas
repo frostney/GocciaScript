@@ -19,6 +19,13 @@ type
     FTarget: TGocciaValue;
     FHandler: TGocciaObjectValue;
     FRevoked: Boolean;
+    // ES2026 §10.5.15 ProxyCreate steps 5-6: a Proxy has [[Call]] and
+    // [[Construct]] exactly when its target has them when it is created, and
+    // keeps them after it is revoked. Recorded here so typeof, IsCallable,
+    // IsConstructable and every link of a call through a chain of Proxies
+    // read one flag instead of walking the rest of the chain (#1799).
+    FCallable: Boolean;
+    FConstructable: Boolean;
 
     procedure CheckRevoked;
     procedure CollectOwnPropertyTrapKeys(out AStringKeys: TArray<string>;
@@ -198,6 +205,7 @@ uses
   Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Constants.TypeNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
@@ -217,6 +225,10 @@ begin
   FTarget := ATarget;
   FHandler := AHandler;
   FRevoked := False;
+  // A Proxy target answers from its own flags, so a chain built one Proxy at
+  // a time never walks the links already built.
+  FCallable := ATarget.IsCallable;
+  FConstructable := ATarget.IsConstructable;
 end;
 
 procedure TGocciaProxyValue.CheckRevoked;
@@ -2219,7 +2231,7 @@ var
 begin
   CheckRevoked;
 
-  if not FTarget.IsCallable then
+  if not FCallable then
     ThrowTypeError(SErrorProxyApplyNonFunction, SSuggestProxyTargetType);
 
   Trap := GetTrap(PROP_APPLY);
@@ -2287,9 +2299,10 @@ var
 begin
   CheckRevoked;
 
-  // ES2026 §28.1.1 step 1: Proxy [[Construct]] only exists when target
-  // is constructable. Validate before dispatching to the trap.
-  if not FTarget.IsConstructable then
+  // ES2026 §10.5.15 step 6: a Proxy has [[Construct]] only when its target
+  // was a constructor when the Proxy was created. Validate before dispatching
+  // to the trap.
+  if not FConstructable then
     ThrowTypeError(SErrorProxyTargetNotConstructor, SSuggestProxyTargetType);
 
   // Default newTarget for `new proxy(...)` is the proxy itself per ES2026.
@@ -2345,50 +2358,24 @@ begin
       Result := ConstructValue(FTarget, AArguments, EffectiveNewTarget);
 end;
 
-// The innermost target of a nest of Proxies. typeof and IsCallable cannot
-// throw, so they step through the nest in a loop rather than recursing
-// through it.
-function InnermostProxyTarget(const AProxy: TGocciaProxyValue): TGocciaValue;
-begin
-  Result := AProxy.Target;
-  while Result.ClassType = TGocciaProxyValue do
-    Result := TGocciaProxyValue(Result).Target;
-end;
-
-// The same walk, through the bound functions between Proxies as well, for
-// IsConstructable, which cannot throw either: ES2026 §10.4.1.3 BoundFunctionCreate step 6 gives a bound
-// function [[Construct]] exactly when its target has one. (A bound function
-// is callable whatever its target, so typeof and IsCallable stop at it.)
-function InnermostConstructTarget(const AProxy: TGocciaProxyValue): TGocciaValue;
-begin
-  Result := AProxy.Target;
-  while True do
-  begin
-    if Result.ClassType = TGocciaProxyValue then
-      Result := TGocciaProxyValue(Result).Target
-    else if (Result is TGocciaBoundFunctionValue) and
-            Assigned(TGocciaBoundFunctionValue(Result).OriginalFunction) then
-      Result := TGocciaBoundFunctionValue(Result).OriginalFunction
-    else
-      Break;
-  end;
-end;
-
+// ES2026 §13.5.3.1 typeof: "function" exactly when the object has [[Call]].
+// Revocation removes neither [[Call]] nor the answer.
 function TGocciaProxyValue.TypeOf: string;
 begin
-  // ES2026 §28.1.1: Revocation disables operations, not type
-  // inspection. typeof and IsCallable always reflect the target.
-  Result := InnermostProxyTarget(Self).TypeOf;
+  if FCallable then
+    Result := FUNCTION_TYPE_NAME
+  else
+    Result := OBJECT_TYPE_NAME;
 end;
 
 function TGocciaProxyValue.IsCallable: Boolean;
 begin
-  Result := InnermostProxyTarget(Self).IsCallable;
+  Result := FCallable;
 end;
 
 function TGocciaProxyValue.IsConstructable: Boolean;
 begin
-  Result := InnermostConstructTarget(Self).IsConstructable;
+  Result := FConstructable;
 end;
 
 function TGocciaProxyValue.ToStringTag: string;
