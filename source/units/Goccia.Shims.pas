@@ -32,9 +32,11 @@ type
   { Runs a bootstrap shim's module program in AScope, the shim's own module
     environment under the global scope, leaving the shim's top-level
     bindings, its export included, in AScope. AFileName names the shim in
-    stack frames. TGocciaEngine provides one; see TGocciaShimLoader. }
-  TGocciaShimEvaluator = procedure(const AProgram: TGocciaProgram;
-    const AScope: TGocciaScope; const AFileName: string) of object;
+    stack frames. True when the evaluation ran code other than a shim's (a
+    run's function, through a built-in the run replaced). TGocciaEngine
+    provides one; see TGocciaShimLoader. }
+  TGocciaShimEvaluator = function(const AProgram: TGocciaProgram;
+    const AScope: TGocciaScope; const AFileName: string): Boolean of object;
 
   { How one engine loads its shims: its realm, its global environment, and
     the evaluator that runs a shim program on its VM
@@ -136,9 +138,9 @@ function GetDateIntrinsic(const ALoader: TGocciaShimLoader): TGocciaValue;
 procedure RememberShimLoader(const ALoader: TGocciaShimLoader);
 
 { Whether AObject was created while ARealm loaded a shim (its module scope,
-  cells, functions and tables, and the markers that bound each load), so is
-  a shim's internals unless a run's code that the load called made it. A
-  heap snapshot's accounting check (ADR 0148) passes over such objects that
+  cells, functions and tables, and the markers that bound each load), by a
+  load that ran no code but shims', so is a shim's internals. A heap
+  snapshot's accounting check (ADR 0148) passes over such objects that
   built-ins reach. Objects keep the order the collector listed them in. }
 function CreatedByShimLoad(const ARealm: TGocciaRealm;
   const AObject: TObject; out AIsMarker: Boolean): Boolean;
@@ -1186,6 +1188,8 @@ type
     between them. }
   TGocciaShimLoadWindow = record
     First, Last: TGCManagedObject;
+    // The load ran a run's code: what it made is not taken for the shim's.
+    RanOtherCode: Boolean;
   end;
 
   { A realm's shim loader, and the markers of each shim load, kept alive
@@ -1198,7 +1202,8 @@ type
     Loader: TGocciaShimLoader;
     destructor Destroy; override;
     function AddMarker: TGCManagedObject;
-    procedure AddWindow(const AFirst, ALast: TGCManagedObject);
+    procedure AddWindow(const AFirst, ALast: TGCManagedObject;
+      const ARanOtherCode: Boolean);
     procedure MarkRootReferences; override;
   end;
 
@@ -1218,7 +1223,7 @@ begin
 end;
 
 procedure TGocciaShimLoaderHolder.AddWindow(const AFirst,
-  ALast: TGCManagedObject);
+  ALast: TGCManagedObject; const ARanOtherCode: Boolean);
 var
   Window: TGocciaShimLoadWindow;
 begin
@@ -1226,6 +1231,7 @@ begin
     FWindows := TList<TGocciaShimLoadWindow>.Create;
   Window.First := AFirst;
   Window.Last := ALast;
+  Window.RanOtherCode := ARanOtherCode;
   FWindows.Add(Window);
 end;
 
@@ -1284,7 +1290,8 @@ begin
   for I := 0 to Holder.FWindows.Count - 1 do
   begin
     Window := Holder.FWindows[I];
-    if (Index > Window.First.GCIndex) and (Index < Window.Last.GCIndex) then
+    if not Window.RanOtherCode and (Index > Window.First.GCIndex) and
+       (Index < Window.Last.GCIndex) then
       Exit(True);
   end;
 end;
@@ -1299,6 +1306,7 @@ var
   ShimScope: TGocciaScope;
   Holder: TGocciaShimLoaderHolder;
   FirstMarker: TGCManagedObject;
+  RanOtherCode: Boolean;
 begin
   { A lazy shim member can be touched from code of another realm (a
     test262 $262.createRealm global, say): the shim belongs to the realm of
@@ -1341,11 +1349,13 @@ begin
         ShimScope.DefineLexicalBinding('__GocciaSetForeignDateValue',
           ForeignSetter, dtConst);
       end;
-      ALoader.Evaluate(ProgramNode, ShimScope,
+      // A load that fails is taken as one that ran a run's code.
+      RanOtherCode := True;
+      RanOtherCode := ALoader.Evaluate(ProgramNode, ShimScope,
         DEFAULT_SHIMS[AShimIndex].FileName);
     finally
       if Assigned(FirstMarker) then
-        Holder.AddWindow(FirstMarker, Holder.AddMarker);
+        Holder.AddWindow(FirstMarker, Holder.AddMarker, RanOtherCode);
     end;
     Result := ShimScope.GetValue(DEFAULT_SHIMS[AShimIndex].Name);
     CurrentRealm.SetSlot(GShimExportSlots[AShimIndex], Result);

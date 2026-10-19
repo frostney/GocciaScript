@@ -244,6 +244,10 @@ type
     // FFrameDepth it is refused once the native stack runs low (see
     // CheckNativeStackHeadroom in Goccia.StackLimit).
     FNativeExecutionDepth: Integer;
+    // How many shim loads (Goccia.Shims) are running, and how many frames of
+    // other code they have set up: a run's function a load called.
+    FShimLoadDepth: Integer;
+    FShimLoadOtherFrames: Int64;
     // NativeStackLimit of the thread the VM is bound to, looked up by the
     // first check that needs it after BindToCurrentThread.
     FNativeStackLimit: NativeUInt;
@@ -686,6 +690,7 @@ type
       const AArgCount: Integer; const APushExecutionContext: Boolean;
       var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
+    procedure NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
     procedure HandleExceptionUnwind(const AErrorValue: TGocciaValue;
       const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
       ASavedHandlerCount: Integer;
@@ -741,6 +746,14 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure EnsureStackRootRegistered;
+    { A shim load brackets its evaluation with these. EndShimLoad says
+      whether a frame of code other than a shim's (whose source file is
+      <shim:...>) was set up since the BeginShimLoad that returned AToken: a
+      run's function the load called, through a built-in the run replaced. A
+      heap snapshot then does not take what the load made for a shim's own
+      (ADR 0148). }
+    function BeginShimLoad: Int64;
+    function EndShimLoad(const AToken: Int64): Boolean;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     { Runs AModule's top level. AThisValue is its receiver, which a direct
       eval at that top level reads as its caller's `this`; nil passes
@@ -15840,6 +15853,31 @@ end;
   callee's argument window before any register is acquired, because acquiring
   registers can move the register arena (growth) or clear the very slots the
   arguments sit in (a tail call reuses the caller's window). }
+function TGocciaVM.BeginShimLoad: Int64;
+begin
+  Inc(FShimLoadDepth);
+  Result := FShimLoadOtherFrames;
+end;
+
+function TGocciaVM.EndShimLoad(const AToken: Int64): Boolean;
+begin
+  Dec(FShimLoadDepth);
+  Result := FShimLoadOtherFrames <> AToken;
+end;
+
+// Out of line: SetupNewFrame holds no string. Generator resumes and closed
+// numeric frames do not come here; neither can a shim's load reach a run's
+// generator or make a numeric frame hold anything.
+procedure TGocciaVM.NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
+const
+  SHIM_SOURCE_PREFIX = '<shim:';
+begin
+  if not Assigned(ATemplate.DebugInfo) or
+     (Copy(ATemplate.DebugInfo.SourceFile, 1, Length(SHIM_SOURCE_PREFIX)) <>
+      SHIM_SOURCE_PREFIX) then
+    Inc(FShimLoadOtherFrames);
+end;
+
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
   const AArgCount: Integer; const APushExecutionContext: Boolean;
@@ -15857,6 +15895,8 @@ begin
     'A frame was set up above a closed numeric frame');
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
+  if FShimLoadDepth > 0 then
+    NoteShimLoadFrame(ATemplate);
   // The frame's source path is the template's own source file, or the running
   // module's path when it has none. This procedure runs on every call and must
   // not hold that string: a managed local costs an implicit exception frame.
