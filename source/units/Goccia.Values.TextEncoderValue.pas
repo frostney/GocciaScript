@@ -29,7 +29,7 @@ type
     constructor Create(const AClass: TGocciaClassValue = nil);
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
   end;
@@ -164,9 +164,8 @@ begin
   Result := CONSTRUCTOR_TEXT_ENCODER;
 end;
 
-procedure TGocciaTextEncoderValue.MarkReferences;
+procedure TGocciaTextEncoderValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 end;
 

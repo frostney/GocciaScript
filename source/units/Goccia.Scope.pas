@@ -71,7 +71,7 @@ type
     destructor Destroy; override;
     function CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
 
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     // New Define/Assign pattern
     procedure PredeclareLexicalBinding(const AName: string; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
@@ -1352,12 +1352,11 @@ end;
 
 { TGocciaScope - GC support }
 
-procedure TGocciaScope.MarkReferences;
+procedure TGocciaScope.TraceReferences;
 var
   ImportBindingPair: TGocciaModuleImportBindingMap.TKeyValuePair;
   Pair: TGocciaScopeBindingMap.TKeyValuePair;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FParent) then

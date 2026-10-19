@@ -37,7 +37,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class function NullPointer: TGocciaFFIPointerValue;
     class procedure ExposePrototype(const ATarget: TGocciaObjectValue);
@@ -204,9 +204,8 @@ begin
   Result := FFI_POINTER_TAG;
 end;
 
-procedure TGocciaFFIPointerValue.MarkReferences;
+procedure TGocciaFFIPointerValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 end;
 

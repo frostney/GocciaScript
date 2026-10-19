@@ -37,7 +37,7 @@ type
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
@@ -210,9 +210,8 @@ begin
   Result := CONSTRUCTOR_TEXT_DECODER;
 end;
 
-procedure TGocciaTextDecoderValue.MarkReferences;
+procedure TGocciaTextDecoderValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   // No additional TGocciaValue fields — FEncoding is a plain Pascal string.
 end;

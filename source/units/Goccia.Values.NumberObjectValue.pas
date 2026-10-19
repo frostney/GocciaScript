@@ -23,7 +23,7 @@ type
     function ToStringTag: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure InitializePrototype;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
     class function GetSharedPrototypeForRealm(
@@ -470,9 +470,8 @@ begin
     Result := nil;
 end;
 
-procedure TGocciaNumberObjectValue.MarkReferences;
+procedure TGocciaNumberObjectValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FPrimitive) then
     FPrimitive.MarkReferences;

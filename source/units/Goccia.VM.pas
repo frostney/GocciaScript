@@ -62,7 +62,7 @@ type
     procedure MarkClosureReferences(const AClosure: TGocciaBytecodeClosure);
   public
     constructor Create(const AVM: TGocciaVM);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaVMLiteralObjectValue = class(TGocciaObjectValue)
@@ -930,7 +930,7 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     function IsConstructable: Boolean; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
@@ -2259,7 +2259,7 @@ type
     OriginalClassValue: TGocciaValue;
     StaticDecoratorInitializersRun: Boolean;
     constructor Create(const AMetadataObject: TGocciaObjectValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -2317,7 +2317,7 @@ type
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     function IsConstructable: Boolean; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaVMSyncDisposeFallbackValue = class(TGocciaFunctionBase)
@@ -2331,7 +2331,7 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaVMAsyncDisposeMethodValue = class(TGocciaFunctionBase)
@@ -2345,7 +2345,7 @@ type
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaVMAsyncAwaitContinuationValue = class(TGocciaPromiseReactionHandler)
@@ -2363,7 +2363,7 @@ type
       const AAsyncGeneratorResult: Boolean = False);
     function HandleReaction(const AArgument: TGocciaValue): TGocciaValue;
       override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaVMDynamicImportStartValue = class(TGocciaFunctionBase)
@@ -2383,7 +2383,7 @@ type
       const ASiteColumn: Integer = 0);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   EGocciaBytecodeYield = class(Exception)
@@ -2509,7 +2509,7 @@ type
       const AResumeRegister: UInt16; const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
       const AContinuationIP: Integer);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     function ToStringTag: string; override;
   end;
 
@@ -2573,7 +2573,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue; override;
     function AsyncIteratorSelf(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     function ToStringTag: string; override;
   end;
 
@@ -2589,7 +2589,7 @@ type
       const AReturn: Boolean = False);
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   // What StampBytecodePrivateBrands stamps for a class: each private name
@@ -2658,7 +2658,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     procedure SetVMConstructor(const AValue: TGocciaValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     procedure AddRuntimeKeyedPrivateKey(const ACompiledKey: string);
     function PrivateStampPlan: TGocciaPrivateStampPlan;
     // The brand key for ACompiledKey, which this class declares.
@@ -2733,7 +2733,7 @@ begin
   end;
 end;
 
-procedure TGocciaVMStackRoot.MarkReferences;
+procedure TGocciaVMStackRoot.TraceReferences;
 var
   I, Limit: Integer;
   ExportPair: TGocciaValueMap.TKeyValuePair;
@@ -2779,7 +2779,6 @@ var
   end;
 
 begin
-  if GCMarked then Exit;
   inherited;
   if not Assigned(FVM) then
     Exit;
@@ -2923,9 +2922,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaVMSyncDisposeFallbackValue.MarkReferences;
+procedure TGocciaVMSyncDisposeFallbackValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FDisposeMethod) then
     FDisposeMethod.MarkReferences;
@@ -2983,9 +2981,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaVMAsyncDisposeMethodValue.MarkReferences;
+procedure TGocciaVMAsyncDisposeMethodValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FDisposeMethod) then
     FDisposeMethod.MarkReferences;
@@ -3187,10 +3184,8 @@ begin
   StaticDecoratorInitializersRun := False;
 end;
 
-procedure TGocciaVMDecoratorSession.MarkReferences;
+procedure TGocciaVMDecoratorSession.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(MetadataObject) then
     MetadataObject.MarkReferences;
@@ -3263,7 +3258,7 @@ type
     constructor Create(const AIteratorValue, ANextMethod: TGocciaValue);
     function GetUnderlyingReturnMethod(out AReturnMethod: TGocciaValue): Boolean;
     property LastReturnMethodMissing: Boolean read FLastReturnMethodMissing;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaVMAsyncFromSyncIteratorValue = class(TGocciaObjectValue)
@@ -3302,7 +3297,7 @@ type
       const AThisContext: TGocciaValue): TGocciaValue; override;
     function GetOwnPropertyDescriptor(
       const AName: string): TGocciaPropertyDescriptor; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   // ES2026 §27.1.5.4 AsyncFromSyncIteratorContinuation step 9: unwrap.
@@ -3324,7 +3319,7 @@ type
     constructor Create(const AIterator: TGocciaVMAsyncFromSyncIteratorValue);
     function HandleReaction(const AArgument: TGocciaValue): TGocciaValue;
       override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 constructor TGocciaVMAsyncIteratorRecordValue.Create(
@@ -3466,9 +3461,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaVMAsyncIteratorRecordValue.MarkReferences;
+procedure TGocciaVMAsyncIteratorRecordValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FIteratorValue) then
     FIteratorValue.MarkReferences;
@@ -3653,9 +3647,8 @@ begin
   raise TGocciaThrowValue.Create(AArgument);
 end;
 
-procedure TGocciaVMAsyncFromSyncRejectValue.MarkReferences;
+procedure TGocciaVMAsyncFromSyncRejectValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FIterator) then
     FIterator.MarkReferences;
@@ -3985,9 +3978,8 @@ begin
   end;
 end;
 
-procedure TGocciaVMAsyncFromSyncIteratorValue.MarkReferences;
+procedure TGocciaVMAsyncFromSyncIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FIteratorValue) then
     FIteratorValue.MarkReferences;
@@ -4927,9 +4919,8 @@ begin
   end;
 end;
 
-procedure TGocciaVMAsyncAwaitContinuationValue.MarkReferences;
+procedure TGocciaVMAsyncAwaitContinuationValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FContinuation) then
     FContinuation.MarkReferences;
@@ -5042,9 +5033,8 @@ begin
   end;
 end;
 
-procedure TGocciaVMDynamicImportStartValue.MarkReferences;
+procedure TGocciaVMDynamicImportStartValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FPromise) then
     FPromise.MarkReferences;
@@ -5092,15 +5082,15 @@ begin
     Value, Done);
 end;
 
-procedure TGocciaBytecodeGeneratorObjectValue.MarkReferences;
+procedure TGocciaBytecodeGeneratorObjectValue.TraceReferences;
 var
   I: Integer;
   Upvalue: TGocciaBytecodeCell;
 begin
-  // Marking the function value below closes a reference cycle back to this
-  // generator (a generator reachable from its own function's upvalues), so the
-  // walk has to be idempotent the way TGocciaBytecodeFunctionValue's is.
-  if GCMarked then Exit;
+  // Marking the function value below can close a reference cycle back to
+  // this generator (a generator reachable from its own function's upvalues);
+  // the collector traces each object once per collection, so the cycle ends
+  // at the mark (ADR 0147).
   inherited;
   if Assigned(FClosure) then
   begin
@@ -5557,9 +5547,8 @@ begin
     FGenerator.ResolveAwaitedYield(FRequestPromise, Value);
 end;
 
-procedure TGocciaVMAsyncGeneratorYieldAwaitHandler.MarkReferences;
+procedure TGocciaVMAsyncGeneratorYieldAwaitHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FGenerator) then
     FGenerator.MarkReferences;
@@ -5606,15 +5595,14 @@ begin
   Result := AThisValue;
 end;
 
-procedure TGocciaBytecodeAsyncGeneratorObjectValue.MarkReferences;
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.TraceReferences;
 var
   I: Integer;
   Index: Integer;
 begin
   // The continuation's function edge can cycle back through an upvalue to
-  // this wrapper; the guard keeps re-visits from re-walking the queue.
-  if GCMarked then
-    Exit;
+  // this wrapper; the collector traces each object once per collection, so a
+  // re-visit never re-walks the queue (ADR 0147).
   inherited;
   if Assigned(FInner) then
     FInner.MarkReferences;
@@ -7844,9 +7832,8 @@ begin
   Result := False;
 end;
 
-procedure TGocciaVMClassValue.MarkReferences;
+procedure TGocciaVMClassValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FConstructorValue) then
     FConstructorValue.MarkReferences;
@@ -7856,9 +7843,8 @@ begin
     FOuterPrivateClass.MarkReferences;
 end;
 
-procedure TGocciaVMSuperConstructorValue.MarkReferences;
+procedure TGocciaVMSuperConstructorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
@@ -7868,12 +7854,11 @@ begin
     FCurrentCtorClass.MarkReferences;
 end;
 
-procedure TGocciaBytecodeFunctionValue.MarkReferences;
+procedure TGocciaBytecodeFunctionValue.TraceReferences;
 var
   I: Integer;
   Upvalue: TGocciaBytecodeCell;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if not Assigned(FClosure) then
@@ -15447,7 +15432,7 @@ begin
   FRegisters := @FRegisterStack[FRegisterBase];
   // The window is not cleared, so it can still hold references that an
   // earlier frame left there; the collector does not mark closed numeric
-  // windows (TGocciaVMStackRoot.MarkReferences). The proof admits only
+  // windows (TGocciaVMStackRoot.TraceReferences). The proof admits only
   // scalar-number expressions, numeric predicates, and direct self-calls, so
   // the frame writes each register before reading it and stores only scalars
   // and the pinned NaN, infinity and -0 values.

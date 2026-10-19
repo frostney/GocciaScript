@@ -177,7 +177,7 @@ type
     function TestIntegrityFrozen: Boolean; virtual;
     function TestIntegritySealed: Boolean; virtual;
 
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     { Heap snapshot restore (ADR 0148) only: set an object's raw state
       without [[DefineOwnProperty]]'s validation, which the snapshot's own
@@ -1505,12 +1505,11 @@ begin
   inherited;
 end;
 
-procedure TGocciaObjectValue.MarkReferences;
+procedure TGocciaObjectValue.TraceReferences;
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   SymPair: TSymbolDescriptorMap.TKeyValuePair;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FPrototype) then

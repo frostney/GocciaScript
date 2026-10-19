@@ -65,7 +65,7 @@ type
     function Includes(const AValue: TGocciaValue; AFromIndex: Integer = 0): Boolean;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     procedure Freeze; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
@@ -1307,11 +1307,10 @@ begin
   end;
 end;
 
-procedure TGocciaArrayValue.MarkReferences;
+procedure TGocciaArrayValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
 
   for I := 0 to FElements.Count - 1 do
