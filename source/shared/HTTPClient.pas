@@ -907,6 +907,38 @@ begin
   end;
 end;
 
+{ A Content-Length value: decimal digits and nothing else. A value too large
+  for an Integer is reported as High(Integer), which the body limit then
+  refuses. }
+function TryParseContentLength(const AText: string;
+  out ALength: Integer): Boolean;
+var
+  Digit, I: Integer;
+begin
+  ALength := 0;
+  Result := AText <> '';
+  for I := 1 to Length(AText) do
+  begin
+    if not (AText[I] in ['0'..'9']) then
+      Exit(False);
+    Digit := Ord(AText[I]) - Ord('0');
+    if ALength > (High(Integer) - Digit) div 10 then
+      ALength := High(Integer)
+    else
+      ALength := ALength * 10 + Digit;
+  end;
+end;
+
+function HasHeader(const AHeaders: THTTPHeaders; const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AHeaders) do
+    if AHeaders[I].Name = AName then
+      Exit(True);
+  Result := False;
+end;
+
 function ReadResponse(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
   const AIsHead: Boolean; const ADeadlineNs: Int64;
@@ -922,6 +954,7 @@ var
   BodyBytes: TBytes;
   BodyLen: Integer;
   ChunkBuf: TBytes;
+  ChunkBufLimit: Integer;
   Remaining: Integer;
 
   function RemainingTimeoutMilliseconds: Integer;
@@ -967,6 +1000,10 @@ var
        ((Failure = srfTimedOut) or
         ((ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs))) then
       raise EHTTPError.Create('HTTP request timed out');
+    { A failed read (a reset connection) is not the peer closing it, which
+      is what ends a body without a declared length. }
+    if Result < 0 then
+      raise EHTTPError.Create('HTTP connection failed while reading the response');
   end;
 begin
   Result.StatusCode := 0;
@@ -1074,6 +1111,12 @@ begin
       bytes that arrived are ever copied into the body. }
     ChunkBuf := Copy(BodyBytes, 0, Length(BodyBytes));
     SetLength(Result.Body, 0);
+    { Room for a whole chunk plus one receive; kept within an Integer for a
+      body limit near High(Integer). }
+    if AMaxBodyBytes > High(Integer) - RECV_BUF_SIZE then
+      ChunkBufLimit := High(Integer)
+    else
+      ChunkBufLimit := AMaxBodyBytes + RECV_BUF_SIZE;
 
     repeat
       while FindCRLF(ChunkBuf) < 0 do
@@ -1081,8 +1124,7 @@ begin
         N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then
           raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
-        AppendBytes(ChunkBuf, @Buf[0], N,
-          AMaxBodyBytes + RECV_BUF_SIZE);
+        AppendBytes(ChunkBuf, @Buf[0], N, ChunkBufLimit);
       end;
 
       I := FindCRLF(ChunkBuf);
@@ -1096,18 +1138,32 @@ begin
       if not TryParseChunkSize(Trim(Line), ChunkSize) then
         raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
       if ChunkSize = 0 then
+      begin
+        { The last chunk is followed by the trailer section, which ends
+          with an empty line; its fields are read and dropped. }
+        repeat
+          while FindCRLF(ChunkBuf) < 0 do
+          begin
+            N := Receive(Buf, RECV_BUF_SIZE);
+            if N <= 0 then
+              raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
+            AppendBytes(ChunkBuf, @Buf[0], N, ChunkBufLimit);
+          end;
+          I := FindCRLF(ChunkBuf);
+          RemoveLeadingBytes(ChunkBuf, I + 2);
+        until I = 0;
         Break;
+      end;
       if Length(Result.Body) > AMaxBodyBytes - ChunkSize then
         raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
           [AMaxBodyBytes]);
 
-      while Length(ChunkBuf) < ChunkSize + 2 do
+      while Length(ChunkBuf) < Int64(ChunkSize) + 2 do
       begin
         N := Receive(Buf, RECV_BUF_SIZE);
         if N <= 0 then
           raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
-        AppendBytes(ChunkBuf, @Buf[0], N,
-          AMaxBodyBytes + RECV_BUF_SIZE);
+        AppendBytes(ChunkBuf, @Buf[0], N, ChunkBufLimit);
       end;
       if (ChunkBuf[ChunkSize] <> 13) or (ChunkBuf[ChunkSize + 1] <> 10) then
         raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
@@ -1120,7 +1176,11 @@ begin
   end
   else
   begin
-    ContentLen := StrToIntDef(FindHeaderValue(Result.Headers, 'content-length'), -1);
+    ContentLen := -1;
+    if HasHeader(Result.Headers, 'content-length') and
+       not TryParseContentLength(
+         FindHeaderValue(Result.Headers, 'content-length'), ContentLen) then
+      raise EHTTPError.Create('Invalid HTTP response: malformed Content-Length');
 
     if ContentLen >= 0 then
     begin
@@ -1406,7 +1466,14 @@ begin
         handing the literal here would break certificate validation and
         silently downgrade the connection's guarantees. }
       if Parsed.Scheme = 'https' then
-        StartTransportSecurity(Transport, Sock, Parsed.Host);
+        try
+          StartTransportSecurity(Transport, Sock, Parsed.Host, DeadlineNs);
+        except
+          { A handshake the deadline ended is the request timing out. }
+          if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
+            raise EHTTPError.Create('HTTP request timed out');
+          raise;
+        end;
 
       try
         // Build Host header value

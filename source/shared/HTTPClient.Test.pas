@@ -29,6 +29,7 @@ type
     procedure TestMissingLastChunkIsAnError;
     procedure TestMalformedChunkedBodyIsAnError;
     procedure TestContentLengthCutShortIsAnError;
+    procedure TestTricklingTLSHandshakeTimesOut;
     {$ENDIF}
     {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
     procedure TestSilentTLSPeerTimesOut;
@@ -252,6 +253,134 @@ const
     'Connection: close'#13#10#13#10;
   TRUNCATED_BODY = 'error: HTTP response body ended before its declared length';
   MALFORMED_CHUNKED_BODY = 'error: Invalid HTTP response: malformed chunked body';
+
+type
+  { Runs one HTTPGet off the test thread, so a client that never returns
+    fails the test instead of hanging it. }
+  TClientRequest = class(TThread)
+  private
+    FURL: string;
+    FTimeoutMilliseconds: Integer;
+    FDone: PRTLEvent;
+  protected
+    procedure Execute; override;
+  public
+    ErrorMessage: string;
+    constructor Create(const AURL: string;
+      const ATimeoutMilliseconds: Integer);
+    destructor Destroy; override;
+    function WaitDone(const AMilliseconds: Cardinal): Boolean;
+  end;
+
+  { Accepts one connection, reads the client's hello, then answers with the
+    header of a 16 KiB TLS handshake record and trickles its body one byte
+    every 100 ms until Release: every receive gets a byte before any receive
+    timeout, so only a deadline over the whole handshake ends it. }
+  TTricklingTLSServer = class(TThread)
+  private
+    FListener: cint;
+    FReleased: Boolean;
+  protected
+    procedure Execute; override;
+  public
+    Port: Word;
+    constructor Create;
+    destructor Destroy; override;
+    procedure Release;
+  end;
+
+constructor TClientRequest.Create(const AURL: string;
+  const ATimeoutMilliseconds: Integer);
+begin
+  FURL := AURL;
+  FTimeoutMilliseconds := ATimeoutMilliseconds;
+  FDone := RTLEventCreate;
+  inherited Create(False);
+end;
+
+destructor TClientRequest.Destroy;
+begin
+  RTLEventDestroy(FDone);
+  inherited Destroy;
+end;
+
+procedure TClientRequest.Execute;
+var
+  Headers: THTTPHeaders;
+begin
+  SetLength(Headers, 0);
+  try
+    try
+      HTTPGet(FURL, Headers, nil, FTimeoutMilliseconds);
+      ErrorMessage := '(no error)';
+    except
+      on E: Exception do
+        ErrorMessage := E.Message;
+    end;
+  finally
+    RTLEventSetEvent(FDone);
+  end;
+end;
+
+function TClientRequest.WaitDone(const AMilliseconds: Cardinal): Boolean;
+var
+  Deadline: Int64;
+begin
+  Deadline := GetNanoseconds + Int64(AMilliseconds) * 1000000;
+  repeat
+    RTLEventWaitFor(FDone, 50);
+    if Finished then
+      Exit(True);
+  until GetNanoseconds >= Deadline;
+  Result := Finished;
+end;
+
+constructor TTricklingTLSServer.Create;
+begin
+  FListener := CreateLoopbackListener(Port);
+  inherited Create(False);
+end;
+
+destructor TTricklingTLSServer.Destroy;
+begin
+  CloseSocket(FListener);
+  inherited Destroy;
+end;
+
+procedure TTricklingTLSServer.Release;
+begin
+  FReleased := True;
+end;
+
+procedure TTricklingTLSServer.Execute;
+const
+  RECORD_HEADER: array[0..4] of Byte = ($16, $03, $03, $40, $00);
+var
+  Buffer: array[0..4095] of Byte;
+  Connection: cint;
+  Filler: Byte;
+begin
+  Connection := fpAccept(FListener, nil, nil);
+  if Connection < 0 then
+    Exit;
+  try
+    if fpRecv(Connection, @Buffer[0], SizeOf(Buffer), 0) <= 0 then
+      Exit;
+    if fpSend(Connection, @RECORD_HEADER[0], SizeOf(RECORD_HEADER),
+      {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF}) <> SizeOf(RECORD_HEADER) then
+      Exit;
+    Filler := 0;
+    while not FReleased do
+    begin
+      Sleep(100);
+      if fpSend(Connection, @Filler, 1,
+        {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF}) <> 1 then
+        Exit;
+    end;
+  finally
+    CloseSocket(Connection);
+  end;
+end;
 {$ENDIF}
 
 {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
@@ -310,7 +439,7 @@ const
     '-----END PRIVATE KEY-----'#10;
 
 function Setenv(AName, AValue: PAnsiChar; AOverwrite: cint): cint; cdecl;
-  external 'c';
+  external 'c' name 'setenv';
 
 type
   { Accepts one connection, completes a TLS handshake on it and then sends
@@ -332,22 +461,6 @@ type
     procedure Release;
   end;
 
-  { Runs one HTTPGet off the test thread, so a client that never returns
-    fails the test instead of hanging it. }
-  TClientRequest = class(TThread)
-  private
-    FURL: string;
-    FTimeoutMilliseconds: Integer;
-    FDone: PRTLEvent;
-  protected
-    procedure Execute; override;
-  public
-    ErrorMessage: string;
-    constructor Create(const AURL: string;
-      const ATimeoutMilliseconds: Integer);
-    destructor Destroy; override;
-    function WaitDone(const AMilliseconds: Cardinal): Boolean;
-  end;
 
 constructor TSilentTLSServer.Create(const ACertificateFile, AKeyFile: string);
 begin
@@ -421,51 +534,6 @@ begin
   end;
 end;
 
-constructor TClientRequest.Create(const AURL: string;
-  const ATimeoutMilliseconds: Integer);
-begin
-  FURL := AURL;
-  FTimeoutMilliseconds := ATimeoutMilliseconds;
-  FDone := RTLEventCreate;
-  inherited Create(False);
-end;
-
-destructor TClientRequest.Destroy;
-begin
-  RTLEventDestroy(FDone);
-  inherited Destroy;
-end;
-
-procedure TClientRequest.Execute;
-var
-  Headers: THTTPHeaders;
-begin
-  SetLength(Headers, 0);
-  try
-    try
-      HTTPGet(FURL, Headers, nil, FTimeoutMilliseconds);
-      ErrorMessage := '(no error)';
-    except
-      on E: Exception do
-        ErrorMessage := E.Message;
-    end;
-  finally
-    RTLEventSetEvent(FDone);
-  end;
-end;
-
-function TClientRequest.WaitDone(const AMilliseconds: Cardinal): Boolean;
-var
-  Deadline: Int64;
-begin
-  Deadline := GetNanoseconds + Int64(AMilliseconds) * 1000000;
-  repeat
-    RTLEventWaitFor(FDone, 50);
-    if Finished then
-      Exit(True);
-  until GetNanoseconds >= Deadline;
-  Result := Finished;
-end;
 {$IFEND}
 
 procedure THTTPClientTests.SetupTests;
@@ -486,6 +554,8 @@ begin
     TestMalformedChunkedBodyIsAnError);
   Test('A body shorter than its Content-Length is an error',
     TestContentLengthCutShortIsAnError);
+  Test('A TLS handshake trickled byte by byte ends at the deadline',
+    TestTricklingTLSHandshakeTimesOut);
   {$ENDIF}
   {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
   Test('A TLS peer that goes silent after the handshake times out',
@@ -624,6 +694,8 @@ begin
     '5;name=value'#13#10'hello'#13#10 +
     '6'#13#10' world'#13#10 +
     '0'#13#10#13#10)).ToBe('hello world');
+  Expect<string>(FetchCanned(CHUNKED_HEAD + '5'#13#10'hello'#13#10 +
+    '0'#13#10'X-Trailer: 1'#13#10#13#10)).ToBe('hello');
 end;
 
 { The chunk declares 4,000 bytes and one arrives before the connection
@@ -645,6 +717,11 @@ begin
     TRUNCATED_BODY);
   Expect<string>(FetchCanned(CHUNKED_HEAD + '5'#13#10'hello'#13#10'6')).ToBe(
     TRUNCATED_BODY);
+  { The last chunk without the empty line that ends the trailer section. }
+  Expect<string>(FetchCanned(CHUNKED_HEAD +
+    '5'#13#10'hello'#13#10'0'#13#10)).ToBe(TRUNCATED_BODY);
+  Expect<string>(FetchCanned(CHUNKED_HEAD +
+    '5'#13#10'hello'#13#10'0'#13#10'X-Trailer: 1'#13#10)).ToBe(TRUNCATED_BODY);
 end;
 
 procedure THTTPClientTests.TestMalformedChunkedBodyIsAnError;
@@ -671,6 +748,44 @@ begin
   Expect<string>(FetchCanned('HTTP/1.1 200 OK'#13#10 +
     'Content-Length: 3'#13#10'Connection: close'#13#10#13#10'abc')).ToBe(
     'abc');
+  Expect<string>(FetchCanned('HTTP/1.1 200 OK'#13#10 +
+    'Content-Length: 2147483648'#13#10'Connection: close'#13#10#13#10 +
+    'abc')).ToBe('error: HTTP response body exceeds 8388608 byte limit');
+  Expect<string>(FetchCanned('HTTP/1.1 200 OK'#13#10 +
+    'Content-Length: 3x'#13#10'Connection: close'#13#10#13#10'abc')).ToBe(
+    'error: Invalid HTTP response: malformed Content-Length');
+  Expect<string>(FetchCanned('HTTP/1.1 200 OK'#13#10 +
+    'Connection: close'#13#10#13#10'until close')).ToBe('until close');
+end;
+
+{ Each receive gets a byte well within the receive timeout, so a timeout per
+  receive never fires; the request's deadline must still end the handshake. }
+procedure THTTPClientTests.TestTricklingTLSHandshakeTimesOut;
+const
+  DEADLINE_MILLISECONDS = 1000;
+  WAIT_MILLISECONDS = 10000;
+var
+  Client: TClientRequest;
+  Finished: Boolean;
+  Server: TTricklingTLSServer;
+begin
+  Server := TTricklingTLSServer.Create;
+  try
+    Client := TClientRequest.Create(
+      Format('https://localhost:%d/', [Server.Port]), DEADLINE_MILLISECONDS);
+    try
+      Finished := Client.WaitDone(WAIT_MILLISECONDS);
+      Server.Release;
+      Client.WaitFor;
+      Server.WaitFor;
+      Expect<Boolean>(Finished).ToBe(True);
+      Expect<string>(Client.ErrorMessage).ToBe('HTTP request timed out');
+    finally
+      Client.Free;
+    end;
+  finally
+    Server.Free;
+  end;
 end;
 {$ENDIF}
 
