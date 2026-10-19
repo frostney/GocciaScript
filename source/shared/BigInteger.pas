@@ -28,6 +28,12 @@ type
     class function FromHexString(const AValue: string): TBigInteger; static;
     class function FromBinaryString(const AValue: string): TBigInteger; static;
     class function FromOctalString(const AValue: string): TBigInteger; static;
+    // A value from its magnitude's 32-bit limbs, least significant first,
+    // and its sign; leading zero limbs are dropped and zero is not negative.
+    // The value takes ALimbs over: it is not copied unless it has leading
+    // zero limbs to drop.
+    class function FromLimbs(const ALimbs: TLimbArray;
+      const ANegative: Boolean): TBigInteger; static;
 
     function IsZero: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsNegative: Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -41,6 +47,9 @@ type
     function ToInt64: Int64;
     function ToString: string;
     function ToRadixString(const ARadix: Integer): string;
+    // The magnitude's 32-bit limbs, least significant first, read in place.
+    function LimbCount: Integer;
+    function LimbAt(const AIndex: Integer): Cardinal;
 
     function Negate: TBigInteger;
     function AbsValue: TBigInteger;
@@ -317,6 +326,25 @@ class function TBigInteger.Zero: TBigInteger;
 begin
   Result.FNegative := False;
   Result.FLimbs := nil;
+end;
+
+class function TBigInteger.FromLimbs(const ALimbs: TLimbArray;
+  const ANegative: Boolean): TBigInteger;
+begin
+  Result.FLimbs := ALimbs;
+  Result.FNegative := ANegative;
+  if (Length(ALimbs) = 0) or (ALimbs[High(ALimbs)] = 0) then
+    Result.Normalize;
+end;
+
+function TBigInteger.LimbCount: Integer;
+begin
+  Result := Length(FLimbs);
+end;
+
+function TBigInteger.LimbAt(const AIndex: Integer): Cardinal;
+begin
+  Result := FLimbs[AIndex];
 end;
 
 class function TBigInteger.One: TBigInteger;

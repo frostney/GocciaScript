@@ -167,6 +167,10 @@ type
     function DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>; virtual;
+    // The symbol keys this object stores itself, in order, without copying
+    // them (a heap snapshot walks them one at a time). No trap is asked.
+    function StoredSymbolCount: Integer;
+    function StoredSymbolAt(const AIndex: Integer): TGocciaSymbolValue;
 
     procedure Freeze; virtual;
     procedure Seal; virtual;
@@ -178,6 +182,18 @@ type
     function TestIntegritySealed: Boolean; virtual;
 
     procedure TraceReferences; override;
+
+    { Heap snapshot restore (ADR 0148) only: set an object's raw state
+      without [[DefineOwnProperty]]'s validation, which the snapshot's own
+      checks stand in for. }
+    // Frees every own property, string- and symbol-keyed.
+    procedure ClearOwnPropertiesForRestore;
+    // Appends a symbol-keyed property; the object takes ownership of
+    // ADescriptor. The caller has checked ASymbol is not an own key yet.
+    procedure DefineSymbolPropertyForRestore(const ASymbol: TGocciaSymbolValue;
+      const ADescriptor: TGocciaPropertyDescriptor);
+    procedure SetIntegrityForRestore(const AExtensible, AFrozen, ASealed,
+      AHasEverHadIndexedOwnProperty: Boolean);
 
     property Properties: TGocciaPropertyMap read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
@@ -308,6 +324,23 @@ function DelegateSetSymbolProperty(const AObject: TGocciaObjectValue;
 procedure RegisterOrdinaryObjectClass(const AClass: TClass);
 function IsOrdinaryObjectClass(const AClass: TClass): Boolean;
 
+type
+  { Told when a lazy own property is built, with the descriptor it became.
+    A heap snapshot session (ADR 0148) watches this to tell a built-in's lazy
+    member being built from the run changing that member. }
+  TGocciaLazyMaterializationObserver = class
+  public
+    procedure Materialized(const AObject: TGocciaObjectValue;
+      const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+      virtual; abstract;
+  end;
+
+// Adds AObserver to this thread's observers, and removes it again; each is
+// told of every build while it is added, in any order of adding and removing.
+procedure AddLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver);
+procedure RemoveLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver);
 
 implementation
 
@@ -970,6 +1003,39 @@ begin
   FRegExpData := AValue;
 end;
 
+threadvar
+  // nil while no observer is added: the materialization path tests one
+  // pointer.
+  GLazyMaterializationObservers: TList<TGocciaLazyMaterializationObserver>;
+
+procedure AddLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver);
+begin
+  if not Assigned(GLazyMaterializationObservers) then
+    GLazyMaterializationObservers :=
+      TList<TGocciaLazyMaterializationObserver>.Create;
+  GLazyMaterializationObservers.Add(AObserver);
+end;
+
+procedure RemoveLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver);
+begin
+  if not Assigned(GLazyMaterializationObservers) then
+    Exit;
+  GLazyMaterializationObservers.Remove(AObserver);
+  if GLazyMaterializationObservers.Count = 0 then
+    FreeAndNil(GLazyMaterializationObservers);
+end;
+
+procedure NotifyLazyMaterialized(const AObject: TGocciaObjectValue;
+  const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+var
+  I: Integer;
+begin
+  for I := GLazyMaterializationObservers.Count - 1 downto 0 do
+    GLazyMaterializationObservers[I].Materialized(AObject, AName, ADescriptor);
+end;
+
 function TGocciaObjectValue.MaterializeOwnLazyProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
 var
@@ -991,6 +1057,8 @@ begin
   end;
   FProperties.Add(AName, Result);
   LazyDescriptor.Free;
+  if Assigned(GLazyMaterializationObservers) then
+    NotifyLazyMaterialized(Self, AName, Result);
 end;
 
 function TGocciaObjectValue.MaterializeOwnLazyPropertyHolding(
@@ -1436,6 +1504,47 @@ begin
   FSymbolInsertionOrder.Free;
   FRegExpData.Free;
   inherited;
+end;
+
+procedure TGocciaObjectValue.ClearOwnPropertiesForRestore;
+var
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
+begin
+  for Pair in FProperties do
+    Pair.Value.Free;
+  FProperties.Clear;
+  if Assigned(FSymbolDescriptors) then
+  begin
+    for SymPair in FSymbolDescriptors do
+      SymPair.Value.Free;
+    FSymbolDescriptors.Clear;
+  end;
+  if Assigned(FSymbolInsertionOrder) then
+    FSymbolInsertionOrder.Clear;
+end;
+
+procedure TGocciaObjectValue.DefineSymbolPropertyForRestore(
+  const ASymbol: TGocciaSymbolValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  try
+    EnsureSymbolStorage;
+    FSymbolDescriptors.Add(ASymbol, ADescriptor);
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+  FSymbolInsertionOrder.Add(ASymbol);
+end;
+
+procedure TGocciaObjectValue.SetIntegrityForRestore(const AExtensible, AFrozen,
+  ASealed, AHasEverHadIndexedOwnProperty: Boolean);
+begin
+  FExtensible := AExtensible;
+  FFrozen := AFrozen;
+  FSealed := ASealed;
+  FHasEverHadIndexedOwnProperty := AHasEverHadIndexedOwnProperty;
 end;
 
 destructor TGocciaErrorObjectValue.Destroy;
@@ -2747,6 +2856,20 @@ begin
   for I := 0 to FSymbolInsertionOrder.Count - 1 do
     Symbols[I] := FSymbolInsertionOrder[I];
   Result := Symbols;
+end;
+
+function TGocciaObjectValue.StoredSymbolCount: Integer;
+begin
+  if Assigned(FSymbolInsertionOrder) then
+    Result := FSymbolInsertionOrder.Count
+  else
+    Result := 0;
+end;
+
+function TGocciaObjectValue.StoredSymbolAt(
+  const AIndex: Integer): TGocciaSymbolValue;
+begin
+  Result := FSymbolInsertionOrder[AIndex];
 end;
 
 procedure TGocciaObjectValue.Freeze;

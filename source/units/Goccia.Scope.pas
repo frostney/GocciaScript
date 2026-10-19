@@ -165,6 +165,10 @@ type
     function Contains(const AName: string): Boolean; virtual;
     function GetOwnBindingNames: TGocciaStringArray; virtual;
     function GetOwnVarBindingNames: TGocciaStringArray; virtual;
+    // An own lexical binding record as it is stored, for naming built-ins in
+    // a heap snapshot (ADR 0148).
+    function TryGetOwnLexicalBindingRaw(const AName: string;
+      out ABinding: TLexicalBinding): Boolean;
 
     // Walk the parent chain to find the nearest function/module/global scope (for var hoisting)
     function FindFunctionOrModuleScope: TGocciaScope;
@@ -1330,6 +1334,12 @@ end;
 function TGocciaScope.GetOwnBindingNames: TGocciaStringArray;
 begin
   Result := BindingNamesToArray(FLexicalBindings);
+end;
+
+function TGocciaScope.TryGetOwnLexicalBindingRaw(const AName: string;
+  out ABinding: TLexicalBinding): Boolean;
+begin
+  Result := FLexicalBindings.TryGetValue(AName, ABinding);
 end;
 
 function TGocciaScope.GetOwnVarBindingNames: TGocciaStringArray;

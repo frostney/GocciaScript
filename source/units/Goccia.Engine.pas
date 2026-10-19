@@ -8,6 +8,7 @@ uses
   Classes,
   Contnrs,
   Generics.Collections,
+  SysUtils,
 
   OrderedStringMap,
   UnicodeStringList,
@@ -123,6 +124,11 @@ type
       for. Guest code that runs after WaitForIdle returns, in a later
       extension's pass or in a microtask, can start more. }
     function HasPendingWork: Boolean; virtual;
+    { Why a heap snapshot of the run would lose state this extension holds
+      outside the heap, or '' when it would not (ADR 0148). Separate from
+      HasPendingWork, which says whether the idle wait has work: a timer the
+      idle wait does not run is still state a snapshot would lose. }
+    function HeapSnapshotRefusal: string; virtual;
     procedure DiscardPending; virtual;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; virtual;
@@ -164,6 +170,19 @@ type
     for the first and a TypeError for the second. }
   TGocciaGlobalEvalStage = (gesCompile, gesRun);
 
+  TGocciaEngine = class;
+
+  { Ends a run that paused at a pause checkpoint (ADR 0148): raised out of
+    Execute once the OnPauseCheckpoint handler asked to pause. No script can
+    catch it: no frame is running at a checkpoint. }
+  EGocciaRunPaused = class(Exception);
+
+  { Called at a pause checkpoint (ADR 0148). The handler may take a heap
+    snapshot; setting APause ends the run with EGocciaRunPaused, and leaving
+    it False goes on waiting for the host calls as usual. }
+  TGocciaPauseCheckpointEvent = procedure(const AEngine: TGocciaEngine;
+    var APause: Boolean) of object;
+
   TGocciaEngine = class
   public
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
@@ -204,6 +223,10 @@ type
     FCompileTimeNanoseconds: Int64;
     FExecuteTimeNanoseconds: Int64;
     FShimLoader: TGocciaShimLoader;
+    { ADR 0148: the extension that owns the run's host calls, and the
+      handler called when the run waits only on those. }
+    FHostCallOwner: TGocciaEngineExtension;
+    FOnPauseCheckpoint: TGocciaPauseCheckpointEvent;
     FSourceLines: TStringList;
     FExtensions: TGocciaEngineExtensionList;
     // Qualified: Generics.Collections' TObjectList<T> shadows the
@@ -392,6 +415,22 @@ type
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
     procedure WaitForRuntimeIdle;
+    { ADR 0148: true while the run is at a pause checkpoint. No bytecode
+      frame runs (the caller is the idle wait), the microtask queue is empty,
+      no Atomics.waitAsync waiter of this engine is pending, no extension but
+      HostCallOwner has pending work, none holds state outside the heap
+      (HeapSnapshotRefusal), and HostCallOwner has pending work: the run
+      waits only on host calls the embedder answers. }
+    function IsAtPauseCheckpoint: Boolean;
+    { ADR 0148: why the run is not idle enough for a heap snapshot, or ''
+      when it is: a bytecode frame running, a job queued, an Atomics.waitAsync
+      waiter of this engine pending, an extension other than HostCallOwner
+      with pending work, or state outside the heap (HeapSnapshotRefusal).
+      IsAtPauseCheckpoint is this plus pending host calls on the owner. }
+    function SnapshotIdleRefusal: string;
+    { ADR 0148: why a heap snapshot of the run would lose state held outside
+      the heap, from every extension, or '' when none would. }
+    function HeapSnapshotRefusal: string;
     procedure RaiseUnhandledRejection;
     procedure ClearPendingWorkOfFailedRun(
       const AOuterRunningEngine: TGocciaEngine);
@@ -579,9 +618,21 @@ type
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
     property GocciaGlobal: TGocciaObjectValue read FGocciaGlobal;
     property Realm: TGocciaRealm read FRealm;
+    { The bytecode VM this engine runs on; a heap snapshot releases its idle
+      scratch (ADR 0148). }
+    property VM: TGocciaVM read FVM;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property UnhandledRejections: TGocciaUnhandledRejectionMode
       read FUnhandledRejections write FUnhandledRejections;
+    { ADR 0148: the extension that owns the run's host calls; one of this
+      engine's extensions, or nil for none. }
+    property HostCallOwner: TGocciaEngineExtension read FHostCallOwner
+      write FHostCallOwner;
+    { ADR 0148: called where the idle wait would call HostCallOwner's
+      WaitForIdle, before it blocks, whenever the run is at a pause
+      checkpoint. }
+    property OnPauseCheckpoint: TGocciaPauseCheckpointEvent
+      read FOnPauseCheckpoint write FOnPauseCheckpoint;
     { Observes what UnhandledRejections decides about. Once a run has nothing
       left to do, and before the mode is applied, the hook is called for each
       promise the current microtask scope holds as rejected with no handler,
@@ -612,7 +663,6 @@ implementation
 
 uses
   Math,
-  SysUtils,
 
   TextSemantics,
   TimingUtils,
@@ -680,6 +730,11 @@ end;
 function TGocciaEngineExtension.HasPendingWork: Boolean;
 begin
   Result := False;
+end;
+
+function TGocciaEngineExtension.HeapSnapshotRefusal: string;
+begin
+  Result := '';
 end;
 
 procedure TGocciaEngineExtension.DiscardPending;
@@ -2305,12 +2360,56 @@ end;
   fetch runs in the job that resumes the module. One round left that request
   in flight and the run ended without it, so rounds repeat until one leaves
   no extension with work. }
+function TGocciaEngine.SnapshotIdleRefusal: string;
+var
+  I: Integer;
+  Queue: TGocciaMicrotaskQueue;
+  Reason: string;
+begin
+  if Assigned(FVM) and not FVM.IsIdle then
+    Exit('a bytecode frame is running');
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if Assigned(Queue) and Queue.HasPending then
+    Exit('a job is queued');
+  // This engine's waiters, settled or not; another engine's on the thread
+  // are its own.
+  if HasAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
+    Exit('an Atomics.waitAsync waiter is pending');
+  for I := 0 to FExtensions.Count - 1 do
+    if (FExtensions[I] <> FHostCallOwner) and FExtensions[I].HasPendingWork then
+      Exit('an extension other than the host-call owner has pending work');
+  // State outside the heap no codec covers (ADR 0148).
+  Reason := HeapSnapshotRefusal;
+  if Reason <> '' then
+    Exit('state outside the heap no codec covers: ' + Reason);
+  Result := '';
+end;
+
+function TGocciaEngine.IsAtPauseCheckpoint: Boolean;
+begin
+  Result := Assigned(FHostCallOwner) and (SnapshotIdleRefusal = '') and
+    FHostCallOwner.HasPendingWork;
+end;
+
+function TGocciaEngine.HeapSnapshotRefusal: string;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+  begin
+    Result := FExtensions[I].HeapSnapshotRefusal;
+    if Result <> '' then
+      Exit;
+  end;
+  Result := '';
+end;
+
 procedure TGocciaEngine.WaitForRuntimeIdle;
 var
   I: Integer;
   Queue: TGocciaMicrotaskQueue;
   GC: TGarbageCollector;
-  Repeating: Boolean;
+  Repeating, Pause: Boolean;
 begin
   Repeating := False;
   try
@@ -2323,7 +2422,24 @@ begin
       end;
       Repeating := True;
       for I := 0 to FExtensions.Count - 1 do
+      begin
+        if (FExtensions[I] = FHostCallOwner) and
+           Assigned(FOnPauseCheckpoint) and IsAtPauseCheckpoint then
+        begin
+          { No job runs at a checkpoint, so the objects WeakRef and
+            FinalizationRegistry kept alive for the current job are let go
+            here (ES2026 §9.10 ClearKeptObjects), as the pass below would.
+            Kept, they are state a snapshot would not hold. }
+          GC := TGarbageCollector.Instance;
+          if Assigned(GC) then
+            GC.ClearKeptObjects;
+          Pause := False;
+          FOnPauseCheckpoint(Self, Pause);
+          if Pause then
+            raise EGocciaRunPaused.Create('the run paused at a checkpoint');
+        end;
         FExtensions[I].WaitForIdle;
+      end;
       GC := TGarbageCollector.Instance;
       if Assigned(GC) then
         GC.ClearKeptObjects;

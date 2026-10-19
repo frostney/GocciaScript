@@ -46,6 +46,8 @@ type
     procedure WaitForIdle; virtual;
     { See TGocciaEngineExtension.HasPendingWork. }
     function HasPendingWork: Boolean; virtual;
+    { See TGocciaEngineExtension.HeapSnapshotRefusal. }
+    function HeapSnapshotRefusal: string; virtual;
     procedure DiscardPending; virtual;
   end;
 
@@ -92,6 +94,7 @@ type
 
     procedure WaitForIdle; override;
     function HasPendingWork: Boolean; override;
+    function HeapSnapshotRefusal: string; override;
     procedure DiscardPending; override;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; override;
@@ -258,6 +261,11 @@ end;
 function TGocciaRuntimeExtension.HasPendingWork: Boolean;
 begin
   Result := False;
+end;
+
+function TGocciaRuntimeExtension.HeapSnapshotRefusal: string;
+begin
+  Result := '';
 end;
 
 procedure TGocciaRuntimeExtension.DiscardPending;
@@ -541,6 +549,19 @@ begin
     if FExtensions[I].HasPendingWork then
       Exit(True);
   Result := False;
+end;
+
+function TGocciaRuntimeCore.HeapSnapshotRefusal: string;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+  begin
+    Result := FExtensions[I].HeapSnapshotRefusal;
+    if Result <> '' then
+      Exit;
+  end;
+  Result := '';
 end;
 
 procedure TGocciaRuntimeCore.DiscardPending;

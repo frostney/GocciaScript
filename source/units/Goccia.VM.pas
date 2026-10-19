@@ -780,6 +780,14 @@ type
     property CoverageEnabled: Boolean read FCoverageEnabled write FCoverageEnabled;
     property ProfilingOpcodes: Boolean read FProfilingOpcodes write FProfilingOpcodes;
     property ProfilingFunctions: Boolean read FProfilingFunctions write FProfilingFunctions;
+    { ADR 0148: with no bytecode frame running, clears what the last frames
+      left in the register, cell and argument stacks. Those slots are still
+      marked, so without this they keep alive garbage no script value
+      reaches, which a heap snapshot would then count. False, and nothing
+      cleared, when a frame is running. }
+    function ReleaseIdleScratch: Boolean;
+    // True when no bytecode frame is running.
+    function IsIdle: Boolean;
   end;
 
 implementation
@@ -816,6 +824,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
+  Goccia.HeapSnapshot.Codec,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
@@ -17078,8 +17087,135 @@ begin
   Result := True;
 end;
 
+function TGocciaVM.IsIdle: Boolean;
+begin
+  Result := (FFrameStackCount = 0) and (FClosedNumericFrameStackCount = 0) and
+    (FFrameDepth = 0);
+end;
+
+function TGocciaVM.ReleaseIdleScratch: Boolean;
+var
+  I, Limit: Integer;
+begin
+  Result := IsIdle;
+  if not Result then
+    Exit;
+  Limit := FRegisterBase + FRegisterCount;
+  if Limit > Length(FRegisterStack) then
+    Limit := Length(FRegisterStack);
+  for I := 0 to Limit - 1 do
+    FRegisterStack[I] := RegisterUndefined;
+  Limit := FLocalCellBase + FLocalCellCount;
+  if Limit > Length(FLocalCellStack) then
+    Limit := Length(FLocalCellStack);
+  for I := 0 to Limit - 1 do
+    FLocalCellStack[I] := nil;
+  Limit := FArgumentBase + FArgCount;
+  if Limit > Length(FArgumentStack) then
+    Limit := Length(FArgumentStack);
+  for I := 0 to Limit - 1 do
+    FArgumentStack[I] := RegisterUndefined;
+  FLastClosureThisValue := RegisterUndefined;
+end;
+
+{ Heap snapshot slot materializer (ADR 0148): the function-object intrinsics
+  (AsyncFunction, GeneratorFunction, AsyncGeneratorFunction, their prototypes
+  and the generator prototypes) are built on first use. }
+procedure MaterializeVMFunctionObjectIntrinsics;
+var
+  Kind: TGocciaFunctionObjectIntrinsicKind;
+begin
+  for Kind := Low(TGocciaFunctionObjectIntrinsicKind) to
+      High(TGocciaFunctionObjectIntrinsicKind) do
+    VMFunctionObjectPrototype(Kind);
+  VMGeneratorObjectPrototype(foikGenerator);
+  VMGeneratorObjectPrototype(foikAsyncGenerator);
+end;
+
+{ Heap snapshot codec (ADR 0148): an object literal. }
+
+type
+  TLiteralObjectSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    function SchemaVersion: Word; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TLiteralObjectSnapshotCodec.Tag: string;
+begin
+  Result := 'literal-object';
+end;
+
+function TLiteralObjectSnapshotCodec.SchemaVersion: Word;
+begin
+  Result := 1;
+end;
+
+procedure TLiteralObjectSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+begin
+  AWriter.WriteBool(TGocciaVMLiteralObjectValue(AObject).FFastLiteralMode);
+  AWriter.WriteObjectCore(TGocciaVMLiteralObjectValue(AObject));
+end;
+
+function TLiteralObjectSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaVMLiteralObjectValue.Create;
+end;
+
+procedure TLiteralObjectSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  Literal: TGocciaVMLiteralObjectValue;
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  Fast: Boolean;
+begin
+  Literal := TGocciaVMLiteralObjectValue(AObject);
+  Fast := AReader.ReadBool;
+  AReader.ReadObjectCore(Literal);
+  // The fast path adds properties without asking for extensibility and
+  // replaces any own property that is not a plain data property, so it is
+  // kept only for a literal the engine itself could leave in that mode: an
+  // extensible one (a freeze, seal or preventExtensions leaves it) whose own
+  // properties are all enumerable, configurable, writable data (any other
+  // definition leaves it too), whatever the snapshot says.
+  if Fast and Literal.Extensible then
+    for Pair in Literal.Properties do
+    begin
+      AReader.Poll;
+      if (Pair.Value.ClassType <> TGocciaPropertyDescriptorData) or
+         (Pair.Value.Flags <> [pfEnumerable, pfConfigurable, pfWritable]) then
+      begin
+        Fast := False;
+        Break;
+      end;
+    end;
+  Literal.FFastLiteralMode := Fast and Literal.Extensible;
+end;
+
 initialization
   RegisterFunctionConstructRedirectHook(RedirectBytecodeClassConstruct);
   RegisterOrdinaryObjectClass(TGocciaVMLiteralObjectValue);
+  RegisterSnapshotCodec(TGocciaVMLiteralObjectValue,
+    TLiteralObjectSnapshotCodec.Create);
+  RegisterSnapshotSlotMaterializer('AsyncFunction.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('GeneratorFunction.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('Generator.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('AsyncIterator.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('AsyncGeneratorFunction.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('AsyncGenerator.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
 
 end.

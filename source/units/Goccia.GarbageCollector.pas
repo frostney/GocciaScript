@@ -293,6 +293,7 @@ type
     {$ENDIF}
 
     function GetManagedObjectCount: Integer;
+    function GetManagedObject(const AIndex: Integer): TGCManagedObject;
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
     function HeapTriggerBytes: Int64;
     // The BytesAllocated level at which the pressure checks collect, given
@@ -483,6 +484,11 @@ type
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
     property ManagedObjectCount: Integer read GetManagedObjectCount;
+    // Read access to the registered objects, for the heap snapshot's
+    // accounting check (ADR 0148). A slot can be nil between an
+    // unregistration and the next sweep.
+    property ManagedObjects[const AIndex: Integer]: TGCManagedObject
+      read GetManagedObject;
 
     // Current depth of the active-root stack. Captured by
     // TGocciaActiveRootFrame.Initialize as the floor its Clear may not
@@ -2358,6 +2364,12 @@ end;
 function TGarbageCollector.GetManagedObjectCount: Integer;
 begin
   Result := FManagedObjects.Count;
+end;
+
+function TGarbageCollector.GetManagedObject(
+  const AIndex: Integer): TGCManagedObject;
+begin
+  Result := FManagedObjects[AIndex];
 end;
 
 initialization

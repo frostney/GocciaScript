@@ -43,6 +43,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Values.ErrorHelper;
 
@@ -379,7 +380,16 @@ begin
   Result := TGocciaSymbolValue.Create(INTL_LEGACY_CONSTRUCTED_SYMBOL_DESCRIPTION);
 end;
 
+{ Heap snapshot slot materializer (ADR 0148): the fallback symbol is made on
+  the first legacy constructor call. }
+procedure MaterializeIntlFallbackSymbol;
+begin
+  IntlFallbackSymbol;
+end;
+
 initialization
   GIntlFallbackSymbolSlot := RegisterRealmSlot('Intl.[[FallbackSymbol]]');
+  RegisterSnapshotSlotMaterializer('Intl.[[FallbackSymbol]]',
+    MaterializeIntlFallbackSymbol);
 
 end.

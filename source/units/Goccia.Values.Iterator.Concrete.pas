@@ -142,6 +142,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -1012,11 +1013,47 @@ begin
     FSource.MarkReferences;
 end;
 
+{ Heap snapshot slot materializers (ADR 0148): the concrete iterator
+  prototypes are built on first use. }
+
+procedure MaterializeArrayIteratorPrototype;
+begin
+  EnsureArrayIteratorPrototype;
+end;
+
+procedure MaterializeStringIteratorPrototype;
+begin
+  TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
+    GStringIteratorPrototypeSlot, 'String Iterator');
+end;
+
+procedure MaterializeMapIteratorPrototype;
+begin
+  TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
+    GMapIteratorPrototypeSlot, 'Map Iterator');
+end;
+
+procedure MaterializeSetIteratorPrototype;
+begin
+  TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
+    GSetIteratorPrototypeSlot, 'Set Iterator');
+end;
+
 initialization
   GArrayIteratorPrototypeSlot := RegisterRealmSlot('ArrayIterator.prototype');
   GArrayIteratorNextSlot := RegisterRealmSlot('%ArrayIteratorPrototype%.next');
   GStringIteratorPrototypeSlot := RegisterRealmSlot('StringIterator.prototype');
   GMapIteratorPrototypeSlot := RegisterRealmSlot('MapIterator.prototype');
   GSetIteratorPrototypeSlot := RegisterRealmSlot('SetIterator.prototype');
+  RegisterSnapshotSlotMaterializer('ArrayIterator.prototype',
+    MaterializeArrayIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('%ArrayIteratorPrototype%.next',
+    MaterializeArrayIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('StringIterator.prototype',
+    MaterializeStringIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('MapIterator.prototype',
+    MaterializeMapIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('SetIterator.prototype',
+    MaterializeSetIteratorPrototype);
 
 end.

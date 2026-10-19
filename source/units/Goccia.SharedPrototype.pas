@@ -32,6 +32,7 @@ type
     destructor Destroy; override;
     procedure ExposeOnConstructor(const AConstructor: TGocciaValue);
     property Prototype: TGocciaObjectValue read FPrototype;
+    property MethodHost: TGocciaValue read FMethodHost;
   end;
 
 function GetSharedPrototypeFromOwnedSlot(const ARealm: TGocciaRealm;
