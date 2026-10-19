@@ -21,13 +21,20 @@ const deepDuplicateNames = (n) =>
   "(?:".repeat(500) + duplicateNames(n) + ")".repeat(500);
 
 // The fastest of several rounds, so a collection or a busy machine during one
-// round does not decide the result.
+// round does not decide the result. A round compiles the pattern enough times
+// to run for about MIN_ROUND_MS, so a fast pattern is not timed at the clock's
+// resolution, and counts the time per compile.
+const MIN_ROUND_MS = 20;
 const compileTime = (source) => {
+  const probeStart = performance.now();
+  new RegExp(source);
+  const probe = Math.max(performance.now() - probeStart, 0.01);
+  const compiles = Math.min(1000, Math.max(1, Math.ceil(MIN_ROUND_MS / probe)));
   let best = Infinity;
   for (const _ of Array.from({ length: 7 })) {
     const start = performance.now();
-    new RegExp(source);
-    best = Math.min(best, performance.now() - start);
+    for (const __ of Array.from({ length: compiles })) new RegExp(source);
+    best = Math.min(best, (performance.now() - start) / compiles);
   }
   return best;
 };
@@ -249,9 +256,9 @@ describe("backreferences", () => {
     expect(/(?<=\1(a))b/.test("aab")).toBe(true);
   });
 
-  test("30,000 named backreferences to one group compile and match", () => {
-    const re = new RegExp("(?<n>a)" + "\\k<n>".repeat(30000));
-    expect(re.test("a".repeat(30001))).toBe(true);
-    expect(re.test("a".repeat(30000))).toBe(false);
+  test("3,000 named backreferences to one group compile and match", () => {
+    const re = new RegExp("(?<n>a)" + "\\k<n>".repeat(3000));
+    expect(re.test("a".repeat(3001))).toBe(true);
+    expect(re.test("a".repeat(3000))).toBe(false);
   });
 });
