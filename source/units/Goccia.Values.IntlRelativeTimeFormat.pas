@@ -44,6 +44,7 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -940,15 +941,24 @@ function TGocciaIntlRelativeTimeFormatValue.IntlRelativeTimeFormatResolvedOption
 var
   RTF: TGocciaIntlRelativeTimeFormatValue;
   Obj: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   RTF := AsRelativeTimeFormat(AThisValue, 'Intl.RelativeTimeFormat.prototype.resolvedOptions');
-  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  DefineRelativeTimeResolvedProperty(Obj, 'locale', RTF.FLocale);
-  DefineRelativeTimeResolvedProperty(Obj, 'style', RTF.FStyle);
-  DefineRelativeTimeResolvedProperty(Obj, 'numeric', RTF.FNumeric);
-  DefineRelativeTimeResolvedProperty(Obj, 'numberingSystem',
-    RTF.FNumberingSystem);
-  Result := Obj;
+  // Held only by this local while the values stored into it are made;
+  // each can reserve, and a reservation can collect.
+  Roots.Initialize;
+  try
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(Obj);
+    DefineRelativeTimeResolvedProperty(Obj, 'locale', RTF.FLocale);
+    DefineRelativeTimeResolvedProperty(Obj, 'style', RTF.FStyle);
+    DefineRelativeTimeResolvedProperty(Obj, 'numeric', RTF.FNumeric);
+    DefineRelativeTimeResolvedProperty(Obj, 'numberingSystem',
+      RTF.FNumberingSystem);
+    Result := Obj;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 initialization

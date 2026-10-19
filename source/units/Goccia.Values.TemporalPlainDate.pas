@@ -817,48 +817,57 @@ var
   Increment: Integer;
   Years, Months, Weeks, Days: Int64;
   ZeroH, ZeroM, ZeroS, ZeroMs, ZeroUs, ZeroNs: Int64;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.until');
-  Other := CoercePlainDate(AArgs.GetElement(0), 'PlainDate.prototype.until');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoercePlainDate(AArgs.GetElement(0), 'PlainDate.prototype.until');
+    OtherRoots.Add(Other);
 
-  OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
-  Increment := GetRoundingIncrement(OptionsObj, 1);
-  Mode := GetRoundingMode(OptionsObj, rmTrunc);
-  SmallestUnit := GetSmallestUnit(OptionsObj, tuDay);
-  if LargestUnit = tuAuto then
-  begin
-    if Ord(SmallestUnit) < Ord(tuDay) then
-      LargestUnit := SmallestUnit
-    else
-      LargestUnit := tuDay;
+    OptionsObj := GetDiffOptions(AArgs, 1);
+    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
+    Mode := GetRoundingMode(OptionsObj, rmTrunc);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuDay);
+    if LargestUnit = tuAuto then
+    begin
+      if Ord(SmallestUnit) < Ord(tuDay) then
+        LargestUnit := SmallestUnit
+      else
+        LargestUnit := tuDay;
+    end;
+    if not (SmallestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
+    if not (LargestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+    ValidateRoundingIncrement(Increment, SmallestUnit);
+
+    if D.FCalendarId <> Other.FCalendarId then
+      ThrowRangeError('Temporal.PlainDate calendars must match',
+        SSuggestTemporalDateRange);
+
+    CalendarDateUntil(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
+      Other.FYear, Other.FMonth, Other.FDay, LargestUnit,
+      Years, Months, Weeks, Days);
+
+    if (SmallestUnit <> tuDay) or (Increment <> 1) then
+    begin
+      ZeroH := 0; ZeroM := 0; ZeroS := 0; ZeroMs := 0; ZeroUs := 0; ZeroNs := 0;
+      RoundDiffDuration(Years, Months, Weeks, Days,
+        ZeroH, ZeroM, ZeroS, ZeroMs, ZeroUs, ZeroNs,
+        D.FYear, D.FMonth, D.FDay,
+        LargestUnit, SmallestUnit, Mode, Increment);
+    end;
+
+    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days, 0, 0, 0, 0, 0, 0);
+  finally
+    OtherRoots.Clear;
   end;
-  if not (SmallestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
-  if not (LargestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
-  if Ord(LargestUnit) > Ord(SmallestUnit) then
-    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(Increment, SmallestUnit);
-
-  if D.FCalendarId <> Other.FCalendarId then
-    ThrowRangeError('Temporal.PlainDate calendars must match',
-      SSuggestTemporalDateRange);
-
-  CalendarDateUntil(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
-    Other.FYear, Other.FMonth, Other.FDay, LargestUnit,
-    Years, Months, Weeks, Days);
-
-  if (SmallestUnit <> tuDay) or (Increment <> 1) then
-  begin
-    ZeroH := 0; ZeroM := 0; ZeroS := 0; ZeroMs := 0; ZeroUs := 0; ZeroNs := 0;
-    RoundDiffDuration(Years, Months, Weeks, Days,
-      ZeroH, ZeroM, ZeroS, ZeroMs, ZeroUs, ZeroNs,
-      D.FYear, D.FMonth, D.FDay,
-      LargestUnit, SmallestUnit, Mode, Increment);
-  end;
-
-  Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days, 0, 0, 0, 0, 0, 0);
 end;
 
 function TGocciaTemporalPlainDateValue.DateSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -870,54 +879,63 @@ var
   Increment: Integer;
   Years, Months, Weeks, Days: Int64;
   ZeroH, ZeroM, ZeroS, ZeroMs, ZeroUs, ZeroNs: Int64;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.since');
-  Other := CoercePlainDate(AArgs.GetElement(0), 'PlainDate.prototype.since');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoercePlainDate(AArgs.GetElement(0), 'PlainDate.prototype.since');
+    OtherRoots.Add(Other);
 
-  OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
-  Increment := GetRoundingIncrement(OptionsObj, 1);
-  Mode := GetRoundingMode(OptionsObj, rmTrunc);
-  SmallestUnit := GetSmallestUnit(OptionsObj, tuDay);
-  if LargestUnit = tuAuto then
-  begin
-    if Ord(SmallestUnit) < Ord(tuDay) then
-      LargestUnit := SmallestUnit
-    else
-      LargestUnit := tuDay;
+    OptionsObj := GetDiffOptions(AArgs, 1);
+    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+    Increment := GetRoundingIncrement(OptionsObj, 1);
+    Mode := GetRoundingMode(OptionsObj, rmTrunc);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuDay);
+    if LargestUnit = tuAuto then
+    begin
+      if Ord(SmallestUnit) < Ord(tuDay) then
+        LargestUnit := SmallestUnit
+      else
+        LargestUnit := tuDay;
+    end;
+    if not (SmallestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
+    if not (LargestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+    ValidateRoundingIncrement(Increment, SmallestUnit);
+    Mode := NegateTemporalRoundingMode(Mode);
+
+    if D.FCalendarId <> Other.FCalendarId then
+      ThrowRangeError('Temporal.PlainDate calendars must match',
+        SSuggestTemporalDateRange);
+
+    CalendarDateUntil(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
+      Other.FYear, Other.FMonth, Other.FDay, LargestUnit,
+      Years, Months, Weeks, Days);
+
+    if (SmallestUnit <> tuDay) or (Increment <> 1) then
+    begin
+      ZeroH := 0; ZeroM := 0; ZeroS := 0; ZeroMs := 0; ZeroUs := 0; ZeroNs := 0;
+      RoundDiffDuration(Years, Months, Weeks, Days,
+        ZeroH, ZeroM, ZeroS, ZeroMs, ZeroUs, ZeroNs,
+        D.FYear, D.FMonth, D.FDay,
+        LargestUnit, SmallestUnit, Mode, Increment);
+    end;
+
+    Years := -Years;
+    Months := -Months;
+    Weeks := -Weeks;
+    Days := -Days;
+
+    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days, 0, 0, 0, 0, 0, 0);
+  finally
+    OtherRoots.Clear;
   end;
-  if not (SmallestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
-  if not (LargestUnit in [tuYear, tuMonth, tuWeek, tuDay]) then
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['PlainDate.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
-  if Ord(LargestUnit) > Ord(SmallestUnit) then
-    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(Increment, SmallestUnit);
-  Mode := NegateTemporalRoundingMode(Mode);
-
-  if D.FCalendarId <> Other.FCalendarId then
-    ThrowRangeError('Temporal.PlainDate calendars must match',
-      SSuggestTemporalDateRange);
-
-  CalendarDateUntil(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
-    Other.FYear, Other.FMonth, Other.FDay, LargestUnit,
-    Years, Months, Weeks, Days);
-
-  if (SmallestUnit <> tuDay) or (Increment <> 1) then
-  begin
-    ZeroH := 0; ZeroM := 0; ZeroS := 0; ZeroMs := 0; ZeroUs := 0; ZeroNs := 0;
-    RoundDiffDuration(Years, Months, Weeks, Days,
-      ZeroH, ZeroM, ZeroS, ZeroMs, ZeroUs, ZeroNs,
-      D.FYear, D.FMonth, D.FDay,
-      LargestUnit, SmallestUnit, Mode, Increment);
-  end;
-
-  Years := -Years;
-  Months := -Months;
-  Weeks := -Weeks;
-  Days := -Days;
-
-  Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days, 0, 0, 0, 0, 0, 0);
 end;
 
 function TGocciaTemporalPlainDateValue.DateEquals(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

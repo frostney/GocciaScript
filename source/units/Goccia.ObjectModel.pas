@@ -11,6 +11,7 @@ uses
   TypInfo,
 
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel.Types,
   Goccia.Values.NativeFunction,
   Goccia.Values.NativeFunctionCallback,
@@ -44,11 +45,16 @@ const
 type
   EGocciaObjectModelError = class(Exception);
 
-  TGocciaMemberCollection = class
+  { A live member collection is a root source: the data values and symbols
+    it holds are often fresh (a toStringTag string) and reachable from nothing
+    else until RegisterMemberDefinitions stores them, while the values added
+    after them are allocated and can collect. }
+  TGocciaMemberCollection = class(TGCRootSource)
   private
     FMembers: TArray<TGocciaMemberDefinition>;
     procedure AddDefinition(const ADefinition: TGocciaMemberDefinition);
   public
+    procedure MarkRootReferences; override;
     procedure AddMethod(const ACallback: TGocciaNativeFunctionCallback;
       const AArity: Integer;
       const AKind: TGocciaMemberKind = gmkPrototypeMethod;
@@ -557,6 +563,19 @@ begin
   Result := DefineAccessor(AExposedName, GetterHost.Invoke, nil, AFlags, AKind);
 end;
 
+procedure TGocciaMemberCollection.MarkRootReferences;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FMembers) do
+  begin
+    if Assigned(FMembers[I].Symbol) then
+      FMembers[I].Symbol.MarkReferences;
+    if Assigned(FMembers[I].DataValue) then
+      FMembers[I].DataValue.MarkReferences;
+  end;
+end;
+
 procedure TGocciaMemberCollection.AddDefinition(
   const ADefinition: TGocciaMemberDefinition);
 var
@@ -760,90 +779,121 @@ var
   AliasDescriptor: TGocciaPropertyDescriptor;
   AliasValue: TGocciaValue;
   TargetObject: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
+  SetterRoots: TGocciaActiveRootFrame;
 begin
   if not (ATarget is TGocciaObjectValue) then
     raise EGocciaObjectModelError.Create('RegisterMemberDefinitions target must be a TGocciaObjectValue');
 
   TargetObject := TGocciaObjectValue(ATarget);
 
-  for I := 0 to High(AMembers) do
-  begin
-    Def := AMembers[I];
-    ValidateMemberDefinition(Def);
+  // The definitions' values and symbols may be held by nothing but this array
+  // (the collection that built it is gone), and every member registered
+  // before them allocates functions and names that can collect.
+  Roots.Initialize;
+  try
+    Roots.Add(TargetObject);
+    for I := 0 to High(AMembers) do
+    begin
+      Roots.Add(AMembers[I].Symbol);
+      Roots.Add(AMembers[I].DataValue);
+    end;
 
-    case Def.Kind of
-      gmkPrototypeMethod, gmkStaticMethod:
-        TargetObject.RegisterNativeMethod(CreateNativeFunctionFromDef(Def));
-      gmkPrototypeGetter, gmkStaticGetter,
-      gmkPrototypeSetter, gmkStaticSetter:
-      begin
-        if Assigned(Def.Callback) then
-          GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            Def.Callback, 'get ' + Def.ExposedName, 0)
-        else
-          GetterFn := nil;
+    for I := 0 to High(AMembers) do
+    begin
+      Def := AMembers[I];
+      ValidateMemberDefinition(Def);
 
-        if Assigned(Def.SetterCallback) then
-          SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            Def.SetterCallback, 'set ' + Def.ExposedName, 1)
-        else
-          SetterFn := nil;
+      case Def.Kind of
+        gmkPrototypeMethod, gmkStaticMethod:
+          TargetObject.RegisterNativeMethod(CreateNativeFunctionFromDef(Def));
+        gmkPrototypeGetter, gmkStaticGetter,
+        gmkPrototypeSetter, gmkStaticSetter:
+        begin
+          if Assigned(Def.Callback) then
+            GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+              Def.Callback, 'get ' + Def.ExposedName, 0)
+          else
+            GetterFn := nil;
 
-        TargetObject.DefineProperty(Def.ExposedName,
-          TGocciaPropertyDescriptorAccessor.Create(GetterFn, SetterFn, Def.PropertyFlags));
-      end;
-      gmkSymbolMethod:
-        TargetObject.DefineSymbolProperty(TGocciaSymbolValue(Def.Symbol),
-          TGocciaPropertyDescriptorData.Create(
-            TGocciaNativeFunctionValue.CreateWithoutPrototype(
-              Def.Callback, Def.ExposedName, Def.Arity),
-            Def.PropertyFlags));
-      gmkSymbolAccessor:
-      begin
-        if Assigned(Def.Callback) then
-          GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            Def.Callback, 'get ' + Def.ExposedName, 0)
-        else
-          GetterFn := nil;
+          // The getter is held only here while the setter is made.
+          SetterRoots.Initialize;
+          try
+            SetterRoots.Add(GetterFn);
+            if Assigned(Def.SetterCallback) then
+              SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+                Def.SetterCallback, 'set ' + Def.ExposedName, 1)
+            else
+              SetterFn := nil;
+          finally
+            SetterRoots.Clear;
+          end;
 
-        if Assigned(Def.SetterCallback) then
-          SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-            Def.SetterCallback, 'set ' + Def.ExposedName, 1)
-        else
-          SetterFn := nil;
-
-        TargetObject.DefineSymbolProperty(TGocciaSymbolValue(Def.Symbol),
-          TGocciaPropertyDescriptorAccessor.Create(GetterFn, SetterFn, Def.PropertyFlags));
-      end;
-      gmkSymbolProperty:
-        TargetObject.DefineSymbolProperty(TGocciaSymbolValue(Def.Symbol),
-          TGocciaPropertyDescriptorData.Create(Def.DataValue, Def.PropertyFlags));
-      gmkDataProperty:
-        TargetObject.DefineProperty(Def.ExposedName,
-          TGocciaPropertyDescriptorData.Create(Def.DataValue, Def.PropertyFlags));
-      gmkPropertyAlias, gmkSymbolAlias:
-      begin
-        AliasDescriptor := TargetObject.GetOwnPropertyDescriptor(
-          Def.AliasTargetName);
-        try
-          if not (AliasDescriptor is TGocciaPropertyDescriptorData) then
-            raise EGocciaObjectModelError.CreateFmt(
-              'Cannot register %s: target "%s" is not an existing data property',
-              [KindToString(Def.Kind), Def.AliasTargetName]);
-          AliasValue := TGocciaPropertyDescriptorData(AliasDescriptor).Value;
-        finally
-          ReleaseDescriptor(AliasDescriptor);
-        end;
-        if Def.Kind = gmkPropertyAlias then
           TargetObject.DefineProperty(Def.ExposedName,
-            TGocciaPropertyDescriptorData.Create(AliasValue,
-              Def.PropertyFlags))
-        else
+            TGocciaPropertyDescriptorAccessor.Create(GetterFn, SetterFn, Def.PropertyFlags));
+        end;
+        gmkSymbolMethod:
           TargetObject.DefineSymbolProperty(TGocciaSymbolValue(Def.Symbol),
-            TGocciaPropertyDescriptorData.Create(AliasValue,
+            TGocciaPropertyDescriptorData.Create(
+              TGocciaNativeFunctionValue.CreateWithoutPrototype(
+                Def.Callback, Def.ExposedName, Def.Arity),
               Def.PropertyFlags));
+        gmkSymbolAccessor:
+        begin
+          if Assigned(Def.Callback) then
+            GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+              Def.Callback, 'get ' + Def.ExposedName, 0)
+          else
+            GetterFn := nil;
+
+          // The getter is held only here while the setter is made.
+          SetterRoots.Initialize;
+          try
+            SetterRoots.Add(GetterFn);
+            if Assigned(Def.SetterCallback) then
+              SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+                Def.SetterCallback, 'set ' + Def.ExposedName, 1)
+            else
+              SetterFn := nil;
+          finally
+            SetterRoots.Clear;
+          end;
+
+          TargetObject.DefineSymbolProperty(TGocciaSymbolValue(Def.Symbol),
+            TGocciaPropertyDescriptorAccessor.Create(GetterFn, SetterFn, Def.PropertyFlags));
+        end;
+        gmkSymbolProperty:
+          TargetObject.DefineSymbolProperty(TGocciaSymbolValue(Def.Symbol),
+            TGocciaPropertyDescriptorData.Create(Def.DataValue, Def.PropertyFlags));
+        gmkDataProperty:
+          TargetObject.DefineProperty(Def.ExposedName,
+            TGocciaPropertyDescriptorData.Create(Def.DataValue, Def.PropertyFlags));
+        gmkPropertyAlias, gmkSymbolAlias:
+        begin
+          AliasDescriptor := TargetObject.GetOwnPropertyDescriptor(
+            Def.AliasTargetName);
+          try
+            if not (AliasDescriptor is TGocciaPropertyDescriptorData) then
+              raise EGocciaObjectModelError.CreateFmt(
+                'Cannot register %s: target "%s" is not an existing data property',
+                [KindToString(Def.Kind), Def.AliasTargetName]);
+            AliasValue := TGocciaPropertyDescriptorData(AliasDescriptor).Value;
+          finally
+            ReleaseDescriptor(AliasDescriptor);
+          end;
+          if Def.Kind = gmkPropertyAlias then
+            TargetObject.DefineProperty(Def.ExposedName,
+              TGocciaPropertyDescriptorData.Create(AliasValue,
+                Def.PropertyFlags))
+          else
+            TargetObject.DefineSymbolProperty(TGocciaSymbolValue(Def.Symbol),
+              TGocciaPropertyDescriptorData.Create(AliasValue,
+                Def.PropertyFlags));
+        end;
       end;
     end;
+  finally
+    Roots.Clear;
   end;
 end;
 

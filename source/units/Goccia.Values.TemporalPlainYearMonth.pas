@@ -63,6 +63,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.Options,
@@ -1086,33 +1087,42 @@ var
   RIncrement: Integer;
   DiffYears, RemMonths: Int64;
   TotalMonths: Int64;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.until');
-  Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.until');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.until');
+    OtherRoots.Add(Other);
 
-  ReadPlainYearMonthDifferenceSettings(AArgs,
-    'PlainYearMonth.prototype.until', LargestUnit, SmallestUnit, RMode,
-    RIncrement);
-
-  if YM.FCalendarId <> Other.FCalendarId then
-    ThrowRangeError('Temporal.PlainYearMonth calendars must match',
-      SSuggestTemporalDateRange);
-
-  TotalMonths := PlainYearMonthCalendarMonthsBetween(YM, Other,
-    'PlainYearMonth.prototype.until');
-  if TotalMonths <> 0 then
-  begin
-    if (not IsTemporalISODateInSupportedRange(YM.FYear, YM.FMonth, 1)) or
-       (not IsTemporalISODateInSupportedRange(Other.FYear, Other.FMonth, 1)) then
-      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
-        ['PlainYearMonth.prototype.until']), SSuggestTemporalDateRange);
-    CheckPlainYearMonthRoundingEndpoint(YM, TotalMonths, SmallestUnit,
+    ReadPlainYearMonthDifferenceSettings(AArgs,
+      'PlainYearMonth.prototype.until', LargestUnit, SmallestUnit, RMode,
       RIncrement);
-  end;
-  BuildPlainYearMonthDifferenceBetween(YM, Other, TotalMonths, LargestUnit,
-    SmallestUnit, RMode, RIncrement, DiffYears, RemMonths);
 
-  Result := TGocciaTemporalDurationValue.Create(DiffYears, RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
+    if YM.FCalendarId <> Other.FCalendarId then
+      ThrowRangeError('Temporal.PlainYearMonth calendars must match',
+        SSuggestTemporalDateRange);
+
+    TotalMonths := PlainYearMonthCalendarMonthsBetween(YM, Other,
+      'PlainYearMonth.prototype.until');
+    if TotalMonths <> 0 then
+    begin
+      if (not IsTemporalISODateInSupportedRange(YM.FYear, YM.FMonth, 1)) or
+         (not IsTemporalISODateInSupportedRange(Other.FYear, Other.FMonth, 1)) then
+        ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
+          ['PlainYearMonth.prototype.until']), SSuggestTemporalDateRange);
+      CheckPlainYearMonthRoundingEndpoint(YM, TotalMonths, SmallestUnit,
+        RIncrement);
+    end;
+    BuildPlainYearMonthDifferenceBetween(YM, Other, TotalMonths, LargestUnit,
+      SmallestUnit, RMode, RIncrement, DiffYears, RemMonths);
+
+    Result := TGocciaTemporalDurationValue.Create(DiffYears, RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
+  finally
+    OtherRoots.Clear;
+  end;
 end;
 
 // TC39 Temporal §10.3.15 Temporal.PlainYearMonth.prototype.since(other [, options])
@@ -1124,34 +1134,43 @@ var
   RIncrement: Integer;
   DiffYears, RemMonths: Int64;
   TotalMonths: Int64;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.since');
-  Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.since');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoercePlainYearMonth(AArgs.GetElement(0), 'PlainYearMonth.prototype.since');
+    OtherRoots.Add(Other);
 
-  ReadPlainYearMonthDifferenceSettings(AArgs,
-    'PlainYearMonth.prototype.since', LargestUnit, SmallestUnit, RMode,
-    RIncrement);
-  RMode := InvertPlainYearMonthSinceRoundingMode(RMode);
-
-  if YM.FCalendarId <> Other.FCalendarId then
-    ThrowRangeError('Temporal.PlainYearMonth calendars must match',
-      SSuggestTemporalDateRange);
-
-  TotalMonths := PlainYearMonthCalendarMonthsBetween(YM, Other,
-    'PlainYearMonth.prototype.since');
-  if TotalMonths <> 0 then
-  begin
-    if (not IsTemporalISODateInSupportedRange(YM.FYear, YM.FMonth, 1)) or
-       (not IsTemporalISODateInSupportedRange(Other.FYear, Other.FMonth, 1)) then
-      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
-        ['PlainYearMonth.prototype.since']), SSuggestTemporalDateRange);
-    CheckPlainYearMonthRoundingEndpoint(YM, -TotalMonths, SmallestUnit,
+    ReadPlainYearMonthDifferenceSettings(AArgs,
+      'PlainYearMonth.prototype.since', LargestUnit, SmallestUnit, RMode,
       RIncrement);
-  end;
-  BuildPlainYearMonthDifferenceBetween(YM, Other, TotalMonths, LargestUnit,
-    SmallestUnit, RMode, RIncrement, DiffYears, RemMonths);
+    RMode := InvertPlainYearMonthSinceRoundingMode(RMode);
 
-  Result := TGocciaTemporalDurationValue.Create(-DiffYears, -RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
+    if YM.FCalendarId <> Other.FCalendarId then
+      ThrowRangeError('Temporal.PlainYearMonth calendars must match',
+        SSuggestTemporalDateRange);
+
+    TotalMonths := PlainYearMonthCalendarMonthsBetween(YM, Other,
+      'PlainYearMonth.prototype.since');
+    if TotalMonths <> 0 then
+    begin
+      if (not IsTemporalISODateInSupportedRange(YM.FYear, YM.FMonth, 1)) or
+         (not IsTemporalISODateInSupportedRange(Other.FYear, Other.FMonth, 1)) then
+        ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
+          ['PlainYearMonth.prototype.since']), SSuggestTemporalDateRange);
+      CheckPlainYearMonthRoundingEndpoint(YM, -TotalMonths, SmallestUnit,
+        RIncrement);
+    end;
+    BuildPlainYearMonthDifferenceBetween(YM, Other, TotalMonths, LargestUnit,
+      SmallestUnit, RMode, RIncrement, DiffYears, RemMonths);
+
+    Result := TGocciaTemporalDurationValue.Create(-DiffYears, -RemMonths, 0, 0, 0, 0, 0, 0, 0, 0);
+  finally
+    OtherRoots.Clear;
+  end;
 end;
 
 // TC39 Temporal §10.3.16 Temporal.PlainYearMonth.prototype.equals(other)

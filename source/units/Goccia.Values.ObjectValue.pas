@@ -876,6 +876,7 @@ function TGocciaObjectValue.OwnPropertyKeyValues: TArray<TGocciaValue>;
 var
   Count: Integer;
   I: Integer;
+  Roots: TGocciaActiveRootFrame;
   StringKeys: TArray<string>;
   SymbolKeys: TArray<TGocciaSymbolValue>;
 begin
@@ -886,10 +887,19 @@ begin
   SymbolKeys := GetOwnSymbols;
   SetLength(Result, Length(StringKeys) + Length(SymbolKeys));
   Count := 0;
-  for I := 0 to High(StringKeys) do
-  begin
-    Result[Count] := TGocciaStringLiteralValue.Create(StringKeys[I]);
-    Inc(Count);
+  // Each key string reserves its payload, which can collect, so the keys made
+  // so far are rooted until the list is complete. The caller roots the list
+  // before its next allocation.
+  Roots.Initialize;
+  try
+    for I := 0 to High(StringKeys) do
+    begin
+      Result[Count] := TGocciaStringLiteralValue.Create(StringKeys[I]);
+      Roots.Add(Result[Count]);
+      Inc(Count);
+    end;
+  finally
+    Roots.Clear;
   end;
   for I := 0 to High(SymbolKeys) do
   begin
@@ -2878,27 +2888,39 @@ var
   NewDescriptor: TGocciaPropertyDescriptor;
   I: Integer;
   Keys: TArray<TGocciaValue>;
+  Roots: TGocciaActiveRootFrame;
 begin
   PreventExtensions;
-  Keys := Self.OwnPropertyKeyValues;
-  for I := 0 to High(Keys) do
-  begin
-    Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
-    if not Assigned(Descriptor) then
-      Continue;
-    if IsAccessorDescriptor(Descriptor) then
-      NewDescriptor := TGocciaPropertyDescriptor.Create([],
-        [pdfConfigurable])
-    else if IsDataDescriptor(Descriptor) then
-      NewDescriptor := TGocciaPropertyDescriptorData.CreatePartial(
-        TGocciaUndefinedLiteralValue.UndefinedValue, [],
-        [pdfConfigurable, pdfWritable])
-    else
-      NewDescriptor := TGocciaPropertyDescriptor.Create([],
-        [pdfConfigurable]);
-    // Released before the definition, which may replace a stored one.
-    ReleaseDescriptor(Descriptor);
-    Self.DefineOwnPropertyOrThrowForKey(Keys[I], NewDescriptor);
+  // The key list is fresh strings that nothing else holds, and every step
+  // below can allocate (and, through a proxy, run guest code), so the
+  // object and its keys are rooted until the loop ends.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    Keys := Self.OwnPropertyKeyValues;
+    for I := 0 to High(Keys) do
+      Roots.Add(Keys[I]);
+    for I := 0 to High(Keys) do
+    begin
+      Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
+      if not Assigned(Descriptor) then
+        Continue;
+      if IsAccessorDescriptor(Descriptor) then
+        NewDescriptor := TGocciaPropertyDescriptor.Create([],
+          [pdfConfigurable])
+      else if IsDataDescriptor(Descriptor) then
+        NewDescriptor := TGocciaPropertyDescriptorData.CreatePartial(
+          TGocciaUndefinedLiteralValue.UndefinedValue, [],
+          [pdfConfigurable, pdfWritable])
+      else
+        NewDescriptor := TGocciaPropertyDescriptor.Create([],
+          [pdfConfigurable]);
+      // Released before the definition, which may replace a stored one.
+      ReleaseDescriptor(Descriptor);
+      Self.DefineOwnPropertyOrThrowForKey(Keys[I], NewDescriptor);
+    end;
+  finally
+    Roots.Clear;
   end;
   FFrozen := True;
   FSealed := True;
@@ -2909,12 +2931,22 @@ procedure TGocciaObjectValue.Seal;
 var
   I: Integer;
   Keys: TArray<TGocciaValue>;
+  Roots: TGocciaActiveRootFrame;
 begin
   PreventExtensions;
-  Keys := Self.OwnPropertyKeyValues;
-  for I := 0 to High(Keys) do
-    Self.DefineOwnPropertyOrThrowForKey(Keys[I],
-      TGocciaPropertyDescriptor.Create([], [pdfConfigurable]));
+  // As in Freeze: the fresh key strings are held only by this list.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    Keys := Self.OwnPropertyKeyValues;
+    for I := 0 to High(Keys) do
+      Roots.Add(Keys[I]);
+    for I := 0 to High(Keys) do
+      Self.DefineOwnPropertyOrThrowForKey(Keys[I],
+        TGocciaPropertyDescriptor.Create([], [pdfConfigurable]));
+  finally
+    Roots.Clear;
+  end;
   FSealed := True;
   FExtensible := False;
 end;
@@ -2939,6 +2971,7 @@ var
   ExtensibleCheck: Boolean;
   I: Integer;
   Keys: TArray<TGocciaValue>;
+  Roots: TGocciaActiveRootFrame;
 begin
   if Self is TGocciaProxyValue then
     ExtensibleCheck := TGocciaProxyValue(Self).IsExtensibleTrap
@@ -2949,18 +2982,27 @@ begin
   if ExtensibleCheck then
     Exit(False);
 
-  // Step 5: For each element key of keys
-  Keys := Self.OwnPropertyKeyValues;
-  for I := 0 to High(Keys) do
-  begin
-    Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
-    if not Assigned(Descriptor) then
-      Continue;
-    IsFrozenProperty := not Descriptor.Configurable and
-      not (IsDataDescriptor(Descriptor) and Descriptor.Writable);
-    ReleaseDescriptor(Descriptor);
-    if not IsFrozenProperty then
-      Exit(False);
+  // Step 5: For each element key of keys. A proxy's getOwnPropertyDescriptor
+  // trap runs guest code between keys, so the fresh key strings are rooted.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    Keys := Self.OwnPropertyKeyValues;
+    for I := 0 to High(Keys) do
+      Roots.Add(Keys[I]);
+    for I := 0 to High(Keys) do
+    begin
+      Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
+      if not Assigned(Descriptor) then
+        Continue;
+      IsFrozenProperty := not Descriptor.Configurable and
+        not (IsDataDescriptor(Descriptor) and Descriptor.Writable);
+      ReleaseDescriptor(Descriptor);
+      if not IsFrozenProperty then
+        Exit(False);
+    end;
+  finally
+    Roots.Clear;
   end;
 
   // Step 6: Return true
@@ -2975,6 +3017,7 @@ var
   ExtensibleCheck: Boolean;
   I: Integer;
   Keys: TArray<TGocciaValue>;
+  Roots: TGocciaActiveRootFrame;
 begin
   if Self is TGocciaProxyValue then
     ExtensibleCheck := TGocciaProxyValue(Self).IsExtensibleTrap
@@ -2985,15 +3028,23 @@ begin
   if ExtensibleCheck then
     Exit(False);
 
-  // Step 5: For each element key of keys
-  Keys := Self.OwnPropertyKeyValues;
-  for I := 0 to High(Keys) do
-  begin
-    Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
-    IsConfigurable := Assigned(Descriptor) and Descriptor.Configurable;
-    ReleaseDescriptor(Descriptor);
-    if IsConfigurable then
-      Exit(False);
+  // Step 5: For each element key of keys (rooted as in TestIntegrityFrozen)
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    Keys := Self.OwnPropertyKeyValues;
+    for I := 0 to High(Keys) do
+      Roots.Add(Keys[I]);
+    for I := 0 to High(Keys) do
+    begin
+      Descriptor := Self.OwnPropertyDescriptorForKey(Keys[I]);
+      IsConfigurable := Assigned(Descriptor) and Descriptor.Configurable;
+      ReleaseDescriptor(Descriptor);
+      if IsConfigurable then
+        Exit(False);
+    end;
+  finally
+    Roots.Clear;
   end;
 
   // Step 6: Return true

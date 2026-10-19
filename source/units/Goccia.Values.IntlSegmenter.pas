@@ -360,6 +360,7 @@ var
   Iter: TGocciaIntlSegmentIteratorValue;
   I: Integer;
   Seg: TIntlSegment;
+  Roots: TGocciaActiveRootFrame;
 begin
   Segs := AsSegments(AThisValue, 'Segments.prototype.containing');
   if AArgs.Length < 1 then
@@ -367,10 +368,15 @@ begin
   else
     Idx := ToIntegerFromArgs(AArgs, 0);
 
-  // Build all segments and find the one containing the index
+  // Build all segments and find the one containing the index. The iterator
+  // is a managed value this call frees itself, so it is rooted until then: a
+  // collection inside CreateSegmentObject would otherwise sweep it, and the
+  // Free below would free it a second time.
   Iter := TGocciaIntlSegmentIteratorValue.Create(Segs.FLocale, Segs.FGranularity,
     Segs.FText);
+  Roots.Initialize;
   try
+    Roots.Add(Iter);
     for I := 0 to Length(Iter.FSegments) - 1 do
     begin
       Seg := Iter.FSegments[I];
@@ -383,6 +389,7 @@ begin
     end;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   finally
+    Roots.Clear;
     Iter.Free;
   end;
 end;

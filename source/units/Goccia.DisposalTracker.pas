@@ -165,12 +165,17 @@ var
   ErrorObj: TGocciaObjectValue;
   SuppressedErrorProto: TGocciaObjectValue;
   ErrorRoot: TGocciaTempRoot;
+  ArgumentRoots: TGocciaActiveRootFrame;
 begin
   SuppressedErrorProto := GetSuppressedErrorProto;
   { The name/message/stack strings below are GC safe points; root the error
-    while it fills. }
+    while it fills, and the two errors it wraps, which a caller can hold only
+    in locals (the error accumulated so far across a stack's disposers). }
+  ArgumentRoots.Initialize;
   InitializeTempRoot(ErrorRoot);
   try
+  ArgumentRoots.Add(AError);
+  ArgumentRoots.Add(ASuppressed);
   // Build the automatic SuppressedError as the error subclass so its genuine
   // throw provenance (the double-fault site) is captured and its code frame
   // renders, matching an explicit `throw`.
@@ -210,6 +215,7 @@ begin
   Result := ErrorObj;
   finally
     RemoveTempRootIfNeeded(ErrorRoot);
+    ArgumentRoots.Clear;
   end;
 end;
 

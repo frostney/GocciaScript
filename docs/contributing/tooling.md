@@ -426,6 +426,33 @@ fails the job. On a scheduled or `main` run, it also opens one tracking issue
 or comments on the open one (`.github/scripts/report-gc-stress.sh`). Runs on
 other branches only print what they would file.
 
+### GC stress at every reservation
+
+The GC-stress build collects at instruction boundaries. Native code also
+collects at a reservation: making a string, a buffer or an error, or growing
+element or property storage past the gate, collects first when the request
+would cross the `--max-memory` ceiling. Two switches on the collector make
+that certain in a test, in any build:
+
+| Switch | Effect |
+|---|---|
+| `CollectBeforeEveryReservation` | Every `TryReserveExternalBytes` and every gated growth (`RequireNativeBytes`) runs the full collection a request over the ceiling runs. |
+| `QuarantineSwept` | A sweep keeps what it would free, intact. A later collection that reaches a kept object counts a violation instead of reading freed memory: `QuarantineViolations`, with the first one's class (`FirstQuarantineViolation`) and the collection that swept it (`FirstQuarantineViolationSweptIn`, a `TotalCollections` value). Turning it off frees what it kept. |
+
+`Goccia.GCStress.Test` sets both and runs engine creation, every lazy global
+and its members, and the native construction paths issue #1816 found
+unrooted, each case written so it reports a violation without its fix. It
+takes a few seconds, so it runs per PR in the Pascal unit-test loop, and the
+scheduled memory-safety job (`fuzz.yml`) runs it again under heaptrc and
+under Valgrind memcheck.
+
+To sweep a wider workload, set both switches in `TGarbageCollector.Create`
+in a local build of `GocciaTestRunner` or `GocciaTest262Runner` and run each
+file in its own process with one worker. A violation names the class that was
+swept while something still held it; running the file again and stopping in
+the collection that swept it (when `TotalCollections` is one less) shows the
+native frame that was holding it.
+
 ## Depth and Fuzz Probe
 
 `scripts/depth-probe.ts` runs depth and nesting shapes against a `GocciaRunner`

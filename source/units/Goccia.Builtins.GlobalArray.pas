@@ -176,6 +176,7 @@ function TArrayFromAsyncSyncIteratorJob.ContinueJob(
 var
   DoneValue, KValue: TGocciaValue;
   Done: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FSettled then
@@ -192,20 +193,31 @@ begin
       Exit;
     end;
 
-    KValue := FNextResult.GetProperty(PROP_VALUE);
-    if not Assigned(KValue) then
-      KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    KValue := AwaitValue(KValue);
-
-    if FMapping then
-    begin
-      FMapArgs.SetElement(0, KValue);
-      FMapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(FK));
-      KValue := InvokeCallable(FMapCallback, FMapArgs, FThisArg);
+    // Each value is held only by this local while it is awaited (which reads
+    // its then, guest code) and while the mapped value is computed.
+    Roots.Initialize;
+    try
+      KValue := FNextResult.GetProperty(PROP_VALUE);
+      if not Assigned(KValue) then
+        KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Roots.Add(KValue);
       KValue := AwaitValue(KValue);
-    end;
+      Roots.Add(KValue);
 
-    FResultObj.CreateDataPropertyOrThrow(IntToStr(FK), KValue);
+      if FMapping then
+      begin
+        FMapArgs.SetElement(0, KValue);
+        FMapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(FK));
+        KValue := InvokeCallable(FMapCallback, FMapArgs, FThisArg);
+        Roots.Add(KValue);
+        KValue := AwaitValue(KValue);
+        Roots.Add(KValue);
+      end;
+
+      FResultObj.CreateDataPropertyOrThrow(IntToStr(FK), KValue);
+    finally
+      Roots.Clear;
+    end;
     Inc(FK);
     FNextResult := FIterator.AdvanceNext;
     Schedule;
@@ -604,6 +616,7 @@ var
   LengthValue: TGocciaValue;
   GC: TGarbageCollector;
   SourceRoot: TGocciaTempRoot;
+  IteratorRoot: TGocciaTempRoot;
 
   procedure CreateResultObject(const ALen: Integer; const APassLength: Boolean);
   begin
@@ -649,6 +662,10 @@ var
 begin
   GC := TGarbageCollector.Instance;
   InitializeTempRoot(SourceRoot);
+  // The iterator @@iterator returned is held only by locals while its next
+  // getter runs and while the this-constructor builds the result, both guest
+  // code.
+  InitializeTempRoot(IteratorRoot);
   Promise := TGocciaPromiseValue.Create;
 
   if Assigned(GC) then
@@ -804,6 +821,7 @@ begin
               finally
                 EmptyArgs.Free;
               end;
+              AddTempRootIfNeeded(IteratorRoot, IteratorObj);
 
               if IteratorObj is TGocciaIteratorValue then
                 Iterator := TGocciaIteratorValue(IteratorObj)
@@ -830,6 +848,8 @@ begin
 
           if Assigned(Iterator) then
           begin
+            // The iterator record (a wrapper marks the object it wraps).
+            AddTempRootIfNeeded(IteratorRoot, Iterator);
             CreateResultObject(0, False);
             if Assigned(GC) then
               GC.AddTempRoot(Iterator);
@@ -904,6 +924,7 @@ begin
         GC.RemoveTempRoot(ResultObj);
     end;
   finally
+    RemoveTempRootIfNeeded(IteratorRoot);
     RemoveTempRootIfNeeded(SourceRoot);
     if Assigned(GC) then
       GC.RemoveTempRoot(Promise);

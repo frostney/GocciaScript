@@ -98,6 +98,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.DurationMath,
@@ -3397,64 +3398,73 @@ var
   StartNs, EndNs, DiffNs, IncrementNs: TBigInteger;
   Years, Months, Weeks, Days: Int64;
   RH, RM, RS, RMs, RUs, RNs: Int64;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.until');
-  Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.until');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.until');
+    OtherRoots.Add(Other);
 
-  OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
-  if LargestUnit = tuAuto then
-  begin
-    if Ord(tuHour) > Ord(SmallestUnit) then
-      LargestUnit := SmallestUnit
-    else
-      LargestUnit := tuHour;
-  end;
-  if Ord(LargestUnit) > Ord(SmallestUnit) then
-    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateZonedDateTimeDiffRoundingIncrement(RIncrement, SmallestUnit,
-    LargestUnit);
-
-  if Zdt.FCalendarId <> Other.FCalendarId then
-    ThrowRangeError('Temporal.ZonedDateTime calendars must match',
-      SSuggestTemporalDateRange);
-
-  if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
-  begin
-    if not TimeZoneIdentifiersEqual(Zdt.FTimeZone, Other.FTimeZone) then
-      ThrowRangeError('Temporal.ZonedDateTime time zones must match',
-        SSuggestTemporalTimezone);
-    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
-      RoundZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
-        Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
-        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
-        SmallestUnit, RMode, RIncrement, Years, Months, Weeks, Days,
-        RH, RM, RS, RMs, RUs, RNs)
-    else
-      ComputeZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
-        Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
-        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
-        Years, Months, Weeks, Days, RH, RM, RS, RMs, RUs, RNs);
-
-    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
-      RH, RM, RS, RMs, RUs, RNs);
-  end
-  else
-  begin
-    // Sub-day: use exact epoch nanosecond difference.
-    StartNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds);
-    EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
-    DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
-    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+    OptionsObj := GetDiffOptions(AArgs, 1);
+    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+    RIncrement := GetRoundingIncrement(OptionsObj, 1);
+    RMode := GetRoundingMode(OptionsObj, rmTrunc);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+    if LargestUnit = tuAuto then
     begin
-      IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
-        .Multiply(TBigInteger.FromInt64(RIncrement));
-      DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
+      if Ord(tuHour) > Ord(SmallestUnit) then
+        LargestUnit := SmallestUnit
+      else
+        LargestUnit := tuHour;
     end;
-    Result := ZonedDiffToUnits(DiffNs, LargestUnit);
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+    ValidateZonedDateTimeDiffRoundingIncrement(RIncrement, SmallestUnit,
+      LargestUnit);
+
+    if Zdt.FCalendarId <> Other.FCalendarId then
+      ThrowRangeError('Temporal.ZonedDateTime calendars must match',
+        SSuggestTemporalDateRange);
+
+    if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
+    begin
+      if not TimeZoneIdentifiersEqual(Zdt.FTimeZone, Other.FTimeZone) then
+        ThrowRangeError('Temporal.ZonedDateTime time zones must match',
+          SSuggestTemporalTimezone);
+      if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+        RoundZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
+          Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
+          Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
+          SmallestUnit, RMode, RIncrement, Years, Months, Weeks, Days,
+          RH, RM, RS, RMs, RUs, RNs)
+      else
+        ComputeZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
+          Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
+          Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
+          Years, Months, Weeks, Days, RH, RM, RS, RMs, RUs, RNs);
+
+      Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
+        RH, RM, RS, RMs, RUs, RNs);
+    end
+    else
+    begin
+      // Sub-day: use exact epoch nanosecond difference.
+      StartNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds, Zdt.FSubMillisecondNanoseconds);
+      EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
+      DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
+      if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+      begin
+        IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+          .Multiply(TBigInteger.FromInt64(RIncrement));
+        DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
+      end;
+      Result := ZonedDiffToUnits(DiffNs, LargestUnit);
+    end;
+  finally
+    OtherRoots.Clear;
   end;
 end;
 
@@ -3481,66 +3491,75 @@ var
   StartNs, EndNs, DiffNs, IncrementNs: TBigInteger;
   Years, Months, Weeks, Days: Int64;
   RH, RM, RS, RMs, RUs, RNs: Int64;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.since');
-  Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.since');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'ZonedDateTime.prototype.since');
+    OtherRoots.Add(Other);
 
-  OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  RMode := InvertSinceRoundingMode(RMode);
-  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
-  if LargestUnit = tuAuto then
-  begin
-    if Ord(tuHour) > Ord(SmallestUnit) then
-      LargestUnit := SmallestUnit
-    else
-      LargestUnit := tuHour;
-  end;
-  if Ord(LargestUnit) > Ord(SmallestUnit) then
-    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateZonedDateTimeDiffRoundingIncrement(RIncrement, SmallestUnit,
-    LargestUnit);
-
-  if Zdt.FCalendarId <> Other.FCalendarId then
-    ThrowRangeError('Temporal.ZonedDateTime calendars must match',
-      SSuggestTemporalDateRange);
-
-  if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
-  begin
-    if not TimeZoneIdentifiersEqual(Zdt.FTimeZone, Other.FTimeZone) then
-      ThrowRangeError('Temporal.ZonedDateTime time zones must match',
-        SSuggestTemporalTimezone);
-    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
-      RoundZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
-        Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
-        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
-        SmallestUnit, RMode, RIncrement, Years, Months, Weeks, Days,
-        RH, RM, RS, RMs, RUs, RNs)
-    else
-      ComputeZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
-        Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
-        Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
-        Years, Months, Weeks, Days, RH, RM, RS, RMs, RUs, RNs);
-
-    Result := TGocciaTemporalDurationValue.Create(-Years, -Months, -Weeks,
-      -Days, -RH, -RM, -RS, -RMs, -RUs, -RNs);
-  end
-  else
-  begin
-    StartNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds,
-      Zdt.FSubMillisecondNanoseconds);
-    EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds,
-      Other.FSubMillisecondNanoseconds);
-    DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
-    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+    OptionsObj := GetDiffOptions(AArgs, 1);
+    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+    RIncrement := GetRoundingIncrement(OptionsObj, 1);
+    RMode := GetRoundingMode(OptionsObj, rmTrunc);
+    RMode := InvertSinceRoundingMode(RMode);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+    if LargestUnit = tuAuto then
     begin
-      IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
-        .Multiply(TBigInteger.FromInt64(RIncrement));
-      DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
+      if Ord(tuHour) > Ord(SmallestUnit) then
+        LargestUnit := SmallestUnit
+      else
+        LargestUnit := tuHour;
     end;
-    Result := ZonedDiffToUnits(DiffNs.Negate, LargestUnit);
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+    ValidateZonedDateTimeDiffRoundingIncrement(RIncrement, SmallestUnit,
+      LargestUnit);
+
+    if Zdt.FCalendarId <> Other.FCalendarId then
+      ThrowRangeError('Temporal.ZonedDateTime calendars must match',
+        SSuggestTemporalDateRange);
+
+    if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
+    begin
+      if not TimeZoneIdentifiersEqual(Zdt.FTimeZone, Other.FTimeZone) then
+        ThrowRangeError('Temporal.ZonedDateTime time zones must match',
+          SSuggestTemporalTimezone);
+      if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+        RoundZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
+          Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
+          Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
+          SmallestUnit, RMode, RIncrement, Years, Months, Weeks, Days,
+          RH, RM, RS, RMs, RUs, RNs)
+      else
+        ComputeZonedDateTimeDiffFields(Zdt.FEpochMilliseconds,
+          Zdt.FSubMillisecondNanoseconds, Other.FEpochMilliseconds,
+          Other.FSubMillisecondNanoseconds, Zdt.FTimeZone, Zdt.FCalendarId, LargestUnit,
+          Years, Months, Weeks, Days, RH, RM, RS, RMs, RUs, RNs);
+
+      Result := TGocciaTemporalDurationValue.Create(-Years, -Months, -Weeks,
+        -Days, -RH, -RM, -RS, -RMs, -RUs, -RNs);
+    end
+    else
+    begin
+      StartNs := EpochNanosecondsFromParts(Zdt.FEpochMilliseconds,
+        Zdt.FSubMillisecondNanoseconds);
+      EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds,
+        Other.FSubMillisecondNanoseconds);
+      DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
+      if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+      begin
+        IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+          .Multiply(TBigInteger.FromInt64(RIncrement));
+        DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
+      end;
+      Result := ZonedDiffToUnits(DiffNs.Negate, LargestUnit);
+    end;
+  finally
+    OtherRoots.Clear;
   end;
 end;
 

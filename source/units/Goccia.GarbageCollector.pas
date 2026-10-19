@@ -187,6 +187,13 @@ type
     FGCThreshold: Integer;
     FEnabled: Boolean;
     FCollecting: Boolean;
+    FCollectBeforeEveryReservation: Boolean;
+    // The swept objects a test asked to keep (QuarantineSwept), and whether
+    // the destructors running now are ReleaseQuarantine's.
+    FQuarantineSwept: Boolean;
+    FQuarantine: TGCManagedObjectArray;
+    FQuarantineCount: Integer;
+    FReleasingQuarantine: Boolean;
     FTotalCollected: Int64;
     FTotalCollections: Integer;
 
@@ -479,7 +486,38 @@ type
     procedure PrintTimingSummary;
     {$ENDIF}
 
+    procedure SetQuarantineSwept(const AValue: Boolean);
+    procedure RecycleSwept(const AObject: TGCManagedObject);
+    procedure ReleaseQuarantine;
+    procedure ForgetQuarantined(const AObject: TGCManagedObject);
+
     property Enabled: Boolean read FEnabled write FEnabled;
+    // A stress switch for tests: every TryReserveExternalBytes, and every
+    // gated growth (RequireNativeBytes), first runs the full collection a
+    // request over the ceiling runs as its last resort, so native code that
+    // holds an unrooted value across a reservation fails at once instead of
+    // only near the ceiling (#1816: Goccia.GCStress.Test; the heap snapshot
+    // reader's hardening tests set it too). Off by default.
+    property CollectBeforeEveryReservation: Boolean
+      read FCollectBeforeEveryReservation
+      write FCollectBeforeEveryReservation;
+    // A detector for tests, paired with the switch above: while it is on, a
+    // sweep keeps what it would free, intact, instead of freeing it, and a
+    // later collection that reaches a kept object (a value that was swept
+    // while native code still held it, then stored) counts a violation
+    // instead of reading freed memory, as does freeing a kept object
+    // natively. So a missing root fails a test deterministically, with the
+    // class that was lost, in any build. Turning it off frees what it kept.
+    property QuarantineSwept: Boolean read FQuarantineSwept
+      write SetQuarantineSwept;
+    // Violations since the last ResetQuarantineViolations, across collectors
+    // (marking is process-wide), and the class of the first one.
+    class function QuarantineViolations: Integer; static;
+    class function FirstQuarantineViolation: string; static;
+    // The ordinal of the collection that swept that object (TotalCollections
+    // after it), to stop at when looking for what was holding it.
+    class function FirstQuarantineViolationSweptIn: Integer; static;
+    class procedure ResetQuarantineViolations; static;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
@@ -534,6 +572,9 @@ type
 
 const
   DEFAULT_GC_THRESHOLD = 10000;
+  // The mark a quarantined object carries (TGarbageCollector.QuarantineSwept).
+  // AdvanceMark never makes it the current mark.
+  GC_QUARANTINE_MARK = High(Cardinal);
 
   DEFAULT_MAX_BYTES   = 512 * 1024 * 1024;         { 512 MB fallback }
   MAX_BYTES_CAP_64BIT = Int64(8192) * 1024 * 1024;  { 8 GB cap for 64-bit }
@@ -627,6 +668,12 @@ end;
 
 var
   GCCurrentMark: Cardinal;
+  // QuarantineSwept's findings. Marking runs only under the collect lock, and
+  // a native free of a kept object only on its owner thread, so these are
+  // written under that lock or by tests that run one thread.
+  GCQuarantineViolations: Integer = 0;
+  GCQuarantineFirstViolation: string = '';
+  GCQuarantineFirstViolationSweptIn: Integer = 0;
   // Global collection coordination only. Collect and CollectYoung serialize
   // across ALL collectors because the mark epoch (GCCurrentMark) is
   // process-global and some intrinsic objects are shared: two concurrent
@@ -846,7 +893,7 @@ end;
 class procedure TGCManagedObject.AdvanceMark;
 begin
   Inc(GCCurrentMark);
-  if GCCurrentMark = 0 then
+  if (GCCurrentMark = 0) or (GCCurrentMark = GC_QUARANTINE_MARK) then
     GCCurrentMark := 1;
 end;
 
@@ -861,10 +908,29 @@ begin
     FGCMark := GCCurrentMark;
 end;
 
+procedure NoteQuarantinedReached(const AObject: TGCManagedObject);
+begin
+  if GCQuarantineViolations = 0 then
+  begin
+    GCQuarantineFirstViolation := AObject.ClassName;
+    // RecycleSwept left the collection that swept it here.
+    GCQuarantineFirstViolationSweptIn := AObject.GCIndex;
+  end;
+  Inc(GCQuarantineViolations);
+end;
+
 procedure TGCManagedObject.MarkReferences;
 begin
   if FGCMark = GCCurrentMark then
     Exit;
+  // Only with TGarbageCollector.QuarantineSwept on: something live holds an
+  // object a sweep took. Counted, and not traced, so its children (which
+  // may be quarantined too) are not counted twice.
+  if FGCMark = GC_QUARANTINE_MARK then
+  begin
+    NoteQuarantinedReached(Self);
+    Exit;
+  end;
   FGCMark := GCCurrentMark;
   if not GCMarkTracing then
     TraceFrom(Self)
@@ -915,7 +981,12 @@ var
 begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
-    GC.UnregisterObject(Self);
+  begin
+    if FGCMark = GC_QUARANTINE_MARK then
+      GC.ForgetQuarantined(Self)
+    else
+      GC.UnregisterObject(Self);
+  end;
   inherited;
 end;
 
@@ -1559,7 +1630,7 @@ begin
       begin
         Inc(FreedBytes, Obj.InstanceSize);
         Obj.GCIndex := -1;
-        Obj.Recycle;
+        RecycleSwept(Obj);
         Inc(Collected);
       end;
     end;
@@ -1597,6 +1668,7 @@ const
 var
   Pass: Integer;
 begin
+  SetQuarantineSwept(False);
   FPinnedObjects.Clear;
   FTempRoots.Clear;
   FQueuedRoots.Clear;
@@ -2011,7 +2083,7 @@ begin
           begin
             Inc(FreedBytes, Obj.InstanceSize);
             Obj.GCIndex := -1;
-            Obj.Recycle;
+            RecycleSwept(Obj);
             Inc(Collected);
           end;
         end;
@@ -2184,11 +2256,104 @@ begin
     RequestPressureCollection;
 end;
 
+procedure TGarbageCollector.SetQuarantineSwept(const AValue: Boolean);
+begin
+  FQuarantineSwept := AValue;
+  if not AValue then
+    ReleaseQuarantine;
+end;
+
+procedure TGarbageCollector.RecycleSwept(const AObject: TGCManagedObject);
+begin
+  if not FQuarantineSwept then
+  begin
+    AObject.Recycle;
+    Exit;
+  end;
+  AObject.FGCMark := GC_QUARANTINE_MARK;
+  // A swept object has no list slot; its index records which collection
+  // swept it, for the violation report (FirstQuarantineViolationSweptIn).
+  AObject.GCIndex := FTotalCollections + 1;
+  if FQuarantineCount = Length(FQuarantine) then
+    SetLength(FQuarantine, FQuarantineCount * 2 + 256);
+  FQuarantine[FQuarantineCount] := AObject;
+  Inc(FQuarantineCount);
+end;
+
+procedure TGarbageCollector.ReleaseQuarantine;
+var
+  Obj: TGCManagedObject;
+begin
+  if FReleasingQuarantine then
+    Exit;
+  FReleasingQuarantine := True;
+  try
+    // A destructor here can free another kept object natively, which takes
+    // it off the list (ForgetQuarantined), so each entry is read once.
+    while FQuarantineCount > 0 do
+    begin
+      Dec(FQuarantineCount);
+      Obj := FQuarantine[FQuarantineCount];
+      FQuarantine[FQuarantineCount] := nil;
+      if Assigned(Obj) then
+      begin
+        // No longer kept: its destructor unregisters it like any value.
+        Obj.FGCMark := 0;
+        Obj.GCIndex := -1;
+        Obj.Recycle;
+      end;
+    end;
+  finally
+    FReleasingQuarantine := False;
+  end;
+  SetLength(FQuarantine, 0);
+end;
+
+procedure TGarbageCollector.ForgetQuarantined(const AObject: TGCManagedObject);
+var
+  I: Integer;
+begin
+  // Outside ReleaseQuarantine a native free of a swept object would be a
+  // double free with the switch off.
+  if not FReleasingQuarantine then
+    NoteQuarantinedReached(AObject);
+  for I := FQuarantineCount - 1 downto 0 do
+    if FQuarantine[I] = AObject then
+    begin
+      FQuarantine[I] := nil;
+      Exit;
+    end;
+end;
+
+class function TGarbageCollector.QuarantineViolations: Integer;
+begin
+  Result := GCQuarantineViolations;
+end;
+
+class function TGarbageCollector.FirstQuarantineViolation: string;
+begin
+  Result := GCQuarantineFirstViolation;
+end;
+
+class function TGarbageCollector.FirstQuarantineViolationSweptIn: Integer;
+begin
+  Result := GCQuarantineFirstViolationSweptIn;
+end;
+
+class procedure TGarbageCollector.ResetQuarantineViolations;
+begin
+  GCQuarantineViolations := 0;
+  GCQuarantineFirstViolation := '';
+  GCQuarantineFirstViolationSweptIn := 0;
+end;
+
 function TGarbageCollector.TryReserveExternalBytes(
   const ABytes: Int64; const AProtect: TGCManagedObject): Boolean;
 begin
   if ABytes <= 0 then
     Exit(True);
+  if FCollectBeforeEveryReservation then
+    CollectForMemoryPressure(AProtect, True);
   // External-byte accounting is a read-modify-write on FBytesAllocated and
   // FExternalBytes that a cross-thread error destructor can drive concurrently
   // through ReleaseExternalBytes on this same (reserving) collector, so both

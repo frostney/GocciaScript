@@ -82,7 +82,11 @@ type
     function GetStaticPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetPrivatePropertyGetter(const AName: string): TGocciaValue;
     function GetPrivatePropertySetter(const AName: string): TGocciaValue;
-    procedure MaterializeIntrinsicProperty(const AName: string);
+    // APending and APendingValue are what the caller is about to store: they
+    // are rooted while the intrinsic's value is allocated.
+    procedure MaterializeIntrinsicProperty(const AName: string;
+      const APending: TGocciaPropertyDescriptor = nil;
+      const APendingValue: TGocciaValue = nil);
     // The body of Instantiate. ARoots is the frame Instantiate raised around
     // it; every value this body reads again after guest code runs goes in it.
     function InstantiateRooted(const AArguments: TGocciaArgumentsCollection;
@@ -1893,15 +1897,30 @@ end;
 // Object.seal define every own key after preventing extensions) and which
 // fills in a partial descriptor from the defaults instead of the current
 // attributes. A deleted property stays absent.
-procedure TGocciaClassValue.MaterializeIntrinsicProperty(const AName: string);
+procedure TGocciaClassValue.MaterializeIntrinsicProperty(const AName: string;
+  const APending: TGocciaPropertyDescriptor;
+  const APendingValue: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (AName <> PROP_NAME) and (AName <> PROP_LENGTH) then
     Exit;
   if FProperties.ContainsKey(AName) then
     Exit;
-  Descriptor := GetOwnPropertyDescriptor(AName);
+  // Synthesizing the descriptor allocates its value (a name string reserves
+  // its payload and can collect) while the caller's pending descriptor or
+  // value is held by nothing but the caller.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    if Assigned(APending) then
+      APending.PushRoots(Roots);
+    Roots.Add(APendingValue);
+    Descriptor := GetOwnPropertyDescriptor(AName);
+  finally
+    Roots.Clear;
+  end;
   if not Assigned(Descriptor) then
     Exit;
   if Descriptor.CallerOwned then
@@ -1926,7 +1945,7 @@ begin
       SSuggestCannotDeleteNonConfigurable);
   end;
 
-  MaterializeIntrinsicProperty(AName);
+  MaterializeIntrinsicProperty(AName, ADescriptor);
   inherited DefineProperty(AName, ADescriptor);
 end;
 
@@ -1944,7 +1963,7 @@ begin
     Exit(False);
   end;
 
-  MaterializeIntrinsicProperty(AName);
+  MaterializeIntrinsicProperty(AName, ADescriptor);
   Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
@@ -1958,7 +1977,7 @@ begin
   // messages use, as Object.defineProperty already left it.
   if (AName = PROP_NAME) or (AName = PROP_LENGTH) then
   begin
-    MaterializeIntrinsicProperty(AName);
+    MaterializeIntrinsicProperty(AName, nil, AValue);
     inherited SetProperty(AName, AValue);
     Exit;
   end;

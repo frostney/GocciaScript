@@ -79,6 +79,8 @@ type
     procedure RegisterPlainMonthDay;
     procedure RegisterZonedDateTime;
     procedure RegisterNow;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
@@ -375,6 +377,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(DurationConstructorFn, 'Duration', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('Duration',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   TGocciaTemporalDurationValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('from',
     TGocciaPropertyDescriptorData.Create(
@@ -384,8 +390,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(DurationCompare, 'compare', 2),
       [pfConfigurable, pfWritable]));
-  FTemporalNamespace.DefineProperty('Duration',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.DurationConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -495,6 +499,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(InstantConstructorFn, 'Instant', 1);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('Instant',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   TGocciaTemporalInstantValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('from',
     TGocciaPropertyDescriptorData.Create(
@@ -512,8 +520,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(InstantCompare, 'compare', 2),
       [pfConfigurable, pfWritable]));
-  FTemporalNamespace.DefineProperty('Instant',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.InstantConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -618,6 +624,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainDateConstructorFn, 'PlainDate', 3);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('PlainDate',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   TGocciaTemporalPlainDateValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('from',
     TGocciaPropertyDescriptorData.Create(
@@ -627,8 +637,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateCompare, 'compare', 2),
       [pfConfigurable, pfWritable]));
-  FTemporalNamespace.DefineProperty('PlainDate',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainDateConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -841,6 +849,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainTimeConstructorFn, 'PlainTime', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('PlainTime',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   TGocciaTemporalPlainTimeValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('from',
     TGocciaPropertyDescriptorData.Create(
@@ -850,8 +862,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainTimeCompare, 'compare', 2),
       [pfConfigurable, pfWritable]));
-  FTemporalNamespace.DefineProperty('PlainTime',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1022,6 +1032,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainDateTimeConstructorFn, 'PlainDateTime', 3);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('PlainDateTime',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   TGocciaTemporalPlainDateTimeValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('from',
     TGocciaPropertyDescriptorData.Create(
@@ -1031,8 +1045,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainDateTimeCompare, 'compare', 2),
       [pfConfigurable, pfWritable]));
-  FTemporalNamespace.DefineProperty('PlainDateTime',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainDateTimeConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1299,6 +1311,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainYearMonthConstructorFn, 'PlainYearMonth', 2);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('PlainYearMonth',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   TGocciaTemporalPlainYearMonthValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('from',
     TGocciaPropertyDescriptorData.Create(
@@ -1308,8 +1324,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainYearMonthCompare, 'compare', 2),
       [pfConfigurable, pfWritable]));
-  FTemporalNamespace.DefineProperty('PlainYearMonth',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainYearMonthConstructorFn(const AArgs: TGocciaArgumentsCollection;
@@ -1524,6 +1538,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PlainMonthDayConstructorFn, 'PlainMonthDay', 2);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('PlainMonthDay',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   TGocciaTemporalPlainMonthDayValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('from',
     TGocciaPropertyDescriptorData.Create(
@@ -1533,8 +1551,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(PlainMonthDayCompare, 'compare', 2),
       [pfConfigurable, pfWritable]));
-  FTemporalNamespace.DefineProperty('PlainMonthDay',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.PlainMonthDayConstructorFn(const AArgs: TGocciaArgumentsCollection;
@@ -2101,6 +2117,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(ZonedDateTimeConstructorFn, 'ZonedDateTime', 2);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('ZonedDateTime',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   TGocciaTemporalZonedDateTimeValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('from',
     TGocciaPropertyDescriptorData.Create(
@@ -2110,8 +2130,6 @@ begin
     TGocciaPropertyDescriptorData.Create(
       TGocciaNativeFunctionValue.CreateWithoutPrototype(ZonedDateTimeCompare, 'compare', 2),
       [pfConfigurable, pfWritable]));
-  FTemporalNamespace.DefineProperty('ZonedDateTime',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 // TC39 Temporal §6.1.1 new Temporal.ZonedDateTime(epochNanoseconds, timeZone, calendar)
@@ -2190,6 +2208,10 @@ var
   NowMembers: array[0..0] of TGocciaMemberDefinition;
 begin
   NowObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FTemporalNamespace.DefineProperty('Now',
+    TGocciaPropertyDescriptorData.Create(NowObj, [pfConfigurable, pfWritable]));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(NowInstant, 'instant', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(NowPlainDateISO, 'plainDateISO', 0));
   NowObj.RegisterNativeMethod(TGocciaNativeFunctionValue.CreateWithoutPrototype(NowPlainTimeISO, 'plainTimeISO', 0));
@@ -2201,8 +2223,6 @@ begin
     TGocciaStringLiteralValue.Create('Temporal.Now'),
     [pfConfigurable]);
   RegisterMemberDefinitions(NowObj, NowMembers);
-  FTemporalNamespace.DefineProperty('Now',
-    TGocciaPropertyDescriptorData.Create(NowObj, [pfConfigurable, pfWritable]));
 end;
 
 function TGocciaTemporalBuiltin.NowInstant(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -2277,6 +2297,16 @@ begin
 
   Result := TGocciaTemporalZonedDateTimeValue.Create(
     EpochNs div 1000000, Integer(EpochNs mod 1000000), TZ);
+end;
+
+procedure TGocciaTemporalBuiltin.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FTemporalNamespace) then
+    FTemporalNamespace.MarkReferences;
 end;
 
 end.

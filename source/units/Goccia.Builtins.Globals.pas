@@ -64,6 +64,7 @@ type
     function DOMExceptionConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function PermissionDeniedConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
   protected
+    procedure MarkBuiltinReferences; override;
   published
     function ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function EvalErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1479,6 +1480,9 @@ begin
   Result := CreateDOMExceptionObject(
     OwnStringData(AException, PROP_NAME, ERROR_NAME),
     OwnStringData(AException, PROP_MESSAGE, ''));
+  // Recorded at once: the clone memory is a root, and the stack string below
+  // reserves its payload, which can collect.
+  RegisterClone(AException, Result, AMemory);
   // As for an Error, the clone keeps the original's stack, not one captured
   // at the structuredClone call. A DOMException carries it as an own `stack`
   // data property, which CreateDOMExceptionObject defined from the new
@@ -1489,7 +1493,6 @@ begin
       TGocciaPropertyDescriptorData.Create(
         TGocciaStringLiteralValue.Create(Result.ErrorStack),
         [pfConfigurable, pfWritable]));
-  RegisterClone(AException, Result, AMemory);
 end;
 
 { How a DataCloneError names an object that cannot be cloned: its class string
@@ -1707,6 +1710,36 @@ begin
   // Step 2: Let reservedURIComponentSet be the empty String
   // Step 3: Return ? Decode(componentString, reservedURIComponentSet)
   Result := TGocciaStringLiteralValue.Create(DecodeURIComponent(ComponentString));
+end;
+
+procedure TGocciaGlobals.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FErrorProto) then
+    FErrorProto.MarkReferences;
+  if Assigned(FEvalErrorProto) then
+    FEvalErrorProto.MarkReferences;
+  if Assigned(FTypeErrorProto) then
+    FTypeErrorProto.MarkReferences;
+  if Assigned(FReferenceErrorProto) then
+    FReferenceErrorProto.MarkReferences;
+  if Assigned(FRangeErrorProto) then
+    FRangeErrorProto.MarkReferences;
+  if Assigned(FSyntaxErrorProto) then
+    FSyntaxErrorProto.MarkReferences;
+  if Assigned(FURIErrorProto) then
+    FURIErrorProto.MarkReferences;
+  if Assigned(FAggregateErrorProto) then
+    FAggregateErrorProto.MarkReferences;
+  if Assigned(FSuppressedErrorProto) then
+    FSuppressedErrorProto.MarkReferences;
+  if Assigned(FDOMExceptionProto) then
+    FDOMExceptionProto.MarkReferences;
+  if Assigned(FPermissionDeniedProto) then
+    FPermissionDeniedProto.MarkReferences;
 end;
 
 initialization

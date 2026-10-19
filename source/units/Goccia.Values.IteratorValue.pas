@@ -746,6 +746,7 @@ class function TGocciaIteratorValue.EnsureConcreteIteratorPrototype(
   const AToStringTag: string): TGocciaObjectValue;
 var
   IteratorPrototype: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (CurrentRealm = nil) then
     Exit(nil);
@@ -756,17 +757,25 @@ begin
 
   EnsurePrototypeInitialized;
   IteratorPrototype := GetSharedIteratorPrototype;
-  Result := TGocciaObjectValue.Create(IteratorPrototype);
-  Result.DefineProperty('next',
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        GetIteratorMethodHost.IteratorNext, 'next', 0),
-      [pfConfigurable, pfWritable]));
-  Result.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(AToStringTag), [pfConfigurable]));
-  CurrentRealm.SetSlot(ASlotId, Result);
+  // The new prototype is held only by this local until the slot takes it,
+  // and the tag string reserves its payload, which can collect (#1816).
+  Roots.Initialize;
+  try
+    Result := TGocciaObjectValue.Create(IteratorPrototype);
+    Roots.Add(Result);
+    Result.DefineProperty('next',
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          GetIteratorMethodHost.IteratorNext, 'next', 0),
+        [pfConfigurable, pfWritable]));
+    Result.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(AToStringTag), [pfConfigurable]));
+    CurrentRealm.SetSlot(ASlotId, Result);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure TGocciaIteratorValue.InitializePrototype;

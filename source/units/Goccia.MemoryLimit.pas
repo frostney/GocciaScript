@@ -166,6 +166,11 @@ var
   GC: TGarbageCollector;
   Budget: Int64;
 begin
+  { The test stress switch makes every gated growth the collecting safe point
+    it is near the ceiling, as it does every charged reservation. }
+  GC := TGarbageCollector.Instance;
+  if (ABytes > 0) and Assigned(GC) and GC.CollectBeforeEveryReservation then
+    GC.CollectForMemoryPressure(nil, True);
   if CanAllocateNativeBytes(ABytes) then
   begin
     { Granted without a charge (ADR 0106), so no registration accounts for

@@ -55,6 +55,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function AsyncStackGetDisposed(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
@@ -568,6 +570,7 @@ var
   CallArgs: TGocciaArgumentsCollection;
   CurrentError: TGocciaValue;
   HasError: Boolean;
+  ErrorRoots: TGocciaActiveRootFrame;
 begin
   Slot := GetSlotForKind(AThisValue, False);
 
@@ -580,59 +583,68 @@ begin
 
   Slot^.Disposed := True;
 
-  CurrentError := nil;
-  HasError := False;
+  // The error so far is held only by this local while the next disposers
+  // (guest code) run, until the throw takes it.
+  ErrorRoots.Initialize;
+  try
+    CurrentError := nil;
+    HasError := False;
 
-  // Dispose in reverse order
-  for I := Slot^.Tracker.Count - 1 downto 0 do
-  begin
-    Resource := Slot^.Tracker.GetResource(I);
-    if Assigned(Resource.DisposeMethod) and Resource.DisposeMethod.IsCallable then
+    // Dispose in reverse order
+    for I := Slot^.Tracker.Count - 1 downto 0 do
     begin
-      try
-        if Resource.HasDisposeArgument then
-        begin
-          CallArgs := TGocciaArgumentsCollection.Create([Resource.DisposeArgument]);
-          try
-            InvokeCallable(Resource.DisposeMethod, CallArgs,
-              TGocciaUndefinedLiteralValue.UndefinedValue);
-          finally
-            CallArgs.Free;
-          end;
-        end
-        else
-        begin
-          CallArgs := TGocciaArgumentsCollection.Create;
-          try
-            InvokeCallable(Resource.DisposeMethod, CallArgs,
-              Resource.ResourceValue);
-          finally
-            CallArgs.Free;
-          end;
-        end;
-      except
-        on E: EGocciaBytecodeThrow do
-        begin
-          if HasError then
-            CurrentError := CreateSuppressedErrorObject(E.ThrownValue, CurrentError)
+      Resource := Slot^.Tracker.GetResource(I);
+      if Assigned(Resource.DisposeMethod) and Resource.DisposeMethod.IsCallable then
+      begin
+        try
+          if Resource.HasDisposeArgument then
+          begin
+            CallArgs := TGocciaArgumentsCollection.Create([Resource.DisposeArgument]);
+            try
+              InvokeCallable(Resource.DisposeMethod, CallArgs,
+                TGocciaUndefinedLiteralValue.UndefinedValue);
+            finally
+              CallArgs.Free;
+            end;
+          end
           else
-            CurrentError := E.ThrownValue;
-          HasError := True;
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          if HasError then
-            CurrentError := CreateSuppressedErrorObject(E.Value, CurrentError)
-          else
-            CurrentError := E.Value;
-          HasError := True;
+          begin
+            CallArgs := TGocciaArgumentsCollection.Create;
+            try
+              InvokeCallable(Resource.DisposeMethod, CallArgs,
+                Resource.ResourceValue);
+            finally
+              CallArgs.Free;
+            end;
+          end;
+        except
+          on E: EGocciaBytecodeThrow do
+          begin
+            if HasError then
+              CurrentError := CreateSuppressedErrorObject(E.ThrownValue, CurrentError)
+            else
+              CurrentError := E.ThrownValue;
+            ErrorRoots.Add(CurrentError);
+            HasError := True;
+          end;
+          on E: TGocciaThrowValue do
+          begin
+            if HasError then
+              CurrentError := CreateSuppressedErrorObject(E.Value, CurrentError)
+            else
+              CurrentError := E.Value;
+            ErrorRoots.Add(CurrentError);
+            HasError := True;
+          end;
         end;
       end;
     end;
-  end;
 
-  if HasError then
-    raise TGocciaThrowValue.Create(CurrentError);
+    if HasError then
+      raise TGocciaThrowValue.Create(CurrentError);
+  finally
+    ErrorRoots.Clear;
+  end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -835,6 +847,7 @@ var
   UseFunc, AdoptFunc, DeferFunc, DisposeFunc, MoveFunc: TGocciaNativeFunctionValue;
   AsyncUseFunc, AsyncAdoptFunc, AsyncDeferFunc, DisposeAsyncFunc: TGocciaNativeFunctionValue;
   AsyncMoveFunc, DisposedGetterFunc, AsyncDisposedGetterFunc: TGocciaNativeFunctionValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -870,54 +883,73 @@ begin
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK, AsyncDisposableStackFunc, dtConst, True);
 
-  UseFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackUse, PROP_USE, 1);
-  AdoptFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackAdopt, PROP_ADOPT, 2);
-  DeferFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackDefer, PROP_DEFER, 1);
-  DisposeFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackDispose, 'dispose', 0);
-  MoveFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackMove, PROP_MOVE, 0);
-  DisposedGetterFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackGetDisposed, 'get ' + PROP_DISPOSED, 0);
-  AsyncUseFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackUse, PROP_USE, 1);
-  AsyncAdoptFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackAdopt, PROP_ADOPT, 2);
-  AsyncDeferFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackDefer, PROP_DEFER, 1);
-  DisposeAsyncFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackDispose, PROP_DISPOSE_ASYNC, 0);
-  AsyncMoveFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackMove, PROP_MOVE, 0);
-  AsyncDisposedGetterFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackGetDisposed, 'get ' + PROP_DISPOSED, 0);
+  // The methods are held only by these locals until the prototypes store
+  // them, and the tag strings reserve their payloads, which can collect.
+  Roots.Initialize;
+  try
+    UseFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackUse, PROP_USE, 1);
+    Roots.Add(UseFunc);
+    AdoptFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackAdopt, PROP_ADOPT, 2);
+    Roots.Add(AdoptFunc);
+    DeferFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackDefer, PROP_DEFER, 1);
+    Roots.Add(DeferFunc);
+    DisposeFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackDispose, 'dispose', 0);
+    Roots.Add(DisposeFunc);
+    MoveFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackMove, PROP_MOVE, 0);
+    Roots.Add(MoveFunc);
+    DisposedGetterFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(StackGetDisposed, 'get ' + PROP_DISPOSED, 0);
+    Roots.Add(DisposedGetterFunc);
+    AsyncUseFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackUse, PROP_USE, 1);
+    Roots.Add(AsyncUseFunc);
+    AsyncAdoptFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackAdopt, PROP_ADOPT, 2);
+    Roots.Add(AsyncAdoptFunc);
+    AsyncDeferFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackDefer, PROP_DEFER, 1);
+    Roots.Add(AsyncDeferFunc);
+    DisposeAsyncFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackDispose, PROP_DISPOSE_ASYNC, 0);
+    Roots.Add(DisposeAsyncFunc);
+    AsyncMoveFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackMove, PROP_MOVE, 0);
+    Roots.Add(AsyncMoveFunc);
+    AsyncDisposedGetterFunc := TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncStackGetDisposed, 'get ' + PROP_DISPOSED, 0);
+    Roots.Add(AsyncDisposedGetterFunc);
 
-  TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_USE,
-    TGocciaPropertyDescriptorData.Create(UseFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_ADOPT,
-    TGocciaPropertyDescriptorData.Create(AdoptFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_DEFER,
-    TGocciaPropertyDescriptorData.Create(DeferFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FDisposableStackPrototype).DefineProperty('dispose',
-    TGocciaPropertyDescriptorData.Create(DisposeFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_MOVE,
-    TGocciaPropertyDescriptorData.Create(MoveFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_DISPOSED,
-    TGocciaPropertyDescriptorAccessor.Create(DisposedGetterFunc, nil, [pfConfigurable]));
-  TGocciaObjectValue(FDisposableStackPrototype).DefineSymbolProperty(TGocciaSymbolValue.WellKnownDispose,
-    TGocciaPropertyDescriptorData.Create(DisposeFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FDisposableStackPrototype).DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(CONSTRUCTOR_DISPOSABLE_STACK), [pfConfigurable]));
+    TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_USE,
+      TGocciaPropertyDescriptorData.Create(UseFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_ADOPT,
+      TGocciaPropertyDescriptorData.Create(AdoptFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_DEFER,
+      TGocciaPropertyDescriptorData.Create(DeferFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FDisposableStackPrototype).DefineProperty('dispose',
+      TGocciaPropertyDescriptorData.Create(DisposeFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_MOVE,
+      TGocciaPropertyDescriptorData.Create(MoveFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FDisposableStackPrototype).DefineProperty(PROP_DISPOSED,
+      TGocciaPropertyDescriptorAccessor.Create(DisposedGetterFunc, nil, [pfConfigurable]));
+    TGocciaObjectValue(FDisposableStackPrototype).DefineSymbolProperty(TGocciaSymbolValue.WellKnownDispose,
+      TGocciaPropertyDescriptorData.Create(DisposeFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FDisposableStackPrototype).DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(CONSTRUCTOR_DISPOSABLE_STACK), [pfConfigurable]));
 
-  TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_USE,
-    TGocciaPropertyDescriptorData.Create(AsyncUseFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_ADOPT,
-    TGocciaPropertyDescriptorData.Create(AsyncAdoptFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_DEFER,
-    TGocciaPropertyDescriptorData.Create(AsyncDeferFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_DISPOSE_ASYNC,
-    TGocciaPropertyDescriptorData.Create(DisposeAsyncFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_MOVE,
-    TGocciaPropertyDescriptorData.Create(AsyncMoveFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_DISPOSED,
-    TGocciaPropertyDescriptorAccessor.Create(AsyncDisposedGetterFunc, nil, [pfConfigurable]));
-  TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineSymbolProperty(TGocciaSymbolValue.WellKnownAsyncDispose,
-    TGocciaPropertyDescriptorData.Create(DisposeAsyncFunc, [pfWritable, pfConfigurable]));
-  TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK), [pfConfigurable]));
+    TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_USE,
+      TGocciaPropertyDescriptorData.Create(AsyncUseFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_ADOPT,
+      TGocciaPropertyDescriptorData.Create(AsyncAdoptFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_DEFER,
+      TGocciaPropertyDescriptorData.Create(AsyncDeferFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_DISPOSE_ASYNC,
+      TGocciaPropertyDescriptorData.Create(DisposeAsyncFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_MOVE,
+      TGocciaPropertyDescriptorData.Create(AsyncMoveFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineProperty(PROP_DISPOSED,
+      TGocciaPropertyDescriptorAccessor.Create(AsyncDisposedGetterFunc, nil, [pfConfigurable]));
+    TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineSymbolProperty(TGocciaSymbolValue.WellKnownAsyncDispose,
+      TGocciaPropertyDescriptorData.Create(DisposeAsyncFunc, [pfWritable, pfConfigurable]));
+    TGocciaObjectValue(FAsyncDisposableStackPrototype).DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(CONSTRUCTOR_ASYNC_DISPOSABLE_STACK), [pfConfigurable]));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaBuiltinDisposableStack.DisposableStackConstructor(
@@ -969,6 +1001,22 @@ begin
     GSlotMap.Free;
     GSlotMap := nil;
   end;
+end;
+
+procedure TGocciaBuiltinDisposableStack.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FDisposableStackPrototype) then
+    FDisposableStackPrototype.MarkReferences;
+  if Assigned(FAsyncDisposableStackPrototype) then
+    FAsyncDisposableStackPrototype.MarkReferences;
+  if Assigned(FDisposableStackConstructorValue) then
+    FDisposableStackConstructorValue.MarkReferences;
+  if Assigned(FAsyncDisposableStackConstructorValue) then
+    FAsyncDisposableStackConstructorValue.MarkReferences;
 end;
 
 initialization

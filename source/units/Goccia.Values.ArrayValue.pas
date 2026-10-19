@@ -1653,45 +1653,55 @@ var
   CallArgs: TGocciaArrayCallbackArgs;
   I: Integer;
   ResultRoot: TGocciaTempRoot;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-  if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.Obj, View.Len64)
-  else
-  begin
-    // Step 5: Let A be ArraySpeciesCreate(O, len) — default ArrayCreate
-    // throws RangeError if len > 2^32 - 1.
-    View.CheckArrayCreateLen;
-    ResultArray := ArrayCreateWithLength(View.Len);
-  end;
-  InitializeTempRoot(ResultRoot);
-  AddTempRootIfNeeded(ResultRoot, ResultArray);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    TypedCallback := nil;
-    if Callback is TGocciaFunctionBase then
-      TypedCallback := TGocciaFunctionBase(Callback);
-
-    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
-    try
-      for I := 0 to View.Len - 1 do
-      begin
-        if not View.HasIndex(I) then
-          Continue;
-
-        CallArgs.Element := View.Get(I);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        ArrayCreateDataProperty(ResultArray, I,
-          InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg));
-      end;
-    finally
-      CallArgs.Free;
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('map', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
+    if Assigned(View.SpeciesArr) then
+      ResultArray := ArraySpeciesCreate(View.Obj, View.Len64)
+    else
+    begin
+      // Step 5: Let A be ArraySpeciesCreate(O, len) — default ArrayCreate
+      // throws RangeError if len > 2^32 - 1.
+      View.CheckArrayCreateLen;
+      ResultArray := ArrayCreateWithLength(View.Len);
     end;
+    InitializeTempRoot(ResultRoot);
+    AddTempRootIfNeeded(ResultRoot, ResultArray);
+    try
+      TypedCallback := nil;
+      if Callback is TGocciaFunctionBase then
+        TypedCallback := TGocciaFunctionBase(Callback);
 
-    Result := ResultArray;
+      CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+      try
+        for I := 0 to View.Len - 1 do
+        begin
+          if not View.HasIndex(I) then
+            Continue;
+
+          CallArgs.Element := View.Get(I);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+          ArrayCreateDataProperty(ResultArray, I,
+            InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg));
+        end;
+      finally
+        CallArgs.Free;
+      end;
+
+      Result := ResultArray;
+    finally
+      RemoveTempRootIfNeeded(ResultRoot);
+    end;
   finally
-    RemoveTempRootIfNeeded(ResultRoot);
+    ViewRoots.Clear;
   end;
 end;
 
@@ -1709,67 +1719,78 @@ var
   Sparse: TArray<Int64>;
   K: Int64;
   ResultRoot: TGocciaTempRoot;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-  if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.Obj, 0)
-  else
-    ResultArray := TGocciaArrayValue.Create;
-  ToIndex := 0;
-  InitializeTempRoot(ResultRoot);
-  AddTempRootIfNeeded(ResultRoot, ResultArray);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-
-    TypedCallback := nil;
-    if Callback is TGocciaFunctionBase then
-      TypedCallback := TGocciaFunctionBase(Callback);
-
-    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('filter', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
+    if Assigned(View.SpeciesArr) then
+      ResultArray := ArraySpeciesCreate(View.Obj, 0)
+    else
+      ResultArray := TGocciaArrayValue.Create;
+    ViewRoots.Add(ResultArray);
+    ToIndex := 0;
+    InitializeTempRoot(ResultRoot);
+    AddTempRootIfNeeded(ResultRoot, ResultArray);
     try
-      if View.NeedsSparsePath then
-      begin
-        Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
-        for K in Sparse do
+
+      TypedCallback := nil;
+      if Callback is TGocciaFunctionBase then
+        TypedCallback := TGocciaFunctionBase(Callback);
+
+      CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+      try
+        if View.NeedsSparsePath then
         begin
-          Element := View.Get64(K);
-          CallArgs.Element := Element;
-          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-          PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-          if PredicateResult.ToBooleanLiteral.Value then
+          Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+          for K in Sparse do
           begin
-            ArrayCreateDataProperty(ResultArray, ToIndex, Element);
-            Inc(ToIndex);
+            Element := View.Get64(K);
+            CallArgs.Element := Element;
+            CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+            PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+            if PredicateResult.ToBooleanLiteral.Value then
+            begin
+              ArrayCreateDataProperty(ResultArray, ToIndex, Element);
+              Inc(ToIndex);
+            end;
+          end;
+        end
+        else
+        begin
+          for I := 0 to View.Len - 1 do
+          begin
+            if not View.HasIndex(I) then
+              Continue;
+
+            Element := View.Get(I);
+            CallArgs.Element := Element;
+            CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+            PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+
+            if PredicateResult.ToBooleanLiteral.Value then
+            begin
+              ArrayCreateDataProperty(ResultArray, ToIndex, Element);
+              Inc(ToIndex);
+            end;
           end;
         end;
-      end
-      else
-      begin
-        for I := 0 to View.Len - 1 do
-        begin
-          if not View.HasIndex(I) then
-            Continue;
-
-          Element := View.Get(I);
-          CallArgs.Element := Element;
-          CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-          PredicateResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-
-          if PredicateResult.ToBooleanLiteral.Value then
-          begin
-            ArrayCreateDataProperty(ResultArray, ToIndex, Element);
-            Inc(ToIndex);
-          end;
-        end;
+      finally
+        CallArgs.Free;
       end;
-    finally
-      CallArgs.Free;
-    end;
 
-    Result := ResultArray;
+      Result := ResultArray;
+    finally
+      RemoveTempRootIfNeeded(ResultRoot);
+    end;
   finally
-    RemoveTempRootIfNeeded(ResultRoot);
+    ViewRoots.Clear;
   end;
 end;
 
@@ -1785,38 +1806,89 @@ var
   Sparse: TArray<Int64>;
   SparseStart: Integer;
   J: Integer;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('reduce', AArgs, AThisValue, True);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('reduce', AArgs, AThisValue, True);
 
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
 
-  if View.NeedsSparsePath then
-  begin
-    Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+    if View.NeedsSparsePath then
+    begin
+      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+      if AArgs.Length >= 2 then
+      begin
+        Accumulator := AArgs.GetElement(1);
+        SparseStart := 0;
+      end
+      else
+      begin
+        if Length(Sparse) = 0 then
+          ThrowTypeError(SErrorReduceEmptyArray,
+            SSuggestReduceInitialValue);
+        Accumulator := View.Get64(Sparse[0]);
+        SparseStart := 1;
+      end;
+
+      CallArgs := TGocciaReduceCallbackArgs.Create(View.Obj);
+      try
+        for J := SparseStart to High(Sparse) do
+        begin
+          CallArgs.Accumulator := Accumulator;
+          CallArgs.Element := View.Get64(Sparse[J]);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+          Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+        end;
+      finally
+        CallArgs.Free;
+      end;
+
+      Result := Accumulator;
+      Exit;
+    end;
+
     if AArgs.Length >= 2 then
     begin
       Accumulator := AArgs.GetElement(1);
-      SparseStart := 0;
+      StartIndex := 0;
     end
     else
     begin
-      if Length(Sparse) = 0 then
+      // ES2026 §23.1.3.22 steps 6-8: scan for first present element
+      StartIndex := -1;
+      for I := 0 to View.Len - 1 do
+      begin
+        if View.HasIndex(I) then
+        begin
+          Accumulator := View.Get(I);
+          StartIndex := I + 1;
+          Break;
+        end;
+      end;
+      if StartIndex < 0 then
         ThrowTypeError(SErrorReduceEmptyArray,
           SSuggestReduceInitialValue);
-      Accumulator := View.Get64(Sparse[0]);
-      SparseStart := 1;
     end;
 
     CallArgs := TGocciaReduceCallbackArgs.Create(View.Obj);
     try
-      for J := SparseStart to High(Sparse) do
+      for I := StartIndex to View.Len - 1 do
       begin
+        if not View.HasIndex(I) then
+          Continue;
+
         CallArgs.Accumulator := Accumulator;
-        CallArgs.Element := View.Get64(Sparse[J]);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+        CallArgs.Element := View.Get(I);
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
         Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
           TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
@@ -1825,50 +1897,9 @@ begin
     end;
 
     Result := Accumulator;
-    Exit;
-  end;
-
-  if AArgs.Length >= 2 then
-  begin
-    Accumulator := AArgs.GetElement(1);
-    StartIndex := 0;
-  end
-  else
-  begin
-    // ES2026 §23.1.3.22 steps 6-8: scan for first present element
-    StartIndex := -1;
-    for I := 0 to View.Len - 1 do
-    begin
-      if View.HasIndex(I) then
-      begin
-        Accumulator := View.Get(I);
-        StartIndex := I + 1;
-        Break;
-      end;
-    end;
-    if StartIndex < 0 then
-      ThrowTypeError(SErrorReduceEmptyArray,
-        SSuggestReduceInitialValue);
-  end;
-
-  CallArgs := TGocciaReduceCallbackArgs.Create(View.Obj);
-  try
-    for I := StartIndex to View.Len - 1 do
-    begin
-      if not View.HasIndex(I) then
-        Continue;
-
-      CallArgs.Accumulator := Accumulator;
-      CallArgs.Element := View.Get(I);
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
-        TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
   finally
-    CallArgs.Free;
+    ViewRoots.Clear;
   end;
-
-  Result := Accumulator;
 end;
 
 // ES2026 §23.1.3.25 Array.prototype.reduceRight(callbackfn [, initialValue])
@@ -1883,38 +1914,89 @@ var
   Sparse: TArray<Int64>;
   SparseEnd: Integer;
   J: Integer;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('reduceRight', AArgs, AThisValue, True);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('reduceRight', AArgs, AThisValue, True);
 
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
 
-  if View.NeedsSparsePath then
-  begin
-    Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+    if View.NeedsSparsePath then
+    begin
+      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+      if AArgs.Length >= 2 then
+      begin
+        Accumulator := AArgs.GetElement(1);
+        SparseEnd := High(Sparse);
+      end
+      else
+      begin
+        if Length(Sparse) = 0 then
+          ThrowTypeError(SErrorReduceEmptyArray,
+            SSuggestReduceInitialValue);
+        Accumulator := View.Get64(Sparse[High(Sparse)]);
+        SparseEnd := High(Sparse) - 1;
+      end;
+
+      CallArgs := TGocciaReduceCallbackArgs.Create(View.Obj);
+      try
+        for J := SparseEnd downto 0 do
+        begin
+          CallArgs.Accumulator := Accumulator;
+          CallArgs.Element := View.Get64(Sparse[J]);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+          Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+        end;
+      finally
+        CallArgs.Free;
+      end;
+
+      Result := Accumulator;
+      Exit;
+    end;
+
     if AArgs.Length >= 2 then
     begin
       Accumulator := AArgs.GetElement(1);
-      SparseEnd := High(Sparse);
+      StartIndex := View.Len - 1;
     end
     else
     begin
-      if Length(Sparse) = 0 then
+      // ES2026 §23.1.3.25 steps 6-8: scan for last present element
+      StartIndex := -2;
+      for I := View.Len - 1 downto 0 do
+      begin
+        if View.HasIndex(I) then
+        begin
+          Accumulator := View.Get(I);
+          StartIndex := I - 1;
+          Break;
+        end;
+      end;
+      if StartIndex = -2 then
         ThrowTypeError(SErrorReduceEmptyArray,
           SSuggestReduceInitialValue);
-      Accumulator := View.Get64(Sparse[High(Sparse)]);
-      SparseEnd := High(Sparse) - 1;
     end;
 
     CallArgs := TGocciaReduceCallbackArgs.Create(View.Obj);
     try
-      for J := SparseEnd downto 0 do
+      for I := StartIndex downto 0 do
       begin
+        if not View.HasIndex(I) then
+          Continue;
+
         CallArgs.Accumulator := Accumulator;
-        CallArgs.Element := View.Get64(Sparse[J]);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+        CallArgs.Element := View.Get(I);
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
         Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
           TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
@@ -1923,50 +2005,9 @@ begin
     end;
 
     Result := Accumulator;
-    Exit;
-  end;
-
-  if AArgs.Length >= 2 then
-  begin
-    Accumulator := AArgs.GetElement(1);
-    StartIndex := View.Len - 1;
-  end
-  else
-  begin
-    // ES2026 §23.1.3.25 steps 6-8: scan for last present element
-    StartIndex := -2;
-    for I := View.Len - 1 downto 0 do
-    begin
-      if View.HasIndex(I) then
-      begin
-        Accumulator := View.Get(I);
-        StartIndex := I - 1;
-        Break;
-      end;
-    end;
-    if StartIndex = -2 then
-      ThrowTypeError(SErrorReduceEmptyArray,
-        SSuggestReduceInitialValue);
-  end;
-
-  CallArgs := TGocciaReduceCallbackArgs.Create(View.Obj);
-  try
-    for I := StartIndex downto 0 do
-    begin
-      if not View.HasIndex(I) then
-        Continue;
-
-      CallArgs.Accumulator := Accumulator;
-      CallArgs.Element := View.Get(I);
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
-        TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
   finally
-    CallArgs.Free;
+    ViewRoots.Clear;
   end;
-
-  Result := Accumulator;
 end;
 
 // ES2026 §23.1.3.12 Array.prototype.forEach(callbackfn [, thisArg])
@@ -1980,44 +2021,54 @@ var
   I: Integer;
   Sparse: TArray<Int64>;
   K: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('forEach', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    if View.NeedsSparsePath then
-    begin
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
-      for K in Sparse do
-      begin
-        CallArgs.Element := View.Get64(K);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      end;
-    end
-    else
-    begin
-      for I := 0 to View.Len - 1 do
-      begin
-        if not View.HasIndex(I) then
-          Continue;
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('forEach', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
 
-        CallArgs.Element := View.Get(I);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
+
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      if View.NeedsSparsePath then
+      begin
+        Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+        for K in Sparse do
+        begin
+          CallArgs.Element := View.Get64(K);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+          InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+        end;
+      end
+      else
+      begin
+        for I := 0 to View.Len - 1 do
+        begin
+          if not View.HasIndex(I) then
+            Continue;
+
+          CallArgs.Element := View.Get(I);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+          InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+        end;
       end;
+    finally
+      CallArgs.Free;
     end;
-  finally
-    CallArgs.Free;
-  end;
 
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 // ES2026 §23.1.3.16 Array.prototype.join(separator)
@@ -2028,35 +2079,45 @@ var
   I: Integer;
   ResultString: string;
   Element: TGocciaValue;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: If separator is undefined, let sep be ","
-  // Step 4: Else let sep be ToString(separator)
-  if (AArgs.Length < 1) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-    Separator := ','
-  else
-    Separator := AArgs.GetElement(0).ToStringLiteral.Value;
-
-  // Steps 5-8: Build result string, treating undefined/null elements as empty string
-  ResultString := '';
-  for I := 0 to View.Len - 1 do
-  begin
-    if I > 0 then
-      ResultString := ResultString + Separator;
-    // Step 7b: If element is undefined or null, let next be ""
-    Element := View.Get(I);
-    if (Element is TGocciaUndefinedLiteralValue) or
-       (Element is TGocciaNullLiteralValue) then
-      Continue
+    // Step 3: If separator is undefined, let sep be ","
+    // Step 4: Else let sep be ToString(separator)
+    if (AArgs.Length < 1) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+      Separator := ','
     else
-      // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
-      ResultString := ResultString + Element.ToStringLiteral.Value;
-  end;
+      Separator := AArgs.GetElement(0).ToStringLiteral.Value;
 
-  // Step 9: Return R
-  Result := TGocciaStringLiteralValue.Create(ResultString);
+    // Steps 5-8: Build result string, treating undefined/null elements as empty string
+    ResultString := '';
+    for I := 0 to View.Len - 1 do
+    begin
+      if I > 0 then
+        ResultString := ResultString + Separator;
+      // Step 7b: If element is undefined or null, let next be ""
+      Element := View.Get(I);
+      if (Element is TGocciaUndefinedLiteralValue) or
+         (Element is TGocciaNullLiteralValue) then
+        Continue
+      else
+        // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
+        ResultString := ResultString + Element.ToStringLiteral.Value;
+    end;
+
+    // Step 9: Return R
+    Result := TGocciaStringLiteralValue.Create(ResultString);
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 // ES2026 §23.1.3.35 Array.prototype.toString()
@@ -2087,83 +2148,93 @@ var
   FromIndex, I: Integer;
   Len64Val, FromIndex64, K: Int64;
   Sparse: TArray<Int64>;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: If len is 0, return false — before ToIntegerOrInfinity(fromIndex).
-  if View.Len = 0 then
-  begin
-    Result := TGocciaBooleanLiteralValue.FalseValue;
-    Exit;
-  end;
-
-  if AArgs.Length < 1 then
-    SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
-  else
-    SearchValue := AArgs.GetElement(0);
-
-  // Sparse iteration path for generic array-likes whose claimed length
-  // exceeds 2^32 - 1.  Includes uses SameValueZero on Get(O, k) for every
-  // index in [fromIndex, len); holes return undefined.  When SearchValue
-  // is undefined and the range is non-empty, every non-existent slot
-  // already produces a match, so the answer is True without enumerating.
-  if View.NeedsSparsePath then
-  begin
-    Len64Val := View.Len64;
-    FromIndex64 := ToInteger64FromArgs(AArgs, 1);
-    if FromIndex64 < 0 then
-      FromIndex64 := Len64Val + FromIndex64;
-    if FromIndex64 < 0 then
-      FromIndex64 := 0;
-    if FromIndex64 >= Len64Val then
+    // Step 3: If len is 0, return false — before ToIntegerOrInfinity(fromIndex).
+    if View.Len = 0 then
     begin
       Result := TGocciaBooleanLiteralValue.FalseValue;
       Exit;
     end;
-    Sparse := CollectSparseIndicesInRange(View.Obj, FromIndex64, Len64Val);
-    if SearchValue is TGocciaUndefinedLiteralValue then
+
+    if AArgs.Length < 1 then
+      SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      SearchValue := AArgs.GetElement(0);
+
+    // Sparse iteration path for generic array-likes whose claimed length
+    // exceeds 2^32 - 1.  Includes uses SameValueZero on Get(O, k) for every
+    // index in [fromIndex, len); holes return undefined.  When SearchValue
+    // is undefined and the range is non-empty, every non-existent slot
+    // already produces a match, so the answer is True without enumerating.
+    if View.NeedsSparsePath then
     begin
-      // For undefined we need to distinguish two sub-cases: a hole in the
-      // window means Get(O, k) returns undefined for that k → true.  When
-      // every index in [fromIndex, len) has an own property (e.g. fromIndex
-      // narrows the window to a single materialised index) we still have
-      // to compare the actual values, since they may not be undefined.
-      if Int64(Length(Sparse)) < (Len64Val - FromIndex64) then
+      Len64Val := View.Len64;
+      FromIndex64 := ToInteger64FromArgs(AArgs, 1);
+      if FromIndex64 < 0 then
+        FromIndex64 := Len64Val + FromIndex64;
+      if FromIndex64 < 0 then
+        FromIndex64 := 0;
+      if FromIndex64 >= Len64Val then
       begin
-        Result := TGocciaBooleanLiteralValue.TrueValue;
+        Result := TGocciaBooleanLiteralValue.FalseValue;
         Exit;
       end;
-    end;
-    for K in Sparse do
-      if IsSameValueZero(View.Get64(K), SearchValue) then
+      Sparse := CollectSparseIndicesInRange(View.Obj, FromIndex64, Len64Val);
+      if SearchValue is TGocciaUndefinedLiteralValue then
       begin
-        Result := TGocciaBooleanLiteralValue.TrueValue;
-        Exit;
+        // For undefined we need to distinguish two sub-cases: a hole in the
+        // window means Get(O, k) returns undefined for that k → true.  When
+        // every index in [fromIndex, len) has an own property (e.g. fromIndex
+        // narrows the window to a single materialised index) we still have
+        // to compare the actual values, since they may not be undefined.
+        if Int64(Length(Sparse)) < (Len64Val - FromIndex64) then
+        begin
+          Result := TGocciaBooleanLiteralValue.TrueValue;
+          Exit;
+        end;
       end;
-    Result := TGocciaBooleanLiteralValue.FalseValue;
-    Exit;
-  end;
-
-  // Steps 4-5: Let n be ToIntegerOrInfinity(fromIndex), compute k
-  FromIndex := ToIntegerFromArgs(AArgs, 1);
-  if FromIndex < 0 then
-    FromIndex := View.Len + FromIndex;
-  if FromIndex < 0 then
-    FromIndex := 0;
-
-  // Steps 6-8: Search using SameValueZero comparison
-  for I := FromIndex to View.Len - 1 do
-  begin
-    Element := View.Get(I);
-    if IsSameValueZero(Element, SearchValue) then
-    begin
-      Result := TGocciaBooleanLiteralValue.TrueValue;
+      for K in Sparse do
+        if IsSameValueZero(View.Get64(K), SearchValue) then
+        begin
+          Result := TGocciaBooleanLiteralValue.TrueValue;
+          Exit;
+        end;
+      Result := TGocciaBooleanLiteralValue.FalseValue;
       Exit;
     end;
-  end;
 
-  Result := TGocciaBooleanLiteralValue.FalseValue;
+    // Steps 4-5: Let n be ToIntegerOrInfinity(fromIndex), compute k
+    FromIndex := ToIntegerFromArgs(AArgs, 1);
+    if FromIndex < 0 then
+      FromIndex := View.Len + FromIndex;
+    if FromIndex < 0 then
+      FromIndex := 0;
+
+    // Steps 6-8: Search using SameValueZero comparison
+    for I := FromIndex to View.Len - 1 do
+    begin
+      Element := View.Get(I);
+      if IsSameValueZero(Element, SearchValue) then
+      begin
+        Result := TGocciaBooleanLiteralValue.TrueValue;
+        Exit;
+      end;
+    end;
+
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 // ES2026 §23.1.3.28 Array.prototype.some(callbackfn [, thisArg])
@@ -2178,54 +2249,64 @@ var
   SomeResult: TGocciaValue;
   Sparse: TArray<Int64>;
   K: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('some', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    if View.NeedsSparsePath then
-    begin
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
-      for K in Sparse do
-      begin
-        CallArgs.Element := View.Get64(K);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        SomeResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-        if SomeResult.ToBooleanLiteral.Value then
-        begin
-          Result := TGocciaBooleanLiteralValue.TrueValue;
-          Exit;
-        end;
-      end;
-    end
-    else
-    begin
-      for I := 0 to View.Len - 1 do
-      begin
-        if not View.HasIndex(I) then
-          Continue;
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('some', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
 
-        CallArgs.Element := View.Get(I);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        SomeResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-        if SomeResult.ToBooleanLiteral.Value then
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
+
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      if View.NeedsSparsePath then
+      begin
+        Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+        for K in Sparse do
         begin
-          Result := TGocciaBooleanLiteralValue.TrueValue;
-          Exit;
+          CallArgs.Element := View.Get64(K);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+          SomeResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if SomeResult.ToBooleanLiteral.Value then
+          begin
+            Result := TGocciaBooleanLiteralValue.TrueValue;
+            Exit;
+          end;
+        end;
+      end
+      else
+      begin
+        for I := 0 to View.Len - 1 do
+        begin
+          if not View.HasIndex(I) then
+            Continue;
+
+          CallArgs.Element := View.Get(I);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+          SomeResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if SomeResult.ToBooleanLiteral.Value then
+          begin
+            Result := TGocciaBooleanLiteralValue.TrueValue;
+            Exit;
+          end;
         end;
       end;
+    finally
+      CallArgs.Free;
     end;
-  finally
-    CallArgs.Free;
-  end;
 
-  Result := TGocciaBooleanLiteralValue.FalseValue;
+    Result := TGocciaBooleanLiteralValue.FalseValue;
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 // ES2026 §23.1.3.6 Array.prototype.every(callbackfn [, thisArg])
@@ -2240,54 +2321,64 @@ var
   EveryResult: TGocciaValue;
   Sparse: TArray<Int64>;
   K: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('every', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    if View.NeedsSparsePath then
-    begin
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
-      for K in Sparse do
-      begin
-        CallArgs.Element := View.Get64(K);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
-        EveryResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-        if not EveryResult.ToBooleanLiteral.Value then
-        begin
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-          Exit;
-        end;
-      end;
-    end
-    else
-    begin
-      for I := 0 to View.Len - 1 do
-      begin
-        if not View.HasIndex(I) then
-          Continue;
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('every', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
 
-        CallArgs.Element := View.Get(I);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        EveryResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-        if not EveryResult.ToBooleanLiteral.Value then
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
+
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      if View.NeedsSparsePath then
+      begin
+        Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+        for K in Sparse do
         begin
-          Result := TGocciaBooleanLiteralValue.FalseValue;
-          Exit;
+          CallArgs.Element := View.Get64(K);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+          EveryResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if not EveryResult.ToBooleanLiteral.Value then
+          begin
+            Result := TGocciaBooleanLiteralValue.FalseValue;
+            Exit;
+          end;
+        end;
+      end
+      else
+      begin
+        for I := 0 to View.Len - 1 do
+        begin
+          if not View.HasIndex(I) then
+            Continue;
+
+          CallArgs.Element := View.Get(I);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+          EveryResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if not EveryResult.ToBooleanLiteral.Value then
+          begin
+            Result := TGocciaBooleanLiteralValue.FalseValue;
+            Exit;
+          end;
         end;
       end;
+    finally
+      CallArgs.Free;
     end;
-  finally
-    CallArgs.Free;
-  end;
 
-  Result := TGocciaBooleanLiteralValue.TrueValue;
+    Result := TGocciaBooleanLiteralValue.TrueValue;
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 function IsArrayForFlatten(const AValue: TGocciaValue): Boolean;
@@ -2342,44 +2433,55 @@ var
   ResultArray: TGocciaObjectValue;
   Depth, I, TargetIndex: Integer;
   Element: TGocciaValue;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
-  // Step 3: Let depthNum be 1 (default)
-  Depth := 1;
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
+    // Step 3: Let depthNum be 1 (default)
+    Depth := 1;
 
-  // Step 4: If depth is not undefined, let depthNum be ToIntegerOrInfinity(depth)
-  if (AArgs.Length > 0) and
-     not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-  begin
-    Depth := ToIntegerValue(AArgs.GetElement(0));
-    if Depth < 0 then
-      Depth := 0;
-  end;
-
-  // Step 5: Let A be ArraySpeciesCreate(O, 0)
-  if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.Obj, 0)
-  else
-    ResultArray := TGocciaArrayValue.Create;
-
-  // Step 6: FlattenIntoArray via View for prototype-aware semantics
-  TargetIndex := 0;
-  for I := 0 to View.Len - 1 do
-  begin
-    if not View.HasIndex(I) then
-      Continue;
-    Element := View.Get(I);
-    if (Depth > 0) and IsArrayForFlatten(Element) then
-      FlattenValueIntoArray(Element, ResultArray, Depth - 1, TargetIndex)
-    else
+    // Step 4: If depth is not undefined, let depthNum be ToIntegerOrInfinity(depth)
+    if (AArgs.Length > 0) and
+       not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
     begin
-      ArrayCreateDataProperty(ResultArray, TargetIndex, Element);
-      Inc(TargetIndex);
+      Depth := ToIntegerValue(AArgs.GetElement(0));
+      if Depth < 0 then
+        Depth := 0;
     end;
+
+    // Step 5: Let A be ArraySpeciesCreate(O, 0)
+    if Assigned(View.SpeciesArr) then
+      ResultArray := ArraySpeciesCreate(View.Obj, 0)
+    else
+      ResultArray := TGocciaArrayValue.Create;
+    ViewRoots.Add(ResultArray);
+
+    // Step 6: FlattenIntoArray via View for prototype-aware semantics
+    TargetIndex := 0;
+    for I := 0 to View.Len - 1 do
+    begin
+      if not View.HasIndex(I) then
+        Continue;
+      Element := View.Get(I);
+      if (Depth > 0) and IsArrayForFlatten(Element) then
+        FlattenValueIntoArray(Element, ResultArray, Depth - 1, TargetIndex)
+      else
+      begin
+        ArrayCreateDataProperty(ResultArray, TargetIndex, Element);
+        Inc(TargetIndex);
+      end;
+    end;
+    // Step 7: Return A
+    Result := ResultArray;
+  finally
+    ViewRoots.Clear;
   end;
-  // Step 7: Return A
-  Result := ResultArray;
 end;
 
 // ES2026 §23.1.3.10 Array.prototype.flatMap(mapperFunction [, thisArg])
@@ -2394,65 +2496,76 @@ var
   I, J, TargetIndex: Integer;
   MappedValue: TGocciaValue;
   ResultRoot, MappedValueRoot: TGocciaTempRoot;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-  if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.Obj, 0)
-  else
-    ResultArray := TGocciaArrayValue.Create;
-  TargetIndex := 0;
-  InitializeTempRoot(ResultRoot);
-  InitializeTempRoot(MappedValueRoot);
-  AddTempRootIfNeeded(ResultRoot, ResultArray);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-
-    TypedCallback := nil;
-    if Callback is TGocciaFunctionBase then
-      TypedCallback := TGocciaFunctionBase(Callback);
-
-    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('flatMap', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
+    if Assigned(View.SpeciesArr) then
+      ResultArray := ArraySpeciesCreate(View.Obj, 0)
+    else
+      ResultArray := TGocciaArrayValue.Create;
+    ViewRoots.Add(ResultArray);
+    TargetIndex := 0;
+    InitializeTempRoot(ResultRoot);
+    InitializeTempRoot(MappedValueRoot);
+    AddTempRootIfNeeded(ResultRoot, ResultArray);
     try
-      for I := 0 to View.Len - 1 do
-      begin
-        if not View.HasIndex(I) then
-          Continue;
 
-        CallArgs.Element := View.Get(I);
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-        MappedValue := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-        try
-          AddTempRootIfNeeded(MappedValueRoot, MappedValue);
-          if IsArrayForFlatten(MappedValue) then
-          begin
-            // Use View-based iteration for prototype-aware access
-            MappedView.Init(MappedValue);
-            for J := 0 to MappedView.Len - 1 do
+      TypedCallback := nil;
+      if Callback is TGocciaFunctionBase then
+        TypedCallback := TGocciaFunctionBase(Callback);
+
+      CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+      try
+        for I := 0 to View.Len - 1 do
+        begin
+          if not View.HasIndex(I) then
+            Continue;
+
+          CallArgs.Element := View.Get(I);
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+          MappedValue := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          try
+            AddTempRootIfNeeded(MappedValueRoot, MappedValue);
+            if IsArrayForFlatten(MappedValue) then
             begin
-              if MappedView.HasIndex(J) then
+              // Use View-based iteration for prototype-aware access
+              MappedView.Init(MappedValue);
+              for J := 0 to MappedView.Len - 1 do
               begin
-                ArrayCreateDataProperty(ResultArray, TargetIndex, MappedView.Get(J));
-                Inc(TargetIndex);
+                if MappedView.HasIndex(J) then
+                begin
+                  ArrayCreateDataProperty(ResultArray, TargetIndex, MappedView.Get(J));
+                  Inc(TargetIndex);
+                end;
               end;
+            end
+            else
+            begin
+              ArrayCreateDataProperty(ResultArray, TargetIndex, MappedValue);
+              Inc(TargetIndex);
             end;
-          end
-          else
-          begin
-            ArrayCreateDataProperty(ResultArray, TargetIndex, MappedValue);
-            Inc(TargetIndex);
+          finally
+            RemoveTempRootIfNeeded(MappedValueRoot);
           end;
-        finally
-          RemoveTempRootIfNeeded(MappedValueRoot);
         end;
+      finally
+        CallArgs.Free;
       end;
-    finally
-      CallArgs.Free;
-    end;
 
-    Result := ResultArray;
+      Result := ResultArray;
+    finally
+      RemoveTempRootIfNeeded(ResultRoot);
+    end;
   finally
-    RemoveTempRootIfNeeded(ResultRoot);
+    ViewRoots.Clear;
   end;
 end;
 
@@ -2525,37 +2638,47 @@ function TGocciaArrayValue.ArrayPop(const AArgs: TGocciaArgumentsCollection; con
 var
   View: TArrayLikeView;
   NewLen64: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: If len = 0, set length to 0 and return undefined
-  if View.Len = 0 then
-  begin
-    View.SetLen(0);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
+    // Step 3: If len = 0, set length to 0 and return undefined
+    if View.Len = 0 then
+    begin
+      View.SetLen(0);
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+
+    if View.RawLen > MaxInt then
+    begin
+      NewLen64 := View.Len64 - 1;
+      Result := View.Get64(NewLen64);
+      if not View.Obj.DeleteProperty(IntegerToString(NewLen64)) then
+        ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntegerToString(NewLen64)]),
+          SSuggestCannotDeleteNonConfigurable);
+      View.Obj.AssignProperty(PROP_LENGTH,
+        TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64)));
+      Exit;
+    end;
+
+    // Step 5: Let element be Get(O, ToString(newLen))
+    Result := View.Get(View.Len - 1);
+
+    // Step 6: DeletePropertyOrThrow(O, ToString(newLen))
+    View.DeleteIndex(View.Len - 1);
+    // Step 7: Set(O, "length", newLen)
+    View.SetLen(View.Len - 1);
+  finally
+    ViewRoots.Clear;
   end;
-
-  if View.RawLen > MaxInt then
-  begin
-    NewLen64 := View.Len64 - 1;
-    Result := View.Get64(NewLen64);
-    if not View.Obj.DeleteProperty(IntegerToString(NewLen64)) then
-      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntegerToString(NewLen64)]),
-        SSuggestCannotDeleteNonConfigurable);
-    View.Obj.AssignProperty(PROP_LENGTH,
-      TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64)));
-    Exit;
-  end;
-
-  // Step 5: Let element be Get(O, ToString(newLen))
-  Result := View.Get(View.Len - 1);
-
-  // Step 6: DeletePropertyOrThrow(O, ToString(newLen))
-  View.DeleteIndex(View.Len - 1);
-  // Step 7: Set(O, "length", newLen)
-  View.SetLen(View.Len - 1);
 end;
 
 // ES2026 §23.1.3.26 Array.prototype.slice(start, end)
@@ -2567,111 +2690,122 @@ var
   I, N: Integer;
   K: Int64;
   RawStart, RawEnd, RawK, RawFinal, RawNeeded: Double;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: Let relativeStart be ToIntegerOrInfinity(start).  Compute in
-  // Double against RawLen for spec correctness on array-likes whose length
-  // exceeds MaxInt — using View.Len would silently truncate the default
-  // end on a length-2^32 receiver and let an oversized count slip past
-  // the ArrayCreate ceiling check below.
-  // ES2026 §7.1.5 ToIntegerOrInfinity: NaN → 0; ±Infinity propagates to
-  // the Min/Max clamps below.  Trunc on non-finite values under a masked
-  // FPU returns Low(Int64), which would corrupt the start/final clamping
-  // (e.g. slice(+Infinity) would yield k = 0 instead of len).
-  if AArgs.Length > 0 then
-  begin
-    RawStart := AArgs.GetElement(0).ToNumberLiteral.Value;
-    if IsNaN(RawStart) then
-      RawStart := 0
-    else if not IsInfinite(RawStart) then
-      RawStart := Trunc(RawStart);
-  end
-  else
-    RawStart := 0;
-
-  // Step 4: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
-  // The `0.0` literal forces Math.Max to bind to its Double overload; the
-  // bare integer `0` resolves to the Single overload on FPC, narrowing
-  // RawLen-sized arguments and losing precision past 2^24 (e.g. RawSkipCount
-  // = 2^31 - 1 round-trips through Single as 2^31).
-  if RawStart < 0 then
-    RawK := Max(View.RawLen + RawStart, 0.0)
-  else
-    RawK := Min(RawStart, View.RawLen);
-
-  // Step 5: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
-  if (AArgs.Length > 1) and
-     not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
-  begin
-    RawEnd := AArgs.GetElement(1).ToNumberLiteral.Value;
-    if IsNaN(RawEnd) then
-      RawEnd := 0
-    else if not IsInfinite(RawEnd) then
-      RawEnd := Trunc(RawEnd);
-  end
-  else
-    RawEnd := View.RawLen;
-
-  // Step 6: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
-  if RawEnd < 0 then
-    RawFinal := Max(View.RawLen + RawEnd, 0.0)
-  else
-    RawFinal := Min(RawEnd, View.RawLen);
-
-  // Step 7: Let count be max(final - k, 0)
-  // Step 8: Let A be ArraySpeciesCreate(O, count) — ArrayCreate throws
-  // RangeError only when *count* exceeds 2^32 - 1.  Validate the
-  // computed result length, not the source's RawLen — checking RawLen
-  // would spuriously reject a tiny slice taken from a huge array-like
-  // (e.g. slice(0, 2) on a {length: 2^32} receiver).
-  RawNeeded := Max(RawFinal - RawK, 0.0);
-  View.CheckArrayCreateLenValue(RawNeeded);
-
-  // After the check, RawNeeded ≤ MaxInt — safe to truncate for the loop.
-  Needed := Integer(Trunc(RawNeeded));
-
-  if Assigned(View.SpeciesArr) then
-    ResultArray := ArraySpeciesCreate(View.Obj, Needed)
-  else
-    ResultArray := ArrayCreateWithLength(Needed);
-
-  // Step 9: Let n be 0; repeat while k < final
-  N := 0;
-  // Use 64-bit probing whenever the copy window can touch indices > MaxInt.
-  // Branching on RawFinal (not RawK) catches boundary-crossing windows
-  // where start <= MaxInt but start + count overflows the Integer range.
-  if RawFinal > MaxInt then
-  begin
-    K := Trunc(RawK);
-    while N < Needed do
+    // Step 3: Let relativeStart be ToIntegerOrInfinity(start).  Compute in
+    // Double against RawLen for spec correctness on array-likes whose length
+    // exceeds MaxInt — using View.Len would silently truncate the default
+    // end on a length-2^32 receiver and let an oversized count slip past
+    // the ArrayCreate ceiling check below.
+    // ES2026 §7.1.5 ToIntegerOrInfinity: NaN → 0; ±Infinity propagates to
+    // the Min/Max clamps below.  Trunc on non-finite values under a masked
+    // FPU returns Low(Int64), which would corrupt the start/final clamping
+    // (e.g. slice(+Infinity) would yield k = 0 instead of len).
+    if AArgs.Length > 0 then
     begin
-      if View.HasIndex64(K) then
-        ArrayCreateDataProperty(ResultArray, N, View.Get64(K));
-      Inc(K);
-      Inc(N);
-    end;
-  end
-  else
-  begin
-    StartIndex := Integer(Trunc(RawK));
-    EndIndex := Integer(Trunc(RawFinal));
-    if EndIndex > View.Len then
-      EndIndex := View.Len;
-    for I := StartIndex to EndIndex - 1 do
+      RawStart := AArgs.GetElement(0).ToNumberLiteral.Value;
+      if IsNaN(RawStart) then
+        RawStart := 0
+      else if not IsInfinite(RawStart) then
+        RawStart := Trunc(RawStart);
+    end
+    else
+      RawStart := 0;
+
+    // Step 4: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
+    // The `0.0` literal forces Math.Max to bind to its Double overload; the
+    // bare integer `0` resolves to the Single overload on FPC, narrowing
+    // RawLen-sized arguments and losing precision past 2^24 (e.g. RawSkipCount
+    // = 2^31 - 1 round-trips through Single as 2^31).
+    if RawStart < 0 then
+      RawK := Max(View.RawLen + RawStart, 0.0)
+    else
+      RawK := Min(RawStart, View.RawLen);
+
+    // Step 5: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
+    if (AArgs.Length > 1) and
+       not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
     begin
-      if View.HasIndex(I) then
-        ArrayCreateDataProperty(ResultArray, N, View.Get(I));
-      Inc(N);
+      RawEnd := AArgs.GetElement(1).ToNumberLiteral.Value;
+      if IsNaN(RawEnd) then
+        RawEnd := 0
+      else if not IsInfinite(RawEnd) then
+        RawEnd := Trunc(RawEnd);
+    end
+    else
+      RawEnd := View.RawLen;
+
+    // Step 6: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
+    if RawEnd < 0 then
+      RawFinal := Max(View.RawLen + RawEnd, 0.0)
+    else
+      RawFinal := Min(RawEnd, View.RawLen);
+
+    // Step 7: Let count be max(final - k, 0)
+    // Step 8: Let A be ArraySpeciesCreate(O, count) — ArrayCreate throws
+    // RangeError only when *count* exceeds 2^32 - 1.  Validate the
+    // computed result length, not the source's RawLen — checking RawLen
+    // would spuriously reject a tiny slice taken from a huge array-like
+    // (e.g. slice(0, 2) on a {length: 2^32} receiver).
+    RawNeeded := Max(RawFinal - RawK, 0.0);
+    View.CheckArrayCreateLenValue(RawNeeded);
+
+    // After the check, RawNeeded ≤ MaxInt — safe to truncate for the loop.
+    Needed := Integer(Trunc(RawNeeded));
+
+    if Assigned(View.SpeciesArr) then
+      ResultArray := ArraySpeciesCreate(View.Obj, Needed)
+    else
+      ResultArray := ArrayCreateWithLength(Needed);
+    ViewRoots.Add(ResultArray);
+
+    // Step 9: Let n be 0; repeat while k < final
+    N := 0;
+    // Use 64-bit probing whenever the copy window can touch indices > MaxInt.
+    // Branching on RawFinal (not RawK) catches boundary-crossing windows
+    // where start <= MaxInt but start + count overflows the Integer range.
+    if RawFinal > MaxInt then
+    begin
+      K := Trunc(RawK);
+      while N < Needed do
+      begin
+        if View.HasIndex64(K) then
+          ArrayCreateDataProperty(ResultArray, N, View.Get64(K));
+        Inc(K);
+        Inc(N);
+      end;
+    end
+    else
+    begin
+      StartIndex := Integer(Trunc(RawK));
+      EndIndex := Integer(Trunc(RawFinal));
+      if EndIndex > View.Len then
+        EndIndex := View.Len;
+      for I := StartIndex to EndIndex - 1 do
+      begin
+        if View.HasIndex(I) then
+          ArrayCreateDataProperty(ResultArray, N, View.Get(I));
+        Inc(N);
+      end;
     end;
+
+    // Ensure result has correct length (preserve trailing holes)
+    ResultArray.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(N));
+
+    // Step 11: Return A
+    Result := ResultArray;
+  finally
+    ViewRoots.Clear;
   end;
-
-  // Ensure result has correct length (preserve trailing holes)
-  ResultArray.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(N));
-
-  // Step 11: Return A
-  Result := ResultArray;
 end;
 
 // ES2026 §23.1.3.9 Array.prototype.find(predicate [, thisArg])
@@ -2686,35 +2820,59 @@ var
   Element, CallResult: TGocciaValue;
   Sparse: TArray<Int64>;
   K: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('find', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    if View.NeedsSparsePath then
-    begin
-      Element := View.Get64(0);
-      CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(0);
-      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('find', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
+
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
+
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      if View.NeedsSparsePath then
       begin
-        Result := Element;
+        Element := View.Get64(0);
+        CallArgs.Element := Element;
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(0);
+        CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+        if CallResult.ToBooleanLiteral.Value then
+        begin
+          Result := Element;
+          Exit;
+        end;
+
+        Sparse := CollectSparseIndicesInRange(View.Obj, 1, View.Len64);
+        for K in Sparse do
+        begin
+          Element := View.Get64(K);
+          CallArgs.Element := Element;
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+          CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if CallResult.ToBooleanLiteral.Value then
+          begin
+            Result := Element;
+            Exit;
+          end;
+        end;
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Exit;
       end;
 
-      Sparse := CollectSparseIndicesInRange(View.Obj, 1, View.Len64);
-      for K in Sparse do
+      for I := 0 to View.Len - 1 do
       begin
-        Element := View.Get64(K);
+        Element := View.Get(I);
+
         CallArgs.Element := Element;
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
         CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if CallResult.ToBooleanLiteral.Value then
         begin
@@ -2722,28 +2880,14 @@ begin
           Exit;
         end;
       end;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
+    finally
+      CallArgs.Free;
     end;
 
-    for I := 0 to View.Len - 1 do
-    begin
-      Element := View.Get(I);
-
-      CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
-      begin
-        Result := Element;
-        Exit;
-      end;
-    end;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   finally
-    CallArgs.Free;
+    ViewRoots.Clear;
   end;
-
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 // ES2026 §23.1.3.10 Array.prototype.findIndex(predicate [, thisArg])
@@ -2758,64 +2902,74 @@ var
   Element, CallResult: TGocciaValue;
   Sparse: TArray<Int64>;
   K: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('findIndex', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    if View.NeedsSparsePath then
-    begin
-      Element := View.Get64(0);
-      CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(0);
-      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
-      begin
-        Result := TGocciaNumberLiteralValue.Create(0);
-        Exit;
-      end;
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('findIndex', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
 
-      Sparse := CollectSparseIndicesInRange(View.Obj, 1, View.Len64);
-      for K in Sparse do
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
+
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      if View.NeedsSparsePath then
       begin
-        Element := View.Get64(K);
+        Element := View.Get64(0);
         CallArgs.Element := Element;
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(0);
         CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if CallResult.ToBooleanLiteral.Value then
         begin
-          Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+          Result := TGocciaNumberLiteralValue.Create(0);
+          Exit;
+        end;
+
+        Sparse := CollectSparseIndicesInRange(View.Obj, 1, View.Len64);
+        for K in Sparse do
+        begin
+          Element := View.Get64(K);
+          CallArgs.Element := Element;
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+          CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if CallResult.ToBooleanLiteral.Value then
+          begin
+            Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+            Exit;
+          end;
+        end;
+        Result := TGocciaNumberLiteralValue.Create(-1);
+        Exit;
+      end;
+
+      for I := 0 to View.Len - 1 do
+      begin
+        Element := View.Get(I);
+
+        CallArgs.Element := Element;
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+        CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+        if CallResult.ToBooleanLiteral.Value then
+        begin
+          Result := TGocciaNumberLiteralValue.Create(I);
           Exit;
         end;
       end;
-      Result := TGocciaNumberLiteralValue.Create(-1);
-      Exit;
+    finally
+      CallArgs.Free;
     end;
 
-    for I := 0 to View.Len - 1 do
-    begin
-      Element := View.Get(I);
-
-      CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
-      begin
-        Result := TGocciaNumberLiteralValue.Create(I);
-        Exit;
-      end;
-    end;
+    Result := TGocciaNumberLiteralValue.Create(-1);
   finally
-    CallArgs.Free;
+    ViewRoots.Clear;
   end;
-
-  Result := TGocciaNumberLiteralValue.Create(-1);
 end;
 
 // ES2026 §23.1.3.11 Array.prototype.findLast(predicate [, thisArg])
@@ -2831,36 +2985,60 @@ var
   Sparse: TArray<Int64>;
   LastIndex: Int64;
   J: Integer;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('findLast', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    if View.NeedsSparsePath then
-    begin
-      LastIndex := View.Len64 - 1;
-      Element := View.Get64(LastIndex);
-      CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
-      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('findLast', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
+
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
+
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      if View.NeedsSparsePath then
       begin
-        Result := Element;
+        LastIndex := View.Len64 - 1;
+        Element := View.Get64(LastIndex);
+        CallArgs.Element := Element;
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
+        CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+        if CallResult.ToBooleanLiteral.Value then
+        begin
+          Result := Element;
+          Exit;
+        end;
+
+        Sparse := CollectSparseIndicesInRange(View.Obj, 0, LastIndex);
+        for J := High(Sparse) downto 0 do
+        begin
+          Element := View.Get64(Sparse[J]);
+          CallArgs.Element := Element;
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+          CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if CallResult.ToBooleanLiteral.Value then
+          begin
+            Result := Element;
+            Exit;
+          end;
+        end;
+        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
         Exit;
       end;
 
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, LastIndex);
-      for J := High(Sparse) downto 0 do
+      for I := View.Len - 1 downto 0 do
       begin
-        Element := View.Get64(Sparse[J]);
+        Element := View.Get(I);
+
         CallArgs.Element := Element;
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
         CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if CallResult.ToBooleanLiteral.Value then
         begin
@@ -2868,28 +3046,14 @@ begin
           Exit;
         end;
       end;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
+    finally
+      CallArgs.Free;
     end;
 
-    for I := View.Len - 1 downto 0 do
-    begin
-      Element := View.Get(I);
-
-      CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
-      begin
-        Result := Element;
-        Exit;
-      end;
-    end;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   finally
-    CallArgs.Free;
+    ViewRoots.Clear;
   end;
-
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 // ES2026 §23.1.3.12 Array.prototype.findLastIndex(predicate [, thisArg])
@@ -2905,65 +3069,75 @@ var
   Sparse: TArray<Int64>;
   LastIndex: Int64;
   J: Integer;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   View.Init(AThisValue);
-  Callback := ValidateArrayMethodCall('findLastIndex', AArgs, AThisValue, True);
-  ThisArg := GetArrayCallbackThisArg(AArgs);
-
-  TypedCallback := nil;
-  if Callback is TGocciaFunctionBase then
-    TypedCallback := TGocciaFunctionBase(Callback);
-
-  CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    if View.NeedsSparsePath then
-    begin
-      LastIndex := View.Len64 - 1;
-      Element := View.Get64(LastIndex);
-      CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
-      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
-      begin
-        Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
-        Exit;
-      end;
+    ViewRoots.Add(View.Obj);
+    Callback := ValidateArrayMethodCall('findLastIndex', AArgs, AThisValue, True);
+    ThisArg := GetArrayCallbackThisArg(AArgs);
 
-      Sparse := CollectSparseIndicesInRange(View.Obj, 0, LastIndex);
-      for J := High(Sparse) downto 0 do
+    TypedCallback := nil;
+    if Callback is TGocciaFunctionBase then
+      TypedCallback := TGocciaFunctionBase(Callback);
+
+    CallArgs := TGocciaArrayCallbackArgs.Create(View.Obj);
+    try
+      if View.NeedsSparsePath then
       begin
-        Element := View.Get64(Sparse[J]);
+        LastIndex := View.Len64 - 1;
+        Element := View.Get64(LastIndex);
         CallArgs.Element := Element;
-        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
         CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
         if CallResult.ToBooleanLiteral.Value then
         begin
-          Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+          Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(LastIndex));
+          Exit;
+        end;
+
+        Sparse := CollectSparseIndicesInRange(View.Obj, 0, LastIndex);
+        for J := High(Sparse) downto 0 do
+        begin
+          Element := View.Get64(Sparse[J]);
+          CallArgs.Element := Element;
+          CallArgs.Index := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+          CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+          if CallResult.ToBooleanLiteral.Value then
+          begin
+            Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+            Exit;
+          end;
+        end;
+        Result := TGocciaNumberLiteralValue.Create(-1);
+        Exit;
+      end;
+
+      for I := View.Len - 1 downto 0 do
+      begin
+        Element := View.Get(I);
+
+        CallArgs.Element := Element;
+        CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
+        CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
+        if CallResult.ToBooleanLiteral.Value then
+        begin
+          Result := TGocciaNumberLiteralValue.Create(I);
           Exit;
         end;
       end;
-      Result := TGocciaNumberLiteralValue.Create(-1);
-      Exit;
+    finally
+      CallArgs.Free;
     end;
 
-    for I := View.Len - 1 downto 0 do
-    begin
-      Element := View.Get(I);
-
-      CallArgs.Element := Element;
-      CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
-      CallResult := InvokeArrayCallback(Callback, TypedCallback, CallArgs, ThisArg);
-      if CallResult.ToBooleanLiteral.Value then
-      begin
-        Result := TGocciaNumberLiteralValue.Create(I);
-        Exit;
-      end;
-    end;
+    Result := TGocciaNumberLiteralValue.Create(-1);
   finally
-    CallArgs.Free;
+    ViewRoots.Clear;
   end;
-
-  Result := TGocciaNumberLiteralValue.Create(-1);
 end;
 
 // ES2026 §23.1.3.38 Array.prototype.with(index, value)
@@ -2974,45 +3148,56 @@ var
   Index, ActualIndex: Int64;
   I: Integer;
   NewValue: TGocciaValue;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  if AArgs.Length < 2 then
-    ThrowError(SErrorArrayWithRequiresArgs, [], SSuggestArrayThisType);
+    if AArgs.Length < 2 then
+      ThrowError(SErrorArrayWithRequiresArgs, [], SSuggestArrayThisType);
 
-  // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
-  Index := ToInteger64FromArgs(AArgs);
-  // Step 5: Let value be args[1]
-  NewValue := AArgs.GetElement(1);
+    // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
+    Index := ToInteger64FromArgs(AArgs);
+    // Step 5: Let value be args[1]
+    NewValue := AArgs.GetElement(1);
 
-  // Step 4: If relativeIndex >= 0, let actualIndex be relativeIndex; else len + relativeIndex
-  if Index < 0 then
-    ActualIndex := View.Len64 + Index
-  else
-    ActualIndex := Index;
-
-  // Step 6: If actualIndex >= len or actualIndex < 0, throw RangeError
-  if (ActualIndex < 0) or (ActualIndex >= View.Len64) then
-    ThrowRangeError(SErrorInvalidArrayWithIndex,
-      Format('index must be between %s and %s',
-        [IntToStr(-View.Len64), IntToStr(View.Len64 - 1)]));
-
-  // Step 7: Let A be ArrayCreate(len)
-  View.CheckArrayCreateLen;
-  ResultArray := TGocciaArrayValue.Create;
-  // Step 8: Let k be 0; repeat while k < len
-  for I := 0 to View.Len - 1 do
-  begin
-    // Step 8b: If k = actualIndex, let fromValue be value; else Get(O, Pk)
-    if Int64(I) = ActualIndex then
-      ResultArray.Elements.Add(NewValue)
+    // Step 4: If relativeIndex >= 0, let actualIndex be relativeIndex; else len + relativeIndex
+    if Index < 0 then
+      ActualIndex := View.Len64 + Index
     else
-      ResultArray.Elements.Add(View.Get(I));
-  end;
+      ActualIndex := Index;
 
-  // Step 9: Return A
-  Result := ResultArray;
+    // Step 6: If actualIndex >= len or actualIndex < 0, throw RangeError
+    if (ActualIndex < 0) or (ActualIndex >= View.Len64) then
+      ThrowRangeError(SErrorInvalidArrayWithIndex,
+        Format('index must be between %s and %s',
+          [IntToStr(-View.Len64), IntToStr(View.Len64 - 1)]));
+
+    // Step 7: Let A be ArrayCreate(len)
+    View.CheckArrayCreateLen;
+    ResultArray := TGocciaArrayValue.Create;
+    ViewRoots.Add(ResultArray);
+    // Step 8: Let k be 0; repeat while k < len
+    for I := 0 to View.Len - 1 do
+    begin
+      // Step 8b: If k = actualIndex, let fromValue be value; else Get(O, Pk)
+      if Int64(I) = ActualIndex then
+        ResultArray.Elements.Add(NewValue)
+      else
+        ResultArray.Elements.Add(View.Get(I));
+    end;
+
+    // Step 9: Return A
+    Result := ResultArray;
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 // ES2026 §23.1.3.4 Array.prototype.copyWithin(target, start [, end])
@@ -3024,101 +3209,111 @@ var
   Direction: Integer;
   Temp: array of TGocciaValue;
   Present: array of Boolean;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  if View.NeedsSparsePath then
-  begin
-    Target64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 0), View.Len64);
-    Start64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 1), View.Len64);
+    if View.NeedsSparsePath then
+    begin
+      Target64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 0), View.Len64);
+      Start64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 1), View.Len64);
+      if (AArgs.Length > 2) and
+         not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+        End64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 2), View.Len64)
+      else
+        End64 := View.Len64;
+      Count64 := End64 - Start64;
+      if Count64 > View.Len64 - Target64 then
+        Count64 := View.Len64 - Target64;
+      if Count64 <= 0 then
+      begin
+        Result := View.Obj;
+        Exit;
+      end;
+
+      From64 := Start64;
+      To64 := Target64;
+      Direction := 1;
+      if (From64 < To64) and (To64 < From64 + Count64) then
+      begin
+        Direction := -1;
+        From64 := From64 + Count64 - 1;
+        To64 := To64 + Count64 - 1;
+      end;
+
+      while Count64 > 0 do
+      begin
+        if View.HasIndex64(From64) then
+          View.Obj.AssignProperty(IntegerToString(To64), View.Get64(From64))
+        else if not View.Obj.DeleteProperty(IntegerToString(To64)) then
+          ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(To64)]),
+            SSuggestCannotDeleteNonConfigurable);
+        From64 := From64 + Direction;
+        To64 := To64 + Direction;
+        Dec(Count64);
+      end;
+
+      Result := View.Obj;
+      Exit;
+    end;
+
+    // Step 3: Let relativeTarget be ToIntegerOrInfinity(target)
+    Target := ToIntegerFromArgs(AArgs);
+    // Step 4: If relativeTarget < 0, let to be max(len + relativeTarget, 0); else min(relativeTarget, len)
+    Target := NormalizeRelativeIndex(Target, View.Len);
+
+    // Step 5: Let relativeStart be ToIntegerOrInfinity(start)
+    Start := ToIntegerFromArgs(AArgs, 1);
+    // Step 6: If relativeStart < 0, let from be max(len + relativeStart, 0); else min(relativeStart, len)
+    Start := NormalizeRelativeIndex(Start, View.Len);
+
+    // Step 7: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
     if (AArgs.Length > 2) and
        not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-      End64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 2), View.Len64)
+      EndIdx := ToIntegerFromArgs(AArgs, 2)
     else
-      End64 := View.Len64;
-    Count64 := End64 - Start64;
-    if Count64 > View.Len64 - Target64 then
-      Count64 := View.Len64 - Target64;
-    if Count64 <= 0 then
+      EndIdx := View.Len;
+    // Step 8: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
+    EndIdx := NormalizeRelativeIndex(EndIdx, View.Len);
+
+    // Step 9: Let count be min(final - from, len - to)
+    Count := Min(EndIdx - Start, View.Len - Target);
+    if Count <= 0 then
     begin
       Result := View.Obj;
       Exit;
     end;
 
-    From64 := Start64;
-    To64 := Target64;
-    Direction := 1;
-    if (From64 < To64) and (To64 < From64 + Count64) then
+    // Steps 10-12: Copy elements (using temp buffer for overlap safety)
+    // Preserve sparsity per ES spec: delete destination when source is absent.
+    SetLength(Temp, Count);
+    SetLength(Present, Count);
+    for I := 0 to Count - 1 do
     begin
-      Direction := -1;
-      From64 := From64 + Count64 - 1;
-      To64 := To64 + Count64 - 1;
+      Present[I] := View.HasIndex(Start + I);
+      if Present[I] then
+        Temp[I] := View.Get(Start + I);
+    end;
+    for I := 0 to Count - 1 do
+    begin
+      if Present[I] then
+        View.Put(Target + I, Temp[I])
+      else
+        View.DeleteIndex(Target + I);
     end;
 
-    while Count64 > 0 do
-    begin
-      if View.HasIndex64(From64) then
-        View.Obj.AssignProperty(IntegerToString(To64), View.Get64(From64))
-      else if not View.Obj.DeleteProperty(IntegerToString(To64)) then
-        ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(To64)]),
-          SSuggestCannotDeleteNonConfigurable);
-      From64 := From64 + Direction;
-      To64 := To64 + Direction;
-      Dec(Count64);
-    end;
-
+    // Step 13: Return O
     Result := View.Obj;
-    Exit;
+  finally
+    ViewRoots.Clear;
   end;
-
-  // Step 3: Let relativeTarget be ToIntegerOrInfinity(target)
-  Target := ToIntegerFromArgs(AArgs);
-  // Step 4: If relativeTarget < 0, let to be max(len + relativeTarget, 0); else min(relativeTarget, len)
-  Target := NormalizeRelativeIndex(Target, View.Len);
-
-  // Step 5: Let relativeStart be ToIntegerOrInfinity(start)
-  Start := ToIntegerFromArgs(AArgs, 1);
-  // Step 6: If relativeStart < 0, let from be max(len + relativeStart, 0); else min(relativeStart, len)
-  Start := NormalizeRelativeIndex(Start, View.Len);
-
-  // Step 7: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
-  if (AArgs.Length > 2) and
-     not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-    EndIdx := ToIntegerFromArgs(AArgs, 2)
-  else
-    EndIdx := View.Len;
-  // Step 8: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
-  EndIdx := NormalizeRelativeIndex(EndIdx, View.Len);
-
-  // Step 9: Let count be min(final - from, len - to)
-  Count := Min(EndIdx - Start, View.Len - Target);
-  if Count <= 0 then
-  begin
-    Result := View.Obj;
-    Exit;
-  end;
-
-  // Steps 10-12: Copy elements (using temp buffer for overlap safety)
-  // Preserve sparsity per ES spec: delete destination when source is absent.
-  SetLength(Temp, Count);
-  SetLength(Present, Count);
-  for I := 0 to Count - 1 do
-  begin
-    Present[I] := View.HasIndex(Start + I);
-    if Present[I] then
-      Temp[I] := View.Get(Start + I);
-  end;
-  for I := 0 to Count - 1 do
-  begin
-    if Present[I] then
-      View.Put(Target + I, Temp[I])
-    else
-      View.DeleteIndex(Target + I);
-  end;
-
-  // Step 13: Return O
-  Result := View.Obj;
 end;
 
 // ES2026 §23.1.3.15 Array.prototype.indexOf(searchElement [, fromIndex])
@@ -3129,75 +3324,85 @@ var
   I, FromIndex: Integer;
   Len64Val, FromIndex64, K: Int64;
   Sparse: TArray<Int64>;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: If len is 0, return -1 — before ToIntegerOrInfinity(fromIndex).
-  if View.Len = 0 then
-  begin
-    Result := TGocciaNumberLiteralValue.Create(-1);
-    Exit;
-  end;
-
-  if AArgs.Length < 1 then
-    SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
-  else
-    SearchValue := AArgs.GetElement(0);
-
-  // Sparse iteration path for generic array-likes whose claimed length
-  // exceeds 2^32 - 1.  The dense Integer loop would saturate to MaxInt and
-  // walk billions of phantom indices; the spec only observes indices that
-  // actually exist on the chain, so we enumerate exactly those.
-  if View.NeedsSparsePath then
-  begin
-    Len64Val := View.Len64;
-    FromIndex64 := ToInteger64FromArgs(AArgs, 1);
-    if FromIndex64 < 0 then
-      FromIndex64 := Len64Val + FromIndex64;
-    if FromIndex64 < 0 then
-      FromIndex64 := 0;
-    if FromIndex64 >= Len64Val then
+    // Step 3: If len is 0, return -1 — before ToIntegerOrInfinity(fromIndex).
+    if View.Len = 0 then
     begin
       Result := TGocciaNumberLiteralValue.Create(-1);
       Exit;
     end;
-    Sparse := CollectSparseIndicesInRange(View.Obj, FromIndex64, Len64Val);
-    for K in Sparse do
-      if IsStrictEqual(View.Get64(K), SearchValue) then
+
+    if AArgs.Length < 1 then
+      SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      SearchValue := AArgs.GetElement(0);
+
+    // Sparse iteration path for generic array-likes whose claimed length
+    // exceeds 2^32 - 1.  The dense Integer loop would saturate to MaxInt and
+    // walk billions of phantom indices; the spec only observes indices that
+    // actually exist on the chain, so we enumerate exactly those.
+    if View.NeedsSparsePath then
+    begin
+      Len64Val := View.Len64;
+      FromIndex64 := ToInteger64FromArgs(AArgs, 1);
+      if FromIndex64 < 0 then
+        FromIndex64 := Len64Val + FromIndex64;
+      if FromIndex64 < 0 then
+        FromIndex64 := 0;
+      if FromIndex64 >= Len64Val then
       begin
-        Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+        Result := TGocciaNumberLiteralValue.Create(-1);
         Exit;
       end;
-    Result := TGocciaNumberLiteralValue.Create(-1);
-    Exit;
-  end;
-
-  // Step 4: Let n be ToIntegerOrInfinity(fromIndex)
-  // Step 6: If n >= 0, let k be n; else let k be max(len + n, 0)
-  FromIndex := ToIntegerFromArgs(AArgs, 1);
-  if FromIndex < 0 then
-    FromIndex := View.Len + FromIndex;
-  if FromIndex < 0 then
-    FromIndex := 0;
-
-  // Step 7: Repeat, while k < len
-  for I := FromIndex to View.Len - 1 do
-  begin
-    // Step 7a: Let kPresent be HasProperty(O, Pk)
-    if not View.HasIndex(I) then
-      Continue;
-    // Step 7b: If kPresent, let elementK be Get(O, Pk)
-    // Step 7c: If IsStrictlyEqual(searchElement, elementK) is true, return k
-    if IsStrictEqual(View.Get(I), SearchValue) then
-    begin
-      Result := TGocciaNumberLiteralValue.Create(I);
+      Sparse := CollectSparseIndicesInRange(View.Obj, FromIndex64, Len64Val);
+      for K in Sparse do
+        if IsStrictEqual(View.Get64(K), SearchValue) then
+        begin
+          Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(K));
+          Exit;
+        end;
+      Result := TGocciaNumberLiteralValue.Create(-1);
       Exit;
     end;
-  end;
 
-  // Step 8: Return -1𝔽
-  Result := TGocciaNumberLiteralValue.Create(-1);
+    // Step 4: Let n be ToIntegerOrInfinity(fromIndex)
+    // Step 6: If n >= 0, let k be n; else let k be max(len + n, 0)
+    FromIndex := ToIntegerFromArgs(AArgs, 1);
+    if FromIndex < 0 then
+      FromIndex := View.Len + FromIndex;
+    if FromIndex < 0 then
+      FromIndex := 0;
+
+    // Step 7: Repeat, while k < len
+    for I := FromIndex to View.Len - 1 do
+    begin
+      // Step 7a: Let kPresent be HasProperty(O, Pk)
+      if not View.HasIndex(I) then
+        Continue;
+      // Step 7b: If kPresent, let elementK be Get(O, Pk)
+      // Step 7c: If IsStrictlyEqual(searchElement, elementK) is true, return k
+      if IsStrictEqual(View.Get(I), SearchValue) then
+      begin
+        Result := TGocciaNumberLiteralValue.Create(I);
+        Exit;
+      end;
+    end;
+
+    // Step 8: Return -1𝔽
+    Result := TGocciaNumberLiteralValue.Create(-1);
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 // ES2026 §23.1.3.17 Array.prototype.lastIndexOf(searchElement [, fromIndex])
@@ -3209,76 +3414,86 @@ var
   Len64Val, FromIndex64: Int64;
   Sparse: TArray<Int64>;
   J: Integer;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: If len is 0, return -1 — before ToIntegerOrInfinity(fromIndex).
-  if View.Len = 0 then
-  begin
-    Result := TGocciaNumberLiteralValue.Create(-1);
-    Exit;
-  end;
-
-  if AArgs.Length < 1 then
-    SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
-  else
-    SearchValue := AArgs.GetElement(0);
-
-  // Sparse iteration path for generic array-likes whose claimed length
-  // exceeds 2^32 - 1.  See ArrayIndexOf for rationale.
-  if View.NeedsSparsePath then
-  begin
-    Len64Val := View.Len64;
-    if AArgs.Length >= 2 then
-      FromIndex64 := ToInteger64FromArgs(AArgs, 1)
-    else
-      FromIndex64 := Len64Val - 1;
-    if FromIndex64 < 0 then
-      FromIndex64 := Len64Val + FromIndex64;
-    if FromIndex64 >= Len64Val then
-      FromIndex64 := Len64Val - 1;
-    if FromIndex64 < 0 then
+    // Step 3: If len is 0, return -1 — before ToIntegerOrInfinity(fromIndex).
+    if View.Len = 0 then
     begin
       Result := TGocciaNumberLiteralValue.Create(-1);
       Exit;
     end;
-    Sparse := CollectSparseIndicesInRange(View.Obj, 0, FromIndex64 + 1);
-    for J := High(Sparse) downto 0 do
-      if IsStrictEqual(View.Get64(Sparse[J]), SearchValue) then
+
+    if AArgs.Length < 1 then
+      SearchValue := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      SearchValue := AArgs.GetElement(0);
+
+    // Sparse iteration path for generic array-likes whose claimed length
+    // exceeds 2^32 - 1.  See ArrayIndexOf for rationale.
+    if View.NeedsSparsePath then
+    begin
+      Len64Val := View.Len64;
+      if AArgs.Length >= 2 then
+        FromIndex64 := ToInteger64FromArgs(AArgs, 1)
+      else
+        FromIndex64 := Len64Val - 1;
+      if FromIndex64 < 0 then
+        FromIndex64 := Len64Val + FromIndex64;
+      if FromIndex64 >= Len64Val then
+        FromIndex64 := Len64Val - 1;
+      if FromIndex64 < 0 then
       begin
-        Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+        Result := TGocciaNumberLiteralValue.Create(-1);
         Exit;
       end;
-    Result := TGocciaNumberLiteralValue.Create(-1);
-    Exit;
-  end;
-
-  // Step 4: If fromIndex is present, let n be ToIntegerOrInfinity(fromIndex); else let n be len - 1
-  FromIndex := ToIntegerFromArgs(AArgs, 1, View.Len - 1);
-  // Step 6: If n < 0, let k be len + n
-  if FromIndex < 0 then
-    FromIndex := View.Len + FromIndex;
-
-  if FromIndex >= View.Len then
-    FromIndex := View.Len - 1;
-
-  // Step 7: Repeat, while k >= 0
-  for I := FromIndex downto 0 do
-  begin
-    // Step 7a: Let kPresent be HasProperty(O, Pk)
-    if not View.HasIndex(I) then
-      Continue;
-    // Step 7c: If IsStrictlyEqual(searchElement, elementK) is true, return k
-    if IsStrictEqual(View.Get(I), SearchValue) then
-    begin
-      Result := TGocciaNumberLiteralValue.Create(I);
+      Sparse := CollectSparseIndicesInRange(View.Obj, 0, FromIndex64 + 1);
+      for J := High(Sparse) downto 0 do
+        if IsStrictEqual(View.Get64(Sparse[J]), SearchValue) then
+        begin
+          Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(Sparse[J]));
+          Exit;
+        end;
+      Result := TGocciaNumberLiteralValue.Create(-1);
       Exit;
     end;
-  end;
 
-  // Step 8: Return -1𝔽
-  Result := TGocciaNumberLiteralValue.Create(-1);
+    // Step 4: If fromIndex is present, let n be ToIntegerOrInfinity(fromIndex); else let n be len - 1
+    FromIndex := ToIntegerFromArgs(AArgs, 1, View.Len - 1);
+    // Step 6: If n < 0, let k be len + n
+    if FromIndex < 0 then
+      FromIndex := View.Len + FromIndex;
+
+    if FromIndex >= View.Len then
+      FromIndex := View.Len - 1;
+
+    // Step 7: Repeat, while k >= 0
+    for I := FromIndex downto 0 do
+    begin
+      // Step 7a: Let kPresent be HasProperty(O, Pk)
+      if not View.HasIndex(I) then
+        Continue;
+      // Step 7c: If IsStrictlyEqual(searchElement, elementK) is true, return k
+      if IsStrictEqual(View.Get(I), SearchValue) then
+      begin
+        Result := TGocciaNumberLiteralValue.Create(I);
+        Exit;
+      end;
+    end;
+
+    // Step 8: Return -1𝔽
+    Result := TGocciaNumberLiteralValue.Create(-1);
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 // ES2026 §7.2.15 IsConcatSpreadable(O)
@@ -3382,54 +3597,65 @@ var
   ResultArray: TGocciaObjectValue;
   I, N: Integer;
   Arg: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
-  Obj := ToObject(AThisValue);
-  ArrayProbe := Obj;
-  while ArrayProbe is TGocciaProxyValue do
-  begin
-    if TGocciaProxyValue(ArrayProbe).Revoked then
-      ThrowTypeError(SErrorProxyRevoked, SSuggestProxyRevoked);
-    ArrayProbe := TGocciaProxyValue(ArrayProbe).Target;
-  end;
+  // The receiver object (a fresh wrapper for a primitive this) and the result
+  // are held only by locals while guest code (Symbol.isConcatSpreadable
+  // getters, element getters, proxy traps) runs.
+  Roots.Initialize;
+  try
+    Obj := ToObject(AThisValue);
+    Roots.Add(Obj);
+    ArrayProbe := Obj;
+    while ArrayProbe is TGocciaProxyValue do
+    begin
+      if TGocciaProxyValue(ArrayProbe).Revoked then
+        ThrowTypeError(SErrorProxyRevoked, SSuggestProxyRevoked);
+      ArrayProbe := TGocciaProxyValue(ArrayProbe).Target;
+    end;
 
-  // Step 2: Let A be ArraySpeciesCreate(O, 0)
-  if ArrayProbe is TGocciaArrayValue then
-    ResultArray := ArraySpeciesCreate(Obj, 0)
-  else
-    ResultArray := TGocciaArrayValue.Create;
+    // Step 2: Let A be ArraySpeciesCreate(O, 0)
+    if ArrayProbe is TGocciaArrayValue then
+      ResultArray := ArraySpeciesCreate(Obj, 0)
+    else
+      ResultArray := TGocciaArrayValue.Create;
+    Roots.Add(ResultArray);
 
-  // Step 3: Let n be 0
-  N := 0;
+    // Step 3: Let n be 0
+    N := 0;
 
-  // Step 4: Prepend O to items — check IsConcatSpreadable
-  if IsConcatSpreadable(Obj) then
-    SpreadIntoConcat(Obj, ResultArray, N)
-  else
-  begin
-    ArrayCreateDataProperty(ResultArray, N, Obj);
-    Inc(N);
-  end;
-
-  // Step 5: For each element E of items
-  for I := 0 to AArgs.Length - 1 do
-  begin
-    Arg := AArgs.GetElement(I);
-    // Step 5b: If IsConcatSpreadable(E) is true, spread via array-like iteration
-    if IsConcatSpreadable(Arg) then
-      SpreadIntoConcat(Arg, ResultArray, N)
-    // Step 5c: Else, CreateDataPropertyOrThrow(A, ToString(n), E)
+    // Step 4: Prepend O to items — check IsConcatSpreadable
+    if IsConcatSpreadable(Obj) then
+      SpreadIntoConcat(Obj, ResultArray, N)
     else
     begin
-      ArrayCreateDataProperty(ResultArray, N, Arg);
+      ArrayCreateDataProperty(ResultArray, N, Obj);
       Inc(N);
     end;
+
+    // Step 5: For each element E of items
+    for I := 0 to AArgs.Length - 1 do
+    begin
+      Arg := AArgs.GetElement(I);
+      // Step 5b: If IsConcatSpreadable(E) is true, spread via array-like iteration
+      if IsConcatSpreadable(Arg) then
+        SpreadIntoConcat(Arg, ResultArray, N)
+      // Step 5c: Else, CreateDataPropertyOrThrow(A, ToString(n), E)
+      else
+      begin
+        ArrayCreateDataProperty(ResultArray, N, Arg);
+        Inc(N);
+      end;
+    end;
+
+    ResultArray.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(N));
+
+    // Step 6: Return A
+    Result := ResultArray;
+  finally
+    Roots.Clear;
   end;
-
-  ResultArray.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(N));
-
-  // Step 6: Return A
-  Result := ResultArray;
 end;
 
 // ES2026 §23.1.3.23 Array.prototype.reverse()
@@ -3440,87 +3666,97 @@ var
   LowerIndex, UpperIndex: Int64;
   LowerExists, UpperExists: Boolean;
   Lower, Upper: TGocciaValue;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  if View.NeedsSparsePath then
-  begin
-    LowerIndex := 0;
-    UpperIndex := View.Len64 - 1;
-    while LowerIndex < UpperIndex do
+    if View.NeedsSparsePath then
     begin
-      LowerExists := View.HasIndex64(LowerIndex);
+      LowerIndex := 0;
+      UpperIndex := View.Len64 - 1;
+      while LowerIndex < UpperIndex do
+      begin
+        LowerExists := View.HasIndex64(LowerIndex);
+        if LowerExists then
+          Lower := View.Get64(LowerIndex);
+        UpperExists := View.HasIndex64(UpperIndex);
+        if UpperExists then
+          Upper := View.Get64(UpperIndex);
+
+        if LowerExists and UpperExists then
+        begin
+          View.Obj.AssignProperty(IntegerToString(LowerIndex), Upper);
+          View.Obj.AssignProperty(IntegerToString(UpperIndex), Lower);
+        end
+        else if UpperExists then
+        begin
+          View.Obj.AssignProperty(IntegerToString(LowerIndex), Upper);
+          if not View.Obj.DeleteProperty(IntegerToString(UpperIndex)) then
+            ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(UpperIndex)]),
+              SSuggestCannotDeleteNonConfigurable);
+        end
+        else if LowerExists then
+        begin
+          if not View.Obj.DeleteProperty(IntegerToString(LowerIndex)) then
+            ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(LowerIndex)]),
+              SSuggestCannotDeleteNonConfigurable);
+          View.Obj.AssignProperty(IntegerToString(UpperIndex), Lower);
+        end;
+
+        Inc(LowerIndex);
+        Dec(UpperIndex);
+      end;
+
+      Result := View.Obj;
+      Exit;
+    end;
+
+    // Step 3: Let middle be floor(len / 2), let lower be 0
+    I := 0;
+    J := View.Len - 1;
+    // Step 4: Repeat, while lower ≠ middle
+    while I < J do
+    begin
+      // ES2026 §23.1.3.23 steps 4a-i: preserve sparsity via HasProperty/Delete
+      LowerExists := View.HasIndex(I);
       if LowerExists then
-        Lower := View.Get64(LowerIndex);
-      UpperExists := View.HasIndex64(UpperIndex);
+        Lower := View.Get(I);
+      UpperExists := View.HasIndex(J);
       if UpperExists then
-        Upper := View.Get64(UpperIndex);
+        Upper := View.Get(J);
 
       if LowerExists and UpperExists then
       begin
-        View.Obj.AssignProperty(IntegerToString(LowerIndex), Upper);
-        View.Obj.AssignProperty(IntegerToString(UpperIndex), Lower);
+        View.Put(I, Upper);
+        View.Put(J, Lower);
       end
       else if UpperExists then
       begin
-        View.Obj.AssignProperty(IntegerToString(LowerIndex), Upper);
-        if not View.Obj.DeleteProperty(IntegerToString(UpperIndex)) then
-          ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(UpperIndex)]),
-            SSuggestCannotDeleteNonConfigurable);
+        View.Put(I, Upper);
+        View.DeleteIndex(J);
       end
       else if LowerExists then
       begin
-        if not View.Obj.DeleteProperty(IntegerToString(LowerIndex)) then
-          ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(LowerIndex)]),
-            SSuggestCannotDeleteNonConfigurable);
-        View.Obj.AssignProperty(IntegerToString(UpperIndex), Lower);
+        View.DeleteIndex(I);
+        View.Put(J, Lower);
       end;
-
-      Inc(LowerIndex);
-      Dec(UpperIndex);
+      // else: both absent — nothing to do
+      Inc(I);
+      Dec(J);
     end;
 
+    // Step 5: Return O
     Result := View.Obj;
-    Exit;
+  finally
+    ViewRoots.Clear;
   end;
-
-  // Step 3: Let middle be floor(len / 2), let lower be 0
-  I := 0;
-  J := View.Len - 1;
-  // Step 4: Repeat, while lower ≠ middle
-  while I < J do
-  begin
-    // ES2026 §23.1.3.23 steps 4a-i: preserve sparsity via HasProperty/Delete
-    LowerExists := View.HasIndex(I);
-    if LowerExists then
-      Lower := View.Get(I);
-    UpperExists := View.HasIndex(J);
-    if UpperExists then
-      Upper := View.Get(J);
-
-    if LowerExists and UpperExists then
-    begin
-      View.Put(I, Upper);
-      View.Put(J, Lower);
-    end
-    else if UpperExists then
-    begin
-      View.Put(I, Upper);
-      View.DeleteIndex(J);
-    end
-    else if LowerExists then
-    begin
-      View.DeleteIndex(I);
-      View.Put(J, Lower);
-    end;
-    // else: both absent — nothing to do
-    Inc(I);
-    Dec(J);
-  end;
-
-  // Step 5: Return O
-  Result := View.Obj;
 end;
 
 // ES2026 §23.1.3.33 Array.prototype.toReversed()
@@ -3530,28 +3766,38 @@ var
   ResultArray: TGocciaArrayValue;
   I: Integer;
   Roots: TGocciaActiveRootFrame;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
-  // Step 3: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
-  View.CheckArrayCreateLen;
-  // Each element read can run a getter or a Proxy trap, and the receiver
-  // (a fresh wrapper for a primitive this) and the result are held only here
-  // while it does (issue #1679).
-  Roots.Initialize;
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    Roots.Add(View.Obj);
-    ResultArray := TGocciaArrayValue.Create;
-    Roots.Add(ResultArray);
+    ViewRoots.Add(View.Obj);
+    // Step 3: Let A be ArrayCreate(len) — RangeError if len > 2^32-1
+    View.CheckArrayCreateLen;
+    // Each element read can run a getter or a Proxy trap, and the receiver
+    // (a fresh wrapper for a primitive this) and the result are held only here
+    // while it does (issue #1679).
+    Roots.Initialize;
+    try
+      Roots.Add(View.Obj);
+      ResultArray := TGocciaArrayValue.Create;
+      Roots.Add(ResultArray);
 
-    // Step 4: Let k be 0; repeat while k < len
-    for I := View.Len - 1 downto 0 do
-      ResultArray.Elements.Add(View.Get(I));
+      // Step 4: Let k be 0; repeat while k < len
+      for I := View.Len - 1 downto 0 do
+        ResultArray.Elements.Add(View.Get(I));
 
-    // Step 5: Return A
-    Result := ResultArray;
+      // Step 5: Return A
+      Result := ResultArray;
+    finally
+      Roots.Clear;
+    end;
   finally
-    Roots.Clear;
+    ViewRoots.Clear;
   end;
 end;
 
@@ -4368,230 +4614,240 @@ var
   Shift, RemovedRangeStart, TargetSrcKey, K: Int64;
   SourceSparse, DestSparse, TrailingSparse, RemovedSparse: TArray<Int64>;
   Roots: TGocciaActiveRootFrame;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
-  // start and deleteCount are converted after the receiver is made, the
-  // species constructor runs guest code, and so does every element read and
-  // write; the receiver and the removed-elements array are held only here
-  // across all of them (issue #1679).
-  Roots.Initialize;
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
   try
-    Roots.Add(View.Obj);
-    Len64 := View.Len64;
+    ViewRoots.Add(View.Obj);
+    // start and deleteCount are converted after the receiver is made, the
+    // species constructor runs guest code, and so does every element read and
+    // write; the receiver and the removed-elements array are held only here
+    // across all of them (issue #1679).
+    Roots.Initialize;
+    try
+      Roots.Add(View.Obj);
+      Len64 := View.Len64;
 
-    // Step 5: If start is not present
-    if AArgs.Length < 1 then
-    begin
+      // Step 5: If start is not present
+      if AArgs.Length < 1 then
+      begin
+        if Assigned(View.SpeciesArr) then
+          Removed := ArraySpeciesCreate(View.Obj, 0)
+        else
+          Removed := ArrayCreateWithLength(0);
+        Roots.Add(Removed);
+        if not (Assigned(View.Arr) and View.Arr.FLengthWritable) then
+          View.Obj.AssignProperty(PROP_LENGTH,
+            TGocciaNumberLiteralValue.Create(View.RawLen));
+        Result := Removed;
+        Exit;
+      end;
+
+      // Steps 3-4: ToIntegerOrInfinity(start), then clamp against the full
+      // ToLength value.  Use Int64 so generic array-likes near
+      // Number.MAX_SAFE_INTEGER do not wrap through the dense Integer path.
+      RelativeStart64 := ToInteger64FromArgs(AArgs, 0);
+      ActualStart64 := NormalizeRelativeIndex64(RelativeStart64, Len64);
+
+      // Steps 5-9: Determine actualDeleteCount
+      if AArgs.Length > 1 then
+      begin
+        DeleteCountArg64 := ToInteger64FromArgs(AArgs, 1);
+        if DeleteCountArg64 < 0 then
+          DeleteCount64 := 0
+        else if DeleteCountArg64 > Len64 - ActualStart64 then
+          DeleteCount64 := Len64 - ActualStart64
+        else
+          DeleteCount64 := DeleteCountArg64;
+      end
+      else
+        DeleteCount64 := Len64 - ActualStart64;
+
+      ItemCount := AArgs.Length - 2;
+      if ItemCount < 0 then
+        ItemCount := 0;
+
+      // Step 9a: If len + itemCount - actualDeleteCount > 2^53 - 1, throw TypeError.
+      if (Len64 - DeleteCount64) > MAX_SAFE_INTEGER - Int64(ItemCount) then
+        ThrowTypeError(
+          'Array length exceeds maximum safe integer (2^53 - 1)',
+          'use a smaller length');
+      NewLen64 := Len64 - DeleteCount64 + Int64(ItemCount);
+
+      // Step 10: Let A be ArraySpeciesCreate(O, actualDeleteCount)
       if Assigned(View.SpeciesArr) then
-        Removed := ArraySpeciesCreate(View.Obj, 0)
+        Removed := ArraySpeciesCreate(View.Obj, DeleteCount64)
       else
-        Removed := ArrayCreateWithLength(0);
+        Removed := ArrayCreateWithLength(DeleteCount64);
       Roots.Add(Removed);
-      if not (Assigned(View.Arr) and View.Arr.FLengthWritable) then
-        View.Obj.AssignProperty(PROP_LENGTH,
-          TGocciaNumberLiteralValue.Create(View.RawLen));
+
+      UseSparsePath := View.NeedsSparsePath or (ActualStart64 > MaxInt) or
+        (DeleteCount64 > MaxInt) or (NewLen64 > MaxInt);
+
+      if UseSparsePath then
+      begin
+        // Sparse path: receiver is a generic object with RawLen > MaxInt.  The
+        // dense Integer-indexed shift and trailing-delete loops below saturate
+        // at View.Len = MaxInt and silently drop high-index source properties
+        // and orphan high-index trailing properties.  Walk actually-present
+        // ordinary keys via CollectSparseIndicesInRange; proxy receivers retain
+        // the spec's per-index Has/Get sequence because enumeration would skip
+        // observable traps for holes.
+
+        // Step 11 (sparse): Collect removed elements.  ActualStart + DeleteCount
+        // can exceed MaxInt; use Int64 property names for removed indexes too.
+        RemovedRangeStart := ActualStart64;
+        if View.Obj is TGocciaProxyValue then
+        begin
+          K := 0;
+          while K < DeleteCount64 do
+          begin
+            if View.HasIndex64(RemovedRangeStart + K) then
+              Removed.CreateDataPropertyOrThrow(IntegerToString(K),
+                View.Get64(RemovedRangeStart + K));
+            Inc(K);
+          end;
+        end
+        else
+        begin
+          RemovedSparse := CollectSparseIndicesInRange(View.Obj,
+            RemovedRangeStart, RemovedRangeStart + DeleteCount64);
+          // FPC rejects Int64 as a classic for-loop counter on 32-bit targets;
+          // the enumerator form `for K in TArray<Int64>` compiles everywhere.
+          for K in RemovedSparse do
+            Removed.CreateDataPropertyOrThrow(IntegerToString(K - RemovedRangeStart),
+              View.Get64(K));
+        end;
+
+        if Int64(ItemCount) < DeleteCount64 then
+        begin
+          // Shift left: source [ActualStart + DeleteCount, RawLen) → dest
+          // [ActualStart + ItemCount, NewLen).  Walk source-present keys to
+          // write values, then walk originally-present dest keys whose source
+          // counterpart is absent to delete them.  Source keys are read in
+          // ascending order; since shift > 0, no read aliases a prior write.
+          Shift := DeleteCount64 - Int64(ItemCount);
+          SourceSparse := CollectSparseIndicesInRange(View.Obj,
+            ActualStart64 + DeleteCount64, Len64);
+          DestSparse := CollectSparseIndicesInRange(View.Obj,
+            ActualStart64 + Int64(ItemCount), NewLen64);
+          for K in SourceSparse do
+            View.Obj.AssignProperty(IntegerToString(K - Shift), View.Get64(K));
+          for K in DestSparse do
+          begin
+            TargetSrcKey := K + Shift;
+            if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
+              View.Obj.DeleteProperty(IntegerToString(K));
+          end;
+
+          // Delete properties in [NewLen, RawLen) — the original trailing range
+          // including any indices past MaxInt.  The dense View.DeleteIndex loop
+          // below would only reach MaxInt - 1 because View.Len is truncated.
+          TrailingSparse := CollectSparseIndicesInRange(View.Obj,
+            NewLen64, Len64);
+          for K in TrailingSparse do
+            View.Obj.DeleteProperty(IntegerToString(K));
+        end
+        else if Int64(ItemCount) > DeleteCount64 then
+        begin
+          // Shift right: source [ActualStart, Len - DeleteCount) → dest shifted
+          // by itemCount - deleteCount.  Walk present source keys descending so
+          // writes never overwrite a value that has not been read yet, then
+          // delete originally-present destination keys whose source was a hole.
+          Shift := Int64(ItemCount) - DeleteCount64;
+          SourceSparse := CollectSparseIndicesInRange(View.Obj,
+            ActualStart64, Len64 - DeleteCount64);
+          DestSparse := CollectSparseIndicesInRange(View.Obj,
+            ActualStart64 + Int64(ItemCount), NewLen64);
+          for I := Length(SourceSparse) - 1 downto 0 do
+          begin
+            K := SourceSparse[I];
+            View.Obj.AssignProperty(IntegerToString(K + Shift), View.Get64(K));
+          end;
+          for I := Length(DestSparse) - 1 downto 0 do
+          begin
+            K := DestSparse[I];
+            TargetSrcKey := K - Shift;
+            if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
+              View.Obj.DeleteProperty(IntegerToString(K));
+          end;
+        end;
+
+        // Insert new items.
+        for I := 0 to ItemCount - 1 do
+          View.Obj.AssignProperty(IntegerToString(ActualStart64 + Int64(I)),
+            AArgs.GetElement(I + 2));
+
+        // Set the spec-relative length on the receiver.
+        View.Obj.AssignProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(
+          Int64ToDouble(NewLen64)));
+      end
+      else
+      begin
+        ActualStart := Integer(ActualStart64);
+        DeleteCount := Integer(DeleteCount64);
+        NewLen := Integer(NewLen64);
+
+        // Step 11: Collect removed elements (preserve sparsity per ES spec §23.1.3.32 step 11)
+        for I := 0 to DeleteCount - 1 do
+        begin
+          if View.HasIndex(ActualStart + I) then
+            ArrayCreateDataProperty(Removed, I, View.Get(ActualStart + I));
+          // else: absent → leave hole in Removed (sparse)
+        end;
+
+        // Shift elements via View methods for prototype-aware semantics.
+        if ItemCount < DeleteCount then
+        begin
+          // Shift elements left
+          for I := ActualStart to View.Len - DeleteCount - 1 do
+          begin
+            From := I + DeleteCount;
+            Target := I + ItemCount;
+            if View.HasIndex(From) then
+              View.Put(Target, View.Get(From))
+            else
+              View.DeleteIndex(Target);
+          end;
+          // Delete trailing properties
+          for I := NewLen to View.Len - 1 do
+            View.DeleteIndex(I);
+        end
+        else if ItemCount > DeleteCount then
+        begin
+          // Shift elements right
+          for I := View.Len - DeleteCount - 1 downto ActualStart do
+          begin
+            From := I + DeleteCount;
+            Target := I + ItemCount;
+            if View.HasIndex(From) then
+              View.Put(Target, View.Get(From))
+            else
+              View.DeleteIndex(Target);
+          end;
+        end;
+        // Insert new items
+        for I := 0 to ItemCount - 1 do
+          View.Put(ActualStart + I, AArgs.GetElement(I + 2));
+        View.SetLen(NewLen);
+      end;
+
+      // Ensure removed array has correct length (preserve trailing holes)
+      Removed.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(
+        Int64ToDouble(DeleteCount64)));
+
+      // Step 17: Return A
       Result := Removed;
-      Exit;
+    finally
+      Roots.Clear;
     end;
-
-    // Steps 3-4: ToIntegerOrInfinity(start), then clamp against the full
-    // ToLength value.  Use Int64 so generic array-likes near
-    // Number.MAX_SAFE_INTEGER do not wrap through the dense Integer path.
-    RelativeStart64 := ToInteger64FromArgs(AArgs, 0);
-    ActualStart64 := NormalizeRelativeIndex64(RelativeStart64, Len64);
-
-    // Steps 5-9: Determine actualDeleteCount
-    if AArgs.Length > 1 then
-    begin
-      DeleteCountArg64 := ToInteger64FromArgs(AArgs, 1);
-      if DeleteCountArg64 < 0 then
-        DeleteCount64 := 0
-      else if DeleteCountArg64 > Len64 - ActualStart64 then
-        DeleteCount64 := Len64 - ActualStart64
-      else
-        DeleteCount64 := DeleteCountArg64;
-    end
-    else
-      DeleteCount64 := Len64 - ActualStart64;
-
-    ItemCount := AArgs.Length - 2;
-    if ItemCount < 0 then
-      ItemCount := 0;
-
-    // Step 9a: If len + itemCount - actualDeleteCount > 2^53 - 1, throw TypeError.
-    if (Len64 - DeleteCount64) > MAX_SAFE_INTEGER - Int64(ItemCount) then
-      ThrowTypeError(
-        'Array length exceeds maximum safe integer (2^53 - 1)',
-        'use a smaller length');
-    NewLen64 := Len64 - DeleteCount64 + Int64(ItemCount);
-
-    // Step 10: Let A be ArraySpeciesCreate(O, actualDeleteCount)
-    if Assigned(View.SpeciesArr) then
-      Removed := ArraySpeciesCreate(View.Obj, DeleteCount64)
-    else
-      Removed := ArrayCreateWithLength(DeleteCount64);
-    Roots.Add(Removed);
-
-    UseSparsePath := View.NeedsSparsePath or (ActualStart64 > MaxInt) or
-      (DeleteCount64 > MaxInt) or (NewLen64 > MaxInt);
-
-    if UseSparsePath then
-    begin
-      // Sparse path: receiver is a generic object with RawLen > MaxInt.  The
-      // dense Integer-indexed shift and trailing-delete loops below saturate
-      // at View.Len = MaxInt and silently drop high-index source properties
-      // and orphan high-index trailing properties.  Walk actually-present
-      // ordinary keys via CollectSparseIndicesInRange; proxy receivers retain
-      // the spec's per-index Has/Get sequence because enumeration would skip
-      // observable traps for holes.
-
-      // Step 11 (sparse): Collect removed elements.  ActualStart + DeleteCount
-      // can exceed MaxInt; use Int64 property names for removed indexes too.
-      RemovedRangeStart := ActualStart64;
-      if View.Obj is TGocciaProxyValue then
-      begin
-        K := 0;
-        while K < DeleteCount64 do
-        begin
-          if View.HasIndex64(RemovedRangeStart + K) then
-            Removed.CreateDataPropertyOrThrow(IntegerToString(K),
-              View.Get64(RemovedRangeStart + K));
-          Inc(K);
-        end;
-      end
-      else
-      begin
-        RemovedSparse := CollectSparseIndicesInRange(View.Obj,
-          RemovedRangeStart, RemovedRangeStart + DeleteCount64);
-        // FPC rejects Int64 as a classic for-loop counter on 32-bit targets;
-        // the enumerator form `for K in TArray<Int64>` compiles everywhere.
-        for K in RemovedSparse do
-          Removed.CreateDataPropertyOrThrow(IntegerToString(K - RemovedRangeStart),
-            View.Get64(K));
-      end;
-
-      if Int64(ItemCount) < DeleteCount64 then
-      begin
-        // Shift left: source [ActualStart + DeleteCount, RawLen) → dest
-        // [ActualStart + ItemCount, NewLen).  Walk source-present keys to
-        // write values, then walk originally-present dest keys whose source
-        // counterpart is absent to delete them.  Source keys are read in
-        // ascending order; since shift > 0, no read aliases a prior write.
-        Shift := DeleteCount64 - Int64(ItemCount);
-        SourceSparse := CollectSparseIndicesInRange(View.Obj,
-          ActualStart64 + DeleteCount64, Len64);
-        DestSparse := CollectSparseIndicesInRange(View.Obj,
-          ActualStart64 + Int64(ItemCount), NewLen64);
-        for K in SourceSparse do
-          View.Obj.AssignProperty(IntegerToString(K - Shift), View.Get64(K));
-        for K in DestSparse do
-        begin
-          TargetSrcKey := K + Shift;
-          if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
-            View.Obj.DeleteProperty(IntegerToString(K));
-        end;
-
-        // Delete properties in [NewLen, RawLen) — the original trailing range
-        // including any indices past MaxInt.  The dense View.DeleteIndex loop
-        // below would only reach MaxInt - 1 because View.Len is truncated.
-        TrailingSparse := CollectSparseIndicesInRange(View.Obj,
-          NewLen64, Len64);
-        for K in TrailingSparse do
-          View.Obj.DeleteProperty(IntegerToString(K));
-      end
-      else if Int64(ItemCount) > DeleteCount64 then
-      begin
-        // Shift right: source [ActualStart, Len - DeleteCount) → dest shifted
-        // by itemCount - deleteCount.  Walk present source keys descending so
-        // writes never overwrite a value that has not been read yet, then
-        // delete originally-present destination keys whose source was a hole.
-        Shift := Int64(ItemCount) - DeleteCount64;
-        SourceSparse := CollectSparseIndicesInRange(View.Obj,
-          ActualStart64, Len64 - DeleteCount64);
-        DestSparse := CollectSparseIndicesInRange(View.Obj,
-          ActualStart64 + Int64(ItemCount), NewLen64);
-        for I := Length(SourceSparse) - 1 downto 0 do
-        begin
-          K := SourceSparse[I];
-          View.Obj.AssignProperty(IntegerToString(K + Shift), View.Get64(K));
-        end;
-        for I := Length(DestSparse) - 1 downto 0 do
-        begin
-          K := DestSparse[I];
-          TargetSrcKey := K - Shift;
-          if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
-            View.Obj.DeleteProperty(IntegerToString(K));
-        end;
-      end;
-
-      // Insert new items.
-      for I := 0 to ItemCount - 1 do
-        View.Obj.AssignProperty(IntegerToString(ActualStart64 + Int64(I)),
-          AArgs.GetElement(I + 2));
-
-      // Set the spec-relative length on the receiver.
-      View.Obj.AssignProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(
-        Int64ToDouble(NewLen64)));
-    end
-    else
-    begin
-      ActualStart := Integer(ActualStart64);
-      DeleteCount := Integer(DeleteCount64);
-      NewLen := Integer(NewLen64);
-
-      // Step 11: Collect removed elements (preserve sparsity per ES spec §23.1.3.32 step 11)
-      for I := 0 to DeleteCount - 1 do
-      begin
-        if View.HasIndex(ActualStart + I) then
-          ArrayCreateDataProperty(Removed, I, View.Get(ActualStart + I));
-        // else: absent → leave hole in Removed (sparse)
-      end;
-
-      // Shift elements via View methods for prototype-aware semantics.
-      if ItemCount < DeleteCount then
-      begin
-        // Shift elements left
-        for I := ActualStart to View.Len - DeleteCount - 1 do
-        begin
-          From := I + DeleteCount;
-          Target := I + ItemCount;
-          if View.HasIndex(From) then
-            View.Put(Target, View.Get(From))
-          else
-            View.DeleteIndex(Target);
-        end;
-        // Delete trailing properties
-        for I := NewLen to View.Len - 1 do
-          View.DeleteIndex(I);
-      end
-      else if ItemCount > DeleteCount then
-      begin
-        // Shift elements right
-        for I := View.Len - DeleteCount - 1 downto ActualStart do
-        begin
-          From := I + DeleteCount;
-          Target := I + ItemCount;
-          if View.HasIndex(From) then
-            View.Put(Target, View.Get(From))
-          else
-            View.DeleteIndex(Target);
-        end;
-      end;
-      // Insert new items
-      for I := 0 to ItemCount - 1 do
-        View.Put(ActualStart + I, AArgs.GetElement(I + 2));
-      View.SetLen(NewLen);
-    end;
-
-    // Ensure removed array has correct length (preserve trailing holes)
-    Removed.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(
-      Int64ToDouble(DeleteCount64)));
-
-    // Step 17: Return A
-    Result := Removed;
   finally
-    Roots.Clear;
+    ViewRoots.Clear;
   end;
 end;
 
@@ -4600,31 +4856,41 @@ function TGocciaArrayValue.ArrayShift(const AArgs: TGocciaArgumentsCollection; c
 var
   View: TArrayLikeView;
   I: Integer;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: If len = 0, set length to 0 and return undefined
-  if View.Len = 0 then
-  begin
-    View.SetLen(0);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
+    // Step 3: If len = 0, set length to 0 and return undefined
+    if View.Len = 0 then
+    begin
+      View.SetLen(0);
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+
+    // Step 4: Let first be Get(O, "0")
+    Result := View.Get(0);
+
+    // Steps 5-7: shift elements down via View for prototype-aware semantics
+    for I := 1 to View.Len - 1 do
+    begin
+      if View.HasIndex(I) then
+        View.Put(I - 1, View.Get(I))
+      else
+        View.DeleteIndex(I - 1);
+    end;
+    View.DeleteIndex(View.Len - 1);
+    View.SetLen(View.Len - 1);
+  finally
+    ViewRoots.Clear;
   end;
-
-  // Step 4: Let first be Get(O, "0")
-  Result := View.Get(0);
-
-  // Steps 5-7: shift elements down via View for prototype-aware semantics
-  for I := 1 to View.Len - 1 do
-  begin
-    if View.HasIndex(I) then
-      View.Put(I - 1, View.Get(I))
-    else
-      View.DeleteIndex(I - 1);
-  end;
-  View.DeleteIndex(View.Len - 1);
-  View.SetLen(View.Len - 1);
 end;
 
 // ES2026 §23.1.3.37 Array.prototype.unshift(...items)
@@ -4637,6 +4903,7 @@ var
   SparsePos: Integer;
   Element: TGocciaValue;
 
+  ViewRoots: TGocciaActiveRootFrame;
   procedure DeleteDestinationsForAbsentSources(
     const AFirstSource, ALastSource: Int64);
   var
@@ -4654,78 +4921,87 @@ var
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
-  ArgCount := AArgs.Length;
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
+    ArgCount := AArgs.Length;
 
-  // ES2026 §23.1.3.37 step 4: skip shifting when no arguments provided.
-  // Step 5 still requires Set(O, "length", F(len), true); for native arrays
-  // length is intrinsic, for generic receivers we write through Obj so
-  // accessor/writability semantics fire.  Use RawLen so receivers with
-  // length > MaxInt aren't truncated back to View.Len.
-  if ArgCount = 0 then
-  begin
-    if Assigned(View.Arr) and View.Arr.FLengthWritable then
+    // ES2026 §23.1.3.37 step 4: skip shifting when no arguments provided.
+    // Step 5 still requires Set(O, "length", F(len), true); for native arrays
+    // length is intrinsic, for generic receivers we write through Obj so
+    // accessor/writability semantics fire.  Use RawLen so receivers with
+    // length > MaxInt aren't truncated back to View.Len.
+    if ArgCount = 0 then
     begin
+      if Assigned(View.Arr) and View.Arr.FLengthWritable then
+      begin
+        Result := TGocciaNumberLiteralValue.Create(View.RawLen);
+        Exit;
+      end;
+      View.Obj.AssignProperty(PROP_LENGTH,
+        TGocciaNumberLiteralValue.Create(View.RawLen));
       Result := TGocciaNumberLiteralValue.Create(View.RawLen);
       Exit;
     end;
-    View.Obj.AssignProperty(PROP_LENGTH,
-      TGocciaNumberLiteralValue.Create(View.RawLen));
-    Result := TGocciaNumberLiteralValue.Create(View.RawLen);
-    Exit;
-  end;
 
-  // Step 4.a: If len + argCount > 2^53 - 1, throw TypeError
-  NewLen64 := View.Len64 + ArgCount;
-  if NewLen64 > MAX_SAFE_INTEGER then
-    ThrowTypeError(
-      'Array length exceeds maximum safe integer (2^53 - 1)',
-      'use a smaller length');
+    // Step 4.a: If len + argCount > 2^53 - 1, throw TypeError
+    NewLen64 := View.Len64 + ArgCount;
+    if NewLen64 > MAX_SAFE_INTEGER then
+      ThrowTypeError(
+        'Array length exceeds maximum safe integer (2^53 - 1)',
+        'use a smaller length');
 
-  if View.NeedsSparsePath then
-  begin
-    Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
-    Boundary := View.Len64 - 1;
-    for SparsePos := High(Sparse) downto 0 do
+    if View.NeedsSparsePath then
     begin
-      SourceIndex := Sparse[SparsePos];
-      if SourceIndex > Boundary then
-        Continue;
-      DeleteDestinationsForAbsentSources(SourceIndex + 1, Boundary);
-      Element := View.Get64(SourceIndex);
-      DestIndex := SourceIndex + ArgCount;
-      View.Obj.AssignProperty(IntegerToString(DestIndex), Element);
-      Boundary := SourceIndex - 1;
-    end;
-    DeleteDestinationsForAbsentSources(0, Boundary);
+      Sparse := CollectSparseIndicesInRange(View.Obj, 0, View.Len64);
+      Boundary := View.Len64 - 1;
+      for SparsePos := High(Sparse) downto 0 do
+      begin
+        SourceIndex := Sparse[SparsePos];
+        if SourceIndex > Boundary then
+          Continue;
+        DeleteDestinationsForAbsentSources(SourceIndex + 1, Boundary);
+        Element := View.Get64(SourceIndex);
+        DestIndex := SourceIndex + ArgCount;
+        View.Obj.AssignProperty(IntegerToString(DestIndex), Element);
+        Boundary := SourceIndex - 1;
+      end;
+      DeleteDestinationsForAbsentSources(0, Boundary);
 
+      for I := 0 to ArgCount - 1 do
+        View.Obj.AssignProperty(IntegerToString(I), AArgs.GetElement(I));
+      View.Obj.AssignProperty(PROP_LENGTH,
+        TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64)));
+
+      Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64));
+      Exit;
+    end;
+
+    View.CheckSafeIntegerLen(View.RawLen + ArgCount);
+
+    // Shift existing elements up by argCount via View for prototype-aware semantics
+    NewLen := View.Len + ArgCount;
+    for I := View.Len - 1 downto 0 do
+    begin
+      if View.HasIndex(I) then
+        View.Obj.AssignProperty(IntegerToString(I + ArgCount), View.Get(I))
+      else
+        View.DeleteIndex(I + ArgCount);
+    end;
+    // Set items at front
     for I := 0 to ArgCount - 1 do
       View.Obj.AssignProperty(IntegerToString(I), AArgs.GetElement(I));
-    View.Obj.AssignProperty(PROP_LENGTH,
-      TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64)));
+    if (not Assigned(View.Arr)) or (View.Arr.FLength <> NewLen) then
+      View.SetLen(NewLen);
 
-    Result := TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64));
-    Exit;
+    // Step 7: Return len + argCount
+    Result := TGocciaNumberLiteralValue.Create(NewLen);
+  finally
+    ViewRoots.Clear;
   end;
-
-  View.CheckSafeIntegerLen(View.RawLen + ArgCount);
-
-  // Shift existing elements up by argCount via View for prototype-aware semantics
-  NewLen := View.Len + ArgCount;
-  for I := View.Len - 1 downto 0 do
-  begin
-    if View.HasIndex(I) then
-      View.Obj.AssignProperty(IntegerToString(I + ArgCount), View.Get(I))
-    else
-      View.DeleteIndex(I + ArgCount);
-  end;
-  // Set items at front
-  for I := 0 to ArgCount - 1 do
-    View.Obj.AssignProperty(IntegerToString(I), AArgs.GetElement(I));
-  if (not Assigned(View.Arr)) or (View.Arr.FLength <> NewLen) then
-    View.SetLen(NewLen);
-
-  // Step 7: Return len + argCount
-  Result := TGocciaNumberLiteralValue.Create(NewLen);
 end;
 
 // ES2026 §23.1.3.7 Array.prototype.fill(value [, start [, end]])
@@ -4801,26 +5077,36 @@ function TGocciaArrayValue.ArrayAt(const AArgs: TGocciaArgumentsCollection; cons
 var
   View: TArrayLikeView;
   Index64, Len64Val: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) and the
+  // result are held only by locals while guest code (getters, proxy
+  // traps, callbacks, ToPrimitive) runs.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
-  // A missing index coerces to 0, not undefined. 64-bit math so generic
-  // array-likes with length beyond MaxInt index correctly (Len64/Get64).
-  Index64 := ToInteger64FromArgs(AArgs, 0);
-  Len64Val := View.Len64;
+    // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
+    // A missing index coerces to 0, not undefined. 64-bit math so generic
+    // array-likes with length beyond MaxInt index correctly (Len64/Get64).
+    Index64 := ToInteger64FromArgs(AArgs, 0);
+    Len64Val := View.Len64;
 
-  // Step 4: If relativeIndex >= 0, let k be relativeIndex; else len + relativeIndex
-  if Index64 < 0 then
-    Index64 := Len64Val + Index64;
+    // Step 4: If relativeIndex >= 0, let k be relativeIndex; else len + relativeIndex
+    if Index64 < 0 then
+      Index64 := Len64Val + Index64;
 
-  // Step 5: If k < 0 or k >= len, return undefined
-  if (Index64 < 0) or (Index64 >= Len64Val) then
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue
-  else
-    // Step 6: Return Get(O, ToString(k))
-    Result := View.Get64(Index64);
+    // Step 5: If k < 0 or k >= len, return undefined
+    if (Index64 < 0) or (Index64 >= Len64Val) then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue
+    else
+      // Step 6: Return Get(O, ToString(k))
+      Result := View.Get64(Index64);
+  finally
+    ViewRoots.Clear;
+  end;
 end;
 
 // ES2026 §23.1.3.36 Array.prototype.values()

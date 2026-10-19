@@ -20,6 +20,7 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives;
@@ -258,10 +259,20 @@ const
 function CreateFeatureEntryObject(const AEntry: TGocciaFeatureEntry): TGocciaObjectValue;
 var
   Obj: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  Obj := TGocciaObjectValue.Create;
-  Obj.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AEntry.Name));
-  Obj.AssignProperty(PROP_LINK, TGocciaStringLiteralValue.Create(AEntry.Link));
+  // Each builder here holds what it is building in a local while the strings
+  // that go into it reserve their payloads, and a reservation can collect;
+  // the caller stores the result before its next allocation.
+  Roots.Initialize;
+  try
+    Obj := TGocciaObjectValue.Create;
+    Roots.Add(Obj);
+    Obj.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AEntry.Name));
+    Obj.AssignProperty(PROP_LINK, TGocciaStringLiteralValue.Create(AEntry.Link));
+  finally
+    Roots.Clear;
+  end;
   Result := Obj;
 end;
 
@@ -269,10 +280,17 @@ function CreateFeatureArray(const AEntries: array of TGocciaFeatureEntry): TGocc
 var
   Arr: TGocciaArrayValue;
   I: Integer;
+  Roots: TGocciaActiveRootFrame;
 begin
-  Arr := TGocciaArrayValue.Create;
-  for I := Low(AEntries) to High(AEntries) do
-    Arr.Elements.Add(CreateFeatureEntryObject(AEntries[I]));
+  Roots.Initialize;
+  try
+    Arr := TGocciaArrayValue.Create;
+    Roots.Add(Arr);
+    for I := Low(AEntries) to High(AEntries) do
+      Arr.Elements.Add(CreateFeatureEntryObject(AEntries[I]));
+  finally
+    Roots.Clear;
+  end;
   Result := Arr;
 end;
 
@@ -286,35 +304,49 @@ end;
 function CreateSpecObject: TGocciaObjectValue;
 var
   Obj: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  Obj := TGocciaObjectValue.Create;
-  DefineReadOnlyProperty(Obj, '2015', CreateFeatureArray(ES2015_FEATURES));
-  DefineReadOnlyProperty(Obj, '2016', CreateFeatureArray(ES2016_FEATURES));
-  DefineReadOnlyProperty(Obj, '2017', CreateFeatureArray(ES2017_FEATURES));
-  DefineReadOnlyProperty(Obj, '2018', CreateFeatureArray(ES2018_FEATURES));
-  DefineReadOnlyProperty(Obj, '2019', CreateFeatureArray(ES2019_FEATURES));
-  DefineReadOnlyProperty(Obj, '2020', CreateFeatureArray(ES2020_FEATURES));
-  DefineReadOnlyProperty(Obj, '2021', CreateFeatureArray(ES2021_FEATURES));
-  DefineReadOnlyProperty(Obj, '2022', CreateFeatureArray(ES2022_FEATURES));
-  DefineReadOnlyProperty(Obj, '2023', CreateFeatureArray(ES2023_FEATURES));
-  DefineReadOnlyProperty(Obj, '2024', CreateFeatureArray(ES2024_FEATURES));
-  DefineReadOnlyProperty(Obj, '2025', CreateFeatureArray(ES2025_FEATURES));
-  DefineReadOnlyProperty(Obj, '2026', CreateFeatureArray(ES2026_FEATURES));
-  DefineReadOnlyProperty(Obj, '2027', CreateFeatureArray(ES2027_FEATURES));
-  DefineReadOnlyProperty(Obj, 'whatwg', CreateFeatureArray(WHATWG_FEATURES));
+  Roots.Initialize;
+  try
+    Obj := TGocciaObjectValue.Create;
+    Roots.Add(Obj);
+    DefineReadOnlyProperty(Obj, '2015', CreateFeatureArray(ES2015_FEATURES));
+    DefineReadOnlyProperty(Obj, '2016', CreateFeatureArray(ES2016_FEATURES));
+    DefineReadOnlyProperty(Obj, '2017', CreateFeatureArray(ES2017_FEATURES));
+    DefineReadOnlyProperty(Obj, '2018', CreateFeatureArray(ES2018_FEATURES));
+    DefineReadOnlyProperty(Obj, '2019', CreateFeatureArray(ES2019_FEATURES));
+    DefineReadOnlyProperty(Obj, '2020', CreateFeatureArray(ES2020_FEATURES));
+    DefineReadOnlyProperty(Obj, '2021', CreateFeatureArray(ES2021_FEATURES));
+    DefineReadOnlyProperty(Obj, '2022', CreateFeatureArray(ES2022_FEATURES));
+    DefineReadOnlyProperty(Obj, '2023', CreateFeatureArray(ES2023_FEATURES));
+    DefineReadOnlyProperty(Obj, '2024', CreateFeatureArray(ES2024_FEATURES));
+    DefineReadOnlyProperty(Obj, '2025', CreateFeatureArray(ES2025_FEATURES));
+    DefineReadOnlyProperty(Obj, '2026', CreateFeatureArray(ES2026_FEATURES));
+    DefineReadOnlyProperty(Obj, '2027', CreateFeatureArray(ES2027_FEATURES));
+    DefineReadOnlyProperty(Obj, 'whatwg', CreateFeatureArray(WHATWG_FEATURES));
+  finally
+    Roots.Clear;
+  end;
   Result := Obj;
 end;
 
 function CreateProposalObject: TGocciaObjectValue;
 var
   Obj: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  Obj := TGocciaObjectValue.Create;
-  DefineReadOnlyProperty(Obj, 'stage-4', CreateFeatureArray(STAGE4_PROPOSALS));
-  DefineReadOnlyProperty(Obj, 'stage-3', CreateFeatureArray(STAGE3_PROPOSALS));
-  DefineReadOnlyProperty(Obj, 'stage-2.7', CreateFeatureArray(STAGE27_PROPOSALS));
-  DefineReadOnlyProperty(Obj, 'stage-2', CreateFeatureArray(STAGE2_PROPOSALS));
-  DefineReadOnlyProperty(Obj, 'stage-1', CreateFeatureArray(STAGE1_PROPOSALS));
+  Roots.Initialize;
+  try
+    Obj := TGocciaObjectValue.Create;
+    Roots.Add(Obj);
+    DefineReadOnlyProperty(Obj, 'stage-4', CreateFeatureArray(STAGE4_PROPOSALS));
+    DefineReadOnlyProperty(Obj, 'stage-3', CreateFeatureArray(STAGE3_PROPOSALS));
+    DefineReadOnlyProperty(Obj, 'stage-2.7', CreateFeatureArray(STAGE27_PROPOSALS));
+    DefineReadOnlyProperty(Obj, 'stage-2', CreateFeatureArray(STAGE2_PROPOSALS));
+    DefineReadOnlyProperty(Obj, 'stage-1', CreateFeatureArray(STAGE1_PROPOSALS));
+  finally
+    Roots.Clear;
+  end;
   Result := Obj;
 end;
 

@@ -24,6 +24,8 @@ type
     function BigIntAsIntN(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     // ES2026 §21.2.2.2 BigInt.asUintN(bits, bigint)
     function BigIntAsUintN(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -274,6 +276,16 @@ begin
   BigIntVal := ToBigIntValue(AArgs.GetElement(1));
 
   Result := TGocciaBigIntValue.Create(BigIntVal.Value.AsUintN(Bits));
+end;
+
+procedure TGocciaGlobalBigInt.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FBigIntFunction) then
+    FBigIntFunction.MarkReferences;
 end;
 
 end.

@@ -1168,196 +1168,205 @@ var
   Years, Months, Weeks, Days: Int64;
   AbsTimeNs, AbsDays, TotalInUnit, RemNs: Int64;
   RH, RM, RS, RMs, RUs, RNs: Int64;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.until');
-  Other := CoercePlainDateTime(AArgs.GetElement(0), 'PlainDateTime.prototype.until');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoercePlainDateTime(AArgs.GetElement(0), 'PlainDateTime.prototype.until');
+    OtherRoots.Add(Other);
 
-  OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
-  if LargestUnit = tuAuto then
-  begin
-    if Ord(SmallestUnit) < Ord(tuDay) then
-      LargestUnit := SmallestUnit
-    else
-      LargestUnit := tuDay;
-  end;
-  if Ord(LargestUnit) > Ord(SmallestUnit) then
-    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(RIncrement, SmallestUnit);
-
-  if D.FCalendarId <> Other.FCalendarId then
-    ThrowRangeError('Temporal.PlainDateTime calendars must match',
-      SSuggestTemporalDateRange);
-
-  T1Ns := Int64(D.FNanosecond) + Int64(D.FMicrosecond) * 1000 + Int64(D.FMillisecond) * 1000000 +
-           Int64(D.FSecond) * Int64(1000000000) + Int64(D.FMinute) * Int64(60000000000) +
-           Int64(D.FHour) * Int64(3600000000000);
-  T2Ns := Int64(Other.FNanosecond) + Int64(Other.FMicrosecond) * 1000 + Int64(Other.FMillisecond) * 1000000 +
-           Int64(Other.FSecond) * Int64(1000000000) + Int64(Other.FMinute) * Int64(60000000000) +
-           Int64(Other.FHour) * Int64(3600000000000);
-
-  if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
-  begin
-    // Calendar-aware differencing — keep days and time-ns separate to avoid
-    // Int64 overflow when multiplying day deltas by nanoseconds-per-day.
-    DayDelta := DateToEpochDays(Other.FYear, Other.FMonth, Other.FDay) -
-                DateToEpochDays(D.FYear, D.FMonth, D.FDay);
-    TimeDiffNs := T2Ns - T1Ns;
-
-    // Determine overall sign from the two components.
-    // |TimeDiffNs| < 86400000000000 (always < 1 day), so DayDelta dominates.
-    if DayDelta > 0 then Sgn := 1
-    else if DayDelta < 0 then Sgn := -1
-    else if TimeDiffNs > 0 then Sgn := 1
-    else if TimeDiffNs < 0 then Sgn := -1
-    else
+    OptionsObj := GetDiffOptions(AArgs, 1);
+    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+    RIncrement := GetRoundingIncrement(OptionsObj, 1);
+    RMode := GetRoundingMode(OptionsObj, rmTrunc);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+    if LargestUnit = tuAuto then
     begin
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-      Exit;
+      if Ord(SmallestUnit) < Ord(tuDay) then
+        LargestUnit := SmallestUnit
+      else
+        LargestUnit := tuDay;
     end;
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+    ValidateRoundingIncrement(RIncrement, SmallestUnit);
 
-    // If time diff has opposite sign to overall diff, borrow/carry a day
-    AdjY2 := Other.FYear;
-    AdjM2 := Other.FMonth;
-    AdjD2 := Other.FDay;
-    if (Sgn > 0) and (TimeDiffNs < 0) then
+    if D.FCalendarId <> Other.FCalendarId then
+      ThrowRangeError('Temporal.PlainDateTime calendars must match',
+        SSuggestTemporalDateRange);
+
+    T1Ns := Int64(D.FNanosecond) + Int64(D.FMicrosecond) * 1000 + Int64(D.FMillisecond) * 1000000 +
+             Int64(D.FSecond) * Int64(1000000000) + Int64(D.FMinute) * Int64(60000000000) +
+             Int64(D.FHour) * Int64(3600000000000);
+    T2Ns := Int64(Other.FNanosecond) + Int64(Other.FMicrosecond) * 1000 + Int64(Other.FMillisecond) * 1000000 +
+             Int64(Other.FSecond) * Int64(1000000000) + Int64(Other.FMinute) * Int64(60000000000) +
+             Int64(Other.FHour) * Int64(3600000000000);
+
+    if LargestUnit in [tuYear, tuMonth, tuWeek, tuDay] then
     begin
-      AdjDate := AddDaysToDate(AdjY2, AdjM2, AdjD2, -1);
-      AdjY2 := AdjDate.Year; AdjM2 := AdjDate.Month; AdjD2 := AdjDate.Day;
-      TimeDiffNs := TimeDiffNs + Int64(86400000000000);
-    end
-    else if (Sgn < 0) and (TimeDiffNs > 0) then
-    begin
-      AdjDate := AddDaysToDate(AdjY2, AdjM2, AdjD2, 1);
-      AdjY2 := AdjDate.Year; AdjM2 := AdjDate.Month; AdjD2 := AdjDate.Day;
-      TimeDiffNs := TimeDiffNs - Int64(86400000000000);
-    end;
+      // Calendar-aware differencing — keep days and time-ns separate to avoid
+      // Int64 overflow when multiplying day deltas by nanoseconds-per-day.
+      DayDelta := DateToEpochDays(Other.FYear, Other.FMonth, Other.FDay) -
+                  DateToEpochDays(D.FYear, D.FMonth, D.FDay);
+      TimeDiffNs := T2Ns - T1Ns;
 
-    CalendarDateUntil(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
-      AdjY2, AdjM2, AdjD2, LargestUnit,
-      Years, Months, Weeks, Days);
-
-    // Decompose time nanoseconds (same sign as overall result)
-    AbsTimeNs := Abs(TimeDiffNs);
-    RH := Sgn * (AbsTimeNs div Int64(3600000000000));
-    RM := Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60);
-    RS := Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60);
-    RMs := Sgn * ((AbsTimeNs div 1000000) mod 1000);
-    RUs := Sgn * ((AbsTimeNs div 1000) mod 1000);
-    RNs := Sgn * (AbsTimeNs mod 1000);
-
-    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
-      RoundDiffDuration(Years, Months, Weeks, Days,
-        RH, RM, RS, RMs, RUs, RNs,
-        D.FYear, D.FMonth, D.FDay,
-        LargestUnit, SmallestUnit, RMode, RIncrement);
-
-    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
-      RH, RM, RS, RMs, RUs, RNs);
-  end
-  else
-  begin
-    // Sub-day largestUnit: keep days and time-ns separate to avoid overflow.
-    DayDelta := DateToEpochDays(Other.FYear, Other.FMonth, Other.FDay) -
-                DateToEpochDays(D.FYear, D.FMonth, D.FDay);
-    TimeDiffNs := T2Ns - T1Ns;
-
-    // Normalize: borrow/carry so DayDelta and TimeDiffNs share the same sign
-    if (DayDelta > 0) and (TimeDiffNs < 0) then
-    begin
-      Dec(DayDelta);
-      TimeDiffNs := TimeDiffNs + Int64(86400000000000);
-    end
-    else if (DayDelta < 0) and (TimeDiffNs > 0) then
-    begin
-      Inc(DayDelta);
-      TimeDiffNs := TimeDiffNs - Int64(86400000000000);
-    end;
-
-    if DayDelta > 0 then Sgn := 1
-    else if DayDelta < 0 then Sgn := -1
-    else if TimeDiffNs > 0 then Sgn := 1
-    else if TimeDiffNs < 0 then Sgn := -1
-    else
-    begin
-      Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-      Exit;
-    end;
-
-    AbsDays := Abs(DayDelta);
-    AbsTimeNs := Abs(TimeDiffNs);
-
-    // Decompose by converting day delta using safe integer multiplication,
-    // then adding the within-day time remainder.
-    Years := 0; Months := 0; Weeks := 0; Days := 0;
-    case LargestUnit of
-      tuHour:
-        begin
-          TotalInUnit := AbsDays * 24 + AbsTimeNs div Int64(3600000000000);
-          RemNs := AbsTimeNs mod Int64(3600000000000);
-          RH := Float64RepresentableInteger(Sgn * TotalInUnit);
-          RM := Sgn * (RemNs div Int64(60000000000));
-          RS := Sgn * ((RemNs div Int64(1000000000)) mod 60);
-          RMs := Sgn * ((RemNs div 1000000) mod 1000);
-          RUs := Sgn * ((RemNs div 1000) mod 1000);
-          RNs := Sgn * (RemNs mod 1000);
-        end;
-      tuMinute:
-        begin
-          TotalInUnit := AbsDays * 1440 + AbsTimeNs div Int64(60000000000);
-          RemNs := AbsTimeNs mod Int64(60000000000);
-          RH := 0;
-          RM := Float64RepresentableInteger(Sgn * TotalInUnit);
-          RS := Sgn * (RemNs div Int64(1000000000));
-          RMs := Sgn * ((RemNs div 1000000) mod 1000);
-          RUs := Sgn * ((RemNs div 1000) mod 1000);
-          RNs := Sgn * (RemNs mod 1000);
-        end;
-      tuSecond:
-        begin
-          TotalInUnit := AbsDays * 86400 + AbsTimeNs div Int64(1000000000);
-          RemNs := AbsTimeNs mod Int64(1000000000);
-          RH := 0; RM := 0;
-          RS := Float64RepresentableInteger(Sgn * TotalInUnit);
-          RMs := Sgn * (RemNs div 1000000);
-          RUs := Sgn * ((RemNs div 1000) mod 1000);
-          RNs := Sgn * (RemNs mod 1000);
-        end;
-      tuMillisecond:
-        begin
-          TotalInUnit := AbsDays * 86400000 + AbsTimeNs div 1000000;
-          RemNs := AbsTimeNs mod 1000000;
-          RH := 0; RM := 0; RS := 0;
-          RMs := Float64RepresentableInteger(Sgn * TotalInUnit);
-          RUs := Sgn * (RemNs div 1000);
-          RNs := Sgn * (RemNs mod 1000);
-        end;
-      tuMicrosecond:
-        begin
-          TotalInUnit := AbsDays * Int64(86400000000) + AbsTimeNs div 1000;
-          RH := 0; RM := 0; RS := 0; RMs := 0;
-          RUs := Float64RepresentableInteger(Sgn * TotalInUnit);
-          RNs := Sgn * (AbsTimeNs mod 1000);
-        end;
-    else // tuNanosecond
+      // Determine overall sign from the two components.
+      // |TimeDiffNs| < 86400000000000 (always < 1 day), so DayDelta dominates.
+      if DayDelta > 0 then Sgn := 1
+      else if DayDelta < 0 then Sgn := -1
+      else if TimeDiffNs > 0 then Sgn := 1
+      else if TimeDiffNs < 0 then Sgn := -1
+      else
       begin
-        TotalInUnit := AbsDays * Int64(86400000000000) + AbsTimeNs;
-        RH := 0; RM := 0; RS := 0; RMs := 0; RUs := 0;
-        RNs := Float64RepresentableInteger(Sgn * TotalInUnit);
+        Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        Exit;
       end;
+
+      // If time diff has opposite sign to overall diff, borrow/carry a day
+      AdjY2 := Other.FYear;
+      AdjM2 := Other.FMonth;
+      AdjD2 := Other.FDay;
+      if (Sgn > 0) and (TimeDiffNs < 0) then
+      begin
+        AdjDate := AddDaysToDate(AdjY2, AdjM2, AdjD2, -1);
+        AdjY2 := AdjDate.Year; AdjM2 := AdjDate.Month; AdjD2 := AdjDate.Day;
+        TimeDiffNs := TimeDiffNs + Int64(86400000000000);
+      end
+      else if (Sgn < 0) and (TimeDiffNs > 0) then
+      begin
+        AdjDate := AddDaysToDate(AdjY2, AdjM2, AdjD2, 1);
+        AdjY2 := AdjDate.Year; AdjM2 := AdjDate.Month; AdjD2 := AdjDate.Day;
+        TimeDiffNs := TimeDiffNs - Int64(86400000000000);
+      end;
+
+      CalendarDateUntil(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
+        AdjY2, AdjM2, AdjD2, LargestUnit,
+        Years, Months, Weeks, Days);
+
+      // Decompose time nanoseconds (same sign as overall result)
+      AbsTimeNs := Abs(TimeDiffNs);
+      RH := Sgn * (AbsTimeNs div Int64(3600000000000));
+      RM := Sgn * ((AbsTimeNs div Int64(60000000000)) mod 60);
+      RS := Sgn * ((AbsTimeNs div Int64(1000000000)) mod 60);
+      RMs := Sgn * ((AbsTimeNs div 1000000) mod 1000);
+      RUs := Sgn * ((AbsTimeNs div 1000) mod 1000);
+      RNs := Sgn * (AbsTimeNs mod 1000);
+
+      if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+        RoundDiffDuration(Years, Months, Weeks, Days,
+          RH, RM, RS, RMs, RUs, RNs,
+          D.FYear, D.FMonth, D.FDay,
+          LargestUnit, SmallestUnit, RMode, RIncrement);
+
+      Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
+        RH, RM, RS, RMs, RUs, RNs);
+    end
+    else
+    begin
+      // Sub-day largestUnit: keep days and time-ns separate to avoid overflow.
+      DayDelta := DateToEpochDays(Other.FYear, Other.FMonth, Other.FDay) -
+                  DateToEpochDays(D.FYear, D.FMonth, D.FDay);
+      TimeDiffNs := T2Ns - T1Ns;
+
+      // Normalize: borrow/carry so DayDelta and TimeDiffNs share the same sign
+      if (DayDelta > 0) and (TimeDiffNs < 0) then
+      begin
+        Dec(DayDelta);
+        TimeDiffNs := TimeDiffNs + Int64(86400000000000);
+      end
+      else if (DayDelta < 0) and (TimeDiffNs > 0) then
+      begin
+        Inc(DayDelta);
+        TimeDiffNs := TimeDiffNs - Int64(86400000000000);
+      end;
+
+      if DayDelta > 0 then Sgn := 1
+      else if DayDelta < 0 then Sgn := -1
+      else if TimeDiffNs > 0 then Sgn := 1
+      else if TimeDiffNs < 0 then Sgn := -1
+      else
+      begin
+        Result := TGocciaTemporalDurationValue.Create(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        Exit;
+      end;
+
+      AbsDays := Abs(DayDelta);
+      AbsTimeNs := Abs(TimeDiffNs);
+
+      // Decompose by converting day delta using safe integer multiplication,
+      // then adding the within-day time remainder.
+      Years := 0; Months := 0; Weeks := 0; Days := 0;
+      case LargestUnit of
+        tuHour:
+          begin
+            TotalInUnit := AbsDays * 24 + AbsTimeNs div Int64(3600000000000);
+            RemNs := AbsTimeNs mod Int64(3600000000000);
+            RH := Float64RepresentableInteger(Sgn * TotalInUnit);
+            RM := Sgn * (RemNs div Int64(60000000000));
+            RS := Sgn * ((RemNs div Int64(1000000000)) mod 60);
+            RMs := Sgn * ((RemNs div 1000000) mod 1000);
+            RUs := Sgn * ((RemNs div 1000) mod 1000);
+            RNs := Sgn * (RemNs mod 1000);
+          end;
+        tuMinute:
+          begin
+            TotalInUnit := AbsDays * 1440 + AbsTimeNs div Int64(60000000000);
+            RemNs := AbsTimeNs mod Int64(60000000000);
+            RH := 0;
+            RM := Float64RepresentableInteger(Sgn * TotalInUnit);
+            RS := Sgn * (RemNs div Int64(1000000000));
+            RMs := Sgn * ((RemNs div 1000000) mod 1000);
+            RUs := Sgn * ((RemNs div 1000) mod 1000);
+            RNs := Sgn * (RemNs mod 1000);
+          end;
+        tuSecond:
+          begin
+            TotalInUnit := AbsDays * 86400 + AbsTimeNs div Int64(1000000000);
+            RemNs := AbsTimeNs mod Int64(1000000000);
+            RH := 0; RM := 0;
+            RS := Float64RepresentableInteger(Sgn * TotalInUnit);
+            RMs := Sgn * (RemNs div 1000000);
+            RUs := Sgn * ((RemNs div 1000) mod 1000);
+            RNs := Sgn * (RemNs mod 1000);
+          end;
+        tuMillisecond:
+          begin
+            TotalInUnit := AbsDays * 86400000 + AbsTimeNs div 1000000;
+            RemNs := AbsTimeNs mod 1000000;
+            RH := 0; RM := 0; RS := 0;
+            RMs := Float64RepresentableInteger(Sgn * TotalInUnit);
+            RUs := Sgn * (RemNs div 1000);
+            RNs := Sgn * (RemNs mod 1000);
+          end;
+        tuMicrosecond:
+          begin
+            TotalInUnit := AbsDays * Int64(86400000000) + AbsTimeNs div 1000;
+            RH := 0; RM := 0; RS := 0; RMs := 0;
+            RUs := Float64RepresentableInteger(Sgn * TotalInUnit);
+            RNs := Sgn * (AbsTimeNs mod 1000);
+          end;
+      else // tuNanosecond
+        begin
+          TotalInUnit := AbsDays * Int64(86400000000000) + AbsTimeNs;
+          RH := 0; RM := 0; RS := 0; RMs := 0; RUs := 0;
+          RNs := Float64RepresentableInteger(Sgn * TotalInUnit);
+        end;
+      end;
+
+      if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+        RoundDiffDuration(Years, Months, Weeks, Days,
+          RH, RM, RS, RMs, RUs, RNs,
+          D.FYear, D.FMonth, D.FDay,
+          LargestUnit, SmallestUnit, RMode, RIncrement);
+
+      Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
+        RH, RM, RS, RMs, RUs, RNs);
     end;
-
-    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
-      RoundDiffDuration(Years, Months, Weeks, Days,
-        RH, RM, RS, RMs, RUs, RNs,
-        D.FYear, D.FMonth, D.FDay,
-        LargestUnit, SmallestUnit, RMode, RIncrement);
-
-    Result := TGocciaTemporalDurationValue.Create(Years, Months, Weeks, Days,
-      RH, RM, RS, RMs, RUs, RNs);
+  finally
+    OtherRoots.Clear;
   end;
 end;
 
@@ -1371,52 +1380,62 @@ var
   RMode: TTemporalRoundingMode;
   RIncrement: Integer;
   UntilDuration: TGocciaTemporalDurationValue;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.since');
-  Other := CoercePlainDateTime(AArgs.GetElement(0), 'PlainDateTime.prototype.since');
-
-  OptionsArg := AArgs.GetElement(1);
-  OptionsObj := GetDiffOptions(AArgs, 1);
-  InternalOptions := nil;
-  if OptionsObj <> nil then
-  begin
-    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
-    RIncrement := GetRoundingIncrement(OptionsObj, 1);
-    RMode := GetRoundingMode(OptionsObj, rmTrunc);
-    SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
-
-    InternalOptions := TGocciaObjectValue.Create(nil, 4);
-    InternalOptions.CreateDataPropertyOrThrow('largestUnit',
-      TGocciaStringLiteralValue.Create(TemporalUnitToOptionString(LargestUnit)));
-    InternalOptions.CreateDataPropertyOrThrow('roundingIncrement',
-      TGocciaNumberLiteralValue.Create(RIncrement));
-    InternalOptions.CreateDataPropertyOrThrow('roundingMode',
-      TGocciaStringLiteralValue.Create(
-        TemporalRoundingModeToOptionString(NegateTemporalRoundingMode(RMode))));
-    InternalOptions.CreateDataPropertyOrThrow('smallestUnit',
-      TGocciaStringLiteralValue.Create(TemporalUnitToOptionString(SmallestUnit)));
-    TGarbageCollector.Instance.AddTempRoot(InternalOptions);
-  end;
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
   try
-    if InternalOptions <> nil then
-      NewArgs := TGocciaArgumentsCollection.Create([Other, InternalOptions])
-    else if (OptionsArg <> nil) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
-      NewArgs := TGocciaArgumentsCollection.Create([Other, OptionsArg])
-    else
-      NewArgs := TGocciaArgumentsCollection.Create([Other]);
+    Other := CoercePlainDateTime(AArgs.GetElement(0), 'PlainDateTime.prototype.since');
+    OtherRoots.Add(Other);
+
+    OptionsArg := AArgs.GetElement(1);
+    OptionsObj := GetDiffOptions(AArgs, 1);
+    InternalOptions := nil;
+    if OptionsObj <> nil then
+    begin
+      LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+      RIncrement := GetRoundingIncrement(OptionsObj, 1);
+      RMode := GetRoundingMode(OptionsObj, rmTrunc);
+      SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+
+      InternalOptions := TGocciaObjectValue.Create(nil, 4);
+      OtherRoots.Add(InternalOptions);
+      InternalOptions.CreateDataPropertyOrThrow('largestUnit',
+        TGocciaStringLiteralValue.Create(TemporalUnitToOptionString(LargestUnit)));
+      InternalOptions.CreateDataPropertyOrThrow('roundingIncrement',
+        TGocciaNumberLiteralValue.Create(RIncrement));
+      InternalOptions.CreateDataPropertyOrThrow('roundingMode',
+        TGocciaStringLiteralValue.Create(
+          TemporalRoundingModeToOptionString(NegateTemporalRoundingMode(RMode))));
+      InternalOptions.CreateDataPropertyOrThrow('smallestUnit',
+        TGocciaStringLiteralValue.Create(TemporalUnitToOptionString(SmallestUnit)));
+      TGarbageCollector.Instance.AddTempRoot(InternalOptions);
+    end;
     try
-    UntilDuration := TGocciaTemporalDurationValue(DateTimeUntil(NewArgs, D));
-    Result := TGocciaTemporalDurationValue.Create(
-      -UntilDuration.Years, -UntilDuration.Months, -UntilDuration.Weeks,
-      -UntilDuration.Days, -UntilDuration.Hours, -UntilDuration.Minutes,
-      -UntilDuration.Seconds, -UntilDuration.Milliseconds,
-      -UntilDuration.Microseconds, -UntilDuration.Nanoseconds);
+      if InternalOptions <> nil then
+        NewArgs := TGocciaArgumentsCollection.Create([Other, InternalOptions])
+      else if (OptionsArg <> nil) and not (OptionsArg is TGocciaUndefinedLiteralValue) then
+        NewArgs := TGocciaArgumentsCollection.Create([Other, OptionsArg])
+      else
+        NewArgs := TGocciaArgumentsCollection.Create([Other]);
+      try
+      UntilDuration := TGocciaTemporalDurationValue(DateTimeUntil(NewArgs, D));
+      Result := TGocciaTemporalDurationValue.Create(
+        -UntilDuration.Years, -UntilDuration.Months, -UntilDuration.Weeks,
+        -UntilDuration.Days, -UntilDuration.Hours, -UntilDuration.Minutes,
+        -UntilDuration.Seconds, -UntilDuration.Milliseconds,
+        -UntilDuration.Microseconds, -UntilDuration.Nanoseconds);
+      finally
+        NewArgs.Free;
+      end;
     finally
-      NewArgs.Free;
+      if InternalOptions <> nil then
+        TGarbageCollector.Instance.RemoveTempRoot(InternalOptions);
     end;
   finally
-    if InternalOptions <> nil then
-      TGarbageCollector.Instance.RemoveTempRoot(InternalOptions);
+    OtherRoots.Clear;
   end;
 end;
 

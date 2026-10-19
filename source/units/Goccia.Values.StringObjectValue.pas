@@ -1644,11 +1644,12 @@ begin
       FoundPos := UTF16IndexOf(StringValue, SearchValue, 0);
     if FoundPos >= 0 then
     begin
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(SearchValue),
-        TGocciaNumberLiteralValue.Create(FoundPos),
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // Added one at a time: the collection roots what it holds, and each
+      // string's reservation can collect the arguments made before it.
+      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
+      CallArgs.Add(TGocciaStringLiteralValue.Create(SearchValue));
+      CallArgs.Add(TGocciaNumberLiteralValue.Create(FoundPos));
+      CallArgs.Add(TGocciaStringLiteralValue.Create(StringValue));
       try
         CallResult := InvokeCallable(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ReplaceValue := CallResult.ToStringLiteral.Value;
@@ -1765,11 +1766,12 @@ begin
     if SearchValue = '' then
     begin
       Offset := 0;
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(''),
-        nil,
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // Added one at a time: the collection roots what it holds, and the
+      // string's reservation can collect the arguments made before it.
+      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
+      CallArgs.Add(TGocciaStringLiteralValue.Create(''));
+      CallArgs.Add(nil);
+      CallArgs.Add(TGocciaStringLiteralValue.Create(StringValue));
       try
         while Offset <= StringLength do
         begin

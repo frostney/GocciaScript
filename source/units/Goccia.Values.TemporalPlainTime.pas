@@ -66,6 +66,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
@@ -587,23 +588,41 @@ end;
 function TGocciaTemporalPlainTimeValue.TimeUntil(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T, Other: TGocciaTemporalPlainTimeValue;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.until');
-  Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.until');
-  Result := ComputeTimeDiffDuration(
-    TimeToTotalNanoseconds(Other) - TimeToTotalNanoseconds(T),
-    AArgs, 'PlainTime.prototype.until');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.until');
+    OtherRoots.Add(Other);
+    Result := ComputeTimeDiffDuration(
+      TimeToTotalNanoseconds(Other) - TimeToTotalNanoseconds(T),
+      AArgs, 'PlainTime.prototype.until');
+  finally
+    OtherRoots.Clear;
+  end;
 end;
 
 function TGocciaTemporalPlainTimeValue.TimeSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T, Other: TGocciaTemporalPlainTimeValue;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   T := AsPlainTime(AThisValue, 'PlainTime.prototype.since');
-  Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.since');
-  Result := ComputeTimeDiffDuration(
-    TimeToTotalNanoseconds(T) - TimeToTotalNanoseconds(Other),
-    AArgs, 'PlainTime.prototype.since');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoercePlainTime(AArgs.GetElement(0), 'PlainTime.prototype.since');
+    OtherRoots.Add(Other);
+    Result := ComputeTimeDiffDuration(
+      TimeToTotalNanoseconds(T) - TimeToTotalNanoseconds(Other),
+      AArgs, 'PlainTime.prototype.since');
+  finally
+    OtherRoots.Clear;
+  end;
 end;
 
 function TGocciaTemporalPlainTimeValue.TimeRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
