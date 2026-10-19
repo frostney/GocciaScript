@@ -776,12 +776,13 @@ begin
 end;
 
 { A URL the built-in client could have reported as a response's final URL:
-  an absolute http(s) URL its own parser accepts. }
+  an absolute http(s) URL its own parser accepts, and the URL Standard's
+  parser too, since Response.url is the latter's serialization. }
 function IsClientResponseURL(const AURL: string): Boolean;
 begin
   try
     ParseHTTPURL(AURL);
-    Result := True;
+    Result := ParseURL(AURL).IsValid;
   except
     on EHTTPError do
       Result := False;
@@ -793,9 +794,10 @@ end;
   excluded, so the scheme and host are lowercase, dot segments are resolved
   and no fragment is left. The built-in client and a transport both report the
   URL they were given or followed to, and this is the one place either becomes
-  what a script reads. A URL the URL Standard's parser refuses, which the
-  built-in client's own parser still accepted, keeps its text with only the
-  fragment cut off. }
+  what a script reads. A URL the URL Standard's parser refuses but the
+  built-in client's own parser accepted (a transport's is refused first) keeps
+  its text with only the fragment cut off. Host parsing is the engine's
+  (Goccia.URL.Parser), so the result is what new URL(...).href gives. }
 function ResponseURLForScript(const AURL: string): string;
 var
   Parsed: TGocciaURLRecord;

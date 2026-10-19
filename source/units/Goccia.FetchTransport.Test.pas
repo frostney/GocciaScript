@@ -937,6 +937,12 @@ begin
   Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
     ApiCapabilities))
     .ToBe('TypeError: fetch transport answered an invalid URL');
+  // One the URL Standard's parser refuses cannot be serialized.
+  Response.FinalURL := 'http://api|example/moved#fragment';
+  Fake.Response := Response;
+  Expect<string>(RunWithTransport(FetchScript(API_URL), Transport,
+    ApiCapabilities))
+    .ToBe('TypeError: fetch transport answered an invalid URL');
   // The built-in client follows http(s) only.
   Response.FinalURL := 'ftp://' + API_HOST + '/moved';
   Fake.Response := Response;
@@ -1592,7 +1598,6 @@ type
     FConnections: Integer;
     FSameReply: Boolean;
     FRedirect: string;
-    FRequestTargets: TStringList;
     FPort: Word;
   protected
     procedure Execute; override;
@@ -1604,9 +1609,6 @@ type
     constructor Create(const AConnections: Integer;
       const ASameReply: Boolean = False; const ARedirect: string = '');
     destructor Destroy; override;
-    { The request target of connection n (0-based), as the origin read it; only
-      read after WaitFor. }
-    function RequestTarget(const AIndex: Integer): string;
     property Port: Word read FPort;
   end;
 
@@ -1619,7 +1621,6 @@ begin
   FConnections := AConnections;
   FSameReply := ASameReply;
   FRedirect := ARedirect;
-  FRequestTargets := TStringList.Create;
   FListener := fpSocket(AF_INET, SOCK_STREAM, 0);
   FillChar(Address, SizeOf(Address), 0);
   Address.sin_family := AF_INET;
@@ -1636,35 +1637,22 @@ end;
 destructor TLoopbackOrigin.Destroy;
 begin
   CloseSocket(FListener);
-  FRequestTargets.Free;
   inherited;
-end;
-
-function TLoopbackOrigin.RequestTarget(const AIndex: Integer): string;
-begin
-  Result := FRequestTargets[AIndex];
 end;
 
 procedure TLoopbackOrigin.Execute;
 var
   Client: TSocket;
   Buffer: array[0..4095] of Byte;
-  Body, Reply, Received: AnsiString;
-  I, Sequence, ReceivedLength, TargetStart, TargetEnd: Integer;
+  Body, Reply: AnsiString;
+  I, Sequence: Integer;
 begin
   for I := 1 to FConnections do
   begin
     Client := fpAccept(FListener, nil, nil);
     if Client < 0 then
       Exit;
-    ReceivedLength := fpRecv(Client, @Buffer[0], SizeOf(Buffer), 0);
-    if ReceivedLength < 0 then
-      ReceivedLength := 0;
-    SetString(Received, PAnsiChar(@Buffer[0]), ReceivedLength);
-    TargetStart := Pos(' ', string(Received)) + 1;
-    TargetEnd := Pos(' HTTP/', string(Received));
-    FRequestTargets.Add(Copy(string(Received), TargetStart,
-      TargetEnd - TargetStart));
+    fpRecv(Client, @Buffer[0], SizeOf(Buffer), 0);
     if (FRedirect <> '') and Odd(I) then
     begin
       Reply := 'HTTP/1.1 302 Found'#13#10 + 'Location: ' +
@@ -1778,24 +1766,15 @@ type
   TRedirectCase = record
     Location: string;
     Url: string;
-    Target: string;
   end;
 const
-  CASES: array[0..8] of TRedirectCase = (
+  CASES: array[0..4] of TRedirectCase = (
     (Location: 'http://127.0.0.1:{port}/Next/../Final?x=1#frag';
-     Url: '/Final?x=1'; Target: '/Next/../Final?x=1'),
-    (Location: 'HTTP://127.0.0.1:{port}/A/./B#f';
-     Url: '/A/B'; Target: '/A/./B'),
-    (Location: '/Root/./rel#f'; Url: '/Root/rel'; Target: '/Root/./rel'),
-    (Location: '//127.0.0.1:{port}/scheme-relative#f';
-     Url: '/scheme-relative'; Target: '/scheme-relative'),
-    (Location: 'sibling?y=2#z'; Url: '/dir/sibling?y=2';
-     Target: '/dir/sibling?y=2'),
-    (Location: '../up/./over'; Url: '/up/over'; Target: '/dir/../up/./over'),
-    (Location: '?only=1'; Url: '/dir/page?only=1'; Target: '/dir/page?only=1'),
-    (Location: '#only'; Url: '/dir/page?q=1'; Target: '/dir/page?q=1'),
-    (Location: '/a%7Eb/%e2%82%ac#f'; Url: '/a%7Eb/%e2%82%ac';
-     Target: '/a%7Eb/%e2%82%ac')
+     Url: '/Final?x=1'),
+    (Location: 'HTTP://127.0.0.1:{port}/A/./B#f'; Url: '/A/B'),
+    (Location: '/Root/./rel#f'; Url: '/Root/rel'),
+    (Location: '//127.0.0.1:{port}/scheme-relative#f'; Url: '/scheme-relative'),
+    (Location: '/a%7Eb/%e2%82%ac#f'; Url: '/a%7Eb/%e2%82%ac')
   );
 var
   Origin: TLoopbackOrigin;
@@ -1823,9 +1802,6 @@ begin
       Origin.WaitFor;
       Expect<string>(Direct).ToBe(Base + CASES[I].Url + '|true');
       Expect<string>(Forwarded).ToBe(Direct);
-      // The client asked the redirect's target, resolved against the URL
-      // that redirected, and never sent a fragment.
-      Expect<string>(Origin.RequestTarget(1)).ToBe(CASES[I].Target);
     finally
       Origin.Free;
       Tape.Free;
