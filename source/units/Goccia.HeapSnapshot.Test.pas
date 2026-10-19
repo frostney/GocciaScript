@@ -32,7 +32,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.PromiseValue;
+  Goccia.Values.PromiseValue,
+  Goccia.VM.Registers;
 
 const
   TEST_PATH = '<heap-snapshot-test>';
@@ -103,6 +104,10 @@ type
     // has compiled the same module) and restores there; ACheck runs as global
     // eval code with the restored value in `restored`.
     function RoundTripModule(const ASource, ACheck: string): string;
+    // Restores ABytes, which ASource's run wrote, in an engine that ran
+    // ASource too, and checks it as RoundTripModule does.
+    function RoundTripModuleBytes(const ASource: string; const ABytes: TBytes;
+      const ACheck: string): string;
     function SnapshotModule(const ASource: string; out ARefusal: string;
       const AAsModule: Boolean = False): TBytes;
     procedure TestClosuresShareTheirCells;
@@ -110,6 +115,8 @@ type
     procedure TestGeneratorKeepsItsHandlers;
     procedure TestFunctionNeedsItsModuleCompiled;
     procedure TestRefusesPromisesUntilTheirCodec;
+    procedure TestRestoredFrameKeepsItsCharge;
+    procedure TestSameCodeCompiledTwiceIsNamed;
     procedure OnCheckpoint(const AEngine: TGocciaEngine; var APause: Boolean);
     function RunHostCall(const AOwnerFirst, ABusyExtension,
       ANativeState: Boolean; out AResult: string): string;
@@ -240,7 +247,11 @@ begin
     TestGeneratorKeepsItsHandlers);
   Test('A function restores only where its module is compiled',
     TestFunctionNeedsItsModuleCompiled);
-  Test('Promises and yield* refuse until their codecs land',
+  Test('A restored frame is charged before it is allocated, and kept',
+    TestRestoredFrameKeepsItsCharge);
+  Test('Code compiled twice is named by its bytecode either time',
+    TestSameCodeCompiledTwiceIsNamed);
+  Test('Promises, async generators and yield* refuse until their codecs land',
     TestRefusesPromisesUntilTheirCodec);
   Test('Objects and arrays round-trip with holes and lengths',
     TestObjectsAndArrays);
@@ -516,6 +527,16 @@ function THeapSnapshotTests.RoundTripModule(const ASource,
 var
   Refusal: string;
   Bytes: TBytes;
+begin
+  Bytes := SnapshotModule(ASource, Refusal);
+  if Refusal <> '' then
+    Exit('refused: ' + Refusal);
+  Result := RoundTripModuleBytes(ASource, Bytes, ACheck);
+end;
+
+function THeapSnapshotTests.RoundTripModuleBytes(const ASource: string;
+  const ABytes: TBytes; const ACheck: string): string;
+var
   Engine: TGocciaEngine;
   Restore: TGocciaHeapSnapshotRestore;
   Lines: TStringList;
@@ -523,14 +544,11 @@ var
   Stream: TBytesStream;
   Stage: TGocciaGlobalEvalStage;
 begin
-  Bytes := SnapshotModule(ASource, Refusal);
-  if Refusal <> '' then
-    Exit('refused: ' + Refusal);
   Lines := TStringList.Create;
   Capture := TCapture.Create;
   Engine := nil;
   Restore := nil;
-  Stream := TBytesStream.Create(Bytes);
+  Stream := TBytesStream.Create(ABytes);
   try
     Lines.Text := ASource;
     Engine := TGocciaEngine.Create(TEST_PATH, Lines);
@@ -631,6 +649,135 @@ begin
     '*outer() { yield* source.inner(); } }; const g = source.outer(); ' +
     'g.next(); capture(g); })();', Refusal);
   Expect<Boolean>(Pos('a generator inside yield*', Refusal) > 0).ToBe(True);
+  SnapshotModule('(() => { const source = { async *g() { yield 1; } }; ' +
+    'capture(source.g()); })();', Refusal);
+  Expect<Boolean>(Pos('no snapshot codec for ' +
+    'TGocciaBytecodeAsyncGeneratorObjectValue', Refusal) > 0).ToBe(True);
+end;
+
+procedure THeapSnapshotTests.TestRestoredFrameKeepsItsCharge;
+const
+  SOURCE = '(() => { const source = { *g(...xs) { yield 0; ' +
+    'yield xs.length; } }; const g = source.g(...Array.from({ length: 4000 }, ' +
+    '(_, i) => i)); g.next(); capture(g); })();';
+  // The generator's arguments alone: 4,000 registers.
+  FRAME_BYTES = 4000 * SizeOf(TGocciaRegister);
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Capture: TCapture;
+  Restore: TGocciaHeapSnapshotRestore;
+  Stream: TBytesStream;
+  GC: TGarbageCollector;
+  Value: TGocciaValue;
+  Before, Previous: Int64;
+begin
+  Bytes := SnapshotModule(SOURCE, Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Lines := TStringList.Create;
+  Capture := TCapture.Create;
+  Engine := nil;
+  GC := TGarbageCollector.Instance;
+  try
+    Lines.Text := SOURCE;
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    Engine.GlobalScope.DefineLexicalBinding('capture',
+      TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
+    Engine.Execute;
+    TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
+    Capture.Value := nil;
+    GC.Collect;
+    Before := GC.BytesAllocated;
+    // Under a ceiling the frame does not fit: refused before allocating it.
+    Previous := GC.MaxBytes;
+    GC.MaxBytes := Before + FRAME_BYTES div 2;
+    Stream := TBytesStream.Create(Bytes);
+    try
+      try
+        TGocciaHeapSnapshotRestore.Create(Engine, Stream,
+          TGocciaHeapSnapshotLimits.Defaults).Free;
+        Refusal := '';
+      except
+        on E: EGocciaHeapSnapshotInvalid do
+          Refusal := E.Message;
+      end;
+    finally
+      GC.MaxBytes := Previous;
+      Stream.Free;
+    end;
+    Expect<Boolean>(Pos('memory', Refusal) > 0).ToBe(True);
+    GC.Collect;
+    Before := GC.BytesAllocated;
+    Stream := TBytesStream.Create(Bytes);
+    try
+      Restore := TGocciaHeapSnapshotRestore.Create(Engine, Stream,
+        TGocciaHeapSnapshotLimits.Defaults);
+      Value := TGocciaValue(Restore.Roots[0]);
+      GC.AddTempRoot(Value);
+      Restore.Free;
+    finally
+      Stream.Free;
+    end;
+    GC.Collect;
+    // The restore's reservations are gone; the frame's charge is the
+    // generator's now.
+    Expect<Boolean>(GC.BytesAllocated - Before >= FRAME_BYTES).ToBe(True);
+    GC.RemoveTempRoot(Value);
+    GC.Collect;
+    Expect<Boolean>(GC.BytesAllocated - Before < FRAME_BYTES).ToBe(True);
+  finally
+    Engine.Free;
+    Capture.Free;
+    Lines.Free;
+  end;
+  // A frame wider than its template, one register per argument: resumed
+  // with its arguments.
+  Expect<string>(RoundTripModuleBytes(SOURCE, Bytes,
+    'String(restored.next().value)')).ToBe('4000');
+end;
+
+procedure THeapSnapshotTests.TestSameCodeCompiledTwiceIsNamed;
+const
+  SOURCE = 'capture({ f: () => 7 });';
+var
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Lines: TStringList;
+  Capture: TCapture;
+  Stream: TBytesStream;
+  Bytes: TBytes;
+begin
+  Lines := TStringList.Create;
+  Capture := TCapture.Create;
+  Stream := TBytesStream.Create;
+  Engine := nil;
+  Session := nil;
+  try
+    Lines.Text := SOURCE;
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    Engine.GlobalScope.DefineLexicalBinding('capture',
+      TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
+    Session := TGocciaHeapSnapshotSession.Create(Engine);
+    Session.CheckAccounting := False;
+    // Compiled twice: the function captured last is the second compilation's.
+    Engine.Execute;
+    Engine.Execute;
+    Expect<Boolean>(Engine.RetainedModuleCount >= 2).ToBe(True);
+    Session.Snapshot([Capture.Value], Stream);
+    Bytes := Copy(Stream.Bytes, 0, Stream.Size);
+  finally
+    if Assigned(Capture.Value) then
+      TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
+    Session.Free;
+    Engine.Free;
+    Stream.Free;
+    Capture.Free;
+    Lines.Free;
+  end;
+  Expect<string>(RoundTripModuleBytes(SOURCE, Bytes, 'String(restored.f())'))
+    .ToBe('7');
 end;
 
 procedure THeapSnapshotTests.TestPrimitives;

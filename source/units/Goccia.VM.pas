@@ -17176,10 +17176,6 @@ type
       const AObject: TGCManagedObject); override;
   end;
 
-const
-  // Every template's register count fits a UInt16; a frame copy is never
-  // larger, and a handler stack is far smaller in any compiled function.
-  MAX_SNAPSHOT_HANDLERS = 4096;
 
 function SnapshotVM(const AReader: TGocciaHeapSnapshotReader): TGocciaVM;
 begin
@@ -17196,24 +17192,107 @@ begin
   Result := TGocciaObjectValue(AValue);
 end;
 
-// True when AIP starts an instruction of ATemplate, or is its end: an
-// OP_WIDE prefix and the instruction it widens are one instruction.
-function IsInstructionBoundary(const ATemplate: TGocciaFunctionTemplate;
-  const AIP: Integer): Boolean;
-var
-  PC: Integer;
-begin
-  if (AIP < 0) or (AIP > ATemplate.CodeCount) then
-    Exit(False);
-  PC := 0;
-  while PC < AIP do
-  begin
-    if DecodeOp(ATemplate.GetInstructionUnchecked(PC)) = Ord(OP_WIDE) then
-      Inc(PC, 2)
-    else
-      Inc(PC);
+type
+  { What a restored frame may hold, worked out once per template and restore
+    from the template's code: where its instructions start, and the handlers
+    its OP_PUSH_HANDLER and OP_PUSH_FINALLY_HANDLER instructions push. A
+    frame's handler stack holds at most one entry per push site, since each
+    try is popped before it is entered again. }
+  TSnapshotFrameInfo = class
+  public
+    Boundaries: array of Boolean;
+    Handlers: TDictionary<Int64, Boolean>;
+    PushSites: Integer;
+    constructor Create;
+    destructor Destroy; override;
+    function IsBoundary(const AIP: Integer): Boolean;
+    function HasHandler(const ACatchIP: Integer; const ACatchRegister: UInt16;
+      const AKind: TGocciaBytecodeHandlerKind): Boolean;
   end;
-  Result := PC = AIP;
+
+function SnapshotHandlerKey(const ACatchIP: Integer;
+  const ACatchRegister: UInt16; const AKind: TGocciaBytecodeHandlerKind): Int64;
+begin
+  Result := (Int64(ACatchIP) shl 24) or (Int64(ACatchRegister) shl 8) or
+    Ord(AKind);
+end;
+
+constructor TSnapshotFrameInfo.Create;
+begin
+  inherited Create;
+  Handlers := TDictionary<Int64, Boolean>.Create;
+end;
+
+destructor TSnapshotFrameInfo.Destroy;
+begin
+  Handlers.Free;
+  inherited;
+end;
+
+function TSnapshotFrameInfo.IsBoundary(const AIP: Integer): Boolean;
+begin
+  Result := (AIP >= 0) and (AIP < Length(Boundaries)) and Boundaries[AIP];
+end;
+
+function TSnapshotFrameInfo.HasHandler(const ACatchIP: Integer;
+  const ACatchRegister: UInt16; const AKind: TGocciaBytecodeHandlerKind): Boolean;
+begin
+  Result := Handlers.ContainsKey(SnapshotHandlerKey(ACatchIP, ACatchRegister,
+    AKind));
+end;
+
+// ATemplate's frame layout, scanned once per restore with polling and its
+// tables charged: an OP_WIDE prefix and the instruction it widens are one
+// instruction, and the end of the code is a boundary too.
+function SnapshotFrameInfo(const AReader: TGocciaHeapSnapshotReader;
+  const ATemplate: TGocciaFunctionTemplate): TSnapshotFrameInfo;
+var
+  PC, NextPC, A: Integer;
+  Instruction: UInt32;
+  Op: Byte;
+  Kind: TGocciaBytecodeHandlerKind;
+begin
+  Result := TSnapshotFrameInfo(AReader.Scratch(ATemplate));
+  if Assigned(Result) then
+    Exit;
+  AReader.ReserveItems(Int64(ATemplate.CodeCount) + 1, SizeOf(Boolean));
+  Result := TSnapshotFrameInfo.Create;
+  AReader.SetScratch(ATemplate, Result);
+  SetLength(Result.Boundaries, ATemplate.CodeCount + 1);
+  PC := 0;
+  while PC < ATemplate.CodeCount do
+  begin
+    if PC and 4095 = 0 then
+      AReader.Poll;
+    Result.Boundaries[PC] := True;
+    Instruction := ATemplate.GetInstructionUnchecked(PC);
+    Op := DecodeOp(Instruction);
+    A := DecodeA(Instruction);
+    NextPC := PC + 1;
+    if Op = Ord(OP_WIDE) then
+    begin
+      if NextPC >= ATemplate.CodeCount then
+        Break;
+      Instruction := ATemplate.GetInstructionUnchecked(NextPC);
+      Op := DecodeOp(Instruction);
+      A := (A shl 8) or DecodeA(Instruction);
+      NextPC := PC + 2;
+    end;
+    if (Op = Ord(OP_PUSH_HANDLER)) or (Op = Ord(OP_PUSH_FINALLY_HANDLER)) then
+    begin
+      if Op = Ord(OP_PUSH_FINALLY_HANDLER) then
+        Kind := bhkFinally
+      else
+        Kind := bhkCatch;
+      AReader.ReserveItems(1, 32);
+      Result.Handlers.AddOrSetValue(SnapshotHandlerKey(
+        NextPC + DecodeBx(Instruction), UInt16(A), Kind), True);
+      Inc(Result.PushSites);
+    end;
+    PC := NextPC;
+  end;
+  if PC = ATemplate.CodeCount then
+    Result.Boundaries[PC] := True;
 end;
 
 // The template and the upvalue count first: allocation needs them.
@@ -17305,7 +17384,9 @@ var
 begin
   Result := R.ReadItemCount(1);
   if Result > AMax then
-    R.Refuse('more registers than the template has');
+    R.Refuse('more registers than the frame has');
+  // Charged before it is allocated; the generator takes the charge over.
+  R.ReserveItems(Result, SizeOf(TGocciaRegister));
   SetLength(ARegisters, Result);
   for I := 0 to Result - 1 do
   begin
@@ -17478,7 +17559,8 @@ procedure TVMGeneratorSnapshotCodec.Fill(
 var
   G: TGocciaBytecodeGeneratorObjectValue;
   Template: TGocciaFunctionTemplate;
-  Count, I: Integer;
+  Info: TSnapshotFrameInfo;
+  Count, I, Window, RegisterWindow: Integer;
   Cell: TGCManagedObject;
   Kind: Byte;
   Value: TGocciaValue;
@@ -17486,6 +17568,7 @@ begin
   G := TGocciaBytecodeGeneratorObjectValue(AObject);
   ReadSnapshotClosure(AReader, G.FClosure);
   Template := G.FClosure.Template;
+  Info := SnapshotFrameInfo(AReader, Template);
   G.FThisValue := AReader.ReadRegister;
   ReadSnapshotRegisters(AReader, G.FArguments, High(UInt16));
   Kind := AReader.ReadU8;
@@ -17508,15 +17591,23 @@ begin
   G.FReturnResumeValueAwaited := AReader.ReadBool;
   G.FHasContinuation := AReader.ReadBool;
   G.FContinuationIP := AReader.ReadI32;
-  if G.FHasContinuation and
-     not IsInstructionBoundary(Template, G.FContinuationIP) then
+  if G.FHasContinuation and not Info.IsBoundary(G.FContinuationIP) then
     AReader.Refuse('a continuation that is not at an instruction of its ' +
       'template');
+  // The frame's windows, as SetupNewFrame sizes them: the template's
+  // registers, and one register per argument past them plus `this`.
+  Window := Template.MaxRegisters;
+  if Window < 1 then
+    Window := 1;
+  RegisterWindow := Window;
+  if RegisterWindow <= Length(G.FArguments) then
+    RegisterWindow := Length(G.FArguments) + 1;
   G.FContinuationRegisterCount := ReadSnapshotRegisters(AReader,
-    G.FContinuationRegisters, Template.MaxRegisters);
+    G.FContinuationRegisters, RegisterWindow);
   Count := AReader.ReadItemCount(1);
-  if Count > Template.MaxRegisters then
-    AReader.Refuse('more local cells than the template has registers');
+  if Count > Window then
+    AReader.Refuse('more local cells than the frame has');
+  AReader.ReserveItems(Count, SizeOf(TGocciaBytecodeCell));
   SetLength(G.FContinuationLocalCells, Count);
   for I := 0 to Count - 1 do
   begin
@@ -17528,8 +17619,9 @@ begin
   end;
   G.FContinuationLocalCellCount := Count;
   Count := AReader.ReadItemCount(7);
-  if Count > MAX_SNAPSHOT_HANDLERS then
-    AReader.Refuse('more exception handlers than a frame holds');
+  if Count > Info.PushSites then
+    AReader.Refuse('more exception handlers than its template pushes');
+  AReader.ReserveItems(Count, SizeOf(TGocciaBytecodeHandlerEntry));
   SetLength(G.FContinuationHandlers, Count);
   for I := 0 to Count - 1 do
   begin
@@ -17541,10 +17633,12 @@ begin
       AReader.Refuse('an unknown handler kind');
     G.FContinuationHandlers[I].Kind := TGocciaBytecodeHandlerKind(Kind);
     G.FContinuationHandlers[I].FrameDepth := 0;
-    if not IsInstructionBoundary(Template,
-       G.FContinuationHandlers[I].CatchIP) or
+    // Only a handler one of the template's push instructions pushes.
+    if not Info.HasHandler(G.FContinuationHandlers[I].CatchIP,
+       G.FContinuationHandlers[I].CatchRegister,
+       G.FContinuationHandlers[I].Kind) or
        (G.FContinuationHandlers[I].CatchRegister >= Template.MaxRegisters) then
-      AReader.Refuse('an exception handler outside its template');
+      AReader.Refuse('an exception handler its template does not push');
   end;
   G.FIgnoreNextResume := AReader.ReadBool;
   G.FLastResumeResultIsIteratorResult := AReader.ReadBool;
@@ -17560,7 +17654,8 @@ begin
 end;
 
 // The restored frame is charged as CaptureContinuation charged the original
-// (ADR 0130), without collecting.
+// (ADR 0130): Fill reserved each array before allocating it, and the
+// generator takes that reservation over here.
 procedure TVMGeneratorSnapshotCodec.Finish(
   const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
 var
@@ -17577,8 +17672,7 @@ begin
   GC := TGarbageCollector.Instance;
   if (FrameBytes > 0) and Assigned(GC) then
   begin
-    if not GC.TryChargeExternalBytes(FrameBytes) then
-      AReader.Refuse('a restored frame over the memory limit');
+    AReader.HandOverReservation(FrameBytes);
     G.FContinuationChargeCollector := GC;
     G.FContinuationChargedBytes := FrameBytes;
   end;

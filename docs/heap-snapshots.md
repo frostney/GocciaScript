@@ -163,21 +163,27 @@ round-trips the graphs the codecs so far cover.
 A function is written as its closure: the code it runs, the cells it
 shares with other closures, its home object and its own properties. The code
 is never written. Each compiled module the engine keeps is named by the
-SHA-256 of its bytecode, and each function's code by its depth-first place in
-its module; the restoring engine names its own compiled modules the same way
-and finds the one with the same bytecode. A snapshot naming a module the
-restoring engine has not compiled is refused. Code from `eval` has no bytecode file
-form and so no name: its functions refuse the snapshot.
+SHA-256 of its bytecode as the bytecode format writes it, its source path
+included, and each function's code by its depth-first place in its module;
+the restoring engine names its own compiled modules the same way and finds
+one with the same bytecode, so it must compile the module from the same
+path. Two modules with the same bytecode are interchangeable. A snapshot
+naming a module the restoring engine has not compiled is refused. Global
+`eval` code has no bytecode file form and so no name: its functions refuse
+the snapshot. The hashes are streamed, polled and computed only for the
+modules a snapshot names.
 
 A suspended generator is written with its frame: its registers, its cells,
 its exception handlers and where it resumes. The reader checks that frame
-against the code it runs (the resume point and every handler on an
-instruction boundary, register and handler counts within the function), and
-the restored frame is charged to the run's memory ceiling as a suspended
-frame always is. A register may hold the marker of a binding still in its
+against the code it runs: the resume point on an instruction boundary,
+registers and cells within the frame's windows, and each handler one that
+the function's own push instructions push, no more of them than it has push
+instructions. It charges each frame array to the run's memory ceiling before
+allocating it, and the restored generator keeps that charge, as a suspended
+frame always does. A register may hold the marker of a binding still in its
 temporal dead zone, which stays there until the generator runs the
-declaration. A generator inside `yield*`, and an async function or async
-generator waiting on a promise, refuse until the promise and iterator codecs
+declaration. A generator inside `yield*`, an async generator and an async
+function waiting on a promise refuse until the promise and iterator codecs
 land; so does a function whose code closes over a module's scope, until the
 module codecs land.
 

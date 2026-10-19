@@ -858,32 +858,33 @@ var
 begin
   inherited Create;
   FEngine := AEngine;
-  FTable := TGocciaHeapSnapshotBuiltinTable.Create;
-  BuildBuiltinTable(FTable, AEngine, False);
-  // The lazy members this engine builds while it resolves names are its
-  // pristine ones, as the writing engine's were when it built them.
-  FTable.Install;
-  FResolver := TGocciaBuiltinPathResolver.Create(FTable, AEngine);
-  FReader := TGocciaHeapSnapshotReader.Create(FTable, ALimits);
-  FReader.BuiltinResolve := FResolver.Resolve;
-  FReader.BuiltinVerify := VerifyBuiltins;
-  // The functions the snapshot restores run the code of this engine's own
-  // compiled modules, matched by their bytecode.
-  FTemplates := EngineTemplates(AEngine);
-  FReader.Templates := FTemplates;
-  FReader.Context := AEngine.VM;
   // In this engine's realm, whichever is current on the thread: built-ins
   // built on first use are built into it.
   Context := AEngine.ActivateRealmExecutionContext;
   try
     try
+      FTable := TGocciaHeapSnapshotBuiltinTable.Create;
+      BuildBuiltinTable(FTable, AEngine, False);
+      // The lazy members this engine builds while it resolves names are its
+      // pristine ones, as the writing engine's were when it built them.
+      FTable.Install;
+      FResolver := TGocciaBuiltinPathResolver.Create(FTable, AEngine);
+      FReader := TGocciaHeapSnapshotReader.Create(FTable, ALimits);
+      FReader.BuiltinResolve := FResolver.Resolve;
+      FReader.BuiltinVerify := VerifyBuiltins;
+      FReader.Context := AEngine.VM;
+      // The functions the snapshot restores run the code of this engine's
+      // own compiled modules, matched by their bytecode.
+      FTemplates := EngineTemplates(AEngine);
+      FReader.Templates := FTemplates;
       FRoots := FReader.Restore(AStream);
     except
       // The run's memory ceiling, or a script error from building a lazy
       // built-in a name crossed: the snapshot cannot be restored here.
       on E: TGocciaThrowValue do
         raise EGocciaHeapSnapshotInvalid.Create('restore: ' + ThrowMessage(E));
-      // A charge of the table's that did not fit.
+      // A charge of the tables' that did not fit, the built-in table's
+      // included.
       on E: EGocciaHeapSnapshotRefused do
         if E is EGocciaHeapSnapshotInvalid then
           raise

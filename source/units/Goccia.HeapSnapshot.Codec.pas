@@ -239,29 +239,37 @@ type
   { The compiled modules whose function templates a snapshot can refer to,
     each named by the SHA-256 of its bytecode, and each template by its
     depth-first index in its module. A restoring engine supplies its own
-    compiled modules; a template refers to the module with the same hash. }
+    compiled modules; a template refers to a module with the same hash, and
+    two modules with the same bytecode are interchangeable. A module's hash is
+    computed when first asked for, streamed through SHA-256 without a copy of
+    the bytecode, and its tables are charged to the run's memory ceiling. }
   TGocciaSnapshotTemplateList = TList<TGocciaFunctionTemplate>;
   TGocciaSnapshotTemplateLists = TObjectList<TGocciaSnapshotTemplateList>;
 
   TGocciaSnapshotTemplateTable = class
   private
     FModules: TList<TGocciaBytecodeModule>;
+    FModuleSet: THashMap<TGocciaBytecodeModule, Boolean>;
     FHashes: TList<string>;
     FByHash: TDictionary<string, Integer>;
+    FAllHashed: Boolean;
     FTemplates: THashMap<TGocciaFunctionTemplate, Int64>;
     FTemplateLists: TGocciaSnapshotTemplateLists;
+    FChargedBytes: Int64;
+    procedure Charge(const ABytes: Int64);
   public
     constructor Create;
     destructor Destroy; override;
-    // Adds AModule and numbers its templates; a module already in the table,
-    // or one with the same bytecode, is not added again, and neither is one
-    // the bytecode format cannot write (eval code): its functions refuse.
+    // Adds AModule and numbers its templates; a module already in the table
+    // is not added again, and neither is global eval code, which the
+    // bytecode format cannot write: its functions refuse.
     procedure AddModule(const AModule: TGocciaBytecodeModule);
     // AModule's index and ATemplate's index in it; False for a template of no
     // module in the table.
     function TryIdentify(const ATemplate: TGocciaFunctionTemplate;
       out AModule, AIndex: Integer): Boolean;
     function ModuleHash(const AModule: Integer): string;
+    // A module with the bytecode AHash names, or -1.
     function FindModule(const AHash: string): Integer;
     function TemplateAt(const AModule, AIndex: Integer): TGocciaFunctionTemplate;
     function TemplateCount(const AModule: Integer): Integer;
@@ -390,6 +398,7 @@ type
     FBuiltinVerify: TGocciaBuiltinVerify;
     FBuildIdentity: string;
     FContext: TObject;
+    FScratch: TObjectDictionary<TObject, TObject>;
     FTemplates: TGocciaSnapshotTemplateTable;
     // The snapshot's modules, as indexes into FTemplates.
     FModuleMap: array of Integer;
@@ -438,6 +447,17 @@ type
     // Polls the run's execution limits; codecs call it once per item in
     // every loop whose length follows the input.
     procedure Poll;
+    // Charges ACount items of AElementSize to the run's memory ceiling
+    // before a codec allocates them; the charge ends with the restore unless
+    // the codec hands it over to the object that keeps the memory.
+    procedure ReserveItems(const ACount, AElementSize: Int64);
+    // ABytes of what ReserveItems charged now belong to a restored object,
+    // which releases them itself.
+    procedure HandOverReservation(const ABytes: Int64);
+    // What a codec worked out once for AKey (a template's frame layout, say),
+    // kept until the restore ends; the reader owns it.
+    function Scratch(const AKey: TObject): TObject;
+    procedure SetScratch(const AKey, AValue: TObject);
     procedure Refuse(const AReason: string);
 
     // Restores the snapshot in AStream and returns its roots, rooted until
@@ -1184,10 +1204,72 @@ end;
 
 { TGocciaSnapshotTemplateTable }
 
+const
+  // What one template costs the table: its map entry and its list slot.
+  TEMPLATE_ENTRY_BYTES = 48;
+  MODULE_ENTRY_BYTES = 160;
+  // Bytes hashed between polls of the run's execution limits.
+  HASH_POLL_BYTES = 65536;
+
+type
+  // A write-only stream that hashes what is written to it: the module's
+  // bytecode is never held in memory.
+  THashingStream = class(TStream)
+  private
+    FContext: TSHA256Context;
+    FPosition: Int64;
+    FSincePoll: Int64;
+  public
+    constructor Create;
+    function Read(var ABuffer; ACount: Longint): Longint; override;
+    function Write(const ABuffer; ACount: Longint): Longint; override;
+    function Seek(const AOffset: Int64; AOrigin: TSeekOrigin): Int64; override;
+    function HexDigest: string;
+  end;
+
+constructor THashingStream.Create;
+begin
+  inherited Create;
+  SHA256Init(FContext);
+end;
+
+function THashingStream.Read(var ABuffer; ACount: Longint): Longint;
+begin
+  raise EStreamError.Create('a hashing stream cannot be read');
+end;
+
+function THashingStream.Write(const ABuffer; ACount: Longint): Longint;
+begin
+  SHA256Update(FContext, @ABuffer, ACount);
+  Inc(FPosition, ACount);
+  Inc(FSincePoll, ACount);
+  if FSincePoll >= HASH_POLL_BYTES then
+  begin
+    FSincePoll := 0;
+    CheckNativeWork;
+  end;
+  Result := ACount;
+end;
+
+function THashingStream.Seek(const AOffset: Int64;
+  AOrigin: TSeekOrigin): Int64;
+begin
+  // Only asking for the position is allowed.
+  if (AOffset <> 0) or (AOrigin <> soCurrent) then
+    raise EStreamError.Create('a hashing stream cannot seek');
+  Result := FPosition;
+end;
+
+function THashingStream.HexDigest: string;
+begin
+  Result := SHA256FinalHex(FContext);
+end;
+
 constructor TGocciaSnapshotTemplateTable.Create;
 begin
   inherited Create;
   FModules := TList<TGocciaBytecodeModule>.Create;
+  FModuleSet := THashMap<TGocciaBytecodeModule, Boolean>.Create;
   FHashes := TList<string>.Create;
   FByHash := TDictionary<string, Integer>.Create;
   FTemplates := THashMap<TGocciaFunctionTemplate, Int64>.Create;
@@ -1197,82 +1279,75 @@ end;
 destructor TGocciaSnapshotTemplateTable.Destroy;
 begin
   FModules.Free;
+  FModuleSet.Free;
   FHashes.Free;
   FByHash.Free;
   FTemplates.Free;
   FTemplateLists.Free;
+  ReleaseCharge(FChargedBytes);
   inherited;
 end;
 
-// The SHA-256 of a module's bytecode as the bytecode format writes it.
-function ModuleBytecodeHash(const AModule: TGocciaBytecodeModule): string;
-var
-  Writer: TGocciaBytecodeWriter;
-  Stream: TMemoryStream;
-  Bytes: TBytes;
+procedure TGocciaSnapshotTemplateTable.Charge(const ABytes: Int64);
 begin
-  Stream := TMemoryStream.Create;
-  Writer := TGocciaBytecodeWriter.Create(Stream);
-  try
-    Writer.WriteModule(AModule);
-    SetLength(Bytes, Stream.Size);
-    if Stream.Size > 0 then
-      Move(Stream.Memory^, Bytes[0], Stream.Size);
-    Result := SHA256Hex(Bytes);
-  finally
-    Writer.Free;
-    Stream.Free;
-  end;
+  ChargeWithoutCollecting(ABytes);
+  Inc(FChargedBytes, ABytes);
 end;
 
 procedure TGocciaSnapshotTemplateTable.AddModule(
   const AModule: TGocciaBytecodeModule);
 var
-  Hash: string;
   ModuleIndex, I: Integer;
   List: TGocciaSnapshotTemplateList;
   Pending: TGocciaSnapshotTemplateList;
   Template: TGocciaFunctionTemplate;
 begin
-  if not Assigned(AModule) or FModules.Contains(AModule) then
+  if not Assigned(AModule) or FModuleSet.ContainsKey(AModule) then
     Exit;
-  try
-    Hash := ModuleBytecodeHash(AModule);
-  except
-    // Eval code has no bytecode file form, so no name another engine
-    // shares: the snapshot cannot name its functions.
-    on E: Exception do
-      Exit;
-  end;
-  if FByHash.ContainsKey(Hash) then
-    Exit;
-  ModuleIndex := FModules.Count;
-  FModules.Add(AModule);
-  FHashes.Add(Hash);
-  FByHash.Add(Hash, ModuleIndex);
-  List := TGocciaSnapshotTemplateList.Create;
-  FTemplateLists.Add(List);
+  FModuleSet.Add(AModule, True);
   // Depth first, the top level first and each template's children in
   // order, with an explicit stack: the same numbering in every engine that
   // compiled the same bytecode.
+  List := TGocciaSnapshotTemplateList.Create;
   Pending := TGocciaSnapshotTemplateList.Create;
   try
-    Pending.Add(AModule.TopLevel);
-    while Pending.Count > 0 do
-    begin
-      Template := Pending[Pending.Count - 1];
-      Pending.Delete(Pending.Count - 1);
-      if not Assigned(Template) then
-        Continue;
-      if not FTemplates.ContainsKey(Template) then
-        FTemplates.Add(Template, (Int64(ModuleIndex) shl 32) or List.Count);
-      List.Add(Template);
-      for I := Template.FunctionCount - 1 downto 0 do
-        Pending.Add(Template.GetFunction(I));
+    try
+      Pending.Add(AModule.TopLevel);
+      while Pending.Count > 0 do
+      begin
+        CheckNativeWork;
+        Template := Pending[Pending.Count - 1];
+        Pending.Delete(Pending.Count - 1);
+        if not Assigned(Template) then
+          Continue;
+        // Global eval code has no bytecode file form, so no name another
+        // engine shares: the snapshot cannot name its functions.
+        if Template.GlobalEvalCode then
+        begin
+          List.Free;
+          Exit;
+        end;
+        Charge(TEMPLATE_ENTRY_BYTES);
+        List.Add(Template);
+        for I := Template.FunctionCount - 1 downto 0 do
+          Pending.Add(Template.GetFunction(I));
+      end;
+      Charge(MODULE_ENTRY_BYTES);
+    except
+      List.Free;
+      raise;
     end;
   finally
     Pending.Free;
   end;
+  ModuleIndex := FModules.Count;
+  FModules.Add(AModule);
+  FHashes.Add('');
+  FTemplateLists.Add(List);
+  FAllHashed := False;
+  for I := 0 to List.Count - 1 do
+    if not FTemplates.ContainsKey(List[I]) then
+      FTemplates.Add(List[I], (Int64(ModuleIndex) shl 32) or I);
 end;
 
 function TGocciaSnapshotTemplateTable.TryIdentify(
@@ -1288,13 +1363,39 @@ begin
   end;
 end;
 
+// The SHA-256 of a module's bytecode as the bytecode format writes it, its
+// source path included.
 function TGocciaSnapshotTemplateTable.ModuleHash(const AModule: Integer): string;
+var
+  Stream: THashingStream;
+  Writer: TGocciaBytecodeWriter;
 begin
+  if FHashes[AModule] = '' then
+  begin
+    Stream := THashingStream.Create;
+    Writer := TGocciaBytecodeWriter.Create(Stream);
+    try
+      Writer.WriteModule(FModules[AModule]);
+      FHashes[AModule] := Stream.HexDigest;
+    finally
+      Writer.Free;
+      Stream.Free;
+    end;
+  end;
   Result := FHashes[AModule];
 end;
 
 function TGocciaSnapshotTemplateTable.FindModule(const AHash: string): Integer;
+var
+  I: Integer;
 begin
+  if not FAllHashed then
+  begin
+    for I := 0 to FModules.Count - 1 do
+      if not FByHash.ContainsKey(ModuleHash(I)) then
+        FByHash.Add(ModuleHash(I), I);
+    FAllHashed := True;
+  end;
   if not FByHash.TryGetValue(AHash, Result) then
     Result := -1;
 end;
@@ -1872,6 +1973,7 @@ begin
   FBuildIdentity := HeapSnapshotBuildIdentity;
   FCreated := TList<TGCManagedObject>.Create;
   FNewRegistered := TDictionary<string, TGocciaSymbolValue>.Create;
+  FScratch := TObjectDictionary<TObject, TObject>.Create([doOwnsValues]);
 end;
 
 destructor TGocciaHeapSnapshotReader.Destroy;
@@ -1879,8 +1981,33 @@ begin
   FRoots.Free;
   FCreated.Free;
   FNewRegistered.Free;
+  FScratch.Free;
   ReleaseNativeBytes(FReservedBytes);
   inherited;
+end;
+
+procedure TGocciaHeapSnapshotReader.ReserveItems(const ACount,
+  AElementSize: Int64);
+begin
+  Reserve(ACount, AElementSize);
+end;
+
+procedure TGocciaHeapSnapshotReader.HandOverReservation(const ABytes: Int64);
+begin
+  if (ABytes < 0) or (ABytes > FReservedBytes) then
+    Refuse('a hand-over of more than the reader reserved');
+  Dec(FReservedBytes, ABytes);
+end;
+
+function TGocciaHeapSnapshotReader.Scratch(const AKey: TObject): TObject;
+begin
+  if not FScratch.TryGetValue(AKey, Result) then
+    Result := nil;
+end;
+
+procedure TGocciaHeapSnapshotReader.SetScratch(const AKey, AValue: TObject);
+begin
+  FScratch.AddOrSetValue(AKey, AValue);
 end;
 
 function TGocciaHeapSnapshotReader.GetObjectCount: Integer;
