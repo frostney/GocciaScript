@@ -28,7 +28,8 @@ type
 
 { Test seam: AHook runs on the waiting agent after an Atomics.wait suspension
   ends and before the wait enters the waiter list's critical section again,
-  so a test can order an Atomics.notify against a timeout. Nil outside tests. }
+  so a test can order an Atomics.notify against a timeout. It applies to the
+  calling thread's agent only. Nil outside tests. }
 procedure SetAtomicsWaitSuspensionEndedHookForTesting(
   const AHook: TAtomicsWaitSuspensionEndedHook);
 
@@ -160,9 +161,9 @@ var
   // returns before taking the lock.
   GAtomicsAsyncWaiterCount: Integer;
 
-  GAtomicsWaitSuspensionEndedHook: TAtomicsWaitSuspensionEndedHook;
-
 threadvar
+  // Per thread, so a hook a test installs runs only for its own agent.
+  GAtomicsWaitSuspensionEndedHook: TAtomicsWaitSuspensionEndedHook;
   GAtomicsAgentCanSuspend: Boolean;
   GAtomicsAgentCanSuspendConfigured: Boolean;
 
@@ -1481,13 +1482,14 @@ begin
       if Assigned(GAtomicsWaitSuspensionEndedHook) then
         GAtomicsWaitSuspensionEndedHook;
     finally
-      // The wait was notified exactly when Atomics.notify removed the waiter
-      // from the list, and that is decided here, inside the critical section
-      // (ES2023 25.4.12 Atomics.wait steps 18-23 with 25.4.2.9 SuspendAgent;
-      // ES2026 25.4.3.15 decides an async timeout the same way): a notify
+      // ES2026 §25.4.3.11 SuspendThisAgent step 8: the agent re-enters the
+      // critical section, and only there is it settled whether the wait was
+      // notified (ES2023 §25.4.12 Atomics.wait steps 18-23 spell this out;
+      // §25.4.3.15 decides an async timeout the same way). The wait was
+      // notified exactly when Atomics.notify removed the waiter: a notify
       // that lands after the suspension timed out but before this point
       // counted the waiter, so the wait returns "ok", and a waiter still in
-      // the list timed out and leaves it, so no later notify counts it.
+      // the list timed out and removes itself, so no later notify counts it.
       // This also leaves the waiter list as it was before the wait on every
       // exit, including the instruction limit or execution timeout raising
       // inside the wait: the waiter is freed below, and a waiter left in the
