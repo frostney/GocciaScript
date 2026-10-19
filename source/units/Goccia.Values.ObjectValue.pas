@@ -33,8 +33,11 @@ type
     FSymbolOrder: TList<TGocciaSymbolValue>;
     // The descriptors the object holds now that the new layout keeps.
     FKept: THashMap<Pointer, Boolean>;
+    FHasIndexKey: Boolean;
   public
     destructor Destroy; override;
+    // Whether a key of the new layout is an array index.
+    property HasIndexKey: Boolean read FHasIndexKey;
   end;
 
   TGocciaObjectValue = class(TGocciaValue)
@@ -1591,6 +1594,7 @@ function TGocciaObjectValue.PrepareOwnPropertiesForRestore(
 var
   Map: TGocciaShapedPropertyMap;
   Descriptor: TGocciaPropertyDescriptor;
+  Index: UInt64;
   I: Integer;
 begin
   Result := TGocciaRestoredOwnProperties.Create;
@@ -1598,8 +1602,9 @@ begin
     Result.FKept := THashMap<Pointer, Boolean>.Create;
     // A map like the one the constructor makes, rooting its owner where it
     // grows: its new values are rooted by the caller, its kept ones by the
-    // map the object holds now.
-    Map := TGocciaShapedPropertyMap.Create(Length(AKeys));
+    // map the object holds now. It grows as keys are added, as a restored
+    // object's does, rather than being sized up front by the input.
+    Map := TGocciaShapedPropertyMap.Create;
     Result.FProperties := Map;
     Map.Owner := Self;
     for I := 0 to High(AKeys) do
@@ -1615,6 +1620,8 @@ begin
         Result.FKept.AddOrSetValue(Descriptor, True);
       end;
       Result.FProperties.Add(AKeys[I], Descriptor);
+      if not Result.FHasIndexKey and TryParseArrayIndexKey(AKeys[I], Index) then
+        Result.FHasIndexKey := True;
     end;
     if Length(ASymbols) > 0 then
     begin

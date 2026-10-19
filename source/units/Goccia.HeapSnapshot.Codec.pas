@@ -84,6 +84,7 @@ const
   // The parts of a changed built-in's state past its object core.
   HSB_FUNCTION = 1;
   HSB_ARRAY = 2;
+  HSB_CLASS = 4;
 
 type
   { The snapshot cannot be taken: a class without a codec, a state a codec
@@ -462,7 +463,8 @@ type
     procedure CheckPrototypeChains;
     procedure ReadDifferences;
     procedure CheckDifferenceChains;
-    procedure ApplyDifferences;
+    procedure PrepareDifferences;
+    procedure CommitDifferences;
   public
     constructor Create(const ABuiltins: TGocciaHeapSnapshotBuiltinTable;
       const ALimits: TGocciaHeapSnapshotLimits);
@@ -580,6 +582,7 @@ uses
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
+  Goccia.Values.ClassValue,
   Goccia.Values.DateData,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
@@ -614,6 +617,7 @@ type
     Extensible, Frozen, Sealed, HadIndexed: Boolean;
     IsFunction, HasOwnLength, HasOwnName: Boolean;
     IsArray, LengthWritable: Boolean;
+    IsClass, NameDeleted, LengthDeleted: Boolean;
     ArrayLength: Int64;
     Elements: array of TGocciaValue;
     Keys: array of string;
@@ -1289,6 +1293,14 @@ begin
       if TGocciaFunctionBase(Obj).HasOwnNameProperty then
         Encoder.Field(TGocciaFunctionBase(Obj).IntrinsicName);
     end;
+    // A class keeps whether its synthesized name and length were deleted
+    // outside the property map too.
+    if Obj is TGocciaClassValue then
+    begin
+      Encoder.Field('class');
+      Encoder.Count(Ord(TGocciaClassValue(Obj).NameDeleted) or
+        (Ord(TGocciaClassValue(Obj).LengthDeleted) shl 1));
+    end;
     // In order: a deleted and re-added member moves to the end.
     Encoder.Count(Obj.Properties.Count);
     for Pair in Obj.Properties do
@@ -1928,11 +1940,18 @@ begin
     Parts := Parts or HSB_FUNCTION;
   if Obj is TGocciaArrayValue then
     Parts := Parts or HSB_ARRAY;
+  if Obj is TGocciaClassValue then
+    Parts := Parts or HSB_CLASS;
   WriteU8(Parts);
   if Obj is TGocciaFunctionBase then
   begin
     WriteBool(TGocciaFunctionBase(Obj).HasOwnLengthProperty);
     WriteBool(TGocciaFunctionBase(Obj).HasOwnNameProperty);
+  end;
+  if Obj is TGocciaClassValue then
+  begin
+    WriteBool(TGocciaClassValue(Obj).NameDeleted);
+    WriteBool(TGocciaClassValue(Obj).LengthDeleted);
   end;
   if Obj is TGocciaArrayValue then
   begin
@@ -3087,10 +3106,11 @@ begin
   end;
   if FPos <> FLimit then
     Refuse('bytes after the roots');
-  // Last, once nothing else can refuse: the changed built-ins take their
-  // state, so a refused restore leaves this engine's built-ins as they were.
+  // The changed built-ins' new state is built now, and taken last, once
+  // nothing else can refuse, so a refused restore leaves this engine's
+  // built-ins as they were.
   CheckDifferenceChains;
-  ApplyDifferences;
+  PrepareDifferences;
   // The restore succeeded: the registered symbols it made are registered,
   // polling as any loop the input sizes does. A stop between two leaves
   // some registered and the rest not, which is harmless: a registered
@@ -3102,6 +3122,7 @@ begin
     RegisterSymbol(Pair.Value);
   end;
   FNewRegistered.Clear;
+  CommitDifferences;
   // The input is not needed any more; its reservation is released with the
   // reader.
   SetLength(FData, 0);
@@ -3288,17 +3309,24 @@ begin
         Refuse('integrity flags that contradict each other');
 
       Parts := ReadU8;
-      if Parts > (HSB_FUNCTION or HSB_ARRAY) then
+      if Parts > (HSB_FUNCTION or HSB_ARRAY or HSB_CLASS) then
         Refuse('unknown parts of a changed built-in');
       Pending.IsFunction := Parts and HSB_FUNCTION <> 0;
       Pending.IsArray := Parts and HSB_ARRAY <> 0;
+      Pending.IsClass := Parts and HSB_CLASS <> 0;
       if (Pending.IsFunction <> (Target is TGocciaFunctionBase)) or
-         (Pending.IsArray <> (Target is TGocciaArrayValue)) then
+         (Pending.IsArray <> (Target is TGocciaArrayValue)) or
+         (Pending.IsClass <> (Target is TGocciaClassValue)) then
         Refuse('a changed built-in''s parts that are not its kind''s');
       if Pending.IsFunction then
       begin
         Pending.HasOwnLength := ReadBool;
         Pending.HasOwnName := ReadBool;
+      end;
+      if Pending.IsClass then
+      begin
+        Pending.NameDeleted := ReadBool;
+        Pending.LengthDeleted := ReadBool;
       end;
       if Pending.IsArray then
       begin
@@ -3441,11 +3469,9 @@ begin
   end;
 end;
 
-{ First everything that can fail, polling as it goes: each built-in's new
-  properties and elements are built aside. Then the commit, which allocates
-  nothing, polls nothing and cannot fail, so a refused restore changed no
-  built-in, and a restored one changed all it names. }
-procedure TGocciaHeapSnapshotReader.ApplyDifferences;
+{ Everything that can fail, polling as it goes: each built-in's new
+  properties and elements are built aside. CommitDifferences installs them. }
+procedure TGocciaHeapSnapshotReader.PrepareDifferences;
 var
   Pending: TPendingDifference;
   I, J: Integer;
@@ -3480,6 +3506,16 @@ begin
       Pending.PreparedElements :=
         TGocciaArrayValue.PrepareElementsForRestore(Pending.Elements);
   end;
+end;
+
+{ The last step of a restore: it allocates nothing, polls nothing and cannot
+  fail, so a refused restore changed no built-in, and a restored one changed
+  all it names. }
+procedure TGocciaHeapSnapshotReader.CommitDifferences;
+var
+  Pending: TPendingDifference;
+  I: Integer;
+begin
   for I := 0 to FDifferences.Count - 1 do
   begin
     Pending := TPendingDifference(FDifferences[I]);
@@ -3491,14 +3527,21 @@ begin
     if Pending.IsFunction then
       TGocciaFunctionBase(Pending.Target).SetIntrinsicPropertiesForRestore(
         Pending.HasOwnLength, Pending.HasOwnName);
+    if Pending.IsClass then
+      TGocciaClassValue(Pending.Target).SetIntrinsicDeletionsForRestore(
+        Pending.NameDeleted, Pending.LengthDeleted);
     if Pending.IsArray then
     begin
       TGocciaArrayValue(Pending.Target).CommitArrayPartForRestore(
         Pending.PreparedElements, Pending.ArrayLength, Pending.LengthWritable);
       Pending.PreparedElements := nil;
     end;
+    // Once an object has had an index key, it has for good: the fast paths
+    // for arrays trust that, so the snapshot's word is not taken alone.
     Pending.Target.SetIntegrityForRestore(Pending.Extensible, Pending.Frozen,
-      Pending.Sealed, Pending.HadIndexed);
+      Pending.Sealed, Pending.HadIndexed or
+      Pending.Target.HasEverHadIndexedOwnProperty or
+      Pending.Prepared.HasIndexKey);
   end;
 end;
 

@@ -23,6 +23,7 @@ uses
   Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.TestSupport,
   Goccia.MemoryLimit,
+  Goccia.Timeout,
   Goccia.Realm,
   Goccia.Scope.BindingMap,
   Goccia.SharedPrototype,
@@ -51,6 +52,8 @@ type
     procedure TestHostileDifferencesRefuse;
     procedure TestRefusedRestoreLeavesBuiltins;
     procedure TestRefusalWhileApplyingLeavesBuiltins;
+    procedure TestTimeoutWhileRestoringLeavesBuiltins;
+    procedure TestIndexKeyIsNeverForgotten;
     procedure TestDifferenceTruncationsAndMutants;
     procedure TestRestoredRunSnapshotsAgain;
   public
@@ -122,6 +125,10 @@ begin
     TestRefusedRestoreLeavesBuiltins);
   Test('A restore refused at any memory ceiling changed no built-in',
     TestRefusalWhileApplyingLeavesBuiltins);
+  Test('A restore stopped at any point by its deadline changed no built-in',
+    TestTimeoutWhileRestoringLeavesBuiltins);
+  Test('A changed built-in that has an index key keeps the fact',
+    TestIndexKeyIsNeverForgotten);
   Test('Truncations and mutants of differences refuse, or restore',
     TestDifferenceTruncationsAndMutants);
   Test('A restored run with differences snapshots and restores again',
@@ -794,6 +801,16 @@ begin
   Expect<string>(RoundTrip('(() => { Object.defineProperty(Math.max, ' +
     '"length", { value: 7 }); return {}; })()', 'String(Math.max.length)'))
     .ToBe('7');
+  // A class's synthesized name and length, deleted, and the place a name
+  // defined again takes.
+  Expect<string>(RoundTrip('(() => { delete Map.name; delete Map.length; ' +
+    'return {}; })()', '[Object.hasOwn(Map, "name"), ' +
+    'Object.hasOwn(Map, "length")].join()')).ToBe('false,false');
+  Expect<string>(RoundTrip('(() => { delete Map.name; ' +
+    'Object.defineProperty(Map, "name", { value: "M", configurable: true }); ' +
+    'return Reflect.ownKeys(Map).map(String).join(); })()',
+    '[restored === Reflect.ownKeys(Map).map(String).join(), Map.name].join()'))
+    .ToBe('true,M');
   // A built-in array.
   Expect<string>(RoundTrip('(() => { Goccia.shims.push("mine"); ' +
     'return {}; })()', 'String(Goccia.shims.includes("mine"))')).ToBe('true');
@@ -1011,6 +1028,98 @@ begin
       LastDelimiter(',', Pristine) - Pos(',', Pristine) - 1))) + ',object');
   finally
     GC.MaxBytes := Previous;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestTimeoutWhileRestoringLeavesBuiltins;
+const
+  STATE = '[Array.prototype.length, typeof Math.extra].join()';
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Refusal, Pristine: string;
+  Bytes: TBytes;
+  Deadline, Refused: Integer;
+  Restored: Boolean;
+begin
+  // Built-in differences, then many symbols registered only once the
+  // restore succeeds, the last thing it polls for: wherever the deadline
+  // falls, no built-in changed unless the restore did.
+  Bytes := Snapshot('(() => { const o = {}; Math.extra = o; ' +
+    'Array.prototype.push(...Array.from({ length: 30000 }, () => o)); ' +
+    'return Array.from({ length: 30000 }, (_, i) => ' +
+    'Symbol.for("restore-deadline-" + i)); })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Refused := 0;
+  Restored := False;
+  try
+    Pristine := Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value;
+    Deadline := 1;
+    while Deadline < 20000 do
+    begin
+      StartExecutionTimeout(Deadline);
+      try
+        try
+          Refusal := RestoreRefusalIn(Engine, Bytes);
+        except
+          on E: TGocciaTimeoutError do
+            Refusal := E.Message;
+        end;
+      finally
+        ClearExecutionTimeout;
+      end;
+      if Refusal = '' then
+      begin
+        Restored := True;
+        Break;
+      end;
+      Inc(Refused);
+      Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+        Stage).ToStringLiteral.Value).ToBe(Pristine);
+      Deadline := Deadline + 1 + Deadline div 8;
+    end;
+    Expect<Boolean>(Restored and (Refused > 0)).ToBe(True);
+    Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value).ToBe('30000,object');
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestIndexKeyIsNeverForgotten;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Refusal: string;
+  Bytes: TBytes;
+  At: Integer;
+begin
+  Bytes := Snapshot('(() => { Object.prototype[5] = 1; return {}; })()',
+    Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // Object.prototype: its reference, its null prototype, then extensible,
+  // frozen, sealed and had-an-index-key. A snapshot that says it never had
+  // one, while giving it one, is not believed.
+  At := DifferencesAt(Bytes) + 4;
+  Expect<Integer>(Bytes[At + 4]).ToBe(HSV_NIL);
+  Expect<Integer>(Bytes[At + 8]).ToBe(1);
+  Bytes[At + 8] := 0;
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    Expect<Boolean>(TGocciaObjectValue(Engine.EvaluateGlobalEval(
+      'Object.prototype', TEST_PATH, Stage)).HasEverHadIndexedOwnProperty)
+      .ToBe(True);
+  finally
     Engine.Free;
     Lines.Free;
   end;

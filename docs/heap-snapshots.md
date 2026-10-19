@@ -268,7 +268,8 @@ value refuses the snapshot until a codec covers it.
 A built-in whose state differs from what the session recorded is written in
 its own section (format version 3, between the object table and the roots)
 as its whole own state: its prototype, its extensibility and integrity, a
-function's synthesized `length` and `name`, an array's length and elements,
+function's or a class's synthesized `length` and `name`, an array's length
+and elements,
 and every own property, string- and symbol-keyed, in its final order. A
 member the engine built and the run left alone, or one still lazy, is
 written as kept: the restoring engine's own member of that key, lazy or
@@ -302,8 +303,9 @@ and 10,000 mutants of a real snapshot, and of one holding closures and a
 suspended generator, which it then resumes.
 `Goccia.HeapSnapshot.Builtins.Test` round-trips each kind of difference,
 checks the reader's refusals of impossible ones, restores every cut and
-11,000 mutants of snapshots with differences, and restores one under rising
-memory ceilings, every refusal leaving the built-ins as they were. The fuzz harness restores one input
+11,000 mutants of snapshots with differences, and restores under rising
+memory ceilings and deadlines, every refusal leaving the built-ins as they
+were. The fuzz harness restores one input
 as a snapshot with `--heap-snapshot <file>` and writes its own seed
 snapshots with `--write-heap-snapshot-seeds <dir>`; the scheduled
 [fuzz workflow](../.github/workflows/fuzz.yml) fuzzes the reader with
