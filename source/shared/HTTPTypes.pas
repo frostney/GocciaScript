@@ -101,6 +101,16 @@ function ParseHTTPURL(const AURL: string;
 function HTTPURLHost(const AURL: string): string;
 function HTTPURLAuditHost(const AURL: string): string;
 
+{ The request text checks the client makes before it writes a request: a
+  value with a control character (a tab only where AAllowTab) raises
+  EHTTPError `Invalid HTTP <AKind>`. Socket-free, so a layer that hands a
+  request to something other than the client can apply the same checks. }
+procedure ValidateHTTPRequestText(const AValue, AKind: string;
+  const AAllowTab: Boolean);
+{ The client's checks on a request's header list, header by header, in the
+  order it makes them while writing the request. }
+procedure ValidateHTTPRequestHeaders(const AHeaders: THTTPHeaders);
+
 implementation
 
 function DefaultHTTPPolicy: THTTPRequestPolicy;
@@ -331,6 +341,41 @@ begin
   // This parser is only for capability-audit subjects. It canonicalizes the
   // destination after userinfo without relaxing request validation.
   Result := ParseHTTPURL(AURL, False, True).Host;
+end;
+
+procedure ValidateHTTPRequestText(const AValue, AKind: string;
+  const AAllowTab: Boolean);
+const
+  DELETE_CHARACTER = 127;
+  FIRST_PRINTABLE_CHARACTER = 32;
+  TAB_CHARACTER = 9;
+var
+  I, Code: Integer;
+begin
+  for I := 1 to Length(AValue) do
+  begin
+    Code := Ord(AValue[I]);
+    if (Code = DELETE_CHARACTER) or
+       ((Code < FIRST_PRINTABLE_CHARACTER) and
+        not (AAllowTab and (Code = TAB_CHARACTER))) then
+      raise EHTTPError.CreateFmt('Invalid HTTP %s', [AKind]);
+  end;
+end;
+
+procedure ValidateHTTPRequestHeaders(const AHeaders: THTTPHeaders);
+var
+  I: Integer;
+  HeaderName: string;
+begin
+  for I := 0 to High(AHeaders) do
+  begin
+    HeaderName := AHeaders[I].Name;
+    ValidateHTTPRequestText(HeaderName, 'header name', False);
+    ValidateHTTPRequestText(AHeaders[I].Value, 'header value', True);
+    if (HeaderName = '') or (Pos(':', HeaderName) > 0) or
+       (Pos(' ', HeaderName) > 0) or (Pos(#9, HeaderName) > 0) then
+      raise EHTTPError.Create('Invalid HTTP header name');
+  end;
 end;
 
 end.

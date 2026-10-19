@@ -1304,19 +1304,6 @@ var
         [AParsed.Host, Result]);
   end;
 
-  procedure ValidateRequestText(const AValue, AKind: string;
-    const AAllowTab: Boolean);
-  var
-    K, Code: Integer;
-  begin
-    for K := 1 to Length(AValue) do
-    begin
-      Code := Ord(AValue[K]);
-      if (Code = 127) or (Code = 0) or (Code = 13) or (Code = 10) or
-         ((Code < 32) and not (AAllowTab and (Code = 9))) then
-        raise EHTTPError.CreateFmt('Invalid HTTP %s', [AKind]);
-    end;
-  end;
 begin
   if ATimeoutMilliseconds < 0 then
     raise EHTTPError.Create('Invalid HTTP timeout');
@@ -1340,7 +1327,7 @@ begin
     { Runs on every pass of this loop, so a redirect hop is resolved,
       validated, and pinned exactly like the initial request. }
     ResolvedAddress := ResolveAndValidateDestination(Parsed);
-    ValidateRequestText(Parsed.Path, 'request target', False);
+    ValidateHTTPRequestText(Parsed.Path, 'request target', False);
     FillChar(Transport, SizeOf(Transport), 0);
     { Connect to the address that was just validated, not to the name. Both
       platform connect paths take a numeric fast path for a literal, so this
@@ -1379,15 +1366,11 @@ begin
           RequestText := RequestText + 'User-Agent: GocciaScript/1.0' + CRLF;
 
         // Add custom headers (skip Host since we already set it)
+        ValidateHTTPRequestHeaders(AHeaders);
         for I := 0 to High(AHeaders) do
         begin
           HeaderName := AHeaders[I].Name;
           HeaderValue := AHeaders[I].Value;
-          ValidateRequestText(HeaderName, 'header name', False);
-          ValidateRequestText(HeaderValue, 'header value', True);
-          if (HeaderName = '') or (Pos(':', HeaderName) > 0) or
-             (Pos(' ', HeaderName) > 0) or (Pos(#9, HeaderName) > 0) then
-            raise EHTTPError.Create('Invalid HTTP header name');
           if LowerCase(HeaderName) = 'host' then Continue;
           RequestText := RequestText + HeaderName + ': ' +
             HeaderValue + CRLF;
