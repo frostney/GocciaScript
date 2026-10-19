@@ -19,6 +19,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
+  Goccia.Builtins.GlobalSymbol,
   Goccia.Engine,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot,
@@ -100,6 +101,7 @@ type
     procedure TestSymbols;
     procedure TestBuiltinsAreNamed;
     procedure TestLazyBuiltinsResolve;
+    procedure TestBuiltinsTheRunBuiltRestore;
     function ChainRoundTrip(const ALength: Integer): string;
     procedure TestChain;
     procedure TestDeepChain;
@@ -108,6 +110,8 @@ type
     procedure TestRootsNeedNoRootingByTheCaller;
     procedure TestRefusesReplacedLazyMember;
     procedure TestRefusesPrototypeCycle;
+    procedure TestRefusesChangedLateBuiltin;
+    procedure TestRegistersSymbolsOnlyOnSuccess;
     procedure TestRefusesWithoutCodec;
     procedure TestRefusesChangedBuiltin;
     procedure TestAccountingRefusesMissedObject;
@@ -197,6 +201,8 @@ begin
     TestBuiltinsAreNamed);
   Test('A lazily built built-in resolves by walking its name',
     TestLazyBuiltinsResolve);
+  Test('The built-ins ordinary code builds are checked and restore',
+    TestBuiltinsTheRunBuiltRestore);
   Test('A chain is written and read without native recursion',
     TestChain);
   Test('A million-deep chain is written and read without native recursion',
@@ -211,6 +217,10 @@ begin
     TestRefusesReplacedLazyMember);
   Test('A snapshot whose prototypes loop is refused',
     TestRefusesPrototypeCycle);
+  Test('A built-in the run built and then changed is refused on restore',
+    TestRefusesChangedLateBuiltin);
+  Test('A refused restore registers no symbol; a restored one does',
+    TestRegistersSymbolsOnlyOnSuccess);
   Test('A live object with no codec refuses the snapshot',
     TestRefusesWithoutCodec);
   Test('A built-in the run changed refuses the snapshot',
@@ -522,6 +532,25 @@ begin
   Expect<string>(ChainRoundTrip(5000)).ToBe('5000,12497500');
 end;
 
+procedure THeapSnapshotTests.TestBuiltinsTheRunBuiltRestore;
+begin
+  // Iterators of every kind, spreads, collections, strings and RegExps, JSON,
+  // Temporal and Intl: whatever the engine builds on first use is named,
+  // fingerprinted and built again on restore. (No promise job: outside a run
+  // it would stay queued for the tests after this one.)
+  Expect<string>(RoundTrip(
+    '(() => { const out = []; for (const x of [1, 2]) out.push(x); ' +
+    'out.push(...new Set([3]), ...new Map([[4, 4]]).keys(), ...("ab")); ' +
+    'out.push("a-b".split(/-/).length, [..."x".matchAll(/x/g)].length); ' +
+    'out.push(JSON.stringify({ k: 1 })); ' +
+    'out.push(Temporal.PlainDate.from("2026-10-19").day); ' +
+    'out.push(new Intl.NumberFormat("en").format(1234)); ' +
+    'out.push([1, 2].entries().next().value[1], Object.entries({ e: 5 })[0][1]); ' +
+    'return { out, it: [][Symbol.iterator]() .__proto__ === undefined }; })()',
+    'restored.out.join() + "|" + restored.it'))
+    .ToBe('1,2,3,4,a,b,2,1,{"k":1},19,1,234,1,5|false');
+end;
+
 procedure THeapSnapshotTests.TestDeepChain;
 begin
   Expect<string>(ChainRoundTrip(1000000)).ToBe('1000000,499999500000');
@@ -646,6 +675,7 @@ begin
     Pos_ := Pos_ + 4 + 2 * Integer(U32At(Pos_));
   Pos_ := Pos_ + 4 + 6 * Integer(U32At(Pos_));       // codecs
   Pos_ := Pos_ + 4 + 4 * Integer(U32At(Pos_));       // built-in names
+  Pos_ := Pos_ + 4 + 12 * Integer(U32At(Pos_));      // built-ins the run built
   Count := U32At(Pos_);                                // objects
   Inc(Pos_, 4);
   Expect<Integer>(Integer(Count)).ToBe(3);
@@ -663,6 +693,48 @@ begin
   Bytes[Pos_ + 4] := 0;
   Expect<string>(RestoreRefusal(Bytes))
     .ToBe('restore: a prototype chain that loops');
+end;
+
+procedure THeapSnapshotTests.TestRefusesChangedLateBuiltin;
+var
+  Refusal: string;
+  Bytes: TBytes;
+begin
+  // Built by the run, then changed: the writing engine never saw it pristine,
+  // so the restoring engine builds it and compares.
+  Bytes := Snapshot('(() => { Temporal.PlainDate.prototype.extra = 1; ' +
+    'return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<Boolean>(Pos('the run changed the built-in',
+    RestoreRefusal(Bytes)) > 0).ToBe(True);
+  Bytes := Snapshot('(() => { Object.getPrototypeOf([][Symbol.iterator]())' +
+    '.extra = 1; return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<Boolean>(Pos('ArrayIterator', RestoreRefusal(Bytes)) > 0).ToBe(True);
+end;
+
+procedure THeapSnapshotTests.TestRegistersSymbolsOnlyOnSuccess;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+begin
+  Bytes := Snapshot('({ s: Symbol.for("staged-key"), n: 1 })', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    // Cut short after the symbol: refused, and the registry is as it was.
+    Expect<Boolean>(RestoreRefusalIn(Engine,
+      Copy(Bytes, 0, Length(Bytes) - 1)) <> '').ToBe(True);
+    Expect<Boolean>(Assigned(FindRegisteredSymbol('staged-key'))).ToBe(False);
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    Expect<Boolean>(Assigned(FindRegisteredSymbol('staged-key'))).ToBe(True);
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
 end;
 
 procedure THeapSnapshotTests.TestRefusesWithoutCodec;

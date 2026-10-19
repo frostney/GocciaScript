@@ -151,13 +151,11 @@ type
 
   TGocciaHeapSnapshotBuiltinTable = class;
 
-  // Records into a table each lazy member built while it is installed, and
-  // passes the call on to the observer it replaced.
+  // Records into a table each lazy member built while it is installed.
   TGocciaBuiltinMaterializationObserver = class(
     TGocciaLazyMaterializationObserver)
   private
     FTable: TGocciaHeapSnapshotBuiltinTable;
-    FPrevious: TGocciaLazyMaterializationObserver;
   public
     procedure Materialized(const AObject: TGocciaObjectValue;
       const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
@@ -213,6 +211,9 @@ type
     // built-ins the run changed. The caller frees the list.
     function DirtyPaths: TStringList;
     property Count: Integer read GetCount;
+    // How many entries RecordFingerprints recorded: the ones after them were
+    // added since, as the run built them.
+    property FingerprintCount: Integer read FFingerprintCount;
   end;
 
   TGocciaHeapSnapshotWriter = class
@@ -267,11 +268,15 @@ type
     // changed a built-in or something reachable has no codec.
     procedure Serialize(const ARoots: array of TGCManagedObject;
       const AStream: TStream);
-    // Refuses when a live object is neither in ABaseline (alive before the
-    // run, or the embedder's own), a built-in, nor written. Detects objects
-    // a codec missed, not fields. It does not collect: the caller collects
-    // before the snapshot, so what is left is live.
-    procedure CheckAccounting(const ABaseline: TGocciaHeapSnapshotBaseline);
+    // Refuses when a live object registered after AFirstOfRun (an object
+    // registered when the run began) is neither in ABaseline (the embedder's
+    // own), a built-in, nor written. The collector's list keeps objects in
+    // the order they registered, so what was alive before the run is what
+    // comes before AFirstOfRun. Detects objects a codec missed, not fields.
+    // It does not collect: the caller collects before the snapshot, so what
+    // is left is live.
+    procedure CheckAccounting(const AFirstOfRun: TGCManagedObject;
+      const ABaseline: TGocciaHeapSnapshotBaseline);
     function IsWritten(const AObject: TGCManagedObject): Boolean;
 
     property ObjectCount: Integer read GetObjectCount;
@@ -284,6 +289,11 @@ type
   // nil when the name refers to nothing in this engine.
   TGocciaBuiltinPathResolve = function(const APath: string): TGCManagedObject
     of object;
+  // Builds the named built-ins in this engine and compares each with the
+  // fingerprint the writing engine took; the name of the first that differs
+  // or is missing, or '' when all match.
+  TGocciaBuiltinVerify = function(const APaths: TStringArray;
+    const AFingerprints: array of UInt64): string of object;
 
   TGocciaHeapSnapshotReader = class
   private
@@ -300,12 +310,18 @@ type
     // the shells until the reader is freed, since growing an object's
     // storage during a fill can collect before a value is stored.
     FCreated: TList<TGCManagedObject>;
+    FCreatedCharged: Integer;
+    // Registered symbols the thread's registry did not have yet: created
+    // unregistered, and registered only once the restore succeeded, so a
+    // refused snapshot leaves the registry as it was.
+    FNewRegistered: TDictionary<string, TGocciaSymbolValue>;
     FObjectCodecs: array of Integer;
     FPayloadStart: array of Int64;
     FPayloadEnd: array of Int64;
     FRoots: TGCRootSource;
     FReservedBytes: Int64;
     FBuiltinResolve: TGocciaBuiltinPathResolve;
+    FBuiltinVerify: TGocciaBuiltinVerify;
     FBuildIdentity: string;
     FContext: TObject;
     function GetObjectCount: Integer;
@@ -313,6 +329,7 @@ type
     function ReadCount(const ALimit: Int64; const AMinBytesEach: Int64;
       const AWhat: string): Integer;
     procedure Reserve(const ACount, AElementSize: Int64);
+    procedure NoteCreated(const AObject: TGCManagedObject);
     function ReadRawString: string;
     procedure CheckPrototypeChains;
   public
@@ -329,6 +346,10 @@ type
     function ReadBool: Boolean;
     function ReadStr: string;
     function ReadValue: TGocciaValue;
+    // A value that must be there: a property's value, an array element.
+    function ReadPresentValue: TGocciaValue;
+    // An accessor's getter or setter: absent or a function.
+    function ReadAccessorHalf: TGocciaValue;
     function ReadRef: TGCManagedObject;
     // A count of items each at least AMinBytesEach long in what is left of
     // the current payload: refuses one the payload cannot hold.
@@ -346,6 +367,9 @@ type
     property ObjectCount: Integer read GetObjectCount;
     property BuiltinResolve: TGocciaBuiltinPathResolve
       read FBuiltinResolve write FBuiltinResolve;
+    // Without it, a snapshot that names built-ins the run built is refused.
+    property BuiltinVerify: TGocciaBuiltinVerify
+      read FBuiltinVerify write FBuiltinVerify;
     // The engine build this reader accepts.
     property BuildIdentity: string read FBuildIdentity write FBuildIdentity;
     // Engine-side context for codecs that need it.
@@ -363,6 +387,18 @@ function FindSnapshotCodecByTag(const ATag: string): TGocciaSnapshotCodec;
 function SnapshotCanHold(const AObject: TObject): Boolean;
 // The engine build a snapshot names by default: version and commit.
 function HeapSnapshotBuildIdentity: string;
+
+type
+  // Creates the intrinsic of a realm slot that is filled on first use, in the
+  // current realm, as using it would.
+  TGocciaSnapshotSlotMaterializer = procedure;
+
+// A unit whose realm slot is filled on first use registers how to fill it, so
+// a restore can build the intrinsic a snapshot names (ADR 0148).
+procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
+  const AMaterializer: TGocciaSnapshotSlotMaterializer);
+function FindSnapshotSlotMaterializer(
+  const ASlotName: string): TGocciaSnapshotSlotMaterializer;
 
 implementation
 
@@ -423,6 +459,24 @@ type
 
 var
   GRegistry: TCodecRegistry;
+  GSlotMaterializers: TDictionary<string, TGocciaSnapshotSlotMaterializer>;
+
+procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
+  const AMaterializer: TGocciaSnapshotSlotMaterializer);
+begin
+  if not Assigned(GSlotMaterializers) then
+    GSlotMaterializers :=
+      TDictionary<string, TGocciaSnapshotSlotMaterializer>.Create;
+  GSlotMaterializers.AddOrSetValue(ASlotName, AMaterializer);
+end;
+
+function FindSnapshotSlotMaterializer(
+  const ASlotName: string): TGocciaSnapshotSlotMaterializer;
+begin
+  Result := nil;
+  if Assigned(GSlotMaterializers) then
+    GSlotMaterializers.TryGetValue(ASlotName, Result);
+end;
 
 const
   // The smallest encodings, used to bound counts by the bytes left: a value
@@ -437,6 +491,10 @@ const
   MIN_PROPERTY_BYTES = 7;
   // What the writer's tables hold per object or string, charged up front.
   WRITER_ENTRY_BYTES = 64;
+  // What the reader's duplicate-key check and its prototype-chain check hold
+  // per entry.
+  SEEN_ENTRY_BYTES = 48;
+  CHAIN_ENTRY_BYTES = 40;
   // TMemoryStream's growth step, which its capacity is rounded to.
   STREAM_BLOCK_BYTES = 4096;
 
@@ -620,16 +678,14 @@ begin
     Exit;
   FObserver := TGocciaBuiltinMaterializationObserver.Create;
   FObserver.FTable := Self;
-  FObserver.FPrevious := SetLazyMaterializationObserver(FObserver);
+  AddLazyMaterializationObserver(FObserver);
 end;
 
-// Puts back the observer Install replaced. Installs nest: the innermost is
-// uninstalled first.
 procedure TGocciaHeapSnapshotBuiltinTable.Uninstall;
 begin
   if not Assigned(FObserver) then
     Exit;
-  SetLazyMaterializationObserver(FObserver.FPrevious);
+  RemoveLazyMaterializationObserver(FObserver);
   FreeAndNil(FObserver);
 end;
 
@@ -665,8 +721,6 @@ procedure TGocciaBuiltinMaterializationObserver.Materialized(
   const ADescriptor: TGocciaPropertyDescriptor);
 begin
   FTable.NoteMaterialized(AObject, AName, ADescriptor);
-  if Assigned(FPrevious) then
-    FPrevious.Materialized(AObject, AName, ADescriptor);
 end;
 
 procedure TGocciaHeapSnapshotBuiltinTable.Clear;
@@ -760,9 +814,11 @@ const
   begin
     if not Assigned(AValue) then
       Exit('nil');
+    // A built-in by its name, which is the same in every engine that has it:
+    // a fingerprint taken here can be compared with one taken in another.
     Index := IndexOf(AValue);
     if Index >= 0 then
-      Exit('#' + IntToStr(Index));
+      Exit('#' + FPaths[Index]);
     if AValue is TGocciaUndefinedLiteralValue then
       Exit('u');
     if AValue is TGocciaNullLiteralValue then
@@ -1143,7 +1199,6 @@ procedure TGocciaHeapSnapshotWriter.WriteObjectCore(
   const AObject: TGocciaObjectValue);
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
-  Count: Integer;
   Descriptor: TGocciaPropertyDescriptor;
   Symbols: TArray<TGocciaSymbolValue>;
   I: Integer;
@@ -1158,10 +1213,7 @@ begin
   WriteBool(AObject.Frozen);
   WriteBool(AObject.Sealed);
   WriteBool(AObject.HasEverHadIndexedOwnProperty);
-  Count := 0;
-  for Pair in AObject.Properties do
-    Inc(Count);
-  WriteU32(Count);
+  WriteU32(AObject.Properties.Count);
   for Pair in AObject.Properties do
   begin
     Poll;
@@ -1216,7 +1268,8 @@ var
   Codec: TGocciaSnapshotCodec;
   Obj: TGCManagedObject;
   Dirty: TStringList;
-  PathIndexes: array of Integer;
+  PathIndexes, LatePathIndexes: array of Integer;
+  LateFingerprints: array of UInt64;
 begin
   Dirty := FBuiltins.DirtyPaths;
   try
@@ -1263,6 +1316,19 @@ begin
     SetLength(PathIndexes, FBuiltinRefs.Count);
     for I := 0 to FBuiltinRefs.Count - 1 do
       PathIndexes[I] := StringIndex(FBuiltins.PathAt(FBuiltinRefs[I]));
+    // The built-ins the run built since the table was recorded: no pristine
+    // state of theirs was seen here, so each goes with its fingerprint, and
+    // the restoring engine builds the same ones and compares.
+    SetLength(LatePathIndexes, FBuiltins.Count - FBuiltins.FingerprintCount);
+    SetLength(LateFingerprints, Length(LatePathIndexes));
+    for I := 0 to High(LatePathIndexes) do
+    begin
+      Poll;
+      LatePathIndexes[I] := StringIndex(FBuiltins.PathAt(
+        FBuiltins.FingerprintCount + I));
+      LateFingerprints[I] := FBuiltins.ComputeFingerprint(
+        FBuiltins.FingerprintCount + I);
+    end;
     for I := 0 to FCodecs.Count - 1 do
       StringIndex(FCodecs[I].Tag);
 
@@ -1283,6 +1349,12 @@ begin
     WriteU32(FBuiltinRefs.Count);
     for I := 0 to FBuiltinRefs.Count - 1 do
       WriteU32(PathIndexes[I]);
+    WriteU32(Length(LatePathIndexes));
+    for I := 0 to High(LatePathIndexes) do
+    begin
+      WriteU32(LatePathIndexes[I]);
+      WriteI64(Int64(LateFingerprints[I]));
+    end;
     WriteU32(FObjects.Count);
     AStream.CopyFrom(ObjectsOut, 0);
     AStream.CopyFrom(RootsOut, 0);
@@ -1296,6 +1368,7 @@ begin
 end;
 
 procedure TGocciaHeapSnapshotWriter.CheckAccounting(
+  const AFirstOfRun: TGCManagedObject;
   const ABaseline: TGocciaHeapSnapshotBaseline);
 const
   MAX_DETAILS = 8;
@@ -1311,7 +1384,7 @@ begin
   try
     Missing.Sorted := True;
     Missing.Duplicates := dupIgnore;
-    for I := 0 to GC.ManagedObjectCount - 1 do
+    for I := AFirstOfRun.GCIndex + 1 to GC.ManagedObjectCount - 1 do
     begin
       Poll;
       Obj := GC.ManagedObjects[I];
@@ -1363,12 +1436,14 @@ begin
   FLimits := ALimits;
   FBuildIdentity := HeapSnapshotBuildIdentity;
   FCreated := TList<TGCManagedObject>.Create;
+  FNewRegistered := TDictionary<string, TGocciaSymbolValue>.Create;
 end;
 
 destructor TGocciaHeapSnapshotReader.Destroy;
 begin
   FRoots.Free;
   FCreated.Free;
+  FNewRegistered.Free;
   ReleaseNativeBytes(FReservedBytes);
   inherited;
 end;
@@ -1399,9 +1474,9 @@ end;
 // are the reader's own copies: its input, its tables, the string table's
 // strings and a BigInt's limbs while it reads them. What the restored graph
 // keeps is charged as the engine charges it anywhere else: each value and
-// object when it registers with the collector, and an array's elements
-// through the element store's gate. A string a value shares with the table
-// stays uncharged afterwards, as every string payload in the engine does.
+// object when it registers with the collector, a string's backing store when
+// the string value is created (TGocciaStringLiteralValue reserves it), and an
+// array's elements through the element store's gate.
 procedure TGocciaHeapSnapshotReader.Reserve(const ACount, AElementSize: Int64);
 var
   Bytes: Int64;
@@ -1409,6 +1484,19 @@ begin
   Bytes := CheckedNativeByteSize(ACount, AElementSize);
   ReserveNativeBytes(Bytes);
   Inc(FReservedBytes, Bytes);
+end;
+
+// Roots a value the reader created; the list's growth is charged in steps.
+procedure TGocciaHeapSnapshotReader.NoteCreated(const AObject: TGCManagedObject);
+const
+  CHARGE_STEP = 4096;
+begin
+  if FCreated.Count >= FCreatedCharged then
+  begin
+    Reserve(CHARGE_STEP, SizeOf(Pointer));
+    Inc(FCreatedCharged, CHARGE_STEP);
+  end;
+  FCreated.Add(AObject);
 end;
 
 function TGocciaHeapSnapshotReader.ReadCount(const ALimit: Int64;
@@ -1533,6 +1621,7 @@ var
   Negative: Boolean;
   Count, I: Integer;
   Limbs: TLimbArray;
+  Text: string;
 begin
   Tag := ReadU8;
   case Tag of
@@ -1551,12 +1640,12 @@ begin
     HSV_NUMBER:
       begin
         Result := TGocciaNumberLiteralValue.Create(ReadDouble);
-        FCreated.Add(Result);
+        NoteCreated(Result);
       end;
     HSV_STRING:
       begin
         Result := TGocciaStringLiteralValue.Create(ReadStr);
-        FCreated.Add(Result);
+        NoteCreated(Result);
       end;
     HSV_BIGINT:
       begin
@@ -1572,7 +1661,7 @@ begin
         end;
         Result := TGocciaBigIntValue.Create(
           TBigInteger.FromLimbs(Limbs, Negative));
-        FCreated.Add(Result);
+        NoteCreated(Result);
       end;
     HSV_OBJECT:
       begin
@@ -1589,11 +1678,38 @@ begin
         Result := FBuiltinObjects[Index];
       end;
     HSV_REGISTERED_SYMBOL:
-      Result := RegisteredSymbolFor(ReadStr);
+      begin
+        Text := ReadStr;
+        Result := FindRegisteredSymbol(Text);
+        if not Assigned(Result) and
+           not FNewRegistered.TryGetValue(Text, TGocciaSymbolValue(Result)) then
+        begin
+          Result := TGocciaSymbolValue.Create(Text);
+          NoteCreated(Result);
+          FNewRegistered.Add(Text, TGocciaSymbolValue(Result));
+        end;
+      end;
   else
     Refuse('an unknown value tag ' + IntToStr(Tag));
     Result := nil;
   end;
+end;
+
+// A property's value or an element: present (nil is no JavaScript value).
+function TGocciaHeapSnapshotReader.ReadPresentValue: TGocciaValue;
+begin
+  Result := ReadValue;
+  if not Assigned(Result) then
+    Refuse('a value that is missing');
+end;
+
+// One half of an accessor: absent (nil or undefined) or a function.
+function TGocciaHeapSnapshotReader.ReadAccessorHalf: TGocciaValue;
+begin
+  Result := ReadValue;
+  if Assigned(Result) and not (Result is TGocciaUndefinedLiteralValue) and
+     not Result.IsCallable then
+    Refuse('an accessor half that is not a function');
 end;
 
 function TGocciaHeapSnapshotReader.ReadValue: TGocciaValue;
@@ -1615,6 +1731,9 @@ var
   Extensible, Frozen, Sealed, HadIndexed: Boolean;
   Count, I: Integer;
   Key: string;
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  Symbols: TArray<TGocciaSymbolValue>;
+  SymbolDescriptor: TGocciaPropertyDescriptor;
   FlagBits: Byte;
   Flags: TPropertyFlags;
   Kind: Byte;
@@ -1637,6 +1756,8 @@ begin
   AObject.ClearOwnPropertiesForRestore;
   AObject.Prototype := TGocciaObjectValue(Proto);
   Count := ReadItemCount(MIN_PROPERTY_BYTES);
+  // The duplicate check's table, charged for the most it can hold.
+  Reserve(Count, SEEN_ENTRY_BYTES);
   Seen := TDictionary<string, Boolean>.Create;
   try
     for I := 1 to Count do
@@ -1656,13 +1777,14 @@ begin
           begin
             if pfWritable in Flags then
               Refuse('an accessor marked writable');
-            Getter := ReadValue;
-            Setter := ReadValue;
+            Getter := ReadAccessorHalf;
+            Setter := ReadAccessorHalf;
             Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter,
               Setter, Flags);
           end;
         HSD_DATA:
-          Descriptor := TGocciaPropertyDescriptorData.Create(ReadValue, Flags);
+          Descriptor := TGocciaPropertyDescriptorData.Create(ReadPresentValue,
+            Flags);
       else
         Refuse('an unknown property kind');
         Descriptor := nil;
@@ -1697,19 +1819,43 @@ begin
         begin
           if pfWritable in Flags then
             Refuse('an accessor marked writable');
-          Getter := ReadValue;
-          Setter := ReadValue;
+          Getter := ReadAccessorHalf;
+          Setter := ReadAccessorHalf;
           AObject.DefineSymbolPropertyForRestore(TGocciaSymbolValue(Symbol),
             TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, Flags));
         end;
       HSD_DATA:
         begin
-          Value := ReadValue;
+          Value := ReadPresentValue;
           AObject.DefineSymbolPropertyForRestore(TGocciaSymbolValue(Symbol),
             TGocciaPropertyDescriptorData.Create(Value, Flags));
         end;
     else
       Refuse('an unknown property kind');
+    end;
+  end;
+  // Sealed and frozen are what the properties say they are: an object the
+  // engine sealed has no configurable property, one it froze no writable
+  // one either.
+  if Sealed or Frozen then
+  begin
+    for Pair in AObject.Properties do
+      if pfConfigurable in Pair.Value.Flags then
+        Refuse('a sealed object with a configurable property');
+    if Frozen then
+      for Pair in AObject.Properties do
+        if (Pair.Value is TGocciaPropertyDescriptorData) and
+           (pfWritable in Pair.Value.Flags) then
+          Refuse('a frozen object with a writable property');
+    Symbols := AObject.GetOwnSymbols;
+    for I := 0 to High(Symbols) do
+    begin
+      SymbolDescriptor := AObject.GetOwnSymbolPropertyDescriptor(Symbols[I]);
+      if pfConfigurable in SymbolDescriptor.Flags then
+        Refuse('a sealed object with a configurable property');
+      if Frozen and (SymbolDescriptor is TGocciaPropertyDescriptorData) and
+         (pfWritable in SymbolDescriptor.Flags) then
+        Refuse('a frozen object with a writable property');
     end;
   end;
   AObject.SetIntegrityForRestore(Extensible, Frozen, Sealed, HadIndexed);
@@ -1729,6 +1875,9 @@ var
   Roots: TRestoreRoots;
   RootStart: Int64;
   Seen: TDictionary<string, Boolean>;
+  LatePaths: TStringArray;
+  LateFingerprints: array of UInt64;
+  Pair: TPair<string, TGocciaSymbolValue>;
 begin
   if Assigned(FRoots) then
     raise EInvalidOperation.Create('a heap snapshot reader restores once');
@@ -1808,6 +1957,28 @@ begin
         HEAP_SNAPSHOT_PATH_SEPARATOR, '.', [rfReplaceAll]) + ' in this engine');
   end;
 
+  // The built-ins the writing run built, each with its fingerprint there.
+  Count := ReadCount(FLimits.MaxBuiltins, 12, 'built-ins the run built');
+  if Count > 0 then
+  begin
+    Reserve(Count, SizeOf(Pointer) + SizeOf(UInt64));
+    SetLength(LatePaths, Count);
+    SetLength(LateFingerprints, Count);
+    for I := 0 to Count - 1 do
+    begin
+      Poll;
+      LatePaths[I] := ReadStr;
+      LateFingerprints[I] := UInt64(ReadI64);
+    end;
+    if not Assigned(FBuiltinVerify) then
+      Refuse('built-ins the run built, and no way to check them');
+    Path := FBuiltinVerify(LatePaths, LateFingerprints);
+    if Path <> '' then
+      Refuse('the run changed the built-in ' + StringReplace(Path,
+        HEAP_SNAPSHOT_PATH_SEPARATOR, '.', [rfReplaceAll]) +
+        ', or this engine does not build it the same way');
+  end;
+
   // The object table.
   Count := ReadCount(FLimits.MaxObjects, MIN_OBJECT_BYTES, 'objects');
   Reserve(Count, SizeOf(Pointer) + SizeOf(Integer) + 2 * SizeOf(Int64));
@@ -1869,6 +2040,7 @@ begin
   FPos := RootStart;
   FLimit := Length(FData);
   Count := ReadCount(FLimits.MaxRoots, MIN_VALUE_BYTES, 'roots');
+  Reserve(Count, SizeOf(Pointer));
   SetLength(Result, Count);
   for J := 0 to Count - 1 do
   begin
@@ -1877,6 +2049,10 @@ begin
   end;
   if FPos <> FLimit then
     Refuse('bytes after the roots');
+  // The restore succeeded: the registered symbols it made are registered.
+  for Pair in FNewRegistered do
+    RegisterSymbol(Pair.Value);
+  FNewRegistered.Clear;
   // The input is not needed any more; its reservation is released with the
   // reader.
   SetLength(FData, 0);
@@ -1898,13 +2074,20 @@ var
   Current: TGCManagedObject;
   Mark: Byte;
 begin
+  // The state of each restored object and the chain being followed, charged
+  // for the most they can hold.
+  Reserve(Length(FObjects), CHAIN_ENTRY_BYTES);
   State := THashMap<TGCManagedObject, Byte>.Create;
   Path := TList<TGCManagedObject>.Create;
   try
     // Restored objects start unvisited; anything else ends a chain.
     for I := 0 to High(FObjects) do
+    begin
+      if I and 1023 = 0 then
+        Poll;
       if FObjects[I] is TGocciaObjectValue then
         State.AddOrSetValue(FObjects[I], 0);
+    end;
     for I := 0 to High(FObjects) do
     begin
       Poll;
@@ -1913,6 +2096,8 @@ begin
       while Assigned(Current) and State.TryGetValue(Current, Mark) and
             (Mark <> CHECKED) do
       begin
+        if Path.Count and 1023 = 1023 then
+          Poll;
         if Mark = ON_PATH then
           Refuse('a prototype chain that loops');
         State[Current] := ON_PATH;
@@ -2000,5 +2185,6 @@ initialization
 
 finalization
   FreeAndNil(GRegistry);
+  FreeAndNil(GSlotMaterializers);
 
 end.

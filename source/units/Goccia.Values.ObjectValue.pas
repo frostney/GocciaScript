@@ -331,11 +331,12 @@ type
       virtual; abstract;
   end;
 
-// Installs AObserver for this thread and returns the one it replaces, which
-// the caller puts back when it is done and its observer passes calls on to.
-function SetLazyMaterializationObserver(
-  const AObserver: TGocciaLazyMaterializationObserver):
-  TGocciaLazyMaterializationObserver;
+// Adds AObserver to this thread's observers, and removes it again; each is
+// told of every build while it is added, in any order of adding and removing.
+procedure AddLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver);
+procedure RemoveLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver);
 
 implementation
 
@@ -999,14 +1000,36 @@ begin
 end;
 
 threadvar
-  GLazyMaterializationObserver: TGocciaLazyMaterializationObserver;
+  // nil while no observer is added: the materialization path tests one
+  // pointer.
+  GLazyMaterializationObservers: TList<TGocciaLazyMaterializationObserver>;
 
-function SetLazyMaterializationObserver(
-  const AObserver: TGocciaLazyMaterializationObserver):
-  TGocciaLazyMaterializationObserver;
+procedure AddLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver);
 begin
-  Result := GLazyMaterializationObserver;
-  GLazyMaterializationObserver := AObserver;
+  if not Assigned(GLazyMaterializationObservers) then
+    GLazyMaterializationObservers :=
+      TList<TGocciaLazyMaterializationObserver>.Create;
+  GLazyMaterializationObservers.Add(AObserver);
+end;
+
+procedure RemoveLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver);
+begin
+  if not Assigned(GLazyMaterializationObservers) then
+    Exit;
+  GLazyMaterializationObservers.Remove(AObserver);
+  if GLazyMaterializationObservers.Count = 0 then
+    FreeAndNil(GLazyMaterializationObservers);
+end;
+
+procedure NotifyLazyMaterialized(const AObject: TGocciaObjectValue;
+  const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+var
+  I: Integer;
+begin
+  for I := GLazyMaterializationObservers.Count - 1 downto 0 do
+    GLazyMaterializationObservers[I].Materialized(AObject, AName, ADescriptor);
 end;
 
 function TGocciaObjectValue.MaterializeOwnLazyProperty(const AName: string;
@@ -1030,8 +1053,8 @@ begin
   end;
   FProperties.Add(AName, Result);
   LazyDescriptor.Free;
-  if Assigned(GLazyMaterializationObserver) then
-    GLazyMaterializationObserver.Materialized(Self, AName, Result);
+  if Assigned(GLazyMaterializationObservers) then
+    NotifyLazyMaterialized(Self, AName, Result);
 end;
 
 function TGocciaObjectValue.MaterializeOwnLazyPropertyHolding(

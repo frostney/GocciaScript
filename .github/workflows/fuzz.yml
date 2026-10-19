@@ -251,8 +251,11 @@ jobs:
         run: |
           mkdir -p build/fuzz/heap-snapshot-replay
           cp build/fuzz/heap-snapshot-corpus/*.ghsn build/fuzz/heap-snapshot-replay/
-          find build/fuzz/heap-snapshot-out -path '*/queue/id:*' -type f 2>/dev/null \
-            | head -n 200 | while read -r f; do cp "$f" "build/fuzz/heap-snapshot-replay/q-$(basename "$f" | tr ',:' '__')"; done
+          # Read whole, then sliced: no pipeline closed early under pipefail.
+          mapfile -t queue < <(find build/fuzz/heap-snapshot-out -path '*/queue/id:*' -type f 2>/dev/null | sort)
+          for f in "${queue[@]:0:200}"; do
+            cp "$f" "build/fuzz/heap-snapshot-replay/q-$(basename "$f" | tr ',:' '__')"
+          done
           printf 'x' > build/fuzz/not-a-snapshot
           blocks() { ./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$1" 2>&1 | grep -oE '^[0-9]+ unfreed memory blocks' | cut -d' ' -f1; }
           baseline=$(blocks build/fuzz/not-a-snapshot)
@@ -265,7 +268,8 @@ jobs:
               status=1
             fi
           done
-          for f in $(ls build/fuzz/heap-snapshot-replay/* | head -n 60); do
+          replay=(build/fuzz/heap-snapshot-replay/*)
+          for f in "${replay[@]:0:60}"; do
             if ! valgrind --tool=memcheck --error-exitcode=42 \
                 --suppressions=scripts/valgrind/fpc-rtl.supp -q \
                 ./build/GocciaFuzzHarness --heap-snapshot "$f" > /dev/null 2> build/fuzz/valgrind.log; then

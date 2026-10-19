@@ -20,8 +20,14 @@ from is the [heap snapshot spike](spikes/heap-snapshot-prototype.md).
 Create the session right after the engine, before anything runs on it: it
 names the engine's built-ins then, records their state (a built-in the run
 changes refuses the snapshot until built-in differences are written), and
-records the objects alive before the run, which the accounting check does
-not count.
+marks where the run's objects begin, which the accounting check counts.
+
+Built-ins the run builds later (a lazily built global such as `Temporal`, an
+iterator prototype made on first use) are named too. Lazy members are watched
+as they are built, so building one is not a change; a built-in the session
+never saw before the run is written with its fingerprint, and the restoring
+engine builds the same built-in by name and compares, refusing the snapshot
+when the run had changed it.
 
 ```pascal
 uses
@@ -52,7 +58,10 @@ buffers, refuses the snapshot instead.
 The **accounting check** (on by default, `CheckAccounting`) collects, then
 refuses when a live object the run created is neither written nor a
 built-in: it finds objects a codec missed, not fields. Objects the embedder
-keeps alive itself go into the baseline with `AddToBaseline`.
+keeps alive itself go into the baseline with `AddToBaseline`. The collection
+runs before anything is written; one that queues a job (a
+`FinalizationRegistry` whose target died) refuses the snapshot, since the run
+is not idle any more.
 
 ## Restoring
 
@@ -113,10 +122,13 @@ question.
 procedure THost.OnCheckpoint(const AEngine: TGocciaEngine;
   var APause: Boolean);
 begin
-  if AEngine.HeapSnapshotRefusal <> '' then
-    Exit; // state outside the heap: keep waiting, replay later
-  FSession.Snapshot(FPendingCallPromises, FOutput);
-  APause := True;
+  try
+    FSession.Snapshot(FPendingCallPromises, FOutput);
+    APause := True;
+  except
+    on E: EGocciaHeapSnapshotRefused do
+      ; // keep waiting; resume by replay later
+  end;
 end;
 
 Engine.HostCallOwner := MyToolsExtension;
@@ -132,8 +144,8 @@ end;
 Leaving `APause` false goes on waiting for the host calls as usual. An
 extension that keeps state outside the heap no codec covers reports it
 through `HeapSnapshotRefusal` (the timer extension does for any scheduled
-timer, a mocked clock or an unreported timer error); `Snapshot` refuses while
-any extension does.
+timer, a mocked clock or an unreported timer error); while any extension
+does, the run is not at a checkpoint, and `Snapshot` refuses too.
 
 Until the VM-state and module codecs land, a run paused at a checkpoint
 holds a suspended module body and pending promises that no codec writes yet,
@@ -160,6 +172,11 @@ properties. A reader codec checks what it reads and calls `Refuse` rather
 than guessing, and calls `Poll` once per item in any loop whose length comes
 from the input. `source/units/Goccia.Values.ArrayValue.pas` holds the array
 codec as an example.
+
+A unit whose realm slot is filled on first use registers how to fill it with
+`RegisterSnapshotSlotMaterializer`, so a restore can build the intrinsic a
+snapshot names (the iterator prototypes and the function-object intrinsics
+do). A slot without one refuses a snapshot that names it.
 
 ## Testing
 

@@ -17111,6 +17111,20 @@ begin
   FLastClosureThisValue := RegisterUndefined;
 end;
 
+{ Heap snapshot slot materializer (ADR 0148): the function-object intrinsics
+  (AsyncFunction, GeneratorFunction, AsyncGeneratorFunction, their prototypes
+  and the generator prototypes) are built on first use. }
+procedure MaterializeVMFunctionObjectIntrinsics;
+var
+  Kind: TGocciaFunctionObjectIntrinsicKind;
+begin
+  for Kind := Low(TGocciaFunctionObjectIntrinsicKind) to
+      High(TGocciaFunctionObjectIntrinsicKind) do
+    VMFunctionObjectPrototype(Kind);
+  VMGeneratorObjectPrototype(foikGenerator);
+  VMGeneratorObjectPrototype(foikAsyncGenerator);
+end;
+
 { Heap snapshot codec (ADR 0148): an object literal. }
 
 type
@@ -17161,5 +17175,17 @@ initialization
   RegisterOrdinaryObjectClass(TGocciaVMLiteralObjectValue);
   RegisterSnapshotCodec(TGocciaVMLiteralObjectValue,
     TLiteralObjectSnapshotCodec.Create);
+  RegisterSnapshotSlotMaterializer('AsyncFunction.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('GeneratorFunction.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('Generator.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('AsyncIterator.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('AsyncGeneratorFunction.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
+  RegisterSnapshotSlotMaterializer('AsyncGenerator.prototype',
+    MaterializeVMFunctionObjectIntrinsics);
 
 end.

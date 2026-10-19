@@ -64,6 +64,9 @@ type
     FEngine: TGocciaEngine;
     FTable: TGocciaHeapSnapshotBuiltinTable;
     FBaseline: TGocciaHeapSnapshotBaseline;
+    // Registered when the session was made and kept alive by it: what the
+    // collector lists before it was alive before the run.
+    FFirstOfRun: TGCManagedObject;
     FCheckAccounting: Boolean;
     FLastObjectCount: Integer;
   public
@@ -73,8 +76,8 @@ type
       EGocciaHeapSnapshotRefused and leaves AStream as it was. }
     procedure Snapshot(const ARoots: array of TGCManagedObject;
       const AStream: TStream);
-    { Objects the embedder keeps alive itself, which the accounting check
-      is not to count as missed. }
+    { Objects the embedder keeps alive itself (for as long as the session),
+      which the accounting check is not to count as missed. }
     procedure AddToBaseline(const AObject: TGCManagedObject);
     property Table: TGocciaHeapSnapshotBuiltinTable read FTable;
     // Whether Snapshot runs the accounting check (on by default).
@@ -88,10 +91,13 @@ type
     rooted until the restore is freed; the caller takes over what it keeps. }
   TGocciaHeapSnapshotRestore = class
   private
+    FEngine: TGocciaEngine;
     FReader: TGocciaHeapSnapshotReader;
     FTable: TGocciaHeapSnapshotBuiltinTable;
     FResolver: TGocciaBuiltinPathResolver;
     FRoots: TGCManagedObjectArray;
+    function VerifyBuiltins(const APaths: TStringArray;
+      const AFingerprints: array of UInt64): string;
   public
     constructor Create(const AEngine: TGocciaEngine; const AStream: TStream;
       const ALimits: TGocciaHeapSnapshotLimits);
@@ -299,8 +305,29 @@ begin
   Result := -1;
 end;
 
-// Each builtin's own object is a collector root the engine keeps. The live
-// list is the thread's, so only this engine's builtins are taken.
+// This engine's builtin with AName, nil when it has none or more than one
+// (the live list is the thread's; a name two of them share names neither).
+function FindLiveBuiltinObject(const AEngine: TGocciaEngine;
+  const AName: string): TGocciaObjectValue;
+var
+  Builtin: TGocciaBuiltin;
+begin
+  Result := nil;
+  Builtin := FirstLiveBuiltin;
+  while Assigned(Builtin) do
+  begin
+    if (Builtin.Scope = AEngine.GlobalScope) and (Builtin.Name = AName) then
+    begin
+      if Assigned(Result) and (Result <> Builtin.BuiltinObject) then
+        Exit(nil);
+      Result := Builtin.BuiltinObject;
+    end;
+    Builtin := Builtin.NextLive;
+  end;
+end;
+
+// Each builtin's own object is a collector root the engine keeps; named only
+// when its name is this engine's for it alone.
 procedure AddLiveBuiltinObjects(const ATable: TGocciaHeapSnapshotBuiltinTable;
   const AEngine: TGocciaEngine);
 var
@@ -309,25 +336,11 @@ begin
   Builtin := FirstLiveBuiltin;
   while Assigned(Builtin) do
   begin
-    if Builtin.Scope = AEngine.GlobalScope then
+    if (Builtin.Scope = AEngine.GlobalScope) and
+       (FindLiveBuiltinObject(AEngine, Builtin.Name) = Builtin.BuiltinObject) then
       AddValue(ATable, Builtin.BuiltinObject, Seg('%builtin', Builtin.Name));
     Builtin := Builtin.NextLive;
   end;
-end;
-
-function FindLiveBuiltinObject(const AEngine: TGocciaEngine;
-  const AName: string): TGocciaObjectValue;
-var
-  Builtin: TGocciaBuiltin;
-begin
-  Builtin := FirstLiveBuiltin;
-  while Assigned(Builtin) do
-  begin
-    if (Builtin.Scope = AEngine.GlobalScope) and (Builtin.Name = AName) then
-      Exit(Builtin.BuiltinObject);
-    Builtin := Builtin.NextLive;
-  end;
-  Result := nil;
 end;
 
 procedure AddSlots(const ATable: TGocciaHeapSnapshotBuiltinTable;
@@ -422,10 +435,14 @@ end;
 function SplitPath(const APath: string): TStringArray;
 const
   MAX_PATH_SEGMENTS = 256;
+  // Far above any built-in's name; a longer one names nothing here.
+  MAX_PATH_CHARS = 4096;
 var
   Start, I, Count, Segments: Integer;
 begin
   Result := nil;
+  if Length(APath) > MAX_PATH_CHARS then
+    Exit;
   Segments := 1;
   for I := 1 to Length(APath) do
     if APath[I] = SEP then
@@ -453,6 +470,7 @@ var
   Slot: Integer;
   Binding: TLexicalBinding;
   Owned: TObject;
+  Materializer: TGocciaSnapshotSlotMaterializer;
 begin
   Result := nil;
   AConsumed := 1;
@@ -475,9 +493,16 @@ begin
   if AParts[0] = '%slot' then
   begin
     Slot := FindSlotByName(AParts[1]);
-    if Slot >= 0 then
-      Exit(AEngine.Realm.GetSlot(Slot));
-    Exit;
+    if Slot < 0 then
+      Exit;
+    // Filled on first use: filled here as using it would have.
+    if not Assigned(AEngine.Realm.GetSlot(Slot)) then
+    begin
+      Materializer := FindSnapshotSlotMaterializer(AParts[1]);
+      if Assigned(Materializer) then
+        Materializer();
+    end;
+    Exit(AEngine.Realm.GetSlot(Slot));
   end;
   if (AParts[0] = '%owned') and (Length(AParts) >= 3) then
   begin
@@ -639,10 +664,6 @@ end;
 { TGocciaHeapSnapshotSession }
 
 constructor TGocciaHeapSnapshotSession.Create(const AEngine: TGocciaEngine);
-var
-  GC: TGarbageCollector;
-  I: Integer;
-  Obj: TGCManagedObject;
 begin
   inherited Create;
   FEngine := AEngine;
@@ -653,18 +674,14 @@ begin
   // From here on, a lazy member a built-in builds is told apart from a
   // change the run makes to it.
   FTable.Install;
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    for I := 0 to GC.ManagedObjectCount - 1 do
-    begin
-      Obj := GC.ManagedObjects[I];
-      if Assigned(Obj) then
-        FBaseline.AddOrSetValue(Obj, True);
-    end;
+  FFirstOfRun := TGocciaObjectValue.Create;
+  TGarbageCollector.Instance.AddTempRoot(FFirstOfRun);
 end;
 
 destructor TGocciaHeapSnapshotSession.Destroy;
 begin
+  if Assigned(FFirstOfRun) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RemoveTempRoot(FFirstOfRun);
   FBaseline.Free;
   FTable.Free;
   inherited;
@@ -722,7 +739,7 @@ begin
       Buffer := TGocciaChargedMemoryStream.Create;
       Writer.Serialize(ARoots, Buffer);
       if FCheckAccounting then
-        Writer.CheckAccounting(FBaseline);
+        Writer.CheckAccounting(FFirstOfRun, FBaseline);
     except
       // The run's memory ceiling, reached by the writer's own buffers: the
       // snapshot is refused and the run goes on. A timeout or a host stop
@@ -746,11 +763,16 @@ constructor TGocciaHeapSnapshotRestore.Create(const AEngine: TGocciaEngine;
   const AStream: TStream; const ALimits: TGocciaHeapSnapshotLimits);
 begin
   inherited Create;
+  FEngine := AEngine;
   FTable := TGocciaHeapSnapshotBuiltinTable.Create;
   BuildBuiltinTable(FTable, AEngine);
+  // The lazy members this engine builds while it resolves names are its
+  // pristine ones, as the writing engine's were when it built them.
+  FTable.Install;
   FResolver := TGocciaBuiltinPathResolver.Create(FTable, AEngine);
   FReader := TGocciaHeapSnapshotReader.Create(FTable, ALimits);
   FReader.BuiltinResolve := FResolver.Resolve;
+  FReader.BuiltinVerify := VerifyBuiltins;
   try
     FRoots := FReader.Restore(AStream);
   except
@@ -759,6 +781,29 @@ begin
     on E: TGocciaThrowValue do
       raise EGocciaHeapSnapshotInvalid.Create('restore: ' + ThrowMessage(E));
   end;
+end;
+
+// The built-ins the writing run built, built here by name, each compared
+// with the fingerprint the run's took: pristine here, so a difference is a
+// change the run made (or an engine that builds it otherwise).
+function TGocciaHeapSnapshotRestore.VerifyBuiltins(const APaths: TStringArray;
+  const AFingerprints: array of UInt64): string;
+var
+  I, Index: Integer;
+begin
+  for I := 0 to High(APaths) do
+    if not Assigned(FResolver.Resolve(APaths[I])) then
+      Exit(APaths[I]);
+  // What they reach is named here as it was there.
+  ExtendBuiltinTable(FTable, FEngine);
+  for I := 0 to High(APaths) do
+  begin
+    CheckNativeWork;
+    Index := FTable.IndexOf(FTable.FindPath(APaths[I]));
+    if (Index < 0) or (FTable.ComputeFingerprint(Index) <> AFingerprints[I]) then
+      Exit(APaths[I]);
+  end;
+  Result := '';
 end;
 
 destructor TGocciaHeapSnapshotRestore.Destroy;

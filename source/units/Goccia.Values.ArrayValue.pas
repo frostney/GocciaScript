@@ -4925,10 +4925,13 @@ begin
   for I := 0 to Count - 1 do
   begin
     AReader.Poll;
-    A.FElements[I] := AReader.ReadValue;
+    A.FElements[I] := AReader.ReadPresentValue;
   end;
   A.FLength := Len;
   AReader.ReadObjectCore(A);
+  // Freezing an array also makes its length read-only.
+  if A.Frozen and A.FLengthWritable then
+    AReader.Refuse('a frozen array with a writable length');
 end;
 
 initialization

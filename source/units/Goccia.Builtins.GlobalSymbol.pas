@@ -43,6 +43,13 @@ type
 // GlobalSymbolRegistry: the registered symbol for AKey, created and
 // registered when there is none yet.
 function RegisteredSymbolFor(const AKey: string): TGocciaSymbolValue;
+// The registered symbol for AKey, or nil: registers nothing.
+function FindRegisteredSymbol(const AKey: string): TGocciaSymbolValue;
+// Registers ASymbol, a symbol no registry holds, as the one for its
+// description, which no registered symbol has yet; as Symbol.for would have
+// for a symbol it created (a heap snapshot's restore registers the ones it
+// restored only once the restore succeeded, ADR 0148).
+procedure RegisterSymbol(const ASymbol: TGocciaSymbolValue);
 
 implementation
 
@@ -216,6 +223,20 @@ begin
     TGarbageCollector.Instance.PinObject(Result);
   Registry.Add(AKey, Result);
   { Step 6: Return newSymbol }
+end;
+
+function FindRegisteredSymbol(const AKey: string): TGocciaSymbolValue;
+begin
+  if not SharedSymbolRegistry.TryGetValue(AKey, Result) then
+    Result := nil;
+end;
+
+procedure RegisterSymbol(const ASymbol: TGocciaSymbolValue);
+begin
+  ASymbol.Registered := True;
+  if (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.PinObject(ASymbol);
+  SharedSymbolRegistry.Add(ASymbol.Description, ASymbol);
 end;
 
 function TGocciaGlobalSymbol.SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

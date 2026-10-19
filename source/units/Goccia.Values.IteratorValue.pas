@@ -110,6 +110,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -2169,5 +2170,11 @@ initialization
     'WrapForValidIterator.prototype');
   GIteratorConstructorSlot := RegisterRealmSlot('Iterator');
   GIteratorMethodHostSlot := RegisterRealmSlot('Iterator.prototype.methodHost');
+  // Built on first use; a heap snapshot's restore builds them by name
+  // (ADR 0148).
+  RegisterSnapshotSlotMaterializer('IteratorHelper.prototype',
+    EnsureIteratorHelperPrototypeInitialized);
+  RegisterSnapshotSlotMaterializer('WrapForValidIterator.prototype',
+    EnsureWrapForValidIteratorPrototypeInitialized);
 
 end.
