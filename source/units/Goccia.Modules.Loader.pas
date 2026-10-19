@@ -74,8 +74,8 @@ type
     rdComputedImport);
 
   { A source module a heap snapshot restore read: what loading it would have
-    recorded (its ownership and its text for diagnostics), kept until the
-    restore commits. }
+    recorded (its ownership and its text for diagnostics), which the restore
+    keeps until it commits. }
   TGocciaModuleSnapshotSource = record
     Path: string;
     Text: string;
@@ -111,9 +111,6 @@ type
       makes a path alias of a host file inherit the same ownership before that
       aliased module can import anything of its own. }
     FHostOwnedModuleIdentities: TOrderedStringMap<Boolean>;
-    // The sources a heap snapshot restore read, until it commits or is
-    // refused (ParseModuleForSnapshot, CacheRestoredModules).
-    FSnapshotSources: TList<TGocciaModuleSnapshotSource>;
     FGlobalScope: TGocciaGlobalScope;
     FLinkingDepth: Integer;
     FLoadingModules: TOrderedStringMap<Boolean>;
@@ -336,14 +333,13 @@ type
     { Caches restored records, each under its keys (AKeys[I] for
       AModules[I]), as evaluated modules, which a later import finds without
       running their bodies; the loader owns them from then on. It also
-      records what ParseModuleForSnapshot read as loading would have. The
-      run's limits are polled per key, and a restore they stop leaves the
-      loader's modules and ownership as they were. }
+      records the sources the restore read (ASources) as loading them would
+      have. The run's limits are polled per key, and a restore they stop
+      leaves the loader as it was; the sources' diagnostics text is
+      registered once every key is cached, without polling. }
     procedure CacheRestoredModules(const AModules: TGocciaModuleList;
-      const AKeys: array of TGocciaModuleKeyList);
-    // Forgets what ParseModuleForSnapshot read: a restore starts with
-    // nothing an earlier, refused one read.
-    procedure DiscardSnapshotSources;
+      const AKeys: array of TGocciaModuleKeyList;
+      const ASources: array of TGocciaModuleSnapshotSource);
     { The modification time a later import compares a cached module's with
       (CheckForModuleReload), or False when the module has none. }
     function TryGetModuleLastModified(const APath: string;
@@ -351,9 +347,10 @@ type
     { Reads and parses the module at AResolvedPath as the loader would load
       it, under the same read policy, for a restore to compile. The caller
       owns the program. What loading it records (ownership, diagnostics
-      text) waits for CacheRestoredModules. }
+      text) is ASource, for CacheRestoredModules. }
     function ParseModuleForSnapshot(const AResolvedPath: string;
-      const AIsHostOwned: Boolean): TGocciaProgram;
+      const AIsHostOwned: Boolean;
+      out ASource: TGocciaModuleSnapshotSource): TGocciaProgram;
 
     property ContentProvider: TGocciaModuleContentProvider
       read FContentProvider;
@@ -684,7 +681,6 @@ begin
   FGlobalModules := TOrderedStringMap<TGocciaModule>.Create;
   FGlobalModuleProviders := TOrderedStringMap<TGocciaGlobalModuleProvider>.Create;
   FHostOwnedModuleAddresses := TOrderedStringMap<Boolean>.Create;
-  FSnapshotSources := TList<TGocciaModuleSnapshotSource>.Create;
   FHostOwnedModuleIdentities := TOrderedStringMap<Boolean>.Create;
   FGraphPackageRoots := TStringList.Create;
   FGraphPackageRoots.Sorted := True;
@@ -773,7 +769,6 @@ begin
   FGlobalModules.Free;
   FHostOwnedModuleIdentities.Free;
   FHostOwnedModuleAddresses.Free;
-  FSnapshotSources.Free;
   FGraphPackageRoots.Free;
   if FOwnsResolver then
     FResolver.Free;
@@ -1903,7 +1898,8 @@ end;
 
 procedure TGocciaModuleLoader.CacheRestoredModules(
   const AModules: TGocciaModuleList;
-  const AKeys: array of TGocciaModuleKeyList);
+  const AKeys: array of TGocciaModuleKeyList;
+  const ASources: array of TGocciaModuleSnapshotSource);
 var
   Cached, MarkedAddresses, MarkedIdentities: TGocciaModuleKeyList;
   Source: TGocciaModuleSnapshotSource;
@@ -1938,9 +1934,9 @@ begin
   try
     try
       // What LoadResolvedContent records for a host-owned source.
-      for I := 0 to FSnapshotSources.Count - 1 do
+      for I := 0 to High(ASources) do
       begin
-        Source := FSnapshotSources[I];
+        Source := ASources[I];
         if not Source.IsHostOwned then
           Continue;
         if (Source.CanonicalIdentity <> '') and
@@ -1964,11 +1960,12 @@ begin
           FModules.AddOrSetValue(AKeys[I][J], AModules[I]);
         end;
       end;
-      // Their text for diagnostics, as a load registers it.
-      for I := 0 to FSnapshotSources.Count - 1 do
+      // Their text for diagnostics, as a load registers it. Not polled: the
+      // run's limits cannot stop it part way. A registration the memory
+      // ceiling refuses leaves what a module that failed to load leaves.
+      for I := 0 to High(ASources) do
       begin
-        CheckNativeWork;
-        Source := FSnapshotSources[I];
+        Source := ASources[I];
         FDiagnosticScope.Register(Source.Path, Source.Text,
           Source.IsHostOwned, Source.CanonicalIdentity,
           Source.IdentityRequired);
@@ -1983,16 +1980,10 @@ begin
       raise;
     end;
   finally
-    FSnapshotSources.Clear;
     MarkedIdentities.Free;
     MarkedAddresses.Free;
     Cached.Free;
   end;
-end;
-
-procedure TGocciaModuleLoader.DiscardSnapshotSources;
-begin
-  FSnapshotSources.Clear;
 end;
 
 function TGocciaModuleLoader.TryGetModuleLastModified(const APath: string;
@@ -2002,18 +1993,20 @@ begin
 end;
 
 function TGocciaModuleLoader.ParseModuleForSnapshot(
-  const AResolvedPath: string; const AIsHostOwned: Boolean): TGocciaProgram;
+  const AResolvedPath: string; const AIsHostOwned: Boolean;
+  out ASource: TGocciaModuleSnapshotSource): TGocciaProgram;
 var
   Content: TGocciaModuleContent;
   IsHostOwned: Boolean;
   ParseResult: TGocciaSourcePipelineModuleResult;
-  Source: TGocciaModuleSnapshotSource;
 begin
+  ASource := Default(TGocciaModuleSnapshotSource);
   IsHostOwned := AIsHostOwned;
   // Read as a literal import of the module would be.
   EnforceHostRead(AResolvedPath, AResolvedPath, '', '', True, IsHostOwned);
   // Not LoadResolvedContent: what it records about the module waits for the
-  // restore to commit, so a refused one leaves the loader as it was.
+  // restore to commit (ASource), so a refused one leaves the loader as it
+  // was.
   Content := ReadResolvedContent(AResolvedPath);
   if not Assigned(Content) then
     raise Exception.Create('the module has no source');
@@ -2028,17 +2021,11 @@ begin
     finally
       ParseResult.Free;
     end;
-    try
-      Source.Path := AResolvedPath;
-      Source.Text := Content.Text;
-      Source.CanonicalIdentity := Content.CanonicalIdentity;
-      Source.IdentityRequired := Content.IdentityRequired;
-      Source.IsHostOwned := IsHostOwned;
-      FSnapshotSources.Add(Source);
-    except
-      Result.Free;
-      raise;
-    end;
+    ASource.Path := AResolvedPath;
+    ASource.Text := Content.Text;
+    ASource.CanonicalIdentity := Content.CanonicalIdentity;
+    ASource.IdentityRequired := Content.IdentityRequired;
+    ASource.IsHostOwned := IsHostOwned;
   finally
     Content.Free;
   end;

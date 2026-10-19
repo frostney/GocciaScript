@@ -451,9 +451,11 @@ type
       linking or running it, and keeps it: a heap snapshot restore needs the
       code of the modules it restores (ADR 0148). The engine's own source
       when ASourcePath is its source path, else the loader reads the module
-      under its read policy. }
+      under its read policy, and ASource (AHasSource) is what loading it
+      would record. }
     function CompileModuleForSnapshot(const ASourcePath: string;
-      const AIsHostOwned: Boolean): TGocciaBytecodeModule;
+      const AIsHostOwned: Boolean; out AHasSource: Boolean;
+      out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
     function RunModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
     function RunModuleInScope(const AModule: TGocciaBytecodeModule;
@@ -2650,11 +2652,14 @@ end;
   loader's setting, or the engine's for its own source. The snapshot names
   the bytecode by its hash, so a module compiled differently is refused. }
 function TGocciaEngine.CompileModuleForSnapshot(const ASourcePath: string;
-  const AIsHostOwned: Boolean): TGocciaBytecodeModule;
+  const AIsHostOwned: Boolean; out AHasSource: Boolean;
+  out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
 var
   ParseResult: TGocciaSourcePipelineResult;
   ProgramNode: TGocciaProgram;
 begin
+  AHasSource := False;
+  ASource := Default(TGocciaModuleSnapshotSource);
   if ASourcePath = FSourcePath then
   begin
     ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
@@ -2668,13 +2673,14 @@ begin
     Exit;
   end;
   ProgramNode := FModuleLoader.ParseModuleForSnapshot(ASourcePath,
-    AIsHostOwned);
+    AIsHostOwned, ASource);
   try
     Result := CompileModuleProgram(ProgramNode, ASourcePath, False,
       FModuleLoader.ArgumentsObjectEnabled);
   finally
     ProgramNode.Free;
   end;
+  AHasSource := True;
 end;
 
 { Create each top-level function declaration of AModule, compiled for

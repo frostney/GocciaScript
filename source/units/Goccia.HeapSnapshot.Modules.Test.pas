@@ -640,6 +640,7 @@ var
   Refusal: string;
   Bytes, Cut: TBytes;
   Run: TModuleRun;
+  Retained: Int64;
 begin
   DefineGraph;
   Bytes := SnapshotEntry('main.js', Refusal);
@@ -649,10 +650,14 @@ begin
     // Cut short of its roots: every record was allocated and filled, then
     // the restore is refused, and the records go with it.
     Cut := Copy(Bytes, 0, Length(Bytes) - 1);
+    Retained := Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes;
     Expect<Boolean>(RestoreInto(Run, Cut) <> '').ToBe(True);
     TGarbageCollector.Instance.Collect;
     Expect<Boolean>(Run.Engine.ModuleLoader.HasCachedModule(
       PathOf('counter.js'))).ToBe(False);
+    // The sources it read are not registered for diagnostics either.
+    Expect<Int64>(Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes)
+      .ToBe(Retained);
     Expect<string>(RestoreInto(Run, Bytes)).ToBe('');
     TGarbageCollector.Instance.Collect;
     Expect<string>(Run.Check('String(restored.inc())')).ToBe('2');
@@ -1016,9 +1021,11 @@ var
   var
     Run: TModuleRun;
     Outcome: string;
+    Retained: Int64;
   begin
     Run := TModuleRun.Create(PathOf('main.js'));
     try
+      Retained := Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes;
       StartInstructionLimit(ALimit);
       try
         try
@@ -1038,6 +1045,9 @@ var
           PathOf('counter.js'))).ToBe(False);
         Expect<Boolean>(Run.Engine.ModuleLoader.HasCachedModule(
           PathOf('main.js'))).ToBe(False);
+        // Nor the text of the sources it read, for diagnostics.
+        Expect<Int64>(Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes)
+          .ToBe(Retained);
       end;
     finally
       Run.Free;

@@ -29,7 +29,8 @@ uses
 
   Goccia.Engine,
   Goccia.HeapSnapshot.Codec,
-  Goccia.Modules;
+  Goccia.Modules,
+  Goccia.Modules.Loader;
 
 type
   TGocciaModuleSnapshotRecords = class(TGocciaSnapshotModuleRecordCodec)
@@ -43,6 +44,8 @@ type
     // A restored source module's file's modification time, read before the
     // module was compiled from it.
     FStamps: TDictionary<TGocciaModule, TDateTime>;
+    // What reading each source module recorded, for the loader at Commit.
+    FSources: TList<TGocciaModuleSnapshotSource>;
   public
     constructor Create(const AEngine: TGocciaEngine);
     // Frees the restored records not committed.
@@ -94,8 +97,7 @@ begin
   FRestored := TGocciaModuleList.Create;
   FSeenKeys := TDictionary<string, Boolean>.Create;
   FStamps := TDictionary<TGocciaModule, TDateTime>.Create;
-  // What an earlier, refused restore read stays unrecorded.
-  FEngine.ModuleLoader.DiscardSnapshotSources;
+  FSources := TList<TGocciaModuleSnapshotSource>.Create;
 end;
 
 destructor TGocciaModuleSnapshotRecords.Destroy;
@@ -108,6 +110,7 @@ begin
   FKeys.Free;
   FSeenKeys.Free;
   FStamps.Free;
+  FSources.Free;
   inherited;
 end;
 
@@ -192,11 +195,13 @@ end;
 // not compiled it yet (ACompiledNow).
 function EnsureCompiled(const AReader: TGocciaHeapSnapshotReader;
   const AEngine: TGocciaEngine; const APath, ASourcePath, AHash: string;
-  const AIsHostOwned: Boolean;
+  const AIsHostOwned: Boolean; const ASources: TList<TGocciaModuleSnapshotSource>;
   out ACompiledNow: Boolean): TGocciaBytecodeModule;
 var
   Index: Integer;
   Compiled: TGocciaBytecodeModule;
+  HasSource: Boolean;
+  Source: TGocciaModuleSnapshotSource;
 begin
   Compiled := nil;
   ACompiledNow := False;
@@ -207,7 +212,8 @@ begin
   if Index < 0 then
   begin
     try
-      Compiled := AEngine.CompileModuleForSnapshot(ASourcePath, AIsHostOwned);
+      Compiled := AEngine.CompileModuleForSnapshot(ASourcePath, AIsHostOwned,
+        HasSource, Source);
     except
       // The run's limits end the restore as they end any work, and a
       // refusal is the restore's own.
@@ -227,6 +233,8 @@ begin
       AReader.Refuse('the module ' + APath + ' is not the one the snapshot ' +
         'ran');
     ACompiledNow := True;
+    if HasSource then
+      ASources.Add(Source);
   end;
   Result := AReader.Templates.ModuleAt(Index);
 end;
@@ -291,7 +299,7 @@ begin
       // keeps the run's time.
       HasStamp := FEngine.ModuleLoader.TryGetModuleLastModified(Path, Stamp);
       Compiled := EnsureCompiled(AReader, FEngine, Path, SourcePath, Hash,
-        IsHostOwned, CompiledNow);
+        IsHostOwned, FSources, CompiledNow);
       HasStamp := HasStamp and CompiledNow and
         (SourcePath <> FEngine.SourcePath);
     end;
@@ -342,7 +350,8 @@ begin
   SetLength(Keys, FRestored.Count);
   for I := 0 to FRestored.Count - 1 do
     Keys[I] := FKeys[FRestored[I]];
-  FEngine.ModuleLoader.CacheRestoredModules(FRestored, Keys);
+  FEngine.ModuleLoader.CacheRestoredModules(FRestored, Keys,
+    FSources.ToArray);
   // The loader owns them now.
   FRestored.Clear;
 end;
