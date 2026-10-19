@@ -105,6 +105,10 @@ type
   TGocciaHeapSnapshotWriter = class;
   TGocciaHeapSnapshotReader = class;
 
+  // An object the accounting check is to pass over.
+  TGocciaSnapshotObjectFilter = function(
+    const AObject: TGCManagedObject): Boolean of object;
+
   { Objects the accounting check does not count as missed: what was alive
     before the run, and what the embedder keeps itself. One named type, so
     every unit shares its specialization. }
@@ -347,9 +351,11 @@ type
     // the order they registered, so what was alive before the run is what
     // comes before AFirstOfRun. Detects objects a codec missed, not fields.
     // It does not collect: the caller collects before the snapshot, so what
-    // is left is live.
+    // is left is live. It also passes over the objects ASkip accepts (the
+    // internals of built-ins, which are named through them).
     procedure CheckAccounting(const AFirstOfRun: TGCManagedObject;
-      const ABaseline: TGocciaHeapSnapshotBaseline);
+      const ABaseline: TGocciaHeapSnapshotBaseline;
+      const ASkip: TGocciaSnapshotObjectFilter = nil);
     function IsWritten(const AObject: TGCManagedObject): Boolean;
 
     property ObjectCount: Integer read GetObjectCount;
@@ -507,6 +513,16 @@ procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
   const AMaterializer: TGocciaSnapshotSlotMaterializer);
 function FindSnapshotSlotMaterializer(
   const ASlotName: string): TGocciaSnapshotSlotMaterializer;
+// A slot filled when a lazy built-in is first read, instead of by a
+// materializer: AGlobalPath names that built-in from the global object, its
+// own property names separated by '.' ('Temporal.PlainDate',
+// 'Object.prototype.__proto__'), and reading each property's descriptor in
+// turn builds what fills the slot without calling anything.
+procedure RegisterSnapshotSlotGlobalPath(const ASlotName, AGlobalPath: string);
+function FindSnapshotSlotGlobalPath(const ASlotName: string): string;
+// Fills the slot ASlotName names in the current realm as using it would, by
+// its materializer or its global path; False when it has neither.
+function MaterializeSnapshotSlot(const ASlotName: string): Boolean;
 
 implementation
 
@@ -522,6 +538,8 @@ uses
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
+  Goccia.Values.DateData,
+  Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Version;
 
@@ -572,6 +590,7 @@ type
 var
   GRegistry: TCodecRegistry;
   GSlotMaterializers: TDictionary<string, TGocciaSnapshotSlotMaterializer>;
+  GSlotGlobalPaths: TDictionary<string, string>;
 
 procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
   const AMaterializer: TGocciaSnapshotSlotMaterializer);
@@ -588,6 +607,62 @@ begin
   Result := nil;
   if Assigned(GSlotMaterializers) then
     GSlotMaterializers.TryGetValue(ASlotName, Result);
+end;
+
+procedure RegisterSnapshotSlotGlobalPath(const ASlotName, AGlobalPath: string);
+begin
+  if not Assigned(GSlotGlobalPaths) then
+    GSlotGlobalPaths := TDictionary<string, string>.Create;
+  GSlotGlobalPaths.AddOrSetValue(ASlotName, AGlobalPath);
+end;
+
+function FindSnapshotSlotGlobalPath(const ASlotName: string): string;
+begin
+  Result := '';
+  if Assigned(GSlotGlobalPaths) then
+    GSlotGlobalPaths.TryGetValue(ASlotName, Result);
+end;
+
+function MaterializeSnapshotSlot(const ASlotName: string): Boolean;
+var
+  Materializer: TGocciaSnapshotSlotMaterializer;
+  Path, Name: string;
+  Current: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  Start, I: Integer;
+begin
+  Materializer := FindSnapshotSlotMaterializer(ASlotName);
+  if Assigned(Materializer) then
+  begin
+    Materializer();
+    Exit(True);
+  end;
+  Path := FindSnapshotSlotGlobalPath(ASlotName);
+  Result := Path <> '';
+  if not Result or (CurrentRealm = nil) or
+     not (CurrentRealm.GlobalObject is TGocciaObjectValue) then
+    Exit;
+  // Each name is an own property of what the last one held; a descriptor
+  // read builds a lazy one and calls no getter.
+  Current := TGocciaObjectValue(CurrentRealm.GlobalObject);
+  Start := 1;
+  for I := 1 to Length(Path) + 1 do
+    if (I > Length(Path)) or (Path[I] = '.') then
+    begin
+      Name := Copy(Path, Start, I - Start);
+      Start := I + 1;
+      if not Assigned(Current) then
+        Exit;
+      Descriptor := Current.GetOwnPropertyDescriptor(Name);
+      if (Descriptor is TGocciaPropertyDescriptorData) and
+         (TGocciaPropertyDescriptorData(Descriptor).Value is
+          TGocciaObjectValue) then
+        Current := TGocciaObjectValue(
+          TGocciaPropertyDescriptorData(Descriptor).Value)
+      else
+        Current := nil;
+      ReleaseDescriptor(Descriptor);
+    end;
 end;
 
 const
@@ -1151,6 +1226,21 @@ begin
     Identity(Encoder, Obj.Prototype);
     Encoder.Count(Ord(Obj.Extensible) or (Ord(Obj.Sealed) shl 1) or
       (Ord(Obj.Frozen) shl 2));
+    // A function by its kind, whether its code is a shim's, and its
+    // synthesized length and name, which are not in the property map: a
+    // run's function standing where a built-in's was is not the engine's
+    // own, and a deleted length or name is a change.
+    if Obj is TGocciaFunctionBase then
+    begin
+      Encoder.Field(Obj.ClassName);
+      Encoder.Count(Ord(TGocciaFunctionBase(Obj).IsShimCode));
+      Encoder.Count(Ord(TGocciaFunctionBase(Obj).HasOwnLengthProperty) or
+        (Ord(TGocciaFunctionBase(Obj).HasOwnNameProperty) shl 1));
+      if TGocciaFunctionBase(Obj).HasOwnLengthProperty then
+        Encoder.Count(TGocciaFunctionBase(Obj).IntrinsicLength);
+      if TGocciaFunctionBase(Obj).HasOwnNameProperty then
+        Encoder.Field(TGocciaFunctionBase(Obj).IntrinsicName);
+    end;
     // In order: a deleted and re-added member moves to the end.
     Encoder.Count(Obj.Properties.Count);
     for Pair in Obj.Properties do
@@ -1747,6 +1837,10 @@ begin
     Refuse('no snapshot codec for an object''s error data');
   if AObject.HasRegExpData then
     Refuse('no snapshot codec for an object''s RegExp data');
+  // A Date's time value is not the object's own: the Date shim keeps it in
+  // a built-in WeakMap, which is named, not written.
+  if HasDateValue(AObject) then
+    Refuse('no snapshot codec for a Date''s time value');
   WriteValue(AObject.Prototype);
   WriteBool(AObject.Extensible);
   WriteBool(AObject.Frozen);
@@ -1949,7 +2043,8 @@ end;
 
 procedure TGocciaHeapSnapshotWriter.CheckAccounting(
   const AFirstOfRun: TGCManagedObject;
-  const ABaseline: TGocciaHeapSnapshotBaseline);
+  const ABaseline: TGocciaHeapSnapshotBaseline;
+  const ASkip: TGocciaSnapshotObjectFilter);
 const
   MAX_DETAILS = 8;
 var
@@ -1973,6 +2068,8 @@ begin
       if Assigned(ABaseline) and ABaseline.ContainsKey(Obj) then
         Continue;
       if FIds.ContainsKey(Obj) or (FBuiltins.IndexOf(Obj) >= 0) then
+        Continue;
+      if Assigned(ASkip) and ASkip(Obj) then
         Continue;
       if (Obj is TGocciaSymbolValue) and
          TGocciaSymbolValue(Obj).Registered then
@@ -2890,5 +2987,6 @@ initialization
 finalization
   FreeAndNil(GRegistry);
   FreeAndNil(GSlotMaterializers);
+  FreeAndNil(GSlotGlobalPaths);
 
 end.

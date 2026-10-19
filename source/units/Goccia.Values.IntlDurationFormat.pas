@@ -74,6 +74,7 @@ uses
   Goccia.Builtins.Intl,
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -1452,5 +1453,6 @@ end;
 
 initialization
   GIntlDurationFormatSharedSlot := RegisterRealmOwnedSlot('Intl.DurationFormat.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.DurationFormat.shared', 'Intl.DurationFormat');
 
 end.

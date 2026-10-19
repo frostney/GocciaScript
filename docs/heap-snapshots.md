@@ -28,7 +28,10 @@ iterator prototype made on first use) are named too. Lazy members are watched
 as they are built, so building one is not a change; a built-in the session
 never saw before the run is written with its fingerprint, and the restoring
 engine builds the same built-in by name and compares, refusing the snapshot
-when the run had changed it.
+when the run had changed it. A built-in's state is its prototype, flags and
+own properties, and for a function also its kind, whether its code is a
+shim's, and its synthesized `length` and `name`: a run's function standing
+where a built-in's was is not the engine's own.
 
 ```pascal
 uses
@@ -62,7 +65,21 @@ buffers, refuses the snapshot instead.
 
 The **accounting check** (on by default, `CheckAccounting`) collects, then
 refuses when a live object the run created is neither written nor a
-built-in: it finds objects a codec missed, not fields. Objects the embedder
+built-in: it finds objects a codec missed, not fields. What the named
+built-ins reach counts as theirs: a built-in written in JavaScript (a shim
+such as `Date`) keeps its module scope, cells and private functions, built
+when the run first used it, and those are not missed objects. Only what a
+shim's load created counts as its own, and only when the load ran no code
+but shims' (the engine marks the code it compiles from a shim). A shim
+loads with the built-ins the engine had before any script ran (`WeakMap`,
+`Object.defineProperty`, `Number.parseInt` and `Number.parseFloat`, bound in
+its own scope), so what the run did to those globals does not reach it; a
+load that still ran a run's function, on any engine of the thread (a getter
+the run put on `Object.prototype`, say), has all it made counted. What the
+run's own top-level bindings hold is counted too.
+Should the collector's mark stack fail
+to grow while it marks what built-ins reach, the snapshot is refused, since
+its recovery traces the global scope as well. Objects the embedder
 keeps alive itself go into the baseline with `AddToBaseline`. The collection
 runs before anything is written; one that queues a job (a
 `FinalizationRegistry` whose target died) refuses the snapshot, since the run
@@ -215,13 +232,34 @@ than guessing, and calls `Poll` once per item in any loop whose length comes
 from the input. `source/units/Goccia.Values.ArrayValue.pas` holds the array
 codec as an example.
 
-A unit whose realm slot, or owned slot, is filled on first use registers how
-to fill it with `RegisterSnapshotSlotMaterializer`, under the slot's name, so
-a restore can build the intrinsic a snapshot names (the iterator prototypes,
-the function-object intrinsics, Intl's legacy fallback symbol and the segment
-prototypes do). A restore builds the built-ins the run built in the order the
-run named them, so a slot that building an earlier one fills needs none; one
-nothing fills refuses the restore.
+## Built-ins filled on first use
+
+A snapshot may name a built-in by the realm slot, or owned slot, that holds
+it, and a slot filled on first use may be named before anything else that
+fills it, as when a runtime extension loads the `Date` shim natively. So the
+unit that owns such a slot registers, under the slot's name, how a restore
+fills it:
+
+- `RegisterSnapshotSlotMaterializer`, a procedure that builds it in the
+  current realm (the iterator prototypes, the function-object intrinsics,
+  Intl's legacy fallback symbol, the segment and module source prototypes,
+  and the `hasOwnProperty` shim, which native code can load although no
+  script installs it);
+- or `RegisterSnapshotSlotGlobalPath`, the lazy built-in whose first read
+  fills it, by its path from the global object (`Temporal.PlainDate` for
+  Temporal's and Intl's shared prototypes, `DisposableStack`, and for each
+  shim its global or prototype member, `Date` for the `Date` shim's own
+  slots).
+
+Every slot a run can fill resolves by its name on its own in a fresh engine.
+`Goccia.HeapSnapshot.Builtins.Test` builds everything an engine builds lazily
+and checks each slot's names, and lists the slots nothing fills: `eval`,
+which the host installs, and the shared prototypes of runtime extensions an
+engine without them never builds.
+
+A `Date` keeps its time value outside the object, in the `Date` shim's
+WeakMap, which is a built-in and named, not written: an object with a time
+value refuses the snapshot until a codec covers it.
 
 ## Testing
 
