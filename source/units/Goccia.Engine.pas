@@ -910,15 +910,22 @@ var
   ExportNames: TArray<string>;
   ExportValue: TGocciaValue;
   Module: TGocciaModule;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  // Host enrollment is durable on the root module/address. Every static,
-  // dynamic or deferred import from it inherits host ownership regardless of
-  // when the import resolves.
-  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
-  ExportNames := Module.GetExportNames;
-  for ExportName in ExportNames do
-    if Module.TryGetExportValue(ExportName, ExportValue) then
-      RegisterGlobal(ExportName, ExportValue);
+  // The module is compiled and run here, possibly outside any run.
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    // Host enrollment is durable on the root module/address. Every static,
+    // dynamic or deferred import from it inherits host ownership regardless
+    // of when the import resolves.
+    Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
+    ExportNames := Module.GetExportNames;
+    for ExportName in ExportNames do
+      if Module.TryGetExportValue(ExportName, ExportValue) then
+        RegisterGlobal(ExportName, ExportValue);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
 end;
 
 procedure TGocciaEngine.InjectModule(const AName, AContent: string;
@@ -1056,14 +1063,22 @@ procedure TGocciaEngine.InjectModulesFromModule(const APath: string);
 var
   DefaultValue: TGocciaValue;
   Module: TGocciaModule;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  // The manifest module is host-provided config. Durable ownership also covers
-  // imports its exported code may initiate after manifest evaluation returns.
-  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
-  if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
-    raise EArgumentException.Create(
-      'Virtual modules manifest module must have a default export.');
-  InjectModulesFromValue(DefaultValue, Module.Path, Module.Path);
+  // The manifest module is compiled and run here, possibly outside any run.
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    // The manifest module is host-provided config. Durable ownership also
+    // covers imports its exported code may initiate after manifest evaluation
+    // returns.
+    Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
+    if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
+      raise EArgumentException.Create(
+        'Virtual modules manifest module must have a default export.');
+    InjectModulesFromValue(DefaultValue, Module.Path, Module.Path);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
 end;
 
 procedure TGocciaEngine.ClearTransientCaches;
