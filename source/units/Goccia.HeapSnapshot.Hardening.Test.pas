@@ -5,11 +5,14 @@ program Goccia.HeapSnapshot.Hardening.Test;
 { ADR 0148: the heap snapshot reader's hardening. A snapshot is untrusted
   input to the reader, so real snapshots are taken apart field by field and
   mutated where a hostile one would be: every count, index and length of the
-  header set to its boundary values, every object entry read by every other
-  codec, dropped, doubled and moved, every object reference pointed at every
-  other object and at the built-ins, and every payload byte set to every
-  value tag. Each mutant restores or is refused, never faults, and what
-  restores is used: its functions called and its generators resumed.
+  header and its tables (not those inside payloads, which the payload bytes
+  cover a byte at a time) set to its boundary values, every object entry
+  read by every other codec, dropped, doubled and moved, every reference to
+  an object or a built-in pointed at the other objects and built-ins, and
+  the payload bytes set to the value tags (the sizes below say how many of
+  each). Each mutant restores or is refused, never faults, and what restores
+  is used: its functions called and its generators resumed, returned or
+  thrown into.
 
   The walks over the heap are iterative (ADR 0147): each recursive shape a
   graph can take (closures, suspended generators, accessors, symbol-keyed
@@ -485,11 +488,14 @@ begin
   Test('Both seeds restore, and using them runs', TestSeedsRestoreAndRun);
   Test('A restored suspended generator returns and throws through its ' +
     'finally block', TestRestoredGeneratorReturnsAndThrows);
-  Test('The exercise calls every function of a restored chain of 64',
+  Test('The exercise calls every function of a restored chain of 64, and ' +
+    'past thousands of primitives',
     TestExerciseReachesEveryFunction);
-  Test('Every count, index and length of the plain seed at its boundaries',
+  Test('Every header and table count, index and length of the plain seed ' +
+    'at its boundaries',
     TestFieldsOfThePlainSeed);
-  Test('Every count, index and length of the VM seed at its boundaries',
+  Test('Every header and table count, index and length of the VM seed at ' +
+    'its boundaries',
     TestFieldsOfTheVMSeed);
   Test('Every entry of the plain seed retyped, dropped, doubled and moved',
     TestEntriesOfThePlainSeed);
@@ -637,6 +643,12 @@ const
     '(_, i) => i).reduce((prev, i) => { const f = () => { calls += 1; ' +
     'return prev; }; f.i = i; return f; }, null); ' +
     'capture({ head, calls: () => calls }); })();';
+  PADDED = '(() => { let calls = 0; const shared = {}; ' +
+    'const second = () => { calls += 1; return 0; }; ' +
+    'const head = () => { calls += 1; return second; }; ' +
+    'capture({ padding: Array.from({ length: 4000 }, () => 0), ' +
+    'repeats: Array.from({ length: 4000 }, () => shared), head, ' +
+    'calls: () => calls }); })();';
 var
   Feeder: TMutantFeeder;
   Bytes: TBytes;
@@ -649,6 +661,18 @@ begin
     Feeder.ExerciseBeforeCheck := True;
     Expect<string>(Feeder.Feed(Bytes, 'String(restored.calls())')).ToBe('');
     Expect<string>(Feeder.LastCheck).ToBe('64');
+  finally
+    Feeder.Free;
+  end;
+  // Thousands of primitives and repeats before a function do not crowd out
+  // the function its call returns.
+  Bytes := SnapshotModule(PADDED, Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Feeder := TMutantFeeder.Create(PADDED);
+  try
+    Feeder.ExerciseBeforeCheck := True;
+    Expect<string>(Feeder.Feed(Bytes, 'String(restored.calls())')).ToBe('');
+    Expect<string>(Feeder.LastCheck).ToBe('2');
   finally
     Feeder.Free;
   end;
@@ -772,26 +796,33 @@ var
   Mutant: TBytes;
   Sites: TList<Integer>;
   I, P, S, Target, Count, Last: Integer;
+
+  function IsReference(const AAt: Integer): Boolean;
+  begin
+    Result := ((ASeed[AAt] = HSV_OBJECT_TAG) and
+      (U32At(ASeed, AAt + 1) < Cardinal(Count))) or
+      ((ASeed[AAt] = HSV_BUILTIN_TAG) and
+      (U32At(ASeed, AAt + 1) < Cardinal(Layout.BuiltinCount)));
+  end;
+
 begin
   Layout := ParseLayout(ASeed);
   Count := Length(Layout.EntryAt);
   Feeder := TMutantFeeder.Create(AModule);
   Sites := TList<Integer>.Create;
   try
-    // An object reference: its tag and an index into the object table.
-    // A payload byte that only looks like one is mutated too, which is as
-    // good a mutant.
+    // A reference: its tag and an index into the object table or the
+    // built-in names. A payload byte that only looks like one is mutated
+    // too, which is as good a mutant.
     for I := 0 to Count - 1 do
     begin
       Last := Layout.PayloadAt[I] + Layout.PayloadLength[I] - 5;
       for P := Layout.PayloadAt[I] to Last do
-        if (ASeed[P] = HSV_OBJECT_TAG) and
-           (U32At(ASeed, P + 1) < Cardinal(Count)) then
+        if IsReference(P) then
           Sites.Add(P);
     end;
     for P := Layout.RootsAt + 4 to Length(ASeed) - 5 do
-      if (ASeed[P] = HSV_OBJECT_TAG) and
-         (U32At(ASeed, P + 1) < Cardinal(Count)) then
+      if IsReference(P) then
         Sites.Add(P);
     Expect<Boolean>(Sites.Count >= ByteShare).ToBe(True);
     // Each site is pointed at the objects and built-ins whose index is the
@@ -801,14 +832,18 @@ begin
       P := Sites[S];
       for Target := 0 to Count - 1 do
         if (Target mod ByteShare = S mod ByteShare) and
-           (Cardinal(Target) <> U32At(ASeed, P + 1)) then
+           not ((ASeed[P] = HSV_OBJECT_TAG) and
+                (Cardinal(Target) = U32At(ASeed, P + 1))) then
         begin
           Mutant := Copy(ASeed);
+          Mutant[P] := HSV_OBJECT_TAG;
           PutU32(Mutant, P + 1, Target);
           Feeder.Feed(Mutant);
         end;
       for Target := 0 to Layout.BuiltinCount - 1 do
-        if Target mod ByteShare = S mod ByteShare then
+        if (Target mod ByteShare = S mod ByteShare) and
+           not ((ASeed[P] = HSV_BUILTIN_TAG) and
+                (Cardinal(Target) = U32At(ASeed, P + 1))) then
         begin
           Mutant := Copy(ASeed);
           Mutant[P] := HSV_BUILTIN_TAG;
@@ -975,8 +1010,7 @@ procedure THeapSnapshotHardeningTests.TestDeepMixedChain;
 const
   // Link i holds the last through: an object literal, an array, a plain
   // object without a prototype, a closure, a frozen object, a symbol key, a
-  // getter, a suspended generator and a sealed array, in turn; every link
-  // also inherits from the link before it when it can.
+  // getter, a suspended generator and a sealed array, in turn.
   LINK = '(prev, i) => { switch (i % 9) { ' +
     'case 0: return { i, next: prev }; ' +
     'case 1: return [i, prev]; ' +

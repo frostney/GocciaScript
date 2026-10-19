@@ -29,29 +29,32 @@ uses
   Goccia.Values.Primitives;
 
 const
-  // (restored, mode) => ...: walks at most EXERCISE_OBJECTS distinct
-  // objects, what the run's values hold (property values, accessors' results,
+  // (restored, mode) => ...: walks at most 600 distinct objects (queueing
+  // each once, and no primitive), what the run's values hold (property values, accessors' results,
   // array elements, what calls and generators return) before any prototype,
   // so the built-ins a prototype chain reaches never crowd out the restored
   // graph. Each generator is resumed (mode 0: next, next, throw, return),
   // returned (mode 1: return, then next) or thrown into (mode 2: throw, then
   // next) while it is still suspended.
   HEAP_SNAPSHOT_EXERCISE = '((restored, mode) => { const seen = new Set(); ' +
-    'const own = [restored]; const protos = []; let oi = 0; let pi = 0; ' +
-    'let steps = 0; let out = 0; ' +
-    'const note = (v) => { if (own.length < 4000) own.push(v); }; ' +
+    'const queued = new Set(); const own = []; const protos = []; ' +
+    'let oi = 0; let pi = 0; let steps = 0; let out = 0; ' +
+    'const note = (v) => { if (v === null || v === undefined) return; ' +
+    'const t = typeof v; if (t !== "object" && t !== "function") { ' +
+    'try { out += String(v).length; } catch (e) { out++; } return; } ' +
+    'if (queued.has(v) || own.length >= 4000) return; queued.add(v); ' +
+    'own.push(v); }; note(restored); ' +
     'const work = { [Symbol.iterator]() { return { next() { ' +
     'if (oi < own.length) return { done: false, value: own[oi++] }; ' +
     'if (pi < protos.length) return { done: false, value: protos[pi++] }; ' +
     'return { done: true, value: undefined }; } }; } }; ' +
     'for (const v of work) { ' +
     'if (v === null || v === undefined) continue; const t = typeof v; ' +
-    'if (t !== "object" && t !== "function") { ' +
-    'try { out += String(v).length; } catch (e) { out++; } continue; } ' +
     'if (seen.has(v)) continue; seen.add(v); steps++; ' +
     'if (steps > 600) break; ' +
     'try { const p = Object.getPrototypeOf(v); ' +
-    'if (protos.length < 4000) protos.push(p); } catch (e) { out++; } ' +
+    'if (p !== null && !queued.has(p) && protos.length < 4000) { ' +
+    'queued.add(p); protos.push(p); } } catch (e) { out++; } ' +
     'try { out += Object.isFrozen(v) ? 1 : 0; ' +
     'out += Object.isExtensible(v) ? 1 : 0; } catch (e) { out++; } ' +
     'let keys = []; try { keys = Reflect.ownKeys(v); } catch (e) { out++; } ' +

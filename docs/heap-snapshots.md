@@ -236,17 +236,17 @@ them ([Tooling — Fuzzing](contributing/tooling.md#fuzzing-and-memory-safety)).
 
 `source/units/Goccia.HeapSnapshot.Hardening.Test.pas` takes two real
 snapshots apart along the format, one of a plain graph and one holding
-closures and suspended generators: every count, index and length set to its
-boundary values, every object entry read by every other codec, dropped,
-doubled, swapped and cut short, object references pointed at other objects
-and at built-ins, and payload bytes set to the value tags. Each mutant
-restores or is refused, and what restores is used (`THeapSnapshotExerciser`
-in `Goccia.HeapSnapshot.Exercise`: up to 600 distinct objects, what the
-run's values hold before any prototype, each property read, each function
-called, each generator resumed, returned or thrown into while it is
-suspended). It also round-trips deep chains of every kind of link, refuses
-at the end of one and stops a restore of one at half its memory, so no walk
-recurses per link; restores with the collector's
+closures and suspended generators: every count, index and length of the
+header and its tables set to its boundary values, every object entry read by
+every other codec, dropped, doubled, swapped and cut short, references to
+objects and built-ins pointed at other objects and built-ins, and payload bytes set
+to the value tags. Each mutant restores or is refused, and what restores is
+used (`THeapSnapshotExerciser` in `Goccia.HeapSnapshot.Exercise`: up to 600
+distinct objects, what the run's values hold before any prototype, each
+property read, each function called, each generator resumed, returned or
+thrown into while it is suspended). It also round-trips deep chains of every
+kind of link, refuses at the end of one and stops a restore of one at half
+its memory, so no walk recurses per link; restores with the collector's
 `CollectBeforeEveryReservation` on, so each reservation the reader makes
 collects first; restores under 401 ceilings spread evenly up to what a
 restore needs; and restores the same mutants again to check that the heap
