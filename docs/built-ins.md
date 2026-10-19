@@ -1011,9 +1011,9 @@ Implements the [Encoding Standard TextDecoder](https://developer.mozilla.org/en-
 
 ### URL (`Goccia.Builtins.GlobalURL.pas`)
 
-Implements the [WHATWG URL Standard](https://developer.mozilla.org/en-US/docs/Web/API/URL). See [MDN URL reference](https://developer.mozilla.org/en-US/docs/Web/API/URL) for the full API.
+Implements the [WHATWG URL Standard](https://developer.mozilla.org/en-US/docs/Web/API/URL). See [MDN URL reference](https://developer.mozilla.org/en-US/docs/Web/API/URL) for the full API. A path, query, fragment, userinfo, opaque path and non-special host are percent-encoded as UTF-8 (a surrogate pair is one code point, a lone surrogate is U+FFFD); `URLSearchParams` encodes and decodes names and values as UTF-8 too.
 
-**GocciaScript differences:** None -- full standard compliance.
+**GocciaScript differences:** Host parsing is simplified. A special-scheme domain is percent-decoded and lowercased, but there is no IDNA or Punycode processing (a non-ASCII domain stays as written, where the standard gives its `xn--` form), and IPv4 and IPv6 addresses are kept as written rather than canonicalised.
 
 ### URLSearchParams (`Goccia.Values.URLSearchParamsValue.pas`)
 
