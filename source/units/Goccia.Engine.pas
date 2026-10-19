@@ -422,6 +422,12 @@ type
       (HeapSnapshotRefusal), and HostCallOwner has pending work: the run
       waits only on host calls the embedder answers. }
     function IsAtPauseCheckpoint: Boolean;
+    { ADR 0148: why the run is not idle enough for a heap snapshot, or ''
+      when it is: a bytecode frame running, a job queued, an Atomics.waitAsync
+      waiter of this engine pending, an extension other than HostCallOwner
+      with pending work, or state outside the heap (HeapSnapshotRefusal).
+      IsAtPauseCheckpoint is this plus pending host calls on the owner. }
+    function SnapshotIdleRefusal: string;
     { ADR 0148: why a heap snapshot of the run would lose state held outside
       the heap, from every extension, or '' when none would. }
     function HeapSnapshotRefusal: string;
@@ -2354,29 +2360,35 @@ end;
   fetch runs in the job that resumes the module. One round left that request
   in flight and the run ended without it, so rounds repeat until one leaves
   no extension with work. }
-function TGocciaEngine.IsAtPauseCheckpoint: Boolean;
+function TGocciaEngine.SnapshotIdleRefusal: string;
 var
   I: Integer;
   Queue: TGocciaMicrotaskQueue;
+  Reason: string;
 begin
-  Result := False;
-  if not Assigned(FHostCallOwner) then
-    Exit;
+  if Assigned(FVM) and not FVM.IsIdle then
+    Exit('a bytecode frame is running');
   Queue := TGocciaMicrotaskQueue.Instance;
   if Assigned(Queue) and Queue.HasPending then
-    Exit;
+    Exit('a job is queued');
   // This engine's waiters, settled or not; another engine's on the thread
   // are its own.
   if HasAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
-    Exit;
+    Exit('an Atomics.waitAsync waiter is pending');
   for I := 0 to FExtensions.Count - 1 do
     if (FExtensions[I] <> FHostCallOwner) and FExtensions[I].HasPendingWork then
-      Exit;
-  // State outside the heap no codec covers: a pause here could not be
-  // snapshotted (ADR 0148).
-  if HeapSnapshotRefusal <> '' then
-    Exit;
-  Result := FHostCallOwner.HasPendingWork;
+      Exit('an extension other than the host-call owner has pending work');
+  // State outside the heap no codec covers (ADR 0148).
+  Reason := HeapSnapshotRefusal;
+  if Reason <> '' then
+    Exit('state outside the heap no codec covers: ' + Reason);
+  Result := '';
+end;
+
+function TGocciaEngine.IsAtPauseCheckpoint: Boolean;
+begin
+  Result := Assigned(FHostCallOwner) and (SnapshotIdleRefusal = '') and
+    FHostCallOwner.HasPendingWork;
 end;
 
 function TGocciaEngine.HeapSnapshotRefusal: string;

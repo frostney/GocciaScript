@@ -4926,7 +4926,7 @@ begin
   for I := 0 to Count - 1 do
   begin
     AReader.Poll;
-    A.FElements[I] := AReader.ReadPresentValue;
+    A.FElements[I] := AReader.ReadElementValue;
   end;
   A.FLength := Len;
   AReader.ReadObjectCore(A);
@@ -4942,7 +4942,7 @@ begin
     AReader.Poll;
     if Pair.Key = PROP_LENGTH then
       AReader.Refuse('an array whose length is an ordinary property');
-    if TryParseArrayIndex(Pair.Key, Index) and
+    if TryParseArrayElementIndex(Pair.Key, Index) and
        ((Index >= Len) or ((Index < Count) and
         (A.FElements[Integer(Index)] <> TGocciaHoleValue.HoleValue))) then
       AReader.Refuse('an array index property the array cannot hold');

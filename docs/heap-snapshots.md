@@ -48,8 +48,12 @@ finally
 end;
 ```
 
-`Snapshot` writes what its roots reach, or refuses with
-`EGocciaHeapSnapshotRefused` and leaves the stream as it was. The message
+`Snapshot` writes what its roots reach from the stream's position and ends
+the stream there, or refuses with `EGocciaHeapSnapshotRefused` and leaves the
+stream as it was. The run must be idle, as at a pause checkpoint: a running
+bytecode frame, a queued job, a pending `Atomics.waitAsync` waiter, pending
+work on an extension other than `HostCallOwner`, or state outside the heap
+(below) refuses it, and `Engine.SnapshotIdleRefusal` says which. The message
 names the reason and, for an object without a codec, the chain of objects
 that reached it. The run's timeout and instruction limit still end the run
 while the writer works; its memory ceiling, reached by the writer's own
@@ -106,7 +110,8 @@ anything for it:
 
 The reader also charges its input, its tables and what it restores to the
 run's memory ceiling, and polls the run's timeout and instruction limit in
-every loop whose length follows the input.
+every loop whose length follows the input. A restored BigInt keeps the charge
+for its digits for as long as it lives.
 
 ## The pause checkpoint
 

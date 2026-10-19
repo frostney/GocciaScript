@@ -74,8 +74,9 @@ type
   public
     constructor Create(const AEngine: TGocciaEngine);
     destructor Destroy; override;
-    { Writes what ARoots reach to AStream, or refuses with
-      EGocciaHeapSnapshotRefused and leaves AStream as it was. }
+    { Writes what ARoots reach to AStream from its position, and ends the
+      stream there, or refuses with EGocciaHeapSnapshotRefused and leaves
+      AStream as it was. The run must be idle (SnapshotIdleRefusal). }
     procedure Snapshot(const ARoots: array of TGCManagedObject;
       const AStream: TStream);
     { Objects the embedder keeps alive itself (for as long as the session),
@@ -764,10 +765,11 @@ var
   Roots: TGocciaActiveRootFrame;
   I: Integer;
 begin
-  Reason := FEngine.HeapSnapshotRefusal;
+  // The run must be idle: no frame, job, waiter or other extension's work
+  // the snapshot would drop (ADR 0148).
+  Reason := FEngine.SnapshotIdleRefusal;
   if Reason <> '' then
-    raise EGocciaHeapSnapshotRefused.Create(
-      'state outside the heap no codec covers: ' + Reason);
+    raise EGocciaHeapSnapshotRefused.Create(Reason);
   Writer := nil;
   Buffer := nil;
   // The roots may be held only by the caller's array: rooted before the
@@ -787,13 +789,11 @@ begin
       if not FEngine.VM.ReleaseIdleScratch then
         raise EGocciaHeapSnapshotRefused.Create('a bytecode frame is running');
       if FCheckAccounting then
-      begin
         TGarbageCollector.Instance.Collect;
-        Queue := TGocciaMicrotaskQueue.Instance;
-        if Assigned(Queue) and Queue.HasPending then
-          raise EGocciaHeapSnapshotRefused.Create('the collection before ' +
-            'the snapshot queued a job: the run is not idle any more');
-      end;
+      Queue := TGocciaMicrotaskQueue.Instance;
+      if Assigned(Queue) and Queue.HasPending then
+        raise EGocciaHeapSnapshotRefused.Create('the collection before ' +
+          'the snapshot queued a job: the run is not idle any more');
       // A changed built-in refuses before the table is walked again: what the
       // run hung on one is not walked for nothing.
       RefuseChangedBuiltins(FTable);
@@ -813,6 +813,10 @@ begin
     end;
     FLastObjectCount := Writer.ObjectCount;
     AStream.CopyFrom(Buffer, 0);
+    // The snapshot ends the stream: what a reused stream held past it would
+    // read as bytes after the roots.
+    if AStream.Size > AStream.Position then
+      AStream.Size := AStream.Position;
   finally
     Buffer.Free;
     Writer.Free;

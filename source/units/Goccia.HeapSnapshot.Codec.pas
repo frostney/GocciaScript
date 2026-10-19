@@ -350,6 +350,7 @@ type
     procedure RoomForCreated;
     procedure NoteCreated(const AObject: TGCManagedObject);
     function ReadRawString: string;
+    function ReadValueOrHole: TGocciaValue;
     procedure CheckPrototypeChains;
   public
     constructor Create(const ABuiltins: TGocciaHeapSnapshotBuiltinTable;
@@ -364,9 +365,13 @@ type
     function ReadDouble: Double;
     function ReadBool: Boolean;
     function ReadStr: string;
+    // A value or nil; never the array hole, which only ReadElementValue
+    // reads.
     function ReadValue: TGocciaValue;
-    // A value that must be there: a property's value, an array element.
+    // A value that must be there: a property's value.
     function ReadPresentValue: TGocciaValue;
+    // A dense array element: a value or the hole that marks a missing one.
+    function ReadElementValue: TGocciaValue;
     // An accessor's getter or setter: absent or a function.
     function ReadAccessorHalf: TGocciaValue;
     function ReadRef: TGCManagedObject;
@@ -858,6 +863,8 @@ type
 
 procedure TFingerprintEncoder.Count(const AValue: Integer);
 begin
+  if TooLarge then
+    Exit;
   if Length_ + 4 > MAX_FINGERPRINT_BYTES then
   begin
     TooLarge := True;
@@ -887,20 +894,23 @@ begin
   Inc(Length_, Bytes);
 end;
 
-// A BigInt by its limbs in hex: linear, where decimal text is quadratic.
-function BigIntIdentity(const AValue: TGocciaBigIntValue): string;
+// A BigInt by its sign and limbs, encoded in place: no copy of the value,
+// and nothing past the encoder's cap.
+procedure EncodeBigInt(var AEncoder: TFingerprintEncoder;
+  const AValue: TGocciaBigIntValue);
 var
   I: Integer;
 begin
-  if AValue.Value.IsNegative then
-    Result := 'i-'
-  else
-    Result := 'i+';
+  AEncoder.Field('i');
+  AEncoder.Count(Ord(AValue.Value.IsNegative));
+  AEncoder.Count(AValue.Value.LimbCount);
   for I := AValue.Value.LimbCount - 1 downto 0 do
   begin
+    if AEncoder.TooLarge then
+      Exit;
     if I and 4095 = 0 then
       CheckNativeWork;
-    Result := Result + IntToHex(AValue.Value.LimbAt(I), 8);
+    AEncoder.Count(Integer(AValue.Value.LimbAt(I)));
   end;
 end;
 
@@ -909,34 +919,61 @@ function TGocciaHeapSnapshotBuiltinTable.ComputeFingerprint(
 const
   LAZY = 'L';
 
-  // A value's identity: a built-in by its name, a primitive by its value,
-  // anything else (an object the run attached) by its address.
-  function Identity(const AValue: TGocciaValue): string;
+  // A value's identity, a tag field and then its value's fields, encoded in
+  // place: a built-in by its name, a primitive by its value, anything else
+  // (an object the run attached) by its address. Nothing the run made is
+  // copied first, so the encoder's cap bounds the work.
+  procedure Identity(var AEncoder: TFingerprintEncoder;
+    const AValue: TGocciaValue);
   var
     Index: Integer;
   begin
     if not Assigned(AValue) then
-      Exit('nil');
+    begin
+      AEncoder.Field('nil');
+      Exit;
+    end;
     // A built-in by its name, which is the same in every engine that has it:
     // a fingerprint taken here can be compared with one taken in another.
     Index := IndexOf(AValue);
     if Index >= 0 then
-      Exit('#' + FPaths[Index]);
-    if AValue is TGocciaUndefinedLiteralValue then
-      Exit('u');
-    if AValue is TGocciaNullLiteralValue then
-      Exit('n');
-    if AValue is TGocciaBooleanLiteralValue then
-      Exit('b' + BoolToStr(TGocciaBooleanLiteralValue(AValue).Value, True));
-    if AValue is TGocciaStringLiteralValue then
-      Exit('s' + TGocciaStringLiteralValue(AValue).Value);
-    if AValue is TGocciaNumberLiteralValue then
-      Exit('d' + IntToHex(PInt64(@TGocciaNumberLiteralValue(AValue).Value)^, 16));
-    if AValue is TGocciaBigIntValue then
-      Exit(BigIntIdentity(TGocciaBigIntValue(AValue)));
-    if (AValue is TGocciaSymbolValue) and TGocciaSymbolValue(AValue).Registered then
-      Exit('r' + TGocciaSymbolValue(AValue).Description);
-    Result := 'X' + IntToHex(PtrUInt(AValue), SizeOf(PtrUInt) * 2);
+    begin
+      AEncoder.Field('#');
+      AEncoder.Field(FPaths[Index]);
+    end
+    else if AValue is TGocciaUndefinedLiteralValue then
+      AEncoder.Field('u')
+    else if AValue is TGocciaNullLiteralValue then
+      AEncoder.Field('n')
+    else if AValue is TGocciaBooleanLiteralValue then
+    begin
+      AEncoder.Field('b');
+      AEncoder.Count(Ord(TGocciaBooleanLiteralValue(AValue).Value));
+    end
+    else if AValue is TGocciaStringLiteralValue then
+    begin
+      AEncoder.Field('s');
+      AEncoder.Field(TGocciaStringLiteralValue(AValue).Value);
+    end
+    else if AValue is TGocciaNumberLiteralValue then
+    begin
+      AEncoder.Field('d');
+      AEncoder.Field(IntToHex(
+        PInt64(@TGocciaNumberLiteralValue(AValue).Value)^, 16));
+    end
+    else if AValue is TGocciaBigIntValue then
+      EncodeBigInt(AEncoder, TGocciaBigIntValue(AValue))
+    else if (AValue is TGocciaSymbolValue) and
+            TGocciaSymbolValue(AValue).Registered then
+    begin
+      AEncoder.Field('r');
+      AEncoder.Field(TGocciaSymbolValue(AValue).Description);
+    end
+    else
+    begin
+      AEncoder.Field('X');
+      AEncoder.Field(IntToHex(PtrUInt(AValue), SizeOf(PtrUInt) * 2));
+    end;
   end;
 
   procedure EncodeDescriptor(var AEncoder: TFingerprintEncoder;
@@ -975,14 +1012,14 @@ const
     begin
       AEncoder.Field('a');
       AEncoder.Count(Byte(ADescriptor.Flags));
-      AEncoder.Field(Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter));
-      AEncoder.Field(Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter));
+      Identity(AEncoder, TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
+      Identity(AEncoder, TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
     end
     else if ADescriptor is TGocciaPropertyDescriptorData then
     begin
       AEncoder.Field('d');
       AEncoder.Count(Byte(ADescriptor.Flags));
-      AEncoder.Field(Identity(TGocciaPropertyDescriptorData(ADescriptor).Value));
+      Identity(AEncoder, TGocciaPropertyDescriptorData(ADescriptor).Value);
     end
     else
       AEncoder.Field('?' + ADescriptor.ClassName);
@@ -1002,13 +1039,15 @@ begin
   Obj := TGocciaObjectValue(FObjects[AIndex]);
   Encoder := Default(TFingerprintEncoder);
   Encoder.Field('proto');
-  Encoder.Field(Identity(Obj.Prototype));
+  Identity(Encoder, Obj.Prototype);
   Encoder.Count(Ord(Obj.Extensible) or (Ord(Obj.Sealed) shl 1) or
     (Ord(Obj.Frozen) shl 2));
   // In order: a deleted and re-added member moves to the end.
   Encoder.Count(Obj.Properties.Count);
   for Pair in Obj.Properties do
   begin
+    if Encoder.TooLarge then
+      Break;
     CheckNativeWork;
     Encoder.Field(Pair.Key);
     EncodeDescriptor(Encoder, Obj, Pair.Key, Pair.Value);
@@ -1017,8 +1056,10 @@ begin
   Encoder.Count(Length(Symbols));
   for I := 0 to High(Symbols) do
   begin
+    if Encoder.TooLarge then
+      Break;
     CheckNativeWork;
-    Encoder.Field(Identity(Symbols[I]));
+    Identity(Encoder, Symbols[I]);
     EncodeDescriptor(Encoder, Obj, '',
       Obj.GetOwnSymbolPropertyDescriptor(Symbols[I]));
   end;
@@ -1032,7 +1073,7 @@ begin
       if LengthDescriptor is TGocciaPropertyDescriptorData then
       begin
         Encoder.Count(Byte(LengthDescriptor.Flags));
-        Encoder.Field(Identity(TGocciaPropertyDescriptorData(LengthDescriptor).Value));
+        Identity(Encoder, TGocciaPropertyDescriptorData(LengthDescriptor).Value);
       end;
     finally
       ReleaseDescriptor(LengthDescriptor);
@@ -1040,9 +1081,11 @@ begin
     Encoder.Count(TGocciaArrayValue(Obj).Elements.Count);
     for I := 0 to TGocciaArrayValue(Obj).Elements.Count - 1 do
     begin
+      if Encoder.TooLarge then
+        Break;
       if I and 1023 = 0 then
         CheckNativeWork;
-      Encoder.Field(Identity(TGocciaArrayValue(Obj).Elements[I]));
+      Identity(Encoder, TGocciaArrayValue(Obj).Elements[I]);
     end;
   end;
   if Encoder.TooLarge then
@@ -1832,6 +1875,10 @@ begin
         Result := TGocciaBigIntValue.Create(
           TBigInteger.FromLimbs(Limbs, Negative));
         NoteCreated(Result);
+        // The limbs live as long as the value: the reservation goes with
+        // them rather than ending with the restore.
+        TGocciaBigIntValue(Result).AdoptCharge(Int64(Count) * 4);
+        Dec(FReservedBytes, Int64(Count) * 4);
       end;
     HSV_OBJECT:
       begin
@@ -1867,10 +1914,17 @@ begin
   end;
 end;
 
-// A property's value or an element: present (nil is no JavaScript value).
+// A property's value: present (nil is no JavaScript value).
 function TGocciaHeapSnapshotReader.ReadPresentValue: TGocciaValue;
 begin
   Result := ReadValue;
+  if not Assigned(Result) then
+    Refuse('a value that is missing');
+end;
+
+function TGocciaHeapSnapshotReader.ReadElementValue: TGocciaValue;
+begin
+  Result := ReadValueOrHole;
   if not Assigned(Result) then
     Refuse('a value that is missing');
 end;
@@ -1885,6 +1939,14 @@ begin
 end;
 
 function TGocciaHeapSnapshotReader.ReadValue: TGocciaValue;
+begin
+  Result := ReadValueOrHole;
+  // The hole is the element store's marker, never a value of its own.
+  if Result = TGocciaHoleValue.HoleValue then
+    Refuse('an array hole outside an array''s elements');
+end;
+
+function TGocciaHeapSnapshotReader.ReadValueOrHole: TGocciaValue;
 var
   Obj: TGCManagedObject;
 begin

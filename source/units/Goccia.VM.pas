@@ -786,6 +786,8 @@ type
       reaches, which a heap snapshot would then count. False, and nothing
       cleared, when a frame is running. }
     function ReleaseIdleScratch: Boolean;
+    // True when no bytecode frame is running.
+    function IsIdle: Boolean;
   end;
 
 implementation
@@ -17085,12 +17087,17 @@ begin
   Result := True;
 end;
 
+function TGocciaVM.IsIdle: Boolean;
+begin
+  Result := (FFrameStackCount = 0) and (FClosedNumericFrameStackCount = 0) and
+    (FFrameDepth = 0);
+end;
+
 function TGocciaVM.ReleaseIdleScratch: Boolean;
 var
   I, Limit: Integer;
 begin
-  Result := (FFrameStackCount = 0) and (FClosedNumericFrameStackCount = 0) and
-    (FFrameDepth = 0);
+  Result := IsIdle;
   if not Result then
     Exit;
   Limit := FRegisterBase + FRegisterCount;
@@ -17165,9 +17172,18 @@ end;
 
 procedure TLiteralObjectSnapshotCodec.Fill(
   const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  Literal: TGocciaVMLiteralObjectValue;
+  Fast: Boolean;
 begin
-  TGocciaVMLiteralObjectValue(AObject).FFastLiteralMode := AReader.ReadBool;
-  AReader.ReadObjectCore(TGocciaVMLiteralObjectValue(AObject));
+  Literal := TGocciaVMLiteralObjectValue(AObject);
+  Fast := AReader.ReadBool;
+  AReader.ReadObjectCore(Literal);
+  // The fast path adds properties without asking for extensibility, so a
+  // non-extensible literal (sealed and frozen ones included) never takes it,
+  // whatever the snapshot says; the engine itself leaves it on a freeze,
+  // seal or preventExtensions.
+  Literal.FFastLiteralMode := Fast and Literal.Extensible;
 end;
 
 initialization
