@@ -20,7 +20,7 @@ The `options` object supports:
 - `headers`: a plain object or `Headers` instance;
 - `signal`: an `AbortSignal`, `null`, or `undefined`.
 
-Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
+Redirects (301/302/303/307/308) are followed automatically up to 20 hops. A redirect's `Location` is parsed by the URL Standard's parser with the redirecting response's URL as the base (relative, `./`, `../`, absolute-path, query-only and scheme-relative forms), and the URL sent, for the first request and every hop, has its dot segments removed (`https://h/a/./b/../c` is requested as `https://h/a/c`); a `Location` that does not parse is a network error. HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
 
 ### Network capability
 

@@ -30,6 +30,8 @@ type
     procedure TestAcceptsValidSchemes;
     procedure TestRejectsMalformedScheme;
     procedure TestRejectsRequestTargetControls;
+    procedure TestNormalizesRequestURL;
+    procedure TestResolvesRedirectLocation;
     procedure TestClassifiesPrivateAddressRanges;
     procedure TestClassifiesPublicAddressesAsRoutable;
     procedure TestRejectsObfuscatedLoopbackForms;
@@ -137,6 +139,10 @@ begin
   Test('Accepts valid URI schemes', TestAcceptsValidSchemes);
   Test('Rejects malformed URI scheme', TestRejectsMalformedScheme);
   Test('Rejects request-target controls', TestRejectsRequestTargetControls);
+  Test('Normalizes a request URL by the URL Standard',
+    TestNormalizesRequestURL);
+  Test('Resolves a redirect Location against the response URL',
+    TestResolvesRedirectLocation);
   Test('Classifies private address ranges',
     TestClassifiesPrivateAddressRanges);
   Test('Classifies public addresses as routable',
@@ -344,6 +350,50 @@ begin
   Raised := False;
   try
     HTTPURLHost('http://example.com/path' + #13 + #10 + 'Injected: yes');
+  except
+    on E: EHTTPError do
+      Raised := True;
+  end;
+  Expect<Boolean>(Raised).ToBe(True);
+end;
+
+procedure THTTPClientTests.TestNormalizesRequestURL;
+begin
+  Expect<string>(NormalizeHTTPRequestURL('HTTP://Example.COM/a/./b/../c?x=1#f'))
+    .ToBe('http://example.com/a/c?x=1');
+  Expect<string>(NormalizeHTTPRequestURL('http://h/a/%2e/%2E%2e/b'))
+    .ToBe('http://h/b');
+  // What the client's own checks decide stays as given.
+  Expect<string>(NormalizeHTTPRequestURL('ftp://h/a/./b'))
+    .ToBe('ftp://h/a/./b');
+  Expect<string>(NormalizeHTTPRequestURL('http://h/a/./b' + #10 + 'x'))
+    .ToBe('http://h/a/./b' + #10 + 'x');
+  Expect<string>(NormalizeHTTPRequestURL('not a url')).ToBe('not a url');
+end;
+
+procedure THTTPClientTests.TestResolvesRedirectLocation;
+const
+  BASE = 'http://h:81/dir/page?q=1';
+var
+  Raised: Boolean;
+begin
+  Expect<string>(ResolveHTTPRedirectURL(BASE, 'sibling'))
+    .ToBe('http://h:81/dir/sibling');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, './sibling'))
+    .ToBe('http://h:81/dir/sibling');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, '../up'))
+    .ToBe('http://h:81/up');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, '/abs/./p'))
+    .ToBe('http://h:81/abs/p');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, '//other/x'))
+    .ToBe('http://other/x');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, '?k=v'))
+    .ToBe('http://h:81/dir/page?k=v');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, 'https://o/a/../b#f'))
+    .ToBe('https://o/b');
+  Raised := False;
+  try
+    ResolveHTTPRedirectURL(BASE, 'http://');
   except
     on E: EHTTPError do
       Raised := True;
