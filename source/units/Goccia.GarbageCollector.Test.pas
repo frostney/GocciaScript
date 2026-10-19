@@ -673,7 +673,7 @@ const
   MAX_HEAP_COLLECTIONS = 4;
 var
   GC: TGarbageCollector;
-  HeapCollectionsBefore: Integer;
+  HeapCollections, HeapCollectionsBefore: Integer;
   PreviousMaxBytes: Int64;
   Retained: Pointer;
 begin
@@ -686,8 +686,11 @@ begin
     GC.Collect;
     HeapCollectionsBefore := GC.HeapTriggeredCollections;
     ChurnGarbage(GC, GARBAGE_OBJECTS);
-    Expect<Boolean>(GC.HeapTriggeredCollections - HeapCollectionsBefore <=
-      MAX_HEAP_COLLECTIONS).ToBe(True);
+    HeapCollections := GC.HeapTriggeredCollections - HeapCollectionsBefore;
+    { The factor still fires: zero would mean the trigger stopped working
+      over a retained heap. }
+    Expect<Boolean>(HeapCollections > 0).ToBe(True);
+    Expect<Boolean>(HeapCollections <= MAX_HEAP_COLLECTIONS).ToBe(True);
   finally
     FreeMem(Retained);
     GC.MaxBytes := PreviousMaxBytes;
