@@ -782,6 +782,13 @@ begin
     'Content-Length: 3x'#13#10'Connection: close'#13#10#13#10'abc')).ToBe(
     'error: Invalid HTTP response: malformed Content-Length');
   Expect<string>(FetchCanned('HTTP/1.1 200 OK'#13#10 +
+    'Content-Length: 3'#13#10'Content-Length: 10'#13#10 +
+    'Connection: close'#13#10#13#10'abc')).ToBe(
+    'error: Invalid HTTP response: malformed Content-Length');
+  Expect<string>(FetchCanned('HTTP/1.1 200 OK'#13#10 +
+    'Content-Length: 3'#13#10'Content-Length: 3'#13#10 +
+    'Connection: close'#13#10#13#10'abc')).ToBe('abc');
+  Expect<string>(FetchCanned('HTTP/1.1 200 OK'#13#10 +
     'Connection: close'#13#10#13#10'until close')).ToBe('until close');
 end;
 

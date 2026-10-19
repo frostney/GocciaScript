@@ -969,7 +969,7 @@ var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
   N, HeaderEnd, I, J, ContentLen, ChunkSize: Integer;
-  DeclaredLength: Int64;
+  DeclaredLength, FieldLength: Int64;
   TrailerBytes: Integer;
   Line, HeaderBlock: string;
   Lines: array of string;
@@ -1213,11 +1213,19 @@ begin
     ContentLen := -1;
     if HasHeader(Result.Headers, 'content-length') then
     begin
-      if not TryParseContentLength(
-         FindHeaderValue(Result.Headers, 'content-length'),
-         DeclaredLength) then
-        raise EHTTPError.Create(
-          'Invalid HTTP response: malformed Content-Length');
+      { Every Content-Length field must hold the same value (RFC 9112
+        section 6.3; Fetch's "extract a length"). }
+      DeclaredLength := -1;
+      for I := 0 to High(Result.Headers) do
+        if Result.Headers[I].Name = 'content-length' then
+        begin
+          if not TryParseContentLength(Result.Headers[I].Value,
+             FieldLength) or
+             ((DeclaredLength >= 0) and (FieldLength <> DeclaredLength)) then
+            raise EHTTPError.Create(
+              'Invalid HTTP response: malformed Content-Length');
+          DeclaredLength := FieldLength;
+        end;
       if DeclaredLength > AMaxBodyBytes then
         raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
           [AMaxBodyBytes]);
