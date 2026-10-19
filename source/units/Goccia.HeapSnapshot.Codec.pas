@@ -201,6 +201,7 @@ type
     // without collecting as they are added: a run can hang a large graph on
     // a built-in, and the walk names what it reaches before refusing.
     FChargedBytes: Int64;
+    FRealm: TObject;
     function GetCount: Integer;
     function MemberKey(const AObject: TGCManagedObject;
       const AName: string): string;
@@ -208,8 +209,10 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure Clear;
-    // Watches this thread's lazy member builds until Uninstall.
-    procedure Install;
+    // Watches the lazy member builds of ARealm (the engine's realm) on this
+    // thread until Uninstall; another engine's, nested on the thread, are
+    // its own.
+    procedure Install(const ARealm: TObject);
     procedure Uninstall;
     procedure NoteMaterialized(const AObject: TGocciaObjectValue;
       const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
@@ -497,8 +500,9 @@ type
   // current realm, as using it would.
   TGocciaSnapshotSlotMaterializer = procedure;
 
-// A unit whose realm slot is filled on first use registers how to fill it, so
-// a restore can build the intrinsic a snapshot names (ADR 0148).
+// A unit whose realm slot, or owned slot, is filled on first use registers
+// how to fill it, under the slot's name, so a restore can build the intrinsic
+// a snapshot names (ADR 0148).
 procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
   const AMaterializer: TGocciaSnapshotSlotMaterializer);
 function FindSnapshotSlotMaterializer(
@@ -514,8 +518,8 @@ uses
 
   Goccia.Builtins.GlobalSymbol,
   Goccia.Bytecode.Binary,
-  Goccia.Constants.PropertyNames,
   Goccia.NativeLimits,
+  Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.HoleValue,
@@ -790,10 +794,11 @@ begin
   inherited;
 end;
 
-procedure TGocciaHeapSnapshotBuiltinTable.Install;
+procedure TGocciaHeapSnapshotBuiltinTable.Install(const ARealm: TObject);
 begin
   if Assigned(FObserver) then
     Exit;
+  FRealm := ARealm;
   FObserver := TGocciaBuiltinMaterializationObserver.Create;
   FObserver.FTable := Self;
   AddLazyMaterializationObserver(FObserver);
@@ -860,6 +865,9 @@ procedure TGocciaBuiltinMaterializationObserver.Materialized(
   const AObject: TGocciaObjectValue; const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 begin
+  // A lazy member builds in the realm whose built-in holds it.
+  if TObject(CurrentRealm) <> FTable.FRealm then
+    Exit;
   FTable.NoteMaterialized(AObject, AName, ADescriptor);
 end;
 
@@ -938,9 +946,28 @@ type
     // Past MAX_FINGERPRINT_BYTES: no built-in an engine makes is that large,
     // so one is a built-in the run grew, and it fingerprints as changed.
     TooLarge: Boolean;
+    // What Data's capacity has charged to the run's memory ceiling; the
+    // caller releases it.
+    Charged: Int64;
+    procedure Grow(const ANeeded: Int64);
     procedure Field(const AText: string);
     procedure Count(const AValue: Integer);
   end;
+
+// Room for ANeeded bytes, never past the cap, charged without collecting.
+procedure TFingerprintEncoder.Grow(const ANeeded: Int64);
+var
+  Capacity: Int64;
+begin
+  if Length(Data) >= ANeeded then
+    Exit;
+  Capacity := ANeeded * 2 + 64;
+  if Capacity > MAX_FINGERPRINT_BYTES then
+    Capacity := MAX_FINGERPRINT_BYTES;
+  ChargeWithoutCollecting(Capacity - Length(Data));
+  Inc(Charged, Capacity - Length(Data));
+  SetLength(Data, Capacity);
+end;
 
 procedure TFingerprintEncoder.Count(const AValue: Integer);
 begin
@@ -951,8 +978,7 @@ begin
     TooLarge := True;
     Exit;
   end;
-  if Length(Data) < Length_ + 4 then
-    SetLength(Data, (Length_ + 4) * 2 + 64);
+  Grow(Length_ + 4);
   Move(AValue, Data[Length_], 4);
   Inc(Length_, 4);
 end;
@@ -968,8 +994,7 @@ begin
     TooLarge := True;
     Exit;
   end;
-  if Length(Data) < Length_ + Bytes then
-    SetLength(Data, (Length_ + Bytes) * 2 + 64);
+  Grow(Length_ + Bytes);
   if Bytes > 0 then
     Move(AText[1], Data[Length_], Bytes);
   Inc(Length_, Bytes);
@@ -1063,6 +1088,8 @@ const
   var
     Member: TGocciaMaterializedMember;
   begin
+    if AEncoder.TooLarge then
+      Exit;
     if ADescriptor is TGocciaLazyPropertyDescriptorData then
     begin
       AEncoder.Field(LAZY);
@@ -1109,71 +1136,74 @@ const
 var
   Obj: TGocciaObjectValue;
   Pair: TGocciaPropertyMap.TKeyValuePair;
-  Symbols: TArray<TGocciaSymbolValue>;
+  Symbol: TGocciaSymbolValue;
   I: Integer;
   Encoder: TFingerprintEncoder;
-  LengthDescriptor: TGocciaPropertyDescriptor;
+  Hash: TSHA256Context;
 begin
   Result := '';
   if not (FObjects[AIndex] is TGocciaObjectValue) then
     Exit;
   Obj := TGocciaObjectValue(FObjects[AIndex]);
   Encoder := Default(TFingerprintEncoder);
-  Encoder.Field('proto');
-  Identity(Encoder, Obj.Prototype);
-  Encoder.Count(Ord(Obj.Extensible) or (Ord(Obj.Sealed) shl 1) or
-    (Ord(Obj.Frozen) shl 2));
-  // In order: a deleted and re-added member moves to the end.
-  Encoder.Count(Obj.Properties.Count);
-  for Pair in Obj.Properties do
-  begin
-    if Encoder.TooLarge then
-      Break;
-    CheckNativeWork;
-    Encoder.Field(Pair.Key);
-    EncodeDescriptor(Encoder, Obj, Pair.Key, Pair.Value);
-  end;
-  Symbols := Obj.GetOwnSymbols;
-  Encoder.Count(Length(Symbols));
-  for I := 0 to High(Symbols) do
-  begin
-    if Encoder.TooLarge then
-      Break;
-    CheckNativeWork;
-    Identity(Encoder, Symbols[I]);
-    EncodeDescriptor(Encoder, Obj, '',
-      Obj.GetOwnSymbolPropertyDescriptor(Symbols[I]));
-  end;
-  // An array built-in (Array.prototype is one) keeps its length and dense
-  // elements outside the property map.
-  if Obj is TGocciaArrayValue then
-  begin
-    Encoder.Field('array');
-    LengthDescriptor := Obj.GetOwnPropertyDescriptor(PROP_LENGTH);
-    try
-      if LengthDescriptor is TGocciaPropertyDescriptorData then
-      begin
-        Encoder.Count(Byte(LengthDescriptor.Flags));
-        Identity(Encoder, TGocciaPropertyDescriptorData(LengthDescriptor).Value);
-      end;
-    finally
-      ReleaseDescriptor(LengthDescriptor);
+  try
+    Encoder.Field('proto');
+    Identity(Encoder, Obj.Prototype);
+    Encoder.Count(Ord(Obj.Extensible) or (Ord(Obj.Sealed) shl 1) or
+      (Ord(Obj.Frozen) shl 2));
+    // In order: a deleted and re-added member moves to the end.
+    Encoder.Count(Obj.Properties.Count);
+    for Pair in Obj.Properties do
+    begin
+      CheckNativeWork;
+      Encoder.Field(Pair.Key);
+      // Past the cap nothing more is encoded, and the key is not copied into
+      // a lookup either.
+      if Encoder.TooLarge then
+        Break;
+      EncodeDescriptor(Encoder, Obj, Pair.Key, Pair.Value);
     end;
-    Encoder.Count(TGocciaArrayValue(Obj).Elements.Count);
-    for I := 0 to TGocciaArrayValue(Obj).Elements.Count - 1 do
+    Encoder.Count(Obj.StoredSymbolCount);
+    for I := 0 to Obj.StoredSymbolCount - 1 do
     begin
       if Encoder.TooLarge then
         Break;
-      if I and 1023 = 0 then
-        CheckNativeWork;
-      Identity(Encoder, TGocciaArrayValue(Obj).Elements[I]);
+      CheckNativeWork;
+      Symbol := Obj.StoredSymbolAt(I);
+      Identity(Encoder, Symbol);
+      EncodeDescriptor(Encoder, Obj, '',
+        Obj.GetOwnSymbolPropertyDescriptor(Symbol));
     end;
+    // An array built-in (Array.prototype is one) keeps its length and dense
+    // elements outside the property map.
+    if Obj is TGocciaArrayValue then
+    begin
+      Encoder.Field('array');
+      // Read in place: a descriptor would create the length's number value,
+      // and nothing may be created after the snapshot's collection.
+      Encoder.Count(Ord(TGocciaArrayValue(Obj).LengthWritable));
+      Encoder.Field(IntToStr(TGocciaArrayValue(Obj).StoredLength));
+      Encoder.Count(TGocciaArrayValue(Obj).Elements.Count);
+      for I := 0 to TGocciaArrayValue(Obj).Elements.Count - 1 do
+      begin
+        if Encoder.TooLarge then
+          Break;
+        if I and 1023 = 0 then
+          CheckNativeWork;
+        Identity(Encoder, TGocciaArrayValue(Obj).Elements[I]);
+      end;
+    end;
+    if Encoder.TooLarge then
+      Exit('too large: ' + IntToHex(PtrUInt(Obj), SizeOf(PtrUInt) * 2));
+    CheckNativeWork;
+    // Hashed in place: no copy of the encoding.
+    SHA256Init(Hash);
+    if Encoder.Length_ > 0 then
+      SHA256Update(Hash, @Encoder.Data[0], Encoder.Length_);
+    Result := SHA256FinalHex(Hash);
+  finally
+    ReleaseCharge(Encoder.Charged);
   end;
-  if Encoder.TooLarge then
-    Exit('too large: ' + IntToHex(PtrUInt(Obj), SizeOf(PtrUInt) * 2));
-  SetLength(Encoder.Data, Encoder.Length_);
-  CheckNativeWork;
-  Result := SHA256Hex(Encoder.Data);
 end;
 
 procedure TGocciaHeapSnapshotBuiltinTable.RecordFingerprints;
@@ -1702,7 +1732,7 @@ procedure TGocciaHeapSnapshotWriter.WriteObjectCore(
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   Descriptor: TGocciaPropertyDescriptor;
-  Symbols: TArray<TGocciaSymbolValue>;
+  Symbol: TGocciaSymbolValue;
   I: Integer;
 begin
   // Error and RegExp internals belong to their own codecs.
@@ -1738,13 +1768,13 @@ begin
     else
       Refuse('no snapshot codec for a ' + Descriptor.ClassName);
   end;
-  Symbols := AObject.GetOwnSymbols;
-  WriteU32(Length(Symbols));
-  for I := 0 to High(Symbols) do
+  WriteU32(AObject.StoredSymbolCount);
+  for I := 0 to AObject.StoredSymbolCount - 1 do
   begin
     Poll;
-    Descriptor := AObject.GetOwnSymbolPropertyDescriptor(Symbols[I]);
-    WriteValue(Symbols[I]);
+    Symbol := AObject.StoredSymbolAt(I);
+    Descriptor := AObject.GetOwnSymbolPropertyDescriptor(Symbol);
+    WriteValue(Symbol);
     WriteU8(Byte(Descriptor.Flags));
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -1841,12 +1871,17 @@ begin
     FCurrentId := -1;
 
     // Built-in names go into the string table before it is written.
+    // The index tables below are charged as the writer's other tables are.
+    Reserve(Int64(FBuiltinRefs.Count) * SizeOf(Integer));
     SetLength(PathIndexes, FBuiltinRefs.Count);
     for I := 0 to FBuiltinRefs.Count - 1 do
       PathIndexes[I] := StringIndex(FBuiltins.PathAt(FBuiltinRefs[I]));
     // The built-ins the run built since the table was recorded: no pristine
     // state of theirs was seen here, so each goes with its fingerprint, and
     // the restoring engine builds the same ones and compares.
+    // Two indexes and a fingerprint (64 hex digits) for each.
+    Reserve(Int64(FBuiltins.Count - FBuiltins.FingerprintCount) *
+      (2 * SizeOf(Integer) + SizeOf(string) + 160));
     SetLength(LatePathIndexes, FBuiltins.Count - FBuiltins.FingerprintCount);
     SetLength(LateFingerprints, Length(LatePathIndexes));
     SetLength(LateFingerprintIndexes, Length(LatePathIndexes));
@@ -2369,7 +2404,6 @@ var
   Count, I: Integer;
   Key: string;
   Pair: TGocciaPropertyMap.TKeyValuePair;
-  Symbols: TArray<TGocciaSymbolValue>;
   SymbolDescriptor: TGocciaPropertyDescriptor;
   FlagBits: Byte;
   Flags: TPropertyFlags;
@@ -2484,10 +2518,11 @@ begin
         if (Pair.Value is TGocciaPropertyDescriptorData) and
            (pfWritable in Pair.Value.Flags) then
           Refuse('a frozen object with a writable property');
-    Symbols := AObject.GetOwnSymbols;
-    for I := 0 to High(Symbols) do
+    for I := 0 to AObject.StoredSymbolCount - 1 do
     begin
-      SymbolDescriptor := AObject.GetOwnSymbolPropertyDescriptor(Symbols[I]);
+      Poll;
+      SymbolDescriptor := AObject.GetOwnSymbolPropertyDescriptor(
+        AObject.StoredSymbolAt(I));
       if pfConfigurable in SymbolDescriptor.Flags then
         Refuse('a sealed object with a configurable property');
       if Frozen and (SymbolDescriptor is TGocciaPropertyDescriptorData) and
@@ -2702,11 +2737,16 @@ begin
   end;
   if FPos <> FLimit then
     Refuse('bytes after the roots');
-  // The restore succeeded: the registered symbols it made are registered.
-  // In one go, polling nothing: a stop between two would leave the registry
-  // half done.
+  // The restore succeeded: the registered symbols it made are registered,
+  // polling as any loop the input sizes does. A stop between two leaves
+  // some registered and the rest not, which is harmless: a registered
+  // symbol is only its key, and each is what Symbol.for(key) would have
+  // made and pinned, under the same limits.
   for Pair in FNewRegistered do
+  begin
+    Poll;
     RegisterSymbol(Pair.Value);
+  end;
   FNewRegistered.Clear;
   // The input is not needed any more; its reservation is released with the
   // reader.

@@ -81,6 +81,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Utils,
@@ -667,9 +668,26 @@ begin
   Result := AThisValue;
 end;
 
+{ Heap snapshot slot materializers (ADR 0148): the segments and segment
+  iterator prototypes are made with their first instance, and no global name
+  reaches them. A throwaway instance makes them as using them would. }
+procedure MaterializeIntlSegmentsShared;
+begin
+  TGocciaIntlSegmentsValue.Create('en', 'grapheme', '');
+end;
+
+procedure MaterializeIntlSegmentIteratorShared;
+begin
+  TGocciaIntlSegmentIteratorValue.Create('en', 'grapheme', '');
+end;
+
 initialization
   GIntlSegmenterSharedSlot := RegisterRealmOwnedSlot('Intl.Segmenter.shared');
   GIntlSegmentsSharedSlot := RegisterRealmOwnedSlot('Intl.Segments.shared');
   GIntlSegmentIteratorSharedSlot := RegisterRealmOwnedSlot('Intl.SegmentIterator.shared');
+  RegisterSnapshotSlotMaterializer('Intl.Segments.shared',
+    MaterializeIntlSegmentsShared);
+  RegisterSnapshotSlotMaterializer('Intl.SegmentIterator.shared',
+    MaterializeIntlSegmentIteratorShared);
 
 end.

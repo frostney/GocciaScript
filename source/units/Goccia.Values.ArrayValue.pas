@@ -41,6 +41,11 @@ type
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
 
+    // The length and whether it is writable, read without creating a value
+    // (a heap snapshot's fingerprint reads them after its last collection).
+    function StoredLength: Int64;
+    function LengthWritable: Boolean;
+
     // Index-based element access
     function GetLength: Integer;
     function HasDenseElementLength: Boolean;
@@ -1354,6 +1359,19 @@ begin
 end;
 
 // Index-based element access implementations
+function TGocciaArrayValue.StoredLength: Int64;
+begin
+  // The length property's value: never below the dense elements' count.
+  Result := FLength;
+  if Result < FElements.Count then
+    Result := FElements.Count;
+end;
+
+function TGocciaArrayValue.LengthWritable: Boolean;
+begin
+  Result := FLengthWritable;
+end;
+
 function TGocciaArrayValue.GetLength: Integer;
 begin
   if FLength < FElements.Count then

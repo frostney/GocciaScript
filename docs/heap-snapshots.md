@@ -211,10 +211,13 @@ than guessing, and calls `Poll` once per item in any loop whose length comes
 from the input. `source/units/Goccia.Values.ArrayValue.pas` holds the array
 codec as an example.
 
-A unit whose realm slot is filled on first use registers how to fill it with
-`RegisterSnapshotSlotMaterializer`, so a restore can build the intrinsic a
-snapshot names (the iterator prototypes and the function-object intrinsics
-do). A slot without one refuses a snapshot that names it.
+A unit whose realm slot, or owned slot, is filled on first use registers how
+to fill it with `RegisterSnapshotSlotMaterializer`, under the slot's name, so
+a restore can build the intrinsic a snapshot names (the iterator prototypes,
+the function-object intrinsics, Intl's legacy fallback symbol and the segment
+prototypes do). A restore builds the built-ins the run built in the order the
+run named them, so a slot that building an earlier one fills needs none; one
+nothing fills refuses the restore.
 
 ## Testing
 

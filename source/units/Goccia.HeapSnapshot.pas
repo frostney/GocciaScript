@@ -195,35 +195,66 @@ end;
 // The segment names of an object's own symbol keys, in their order: a
 // well-known symbol's name, else [description]#n for the n-th own symbol with
 // that description. One pass, counting descriptions as it goes.
-function SymbolSegments(
-  const ASymbols: TArray<TGocciaSymbolValue>): TStringArray;
-var
-  Seen: TDictionary<string, Integer>;
-  I, Occurrence: Integer;
-begin
-  SetLength(Result, Length(ASymbols));
-  Seen := TDictionary<string, Integer>.Create;
-  try
-    for I := 0 to High(ASymbols) do
-    begin
-      Result[I] := WellKnownSymbolName(ASymbols[I]);
-      if Result[I] <> '' then
-        Continue;
-      if not Seen.TryGetValue(ASymbols[I].Description, Occurrence) then
-        Occurrence := 0;
-      Seen.AddOrSetValue(ASymbols[I].Description, Occurrence + 1);
-      Result[I] := '[' + ASymbols[I].Description + ']#' + IntToStr(Occurrence);
-    end;
-  finally
-    Seen.Free;
-  end;
-end;
-
 // Far above any built-in's name. A longer path is not a name: what only a
 // path that long reaches is not named (anything a run hangs on a built-in
 // that deep has changed that built-in anyway), and SplitPath refuses one.
 const
   MAX_PATH_CHARS = 4096;
+
+type
+  // Names an object's own symbol keys one at a time, in their order, as
+  // SymbolSegments does; a name that could not be part of a path (its
+  // description too long) is '' and still counted.
+  TSymbolSegmentNamer = class
+  private
+    FSeen: TDictionary<string, Integer>;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    function Next(const ASymbol: TGocciaSymbolValue): string;
+  end;
+
+constructor TSymbolSegmentNamer.Create;
+begin
+  inherited Create;
+  FSeen := TDictionary<string, Integer>.Create;
+end;
+
+destructor TSymbolSegmentNamer.Destroy;
+begin
+  FSeen.Free;
+  inherited;
+end;
+
+function TSymbolSegmentNamer.Next(const ASymbol: TGocciaSymbolValue): string;
+var
+  Occurrence: Integer;
+begin
+  Result := WellKnownSymbolName(ASymbol);
+  if Result <> '' then
+    Exit;
+  if not FSeen.TryGetValue(ASymbol.Description, Occurrence) then
+    Occurrence := 0;
+  FSeen.AddOrSetValue(ASymbol.Description, Occurrence + 1);
+  if Length(ASymbol.Description) <= MAX_PATH_CHARS then
+    Result := '[' + ASymbol.Description + ']#' + IntToStr(Occurrence);
+end;
+
+function SymbolSegments(
+  const ASymbols: TArray<TGocciaSymbolValue>): TStringArray;
+var
+  Namer: TSymbolSegmentNamer;
+  I: Integer;
+begin
+  SetLength(Result, Length(ASymbols));
+  Namer := TSymbolSegmentNamer.Create;
+  try
+    for I := 0 to High(ASymbols) do
+      Result[I] := Namer.Next(ASymbols[I]);
+  finally
+    Namer.Free;
+  end;
+end;
 
 procedure AddValue(const ATable: TGocciaHeapSnapshotBuiltinTable;
   const AValue: TGocciaValue; const APath: string);
@@ -233,6 +264,17 @@ begin
     ATable.Add(AValue, APath);
 end;
 
+// A member at APath's segment AKind + AKey: the path is built only when the
+// value could be named and the path would not be too long, so a key the run
+// made long is never copied.
+procedure AddMember(const ATable: TGocciaHeapSnapshotBuiltinTable;
+  const AValue: TGocciaValue; const APath, AKind, AKey: string);
+begin
+  if ((AValue is TGocciaObjectValue) or (AValue is TGocciaSymbolValue)) and
+     (Length(APath) + Length(AKind) + Length(AKey) + 1 <= MAX_PATH_CHARS) then
+    ATable.Add(AValue, APath + SEP + AKind + AKey);
+end;
+
 // Numbers what one entry reaches; lazy members stay lazy.
 procedure Visit(const ATable: TGocciaHeapSnapshotBuiltinTable;
   const AObject: TGCManagedObject; const APath: string);
@@ -240,8 +282,8 @@ var
   Obj: TGocciaObjectValue;
   Pair: TGocciaPropertyMap.TKeyValuePair;
   Descriptor: TGocciaPropertyDescriptor;
-  Symbols: TArray<TGocciaSymbolValue>;
-  Names: TStringArray;
+  Symbol: TGocciaSymbolValue;
+  Namer: TSymbolSegmentNamer;
   Name: string;
   I: Integer;
 begin
@@ -265,33 +307,41 @@ begin
       Continue;
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
-      AddValue(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-        Seg(APath, 'g.' + Pair.Key));
-      AddValue(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-        Seg(APath, 's.' + Pair.Key));
+      AddMember(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+        APath, 'g.', Pair.Key);
+      AddMember(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+        APath, 's.', Pair.Key);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
-      AddValue(ATable, TGocciaPropertyDescriptorData(Descriptor).Value,
-        Seg(APath, '.' + Pair.Key));
+      AddMember(ATable, TGocciaPropertyDescriptorData(Descriptor).Value,
+        APath, '.', Pair.Key);
   end;
-  Symbols := Obj.GetOwnSymbols;
-  Names := SymbolSegments(Symbols);
-  for I := 0 to High(Symbols) do
-  begin
-    CheckNativeWork;
-    Name := Names[I];
-    AddValue(ATable, Symbols[I], Seg(APath, 'k@' + Name));
-    Descriptor := Obj.GetOwnSymbolPropertyDescriptor(Symbols[I]);
-    if Descriptor is TGocciaPropertyDescriptorAccessor then
+  // One symbol at a time, without a copy of the list.
+  Namer := TSymbolSegmentNamer.Create;
+  try
+    for I := 0 to Obj.StoredSymbolCount - 1 do
     begin
-      AddValue(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-        Seg(APath, 'g@' + Name));
-      AddValue(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-        Seg(APath, 's@' + Name));
-    end
-    else if Descriptor is TGocciaPropertyDescriptorData then
-      AddValue(ATable, TGocciaPropertyDescriptorData(Descriptor).Value,
-        Seg(APath, '@' + Name));
+      CheckNativeWork;
+      Symbol := Obj.StoredSymbolAt(I);
+      Name := Namer.Next(Symbol);
+      // A description too long for a path: nothing it reaches is named.
+      if Name = '' then
+        Continue;
+      AddMember(ATable, Symbol, APath, 'k@', Name);
+      Descriptor := Obj.GetOwnSymbolPropertyDescriptor(Symbol);
+      if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        AddMember(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+          APath, 'g@', Name);
+        AddMember(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+          APath, 's@', Name);
+      end
+      else if Descriptor is TGocciaPropertyDescriptorData then
+        AddMember(ATable, TGocciaPropertyDescriptorData(Descriptor).Value,
+          APath, '@', Name);
+    end;
+  finally
+    Namer.Free;
   end;
   if Obj is TGocciaNativeFunctionValue then
     AddValue(ATable, TGocciaNativeFunctionValue(Obj).CapturedRoot,
@@ -539,6 +589,13 @@ begin
     Slot := FindOwnedSlotByName(AParts[1]);
     if Slot < 0 then
       Exit;
+    // Filled on first use: filled here as using it would have.
+    if not Assigned(AEngine.Realm.GetOwnedSlot(Slot)) then
+    begin
+      Materializer := FindSnapshotSlotMaterializer(AParts[1]);
+      if Assigned(Materializer) then
+        Materializer();
+    end;
     Owned := AEngine.Realm.GetOwnedSlot(Slot);
     if not (Owned is TGocciaSharedPrototype) then
       Exit;
@@ -754,7 +811,7 @@ begin
   BuildBuiltinTable(FTable, AEngine);
   // From here on, a lazy member a built-in builds is told apart from a
   // change the run makes to it.
-  FTable.Install;
+  FTable.Install(AEngine.Realm);
   FFirstOfRun := TGocciaObjectValue.Create;
   TGarbageCollector.Instance.AddTempRoot(FFirstOfRun);
 end;
@@ -867,7 +924,7 @@ begin
       BuildBuiltinTable(FTable, AEngine, False);
       // The lazy members this engine builds while it resolves names are its
       // pristine ones, as the writing engine's were when it built them.
-      FTable.Install;
+      FTable.Install(AEngine.Realm);
       FResolver := TGocciaBuiltinPathResolver.Create(FTable, AEngine);
       FReader := TGocciaHeapSnapshotReader.Create(FTable, ALimits);
       FReader.BuiltinResolve := FResolver.Resolve;

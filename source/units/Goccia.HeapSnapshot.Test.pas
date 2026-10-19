@@ -86,6 +86,9 @@ type
     FSession: TGocciaHeapSnapshotSession;
     FSnapshotRefusal: string;
     FModuleSource: string;
+    // snapNow(): a snapshot through FSession while the calling frame runs.
+    function SnapNow(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function Snapshot(const ASource: string; out ARefusal: string;
       const AAccounting: Boolean = False): TBytes;
     function RestoreAndCheck(const ABytes: TBytes; const ACheck: string;
@@ -165,6 +168,10 @@ type
     procedure TestRestoredFrozenLiteralStaysFrozen;
     procedure TestLargeIndexPropertyRoundTrips;
     procedure TestSnapshotEndsTheStream;
+    procedure TestBuiltinsARunBuildsRestoreOrRefuseEarly;
+    procedure TestSnapshotCreatesNothing;
+    procedure TestHugeKeyOnBuiltinStaysBounded;
+    procedure TestNestedEngineBuildsAreItsOwn;
   public
     procedure SetupTests; override;
   end;
@@ -329,6 +336,14 @@ begin
     TestLargeIndexPropertyRoundTrips);
   Test('A snapshot ends the stream it is written to',
     TestSnapshotEndsTheStream);
+  Test('Built-ins a run builds restore, the legacy Intl and Segmenter ones too',
+    TestBuiltinsARunBuildsRestoreOrRefuseEarly);
+  Test('Taking a snapshot creates no managed object',
+    TestSnapshotCreatesNothing);
+  Test('A huge key on a built-in refuses within the fingerprint cap',
+    TestHugeKeyOnBuiltinStaysBounded);
+  Test('Built-ins a nested engine builds are not the outer session''s',
+    TestNestedEngineBuildsAreItsOwn);
 end;
 
 // Builds a graph with ASource in a fresh engine and writes what it returns;
@@ -1098,6 +1113,26 @@ begin
   Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
 end;
 
+function THeapSnapshotTests.SnapNow(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Stream: TBytesStream;
+begin
+  FSnapshotRefusal := '';
+  Stream := TBytesStream.Create;
+  try
+    try
+      FSession.Snapshot([], Stream);
+    except
+      on E: EGocciaHeapSnapshotRefused do
+        FSnapshotRefusal := E.Message;
+    end;
+  finally
+    Stream.Free;
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
 procedure THeapSnapshotTests.TestSnapshotNeedsAnIdleRun;
 var
   Engine: TGocciaEngine;
@@ -1137,7 +1172,15 @@ begin
       'new Int32Array(new SharedArrayBuffer(4)), 0, 0); 0', False))
       .ToBe('an Atomics.waitAsync waiter is pending');
     Expect<Boolean>(Engine.IsAtPauseCheckpoint).ToBe(False);
+    // From a host function the script called, its frame still running.
+    FSession := Session;
+    Engine.GlobalScope.DefineLexicalBinding('snapNow',
+      TGocciaNativeFunctionValue.Create(SnapNow, 'snapNow', 0), dtConst);
+    Engine.EvaluateGlobalEval('(() => { snapNow(); return 0; })()',
+      TEST_PATH, Stage);
+    Expect<string>(FSnapshotRefusal).ToBe('a bytecode frame is running');
   finally
+    FSession := nil;
     Session.Free;
     Engine.Free;
     Stream.Free;
@@ -1280,6 +1323,164 @@ begin
     Lines.Free;
   end;
   Expect<string>(RestoreAndCheck(Bytes, 'String(restored.a)')).ToBe('1');
+end;
+
+procedure THeapSnapshotTests.TestBuiltinsARunBuildsRestoreOrRefuseEarly;
+const
+  SOURCES: array[0..32] of string = (
+    'Temporal.Now.instant(); ({})',
+    'Temporal.PlainDate.from("2026-01-02").add({ days: 1 }); ({})',
+    'Temporal.Duration.from({ hours: 1 }); ({})',
+    'Temporal.PlainTime.from("10:00"); ({})',
+    'Temporal.ZonedDateTime.from("2026-01-02T00:00[UTC]"); ({})',
+    'Temporal.PlainYearMonth.from("2026-01"); Temporal.PlainMonthDay.from("01-02"); ({})',
+    'Temporal.PlainDateTime.from("2026-01-02T03:04"); Temporal.Instant.from("2026-01-02T00:00Z"); ({})',
+    'new Intl.NumberFormat("en").format(1); ({})',
+    'Intl.NumberFormat.call(Object.create(Intl.NumberFormat.prototype)); ({})',
+    'Intl.DateTimeFormat.call(Object.create(Intl.DateTimeFormat.prototype)); ({})',
+    'new Intl.DateTimeFormat("en").format(0); ({})',
+    'new Intl.Collator("en").compare("a", "b"); ({})',
+    'new Intl.Segmenter("en").segment("a b"); ({})',
+    '[...new Intl.Segmenter("en").segment("a b")]; ({})',
+    'new Intl.Locale("en"); ({})',
+    'new Intl.ListFormat("en").format(["a"]); ({})',
+    'new Intl.DurationFormat("en").format({ hours: 1 }); ({})',
+    'new Intl.DisplayNames("en", { type: "region" }).of("US"); ({})',
+    'new Intl.PluralRules("en").select(1); ({})',
+    'new Intl.RelativeTimeFormat("en").format(1, "day"); ({})',
+    'new Date(0).toISOString(); ({})',
+    'Date.now(); new Date().toLocaleString(); ({})',
+    'new DisposableStack(); new AsyncDisposableStack(); ({})',
+    'parseInt("1"); atob("YQ=="); btoa("a"); isNaN(1); ({})',
+    '({}).hasOwnProperty("a"); ({}).__proto__; ({})',
+    '[1, 2].values().map((x) => x).toArray(); "ab".matchAll(/a/g).next(); ({})',
+    'new Map([[1, 2]]).entries().next(); new Set([1]).values().next(); "a"[Symbol.iterator]().next(); ({})',
+    'const o = { *g() { yield 1; } }; o.g().next(); ({})',
+    'const o = { async *g() { yield 1; } }; o.g().next(); ({})',
+    'const f = async () => 1; f(); ({})',
+    'Iterator.from({ next() { return { done: true }; } }).next(); ({})',
+    'new Proxy({}, {}); Reflect.ownKeys({}); ({})',
+    '[1.5].toLocaleString(); (1).toLocaleString(); ({})');
+var
+  Refusal: string;
+  I, Restored: Integer;
+  Bytes: TBytes;
+begin
+  Restored := 0;
+  for I := 0 to High(SOURCES) do
+  begin
+    Bytes := Snapshot(SOURCES[I], Refusal);
+    // What an async source left queued is the next source's problem
+    // otherwise: the queue is the thread's.
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
+    // A snapshot the same engine build wrote restores.
+    if Refusal = '' then
+    begin
+      Expect<string>(SOURCES[I] + ' => ' + RestoreRefusal(Bytes))
+        .ToBe(SOURCES[I] + ' => ');
+      Inc(Restored);
+    end;
+  end;
+  // Every source but the async generator's, whose next() leaves a job
+  // queued.
+  Expect<Integer>(Restored).ToBe(Length(SOURCES) - 1);
+end;
+
+procedure THeapSnapshotTests.TestSnapshotCreatesNothing;
+var
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Stream: TBytesStream;
+  Value: TGocciaValue;
+  GC: TGarbageCollector;
+  Before: Integer;
+begin
+  Lines := TStringList.Create;
+  Stream := TBytesStream.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Session := TGocciaHeapSnapshotSession.Create(Engine);
+  GC := TGarbageCollector.Instance;
+  try
+    // Array built-ins included: their length is fingerprinted too.
+    Value := Engine.EvaluateGlobalEval('[1, { a: [2] }]', TEST_PATH, Stage);
+    GC.AddTempRoot(Value);
+    Session.AddToBaseline(Value);
+    GC.Collect;
+    Before := GC.ManagedObjectCount;
+    Session.Snapshot([Value], Stream);
+    Session.Snapshot([Value], Stream);
+    // What the writer created would outlive its collection, uncounted.
+    Expect<Integer>(GC.ManagedObjectCount).ToBe(Before);
+    GC.RemoveTempRoot(Value);
+  finally
+    Session.Free;
+    Engine.Free;
+    Stream.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotTests.TestHugeKeyOnBuiltinStaysBounded;
+var
+  Refusal: string;
+  Bytes: TBytes;
+begin
+  // The key alone is past the cap: refused as changed, the key copied
+  // nowhere first.
+  Snapshot('(() => { Math["k".repeat(5 * 1024 * 1024)] = 1; return {}; })()',
+    Refusal);
+  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  // So are many symbols.
+  Snapshot('(() => { for (const i of Array.from({ length: 300000 }, ' +
+    '(_, i) => i)) Math[Symbol()] = i; return {}; })()', Refusal);
+  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  // A built-in the run built, then grew: walked one key at a time, and the
+  // restoring engine sees the change.
+  Bytes := Snapshot('(() => { const p = Temporal.PlainDate.prototype; ' +
+    'p["k".repeat(5 * 1024 * 1024)] = 1; ' +
+    'for (const i of Array.from({ length: 100000 }, (_, i) => i)) ' +
+    'p[Symbol("s".repeat(i % 7))] = i; return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<Boolean>(Pos('the run changed the built-in', RestoreRefusal(Bytes)) > 0)
+    .ToBe(True);
+end;
+
+procedure THeapSnapshotTests.TestNestedEngineBuildsAreItsOwn;
+var
+  Outer, Nested: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Stream: TBytesStream;
+  Value: TGocciaValue;
+begin
+  Lines := TStringList.Create;
+  Stream := TBytesStream.Create;
+  Outer := TGocciaEngine.Create(TEST_PATH, Lines);
+  Session := TGocciaHeapSnapshotSession.Create(Outer);
+  try
+    // Another engine on the thread builds lazy built-ins of its own, then
+    // goes away: what it built is garbage, not the outer run's.
+    Nested := TGocciaEngine.Create(TEST_PATH, Lines);
+    try
+      Nested.EvaluateGlobalEval('Temporal.PlainDate.from("2026-01-02"); ' +
+        'new Intl.NumberFormat("en").format(1); 0', TEST_PATH, Stage);
+    finally
+      Nested.Free;
+    end;
+    Value := Outer.EvaluateGlobalEval('({ a: 1 })', TEST_PATH, Stage);
+    Session.AddToBaseline(Value);
+    Session.CheckAccounting := True;
+    Session.Snapshot([Value], Stream);
+    Expect<Boolean>(Stream.Size > 0).ToBe(True);
+  finally
+    Session.Free;
+    Outer.Free;
+    Stream.Free;
+    Lines.Free;
+  end;
 end;
 
 procedure THeapSnapshotTests.TestRefusesChangedLateBuiltin;
@@ -1506,6 +1707,11 @@ begin
     GC.Collect;
     GC.MaxBytes := GC.BytesAllocated + 1024 * 1024;
     Refusal := RestoreRefusalIn(Engine, Bytes);
+    // Under a ceiling the restore's own tables do not fit either: refused as
+    // invalid all the same, never another exception.
+    GC.MaxBytes := GC.BytesAllocated + 1;
+    Expect<Boolean>(Pos('memory', RestoreRefusalIn(Engine, Bytes)) > 0)
+      .ToBe(True);
   finally
     GC.MaxBytes := Previous;
     Engine.Free;
