@@ -878,6 +878,35 @@ begin
     end;
 end;
 
+const
+  TRUNCATED_BODY_ERROR = 'HTTP response body ended before its declared length';
+  MALFORMED_CHUNK_ERROR = 'Invalid HTTP response: malformed chunked body';
+
+{ A chunk-size line's size: one or more hexadecimal digits and nothing else.
+  A size too large for an Integer is reported as High(Integer), which the
+  body limit then refuses. }
+function TryParseChunkSize(const AText: string; out ASize: Integer): Boolean;
+var
+  Digit, I: Integer;
+begin
+  ASize := 0;
+  Result := AText <> '';
+  for I := 1 to Length(AText) do
+  begin
+    case AText[I] of
+      '0'..'9': Digit := Ord(AText[I]) - Ord('0');
+      'a'..'f': Digit := Ord(AText[I]) - Ord('a') + 10;
+      'A'..'F': Digit := Ord(AText[I]) - Ord('A') + 10;
+    else
+      Exit(False);
+    end;
+    if ASize > (High(Integer) - Digit) div 16 then
+      ASize := High(Integer)
+    else
+      ASize := ASize * 16 + Digit;
+  end;
+end;
+
 function ReadResponse(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
   const AIsHead: Boolean; const ADeadlineNs: Int64;
@@ -893,7 +922,6 @@ var
   BodyBytes: TBytes;
   BodyLen: Integer;
   ChunkBuf: TBytes;
-  Done: Boolean;
   Remaining: Integer;
 
   function RemainingTimeoutMilliseconds: Integer;
@@ -921,9 +949,18 @@ var
       be taken for: a missing header terminator, or a complete body. }
     repeat
       ConfigureSocketTimeout(ASock, RemainingTimeoutMilliseconds);
-      Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
+      try
+        Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
+      except
+        { A TLS backend that cannot tell a timeout from a broken
+          connection raises its read error when the socket timeout ends
+          the read. Past the deadline that is the request timing out. }
+        if (ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs) then
+          raise EHTTPError.Create('HTTP request timed out');
+        raise;
+      end;
       Failure := srfOther;
-      if (Result < 0) and not ATransport.Active then
+      if Result < 0 then
         Failure := LastSocketReadFailure;
     until Failure <> srfInterrupted;
     if (Result <= 0) and
@@ -1031,21 +1068,22 @@ begin
 
   if Pos('chunked', TransferEncoding) > 0 then
   begin
-    // Chunked transfer encoding
+    { Chunked transfer coding (RFC 9112 section 7.1). A connection that
+      ends before the last chunk is an incomplete message, which fetch
+      reports as a network error rather than as a shorter body, and only
+      bytes that arrived are ever copied into the body. }
     ChunkBuf := Copy(BodyBytes, 0, Length(BodyBytes));
     SetLength(Result.Body, 0);
-    Done := False;
 
-    while not Done do
-    begin
+    repeat
       while FindCRLF(ChunkBuf) < 0 do
       begin
         N := Receive(Buf, RECV_BUF_SIZE);
-        if N <= 0 then begin Done := True; Break; end;
+        if N <= 0 then
+          raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
         AppendBytes(ChunkBuf, @Buf[0], N,
           AMaxBodyBytes + RECV_BUF_SIZE);
       end;
-      if Done then Break;
 
       I := FindCRLF(ChunkBuf);
       Line := IsomorphicDecode(ChunkBuf, 0, I);
@@ -1055,26 +1093,30 @@ begin
       if J > 0 then
         Line := Copy(Line, 1, J - 1);
 
-      ChunkSize := StrToIntDef('$' + Trim(Line), 0);
-      if ChunkSize = 0 then Break;
-      if (ChunkSize < 0) or
-         (Length(Result.Body) > AMaxBodyBytes - ChunkSize) then
+      if not TryParseChunkSize(Trim(Line), ChunkSize) then
+        raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
+      if ChunkSize = 0 then
+        Break;
+      if Length(Result.Body) > AMaxBodyBytes - ChunkSize then
         raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
           [AMaxBodyBytes]);
 
       while Length(ChunkBuf) < ChunkSize + 2 do
       begin
         N := Receive(Buf, RECV_BUF_SIZE);
-        if N <= 0 then begin Done := True; Break; end;
+        if N <= 0 then
+          raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
         AppendBytes(ChunkBuf, @Buf[0], N,
           AMaxBodyBytes + RECV_BUF_SIZE);
       end;
+      if (ChunkBuf[ChunkSize] <> 13) or (ChunkBuf[ChunkSize + 1] <> 10) then
+        raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
 
       BodyLen := Length(Result.Body);
       SetLength(Result.Body, BodyLen + ChunkSize);
       Move(ChunkBuf[0], Result.Body[BodyLen], ChunkSize);
       RemoveLeadingBytes(ChunkBuf, ChunkSize + 2);
-    end;
+    until False;
   end
   else
   begin
@@ -1103,11 +1145,13 @@ begin
         end;
       end;
 
-      // Read remaining
+      // Read remaining; a connection that ends first is an incomplete
+      // message (RFC 9112 section 8), not a body padded with zeros.
       while BodyLen < ContentLen do
       begin
         N := Receive(Buf, RECV_BUF_SIZE);
-        if N <= 0 then Break;
+        if N <= 0 then
+          raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
         Remaining := ContentLen - BodyLen;
         if N > Remaining then N := Remaining;
         Move(Buf[0], Result.Body[BodyLen], N);

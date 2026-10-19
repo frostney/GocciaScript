@@ -42,6 +42,10 @@ type
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
   const ASocket: TSocket; const AHost: string);
 procedure CloseTransportSecurity(var AConnection: TTransportSecurityConnection);
+{ Both return the byte count, 0 when the peer closed the connection, or -1
+  when the socket's timeout ended the call, with the socket error left for
+  the caller as a plain socket call leaves it. A backend that cannot tell a
+  timeout apart raises its read or write error instead. }
 function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
 function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
@@ -605,11 +609,26 @@ begin
   end;
 end;
 
+{ The socket blocks, so OpenSSL asks to be called again (SSL_ERROR_WANT_READ
+  or SSL_ERROR_WANT_WRITE) only when the socket call it made did not
+  complete. A signal that interrupted the call is retried. Anything else is
+  the socket's receive or send timeout ending the call, and retrying that
+  would wait for ever on a peer that has gone silent, so it is returned to the
+  caller as a failed call, -1 with the socket error left in errno, exactly as
+  a plain socket call reports it. }
+function RetryInterruptedOpenSSLCall(const ASocketError: cint): Boolean;
+begin
+  Result := ASocketError = ESysEINTR;
+  if not Result then
+    fpSetErrNo(ASocketError);
+end;
+
 function ReadOpenSSL(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
 var
   Data: TOpenSSLData;
   ErrorCode: Integer;
+  SocketError: cint;
 begin
   Data := TOpenSSLData(AConnection.BackendData);
   repeat
@@ -617,6 +636,7 @@ begin
     if Result > 0 then
       Exit;
 
+    SocketError := fpGetErrNo;
     ErrorCode := SslGetError(Data.SSL, Result);
     case ErrorCode of
       SSL_ERROR_ZERO_RETURN:
@@ -626,7 +646,11 @@ begin
         end;
       SSL_ERROR_WANT_READ,
       SSL_ERROR_WANT_WRITE:
-        Continue;
+        if not RetryInterruptedOpenSSLCall(SocketError) then
+        begin
+          Result := -1;
+          Exit;
+        end;
     else
       raise ETransportSecurityError.CreateFmt('%s: %d',
         [TLS_READ_ERROR, ErrorCode]);
@@ -639,6 +663,7 @@ function WriteOpenSSL(var AConnection: TTransportSecurityConnection;
 var
   Data: TOpenSSLData;
   ErrorCode: Integer;
+  SocketError: cint;
 begin
   Data := TOpenSSLData(AConnection.BackendData);
   repeat
@@ -646,6 +671,7 @@ begin
     if Result > 0 then
       Exit;
 
+    SocketError := fpGetErrNo;
     ErrorCode := SslGetError(Data.SSL, Result);
     case ErrorCode of
       SSL_ERROR_ZERO_RETURN:
@@ -655,7 +681,11 @@ begin
         end;
       SSL_ERROR_WANT_READ,
       SSL_ERROR_WANT_WRITE:
-        Continue;
+        if not RetryInterruptedOpenSSLCall(SocketError) then
+        begin
+          Result := -1;
+          Exit;
+        end;
     else
       raise ETransportSecurityError.CreateFmt('%s: %d',
         [TLS_WRITE_ERROR, ErrorCode]);
