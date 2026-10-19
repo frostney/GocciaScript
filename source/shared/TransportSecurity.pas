@@ -37,10 +37,20 @@ type
     Backend: Integer;
     Socket: TSocket;
     BackendData: Pointer;
+    DeadlineNanoseconds: Int64;
   end;
 
+{ ADeadlineNanoseconds is the request's deadline on the GetNanoseconds clock,
+  or 0 (the default) for none. The handshake and every later read and write
+  end by it, however the peer paces its bytes. A handshake past the deadline
+  raises. Past it, OpenSSL's read and write return -1 with EAGAIN in errno, as
+  a plain receive that timed out leaves it, and SecureTransport's and
+  SChannel's raise their read or write error. Otherwise both return the byte
+  count, or 0 when the peer closed the connection. The OpenSSL backend puts
+  the socket in non-blocking mode for the rest of the connection. }
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
-  const ASocket: TSocket; const AHost: string);
+  const ASocket: TSocket; const AHost: string;
+  const ADeadlineNanoseconds: Int64 = 0);
 procedure CloseTransportSecurity(var AConnection: TTransportSecurityConnection);
 function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
@@ -58,7 +68,8 @@ const
   NO_TLS_ERROR = 'TLS transport is not available on this platform';
 
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
-  const ASocket: TSocket; const AHost: string);
+  const ASocket: TSocket; const AHost: string;
+  const ADeadlineNanoseconds: Int64);
 begin
   AConnection.Active := False;
   AConnection.Backend := 0;
@@ -100,7 +111,8 @@ uses
   Windows,
   {$ENDIF}
   Math,
-  TextEncoding;
+  TextEncoding,
+  TimingUtils;
 
 const
   TSB_NONE = 0;
@@ -111,6 +123,7 @@ const
   TLS_HANDSHAKE_ERROR = 'TLS handshake failed';
   TLS_READ_ERROR = 'TLS read failed';
   TLS_WRITE_ERROR = 'TLS write failed';
+  TLS_TIMEOUT_ERROR = 'TLS handshake timed out';
 
 type
   ETransportSecurityError = class(Exception);
@@ -146,6 +159,55 @@ begin
   Result := WinSock2.recv(ASock, ABuffer^, ALength, 0);
   {$ENDIF}
 end;
+
+{ Milliseconds left before ADeadlineNanoseconds, rounded up; 0 when it has
+  passed. Only called with a deadline set. }
+function MillisecondsBefore(const ADeadlineNanoseconds: Int64): Int64;
+var
+  Remaining: Int64;
+begin
+  Remaining := ADeadlineNanoseconds - GetNanoseconds;
+  if Remaining <= 0 then
+    Result := 0
+  else
+    Result := (Remaining + 999999) div 1000000;
+end;
+
+{$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
+{ A receive on the blocking socket that ends by ADeadlineNanoseconds (0 for
+  none): the socket's receive timeout is set to the time left before every
+  call, so a peer that trickles bytes cannot stretch a TLS read made of many
+  receives past the deadline. Returns -1 once the deadline has passed. }
+function SocketReceiveBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+var
+  Milliseconds: Int64;
+  {$IFDEF UNIX}
+  Timeout: TTimeVal;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Timeout: LongInt;
+  {$ENDIF}
+begin
+  if ADeadlineNanoseconds <> 0 then
+  begin
+    Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
+    if Milliseconds = 0 then
+      Exit(-1);
+    {$IFDEF UNIX}
+    Timeout.tv_sec := Milliseconds div 1000;
+    Timeout.tv_usec := (Milliseconds mod 1000) * 1000;
+    fpSetSockOpt(ASock, SOL_SOCKET, SO_RCVTIMEO, @Timeout, SizeOf(Timeout));
+    {$ENDIF}
+    {$IFDEF MSWINDOWS}
+    Timeout := LongInt(Min(Milliseconds, Int64(High(LongInt))));
+    WinSock2.setsockopt(ASock, SOL_SOCKET, SO_RCVTIMEO,
+      PAnsiChar(@Timeout), SizeOf(Timeout));
+    {$ENDIF}
+  end;
+  Result := SocketReceive(ASock, ABuffer, ALength);
+end;
+{$IFEND}
 
 procedure SendSocketAll(const ASocket: TSocket; const ABuffer: Pointer;
   const ALength: Integer);
@@ -191,6 +253,7 @@ type
   public
     Socket: TSocket;
     Context: SSLContextRef;
+    DeadlineNanoseconds: Int64;
   end;
 
   TSecureTransportReadFunc = function(AConnection: SSLConnectionRef;
@@ -236,7 +299,8 @@ var
 begin
   Data := TSecureTransportData(AConnection);
   RequestedLength := ADataLength;
-  ReadCount := SocketReceive(Data.Socket, AData, ADataLength);
+  ReadCount := SocketReceiveBefore(Data.Socket, AData, ADataLength,
+    Data.DeadlineNanoseconds);
   if ReadCount > 0 then
   begin
     ADataLength := ReadCount;
@@ -291,6 +355,7 @@ var
 begin
   Data := TSecureTransportData.Create;
   Data.Socket := AConnection.Socket;
+  Data.DeadlineNanoseconds := AConnection.DeadlineNanoseconds;
   Data.Context := SSLCreateContext(nil, K_SSL_CLIENT_SIDE, K_SSL_STREAM_TYPE);
   if Data.Context = nil then
   begin
@@ -542,11 +607,62 @@ begin
   end;
 end;
 
+{ The OpenSSL backend drives its socket without blocking: after the TCP
+  connection it puts the socket in non-blocking mode, and whenever OpenSSL
+  wants to read or write it waits with poll for the time left before the
+  request's deadline. A blocking socket with a receive timeout bounded each
+  receive but not one OpenSSL call, which makes as many receives as a record
+  needs, and a timed-out receive came back as SSL_ERROR_WANT_READ, which used
+  to be retried for ever. }
+procedure SetSocketNonBlocking(const ASocket: TSocket);
+var
+  Flags: cint;
+begin
+  Flags := FpFcntl(ASocket, F_GETFL);
+  if (Flags < 0) or (FpFcntl(ASocket, F_SETFL, Flags or O_NONBLOCK) < 0) then
+    raise ETransportSecurityError.Create(
+      'Failed to configure the TLS socket');
+end;
+
+{ Waits until ASocket is ready for AEvents (POLLIN or POLLOUT), or reports
+  False once ADeadlineNanoseconds (0 for none) has passed. An error or hang-up
+  on the socket counts as ready: the OpenSSL call made next reports it. }
+function WaitForSocket(const ASocket: TSocket; const AEvents: cshort;
+  const ADeadlineNanoseconds: Int64): Boolean;
+var
+  Descriptor: TPollFd;
+  Milliseconds: Int64;
+  Outcome: cint;
+begin
+  repeat
+    if ADeadlineNanoseconds = 0 then
+      Milliseconds := -1
+    else
+    begin
+      Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
+      if Milliseconds = 0 then
+        Exit(False);
+      if Milliseconds > High(cint) then
+        Milliseconds := High(cint);
+    end;
+    Descriptor.fd := ASocket;
+    Descriptor.events := AEvents;
+    Descriptor.revents := 0;
+    Outcome := FpPoll(@Descriptor, 1, Milliseconds);
+    if Outcome > 0 then
+      Exit(True);
+    if (Outcome < 0) and (FpGetErrNo <> ESysEINTR) then
+      raise ETransportSecurityError.Create('TLS socket wait failed');
+  until False;
+end;
+
 procedure StartOpenSSL(var AConnection: TTransportSecurityConnection;
   const AHost: string);
 var
   Data: TOpenSSLData;
   HostName: TBytes;
+  Outcome: Integer;
+  Ready: Boolean;
 begin
   if not EnsureOpenSSLLoaded then
     raise ETransportSecurityError.Create(OPENSSL_LOAD_ERROR);
@@ -568,8 +684,29 @@ begin
       TLSEXT_NAMETYPE_host_name, PAnsiChar(@HostName[0]));
 
     SslSetFd(Data.SSL, AConnection.Socket);
-    if SslConnect(Data.SSL) <= 0 then
-      raise ETransportSecurityError.Create(TLS_HANDSHAKE_ERROR);
+    { Without auto-retry, SSL_read returns after each record that carries no
+      application data (a TLS 1.3 session ticket, say) instead of reading
+      on, so a peer that streams such records cannot keep one call running
+      past the deadline: every return comes back through WaitForSocket. }
+    SslCtrl(Data.SSL, SSL_CTRL_CLEAR_MODE, SSL_MODE_AUTO_RETRY, nil);
+    SetSocketNonBlocking(AConnection.Socket);
+    repeat
+      Outcome := SslConnect(Data.SSL);
+      if Outcome = 1 then
+        Break;
+      case SslGetError(Data.SSL, Outcome) of
+        SSL_ERROR_WANT_READ:
+          Ready := WaitForSocket(AConnection.Socket, POLLIN,
+            AConnection.DeadlineNanoseconds);
+        SSL_ERROR_WANT_WRITE:
+          Ready := WaitForSocket(AConnection.Socket, POLLOUT,
+            AConnection.DeadlineNanoseconds);
+      else
+        raise ETransportSecurityError.Create(TLS_HANDSHAKE_ERROR);
+      end;
+      if not Ready then
+        raise ETransportSecurityError.Create(TLS_TIMEOUT_ERROR);
+    until False;
 
     if SSLGetVerifyResult(Data.SSL) <> X509_V_OK then
       raise ETransportSecurityError.Create('OpenSSL certificate verification failed');
@@ -605,11 +742,24 @@ begin
   end;
 end;
 
+{ OpenSSL asked to be called again once the socket is ready for AEvents.
+  Waits for that; past the deadline, reports False with the socket timeout's
+  error in errno, as a plain receive that timed out leaves it. }
+function AwaitOpenSSLSocket(const AConnection: TTransportSecurityConnection;
+  const AEvents: cshort): Boolean;
+begin
+  Result := WaitForSocket(AConnection.Socket, AEvents,
+    AConnection.DeadlineNanoseconds);
+  if not Result then
+    FpSetErrNo(ESysEAGAIN);
+end;
+
 function ReadOpenSSL(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
 var
   Data: TOpenSSLData;
   ErrorCode: Integer;
+  Events: cshort;
 begin
   Data := TOpenSSLData(AConnection.BackendData);
   repeat
@@ -626,7 +776,17 @@ begin
         end;
       SSL_ERROR_WANT_READ,
       SSL_ERROR_WANT_WRITE:
-        Continue;
+        begin
+          if ErrorCode = SSL_ERROR_WANT_READ then
+            Events := POLLIN
+          else
+            Events := POLLOUT;
+          if not AwaitOpenSSLSocket(AConnection, Events) then
+          begin
+            Result := -1;
+            Exit;
+          end;
+        end;
     else
       raise ETransportSecurityError.CreateFmt('%s: %d',
         [TLS_READ_ERROR, ErrorCode]);
@@ -639,6 +799,7 @@ function WriteOpenSSL(var AConnection: TTransportSecurityConnection;
 var
   Data: TOpenSSLData;
   ErrorCode: Integer;
+  Events: cshort;
 begin
   Data := TOpenSSLData(AConnection.BackendData);
   repeat
@@ -655,7 +816,17 @@ begin
         end;
       SSL_ERROR_WANT_READ,
       SSL_ERROR_WANT_WRITE:
-        Continue;
+        begin
+          if ErrorCode = SSL_ERROR_WANT_READ then
+            Events := POLLIN
+          else
+            Events := POLLOUT;
+          if not AwaitOpenSSLSocket(AConnection, Events) then
+          begin
+            Result := -1;
+            Exit;
+          end;
+        end;
     else
       raise ETransportSecurityError.CreateFmt('%s: %d',
         [TLS_WRITE_ERROR, ErrorCode]);
@@ -725,6 +896,7 @@ type
   TSChannelData = class
   public
     Socket: TSocket;
+    DeadlineNanoseconds: Int64;
     Credential: TSecHandle;
     Context: TSecHandle;
     HasContext: Boolean;
@@ -812,11 +984,13 @@ begin
   AppendBytes(ATarget, ASource, ALength);
 end;
 
-function ReceiveIntoBuffer(const ASocket: TSocket; var ABuffer: TBytes): Integer;
+function ReceiveIntoBuffer(const AData: TSChannelData;
+  var ABuffer: TBytes): Integer;
 var
   Temporary: array[0..8191] of Byte;
 begin
-  Result := SocketReceive(ASocket, @Temporary[0], Length(Temporary));
+  Result := SocketReceiveBefore(AData.Socket, @Temporary[0],
+    Length(Temporary), AData.DeadlineNanoseconds);
   if Result > 0 then
     AppendBytes(ABuffer, @Temporary[0], Result);
 end;
@@ -856,6 +1030,7 @@ begin
   FillChar(Data.Context, SizeOf(Data.Context), 0);
   FillChar(Data.StreamSizes, SizeOf(Data.StreamSizes), 0);
   Data.Socket := AConnection.Socket;
+  Data.DeadlineNanoseconds := AConnection.DeadlineNanoseconds;
   Data.HasContext := False;
 
   FillChar(Credential, SizeOf(Credential), 0);
@@ -919,7 +1094,7 @@ begin
 
       if Status = SEC_E_INCOMPLETE_MESSAGE then
       begin
-        ReceiveCount := ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput);
+        ReceiveCount := ReceiveIntoBuffer(Data, Data.EncryptedInput);
         if ReceiveCount < 0 then
           raise ETransportSecurityError.Create(TLS_READ_ERROR);
         if ReceiveCount = 0 then
@@ -934,7 +1109,7 @@ begin
       begin
         if Length(Data.EncryptedInput) = 0 then
         begin
-          ReceiveCount := ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput);
+          ReceiveCount := ReceiveIntoBuffer(Data, Data.EncryptedInput);
           if ReceiveCount < 0 then
             raise ETransportSecurityError.Create(TLS_READ_ERROR);
           if ReceiveCount = 0 then
@@ -1057,7 +1232,7 @@ begin
   begin
     if Length(Data.EncryptedInput) = 0 then
     begin
-      ReceiveCount := ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput);
+      ReceiveCount := ReceiveIntoBuffer(Data, Data.EncryptedInput);
       if ReceiveCount < 0 then
         raise ETransportSecurityError.Create(TLS_READ_ERROR);
       if ReceiveCount = 0 then
@@ -1083,7 +1258,7 @@ begin
       @QualityOfProtection);
     if Status = SEC_E_INCOMPLETE_MESSAGE then
     begin
-      ReceiveCount := ReceiveIntoBuffer(Data.Socket, Data.EncryptedInput);
+      ReceiveCount := ReceiveIntoBuffer(Data, Data.EncryptedInput);
       if ReceiveCount < 0 then
         raise ETransportSecurityError.Create(TLS_READ_ERROR);
       if ReceiveCount = 0 then
@@ -1183,10 +1358,12 @@ end;
 {$ENDIF}
 
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
-  const ASocket: TSocket; const AHost: string);
+  const ASocket: TSocket; const AHost: string;
+  const ADeadlineNanoseconds: Int64);
 begin
   FillChar(AConnection, SizeOf(AConnection), 0);
   AConnection.Socket := ASocket;
+  AConnection.DeadlineNanoseconds := ADeadlineNanoseconds;
   AConnection.Backend := TSB_NONE;
 
   {$IFDEF DARWIN}
