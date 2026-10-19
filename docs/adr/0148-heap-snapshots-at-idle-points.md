@@ -55,6 +55,9 @@ A run reaches the checkpoint when all of these hold:
 - the microtask queue is empty;
 - every extension except the one that owns the run's host calls reports no
   pending work (`HasPendingWork`, ADR 0142);
+- no `Atomics.waitAsync` waiter is pending: the engine services those outside
+  the extensions, and a waiter's buffer subscription and deadline live outside
+  the heap;
 - the host-call owner reports only host calls the embedder answers.
 
 The engine checks for the checkpoint where it would otherwise call that
@@ -66,7 +69,8 @@ snapshot then, the engine:
 3. ends the run with a paused result, not with an exception a script can see.
 
 Other pending work at that point means the run is not at a checkpoint: a
-timer still due, a fetch in flight (ADR 0146), or an extension's own work.
+timer still due, a fetch in flight (ADR 0146), an `Atomics.waitAsync` waiter,
+or an extension's own work.
 The snapshot is then refused, and the embedder keeps waiting or replays
 later. Every resume point is a pending promise the host owns, and all control
 state lives in heap objects: suspended async and generator continuations,
@@ -128,10 +132,14 @@ the realm's slots and shared prototypes, and the well-known symbols.
   - added, deleted and redefined own properties, string- and symbol-keyed,
     with their data or accessor descriptors and attributes;
   - a changed prototype;
+  - a changed `[[Extensible]]` flag (`Object.preventExtensions`), recorded
+    apart from sealing and freezing;
   - a changed integrity level.
 
   A restore applies the differences after the built-in table is resolved and
-  before the object graph is filled, in the order they were recorded.
+  before the object graph is filled: property and prototype changes in the
+  order they were recorded, then extensibility and integrity. Each kind of
+  difference has a round-trip test.
 - A change to a built-in's native internal state (its slots) refuses unless
   a codec covers that state.
 
@@ -153,8 +161,12 @@ How each kind of module is restored:
 - **Source modules** are restored as above.
 - **Data modules** are read again and checked by content hash.
 - **Host and runtime modules** (`fs`, `goccia:*`, an embedder's own modules)
-  are created by the engine as usual. Their state is written only through
-  their codecs; without one they refuse if the run changed them.
+  are created by the engine as usual. Each is identified by its name and a
+  version: the engine build for the engine's own modules, and for a host
+  module a version the embedder supplies when it registers the module, which
+  it changes whenever the module's exports or behaviour change. A host module
+  registered without a version refuses the snapshot. Their state is written
+  only through their codecs; without one they refuse if the run changed them.
 - **Pending dynamic imports and deferred namespaces** refuse until a codec
   covers them.
 
@@ -172,6 +184,10 @@ handler stacks. Two rules follow:
   - it checks every count, index and length with overflow-safe arithmetic,
     and against limits on the input's total size, the number of objects and
     strings, string lengths and nesting depth;
+  - it polls the run's execution limits (`CheckNativeWork`, as ADR 0103
+    requires of native parsers) in every loop whose length follows the input:
+    the passes over the object table, codec loops, string decoding and
+    decompression;
   - it charges restored objects and its temporary tables to the run's memory
     ceiling before allocating them;
   - it checks VM state against the bytecode it belongs to (instruction
@@ -194,9 +210,19 @@ and prototype chains) has a deep-chain round-trip test.
 
 **State outside the heap is recorded or left to the embedder.**
 
-- **Recorded and checked by the engine:** the random source's state, the
-  deterministic clock, the engine options and compatibility flags, and the
-  limits the run started with. A mismatch refuses the restore.
+- **Recorded and checked by the engine:** the deterministic clock, the engine
+  options and compatibility flags, and the limits the run started with. A
+  mismatch refuses the restore.
+- **The random source.** The host random provider (`IGocciaHostRandom`) gains
+  an optional, versioned interface to save and restore its state. The default
+  provider implements it, so `Math.random` continues the same sequence after a
+  restore; a provider without it refuses the snapshot.
+- **Execution budgets.** The instructions the run has consumed and its active
+  instruction-limit scopes are recorded, and the restored run continues with
+  what was left, so restoring never grants a fresh budget. Time limits count
+  only time the run executes: the interval the snapshot is stored does not
+  count, and each active timeout scope is re-armed with the time it had left
+  at the pause. An embedder may give a restored run tighter limits.
 - **Carried by the embedder:** its own host state. That includes the sandbox
   file system the run wrote to (or the run's file changes), the ids of its
   pending host calls, and the authentication.

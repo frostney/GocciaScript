@@ -6,8 +6,8 @@ The decision to build snapshots, and how, is [ADR 0148](../adr/0148-heap-snapsho
 
 ## Executive Summary
 
-- A structured object-graph snapshot taken at an idle pause point (every
-  microtask has run, the run waits on a host promise) restores correctly in a
+- A structured object-graph snapshot taken at an idle pause point (no frame
+  running, the run waiting on a host promise) restores correctly in a
   fresh process for all 15 measured workloads: closures, async functions
   between awaits, a suspended generator inside `for...of`, a module suspended
   by top-level `await`, classes with private fields, `Promise.all`, RegExps,
@@ -22,10 +22,10 @@ The decision to build snapshots, and how, is [ADR 0148](../adr/0148-heap-snapsho
   Json). Short I/O-bound runs that pause within a few milliseconds replay as
   fast as they restore (0.5-1.0x), and heap-heavy data processing gains only
   about 3x.
-- Snapshots of the larger, data-heavy heaps are 0.3-0.7 bytes per byte of
-  live heap uncompressed, and zstd at level 3 brings them to 3-7% of that.
-  The small, object-heavy AWFY heaps write 1.3-1.6 bytes per live byte and
-  compress to 25-34%.
+- The render and data heaps (SSR, markdown, the JSON and image workloads, the
+  agent loop) write 0.3-0.7 bytes per byte of live heap, and zstd at level 3
+  brings them to 3.5-6.5% of that. Four small, object-heavy AWFY heaps write
+  1.3-1.6 bytes per live byte and compress to 22-26%.
 - At the test suite's sampled await points, every heap held classes the
   prototype has no codec for (module namespaces, error objects, async
   generators, async context, test-runner natives). The prototype covers the
@@ -50,9 +50,12 @@ The design under test is a structured graph serialization at idle pause
 points, with replay as the fallback whenever the snapshot refuses:
 
 - Snapshots are taken only at idle points: no bytecode frame is running and
-  the microtask queue is empty, so the only live control state is in heap
+  the run waits on a host promise, so the only live control state is in heap
   objects (suspended async frames, generator continuations, promise
-  reactions).
+  reactions). The design also requires an empty microtask queue. The
+  prototype takes its snapshot in an extension's `WaitForIdle`, which the
+  engine calls before it drains the queue, and does not check that the queue
+  is empty; the measurements below do not establish that condition.
 - Each object is written by a codec its class registers. A class without a
   codec, or a state a codec does not handle, refuses the snapshot.
 - Built-ins are not written. They are named by a path from a root of a fresh
@@ -109,11 +112,14 @@ first use (an array iterator's prototype) are created through registered
 materializers. A fingerprint of every built-in taken at engine start refuses
 a snapshot when the script changed a built-in.
 
-Two safety nets make a wrong snapshot unlikely to restore silently. The
+Two checks reduce the risk of a wrong snapshot, without removing it. The
 accounting check collects, then refuses when any live object the run created
 is neither serialized nor a built-in; this caught native-held state the walk
-missed. And the reader bounds-checks every count, index and payload length
-and refuses rather than guessing.
+missed, but it detects objects a codec missed, not fields. The reader
+bounds-checks every count, index and payload length and refuses rather than
+guessing, which protects against malformed input, not against an incomplete
+codec. The 15 output comparisons below are point-in-time coverage of those
+workloads, not a general guarantee.
 
 ### Problems Found on the Way
 
@@ -202,15 +208,15 @@ The workloads, in `fixtures/heap-snapshot/`:
 | image-text | A 192x192 image blurred and edge-filtered in typed arrays, word frequencies in a Map, waiting for a threshold |
 | awfy-* | Upstream AWFY programs, paused between benchmark iterations |
 
-Other measurements, medians:
+Other measurements, medians unless stated:
 
 - Built-in table: 1.0-1.4 ms per engine, both at snapshot and at restore,
   down from 28-37 ms when the walk materialized every lazy member.
 - Accounting check: under 1 ms for most workloads, 3.9 ms for markdown,
   31 ms for json-data and 118 ms for json-data-x4 (a full collection plus a
   scan of every managed object).
-- zstd level 3 compresses in 0.04-21 ms; the biggest snapshot (29 MiB) took
-  21 ms.
+- zstd level 3 compresses in 0.04-21 ms, one measurement per workload; the
+  biggest snapshot (29 MiB) took 21 ms.
 - Engine creation, the built-in table and compiling take 2-5 ms for the
   in-repository workloads and 8-19 ms for the larger AWFY bundles. A replay
   pays this too.
@@ -228,7 +234,10 @@ both sizes), and loses or ties for short runs that pause early. That last
 group is what an agent-style program waiting on a tool usually looks like: its
 replay to the pause took 1-4 ms.
 
-Size: raw snapshots are 0.3-0.7 bytes per live heap byte. Strings are written
+Size: the render and data heaps write 0.3-0.7 raw bytes per live heap byte,
+and four small AWFY heaps (Richards, DeltaBlue, Havlak, CD) 1.3-1.6.
+`awfy-json` writes 0.21, and `lazy-builtins` 0.03, because almost all it
+holds are built-ins, which are named rather than written. Strings are written
 inline at every reference and every object repeats its property keys, so
 data-heavy heaps compress very well (json-data: 7.3 MiB raw, 374 KiB zstd).
 A string table and shared shapes would shrink the raw format several fold.
@@ -289,7 +298,7 @@ samples, 117 distinct classes were alive; the prototype has codecs for 21.
 | Bytecode and function templates | Templates by their depth-first index in the recompiled entry module; the snapshot refuses unless the bytecode hashes match | Templates of other modules, of `eval` and of the `Function` constructor |
 | Built-ins | Lazy table, path resolution, late realm slots, live builtin objects, refusal when a built-in changed | Fingerprints for members materialized during the run (a primitive written to a lazily created built-in is not detected); materializers for every lazy realm slot; built-ins changed by the script written as differences instead of refused |
 | Versioning across engine builds | One format version and the module's bytecode hash | An engine build identity and a schema version per codec; a mismatch refuses and the embedder replays |
-| Run state outside the heap | The microtask queue is empty by construction | `Math.random` state, the deterministic clock, engine options and compatibility flags, instruction and memory limits, unhandled-rejection tracking |
+| Run state outside the heap | None; the microtask queue is not checked empty when the snapshot is taken | An empty microtask queue checked at the pause, `Math.random` state, the deterministic clock, engine options and compatibility flags, instruction and memory limits, unhandled-rejection tracking |
 
 ## Effort Estimate to Production Quality
 
