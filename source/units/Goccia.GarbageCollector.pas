@@ -187,6 +187,7 @@ type
     FGCThreshold: Integer;
     FEnabled: Boolean;
     FCollecting: Boolean;
+    FCollectBeforeEveryReservation: Boolean;
     FTotalCollected: Int64;
     FTotalCollections: Integer;
 
@@ -480,6 +481,14 @@ type
     {$ENDIF}
 
     property Enabled: Boolean read FEnabled write FEnabled;
+    // A stress switch for tests: every TryReserveExternalBytes first runs
+    // the full collection a reservation over the ceiling runs as its last
+    // resort, so native code that holds an unrooted value across a
+    // reservation fails at once instead of only near the ceiling (the heap
+    // snapshot reader's hardening tests set it). Off by default.
+    property CollectBeforeEveryReservation: Boolean
+      read FCollectBeforeEveryReservation
+      write FCollectBeforeEveryReservation;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
@@ -2189,6 +2198,8 @@ function TGarbageCollector.TryReserveExternalBytes(
 begin
   if ABytes <= 0 then
     Exit(True);
+  if FCollectBeforeEveryReservation then
+    CollectForMemoryPressure(AProtect, True);
   // External-byte accounting is a read-modify-write on FBytesAllocated and
   // FExternalBytes that a cross-thread error destructor can drive concurrently
   // through ReleaseExternalBytes on this same (reserving) collector, so both
