@@ -320,6 +320,22 @@ function DelegateSetSymbolProperty(const AObject: TGocciaObjectValue;
 procedure RegisterOrdinaryObjectClass(const AClass: TClass);
 function IsOrdinaryObjectClass(const AClass: TClass): Boolean;
 
+type
+  { Told when a lazy own property is built, with the descriptor it became.
+    A heap snapshot session (ADR 0148) watches this to tell a built-in's lazy
+    member being built from the run changing that member. }
+  TGocciaLazyMaterializationObserver = class
+  public
+    procedure Materialized(const AObject: TGocciaObjectValue;
+      const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+      virtual; abstract;
+  end;
+
+// Installs AObserver for this thread and returns the one it replaces, which
+// the caller puts back when it is done and its observer passes calls on to.
+function SetLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver):
+  TGocciaLazyMaterializationObserver;
 
 implementation
 
@@ -982,6 +998,17 @@ begin
   FRegExpData := AValue;
 end;
 
+threadvar
+  GLazyMaterializationObserver: TGocciaLazyMaterializationObserver;
+
+function SetLazyMaterializationObserver(
+  const AObserver: TGocciaLazyMaterializationObserver):
+  TGocciaLazyMaterializationObserver;
+begin
+  Result := GLazyMaterializationObserver;
+  GLazyMaterializationObserver := AObserver;
+end;
+
 function TGocciaObjectValue.MaterializeOwnLazyProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
 var
@@ -1003,6 +1030,8 @@ begin
   end;
   FProperties.Add(AName, Result);
   LazyDescriptor.Free;
+  if Assigned(GLazyMaterializationObserver) then
+    GLazyMaterializationObserver.Materialized(Self, AName, Result);
 end;
 
 function TGocciaObjectValue.MaterializeOwnLazyPropertyHolding(

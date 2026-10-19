@@ -4917,12 +4917,15 @@ begin
   Count := AReader.ReadItemCount(1);
   if Count > Len then
     AReader.Refuse('an array with more elements than its length');
+  // Grown through the element store's gate, as any store grows it: the run's
+  // memory ceiling refuses an oversized one before it is allocated. The
+  // values read below are rooted by the reader until the restore ends.
   A.FElements.Clear;
-  A.FElements.Capacity := Count;
-  for I := 1 to Count do
+  ExtendElementsWithHoles(A.FElements, Count, nil);
+  for I := 0 to Count - 1 do
   begin
     AReader.Poll;
-    A.FElements.Add(AReader.ReadValue);
+    A.FElements[I] := AReader.ReadValue;
   end;
   A.FLength := Len;
   AReader.ReadObjectCore(A);

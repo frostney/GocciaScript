@@ -91,12 +91,12 @@ type
     FReader: TGocciaHeapSnapshotReader;
     FTable: TGocciaHeapSnapshotBuiltinTable;
     FResolver: TGocciaBuiltinPathResolver;
-    FRoots: TArray<TGCManagedObject>;
+    FRoots: TGCManagedObjectArray;
   public
     constructor Create(const AEngine: TGocciaEngine; const AStream: TStream;
       const ALimits: TGocciaHeapSnapshotLimits);
     destructor Destroy; override;
-    property Roots: TArray<TGCManagedObject> read FRoots;
+    property Roots: TGCManagedObjectArray read FRoots;
   end;
 
 procedure BuildBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
@@ -299,27 +299,31 @@ begin
   Result := -1;
 end;
 
-// Each builtin's own object is a collector root the engine keeps.
-procedure AddLiveBuiltinObjects(const ATable: TGocciaHeapSnapshotBuiltinTable);
+// Each builtin's own object is a collector root the engine keeps. The live
+// list is the thread's, so only this engine's builtins are taken.
+procedure AddLiveBuiltinObjects(const ATable: TGocciaHeapSnapshotBuiltinTable;
+  const AEngine: TGocciaEngine);
 var
   Builtin: TGocciaBuiltin;
 begin
   Builtin := FirstLiveBuiltin;
   while Assigned(Builtin) do
   begin
-    AddValue(ATable, Builtin.BuiltinObject, Seg('%builtin', Builtin.Name));
+    if Builtin.Scope = AEngine.GlobalScope then
+      AddValue(ATable, Builtin.BuiltinObject, Seg('%builtin', Builtin.Name));
     Builtin := Builtin.NextLive;
   end;
 end;
 
-function FindLiveBuiltinObject(const AName: string): TGocciaObjectValue;
+function FindLiveBuiltinObject(const AEngine: TGocciaEngine;
+  const AName: string): TGocciaObjectValue;
 var
   Builtin: TGocciaBuiltin;
 begin
   Builtin := FirstLiveBuiltin;
   while Assigned(Builtin) do
   begin
-    if Builtin.Name = AName then
+    if (Builtin.Scope = AEngine.GlobalScope) and (Builtin.Name = AName) then
       Exit(Builtin.BuiltinObject);
     Builtin := Builtin.NextLive;
   end;
@@ -391,7 +395,7 @@ begin
        Binding.Initialized then
       AddValue(ATable, Binding.Value, Seg('%scope', Names[I]));
   AddSlots(ATable, AEngine);
-  AddLiveBuiltinObjects(ATable);
+  AddLiveBuiltinObjects(ATable, AEngine);
   WalkFrom(ATable, 0);
   ATable.RecordFingerprints;
 end;
@@ -406,23 +410,36 @@ begin
   WalkFrom(ATable, 0);
   Start := ATable.Count;
   AddSlots(ATable, AEngine);
-  AddLiveBuiltinObjects(ATable);
+  AddLiveBuiltinObjects(ATable, AEngine);
   WalkFrom(ATable, Start);
 end;
 
 { Path resolution }
 
+// The segments of a name: nil when it has more than MAX_PATH_SEGMENTS. The
+// built-ins of an engine sit a few segments from its roots; a hostile name
+// is bounded here, before anything is allocated for it.
 function SplitPath(const APath: string): TStringArray;
+const
+  MAX_PATH_SEGMENTS = 256;
 var
-  Start, I, Count: Integer;
+  Start, I, Count, Segments: Integer;
 begin
   Result := nil;
+  Segments := 1;
+  for I := 1 to Length(APath) do
+    if APath[I] = SEP then
+    begin
+      Inc(Segments);
+      if Segments > MAX_PATH_SEGMENTS then
+        Exit;
+    end;
+  SetLength(Result, Segments);
   Count := 0;
   Start := 1;
   for I := 1 to Length(APath) + 1 do
     if (I > Length(APath)) or (APath[I] = SEP) then
     begin
-      SetLength(Result, Count + 1);
       Result[Count] := Copy(APath, Start, I - Start);
       Inc(Count);
       Start := I + 1;
@@ -447,7 +464,7 @@ begin
     Exit;
   AConsumed := 2;
   if AParts[0] = '%builtin' then
-    Exit(FindLiveBuiltinObject(AParts[1]));
+    Exit(FindLiveBuiltinObject(AEngine, AParts[1]));
   if AParts[0] = '%scope' then
   begin
     if AEngine.GlobalScope.TryGetOwnLexicalBindingRaw(AParts[1], Binding) and
@@ -597,6 +614,7 @@ begin
   Prefix := Parts[0];
   for I := 1 to High(Parts) do
   begin
+    CheckNativeWork;
     Known := FTable.FindPath(Prefix);
     if Assigned(Known) then
     begin
@@ -610,6 +628,7 @@ begin
   I := Consumed;
   while Assigned(Result) and (I <= High(Parts)) do
   begin
+    CheckNativeWork;
     Result := ResolveSegment(Result, Parts[I]);
     Inc(I);
   end;
@@ -631,6 +650,9 @@ begin
   FTable := TGocciaHeapSnapshotBuiltinTable.Create;
   FBaseline := TGocciaHeapSnapshotBaseline.Create;
   BuildBuiltinTable(FTable, AEngine);
+  // From here on, a lazy member a built-in builds is told apart from a
+  // change the run makes to it.
+  FTable.Install;
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
     for I := 0 to GC.ManagedObjectCount - 1 do
@@ -662,6 +684,8 @@ var
   Buffer: TMemoryStream;
   Reason: string;
   Queue: TGocciaMicrotaskQueue;
+  Roots: TGocciaActiveRootFrame;
+  I: Integer;
 begin
   Reason := FEngine.HeapSnapshotRefusal;
   if Reason <> '' then
@@ -669,6 +693,11 @@ begin
       'state outside the heap no codec covers: ' + Reason);
   Writer := nil;
   Buffer := nil;
+  // The roots may be held only by the caller's array: rooted before the
+  // collection below, and until the snapshot is written.
+  Roots.Initialize;
+  for I := 0 to High(ARoots) do
+    Roots.Add(ARoots[I]);
   try
     try
       // The one collection a snapshot runs, before anything is written: a
@@ -707,6 +736,7 @@ begin
   finally
     Buffer.Free;
     Writer.Free;
+    Roots.Clear;
   end;
 end;
 

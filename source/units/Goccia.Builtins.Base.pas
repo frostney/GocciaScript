@@ -42,6 +42,8 @@ type
     destructor Destroy; override;
 
     property Name: string read FName;
+    // The global scope of the engine this builtin belongs to.
+    property Scope: TGocciaScope read FScope;
     property BuiltinObject: TGocciaObjectValue read FBuiltinObject;
     property ThrowError: TGocciaThrowErrorCallback read FThrowError;
     // The next builtin on this thread's live list, for naming built-ins in a

@@ -417,9 +417,10 @@ type
     procedure WaitForRuntimeIdle;
     { ADR 0148: true while the run is at a pause checkpoint. No bytecode
       frame runs (the caller is the idle wait), the microtask queue is empty,
-      no Atomics.waitAsync waiter is pending, no extension but
-      HostCallOwner has pending work, and HostCallOwner has: the run waits
-      only on host calls the embedder answers. }
+      no Atomics.waitAsync waiter of this engine is pending, no extension but
+      HostCallOwner has pending work, none holds state outside the heap
+      (HeapSnapshotRefusal), and HostCallOwner has pending work: the run
+      waits only on host calls the embedder answers. }
     function IsAtPauseCheckpoint: Boolean;
     { ADR 0148: why a heap snapshot of the run would lose state held outside
       the heap, from every extension, or '' when none would. }
@@ -2364,12 +2365,17 @@ begin
   Queue := TGocciaMicrotaskQueue.Instance;
   if Assigned(Queue) and Queue.HasPending then
     Exit;
-  if HasPendingAtomicsWaitAsyncCompletions or
-     HasAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
+  // This engine's waiters, settled or not; another engine's on the thread
+  // are its own.
+  if HasAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
     Exit;
   for I := 0 to FExtensions.Count - 1 do
     if (FExtensions[I] <> FHostCallOwner) and FExtensions[I].HasPendingWork then
       Exit;
+  // State outside the heap no codec covers: a pause here could not be
+  // snapshotted (ADR 0148).
+  if HeapSnapshotRefusal <> '' then
+    Exit;
   Result := FHostCallOwner.HasPendingWork;
 end;
 

@@ -142,23 +142,63 @@ type
       const AObject: TGCManagedObject); virtual;
   end;
 
+  // What a lazy own property of a built-in became when it was built.
+  TGocciaMaterializedMember = record
+    Accessor: Boolean;
+    Value, Getter, Setter: TGocciaValue;
+    Flags: TPropertyFlags;
+  end;
+
+  TGocciaHeapSnapshotBuiltinTable = class;
+
+  // Records into a table each lazy member built while it is installed, and
+  // passes the call on to the observer it replaced.
+  TGocciaBuiltinMaterializationObserver = class(
+    TGocciaLazyMaterializationObserver)
+  private
+    FTable: TGocciaHeapSnapshotBuiltinTable;
+    FPrevious: TGocciaLazyMaterializationObserver;
+  public
+    procedure Materialized(const AObject: TGocciaObjectValue;
+      const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+      override;
+  end;
+
   { The built-ins of an engine, named by the first path that reached them
     from the engine's roots (Goccia.HeapSnapshot builds and resolves it). A
-    snapshot refers to built-ins by these names. }
+    snapshot refers to built-ins by these names.
+
+    It also records each built-in's own state when RecordFingerprints runs,
+    so DirtyPaths can name the built-ins the run changed. A lazy member is
+    unbuilt then; one built since counts as unchanged only while it is still
+    exactly what building it produced, which the table learns by watching
+    the builds while it is installed (Install). }
   TGocciaHeapSnapshotBuiltinTable = class
   private
     FObjects: TList<TGCManagedObject>;
-    FPaths: TStringList;
+    // TList<string>, not TStringList, whose strings are AnsiString: a key
+    // with a lone surrogate would not survive it.
+    FPaths: TList<string>;
     FIndex: THashMap<TGCManagedObject, Integer>;
     FByPath: TDictionary<string, Integer>;
     FFingerprints: array of UInt64;
     FFingerprintCount: Integer;
+    FMaterialized: TDictionary<string, TGocciaMaterializedMember>;
+    FObserver: TGocciaBuiltinMaterializationObserver;
     function GetCount: Integer;
+    function MemberKey(const AObject: TGCManagedObject;
+      const AName: string): string;
   public
     constructor Create;
     destructor Destroy; override;
     procedure Clear;
-    // False when AObject is already in the table or is nil.
+    // Watches this thread's lazy member builds until Uninstall.
+    procedure Install;
+    procedure Uninstall;
+    procedure NoteMaterialized(const AObject: TGocciaObjectValue;
+      const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
+    // False when AObject is already in the table, is nil, or APath already
+    // names another object.
     function Add(const AObject: TGCManagedObject; const APath: string): Boolean;
     function IndexOf(const AObject: TGCManagedObject): Integer;
     function FindPath(const APath: string): TGCManagedObject;
@@ -183,7 +223,7 @@ type
     FParents: TList<Integer>;
     FBuiltinRefs: TList<Integer>;
     FBuiltinRefIndex: THashMap<Integer, Integer>;
-    FStrings: TStringList;
+    FStrings: TList<string>;
     FStringIndex: TDictionary<string, Integer>;
     FCodecs: TList<TGocciaSnapshotCodec>;
     FCodecIndex: THashMap<TGocciaSnapshotCodec, Integer>;
@@ -274,6 +314,7 @@ type
       const AWhat: string): Integer;
     procedure Reserve(const ACount, AElementSize: Int64);
     function ReadRawString: string;
+    procedure CheckPrototypeChains;
   public
     constructor Create(const ABuiltins: TGocciaHeapSnapshotBuiltinTable;
       const ALimits: TGocciaHeapSnapshotLimits);
@@ -300,7 +341,7 @@ type
 
     // Restores the snapshot in AStream and returns its roots, rooted until
     // the reader is freed.
-    function Restore(const AStream: TStream): TArray<TGCManagedObject>;
+    function Restore(const AStream: TStream): TGCManagedObjectArray;
 
     property ObjectCount: Integer read GetObjectCount;
     property BuiltinResolve: TGocciaBuiltinPathResolve
@@ -326,6 +367,8 @@ function HeapSnapshotBuildIdentity: string;
 implementation
 
 uses
+  Math,
+
   BigInteger,
 
   Goccia.Builtins.GlobalSymbol,
@@ -554,18 +597,76 @@ constructor TGocciaHeapSnapshotBuiltinTable.Create;
 begin
   inherited Create;
   FObjects := TList<TGCManagedObject>.Create;
-  FPaths := TStringList.Create;
+  FPaths := TList<string>.Create;
   FIndex := THashMap<TGCManagedObject, Integer>.Create;
   FByPath := TDictionary<string, Integer>.Create;
+  FMaterialized := TDictionary<string, TGocciaMaterializedMember>.Create;
 end;
 
 destructor TGocciaHeapSnapshotBuiltinTable.Destroy;
 begin
+  Uninstall;
   FObjects.Free;
   FPaths.Free;
   FIndex.Free;
   FByPath.Free;
+  FMaterialized.Free;
   inherited;
+end;
+
+procedure TGocciaHeapSnapshotBuiltinTable.Install;
+begin
+  if Assigned(FObserver) then
+    Exit;
+  FObserver := TGocciaBuiltinMaterializationObserver.Create;
+  FObserver.FTable := Self;
+  FObserver.FPrevious := SetLazyMaterializationObserver(FObserver);
+end;
+
+// Puts back the observer Install replaced. Installs nest: the innermost is
+// uninstalled first.
+procedure TGocciaHeapSnapshotBuiltinTable.Uninstall;
+begin
+  if not Assigned(FObserver) then
+    Exit;
+  SetLazyMaterializationObserver(FObserver.FPrevious);
+  FreeAndNil(FObserver);
+end;
+
+function TGocciaHeapSnapshotBuiltinTable.MemberKey(
+  const AObject: TGCManagedObject; const AName: string): string;
+begin
+  Result := IntToHex(PtrUInt(AObject), SizeOf(PtrUInt) * 2) + #0 + AName;
+end;
+
+procedure TGocciaHeapSnapshotBuiltinTable.NoteMaterialized(
+  const AObject: TGocciaObjectValue; const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Member: TGocciaMaterializedMember;
+begin
+  Member := Default(TGocciaMaterializedMember);
+  Member.Flags := ADescriptor.Flags;
+  if ADescriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Member.Accessor := True;
+    Member.Getter := TGocciaPropertyDescriptorAccessor(ADescriptor).Getter;
+    Member.Setter := TGocciaPropertyDescriptorAccessor(ADescriptor).Setter;
+  end
+  else if ADescriptor is TGocciaPropertyDescriptorData then
+    Member.Value := TGocciaPropertyDescriptorData(ADescriptor).Value;
+  FMaterialized.AddOrSetValue(MemberKey(AObject, AName), Member);
+end;
+
+{ TGocciaBuiltinMaterializationObserver }
+
+procedure TGocciaBuiltinMaterializationObserver.Materialized(
+  const AObject: TGocciaObjectValue; const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  FTable.NoteMaterialized(AObject, AName, ADescriptor);
+  if Assigned(FPrevious) then
+    FPrevious.Materialized(AObject, AName, ADescriptor);
 end;
 
 procedure TGocciaHeapSnapshotBuiltinTable.Clear;
@@ -574,6 +675,7 @@ begin
   FPaths.Clear;
   FIndex.Clear;
   FByPath.Clear;
+  FMaterialized.Clear;
   SetLength(FFingerprints, 0);
   FFingerprintCount := 0;
 end;
@@ -589,10 +691,12 @@ begin
   Result := False;
   if not Assigned(AObject) or FIndex.ContainsKey(AObject) then
     Exit;
+  // A name names one object: the first to take it keeps it, and another
+  // object reached by the same path is not named at all.
+  if FByPath.ContainsKey(APath) then
+    Exit;
   FIndex.Add(AObject, FObjects.Count);
-  // The first path to reach a name keeps it.
-  if not FByPath.ContainsKey(APath) then
-    FByPath.Add(APath, FObjects.Count);
+  FByPath.Add(APath, FObjects.Count);
   FObjects.Add(AObject);
   FPaths.Add(APath);
   Result := True;
@@ -645,7 +749,11 @@ end;
 
 function TGocciaHeapSnapshotBuiltinTable.ComputeFingerprint(
   const AIndex: Integer): UInt64;
+const
+  LAZY = 'L';
 
+  // A value's identity: a built-in by its number, a primitive by its value,
+  // anything else (an object the run attached) by its address.
   function Identity(const AValue: TGocciaValue): string;
   var
     Index: Integer;
@@ -653,47 +761,54 @@ function TGocciaHeapSnapshotBuiltinTable.ComputeFingerprint(
     if not Assigned(AValue) then
       Exit('nil');
     Index := IndexOf(AValue);
-    // An entry numbered after the fingerprints were taken was materialized
-    // since: it hashes as the lazy member it replaced.
-    if (Index >= FFingerprintCount) and (FFingerprintCount > 0) then
-      Exit('L');
     if Index >= 0 then
       Exit('#' + IntToStr(Index));
+    if AValue is TGocciaUndefinedLiteralValue then
+      Exit('u');
+    if AValue is TGocciaNullLiteralValue then
+      Exit('n');
+    if AValue is TGocciaBooleanLiteralValue then
+      Exit('b' + BoolToStr(TGocciaBooleanLiteralValue(AValue).Value, True));
     if AValue is TGocciaStringLiteralValue then
       Exit('s' + TGocciaStringLiteralValue(AValue).Value);
     if AValue is TGocciaNumberLiteralValue then
-      Exit('n' + IntToHex(PInt64(@TGocciaNumberLiteralValue(AValue).Value)^, 16));
+      Exit('d' + IntToHex(PInt64(@TGocciaNumberLiteralValue(AValue).Value)^, 16));
     if AValue is TGocciaBigIntValue then
-      Exit('b' + TGocciaBigIntValue(AValue).Value.ToString);
-    if AValue.IsPrimitive then
-      Exit('p' + AValue.ClassName);
-    // An object the table does not hold: the run put it there.
+      Exit('i' + TGocciaBigIntValue(AValue).Value.ToString);
+    if (AValue is TGocciaSymbolValue) and TGocciaSymbolValue(AValue).Registered then
+      Exit('r' + TGocciaSymbolValue(AValue).Description);
     Result := 'X' + IntToHex(PtrUInt(AValue), SizeOf(PtrUInt) * 2);
   end;
 
-  function DescriptorText(const ADescriptor: TGocciaPropertyDescriptor): string;
+  function DescriptorText(const AObject: TGocciaObjectValue;
+    const AName: string; const ADescriptor: TGocciaPropertyDescriptor): string;
   var
-    Getter, Setter: string;
+    Member: TGocciaMaterializedMember;
   begin
     if ADescriptor is TGocciaLazyPropertyDescriptorData then
-      Exit('L');
+      Exit(LAZY);
+    // Built since the table was recorded, and still exactly what building
+    // it produced: the lazy member it was.
+    if (AName <> '') and
+       FMaterialized.TryGetValue(MemberKey(AObject, AName), Member) and
+       (Member.Flags = ADescriptor.Flags) then
+    begin
+      if Member.Accessor and (ADescriptor is TGocciaPropertyDescriptorAccessor) and
+         (TGocciaPropertyDescriptorAccessor(ADescriptor).Getter = Member.Getter) and
+         (TGocciaPropertyDescriptorAccessor(ADescriptor).Setter = Member.Setter) then
+        Exit(LAZY);
+      if not Member.Accessor and
+         (ADescriptor.ClassType = TGocciaPropertyDescriptorData) and
+         (TGocciaPropertyDescriptorData(ADescriptor).Value = Member.Value) then
+        Exit(LAZY);
+    end;
     if ADescriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      Getter := Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
-      Setter := Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
-      if ((Getter = 'L') or (Getter = 'nil')) and
-         ((Setter = 'L') or (Setter = 'nil')) and (Getter + Setter <> 'nilnil') then
-        Exit('L');
-      Exit('a' + IntToStr(Byte(ADescriptor.Flags)) + '|' + Getter + '/' +
-        Setter);
-    end;
+      Exit('a' + IntToStr(Byte(ADescriptor.Flags)) + '|' +
+        Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) + '/' +
+        Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter));
     if ADescriptor is TGocciaPropertyDescriptorData then
-    begin
-      Getter := Identity(TGocciaPropertyDescriptorData(ADescriptor).Value);
-      if Getter = 'L' then
-        Exit('L');
-      Exit('d' + IntToStr(Byte(ADescriptor.Flags)) + '|' + Getter);
-    end;
+      Exit('d' + IntToStr(Byte(ADescriptor.Flags)) + '|' +
+        Identity(TGocciaPropertyDescriptorData(ADescriptor).Value));
     Result := '?' + ADescriptor.ClassName;
   end;
 
@@ -710,12 +825,14 @@ begin
   Result := FNV1a(Result, 'p' + Identity(Obj.Prototype));
   Result := FNV1a(Result, BoolToStr(Obj.Extensible, True) +
     BoolToStr(Obj.Sealed, True) + BoolToStr(Obj.Frozen, True));
+  // In order: a deleted and re-added member moves to the end.
   for Pair in Obj.Properties do
-    Result := FNV1a(Result, Pair.Key + '|' + DescriptorText(Pair.Value));
+    Result := FNV1a(Result, Pair.Key + '|' +
+      DescriptorText(Obj, Pair.Key, Pair.Value));
   Symbols := Obj.GetOwnSymbols;
   for I := 0 to High(Symbols) do
     Result := FNV1a(Result, Identity(Symbols[I]) + '|' +
-      DescriptorText(Obj.GetOwnSymbolPropertyDescriptor(Symbols[I])));
+      DescriptorText(Obj, '', Obj.GetOwnSymbolPropertyDescriptor(Symbols[I])));
 end;
 
 procedure TGocciaHeapSnapshotBuiltinTable.RecordFingerprints;
@@ -756,7 +873,7 @@ begin
   FParents := TList<Integer>.Create;
   FBuiltinRefs := TList<Integer>.Create;
   FBuiltinRefIndex := THashMap<Integer, Integer>.Create;
-  FStrings := TStringList.Create;
+  FStrings := TList<string>.Create;
   FStringIndex := TDictionary<string, Integer>.Create;
   FCodecs := TList<TGocciaSnapshotCodec>.Create;
   FCodecIndex := THashMap<TGocciaSnapshotCodec, Integer>.Create;
@@ -911,15 +1028,28 @@ begin
   WriteU32(StringIndex(AValue));
 end;
 
-// A string written in place: the string table's own entries.
+// A string written in place: the string table's own entries. Its UTF-16 code
+// units as they are, little-endian, so a lone surrogate survives (as in the
+// bytecode format); copied in chunks with the run's limits polled between.
 procedure TGocciaHeapSnapshotWriter.WriteRaw(const AValue: string);
+const
+  CHUNK_UNITS = 65536;
 var
-  Bytes: UTF8String;
+  Units: array of Word;
+  Start, Count, I: Integer;
 begin
-  Bytes := UTF8String(AValue);
-  WriteU32(Length(Bytes));
-  if Length(Bytes) > 0 then
-    FOut.WriteBuffer(Bytes[1], Length(Bytes));
+  WriteU32(Length(AValue));
+  Start := 1;
+  SetLength(Units, Min(Length(AValue), CHUNK_UNITS));
+  while Start <= Length(AValue) do
+  begin
+    Poll;
+    Count := Min(CHUNK_UNITS, Length(AValue) - Start + 1);
+    for I := 0 to Count - 1 do
+      Units[I] := NtoLE(Word(AValue[Start + I]));
+    FOut.WriteBuffer(Units[0], Count * 2);
+    Inc(Start, Count);
+  end;
 end;
 
 procedure TGocciaHeapSnapshotWriter.WriteRef(const AObject: TGCManagedObject);
@@ -963,7 +1093,11 @@ begin
     Limbs := TGocciaBigIntValue(AObject).Value.Limbs;
     WriteU32(Length(Limbs));
     for I := 0 to High(Limbs) do
+    begin
+      if I and 4095 = 0 then
+        Poll;
       WriteU32(Limbs[I]);
+    end;
   end
   else
   begin
@@ -1261,7 +1395,13 @@ begin
 end;
 
 // Charges ACount elements of AElementSize bytes to the run's memory ceiling
-// before the reader allocates them; released when the reader is freed.
+// before the reader allocates them; released when the reader is freed. These
+// are the reader's own copies: its input, its tables, the string table's
+// strings and a BigInt's limbs while it reads them. What the restored graph
+// keeps is charged as the engine charges it anywhere else: each value and
+// object when it registers with the collector, and an array's elements
+// through the element store's gate. A string a value shares with the table
+// stays uncharged afterwards, as every string payload in the engine does.
 procedure TGocciaHeapSnapshotReader.Reserve(const ACount, AElementSize: Int64);
 var
   Bytes: Int64;
@@ -1345,21 +1485,35 @@ begin
   Result := B = 1;
 end;
 
+// A string's UTF-16 code units, little-endian, decoded in chunks with the
+// run's limits polled between.
 function TGocciaHeapSnapshotReader.ReadRawString: string;
+const
+  CHUNK_UNITS = 65536;
 var
   Len: Cardinal;
-  Bytes: UTF8String;
+  I, Start, Count: Int64;
+  Unit_: Word;
 begin
   Len := ReadU32;
-  if Len > Cardinal(FLimits.MaxStringBytes) then
+  if Int64(Len) * 2 > FLimits.MaxStringBytes then
     Refuse('a string longer than the limit');
-  Need(Len);
-  Reserve(Len, 2);
-  SetLength(Bytes, Len);
-  if Len > 0 then
-    Move(FData[FPos], Bytes[1], Len);
-  Inc(FPos, Len);
-  Result := string(Bytes);
+  Need(Int64(Len) * 2);
+  Reserve(Len, SizeOf(Char));
+  SetLength(Result, Len);
+  Start := 0;
+  while Start < Len do
+  begin
+    Poll;
+    Count := Min(Int64(CHUNK_UNITS), Int64(Len) - Start);
+    for I := 0 to Count - 1 do
+    begin
+      Move(FData[FPos + (Start + I) * 2], Unit_, 2);
+      Result[Start + I + 1] := Char(LEtoN(Unit_));
+    end;
+    Inc(Start, Count);
+  end;
+  Inc(FPos, Int64(Len) * 2);
 end;
 
 function TGocciaHeapSnapshotReader.ReadStr: string;
@@ -1411,7 +1565,11 @@ begin
         Reserve(Count, 4);
         SetLength(Limbs, Count);
         for I := 0 to Count - 1 do
+        begin
+          if I and 4095 = 0 then
+            Poll;
           Limbs[I] := ReadU32;
+        end;
         Result := TGocciaBigIntValue.Create(
           TBigInteger.FromLimbs(Limbs, Negative));
         FCreated.Add(Result);
@@ -1463,6 +1621,7 @@ var
   Getter, Setter, Value: TGocciaValue;
   Symbol: TGocciaValue;
   Seen: TDictionary<string, Boolean>;
+  Descriptor: TGocciaPropertyDescriptor;
 begin
   Proto := ReadValue;
   if Assigned(Proto) and not (Proto is TGocciaObjectValue) then
@@ -1499,17 +1658,21 @@ begin
               Refuse('an accessor marked writable');
             Getter := ReadValue;
             Setter := ReadValue;
-            AObject.Properties.Add(Key,
-              TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, Flags));
+            Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter,
+              Setter, Flags);
           end;
         HSD_DATA:
-          begin
-            Value := ReadValue;
-            AObject.Properties.Add(Key,
-              TGocciaPropertyDescriptorData.Create(Value, Flags));
-          end;
+          Descriptor := TGocciaPropertyDescriptorData.Create(ReadValue, Flags);
       else
         Refuse('an unknown property kind');
+        Descriptor := nil;
+      end;
+      // Owned by the map once added; freed here if adding it raised.
+      try
+        AObject.Properties.Add(Key, Descriptor);
+      except
+        Descriptor.Free;
+        raise;
       end;
     end;
   finally
@@ -1553,7 +1716,7 @@ begin
 end;
 
 function TGocciaHeapSnapshotReader.Restore(
-  const AStream: TStream): TArray<TGCManagedObject>;
+  const AStream: TStream): TGCManagedObjectArray;
 var
   Size: Int64;
   Magic: array[0..3] of AnsiChar;
@@ -1611,6 +1774,7 @@ begin
   try
     for I := 0 to Count - 1 do
     begin
+      Poll;
       Tag := ReadStr;
       Schema := ReadU16;
       if Seen.ContainsKey(Tag) then
@@ -1699,6 +1863,8 @@ begin
     FCodecs[FObjectCodecs[I]].Finish(Self, FObjects[I]);
   end;
 
+  CheckPrototypeChains;
+
   // The roots.
   FPos := RootStart;
   FLimit := Length(FData);
@@ -1714,6 +1880,52 @@ begin
   // The input is not needed any more; its reservation is released with the
   // reader.
   SetLength(FData, 0);
+end;
+
+// A snapshot sets prototypes without [[SetPrototypeOf]]'s cycle check, so a
+// hostile one could make a chain that loops and hang every lookup through
+// it. Each restored object's chain is followed once, iteratively, until it
+// leaves the restored objects or meets one already checked; meeting one on
+// the chain being followed is a cycle.
+procedure TGocciaHeapSnapshotReader.CheckPrototypeChains;
+const
+  ON_PATH = 1;
+  CHECKED = 2;
+var
+  State: THashMap<TGCManagedObject, Byte>;
+  Path: TList<TGCManagedObject>;
+  I, J: Integer;
+  Current: TGCManagedObject;
+  Mark: Byte;
+begin
+  State := THashMap<TGCManagedObject, Byte>.Create;
+  Path := TList<TGCManagedObject>.Create;
+  try
+    // Restored objects start unvisited; anything else ends a chain.
+    for I := 0 to High(FObjects) do
+      if FObjects[I] is TGocciaObjectValue then
+        State.AddOrSetValue(FObjects[I], 0);
+    for I := 0 to High(FObjects) do
+    begin
+      Poll;
+      Current := FObjects[I];
+      Path.Clear;
+      while Assigned(Current) and State.TryGetValue(Current, Mark) and
+            (Mark <> CHECKED) do
+      begin
+        if Mark = ON_PATH then
+          Refuse('a prototype chain that loops');
+        State[Current] := ON_PATH;
+        Path.Add(Current);
+        Current := TGocciaObjectValue(Current).Prototype;
+      end;
+      for J := 0 to Path.Count - 1 do
+        State[Path[J]] := CHECKED;
+    end;
+  finally
+    Path.Free;
+    State.Free;
+  end;
 end;
 
 { TPlainObjectCodec }

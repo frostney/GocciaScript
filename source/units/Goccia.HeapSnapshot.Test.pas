@@ -104,6 +104,10 @@ type
     procedure TestChain;
     procedure TestDeepChain;
     procedure TestDeepNestingAndPrototypes;
+    procedure TestLoneSurrogates;
+    procedure TestRootsNeedNoRootingByTheCaller;
+    procedure TestRefusesReplacedLazyMember;
+    procedure TestRefusesPrototypeCycle;
     procedure TestRefusesWithoutCodec;
     procedure TestRefusesChangedBuiltin;
     procedure TestAccountingRefusesMissedObject;
@@ -199,6 +203,14 @@ begin
     TestDeepChain);
   Test('Deeply nested arrays and prototype chains round-trip',
     TestDeepNestingAndPrototypes);
+  Test('Strings keep lone surrogates and every UTF-16 code unit',
+    TestLoneSurrogates);
+  Test('Roots held only by the caller survive the snapshot''s collection',
+    TestRootsNeedNoRootingByTheCaller);
+  Test('A lazy member the run replaced, or a primitive it changed, refuses',
+    TestRefusesReplacedLazyMember);
+  Test('A snapshot whose prototypes loop is refused',
+    TestRefusesPrototypeCycle);
   Test('A live object with no codec refuses the snapshot',
     TestRefusesWithoutCodec);
   Test('A built-in the run changed refuses the snapshot',
@@ -223,7 +235,7 @@ begin
     TestCheckpointDeclined);
   Test('No checkpoint while another extension has pending work',
     TestNoCheckpointWhileOtherWorkPending);
-  Test('State outside the heap no codec covers refuses the snapshot',
+  Test('State outside the heap no codec covers means no checkpoint',
     TestRefusesStateOutsideHeap);
 end;
 
@@ -534,6 +546,123 @@ begin
     '(o) => Object.getPrototypeOf(o))) { if (protos === 0) top = o.i; ' +
     'protos++; } return arrays + "," + protos + "," + top; })()'))
     .ToBe('100001,100000,99999');
+end;
+
+procedure THeapSnapshotTests.TestLoneSurrogates;
+begin
+  Expect<string>(RoundTrip(
+    '({ lone: "a\uD800b\uDFFFc", pair: "\uD83D\uDE00", ' +
+    '"\uDC00key": String.fromCharCode(0, 65535) })',
+    '[restored.lone.length, restored.lone.charCodeAt(1), ' +
+    'restored.lone.charCodeAt(3), restored.pair.codePointAt(0), ' +
+    'Object.keys(restored)[2].charCodeAt(0), ' +
+    'restored["\uDC00key"].charCodeAt(0), ' +
+    'restored["\uDC00key"].charCodeAt(1)].join()'))
+    .ToBe('5,55296,57343,128512,56320,0,65535');
+end;
+
+procedure THeapSnapshotTests.TestRootsNeedNoRootingByTheCaller;
+var
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Stream: TBytesStream;
+  Bytes: TBytes;
+begin
+  Lines := TStringList.Create;
+  Engine := nil;
+  Session := nil;
+  Stream := TBytesStream.Create;
+  try
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    Session := TGocciaHeapSnapshotSession.Create(Engine);
+    // The accounting check collects first; the value is held only by the
+    // open array handed to Snapshot.
+    Session.Snapshot([Engine.EvaluateGlobalEval(
+      '({ list: Array.from({ length: 1000 }, (_, i) => ({ i })) })',
+      TEST_PATH, Stage)], Stream);
+    Bytes := Copy(Stream.Bytes, 0, Stream.Size);
+  finally
+    Stream.Free;
+    Session.Free;
+    Engine.Free;
+    Lines.Free;
+  end;
+  Expect<string>(RestoreAndCheck(Bytes, 'restored.list.length + "," + ' +
+    'restored.list[999].i')).ToBe('1000,999');
+end;
+
+procedure THeapSnapshotTests.TestRefusesReplacedLazyMember;
+var
+  Refusal: string;
+begin
+  // Building a lazy member is not a change...
+  Snapshot('(() => { Temporal.PlainDate; return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // ...replacing one is, before it was built or after.
+  Snapshot('(() => { Object.defineProperty(globalThis, "Temporal", ' +
+    '{ value: {}, configurable: true, writable: true }); return {}; })()',
+    Refusal);
+  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  Snapshot('(() => { Temporal.PlainDate; ' +
+    'Object.defineProperty(globalThis, "Temporal", { value: {}, ' +
+    'configurable: true, writable: true }); return {}; })()', Refusal);
+  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  // A primitive changed in place, true to false.
+  Snapshot('(() => { Array.prototype[Symbol.unscopables].at = false; ' +
+    'return {}; })()', Refusal);
+  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+end;
+
+// Rewrites the prototype of the third object a snapshot of [a, b] (b being
+// a's prototype) writes, b, from Object.prototype to a, leaving every length
+// as it was. The layout is the format's own: header, string table, codecs,
+// built-in names, then the object table.
+procedure THeapSnapshotTests.TestRefusesPrototypeCycle;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Pos_: Integer;
+  Count, I: Cardinal;
+
+  function U32At(const AAt: Integer): Cardinal;
+  begin
+    Move(Bytes[AAt], Result, 4);
+    Result := LEtoN(Result);
+  end;
+
+begin
+  Bytes := Snapshot('(() => { const b = {}; const a = Object.create(b); ' +
+    'return [a, b]; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes, String('Object.getPrototypeOf(' +
+    'restored[0]) === restored[1]'))).ToBe('true');
+  Pos_ := 4 + 2;
+  Pos_ := Pos_ + 4 + 2 * Integer(U32At(Pos_));       // build identity
+  Count := U32At(Pos_);                                // strings
+  Inc(Pos_, 4);
+  for I := 1 to Count do
+    Pos_ := Pos_ + 4 + 2 * Integer(U32At(Pos_));
+  Pos_ := Pos_ + 4 + 6 * Integer(U32At(Pos_));       // codecs
+  Pos_ := Pos_ + 4 + 4 * Integer(U32At(Pos_));       // built-in names
+  Count := U32At(Pos_);                                // objects
+  Inc(Pos_, 4);
+  Expect<Integer>(Integer(Count)).ToBe(3);
+  // Objects 0 (the array) and 1 (a): skip their entries.
+  for I := 1 to 2 do
+    Pos_ := Pos_ + 2 + 4 + Integer(U32At(Pos_ + 2));
+  // b is an object literal: its payload is its literal flag, then its
+  // prototype, a built-in reference.
+  Inc(Pos_, 2 + 4 + 1);
+  Expect<Integer>(Bytes[Pos_]).ToBe(HSV_BUILTIN);
+  Bytes[Pos_] := HSV_OBJECT;
+  Bytes[Pos_ + 1] := 1;
+  Bytes[Pos_ + 2] := 0;
+  Bytes[Pos_ + 3] := 0;
+  Bytes[Pos_ + 4] := 0;
+  Expect<string>(RestoreRefusal(Bytes))
+    .ToBe('restore: a prototype chain that loops');
 end;
 
 procedure THeapSnapshotTests.TestRefusesWithoutCodec;
@@ -945,13 +1074,13 @@ procedure THeapSnapshotTests.TestRefusesStateOutsideHeap;
 var
   Outcome: string;
 begin
-  // Still a checkpoint (nothing is pending), but a snapshot would lose the
-  // extension's native state.
+  // Nothing is pending, but a snapshot would lose the extension's native
+  // state: not a checkpoint, and the run goes on as usual.
   FCheckpoints := 0;
-  FPauseAtCheckpoint := False;
+  FPauseAtCheckpoint := True;
   Expect<string>(RunHostCall(True, False, True, Outcome)).ToBe('');
-  Expect<Integer>(FCheckpoints).ToBe(1);
-  Expect<string>(FCheckpointRefusal).ToBe('a native handle');
+  Expect<string>(Outcome).ToBe('42');
+  Expect<Integer>(FCheckpoints).ToBe(0);
 end;
 
 begin

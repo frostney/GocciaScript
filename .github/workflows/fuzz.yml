@@ -182,13 +182,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install FPC and AFL++
+      - name: Install FPC, AFL++ and Valgrind
         run: |
           sudo apt-get update
-          sudo apt-get install fpc afl++ -qq > /dev/null
+          sudo apt-get install fpc afl++ valgrind -qq > /dev/null
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
+
+      - name: Build the harness with heaptrc
+        # Its own unit-output directory, per the per-program rule (see the
+        # memory-safety job); fpc does not create it.
+        run: |
+          mkdir -p build/compiled/targets/fuzzharness-heaptrc
+          fpc @config.cfg -gh -gl -FUbuild/compiled/targets/fuzzharness-heaptrc \
+            -obuild/GocciaFuzzHarnessHeaptrc source/app/GocciaFuzzHarness.dpr
 
       - name: Write the seed snapshots
         run: ./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
@@ -232,6 +240,42 @@ jobs:
               exit "${status}"
               ;;
           esac
+
+      - name: Replay under heaptrc and Valgrind
+        # ADR 0148 asks for mutated real snapshots under heaptrc and a memory
+        # checker. The seeds and a sample of what AFL kept are restored again:
+        # under heaptrc each must leave exactly the unfreed blocks an input
+        # that is not a snapshot leaves (the engine's own process-exit
+        # baseline), and under Valgrind memcheck none may report an error.
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p build/fuzz/heap-snapshot-replay
+          cp build/fuzz/heap-snapshot-corpus/*.ghsn build/fuzz/heap-snapshot-replay/
+          find build/fuzz/heap-snapshot-out -path '*/queue/id:*' -type f 2>/dev/null \
+            | head -n 200 | while read -r f; do cp "$f" "build/fuzz/heap-snapshot-replay/q-$(basename "$f" | tr ',:' '__')"; done
+          printf 'x' > build/fuzz/not-a-snapshot
+          blocks() { ./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$1" 2>&1 | grep -oE '^[0-9]+ unfreed memory blocks' | cut -d' ' -f1; }
+          baseline=$(blocks build/fuzz/not-a-snapshot)
+          echo "unfreed blocks at exit without a snapshot: ${baseline}"
+          status=0
+          for f in build/fuzz/heap-snapshot-replay/*; do
+            got=$(blocks "$f")
+            if [ "$got" != "$baseline" ]; then
+              echo "::error::heaptrc: $f leaves ${got} unfreed blocks, ${baseline} without a snapshot"
+              status=1
+            fi
+          done
+          for f in $(ls build/fuzz/heap-snapshot-replay/* | head -n 60); do
+            if ! valgrind --tool=memcheck --error-exitcode=42 \
+                --suppressions=scripts/valgrind/fpc-rtl.supp -q \
+                ./build/GocciaFuzzHarness --heap-snapshot "$f" > /dev/null 2> build/fuzz/valgrind.log; then
+              echo "::error::Valgrind: $f"
+              cat build/fuzz/valgrind.log
+              cp "$f" build/fuzz/heap-snapshot-out/ 2>/dev/null || true
+              status=1
+            fi
+          done
+          exit $status
 
       - name: Report crashes
         if: ${{ !cancelled() }}
