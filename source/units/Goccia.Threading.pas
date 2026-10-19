@@ -222,7 +222,11 @@ type
     constructor Create(AWorkerCount: Integer);
     destructor Destroy; override;
 
-    { Execute AFiles across worker threads. Blocks until all complete.
+    { Execute AFiles across worker threads. Blocks until every worker has
+      finished or been abandoned by the watchdog (AnyWorkerAbandoned); an
+      abandoned worker may still be inside AWorkerProc when RunAll returns,
+      so after an abandonment AData and whatever else the callback reaches
+      must stay allocated until the process exits.
       AWorkerProc is called on each worker thread for each file.
       AData is an opaque pointer passed through to each worker call.
       AWatchdogMs is the maximum time (in milliseconds) that any single
