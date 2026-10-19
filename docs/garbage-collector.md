@@ -4,7 +4,8 @@
 
 ## Executive Summary
 
-- **Mark-and-sweep** — Two-phase tracing GC (`Goccia.GarbageCollector.pas`) for every GocciaScript value: each `TGocciaValue` registers via `AfterConstruction` and overrides `MarkReferences` to mark what it owns; generation-counter marking (`AdvanceMark`) clears marks in O(1), and explicit collections are serialized across worker threads because some intrinsic objects are shared
+- **Mark-and-sweep** — Two-phase tracing GC (`Goccia.GarbageCollector.pas`) for every GocciaScript value: each `TGocciaValue` registers via `AfterConstruction` and overrides `TraceReferences` to mark what it owns; generation-counter marking (`AdvanceMark`) clears marks in O(1), and explicit collections are serialized across worker threads because some intrinsic objects are shared
+- **Marking does not recurse per object** — A trace nests at most 64 objects deep on the native stack and puts the rest on an explicit mark stack, so a collection marks a chain of any depth ([ADR 0147](adr/0147-marking-spills-to-an-explicit-mark-stack.md))
 - **Weak references and finalization** — WeakMap, WeakSet, WeakRef and FinalizationRegistry use post-mark weak tracing and sweeping hooks, so weak targets never become strong roots; WeakRef construction and `deref()` keep targets until the next host job checkpoint, and FinalizationRegistry cleanup jobs run after the normal microtask queue
 - **Pinned singletons** — `undefined`, `null`, `true`, `false`, `NaN`, `Infinity` are pinned once at engine startup; built-in prototypes are pinned per-engine via [realm slots](core-patterns.md#realm-ownership--slot-registration) and released atomically when the realm is destroyed
 - **Collection under memory pressure** — Script execution collects only at the VM's pressure checkpoints, when either the tracked bytes or the heap manager's in-use total nears the `--max-memory` ceiling ([ADR 0129](adr/0129-heap-triggered-collection.md)); both triggers back off above what a collection cannot reclaim ([ADR 0141](adr/0141-tracked-pressure-trigger-backs-off.md)), and there is no allocation-count collection while a script runs
@@ -25,7 +26,8 @@ private
 public
   procedure BeforeDestruction; override;
   class procedure AdvanceMark; static; inline;
-  procedure MarkReferences; virtual;
+  procedure MarkReferences;               // Marks, then traces or pushes
+  procedure TraceReferences; virtual;     // protected: marks what it holds
   function TraceWeakReferences: Boolean; virtual;
   procedure SweepWeakReferences; virtual;
   property GCMarked: Boolean read GetGCMarked write SetGCMarked;
@@ -39,7 +41,7 @@ end;
 ```
 
 - **`AfterConstruction` / `BeforeDestruction`** — Every value auto-registers with the thread-local `TGarbageCollector.Instance` upon creation and unregisters before destruction so root sets cannot retain stale object pointers. A value the memory limit refuses in `AfterConstruction` is unregistered there, unless its constructor has no implicit exception frame (a number box in a production build; see [Managed Locals on Hot Paths](core-patterns.md#managed-locals-on-hot-paths)): FPC then does not destroy it, and it stays registered until a collection frees it.
-- **`MarkReferences`** — Base implementation sets `FGCMark := GCCurrentMark` (marking the object as alive for the current collection). `AdvanceMark` increments the shared `GCCurrentMark` while the collector lock is held, and `TGarbageCollector.Instance` uses that mark while traversing objects. Subclasses override `MarkReferences` to also mark values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaBytecodeFunctionValue` marks its closure's home object and upvalue cells, `TGocciaArrayValue` marks its elements). The `if GCMarked then Exit;` guard at the top of each override prevents re-visiting objects in cyclic reference graphs.
+- **`MarkReferences` / `TraceReferences`** — `MarkReferences` is not virtual: it sets `FGCMark := GCCurrentMark` (marking the object as alive for the current collection) and returns at once when the object is already marked, so a cycle ends at the mark. `AdvanceMark` increments the shared `GCCurrentMark` while the collector lock is held. A newly marked object's `TraceReferences` runs once per collection, and again only during an [overflow rescan](#mark-stack), so it must be idempotent: subclasses override it to mark the values they reference (e.g., `TGocciaObjectValue` marks its prototype and property values, `TGocciaBytecodeFunctionValue` marks its closure's home object and upvalue cells, `TGocciaArrayValue` marks its elements) by calling `MarkReferences` on each. See [Mark stack](#mark-stack) for where that call runs.
 - **`TraceWeakReferences` / `SweepWeakReferences`** — Optional hooks for weak containers and weak references. The default implementations do nothing. WeakMap uses `TraceWeakReferences` as an ephemeron pass: if a key is already marked by normal roots, its value is marked, but the key is never marked by the map. WeakMap and WeakSet use `SweepWeakReferences` to remove entries whose keys/values remain unmarked. WeakRef clears an unmarked target, and FinalizationRegistry removes dead cells while enqueueing cleanup jobs for their held values.
 - **`RuntimeCopy`** — Creates a fresh GC-managed copy of the value. The default implementation returns `Self` (for singletons and complex values). Primitives override this: numbers reuse the special-value singletons (`0`, `1`, `NaN`, `±Infinity`, `-0`) and otherwise create a fresh instance, booleans return singletons, strings create new instances (cheap due to copy-on-write).
 
@@ -47,7 +49,7 @@ end;
 
 When working with the GC, follow these rules:
 
-- **Override `MarkReferences`** in every value type that holds `TGocciaValue` references. Call `inherited` first, then mark each owned reference. This includes host objects a builtin defines for its own bookkeeping — a matcher, a per-call state record, a handler cell — whenever they stash a value in a native field instead of a property. The inherited walk only sees properties, so an unmarked native field is invisible to the collector even while the object holding it is plainly alive, and the value dies mid-operation as soon as the builtin re-enters user code.
+- **Override `TraceReferences`** in every value type that holds `TGocciaValue` references. Call `inherited` first, then call `MarkReferences` on each owned reference. Do not test `GCMarked` at the top: the object is already marked when its `TraceReferences` runs, so that guard would skip the whole body. Do not call `TraceReferences` on another object either; `MarkReferences` decides whether it is traced now or later. This includes host objects a builtin defines for its own bookkeeping — a matcher, a per-call state record, a handler cell — whenever they stash a value in a native field instead of a property. The inherited walk only sees properties, so an unmarked native field is invisible to the collector even while the object holding it is plainly alive, and the value dies mid-operation as soon as the builtin re-enters user code.
 - **Pin singletons** — `UndefinedValue`, `TrueValue`, `NaNValue`, etc. are pinned via `PinObject` during engine initialization (consolidated in `PinPrimitiveSingletons`). Built-in prototype singletons are stored per-engine in realm slots (see next bullet); the realm pins them on `SetSlot` and releases them on `Destroy`, so contributors do not need to call `PinObject` from `InitializePrototype` themselves.
 - **Realm-owned pinning** — Built-in prototypes are stored in per-engine [realm slots](core-patterns.md#realm-ownership--slot-registration). `TGocciaRealm.SetSlot` pins the stored object via `PinObject`; the realm tracks every pin it took and releases all of them in `Destroy` via `UnpinObject`. Owned-slot helpers (`TGocciaSharedPrototype` instances) are `Free`d before the pin-release pass, so their destructors can still call `UnpinObject` on objects they own. This means engine tear-down releases the entire intrinsic prototype graph atomically — embedders should not pin or unpin built-in prototypes manually.
 - **Protect stack-held values** — Values held only by Pascal code (not in any GocciaScript scope) must be protected. Use `TGocciaActiveRootFrame` for stack-local groups of roots, especially nested native paths where the same object may be rooted more than once; use `AddTempRoot`/`RemoveTempRoot` for simple one-off temporary ownership.
@@ -65,7 +67,7 @@ When working with the GC, follow these rules:
 - **A live builtin roots its object.** `TGocciaBuiltin.Create` links the builtin into its thread's list of live builtins as soon as it has made `FBuiltinObject`, before the subclass constructor runs, because that constructor may load a shim (below); `Destroy` unlinks it. One `TGCRootSource` per thread walks the list and calls each builtin's `MarkBuiltinReferences`, which marks `FBuiltinObject`. A builtin need not bind its object anywhere to keep it, and several do not: the engine and runtime extensions read it later through `BuiltinObject` (static members, the `goccia:test` namespace). A builtin that keeps other values only in its own fields overrides `MarkBuiltinReferences` to mark them, as `TGocciaConsole` does for its count and timer tables.
 - **Touching a lazily installed member can run bytecode.** No shim loads at boot ([Shimmed Legacy Globals](core-patterns.md#shimmed-legacy-globals)), so the first read, write, delete or reflection of a shim global on `globalThis` (`Date`, `parseInt`, ...) or a shim member of `Object.prototype`, `Number.prototype` or `Array.prototype` loads its shim through the VM, and the VM's memory-pressure checkpoint can collect there. That includes the `TGocciaObjectValue` operations that materialize lazy members as a side effect: `GetOwnPropertyKeys`, `GetAllPropertyNames`, `GetOwnPropertyDescriptor`, `HasOwnProperty`, `DefineProperty` and `DeleteProperty` on those objects. Native code holding a fresh object across such an operation roots it, exactly as across a getter: `Object.getOwnPropertyDescriptors` keeps its result in a frame, and `%TypedArray%.prototype.toLocaleString` roots each element across its `toLocaleString` lookup. A store is the sharpest case, because the value it carries was often boxed out of a VM register a moment earlier and is held by nothing else. `o.__defineGetter__ = 1.5` finds the lazy member while walking for a setter, and `{ ["__proto__"]: 42 }` while checking whether the literal may take its fast path. So the store paths of `Goccia.Values.ObjectValue.pas` do not materialize through the bare `MaterializeOwnLazyProperty`. The `[[Set]]` walks (`AssignProperty`, `AssignPropertyWithReceiver` and `TGocciaInstanceValue.AssignProperty`) look descriptors up through `GetOwnPropertyDescriptorHolding`, which materializes a lazy entry with the value, the receiver and the owner rooted. `DefineProperty` and `TryDefineProperty` root the pending descriptor's values the same way before they materialize the entry they replace. A walk that only needs to know whether a member exists asks the property map and never materializes it. The literal fast path, `TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast`, checks the prototype chain that way.
 - **A native object whose methods back native functions is a managed value.** When a builtin hosts a native function's callback on a Pascal object of its own (a decorator context's `access.get`, `import.meta.resolve`), that object is a `TGocciaObjectValue` subclass, marks what it holds, and is set as the function's `CapturedRoot`. The collector then keeps it exactly as long as the function and frees it with it. A `TGCManagedObject` subclass that does not register itself, as `TGocciaValue`, `TGocciaScope` and `TGocciaBytecodeCell` do, is never freed by a collector.
-- **Weak containers and weak references must not mark weak targets during `MarkReferences`**. Put weak-value propagation in `TraceWeakReferences` and dead-target pruning or cleanup scheduling in `SweepWeakReferences`; otherwise weak semantics collapse into strong references.
+- **Weak containers and weak references must not mark weak targets during `TraceReferences`**. Put weak-value propagation in `TraceWeakReferences` and dead-target pruning or cleanup scheduling in `SweepWeakReferences`; otherwise weak semantics collapse into strong references.
 - **Queued jobs must root their callback payloads**. Promise reactions, `queueMicrotask` callbacks, and FinalizationRegistry cleanup jobs use queued roots so callback functions, held values, and result promises survive collections until the job runs.
 - **Clear kept objects at host job boundaries**. Engine idle checkpoints and the shared microtask/fetch drain helper clear the kept-objects set before and after draining; individual microtask/finalization jobs clear it after they complete. Clearing an empty set does nothing, and a set grown past 1,024 slots is replaced by a new one rather than cleared slot by slot, so one job that keeps many objects does not make every later job pay for that capacity.
 - **Scopes** register with the GC in their constructor and unregister through `BeforeDestruction`. Active call scopes are tracked via `PushActiveRoot`/`PopActiveRoot`.
@@ -73,6 +75,54 @@ When working with the GC, follow these rules:
 - **A bytecode closure cell is a managed object.** `TGocciaBytecodeCell` (`Goccia.VM.Upvalue.pas`) holds a binding a closure, a direct eval or a mapped `arguments` object has captured. The frame that opened it, every closure that captured it (a closure's upvalue slots hold the cells themselves, and nested closures and generator clones share them), a suspended generator's continuation and a mapped `arguments` object can all hold one cell at once, so none of them frees it: each marks it, and the sweep frees a cell nothing marked. A new holder of a cell must mark it, or the cell is freed under it. Its `InstanceSize` is charged like a value's, so `--max-memory` counts captured bindings. Before [#1618](https://github.com/frostney/GocciaScript/issues/1618) cells and a per-capture upvalue box were plain native objects that nothing freed, about 64 bytes per capture.
 - **The execution-context stacks are deliberately unrooted, and that is a contract on their push sites.** `Goccia.ExecutionContext.pas` keeps a raw thread-local array of GC-managed scopes and function values that no root source marks. What keeps an entry's objects alive is the push site, which must name objects a root the collector already walks holds for at least as long as the entry — a VM frame's closure, the engine global scope, a module scope its module registers as a root, or a temp-rooted shim scope or eval activation. The per-site rooting arguments live next to the array they justify (the `threadvar` comment in that unit) rather than here; read those before adding a push site. One that cannot name such a root makes the array the last reference to a collectible object and needs a real `TGCRootSource` — `TGocciaAsyncContextRoots` in `Goccia.AsyncContext.pas` is the shape to copy. `tests/language/execution-context-gc-roots.js` is the regression guard.
 - The `Enabled` flag (threshold collection through `CollectIfNeeded`) is off during bytecode execution; the [pressure checkpoints](#memory-ceiling) ignore it and still collect. CLI hosts may still call `Collect` explicitly between files; the benchmark runner does this after each benchmark file, and the test runner after each test file, on the main thread and on every parallel worker. Explicit `Goccia.gc()` is still available in worker threads and is serialized by the collector lock.
+
+## Mark Stack
+
+A collection marks without one native frame per object
+([ADR 0147](adr/0147-marking-spills-to-an-explicit-mark-stack.md)). Before it,
+`MarkReferences` was the virtual method and each override called it on its
+children, so marking recursed once per link: a collection taken while a chain
+of 30,000 classes, or of a few hundred thousand nested objects, was alive ran
+out of native stack (a stack overflow in a development build, a segmentation
+fault in a production one).
+
+- **Bounded nesting.** While a trace runs, `MarkReferences` marks the object
+  and calls its `TraceReferences` in place as long as fewer than 64 calls are
+  nested (`MARK_RECURSION_LIMIT`). Most objects are leaves or sit a few links
+  from one, and tracing in place costs one call where the stack costs a push,
+  a pop and the same call.
+- **Spill to the mark stack.** At the limit the object goes on the mark stack,
+  a process-wide array used only under the collect lock, like the mark epoch.
+  The trace drains it before it returns. An object is marked when it is
+  pushed, so it is pushed at most once per collection, and the stack never
+  holds more entries than the collection marks objects: one pointer per live
+  object at worst (an array whose elements are all unmarked). Like the
+  collector's object list it is not charged to `BytesAllocated`. It keeps 4,096
+  entries (32 KiB on 64-bit) for the life of the process and gives back
+  whatever a trace grew it to when the collection ends.
+- **When the stack cannot grow.** A push that finds the stack full doubles it.
+  When the heap manager refuses that, the object is already marked but not
+  traced, so dropping it would let the sweep free what only it references.
+  An object the thread's collector manages is left for a rescan: before the
+  trace ends it calls `TraceReferences` again on every marked object in the
+  collector's list, draining the stack after each, and repeats while a pass
+  overflowed. Each pass marks at least the objects that overflowed in the one
+  before, so the passes end. An object the rescan cannot find (a shared
+  intrinsic another thread's collector manages, or one no collector manages)
+  is traced where its push failed instead. That is the only recursion left: it
+  nests once per such object along a chain of them, and only while the heap
+  manager is refusing memory.
+- **Roots and weak hooks.** A `MarkReferences` call outside a running trace (a
+  root, a root source, a weak container's `TraceWeakReferences`) starts a trace
+  and returns once everything reachable from the object is marked, as the
+  recursive walk did. The stack and the flags are process-wide, like the mark
+  epoch, so marking runs only inside a collection on the collecting thread, or
+  on a thread while no other thread collects (a unit test); outside a
+  collection the trace takes the collect lock itself.
+
+`TGarbageCollector.LimitMarkStackForTesting` caps the stack and turns off
+tracing in place, so the unit tests drive both overflow paths;
+`MarkStackOverflows` counts the pushes that found no room.
 
 ## Design Rationale
 
@@ -152,7 +202,7 @@ The formula is `min(physicalMemory / 2, platformCap)`.
 Several other costs are not charged at all. Each object's `TGocciaShapedPropertyMap` instance and its bucket and entry arrays, each property's `TGocciaPropertyDescriptor`, each scope's binding map, the collector's own object list, and the heap manager's rounding (on 64-bit FPC a block is `InstanceSize + 8` rounded up to 32 bytes) all sit outside `BytesAllocated`. Measured on Linux x64 with nothing collected, the heap manager held 2.4 to 3.6 bytes for every tracked byte across a loop of short-lived objects and arrays and a Promise micro-benchmark (4.8 to 6.7 before an object's symbol-keyed storage became lazy). `BytesAllocated` is therefore an approximate measure of collector-owned bytes, not of the process's memory; the [heap trigger](#memory-ceiling) is what keeps collectable garbage near the ceiling.
 
 Deferred string prefixes reserve their eventual flat buffer **plus** their
-retained suffix when created. `MarkReferences` traces the prefix, with at most
+retained suffix when created. `TraceReferences` marks the prefix, with at most
 32 links. Materialization consumes that reservation without collecting and
 releases the suffix charge; destruction releases the remaining reservation.
 When an append needs a collection to fit, it first materializes its prefix so

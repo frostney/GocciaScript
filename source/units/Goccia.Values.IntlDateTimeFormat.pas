@@ -56,7 +56,7 @@ type
     destructor Destroy; override;
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
   published
     function IntlDateTimeFormatFormatGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -128,7 +128,7 @@ type
     function Format(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const ADateTimeFormat: TGocciaIntlDateTimeFormatValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TDateTimeFormattableKind = (dtfkNumber, dtfkPlainDate, dtfkPlainDateTime,
@@ -752,9 +752,8 @@ begin
   Result := FDateTimeFormat.IntlDateTimeFormatFormat(AArgs, FDateTimeFormat);
 end;
 
-procedure TGocciaIntlDateTimeFormatBoundFormatValue.MarkReferences;
+procedure TGocciaIntlDateTimeFormatBoundFormatValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FDateTimeFormat) then
     FDateTimeFormat.MarkReferences;
@@ -2138,9 +2137,8 @@ begin
   Result := 'Object';
 end;
 
-procedure TGocciaIntlDateTimeFormatValue.MarkReferences;
+procedure TGocciaIntlDateTimeFormatValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FBoundFormat) then
     FBoundFormat.MarkReferences;

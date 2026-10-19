@@ -76,7 +76,7 @@ type
     function DeleteProperty(const AName: string): Boolean; override;
     function GetEnumerablePropertyValues: TArray<TGocciaValue>; override;
     function GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function TGocciaArgumentsObjectValue.ToStringTag: string;
@@ -358,13 +358,11 @@ begin
   Result := Entries;
 end;
 
-procedure TGocciaMappedArgumentsObjectValue.MarkReferences;
+procedure TGocciaMappedArgumentsObjectValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then
-    Exit;
-  inherited MarkReferences;
+  inherited TraceReferences;
   for I := 0 to High(FMappings) do
     if Assigned(FMappings[I].ParameterCell) then
       FMappings[I].ParameterCell.MarkReferences;

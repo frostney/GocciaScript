@@ -27,7 +27,7 @@ type
   public
     constructor Create(const AIterables: array of TGocciaConcatIterableRecord);
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 implementation
@@ -258,11 +258,10 @@ begin
   inherited;
 end;
 
-procedure TGocciaConcatIteratorValue.MarkReferences;
+procedure TGocciaConcatIteratorValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
   for I := 0 to High(FIterables) do
   begin

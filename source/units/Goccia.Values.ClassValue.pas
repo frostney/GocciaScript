@@ -190,7 +190,7 @@ type
     property StaticPropertySetter[const AName: string]: TGocciaFunctionBase read GetStaticPropertySetter;
     property PrivatePropertyGetter[const AName: string]: TGocciaValue read GetPrivatePropertyGetter;
     property PrivatePropertySetter[const AName: string]: TGocciaValue read GetPrivatePropertySetter;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure AddFieldInitializerWithKey(const AName: string; const AComputedKey: TGocciaValue; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
@@ -389,7 +389,7 @@ type
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     property ClassValue: TGocciaClassValue read FClass write FClass;
   end;
@@ -965,12 +965,11 @@ begin
   inherited;
 end;
 
-procedure TGocciaClassValue.MarkReferences;
+procedure TGocciaClassValue.TraceReferences;
 var
   ValPair: TGocciaValueMap.TKeyValuePair;
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FSuperClass) then
@@ -2891,11 +2890,10 @@ begin
   inherited;
 end;
 
-procedure TGocciaInstanceValue.MarkReferences;
+procedure TGocciaInstanceValue.TraceReferences;
 var
   ValPair: TGocciaValueMap.TKeyValuePair;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FClass) then

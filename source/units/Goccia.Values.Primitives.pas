@@ -159,7 +159,7 @@ type
     destructor Destroy; override;
     class function Concatenate(const APrefix: TGocciaStringLiteralValue;
       const ASuffix: string): TGocciaStringLiteralValue; static;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     function IsPrimitive: Boolean; override;
     function TypeName: string; override;
@@ -821,10 +821,8 @@ begin
   Result := FValue;
 end;
 
-procedure TGocciaStringLiteralValue.MarkReferences;
+procedure TGocciaStringLiteralValue.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FPrefix) then
     FPrefix.MarkReferences;

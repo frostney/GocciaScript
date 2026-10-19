@@ -64,7 +64,7 @@ type
       const ARedirected: Boolean);
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
@@ -476,9 +476,8 @@ begin
   Result := CONSTRUCTOR_RESPONSE;
 end;
 
-procedure TGocciaResponseValue.MarkReferences;
+procedure TGocciaResponseValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FHeaders) then
     FHeaders.MarkReferences;

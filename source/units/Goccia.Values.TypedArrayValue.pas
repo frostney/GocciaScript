@@ -99,7 +99,7 @@ type
     function ToStringTag: string; override;
     function TryPreventExtensions: Boolean; override;
 
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
     class function IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -283,7 +283,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function GetTypedArrayShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
@@ -1546,9 +1546,8 @@ begin
   Result := KindName(FKind);
 end;
 
-procedure TGocciaTypedArrayValue.MarkReferences;
+procedure TGocciaTypedArrayValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FBufferValue) and not FBufferValue.GCMarked then
     FBufferValue.MarkReferences;
@@ -1857,10 +1856,8 @@ begin
   Result := 'Array Iterator';
 end;
 
-procedure TGocciaTypedArrayIteratorValue.MarkReferences;
+procedure TGocciaTypedArrayIteratorValue.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FSource) and not FSource.GCMarked then
     FSource.MarkReferences;

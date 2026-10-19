@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **10-step recipe** — Value type, built-in registration, class value subclass, engine/runtime integration, constants, structuredClone, tests, benchmarks, documentation
-- **Key patterns** — Shared prototype singleton (GC-pinned), `ThisValue` for method callbacks (not `Self`), `MarkReferences` for GC
+- **Key patterns** — Shared prototype singleton (GC-pinned), `ThisValue` for method callbacks (not `Self`), `TraceReferences` for GC
 - **Engine/runtime integration** — Core language built-ins are registered by the engine; runtime globals and tool-specific runtime APIs belong in concrete runtime extension classes
 - **Checklist included** — Complete checklist at the end of the document for verification
 
@@ -74,7 +74,7 @@ type
 
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
   end;
@@ -219,14 +219,13 @@ begin
 end;
 ```
 
-**MarkReferences** -- Mark all `TGocciaValue` references held by this object:
+**TraceReferences** -- Mark all `TGocciaValue` references held by this object. The collector calls it after marking the object, so it has no `GCMarked` guard, and it may run more than once in a collection, so it must be idempotent ([ADR 0147](adr/0147-marking-spills-to-an-explicit-mark-stack.md)):
 
 ```pascal
-procedure TGocciaYourValue.MarkReferences;
+procedure TGocciaYourValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
   // Mark each TGocciaValue reference
   for I := 0 to FItems.Count - 1 do
@@ -622,7 +621,7 @@ Use this checklist when adding a new built-in type:
 
 - **Shared prototype** is pinned automatically by `TGocciaSharedPrototype.Create` and unpinned by `TGocciaSharedPrototype.Destroy`. Registering the helper in a realm-owned slot ties its lifetime to the engine's realm, so tear-down releases everything atomically.
 - **Realm slots** pin the values they hold. `RegisterRealmSlot` (for `TGCManagedObject` prototypes) pins on `SetSlot` and unpins at realm tear-down; `RegisterRealmOwnedSlot` (for plain-`TObject` helpers) calls `.Free` at tear-down before pin release.
-- **`MarkReferences`** must mark all `TGocciaValue` fields reachable from the instance. If you only hold non-value data (e.g., `TBytes`), calling `inherited` is sufficient.
+- **`TraceReferences`** must call `MarkReferences` on every `TGocciaValue` field reachable from the instance. If you only hold non-value data (e.g., `TBytes`), calling `inherited` is sufficient.
 - **`ExposePrototype`** creates a sentinel instance that becomes the method host. Do NOT free this instance -- it is pinned by the GC and owned by the realm.
 - **Temp roots**: If you hold `TGocciaValue` references in Pascal variables during a long operation (not in any scope), protect them with `AddTempRoot`/`RemoveTempRoot`.
 - **Non-owning lists**: Use `TObjectList<T>.Create(False)` for lists that store GC-managed values.

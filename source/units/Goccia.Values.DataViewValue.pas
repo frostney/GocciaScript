@@ -52,7 +52,7 @@ type
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class function GetSharedPrototypeForRealm(
@@ -467,9 +467,8 @@ begin
   Result := CONSTRUCTOR_DATA_VIEW;
 end;
 
-procedure TGocciaDataViewValue.MarkReferences;
+procedure TGocciaDataViewValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FBufferValue) and not FBufferValue.GCMarked then
     FBufferValue.MarkReferences;

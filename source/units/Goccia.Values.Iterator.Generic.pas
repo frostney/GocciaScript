@@ -42,7 +42,7 @@ type
     function ReturnValueWithoutValue: TGocciaObjectValue; override;
     function ThrowValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function CreateRootedGenericIterator(
@@ -461,9 +461,8 @@ begin
   ReturnInternal(nil, False);
 end;
 
-procedure TGocciaGenericIteratorValue.MarkReferences;
+procedure TGocciaGenericIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;

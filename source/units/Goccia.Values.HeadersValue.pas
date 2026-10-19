@@ -54,7 +54,7 @@ type
     function GetHeader(const AName: string): string;
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
@@ -379,9 +379,8 @@ begin
   Result := CONSTRUCTOR_HEADERS;
 end;
 
-procedure TGocciaHeadersValue.MarkReferences;
+procedure TGocciaHeadersValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   // FEntries contains only plain strings — no TGocciaValue references
 end;

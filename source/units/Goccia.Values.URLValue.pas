@@ -117,7 +117,7 @@ type
 
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
@@ -891,9 +891,8 @@ begin
   FIsValid := True;
 end;
 
-procedure TGocciaURLValue.MarkReferences;
+procedure TGocciaURLValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSearchParams) then
     FSearchParams.MarkReferences;

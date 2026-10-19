@@ -19,7 +19,7 @@ type
     constructor Create(const APrimitive: TGocciaValue; const AClass: TGocciaClassValue = nil);
     procedure InitializePrototype;
     function GetProperty(const AName: string): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
 
@@ -121,9 +121,8 @@ begin
   Result := TGocciaStringLiteralValue.Create(Prim.Value.ToRadixString(Radix));
 end;
 
-procedure TGocciaBigIntObjectValue.MarkReferences;
+procedure TGocciaBigIntObjectValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FPrimitive) then
     FPrimitive.MarkReferences;
