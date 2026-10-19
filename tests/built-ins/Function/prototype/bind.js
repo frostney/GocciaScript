@@ -127,4 +127,112 @@ describe("Function.prototype.bind", () => {
     expect(Registry.bind("a")).toBe("Registry.bind(a)");
     expect(Registry.bind).not.toBe(Function.prototype.bind);
   });
+
+  describe("BoundFunctionCreate on a Proxy target", () => {
+    test("the bound function's prototype is the target's [[GetPrototypeOf]]", () => {
+      const bound = new Proxy(class {}, {}).bind(null);
+      expect(Object.getPrototypeOf(bound)).toBe(Function.prototype);
+      expect(typeof bound.bind).toBe("function");
+    });
+
+    test("the getPrototypeOf trap runs exactly once, with the target, and its result is the prototype", () => {
+      const proto = { marker: true };
+      const calls = [];
+      const target = () => {};
+      const proxy = new Proxy(target, {
+        getPrototypeOf(t) {
+          calls.push(t);
+          return proto;
+        },
+      });
+      const bound = Function.prototype.bind.call(proxy, null);
+      expect(calls.length).toBe(1);
+      expect(calls[0]).toBe(target);
+      expect(Object.getPrototypeOf(bound)).toBe(proto);
+      expect(Object.getPrototypeOf(bound)).toBe(Object.getPrototypeOf(proxy));
+    });
+
+    test("a null trap result makes the bound function's prototype null", () => {
+      const proxy = new Proxy(() => {}, {
+        getPrototypeOf() {
+          return null;
+        },
+      });
+      const bound = Function.prototype.bind.call(proxy, null);
+      expect(Object.getPrototypeOf(bound)).toBe(null);
+    });
+
+    test("the trap runs before the length and name are read", () => {
+      const log = [];
+      const proxy = new Proxy(() => {}, {
+        getPrototypeOf(t) {
+          log.push("getPrototypeOf");
+          return Reflect.getPrototypeOf(t);
+        },
+        getOwnPropertyDescriptor(t, key) {
+          log.push(`getOwnPropertyDescriptor:${String(key)}`);
+          return Reflect.getOwnPropertyDescriptor(t, key);
+        },
+        get(t, key, receiver) {
+          log.push(`get:${String(key)}`);
+          return Reflect.get(t, key, receiver);
+        },
+      });
+      Function.prototype.bind.call(proxy, null);
+      expect(log[0]).toBe("getPrototypeOf");
+      expect(log.filter((entry) => entry === "getPrototypeOf").length).toBe(1);
+    });
+
+    test("an abrupt completion from the trap propagates and the length is never read", () => {
+      let reads = 0;
+      const proxy = new Proxy(() => {}, {
+        getPrototypeOf() {
+          throw new RangeError("trap");
+        },
+        get(t, key, receiver) {
+          reads += 1;
+          return Reflect.get(t, key, receiver);
+        },
+      });
+      expect(() => Function.prototype.bind.call(proxy, null)).toThrow(RangeError);
+      expect(reads).toBe(0);
+    });
+
+    test("a trap result that is neither an object nor null is a TypeError", () => {
+      const proxy = new Proxy(() => {}, {
+        getPrototypeOf() {
+          return 1;
+        },
+      });
+      expect(() => Function.prototype.bind.call(proxy, null)).toThrow(TypeError);
+    });
+
+    test("a revoked proxy throws a TypeError", () => {
+      const { proxy, revoke } = Proxy.revocable(() => {}, {});
+      revoke();
+      expect(() => Function.prototype.bind.call(proxy, null)).toThrow(TypeError);
+    });
+
+    test("a target that is not a proxy keeps its own prototype", () => {
+      const fn = () => {};
+      const proto = Object.create(Function.prototype);
+      Object.setPrototypeOf(fn, proto);
+      expect(Object.getPrototypeOf(fn.bind(null))).toBe(proto);
+      Object.setPrototypeOf(fn, null);
+      expect(Object.getPrototypeOf(Function.prototype.bind.call(fn, null))).toBe(null);
+    });
+
+    test("a bound function of a bound proxy inherits through the first bound function", () => {
+      const proto = Object.create(Function.prototype);
+      const proxy = new Proxy(() => {}, {
+        getPrototypeOf() {
+          return proto;
+        },
+      });
+      const first = Function.prototype.bind.call(proxy, null);
+      const second = Function.prototype.bind.call(first, null);
+      expect(Object.getPrototypeOf(first)).toBe(proto);
+      expect(Object.getPrototypeOf(second)).toBe(proto);
+    });
+  });
 });

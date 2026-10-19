@@ -2086,6 +2086,7 @@ var
   Trap: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   TargetProto: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   CheckRevoked;
   Trap := GetTrap(PROP_GET_PROTOTYPE_OF);
@@ -2105,12 +2106,21 @@ begin
       ThrowTypeError(SErrorProxyGetProtoReturnType, SSuggestProxyTrapReturnType);
 
     // ES2026 §28.1.1 step 8: If target is non-extensible, trap result
-    // must be the same as the target's actual prototype.
-    if not ProxyTargetIsExtensible(FTarget) then
-    begin
-      TargetProto := ProxyTargetGetPrototype(FTarget);
-      if Result <> TargetProto then
-        ThrowTypeError(SErrorProxyGetProtoMismatch, SSuggestProxyTrapInvariant);
+    // must be the same as the target's actual prototype. The extensibility
+    // and prototype reads of a Proxy target run its traps, which are guest
+    // code that can collect, and the trap's result is held only here: a
+    // fresh object it returned would be swept before the caller stores it.
+    Roots.Initialize;
+    try
+      Roots.Add(Result);
+      if not ProxyTargetIsExtensible(FTarget) then
+      begin
+        TargetProto := ProxyTargetGetPrototype(FTarget);
+        if Result <> TargetProto then
+          ThrowTypeError(SErrorProxyGetProtoMismatch, SSuggestProxyTrapInvariant);
+      end;
+    finally
+      Roots.Clear;
     end;
   end
   else
