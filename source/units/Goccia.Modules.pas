@@ -141,6 +141,9 @@ type
     FExportResolutionVersion: Cardinal;
     FSnapshotKind: TGocciaModuleSnapshotKind;
     FCompiledModule: TObject;
+    // A record a heap snapshot restore is filling: until its forwardings are
+    // checked, a resolution (the collector's included) stops at it.
+    FSnapshotPending: Boolean;
     procedure InvalidateExportResolutions;
     procedure EnsureRoots;
     function GetExportsTable: TGocciaValueMap;
@@ -1078,7 +1081,7 @@ begin
   ABindingModule := nil;
   ABindingName := '';
   AValue := nil;
-  if FAmbiguousExports.ContainsKey(AExportName) then
+  if FSnapshotPending or FAmbiguousExports.ContainsKey(AExportName) then
     Exit(False);
 
   ResolutionKey := ModuleExportResolutionKey(Self, AExportName);
@@ -2136,6 +2139,9 @@ begin
   if (FExportBindings.Count > 0) or (FExportsTable.Count > 0) or
      Assigned(FEnvironment) or Assigned(FNamespaceObject) then
     AReader.Refuse('a module record filled twice');
+  // A collection while the restore fills the records resolves the import
+  // bindings it marks: none may follow a forwarding chain nothing checked.
+  FSnapshotPending := True;
   EnsureRoots;
   FLastModified := AReader.ReadDouble;
   Environment := AReader.ReadRef;
@@ -2253,6 +2259,9 @@ begin
         Break;
     end;
   end;
+  // Every chain from this record's exports is checked; one through another
+  // record still stops at it until that record is checked too.
+  FSnapshotPending := False;
 end;
 
 { TModuleNamespaceSnapshotCodec }

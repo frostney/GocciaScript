@@ -15,6 +15,7 @@ program Goccia.HeapSnapshot.Modules.Test;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
+  Generics.Collections,
   SysUtils,
 
   TestingPascalLibrary,
@@ -95,7 +96,9 @@ type
     procedure TestRefusesForgedLocalExports;
     procedure TestManyCompactBindingsRestore;
     procedure TestTouchedSourceRunsNoModuleBody;
+    procedure TestChangedSourceOverRetainedBytecodeReloads;
     procedure TestStoppedCacheLeavesNoRecords;
+    procedure TestUncheckedChainStopsResolution;
     procedure TestEveryTruncationRefuses;
     procedure TestMutantsRefuseOrRestore;
   end;
@@ -189,6 +192,29 @@ begin
       if Same then
         Exit(I);
     end;
+    Inc(At, 2 * Len);
+  end;
+end;
+
+// Every string of a snapshot's string table, by its index.
+function StringIndexesIn(const ABytes: TBytes): TDictionary<string, Integer>;
+var
+  At, Count, I, J, Len: Integer;
+  Text: string;
+begin
+  Result := TDictionary<string, Integer>.Create;
+  At := 4 + 2;
+  At := At + 4 + 2 * Integer(U32In(ABytes, At));  // build identity
+  Count := Integer(U32In(ABytes, At));
+  Inc(At, 4);
+  for I := 0 to Count - 1 do
+  begin
+    Len := Integer(U32In(ABytes, At));
+    Inc(At, 4);
+    SetLength(Text, Len);
+    for J := 0 to Len - 1 do
+      Text[J + 1] := Char(ABytes[At + 2 * J]);
+    Result.AddOrSetValue(Text, I);
     Inc(At, 2 * Len);
   end;
 end;
@@ -379,8 +405,12 @@ begin
     TestManyCompactBindingsRestore);
   Test('A source file touched after the run is not evaluated again',
     TestTouchedSourceRunsNoModuleBody);
+  Test('A changed file over bytecode compiled before is loaded again',
+    TestChangedSourceOverRetainedBytecodeReloads);
   Test('A restore stopped while it caches its records leaves none behind',
     TestStoppedCacheLeavesNoRecords);
+  Test('A collection during the restore follows no unchecked forwarding chain',
+    TestUncheckedChainStopsResolution);
   Test('Every truncation of a module snapshot is refused',
     TestEveryTruncationRefuses);
   Test('Mutants of a module snapshot restore or are refused, never fault',
@@ -776,6 +806,39 @@ begin
     'restored.out')).ToBe('true,2');
 end;
 
+procedure THeapSnapshotModulesTests.TestChangedSourceOverRetainedBytecodeReloads;
+var
+  Refusal, Counter: string;
+  Bytes: TBytes;
+  Run: TModuleRun;
+begin
+  DefineGraph;
+  Bytes := SnapshotEntry('main.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Counter := StringReplace(PathOf('counter.js'), '\', '\\', [rfReplaceAll]);
+  Run := TModuleRun.Create(PathOf('main.js'));
+  try
+    // A refused restore leaves the modules it compiled in the engine.
+    Expect<Boolean>(RestoreInto(Run, Copy(Bytes, 0, Length(Bytes) - 1)) <> '')
+      .ToBe(True);
+    // counter.js changes; the restore uses the bytecode compiled before and
+    // does not read the file, so the record keeps the run's time, and the
+    // newer file is loaded again on the next import.
+    Define('counter.js', 'tick(); let count = 10; ' +
+      'export const inc = () => { count += 1; return count; }; ' +
+      'export { count };');
+    Expect<Integer>(FileSetDate(PathOf('counter.js'),
+      DateTimeToFileDate(Now + 1 / 24))).ToBe(0);
+    Expect<string>(RestoreInto(Run, Bytes)).ToBe('');
+    Expect<string>(Run.Check('(() => { import("' + Counter + '").then(' +
+      '(m) => { restored.out = m.count; }); return ""; })()',
+      'String(restored.out)')).ToBe('10');
+    Expect<Integer>(Run.Ticks).ToBe(1);
+  finally
+    Run.Free;
+  end;
+end;
+
 procedure THeapSnapshotModulesTests.TestStoppedCacheLeavesNoRecords;
 var
   Refusal: string;
@@ -840,6 +903,145 @@ begin
   Expect<Boolean>(High > 16).ToBe(True);
   for Limit := High - 16 to High - 1 do
     Expect<Boolean>(RestoresWithin(Limit)).ToBe(False);
+end;
+
+procedure THeapSnapshotModulesTests.TestUncheckedChainStopsResolution;
+const
+  CHAIN = 60000;
+var
+  Refusal: string;
+  Bytes, Forged: TBytes;
+  Source: TStringBuilder;
+  Strings: TDictionary<string, Integer>;
+  Out: TBytesStream;
+  V, At, LenAt, PayloadStart, PayloadEnd, Rec, P, I: Integer;
+  Low, High, Mid: Int64;
+
+  procedure PutU8(const AValue: Byte);
+  begin
+    Out.WriteBuffer(AValue, 1);
+  end;
+
+  procedure PutU32Out(const AValue: Cardinal);
+  var
+    Value: Cardinal;
+  begin
+    Value := NtoLE(AValue);
+    Out.WriteBuffer(Value, 4);
+  end;
+
+  // The restore's refusal under a ceiling AMargin bytes above what is live.
+  function RestoreUnder(const AMargin: Int64): string;
+  var
+    Run: TModuleRun;
+    GC: TGarbageCollector;
+    Previous: Int64;
+  begin
+    Run := TModuleRun.Create(PathOf('bigmain.js'));
+    GC := TGarbageCollector.Instance;
+    Previous := GC.MaxBytes;
+    try
+      GC.Collect;
+      GC.MaxBytes := GC.BytesAllocated + AMargin;
+      try
+        Result := RestoreInto(Run, Forged);
+      finally
+        GC.MaxBytes := Previous;
+      end;
+    finally
+      Run.Free;
+    end;
+  end;
+
+  procedure Forward(const AName, ATarget: Integer);
+  begin
+    PutU32Out(AName);
+    PutU8(1);
+    PutU32Out(Rec);
+    PutU32Out(ATarget);
+  end;
+
+begin
+  // big.js binds b0 .. b59999, so their names are in the string table.
+  Source := TStringBuilder.Create;
+  try
+    Source.Append('export let v = 0; ');
+    for I := 0 to CHAIN - 1 do
+      Source.Append('const b').Append(I).Append(' = 0; ');
+    Define('big.js', Source.ToString);
+  finally
+    Source.Free;
+  end;
+  Define('bigmain.js', 'import { v } from "./big.js"; ' +
+    'capture({ v: () => v });');
+  Bytes := SnapshotEntry('bigmain.js', Refusal, False);
+  Expect<string>(Refusal).ToBe('');
+  Strings := StringIndexesIn(Bytes);
+  Out := TBytesStream.Create;
+  try
+    V := Strings['v'];
+    // big.js's payload: its time, its environment, one export binding (v),
+    // the rest; and bigmain.js's import binding of it names its record.
+    At := LocalExportAt(Bytes, V, V);
+    Expect<Boolean>(At >= 0).ToBe(True);
+    Expect<Integer>(Integer(U32In(Bytes, At - 4))).ToBe(1);
+    PayloadStart := At - 4 - 5 - 8;
+    LenAt := PayloadStart - 4;
+    PayloadEnd := PayloadStart + Integer(U32In(Bytes, LenAt));
+    // In the object table, before any record's payload.
+    Rec := 0;
+    for P := 0 to LenAt - 12 do
+      if (U32In(Bytes, P) = Cardinal(V)) and
+         (U32In(Bytes, P + 8) = Cardinal(V)) and
+         (U32In(Bytes, P + 4) >= 1) and (U32In(Bytes, P + 4) <= 8) then
+      begin
+        Expect<Integer>(Rec).ToBe(0);
+        Rec := Integer(U32In(Bytes, P + 4));
+      end;
+    Expect<Boolean>(Rec > 0).ToBe(True);
+    // Forged: v forwards through b0, b1 ... within big.js's own record, far
+    // past what a restore lets a resolution follow, to a local binding.
+    Out.WriteBuffer(Bytes[PayloadStart], 8 + 5);
+    PutU32Out(1 + CHAIN);
+    Forward(V, Strings['b0']);
+    for I := 0 to CHAIN - 2 do
+      Forward(Strings['b' + IntToStr(I)], Strings['b' + IntToStr(I + 1)]);
+    PutU32Out(Strings['b' + IntToStr(CHAIN - 1)]);
+    PutU8(0);
+    Out.WriteBuffer(Bytes[At + 5], 5);
+    PutU32Out(Strings['b' + IntToStr(CHAIN - 1)]);
+    Out.WriteBuffer(Bytes[At + 14], PayloadEnd - (At + 14));
+    SetLength(Forged, LenAt + 4 + Out.Size + (Length(Bytes) - PayloadEnd));
+    Move(Bytes[0], Forged[0], LenAt);
+    PutU32(Forged, LenAt, Out.Size);
+    Move(Out.Bytes[0], Forged[LenAt + 4], Out.Size);
+    Move(Bytes[PayloadEnd], Forged[LenAt + 4 + Out.Size],
+      Length(Bytes) - PayloadEnd);
+  finally
+    Out.Free;
+    Strings.Free;
+  end;
+  Expect<Boolean>(Pos('forwarded through more modules',
+    RoundTripEntry('bigmain.js', Forged, '""')) > 0).ToBe(True);
+  // Under a memory ceiling the last of the restore's charges, made while it
+  // fills the records, does not fit: the collection it makes marks
+  // bigmain.js's import binding of v, and resolving it must stop at the
+  // unchecked record, not follow 60,000 forwardings on the native stack.
+  Low := 0;
+  High := 256 * 1024 * 1024;
+  while Low < High do
+  begin
+    Mid := (Low + High) div 2;
+    if Pos('forwarded through', RestoreUnder(Mid)) > 0 then
+      High := Mid
+    else
+      Low := Mid + 1;
+  end;
+  Expect<Boolean>(Pos('forwarded through', RestoreUnder(High)) > 0)
+    .ToBe(True);
+  Expect<Boolean>(RestoreUnder(High - 1) <> '').ToBe(True);
+  Expect<Boolean>(RestoreUnder(High - 64) <> '').ToBe(True);
+  Expect<Boolean>(RestoreUnder(High - 127) <> '').ToBe(True);
 end;
 
 procedure THeapSnapshotModulesTests.TestEveryTruncationRefuses;

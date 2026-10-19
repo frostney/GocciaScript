@@ -187,15 +187,17 @@ begin
 end;
 
 // The bytecode AHash names, compiled from ASourcePath when this engine has
-// not compiled it yet.
+// not compiled it yet (ACompiledNow).
 function EnsureCompiled(const AReader: TGocciaHeapSnapshotReader;
   const AEngine: TGocciaEngine; const APath, ASourcePath, AHash: string;
-  const AIsHostOwned: Boolean): TGocciaBytecodeModule;
+  const AIsHostOwned: Boolean;
+  out ACompiledNow: Boolean): TGocciaBytecodeModule;
 var
   Index: Integer;
   Compiled: TGocciaBytecodeModule;
 begin
   Compiled := nil;
+  ACompiledNow := False;
   if not Assigned(AReader.Templates) then
     AReader.Refuse('no compiled modules to restore the module ' + APath +
       ' into');
@@ -222,6 +224,7 @@ begin
     if Index < 0 then
       AReader.Refuse('the module ' + APath + ' is not the one the snapshot ' +
         'ran');
+    ACompiledNow := True;
   end;
   Result := AReader.Templates.ModuleAt(Index);
 end;
@@ -236,7 +239,7 @@ var
   Compiled: TGocciaBytecodeModule;
   Module: TGocciaModule;
   RecordKeys: TGocciaModuleKeyList;
-  HasStamp: Boolean;
+  HasStamp, CompiledNow: Boolean;
   Stamp: TDateTime;
 begin
   AReader.ReserveItems(1, RECORD_BYTES);
@@ -280,10 +283,13 @@ begin
     if Kind = RECORD_SOURCE then
     begin
       // Read before the module is compiled: a file that changes after it
-      // reads newer, and a later import reloads it.
+      // reads newer, and a later import reloads it. Bytecode this engine
+      // compiled earlier says nothing about the file now, so the record
+      // then keeps the run's time.
       HasStamp := FEngine.ModuleLoader.TryGetModuleLastModified(Path, Stamp);
       Compiled := EnsureCompiled(AReader, FEngine, Path, SourcePath, Hash,
-        IsHostOwned);
+        IsHostOwned, CompiledNow);
+      HasStamp := HasStamp and CompiledNow;
     end;
   except
     RecordKeys.Free;
@@ -309,11 +315,11 @@ var
   Stamp: TDateTime;
 begin
   TGocciaModule(ARecord).ReadSnapshot(AReader);
-  // A source module was checked against its file here, which a later
-  // import compares the record's time with: the file's own time, not the
-  // writing run's, or a copy of the same file would make that import
-  // evaluate the module again. A data module keeps the run's, as its
-  // values are the run's.
+  // A source module this restore compiled from its file was checked against
+  // it, and a later import compares the record's time with the file's: the
+  // file's own time, not the writing run's, or a copy of the same file would
+  // make that import evaluate the module again. A data module keeps the
+  // run's, as its values are the run's.
   if FStamps.TryGetValue(TGocciaModule(ARecord), Stamp) then
     TGocciaModule(ARecord).LastModified := Stamp;
 end;

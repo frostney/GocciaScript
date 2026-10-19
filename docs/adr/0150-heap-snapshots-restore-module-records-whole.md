@@ -54,7 +54,8 @@ run's changes to them survive.
   deferred namespaces, module source objects) and `import.meta` objects.
 - The entry module, evaluating while its run waits at a checkpoint, is
   restored as evaluated.
-- A restored source module takes its file's modification time, checked
-  against the snapshot's bytecode, so a later import of a copied file does
-  not evaluate it again; a data module keeps the run's, so a newer file is
-  loaded again, as in the run.
+- A source module the restore compiled from its file takes the file's
+  modification time, checked against the snapshot's bytecode, so a later
+  import of a copied file does not evaluate it again; a data module, and a
+  module whose bytecode the engine had compiled before, keep the run's, so
+  a newer file is loaded again, as in the run.

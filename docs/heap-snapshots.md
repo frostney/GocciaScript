@@ -226,17 +226,19 @@ holds are refused. Once the whole snapshot is restored, the records are
 cached in the loader as evaluated modules; a refused restore, or one the
 run's limits stop while it caches them, frees them and leaves the loader as
 it was. Restore into an engine that has not loaded the modules, with the
-same files. A restored source module takes its file's modification time,
-which a later import compares to decide whether to load the module again, so
-a copy of the same file does not evaluate it again.
+same files. A source module the restore compiled from its file takes the
+file's modification time, which a later import compares to decide whether
+to load the module again, so a copy of the same file does not evaluate it
+again; one whose bytecode the engine had compiled before keeps the run's.
 
 A data module (JSON, text) is written as its exported values, not read
 again: the run may have changed them. It keeps the run's modification time,
 so a later import of a newer file loads it again, as it would have in the
 run. The entry module, still evaluating
 while its run waits at a checkpoint, is restored as evaluated. A
-forwarded export is followed through at most 1,024 records on restore. These
-refuse the snapshot:
+forwarded export is followed through at most 1,024 records on restore, and
+until a record's forwardings are checked, resolving an import through it
+stops there, the collector's marking included. These refuse the snapshot:
 
 - a record a host or a runtime module loader built, and a binding of a host
   module, until host module codecs land;
