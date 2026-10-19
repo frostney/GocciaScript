@@ -5,8 +5,9 @@ unit Goccia.HeapSnapshot.Codec;
 
   A snapshot is a structured object graph. Its header names the engine build
   and every codec it uses with that codec's schema version; a string table
-  follows, then the names of the built-ins it refers to, the object table and
-  the roots. Primitives are written inline, strings by their index in the
+  follows, then the names of the built-ins it refers to, the module records'
+  headers, the compiled modules its functions run, the object table, the
+  module records' payloads and the roots. Primitives are written inline, strings by their index in the
   string table, built-ins by name and every other object by its index in the
   object table.
 
