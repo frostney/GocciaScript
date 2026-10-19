@@ -189,6 +189,15 @@ type
   end;
   PGocciaBytecodeSuspension = ^TGocciaBytecodeSuspension;
 
+  // The thread's shim loads (TGocciaVM.BeginShimLoad), shared by every VM
+  // of the thread: how many run, and how many frames of code other than a
+  // shim's were set up while one did.
+  TGocciaShimLoadState = record
+    Depth: Integer;
+    OtherFrames: Int64;
+  end;
+  PGocciaShimLoadState = ^TGocciaShimLoadState;
+
   TGocciaVM = class
   private
     // FRegisters, FLocalCells and FArguments point into stacks that move
@@ -319,6 +328,8 @@ type
     // The dispatch loop polls the timeout through it without a thread-local
     // lookup. Never nil: the constructor points it at the creating thread's.
     FThreadPolls: PGocciaThreadPolls;
+    // The thread's GShimLoadState, kept as FThreadPolls is.
+    FShimLoad: PGocciaShimLoadState;
     // The source path most recently interned for an execution context, and its
     // interned reference. Holding the string keeps its address from being
     // reused, so a path at the same address is the same path.
@@ -3255,6 +3266,7 @@ begin
 end;
 
 threadvar
+  GShimLoadState: TGocciaShimLoadState;
   // Non-owning "active generator" pointer: GC-managed and save/restored around
   // each generator activation, so it is not a thread-exit leak (object-reference
   // threadvar audit, #892).
@@ -6489,6 +6501,7 @@ constructor TGocciaVM.Create;
 begin
   inherited Create;
   FThreadPolls := @GThreadPolls;
+  FShimLoad := @GShimLoadState;
   FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   // Teach the shared call stack how to materialise the template-pointer frames
@@ -15612,6 +15625,7 @@ begin
   FCallStack := TGocciaCallStack.Instance;
   FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
   FThreadPolls := @GThreadPolls;
+  FShimLoad := @GShimLoadState;
   FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   // Interned references belong to the thread that interned them.
   if Pointer(FExecutionSourcePath) <> nil then
@@ -15858,14 +15872,14 @@ end;
   arguments sit in (a tail call reuses the caller's window). }
 function TGocciaVM.BeginShimLoad: Int64;
 begin
-  Inc(FThreadPolls^.ShimLoadDepth);
-  Result := FThreadPolls^.ShimLoadOtherFrames;
+  Inc(FShimLoad^.Depth);
+  Result := FShimLoad^.OtherFrames;
 end;
 
 function TGocciaVM.EndShimLoad(const AToken: Int64): Boolean;
 begin
-  Dec(FThreadPolls^.ShimLoadDepth);
-  Result := FThreadPolls^.ShimLoadOtherFrames <> AToken;
+  Dec(FShimLoad^.Depth);
+  Result := FShimLoad^.OtherFrames <> AToken;
 end;
 
 // Out of line, as SetupNewFrame's rare paths are. Closed numeric frames do
@@ -15873,7 +15887,7 @@ end;
 procedure TGocciaVM.NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
 begin
   if not ATemplate.ShimCode then
-    Inc(FThreadPolls^.ShimLoadOtherFrames);
+    Inc(FShimLoad^.OtherFrames);
 end;
 
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
@@ -15893,7 +15907,7 @@ begin
     'A frame was set up above a closed numeric frame');
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
-  if FThreadPolls^.ShimLoadDepth > 0 then
+  if FShimLoad^.Depth > 0 then
     NoteShimLoadFrame(ATemplate);
   // The frame's source path is the template's own source file, or the running
   // module's path when it has none. This procedure runs on every call and must
