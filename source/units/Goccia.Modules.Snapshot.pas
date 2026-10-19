@@ -94,6 +94,8 @@ begin
   FRestored := TGocciaModuleList.Create;
   FSeenKeys := TDictionary<string, Boolean>.Create;
   FStamps := TDictionary<TGocciaModule, TDateTime>.Create;
+  // What an earlier, refused restore read stays unrecorded.
+  FEngine.ModuleLoader.DiscardSnapshotSources;
 end;
 
 destructor TGocciaModuleSnapshotRecords.Destroy;

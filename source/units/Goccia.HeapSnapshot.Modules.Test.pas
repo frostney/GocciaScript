@@ -92,8 +92,10 @@ type
     procedure TestRefusesChangedOrMissingSource;
     procedure TestRefusesAModuleAlreadyLoaded;
     procedure TestRefusedRestoreLeavesNoRecords;
+    procedure TestRefusedRestoreLeavesOwnershipAlone;
     procedure TestRefusesStateOutsideTheRecords;
     procedure TestRefusesForgedLocalExports;
+    procedure TestRefusesAMissingExportValue;
     procedure TestManyCompactBindingsRestore;
     procedure TestTouchedSourceRunsNoModuleBody;
     procedure TestChangedSourceOverRetainedBytecodeReloads;
@@ -398,10 +400,14 @@ begin
     TestRefusesAModuleAlreadyLoaded);
   Test('A refused restore leaves no module record behind',
     TestRefusedRestoreLeavesNoRecords);
+  Test('A refused restore marks no module host-owned',
+    TestRefusedRestoreLeavesOwnershipAlone);
   Test('Loader state outside the records refuses the snapshot',
     TestRefusesStateOutsideTheRecords);
   Test('A local export forged outside its module''s own bindings is refused',
     TestRefusesForgedLocalExports);
+  Test('An export without a value is refused',
+    TestRefusesAMissingExportValue);
   Test('A module scope of many compact bindings restores',
     TestManyCompactBindingsRestore);
   Test('A source file touched after the run is not evaluated again',
@@ -655,6 +661,59 @@ begin
   end;
 end;
 
+procedure THeapSnapshotModulesTests.TestRefusedRestoreLeavesOwnershipAlone;
+var
+  Refusal: string;
+  Bytes, Forged: TBytes;
+  Counter, P, At: Integer;
+  Run: TModuleRun;
+  Keys: TGocciaModuleKeyList;
+  Modules: TGocciaModuleList;
+  I: Integer;
+  Found: Boolean;
+begin
+  DefineGraph;
+  Bytes := SnapshotEntry('main.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // counter.js's record header: its path, not host-owned, a source module
+  // read from the same path. Forged: host-owned, and cut short of the roots,
+  // so the restore reads and compiles counter.js, then is refused.
+  Counter := StringIndexIn(Bytes, PathOf('counter.js'));
+  Expect<Boolean>(Counter >= 0).ToBe(True);
+  At := -1;
+  for P := 0 to Length(Bytes) - 10 do
+    if (U32In(Bytes, P) = Cardinal(Counter)) and (Bytes[P + 4] = 0) and
+       (Bytes[P + 5] = 1) and (U32In(Bytes, P + 6) = Cardinal(Counter)) then
+    begin
+      Expect<Integer>(At).ToBe(-1);
+      At := P;
+    end;
+  Expect<Boolean>(At >= 0).ToBe(True);
+  Forged := Copy(Bytes, 0, Length(Bytes) - 1);
+  Forged[At + 4] := 1;
+  Run := TModuleRun.Create(PathOf('main.js'));
+  Keys := TGocciaModuleKeyList.Create;
+  Modules := TGocciaModuleList.Create;
+  try
+    Expect<Boolean>(RestoreInto(Run, Forged) <> '').ToBe(True);
+    // The run's own import of counter.js is the guest's, as it was.
+    Run.Engine.Execute;
+    Run.Engine.ModuleLoader.ListCachedModules(Keys, Modules);
+    Found := False;
+    for I := 0 to Modules.Count - 1 do
+      if Modules[I].Path = PathOf('counter.js') then
+      begin
+        Found := True;
+        Expect<Boolean>(Modules[I].IsHostOwned).ToBe(False);
+      end;
+    Expect<Boolean>(Found).ToBe(True);
+  finally
+    Modules.Free;
+    Keys.Free;
+    Run.Free;
+  end;
+end;
+
 procedure THeapSnapshotModulesTests.TestRefusesStateOutsideTheRecords;
 var
   Refusal: string;
@@ -752,6 +811,80 @@ begin
   Expect<Boolean>(Pos('a local export outside its module''s environment',
     RoundTripEntry('loopmain.js', Forged, 'String(restored.get())')) > 0)
     .ToBe(True);
+end;
+
+procedure THeapSnapshotModulesTests.TestRefusesAMissingExportValue;
+var
+  Refusal: string;
+  Bytes, Forged: TBytes;
+  A, B, Get, AtA, AtGet, First, LenAt, PayloadStart, PayloadEnd, P, Entry,
+    Rec: Integer;
+  Seven: Double;
+  Run: TModuleRun;
+begin
+  // self.js reads its own export a through the import binding b.
+  Define('self.js', 'import { a as b } from "./self.js"; ' +
+    'export const a = 7; export const get = () => b;');
+  Define('selfmain.js', 'import { get } from "./self.js"; capture({ get });');
+  Bytes := SnapshotEntry('selfmain.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RoundTripEntry('selfmain.js', Bytes,
+    'String(restored.get())')).ToBe('7');
+  A := StringIndexIn(Bytes, 'a');
+  B := StringIndexIn(Bytes, 'b');
+  Get := StringIndexIn(Bytes, 'get');
+  // self.js's payload: its time, its environment, its two local exports.
+  AtA := LocalExportAt(Bytes, A, A);
+  AtGet := LocalExportAt(Bytes, Get, Get);
+  Expect<Boolean>((AtA >= 0) and (AtGet >= 0)).ToBe(True);
+  if AtA < AtGet then
+    First := AtA
+  else
+    First := AtGet;
+  Expect<Integer>(Integer(U32In(Bytes, First - 4))).ToBe(2);
+  PayloadStart := First - 4 - 5 - 8;
+  LenAt := PayloadStart - 4;
+  PayloadEnd := PayloadStart + Integer(U32In(Bytes, LenAt));
+  // Forged: b imports self.js's export b, which has no binding, and the
+  // exports table lists b without a value. Resolving b would then read b
+  // in self.js's environment: b itself, without end.
+  // The end of self.js's scope: no var bindings, then one import binding,
+  // b of self.js's export a.
+  Forged := Copy(Bytes);
+  Rec := 0;
+  for P := 8 to LenAt - 12 do
+    if (U32In(Bytes, P - 8) = 0) and (U32In(Bytes, P - 4) = 1) and
+       (U32In(Bytes, P) = Cardinal(B)) and (U32In(Bytes, P + 4) >= 1) and
+       (U32In(Bytes, P + 4) <= 8) and (U32In(Bytes, P + 8) = Cardinal(A)) then
+    begin
+      Expect<Integer>(Rec).ToBe(0);
+      Rec := P;
+    end;
+  Expect<Boolean>(Rec > 0).ToBe(True);
+  PutU32(Forged, Rec + 8, B);
+  Entry := -1;
+  Seven := 7;
+  for P := PayloadStart to PayloadEnd - 13 do
+    if (U32In(Bytes, P) = Cardinal(A)) and (Bytes[P + 4] = HSV_NUMBER) and
+       (CompareByte(Bytes[P + 5], Seven, 8) = 0) then
+      Entry := P;
+  Expect<Boolean>(Entry > 0).ToBe(True);
+  PutU32(Forged, Entry, B);
+  Forged[Entry + 4] := HSV_NIL;
+  // The entry's value shrinks from a number to nothing: 8 bytes less.
+  Move(Bytes[Entry + 13], Forged[Entry + 5], Length(Bytes) - (Entry + 13));
+  SetLength(Forged, Length(Bytes) - 8);
+  PutU32(Forged, LenAt, U32In(Bytes, LenAt) - 8);
+  // Functions read b through their own code; the collector marks the scope's
+  // import binding of b, and resolving it would never end.
+  Run := TModuleRun.Create(PathOf('selfmain.js'));
+  try
+    Refusal := RestoreInto(Run, Forged);
+    TGarbageCollector.Instance.Collect;
+    Expect<Boolean>(Pos('a value that is missing', Refusal) > 0).ToBe(True);
+  finally
+    Run.Free;
+  end;
 end;
 
 procedure THeapSnapshotModulesTests.TestManyCompactBindingsRestore;

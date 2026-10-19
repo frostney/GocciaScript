@@ -2210,7 +2210,10 @@ begin
     Name := AReader.ReadStr;
     if FExportsTable.ContainsKey(Name) then
       AReader.Refuse('an export listed twice');
-    Value := AReader.ReadValue;
+    // An entry holds a value: a missing one would resolve an import of it
+    // to the module's environment instead, where an import binding of the
+    // same name could read itself without end.
+    Value := AReader.ReadPresentValue;
     FExportsTable.Add(Name, Value);
   end;
   ReadSnapshotNames(AReader, FAmbiguousExports);
