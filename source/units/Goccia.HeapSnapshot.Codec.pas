@@ -2208,9 +2208,9 @@ begin
     SetLength(PathIndexes, FBuiltinRefs.Count);
     for I := 0 to FBuiltinRefs.Count - 1 do
       PathIndexes[I] := StringIndex(FBuiltins.PathAt(FBuiltinRefs[I]));
-    // The built-ins the run built since the table was recorded: no pristine
-    // state of theirs was seen here, so each goes with its fingerprint, and
-    // the restoring engine builds the same ones and compares.
+    // The built-ins the run built since the table was recorded: each goes
+    // with its fingerprint, as built when the session saw it built, else as
+    // it is now, and the restoring engine builds the same ones and compares.
     // Two indexes and a fingerprint (64 hex digits) for each.
     Reserve(Int64(FBuiltins.Count - FBuiltins.FingerprintCount) *
       (2 * SizeOf(Integer) + SizeOf(string) + 160));

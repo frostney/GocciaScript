@@ -5,12 +5,13 @@
 ## Executive Summary
 
 - **Opt-in, for embedders** — a `TGocciaHeapSnapshotSession` writes what a set of roots reaches; a `TGocciaHeapSnapshotRestore` reads it back in a fresh engine of the same build
-- **Refusal is normal** — a class without a codec, a built-in the run changed or state outside the heap refuses the snapshot, and the embedder resumes by replay instead
+- **Refusal is normal** — a class without a codec or state outside the heap refuses the snapshot, and the embedder resumes by replay instead
 - **Built-ins are named, not written** — a snapshot refers to `Math`, `Array.prototype.map` or a lazily built `Temporal.PlainDate` by name, and the restoring engine resolves its own
+- **Changed built-ins are written as differences** — a built-in the run changed (`Object.prototype.polyfill = …`, `globalThis.answer = 42`, `Object.freeze(Math)`) is written as its whole own state, which the restore gives the same built-in last
 - **The reader expects hostile input** — every count, index and length is checked against the input and the limits, the run's memory ceiling and execution limits apply, and every truncation and mutant of a real snapshot is refused or restored, never a fault
 - **The pause checkpoint** — an engine with a host-call owner calls `OnPauseCheckpoint` when its run waits on nothing but host calls, and a handler that pauses ends the run with `EGocciaRunPaused`
 - **Functions and generators** — closures, the cells they share and suspended generators are written, each function named by its module's bytecode and its place there; the restoring engine must have compiled the same module
-- **Still growing** — plain objects, object literals, arrays, symbols and VM state are written; the codec families that follow (modules, built-in differences, the object model and the rest) are listed in [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md)
+- **Still growing** — plain objects, object literals, arrays, symbols, VM state and built-in differences are written; the codec families that follow (modules, the object model and the rest) are listed in [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md)
 
 The design, its trust model and its phases are recorded in
 [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md); the prototype it grew
@@ -20,15 +21,19 @@ from is the [heap snapshot spike](spikes/heap-snapshot-prototype.md).
 
 Create the session right after the engine, before anything runs on it: it
 names the engine's built-ins then, records their state (a built-in the run
-changes refuses the snapshot until built-in differences are written), and
-marks where the run's objects begin, which the accounting check counts.
+changes is written as its difference, see
+[Built-ins the run changed](#built-ins-the-run-changed)), and marks where
+the run's objects begin, which the accounting check counts.
 
 Built-ins the run builds later (a lazily built global such as `Temporal`, an
 iterator prototype made on first use) are named too. Lazy members are watched
-as they are built, so building one is not a change; a built-in the session
-never saw before the run is written with its fingerprint, and the restoring
-engine builds the same built-in by name and compares, refusing the snapshot
-when the run had changed it. A built-in's state is its prototype, flags and
+as they are built: what one holds is named and recorded right then, so
+building it is not a change and changing it later is a difference. A
+built-in filled on first use some other way (natively, as the iterator
+prototypes are) is named before the snapshot and written with its
+fingerprint; the restoring engine builds the same built-in by name and
+compares, refusing the snapshot when the run had changed it. A built-in's
+state is its prototype, flags and
 own properties, and for a function also its kind, whether its code is a
 shim's, and its synthesized `length` and `name`: a run's function standing
 where a built-in's was is not the engine's own.
@@ -258,12 +263,44 @@ A `Date` keeps its time value outside the object, in the `Date` shim's
 WeakMap, which is a built-in and named, not written: an object with a time
 value refuses the snapshot until a codec covers it.
 
+## Built-ins the run changed
+
+A built-in whose state differs from what the session recorded is written in
+its own section (format version 3, between the object table and the roots)
+as its whole own state: its prototype, its extensibility and integrity, a
+function's synthesized `length` and `name`, an array's length and elements,
+and every own property, string- and symbol-keyed, in its final order. A
+member the engine built and the run left alone, or one still lazy, is
+written as kept: the restoring engine's own member of that key, lazy or
+built, stays. The run's objects a changed built-in holds are written like
+any others, and the naming walk does not reach them through it.
+
+The reader checks each difference against the built-in it names in this
+engine, as it checks a restored object: no built-in changed twice, flags that
+agree with each other and with every member (kept ones included), parts that
+fit the built-in's kind, a kept member the built-in has, an array's elements
+within its length, no new prototype for `Object.prototype` and no prototype
+chain that loops through a changed built-in. The differences are applied
+last, after the roots are read and every check has passed, so a refused
+restore leaves this engine's built-ins as they were (ADR 0148 had them
+applied before the object graph is filled; nothing the fill does reads a
+built-in's own state). Resolving names can still build lazy built-ins, which
+a later restore into the same engine cannot tell from changes: restore into
+a fresh engine. To snapshot a restored run again, create the session before
+the restore, as for any run; the restore is then the run's first change.
+
+A change to a built-in's native internal state (an error's or a RegExp's
+data, a Date's time value) has no difference yet, and refuses the snapshot.
+
 ## Testing
 
 `source/units/Goccia.HeapSnapshot.Test.pas` round-trips graphs through two
 engines and checks them by script, and feeds the reader every truncation
 and 10,000 mutants of a real snapshot, and of one holding closures and a
-suspended generator, which it then resumes. The fuzz harness restores one input
+suspended generator, which it then resumes.
+`Goccia.HeapSnapshot.Builtins.Test` round-trips each kind of difference,
+checks the reader's refusals of impossible ones, and restores every cut and
+11,000 mutants of snapshots with differences. The fuzz harness restores one input
 as a snapshot with `--heap-snapshot <file>` and writes its own seed
 snapshots with `--write-heap-snapshot-seeds <dir>`; the scheduled
 [fuzz workflow](../.github/workflows/fuzz.yml) fuzzes the reader with
