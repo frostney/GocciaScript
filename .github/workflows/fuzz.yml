@@ -257,6 +257,8 @@ jobs:
             cp "$f" "build/fuzz/heap-snapshot-replay/q-$(basename "$f" | tr ',:' '__')"
           done
           printf 'x' > build/fuzz/not-a-snapshot
+          # Every input a replay fails on is kept for the reproducer artifact.
+          mkdir -p build/fuzz/heap-snapshot-replay-failures
           blocks() { ./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$1" 2>&1 | grep -oE '^[0-9]+ unfreed memory blocks' | cut -d' ' -f1; }
           baseline=$(blocks build/fuzz/not-a-snapshot)
           echo "unfreed blocks at exit without a snapshot: ${baseline}"
@@ -265,6 +267,7 @@ jobs:
             got=$(blocks "$f")
             if [ "$got" != "$baseline" ]; then
               echo "::error::heaptrc: $f leaves ${got} unfreed blocks, ${baseline} without a snapshot"
+              cp "$f" build/fuzz/heap-snapshot-replay-failures/heaptrc-"$(basename "$f")"
               status=1
             fi
           done
@@ -275,7 +278,7 @@ jobs:
                 ./build/GocciaFuzzHarness --heap-snapshot "$f" > /dev/null 2> build/fuzz/valgrind.log; then
               echo "::error::Valgrind: $f"
               cat build/fuzz/valgrind.log
-              cp "$f" build/fuzz/heap-snapshot-out/ 2>/dev/null || true
+              cp "$f" build/fuzz/heap-snapshot-replay-failures/valgrind-"$(basename "$f")"
               status=1
             fi
           done
@@ -300,6 +303,7 @@ jobs:
           path: |
             build/fuzz/heap-snapshot-out/**/crashes/**
             build/fuzz/heap-snapshot-out/**/hangs/**
+            build/fuzz/heap-snapshot-replay-failures/**
           if-no-files-found: ignore
           retention-days: 30
 

@@ -142,6 +142,7 @@ type
     procedure TestBuiltinsARunBuildsRestoreOrRefuseEarly;
     procedure TestSnapshotCreatesNothing;
     procedure TestHugeKeyOnBuiltinStaysBounded;
+    procedure TestNestedEngineBuildsAreItsOwn;
   public
     procedure SetupTests; override;
   end;
@@ -284,6 +285,8 @@ begin
     TestSnapshotCreatesNothing);
   Test('A huge key on a built-in refuses within the fingerprint cap',
     TestHugeKeyOnBuiltinStaysBounded);
+  Test('Built-ins a nested engine builds are not the outer session''s',
+    TestNestedEngineBuildsAreItsOwn);
 end;
 
 // Builds a graph with ASource in a fresh engine and writes what it returns;
@@ -1062,6 +1065,7 @@ end;
 procedure THeapSnapshotTests.TestHugeKeyOnBuiltinStaysBounded;
 var
   Refusal: string;
+  Bytes: TBytes;
 begin
   // The key alone is past the cap: refused as changed, the key copied
   // nowhere first.
@@ -1072,6 +1076,51 @@ begin
   Snapshot('(() => { for (const i of Array.from({ length: 300000 }, ' +
     '(_, i) => i)) Math[Symbol()] = i; return {}; })()', Refusal);
   Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  // A built-in the run built, then grew: walked one key at a time, and the
+  // restoring engine sees the change.
+  Bytes := Snapshot('(() => { const p = Temporal.PlainDate.prototype; ' +
+    'p["k".repeat(5 * 1024 * 1024)] = 1; ' +
+    'for (const i of Array.from({ length: 100000 }, (_, i) => i)) ' +
+    'p[Symbol("s".repeat(i % 7))] = i; return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<Boolean>(Pos('the run changed the built-in', RestoreRefusal(Bytes)) > 0)
+    .ToBe(True);
+end;
+
+procedure THeapSnapshotTests.TestNestedEngineBuildsAreItsOwn;
+var
+  Outer, Nested: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Stream: TBytesStream;
+  Value: TGocciaValue;
+begin
+  Lines := TStringList.Create;
+  Stream := TBytesStream.Create;
+  Outer := TGocciaEngine.Create(TEST_PATH, Lines);
+  Session := TGocciaHeapSnapshotSession.Create(Outer);
+  try
+    // Another engine on the thread builds lazy built-ins of its own, then
+    // goes away: what it built is garbage, not the outer run's.
+    Nested := TGocciaEngine.Create(TEST_PATH, Lines);
+    try
+      Nested.EvaluateGlobalEval('Temporal.PlainDate.from("2026-01-02"); ' +
+        'new Intl.NumberFormat("en").format(1); 0', TEST_PATH, Stage);
+    finally
+      Nested.Free;
+    end;
+    Value := Outer.EvaluateGlobalEval('({ a: 1 })', TEST_PATH, Stage);
+    Session.AddToBaseline(Value);
+    Session.CheckAccounting := True;
+    Session.Snapshot([Value], Stream);
+    Expect<Boolean>(Stream.Size > 0).ToBe(True);
+  finally
+    Session.Free;
+    Outer.Free;
+    Stream.Free;
+    Lines.Free;
+  end;
 end;
 
 procedure THeapSnapshotTests.TestRefusesChangedLateBuiltin;
@@ -1297,6 +1346,11 @@ begin
     GC.Collect;
     GC.MaxBytes := GC.BytesAllocated + 1024 * 1024;
     Refusal := RestoreRefusalIn(Engine, Bytes);
+    // Under a ceiling the restore's own tables do not fit either: refused as
+    // invalid all the same, never another exception.
+    GC.MaxBytes := GC.BytesAllocated + 1;
+    Expect<Boolean>(Pos('memory', RestoreRefusalIn(Engine, Bytes)) > 0)
+      .ToBe(True);
   finally
     GC.MaxBytes := Previous;
     Engine.Free;
