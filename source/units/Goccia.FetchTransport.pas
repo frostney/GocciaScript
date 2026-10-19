@@ -57,9 +57,10 @@ type
     pump, never inside the call. }
   IGocciaFetchResponder = interface
     { Answers with a response: the final one, after any redirects the
-      transport followed. AResponse.FinalURL is Response.url as given, as
-      the built-in client reports a redirect's target; empty means the
-      request URL as fetch() received it. Header values lose their leading
+      transport followed. Response.url is AResponse.FinalURL
+      serialized by the URL Standard without its fragment, as it is for the
+      built-in client's final URL; empty means the request URL as fetch()
+      received it, serialized the same way. Header values lose their leading
       and trailing tabs and spaces. The body of a HEAD response or of a 204,
       205 or 304 response is ignored. Header values and status text are
       bytes, one per character up to U+00FF. A status outside 200..599,
