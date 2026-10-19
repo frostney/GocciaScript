@@ -118,6 +118,9 @@ type
     property HasOwnNameProperty: Boolean read FHasOwnNameProperty;
     function IntrinsicLength: Integer;
     function IntrinsicName: string;
+    // Whether the function runs code the engine compiled from a bootstrap
+    // shim (Goccia.Shims), not a script's.
+    function IsShimCode: Boolean; virtual;
     // A heap snapshot restore of a built-in function the run changed.
     procedure SetIntrinsicPropertiesForRestore(const AHasOwnLength,
       AHasOwnName: Boolean);
@@ -810,6 +813,11 @@ end;
 function TGocciaFunctionBase.IntrinsicName: string;
 begin
   Result := GetFunctionName;
+end;
+
+function TGocciaFunctionBase.IsShimCode: Boolean;
+begin
+  Result := False;
 end;
 
 procedure TGocciaFunctionBase.SetIntrinsicPropertiesForRestore(

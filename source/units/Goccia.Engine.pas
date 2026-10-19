@@ -2681,6 +2681,29 @@ end;
   compiling and running it must not change it. The shim can be materialized
   while the VM is running user code (a lazy global read), so the VM state the
   module run changes is restored afterwards, as EvaluateModuleBody does. }
+// Every template of a shim's code is ShimCode (TGocciaVM.BeginShimLoad).
+procedure MarkShimCode(const ATemplate: TGocciaFunctionTemplate);
+var
+  Pending: TList<TGocciaFunctionTemplate>;
+  Template: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Pending := TList<TGocciaFunctionTemplate>.Create;
+  try
+    Pending.Add(ATemplate);
+    while Pending.Count > 0 do
+    begin
+      Template := Pending[Pending.Count - 1];
+      Pending.Delete(Pending.Count - 1);
+      Template.ShimCode := True;
+      for I := 0 to Template.FunctionCount - 1 do
+        Pending.Add(Template.GetFunction(I));
+    end;
+  finally
+    Pending.Free;
+  end;
+end;
+
 function TGocciaEngine.EvaluateShim(const AProgram: TGocciaProgram;
   const AScope: TGocciaScope; const AFileName: string): Boolean;
 var
@@ -2706,6 +2729,7 @@ begin
     Compiler.Free;
   end;
   FRetainedModules.Add(BytecodeModule);
+  MarkShimCode(BytecodeModule.TopLevel);
 
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then

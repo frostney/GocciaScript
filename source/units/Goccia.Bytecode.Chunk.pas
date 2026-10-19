@@ -330,6 +330,8 @@ type
     // the global one. Eval code is compiled when the eval runs and is never
     // serialized, so this is not part of the bytecode format.
     FGlobalEvalCode: Boolean;
+    // Runtime-only: compiled from a bootstrap shim (TGocciaEngine.EvaluateShim).
+    FShimCode: Boolean;
     // Runtime-only: the module environment binding a top-level function
     // declaration of a loader-linked module initializes when the module is
     // linked. Such modules are compiled in process and never serialized, so
@@ -517,6 +519,10 @@ type
       instantiation already made. }
     property GlobalEvalCode: Boolean read FGlobalEvalCode
       write FGlobalEvalCode;
+    { Code of a bootstrap shim (Goccia.Shims), set by the engine on every
+      template of a shim it compiles: a shim load that runs code without it
+      ran a run's code (TGocciaVM.BeginShimLoad). }
+    property ShimCode: Boolean read FShimCode write FShimCode;
     { Set on a function declaration at the top level of a module compiled
       for linking (TGocciaCompiler.PreinitializedTopLevelFunctions): the
       name of the module environment binding that the function object

@@ -29,9 +29,9 @@ as they are built, so building one is not a change; a built-in the session
 never saw before the run is written with its fingerprint, and the restoring
 engine builds the same built-in by name and compares, refusing the snapshot
 when the run had changed it. A built-in's state is its prototype, flags and
-own properties, and for a function also its kind and its synthesized
-`length` and `name`: a lazy built-in that took in the run's function (a shim
-exporting what a global held when it loaded) is not the engine's own.
+own properties, and for a function also its kind, whether its code is a
+shim's, and its synthesized `length` and `name`: a run's function standing
+where a built-in's was is not the engine's own.
 
 ```pascal
 uses
@@ -70,9 +70,13 @@ built-ins reach counts as theirs: a built-in written in JavaScript (a shim
 such as `Date`) keeps its module scope, cells and private functions, built
 when the run first used it, and those are not missed objects. Only what a
 shim's load created counts as its own, and only when the load ran no code
-but shims': a run's object the shim took in as it loaded is still missed, so
-is all a load made that called a run's function (through a built-in the run
-had replaced), and so is what the run's own top-level bindings hold.
+but shims' (the engine marks the code it compiles from a shim). A shim
+loads with the built-ins the engine had before any script ran (`WeakMap`,
+`Object.defineProperty`, `Number.parseInt` and `Number.parseFloat`, bound in
+its own scope), so what the run did to those globals does not reach it; a
+load that still ran a run's function, on any engine of the thread (a getter
+the run put on `Object.prototype`, say), has all it made counted. What the
+run's own top-level bindings hold is counted too.
 Should the collector's mark stack fail
 to grow while it marks what built-ins reach, the snapshot is refused, since
 its recovery traces the global scope as well. Objects the embedder

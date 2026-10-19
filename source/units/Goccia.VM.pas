@@ -244,10 +244,6 @@ type
     // FFrameDepth it is refused once the native stack runs low (see
     // CheckNativeStackHeadroom in Goccia.StackLimit).
     FNativeExecutionDepth: Integer;
-    // How many shim loads (Goccia.Shims) are running, and how many frames of
-    // other code they have set up: a run's function a load called.
-    FShimLoadDepth: Integer;
-    FShimLoadOtherFrames: Int64;
     // NativeStackLimit of the thread the VM is bound to, looked up by the
     // first check that needs it after BindToCurrentThread.
     FNativeStackLimit: NativeUInt;
@@ -747,11 +743,12 @@ type
     destructor Destroy; override;
     procedure EnsureStackRootRegistered;
     { A shim load brackets its evaluation with these. EndShimLoad says
-      whether a frame of code other than a shim's (whose source file is
-      <shim:...>) was set up since the BeginShimLoad that returned AToken: a
-      run's function the load called, through a built-in the run replaced. A
-      heap snapshot then does not take what the load made for a shim's own
-      (ADR 0148). }
+      whether a frame of code other than a shim's (a template without
+      ShimCode) was set up since the BeginShimLoad that returned AToken, by
+      any VM on the thread: a run's function the load called, through a
+      built-in the run replaced, or a Proxy trap of another engine's. A heap
+      snapshot then does not take what the load made for a shim's own (ADR
+      0148). }
     function BeginShimLoad: Int64;
     function EndShimLoad(const AToken: Int64): Boolean;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
@@ -2332,6 +2329,7 @@ type
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     function IsConstructable: Boolean; override;
+    function IsShimCode: Boolean; override;
     procedure TraceReferences; override;
   end;
 
@@ -3178,6 +3176,11 @@ begin
   FSuperClass := ASuperClass;
   FNewTarget := ANewTarget;
   FCurrentCtorClass := ACurrentCtorClass;
+end;
+
+function TGocciaBytecodeFunctionValue.IsShimCode: Boolean;
+begin
+  Result := Assigned(FClosure) and FClosure.Template.ShimCode;
 end;
 
 function TGocciaBytecodeFunctionValue.GetFunctionLength: Integer;
@@ -15855,27 +15858,22 @@ end;
   arguments sit in (a tail call reuses the caller's window). }
 function TGocciaVM.BeginShimLoad: Int64;
 begin
-  Inc(FShimLoadDepth);
-  Result := FShimLoadOtherFrames;
+  Inc(FThreadPolls^.ShimLoadDepth);
+  Result := FThreadPolls^.ShimLoadOtherFrames;
 end;
 
 function TGocciaVM.EndShimLoad(const AToken: Int64): Boolean;
 begin
-  Dec(FShimLoadDepth);
-  Result := FShimLoadOtherFrames <> AToken;
+  Dec(FThreadPolls^.ShimLoadDepth);
+  Result := FThreadPolls^.ShimLoadOtherFrames <> AToken;
 end;
 
-// Out of line: SetupNewFrame holds no string. Generator resumes and closed
-// numeric frames do not come here; neither can a shim's load reach a run's
-// generator or make a numeric frame hold anything.
+// Out of line, as SetupNewFrame's rare paths are. Closed numeric frames do
+// not come here, and cannot make anything a load would keep.
 procedure TGocciaVM.NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
-const
-  SHIM_SOURCE_PREFIX = '<shim:';
 begin
-  if not Assigned(ATemplate.DebugInfo) or
-     (Copy(ATemplate.DebugInfo.SourceFile, 1, Length(SHIM_SOURCE_PREFIX)) <>
-      SHIM_SOURCE_PREFIX) then
-    Inc(FShimLoadOtherFrames);
+  if not ATemplate.ShimCode then
+    Inc(FThreadPolls^.ShimLoadOtherFrames);
 end;
 
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
@@ -15895,7 +15893,7 @@ begin
     'A frame was set up above a closed numeric frame');
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
-  if FShimLoadDepth > 0 then
+  if FThreadPolls^.ShimLoadDepth > 0 then
     NoteShimLoadFrame(ATemplate);
   // The frame's source path is the template's own source file, or the running
   // module's path when it has none. This procedure runs on every call and must

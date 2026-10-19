@@ -1271,13 +1271,14 @@ begin
     Identity(Encoder, Obj.Prototype);
     Encoder.Count(Ord(Obj.Extensible) or (Ord(Obj.Sealed) shl 1) or
       (Ord(Obj.Frozen) shl 2));
-    // A function by its kind and its synthesized length and name, which are
-    // not in the property map: a run's function that a lazy built-in took
-    // in (a shim exporting what a global held when it loaded) is not the
-    // engine's own, and a deleted length or name is a change.
+    // A function by its kind, whether its code is a shim's, and its
+    // synthesized length and name, which are not in the property map: a
+    // run's function standing where a built-in's was is not the engine's
+    // own, and a deleted length or name is a change.
     if Obj is TGocciaFunctionBase then
     begin
       Encoder.Field(Obj.ClassName);
+      Encoder.Count(Ord(TGocciaFunctionBase(Obj).IsShimCode));
       Encoder.Count(Ord(TGocciaFunctionBase(Obj).HasOwnLengthProperty) or
         (Ord(TGocciaFunctionBase(Obj).HasOwnNameProperty) shl 1));
       if TGocciaFunctionBase(Obj).HasOwnLengthProperty then
