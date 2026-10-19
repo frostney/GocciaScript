@@ -50,9 +50,11 @@ type
   private
     FTable: TGocciaHeapSnapshotBuiltinTable;
     FEngine: TGocciaEngine;
+    FSymbolSegments: TObject;
   public
     constructor Create(const ATable: TGocciaHeapSnapshotBuiltinTable;
       const AEngine: TGocciaEngine);
+    destructor Destroy; override;
     function Resolve(const APath: string): TGCManagedObject;
   end;
 
@@ -545,9 +547,13 @@ begin
   end;
 end;
 
+type
+  TSymbolSegmentCache = TDictionary<TGCManagedObject, TStringArray>;
+
 // Follows one segment from AObject; reading a lazy member materializes it.
+// ACache keeps each object's symbol segment names, built once.
 function ResolveSegment(const AObject: TGCManagedObject;
-  const ASegment: string): TGCManagedObject;
+  const ASegment: string; const ACache: TSymbolSegmentCache): TGCManagedObject;
 var
   Obj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
@@ -585,7 +591,12 @@ begin
     Kind := Copy(ASegment, 1, I - 1);
     Name := Copy(ASegment, I + 1, MaxInt);
     Symbols := Obj.GetOwnSymbols;
-    Names := SymbolSegments(Symbols);
+    if not ACache.TryGetValue(Obj, Names) or
+       (Length(Names) <> Length(Symbols)) then
+    begin
+      Names := SymbolSegments(Symbols);
+      ACache.AddOrSetValue(Obj, Names);
+    end;
     for I := 0 to High(Symbols) do
       if Names[I] = Name then
       begin
@@ -644,6 +655,13 @@ begin
   inherited Create;
   FTable := ATable;
   FEngine := AEngine;
+  FSymbolSegments := TSymbolSegmentCache.Create;
+end;
+
+destructor TGocciaBuiltinPathResolver.Destroy;
+begin
+  FSymbolSegments.Free;
+  inherited;
 end;
 
 function TGocciaBuiltinPathResolver.Resolve(
@@ -681,7 +699,8 @@ begin
   while Assigned(Result) and (I <= High(Parts)) do
   begin
     CheckNativeWork;
-    Result := ResolveSegment(Result, Parts[I]);
+    Result := ResolveSegment(Result, Parts[I],
+      TSymbolSegmentCache(FSymbolSegments));
     Inc(I);
   end;
   if Assigned(Result) then

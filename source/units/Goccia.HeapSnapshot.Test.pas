@@ -762,6 +762,11 @@ begin
   Snapshot('(() => { Object.preventExtensions(Math); return {}; })()',
     Refusal);
   Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  // Array.prototype is an array: its elements and length are its state too.
+  Snapshot('(() => { Array.prototype[0] = 1; return {}; })()', Refusal);
+  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  Snapshot('(() => { Array.prototype.length = 3; return {}; })()', Refusal);
+  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
 end;
 
 procedure THeapSnapshotTests.TestAccountingRefusesMissedObject;

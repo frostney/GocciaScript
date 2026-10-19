@@ -233,10 +233,11 @@ end;
 
 procedure RegisterSymbol(const ASymbol: TGocciaSymbolValue);
 begin
+  // Into the registry first: if that raises, the symbol is as it was.
+  SharedSymbolRegistry.Add(ASymbol.Description, ASymbol);
   ASymbol.Registered := True;
   if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.PinObject(ASymbol);
-  SharedSymbolRegistry.Add(ASymbol.Description, ASymbol);
 end;
 
 function TGocciaGlobalSymbol.SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

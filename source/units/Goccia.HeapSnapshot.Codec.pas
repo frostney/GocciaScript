@@ -347,6 +347,7 @@ type
     function ReadCount(const ALimit: Int64; const AMinBytesEach: Int64;
       const AWhat: string): Integer;
     procedure Reserve(const ACount, AElementSize: Int64);
+    procedure RoomForCreated;
     procedure NoteCreated(const AObject: TGCManagedObject);
     function ReadRawString: string;
     procedure CheckPrototypeChains;
@@ -427,7 +428,9 @@ uses
   SHA256,
 
   Goccia.Builtins.GlobalSymbol,
+  Goccia.Constants.PropertyNames,
   Goccia.NativeLimits,
+  Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.HoleValue,
   Goccia.Version;
@@ -517,6 +520,9 @@ const
   // A built-in table entry: its slots in the lists and maps, its fingerprint;
   // its name is held twice (the list and the map key).
   TABLE_ENTRY_BYTES = 160;
+  // The most a fingerprint encodes of one built-in; the encoding is a
+  // temporary of the walk, bounded rather than charged.
+  MAX_FINGERPRINT_BYTES = 4 * 1024 * 1024;
   // TMemoryStream's growth step, which its capacity is rounded to.
   STREAM_BLOCK_BYTES = 4096;
 
@@ -745,7 +751,12 @@ end;
 procedure TGocciaMaterializedMemberRoots.MarkRootReferences;
 var
   Member: TGocciaMaterializedMember;
+  I: Integer;
 begin
+  // The built-ins the table names stay alive with it: a run can detach one
+  // from where it was reached, and the table still fingerprints it.
+  for I := 0 to FTable.FObjects.Count - 1 do
+    FTable.FObjects[I].MarkReferences;
   for Member in FTable.FMaterialized.Values do
   begin
     if Assigned(Member.Value) then
@@ -837,13 +848,21 @@ end;
 type
   TFingerprintEncoder = record
     Data: TBytes;
-    Length_: Integer;
+    Length_: Int64;
+    // Past MAX_FINGERPRINT_BYTES: no built-in an engine makes is that large,
+    // so one is a built-in the run grew, and it fingerprints as changed.
+    TooLarge: Boolean;
     procedure Field(const AText: string);
     procedure Count(const AValue: Integer);
   end;
 
 procedure TFingerprintEncoder.Count(const AValue: Integer);
 begin
+  if Length_ + 4 > MAX_FINGERPRINT_BYTES then
+  begin
+    TooLarge := True;
+    Exit;
+  end;
   if Length(Data) < Length_ + 4 then
     SetLength(Data, (Length_ + 4) * 2 + 64);
   Move(AValue, Data[Length_], 4);
@@ -852,15 +871,37 @@ end;
 
 procedure TFingerprintEncoder.Field(const AText: string);
 var
-  Bytes: Integer;
+  Bytes: Int64;
 begin
   Count(Length(AText));
-  Bytes := Length(AText) * SizeOf(Char);
+  Bytes := Int64(Length(AText)) * SizeOf(Char);
+  if TooLarge or (Length_ + Bytes > MAX_FINGERPRINT_BYTES) then
+  begin
+    TooLarge := True;
+    Exit;
+  end;
   if Length(Data) < Length_ + Bytes then
     SetLength(Data, (Length_ + Bytes) * 2 + 64);
   if Bytes > 0 then
     Move(AText[1], Data[Length_], Bytes);
   Inc(Length_, Bytes);
+end;
+
+// A BigInt by its limbs in hex: linear, where decimal text is quadratic.
+function BigIntIdentity(const AValue: TGocciaBigIntValue): string;
+var
+  I: Integer;
+begin
+  if AValue.Value.IsNegative then
+    Result := 'i-'
+  else
+    Result := 'i+';
+  for I := AValue.Value.LimbCount - 1 downto 0 do
+  begin
+    if I and 4095 = 0 then
+      CheckNativeWork;
+    Result := Result + IntToHex(AValue.Value.LimbAt(I), 8);
+  end;
 end;
 
 function TGocciaHeapSnapshotBuiltinTable.ComputeFingerprint(
@@ -892,7 +933,7 @@ const
     if AValue is TGocciaNumberLiteralValue then
       Exit('d' + IntToHex(PInt64(@TGocciaNumberLiteralValue(AValue).Value)^, 16));
     if AValue is TGocciaBigIntValue then
-      Exit('i' + TGocciaBigIntValue(AValue).Value.ToString);
+      Exit(BigIntIdentity(TGocciaBigIntValue(AValue)));
     if (AValue is TGocciaSymbolValue) and TGocciaSymbolValue(AValue).Registered then
       Exit('r' + TGocciaSymbolValue(AValue).Description);
     Result := 'X' + IntToHex(PtrUInt(AValue), SizeOf(PtrUInt) * 2);
@@ -953,6 +994,7 @@ var
   Symbols: TArray<TGocciaSymbolValue>;
   I: Integer;
   Encoder: TFingerprintEncoder;
+  LengthDescriptor: TGocciaPropertyDescriptor;
 begin
   Result := '';
   if not (FObjects[AIndex] is TGocciaObjectValue) then
@@ -980,7 +1022,33 @@ begin
     EncodeDescriptor(Encoder, Obj, '',
       Obj.GetOwnSymbolPropertyDescriptor(Symbols[I]));
   end;
+  // An array built-in (Array.prototype is one) keeps its length and dense
+  // elements outside the property map.
+  if Obj is TGocciaArrayValue then
+  begin
+    Encoder.Field('array');
+    LengthDescriptor := Obj.GetOwnPropertyDescriptor(PROP_LENGTH);
+    try
+      if LengthDescriptor is TGocciaPropertyDescriptorData then
+      begin
+        Encoder.Count(Byte(LengthDescriptor.Flags));
+        Encoder.Field(Identity(TGocciaPropertyDescriptorData(LengthDescriptor).Value));
+      end;
+    finally
+      ReleaseDescriptor(LengthDescriptor);
+    end;
+    Encoder.Count(TGocciaArrayValue(Obj).Elements.Count);
+    for I := 0 to TGocciaArrayValue(Obj).Elements.Count - 1 do
+    begin
+      if I and 1023 = 0 then
+        CheckNativeWork;
+      Encoder.Field(Identity(TGocciaArrayValue(Obj).Elements[I]));
+    end;
+  end;
+  if Encoder.TooLarge then
+    Exit('too large: ' + IntToHex(PtrUInt(Obj), SizeOf(PtrUInt) * 2));
   SetLength(Encoder.Data, Encoder.Length_);
+  CheckNativeWork;
   Result := SHA256Hex(Encoder.Data);
 end;
 
@@ -1570,8 +1638,9 @@ begin
   Inc(FReservedBytes, Bytes);
 end;
 
-// Roots a value the reader created; the list's growth is charged in steps.
-procedure TGocciaHeapSnapshotReader.NoteCreated(const AObject: TGCManagedObject);
+// Makes room in the list of created values before a value is created: the
+// charge can collect, and nothing roots a value until it is in the list.
+procedure TGocciaHeapSnapshotReader.RoomForCreated;
 const
   CHARGE_STEP = 4096;
 begin
@@ -1579,7 +1648,14 @@ begin
   begin
     Reserve(CHARGE_STEP, SizeOf(Pointer));
     Inc(FCreatedCharged, CHARGE_STEP);
+    FCreated.Capacity := FCreatedCharged;
   end;
+end;
+
+// Roots a value just created, in the room RoomForCreated made: no
+// allocation, so no collection, between its creation and this.
+procedure TGocciaHeapSnapshotReader.NoteCreated(const AObject: TGCManagedObject);
+begin
   FCreated.Add(AObject);
 end;
 
@@ -1723,12 +1799,15 @@ begin
       Result := TGocciaHoleValue.HoleValue;
     HSV_NUMBER:
       begin
+        RoomForCreated;
         Result := TGocciaNumberLiteralValue.Create(ReadDouble);
         NoteCreated(Result);
       end;
     HSV_STRING:
       begin
-        Result := TGocciaStringLiteralValue.Create(ReadStr);
+        Text := ReadStr;
+        RoomForCreated;
+        Result := TGocciaStringLiteralValue.Create(Text);
         NoteCreated(Result);
       end;
     HSV_BIGINT:
@@ -1743,6 +1822,13 @@ begin
             Poll;
           Limbs[I] := ReadU32;
         end;
+        // Canonical only, as the writer writes it: no leading zero limb, and
+        // zero is not negative. The value then takes the limbs over as read.
+        if (Count > 0) and (Limbs[Count - 1] = 0) then
+          Refuse('a BigInt with a leading zero limb');
+        if (Count = 0) and Negative then
+          Refuse('a negative zero BigInt');
+        RoomForCreated;
         Result := TGocciaBigIntValue.Create(
           TBigInteger.FromLimbs(Limbs, Negative));
         NoteCreated(Result);
@@ -1769,6 +1855,7 @@ begin
            not FNewRegistered.TryGetValue(Text, TGocciaSymbolValue(Result)) then
         begin
           Reserve(1, SEEN_ENTRY_BYTES);
+          RoomForCreated;
           Result := TGocciaSymbolValue.Create(Text);
           NoteCreated(Result);
           FNewRegistered.Add(Text, TGocciaSymbolValue(Result));
@@ -2135,11 +2222,10 @@ begin
   if FPos <> FLimit then
     Refuse('bytes after the roots');
   // The restore succeeded: the registered symbols it made are registered.
+  // In one go, polling nothing: a stop between two would leave the registry
+  // half done.
   for Pair in FNewRegistered do
-  begin
-    Poll;
     RegisterSymbol(Pair.Value);
-  end;
   FNewRegistered.Clear;
   // The input is not needed any more; its reservation is released with the
   // reader.

@@ -4902,8 +4902,9 @@ procedure TArraySnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
 var
   A: TGocciaArrayValue;
   ClassValue: TGocciaValue;
-  Len: Int64;
+  Len, Index: Int64;
   Count, I: Integer;
+  Pair: TGocciaPropertyMap.TKeyValuePair;
 begin
   A := TGocciaArrayValue(AObject);
   ClassValue := AReader.ReadValue;
@@ -4932,6 +4933,20 @@ begin
   // Freezing an array also makes its length read-only.
   if A.Frozen and A.FLengthWritable then
     AReader.Refuse('a frozen array with a writable length');
+  // The property map holds what the dense elements do not (an index with
+  // attributes of its own, a hole at its place in the elements): never the
+  // length, never an index the elements hold a value for, never one past the
+  // length.
+  for Pair in A.FProperties do
+  begin
+    AReader.Poll;
+    if Pair.Key = PROP_LENGTH then
+      AReader.Refuse('an array whose length is an ordinary property');
+    if TryParseArrayIndex(Pair.Key, Index) and
+       ((Index >= Len) or ((Index < Count) and
+        (A.FElements[Integer(Index)] <> TGocciaHoleValue.HoleValue))) then
+      AReader.Refuse('an array index property the array cannot hold');
+  end;
 end;
 
 initialization
