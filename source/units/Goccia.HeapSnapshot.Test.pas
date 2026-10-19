@@ -103,6 +103,7 @@ type
     function ChainRoundTrip(const ALength: Integer): string;
     procedure TestChain;
     procedure TestDeepChain;
+    procedure TestDeepNestingAndPrototypes;
     procedure TestRefusesWithoutCodec;
     procedure TestRefusesChangedBuiltin;
     procedure TestAccountingRefusesMissedObject;
@@ -194,11 +195,10 @@ begin
     TestLazyBuiltinsResolve);
   Test('A chain is written and read without native recursion',
     TestChain);
-  // The writer and the reader do not recurse, but until #1792 the collector
-  // marks recursively, so a collection over this chain runs out of native
-  // stack in the engine that builds it.
-  Skip('A million-deep chain is written and read without native recursion',
-    TestDeepChain, 'the collector marks recursively until #1792');
+  Test('A million-deep chain is written and read without native recursion',
+    TestDeepChain);
+  Test('Deeply nested arrays and prototype chains round-trip',
+    TestDeepNestingAndPrototypes);
   Test('A live object with no codec refuses the snapshot',
     TestRefusesWithoutCodec);
   Test('A built-in the run changed refuses the snapshot',
@@ -513,6 +513,27 @@ end;
 procedure THeapSnapshotTests.TestDeepChain;
 begin
   Expect<string>(ChainRoundTrip(1000000)).ToBe('1000000,499999500000');
+end;
+
+procedure THeapSnapshotTests.TestDeepNestingAndPrototypes;
+begin
+  // 100,000 arrays each holding the next, and 100,000 objects each the
+  // prototype of the next.
+  Expect<string>(RoundTrip(
+    '[Array.from({ length: 100000 }, (_, i) => i)' +
+    '.reduce((inner) => [inner], []), ' +
+    'Array.from({ length: 100000 }, (_, i) => i)' +
+    '.reduce((proto, i) => { const o = Object.create(proto); o.i = i; ' +
+    'return o; }, null)]',
+    '(() => { const walk = (start, step) => ({ [Symbol.iterator]() { ' +
+    'let p = start; return { next() { if (p === null || p === undefined) ' +
+    'return { done: true, value: 0 }; const value = p; p = step(p); ' +
+    'return { done: false, value }; } }; } }); ' +
+    'let arrays = 0; for (const a of walk(restored[0], (a) => a[0])) arrays++; ' +
+    'let protos = 0; let top = 0; for (const o of walk(restored[1], ' +
+    '(o) => Object.getPrototypeOf(o))) { if (protos === 0) top = o.i; ' +
+    'protos++; } return arrays + "," + protos + "," + top; })()'))
+    .ToBe('100001,100000,99999');
 end;
 
 procedure THeapSnapshotTests.TestRefusesWithoutCodec;
