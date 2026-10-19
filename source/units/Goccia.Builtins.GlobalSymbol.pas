@@ -39,6 +39,11 @@ type
     property GlobalRegistry: TOrderedStringMap<TGocciaSymbolValue> read FGlobalRegistry;
   end;
 
+// ES2026 §20.4.2.2 Symbol.for(key) steps 2-6 on this thread's
+// GlobalSymbolRegistry: the registered symbol for AKey, created and
+// registered when there is none yet.
+function RegisteredSymbolFor(const AKey: string): TGocciaSymbolValue;
+
 implementation
 
 uses
@@ -196,31 +201,33 @@ end;
   5. Append the Record ([[Key]]: stringKey, [[Symbol]]: newSymbol) to
      the GlobalSymbolRegistry List.
   6. Return newSymbol. }
+function RegisteredSymbolFor(const AKey: string): TGocciaSymbolValue;
+var
+  Registry: TOrderedStringMap<TGocciaSymbolValue>;
+begin
+  Registry := SharedSymbolRegistry;
+  { Step 2: Search GlobalSymbolRegistry for existing entry }
+  if Registry.TryGetValue(AKey, Result) then
+    Exit;
+  { Steps 4-5: Create new symbol, append to GlobalSymbolRegistry }
+  Result := TGocciaSymbolValue.Create(AKey);
+  Result.Registered := True;
+  if (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.PinObject(Result);
+  Registry.Add(AKey, Result);
+  { Step 6: Return newSymbol }
+end;
+
 function TGocciaGlobalSymbol.SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Key: string;
-  Symbol: TGocciaSymbolValue;
 begin
   { Step 1: Let stringKey = ToString(key) }
   if AArgs.Length > 0 then
     Key := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Key := 'undefined';
-
-  { Step 2: Search GlobalSymbolRegistry for existing entry }
-  if FGlobalRegistry.TryGetValue(Key, Symbol) then
-    Result := Symbol
-  else
-  begin
-    { Steps 4-5: Create new symbol, append to GlobalSymbolRegistry }
-    Symbol := TGocciaSymbolValue.Create(Key);
-    Symbol.Registered := True;
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.PinObject(Symbol);
-    FGlobalRegistry.Add(Key, Symbol);
-    { Step 6: Return newSymbol }
-    Result := Symbol;
-  end;
+  Result := RegisteredSymbolFor(Key);
 end;
 
 { Symbol.keyFor ( sym ) — §20.4.2.5

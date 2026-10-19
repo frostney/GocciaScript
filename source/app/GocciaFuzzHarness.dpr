@@ -1,6 +1,7 @@
 program GocciaFuzzHarness;
 
-{ Coverage-blind crash harness for the lexer, parser, compiler, and VM.
+{ Coverage-blind crash harness for the lexer, parser, compiler, and VM, and
+  for the heap snapshot reader (ADR 0148).
 
   Reads one source input from a file argument or stdin, then drives it
   through lex -> parse -> compile -> bytecode VM under tight instruction,
@@ -15,6 +16,14 @@ program GocciaFuzzHarness;
     GocciaFuzzHarness <file>          # AFL++ / manual reproduction
     GocciaFuzzHarness -               # read stdin
     GocciaFuzzHarness --verbose <f>   # print the classification and detail
+    GocciaFuzzHarness --heap-snapshot <file>
+                                      # restore <file> as a heap snapshot
+    GocciaFuzzHarness --write-heap-snapshot-seeds <dir>
+                                      # write real snapshots to seed with
+
+  A heap snapshot names the engine build that wrote it, and a reader refuses
+  another build's, so the snapshot seeds are written by the harness that
+  fuzzes them.
 
   See docs/contributing/tooling.md for the AFL++ and reproduction workflow. }
 
@@ -38,6 +47,8 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot,
+  Goccia.HeapSnapshot.Codec,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.Modules.ContentProvider,
@@ -45,6 +56,7 @@ uses
   Goccia.TextFiles,
   Goccia.Timeout,
   Goccia.Values.Error,
+  Goccia.Values.Primitives,
   Goccia.VM.Exception;
 
 const
@@ -96,6 +108,7 @@ type
     foMemoryLimit,
     foModuleDenied,
     foInputRejected,
+    foSnapshotRefused,
     foUnexpected
   );
 
@@ -154,6 +167,7 @@ begin
     foMemoryLimit:      Result := 'memory-limit';
     foModuleDenied:     Result := 'module-denied';
     foInputRejected:    Result := 'input-rejected';
+    foSnapshotRefused:  Result := 'snapshot-refused';
   else
     Result := 'UNEXPECTED';
   end;
@@ -402,9 +416,145 @@ begin
   Result := True;
 end;
 
+{ The graphs the snapshot seeds hold: every codec the reader has, shared
+  references, cycles, symbols, built-ins named and attributes. }
+const
+  HEAP_SNAPSHOT_SEEDS: array[0..5] of string = (
+    '({ n: 1.5, s: "text", b: 12345678901234567890n, t: true, u: undefined, ' +
+      'z: null, neg: -0 })',
+    '(() => { const a = [1, , "three", [4]]; a.length = 8; a.extra = 1; ' +
+      'return a; })()',
+    '(() => { const shared = { s: 1 }; const o = { x: shared, y: [shared] }; ' +
+      'o.self = o; return o; })()',
+    '({ [Symbol("local")]: 1, [Symbol.for("shared")]: 2, ' +
+      '[Symbol.iterator]: Array.prototype.values, m: Math, p: Object.prototype })',
+    '(() => { const o = {}; Object.defineProperty(o, "h", { value: 1 }); ' +
+      'Object.defineProperty(o, "g", { get: Object.prototype.valueOf, ' +
+      'enumerable: true }); return [Object.freeze({ f: 1 }), Object.seal([1]), ' +
+      'Object.preventExtensions(o), Object.create(null)]; })()',
+    'Array.from({ length: 64 }, (_, i) => ({ i, next: { s: String(i) } }))');
+
+{ Writes one snapshot per seed graph into ADirectory, from a fresh engine
+  each. Returns the number written. }
+function WriteHeapSnapshotSeeds(const ADirectory: string): Integer;
+var
+  I: Integer;
+  Lines: TStringList;
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  Output: TFileStream;
+begin
+  Result := 0;
+  ForceDirectories(ADirectory);
+  for I := 0 to High(HEAP_SNAPSHOT_SEEDS) do
+  begin
+    Lines := TStringList.Create;
+    Engine := nil;
+    Session := nil;
+    try
+      Engine := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, Lines);
+      Session := TGocciaHeapSnapshotSession.Create(Engine);
+      Session.CheckAccounting := False;
+      Value := Engine.EvaluateGlobalEval(HEAP_SNAPSHOT_SEEDS[I],
+        FUZZ_PROGRAM_NAME, Stage);
+      TGarbageCollector.Instance.AddTempRoot(Value);
+      try
+        Output := TFileStream.Create(IncludeTrailingPathDelimiter(ADirectory) +
+          Format('heap-snapshot-%d.ghsn', [I]), fmCreate);
+        try
+          Session.Snapshot([Value], Output);
+        finally
+          Output.Free;
+        end;
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Value);
+      end;
+      Inc(Result);
+    finally
+      Session.Free;
+      Engine.Free;
+      Lines.Free;
+    end;
+  end;
+end;
+
+{ Restores one input as a heap snapshot on an engine of its own, under the
+  same bounds as a script run. A refusal is the reader doing its job; only
+  what escapes the typed ladder is a finding. }
+function RestoreOnce(const AFileName: string;
+  out ADetail: string): TFuzzOutcome;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Input: TFileStream;
+  Restore: TGocciaHeapSnapshotRestore;
+  Limits: TGocciaHeapSnapshotLimits;
+  GC: TGarbageCollector;
+begin
+  ADetail := '';
+  if not FileExists(AFileName) then
+  begin
+    ADetail := 'no such input file: ' + AFileName;
+    Exit(foInputRejected);
+  end;
+  Limits := TGocciaHeapSnapshotLimits.Defaults;
+  Limits.MaxInputBytes := FUZZ_MAX_INPUT_BYTES;
+  StartExecutionTimeout(FUZZ_TIMEOUT_MS);
+  StartInstructionLimit(FUZZ_MAX_INSTRUCTIONS);
+  SetMaxStackDepth(FUZZ_STACK_DEPTH);
+  Lines := TStringList.Create;
+  Engine := nil;
+  Input := nil;
+  try
+    Engine := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, Lines);
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.MaxBytes := FUZZ_MAX_MEMORY_BYTES;
+    Input := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
+    try
+      Restore := TGocciaHeapSnapshotRestore.Create(Engine, Input, Limits);
+      Restore.Free;
+      Result := foCompleted;
+    except
+      on E: EGocciaHeapSnapshotRefused do
+      begin
+        Result := foSnapshotRefused;
+        ADetail := E.Message;
+      end;
+      on E: TGocciaMemoryLimitError do
+      begin
+        Result := foMemoryLimit;
+        ADetail := E.Message;
+      end;
+      on E: TGocciaInstructionLimitError do
+      begin
+        Result := foInstructionLimit;
+        ADetail := E.Message;
+      end;
+      on E: TGocciaTimeoutError do
+      begin
+        Result := foTimeout;
+        ADetail := E.Message;
+      end;
+    end;
+  finally
+    Input.Free;
+    Engine.Free;
+    Lines.Free;
+    ClearInstructionLimit;
+    ClearExecutionTimeout;
+  end;
+end;
+
 procedure PrintUsage;
 begin
   WriteLn(ErrOutput, 'Usage: ', FUZZ_PROGRAM_NAME, ' [--verbose] <file>|-');
+  WriteLn(ErrOutput, '       ', FUZZ_PROGRAM_NAME,
+    ' [--verbose] --heap-snapshot <file>');
+  WriteLn(ErrOutput, '       ', FUZZ_PROGRAM_NAME,
+    ' --write-heap-snapshot-seeds <dir>');
   WriteLn(ErrOutput);
   WriteLn(ErrOutput, 'Drives one input through lex, parse, and both ' +
     'executors under tight bounds.');
@@ -414,14 +564,16 @@ end;
 
 var
   I: Integer;
-  Arg, FileName, Detail, Trace: string;
+  Arg, FileName, Detail, Trace, SeedDirectory: string;
   Source: TStringList;
   Outcome: TFuzzOutcome;
-  Failed, SelfTestFault: Boolean;
+  Failed, SelfTestFault, HeapSnapshot: Boolean;
 begin
   FileName := '';
   Failed := False;
   SelfTestFault := False;
+  HeapSnapshot := False;
+  SeedDirectory := '';
   Trace := '';
 
   for I := 1 to ParamCount do
@@ -431,6 +583,13 @@ begin
       GVerbose := True
     else if Arg = '--self-test-fault' then
       SelfTestFault := True
+    else if Arg = '--heap-snapshot' then
+      HeapSnapshot := True
+    else if Arg = '--write-heap-snapshot-seeds' then
+    begin
+      if I < ParamCount then
+        SeedDirectory := ParamStr(I + 1);
+    end
     else if (Arg = '--help') or (Arg = '-h') then
     begin
       PrintUsage;
@@ -460,6 +619,37 @@ begin
       end;
     end;
     Halt(1);
+  end;
+
+  if SeedDirectory <> '' then
+  begin
+    WriteLn(Format('%d heap snapshot seeds written to %s',
+      [WriteHeapSnapshotSeeds(SeedDirectory), SeedDirectory]));
+    Halt(EXIT_OK);
+  end;
+
+  if HeapSnapshot then
+  begin
+    try
+      Outcome := RestoreOnce(FileName, Detail);
+    except
+      on E: Exception do
+      begin
+        Outcome := foUnexpected;
+        Detail := E.ClassName + ': ' + E.Message;
+        Trace := BackTraceStrFunc(ExceptAddr) + LineEnding +
+          CaptureBackTrace;
+      end;
+    end;
+    if Outcome = foUnexpected then
+    begin
+      WriteLn(ErrOutput, Format('%s: unexpected fault in the heap snapshot ' +
+        'reader: %s', [FUZZ_PROGRAM_NAME, Detail]));
+      WriteLn(ErrOutput, Trace);
+      Halt(1);
+    end;
+    Report(Outcome, Detail);
+    Halt(EXIT_OK);
   end;
 
   if (FileName = '') and IsInputTerminal then

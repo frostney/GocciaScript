@@ -68,6 +68,11 @@ type
 function HasSelfSettlingAtomicsWaitAsyncWaiters(
   const AOwner: TGocciaAtomics): Boolean;
 
+{ True while AOwner has any async waiter on this thread, settled or not. A
+  waiter's buffer subscription and deadline live outside the heap, so a heap
+  snapshot is not taken while one is pending (ADR 0148). }
+function HasAtomicsWaitAsyncWaiters(const AOwner: TGocciaAtomics): Boolean;
+
 implementation
 
 uses
@@ -878,6 +883,28 @@ begin
       if Waiters[I].Async and (Waiters[I].Owner = AOwner) and
          (Waiters[I].OwnerThreadId = OwnerThreadId) and
          (Waiters[I].Ready or Waiters[I].HasDeadline) then
+        Exit(True);
+  finally
+    CriticalSectionLeave(GAtomicsLock);
+  end;
+end;
+
+function HasAtomicsWaitAsyncWaiters(const AOwner: TGocciaAtomics): Boolean;
+var
+  I: Integer;
+  OwnerThreadId: TThreadID;
+  Waiters: TObjectList<TAtomicsWaiter>;
+begin
+  Result := False;
+  if (GAtomicsAsyncWaiterCount = 0) or not Assigned(AOwner) then
+    Exit;
+  OwnerThreadId := GetGocciaThreadId;
+  CriticalSectionEnter(GAtomicsLock);
+  try
+    Waiters := GetAtomicsWaiters;
+    for I := 0 to Waiters.Count - 1 do
+      if Waiters[I].Async and (Waiters[I].Owner = AOwner) and
+         (Waiters[I].OwnerThreadId = OwnerThreadId) then
         Exit(True);
   finally
     CriticalSectionLeave(GAtomicsLock);

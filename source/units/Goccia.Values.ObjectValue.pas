@@ -179,6 +179,18 @@ type
 
     procedure MarkReferences; override;
 
+    { Heap snapshot restore (ADR 0148) only: set an object's raw state
+      without [[DefineOwnProperty]]'s validation, which the snapshot's own
+      checks stand in for. }
+    // Frees every own property, string- and symbol-keyed.
+    procedure ClearOwnPropertiesForRestore;
+    // Appends a symbol-keyed property; the object takes ownership of
+    // ADescriptor. The caller has checked ASymbol is not an own key yet.
+    procedure DefineSymbolPropertyForRestore(const ASymbol: TGocciaSymbolValue;
+      const ADescriptor: TGocciaPropertyDescriptor);
+    procedure SetIntegrityForRestore(const AExtensible, AFrozen, ASealed,
+      AHasEverHadIndexedOwnProperty: Boolean);
+
     property Properties: TGocciaPropertyMap read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
@@ -1436,6 +1448,47 @@ begin
   FSymbolInsertionOrder.Free;
   FRegExpData.Free;
   inherited;
+end;
+
+procedure TGocciaObjectValue.ClearOwnPropertiesForRestore;
+var
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
+begin
+  for Pair in FProperties do
+    Pair.Value.Free;
+  FProperties.Clear;
+  if Assigned(FSymbolDescriptors) then
+  begin
+    for SymPair in FSymbolDescriptors do
+      SymPair.Value.Free;
+    FSymbolDescriptors.Clear;
+  end;
+  if Assigned(FSymbolInsertionOrder) then
+    FSymbolInsertionOrder.Clear;
+end;
+
+procedure TGocciaObjectValue.DefineSymbolPropertyForRestore(
+  const ASymbol: TGocciaSymbolValue;
+  const ADescriptor: TGocciaPropertyDescriptor);
+begin
+  try
+    EnsureSymbolStorage;
+    FSymbolDescriptors.Add(ASymbol, ADescriptor);
+  except
+    ADescriptor.Free;
+    raise;
+  end;
+  FSymbolInsertionOrder.Add(ASymbol);
+end;
+
+procedure TGocciaObjectValue.SetIntegrityForRestore(const AExtensible, AFrozen,
+  ASealed, AHasEverHadIndexedOwnProperty: Boolean);
+begin
+  FExtensible := AExtensible;
+  FFrozen := AFrozen;
+  FSealed := ASealed;
+  FHasEverHadIndexedOwnProperty := AHasEverHadIndexedOwnProperty;
 end;
 
 destructor TGocciaErrorObjectValue.Destroy;

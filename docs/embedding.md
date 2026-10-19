@@ -954,6 +954,8 @@ Engine.Execute;
 
 The recording side wraps the responder it is given in one that passes each `Respond` or `Fail` on and appends it to the tape only when the engine took it (the call returned True), and hands the request and that wrapper to `FetchOverNetwork` on a worker thread. A taken answer whose responder then reports `IsCancelled` was never seen by the script. `source/units/Goccia.FetchTransport.Test.pas` records a run against a loopback server this way and replays it.
 
+An embedder that pauses runs and resumes them later can also write what a run's heap holds and restore it in a fresh engine instead of replaying the run: see [Heap Snapshots](heap-snapshots.md).
+
 ## Garbage Collector
 
 The engine initializes a mark-and-sweep garbage collector (`TGarbageCollector`) automatically. In most embedding scenarios, no manual GC interaction is needed. The GC collects unreachable values during execution.

@@ -28,6 +28,10 @@ type
     class function FromHexString(const AValue: string): TBigInteger; static;
     class function FromBinaryString(const AValue: string): TBigInteger; static;
     class function FromOctalString(const AValue: string): TBigInteger; static;
+    // A value from its magnitude's 32-bit limbs, least significant first,
+    // and its sign; leading zero limbs are dropped and zero is not negative.
+    class function FromLimbs(const ALimbs: TLimbArray;
+      const ANegative: Boolean): TBigInteger; static;
 
     function IsZero: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsNegative: Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -41,6 +45,8 @@ type
     function ToInt64: Int64;
     function ToString: string;
     function ToRadixString(const ARadix: Integer): string;
+    // A copy of the magnitude's 32-bit limbs, least significant first.
+    function Limbs: TLimbArray;
 
     function Negate: TBigInteger;
     function AbsValue: TBigInteger;
@@ -317,6 +323,19 @@ class function TBigInteger.Zero: TBigInteger;
 begin
   Result.FNegative := False;
   Result.FLimbs := nil;
+end;
+
+class function TBigInteger.FromLimbs(const ALimbs: TLimbArray;
+  const ANegative: Boolean): TBigInteger;
+begin
+  Result.FLimbs := Copy(ALimbs);
+  Result.FNegative := ANegative;
+  Result.Normalize;
+end;
+
+function TBigInteger.Limbs: TLimbArray;
+begin
+  Result := Copy(FLimbs);
 end;
 
 class function TBigInteger.One: TBigInteger;

@@ -44,7 +44,13 @@ type
     property Name: string read FName;
     property BuiltinObject: TGocciaObjectValue read FBuiltinObject;
     property ThrowError: TGocciaThrowErrorCallback read FThrowError;
+    // The next builtin on this thread's live list, for naming built-ins in a
+    // heap snapshot (ADR 0148).
+    property NextLive: TGocciaBuiltin read FNextLive;
   end;
+
+// The newest live builtin on this thread, or nil.
+function FirstLiveBuiltin: TGocciaBuiltin;
 
 implementation
 
@@ -134,6 +140,14 @@ begin
   if (TGarbageCollector.Instance = nil) then
     FBuiltinObject.Free;
   inherited;
+end;
+
+function FirstLiveBuiltin: TGocciaBuiltin;
+begin
+  if Assigned(GBuiltinRoots) then
+    Result := GBuiltinRoots.FHead
+  else
+    Result := nil;
 end;
 
 procedure TGocciaBuiltin.LinkLive;

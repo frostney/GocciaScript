@@ -141,6 +141,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -4836,7 +4837,100 @@ begin
   Result := TGocciaArrayIteratorValue.Create(ToObject(AThisValue), akValues);
 end;
 
+{ Heap snapshot codec (ADR 0148) }
+
+const
+  // ES2026 §10.4.2: an array's length is below 2^32.
+  MAX_ARRAY_LENGTH = Int64(4294967295);
+
+type
+  // An array of exactly TGocciaArrayValue. Its class (Array itself for
+  // Array.from and the like) is a reference: a built-in is named, and a
+  // class that extends Array refuses until the object model has codecs.
+  TArraySnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    function SchemaVersion: Word; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+function TArraySnapshotCodec.Tag: string;
+begin
+  Result := 'array';
+end;
+
+function TArraySnapshotCodec.SchemaVersion: Word;
+begin
+  Result := 1;
+end;
+
+procedure TArraySnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+var
+  A: TGocciaArrayValue;
+  I: Integer;
+begin
+  A := TGocciaArrayValue(AObject);
+  AWriter.WriteValue(A.ClassValue);
+  // FLength trails the element count until something reads the length.
+  if A.FLength < A.FElements.Count then
+    AWriter.WriteI64(A.FElements.Count)
+  else
+    AWriter.WriteI64(A.FLength);
+  AWriter.WriteBool(A.FLengthWritable);
+  AWriter.WriteU32(A.FElements.Count);
+  for I := 0 to A.FElements.Count - 1 do
+  begin
+    AWriter.Poll;
+    AWriter.WriteValue(A.FElements[I]);
+  end;
+  AWriter.WriteObjectCore(A);
+end;
+
+function TArraySnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaArrayValue.Create;
+end;
+
+procedure TArraySnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+var
+  A: TGocciaArrayValue;
+  ClassValue: TGocciaValue;
+  Len: Int64;
+  Count, I: Integer;
+begin
+  A := TGocciaArrayValue(AObject);
+  ClassValue := AReader.ReadValue;
+  if Assigned(ClassValue) and not (ClassValue is TGocciaClassValue) then
+    AReader.Refuse('an array class that is not a class');
+  A.ClassValue := TGocciaClassValue(ClassValue);
+  Len := AReader.ReadI64;
+  if (Len < 0) or (Len > MAX_ARRAY_LENGTH) then
+    AReader.Refuse('an array length out of range');
+  A.FLengthWritable := AReader.ReadBool;
+  Count := AReader.ReadItemCount(1);
+  if Count > Len then
+    AReader.Refuse('an array with more elements than its length');
+  A.FElements.Clear;
+  A.FElements.Capacity := Count;
+  for I := 1 to Count do
+  begin
+    AReader.Poll;
+    A.FElements.Add(AReader.ReadValue);
+  end;
+  A.FLength := Len;
+  AReader.ReadObjectCore(A);
+end;
+
 initialization
+  RegisterSnapshotCodec(TGocciaArrayValue, TArraySnapshotCodec.Create);
   GArrayPrototypeSlot := RegisterRealmSlot('Array.prototype');
   GArrayMethodHostSlot := RegisterRealmSlot('Array.prototype.methodHost');
   GArrayValuesSlot := RegisterRealmSlot('%Array.prototype.values%');

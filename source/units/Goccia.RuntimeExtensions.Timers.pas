@@ -36,6 +36,7 @@ type
     procedure Detach; override;
     procedure WaitForIdle; override;
     function HasPendingWork: Boolean; override;
+    function HeapSnapshotRefusal: string; override;
     procedure DiscardPending; override;
   end;
 
@@ -110,6 +111,25 @@ end;
 function TGocciaTimersRuntimeExtension.HasPendingWork: Boolean;
 begin
   Result := (not FDrainBounded) and HasRealTimeoutsForHost;
+end;
+
+{ The timer queue keeps ids, deadlines, the fake clock and parked errors
+  natively, so any of them refuses a heap snapshot until a codec covers the
+  queue (ADR 0148), whether or not the idle wait would run it. }
+function TGocciaTimersRuntimeExtension.HeapSnapshotRefusal: string;
+var
+  Queue: TGocciaTimerQueue;
+begin
+  Result := '';
+  Queue := TGocciaTimerQueue.Instance;
+  if not Assigned(Queue) then
+    Exit;
+  if Queue.CountTimers > 0 then
+    Result := 'scheduled timers'
+  else if Queue.Faking or Queue.MockedDateOnly then
+    Result := 'a mocked timer clock'
+  else if Queue.HasUncaughtError then
+    Result := 'a timer error not yet reported';
 end;
 
 procedure TGocciaTimersRuntimeExtension.DiscardPending;

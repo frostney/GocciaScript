@@ -167,6 +167,94 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  # ── Heap snapshot reader ─────────────────────────────────────────────
+  #
+  # The reader treats a snapshot as hostile input (ADR 0148), so it is fuzzed
+  # the same way: mutated real snapshots, every refusal a normal outcome and
+  # anything else a finding. A snapshot names the engine build that wrote it
+  # and a reader refuses another build's, so the harness writes its own
+  # seeds rather than taking them from the repository.
+  fuzz-heap-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC and AFL++
+        run: |
+          sudo apt-get update
+          sudo apt-get install fpc afl++ -qq > /dev/null
+
+      - name: Build fuzz harness
+        run: ./build.pas fuzzharness
+
+      - name: Write the seed snapshots
+        run: ./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
+
+      - name: Sweep the seeds
+        # Every seed is a snapshot this build wrote: each must restore.
+        run: |
+          status=0
+          for seed in build/fuzz/heap-snapshot-corpus/*.ghsn; do
+            if ! ./build/GocciaFuzzHarness --verbose --heap-snapshot "$seed" 2>&1 | grep -q '\] completed$'; then
+              echo "::error::Seed did not restore: $seed"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Fuzz
+        # Same accommodations and exit-status rules as the script fuzz job.
+        run: |
+          echo core | sudo tee /proc/sys/kernel/core_pattern > /dev/null
+          mkdir -p build/fuzz/heap-snapshot-out
+          status=0
+          started=${SECONDS}
+          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
+          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -n -t 5000 \
+            -i build/fuzz/heap-snapshot-corpus \
+            -o build/fuzz/heap-snapshot-out \
+            -- ./build/GocciaFuzzHarness --heap-snapshot @@ || status=$?
+          elapsed=$(( SECONDS - started ))
+          echo "afl-fuzz exit status: ${status} after ${elapsed}s"
+          case "${status}" in
+            0 | 124) ;;
+            137)
+              if [ "${elapsed}" -lt "${FUZZ_SECONDS}" ]; then
+                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${FUZZ_SECONDS}s deadline (OOM killer?)"
+                exit "${status}"
+              fi
+              ;;
+            *)
+              echo "::error::afl-fuzz did not run to a deadline (exit ${status})"
+              exit "${status}"
+              ;;
+          esac
+
+      - name: Report crashes
+        if: ${{ !cancelled() }}
+        run: |
+          crashes=$(find build/fuzz/heap-snapshot-out -path '*/crashes/id:*' 2>/dev/null | wc -l)
+          hangs=$(find build/fuzz/heap-snapshot-out -path '*/hangs/id:*' 2>/dev/null | wc -l)
+          echo "AFL crashes: $crashes, hangs: $hangs"
+          if [ "$crashes" -gt 0 ] || [ "$hangs" -gt 0 ]; then
+            echo "::error::afl-fuzz recorded $crashes crashing snapshot(s) and $hangs hanging snapshot(s)"
+            exit 1
+          fi
+
+      - name: Upload reproducers
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: heap-snapshot-fuzz-reproducers
+          path: |
+            build/fuzz/heap-snapshot-out/**/crashes/**
+            build/fuzz/heap-snapshot-out/**/hangs/**
+          if-no-files-found: ignore
+          retention-days: 30
+
   # ── Memory safety over the real suite ────────────────────────────────
   #
   # heaptrc and Valgrind answer different questions: heaptrc reports FPC-level

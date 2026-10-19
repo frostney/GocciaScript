@@ -305,6 +305,24 @@ input must not be able to reach the host filesystem — without this,
 Inputs containing `import` are therefore classified `module-denied`, and the
 harness does not exercise the module loader.
 
+### The heap snapshot reader
+
+The reader of [heap snapshots](../heap-snapshots.md) takes hostile input
+too ([ADR 0148](../adr/0148-heap-snapshots-at-idle-points.md)), and the
+harness fuzzes it in a mode of its own. A snapshot names the engine build
+that wrote it and a reader refuses another build's, so the seeds come from
+the harness itself:
+
+```bash
+./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
+afl-fuzz -n -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
+  -- ./build/GocciaFuzzHarness --heap-snapshot @@
+```
+
+A refusal (`snapshot-refused`) is a normal outcome, as are the run limits;
+anything else is a finding. The scheduled workflow runs this as its
+`fuzz-heap-snapshot` job.
+
 ### Memory safety
 
 The scheduled [fuzz workflow](../../.github/workflows/fuzz.yml) runs the full
