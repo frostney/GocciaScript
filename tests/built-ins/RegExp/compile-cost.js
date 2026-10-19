@@ -16,6 +16,8 @@ const namedGroups = (n) =>
   Array.from({ length: n }, (_, i) => `(?<g${i}>a)`).join("");
 // One name in every alternative: every pair of groups may share the name.
 const duplicateNames = (n) => "(?<a>x)|".repeat(n) + "(?<a>y)";
+const deepDuplicateNames = (n) =>
+  "(?:".repeat(500) + duplicateNames(n) + ")".repeat(500);
 
 // The fastest of several rounds, so a collection or a busy machine during one
 // round does not decide the result.
@@ -46,6 +48,12 @@ describe.runIf(typeof Goccia !== "undefined")("compile cost", () => {
 
   test("30,000 groups sharing a name across alternatives cost at most about 3 times the linear growth over 3,000", () => {
     expect(growth(duplicateNames, 3000, 30000)).toBeLessThan(30);
+  });
+});
+
+describe.runIf(typeof Goccia !== "undefined")("compile cost", () => {
+  test("30,000 groups sharing a name inside 500 nested groups cost at most about 3 times the linear growth over 3,000", () => {
+    expect(growth(deepDuplicateNames, 3000, 30000)).toBeLessThan(30);
   });
 });
 
@@ -168,6 +176,10 @@ describe("named groups", () => {
     expect(re.exec("10-2026").groups.y).toBe("2026");
     expect(/(?:(?<a>x)|(?<a>y))(?:(?<b>1)|(?<b>2))/.exec("y2").groups.b).toBe("2");
     expect(new RegExp(duplicateNames(1000)).exec("y").groups.a).toBe("y");
+    expect(new RegExp(deepDuplicateNames(1000)).exec("y").groups.a).toBe("y");
+    expect(/(?:(?<a>x)|(?<a>y)|z)/.exec("y").groups.a).toBe("y");
+    expect(/(?:(?<a>x)|(?<a>y))|(?<a>z)/.exec("z").groups.a).toBe("z");
+    expect(/(?<a>x)|(?:y|(?:(?<a>z)|w))/.exec("z").groups.a).toBe("z");
   });
 
   test("a name repeated where both groups can take part in one match is a SyntaxError", () => {
@@ -175,6 +187,13 @@ describe("named groups", () => {
     expect(() => new RegExp("(?<a>x)(?:(?<a>y)|z)")).toThrow(SyntaxError);
     expect(() => new RegExp("(?:(?<a>x)|y)(?<a>z)")).toThrow(SyntaxError);
     expect(() => new RegExp("(?<a>(?<a>x))")).toThrow(SyntaxError);
+    // One group sits in an alternative of the other, which it is part of.
+    expect(() => new RegExp("(?<a>x|(?<a>y))")).toThrow(SyntaxError);
+    // Alternatives of two different disjunctions can both be taken.
+    expect(() => new RegExp("(?:(?<a>x)|z)(?:w|(?<a>y))")).toThrow(SyntaxError);
+    expect(() => new RegExp("(?:(?<a>x)|z)(?:(?<a>y)|w)")).toThrow(SyntaxError);
+    expect(() => new RegExp("(?:(?<a>x)|(?<a>y))(?<a>z)")).toThrow(SyntaxError);
+    expect(() => new RegExp("(?:(?<a>x)|(?<a>y))|(?<a>z)(?:w|(?<a>v))")).toThrow(SyntaxError);
     expect(() => new RegExp("(?<a>x)|(?<b>y)(?<b>z)")).toThrow(SyntaxError);
     expect(() => new RegExp("(?<a>x)|(?<a>y)(?<a>w)")).toThrow(SyntaxError);
     expect(() => new RegExp(duplicateNames(1000) + "(?<a>z)")).toThrow(SyntaxError);
