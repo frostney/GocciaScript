@@ -37,6 +37,8 @@ Supported operations: `add`, `and`, `compareExchange`, `exchange`, `isLockFree`,
 
 Atomic operations accept an integer TypedArray over an `ArrayBuffer` or a `SharedArrayBuffer`. `wait`, `waitAsync`, and `notify` require `Int32Array` or `BigInt64Array` views, and `wait` and `waitAsync` also require a `SharedArrayBuffer` (`notify` on a non-shared view returns `0`).
 
+Every waiter has one result, and `notify`'s count agrees with it. Inside the waiter list's critical section `notify` claims and counts the waiters it wakes: it removes a `wait` waiter from the list at once, and marks a `waitAsync` waiter of another thread ready for its owner thread to remove. A `wait` decides its result in the same critical section once its suspension ends: a waiter that `notify` already removed returns `"ok"`, even when its timeout passed before the wait got back into the critical section; a waiter still in the list timed out, removes itself and returns `"timed-out"`, and no later `notify` counts it. `waitAsync` decides its timeout under the same lock.
+
 A view that is detached or past the end of its shrunk resizable buffer is a `TypeError` before the index is converted. `load`, `store`, `compareExchange` and the read-modify-write operations convert every argument first, then check the access again (RevalidateAtomicAccess) before they touch the element, because a `valueOf` can resize or detach the buffer: a view that is now detached or out of bounds is a `TypeError`, and an element past the end of a shrunk length-tracking view is a `RangeError`, so nothing is read or written. V8 throws a `TypeError` in that last case too; ECMA-262 specifies the `RangeError`.
 
 ## DataView (`Goccia.Values.DataViewValue.pas`)

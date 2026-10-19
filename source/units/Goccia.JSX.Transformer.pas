@@ -619,7 +619,7 @@ begin
   // Back over whitespace and block comments to the word before, if any.
   Index := AStart - 1;
   while Index >= 1 do
-    if FSource[Index] in [' ', #9, #10, #13] then
+    if CharInSet(FSource[Index], [' ', #9, #10, #13]) then
       Dec(Index)
     else if (Index >= 2) and (FSource[Index] = '/') and
             (FSource[Index - 1] = '*') then
@@ -676,33 +676,33 @@ end;
 
 procedure TGocciaJSXTransformer.CopyNumber;
 begin
-  if (CurrentChar = '0') and (PeekAt(1) in ['x', 'X', 'b', 'B', 'o', 'O']) then
+  if (CurrentChar = '0') and CharInSet(PeekAt(1), ['x', 'X', 'b', 'B', 'o', 'O']) then
   begin
     CopyChar;
     CopyChar;
-    while not IsAtEnd and (CurrentChar in ['0'..'9', 'a'..'f', 'A'..'F', '_']) do
+    while not IsAtEnd and CharInSet(CurrentChar, ['0'..'9', 'a'..'f', 'A'..'F', '_']) do
       CopyChar;
   end
   else
   begin
-    while not IsAtEnd and (CurrentChar in ['0'..'9', '_']) do
+    while not IsAtEnd and CharInSet(CurrentChar, ['0'..'9', '_']) do
       CopyChar;
-    if not IsAtEnd and (CurrentChar = '.') and (PeekAt(1) in ['0'..'9']) then
+    if not IsAtEnd and (CurrentChar = '.') and CharInSet(PeekAt(1), ['0'..'9']) then
     begin
       CopyChar;
-      while not IsAtEnd and (CurrentChar in ['0'..'9', '_']) do
+      while not IsAtEnd and CharInSet(CurrentChar, ['0'..'9', '_']) do
         CopyChar;
     end;
-    if not IsAtEnd and (CurrentChar in ['e', 'E']) then
+    if not IsAtEnd and CharInSet(CurrentChar, ['e', 'E']) then
     begin
       CopyChar;
-      if not IsAtEnd and (CurrentChar in ['+', '-']) then
+      if not IsAtEnd and CharInSet(CurrentChar, ['+', '-']) then
         CopyChar;
-      while not IsAtEnd and (CurrentChar in ['0'..'9']) do
+      while not IsAtEnd and CharInSet(CurrentChar, ['0'..'9']) do
         CopyChar;
     end;
   end;
-  if not IsAtEnd and (CurrentChar in ['n']) then
+  if not IsAtEnd and CharInSet(CurrentChar, ['n']) then
     CopyChar;
   FLastTokenKind := ltkExpressionEnd;
 end;
@@ -742,7 +742,7 @@ begin
     Exit;
   end;
 
-  if (Next = '=') and (C in ['+', '-', '*', '/', '%', '=', '!', '<', '>', '&', '|', '^']) then
+  if (Next = '=') and CharInSet(C, ['+', '-', '*', '/', '%', '=', '!', '<', '>', '&', '|', '^']) then
   begin
     CopyChar;
     CopyChar;
@@ -758,7 +758,7 @@ begin
     OpenParen
   else if C = ')' then
     CloseParen;
-  if C in [')', ']', '}'] then
+  if CharInSet(C, [')', ']', '}']) then
     FLastTokenKind := ltkExpressionEnd
   else
     FLastTokenKind := ltkOperator;
@@ -801,32 +801,32 @@ begin
   if Index > Length(FSource) then
     Exit(False);
   Tail := FSource[Index];
-  if Tail in ['/', '>'] then
+  if CharInSet(Tail, ['/', '>']) then
     Exit(True);
-  if not (Tail in [' ', #9, #10, #13]) then
+  if not CharInSet(Tail, [' ', #9, #10, #13]) then
     Exit(False);
 
-  while (Index <= Length(FSource)) and (FSource[Index] in [' ', #9, #10, #13]) do
+  while (Index <= Length(FSource)) and CharInSet(FSource[Index], [' ', #9, #10, #13]) do
     Inc(Index);
   if Index > Length(FSource) then
     Exit(False);
   Tail := FSource[Index];
-  Result := IsIdentifierStart(Tail) or (Tail in ['{', '/', '>']);
+  Result := IsIdentifierStart(Tail) or CharInSet(Tail, ['{', '/', '>']);
 end;
 
 function TGocciaJSXTransformer.IsIdentifierStart(const AChar: Char): Boolean;
 begin
-  Result := (AChar in ['a'..'z', 'A'..'Z', '_', '$']);
+  Result := CharInSet(AChar, ['a'..'z', 'A'..'Z', '_', '$']);
 end;
 
 function TGocciaJSXTransformer.IsIdentifierPart(const AChar: Char): Boolean;
 begin
-  Result := (AChar in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']);
+  Result := CharInSet(AChar, ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']);
 end;
 
 procedure TGocciaJSXTransformer.SkipWhitespace;
 begin
-  while not IsAtEnd and (CurrentChar in [' ', #9, #13, #10]) do
+  while not IsAtEnd and CharInSet(CurrentChar, [' ', #9, #13, #10]) do
     AdvanceInput;
 end;
 
@@ -922,7 +922,7 @@ begin
   NeedsQuoting := False;
   for I := 1 to Length(AName) do
   begin
-    if not (AName[I] in ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) then
+    if not CharInSet(AName[I], ['a'..'z', 'A'..'Z', '0'..'9', '_', '$']) then
     begin
       NeedsQuoting := True;
       Break;
@@ -1034,7 +1034,7 @@ begin
       Exit;
     end;
 
-    TagIsLowercase := (Length(TagName) > 0) and (TagName[1] in ['a'..'z']);
+    TagIsLowercase := (Length(TagName) > 0) and CharInSet(TagName[1], ['a'..'z']);
     if TagIsLowercase then
       Emit('"' + TagName + '"')
     else
@@ -1728,9 +1728,9 @@ begin
         Ident := Copy(FSource, IdStart, FPos - IdStart);
         FLastTokenKind := TokenKindAfterWord(Ident, IdStart);
       end
-      else if CurrentChar in ['0'..'9'] then
+      else if CharInSet(CurrentChar, ['0'..'9']) then
       begin
-        while not IsAtEnd and (CurrentChar in ['0'..'9', '.', '_', 'a'..'f', 'A'..'F', 'n']) do
+        while not IsAtEnd and CharInSet(CurrentChar, ['0'..'9', '.', '_', 'a'..'f', 'A'..'F', 'n']) do
         begin
           EmitSourceChar;
           AdvanceInput;
@@ -1776,10 +1776,10 @@ var
   begin
     Result := '';
     I := AStart;
-    while (I <= Length(AText)) and (AText[I] in [' ', #9]) do
+    while (I <= Length(AText)) and CharInSet(AText[I], [' ', #9]) do
       Inc(I);
     WordStart := I;
-    while (I <= Length(AText)) and not (AText[I] in [' ', #9, #10, #13, '*', '/']) do
+    while (I <= Length(AText)) and not CharInSet(AText[I], [' ', #9, #10, #13, '*', '/']) do
       Inc(I);
     if I > WordStart then
       Result := Copy(AText, WordStart, I - WordStart);
@@ -1791,7 +1791,7 @@ var
   begin
     Result := 0;
     I := 1;
-    while (I <= Length(AComment)) and (AComment[I] in ['/', '*', ' ', #9]) do
+    while (I <= Length(AComment)) and CharInSet(AComment[I], ['/', '*', ' ', #9]) do
       Inc(I);
     if Copy(AComment, I, Length(ADirective)) = ADirective then
       Result := I;
@@ -1823,7 +1823,7 @@ begin
 
   while not IsAtEnd do
   begin
-    if CurrentChar in [' ', #9, #13, #10] then
+    if CharInSet(CurrentChar, [' ', #9, #13, #10]) then
     begin
       AdvanceInput;
       Continue;
@@ -1903,7 +1903,7 @@ begin
       Continue;
     end;
 
-    if C in ['''', '"'] then
+    if CharInSet(C, ['''', '"']) then
     begin
       CopyString(C);
       Continue;
@@ -1938,7 +1938,7 @@ begin
       Continue;
     end;
 
-    if C in [' ', #9] then
+    if CharInSet(C, [' ', #9]) then
     begin
       CopyChar;
       Continue;
@@ -1956,7 +1956,7 @@ begin
       Continue;
     end;
 
-    if C in ['0'..'9'] then
+    if CharInSet(C, ['0'..'9']) then
     begin
       CopyNumber;
       Continue;
