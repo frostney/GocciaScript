@@ -527,6 +527,19 @@ begin
     'Number.parseInt = original; return saved; })()', Refusal, True);
   Expect<string>(Refusal).ToBe('');
   Expect<string>(RestoreAndCheck(Bytes, 'String(restored("12"))')).ToBe('12');
+  Bytes := Snapshot('(() => { const original = Number.parseFloat; ' +
+    'Number.parseFloat = Math.floor; const saved = globalThis.parseFloat; ' +
+    'Number.parseFloat = original; return saved; })()', Refusal, True);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes, 'String(restored("1.5"))'))
+    .ToBe('1.5');
+  // Nor does a native function standing in for Object.defineProperty
+  // reach the Date shim's load: its Date has its statics.
+  Expect<string>(RoundTrip('(() => { const original = ' +
+    'Object.defineProperty; Object.defineProperty = Object.freeze; ' +
+    'const C = Date; Object.defineProperty = original; ' +
+    'return { now: typeof C.now, parse: C.parse("1970-01-01T00:00:00.005Z") }; ' +
+    '})()', '[restored.now, restored.parse].join()')).ToBe('function,5');
   // The Date shim keeps its time values in the engine's WeakMap, whatever
   // the global held when it loaded, so a Date is one, and refuses.
   Snapshot('(() => { const original = WeakMap; WeakMap = Map; ' +
