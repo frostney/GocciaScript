@@ -365,8 +365,8 @@ type
       const AModule: TGocciaBytecodeModule; const AScope: TGocciaScope;
       const ARealm: TGocciaRealm);
     { The shim loader's evaluator (TGocciaShimEvaluator). }
-    procedure EvaluateShim(const AProgram: TGocciaProgram;
-      const AScope: TGocciaScope; const AFileName: string);
+    function EvaluateShim(const AProgram: TGocciaProgram;
+      const AScope: TGocciaScope; const AFileName: string): Boolean;
     { The VM's compiler for direct eval at a strict call site. }
     function CompileDirectEvalCode(const AProgram: TGocciaProgram;
       const ASourcePath: string; const ASite: TGocciaDirectEvalEnvironment;
@@ -2681,9 +2681,10 @@ end;
   compiling and running it must not change it. The shim can be materialized
   while the VM is running user code (a lazy global read), so the VM state the
   module run changes is restored afterwards, as EvaluateModuleBody does. }
-procedure TGocciaEngine.EvaluateShim(const AProgram: TGocciaProgram;
-  const AScope: TGocciaScope; const AFileName: string);
+function TGocciaEngine.EvaluateShim(const AProgram: TGocciaProgram;
+  const AScope: TGocciaScope; const AFileName: string): Boolean;
 var
+  ShimLoadToken: Int64;
   BytecodeModule: TGocciaBytecodeModule;
   Compiler: TGocciaCompiler;
   GC: TGarbageCollector;
@@ -2713,6 +2714,7 @@ begin
   SavedRealm := FVM.Realm;
   SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
   SavedRuntimeModule := FVM.CurrentRuntimeModule;
+  ShimLoadToken := FVM.BeginShimLoad;
   try
     PredeclareModuleLexicalDeclarations(AProgram, AScope);
     InstantiateCompiledModuleFunctions(BytecodeModule, AScope, FRealm);
@@ -2723,6 +2725,7 @@ begin
       FVM.Realm := FRealm;
     FVM.ExecuteImportedModule(BytecodeModule);
   finally
+    Result := FVM.EndShimLoad(ShimLoadToken);
     FVM.GlobalScope := SavedGlobalScope;
     FVM.Realm := SavedRealm;
     FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;

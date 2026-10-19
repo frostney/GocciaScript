@@ -514,6 +514,18 @@ begin
   Expect<string>(Refusal).ToBe('');
   Refusal := RestoreRefusal(Bytes);
   Expect<Boolean>(Pos('parseInt', Refusal) > 0).ToBe(True);
+  // A shim whose load calls the run's function (Object.defineProperty,
+  // replaced while the Date shim loads): what the load made is not taken for
+  // the shim's own, so the run's state it holds is still missed.
+  Snapshot('(() => { const define = Object.defineProperty; ' +
+    'Object.defineProperty = (target, key, descriptor) => { ' +
+    'if (key === "now") { const hidden = { x: 42 }; ' +
+    'descriptor.value = (class { static now() { return hidden.x; } }).now; } ' +
+    'return define(target, key, descriptor); }; ' +
+    'const d = Date; Object.defineProperty = define; ' +
+    'return { a: d.now() }; })()', Refusal, True);
+  Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
+    .ToBe(True);
   // A function's length and name are its own properties, though synthesized.
   Snapshot('(() => { delete Math.max.name; return { a: 1 }; })()', Refusal);
   Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
