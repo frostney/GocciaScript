@@ -92,6 +92,7 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.Error.Detail,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue;
 
@@ -197,26 +198,24 @@ constructor EGocciaBytecodeThrow.Create(const AThrownValue: TGocciaValue;
   const ASuggestion: string; const ASuggestionIsHostOnly: Boolean);
 var
   MessageText: string;
-  ErrorObject: TGocciaObjectValue;
-  NameValue, DetailValue: TGocciaValue;
+  NameText, DetailText: string;
 begin
   // Pascal-side Exception.Message — consulted only when no higher-level
   // formatter handles the throw. Built from primitive `name`/`message`
-  // properties when available, otherwise a static placeholder. Never invoke
-  // user toString()/valueOf() here: exceptions that JS later catches must
-  // not observe stringification (ES2026 §14.14 ThrowStatement).
-  // Held first: reading name and message below can run a getter.
+  // string data properties when available, otherwise a static placeholder.
+  // Reads no property that can run guest code: not toString()/valueOf(), and
+  // not an accessor or a Proxy trap on `name` or `message`, because a throw
+  // that JS later catches must not observe anything (ES2026 §14.14
+  // ThrowStatement reads no property of the thrown value).
   FRootSlot := HoldThrownValue(Self, AThrownValue);
   MessageText := 'Goccia VM throw';
   if Assigned(AThrownValue) and (AThrownValue is TGocciaObjectValue) then
   begin
-    ErrorObject := TGocciaObjectValue(AThrownValue);
-    NameValue := ErrorObject.GetProperty(PROP_NAME);
-    DetailValue := ErrorObject.GetProperty(PROP_MESSAGE);
-    if (NameValue is TGocciaStringLiteralValue) and
-       (DetailValue is TGocciaStringLiteralValue) then
-      MessageText := TGocciaStringLiteralValue(NameValue).Value + ': ' +
-        TGocciaStringLiteralValue(DetailValue).Value;
+    if TryGetStringDataProperty(TGocciaObjectValue(AThrownValue), PROP_NAME,
+         NameText) and
+       TryGetStringDataProperty(TGocciaObjectValue(AThrownValue), PROP_MESSAGE,
+         DetailText) then
+      MessageText := NameText + ': ' + DetailText;
   end;
   inherited Create(MessageText);
   FThrownValue := AThrownValue;

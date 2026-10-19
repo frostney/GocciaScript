@@ -7,6 +7,7 @@ interface
 uses
   Classes,
 
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
 { Formats a detailed error message for a TGocciaThrowValue, including source
@@ -26,6 +27,14 @@ uses
   host-side suggestion: not one the throw marked ASuggestionIsHostOnly,
   whatever value was thrown, nor the one recorded on the error or an
   ASuggestion equal to it. }
+{ Reads AName as a string held in a data property of AObject or of its prototype
+  chain, through the ordinary [[GetOwnProperty]] only: an accessor, a Proxy (its
+  traps are guest code) or a non-string value is not read and gives False.
+  Never runs guest code, so it is safe where a throw is rendered or carried
+  (ES2026 §14.14 ThrowStatement reads no property of the thrown value). }
+function TryGetStringDataProperty(const AObject: TGocciaObjectValue;
+  const AName: string; out AValue: string): Boolean;
+
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
   const AUseColor: Boolean; const AExpectedPrincipal: Int64;
@@ -48,7 +57,7 @@ uses
   Goccia.Error,
   Goccia.Terminal.Colors,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 function TryGetStringDataProperty(const AObject: TGocciaObjectValue;
@@ -64,6 +73,9 @@ begin
 
   while Assigned(Current) do
   begin
+    // A Proxy's [[GetOwnProperty]] runs its trap.
+    if Current is TGocciaProxyValue then
+      Exit(False);
     Descriptor := Current.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
