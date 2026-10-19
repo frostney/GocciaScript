@@ -140,6 +140,7 @@ type
     procedure TestRedirectLocationResolvesAgainstResponseURL;
     procedure TestRequestURLIsParsed;
     procedure TestRequestURLIsParsedOnTheWire;
+    procedure TestNonASCIIRequestURLIsEncodedOnTheWire;
     procedure TestRecordThenReplay;
   public
     procedure SetupTests; override;
@@ -386,6 +387,8 @@ begin
     'URL, forwarded or direct', TestRedirectLocationResolvesAgainstResponseURL);
   Test('the request URL sent has its dot segments removed, forwarded or ' +
     'direct', TestRequestURLIsParsedOnTheWire);
+  Test('a non-ASCII request URL is sent percent-encoded as UTF-8, forwarded ' +
+    'or direct', TestNonASCIIRequestURLIsEncodedOnTheWire);
   Test('a run recorded through the network replays without it',
     TestRecordThenReplay);
   {$ELSE}
@@ -398,6 +401,9 @@ begin
     LOOPBACK_ORIGIN_SKIP_REASON);
   Skip('the request URL sent has its dot segments removed, forwarded or ' +
     'direct', TestRequestURLIsParsedOnTheWire, LOOPBACK_ORIGIN_SKIP_REASON);
+  Skip('a non-ASCII request URL is sent percent-encoded as UTF-8, forwarded ' +
+    'or direct', TestNonASCIIRequestURLIsEncodedOnTheWire,
+    LOOPBACK_ORIGIN_SKIP_REASON);
   Skip('a run recorded through the network replays without it',
     TestRecordThenReplay, LOOPBACK_ORIGIN_SKIP_REASON);
   {$ENDIF}
@@ -1963,6 +1969,46 @@ begin
     Expect<string>(Forwarded).ToBe(Direct);
     Expect<string>(Origin.RequestLine(1)).ToBe('GET /d/e?q=./x HTTP/1.1');
     Expect<string>(Origin.RequestLine(2)).ToBe('GET /d/e?q=./x HTTP/1.1');
+  finally
+    Origin.Free;
+    Tape.Free;
+  end;
+end;
+{$ELSE}
+begin
+  // Registered as skipped on this platform.
+end;
+{$ENDIF}
+
+procedure TFetchTransportTests.TestNonASCIIRequestURLIsEncodedOnTheWire;
+{$IFDEF UNIX}
+var
+  Origin: TLoopbackOrigin;
+  Tape: TTape;
+  Script, Base, Direct, Forwarded: string;
+  Capabilities: TGocciaCapabilities;
+  Transport: IGocciaFetchTransport;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, LOOPBACK_HOST)
+    .Allow(gcNet, NET_PRIVATE_SCOPE);
+  Tape := TTape.Create;
+  Origin := TLoopbackOrigin.Create(2, True);
+  try
+    Base := 'http://' + LOOPBACK_HOST + ':' + IntToStr(Origin.Port);
+    Script := 'fetch("' + Base + '/x/../caf\u00e9/\u0100?q=\u00e9")' +
+      '.then((r) => { globalThis.outcome = r.url; },' +
+      ' (e) => { globalThis.outcome = e.name + ": " + e.message; });';
+    Direct := RunWithTransport(Script, nil, Capabilities);
+    Transport := TRecordingTransport.Create(Tape);
+    Forwarded := RunWithTransport(Script, Transport, Capabilities);
+    Transport := nil;
+    Origin.WaitFor;
+    Expect<string>(Direct).ToBe(Base + '/caf%C3%A9/%C4%80?q=%C3%A9');
+    Expect<string>(Forwarded).ToBe(Direct);
+    Expect<string>(Origin.RequestLine(1))
+      .ToBe('GET /caf%C3%A9/%C4%80?q=%C3%A9 HTTP/1.1');
+    Expect<string>(Origin.RequestLine(2))
+      .ToBe('GET /caf%C3%A9/%C4%80?q=%C3%A9 HTTP/1.1');
   finally
     Origin.Free;
     Tape.Free;

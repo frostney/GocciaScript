@@ -72,12 +72,11 @@ does.
 transport gives is exposed as given, and the request URL as `fetch()`
 received it when it gives none, as the built-in client exposes a redirect's
 `Location` and the request URL. WHATWG Fetch serializes the URL without its
-fragment, and both paths do it
-([#1786](https://github.com/frostney/GocciaScript/issues/1786)), so a script
-reads the same `url` with or without a transport and a recorded run replays
-to the same value. The request URL and each redirect's `Location` go through
-the same parser (#1805): a `Location` is resolved against the redirecting
-response's URL, and the URL sent has no dot segments.
+fragment; the built-in client does not yet
+([#1786](https://github.com/frostney/GocciaScript/issues/1786)), and the
+transport path follows it, so a script reads the same `url` with or without
+a transport and a recorded run replays to the same value. Fixing both paths
+together is that issue's work.
 
 **A request leaves the pending set the same way whatever answers it.**
 Settling, an abort and a discard (the engine's run failed or it ended) remove
@@ -139,10 +138,8 @@ built-in client would pass it on.
   audit them.
 - An abort cannot interrupt a transport's work; it sees the cancellation
   through `IsCancelled`.
-- A transport's request URL is the one the built-in client would send: the
-  string `fetch()` received parsed by the URL Standard and serialized without
-  its fragment, dot segments removed (#1805), so two spellings of one URL
-  reach a host that keys recordings by it as one.
+- A transport's request URL is the string `fetch()` received, unnormalized.
+  A host that keys recordings by it chooses its own normalization.
 - The WASM lane still has no fetch manager, so `fetch()` stays unavailable
   there with or without a transport, and `FetchOverNetwork` answers with a
   network error.

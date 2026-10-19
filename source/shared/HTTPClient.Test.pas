@@ -369,6 +369,13 @@ begin
   Expect<string>(NormalizeHTTPRequestURL('http://h/a/./b' + #10 + 'x'))
     .ToBe('http://h/a/./b' + #10 + 'x');
   Expect<string>(NormalizeHTTPRequestURL('not a url')).ToBe('not a url');
+  // Non-ASCII path and query code points are percent-encoded as UTF-8.
+  Expect<string>(NormalizeHTTPRequestURL(
+    'http://h/caf' + WideChar($00E9) + '/../x/' + WideChar($0100) +
+    '?q=' + WideChar($00E9) + '#f')).ToBe('http://h/x/%C4%80?q=%C3%A9');
+  // A non-ASCII host stays the client's own to decide.
+  Expect<string>(NormalizeHTTPRequestURL('http://h' + WideChar($00E9) +
+    '/a/./b')).ToBe('http://h' + WideChar($00E9) + '/a/./b');
 end;
 
 procedure THTTPClientTests.TestResolvesRedirectLocation;
@@ -391,6 +398,9 @@ begin
     .ToBe('http://h:81/dir/page?k=v');
   Expect<string>(ResolveHTTPRedirectURL(BASE, 'https://o/a/../b#f'))
     .ToBe('https://o/b');
+  // A header value's bytes: UTF-8 for e-acute.
+  Expect<string>(ResolveHTTPRedirectURL(BASE, 'caf' + Chr($C3) + Chr($A9)))
+    .ToBe('http://h:81/dir/caf%C3%A9');
   Raised := False;
   try
     ResolveHTTPRedirectURL(BASE, 'http://');

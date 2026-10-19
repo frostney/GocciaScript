@@ -1443,16 +1443,66 @@ begin
   end;
 end;
 
+{ The URL Standard percent-encodes non-ASCII path, query and fragment code
+  points as UTF-8, but the engine's parser reads each character as a byte and
+  rejects one past U+00FF. So a URL reaches it as ASCII: AABytes says the
+  characters are already bytes (a header value read off the wire), otherwise
+  they are code points and are encoded as UTF-8 first. }
+function PercentEncodeNonASCII(const AText: string;
+  const AAreBytes: Boolean): string;
+const
+  HEX_DIGITS = '0123456789ABCDEF';
+var
+  Bytes: RawByteString;
+  I: Integer;
+  HasHigh: Boolean;
+begin
+  HasHigh := False;
+  for I := 1 to Length(AText) do
+    if Ord(AText[I]) > 127 then
+      HasHigh := True;
+  if not HasHigh then
+    Exit(AText);
+  if AAreBytes then
+  begin
+    SetLength(Bytes, Length(AText));
+    for I := 1 to Length(AText) do
+      Bytes[I] := AnsiChar(Byte(Ord(AText[I]) and $FF));
+  end
+  else
+    Bytes := UTF8Encode(AText);
+  Result := '';
+  for I := 1 to Length(Bytes) do
+    if Ord(Bytes[I]) > 127 then
+      Result := Result + '%' + HEX_DIGITS[(Ord(Bytes[I]) shr 4) + 1] +
+        HEX_DIGITS[(Ord(Bytes[I]) and $0F) + 1]
+    else
+      Result := Result + Char(Bytes[I]);
+end;
+
 function NormalizeHTTPRequestURL(const AURL: string): string;
 var
   Parsed: TGocciaURLRecord;
-  I: Integer;
+  I, AuthorityStart, AuthorityEnd: Integer;
 begin
   Result := AURL;
   for I := 1 to Length(AURL) do
     if (Ord(AURL[I]) < 32) or (Ord(AURL[I]) = 127) then
       Exit;
-  Parsed := ParseURL(AURL);
+  { A non-ASCII host is the client's own to accept or refuse. }
+  AuthorityStart := Pos('://', AURL);
+  if AuthorityStart = 0 then
+    Exit;
+  AuthorityEnd := AuthorityStart + 3;
+  while (AuthorityEnd <= Length(AURL)) and
+        not (AURL[AuthorityEnd] in ['/', '?', '#']) do
+  begin
+    if Ord(AURL[AuthorityEnd]) > 127 then
+      Exit;
+    Inc(AuthorityEnd);
+  end;
+  Parsed := ParseURL(Copy(AURL, 1, AuthorityEnd - 1) +
+    PercentEncodeNonASCII(Copy(AURL, AuthorityEnd, Length(AURL)), False));
   if Parsed.IsValid and ((Parsed.Scheme = 'http') or
      (Parsed.Scheme = 'https')) then
     Result := SerializeURL(Parsed, True);
@@ -1461,12 +1511,14 @@ end;
 function ResolveHTTPRedirectURL(const ABaseURL, ALocation: string): string;
 var
   Base, Target: TGocciaURLRecord;
+  Location: string;
 begin
-  Base := ParseURL(ABaseURL);
+  Location := PercentEncodeNonASCII(ALocation, True);
+  Base := ParseURL(PercentEncodeNonASCII(ABaseURL, False));
   if Base.IsValid then
-    Target := ParseURLWithBase(ALocation, Base)
+    Target := ParseURLWithBase(Location, Base)
   else
-    Target := ParseURL(ALocation);
+    Target := ParseURL(Location);
   if not Target.IsValid then
     raise EHTTPError.Create('Invalid URL: malformed redirect location');
   Result := SerializeURL(Target, True);
