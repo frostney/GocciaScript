@@ -24,16 +24,18 @@ type
     FArmed: Boolean;
     FCalls: Integer;
     FLastBytes: Int64;
+    FLastNewBytes: Int64;
     FCountAtFirstCall: Integer;
     FValueAtFirstCall: Integer;
   protected
-    procedure RequireStorageBytes(const ABytes: Int64;
+    procedure RequireStorageBytes(const ABytes, ANewBytes: Int64;
       const APendingValue: Integer); override;
   public
     constructor Create(AInitialCapacity: Integer);
     property Armed: Boolean read FArmed write FArmed;
     property Calls: Integer read FCalls;
     property LastBytes: Int64 read FLastBytes;
+    property LastNewBytes: Int64 read FLastNewBytes;
     property CountAtFirstCall: Integer read FCountAtFirstCall;
     { The value the Add that tripped the gate had not stored yet. The gated
       subclass roots this, so a growth path that dropped it on the floor would
@@ -72,12 +74,13 @@ begin
   FArmed := False;
   FCalls := 0;
   FLastBytes := 0;
+  FLastNewBytes := 0;
   FCountAtFirstCall := -1;
   FValueAtFirstCall := -1;
 end;
 
-procedure TGatedStringMap.RequireStorageBytes(const ABytes: Int64;
-  const APendingValue: Integer);
+procedure TGatedStringMap.RequireStorageBytes(const ABytes,
+  ANewBytes: Int64; const APendingValue: Integer);
 begin
   if FCalls = 0 then
   begin
@@ -86,6 +89,7 @@ begin
   end;
   Inc(FCalls);
   FLastBytes := ABytes;
+  FLastNewBytes := ANewBytes;
   if FArmed then
     raise EStorageRefused.CreateFmt('refused %d bytes', [ABytes]);
 end;
@@ -370,6 +374,10 @@ begin
         Expect<Int64>(Map.LastBytes).ToBe(
           (Int64(CapacityBefore) + (Int64(CapacityBefore) + 1) * 2) *
           SizeOf(TGatedStringMap.TEntry));
+        // The new block alone, which is what the heap trigger is told of: the
+        // old block is already in use (ADR 0145).
+        Expect<Int64>(Map.LastNewBytes).ToBe(
+          (Int64(CapacityBefore) + 1) * 2 * SizeOf(TGatedStringMap.TEntry));
         Inc(Steps);
       end;
     end;
