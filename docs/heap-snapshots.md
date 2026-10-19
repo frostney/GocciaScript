@@ -281,10 +281,12 @@ agree with each other and with every member (kept ones included), parts that
 fit the built-in's kind, a kept member the built-in has, an array's elements
 within its length, no new prototype for `Object.prototype` and no prototype
 chain that loops through a changed built-in. The differences are applied
-last, after the roots are read and every check has passed, so a refused
-restore leaves this engine's built-ins as they were (ADR 0148 had them
-applied before the object graph is filled; nothing the fill does reads a
-built-in's own state). Resolving names can still build lazy built-ins, which
+last, after the roots are read and every check has passed: each built-in's
+new properties and elements are built aside first (under the run's memory
+ceiling and execution limits), then installed in a step that allocates
+nothing and cannot fail, so a refused restore leaves this engine's built-ins
+as they were (ADR 0148 had them applied before the object graph is filled;
+nothing the fill does reads a built-in's own state). Resolving names can still build lazy built-ins, which
 a later restore into the same engine cannot tell from changes: restore into
 a fresh engine. To snapshot a restored run again, create the session before
 the restore, as for any run; the restore is then the run's first change.
@@ -299,8 +301,9 @@ engines and checks them by script, and feeds the reader every truncation
 and 10,000 mutants of a real snapshot, and of one holding closures and a
 suspended generator, which it then resumes.
 `Goccia.HeapSnapshot.Builtins.Test` round-trips each kind of difference,
-checks the reader's refusals of impossible ones, and restores every cut and
-11,000 mutants of snapshots with differences. The fuzz harness restores one input
+checks the reader's refusals of impossible ones, restores every cut and
+11,000 mutants of snapshots with differences, and restores one under rising
+memory ceilings, every refusal leaving the built-ins as they were. The fuzz harness restores one input
 as a snapshot with `--heap-snapshot <file>` and writes its own seed
 snapshots with `--write-heap-snapshot-seeds <dir>`; the scheduled
 [fuzz workflow](../.github/workflows/fuzz.yml) fuzzes the reader with

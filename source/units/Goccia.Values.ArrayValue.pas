@@ -46,10 +46,15 @@ type
     function StoredLength: Int64;
     function LengthWritable: Boolean;
     // A heap snapshot restore of a built-in array the run changed (ADR
-    // 0148): its length, whether that is writable, and its dense elements,
-    // the hole for a missing one. ArrayPartRefusal checked them first.
-    procedure SetArrayPartForRestore(const ALength: Int64;
-      const ALengthWritable: Boolean; const AElements: array of TGocciaValue);
+    // 0148), which ArrayPartRefusal checked first. PrepareElementsForRestore
+    // builds its dense elements aside (the hole for a missing one), through
+    // the element store's gate and polling, so it may raise; the caller
+    // keeps them rooted. CommitArrayPartForRestore installs them, with the
+    // length and whether it is writable, and cannot fail.
+    class function PrepareElementsForRestore(
+      const AElements: array of TGocciaValue): TGocciaElementList;
+    procedure CommitArrayPartForRestore(const AElements: TGocciaElementList;
+      const ALength: Int64; const ALengthWritable: Boolean);
 
     // Index-based element access
     function GetLength: Integer;
@@ -4981,16 +4986,33 @@ begin
   end;
 end;
 
-procedure TGocciaArrayValue.SetArrayPartForRestore(const ALength: Int64;
-  const ALengthWritable: Boolean; const AElements: array of TGocciaValue);
+class function TGocciaArrayValue.PrepareElementsForRestore(
+  const AElements: array of TGocciaValue): TGocciaElementList;
 var
   I: Integer;
 begin
-  // Through the element store's gate, as any store grows.
-  FElements.Clear;
-  ExtendElementsWithHoles(FElements, Length(AElements), nil);
-  for I := 0 to High(AElements) do
-    FElements[I] := AElements[I];
+  Result := TGocciaElementList.Create(False);
+  try
+    // Through the element store's gate, as any store grows.
+    ExtendElementsWithHoles(Result, Length(AElements), nil);
+    for I := 0 to High(AElements) do
+    begin
+      if I and 1023 = 1023 then
+        CheckNativeWork;
+      Result[I] := AElements[I];
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+procedure TGocciaArrayValue.CommitArrayPartForRestore(
+  const AElements: TGocciaElementList; const ALength: Int64;
+  const ALengthWritable: Boolean);
+begin
+  FElements.Free;
+  FElements := AElements;
   FLength := ALength;
   FLengthWritable := ALengthWritable;
 end;

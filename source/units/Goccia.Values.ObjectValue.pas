@@ -20,6 +20,23 @@ uses
 type
   TSymbolDescriptorMap = THashMap<TGocciaSymbolValue, TGocciaPropertyDescriptor>;
 
+  { A heap snapshot restore's new own properties for an object (ADR 0148):
+    built by TGocciaObjectValue.PrepareOwnPropertiesForRestore before any
+    object changes, installed by CommitOwnPropertiesForRestore, which
+    allocates nothing and cannot fail. It holds the new layout, not the
+    descriptors: the caller owns those until the commit, and the object
+    after it. Freed uncommitted, it frees only its own containers. }
+  TGocciaRestoredOwnProperties = class
+  private
+    FProperties: TGocciaPropertyMap;
+    FSymbolDescriptors: TSymbolDescriptorMap;
+    FSymbolOrder: TList<TGocciaSymbolValue>;
+    // The descriptors the object holds now that the new layout keeps.
+    FKept: THashMap<Pointer, Boolean>;
+  public
+    destructor Destroy; override;
+  end;
+
   TGocciaObjectValue = class(TGocciaValue)
   private
     procedure SetRegExpData(const AValue: TObject);
@@ -194,18 +211,21 @@ type
       const ADescriptor: TGocciaPropertyDescriptor);
     procedure SetIntegrityForRestore(const AExtensible, AFrozen, ASealed,
       AHasEverHadIndexedOwnProperty: Boolean);
-    // Replaces every own property with AKeys and ASymbols, in their order;
-    // the object takes ownership of the descriptors, even when it raises. A
-    // nil descriptor keeps the one the object holds for that key or symbol
-    // now, which it must hold (else it raises before changing anything);
-    // every other descriptor it held is freed. When the keys it holds are
-    // the first of AKeys, in order, they keep their places and its property
-    // map its shape. The caller keeps every value rooted and has checked
+    // The object's own properties as AKeys and ASymbols give them, in their
+    // order, built aside (TGocciaRestoredOwnProperties). A nil descriptor
+    // keeps the one the object holds for that key or symbol now, which it
+    // must hold, else this raises; so may the run's memory ceiling and
+    // execution limits. The caller keeps every value rooted and has checked
     // that no key or symbol is listed twice.
-    procedure ReplaceOwnPropertiesForRestore(const AKeys: array of string;
+    function PrepareOwnPropertiesForRestore(const AKeys: array of string;
       const ADescriptors: array of TGocciaPropertyDescriptor;
       const ASymbols: array of TGocciaSymbolValue;
-      const ASymbolDescriptors: array of TGocciaPropertyDescriptor);
+      const ASymbolDescriptors: array of TGocciaPropertyDescriptor):
+      TGocciaRestoredOwnProperties;
+    // Installs AProperties and frees every descriptor the object held that
+    // it does not keep. The object owns the new descriptors from here.
+    procedure CommitOwnPropertiesForRestore(
+      const AProperties: TGocciaRestoredOwnProperties);
 
     property Properties: TGocciaPropertyMap read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
@@ -365,6 +385,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.NativeLimits,
   Goccia.ObjectModel,
   Goccia.StackLimit,
   Goccia.Utils,
@@ -1550,147 +1571,100 @@ begin
   FSymbolInsertionOrder.Add(ASymbol);
 end;
 
-procedure TGocciaObjectValue.ReplaceOwnPropertiesForRestore(
+{ TGocciaRestoredOwnProperties }
+
+destructor TGocciaRestoredOwnProperties.Destroy;
+begin
+  FKept.Free;
+  FSymbolOrder.Free;
+  FSymbolDescriptors.Free;
+  FProperties.Free;
+  inherited;
+end;
+
+function TGocciaObjectValue.PrepareOwnPropertiesForRestore(
   const AKeys: array of string;
   const ADescriptors: array of TGocciaPropertyDescriptor;
   const ASymbols: array of TGocciaSymbolValue;
-  const ASymbolDescriptors: array of TGocciaPropertyDescriptor);
+  const ASymbolDescriptors: array of TGocciaPropertyDescriptor):
+  TGocciaRestoredOwnProperties;
+var
+  Map: TGocciaShapedPropertyMap;
+  Descriptor: TGocciaPropertyDescriptor;
+  I: Integer;
+begin
+  Result := TGocciaRestoredOwnProperties.Create;
+  try
+    Result.FKept := THashMap<Pointer, Boolean>.Create;
+    // A map like the one the constructor makes, rooting its owner where it
+    // grows: its new values are rooted by the caller, its kept ones by the
+    // map the object holds now.
+    Map := TGocciaShapedPropertyMap.Create(Length(AKeys));
+    Result.FProperties := Map;
+    Map.Owner := Self;
+    for I := 0 to High(AKeys) do
+    begin
+      if I and 1023 = 1023 then
+        CheckNativeWork;
+      Descriptor := ADescriptors[I];
+      if not Assigned(Descriptor) then
+      begin
+        if not FProperties.TryGetValue(AKeys[I], Descriptor) then
+          raise EInvalidOperation.Create(
+            'a kept property the object does not have');
+        Result.FKept.AddOrSetValue(Descriptor, True);
+      end;
+      Result.FProperties.Add(AKeys[I], Descriptor);
+    end;
+    if Length(ASymbols) > 0 then
+    begin
+      Result.FSymbolOrder := TList<TGocciaSymbolValue>.Create;
+      Result.FSymbolDescriptors := TSymbolDescriptorMap.Create;
+      for I := 0 to High(ASymbols) do
+      begin
+        if I and 1023 = 1023 then
+          CheckNativeWork;
+        Descriptor := ASymbolDescriptors[I];
+        if not Assigned(Descriptor) then
+        begin
+          Descriptor := GetOwnSymbolPropertyDescriptor(ASymbols[I]);
+          if not Assigned(Descriptor) then
+            raise EInvalidOperation.Create(
+              'a kept symbol property the object does not have');
+          Result.FKept.AddOrSetValue(Descriptor, True);
+        end;
+        Result.FSymbolDescriptors.Add(ASymbols[I], Descriptor);
+        Result.FSymbolOrder.Add(ASymbols[I]);
+      end;
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+procedure TGocciaObjectValue.CommitOwnPropertiesForRestore(
+  const AProperties: TGocciaRestoredOwnProperties);
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   SymPair: TSymbolDescriptorMap.TKeyValuePair;
-  Final, SymbolFinal: array of TGocciaPropertyDescriptor;
-  Kept: TDictionary<string, Boolean>;
-  KeptSymbols: TDictionary<TGocciaSymbolValue, Boolean>;
-  Current: TGocciaPropertyDescriptor;
-  Prefix, SymbolPhase: Boolean;
-  I, Added, SymbolsAdded: Integer;
-
-  procedure FreeGiven;
-  var
-    J: Integer;
-  begin
-    for J := 0 to High(ADescriptors) do
-      ADescriptors[J].Free;
-    for J := 0 to High(ASymbolDescriptors) do
-      ASymbolDescriptors[J].Free;
-  end;
-
 begin
-  // What each key ends with: its new descriptor, or the one held now.
-  SetLength(Final, Length(AKeys));
-  for I := 0 to High(AKeys) do
-  begin
-    Final[I] := ADescriptors[I];
-    if not Assigned(Final[I]) and
-       not FProperties.TryGetValue(AKeys[I], Final[I]) then
-    begin
-      FreeGiven;
-      raise EInvalidOperation.Create('a kept property the object does not have');
-    end;
-  end;
-  SetLength(SymbolFinal, Length(ASymbols));
-  for I := 0 to High(ASymbols) do
-  begin
-    SymbolFinal[I] := ASymbolDescriptors[I];
-    if not Assigned(SymbolFinal[I]) then
-    begin
-      SymbolFinal[I] := GetOwnSymbolPropertyDescriptor(ASymbols[I]);
-      if not Assigned(SymbolFinal[I]) then
-      begin
-        FreeGiven;
-        raise EInvalidOperation.Create(
-          'a kept symbol property the object does not have');
-      end;
-    end;
-  end;
-  // Whether the keys held now are the first of AKeys, in order.
-  Prefix := FProperties.Count <= Length(AKeys);
-  if Prefix then
-  begin
-    I := 0;
-    for Pair in FProperties do
-    begin
-      if Pair.Key <> AKeys[I] then
-      begin
-        Prefix := False;
-        Break;
-      end;
-      Inc(I);
-    end;
-  end;
-  Added := 0;
-  SymbolsAdded := 0;
-  SymbolPhase := False;
-  try
-    if Prefix then
-    begin
-      // In place, as a redefinition replaces a descriptor; then appended.
-      Added := FProperties.Count;
-      for I := 0 to Added - 1 do
-        if Assigned(ADescriptors[I]) then
-        begin
-          FProperties.TryGetValue(AKeys[I], Current);
-          FProperties.Add(AKeys[I], ADescriptors[I]);
-          Current.Free;
-        end;
-    end
-    else
-    begin
-      Kept := TDictionary<string, Boolean>.Create;
-      try
-        for I := 0 to High(AKeys) do
-          if not Assigned(ADescriptors[I]) then
-            Kept.Add(AKeys[I], True);
-        for Pair in FProperties do
-          if not Kept.ContainsKey(Pair.Key) then
-            Pair.Value.Free;
-      finally
-        Kept.Free;
-      end;
-      FProperties.Clear;
-    end;
-    while Added <= High(AKeys) do
-    begin
-      FProperties.Add(AKeys[Added], Final[Added]);
-      Inc(Added);
-    end;
-    KeptSymbols := TDictionary<TGocciaSymbolValue, Boolean>.Create;
-    try
-      for I := 0 to High(ASymbols) do
-        if not Assigned(ASymbolDescriptors[I]) then
-          KeptSymbols.Add(ASymbols[I], True);
-      if Assigned(FSymbolDescriptors) then
-      begin
-        for SymPair in FSymbolDescriptors do
-          if not KeptSymbols.ContainsKey(SymPair.Key) then
-            SymPair.Value.Free;
-        FSymbolDescriptors.Clear;
-      end;
-    finally
-      KeptSymbols.Free;
-    end;
-    if Assigned(FSymbolInsertionOrder) then
-      FSymbolInsertionOrder.Clear;
-    SymbolPhase := True;
-    while SymbolsAdded <= High(ASymbols) do
-    begin
-      // Frees its descriptor itself when it fails.
-      Inc(SymbolsAdded);
-      DefineSymbolPropertyForRestore(ASymbols[SymbolsAdded - 1],
-        SymbolFinal[SymbolsAdded - 1]);
-    end;
-  except
-    // What was not added yet is nobody's: freed with the failure.
-    for I := Added to High(Final) do
-      Final[I].Free;
-    if SymbolPhase then
-      for I := SymbolsAdded to High(SymbolFinal) do
-        SymbolFinal[I].Free
-    else
-      for I := 0 to High(ASymbolDescriptors) do
-        ASymbolDescriptors[I].Free;
-    raise;
-  end;
+  for Pair in FProperties do
+    if not AProperties.FKept.ContainsKey(Pair.Value) then
+      Pair.Value.Free;
+  if Assigned(FSymbolDescriptors) then
+    for SymPair in FSymbolDescriptors do
+      if not AProperties.FKept.ContainsKey(SymPair.Value) then
+        SymPair.Value.Free;
+  FProperties.Free;
+  FSymbolDescriptors.Free;
+  FSymbolInsertionOrder.Free;
+  FProperties := AProperties.FProperties;
+  FSymbolDescriptors := AProperties.FSymbolDescriptors;
+  FSymbolInsertionOrder := AProperties.FSymbolOrder;
+  AProperties.FProperties := nil;
+  AProperties.FSymbolDescriptors := nil;
+  AProperties.FSymbolOrder := nil;
 end;
 
 procedure TGocciaObjectValue.SetIntegrityForRestore(const AExtensible, AFrozen,

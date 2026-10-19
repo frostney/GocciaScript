@@ -620,6 +620,9 @@ type
     Descriptors: array of TGocciaPropertyDescriptor;
     Symbols: array of TGocciaSymbolValue;
     SymbolDescriptors: array of TGocciaPropertyDescriptor;
+    // Built aside before anything is applied.
+    Prepared: TGocciaRestoredOwnProperties;
+    PreparedElements: TGocciaElementList;
     destructor Destroy; override;
   end;
 
@@ -3165,6 +3168,8 @@ destructor TPendingDifference.Destroy;
 var
   I: Integer;
 begin
+  Prepared.Free;
+  PreparedElements.Free;
   for I := 0 to High(Descriptors) do
     Descriptors[I].Free;
   for I := 0 to High(SymbolDescriptors) do
@@ -3436,45 +3441,62 @@ begin
   end;
 end;
 
+{ First everything that can fail, polling as it goes: each built-in's new
+  properties and elements are built aside. Then the commit, which allocates
+  nothing, polls nothing and cannot fail, so a refused restore changed no
+  built-in, and a restored one changed all it names. }
 procedure TGocciaHeapSnapshotReader.ApplyDifferences;
 var
   Pending: TPendingDifference;
-  Descriptors, SymbolDescriptors: array of TGocciaPropertyDescriptor;
   I, J: Integer;
 begin
-  // A kept member must still be there: nothing since the check may have
-  // removed one, and nothing is applied unless all are.
-  for I := 0 to FDifferences.Count - 1 do
-  begin
-    Pending := TPendingDifference(FDifferences[I]);
-    for J := 0 to High(Pending.Keys) do
-      if not Assigned(Pending.Descriptors[J]) and
-         not Pending.Target.Properties.ContainsKey(Pending.Keys[J]) then
-        Refuse('a kept property the built-in does not have here');
-    for J := 0 to High(Pending.Symbols) do
-      if not Assigned(Pending.SymbolDescriptors[J]) and
-         not Assigned(Pending.Target.GetOwnSymbolPropertyDescriptor(
-           Pending.Symbols[J])) then
-        Refuse('a kept symbol property the built-in does not have here');
-  end;
   for I := 0 to FDifferences.Count - 1 do
   begin
     Poll;
     Pending := TPendingDifference(FDifferences[I]);
-    // The built-in owns the descriptors from here, even if this raises.
-    Descriptors := Pending.Descriptors;
-    SymbolDescriptors := Pending.SymbolDescriptors;
+    // A kept member must still be there: nothing since the check may have
+    // removed one.
+    for J := 0 to High(Pending.Keys) do
+    begin
+      if J and 1023 = 1023 then
+        Poll;
+      if not Assigned(Pending.Descriptors[J]) and
+         not Pending.Target.Properties.ContainsKey(Pending.Keys[J]) then
+        Refuse('a kept property the built-in does not have here');
+    end;
+    for J := 0 to High(Pending.Symbols) do
+    begin
+      if J and 1023 = 1023 then
+        Poll;
+      if not Assigned(Pending.SymbolDescriptors[J]) and
+         not Assigned(Pending.Target.GetOwnSymbolPropertyDescriptor(
+           Pending.Symbols[J])) then
+        Refuse('a kept symbol property the built-in does not have here');
+    end;
+    Pending.Prepared := Pending.Target.PrepareOwnPropertiesForRestore(
+      Pending.Keys, Pending.Descriptors, Pending.Symbols,
+      Pending.SymbolDescriptors);
+    if Pending.IsArray then
+      Pending.PreparedElements :=
+        TGocciaArrayValue.PrepareElementsForRestore(Pending.Elements);
+  end;
+  for I := 0 to FDifferences.Count - 1 do
+  begin
+    Pending := TPendingDifference(FDifferences[I]);
+    // The built-in owns the descriptors from here.
+    Pending.Target.CommitOwnPropertiesForRestore(Pending.Prepared);
     Pending.Descriptors := nil;
     Pending.SymbolDescriptors := nil;
-    Pending.Target.ReplaceOwnPropertiesForRestore(Pending.Keys, Descriptors,
-      Pending.Symbols, SymbolDescriptors);
     Pending.Target.Prototype := Pending.Prototype;
     if Pending.IsFunction then
       TGocciaFunctionBase(Pending.Target).SetIntrinsicPropertiesForRestore(
         Pending.HasOwnLength, Pending.HasOwnName);
     if Pending.IsArray then
-      TGocciaArrayValue(Pending.Target).SetArrayPartForRestore(
-        Pending.ArrayLength, Pending.LengthWritable, Pending.Elements);
+    begin
+      TGocciaArrayValue(Pending.Target).CommitArrayPartForRestore(
+        Pending.PreparedElements, Pending.ArrayLength, Pending.LengthWritable);
+      Pending.PreparedElements := nil;
+    end;
     Pending.Target.SetIntegrityForRestore(Pending.Extensible, Pending.Frozen,
       Pending.Sealed, Pending.HadIndexed);
   end;

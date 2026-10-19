@@ -22,6 +22,7 @@ uses
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.TestSupport,
+  Goccia.MemoryLimit,
   Goccia.Realm,
   Goccia.Scope.BindingMap,
   Goccia.SharedPrototype,
@@ -49,6 +50,7 @@ type
     procedure TestLateBuiltinDifferences;
     procedure TestHostileDifferencesRefuse;
     procedure TestRefusedRestoreLeavesBuiltins;
+    procedure TestRefusalWhileApplyingLeavesBuiltins;
     procedure TestDifferenceTruncationsAndMutants;
     procedure TestRestoredRunSnapshotsAgain;
   public
@@ -118,6 +120,8 @@ begin
   Test('A difference that cannot be is refused', TestHostileDifferencesRefuse);
   Test('A refused restore leaves this engine''s built-ins as they were',
     TestRefusedRestoreLeavesBuiltins);
+  Test('A restore refused at any memory ceiling changed no built-in',
+    TestRefusalWhileApplyingLeavesBuiltins);
   Test('Truncations and mutants of differences refuse, or restore',
     TestDifferenceTruncationsAndMutants);
   Test('A restored run with differences snapshots and restores again',
@@ -942,6 +946,73 @@ begin
       FreeAndNil(AEngine);
       AEngine := TGocciaEngine.Create(TEST_PATH, ALines);
     end;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestRefusalWhileApplyingLeavesBuiltins;
+const
+  STATE = '[Array.prototype.length, Goccia.shims.length, typeof Math.extra]' +
+    '.join()';
+  STEP = 256 * 1024;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  GC: TGarbageCollector;
+  Refusal, Pristine: string;
+  Bytes: TBytes;
+  Previous, Floor: Int64;
+  I, Refused: Integer;
+  Restored: Boolean;
+begin
+  // Two built-in arrays the run filled: what applying them takes is built
+  // aside first, so a ceiling it does not fit refuses before either changes.
+  Bytes := Snapshot('(() => { const o = {}; Math.extra = o; ' +
+    'const fill = Array.from({ length: 200000 }, () => o); ' +
+    'Array.prototype.push(...fill); Goccia.shims.push(...fill); ' +
+    'return o; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  GC := TGarbageCollector.Instance;
+  Previous := GC.MaxBytes;
+  Refused := 0;
+  Restored := False;
+  try
+    Pristine := Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value;
+    GC.Collect;
+    Floor := GC.BytesAllocated;
+    for I := 0 to 160 do
+    begin
+      GC.MaxBytes := Floor + Int64(I) * STEP;
+      // The engine's memory limit error ends a run as a resource limit; for
+      // a restore it is a refusal like any other.
+      try
+        Refusal := RestoreRefusalIn(Engine, Bytes);
+      except
+        on E: TGocciaMemoryLimitError do
+          Refusal := E.Message;
+      end;
+      GC.MaxBytes := Previous;
+      if Refusal = '' then
+      begin
+        Restored := True;
+        Break;
+      end;
+      Inc(Refused);
+      Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+        Stage).ToStringLiteral.Value).ToBe(Pristine);
+    end;
+    Expect<Boolean>(Restored and (Refused > 0)).ToBe(True);
+    Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value).ToBe('200000,' + IntToStr(200000 +
+      StrToInt(Copy(Pristine, Pos(',', Pristine) + 1,
+      LastDelimiter(',', Pristine) - Pos(',', Pristine) - 1))) + ',object');
+  finally
+    GC.MaxBytes := Previous;
+    Engine.Free;
+    Lines.Free;
   end;
 end;
 
