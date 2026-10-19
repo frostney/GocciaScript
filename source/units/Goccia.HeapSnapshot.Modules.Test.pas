@@ -25,6 +25,7 @@ uses
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.TestSupport,
+  Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
@@ -91,6 +92,10 @@ type
     procedure TestRefusesAModuleAlreadyLoaded;
     procedure TestRefusedRestoreLeavesNoRecords;
     procedure TestRefusesStateOutsideTheRecords;
+    procedure TestRefusesForgedLocalExports;
+    procedure TestManyCompactBindingsRestore;
+    procedure TestTouchedSourceRunsNoModuleBody;
+    procedure TestStoppedCacheLeavesNoRecords;
     procedure TestEveryTruncationRefuses;
     procedure TestMutantsRefuseOrRestore;
   end;
@@ -142,6 +147,69 @@ begin
     TGocciaMicrotaskQueue.Instance.DrainQueue;
   Result := Engine.EvaluateGlobalEval(AAfterJobs, TEST_PATH,
     Stage).ToStringLiteral.Value;
+end;
+
+function U32In(const ABytes: TBytes; const AAt: Integer): Cardinal;
+begin
+  Move(ABytes[AAt], Result, 4);
+  Result := LEtoN(Result);
+end;
+
+procedure PutU32(var ABytes: TBytes; const AAt: Integer;
+  const AValue: Cardinal);
+var
+  Value: Cardinal;
+begin
+  Value := NtoLE(AValue);
+  Move(Value, ABytes[AAt], 4);
+end;
+
+// The index of the ASCII string AText in a snapshot's string table, or -1.
+function StringIndexIn(const ABytes: TBytes; const AText: string): Integer;
+var
+  At, Count, I, J, Len: Integer;
+  Same: Boolean;
+begin
+  Result := -1;
+  At := 4 + 2;
+  At := At + 4 + 2 * Integer(U32In(ABytes, At));  // build identity
+  Count := Integer(U32In(ABytes, At));
+  Inc(At, 4);
+  for I := 0 to Count - 1 do
+  begin
+    Len := Integer(U32In(ABytes, At));
+    Inc(At, 4);
+    if Len = Length(AText) then
+    begin
+      Same := True;
+      for J := 0 to Len - 1 do
+        if (ABytes[At + 2 * J] <> Ord(AText[J + 1])) or
+           (ABytes[At + 2 * J + 1] <> 0) then
+          Same := False;
+      if Same then
+        Exit(I);
+    end;
+    Inc(At, 2 * Len);
+  end;
+end;
+
+{ Where a record's local export AExport of ALocal starts in a snapshot: its
+  export name, kind 0, the environment's object reference (a tag and an id)
+  and its local name. -1 unless there is exactly one. }
+function LocalExportAt(const ABytes: TBytes;
+  const AExport, ALocal: Integer): Integer;
+var
+  At: Integer;
+begin
+  Result := -1;
+  for At := 0 to Length(ABytes) - 14 do
+    if (U32In(ABytes, At) = Cardinal(AExport)) and (ABytes[At + 4] = 0) and
+       (U32In(ABytes, At + 10) = Cardinal(ALocal)) then
+    begin
+      if Result >= 0 then
+        Exit(-1);
+      Result := At;
+    end;
 end;
 
 { THeapSnapshotModulesTests }
@@ -305,6 +373,14 @@ begin
     TestRefusedRestoreLeavesNoRecords);
   Test('Loader state outside the records refuses the snapshot',
     TestRefusesStateOutsideTheRecords);
+  Test('A local export forged outside its module''s own bindings is refused',
+    TestRefusesForgedLocalExports);
+  Test('A module scope of many compact bindings restores',
+    TestManyCompactBindingsRestore);
+  Test('A source file touched after the run is not evaluated again',
+    TestTouchedSourceRunsNoModuleBody);
+  Test('A restore stopped while it caches its records leaves none behind',
+    TestStoppedCacheLeavesNoRecords);
   Test('Every truncation of a module snapshot is refused',
     TestEveryTruncationRefuses);
   Test('Mutants of a module snapshot restore or are refused, never fault',
@@ -594,6 +670,176 @@ begin
     HostModule.Free;
     Stream.Free;
   end;
+end;
+
+procedure THeapSnapshotModulesTests.TestRefusesForgedLocalExports;
+var
+  Refusal: string;
+  Bytes, Forged: TBytes;
+  Outer, Inner, Me, M, At, MainAt: Integer;
+begin
+  // loop.js imports its own export as me; main.js has a local export too,
+  // so its environment is another module scope.
+  Define('loop.js', 'import { outer as me } from "./loop.js"; ' +
+    'let inner = 1; export { inner as outer }; ' +
+    'export const get = () => me;');
+  Define('loopmain.js', 'import { get } from "./loop.js"; ' +
+    'export const m = 2; capture({ get });');
+  Bytes := SnapshotEntry('loopmain.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RoundTripEntry('loopmain.js', Bytes,
+    'String(restored.get())')).ToBe('1');
+  Outer := StringIndexIn(Bytes, 'outer');
+  Inner := StringIndexIn(Bytes, 'inner');
+  Me := StringIndexIn(Bytes, 'me');
+  M := StringIndexIn(Bytes, 'm');
+  Expect<Boolean>((Outer >= 0) and (Inner >= 0) and (Me >= 0) and (M >= 0))
+    .ToBe(True);
+  At := LocalExportAt(Bytes, Outer, Inner);
+  MainAt := LocalExportAt(Bytes, M, M);
+  Expect<Boolean>((At >= 0) and (MainAt >= 0)).ToBe(True);
+  // Its local name an import binding: reading it would read the export
+  // again, without end.
+  Forged := Copy(Bytes);
+  PutU32(Forged, At + 10, Me);
+  Expect<Boolean>(Pos('a local export of no local binding',
+    RoundTripEntry('loopmain.js', Forged, 'String(restored.get())')) > 0)
+    .ToBe(True);
+  // A name the environment does not bind.
+  Forged := Copy(Bytes);
+  PutU32(Forged, At + 10, Outer);
+  Expect<Boolean>(Pos('a local export of no local binding',
+    RoundTripEntry('loopmain.js', Forged, 'String(restored.get())')) > 0)
+    .ToBe(True);
+  // A binding of another module's environment, which this record does not
+  // root.
+  Forged := Copy(Bytes);
+  Move(Bytes[MainAt + 5], Forged[At + 5], 5);
+  PutU32(Forged, At + 10, M);
+  Expect<Boolean>(Pos('a local export outside its module''s environment',
+    RoundTripEntry('loopmain.js', Forged, 'String(restored.get())')) > 0)
+    .ToBe(True);
+end;
+
+procedure THeapSnapshotModulesTests.TestManyCompactBindingsRestore;
+const
+  BINDINGS = 20000;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Source: TStringBuilder;
+  I: Integer;
+begin
+  // Each binding holds true: its entry is as small as an entry gets.
+  Source := TStringBuilder.Create;
+  try
+    for I := 0 to BINDINGS - 1 do
+      Source.Append('const b').Append(I).Append(' = true; ');
+    Source.Append('export const f = () => b0 && b')
+      .Append(BINDINGS - 1).Append(';');
+    Define('compact.js', Source.ToString);
+  finally
+    Source.Free;
+  end;
+  Define('compactmain.js', 'import { f } from "./compact.js"; ' +
+    'capture({ f });');
+  Bytes := SnapshotEntry('compactmain.js', Refusal, False);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RoundTripEntry('compactmain.js', Bytes,
+    'String(restored.f())')).ToBe('true');
+end;
+
+procedure THeapSnapshotModulesTests.TestTouchedSourceRunsNoModuleBody;
+var
+  Refusal: string;
+  Bytes: TBytes;
+
+  procedure Touch(const AName: string);
+  begin
+    Expect<Integer>(FileSetDate(PathOf(AName),
+      DateTimeToFileDate(Now + 1 / 24))).ToBe(0);
+  end;
+
+begin
+  DefineGraph;
+  Bytes := SnapshotEntry('main.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // The same files, newer: copied to another machine, say. Still the
+  // modules the run ran, so a later import evaluates none of them again.
+  Touch('main.js');
+  Touch('lib.js');
+  Touch('counter.js');
+  Touch('extra.js');
+  Expect<string>(RoundTripEntry('main.js', Bytes,
+    '(() => { restored.load().then((m) => { restored.out = [m === ' +
+    'restored.ns, m.increment()].join(); }); return ""; })()',
+    'restored.out')).ToBe('true,2');
+end;
+
+procedure THeapSnapshotModulesTests.TestStoppedCacheLeavesNoRecords;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Low, High, Mid, Limit: Int64;
+
+  // Whether the restore completes within ALimit polls; a stopped one must
+  // leave no record in the loader.
+  function RestoresWithin(const ALimit: Int64): Boolean;
+  var
+    Run: TModuleRun;
+    Outcome: string;
+  begin
+    Run := TModuleRun.Create(PathOf('main.js'));
+    try
+      StartInstructionLimit(ALimit);
+      try
+        try
+          Outcome := RestoreInto(Run, Bytes);
+        except
+          on E: TGocciaInstructionLimitError do
+            Outcome := 'stopped';
+        end;
+      finally
+        ClearInstructionLimit;
+      end;
+      Result := Outcome = '';
+      if not Result then
+      begin
+        TGarbageCollector.Instance.Collect;
+        Expect<Boolean>(Run.Engine.ModuleLoader.HasCachedModule(
+          PathOf('counter.js'))).ToBe(False);
+        Expect<Boolean>(Run.Engine.ModuleLoader.HasCachedModule(
+          PathOf('main.js'))).ToBe(False);
+      end;
+    finally
+      Run.Free;
+    end;
+  end;
+
+begin
+  DefineGraph;
+  Bytes := SnapshotEntry('main.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // The fewest polls the restore completes within; the last of them are
+  // the loader's, one per key it caches.
+  Low := 1;
+  High := 1;
+  while not RestoresWithin(High) do
+  begin
+    Low := High + 1;
+    High := High * 2;
+  end;
+  while Low < High do
+  begin
+    Mid := (Low + High) div 2;
+    if RestoresWithin(Mid) then
+      High := Mid
+    else
+      Low := Mid + 1;
+  end;
+  Expect<Boolean>(High > 16).ToBe(True);
+  for Limit := High - 16 to High - 1 do
+    Expect<Boolean>(RestoresWithin(Limit)).ToBe(False);
 end;
 
 procedure THeapSnapshotModulesTests.TestEveryTruncationRefuses;

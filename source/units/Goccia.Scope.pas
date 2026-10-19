@@ -92,6 +92,9 @@ type
     procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
+    // Whether AName is one of this scope's import bindings (a module
+    // environment's), which reads through the module it names.
+    function IsOwnImportBinding(const AName: string): Boolean;
     function HasLexicalDeclaration(const AName: string): Boolean;
     function HasRestrictedGlobalProperty(const AName: string): Boolean;
     function CanDeclareGlobalVar(const AName: string): Boolean;
@@ -638,6 +641,11 @@ function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
 begin
   Result := (Assigned(FVarBindings) and FVarBindings.ContainsKey(AName)) or
     (Assigned(FGlobalVarNames) and FGlobalVarNames.ContainsKey(AName));
+end;
+
+function TGocciaScope.IsOwnImportBinding(const AName: string): Boolean;
+begin
+  Result := Assigned(FImportBindings) and FImportBindings.ContainsKey(AName);
 end;
 
 // ES2026 §9.1.1.4.15 HasLexicalDeclaration(N) — global-scope approximation.
@@ -1415,8 +1423,9 @@ type
   end;
 
 const
-  // A binding's entry: its name, value, kind, type hint and four flags.
-  MIN_SNAPSHOT_BINDING_BYTES = 10;
+  // A binding's entry: its name (4 bytes), value (1 at least), kind, type
+  // hint and two flags.
+  MIN_SNAPSHOT_BINDING_BYTES = 9;
   // What a restored binding or import binding holds, charged before it is
   // made.
   SNAPSHOT_BINDING_ENTRY_BYTES = 128;

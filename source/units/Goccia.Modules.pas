@@ -2162,12 +2162,20 @@ begin
     case Kind of
       SNAPSHOT_EXPORT_LOCAL:
         begin
+          // A local export is a binding of the module's own environment,
+          // which the module roots, and never one of its import bindings,
+          // which read through another export: a forged one could hold a
+          // scope nothing roots, or read itself without end.
           Environment := AReader.ReadRef;
-          if not Assigned(Environment) or
-             (Environment.ClassType <> TGocciaScope) then
-            AReader.Refuse('a local export whose environment is not a ' +
-              'module scope');
+          if not Assigned(Environment) or (Environment <> FEnvironment) then
+            AReader.Refuse('a local export outside its module''s ' +
+              'environment');
           LocalName := AReader.ReadStr;
+          if not (TGocciaScope(Environment).ContainsOwnLexicalBinding(
+               LocalName) or TGocciaScope(Environment).ContainsOwnVarBinding(
+               LocalName)) or
+             TGocciaScope(Environment).IsOwnImportBinding(LocalName) then
+            AReader.Refuse('a local export of no local binding');
           FExportBindings.Add(Name,
             TGocciaModuleExportBinding.CreateBinding(Environment, LocalName));
         end;

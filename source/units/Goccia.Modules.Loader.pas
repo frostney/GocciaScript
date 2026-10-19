@@ -319,10 +319,17 @@ type
     procedure ListCachedModules(const AKeys: TGocciaModuleKeyList;
       const AModules: TGocciaModuleList);
     function HasCachedModule(const AKey: string): Boolean;
-    { Caches a restored record under AKeys as an evaluated module, which a
-      later import finds without running its body. The loader owns it. }
-    procedure RestoreCachedModule(const AModule: TGocciaModule;
-      const AKeys: array of string);
+    { Caches restored records, each under its keys (AKeys[I] for
+      AModules[I]), as evaluated modules, which a later import finds without
+      running their bodies; the loader owns them from then on. The run's
+      limits are polled per key, and a restore they stop leaves the loader
+      as it was. }
+    procedure CacheRestoredModules(const AModules: TGocciaModuleList;
+      const AKeys: array of TGocciaModuleKeyList);
+    { The modification time a later import compares a cached module's with
+      (CheckForModuleReload), or False when the module has none. }
+    function TryGetModuleLastModified(const APath: string;
+      out ALastModified: TDateTime): Boolean;
     { Reads and parses the module at AResolvedPath as the loader would load
       it, under the same read policy, for a restore to compile. The caller
       owns the program. }
@@ -406,6 +413,7 @@ uses
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.ModuleResolver,
+  Goccia.NativeLimits,
   Goccia.Packages.Address,
   Goccia.Packages.Store,
   Goccia.Realm,
@@ -1872,15 +1880,58 @@ begin
   Result := FModules.ContainsKey(AKey);
 end;
 
-procedure TGocciaModuleLoader.RestoreCachedModule(const AModule: TGocciaModule;
-  const AKeys: array of string);
+procedure TGocciaModuleLoader.CacheRestoredModules(
+  const AModules: TGocciaModuleList;
+  const AKeys: array of TGocciaModuleKeyList);
 var
-  I: Integer;
+  Cached, Marked: TGocciaModuleKeyList;
+  Address: string;
+  I, J, K: Integer;
 begin
-  for I := 0 to High(AKeys) do
-    FModules.AddOrSetValue(AKeys[I], AModule);
-  if AModule.IsHostOwned then
-    MarkHostOwnedAddress(AModule.Path);
+  Cached := TGocciaModuleKeyList.Create;
+  Marked := TGocciaModuleKeyList.Create;
+  try
+    try
+      for I := 0 to AModules.Count - 1 do
+      begin
+        // As MarkHostOwnedAddress marks it, noting what was not marked yet.
+        if AModules[I].IsHostOwned and (AModules[I].Path <> '') then
+          for K := 0 to 1 do
+          begin
+            if K = 0 then
+              Address := AModules[I].Path
+            else
+              Address := ExpandFileName(AModules[I].Path);
+            if not FHostOwnedModuleAddresses.ContainsKey(Address) then
+            begin
+              Marked.Add(Address);
+              FHostOwnedModuleAddresses.AddOrSetValue(Address, True);
+            end;
+          end;
+        for J := 0 to AKeys[I].Count - 1 do
+        begin
+          CheckNativeWork;
+          Cached.Add(AKeys[I][J]);
+          FModules.AddOrSetValue(AKeys[I][J], AModules[I]);
+        end;
+      end;
+    except
+      for I := Cached.Count - 1 downto 0 do
+        FModules.Remove(Cached[I]);
+      for I := Marked.Count - 1 downto 0 do
+        FHostOwnedModuleAddresses.Remove(Marked[I]);
+      raise;
+    end;
+  finally
+    Marked.Free;
+    Cached.Free;
+  end;
+end;
+
+function TGocciaModuleLoader.TryGetModuleLastModified(const APath: string;
+  out ALastModified: TDateTime): Boolean;
+begin
+  Result := TryGetResolvedLastModified(APath, ALastModified);
 end;
 
 function TGocciaModuleLoader.ParseModuleForSnapshot(

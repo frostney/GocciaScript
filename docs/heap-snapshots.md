@@ -213,8 +213,9 @@ a payload:
 
 A module's environment is a module scope: its top-level bindings by name,
 its var bindings and its import bindings, each naming the record and the
-export it reads. A namespace object is written as its record and restored
-as the one the record holds.
+export it reads. A local export must name one of its own module
+environment's bindings that is not an import binding. A namespace object is
+written as its record and restored as the one the record holds.
 
 A restore compiles each source module from the path its header names,
 through the loader and under its read policy (the engine's own source when
@@ -222,12 +223,17 @@ the path is the engine's source path), without linking or running it. A
 module whose bytecode is not the one the snapshot ran, one that no longer
 compiles, and one cached under a key the restoring engine's loader already
 holds are refused. Once the whole snapshot is restored, the records are
-cached in the loader as evaluated modules; a refused restore frees them and
-leaves the loader as it was. Restore into an engine that has not loaded the
-modules, with the same files.
+cached in the loader as evaluated modules; a refused restore, or one the
+run's limits stop while it caches them, frees them and leaves the loader as
+it was. Restore into an engine that has not loaded the modules, with the
+same files. A restored source module takes its file's modification time,
+which a later import compares to decide whether to load the module again, so
+a copy of the same file does not evaluate it again.
 
 A data module (JSON, text) is written as its exported values, not read
-again: the run may have changed them. The entry module, still evaluating
+again: the run may have changed them. It keeps the run's modification time,
+so a later import of a newer file loads it again, as it would have in the
+run. The entry module, still evaluating
 while its run waits at a checkpoint, is restored as evaluated. A
 forwarded export is followed through at most 1,024 records on restore. These
 refuse the snapshot:

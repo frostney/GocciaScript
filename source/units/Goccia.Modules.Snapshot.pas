@@ -40,6 +40,9 @@ type
     FKeys: TObjectDictionary<TGocciaModule, TGocciaModuleKeyList>;
     FRestored: TGocciaModuleList;
     FSeenKeys: TDictionary<string, Boolean>;
+    // A restored source module's file's modification time, read before the
+    // module was compiled from it.
+    FStamps: TDictionary<TGocciaModule, TDateTime>;
   public
     constructor Create(const AEngine: TGocciaEngine);
     // Frees the restored records not committed.
@@ -58,7 +61,8 @@ type
       const ARecord: TObject); override;
     // Caches the restored records in the engine's loader, which owns them
     // from then on. Call once the restore succeeded, after the reader is
-    // done.
+    // done. The run's limits can stop it, leaving the loader as it was and
+    // the records here.
     procedure Commit;
   end;
 
@@ -77,6 +81,9 @@ const
   RECORD_DATA = 2;
   // What a key held for a restored record costs, charged before it is kept.
   KEY_ENTRY_BYTES = 96;
+  // What a restored record and its bookkeeping hold before its payload: the
+  // record, its export maps and roots, and its entries here.
+  RECORD_BYTES = 2048;
 
 constructor TGocciaModuleSnapshotRecords.Create(const AEngine: TGocciaEngine);
 begin
@@ -86,6 +93,7 @@ begin
     [doOwnsValues]);
   FRestored := TGocciaModuleList.Create;
   FSeenKeys := TDictionary<string, Boolean>.Create;
+  FStamps := TDictionary<TGocciaModule, TDateTime>.Create;
 end;
 
 destructor TGocciaModuleSnapshotRecords.Destroy;
@@ -97,6 +105,7 @@ begin
   FRestored.Free;
   FKeys.Free;
   FSeenKeys.Free;
+  FStamps.Free;
   inherited;
 end;
 
@@ -227,7 +236,10 @@ var
   Compiled: TGocciaBytecodeModule;
   Module: TGocciaModule;
   RecordKeys: TGocciaModuleKeyList;
+  HasStamp: Boolean;
+  Stamp: TDateTime;
 begin
+  AReader.ReserveItems(1, RECORD_BYTES);
   Path := AReader.ReadStr;
   IsHostOwned := AReader.ReadBool;
   Kind := AReader.ReadU8;
@@ -263,9 +275,16 @@ begin
       FSeenKeys.Add(Key, True);
       RecordKeys.Add(Key);
     end;
+    HasStamp := False;
+    Stamp := 0;
     if Kind = RECORD_SOURCE then
+    begin
+      // Read before the module is compiled: a file that changes after it
+      // reads newer, and a later import reloads it.
+      HasStamp := FEngine.ModuleLoader.TryGetModuleLastModified(Path, Stamp);
       Compiled := EnsureCompiled(AReader, FEngine, Path, SourcePath, Hash,
         IsHostOwned);
+    end;
   except
     RecordKeys.Free;
     raise;
@@ -273,6 +292,8 @@ begin
   Module := TGocciaModule.Create(Path);
   FRestored.Add(Module);
   FKeys.Add(Module, RecordKeys);
+  if HasStamp then
+    FStamps.Add(Module, Stamp);
   Module.IsHostOwned := IsHostOwned;
   if Kind = RECORD_SOURCE then
     Module.SnapshotKind := mskSource
@@ -284,8 +305,17 @@ end;
 
 procedure TGocciaModuleSnapshotRecords.Fill(
   const AReader: TGocciaHeapSnapshotReader; const ARecord: TObject);
+var
+  Stamp: TDateTime;
 begin
   TGocciaModule(ARecord).ReadSnapshot(AReader);
+  // A source module was checked against its file here, which a later
+  // import compares the record's time with: the file's own time, not the
+  // writing run's, or a copy of the same file would make that import
+  // evaluate the module again. A data module keeps the run's, as its
+  // values are the run's.
+  if FStamps.TryGetValue(TGocciaModule(ARecord), Stamp) then
+    TGocciaModule(ARecord).LastModified := Stamp;
 end;
 
 procedure TGocciaModuleSnapshotRecords.Finish(
@@ -296,15 +326,15 @@ end;
 
 procedure TGocciaModuleSnapshotRecords.Commit;
 var
-  Module: TGocciaModule;
+  Keys: array of TGocciaModuleKeyList;
+  I: Integer;
 begin
-  // Each record leaves the list as the loader takes it over.
-  while FRestored.Count > 0 do
-  begin
-    Module := FRestored[FRestored.Count - 1];
-    FEngine.ModuleLoader.RestoreCachedModule(Module, FKeys[Module].ToArray);
-    FRestored.Delete(FRestored.Count - 1);
-  end;
+  SetLength(Keys, FRestored.Count);
+  for I := 0 to FRestored.Count - 1 do
+    Keys[I] := FKeys[FRestored[I]];
+  FEngine.ModuleLoader.CacheRestoredModules(FRestored, Keys);
+  // The loader owns them now.
+  FRestored.Clear;
 end;
 
 end.
