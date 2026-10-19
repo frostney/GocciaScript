@@ -421,7 +421,8 @@ type
     function ReadValue: TGocciaValue;
     // A value that must be there: a property's value.
     function ReadPresentValue: TGocciaValue;
-    // A dense array element: a value or the hole that marks a missing one.
+    // A dense array element, or a VM register or cell: a value or the hole,
+    // which marks a missing element or a binding in its temporal dead zone.
     function ReadElementValue: TGocciaValue;
     // An accessor's getter or setter: absent or a function.
     function ReadAccessorHalf: TGocciaValue;

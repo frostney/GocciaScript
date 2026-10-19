@@ -240,7 +240,7 @@ begin
     TestGeneratorKeepsItsHandlers);
   Test('A function restores only where its module is compiled',
     TestFunctionNeedsItsModuleCompiled);
-  Test('A promise refuses until the promise codecs land',
+  Test('Promises and yield* refuse until their codecs land',
     TestRefusesPromisesUntilTheirCodec);
   Test('Objects and arrays round-trip with holes and lengths',
     TestObjectsAndArrays);
@@ -578,6 +578,16 @@ begin
     '(() => { const r = restored.next(5); const done = restored.next(); ' +
     'return [r.value, r.done, done.done].join(); })()'))
     .ToBe('16,true,true');
+  // A binding still in its temporal dead zone stays in it until the
+  // generator runs its declaration.
+  Expect<string>(RoundTripModule(
+    '(() => { const source = { *late() { const peek = () => x; ' +
+    'yield peek; let x = 5; yield peek(); } }; const g = source.late(); ' +
+    'capture({ g, peek: g.next().value }); })();',
+    '(() => { let before; try { restored.peek(); before = "read"; } ' +
+    'catch (e) { before = e.constructor.name; } ' +
+    'return [before, restored.g.next().value, restored.peek()].join(); })()'))
+    .ToBe('ReferenceError,5,5');
 end;
 
 procedure THeapSnapshotTests.TestGeneratorKeepsItsHandlers;
@@ -616,6 +626,11 @@ begin
     'capture({ p: later() }); })();', Refusal);
   Expect<Boolean>(Pos('no snapshot codec for TGocciaPromiseValue', Refusal) > 0)
     .ToBe(True);
+  // A generator inside yield* holds an iterator the iterator codecs write.
+  SnapshotModule('(() => { const source = { *inner() { yield 1; yield 2; }, ' +
+    '*outer() { yield* source.inner(); } }; const g = source.outer(); ' +
+    'g.next(); capture(g); })();', Refusal);
+  Expect<Boolean>(Pos('a generator inside yield*', Refusal) > 0).ToBe(True);
 end;
 
 procedure THeapSnapshotTests.TestPrimitives;
