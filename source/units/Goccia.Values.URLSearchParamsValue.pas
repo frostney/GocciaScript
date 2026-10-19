@@ -100,6 +100,7 @@ implementation
 uses
   SysUtils,
 
+  OrderedStringMap,
   StringBuffer,
   TextSemantics,
 
@@ -288,31 +289,33 @@ var
   Key: string;
   Param: TGocciaURLSearchParam;
   Val: TGocciaValue;
-  I: Integer;
-  Found: Boolean;
+  Positions: TOrderedStringMap<Integer>;
+  Position: Integer;
 begin
   FList.Clear;
-  for Key in AObj.GetOwnPropertyKeys do
-  begin
-    Val := AObj.GetProperty(Key);
-    Param.Name := ToWellFormedUTF16(Key);
-    if Assigned(Val) then
-      Param.Value := ToUSVString(Val)
-    else
-      Param.Value := '';
-    // Web IDL record<USVString, USVString> conversion: keys that become the
-    // same USVString (two different lone surrogates are both U+FFFD) are one
-    // entry, which keeps its place and takes the later value.
-    Found := False;
-    for I := 0 to FList.Count - 1 do
-      if FList[I].Name = Param.Name then
+  Positions := TOrderedStringMap<Integer>.Create;
+  try
+    for Key in AObj.GetOwnPropertyKeys do
+    begin
+      Val := AObj.GetProperty(Key);
+      Param.Name := ToWellFormedUTF16(Key);
+      if Assigned(Val) then
+        Param.Value := ToUSVString(Val)
+      else
+        Param.Value := '';
+      // Web IDL record<USVString, USVString> conversion: keys that become the
+      // same USVString (two different lone surrogates are both U+FFFD) are
+      // one entry, which keeps its place and takes the later value.
+      if Positions.TryGetValue(Param.Name, Position) then
+        FList[Position] := Param
+      else
       begin
-        FList[I] := Param;
-        Found := True;
-        Break;
+        Positions.Add(Param.Name, FList.Count);
+        FList.Add(Param);
       end;
-    if not Found then
-      FList.Add(Param);
+    end;
+  finally
+    Positions.Free;
   end;
 end;
 
