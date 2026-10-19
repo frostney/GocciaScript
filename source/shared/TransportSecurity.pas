@@ -41,15 +41,16 @@ type
   end;
 
 { ADeadlineNanoseconds is the request's deadline on the GetNanoseconds clock,
-  or 0 for none. The handshake and every later read and write end by it, however
-  the peer paces its bytes: a TLS record that trickles in cannot hold one call
-  past the deadline. A handshake past the deadline raises; a read or write
-  past it returns -1 with the socket's timeout error (EAGAIN or WSAETIMEDOUT)
-  left as a plain socket call leaves it. Otherwise both return the byte count,
-  or 0 when the peer closed the connection. }
+  or 0 (the default) for none. The handshake and every later read and write
+  end by it, however the peer paces its bytes. A handshake past the deadline
+  raises. Past it, OpenSSL's read and write return -1 with EAGAIN in errno, as
+  a plain receive that timed out leaves it, and SecureTransport's and
+  SChannel's raise their read or write error. Otherwise both return the byte
+  count, or 0 when the peer closed the connection. The OpenSSL backend puts
+  the socket in non-blocking mode for the rest of the connection. }
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
   const ASocket: TSocket; const AHost: string;
-  const ADeadlineNanoseconds: Int64);
+  const ADeadlineNanoseconds: Int64 = 0);
 procedure CloseTransportSecurity(var AConnection: TTransportSecurityConnection);
 function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
