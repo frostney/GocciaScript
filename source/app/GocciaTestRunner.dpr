@@ -139,6 +139,7 @@ type
 
   TTestWorkerDataArray = array[0..MaxInt div SizeOf(TTestWorkerData) - 1] of TTestWorkerData;
   PTestWorkerDataArray = ^TTestWorkerDataArray;
+  TTestWorkerDataDynArray = array of TTestWorkerData;
 
   TTestFileResult = record
     TestResult: TGocciaObjectValue;
@@ -1565,11 +1566,24 @@ begin
     TGarbageCollector.Instance.Collect;
 end;
 
+{ A worker the watchdog abandoned takes no further file, but it may still be
+  inside TestWorkerProc for the file it was on, which writes that file's
+  WorkerData slot when it returns. Take one more reference to the array and
+  never release it, so the block outlives that write: neither this
+  function's exit nor the program's finalization frees it. }
+procedure KeepWorkerDataAlive(const AWorkerData: TTestWorkerDataDynArray);
+var
+  Holder: Pointer;
+begin
+  Holder := nil;
+  TTestWorkerDataDynArray(Holder) := AWorkerData;
+end;
+
 function TTestRunnerApp.RunScriptsFromFilesParallel(
   const AFiles: TStringList; const AJobCount: Integer): TAggregatedTestResult;
 var
   Pool: TGocciaThreadPool;
-  WorkerData: array of TTestWorkerData;
+  WorkerData: TTestWorkerDataDynArray;
   { Synthesised results for orphaned slots.  We deliberately keep these in a
     main-thread-only array instead of writing them into WorkerData, because
     an abandoned worker that unsticks later in native code will resume
@@ -1732,7 +1746,21 @@ begin
         Continue;
       end;
 
-      if Pool.Results[I].ErrorMessage <> '' then
+      if StartsStr('TIMEOUT', Pool.Results[I].ErrorMessage) then
+      begin
+        { The file an abandoned worker was on. That worker may still be in
+          TestWorkerProc for it and write WorkerData[I] when it returns, so
+          neither read nor write the slot: report the watchdog's TIMEOUT
+          from OrphanResults. }
+        IsOrphan[I] := True;
+        OrphanResults[I].ErrorMessage := Pool.Results[I].ErrorMessage;
+        OrphanResults[I].Failed := 1;
+        OrphanResults[I].TotalRunTests := 1;
+        SetLength(OrphanResults[I].FailedTestNames, 1);
+        OrphanResults[I].FailedTestNames[0] := AFiles[I] + ': ' +
+          OrphanResults[I].ErrorMessage;
+      end
+      else if Pool.Results[I].ErrorMessage <> '' then
       begin
         if WorkerData[I].ErrorMessage = '' then
         begin
@@ -1753,14 +1781,13 @@ begin
               (WorkerData[I].Failed = 0) and
               (WorkerData[I].TotalRunTests = 0) then
       begin
-        { Stuck-worker slot: the worker is still alive in native code and
-          may eventually unstick and resume writing to WorkerData[I]
-          itself.  Park the synthesis in OrphanResults[I] so we never
-          touch the managed fields the orphan owns. }
+        { No result and no TIMEOUT: the watchdog abandoned every worker
+          before one took this file, and an abandoned worker takes no
+          further file, so it never ran. }
         IsOrphan[I] := True;
         OrphanResults[I].ErrorMessage :=
-          'Worker produced no result (likely stalled in native code and ' +
-          'was orphaned by the watchdog)';
+          'Never ran: the watchdog abandoned every worker before this ' +
+          'file was taken';
         OrphanResults[I].Failed := 1;
         OrphanResults[I].TotalRunTests := 1;
         SetLength(OrphanResults[I].FailedTestNames, 1);
@@ -1770,6 +1797,8 @@ begin
     end;
   finally
     FActiveCancelFlag := nil;
+    if Pool.AnyWorkerAbandoned then
+      KeepWorkerDataAlive(WorkerData);
     Pool.Free;
   end;
 

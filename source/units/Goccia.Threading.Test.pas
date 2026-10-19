@@ -6,6 +6,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   CriticalSections,
   Classes,
+  SyncObjs,
   SysUtils,
 
   Goccia.GarbageCollector,
@@ -36,6 +37,9 @@ type
     procedure TestPoolSingleWorker;
     procedure TestThreadCleanupRegistryRunsRegistered;
     procedure TestShutdownThreadRuntimeDrainsRegistryPerWorker;
+    procedure TestAbandonedBeforeFileRunsNoFile;
+    procedure TestAbandonedAfterFileReturnsRunsNoFurtherFile;
+    procedure TestAbandonedBetweenFilesRunsNoFurtherFile;
   end;
 
 { Helpers }
@@ -114,7 +118,13 @@ type
     procedure SlowCountingWorker(const AFileName: string;
       const AIndex: Integer; out AConsoleOutput: string;
       out AErrorMessage: string; AData: Pointer);
+    { Counts every invocation and writes into the file's GSlots block. }
+    procedure SlotWorker(const AFileName: string;
+      const AIndex: Integer; out AConsoleOutput: string;
+      out AErrorMessage: string; AData: Pointer);
   end;
+
+
 
 { Release gate for the stalling worker.  Guarded rather than a bare
   Boolean: this file is the regression suite for an unsynchronised
@@ -149,6 +159,52 @@ function WorkerExitCount: Integer;
 begin
   ReadMemoryBarrier;
   Result := GSentinelWorkerCount;
+end;
+
+{ Abandon seam (SetThreadPoolHooksForTesting).  ParkCheckpoint stops the
+  worker that reaches GParkAt on file GParkFile until the test releases it;
+  ParkedWorkerStalled tells the watchdog to abandon exactly that worker, so
+  the abandonment happens at the chosen point and nowhere else, with no
+  dependence on how long anything takes. }
+var
+  GParkAt: TGocciaWorkerCheckpoint;
+  GParkFile: Integer;
+  GParkedWorker: TObject;
+  GParkRelease: TEvent;
+  { Per-file blocks the slot worker writes into, standing in for a host's
+    per-file result data (GocciaTestRunner's WorkerData).  The test frees
+    the blocks of files the pool reports as never run, as a host may once
+    RunAll has returned. }
+  GSlots: array of PByte;
+
+const
+  SLOT_SIZE = 64;
+  { The slot worker writes into the middle of its block, clear of any
+    allocator bookkeeping at the start of a freed block. }
+  SLOT_WRITE_OFFSET = 32;
+
+procedure ParkCheckpoint(const AWorker: TObject;
+  const ACheckpoint: TGocciaWorkerCheckpoint; const AFileIndex: Integer);
+begin
+  if (ACheckpoint <> GParkAt) or (AFileIndex <> GParkFile) then
+    Exit;
+  CriticalSectionEnter(GWorkerLock);
+  try
+    GParkedWorker := AWorker;
+  finally
+    CriticalSectionLeave(GWorkerLock);
+  end;
+  GParkRelease.WaitFor(INFINITE);
+end;
+
+function ParkedWorkerStalled(const AWorker: TObject): Boolean;
+begin
+  CriticalSectionEnter(GWorkerLock);
+  try
+    Result := Assigned(GParkedWorker) and (AWorker = GParkedWorker);
+  finally
+    CriticalSectionLeave(GWorkerLock);
+  end;
 end;
 
 procedure TTestWorkerHost.CountingWorker(const AFileName: string;
@@ -245,6 +301,23 @@ begin
   AErrorMessage := 'deliberate failure after resuming';
 end;
 
+procedure TTestWorkerHost.SlotWorker(const AFileName: string;
+  const AIndex: Integer; out AConsoleOutput: string;
+  out AErrorMessage: string; AData: Pointer);
+begin
+  AConsoleOutput := '';
+  AErrorMessage := '';
+  CriticalSectionEnter(GWorkerLock);
+  try
+    Inc(GWorkerCallCount);
+    SetLength(GWorkerFileNames, Length(GWorkerFileNames) + 1);
+    GWorkerFileNames[High(GWorkerFileNames)] := AFileName;
+  finally
+    CriticalSectionLeave(GWorkerLock);
+  end;
+  GSlots[AIndex][SLOT_WRITE_OFFSET] := 1;
+end;
+
 procedure TTestWorkerHost.SlowCountingWorker(const AFileName: string;
   const AIndex: Integer; out AConsoleOutput: string;
   out AErrorMessage: string; AData: Pointer);
@@ -296,6 +369,12 @@ begin
     reach of a straggler even if that join ever regressed. }
   Test('Resumed abandoned worker cannot cancel a later run',
     TestResumedAbandonedWorkerCannotCancelLaterRun);
+  Test('A worker abandoned before its file runs runs no file',
+    TestAbandonedBeforeFileRunsNoFile);
+  Test('A worker abandoned after its file returned runs no further file',
+    TestAbandonedAfterFileReturnsRunsNoFurtherFile);
+  Test('A worker abandoned between files runs no further file',
+    TestAbandonedBetweenFilesRunsNoFurtherFile);
 end;
 
 procedure TTestThreading.TestWorkQueueDrainsAllItems;
@@ -750,6 +829,151 @@ begin
   finally
     Files.Free;
     Host.Free;
+  end;
+end;
+
+{ Runs ACount files ('f0.js'...) on one worker with the abandon seam set to
+  park at ACheckpoint on file AParkFile.  Once RunAll returns it frees the
+  slot of every file the pool reports as never run, releases the abandoned
+  worker and waits for it to exit, then returns the files it called back
+  for, in order, joined with ','. }
+function RunAbandonedAt(const ACheckpoint: TGocciaWorkerCheckpoint;
+  const AParkFile, ACount: Integer;
+  out AResults: TGocciaWorkerResultArray): string;
+const
+  { A watchdog window no run reaches, so only the stall hook abandons. }
+  NEVER_BY_TIME_MS = 60 * 60 * 1000;
+  { Guards the test against a worker that never exits; the wait ends as
+    soon as it does. }
+  EXIT_GUARD_MS = 60 * 1000;
+var
+  Pool: TGocciaThreadPool;
+  Files: TStringList;
+  Host: TTestWorkerHost;
+  ExitBaseline, I, WaitedMs: Integer;
+  Freed: array of Boolean;
+begin
+  ResetWorkerState;
+  GParkAt := ACheckpoint;
+  GParkFile := AParkFile;
+  GParkedWorker := nil;
+  GParkRelease := TEvent.Create(nil, True, False, '');
+  SetLength(GSlots, ACount);
+  SetLength(Freed, ACount);
+  for I := 0 to ACount - 1 do
+  begin
+    GSlots[I] := AllocMem(SLOT_SIZE);
+    Freed[I] := False;
+  end;
+  ExitBaseline := WorkerExitCount;
+  Host := TTestWorkerHost.Create;
+  Files := TStringList.Create;
+  Pool := TGocciaThreadPool.Create(1);
+  try
+    for I := 0 to ACount - 1 do
+      Files.Add('f' + IntToStr(I) + '.js');
+    SetThreadPoolHooksForTesting(@ParkCheckpoint, @ParkedWorkerStalled);
+    try
+      Pool.RunAll(Files, Host.SlotWorker, nil, NEVER_BY_TIME_MS);
+    finally
+      SetThreadPoolHooksForTesting(nil, nil);
+    end;
+    AResults := Copy(Pool.Results);
+
+    { A file the pool reports as never run (no result, no TIMEOUT) is one
+      nothing may touch any more. }
+    for I := 0 to ACount - 1 do
+      if (not AResults[I].Success) and (AResults[I].ErrorMessage = '') then
+      begin
+        FreeMem(GSlots[I]);
+        Freed[I] := True;
+      end;
+
+    GParkRelease.SetEvent;
+    WaitedMs := 0;
+    while (WorkerExitCount - ExitBaseline < 1) and
+        (WaitedMs < EXIT_GUARD_MS) do
+    begin
+      Sleep(1);
+      Inc(WaitedMs);
+    end;
+    Expect<Integer>(WorkerExitCount - ExitBaseline).ToBe(1);
+
+    CriticalSectionEnter(GWorkerLock);
+    try
+      Result := '';
+      for I := 0 to High(GWorkerFileNames) do
+      begin
+        if I > 0 then
+          Result := Result + ',';
+        Result := Result + GWorkerFileNames[I];
+      end;
+    finally
+      CriticalSectionLeave(GWorkerLock);
+    end;
+  finally
+    Pool.Free;
+    Files.Free;
+    Host.Free;
+    for I := 0 to ACount - 1 do
+      if not Freed[I] then
+        FreeMem(GSlots[I]);
+    SetLength(GSlots, 0);
+    FreeAndNil(GParkRelease);
+  end;
+end;
+
+function IsTimeout(const AResult: TGocciaWorkerResult): Boolean;
+begin
+  Result := (not AResult.Success) and
+    (Pos('TIMEOUT', AResult.ErrorMessage) = 1);
+end;
+
+{ The watchdog abandons the worker after it took f0.js and before it ran it.
+  The file is reported as timed out, and the worker, once it runs on, starts
+  neither that file nor any other: the run has already been reported. }
+procedure TTestThreading.TestAbandonedBeforeFileRunsNoFile;
+var
+  Results: TGocciaWorkerResultArray;
+begin
+  Expect<string>(RunAbandonedAt(wcDequeued, 0, 6, Results)).ToBe('');
+  Expect<Boolean>(IsTimeout(Results[0])).ToBe(True);
+  Expect<Boolean>(Results[1].Success).ToBe(False);
+  Expect<string>(Results[1].ErrorMessage).ToBe('');
+end;
+
+{ Abandoned after f2.js returned but before its result was recorded: f0 and
+  f1 keep their results, f2 is reported as timed out, and the worker runs
+  no further file. }
+procedure TTestThreading.TestAbandonedAfterFileReturnsRunsNoFurtherFile;
+var
+  Results: TGocciaWorkerResultArray;
+begin
+  Expect<string>(RunAbandonedAt(wcFileReturned, 2, 6, Results))
+    .ToBe('f0.js,f1.js,f2.js');
+  Expect<Boolean>(Results[0].Success).ToBe(True);
+  Expect<Boolean>(Results[1].Success).ToBe(True);
+  Expect<Boolean>(IsTimeout(Results[2])).ToBe(True);
+  Expect<Boolean>(Results[3].Success).ToBe(False);
+  Expect<string>(Results[3].ErrorMessage).ToBe('');
+end;
+
+{ Abandoned between files, after f1.js's result was recorded: both results
+  stand, nothing is reported as timed out, and the worker takes no further
+  file. }
+procedure TTestThreading.TestAbandonedBetweenFilesRunsNoFurtherFile;
+var
+  Results: TGocciaWorkerResultArray;
+  I: Integer;
+begin
+  Expect<string>(RunAbandonedAt(wcFileRecorded, 1, 6, Results))
+    .ToBe('f0.js,f1.js');
+  Expect<Boolean>(Results[0].Success).ToBe(True);
+  Expect<Boolean>(Results[1].Success).ToBe(True);
+  for I := 2 to 5 do
+  begin
+    Expect<Boolean>(Results[I].Success).ToBe(False);
+    Expect<string>(Results[I].ErrorMessage).ToBe('');
   end;
 end;
 
