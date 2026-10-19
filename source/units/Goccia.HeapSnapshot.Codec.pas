@@ -617,7 +617,7 @@ type
     Prototype: TGocciaObjectValue;
     Extensible, Frozen, Sealed, HadIndexed: Boolean;
     IsFunction, HasOwnLength, HasOwnName: Boolean;
-    IsArray, LengthWritable: Boolean;
+    IsArray, LengthWritable, HasElement: Boolean;
     IsClass, NameDeleted, LengthDeleted: Boolean;
     ArrayLength: Int64;
     Keys: array of string;
@@ -3341,6 +3341,8 @@ begin
         begin
           Poll;
           Pending.PreparedElements[J] := ReadElementValue;
+          if Pending.PreparedElements[J] <> TGocciaHoleValue.HoleValue then
+            Pending.HasElement := True;
         end;
       end;
 
@@ -3550,11 +3552,12 @@ begin
       Pending.PreparedElements := nil;
     end;
     // Once an object has had an index key, it has for good: the fast paths
-    // for arrays trust that, so the snapshot's word is not taken alone.
+    // for arrays trust that, so the snapshot's word is not taken alone. A
+    // dense element is one too.
     Pending.Target.SetIntegrityForRestore(Pending.Extensible, Pending.Frozen,
       Pending.Sealed, Pending.HadIndexed or
       Pending.Target.HasEverHadIndexedOwnProperty or
-      Pending.Prepared.HasIndexKey);
+      Pending.Prepared.HasIndexKey or Pending.HasElement);
   end;
 end;
 

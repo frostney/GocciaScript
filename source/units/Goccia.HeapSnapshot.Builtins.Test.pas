@@ -1136,6 +1136,24 @@ var
   Bytes: TBytes;
   At: Integer;
 begin
+  // A dense element of a built-in array is an index key too.
+  Bytes := Snapshot('(() => { Array.prototype[0] = 1; return {}; })()',
+    Refusal);
+  Expect<string>(Refusal).ToBe('');
+  At := DifferencesAt(Bytes) + 4;
+  Expect<Integer>(Bytes[At + 4]).ToBe(HSV_BUILTIN);
+  Bytes[At + 12] := 0;
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    Expect<Boolean>(TGocciaObjectValue(Engine.EvaluateGlobalEval(
+      'Array.prototype', TEST_PATH, Stage)).HasEverHadIndexedOwnProperty)
+      .ToBe(True);
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
   Bytes := Snapshot('(() => { Object.prototype[5] = 1; return {}; })()',
     Refusal);
   Expect<string>(Refusal).ToBe('');
