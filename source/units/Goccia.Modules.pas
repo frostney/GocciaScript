@@ -2326,11 +2326,23 @@ begin
     AReader.Refuse('a namespace object its module does not hold');
 end;
 
+{ A heap snapshot restore (ADR 0148) names the module source prototypes by
+  their realm slots, filled with the first module source; both are built
+  here as that would. }
+procedure MaterializeModuleSourcePrototypes;
+begin
+  TGocciaModuleSourceValue.SharedModuleSourcePrototype;
+end;
+
 initialization
   GModuleSourcePrototypeSlot := RegisterRealmSlot(
     'AbstractModuleSource.prototype');
   GJSModuleSourcePrototypeSlot := RegisterRealmSlot(
     'ModuleSource.prototype');
+  RegisterSnapshotSlotMaterializer('AbstractModuleSource.prototype',
+    @MaterializeModuleSourcePrototypes);
+  RegisterSnapshotSlotMaterializer('ModuleSource.prototype',
+    @MaterializeModuleSourcePrototypes);
   RegisterSnapshotCodec(TGocciaModuleNamespaceObject,
     TModuleNamespaceSnapshotCodec.Create);
 

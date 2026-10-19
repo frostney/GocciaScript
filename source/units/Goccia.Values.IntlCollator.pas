@@ -49,6 +49,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -540,5 +541,6 @@ end;
 
 initialization
   GIntlCollatorSharedSlot := RegisterRealmOwnedSlot('Intl.Collator.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.Collator.shared', 'Intl.Collator');
 
 end.

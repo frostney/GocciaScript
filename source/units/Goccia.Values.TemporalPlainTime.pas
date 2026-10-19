@@ -66,6 +66,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
@@ -732,5 +733,6 @@ end;
 
 initialization
   GTemporalPlainTimeSharedSlot := RegisterRealmOwnedSlot('Temporal.PlainTime.shared');
+  RegisterSnapshotSlotGlobalPath('Temporal.PlainTime.shared', 'Temporal.PlainTime');
 
 end.

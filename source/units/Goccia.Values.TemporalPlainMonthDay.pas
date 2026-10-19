@@ -62,6 +62,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.Options,
@@ -898,5 +899,6 @@ end;
 
 initialization
   GTemporalPlainMonthDaySharedSlot := RegisterRealmOwnedSlot('Temporal.PlainMonthDay.shared');
+  RegisterSnapshotSlotGlobalPath('Temporal.PlainMonthDay.shared', 'Temporal.PlainMonthDay');
 
 end.
