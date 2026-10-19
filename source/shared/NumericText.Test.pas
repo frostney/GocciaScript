@@ -24,6 +24,7 @@ type
     procedure TestDecimalRoundingBoundaries;
     procedure TestFastPathMatchesExactConversion;
     procedure TestShortDecimalAllocations;
+    procedure TestEveryRoundingModeConvertsToNearest;
     procedure TestShortestNumberFormatting;
     procedure TestIntegerFormatting;
     procedure TestSignedZero;
@@ -60,6 +61,8 @@ begin
     TestDecimalRoundingBoundaries);
   Test('the fast path converts as the exact conversion does',
     TestFastPathMatchesExactConversion);
+  Test('every floating-point rounding mode converts to nearest, ties to even',
+    TestEveryRoundingModeConvertsToNearest);
   Test('a short decimal converts without per-digit allocations',
     TestShortDecimalAllocations);
   Test('number formatting emits ECMAScript shortest decimals',
@@ -223,11 +226,47 @@ begin
   StartCountingAllocations;
   Value := DecimalTextToNumber('1');
   Value := Value + DecimalTextToNumber('30000');
+  {$IF DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_AARCH64)}
+  // A fraction takes the fast path only where one division rounds once.
   Value := Value + DecimalTextToNumber('1.25');
   Allocations := StopCountingAllocations;
   Expect<Double>(Value).ToBe(30002.25);
+  {$ELSE}
+  Allocations := StopCountingAllocations;
+  Expect<Double>(Value).ToBe(30001);
+  {$ENDIF}
   if Allocations > 6 then
     Fail(Format('%d allocations; expected at most 6', [Allocations]));
+end;
+
+// The conversion's result must not depend on the floating-point rounding
+// mode a host left set.
+procedure TNumericTextTests.TestEveryRoundingModeConvertsToNearest;
+const
+  INPUTS: array[0..5] of string = ('0.1', '1.25', '3.14159', '1e22',
+    '123456789012345e-17', '9007199254740993');
+  MODES: array[0..3] of TFPURoundingMode = (rmNearest, rmDown, rmUp,
+    rmTruncate);
+var
+  Expected: array[0..5] of UInt64;
+  Previous: TFPURoundingMode;
+  I, M: Integer;
+begin
+  for I := 0 to High(INPUTS) do
+    Expected[I] := DoubleToBits(ExactDecimalTextToNumber(INPUTS[I]));
+  Previous := GetRoundMode;
+  try
+    for M := 0 to High(MODES) do
+    begin
+      SetRoundMode(MODES[M]);
+      for I := 0 to High(INPUTS) do
+        if DoubleToBits(DecimalTextToNumber(INPUTS[I])) <> Expected[I] then
+          Fail(Format('%s under rounding mode %d', [INPUTS[I], Ord(MODES[M])]));
+    end;
+  finally
+    SetRoundMode(Previous);
+  end;
+  Expect<Boolean>(True).ToBe(True);
 end;
 
 procedure TNumericTextTests.TestShortestNumberFormatting;

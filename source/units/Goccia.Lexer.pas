@@ -1495,7 +1495,7 @@ end;
 
 procedure TGocciaLexer.ScanIdentifier;
 var
-  ByteLength: Integer;
+  ByteLength, Index: Integer;
   CodePoint: Cardinal;
   SB: TStringBuffer;
   EscapedText: string;
@@ -1523,10 +1523,8 @@ begin
     begin
       // Appended from the source in place: a one-character string per
       // identifier character would be an allocation per character.
-      if ByteLength = 1 then
-        SB.AppendChar(FSource[FCurrent])
-      else
-        SB.Append(Copy(FSource, FCurrent, ByteLength));
+      for Index := 0 to ByteLength - 1 do
+        SB.AppendChar(FSource[FCurrent + Index]);
       Inc(FCurrent, ByteLength);
       Inc(FColumn, ByteLength);
     end

@@ -2,7 +2,7 @@ name: Fuzz and memory safety
 
 # Coverage-blind crash fuzzing plus memory-safety tooling over the JavaScript
 # suite. Scheduled rather than per-PR: a useful fuzz run takes far longer than
-# a PR should wait, and Valgrind slows the suite by roughly an order of
+# a PR should wait, and Valgrind slows the suite by about two orders of
 # magnitude. PR-time coverage stays with the ordinary suite in pr.yml.
 #
 # Cadence: nightly (03:00 UTC). Manual trigger available via workflow_dispatch,

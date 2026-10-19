@@ -1035,9 +1035,13 @@ end;
 // Accurately", PLDI 1990). A significand of at most 2^53 and a power of ten up
 // to 10^22 are exact binary64 values, so a single IEEE-754 multiplication or
 // division by the power rounds the exact value once, to nearest, ties to
-// even: the value StringNumericValue specifies. The x87 FPU of an i386 build
-// rounds to a 64-bit significand first and could round twice, so there only
-// an exact product is taken. Anything else takes the exact rational path.
+// even: the value StringNumericValue specifies. That holds only in the
+// round-to-nearest mode, and a host may run this outside the engine's
+// floating-point setup, so an inexact product or quotient is taken only when
+// the mode is nearest; an exact product is exact in every mode. The x87 FPU
+// of an i386 build rounds to a 64-bit significand first and could round
+// twice, so there only an exact product is taken. Anything else takes the
+// exact rational path.
 function TryFastDecimalToNumber(const ADigits: string;
   const ADecimalExponent: Int64; const ANegative: Boolean;
   out ANumber: Double): Boolean;
@@ -1057,12 +1061,19 @@ begin
   if (ADecimalExponent > EXACT_POWER_OF_TEN_LIMIT) or
      (ADecimalExponent < -EXACT_POWER_OF_TEN_LIMIT) then
     Exit;
-  {$IF NOT (DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_AARCH64))}
-  if (ADecimalExponent < 0) or (ADecimalExponent > EXACT_INTEGER_POWER_OF_TEN_LIMIT) or
+  if (ADecimalExponent < 0) or
+     (ADecimalExponent > EXACT_INTEGER_POWER_OF_TEN_LIMIT) or
      (Significand > EXACT_DOUBLE_INTEGER_LIMIT div
        (RYU_SMALL_POWER_OF_FIVE[ADecimalExponent] shl ADecimalExponent)) then
+  begin
+    // Inexact: one rounding, so nearest mode on a binary64 FPU only.
+    {$IF DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_AARCH64)}
+    if GetRoundMode <> rmNearest then
+      Exit;
+    {$ELSE}
     Exit;
-  {$ENDIF}
+    {$ENDIF}
+  end;
 
   ANumber := Significand;
   if ADecimalExponent > 0 then
