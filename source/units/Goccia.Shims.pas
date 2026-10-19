@@ -134,7 +134,11 @@ function GetDateIntrinsic(const ALoader: TGocciaShimLoader): TGocciaValue;
 
 { Keeps ALoader in its realm, so what fills a shim's realm slot outside a
   script, a heap snapshot restore (ADR 0148), loads the shim as that
-  realm's engine does. TGocciaEngine calls it once its loader is set up. }
+  realm's engine does, and keeps the built-ins a shim uses while it loads
+  (WeakMap, Object.defineProperty, Number.parseInt, Number.parseFloat) as
+  they are now, before any script runs: a load is then the same whatever a
+  script did to those globals. TGocciaEngine calls it once its loader is set
+  up. }
 procedure RememberShimLoader(const ALoader: TGocciaShimLoader);
 
 { Whether AObject was created while ARealm loaded a shim (its module scope,
@@ -166,7 +170,8 @@ uses
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.DateData,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue;
 
 const
   DATE_SHIM_NAME = 'Date';
@@ -243,12 +248,12 @@ const
     ( // ES2027 §19.2.5 — legacy parseInt via Number.parseInt
       Name: 'parseInt';
       FileName: '<shim:parseInt>';
-      Source: 'export const parseInt = Number.parseInt;'
+      Source: 'export const parseInt = __GocciaNumberParseInt;'
     ),
     ( // ES2027 §19.2.4 — legacy parseFloat via Number.parseFloat
       Name: 'parseFloat';
       FileName: '<shim:parseFloat>';
-      Source: 'export const parseFloat = Number.parseFloat;'
+      Source: 'export const parseFloat = __GocciaNumberParseFloat;'
     ),
     ( // ES2027 §19.2.2 — legacy isNaN (coerces argument to number)
       Name: 'isNaN';
@@ -597,7 +602,7 @@ const
         '  catch (e) {}'#10 +
         '  return NaN;'#10 +
         '};'#10 +
-        'const __GocciaDateSlots = new WeakMap();'#10 +
+        'const __GocciaDateSlots = new __GocciaWeakMap();'#10 +
         'const __GocciaDateIsObject = (value: any): boolean =>'#10 +
         '  (typeof value === "object" && value !== null) || typeof value === "function";'#10 +
         '// A Date of another realm keeps its time value in that realm''s map;'#10 +
@@ -714,7 +719,7 @@ const
         '  static #utc(date: any): any { const ms: number = Date.#get(date); return Number.isFinite(ms) ? new Temporal.ZonedDateTime(BigInt(ms) * 1000000n, "UTC") : null; }'#10 +
         '  getTime(): number { return __GocciaDateGetSlot(this); }'#10 +
         '  valueOf(): number { return __GocciaDateGetSlot(this); }'#10 +
-        '  [Symbol.toPrimitive](hint: string): any {'#10 +
+        '  [__GocciaToPrimitive](hint: string): any {'#10 +
         '    if (!__GocciaDateIsObject(this)) throw new TypeError("Date.prototype[Symbol.toPrimitive] called on non-object");'#10 +
         '    if (hint === "string" || hint === "default") return __GocciaDateOrdinaryToPrimitive(this, "string");'#10 +
         '    if (hint === "number") return __GocciaDateOrdinaryToPrimitive(this, "number");'#10 +
@@ -950,15 +955,15 @@ const
         '  }'#10 +
         '  __GocciaDateSlots.set(this, ms);'#10 +
         '};'#10 +
-        'Object.defineProperty(__GocciaDateConstructor, "name", { value: "Date", configurable: true });'#10 +
-        'Object.defineProperty(__GocciaDateConstructor, "length", { value: 7, configurable: true });'#10 +
-        'Object.defineProperty(__GocciaDateClass.UTC, "length", { value: 7, configurable: true });'#10 +
-        'Object.defineProperty(__GocciaDateClass.prototype, Symbol.toPrimitive, { writable: false, configurable: true });'#10 +
-        'Object.defineProperty(__GocciaDateConstructor, "now", { value: __GocciaDateClass.now, writable: true, configurable: true });'#10 +
-        'Object.defineProperty(__GocciaDateConstructor, "parse", { value: __GocciaDateClass.parse, writable: true, configurable: true });'#10 +
-        'Object.defineProperty(__GocciaDateConstructor, "UTC", { value: __GocciaDateClass.UTC, writable: true, configurable: true });'#10 +
-        'Object.defineProperty(__GocciaDateConstructor, "prototype", { value: __GocciaDateClass.prototype, writable: false, configurable: false });'#10 +
-        'Object.defineProperty(__GocciaDateClass.prototype, "constructor", { value: __GocciaDateConstructor, writable: true, configurable: true });'#10 +
+        '__GocciaDefineProperty(__GocciaDateConstructor, "name", { value: "Date", configurable: true });'#10 +
+        '__GocciaDefineProperty(__GocciaDateConstructor, "length", { value: 7, configurable: true });'#10 +
+        '__GocciaDefineProperty(__GocciaDateClass.UTC, "length", { value: 7, configurable: true });'#10 +
+        '__GocciaDefineProperty(__GocciaDateClass.prototype, __GocciaToPrimitive, { writable: false, configurable: true });'#10 +
+        '__GocciaDefineProperty(__GocciaDateConstructor, "now", { value: __GocciaDateClass.now, writable: true, configurable: true });'#10 +
+        '__GocciaDefineProperty(__GocciaDateConstructor, "parse", { value: __GocciaDateClass.parse, writable: true, configurable: true });'#10 +
+        '__GocciaDefineProperty(__GocciaDateConstructor, "UTC", { value: __GocciaDateClass.UTC, writable: true, configurable: true });'#10 +
+        '__GocciaDefineProperty(__GocciaDateConstructor, "prototype", { value: __GocciaDateClass.prototype, writable: false, configurable: false });'#10 +
+        '__GocciaDefineProperty(__GocciaDateClass.prototype, "constructor", { value: __GocciaDateConstructor, writable: true, configurable: true });'#10 +
         'export const Date = __GocciaDateConstructor;'
     ),
     ( // toLocaleString for Number/Array via Intl, installed as lazy members of
@@ -1184,6 +1189,19 @@ begin
 end;
 
 type
+  // The built-ins a shim uses while it loads, bound in its module
+  // environment under SHIM_INTRINSIC_NAMES.
+  TGocciaShimIntrinsic = (siWeakMap, siDefineProperty, siParseInt,
+    siParseFloat);
+
+const
+  SHIM_INTRINSIC_NAMES: array[TGocciaShimIntrinsic] of string = (
+    '__GocciaWeakMap', '__GocciaDefineProperty', '__GocciaNumberParseInt',
+    '__GocciaNumberParseFloat');
+
+type
+  TGocciaShimIntrinsics = array[TGocciaShimIntrinsic] of TGocciaValue;
+
   { A shim load's markers: the collector lists what the load created
     between them. }
   TGocciaShimLoadWindow = record
@@ -1200,6 +1218,7 @@ type
     FWindows: TList<TGocciaShimLoadWindow>;
   public
     Loader: TGocciaShimLoader;
+    Intrinsics: TGocciaShimIntrinsics;
     destructor Destroy; override;
     function AddMarker: TGCManagedObject;
     procedure AddWindow(const AFirst, ALast: TGCManagedObject;
@@ -1238,10 +1257,78 @@ end;
 procedure TGocciaShimLoaderHolder.MarkRootReferences;
 var
   I: Integer;
+  Intrinsic: TGocciaShimIntrinsic;
 begin
   if Assigned(FMarkers) then
     for I := 0 to FMarkers.Count - 1 do
       FMarkers[I].MarkReferences;
+  for Intrinsic := Low(Intrinsic) to High(Intrinsic) do
+    if Assigned(Intrinsics[Intrinsic]) then
+      Intrinsics[Intrinsic].MarkReferences;
+end;
+
+// AObject's own data property AName, or nil; reads no getter.
+function OwnDataValue(const AObject: TObject;
+  const AName: string): TGocciaValue;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := nil;
+  if not (AObject is TGocciaObjectValue) then
+    Exit;
+  Descriptor := TGocciaObjectValue(AObject).GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorData then
+    Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+  ReleaseDescriptor(Descriptor);
+end;
+
+// What ARealm's globals hold now for the built-ins a shim loads with.
+function CaptureShimIntrinsics(
+  const ARealm: TGocciaRealm): TGocciaShimIntrinsics;
+var
+  Global: TObject;
+begin
+  Result := Default(TGocciaShimIntrinsics);
+  if not Assigned(ARealm) then
+    Exit;
+  Global := ARealm.GlobalObject;
+  Result[siWeakMap] := OwnDataValue(Global, 'WeakMap');
+  Result[siDefineProperty] := OwnDataValue(OwnDataValue(Global, 'Object'),
+    'defineProperty');
+  Result[siParseInt] := OwnDataValue(OwnDataValue(Global, 'Number'),
+    'parseInt');
+  Result[siParseFloat] := OwnDataValue(OwnDataValue(Global, 'Number'),
+    'parseFloat');
+end;
+
+// Binds in AScope what shim AIndex uses while it loads.
+procedure DefineShimIntrinsics(const AScope: TGocciaScope;
+  const AIndex: Integer; const AIntrinsics: TGocciaShimIntrinsics);
+
+  procedure Bind(const AIntrinsic: TGocciaShimIntrinsic);
+  var
+    Value: TGocciaValue;
+  begin
+    Value := AIntrinsics[AIntrinsic];
+    if not Assigned(Value) then
+      Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    AScope.DefineLexicalBinding(SHIM_INTRINSIC_NAMES[AIntrinsic], Value,
+      dtConst);
+  end;
+
+begin
+  if DEFAULT_SHIMS[AIndex].Name = DATE_SHIM_NAME then
+  begin
+    Bind(siWeakMap);
+    Bind(siDefineProperty);
+    // A well-known symbol, the same in every realm.
+    AScope.DefineLexicalBinding('__GocciaToPrimitive',
+      TGocciaSymbolValue.WellKnownToPrimitive, dtConst);
+  end
+  else if DEFAULT_SHIMS[AIndex].Name = 'parseInt' then
+    Bind(siParseInt)
+  else if DEFAULT_SHIMS[AIndex].Name = 'parseFloat' then
+    Bind(siParseFloat);
 end;
 
 // The current realm's holder, nil when its engine kept none.
@@ -1263,6 +1350,7 @@ var
 begin
   Holder := TGocciaShimLoaderHolder.Create;
   Holder.Loader := ALoader;
+  Holder.Intrinsics := CaptureShimIntrinsics(ALoader.Realm);
   ALoader.Realm.SetOwnedSlot(GShimLoaderSlot, Holder);
 end;
 
@@ -1339,6 +1427,11 @@ begin
     try
       ShimScope := CreateShimScope(ALoader.GlobalScope,
         DEFAULT_SHIMS[AShimIndex].Name);
+      if Assigned(Holder) then
+        DefineShimIntrinsics(ShimScope, AShimIndex, Holder.Intrinsics)
+      else
+        DefineShimIntrinsics(ShimScope, AShimIndex,
+          CaptureShimIntrinsics(CurrentRealm));
       if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
       begin
         // The Date shim's access to other realms' [[DateValue]] slots

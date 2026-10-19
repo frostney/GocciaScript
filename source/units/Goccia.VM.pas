@@ -2329,6 +2329,7 @@ type
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     function IsConstructable: Boolean; override;
+    function IsShimCode: Boolean; override;
     procedure TraceReferences; override;
   end;
 
@@ -3175,6 +3176,11 @@ begin
   FSuperClass := ASuperClass;
   FNewTarget := ANewTarget;
   FCurrentCtorClass := ACurrentCtorClass;
+end;
+
+function TGocciaBytecodeFunctionValue.IsShimCode: Boolean;
+begin
+  Result := Assigned(FClosure) and FClosure.Template.ShimCode;
 end;
 
 function TGocciaBytecodeFunctionValue.GetFunctionLength: Integer;

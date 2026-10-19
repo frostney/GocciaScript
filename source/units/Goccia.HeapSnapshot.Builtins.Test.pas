@@ -52,12 +52,18 @@ type
 const
   SEP = HEAP_SNAPSHOT_PATH_SEPARATOR;
 
-  // A run's replacement for Object.defineProperty, to be finished by the
-  // caller: while the Date shim defines Date.now, it swaps in its own
-  // function, which holds an object of its own.
-  DEFINE_NOW = '(target, key, descriptor) => { if (key === "now") { ' +
-    'const hidden = { x: 42 }; descriptor.value = ' +
-    '(class { static now() { return hidden.x; } }).now; } ';
+  // A getter the run puts on Object.prototype, which Object.defineProperty
+  // reads through each descriptor the Date shim passes it while it loads:
+  // it swaps in the run's own Date.now, which holds an object of its own.
+  // The script it is compiled in sets `now` to the Date the shim made.
+  POLLUTE_GETTER = '{ get() { if (typeof this.value === "function" && ' +
+    'this.value.name === "now") { const hidden = { x: 42 }; ' +
+    'this.value = ({ now() { return hidden.x; } }).now; } return false; }, ' +
+    'configurable: true }';
+  POLLUTE_DATE_NOW = 'Object.defineProperty(Object.prototype, "enumerable", ' +
+    POLLUTE_GETTER + '); ';
+  LOAD_POLLUTED_DATE = 'const d = Date; ' +
+    'delete Object.prototype.enumerable; ';
 
   // Realm and owned slots a fresh engine leaves empty and nothing a script
   // does fills: the host installs eval; import.meta's cache holds no shared
@@ -93,10 +99,10 @@ begin
     TestDateRefusesUntilItsCodec);
   Test('Built-ins written in JavaScript are not missed objects; the run''s are',
     TestBuiltinInternalsAreNotMissed);
-  Test('A run''s function a shim took in while it loaded is not a built-in',
-    TestShimTakesInRunFunction);
-  Test('A shim load that calls another engine''s code keeps nothing it made',
-    TestShimLoadCallsAnotherEngine);
+  Test('A shim loads with the engine''s built-ins, whatever the run did to ' +
+    'the globals', TestShimTakesInRunFunction);
+  Test('A shim load that ran the run''s code keeps nothing it made, on any ' +
+    'engine', TestShimLoadCallsAnotherEngine);
   Test('Shim code is what the engine compiled as a shim, not a file name',
     TestShimCodeIsNotItsFileName);
 end;
@@ -507,41 +513,67 @@ end;
 
 procedure THeapSnapshotBuiltinsTests.TestShimTakesInRunFunction;
 var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
   Refusal: string;
   Bytes: TBytes;
 begin
-  // The parseInt shim exports what Number.parseInt holds when it loads.
-  // What the run's function holds is the run's, though the shim's export
-  // reaches it.
-  Snapshot('(() => { const original = Number.parseInt; ' +
+  // The parseInt shim exports the engine's Number.parseInt, not what the
+  // global held when it loaded.
+  Bytes := Snapshot('(() => { const original = Number.parseInt; ' +
     'Number.parseInt = (() => { const hidden = { x: 1 }; ' +
     'return (a, b) => hidden; })(); const saved = globalThis.parseInt; ' +
     'Number.parseInt = original; return saved; })()', Refusal, True);
-  Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
-    .ToBe(True);
-  // A function that holds nothing is named as the built-in, and restores
-  // as no other engine builds it.
-  Bytes := Snapshot('(() => { const original = Number.parseInt; ' +
-    'Number.parseInt = (a, b) => 42; const saved = globalThis.parseInt; ' +
-    'Number.parseInt = original; return saved; })()', Refusal, True);
   Expect<string>(Refusal).ToBe('');
-  Refusal := RestoreRefusal(Bytes);
-  Expect<Boolean>(Pos('parseInt', Refusal) > 0).ToBe(True);
-  // A shim whose load calls the run's function (Object.defineProperty,
-  // replaced while the Date shim loads): what the load made is not taken for
-  // the shim's own, so the run's state it holds is still missed.
-  Snapshot('(() => { const define = Object.defineProperty; ' +
-    'Object.defineProperty = ' + DEFINE_NOW +
-    'return define(target, key, descriptor); }; ' +
-    'const d = Date; Object.defineProperty = define; ' +
-    'return { a: d.now() }; })()', Refusal, True);
-  Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
-    .ToBe(True);
+  Expect<string>(RestoreAndCheck(Bytes, 'String(restored("12"))')).ToBe('12');
+  // The Date shim keeps its time values in the engine's WeakMap, whatever
+  // the global held when it loaded, so a Date is one, and refuses.
+  Snapshot('(() => { const original = WeakMap; WeakMap = Map; ' +
+    'const C = Date; WeakMap = original; return new C(5); })()', Refusal,
+    True);
+  Expect<Boolean>(Pos('Date''s time value', Refusal) > 0).ToBe(True);
+  // Nor does a binding of the run's shadow what the shim loads with.
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    Engine.EvaluateGlobalEval('const __GocciaWeakMap = Map; 0', TEST_PATH,
+      Stage);
+    Expect<string>(FloatToStr(TGocciaNumberLiteralValue(
+      Engine.EvaluateGlobalEval('new Date(5).getTime()', TEST_PATH,
+      Stage)).Value)).ToBe('5');
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
   // A function's length and name are its own properties, though synthesized.
   Snapshot('(() => { delete Math.max.name; return { a: 1 }; })()', Refusal);
   Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
   Snapshot('(() => { delete Math.max.length; return { a: 1 }; })()', Refusal);
   Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
+end;
+
+// Snapshots AValue in ASession with the accounting check; the refusal, or ''.
+function SnapshotRefusal(const ASession: TGocciaHeapSnapshotSession;
+  const AValue: TGocciaValue): string;
+var
+  Stream: TBytesStream;
+begin
+  Result := '';
+  Stream := TBytesStream.Create;
+  TGarbageCollector.Instance.AddTempRoot(AValue);
+  try
+    ASession.AddToBaseline(AValue);
+    try
+      ASession.Snapshot([AValue], Stream);
+    except
+      on E: EGocciaHeapSnapshotRefused do
+        Result := E.Message;
+    end;
+  finally
+    TGarbageCollector.Instance.RemoveTempRoot(AValue);
+    Stream.Free;
+  end;
 end;
 
 procedure THeapSnapshotBuiltinsTests.TestShimLoadCallsAnotherEngine;
@@ -550,53 +582,48 @@ var
   Session: TGocciaHeapSnapshotSession;
   Lines: TStringList;
   Stage: TGocciaGlobalEvalStage;
-  ObjectConstructor: TGocciaObjectValue;
-  Trap, Value: TGocciaValue;
-  Stream: TBytesStream;
+  Value, Getter: TGocciaValue;
   Refusal: string;
+  Bytes: TBytes;
 begin
-  // A Proxy of another engine on the thread, whose apply trap runs on that
-  // engine's VM, stands in for Object.defineProperty while Date loads.
+  // On this engine: the getter runs while Date loads, and its Date.now is
+  // the run's. Unchecked, that Date.now is named as the built-in, which a
+  // restore builds as the shim's.
+  // What the load made is counted: the shim's cells among it.
+  Snapshot('(() => { ' + POLLUTE_DATE_NOW + LOAD_POLLUTED_DATE +
+    'return { a: d.now() }; })()', Refusal, True);
+  Expect<Boolean>(Pos('TGocciaBytecodeCell', Refusal) > 0).ToBe(True);
+  Bytes := Snapshot('(() => { ' + POLLUTE_DATE_NOW + LOAD_POLLUTED_DATE +
+    'return { a: d.now(), now: d.now }; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<Boolean>(Pos('Date', RestoreRefusal(Bytes)) > 0).ToBe(True);
+  // The getter of another engine on the thread, which runs on that engine's
+  // VM.
   Lines := TStringList.Create;
-  Stream := TBytesStream.Create;
   Other := TGocciaEngine.Create(TEST_PATH, Lines);
   Engine := TGocciaEngine.Create(TEST_PATH, Lines);
   Session := nil;
   try
-    ObjectConstructor := TGocciaObjectValue(
-      TGocciaObjectValue(Engine.Realm.GlobalObject).GetProperty('Object'));
-    TGocciaObjectValue(Other.Realm.GlobalObject).AssignProperty('realDefine',
-      ObjectConstructor.GetProperty('defineProperty'));
-    Trap := Other.EvaluateGlobalEval('new Proxy(realDefine, { apply: ' +
-      '(real, self, args) => (' + DEFINE_NOW + 'return 0; })' +
-      '(...args) || Reflect.apply(real, self, args) })', TEST_PATH, Stage);
-    ObjectConstructor.AssignProperty('defineProperty', Trap);
+    // Made before the run, so not the run's; installed during it.
+    Getter := TGocciaObjectValue(Other.EvaluateGlobalEval('(' +
+      POLLUTE_GETTER + ')', TEST_PATH, Stage)).GetProperty('get');
+    TGocciaObjectValue(Other.Realm.GlobalObject).AssignProperty('getter',
+      Getter);
     Session := TGocciaHeapSnapshotSession.Create(Engine);
-    Value := Engine.EvaluateGlobalEval('(() => { const d = Date; ' +
+    TGocciaObjectValue(TGocciaObjectValue(TGocciaObjectValue(
+      Engine.Realm.GlobalObject).GetProperty('Object')).GetProperty(
+      'prototype')).DefineProperty('enumerable',
+      TGocciaPropertyDescriptorAccessor.Create(Getter, nil, [pfConfigurable]));
+    Value := Engine.EvaluateGlobalEval('(() => { ' + LOAD_POLLUTED_DATE +
       'return { a: d.now() }; })()', TEST_PATH, Stage);
-    Expect<Boolean>(Value is TGocciaObjectValue).ToBe(True);
-    TGarbageCollector.Instance.AddTempRoot(Value);
-    try
-      Session.AddToBaseline(Value);
-      Refusal := '';
-      try
-        Session.Snapshot([Value], Stream);
-      except
-        on E: EGocciaHeapSnapshotRefused do
-          Refusal := E.Message;
-      end;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(Value);
-    end;
     Expect<string>(FloatToStr(TGocciaNumberLiteralValue(
       TGocciaObjectValue(Value).GetProperty('a')).Value)).ToBe('42');
-    Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
-      .ToBe(True);
+    Refusal := SnapshotRefusal(Session, Value);
+    Expect<Boolean>(Pos('TGocciaBytecodeCell', Refusal) > 0).ToBe(True);
   finally
     Session.Free;
     Engine.Free;
     Other.Free;
-    Stream.Free;
     Lines.Free;
   end;
 end;
@@ -608,39 +635,22 @@ var
   Lines: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
-  Stream: TBytesStream;
-  Refusal: string;
 begin
   // The run's code under a file name like a shim's is still the run's.
   Lines := TStringList.Create;
-  Stream := TBytesStream.Create;
   Engine := TGocciaEngine.Create(TEST_PATH, Lines);
   Session := TGocciaHeapSnapshotSession.Create(Engine);
   try
-    Value := Engine.EvaluateGlobalEval('(() => { ' +
-      'const define = Object.defineProperty; Object.defineProperty = ' +
-      DEFINE_NOW + 'return define(target, key, descriptor); }; ' +
-      'const d = Date; Object.defineProperty = define; ' +
-      'return { a: d.now() }; })()', '<shim:user>', Stage);
-    TGarbageCollector.Instance.AddTempRoot(Value);
-    try
-      Session.AddToBaseline(Value);
-      Refusal := '';
-      try
-        Session.Snapshot([Value], Stream);
-      except
-        on E: EGocciaHeapSnapshotRefused do
-          Refusal := E.Message;
-      end;
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(Value);
-    end;
-    Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
-      .ToBe(True);
+    Value := Engine.EvaluateGlobalEval('(() => { ' + POLLUTE_DATE_NOW +
+      LOAD_POLLUTED_DATE + 'return { a: d.now() }; })()', '<shim:user>',
+      Stage);
+    Expect<string>(FloatToStr(TGocciaNumberLiteralValue(
+      TGocciaObjectValue(Value).GetProperty('a')).Value)).ToBe('42');
+    Expect<Boolean>(Pos('TGocciaBytecodeCell',
+      SnapshotRefusal(Session, Value)) > 0).ToBe(True);
   finally
     Session.Free;
     Engine.Free;
-    Stream.Free;
     Lines.Free;
   end;
 end;
