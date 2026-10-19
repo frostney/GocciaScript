@@ -46,6 +46,8 @@ type
     FStamps: TDictionary<TGocciaModule, TDateTime>;
     // What reading each source module recorded, for the loader at Commit.
     FSources: TList<TGocciaModuleSnapshotSource>;
+    // The modules this restore compiled.
+    FCompiledHere: TList<TObject>;
   public
     constructor Create(const AEngine: TGocciaEngine);
     // Frees the restored records not committed.
@@ -98,6 +100,7 @@ begin
   FSeenKeys := TDictionary<string, Boolean>.Create;
   FStamps := TDictionary<TGocciaModule, TDateTime>.Create;
   FSources := TList<TGocciaModuleSnapshotSource>.Create;
+  FCompiledHere := TList<TObject>.Create;
 end;
 
 destructor TGocciaModuleSnapshotRecords.Destroy;
@@ -111,6 +114,7 @@ begin
   FSeenKeys.Free;
   FStamps.Free;
   FSources.Free;
+  FCompiledHere.Free;
   inherited;
 end;
 
@@ -191,11 +195,16 @@ begin
   TGocciaModule(ARecord).WriteSnapshot(AWriter);
 end;
 
-// The bytecode AHash names, compiled from ASourcePath when this engine has
-// not compiled it yet (ACompiledNow).
+{ The bytecode AHash names, compiled from ASourcePath (ACompiledNow), or
+  compiled for an earlier record of this restore (two identical modules).
+  Bytecode the engine compiled before the restore is refused: it says
+  nothing about the files now, and what reading them records (ownership,
+  diagnostics) went with the restore that read them. }
 function EnsureCompiled(const AReader: TGocciaHeapSnapshotReader;
   const AEngine: TGocciaEngine; const APath, ASourcePath, AHash: string;
-  const AIsHostOwned: Boolean; const ASources: TList<TGocciaModuleSnapshotSource>;
+  const AIsHostOwned: Boolean;
+  const ASources: TList<TGocciaModuleSnapshotSource>;
+  const ACompiledHere: TList<TObject>;
   out ACompiledNow: Boolean): TGocciaBytecodeModule;
 var
   Index: Integer;
@@ -209,6 +218,10 @@ begin
     AReader.Refuse('no compiled modules to restore the module ' + APath +
       ' into');
   Index := AReader.Templates.FindModule(AHash);
+  if (Index >= 0) and
+     not ACompiledHere.Contains(AReader.Templates.ModuleAt(Index)) then
+    AReader.Refuse('the module ' + APath + ', which this engine compiled ' +
+      'before the restore: restore into a fresh engine');
   if Index < 0 then
   begin
     try
@@ -227,6 +240,7 @@ begin
         AReader.Refuse('the module ' + APath + ' does not compile here: ' +
           E.Message);
     end;
+    ACompiledHere.Add(Compiled);
     AReader.Templates.AddModule(Compiled);
     Index := AReader.Templates.FindModule(AHash);
     if Index < 0 then
@@ -298,13 +312,13 @@ begin
     if Kind = RECORD_SOURCE then
     begin
       // Read before the module is compiled: a file that changes after it
-      // reads newer, and a later import reloads it. Bytecode this engine
-      // compiled earlier, or from the source it was created with rather
-      // than the file, says nothing about the file now, so the record then
-      // keeps the run's time.
+      // reads newer, and a later import reloads it. Bytecode this restore
+      // compiled for another record, or from the source the engine was
+      // created with rather than the file, says nothing about the file, so
+      // the record then keeps the run's time.
       HasStamp := FEngine.ModuleLoader.TryGetModuleLastModified(Path, Stamp);
       Compiled := EnsureCompiled(AReader, FEngine, Path, SourcePath, Hash,
-        IsHostOwned, FSources, CompiledNow);
+        IsHostOwned, FSources, FCompiledHere, CompiledNow);
       HasStamp := HasStamp and CompiledNow and
         (SourcePath <> FEngine.SourcePath);
     end;

@@ -98,7 +98,7 @@ type
     procedure TestRefusesAMissingExportValue;
     procedure TestManyCompactBindingsRestore;
     procedure TestTouchedSourceRunsNoModuleBody;
-    procedure TestChangedSourceOverRetainedBytecodeReloads;
+    procedure TestRefusesBytecodeCompiledBefore;
     procedure TestChangedEntryFileReloads;
     procedure TestStoppedCacheLeavesNoRecords;
     procedure TestSourceTextIsCharged;
@@ -413,8 +413,8 @@ begin
     TestManyCompactBindingsRestore);
   Test('A source file touched after the run is not evaluated again',
     TestTouchedSourceRunsNoModuleBody);
-  Test('A changed file over bytecode compiled before is loaded again',
-    TestChangedSourceOverRetainedBytecodeReloads);
+  Test('A restore into an engine that compiled its modules before is refused',
+    TestRefusesBytecodeCompiledBefore);
   Test('An entry file changed after its engine read it is loaded again',
     TestChangedEntryFileReloads);
   Test('A restore stopped while it caches its records leaves none behind',
@@ -661,6 +661,11 @@ begin
     // The sources it read are not registered for diagnostics either.
     Expect<Int64>(Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes)
       .ToBe(Retained);
+  finally
+    Run.Free;
+  end;
+  Run := TModuleRun.Create(PathOf('main.js'));
+  try
     Expect<string>(RestoreInto(Run, Bytes)).ToBe('');
     TGarbageCollector.Instance.Collect;
     Expect<string>(Run.Check('String(restored.inc())')).ToBe('2');
@@ -950,37 +955,30 @@ begin
     'restored.out')).ToBe('true,2');
 end;
 
-procedure THeapSnapshotModulesTests.TestChangedSourceOverRetainedBytecodeReloads;
+procedure THeapSnapshotModulesTests.TestRefusesBytecodeCompiledBefore;
 var
-  Refusal, Counter: string;
+  Refusal: string;
   Bytes: TBytes;
   Run: TModuleRun;
 begin
   DefineGraph;
   Bytes := SnapshotEntry('main.js', Refusal);
   Expect<string>(Refusal).ToBe('');
-  Counter := StringReplace(PathOf('counter.js'), '\', '\\', [rfReplaceAll]);
   Run := TModuleRun.Create(PathOf('main.js'));
   try
-    // A refused restore leaves the modules it compiled in the engine.
+    // A refused restore leaves the modules it compiled in the engine. What
+    // reading their files recorded went with it, and the files may have
+    // changed since: a restore that would use that bytecode is refused.
     Expect<Boolean>(RestoreInto(Run, Copy(Bytes, 0, Length(Bytes) - 1)) <> '')
       .ToBe(True);
-    // counter.js changes; the restore uses the bytecode compiled before and
-    // does not read the file, so the record keeps the run's time, and the
-    // newer file is loaded again on the next import.
-    Define('counter.js', 'tick(); let count = 10; ' +
-      'export const inc = () => { count += 1; return count; }; ' +
-      'export { count };');
-    Expect<Integer>(FileSetDate(PathOf('counter.js'),
-      DateTimeToFileDate(Now + 1 / 24))).ToBe(0);
-    Expect<string>(RestoreInto(Run, Bytes)).ToBe('');
-    Expect<string>(Run.Check('(() => { import("' + Counter + '").then(' +
-      '(m) => { restored.out = m.count; }); return ""; })()',
-      'String(restored.out)')).ToBe('10');
-    Expect<Integer>(Run.Ticks).ToBe(1);
+    Expect<Boolean>(Pos('compiled before the restore',
+      RestoreInto(Run, Bytes)) > 0).ToBe(True);
   finally
     Run.Free;
   end;
+  // A fresh engine restores it.
+  Expect<string>(RoundTripEntry('main.js', Bytes,
+    'String(restored.inc())')).ToBe('2');
 end;
 
 procedure THeapSnapshotModulesTests.TestChangedEntryFileReloads;
@@ -1271,18 +1269,19 @@ begin
   Bytes := SnapshotEntry('main.js', Refusal);
   Expect<string>(Refusal).ToBe('');
   Refused := 0;
-  // A refused restore leaves the engine as it was, so one serves them all.
-  Run := TModuleRun.Create(PathOf('main.js'));
-  try
-    for Len := 0 to Length(Bytes) - 1 do
-    begin
+  // A refused restore keeps the bytecode it compiled, which a later restore
+  // in that engine refuses: each truncation gets a fresh one.
+  for Len := 0 to Length(Bytes) - 1 do
+  begin
+    Run := TModuleRun.Create(PathOf('main.js'));
+    try
       if RestoreInto(Run, Copy(Bytes, 0, Len)) <> '' then
         Inc(Refused);
-      if Len mod 256 = 0 then
-        TGarbageCollector.Instance.Collect;
+    finally
+      Run.Free;
     end;
-  finally
-    Run.Free;
+    if Len mod 256 = 0 then
+      TGarbageCollector.Instance.Collect;
   end;
   Expect<Integer>(Refused).ToBe(Length(Bytes));
 end;

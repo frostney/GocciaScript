@@ -225,12 +225,14 @@ compiles, and one cached under a key the restoring engine's loader already
 holds are refused. Once the whole snapshot is restored, the records are
 cached in the loader as evaluated modules; a refused restore, or one the
 run's limits stop while it caches them, frees them and leaves the loader as
-it was. Restore into an engine that has not loaded the modules, with the
-same files. A source module the restore compiled from its file takes the
+it was. Restore into a fresh engine with the same files: one that has not
+loaded the modules or compiled them for an earlier restore (a refused
+restore keeps the bytecode it compiled, and a later restore that would use
+it is refused). A source module the restore compiled from its file takes the
 file's modification time, which a later import compares to decide whether
 to load the module again, so a copy of the same file does not evaluate it
-again; one whose bytecode the engine had compiled before, or compiled from
-the source the engine was created with, keeps the run's.
+again; one compiled from the source the engine was created with keeps the
+run's.
 
 A data module (JSON, text) is written as its exported values, not read
 again: the run may have changed them. It keeps the run's modification time,

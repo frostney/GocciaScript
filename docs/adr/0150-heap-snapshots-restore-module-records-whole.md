@@ -47,7 +47,8 @@ run's changes to them survive.
 ## Consequences
 
 - The restoring engine needs the same module files, and must not have loaded
-  the modules the snapshot holds.
+  the modules the snapshot holds or compiled them for an earlier, refused
+  restore.
 - Host and runtime-loader modules, and bindings of them, refuse the snapshot
   until host module codecs land, as do loader state outside the records
   (a module still linking, being reloaded or whose evaluation failed,
@@ -56,7 +57,6 @@ run's changes to them survive.
   restored as evaluated.
 - A source module the restore compiled from its file takes the file's
   modification time, checked against the snapshot's bytecode, so a later
-  import of a copied file does not evaluate it again; a data module, a
-  module whose bytecode the engine had compiled before and the engine's own
-  entry source keep the run's, so a newer file is loaded again, as in the
-  run.
+  import of a copied file does not evaluate it again; a data module and the
+  engine's own entry source keep the run's, so a newer file is loaded again,
+  as in the run.
