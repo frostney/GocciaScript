@@ -97,6 +97,7 @@ type
     procedure TestManyCompactBindingsRestore;
     procedure TestTouchedSourceRunsNoModuleBody;
     procedure TestChangedSourceOverRetainedBytecodeReloads;
+    procedure TestChangedEntryFileReloads;
     procedure TestStoppedCacheLeavesNoRecords;
     procedure TestUncheckedChainStopsResolution;
     procedure TestEveryTruncationRefuses;
@@ -407,6 +408,8 @@ begin
     TestTouchedSourceRunsNoModuleBody);
   Test('A changed file over bytecode compiled before is loaded again',
     TestChangedSourceOverRetainedBytecodeReloads);
+  Test('An entry file changed after its engine read it is loaded again',
+    TestChangedEntryFileReloads);
   Test('A restore stopped while it caches its records leaves none behind',
     TestStoppedCacheLeavesNoRecords);
   Test('A collection during the restore follows no unchecked forwarding chain',
@@ -833,6 +836,35 @@ begin
     Expect<string>(Run.Check('(() => { import("' + Counter + '").then(' +
       '(m) => { restored.out = m.count; }); return ""; })()',
       'String(restored.out)')).ToBe('10');
+    Expect<Integer>(Run.Ticks).ToBe(1);
+  finally
+    Run.Free;
+  end;
+end;
+
+procedure THeapSnapshotModulesTests.TestChangedEntryFileReloads;
+var
+  Refusal, Main: string;
+  Bytes: TBytes;
+  Run: TModuleRun;
+begin
+  DefineGraph;
+  Bytes := SnapshotEntry('main.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Main := StringReplace(PathOf('main.js'), '\', '\\', [rfReplaceAll]);
+  // The restoring engine is made with main.js as the run had it; the file
+  // changes before the restore, which compiles the engine's own source and
+  // does not read the file: the record keeps the run's time, and the newer
+  // file is loaded again on the next import.
+  Run := TModuleRun.Create(PathOf('main.js'));
+  try
+    Define('main.js', 'tick(); export const shared = { n: 2 };');
+    Expect<Integer>(FileSetDate(PathOf('main.js'),
+      DateTimeToFileDate(Now + 1 / 24))).ToBe(0);
+    Expect<string>(RestoreInto(Run, Bytes)).ToBe('');
+    Expect<string>(Run.Check('(() => { import("' + Main + '").then(' +
+      '(m) => { restored.out = m.shared.n; }); return ""; })()',
+      'String(restored.out)')).ToBe('2');
     Expect<Integer>(Run.Ticks).ToBe(1);
   finally
     Run.Free;

@@ -284,12 +284,14 @@ begin
     begin
       // Read before the module is compiled: a file that changes after it
       // reads newer, and a later import reloads it. Bytecode this engine
-      // compiled earlier says nothing about the file now, so the record
-      // then keeps the run's time.
+      // compiled earlier, or from the source it was created with rather
+      // than the file, says nothing about the file now, so the record then
+      // keeps the run's time.
       HasStamp := FEngine.ModuleLoader.TryGetModuleLastModified(Path, Stamp);
       Compiled := EnsureCompiled(AReader, FEngine, Path, SourcePath, Hash,
         IsHostOwned, CompiledNow);
-      HasStamp := HasStamp and CompiledNow;
+      HasStamp := HasStamp and CompiledNow and
+        (SourcePath <> FEngine.SourcePath);
     end;
   except
     RecordKeys.Free;

@@ -56,6 +56,7 @@ run's changes to them survive.
   restored as evaluated.
 - A source module the restore compiled from its file takes the file's
   modification time, checked against the snapshot's bytecode, so a later
-  import of a copied file does not evaluate it again; a data module, and a
-  module whose bytecode the engine had compiled before, keep the run's, so
-  a newer file is loaded again, as in the run.
+  import of a copied file does not evaluate it again; a data module, a
+  module whose bytecode the engine had compiled before and the engine's own
+  entry source keep the run's, so a newer file is loaded again, as in the
+  run.

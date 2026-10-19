@@ -229,7 +229,8 @@ it was. Restore into an engine that has not loaded the modules, with the
 same files. A source module the restore compiled from its file takes the
 file's modification time, which a later import compares to decide whether
 to load the module again, so a copy of the same file does not evaluate it
-again; one whose bytecode the engine had compiled before keeps the run's.
+again; one whose bytecode the engine had compiled before, or compiled from
+the source the engine was created with, keeps the run's.
 
 A data module (JSON, text) is written as its exported values, not read
 again: the run may have changed them. It keeps the run's modification time,
