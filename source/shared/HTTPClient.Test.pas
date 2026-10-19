@@ -30,6 +30,8 @@ type
     procedure TestAcceptsValidSchemes;
     procedure TestRejectsMalformedScheme;
     procedure TestRejectsRequestTargetControls;
+    procedure TestNormalizesRequestURL;
+    procedure TestResolvesRedirectLocation;
     procedure TestClassifiesPrivateAddressRanges;
     procedure TestClassifiesPublicAddressesAsRoutable;
     procedure TestRejectsObfuscatedLoopbackForms;
@@ -137,6 +139,10 @@ begin
   Test('Accepts valid URI schemes', TestAcceptsValidSchemes);
   Test('Rejects malformed URI scheme', TestRejectsMalformedScheme);
   Test('Rejects request-target controls', TestRejectsRequestTargetControls);
+  Test('Normalizes a request URL by the URL Standard',
+    TestNormalizesRequestURL);
+  Test('Resolves a redirect Location against the response URL',
+    TestResolvesRedirectLocation);
   Test('Classifies private address ranges',
     TestClassifiesPrivateAddressRanges);
   Test('Classifies public addresses as routable',
@@ -344,6 +350,60 @@ begin
   Raised := False;
   try
     HTTPURLHost('http://example.com/path' + #13 + #10 + 'Injected: yes');
+  except
+    on E: EHTTPError do
+      Raised := True;
+  end;
+  Expect<Boolean>(Raised).ToBe(True);
+end;
+
+procedure THTTPClientTests.TestNormalizesRequestURL;
+begin
+  Expect<string>(NormalizeHTTPRequestURL('HTTP://Example.COM/a/./b/../c?x=1#f'))
+    .ToBe('http://example.com/a/c?x=1');
+  Expect<string>(NormalizeHTTPRequestURL('http://h/a/%2e/%2E%2e/b'))
+    .ToBe('http://h/b');
+  // What the client's own checks decide stays as given.
+  Expect<string>(NormalizeHTTPRequestURL('ftp://h/a/./b'))
+    .ToBe('ftp://h/a/./b');
+  Expect<string>(NormalizeHTTPRequestURL('http://h/a/./b' + #10 + 'x'))
+    .ToBe('http://h/a/./b' + #10 + 'x');
+  Expect<string>(NormalizeHTTPRequestURL('not a url')).ToBe('not a url');
+  // Non-ASCII path and query code points are percent-encoded as UTF-8.
+  Expect<string>(NormalizeHTTPRequestURL(
+    'http://h/caf' + WideChar($00E9) + '/../x/' + WideChar($0100) +
+    '?q=' + WideChar($00E9) + '#f')).ToBe('http://h/x/%C4%80?q=%C3%A9');
+  // A non-ASCII host stays the client's own to decide.
+  Expect<string>(NormalizeHTTPRequestURL('http://h' + WideChar($00E9) +
+    '/a/./b')).ToBe('http://h' + WideChar($00E9) + '/a/./b');
+end;
+
+procedure THTTPClientTests.TestResolvesRedirectLocation;
+const
+  BASE = 'http://h:81/dir/page?q=1';
+var
+  Raised: Boolean;
+begin
+  Expect<string>(ResolveHTTPRedirectURL(BASE, 'sibling'))
+    .ToBe('http://h:81/dir/sibling');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, './sibling'))
+    .ToBe('http://h:81/dir/sibling');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, '../up'))
+    .ToBe('http://h:81/up');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, '/abs/./p'))
+    .ToBe('http://h:81/abs/p');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, '//other/x'))
+    .ToBe('http://other/x');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, '?k=v'))
+    .ToBe('http://h:81/dir/page?k=v');
+  Expect<string>(ResolveHTTPRedirectURL(BASE, 'https://o/a/../b#f'))
+    .ToBe('https://o/b');
+  // A header value's bytes: UTF-8 for e-acute.
+  Expect<string>(ResolveHTTPRedirectURL(BASE, 'caf' + Chr($C3) + Chr($A9)))
+    .ToBe('http://h:81/dir/caf%C3%A9');
+  Raised := False;
+  try
+    ResolveHTTPRedirectURL(BASE, 'http://');
   except
     on E: EHTTPError do
       Raised := True;

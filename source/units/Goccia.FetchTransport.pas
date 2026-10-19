@@ -26,8 +26,11 @@ type
   TGocciaFetchTransportRequest = record
     { "GET" or "HEAD", upper case. }
     Method: string;
-    { The URL as fetch() received it (a URL object's href), unnormalised,
-      exactly what the built-in network client would request. }
+    { The request URL the built-in network client would send: the URL as
+      fetch() received it (a URL object's href) parsed by the URL Standard and
+      serialized without its fragment, so the host is lowercase and dot
+      segments are removed (NormalizeHTTPRequestURL). A URL the engine's URL
+      parser refuses but the client accepts is given as received. }
     URL: string;
     { The request's header list in the order fetch() collected it. Names from
       a plain object are lower-cased; the built-in client adds its own

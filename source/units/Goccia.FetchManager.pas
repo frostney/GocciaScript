@@ -998,8 +998,12 @@ var
   Added, LimitAcquired, Rooted: Boolean;
   RequestTimeoutMilliseconds, SignalTimeoutMilliseconds, PendingIndex,
     MaxResponseBytes: Integer;
-  RequestError: string;
+  RequestError, RequestURL: string;
 begin
+  { WHATWG Fetch: the request's URL is the parsed one, dot segments removed.
+    The built-in client and a transport are handed it, and the client
+    resolves each redirect against it (NormalizeHTTPRequestURL). }
+  RequestURL := NormalizeHTTPRequestURL(AURL);
   Worker := nil;
   Added := False;
   LimitAcquired := False;
@@ -1087,20 +1091,20 @@ begin
       if MaxResponseBytes <= 0 then
         MaxResponseBytes := DEFAULT_MAX_RESPONSE_BODY_BYTES;
       Request.Method := AMethod;
-      Request.URL := AURL;
+      Request.URL := RequestURL;
       Request.Headers := Copy(AHeaders);
       Request.Body := nil;
       Request.TimeoutMilliseconds := RequestTimeoutMilliseconds;
       Request.MaxResponseBytes := MaxResponseBytes;
       Request.Capabilities := APolicy.Capabilities;
       Pending.Exchange := TGocciaFetchExchange.Create(FState,
-        Pending.RequestID, AURL, AMethod = FETCH_METHOD_HEAD,
+        Pending.RequestID, RequestURL, AMethod = FETCH_METHOD_HEAD,
         MaxResponseBytes);
     end
     else
     begin
       Worker := TGocciaFetchWorker.Create(FState, FLimiter,
-        Pending.RequestID, AURL, AMethod, AHeaders,
+        Pending.RequestID, RequestURL, AMethod, AHeaders,
         RequestTimeoutMilliseconds, APolicy);
       LimitAcquired := False;
     end;
@@ -1123,7 +1127,7 @@ begin
         send never reaches the transport; it fails the same way, through the
         promise. }
       LimitAcquired := False;
-      RequestError := TransportRequestError(AURL, AHeaders);
+      RequestError := TransportRequestError(RequestURL, AHeaders);
       if RequestError <> '' then
         Pending.Exchange.Fail(RequestError)
       else

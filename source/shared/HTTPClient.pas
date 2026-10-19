@@ -54,10 +54,30 @@ function HTTPURLAuditHost(const AURL: string): string;
 function WaitForHTTPConnectionWorkers(
   const ATimeoutMilliseconds: Integer): Boolean;
 
+{ The request URL the client sends (WHATWG Fetch, https://fetch.spec.whatwg.org/:
+  a request's URL is what the URL Standard's parser returns): an absolute
+  http(s) URL parsed and serialized without its fragment, so the scheme and
+  host are lowercase and dot segments are removed (https://h/a/./b/../c is
+  https://h/a/c). Anything the URL Standard's parser refuses, a URL with a
+  control character and a scheme other than http and https come back as given,
+  for the client's own checks to refuse or accept as before. Host parsing is
+  the engine's (Goccia.URL.Parser). Every request and every redirect hop goes
+  through it, and so does a request handed to an embedder's transport. }
+function NormalizeHTTPRequestURL(const AURL: string): string;
+
+{ A redirect's target (WHATWG Fetch, HTTP-redirect fetch): the Location value
+  parsed by the URL Standard's parser with the redirecting response's URL as
+  the base, so a relative, ./, ../, absolute-path, query-only and
+  scheme-relative Location are resolved against that URL, then serialized
+  without its fragment. Raises EHTTPError when the value does not parse (a
+  network error). }
+function ResolveHTTPRedirectURL(const ABaseURL, ALocation: string): string;
+
 implementation
 
 uses
   SyncObjs,
+  Goccia.URL.Parser,
 
   {$IFDEF UNIX}
   Sockets, BaseUnix,
@@ -1315,7 +1335,7 @@ begin
       Int64(ATimeoutMilliseconds) * 1000000
   else
     DeadlineNs := 0;
-  CurrentURL := AURL;
+  CurrentURL := NormalizeHTTPRequestURL(AURL);
   Redirects := 0;
   Result.Redirected := False;
   Method := UpperCase(AMethod);
@@ -1399,15 +1419,8 @@ begin
         Inc(Redirects);
         Result.Redirected := True;
 
-        // Handle relative URLs
-        if Copy(Location, 1, 2) = '//' then
-          CurrentURL := Parsed.Scheme + ':' + Location
-        else if (Length(Location) > 0) and (Location[1] = '/') then
-          CurrentURL := Parsed.Scheme + '://' + HostHeader + Location
-        else if Pos('://', Location) = 0 then
-          CurrentURL := Parsed.Scheme + '://' + HostHeader + '/' + Location
-        else
-          CurrentURL := Location;
+        // WHATWG Fetch: Location parsed against the response's URL.
+        CurrentURL := ResolveHTTPRedirectURL(CurrentURL, Location);
 
         // 303: change method to GET per RFC 7231
         if Raw.StatusCode = 303 then
@@ -1428,6 +1441,87 @@ begin
     Result.FinalURL := CurrentURL;
     Break;
   end;
+end;
+
+{ The URL Standard percent-encodes non-ASCII path, query and fragment code
+  points as UTF-8, but the engine's parser reads each character as a byte and
+  rejects one past U+00FF. So a URL reaches it as ASCII: AABytes says the
+  characters are already bytes (a header value read off the wire), otherwise
+  they are code points and are encoded as UTF-8 first. }
+function PercentEncodeNonASCII(const AText: string;
+  const AAreBytes: Boolean): string;
+const
+  HEX_DIGITS = '0123456789ABCDEF';
+var
+  Bytes: RawByteString;
+  I: Integer;
+  HasHigh: Boolean;
+begin
+  HasHigh := False;
+  for I := 1 to Length(AText) do
+    if Ord(AText[I]) > 127 then
+      HasHigh := True;
+  if not HasHigh then
+    Exit(AText);
+  if AAreBytes then
+  begin
+    SetLength(Bytes, Length(AText));
+    for I := 1 to Length(AText) do
+      Bytes[I] := AnsiChar(Byte(Ord(AText[I]) and $FF));
+  end
+  else
+    Bytes := UTF8Encode(AText);
+  Result := '';
+  for I := 1 to Length(Bytes) do
+    if Ord(Bytes[I]) > 127 then
+      Result := Result + '%' + HEX_DIGITS[(Ord(Bytes[I]) shr 4) + 1] +
+        HEX_DIGITS[(Ord(Bytes[I]) and $0F) + 1]
+    else
+      Result := Result + Char(Bytes[I]);
+end;
+
+function NormalizeHTTPRequestURL(const AURL: string): string;
+var
+  Parsed: TGocciaURLRecord;
+  I, AuthorityStart, AuthorityEnd: Integer;
+begin
+  Result := AURL;
+  for I := 1 to Length(AURL) do
+    if (Ord(AURL[I]) < 32) or (Ord(AURL[I]) = 127) then
+      Exit;
+  { A non-ASCII host is the client's own to accept or refuse. }
+  AuthorityStart := Pos('://', AURL);
+  if AuthorityStart = 0 then
+    Exit;
+  AuthorityEnd := AuthorityStart + 3;
+  while (AuthorityEnd <= Length(AURL)) and
+        not (AURL[AuthorityEnd] in ['/', '?', '#']) do
+  begin
+    if Ord(AURL[AuthorityEnd]) > 127 then
+      Exit;
+    Inc(AuthorityEnd);
+  end;
+  Parsed := ParseURL(Copy(AURL, 1, AuthorityEnd - 1) +
+    PercentEncodeNonASCII(Copy(AURL, AuthorityEnd, Length(AURL)), False));
+  if Parsed.IsValid and ((Parsed.Scheme = 'http') or
+     (Parsed.Scheme = 'https')) then
+    Result := SerializeURL(Parsed, True);
+end;
+
+function ResolveHTTPRedirectURL(const ABaseURL, ALocation: string): string;
+var
+  Base, Target: TGocciaURLRecord;
+  Location: string;
+begin
+  Location := PercentEncodeNonASCII(ALocation, True);
+  Base := ParseURL(PercentEncodeNonASCII(ABaseURL, False));
+  if Base.IsValid then
+    Target := ParseURLWithBase(Location, Base)
+  else
+    Target := ParseURL(Location);
+  if not Target.IsValid then
+    raise EHTTPError.Create('Invalid URL: malformed redirect location');
+  Result := SerializeURL(Target, True);
 end;
 
 // ---------------------------------------------------------------------------
