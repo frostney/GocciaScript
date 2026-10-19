@@ -2413,8 +2413,12 @@ var
   Queue: TGocciaMicrotaskQueue;
   GC: TGarbageCollector;
   Repeating, Pause: Boolean;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
   Repeating := False;
+  { The jobs this runs are script, and an embedder can call it outside a run:
+    establish the floating-point mode as the run entries do. }
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
     repeat
       { A further round waits again: the deadline and a host's stop end it. }
@@ -2477,6 +2481,7 @@ begin
     GC := TGarbageCollector.Instance;
     if Assigned(GC) then
       GC.ClearKeptObjects;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 
@@ -3114,12 +3119,18 @@ var
   CompilerOptions: TGocciaCompilerOptimizationOptions;
   SavedGlobalScope: TGocciaScope;
   SavedGlobalBackedTopLevel: Boolean;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
   AStage := gesCompile;
   VarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
   SourceLines := CreateECMAScriptSourceLines(ASourceText);
+  // An embedder can call this entry outside any run, so it establishes the
+  // floating-point mode (NaN and infinity arithmetic without traps, ES2026
+  // §6.1.6.1) for the compile and the run, as Execute does, and restores the
+  // caller's.
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
     Options := SourcePipelineOptions(stScript);
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
@@ -3199,6 +3210,7 @@ begin
       OptionsScope.Free;
     end;
   finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
     SourceLines.Free;
     DeclaredVarNames.Free;
     FunctionNames.Free;

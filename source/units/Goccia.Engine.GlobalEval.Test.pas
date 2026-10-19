@@ -20,6 +20,7 @@ program Goccia.Engine.GlobalEval.Test;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
+  Math,
   SysUtils,
 
   TestingPascalLibrary,
@@ -61,6 +62,8 @@ type
     procedure TestBytecodeEvalReportsRunStage;
     procedure AssertDirectiveFreeEvalIsNonStrict;
     procedure TestBytecodeEvalIsNonStrictInStrictEngine;
+    procedure TestEvalEstablishesFloatingPointMode;
+    procedure TestWaitForRuntimeIdleEstablishesFloatingPointMode;
   public
     procedure SetupTests; override;
   end;
@@ -87,6 +90,10 @@ begin
     TestBytecodeEvalReportsRunStage);
   Test('Bytecode directive-free global eval is non-strict in a strict engine',
     TestBytecodeEvalIsNonStrictInStrictEngine);
+  Test('Global eval runs NaN arithmetic when called outside a run scope',
+    TestEvalEstablishesFloatingPointMode);
+  Test('WaitForRuntimeIdle runs NaN arithmetic when called outside a run scope',
+    TestWaitForRuntimeIdleEstablishesFloatingPointMode);
 end;
 
 function TGlobalEvalTests.CreateEngine(const ASource: TStringList): TGocciaEngine;
@@ -464,6 +471,91 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalIsNonStrictInStrictEngine;
 begin
   AssertDirectiveFreeEvalIsNonStrict;
+end;
+
+// ES2026 §6.1.6.1.4 and §6.1.6.1.5 (Number::divide, Number::subtract) and
+// §13.15.4: NaN and infinity arithmetic follows IEEE 754 and never traps. An
+// embedder that calls EvaluateGlobalEval directly runs with whatever
+// floating-point mode its own process has, FPC's default among them, which
+// raises EInvalidOp on 0/0. The entry establishes the mode and restores the
+// caller's.
+procedure TGlobalEvalTests.TestEvalEstablishesFloatingPointMode;
+const
+  // FPC's startup mask: invalid operation, zero divide and overflow trap.
+  EMBEDDER_MASK: TFPUExceptionMask = [exDenormalized, exUnderflow,
+    exPrecision];
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  SavedMask: TFPUExceptionMask;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  SavedMask := GetExceptionMask;
+  try
+    Engine := CreateEngine(Source);
+    SetExceptionMask(EMBEDDER_MASK);
+    try
+      Value := Engine.EvaluateGlobalEval('0 / 0', '<global-eval-test>',
+        Stage);
+      Expect<Boolean>((Value as TGocciaNumberLiteralValue).IsNaN).ToBe(True);
+      Value := Engine.EvaluateGlobalEval('Infinity - Infinity',
+        '<global-eval-test>', Stage);
+      Expect<Boolean>((Value as TGocciaNumberLiteralValue).IsNaN).ToBe(True);
+      // Operands the compiler cannot fold.
+      Value := Engine.EvaluateGlobalEval(
+        'var zero = 0, inf = Infinity; [zero / zero, inf - inf, inf * zero]' +
+        '.every((n) => n !== n)', '<global-eval-test>', Stage);
+      Expect<Boolean>((Value as TGocciaBooleanLiteralValue).Value).ToBe(True);
+      // The caller's mask is back once the entry returns.
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+    finally
+      SetExceptionMask(SavedMask);
+    end;
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+// Jobs a run left queued run script too: a promise reaction that divides 0
+// by 0 runs inside WaitForRuntimeIdle, which an embedder can call on its own.
+procedure TGlobalEvalTests.TestWaitForRuntimeIdleEstablishesFloatingPointMode;
+const
+  EMBEDDER_MASK: TFPUExceptionMask = [exDenormalized, exUnderflow,
+    exPrecision];
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  SavedMask: TFPUExceptionMask;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  SavedMask := GetExceptionMask;
+  try
+    Engine := CreateEngine(Source);
+    Engine.EvaluateGlobalEval(
+      'var zero = 0; var settled = "pending";' +
+      'Promise.resolve().then(() => { settled = zero / zero; });',
+      '<global-eval-test>', Stage);
+    SetExceptionMask(EMBEDDER_MASK);
+    try
+      Engine.WaitForRuntimeIdle;
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+    finally
+      SetExceptionMask(SavedMask);
+    end;
+    Value := Engine.EvaluateGlobalEval('settled !== settled',
+      '<global-eval-test>', Stage);
+    Expect<Boolean>((Value as TGocciaBooleanLiteralValue).Value).ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
 end;
 
 begin
