@@ -262,7 +262,7 @@ end;
 
 function ParseLayout(const ABytes: TBytes): TSnapshotLayout;
 var
-  At, I, Count: Integer;
+  At, I, J, Count, RecordCount, Kind: Integer;
 
   procedure Field(const AAt, ASize: Integer);
   begin
@@ -312,6 +312,38 @@ begin
   Result.CodecCount := Section(1, 4, 2);           // codecs: tag, schema
   Result.BuiltinCount := Section(1, 4, 0);         // built-in names
   Section(2, 4, 0);                                // built-ins the run built
+  // Module records' headers (Goccia.Modules.Snapshot): the record codec's
+  // schema, then each record's path, host ownership, kind, a source
+  // module's source path and bytecode hash, and its cache keys.
+  Field(At, 4);
+  RecordCount := Integer(U32At(ABytes, At));
+  Inc(At, 4);
+  if RecordCount > 0 then
+  begin
+    Field(At, 2);
+    Inc(At, 2);
+  end;
+  for I := 1 to RecordCount do
+  begin
+    Field(At, 4);
+    Inc(At, 4 + 1);
+    Kind := ABytes[At];
+    Inc(At);
+    if Kind <> 2 then
+    begin
+      Field(At, 4);
+      Field(At + 4, 4);
+      Inc(At, 8);
+    end;
+    Field(At, 4);
+    Count := Integer(U32At(ABytes, At));
+    Inc(At, 4);
+    for J := 1 to Count do
+    begin
+      Field(At, 4);
+      Inc(At, 4);
+    end;
+  end;
   Section(1, 4, 0);                                // modules
   Result.ObjectCountAt := At;
   Field(At, 4);
@@ -328,6 +360,12 @@ begin
     Result.PayloadLength[I] := Integer(U32At(ABytes, At + 2));
     Result.PayloadAt[I] := At + 6;
     At := At + 6 + Result.PayloadLength[I];
+  end;
+  // Each module record's payload, after its length.
+  for I := 1 to RecordCount do
+  begin
+    Field(At, 4);
+    At := At + 4 + Integer(U32At(ABytes, At));
   end;
   Result.RootsAt := At;
   Field(At, 4);                                    // roots
