@@ -1742,10 +1742,12 @@ begin
       begin
         if WorkerData[I].ErrorMessage = '' then
         begin
-          { Cancelled slot: the run was cancelled before a worker ran this
-            file, so TestWorkerProc never saw it, WorkerData[I] is still the
-            zero-initialised default and no worker writes it.  Safe to keep
-            the synthesis in WorkerData. }
+          { The worker finished this file and recorded a failure that
+            TestWorkerProc did not write into WorkerData[I] (an exception
+            escaped it, or the run was cancelled before the file ran).
+            Either way a worker that was not abandoned recorded it, so no
+            thread writes the slot any more and the synthesis may go into
+            WorkerData. }
           WorkerData[I].ErrorMessage := Pool.Results[I].ErrorMessage;
           WorkerData[I].Failed := 1;
           WorkerData[I].TotalRunTests := 1;

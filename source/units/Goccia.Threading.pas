@@ -157,6 +157,7 @@ type
     // FStateLock when it abandons the worker, so it can name the file the
     // worker got stuck on instead of just reporting "some worker".
     FCurrentFileIndex: Integer;
+    procedure TouchActivity;
     function TakeNextItem(out AItem: TGocciaWorkItem): Boolean;
     function StillOwned: Boolean;
     function RecordResult(const AResult: TGocciaWorkerResult): Boolean;
@@ -170,12 +171,13 @@ type
     destructor Destroy; override;
     { Main thread, watchdog only. Abandons the worker unless it has made
       progress since the watchdog read AObservedActivityNs, and returns,
-      from the same critical section, a copy of the results it finished
-      and the file it is on (-1 between files). The worker never writes a
-      result after this, so the copy is the worker's final word. }
+      from the same critical section, its results array (the first
+      ACompletedCount entries are the files it finished) and the file it is
+      on (-1 between files). It allocates nothing, so it cannot fail half
+      way, and the worker never touches the array again. }
     function TryAbandon(const AObservedActivityNs: Int64;
       out ACompleted: TGocciaWorkerResultArray;
-      out ACurrentFileIndex: Integer): Boolean;
+      out ACompletedCount, ACurrentFileIndex: Integer): Boolean;
     { Read only after the worker has finished (WaitFor). }
     property Results: TGocciaWorkerResultArray read FResults;
     property ResultCount: Integer read FResultCount;
@@ -581,6 +583,18 @@ begin
   inherited;
 end;
 
+// Every write of FLastActivityNs is under FStateLock, so the watchdog's
+// check that the worker made no progress and its abandonment are one step.
+procedure TGocciaFileWorker.TouchActivity;
+begin
+  CriticalSectionEnter(FStateLock);
+  try
+    FLastActivityNs := GetNanoseconds;
+  finally
+    CriticalSectionLeave(FStateLock);
+  end;
+end;
+
 function TGocciaFileWorker.TakeNextItem(out AItem: TGocciaWorkItem): Boolean;
 begin
   CriticalSectionEnter(FStateLock);
@@ -634,19 +648,20 @@ end;
 
 function TGocciaFileWorker.TryAbandon(const AObservedActivityNs: Int64;
   out ACompleted: TGocciaWorkerResultArray;
-  out ACurrentFileIndex: Integer): Boolean;
+  out ACompletedCount, ACurrentFileIndex: Integer): Boolean;
 begin
+  ACompleted := nil;
+  ACompletedCount := 0;
+  ACurrentFileIndex := -1;
   CriticalSectionEnter(FStateLock);
   try
     Result := FLastActivityNs = AObservedActivityNs;
     if not Result then
-    begin
-      ACompleted := nil;
-      ACurrentFileIndex := -1;
       Exit;
-    end;
-    // Copy first: if the copy fails, the worker is not abandoned.
-    ACompleted := Copy(FResults, 0, FResultCount);
+    // A reference, not a copy: nothing here can fail once the worker is
+    // abandoned.
+    ACompleted := FResults;
+    ACompletedCount := FResultCount;
     ACurrentFileIndex := FCurrentFileIndex;
     FAbandoned := True;
   finally
@@ -661,7 +676,7 @@ var
   ConsoleOut, ErrorMsg: string;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
 begin
-  FLastActivityNs := GetNanoseconds;
+  TouchActivity;
   InitThreadRuntime(FEnableCoverage, FMaxBytes);
   BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
   try
@@ -729,7 +744,7 @@ begin
   finally
     // Refresh the timestamp as we exit the work loop so the watchdog
     // does not interpret a slow thread-runtime shutdown as a hang.
-    FLastActivityNs := GetNanoseconds;
+    TouchActivity;
     FMemoryStats := CombineCLIJSONMemoryStats(FMemoryStats,
       FinishCLIJSONMemoryMeasurement(MemoryMeasurement), True);
     { Detach the coverage tracker before shutting down the runtime so
@@ -787,6 +802,7 @@ var
     abandoned. Owned by this thread: an abandoned worker never writes them. }
   AbandonedResults: TGocciaWorkerResultArray;
   Completed: TGocciaWorkerResultArray;
+  CompletedCount: Integer;
 begin
   if FCancelFlagLeaked then
   begin
@@ -866,7 +882,8 @@ begin
             ObservedNs := FWorkers[I].LastActivityNs;
             if ((((NowNs - ObservedNs) div 1000000) >= AWatchdogMs) or
                 (Assigned(GStallHook) and GStallHook(FWorkers[I]))) and
-                FWorkers[I].TryAbandon(ObservedNs, Completed, J) then
+                FWorkers[I].TryAbandon(ObservedNs, Completed,
+                  CompletedCount, J) then
             begin
               // Publish the abandonment before anything that can fail
               // (allocation, output): from here on the worker, its queue
@@ -877,7 +894,8 @@ begin
               FAnyAbandoned := True;
               FCancelFlagLeaked := True;
               GWorkerAbandoned := True;
-              AbandonedResults := Concat(AbandonedResults, Completed);
+              AbandonedResults := Concat(AbandonedResults,
+                Copy(Completed, 0, CompletedCount));
               SetLength(StalledFiles, StalledCount + 1);
               StalledFiles[StalledCount].Data := nil;
               StalledFiles[StalledCount].Success := False;
