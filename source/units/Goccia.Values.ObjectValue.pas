@@ -194,6 +194,17 @@ type
       const ADescriptor: TGocciaPropertyDescriptor);
     procedure SetIntegrityForRestore(const AExtensible, AFrozen, ASealed,
       AHasEverHadIndexedOwnProperty: Boolean);
+    // Replaces every own property with AKeys and ASymbols, in their order;
+    // the object takes ownership of the descriptors. A nil descriptor in
+    // ADescriptors keeps the one the object holds for that key now, which
+    // it must hold; every other descriptor it held is freed. When the keys
+    // it holds are the first of AKeys, in order, they keep their places and
+    // its property map its shape. The caller keeps every value rooted and
+    // has checked that no key or symbol is listed twice.
+    procedure ReplaceOwnPropertiesForRestore(const AKeys: array of string;
+      const ADescriptors: array of TGocciaPropertyDescriptor;
+      const ASymbols: array of TGocciaSymbolValue;
+      const ASymbolDescriptors: array of TGocciaPropertyDescriptor);
 
     property Properties: TGocciaPropertyMap read FProperties;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
@@ -1536,6 +1547,106 @@ begin
     raise;
   end;
   FSymbolInsertionOrder.Add(ASymbol);
+end;
+
+procedure TGocciaObjectValue.ReplaceOwnPropertiesForRestore(
+  const AKeys: array of string;
+  const ADescriptors: array of TGocciaPropertyDescriptor;
+  const ASymbols: array of TGocciaSymbolValue;
+  const ASymbolDescriptors: array of TGocciaPropertyDescriptor);
+var
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  SymPair: TSymbolDescriptorMap.TKeyValuePair;
+  Final: array of TGocciaPropertyDescriptor;
+  Kept: TDictionary<string, Boolean>;
+  Current: TGocciaPropertyDescriptor;
+  Prefix: Boolean;
+  I, Added: Integer;
+begin
+  SetLength(Final, Length(AKeys));
+  for I := 0 to High(AKeys) do
+  begin
+    Final[I] := ADescriptors[I];
+    if not Assigned(Final[I]) and
+       not FProperties.TryGetValue(AKeys[I], Final[I]) then
+      raise EInvalidOperation.Create('a kept property the object does not have');
+  end;
+  // Whether the keys held now are the first of AKeys, in order.
+  Prefix := FProperties.Count <= Length(AKeys);
+  if Prefix then
+  begin
+    I := 0;
+    for Pair in FProperties do
+    begin
+      if Pair.Key <> AKeys[I] then
+      begin
+        Prefix := False;
+        Break;
+      end;
+      Inc(I);
+    end;
+  end;
+  Added := 0;
+  try
+    if Prefix then
+    begin
+      // In place, as a redefinition replaces a descriptor; then appended.
+      Added := FProperties.Count;
+      for I := 0 to Added - 1 do
+        if Assigned(ADescriptors[I]) then
+        begin
+          FProperties.TryGetValue(AKeys[I], Current);
+          FProperties.Add(AKeys[I], ADescriptors[I]);
+          Current.Free;
+        end;
+    end
+    else
+    begin
+      Kept := TDictionary<string, Boolean>.Create;
+      try
+        for I := 0 to High(AKeys) do
+          if not Assigned(ADescriptors[I]) then
+            Kept.Add(AKeys[I], True);
+        for Pair in FProperties do
+          if not Kept.ContainsKey(Pair.Key) then
+            Pair.Value.Free;
+      finally
+        Kept.Free;
+      end;
+      FProperties.Clear;
+    end;
+    while Added <= High(AKeys) do
+    begin
+      FProperties.Add(AKeys[Added], Final[Added]);
+      Inc(Added);
+    end;
+  except
+    // What was not added yet is nobody's: freed with the failure.
+    for I := Added to High(Final) do
+      Final[I].Free;
+    raise;
+  end;
+  if Assigned(FSymbolDescriptors) then
+  begin
+    for SymPair in FSymbolDescriptors do
+      SymPair.Value.Free;
+    FSymbolDescriptors.Clear;
+  end;
+  if Assigned(FSymbolInsertionOrder) then
+    FSymbolInsertionOrder.Clear;
+  I := 0;
+  try
+    while I <= High(ASymbols) do
+    begin
+      // Frees its descriptor itself when it fails.
+      Inc(I);
+      DefineSymbolPropertyForRestore(ASymbols[I - 1], ASymbolDescriptors[I - 1]);
+    end;
+  except
+    for Added := I to High(ASymbolDescriptors) do
+      ASymbolDescriptors[Added].Free;
+    raise;
+  end;
 end;
 
 procedure TGocciaObjectValue.SetIntegrityForRestore(const AExtensible, AFrozen,
