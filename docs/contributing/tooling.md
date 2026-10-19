@@ -335,8 +335,9 @@ afl-fuzz -n -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
 Four of the seeds hold closures and suspended generators. Functions are named
 by the bytecode of the module that compiled them, so the harness runs the
 seeds' program before it restores an input, and then uses what restored: it
-reads every property, calls every function and resumes every generator.
-A refusal (`snapshot-refused`) is a normal outcome, as are the run limits and
+walks up to 600 distinct objects, reading properties, calling functions and
+resuming, returning or throwing into generators (the input's size picks
+which). A refusal (`snapshot-refused`) is a normal outcome, as are the run limits and
 a script error (`script-throw`); anything else is a finding. The scheduled
 workflow runs this as its `fuzz-heap-snapshot` job.
 

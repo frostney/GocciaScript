@@ -19,10 +19,10 @@ program Goccia.HeapSnapshot.Hardening.Test;
 
   GC stress: with CollectBeforeEveryReservation, every reservation the reader
   makes (its tables, the frames it restores, a string's storage) collects
-  first, as the last resort a reservation over the ceiling runs would, and a
-  restore under every ceiling from nothing to what it needs stops at every
-  one of those points; a value the reader held only in a local would be
-  freed there. Restoring the same mutants again and again leaves the heap
+  first, as the last resort a reservation over the ceiling runs would, and
+  restores under 401 ceilings spread evenly from nothing to what a restore
+  needs stop at as many points along the way; a value the reader held only
+  in a local would be freed there. Restoring the same mutants again and again leaves the heap
   where it was.
 
   Two sizes; the test names say which ran. By default (every pull request)
@@ -153,6 +153,7 @@ type
     FCapture: TCapture;
     FExerciser: THeapSnapshotExerciser;
     FFed: Integer;
+    procedure Exercise(const ARoot: TGCManagedObject);
   public
     Restored: Integer;
     Refused: Integer;
@@ -162,6 +163,8 @@ type
     Stressed: Boolean;
     // What ACheck returned for the last input that restored.
     LastCheck: string;
+    // Exercise what restored before ACheck runs, rather than instead.
+    ExerciseBeforeCheck: Boolean;
     constructor Create(const AModuleSource: string);
     destructor Destroy; override;
     // '' when ABytes restored and was used, else the refusal. Uses what
@@ -187,6 +190,8 @@ type
     procedure SweepCeilings(const ASeed: TBytes; const AModule: string;
       const AStressed: Boolean);
     procedure TestSeedsRestoreAndRun;
+    procedure TestRestoredGeneratorReturnsAndThrows;
+    procedure TestExerciseReachesEveryFunction;
     procedure TestFieldsOfThePlainSeed;
     procedure TestFieldsOfTheVMSeed;
     procedure TestEntriesOfThePlainSeed;
@@ -425,6 +430,8 @@ begin
     // A root can be any object a codec writes, a cell among them; what is
     // used is a value.
     Root := Restore.Roots[0];
+    if (ACheck = '') or ExerciseBeforeCheck then
+      Exercise(Root);
     if ACheck <> '' then
     begin
       Global := TGocciaObjectValue(FEngine.Realm.GlobalObject);
@@ -432,27 +439,6 @@ begin
       LastCheck := FEngine.EvaluateGlobalEval(ACheck, TEST_PATH,
         Stage).ToStringLiteral.Value;
       Global.DeleteProperty('restored');
-      Exit;
-    end;
-    if not (Root is TGocciaValue) then
-      Exit;
-    StartExecutionTimeout(EXERCISE_TIMEOUT_MS);
-    StartInstructionLimit(EXERCISE_INSTRUCTIONS);
-    try
-      try
-        FExerciser.Exercise(TGocciaValue(Root));
-      except
-        // The run's own limits are outcomes a run can have, and so is a
-        // rejection the run left unhandled (a built-in such as
-        // Array.fromAsync called with the wrong arguments).
-        on E: TGocciaThrowValue do;
-        on E: TGocciaTimeoutError do;
-        on E: TGocciaInstructionLimitError do;
-        on E: TGocciaMemoryLimitError do;
-      end;
-    finally
-      ClearInstructionLimit;
-      ClearExecutionTimeout;
     end;
   finally
     Restore.Free;
@@ -464,6 +450,32 @@ begin
   end;
 end;
 
+procedure TMutantFeeder.Exercise(const ARoot: TGCManagedObject);
+begin
+  if not (ARoot is TGocciaValue) then
+    Exit;
+  StartExecutionTimeout(EXERCISE_TIMEOUT_MS);
+  StartInstructionLimit(EXERCISE_INSTRUCTIONS);
+  try
+    try
+      // Each feed uses generators another way (resume, return first,
+      // throw first), in turn.
+      FExerciser.Exercise(TGocciaValue(ARoot), FFed);
+    except
+      // The run's own limits are outcomes a run can have, and so is a
+      // rejection the run left unhandled (a built-in such as
+      // Array.fromAsync called with the wrong arguments).
+      on E: TGocciaThrowValue do;
+      on E: TGocciaTimeoutError do;
+      on E: TGocciaInstructionLimitError do;
+      on E: TGocciaMemoryLimitError do;
+    end;
+  finally
+    ClearInstructionLimit;
+    ClearExecutionTimeout;
+  end;
+end;
+
 { THeapSnapshotHardeningTests }
 
 procedure THeapSnapshotHardeningTests.SetupTests;
@@ -471,6 +483,10 @@ var
   Targets, Shares: string;
 begin
   Test('Both seeds restore, and using them runs', TestSeedsRestoreAndRun);
+  Test('A restored suspended generator returns and throws through its ' +
+    'finally block', TestRestoredGeneratorReturnsAndThrows);
+  Test('The exercise calls every function of a restored chain of 64',
+    TestExerciseReachesEveryFunction);
   Test('Every count, index and length of the plain seed at its boundaries',
     TestFieldsOfThePlainSeed);
   Test('Every count, index and length of the VM seed at its boundaries',
@@ -518,9 +534,9 @@ begin
     TestEveryReservationCollects);
   Test('Mutants while every reservation collects first',
     TestMutantsWhileEveryReservationCollects);
-  Test('A restore under every ceiling up to what it needs restores or refuses',
+  Test('Restores under 401 ceilings up to what one needs restore or refuse',
     TestEveryCeilingRestoresOrRefuses);
-  Test('Every ceiling while every reservation collects first',
+  Test('401 ceilings while every reservation collects first',
     TestEveryCeilingWhileEveryReservationCollects);
   Test('Restoring the same mutants again leaves the heap where it was',
     TestRepeatedMutantsLeaveTheHeap);
@@ -589,6 +605,50 @@ begin
   Feeder := TMutantFeeder.Create(VM_SEED);
   try
     Expect<string>(Feeder.Feed(VMSeed)).ToBe('');
+  finally
+    Feeder.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestRestoredGeneratorReturnsAndThrows;
+begin
+  // Each from a restore of its own, while the generator is still suspended
+  // inside its try block: returning or throwing into it runs its finally
+  // block (which logs n) and closes it; the one not started closes without.
+  Expect<string>(RoundTripModuleBytes(VM_SEED, VMSeed,
+    '[JSON.stringify(restored.g.return(7)), restored.log.join(), ' +
+    'JSON.stringify(restored.g.next()), ' +
+    'JSON.stringify(restored.fresh.return(3)), restored.log.join()]' +
+    '.join("|")'))
+    .ToBe('{"value":7,"done":true}|1|{"done":true}|' +
+      '{"value":3,"done":true}|1');
+  Expect<string>(RoundTripModuleBytes(VM_SEED, VMSeed,
+    '(() => { let m = ""; try { restored.g.throw(new Error("boom")); } ' +
+    'catch (e) { m = e.message; } return [m, restored.log.join(), ' +
+    'JSON.stringify(restored.g.next())].join("|"); })()'))
+    .ToBe('boom|1|{"done":true}');
+end;
+
+procedure THeapSnapshotHardeningTests.TestExerciseReachesEveryFunction;
+const
+  // Each closure counts its calls; the walk meets the built-ins of the
+  // root's prototype chain before the chain's far end.
+  CHAIN = '(() => { let calls = 0; const head = Array.from({ length: 64 }, ' +
+    '(_, i) => i).reduce((prev, i) => { const f = () => { calls += 1; ' +
+    'return prev; }; f.i = i; return f; }, null); ' +
+    'capture({ head, calls: () => calls }); })();';
+var
+  Feeder: TMutantFeeder;
+  Bytes: TBytes;
+  Refusal: string;
+begin
+  Bytes := SnapshotModule(CHAIN, Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Feeder := TMutantFeeder.Create(CHAIN);
+  try
+    Feeder.ExerciseBeforeCheck := True;
+    Expect<string>(Feeder.Feed(Bytes, 'String(restored.calls())')).ToBe('');
+    Expect<string>(Feeder.LastCheck).ToBe('64');
   finally
     Feeder.Free;
   end;
@@ -1157,10 +1217,11 @@ begin
   end;
 end;
 
-// Restores ASeed under every ceiling from what the engine holds before the
-// restore up to what the restore needs, in steps small enough that each of
-// its reservations and allocations is the one that does not fit under
-// some ceiling. Each restores (and is used) or is refused.
+// Restores ASeed under STEPS + 1 ceilings spread evenly from what the
+// engine holds before the restore up to what the restore needs, so the
+// restore stops at that many points along the way: a sample, not every
+// reservation (two that fall between neighbouring ceilings stop at the
+// same one). Each restores (and is used) or is refused for memory.
 procedure THeapSnapshotHardeningTests.SweepCeilings(const ASeed: TBytes;
   const AModule: string; const AStressed: Boolean);
 const

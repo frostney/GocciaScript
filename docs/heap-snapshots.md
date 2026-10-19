@@ -241,13 +241,16 @@ boundary values, every object entry read by every other codec, dropped,
 doubled, swapped and cut short, object references pointed at other objects
 and at built-ins, and payload bytes set to the value tags. Each mutant
 restores or is refused, and what restores is used (`THeapSnapshotExerciser`
-in `Goccia.HeapSnapshot.Exercise`: every property read, every function
-called, every generator resumed). It also round-trips deep chains of every
-kind of link, refuses at the end of one and stops a restore of one at half
-its memory, so no walk recurses per link; restores with the collector's
+in `Goccia.HeapSnapshot.Exercise`: up to 600 distinct objects, what the
+run's values hold before any prototype, each property read, each function
+called, each generator resumed, returned or thrown into while it is
+suspended). It also round-trips deep chains of every kind of link, refuses
+at the end of one and stops a restore of one at half its memory, so no walk
+recurses per link; restores with the collector's
 `CollectBeforeEveryReservation` on, so each reservation the reader makes
-collects first; restores under 400 ceilings up to what a restore needs; and
-restores the same mutants again to check that the heap stays where it was.
+collects first; restores under 401 ceilings spread evenly up to what a
+restore needs; and restores the same mutants again to check that the heap
+stays where it was.
 
 | Size | Payload values and reference targets | Chains | Runs |
 |---|---|---|---|

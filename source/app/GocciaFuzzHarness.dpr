@@ -25,8 +25,9 @@ program GocciaFuzzHarness;
   another build's, so the snapshot seeds are written by the harness that
   fuzzes them. Functions and generators are named by the bytecode of the
   module that compiled them, so the engine a snapshot is restored in runs
-  the seeds' own program first. What restores is then used: its functions
-  called and its generators resumed.
+  the seeds' own program first. What restores is then used
+  (Goccia.HeapSnapshot.Exercise): its functions called and its generators
+  resumed, returned or thrown into.
 
   See docs/contributing/tooling.md for the AFL++ and reproduction workflow. }
 
@@ -633,7 +634,10 @@ begin
       // used is a value.
       if (Length(Restore.Roots) > 0) and
          (Restore.Roots[0] is TGocciaValue) then
-        ExerciseRestored(Engine, TGocciaValue(Restore.Roots[0]));
+        // The input's size picks how its generators are used, so each
+        // way is fuzzed.
+        ExerciseRestored(Engine, TGocciaValue(Restore.Roots[0]),
+          Integer(Input.Size mod EXERCISE_MODES));
       Result := foCompleted;
     except
       on E: EGocciaHeapSnapshotRefused do
