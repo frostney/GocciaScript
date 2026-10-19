@@ -113,6 +113,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.Error.Detail,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.JSON,
@@ -123,6 +124,7 @@ uses
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue,
   Goccia.Version,
   Goccia.VM.Exception;
 
@@ -521,20 +523,20 @@ function TryPopulateErrorInfoFromValue(const AValue: TGocciaValue;
   var AErrorInfo: TCLIJSONErrorInfo): Boolean;
 var
   ErrorObject: TGocciaObjectValue;
-  NameValue, MessageValue: TGocciaValue;
+  NameText, MessageText: string;
 begin
   Result := False;
   if not (AValue is TGocciaObjectValue) then
     Exit;
 
   ErrorObject := TGocciaObjectValue(AValue);
-  NameValue := ErrorObject.GetProperty(PROP_NAME);
-  MessageValue := ErrorObject.GetProperty(PROP_MESSAGE);
-
-  if Assigned(NameValue) and not (NameValue is TGocciaUndefinedLiteralValue) then
-    AErrorInfo.ErrorType := NameValue.ToStringLiteral.Value;
-  if Assigned(MessageValue) and not (MessageValue is TGocciaUndefinedLiteralValue) then
-    AErrorInfo.Message := MessageValue.ToStringLiteral.Value;
+  // The report is built after the run's engine was freed, so it reads string
+  // data properties only: an accessor or a Proxy trap would run guest code
+  // against that engine (the same rule as the human-readable renderer).
+  if TryGetStringDataProperty(ErrorObject, PROP_NAME, NameText) then
+    AErrorInfo.ErrorType := NameText;
+  if TryGetStringDataProperty(ErrorObject, PROP_MESSAGE, MessageText) then
+    AErrorInfo.Message := MessageText;
 
   // Where the engine recorded the error was created: the same location the
   // human-readable output's `-->` line shows. The guest-writable `stack`
@@ -550,6 +552,19 @@ begin
   end;
 
   Result := (AErrorInfo.ErrorType <> '') or (AErrorInfo.Message <> '');
+end;
+
+{ The message of a thrown value that carries no string name or message. An
+  object is not converted to a string: that would run its toString() against
+  an engine that was freed. }
+function ThrownValueFallbackText(const AValue: TGocciaValue): string;
+begin
+  if AValue is TGocciaObjectValue then
+    Result := '[object ' + TGocciaObjectValue(AValue).ToStringTag + ']'
+  else if AValue is TGocciaSymbolValue then
+    Result := TGocciaSymbolValue(AValue).ToDisplayString.Value
+  else
+    Result := AValue.ToStringLiteral.Value;
 end;
 
 function ExceptionClassToErrorType(const E: Exception): string;
@@ -581,7 +596,7 @@ begin
     if not TryPopulateErrorInfoFromValue(TGocciaThrowValue(E).Value, Result) then
     begin
       Result.ErrorType := 'Error';
-      Result.Message := TGocciaThrowValue(E).Value.ToStringLiteral.Value;
+      Result.Message := ThrownValueFallbackText(TGocciaThrowValue(E).Value);
     end;
     Exit;
   end;

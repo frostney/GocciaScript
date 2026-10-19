@@ -246,11 +246,15 @@ type
     property IsPrefix: Boolean read FIsPrefix;
   end;
 
+  // Whether an expression is or contains an optional chain, once known.
+  TGocciaOptionalChainPresence = (ocpUnknown, ocpAbsent, ocpPresent);
+
   TGocciaCallExpression = class(TGocciaExpression)
   private
     FCallee: TGocciaExpression;
     FArguments: TObjectList<TGocciaExpression>;
     FOptional: Boolean;
+    FOptionalChainPresence: TGocciaOptionalChainPresence;
   public
     constructor Create(const ACallee: TGocciaExpression;
       const AArguments: TObjectList<TGocciaExpression>; const ASpan: TGocciaSourceSpan;
@@ -259,6 +263,11 @@ type
     property Callee: TGocciaExpression read FCallee;
     property Arguments: TObjectList<TGocciaExpression> read FArguments;
     property Optional: Boolean read FOptional;
+    // Remembered by the compiler, which asks it of every call it compiles:
+    // the answer for a call covers the chain of calls and members before it,
+    // so without it a chain of n calls is walked n times.
+    property OptionalChainPresence: TGocciaOptionalChainPresence
+      read FOptionalChainPresence write FOptionalChainPresence;
   end;
 
   TGocciaMemberExpression = class(TGocciaExpression)
@@ -1148,6 +1157,7 @@ begin
   FCallee := ACallee;
   FArguments := AArguments;
   FOptional := AOptional;
+  FOptionalChainPresence := ocpUnknown;
 end;
 
 { TGocciaMemberExpression }

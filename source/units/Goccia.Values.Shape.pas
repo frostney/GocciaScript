@@ -132,13 +132,15 @@ type
     // times per map — a frame at every DefineProperty/TryDefineProperty/
     // AssignProperty instead measured +2.4%..+4.0% across the store-hot-path
     // benchmark shapes, for protection that is only ever consumed here.
-    procedure RequireStorageBytes(const ABytes: Int64;
+    procedure RequireStorageBytes(const ABytes, ANewBytes: Int64;
       const APendingValue: TGocciaPropertyDescriptor); override;
     // The budget decision, taken inside the rooted window RequireStorageBytes
     // has just opened. Separate and virtual so the window and the decision can
     // be reasoned about — and exercised — apart: the gate collects before
     // refusing, and it collects HERE, with the store's values already rooted.
-    procedure ConsultStorageBudget(const ABytes: Int64); virtual;
+    // ABytes is the transient footprint the budget is asked about, ANewBytes
+    // the block being allocated, which is what the heap trigger is told of.
+    procedure ConsultStorageBudget(const ABytes, ANewBytes: Int64); virtual;
   public
     constructor Create; overload;
     constructor Create(AInitialCapacity: Integer); overload;
@@ -296,8 +298,8 @@ begin
   FShapeEntryCount := 0;
 end;
 
-procedure TGocciaShapedPropertyMap.RequireStorageBytes(const ABytes: Int64;
-  const APendingValue: TGocciaPropertyDescriptor);
+procedure TGocciaShapedPropertyMap.RequireStorageBytes(const ABytes,
+  ANewBytes: Int64; const APendingValue: TGocciaPropertyDescriptor);
 var
   Roots: TGocciaActiveRootFrame;
 begin
@@ -334,15 +336,16 @@ begin
   try
     Roots.Add(FOwner);
     APendingValue.PushRoots(Roots);
-    ConsultStorageBudget(ABytes);
+    ConsultStorageBudget(ABytes, ANewBytes);
   finally
     Roots.Clear;
   end;
 end;
 
-procedure TGocciaShapedPropertyMap.ConsultStorageBudget(const ABytes: Int64);
+procedure TGocciaShapedPropertyMap.ConsultStorageBudget(const ABytes,
+  ANewBytes: Int64);
 begin
-  RequireNativeBytes(ABytes);
+  RequireNativeBytes(ABytes, ANewBytes);
 end;
 
 function TGocciaShapedPropertyMap.OwnerRealmIsCurrent: Boolean;

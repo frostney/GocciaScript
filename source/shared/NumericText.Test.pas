@@ -7,6 +7,7 @@ uses
   Math,
   SysUtils,
 
+  AllocationCounter,
   NumberBits,
   NumericText,
   TestingPascalLibrary;
@@ -21,6 +22,9 @@ type
     procedure TestNonDecimalRejections;
     procedure TestDecimalLiterals;
     procedure TestDecimalRoundingBoundaries;
+    procedure TestFastPathMatchesExactConversion;
+    procedure TestShortDecimalAllocations;
+    procedure TestEveryRoundingModeConvertsToNearest;
     procedure TestShortestNumberFormatting;
     procedure TestIntegerFormatting;
     procedure TestSignedZero;
@@ -55,6 +59,12 @@ begin
     TestDecimalLiterals);
   Test('decimal conversion rounds binary64 boundaries ties-to-even',
     TestDecimalRoundingBoundaries);
+  Test('the fast path converts as the exact conversion does',
+    TestFastPathMatchesExactConversion);
+  Test('every floating-point rounding mode converts to nearest, ties to even',
+    TestEveryRoundingModeConvertsToNearest);
+  Test('a short decimal converts without per-digit allocations',
+    TestShortDecimalAllocations);
   Test('number formatting emits ECMAScript shortest decimals',
     TestShortestNumberFormatting);
   Test('integer formatting matches the RTL across the Int64 range',
@@ -152,6 +162,111 @@ begin
     '1.7976931348623158e308'))).ToBe(UInt64($7FEFFFFFFFFFFFFF));
   Expect<UInt64>(DoubleToBits(DecimalTextToNumber(
     '1.7976931348623159e308'))).ToBe(UInt64($7FF0000000000000));
+end;
+
+procedure ExpectSameAsExact(const AText: string);
+begin
+  Expect<string>(AText + ' -> ' + IntToHex(DoubleToBits(
+    DecimalTextToNumber(AText)), 16)).ToBe(AText + ' -> ' + IntToHex(
+    DoubleToBits(ExactDecimalTextToNumber(AText)), 16));
+end;
+
+// A fixed-seed linear congruential step (Knuth's MMIX constants); the
+// arithmetic wraps by design.
+{$PUSH}{$Q-}{$R-}
+function NextPseudoRandom(var AState: UInt64; const ABound: Integer): Integer;
+begin
+  AState := AState * UInt64(6364136223846793005) +
+    UInt64(1442695040888963407);
+  Result := Integer((AState shr 33) mod UInt64(ABound));
+end;
+{$POP}
+
+procedure TNumericTextTests.TestFastPathMatchesExactConversion;
+const
+  BOUNDARIES: array[0..21] of string = (
+    '1', '-1', '1.5', '0.1', '123.456', '-0.000001', '1e22', '1e23',
+    '1e-22', '1e-23', '9007199254740992', '9007199254740993',
+    '9007199254740992e22', '9007199254740992e-22', '9007199254740991e15',
+    '9007199254740991e16', '1e15', '1e16', '7e15', '9999999999999999999',
+    '99999999999999999999', '4.35e-20');
+var
+  I, DigitCount, Exponent, DigitIndex: Integer;
+  State: UInt64;
+  Digits: string;
+begin
+  for I := Low(BOUNDARIES) to High(BOUNDARIES) do
+    ExpectSameAsExact(BOUNDARIES[I]);
+
+  // Every digit count the fast path reads, and every exponent around it.
+  State := 1785;
+  for I := 1 to 5000 do
+  begin
+    DigitCount := 1 + NextPseudoRandom(State, 20);
+    Exponent := NextPseudoRandom(State, 61) - 30;
+    SetLength(Digits, DigitCount);
+    for DigitIndex := 1 to DigitCount do
+      Digits[DigitIndex] := Char(Ord('0') + NextPseudoRandom(State, 10));
+    if Digits[1] = '0' then
+      Digits[1] := '1';
+    ExpectSameAsExact(Digits + 'e' + IntToStr(Exponent));
+    ExpectSameAsExact(Copy(Digits, 1, (DigitCount + 1) div 2) + '.' +
+      Copy(Digits, (DigitCount + 1) div 2 + 1, DigitCount) + 'e' +
+      IntToStr(Exponent));
+  end;
+end;
+
+procedure TNumericTextTests.TestShortDecimalAllocations;
+var
+  Value: Double;
+  Allocations: Int64;
+begin
+  // A source literal such as `1` used to cost a BigInteger long division:
+  // more than a hundred allocations for one digit.
+  StartCountingAllocations;
+  Value := DecimalTextToNumber('1');
+  Value := Value + DecimalTextToNumber('30000');
+  {$IF DEFINED(GOCCIA_CPU_X86_64) OR DEFINED(GOCCIA_CPU_AARCH64)}
+  // A fraction takes the fast path only where one division rounds once.
+  Value := Value + DecimalTextToNumber('1.25');
+  Allocations := StopCountingAllocations;
+  Expect<Double>(Value).ToBe(30002.25);
+  {$ELSE}
+  Allocations := StopCountingAllocations;
+  Expect<Double>(Value).ToBe(30001);
+  {$ENDIF}
+  if Allocations > 6 then
+    Fail(Format('%d allocations; expected at most 6', [Allocations]));
+end;
+
+// The conversion's result must not depend on the floating-point rounding
+// mode a host left set.
+procedure TNumericTextTests.TestEveryRoundingModeConvertsToNearest;
+const
+  INPUTS: array[0..5] of string = ('0.1', '1.25', '3.14159', '1e22',
+    '123456789012345e-17', '9007199254740993');
+  MODES: array[0..3] of TFPURoundingMode = (rmNearest, rmDown, rmUp,
+    rmTruncate);
+var
+  Expected: array[0..5] of UInt64;
+  Previous: TFPURoundingMode;
+  I, M: Integer;
+begin
+  for I := 0 to High(INPUTS) do
+    Expected[I] := DoubleToBits(ExactDecimalTextToNumber(INPUTS[I]));
+  Previous := GetRoundMode;
+  try
+    for M := 0 to High(MODES) do
+    begin
+      SetRoundMode(MODES[M]);
+      for I := 0 to High(INPUTS) do
+        if DoubleToBits(DecimalTextToNumber(INPUTS[I])) <> Expected[I] then
+          Fail(Format('%s under rounding mode %d', [INPUTS[I], Ord(MODES[M])]));
+    end;
+  finally
+    SetRoundMode(Previous);
+  end;
+  Expect<Boolean>(True).ToBe(True);
 end;
 
 procedure TNumericTextTests.TestShortestNumberFormatting;

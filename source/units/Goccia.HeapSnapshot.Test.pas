@@ -166,6 +166,7 @@ type
     procedure TestRestoredBigIntKeepsItsCharge;
     procedure TestHoleOnlyInElements;
     procedure TestRestoredFrozenLiteralStaysFrozen;
+    procedure TestRestoredAccessorLiteralKeepsItsSetter;
     procedure TestLargeIndexPropertyRoundTrips;
     procedure TestSnapshotEndsTheStream;
     procedure TestBuiltinsARunBuildsRestoreOrRefuseEarly;
@@ -344,6 +345,8 @@ begin
     TestHugeKeyOnBuiltinStaysBounded);
   Test('Built-ins a nested engine builds are not the outer session''s',
     TestNestedEngineBuildsAreItsOwn);
+  Test('A restored literal with an accessor keeps it whatever its fast flag says',
+    TestRestoredAccessorLiteralKeepsItsSetter);
 end;
 
 // Builds a graph with ASource in a fresh engine and writes what it returns;
@@ -1275,6 +1278,34 @@ begin
   Expect<string>(RestoreAndCheck(Bytes, '(() => { try { restored.y = 2; } ' +
     'catch (e) {} return [Object.isFrozen(restored), "y" in restored]' +
     '.join(); })()')).ToBe('true,false');
+end;
+
+procedure THeapSnapshotTests.TestRestoredAccessorLiteralKeepsItsSetter;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Pos_: Integer;
+begin
+  // Built-in accessors, which this phase names; neither changes the literal,
+  // which would leave the fast mode on its own.
+  Bytes := Snapshot('(() => { const o = { a: 1 }; ' +
+    'Object.defineProperty(o, "x", { get: Object.prototype.valueOf, ' +
+    'set: Object.prototype.valueOf, configurable: true }); return o; })()',
+    Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // The literal's payload starts with its fast flag, off once an accessor is
+  // defined; a snapshot claiming it on must not let assignments replace the
+  // accessor once the property-write cache stops priming.
+  Pos_ := ObjectEntryAt(Bytes, 0) + 2 + 4;
+  Expect<Integer>(Bytes[Pos_]).ToBe(0);
+  Bytes[Pos_] := 1;
+  // Strict code: the loose store never takes the literal fast path.
+  Expect<string>(RestoreAndCheck(Bytes, '(() => { "use strict"; ' +
+    'for (const i of Array.from({ length: 200 }, (_, n) => n)) ' +
+    'restored.x = i; ' +
+    'const d = Object.getOwnPropertyDescriptor(restored, "x"); ' +
+    'return [typeof d.set, "value" in d].join(); })()'))
+    .ToBe('function,false');
 end;
 
 procedure THeapSnapshotTests.TestLargeIndexPropertyRoundTrips;

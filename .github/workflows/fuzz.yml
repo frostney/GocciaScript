@@ -2,7 +2,7 @@ name: Fuzz and memory safety
 
 # Coverage-blind crash fuzzing plus memory-safety tooling over the JavaScript
 # suite. Scheduled rather than per-PR: a useful fuzz run takes far longer than
-# a PR should wait, and Valgrind slows the suite by roughly an order of
+# a PR should wait, and Valgrind slows the suite by about two orders of
 # magnitude. PR-time coverage stays with the ordinary suite in pr.yml.
 #
 # Cadence: nightly (03:00 UTC). Manual trigger available via workflow_dispatch,
@@ -202,12 +202,17 @@ jobs:
         run: ./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
 
       - name: Sweep the seeds
-        # Every seed is a snapshot this build wrote: each must restore.
+        # Every seed is a snapshot this build wrote: each must restore. One
+        # that does not is kept for the reproducer artifact, since the seeds
+        # are specific to this build.
         run: |
+          mkdir -p build/fuzz/heap-snapshot-replay-failures
           status=0
           for seed in build/fuzz/heap-snapshot-corpus/*.ghsn; do
-            if ! ./build/GocciaFuzzHarness --verbose --heap-snapshot "$seed" 2>&1 | grep -q '\] completed$'; then
+            out=$(./build/GocciaFuzzHarness --verbose --heap-snapshot "$seed" 2>&1 || true)
+            if ! grep -q '\] completed$' <<< "$out"; then
               echo "::error::Seed did not restore: $seed"
+              cp "$seed" build/fuzz/heap-snapshot-replay-failures/seed-"$(basename "$seed")"
               status=1
             fi
           done
@@ -259,14 +264,20 @@ jobs:
           printf 'x' > build/fuzz/not-a-snapshot
           # Every input a replay fails on is kept for the reproducer artifact.
           mkdir -p build/fuzz/heap-snapshot-replay-failures
-          blocks() { ./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$1" 2>&1 | grep -oE '^[0-9]+ unfreed memory blocks' | cut -d' ' -f1; }
-          baseline=$(blocks build/fuzz/not-a-snapshot)
+          # The harness exits 0 on every outcome the reader models (a refusal
+          # included) and nonzero on a fault. A replay that exits nonzero, or
+          # whose unfreed-block count (empty when heaptrc printed none)
+          # differs from the baseline, fails and keeps its input.
+          blocks() { grep -oE '^[0-9]+ unfreed memory blocks' <<< "$1" | cut -d' ' -f1 || true; }
+          baseline=$(blocks "$(./build/GocciaFuzzHarnessHeaptrc --heap-snapshot build/fuzz/not-a-snapshot 2>&1 || true)")
           echo "unfreed blocks at exit without a snapshot: ${baseline}"
           status=0
           for f in build/fuzz/heap-snapshot-replay/*; do
-            got=$(blocks "$f")
-            if [ "$got" != "$baseline" ]; then
-              echo "::error::heaptrc: $f leaves ${got} unfreed blocks, ${baseline} without a snapshot"
+            code=0
+            out=$(./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$f" 2>&1) || code=$?
+            got=$(blocks "$out")
+            if [ "$code" -ne 0 ] || [ "$got" != "$baseline" ]; then
+              echo "::error::heaptrc: $f exits ${code} and leaves ${got} unfreed blocks, ${baseline} without a snapshot"
               cp "$f" build/fuzz/heap-snapshot-replay-failures/heaptrc-"$(basename "$f")"
               status=1
             fi
@@ -321,6 +332,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
       - name: Install FPC and Valgrind
         run: |
           sudo apt-get update
@@ -352,25 +365,66 @@ jobs:
           fi
 
       - name: Run suite under Valgrind memcheck
-        # A full suite run under memcheck is slow; --error-exitcode makes any
-        # invalid access fail the job rather than scroll past. The suppression
-        # file covers the runtime library's aligned over-reads; its header
-        # says what that gives up.
+        # --error-exitcode makes any invalid access fail the job rather than
+        # scroll past. The suppression file covers the runtime library's
+        # aligned over-reads; its header says what that gives up.
+        #
+        # Valgrind runs one guest thread at a time, so --jobs inside one
+        # process buys nothing and starves the pool's workers until its
+        # watchdog abandons them. Each Valgrind process therefore runs one
+        # worker (--jobs=1, the sequential path, no watchdog), and the suite
+        # is split across one such process per CPU, balanced by each file's
+        # native time. One process for the whole suite took 58.6 minutes on
+        # a fast workstation (2026-10-19), too close to this job's limit on
+        # a runner.
+        #
+        # --timeout: memcheck slowed the files that take longest natively by
+        # 68-109x (measured with one worker on 2026-10-19; startup aside),
+        # so a file gets the default 30 s per-file budget times 110: what a
+        # native run accepts, memcheck accepts. A hang still ends at the
+        # job's timeout-minutes.
         run: |
           fpc_version=$(fpc -iV)
           if [ "$fpc_version" != "3.2.2" ]; then
             echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's IndexByte and IndexWord; this job runs FPC $fpc_version"
           fi
-          valgrind \
-            --tool=memcheck \
-            --error-exitcode=42 \
-            --suppressions=scripts/valgrind/fpc-rtl.supp \
-            --errors-for-leak-kinds=none \
-            --leak-check=no \
-            --track-origins=yes \
-            --log-file=build/valgrind.log \
-            ./build/GocciaTestRunner -P tests
-          tail -40 build/valgrind.log
+          shards=$(nproc)
+          # The runner's own file discovery and native per-file times.
+          ./build/GocciaTestRunner -P tests --no-progress --silent \
+            --output=build/memcheck-plan.json > /dev/null
+          bun scripts/valgrind/shard-suite.ts build/memcheck-plan.json \
+            "$shards" build/memcheck-shard
+          pids=()
+          for shard in $(seq 0 $((shards - 1))); do
+            # Fewer files than CPUs leaves a shard empty; a runner with no
+            # path would not run the suite.
+            [ -s "build/memcheck-shard-$shard.txt" ] || continue
+            mapfile -t files < "build/memcheck-shard-$shard.txt"
+            valgrind \
+              --tool=memcheck \
+              --error-exitcode=42 \
+              --suppressions=scripts/valgrind/fpc-rtl.supp \
+              --errors-for-leak-kinds=none \
+              --leak-check=no \
+              --track-origins=yes \
+              --log-file="build/valgrind-$shard.log" \
+              ./build/GocciaTestRunner -P --jobs=1 --timeout=55m --no-progress \
+              "${files[@]}" > "build/memcheck-$shard.log" 2>&1 &
+            pids[$shard]=$!
+          done
+          status=0
+          for shard in "${!pids[@]}"; do
+            if wait "${pids[$shard]}"; then
+              echo "shard $shard: passed"
+            else
+              code=$?
+              echo "::error::memcheck shard $shard exited $code"
+              status=1
+            fi
+            grep -E 'Test Results (Run Tests|Passed|Failed|Failed Tests):' "build/memcheck-$shard.log" || true
+            tail -5 "build/valgrind-$shard.log"
+          done
+          exit $status
 
       - name: Upload memory-safety logs
         if: always()

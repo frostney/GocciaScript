@@ -17790,15 +17790,29 @@ procedure TLiteralObjectSnapshotCodec.Fill(
   const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
 var
   Literal: TGocciaVMLiteralObjectValue;
+  Pair: TGocciaPropertyMap.TKeyValuePair;
   Fast: Boolean;
 begin
   Literal := TGocciaVMLiteralObjectValue(AObject);
   Fast := AReader.ReadBool;
   AReader.ReadObjectCore(Literal);
-  // The fast path adds properties without asking for extensibility, so a
-  // non-extensible literal (sealed and frozen ones included) never takes it,
-  // whatever the snapshot says; the engine itself leaves it on a freeze,
-  // seal or preventExtensions.
+  // The fast path adds properties without asking for extensibility and
+  // replaces any own property that is not a plain data property, so it is
+  // kept only for a literal the engine itself could leave in that mode: an
+  // extensible one (a freeze, seal or preventExtensions leaves it) whose own
+  // properties are all enumerable, configurable, writable data (any other
+  // definition leaves it too), whatever the snapshot says.
+  if Fast and Literal.Extensible then
+    for Pair in Literal.Properties do
+    begin
+      AReader.Poll;
+      if (Pair.Value.ClassType <> TGocciaPropertyDescriptorData) or
+         (Pair.Value.Flags <> [pfEnumerable, pfConfigurable, pfWritable]) then
+      begin
+        Fast := False;
+        Break;
+      end;
+    end;
   Literal.FFastLiteralMode := Fast and Literal.Extensible;
 end;
 
