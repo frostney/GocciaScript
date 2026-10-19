@@ -42,6 +42,7 @@ type
     procedure TestShimLoadedNativelyRestores;
     procedure TestDateRefusesUntilItsCodec;
     procedure TestBuiltinInternalsAreNotMissed;
+    procedure TestShimTakesInRunFunction;
   public
     procedure SetupTests; override;
   end;
@@ -83,6 +84,8 @@ begin
     TestDateRefusesUntilItsCodec);
   Test('Built-ins written in JavaScript are not missed objects; the run''s are',
     TestBuiltinInternalsAreNotMissed);
+  Test('A run''s function a shim took in while it loaded is not a built-in',
+    TestShimTakesInRunFunction);
 end;
 
 // Builds everything an engine builds lazily: every own property of every
@@ -487,6 +490,35 @@ begin
     TGarbageCollector.LimitMarkStackForTesting(0);
   end;
   Expect<Boolean>(Pos('mark stack overflowed', Refusal) > 0).ToBe(True);
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestShimTakesInRunFunction;
+var
+  Refusal: string;
+  Bytes: TBytes;
+begin
+  // The parseInt shim exports what Number.parseInt holds when it loads.
+  // What the run's function holds is the run's, though the shim's export
+  // reaches it.
+  Snapshot('(() => { const original = Number.parseInt; ' +
+    'Number.parseInt = (() => { const hidden = { x: 1 }; ' +
+    'return (a, b) => hidden; })(); const saved = globalThis.parseInt; ' +
+    'Number.parseInt = original; return saved; })()', Refusal, True);
+  Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
+    .ToBe(True);
+  // A function that holds nothing is named as the built-in, and restores
+  // as no other engine builds it.
+  Bytes := Snapshot('(() => { const original = Number.parseInt; ' +
+    'Number.parseInt = (a, b) => 42; const saved = globalThis.parseInt; ' +
+    'Number.parseInt = original; return saved; })()', Refusal, True);
+  Expect<string>(Refusal).ToBe('');
+  Refusal := RestoreRefusal(Bytes);
+  Expect<Boolean>(Pos('parseInt', Refusal) > 0).ToBe(True);
+  // A function's length and name are its own properties, though synthesized.
+  Snapshot('(() => { delete Math.max.name; return { a: 1 }; })()', Refusal);
+  Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
+  Snapshot('(() => { delete Math.max.length; return { a: 1 }; })()', Refusal);
+  Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
 end;
 
 begin

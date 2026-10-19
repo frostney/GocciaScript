@@ -105,6 +105,10 @@ type
   TGocciaHeapSnapshotWriter = class;
   TGocciaHeapSnapshotReader = class;
 
+  // An object the accounting check is to pass over.
+  TGocciaSnapshotObjectFilter = function(
+    const AObject: TGCManagedObject): Boolean of object;
+
   { Objects the accounting check does not count as missed: what was alive
     before the run, and what the embedder keeps itself. One named type, so
     every unit shares its specialization. }
@@ -347,12 +351,11 @@ type
     // the order they registered, so what was alive before the run is what
     // comes before AFirstOfRun. Detects objects a codec missed, not fields.
     // It does not collect: the caller collects before the snapshot, so what
-    // is left is live. With ASkipMarked it also passes over objects that
-    // carry the collector's current mark, which the caller set on what
-    // built-ins reach (their internals) after the collection.
+    // is left is live. It also passes over the objects ASkip accepts (the
+    // internals of built-ins, which are named through them).
     procedure CheckAccounting(const AFirstOfRun: TGCManagedObject;
       const ABaseline: TGocciaHeapSnapshotBaseline;
-      const ASkipMarked: Boolean = False);
+      const ASkip: TGocciaSnapshotObjectFilter = nil);
     function IsWritten(const AObject: TGCManagedObject): Boolean;
 
     property ObjectCount: Integer read GetObjectCount;
@@ -536,6 +539,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.DateData,
+  Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Version;
 
@@ -1222,6 +1226,20 @@ begin
     Identity(Encoder, Obj.Prototype);
     Encoder.Count(Ord(Obj.Extensible) or (Ord(Obj.Sealed) shl 1) or
       (Ord(Obj.Frozen) shl 2));
+    // A function by its kind and its synthesized length and name, which are
+    // not in the property map: a run's function that a lazy built-in took
+    // in (a shim exporting what a global held when it loaded) is not the
+    // engine's own, and a deleted length or name is a change.
+    if Obj is TGocciaFunctionBase then
+    begin
+      Encoder.Field(Obj.ClassName);
+      Encoder.Count(Ord(TGocciaFunctionBase(Obj).HasOwnLengthProperty) or
+        (Ord(TGocciaFunctionBase(Obj).HasOwnNameProperty) shl 1));
+      if TGocciaFunctionBase(Obj).HasOwnLengthProperty then
+        Encoder.Count(TGocciaFunctionBase(Obj).IntrinsicLength);
+      if TGocciaFunctionBase(Obj).HasOwnNameProperty then
+        Encoder.Field(TGocciaFunctionBase(Obj).IntrinsicName);
+    end;
     // In order: a deleted and re-added member moves to the end.
     Encoder.Count(Obj.Properties.Count);
     for Pair in Obj.Properties do
@@ -2024,7 +2042,8 @@ end;
 
 procedure TGocciaHeapSnapshotWriter.CheckAccounting(
   const AFirstOfRun: TGCManagedObject;
-  const ABaseline: TGocciaHeapSnapshotBaseline; const ASkipMarked: Boolean);
+  const ABaseline: TGocciaHeapSnapshotBaseline;
+  const ASkip: TGocciaSnapshotObjectFilter);
 const
   MAX_DETAILS = 8;
 var
@@ -2049,7 +2068,7 @@ begin
         Continue;
       if FIds.ContainsKey(Obj) or (FBuiltins.IndexOf(Obj) >= 0) then
         Continue;
-      if ASkipMarked and Obj.GCMarked then
+      if Assigned(ASkip) and ASkip(Obj) then
         Continue;
       if (Obj is TGocciaSymbolValue) and
          TGocciaSymbolValue(Obj).Registered then

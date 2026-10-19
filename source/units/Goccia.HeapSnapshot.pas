@@ -75,6 +75,7 @@ type
     FMarkOverflows: Integer;
     procedure MarkBuiltinInternals;
     procedure CheckAccountingMarked;
+    function IsBuiltinInternal(const AObject: TGCManagedObject): Boolean;
   public
     constructor Create(const AEngine: TGocciaEngine);
     destructor Destroy; override;
@@ -135,6 +136,7 @@ uses
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.SharedPrototype,
+  Goccia.Shims,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
@@ -830,10 +832,12 @@ end;
   and held only by the built-ins, are named through the built-ins that hold
   them (ADR 0148): nothing writes them, and the accounting check is not to
   count them as missed. Everything the named built-ins reach is marked, by
-  the collector's own marking outside a collection. The global scope is
-  marked first, so what the run's own top-level bindings hold, which a
-  built-in's scope chain reaches, is still counted. No limit is polled:
-  marking is bounded by the heap, as the collection before it is. }
+  the collector's own marking outside a collection, and of that only what a
+  shim's load created is passed over: a run's object that a shim took in
+  while it loaded (what a global held then) is still counted. The global
+  scope is marked first, so what the run's own top-level bindings hold,
+  which a built-in's scope chain reaches, is counted too. No limit is
+  polled: marking is bounded by the heap, as the collection before it is. }
 procedure TGocciaHeapSnapshotSession.MarkBuiltinInternals;
 var
   I: Integer;
@@ -853,7 +857,17 @@ begin
   if TGarbageCollector.MarkStackOverflows <> FMarkOverflows then
     raise EGocciaHeapSnapshotRefused.Create('the mark stack overflowed ' +
       'while the accounting check marked what built-ins reach');
-  FAccountingWriter.CheckAccounting(FFirstOfRun, FBaseline, True);
+  FAccountingWriter.CheckAccounting(FFirstOfRun, FBaseline,
+    IsBuiltinInternal);
+end;
+
+function TGocciaHeapSnapshotSession.IsBuiltinInternal(
+  const AObject: TGCManagedObject): Boolean;
+var
+  IsMarker: Boolean;
+begin
+  Result := CreatedByShimLoad(FEngine.Realm, AObject, IsMarker) and
+    (IsMarker or AObject.GCMarked);
 end;
 
 procedure TGocciaHeapSnapshotSession.AddToBaseline(

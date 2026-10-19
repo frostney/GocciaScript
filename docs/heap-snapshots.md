@@ -28,7 +28,10 @@ iterator prototype made on first use) are named too. Lazy members are watched
 as they are built, so building one is not a change; a built-in the session
 never saw before the run is written with its fingerprint, and the restoring
 engine builds the same built-in by name and compares, refusing the snapshot
-when the run had changed it.
+when the run had changed it. A built-in's state is its prototype, flags and
+own properties, and for a function also its kind and its synthesized
+`length` and `name`: a lazy built-in that took in the run's function (a shim
+exporting what a global held when it loaded) is not the engine's own.
 
 ```pascal
 uses
@@ -65,8 +68,10 @@ refuses when a live object the run created is neither written nor a
 built-in: it finds objects a codec missed, not fields. What the named
 built-ins reach counts as theirs: a built-in written in JavaScript (a shim
 such as `Date`) keeps its module scope, cells and private functions, built
-when the run first used it, and those are not missed objects. What the run's
-own top-level bindings hold still is. Should the collector's mark stack fail
+when the run first used it, and those are not missed objects. Only what a
+shim's load created counts as its own: a run's object the shim took in as it
+loaded is still missed, and so is what the run's own top-level bindings
+hold. Should the collector's mark stack fail
 to grow while it marks what built-ins reach, the snapshot is refused, since
 its recovery traces the global scope as well. Objects the embedder
 keeps alive itself go into the baseline with `AddToBaseline`. The collection
