@@ -355,7 +355,7 @@ Relative paths are resolved against the current working directory. A missing fil
 }
 ```
 
-Config keys mirror CLI option names (e.g. `--source-type` -> `"source-type"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags must be exactly `true` or `false`, and array-valued options like `alias` use JSON arrays. Capability grants and denies go in a `permissions` object, never at the top level; limits take the same units as on the command line. See [Permissions](permissions.md#config-files) for the `permissions` block, how its relative scopes resolve, and the removed keys that now fail with status 2. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
+Config keys mirror CLI option names (e.g. `--source-type` -> `"source-type"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags must be exactly `true` or `false`, and array-valued options like `alias` use JSON arrays. Capability grants and denies go in a `permissions` object, never at the top level; limits take the same units as on the command line. See [Permissions](permissions.md#config-files) for the `permissions` block, how its relative scopes resolve, and the removed keys that now fail with status 2. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream, and in sandbox mode stamps every virtual-filesystem timestamp at the epoch too; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
 ```json
@@ -553,8 +553,9 @@ run. There is no timing banner. The `write-back:` report goes to standard error.
 Diff output is explicit. JSON is the default format; it always includes a
 separate `metadataChanges` array whose per-path `changes` object contains only
 changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields, so
-timestamp-only changes never appear as content modifications. The unified
-format never includes metadata. `--diff-file=<path>` writes the diff to a host
+timestamp-only changes never appear as content modifications; under
+`--deterministic` it is empty ([Deterministic Profile](host-environment.md#deterministic-profile)).
+The unified format never includes metadata. `--diff-file=<path>` writes the diff to a host
 file instead of printing it, choosing JSON for `.json` and unified for `.diff`.
 An explicit `--diff=<format>` wins over the extension, and any other extension
 (`.patch` included) without one is an error.

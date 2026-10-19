@@ -9631,6 +9631,117 @@ await section("Runner sandbox mode: JSON diffs always carry metadata, unified di
   }
 });
 
+await section("Runner sandbox mode: --deterministic stamps every file at the epoch, as Date.now() reads it...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'import { runScript } from "goccia";',
+          "const times = (path) => {",
+          "  const stat = fs.statSync(path);",
+          '  return [stat.atimeMs, stat.mtimeMs, stat.ctimeMs, stat.birthtimeMs, stat.mtime.getTime()].join(",");',
+          "};",
+          'console.log("input:" + times("/in.txt"));',
+          'fs.writeFileSync("/written.txt", "w");',
+          'console.log("written:" + times("/written.txt"));',
+          'fs.writeFileSync("/in.txt", "changed");',
+          'console.log("rewritten:" + times("/in.txt"));',
+          'const child = runScript("/child.js", { sandbox: true, copy: ["/child.js"] });',
+          'console.log("child:" + child.result);',
+          'console.log("now:" + Date.now());',
+        ].join("\n"),
+      },
+      {
+        path: "/child.js",
+        text: [
+          'import fs from "fs";',
+          'fs.writeFileSync("/c.txt", "c");',
+          'fs.statSync("/c.txt").mtimeMs;',
+        ].join("\n"),
+      },
+      { path: "/in.txt", text: "input" },
+      {
+        path: "/reload.js",
+        text: [
+          'import fs from "fs";',
+          'fs.writeFileSync("/m.js", "export const v = 1;");',
+          'const first = (await import("/m.js")).v;',
+          'fs.writeFileSync("/m.js", "export const v = 2;");',
+          'const second = (await import("/m.js")).v;',
+          'fs.writeFileSync("/bad.js", "throw new Error(\'bad\');");',
+          'let failed = "ok";',
+          "try { await import(\"/bad.js\"); } catch (error) { failed = error.message; }",
+          'fs.writeFileSync("/bad.js", "export const fixed = true;");',
+          'let retried = "ok";',
+          "try { retried = String((await import(\"/bad.js\")).fixed); } catch (error) { retried = error.message; }",
+          'console.log([first, second, failed, retried].join("|"));',
+        ].join("\n"),
+      },
+    ]);
+
+    const runSandbox = (extra: string[], diff: string) => {
+      const proc = Bun.spawnSync(
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--diff-file=${diff}`, ...extra],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Sandbox mode timestamp run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      return {
+        stdout: normalizeLineEndings(proc.stdout.toString()).trim(),
+        diff: readFileSync(diff, "utf-8"),
+      };
+    };
+
+    // Inputs copied in, files the run writes, and an isolated child's files
+    // all carry the deterministic profile's epoch, so two runs agree.
+    const first = runSandbox(["--deterministic"], join(tmp, "first.json"));
+    const second = runSandbox(["--deterministic"], join(tmp, "second.json"));
+    const expected = [
+      "input:0,0,0,0,0",
+      "written:0,0,0,0,0",
+      "rewritten:0,0,0,0,0",
+      "child:0",
+      "now:0",
+    ].join("\n");
+    if (first.stdout !== expected)
+      throw new Error(`--deterministic sandbox timestamps should all be 0, got: ${first.stdout}`);
+    if (second.stdout !== first.stdout || second.diff !== first.diff)
+      throw new Error(`Two --deterministic sandbox runs should print and diff the same, got:\n${first.stdout}\n${first.diff}\n---\n${second.stdout}\n${second.diff}`);
+
+    // Every timestamp is the epoch before and after the run, so the metadata
+    // dimension is empty, while content changes are still reported.
+    const parsed = JSON.parse(first.diff);
+    if (!parsed.changes.some((c: any) => c.kind === "modify" && c.path === "/in.txt"))
+      throw new Error(`--deterministic diff should report /in.txt modified, got ${first.diff}`);
+    if (!parsed.changes.some((c: any) => c.kind === "create" && c.path === "/written.txt"))
+      throw new Error(`--deterministic diff should report /written.txt created, got ${first.diff}`);
+    if (!Array.isArray(parsed.metadataChanges) || parsed.metadataChanges.length !== 0)
+      throw new Error(`--deterministic diff should carry an empty metadataChanges, got ${first.diff}`);
+
+    // The loader reloads a module, or retries a failed import, only when its
+    // file is newer than what it cached; under a frozen clock none ever is.
+    const reload = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/reload.js", "--source-type=module", "--deterministic"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const reloadOut = normalizeLineEndings(reload.stdout.toString()).trim();
+    if (reload.exitCode !== 0 || reloadOut !== "1|1|bad|bad")
+      throw new Error(`--deterministic sandbox should neither reload a rewritten module nor retry a failed import, got exit ${reload.exitCode}: ${reloadOut}${reload.stderr.toString()}`);
+
+    // Without the flag the filesystem keeps the wall clock.
+    const live = runSandbox([], join(tmp, "live.json"));
+    const inputLine = live.stdout.split("\n").find((line) => line.startsWith("input:"));
+    const inputMtime = Number(inputLine?.slice("input:".length).split(",")[1]);
+    if (!(inputMtime > 1_000_000_000_000))
+      throw new Error(`Sandbox timestamps without --deterministic should be the wall clock, got: ${live.stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: fs errors are Node-shaped...", async () => {
   const tmp = makeNativeTmp();
   try {

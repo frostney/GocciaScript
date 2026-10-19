@@ -8,6 +8,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  SandboxVirtualFileSystem,
   TextEncoding,
   TimingUtils,
   TextSemantics,
@@ -169,6 +170,7 @@ type
     function HostCapabilityAllowFlags: TGocciaCapabilityScopes;
     function HostOnlyCommandLineOptions(
       const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
+    function SandboxDeterministic: Boolean;
     procedure ConfigureSandboxEngine(const AEngine: TGocciaEngine;
       const AContext: TGocciaSandboxContext; const AEntryPath: string;
       const AParentEngine: TGocciaEngine;
@@ -1620,6 +1622,16 @@ end;
 
 { TRunnerApp - Sandbox mode }
 
+{ --deterministic in sandbox mode. Only the root config, already merged into
+  the options, governs a sandbox run. }
+function TRunnerApp.SandboxDeterministic: Boolean;
+var
+  EmptyConfig: TConfigEntryArray;
+begin
+  EmptyConfig := nil;
+  Result := ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig);
+end;
+
 procedure TRunnerApp.ConfigureSandboxEngine(const AEngine: TGocciaEngine;
   const AContext: TGocciaSandboxContext; const AEntryPath: string;
   const AParentEngine: TGocciaEngine;
@@ -1644,7 +1656,7 @@ begin
   end;
   if Assigned(AParentHostEnvironment) then
     AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
-  else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
+  else if SandboxDeterministic then
     AEngine.HostEnvironment.UseDeterministicProfile;
 
   Runtime := AttachRuntime(AEngine);
@@ -1815,6 +1827,7 @@ end;
 procedure TRunnerApp.RunSandbox(const ARequest: TGocciaSandboxModeRequest);
 var
   Host: TGocciaSandboxHost;
+  FsClock: TSandboxFsClock;
   RunResult: TGocciaSandboxRunResult;
   Report: TStringList;
   EntryPath: string;
@@ -1831,9 +1844,20 @@ begin
   for I := 0 to High(ARequest.Notes) do
     WriteLn(ErrOutput, ARequest.Notes[I]);
 
-  Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes);
-  FSandboxHost := Host;
+  { Under --deterministic the filesystem's timestamps read the clock the
+    engines' deterministic profile reads, so a file's times are the epoch,
+    as Date.now() is, and two runs see and diff the same metadata. The
+    clock is set before the inputs are copied in, so they carry it too. }
+  if SandboxDeterministic then
+    FsClock := TGocciaSandboxFsHostClock.Create(
+      TGocciaHostEnvironment.DeterministicClock)
+  else
+    FsClock := nil;
+  Host := nil;
   try
+    Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes,
+      ARequest.MaxFsNodes, FsClock);
+    FSandboxHost := Host;
     Host.TimeoutMilliseconds := EngineOptions.Timeout.Milliseconds(0);
     Host.MaxInstructions := EngineOptions.MaxInstructions.ValueOr(0);
     Host.ImportMapPath := EngineOptions.ImportMap.ValueOr('');
@@ -1895,6 +1919,7 @@ begin
   finally
     FSandboxHost := nil;
     Host.Free;
+    FsClock.Free;
   end;
 end;
 
