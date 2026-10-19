@@ -6,6 +6,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  AllocationCounter,
   TestingPascalLibrary,
 
   Goccia.Error,
@@ -61,11 +62,14 @@ type
     procedure TestUnicodeEscapeOverflowRaisesLexerError;
     procedure TestTokenSpansUseUTF16CodeUnitOffsets;
   public
+    procedure TestAstralIdentifierAllocations;
     procedure SetupTests; override;
   end;
 
 procedure TLexerTests.SetupTests;
 begin
+  Test('An identifier of supplementary-plane characters scans without ' +
+    'an allocation per character', TestAstralIdentifierAllocations);
   Test('Ignores leading hashbang', TestIgnoresLeadingHashbang);
   Test('Preserves line numbers after hashbang', TestPreservesLineNumbersAfterHashbang);
   Test('Hashbang requires hashbang lexical goal',
@@ -117,6 +121,46 @@ begin
   finally
     Lexer.Free;
   end;
+end;
+
+// An identifier scans with the allocations of its growing buffer, never one
+// per character: one of 2,000 supplementary-plane characters (U+10400, two
+// UTF-16 units each) costs what one of 4,000 ASCII characters does.
+function CountIdentifierScanAllocations(const AIdentifier: string): Int64;
+var
+  Lexer: TGocciaLexer;
+begin
+  Lexer := TGocciaLexer.Create('const ' + AIdentifier + ' = 1;', '<test>');
+  try
+    StartCountingAllocations;
+    repeat
+    until Lexer.ScanNextToken(glgInputElementRegExp).TokenType = gttEOF;
+    Result := StopCountingAllocations;
+  finally
+    Lexer.Free;
+  end;
+end;
+
+procedure TLexerTests.TestAstralIdentifierAllocations;
+const
+  CODE_POINTS = 2000;
+var
+  Astral, Ascii: string;
+  I: Integer;
+  AstralCount, AsciiCount: Int64;
+begin
+  Astral := '';
+  for I := 1 to CODE_POINTS do
+    Astral := Astral + #$D801#$DC00;
+  Ascii := StringOfChar('a', 2 * CODE_POINTS);
+  AsciiCount := CountIdentifierScanAllocations(Ascii);
+  AstralCount := CountIdentifierScanAllocations(Astral);
+  // A handful of allocations differ between the two (5 on x86-64 Linux);
+  // an allocation per character adds 2,000.
+  if AstralCount > AsciiCount + 16 then
+    Fail(Format('%d allocations for the supplementary-plane identifier, ' +
+      '%d for the ASCII one', [AstralCount, AsciiCount]));
+  Expect<Boolean>(AstralCount <= AsciiCount + 16).ToBe(True);
 end;
 
 procedure TLexerTests.ScanAllTokens(const ALexer: TGocciaLexer;

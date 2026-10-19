@@ -215,6 +215,19 @@ Result := NumberBits.IsNegativeZero(V);
 
 This works because `DoubleToBits` copies the whole `Double` into a `UInt64`, so the sign is bit 63 of the integer regardless of byte ordering. Use `DoubleToBits` / `BitsToDouble` for any other bit-level test.
 
+### `WideChar in [set]` Allocates
+
+Under `{$mode delphiunicode}` a set test on a `WideChar` (`Ch in ['0'..'9']`)
+converts the character through the widestring manager (`fpc_uchar_to_char`),
+which allocates and frees a temporary string on every test. A scanner that does
+this per source character makes several heap allocations per character, which
+is slow natively and very slow under heaptrc and Valgrind (the JSX transformer
+did 226,196 allocations for a 36,028-character source). Use `CharInSet(Ch,
+['0'..'9'])`, or compare code points (`(Ch >= '0') and (Ch <= '9')`), in any
+loop over source text. Likewise, append a scanned character to a string or
+builder directly, or copy a range of the source, instead of building a
+one-character string per character.
+
 ## Fuzzing and Memory Safety
 
 `GocciaFuzzHarness` drives a single input through lex, parse, bytecode
@@ -313,7 +326,7 @@ JavaScript suite under two tools that answer different questions:
 | Tool | Catches | Invocation |
 |------|---------|-----------|
 | **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr` |
-| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P tests` |
+| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P --jobs=1 --timeout=55m tests` |
 
 `DIR` is a unit-output directory of your own (CI uses
 `build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own
@@ -330,9 +343,22 @@ read past the end of a buffer and ignore what they find there. The file's
 header explains the over-read and what the suppression gives up, including the
 undefined values it hides inside those two routines.
 
-Both run on Linux only. Valgrind slows the suite by roughly an order of
-magnitude, which is why neither runs per-PR. Findings upload as artifacts with
-a 30-day retention.
+Valgrind runs one thread of a process at a time. Under `--jobs` the pool's
+workers wait for each other, and its watchdog abandons workers that are only
+waiting, so run memcheck with `--jobs=1`. One process for the whole suite took
+58.6 minutes on a fast workstation, so CI splits the suite into one shard per
+CPU, balanced by each file's native time
+(`bun scripts/valgrind/shard-suite.ts`), and runs one single-worker Valgrind
+process per shard side by side. Memcheck slowed the files that take longest
+natively by 68 to 109 times (measured with one worker on 2026-10-19), so the
+step gives each file the default 30-second budget times 110: `--timeout=55m`.
+
+heaptrc costs about 0.6 µs per allocation and free, so a file that allocates
+per character or per digit is slow under it; see
+[`WideChar in [set]` Allocates](#widechar-in-set-allocates).
+
+Both run on Linux only, and neither runs per-PR. Findings upload as artifacts
+with a 30-day retention.
 
 ### GC-stress build
 
