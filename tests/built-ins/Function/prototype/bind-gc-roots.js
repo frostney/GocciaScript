@@ -134,6 +134,7 @@ describe.runIf(hasGoccia)("Function.prototype.bind GC roots", () => {
     churn();
     expect(churn()).toBe(467.5);
   });
+});
 
 describe.runIf(hasGoccia)("Function.prototype.bind GC roots with a Proxy target", () => {
   test("a prototype returned fresh by the getPrototypeOf trap survives the later reads", () => {
@@ -166,5 +167,23 @@ describe.runIf(hasGoccia)("Function.prototype.bind GC roots with a Proxy target"
     expect(bound.name).toBe("bound target");
     expect(bound.length).toBe(2);
   });
-});
+
+  test("a prototype survives the extensibility check of a nested Proxy target", () => {
+    // The outer trap's result is held by nothing while its invariant check
+    // asks the inner Proxy whether it is extensible, which collects.
+    const inner = new Proxy(() => {}, {
+      isExtensible() {
+        churn();
+        return true;
+      },
+    });
+    const outer = new Proxy(inner, {
+      getPrototypeOf() {
+        return { marker: "fresh" };
+      },
+    });
+    const bound = Function.prototype.bind.call(outer, null);
+    churn();
+    expect(Object.getPrototypeOf(bound).marker).toBe("fresh");
+  });
 });
