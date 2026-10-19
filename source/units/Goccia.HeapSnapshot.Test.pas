@@ -1101,8 +1101,10 @@ begin
   begin
     Bytes := Snapshot(SOURCES[I], Refusal);
     // What an async source left queued is the next source's problem
-    // otherwise: the queue is the thread's.
-    TGocciaMicrotaskQueue.Instance.DrainQueue;
+    // otherwise: the queue is the thread's. It belongs to the engine
+    // Snapshot has freed, so it is discarded, never run: a job run after its
+    // engine reads the freed realm (GocciaScript #1821).
+    TGocciaMicrotaskQueue.Instance.ClearQueue;
     // A snapshot the same engine build wrote restores.
     if Refusal = '' then
     begin

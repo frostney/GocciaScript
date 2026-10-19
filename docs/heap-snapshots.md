@@ -96,7 +96,8 @@ is not idle any more.
 Restore := TGocciaHeapSnapshotRestore.Create(FreshEngine, Input,
   TGocciaHeapSnapshotLimits.Defaults);
 try
-  Value := TGocciaValue(Restore.Roots[0]);
+  if Restore.Roots[0] is TGocciaValue then
+    Value := TGocciaValue(Restore.Roots[0]);
   // ... root what you keep, then free the restore ...
 finally
   Restore.Free;
@@ -104,7 +105,9 @@ end;
 ```
 
 The roots come back in the order they were written and stay rooted until
-the restore is freed. A snapshot from another engine build, format version
+the restore is freed. A root is whatever object was written, and a hostile
+snapshot can make it any object it holds, a closure's cell among them, so
+check its class before using it. A snapshot from another engine build, format version
 or codec schema, one naming a built-in this engine does not have, one over
 the limits or one that is malformed is refused with
 `EGocciaHeapSnapshotInvalid` (a subclass of `EGocciaHeapSnapshotRefused`).
@@ -269,11 +272,10 @@ A built-in whose state differs from what the session recorded is written in
 its own section (format version 3, between the object table and the roots)
 as its whole own state: its prototype, its extensibility and integrity, a
 function's or a class's synthesized `length` and `name`, an array's length
-and elements,
-and every own property, string- and symbol-keyed, in its final order. A
-member the engine built and the run left alone, or one still lazy, is
-written as kept: the restoring engine's own member of that key, lazy or
-built, stays. The run's objects a changed built-in holds are written like
+and elements, and every own property, string- and symbol-keyed, in its
+final order. A member the engine built and the run left alone, or one still
+lazy, is written as kept: the restoring engine's own member of that key,
+lazy or built, stays. The run's objects a changed built-in holds are written like
 any others, and the naming walk does not reach them through it.
 
 The reader checks each difference against the built-in it names in this
@@ -287,9 +289,9 @@ new properties and elements are built aside first (under the run's memory
 ceiling and execution limits), then installed in a step that allocates
 nothing and cannot fail, so a refused restore leaves this engine's built-ins
 as they were (ADR 0148 had them applied before the object graph is filled;
-nothing the fill does reads a built-in's own state). Resolving names can still build lazy built-ins, which
-a later restore into the same engine cannot tell from changes: restore into
-a fresh engine. To snapshot a restored run again, create the session before
+nothing the fill does reads a built-in's own state). Resolving names can
+still build lazy built-ins, which a later restore into the same engine
+cannot tell from changes: restore into a fresh engine. To snapshot a restored run again, create the session before
 the restore, as for any run; the restore is then the run's first change.
 
 A change to a built-in's native internal state (an error's or a RegExp's
@@ -310,3 +312,29 @@ as a snapshot with `--heap-snapshot <file>` and writes its own seed
 snapshots with `--write-heap-snapshot-seeds <dir>`; the scheduled
 [fuzz workflow](../.github/workflows/fuzz.yml) fuzzes the reader with
 them ([Tooling — Fuzzing](contributing/tooling.md#fuzzing-and-memory-safety)).
+
+`source/units/Goccia.HeapSnapshot.Hardening.Test.pas` takes two real
+snapshots apart along the format, one of a plain graph and one holding
+closures and suspended generators: every count, index and length of the
+header and its tables set to its boundary values, every object entry read by
+every other codec, dropped, doubled, swapped and cut short, references to
+objects and built-ins pointed at other objects and built-ins, and payload bytes set
+to the value tags. Each mutant restores or is refused, and what restores is
+used (`THeapSnapshotExerciser` in `Goccia.HeapSnapshot.Exercise`: up to 600
+distinct objects, what the run's values hold before any prototype, each
+property read, each function called, each generator resumed, returned or
+thrown into while it is suspended). It also round-trips deep chains of every
+kind of link, refuses at the end of one and stops a restore of one at half
+its memory, so no walk recurses per link; restores with the collector's
+`CollectBeforeEveryReservation` on, so each reservation the reader makes
+collects first; restores under 401 ceilings spread evenly up to what a
+restore needs; and restores the same mutants again to check that the heap
+stays where it was.
+
+| Size | Payload values and reference targets | Chains | Runs |
+|---|---|---|---|
+| default | one in 4 at each, rotating | 200,000 links | on every pull request |
+| `GOCCIA_HEAP_SNAPSHOT_HARDENING=full` | all | 1,000,000 links | in the scheduled fuzz workflow |
+
+The fuzz workflow also runs every heap snapshot test program at its default
+size under heaptrc.
