@@ -71,6 +71,9 @@ type
     FFirstOfRun: TGCManagedObject;
     FCheckAccounting: Boolean;
     FLastObjectCount: Integer;
+    FAccountingWriter: TGocciaHeapSnapshotWriter;
+    procedure MarkBuiltinInternals;
+    procedure CheckAccountingMarked;
   public
     constructor Create(const AEngine: TGocciaEngine);
     destructor Destroy; override;
@@ -554,7 +557,6 @@ var
   Slot: Integer;
   Binding: TLexicalBinding;
   Owned: TObject;
-  Materializer: TGocciaSnapshotSlotMaterializer;
 begin
   Result := nil;
   AConsumed := 1;
@@ -581,11 +583,7 @@ begin
       Exit;
     // Filled on first use: filled here as using it would have.
     if not Assigned(AEngine.Realm.GetSlot(Slot)) then
-    begin
-      Materializer := FindSnapshotSlotMaterializer(AParts[1]);
-      if Assigned(Materializer) then
-        Materializer();
-    end;
+      MaterializeSnapshotSlot(AParts[1]);
     Exit(AEngine.Realm.GetSlot(Slot));
   end;
   if (AParts[0] = '%owned') and (Length(AParts) >= 3) then
@@ -596,11 +594,7 @@ begin
       Exit;
     // Filled on first use: filled here as using it would have.
     if not Assigned(AEngine.Realm.GetOwnedSlot(Slot)) then
-    begin
-      Materializer := FindSnapshotSlotMaterializer(AParts[1]);
-      if Assigned(Materializer) then
-        Materializer();
-    end;
+      MaterializeSnapshotSlot(AParts[1]);
     Owned := AEngine.Realm.GetOwnedSlot(Slot);
     if not (Owned is TGocciaSharedPrototype) then
       Exit;
@@ -830,6 +824,29 @@ begin
   inherited;
 end;
 
+{ The internals of built-ins written in JavaScript (a shim's module scope,
+  its closures' cells, its private functions and tables), built on first use
+  and held only by the built-ins, are named through the built-ins that hold
+  them (ADR 0148): nothing writes them, and the accounting check is not to
+  count them as missed. Everything the named built-ins reach is marked, by
+  the collector's own marking outside a collection. The global scope is
+  marked first, so what the run's own top-level bindings hold, which a
+  built-in's scope chain reaches, is still counted. No limit is polled:
+  marking is bounded by the heap, as the collection before it is. }
+procedure TGocciaHeapSnapshotSession.MarkBuiltinInternals;
+var
+  I: Integer;
+begin
+  FEngine.GlobalScope.GCMarked := True;
+  for I := 0 to FTable.Count - 1 do
+    FTable.ObjectAt(I).MarkReferences;
+end;
+
+procedure TGocciaHeapSnapshotSession.CheckAccountingMarked;
+begin
+  FAccountingWriter.CheckAccounting(FFirstOfRun, FBaseline, True);
+end;
+
 procedure TGocciaHeapSnapshotSession.AddToBaseline(
   const AObject: TGCManagedObject);
 begin
@@ -888,7 +905,15 @@ begin
       Buffer := TGocciaChargedMemoryStream.Create;
       Writer.Serialize(ARoots, Buffer);
       if FCheckAccounting then
-        Writer.CheckAccounting(FFirstOfRun, FBaseline);
+      begin
+        FAccountingWriter := Writer;
+        try
+          TGarbageCollector.Instance.InspectMarked(MarkBuiltinInternals,
+            CheckAccountingMarked);
+        finally
+          FAccountingWriter := nil;
+        end;
+      end;
     except
       // The run's memory ceiling, reached by the writer's own buffers: the
       // snapshot is refused and the run goes on. A timeout or a host stop

@@ -77,6 +77,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.DurationMath,
@@ -1111,5 +1112,6 @@ end;
 initialization
   RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTemporalPlainDateSharedSlot := RegisterRealmOwnedSlot('Temporal.PlainDate.shared');
+  RegisterSnapshotSlotGlobalPath('Temporal.PlainDate.shared', 'Temporal.PlainDate');
 
 end.

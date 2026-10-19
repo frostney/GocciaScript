@@ -1,0 +1,454 @@
+program Goccia.HeapSnapshot.Builtins.Test;
+
+{$I Goccia.inc}
+
+{ ADR 0148: built-ins are named, not written. A restore resolves each name
+  in a fresh engine, building what the name crosses; a realm slot filled on
+  first use is built by the materializer or the global path its unit
+  registered. Every slot a run can fill must resolve on its own, whatever
+  else the snapshot names. }
+
+uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
+  Classes,
+  Generics.Collections,
+  SysUtils,
+
+  TestingPascalLibrary,
+
+  Goccia.Engine,
+  Goccia.ExecutionContext,
+  Goccia.GarbageCollector,
+  Goccia.HeapSnapshot,
+  Goccia.HeapSnapshot.Codec,
+  Goccia.HeapSnapshot.TestSupport,
+  Goccia.Realm,
+  Goccia.Scope.BindingMap,
+  Goccia.SharedPrototype,
+  Goccia.Shims,
+  Goccia.SourcePipeline,
+  Goccia.TestSetup,
+  Goccia.Values.ClassValue,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue;
+
+type
+  THeapSnapshotBuiltinsTests = class(TTestSuite)
+  private
+    procedure TestEverySlotNameResolvesOnItsOwn;
+    procedure TestSlotsNothingFillsAreKnown;
+    procedure TestShimLoadedNativelyRestores;
+    procedure TestDateRefusesUntilItsCodec;
+    procedure TestBuiltinInternalsAreNotMissed;
+  public
+    procedure SetupTests; override;
+  end;
+
+const
+  SEP = HEAP_SNAPSHOT_PATH_SEPARATOR;
+
+  // Realm and owned slots a fresh engine leaves empty and nothing a script
+  // does fills: the host installs eval; Object.prototype has its own
+  // hasOwnProperty, so that shim is never installed; import.meta's cache
+  // holds no shared prototype; the rest belong to runtime extensions (Fetch,
+  // URL, encoding, events), which this engine does not install.
+  UNFILLED_SLOTS: array[0..12] of string = (
+    'eval',
+    '%Shim:hasOwnProperty%',
+    'ImportMeta.cache',
+    'Headers.shared',
+    'URL.shared',
+    'URLSearchParams.shared',
+    'Response.shared',
+    'TextDecoder.shared',
+    'TextEncoder.shared',
+    'Event.shared',
+    'EventTarget.shared',
+    'AbortController.shared',
+    'AbortSignal.shared');
+
+{ THeapSnapshotBuiltinsTests }
+
+procedure THeapSnapshotBuiltinsTests.SetupTests;
+begin
+  Test('Every slot a run can fill resolves by its name on its own',
+    TestEverySlotNameResolvesOnItsOwn);
+  Test('The slots nothing fills are the known ones',
+    TestSlotsNothingFillsAreKnown);
+  Test('A shim loaded natively, not through its global, restores',
+    TestShimLoadedNativelyRestores);
+  Test('A Date refuses the snapshot until a codec covers its time value',
+    TestDateRefusesUntilItsCodec);
+  Test('Built-ins written in JavaScript are not missed objects; the run''s are',
+    TestBuiltinInternalsAreNotMissed);
+end;
+
+// Builds everything an engine builds lazily: every own property of every
+// object reachable from the global object and the realm's slots is read as
+// a descriptor (which builds a lazy one), and every slot filled on first use
+// with a materializer or a global path is filled, until nothing new appears.
+procedure BuildEverything(const AEngine: TGocciaEngine);
+var
+  Seen: TDictionary<TObject, Boolean>;
+  Queue: TList<TGocciaObjectValue>;
+
+  procedure Enqueue(const AValue: TObject);
+  begin
+    if (AValue is TGocciaObjectValue) and not Seen.ContainsKey(AValue) then
+    begin
+      Seen.Add(AValue, True);
+      Queue.Add(TGocciaObjectValue(AValue));
+    end;
+  end;
+
+  procedure Visit(const AObject: TGocciaObjectValue);
+  var
+    Keys: TArray<string>;
+    Symbols: TArray<TGocciaSymbolValue>;
+    Descriptor: TGocciaPropertyDescriptor;
+    I: Integer;
+  begin
+    Enqueue(AObject.Prototype);
+    if AObject is TGocciaClassValue then
+    begin
+      Enqueue(TGocciaClassValue(AObject).GetConstructorPrototype);
+      Enqueue(TGocciaClassValue(AObject).Prototype);
+    end;
+    Keys := AObject.GetOwnPropertyKeys;
+    for I := 0 to High(Keys) do
+    begin
+      Descriptor := AObject.GetOwnPropertyDescriptor(Keys[I]);
+      if Descriptor is TGocciaPropertyDescriptorData then
+        Enqueue(TGocciaPropertyDescriptorData(Descriptor).Value)
+      else if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        Enqueue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+        Enqueue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+      end;
+      ReleaseDescriptor(Descriptor);
+    end;
+    Symbols := AObject.GetOwnSymbols;
+    for I := 0 to High(Symbols) do
+    begin
+      Descriptor := AObject.GetOwnSymbolPropertyDescriptor(Symbols[I]);
+      if Descriptor is TGocciaPropertyDescriptorData then
+        Enqueue(TGocciaPropertyDescriptorData(Descriptor).Value)
+      else if Descriptor is TGocciaPropertyDescriptorAccessor then
+      begin
+        Enqueue(TGocciaPropertyDescriptorAccessor(Descriptor).Getter);
+        Enqueue(TGocciaPropertyDescriptorAccessor(Descriptor).Setter);
+      end;
+    end;
+  end;
+
+  // Fills what can be filled and queues the slots' objects; True when a
+  // slot was filled since the last call.
+  function SweepSlots: Boolean;
+  var
+    Owned: TObject;
+    I: Integer;
+  begin
+    Result := False;
+    for I := 0 to RealmSlotCount - 1 do
+    begin
+      if not Assigned(AEngine.Realm.GetSlot(I)) and
+         MaterializeSnapshotSlot(RealmSlotName(I)) and
+         Assigned(AEngine.Realm.GetSlot(I)) then
+        Result := True;
+      Enqueue(AEngine.Realm.GetSlot(I));
+    end;
+    for I := 0 to RealmOwnedSlotCount - 1 do
+    begin
+      if not Assigned(AEngine.Realm.GetOwnedSlot(I)) and
+         MaterializeSnapshotSlot(RealmOwnedSlotName(I)) and
+         Assigned(AEngine.Realm.GetOwnedSlot(I)) then
+        Result := True;
+      Owned := AEngine.Realm.GetOwnedSlot(I);
+      if Owned is TGocciaSharedPrototype then
+      begin
+        Enqueue(TGocciaSharedPrototype(Owned).Prototype);
+        Enqueue(TGocciaSharedPrototype(Owned).MethodHost);
+      end;
+    end;
+  end;
+
+var
+  Next: Integer;
+  Grew: Boolean;
+begin
+  Seen := TDictionary<TObject, Boolean>.Create;
+  Queue := TList<TGocciaObjectValue>.Create;
+  try
+    Enqueue(AEngine.Realm.GlobalObject);
+    Next := 0;
+    repeat
+      while Next < Queue.Count do
+      begin
+        Visit(Queue[Next]);
+        Inc(Next);
+      end;
+      Grew := SweepSlots;
+    until not Grew and (Next >= Queue.Count);
+  finally
+    Queue.Free;
+    Seen.Free;
+  end;
+end;
+
+// The slot a name starts at: '%slot' and its slot, or '%owned' and its slot.
+function SlotRoot(const APath: string): string;
+var
+  First, Second: Integer;
+begin
+  First := Pos(SEP, APath);
+  Second := Pos(SEP, Copy(APath, First + 1, MaxInt));
+  if Second = 0 then
+    Result := APath
+  else
+    Result := Copy(APath, 1, First + Second - 1);
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestEverySlotNameResolvesOnItsOwn;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Table: TGocciaHeapSnapshotBuiltinTable;
+  Resolver: TGocciaBuiltinPathResolver;
+  Context: TGocciaExecutionContextScope;
+  Roots: TDictionary<string, TStringList>;
+  Root: TPair<string, TStringList>;
+  Failed: TStringList;
+  Path: string;
+  I: Integer;
+begin
+  Lines := TStringList.Create;
+  Roots := TDictionary<string, TStringList>.Create;
+  Failed := TStringList.Create;
+  try
+    // Every name a table gives through a slot, in an engine that built all
+    // it builds lazily: a table names a filled slot by the slot first.
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    Table := TGocciaHeapSnapshotBuiltinTable.Create;
+    try
+      BuildEverything(Engine);
+      BuildBuiltinTable(Table, Engine, False);
+      for I := 0 to Table.Count - 1 do
+      begin
+        Path := Table.PathAt(I);
+        if (Copy(Path, 1, 5) <> '%slot') and (Copy(Path, 1, 6) <> '%owned') then
+          Continue;
+        if not Roots.ContainsKey(SlotRoot(Path)) then
+          Roots.Add(SlotRoot(Path), TStringList.Create);
+        Roots[SlotRoot(Path)].Add(Path);
+      end;
+    finally
+      Table.Free;
+      Engine.Free;
+    end;
+    Expect<Boolean>(Roots.Count > 100).ToBe(True);
+    // Each slot's names resolve in a fresh engine where nothing else was
+    // resolved first.
+    for Root in Roots do
+    begin
+      Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+      Context := Engine.ActivateRealmExecutionContext;
+      Table := TGocciaHeapSnapshotBuiltinTable.Create;
+      Resolver := nil;
+      try
+        BuildBuiltinTable(Table, Engine, False);
+        Resolver := TGocciaBuiltinPathResolver.Create(Table, Engine);
+        for I := 0 to Root.Value.Count - 1 do
+          if not Assigned(Resolver.Resolve(Root.Value[I])) then
+            Failed.Add(StringReplace(Root.Value[I], SEP, '.', [rfReplaceAll]));
+      finally
+        Resolver.Free;
+        Table.Free;
+        Context.Free;
+        Engine.Free;
+      end;
+    end;
+    Failed.Sort;
+    Expect<string>(Failed.CommaText).ToBe('');
+  finally
+    for Root in Roots do
+      Root.Value.Free;
+    Roots.Free;
+    Failed.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestSlotsNothingFillsAreKnown;
+var
+  Engine: TGocciaEngine;
+  Lines, Unfilled, Expected: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Owned: TObject;
+  I: Integer;
+begin
+  Lines := TStringList.Create;
+  Unfilled := TStringList.Create;
+  Expected := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    BuildEverything(Engine);
+    // What only using a built-in fills: iterators of every kind, iterator
+    // helpers, generators, Intl's segments.
+    Engine.EvaluateGlobalEval('[...[1], ..."a", ...new Map([[1, 1]]), ' +
+      '...new Set([1]), ..."a".matchAll(/a/g)]; ' +
+      '[1].values().map((x) => x).toArray(); ' +
+      'Iterator.from({ next() { return { done: true }; } }).toArray(); ' +
+      '({ *g() {} }).g().next(); ' +
+      '[...new Intl.Segmenter("en").segment("a b")]; 0', TEST_PATH, Stage);
+    for I := 0 to RealmSlotCount - 1 do
+      if not Assigned(Engine.Realm.GetSlot(I)) then
+        Unfilled.Add(RealmSlotName(I));
+    for I := 0 to RealmOwnedSlotCount - 1 do
+    begin
+      Owned := Engine.Realm.GetOwnedSlot(I);
+      if not Assigned(Owned) then
+        Unfilled.Add(RealmOwnedSlotName(I));
+    end;
+  finally
+    Engine.Free;
+  end;
+  try
+    for I := Low(UNFILLED_SLOTS) to High(UNFILLED_SLOTS) do
+      Expected.Add(UNFILLED_SLOTS[I]);
+    Unfilled.Sort;
+    Expected.Sort;
+    Expect<string>(Unfilled.CommaText).ToBe(Expected.CommaText);
+  finally
+    Expected.Free;
+    Unfilled.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestShimLoadedNativelyRestores;
+var
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  Stream: TBytesStream;
+  Bytes: TBytes;
+begin
+  Lines := TStringList.Create;
+  Stream := TBytesStream.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Session := TGocciaHeapSnapshotSession.Create(Engine);
+  try
+    // A runtime extension takes %Date% natively (file stats do): the Date
+    // shim is loaded without its global being read, so the snapshot names
+    // the shim's slots alone.
+    GetDateIntrinsic(Engine.ShimLoader);
+    Value := Engine.EvaluateGlobalEval('({ a: 1 })', TEST_PATH, Stage);
+    TGarbageCollector.Instance.AddTempRoot(Value);
+    try
+      Session.AddToBaseline(Value);
+      Session.Snapshot([Value], Stream);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Value);
+    end;
+    Bytes := Copy(Stream.Bytes, 0, Stream.Size);
+  finally
+    Session.Free;
+    Engine.Free;
+    Stream.Free;
+    Lines.Free;
+  end;
+  Expect<string>(RestoreAndCheck(Bytes, 'String(restored.a) + "," + ' +
+    'new Date(5).getTime()')).ToBe('1,5');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestDateRefusesUntilItsCodec;
+var
+  Refusal: string;
+  Bytes: TBytes;
+begin
+  // The time value is kept outside the object: written as a plain object, a
+  // Date would restore as no Date at all.
+  Snapshot('({ d: new Date(5) })', Refusal);
+  Expect<Boolean>(Pos('Date''s time value', Refusal) > 0).ToBe(True);
+  Snapshot('(() => { class Later extends Date {} return [new Later(1)]; })()',
+    Refusal);
+  Expect<Boolean>(Refusal <> '').ToBe(True);
+  // A run that used Dates and kept none restores, and its Dates work there.
+  Bytes := Snapshot('(() => { const t = new Date(7).getTime(); ' +
+    'return { t, proto: Date.prototype }; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes, '[restored.t, ' +
+    'restored.proto === Date.prototype, new Date(9).getTime()].join()'))
+    .ToBe('7,true,9');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestBuiltinInternalsAreNotMissed;
+const
+  // Each loads a shim: its module scope, cells and private functions are
+  // held by the built-in it exports.
+  SOURCES: array[0..2] of string = (
+    '(() => { new Date(0).getTime(); return { a: 1 }; })()',
+    '(() => { [1.5].toLocaleString(); (2.5).toLocaleString(); ' +
+      'return { a: 1 }; })()',
+    '(() => { ({}).__proto__; ({}).__lookupGetter__("x"); ' +
+      'return { a: 1, n: parseInt("12"), s: btoa("x") }; })()');
+var
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  Stream: TBytesStream;
+  Refusal: string;
+  I: Integer;
+begin
+  for I := Low(SOURCES) to High(SOURCES) do
+  begin
+    Snapshot(SOURCES[I], Refusal, True);
+    Expect<string>(Refusal).ToBe('');
+  end;
+  // What only the run's own top-level binding holds is still missed, though
+  // a shim's scope chain reaches the global scope that holds it.
+  Lines := TStringList.Create;
+  Stream := TBytesStream.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Session := TGocciaHeapSnapshotSession.Create(Engine);
+  try
+    Engine.GlobalScope.DefineLexicalBinding('kept',
+      Engine.EvaluateGlobalEval('new Date(0).getTime(); ({ k: 1 })',
+        TEST_PATH, Stage), dtConst);
+    Value := Engine.EvaluateGlobalEval('({ a: 1 })', TEST_PATH, Stage);
+    TGarbageCollector.Instance.AddTempRoot(Value);
+    try
+      Session.AddToBaseline(Value);
+      Refusal := '';
+      try
+        Session.Snapshot([Value], Stream);
+      except
+        on E: EGocciaHeapSnapshotRefused do
+          Refusal := E.Message;
+      end;
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Value);
+    end;
+    Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
+      .ToBe(True);
+    Expect<Boolean>(Pos('Bytecode', Refusal) = 0).ToBe(True);
+  finally
+    Session.Free;
+    Engine.Free;
+    Stream.Free;
+    Lines.Free;
+  end;
+end;
+
+begin
+  TestRunnerProgram.AddSuite(
+    THeapSnapshotBuiltinsTests.Create('Heap snapshot built-ins'));
+  RunGocciaTests;
+  ExitCode := TestResultToExitCode;
+end.

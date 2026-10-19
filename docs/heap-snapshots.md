@@ -62,7 +62,11 @@ buffers, refuses the snapshot instead.
 
 The **accounting check** (on by default, `CheckAccounting`) collects, then
 refuses when a live object the run created is neither written nor a
-built-in: it finds objects a codec missed, not fields. Objects the embedder
+built-in: it finds objects a codec missed, not fields. What the named
+built-ins reach counts as theirs: a built-in written in JavaScript (a shim
+such as `Date`) keeps its module scope, cells and private functions, built
+when the run first used it, and those are not missed objects. What the run's
+own top-level bindings hold still is. Objects the embedder
 keeps alive itself go into the baseline with `AddToBaseline`. The collection
 runs before anything is written; one that queues a job (a
 `FinalizationRegistry` whose target died) refuses the snapshot, since the run
@@ -212,13 +216,32 @@ than guessing, and calls `Poll` once per item in any loop whose length comes
 from the input. `source/units/Goccia.Values.ArrayValue.pas` holds the array
 codec as an example.
 
-A unit whose realm slot, or owned slot, is filled on first use registers how
-to fill it with `RegisterSnapshotSlotMaterializer`, under the slot's name, so
-a restore can build the intrinsic a snapshot names (the iterator prototypes,
-the function-object intrinsics, Intl's legacy fallback symbol and the segment
-prototypes do). A restore builds the built-ins the run built in the order the
-run named them, so a slot that building an earlier one fills needs none; one
-nothing fills refuses the restore.
+## Built-ins filled on first use
+
+A snapshot may name a built-in by the realm slot, or owned slot, that holds
+it, and a slot filled on first use may be named before anything else that
+fills it, as when a runtime extension loads the `Date` shim natively. So the
+unit that owns such a slot registers, under the slot's name, how a restore
+fills it:
+
+- `RegisterSnapshotSlotMaterializer`, a procedure that builds it in the
+  current realm (the iterator prototypes, the function-object intrinsics,
+  Intl's legacy fallback symbol, the segment and module source prototypes);
+- or `RegisterSnapshotSlotGlobalPath`, the lazy built-in whose first read
+  fills it, by its path from the global object (`Temporal.PlainDate` for
+  Temporal's and Intl's shared prototypes, `DisposableStack`, and for each
+  shim its global or prototype member, `Date` for the `Date` shim's own
+  slots).
+
+Every slot a run can fill resolves by its name on its own in a fresh engine.
+`Goccia.HeapSnapshot.Builtins.Test` builds everything an engine builds lazily
+and checks each slot's names, and lists the slots nothing fills: `eval`,
+which the host installs, and the shared prototypes of runtime extensions an
+engine without them never builds.
+
+A `Date` keeps its time value outside the object, in the `Date` shim's
+WeakMap, which is a built-in and named, not written: an object with a time
+value refuses the snapshot until a codec covers it.
 
 ## Testing
 

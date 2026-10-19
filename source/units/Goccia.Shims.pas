@@ -144,6 +144,7 @@ uses
   SysUtils,
 
   Goccia.ExecutionContext,
+  Goccia.HeapSnapshot.Codec,
   Goccia.SourcePipeline,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.DateData,
@@ -1313,10 +1314,35 @@ begin
   end;
 end;
 
+{ Where a script first reads shim AIndex: its global, or its first
+  prototype member. A heap snapshot restore (ADR 0148) fills the shim's
+  realm slot, and the Date shim's, by building that lazy member. }
+function ShimGlobalPath(const AIndex: Integer): string;
+const
+  TARGET_PATHS: array[TGocciaShimTarget] of string = ('Object.prototype.',
+    'Number.prototype.', 'Array.prototype.');
+var
+  Members: TGocciaShimPrototypeMembers;
+begin
+  Members := ShimPrototypeMembers(AIndex);
+  if Length(Members) = 0 then
+    Result := DEFAULT_SHIMS[AIndex].Name
+  else
+    Result := TARGET_PATHS[Members[0].Target] + Members[0].Name;
+end;
+
 initialization
   for GShimInitIndex := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
+  begin
     GShimExportSlots[GShimInitIndex] := RegisterRealmSlot(
       '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%');
+    RegisterSnapshotSlotGlobalPath(
+      '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%',
+      ShimGlobalPath(GShimInitIndex));
+  end;
+  // The Date shim fills the [[DateValue]] slots' WeakMap and %Date% too.
+  RegisterSnapshotSlotGlobalPath('%DateValueStore%', DATE_SHIM_NAME);
+  RegisterSnapshotSlotGlobalPath('%DateConstructor%', DATE_SHIM_NAME);
   RegisterThreadvarCleanup(@ReleaseShimProgramCache);
 
 end.

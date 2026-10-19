@@ -340,6 +340,7 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Keywords.Reserved,
   Goccia.Realm,
   Goccia.Scope,
@@ -1958,10 +1959,22 @@ begin
   AAttributeType := Copy(AEncodedModulePath, SeparatorIndex + 1, MaxInt);
 end;
 
+{ A heap snapshot restore (ADR 0148) names the module source prototypes by
+  their realm slots, filled with the first module source; both are built
+  here as that would. }
+procedure MaterializeModuleSourcePrototypes;
+begin
+  TGocciaModuleSourceValue.SharedModuleSourcePrototype;
+end;
+
 initialization
   GModuleSourcePrototypeSlot := RegisterRealmSlot(
     'AbstractModuleSource.prototype');
   GJSModuleSourcePrototypeSlot := RegisterRealmSlot(
     'ModuleSource.prototype');
+  RegisterSnapshotSlotMaterializer('AbstractModuleSource.prototype',
+    @MaterializeModuleSourcePrototypes);
+  RegisterSnapshotSlotMaterializer('ModuleSource.prototype',
+    @MaterializeModuleSourcePrototypes);
 
 end.

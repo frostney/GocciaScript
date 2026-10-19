@@ -347,9 +347,12 @@ type
     // the order they registered, so what was alive before the run is what
     // comes before AFirstOfRun. Detects objects a codec missed, not fields.
     // It does not collect: the caller collects before the snapshot, so what
-    // is left is live.
+    // is left is live. With ASkipMarked it also passes over objects that
+    // carry the collector's current mark, which the caller set on what
+    // built-ins reach (their internals) after the collection.
     procedure CheckAccounting(const AFirstOfRun: TGCManagedObject;
-      const ABaseline: TGocciaHeapSnapshotBaseline);
+      const ABaseline: TGocciaHeapSnapshotBaseline;
+      const ASkipMarked: Boolean = False);
     function IsWritten(const AObject: TGCManagedObject): Boolean;
 
     property ObjectCount: Integer read GetObjectCount;
@@ -507,6 +510,16 @@ procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
   const AMaterializer: TGocciaSnapshotSlotMaterializer);
 function FindSnapshotSlotMaterializer(
   const ASlotName: string): TGocciaSnapshotSlotMaterializer;
+// A slot filled when a lazy built-in is first read, instead of by a
+// materializer: AGlobalPath names that built-in from the global object, its
+// own property names separated by '.' ('Temporal.PlainDate',
+// 'Object.prototype.__proto__'), and reading each property's descriptor in
+// turn builds what fills the slot without calling anything.
+procedure RegisterSnapshotSlotGlobalPath(const ASlotName, AGlobalPath: string);
+function FindSnapshotSlotGlobalPath(const ASlotName: string): string;
+// Fills the slot ASlotName names in the current realm as using it would, by
+// its materializer or its global path; False when it has neither.
+function MaterializeSnapshotSlot(const ASlotName: string): Boolean;
 
 implementation
 
@@ -522,6 +535,7 @@ uses
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
+  Goccia.Values.DateData,
   Goccia.Values.HoleValue,
   Goccia.Version;
 
@@ -572,6 +586,7 @@ type
 var
   GRegistry: TCodecRegistry;
   GSlotMaterializers: TDictionary<string, TGocciaSnapshotSlotMaterializer>;
+  GSlotGlobalPaths: TDictionary<string, string>;
 
 procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
   const AMaterializer: TGocciaSnapshotSlotMaterializer);
@@ -588,6 +603,62 @@ begin
   Result := nil;
   if Assigned(GSlotMaterializers) then
     GSlotMaterializers.TryGetValue(ASlotName, Result);
+end;
+
+procedure RegisterSnapshotSlotGlobalPath(const ASlotName, AGlobalPath: string);
+begin
+  if not Assigned(GSlotGlobalPaths) then
+    GSlotGlobalPaths := TDictionary<string, string>.Create;
+  GSlotGlobalPaths.AddOrSetValue(ASlotName, AGlobalPath);
+end;
+
+function FindSnapshotSlotGlobalPath(const ASlotName: string): string;
+begin
+  Result := '';
+  if Assigned(GSlotGlobalPaths) then
+    GSlotGlobalPaths.TryGetValue(ASlotName, Result);
+end;
+
+function MaterializeSnapshotSlot(const ASlotName: string): Boolean;
+var
+  Materializer: TGocciaSnapshotSlotMaterializer;
+  Path, Name: string;
+  Current: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  Start, I: Integer;
+begin
+  Materializer := FindSnapshotSlotMaterializer(ASlotName);
+  if Assigned(Materializer) then
+  begin
+    Materializer();
+    Exit(True);
+  end;
+  Path := FindSnapshotSlotGlobalPath(ASlotName);
+  Result := Path <> '';
+  if not Result or (CurrentRealm = nil) or
+     not (CurrentRealm.GlobalObject is TGocciaObjectValue) then
+    Exit;
+  // Each name is an own property of what the last one held; a descriptor
+  // read builds a lazy one and calls no getter.
+  Current := TGocciaObjectValue(CurrentRealm.GlobalObject);
+  Start := 1;
+  for I := 1 to Length(Path) + 1 do
+    if (I > Length(Path)) or (Path[I] = '.') then
+    begin
+      Name := Copy(Path, Start, I - Start);
+      Start := I + 1;
+      if not Assigned(Current) then
+        Exit;
+      Descriptor := Current.GetOwnPropertyDescriptor(Name);
+      if (Descriptor is TGocciaPropertyDescriptorData) and
+         (TGocciaPropertyDescriptorData(Descriptor).Value is
+          TGocciaObjectValue) then
+        Current := TGocciaObjectValue(
+          TGocciaPropertyDescriptorData(Descriptor).Value)
+      else
+        Current := nil;
+      ReleaseDescriptor(Descriptor);
+    end;
 end;
 
 const
@@ -1747,6 +1818,10 @@ begin
     Refuse('no snapshot codec for an object''s error data');
   if AObject.HasRegExpData then
     Refuse('no snapshot codec for an object''s RegExp data');
+  // A Date's time value is not the object's own: the Date shim keeps it in
+  // a built-in WeakMap, which is named, not written.
+  if HasDateValue(AObject) then
+    Refuse('no snapshot codec for a Date''s time value');
   WriteValue(AObject.Prototype);
   WriteBool(AObject.Extensible);
   WriteBool(AObject.Frozen);
@@ -1949,7 +2024,7 @@ end;
 
 procedure TGocciaHeapSnapshotWriter.CheckAccounting(
   const AFirstOfRun: TGCManagedObject;
-  const ABaseline: TGocciaHeapSnapshotBaseline);
+  const ABaseline: TGocciaHeapSnapshotBaseline; const ASkipMarked: Boolean);
 const
   MAX_DETAILS = 8;
 var
@@ -1973,6 +2048,8 @@ begin
       if Assigned(ABaseline) and ABaseline.ContainsKey(Obj) then
         Continue;
       if FIds.ContainsKey(Obj) or (FBuiltins.IndexOf(Obj) >= 0) then
+        Continue;
+      if ASkipMarked and Obj.GCMarked then
         Continue;
       if (Obj is TGocciaSymbolValue) and
          TGocciaSymbolValue(Obj).Registered then
@@ -2890,5 +2967,6 @@ initialization
 finalization
   FreeAndNil(GRegistry);
   FreeAndNil(GSlotMaterializers);
+  FreeAndNil(GSlotGlobalPaths);
 
 end.
