@@ -49,4 +49,10 @@ describe("URL.parse", () => {
     expect(url.search).toBe("?q=hello");
     expect(url.hash).toBe("#section");
   });
+
+  test("percent-encodes non-ASCII code points as UTF-8", () => {
+    expect(URL.parse("http://h/éĀ?é#é").href).toBe(
+      "http://h/%C3%A9%C4%80?%C3%A9#%C3%A9",
+    );
+  });
 });

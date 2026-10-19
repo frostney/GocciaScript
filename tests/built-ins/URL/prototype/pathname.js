@@ -47,4 +47,10 @@ describe("URL.prototype.pathname", () => {
     url.pathname = "/";
     expect(url.pathname).toBe("/");
   });
+
+  test("setter percent-encodes non-ASCII as UTF-8", () => {
+    const url = new URL("https://example.com/old");
+    url.pathname = "/é/Ā/\u{1F600}";
+    expect(url.pathname).toBe("/%C3%A9/%C4%80/%F0%9F%98%80");
+  });
 });
