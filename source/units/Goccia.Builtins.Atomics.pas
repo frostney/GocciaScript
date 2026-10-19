@@ -24,6 +24,16 @@ procedure ShutdownAtomicsWaiters;
 procedure ShutdownAtomicsWaitersForCurrentThread;
 
 type
+  TAtomicsWaitSuspensionEndedHook = procedure;
+
+{ Test seam: AHook runs on the waiting agent after an Atomics.wait suspension
+  ends and before the wait enters the waiter list's critical section again,
+  so a test can order an Atomics.notify against a timeout. It applies to the
+  calling thread's agent only. Nil outside tests. }
+procedure SetAtomicsWaitSuspensionEndedHookForTesting(
+  const AHook: TAtomicsWaitSuspensionEndedHook);
+
+type
   TGocciaAtomics = class(TGocciaBuiltin)
   public
     constructor Create(const AName: string; AScope: TGocciaScope;
@@ -152,6 +162,8 @@ var
   GAtomicsAsyncWaiterCount: Integer;
 
 threadvar
+  // Per thread, so a hook a test installs runs only for its own agent.
+  GAtomicsWaitSuspensionEndedHook: TAtomicsWaitSuspensionEndedHook;
   GAtomicsAgentCanSuspend: Boolean;
   GAtomicsAgentCanSuspendConfigured: Boolean;
 
@@ -166,6 +178,12 @@ procedure SetAtomicsAgentCanSuspend(AValue: Boolean);
 begin
   GAtomicsAgentCanSuspend := AValue;
   GAtomicsAgentCanSuspendConfigured := True;
+end;
+
+procedure SetAtomicsWaitSuspensionEndedHookForTesting(
+  const AHook: TAtomicsWaitSuspensionEndedHook);
+begin
+  GAtomicsWaitSuspensionEndedHook := AHook;
 end;
 
 function GetAtomicsWaiters: TObjectList<TAtomicsWaiter>;
@@ -906,16 +924,17 @@ begin
   Result := True;
 end;
 
-function WaitForSynchronousWaiter(AWaiter: TAtomicsWaiter;
-  ATimeoutMilliseconds: Int64): string;
+{ Suspends until AWaiter's event is set or its timeout passes. Whether the wait
+  was notified is decided afterwards, inside the waiter list's critical
+  section, not here. }
+procedure WaitForSynchronousWaiter(AWaiter: TAtomicsWaiter;
+  ATimeoutMilliseconds: Int64);
 var
   Deadline: UInt64;
   NowMilliseconds: UInt64;
   Remaining: Int64;
   Slice: LongWord;
-  WaitResult: TWaitResult;
 begin
-  Result := ATOMICS_WAIT_TIMED_OUT;
   Deadline := 0;
   if ATimeoutMilliseconds >= 0 then
     Deadline := UInt64(GetMilliseconds) + UInt64(ATimeoutMilliseconds);
@@ -938,9 +957,8 @@ begin
         Slice := LongWord(Remaining);
     end;
 
-    WaitResult := AWaiter.Event.WaitFor(Slice);
-    if WaitResult = wrSignaled then
-      Exit(ATOMICS_WAIT_OK);
+    if AWaiter.Event.WaitFor(Slice) = wrSignaled then
+      Exit;
   until False;
 end;
 
@@ -1416,9 +1434,9 @@ var
   Index: Integer;
   TimeoutMilliseconds: Int64;
   TypedArray: TGocciaTypedArrayValue;
+  Notified: Boolean;
   Waiter: TAtomicsWaiter;
   WaitValueMatches: Boolean;
-  WaitResult: string;
 begin
   ValidateAtomicsWaitAccess(AArgs, 'wait', TypedArray, Buffer, Index,
     ByteOffset);
@@ -1457,23 +1475,38 @@ begin
     CriticalSectionLeave(GAtomicsLock);
   end;
 
+  Notified := False;
   try
     try
-      WaitResult := WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
+      WaitForSynchronousWaiter(Waiter, TimeoutMilliseconds);
+      if Assigned(GAtomicsWaitSuspensionEndedHook) then
+        GAtomicsWaitSuspensionEndedHook;
     finally
-      // Leave the waiter list as it was before the wait on every exit,
-      // including the instruction limit or execution timeout raising inside
-      // the wait: the waiter is freed below, and a waiter left in the list
-      // would be read, written and freed again by Atomics.notify, the owner's
-      // destructor and the thread's shutdown.
+      // ES2026 §25.4.3.11 SuspendThisAgent step 8: the agent re-enters the
+      // critical section, and only there is it settled whether the wait was
+      // notified (ES2023 §25.4.12 Atomics.wait steps 18-23 spell this out;
+      // §25.4.3.15 decides an async timeout the same way). The wait was
+      // notified exactly when Atomics.notify removed the waiter: a notify
+      // that lands after the suspension timed out but before this point
+      // counted the waiter, so the wait returns "ok", and a waiter still in
+      // the list timed out and removes itself, so no later notify counts it.
+      // This also leaves the waiter list as it was before the wait on every
+      // exit, including the instruction limit or execution timeout raising
+      // inside the wait: the waiter is freed below, and a waiter left in the
+      // list would be read, written and freed again by Atomics.notify, the
+      // owner's destructor and the thread's shutdown.
       CriticalSectionEnter(GAtomicsLock);
       try
+        Notified := not Waiter.InList;
         RemoveWaiter(Waiter);
       finally
         CriticalSectionLeave(GAtomicsLock);
       end;
     end;
-    Result := TGocciaStringLiteralValue.Create(WaitResult);
+    if Notified then
+      Result := TGocciaStringLiteralValue.Create(ATOMICS_WAIT_OK)
+    else
+      Result := TGocciaStringLiteralValue.Create(ATOMICS_WAIT_TIMED_OUT);
   finally
     Waiter.Free;
   end;
