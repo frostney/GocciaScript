@@ -179,6 +179,7 @@ type
     function IsHostRequest(const ASpecifier,
       AImportingFilePath: string): Boolean;
 
+    function ModulePipelineOptions: TGocciaSourcePipelineOptions;
     function CaptureLoadStates: TList<TObject>;
     procedure DiscardLinkedModules(
       const APreservedStates: TList<TObject>);
@@ -306,6 +307,27 @@ type
     procedure ConfigureCapabilities(const ACapabilities: TGocciaCapabilities;
       const AProjectRoot: string;
       const AAuditEmitter: TGocciaCapabilityAuditEmitter);
+
+    { Heap snapshots (ADR 0148). Why the loader's state cannot be written, or
+      '': a module still linking, being reloaded or whose evaluation failed,
+      a deferred namespace or a module source object. The entry, which is
+      evaluating while its run waits at a checkpoint, is written as
+      evaluated. }
+    function HeapSnapshotRefusal: string;
+    { Each module record the loader caches, with the key it is cached under;
+      a record cached under several keys is listed once per key. }
+    procedure ListCachedModules(const AKeys: TGocciaModuleKeyList;
+      const AModules: TGocciaModuleList);
+    function HasCachedModule(const AKey: string): Boolean;
+    { Caches a restored record under AKeys as an evaluated module, which a
+      later import finds without running its body. The loader owns it. }
+    procedure RestoreCachedModule(const AModule: TGocciaModule;
+      const AKeys: array of string);
+    { Reads and parses the module at AResolvedPath as the loader would load
+      it, under the same read policy, for a restore to compile. The caller
+      owns the program. }
+    function ParseModuleForSnapshot(const AResolvedPath: string;
+      const AIsHostOwned: Boolean): TGocciaProgram;
 
     property ContentProvider: TGocciaModuleContentProvider
       read FContentProvider;
@@ -1791,6 +1813,100 @@ begin
     FRetiredModules.Add(AModule);
 end;
 
+// The options InstantiateModule parses a module's source with.
+function TGocciaModuleLoader.ModulePipelineOptions:
+  TGocciaSourcePipelineOptions;
+begin
+  Result := TGocciaSourcePipeline.DefaultOptions;
+  Result.Preprocessors := FPreprocessors;
+  Result.Compatibility := FCompatibility;
+  Result.LabelStatementsEnabled := FLabelStatementsEnabled;
+  Result.ForInLoopsEnabled := FForInLoopsEnabled;
+  Result.ExperimentalJSModuleSourceEnabled :=
+    FExperimentalJSModuleSourceEnabled;
+  Result.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
+  Result.SourceType := stModule;
+end;
+
+function TGocciaModuleLoader.HeapSnapshotRefusal: string;
+var
+  Pair: TOrderedStringMap<Boolean>.TKeyValuePair;
+begin
+  if FModuleLoadStates.Count > 0 then
+    Exit('a module is still linking or evaluating');
+  if (FPendingReloads.Count > 0) or (FReloadTargets.Count > 0) then
+    Exit('a module is being reloaded');
+  if FFailedModuleErrors.Count > 0 then
+    Exit('a module whose evaluation failed');
+  if FDeferredModuleNamespaces.Count > 0 then
+    Exit('a deferred module namespace');
+  if FModuleSourceValues.Count > 0 then
+    Exit('a module source object');
+  // Evaluating without a load state is the entry, whose body ran: at an
+  // idle point no frame is running.
+  for Pair in FEvaluatingModules do
+    if not FModules.ContainsKey(Pair.Key) then
+      Exit('a module evaluating that the loader does not hold');
+  for Pair in FLoadingModules do
+    if not FModules.ContainsKey(Pair.Key) then
+      Exit('a module loading that the loader does not hold');
+  Result := '';
+end;
+
+procedure TGocciaModuleLoader.ListCachedModules(
+  const AKeys: TGocciaModuleKeyList;
+  const AModules: TGocciaModuleList);
+var
+  Pair: TOrderedStringMap<TGocciaModule>.TKeyValuePair;
+begin
+  for Pair in FModules do
+    if Assigned(Pair.Value) then
+    begin
+      AKeys.Add(Pair.Key);
+      AModules.Add(Pair.Value);
+    end;
+end;
+
+function TGocciaModuleLoader.HasCachedModule(const AKey: string): Boolean;
+begin
+  Result := FModules.ContainsKey(AKey);
+end;
+
+procedure TGocciaModuleLoader.RestoreCachedModule(const AModule: TGocciaModule;
+  const AKeys: array of string);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AKeys) do
+    FModules.AddOrSetValue(AKeys[I], AModule);
+  if AModule.IsHostOwned then
+    MarkHostOwnedAddress(AModule.Path);
+end;
+
+function TGocciaModuleLoader.ParseModuleForSnapshot(
+  const AResolvedPath: string; const AIsHostOwned: Boolean): TGocciaProgram;
+var
+  Content: TGocciaModuleContent;
+  IsHostOwned: Boolean;
+  ParseResult: TGocciaSourcePipelineModuleResult;
+begin
+  IsHostOwned := AIsHostOwned;
+  // Read as a literal import of the module would be.
+  EnforceHostRead(AResolvedPath, AResolvedPath, '', '', True, IsHostOwned);
+  Content := LoadResolvedContent(AResolvedPath, IsHostOwned);
+  try
+    ParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
+      AResolvedPath, ModulePipelineOptions);
+    try
+      Result := ParseResult.TakeProgramNode;
+    finally
+      ParseResult.Free;
+    end;
+  finally
+    Content.Free;
+  end;
+end;
+
 function TGocciaModuleLoader.CaptureLoadStates: TList<TObject>;
 var
   LoadStateObject: TObject;
@@ -2847,6 +2963,8 @@ begin
               'The module loader has no function instantiator; attach it ' +
               'to an engine before loading modules');
           FInstantiateModuleFunctions(ProgramNode, Context);
+          Module.SnapshotKind := mskSource;
+          Module.CompiledModule := Context.CompiledModule;
           if GetVarEnabled then
             HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
           Context.ModuleEnvironmentInitialized := True;
@@ -3538,6 +3656,7 @@ begin
       Module := TGocciaModule.Create(AResolvedPath);
       Module.IsHostOwned := AIsHostOwned;
       Module.LastModified := Content.LastModified;
+      Module.SnapshotKind := mskData;
       LoadSucceeded := False;
       try
         HasDefaultKey := False;
@@ -3616,6 +3735,7 @@ begin
     Module := TGocciaModule.Create(AResolvedPath);
     Module.IsHostOwned := AIsHostOwned;
     Module.LastModified := Content.LastModified;
+    Module.SnapshotKind := mskData;
     LoadSucceeded := False;
     try
       if not ADefaultOnly then
@@ -3669,6 +3789,7 @@ begin
     Module := TGocciaModule.Create(AResolvedPath);
     Module.IsHostOwned := AIsHostOwned;
     Module.LastModified := LastModified;
+    Module.SnapshotKind := mskData;
     LoadSucceeded := False;
     try
       Module.AddExportValue(KEYWORD_DEFAULT, TypedArray);

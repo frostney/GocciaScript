@@ -99,6 +99,7 @@ type
     FTable: TGocciaHeapSnapshotBuiltinTable;
     FResolver: TGocciaBuiltinPathResolver;
     FTemplates: TGocciaSnapshotTemplateTable;
+    FModuleRecords: TGocciaSnapshotModuleRecordCodec;
     FRoots: TGCManagedObjectArray;
     function VerifyBuiltins(const APaths: TStringArray;
       const AFingerprints: array of string): string;
@@ -126,6 +127,7 @@ uses
   Goccia.Builtins.Base,
   Goccia.ExecutionContext,
   Goccia.MicrotaskQueue,
+  Goccia.Modules.Snapshot,
   Goccia.NativeLimits,
   Goccia.Realm,
   Goccia.Scope,
@@ -847,6 +849,7 @@ var
   Roots: TGocciaActiveRootFrame;
   I: Integer;
   Templates: TGocciaSnapshotTemplateTable;
+  ModuleRecords: TGocciaModuleSnapshotRecords;
 begin
   // The run must be idle: no frame, job, waiter or other extension's work
   // the snapshot would drop (ADR 0148).
@@ -856,6 +859,7 @@ begin
   Writer := nil;
   Buffer := nil;
   Templates := nil;
+  ModuleRecords := nil;
   // The roots may be held only by the caller's array: rooted before the
   // collection below, and until the snapshot is written.
   Roots.Initialize;
@@ -885,6 +889,9 @@ begin
       Writer := TGocciaHeapSnapshotWriter.Create(FTable);
       Templates := EngineTemplates(FEngine);
       Writer.Templates := Templates;
+      // Every module record the run has, whatever the roots reach.
+      ModuleRecords := TGocciaModuleSnapshotRecords.Create(FEngine);
+      Writer.ModuleRecords := ModuleRecords;
       Buffer := TGocciaChargedMemoryStream.Create;
       Writer.Serialize(ARoots, Buffer);
       if FCheckAccounting then
@@ -906,6 +913,7 @@ begin
   finally
     Buffer.Free;
     Writer.Free;
+    ModuleRecords.Free;
     Templates.Free;
     Roots.Clear;
   end;
@@ -939,7 +947,12 @@ begin
       // own compiled modules, matched by their bytecode.
       FTemplates := EngineTemplates(AEngine);
       FReader.Templates := FTemplates;
+      // The module records: compiled here, filled, and cached in this
+      // engine's loader once the whole snapshot restored.
+      FModuleRecords := TGocciaModuleSnapshotRecords.Create(AEngine);
+      FReader.ModuleRecords := FModuleRecords;
       FRoots := FReader.Restore(AStream);
+      TGocciaModuleSnapshotRecords(FModuleRecords).Commit;
     except
       // The run's memory ceiling, or a script error from building a lazy
       // built-in a name crossed: the snapshot cannot be restored here.
@@ -984,6 +997,9 @@ end;
 destructor TGocciaHeapSnapshotRestore.Destroy;
 begin
   FReader.Free;
+  // After the reader: the records a refused restore leaves are freed once
+  // nothing roots the objects that refer to them.
+  FModuleRecords.Free;
   FTemplates.Free;
   FResolver.Free;
   FTable.Free;

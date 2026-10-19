@@ -53,7 +53,7 @@ uses
 
 const
   HEAP_SNAPSHOT_MAGIC: array[0..3] of AnsiChar = ('G', 'H', 'S', 'N');
-  HEAP_SNAPSHOT_FORMAT_VERSION = 2;
+  HEAP_SNAPSHOT_FORMAT_VERSION = 3;
 
   // Separates the segments of a built-in's name; no property key or symbol
   // description of a built-in contains it.
@@ -143,6 +143,37 @@ type
     // Runs after every object is filled, with the payload readable again.
     procedure Finish(const AReader: TGocciaHeapSnapshotReader;
       const AObject: TGCManagedObject); virtual;
+  end;
+
+  { A run's module records. A module record is not a managed object, so a
+    snapshot keeps its records in a table of their own, written and read by
+    the record codec the session or the restore supplies, bound to its
+    engine. Each record has a header, read before any object is allocated
+    (a restore compiles the module a header names there), and a payload,
+    read once every object is filled, before any is finished. }
+  TGocciaSnapshotModuleRecordCodec = class
+  public
+    function SchemaVersion: Word; virtual; abstract;
+    // Lists every record the snapshot holds with AddModuleRecord, or
+    // refuses.
+    procedure ListRecords(const AWriter: TGocciaHeapSnapshotWriter);
+      virtual; abstract;
+    // Strings and plain data only: a header refers to no object.
+    procedure WriteHeader(const AWriter: TGocciaHeapSnapshotWriter;
+      const ARecord: TObject); virtual; abstract;
+    procedure WritePayload(const AWriter: TGocciaHeapSnapshotWriter;
+      const ARecord: TObject); virtual; abstract;
+    // Reads a header and creates the empty record, which the codec keeps
+    // until the restore succeeds or fails.
+    function Allocate(const AReader: TGocciaHeapSnapshotReader): TObject;
+      virtual; abstract;
+    // Reads the payload from its start; every byte of it.
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const ARecord: TObject); virtual; abstract;
+    // Runs once every record is filled, before any object is finished, with
+    // the payload readable again.
+    procedure Finish(const AReader: TGocciaHeapSnapshotReader;
+      const ARecord: TObject); virtual;
   end;
 
   // What a lazy own property of a built-in became when it was built.
@@ -252,7 +283,8 @@ type
   TGocciaSnapshotTemplateTable = class
   private
     FModules: TList<TGocciaBytecodeModule>;
-    FModuleSet: THashMap<TGocciaBytecodeModule, Boolean>;
+    // Each module added, with its index in FModules (-1 for eval code).
+    FModuleSet: THashMap<TGocciaBytecodeModule, Integer>;
     FHashes: TList<string>;
     FByHash: TDictionary<string, Integer>;
     FAllHashed: Boolean;
@@ -274,6 +306,9 @@ type
     function ModuleHash(const AModule: Integer): string;
     // A module with the bytecode AHash names, or -1.
     function FindModule(const AHash: string): Integer;
+    // AModule's index, or -1 for one not in the table (or eval code).
+    function IndexOfModule(const AModule: TGocciaBytecodeModule): Integer;
+    function ModuleAt(const AModule: Integer): TGocciaBytecodeModule;
     function TemplateAt(const AModule, AIndex: Integer): TGocciaFunctionTemplate;
     function TemplateCount(const AModule: Integer): Integer;
     function ModuleCount: Integer;
@@ -299,6 +334,10 @@ type
     // The modules the snapshot refers to, in the order first referred to.
     FModuleRefs: TList<Integer>;
     FModuleRefIndex: THashMap<Integer, Integer>;
+    // The run's module records, in the order the record codec listed them.
+    FRecordCodec: TGocciaSnapshotModuleRecordCodec;
+    FRecords: TList<TObject>;
+    FRecordIndex: THashMap<TObject, Integer>;
     procedure Reserve(const ABytes: Int64);
     function GetObjectCount: Integer;
     function GetBuiltinRefCount: Integer;
@@ -331,6 +370,16 @@ type
     procedure WriteTemplate(const ATemplate: TGocciaFunctionTemplate);
     // A VM register: its kind and its scalar or value.
     procedure WriteRegister(const ARegister: TGocciaRegister);
+    // Lists a module record the snapshot holds; the record codec's
+    // ListRecords calls it.
+    procedure AddModuleRecord(const ARecord: TObject);
+    function HoldsModuleRecord(const ARecord: TObject): Boolean;
+    // A module record or nil, by its place in the record table. Refuses one
+    // the record codec did not list.
+    procedure WriteModuleRecord(const ARecord: TObject);
+    // A compiled module's identity, the SHA-256 of its bytecode, as a
+    // string. Refuses one the template table does not hold.
+    procedure WriteModuleIdentity(const AModule: TGocciaBytecodeModule);
     // Polls the run's execution limits; codecs call it once per item in
     // every loop whose length the run controls.
     procedure Poll;
@@ -360,6 +409,10 @@ type
     // it. Without one, a function refuses.
     property Templates: TGocciaSnapshotTemplateTable read FTemplates
       write FTemplates;
+    // Writes the run's module records; the caller owns it. Without one, the
+    // snapshot holds no records and refuses any reference to one.
+    property ModuleRecords: TGocciaSnapshotModuleRecordCodec
+      read FRecordCodec write FRecordCodec;
   end;
 
   // Finds the built-in a name refers to, adding it to the reader's table;
@@ -405,6 +458,8 @@ type
     FTemplates: TGocciaSnapshotTemplateTable;
     // The snapshot's modules, as indexes into FTemplates.
     FModuleMap: array of Integer;
+    FRecordCodec: TGocciaSnapshotModuleRecordCodec;
+    FRecords: array of TObject;
     function GetObjectCount: Integer;
     procedure Need(const ACount: Int64);
     function ReadCount(const ALimit: Int64; const AMinBytesEach: Int64;
@@ -447,6 +502,9 @@ type
     // the same bytecode.
     function ReadTemplate: TGocciaFunctionTemplate;
     function ReadRegister: TGocciaRegister;
+    // A module record or nil: the record codec's empty record, allocated
+    // before any object was.
+    function ReadModuleRecord: TObject;
     // Polls the run's execution limits; codecs call it once per item in
     // every loop whose length follows the input.
     procedure Poll;
@@ -476,9 +534,14 @@ type
     // The engine build this reader accepts.
     property BuildIdentity: string read FBuildIdentity write FBuildIdentity;
     // This engine's compiled modules; the caller owns it. A snapshot naming a
-    // module it does not hold is refused.
+    // module it does not hold is refused. A record codec may add the modules
+    // it compiles.
     property Templates: TGocciaSnapshotTemplateTable read FTemplates
       write FTemplates;
+    // Restores the snapshot's module records; the caller owns it. Without
+    // one, a snapshot holding records is refused.
+    property ModuleRecords: TGocciaSnapshotModuleRecordCodec
+      read FRecordCodec write FRecordCodec;
     // Engine-side context for codecs that need it.
     property Context: TObject read FContext write FContext;
   end;
@@ -599,6 +662,8 @@ const
   MIN_CODEC_BYTES = 6;
   // An object entry: codec index and payload length.
   MIN_OBJECT_BYTES = 8;
+  // A module record's header holds at least a string and a count.
+  MIN_RECORD_HEADER_BYTES = 8;
   // A property entry: key, flags, kind, one value.
   MIN_PROPERTY_BYTES = 7;
   // What the writer's tables hold per object or string, charged up front.
@@ -749,6 +814,13 @@ end;
 
 procedure TGocciaSnapshotCodec.Finish(const AReader: TGocciaHeapSnapshotReader;
   const AObject: TGCManagedObject);
+begin
+end;
+
+{ TGocciaSnapshotModuleRecordCodec }
+
+procedure TGocciaSnapshotModuleRecordCodec.Finish(
+  const AReader: TGocciaHeapSnapshotReader; const ARecord: TObject);
 begin
 end;
 
@@ -1300,7 +1372,7 @@ constructor TGocciaSnapshotTemplateTable.Create;
 begin
   inherited Create;
   FModules := TList<TGocciaBytecodeModule>.Create;
-  FModuleSet := THashMap<TGocciaBytecodeModule, Boolean>.Create;
+  FModuleSet := THashMap<TGocciaBytecodeModule, Integer>.Create;
   FHashes := TList<string>.Create;
   FByHash := TDictionary<string, Integer>.Create;
   FTemplates := THashMap<TGocciaFunctionTemplate, Int64>.Create;
@@ -1338,7 +1410,7 @@ begin
   // The set entry is charged when it is made, for a skipped eval module
   // too: direct eval retains one module per call.
   Charge(MODULE_SET_ENTRY_BYTES);
-  FModuleSet.Add(AModule, True);
+  FModuleSet.Add(AModule, -1);
   // Depth first, the top level first and each template's children in
   // order, with an explicit stack: the same numbering in every engine that
   // compiled the same bytecode.
@@ -1376,6 +1448,7 @@ begin
   end;
   ModuleIndex := FModules.Count;
   FModules.Add(AModule);
+  FModuleSet[AModule] := ModuleIndex;
   FHashes.Add('');
   FTemplateLists.Add(List);
   FAllHashed := False;
@@ -1437,6 +1510,19 @@ begin
     Result := -1;
 end;
 
+function TGocciaSnapshotTemplateTable.IndexOfModule(
+  const AModule: TGocciaBytecodeModule): Integer;
+begin
+  if not FModuleSet.TryGetValue(AModule, Result) then
+    Result := -1;
+end;
+
+function TGocciaSnapshotTemplateTable.ModuleAt(
+  const AModule: Integer): TGocciaBytecodeModule;
+begin
+  Result := FModules[AModule];
+end;
+
 function TGocciaSnapshotTemplateTable.TemplateAt(const AModule,
   AIndex: Integer): TGocciaFunctionTemplate;
 begin
@@ -1474,12 +1560,16 @@ begin
   FBuildIdentity := HeapSnapshotBuildIdentity;
   FModuleRefs := TList<Integer>.Create;
   FModuleRefIndex := THashMap<Integer, Integer>.Create;
+  FRecords := TList<TObject>.Create;
+  FRecordIndex := THashMap<TObject, Integer>.Create;
 end;
 
 destructor TGocciaHeapSnapshotWriter.Destroy;
 begin
   FModuleRefs.Free;
   FModuleRefIndex.Free;
+  FRecords.Free;
+  FRecordIndex.Free;
   FIds.Free;
   FObjects.Free;
   FParents.Free;
@@ -1819,6 +1909,49 @@ begin
   WriteU32(Index);
 end;
 
+procedure TGocciaHeapSnapshotWriter.AddModuleRecord(const ARecord: TObject);
+begin
+  if not Assigned(ARecord) or FRecordIndex.ContainsKey(ARecord) then
+    Exit;
+  Reserve(WRITER_ENTRY_BYTES);
+  FRecordIndex.Add(ARecord, FRecords.Count);
+  FRecords.Add(ARecord);
+end;
+
+function TGocciaHeapSnapshotWriter.HoldsModuleRecord(
+  const ARecord: TObject): Boolean;
+begin
+  Result := FRecordIndex.ContainsKey(ARecord);
+end;
+
+// 0 for nil, else the record's place plus one.
+procedure TGocciaHeapSnapshotWriter.WriteModuleRecord(const ARecord: TObject);
+var
+  Index: Integer;
+begin
+  if not Assigned(ARecord) then
+  begin
+    WriteU32(0);
+    Exit;
+  end;
+  if not FRecordIndex.TryGetValue(ARecord, Index) then
+    Refuse('a module record the snapshot does not hold');
+  WriteU32(Cardinal(Index) + 1);
+end;
+
+procedure TGocciaHeapSnapshotWriter.WriteModuleIdentity(
+  const AModule: TGocciaBytecodeModule);
+var
+  Index: Integer;
+begin
+  Index := -1;
+  if Assigned(FTemplates) then
+    Index := FTemplates.IndexOfModule(AModule);
+  if Index < 0 then
+    Refuse('a module whose bytecode the snapshot cannot name');
+  WriteStr(FTemplates.ModuleHash(Index));
+end;
+
 procedure TGocciaHeapSnapshotWriter.WriteRegister(
   const ARegister: TGocciaRegister);
 begin
@@ -1838,8 +1971,8 @@ end;
 procedure TGocciaHeapSnapshotWriter.Serialize(
   const ARoots: array of TGCManagedObject; const AStream: TStream);
 var
-  RootsOut, Payload, ObjectsOut: TMemoryStream;
-  I, Index: Integer;
+  RootsOut, Payload, ObjectsOut, RecordHeadersOut, RecordsOut: TMemoryStream;
+  I, Index, RecordIndex: Integer;
   Codec: TGocciaSnapshotCodec;
   Obj: TGCManagedObject;
   PathIndexes, LatePathIndexes, LateFingerprintIndexes,
@@ -1849,18 +1982,49 @@ begin
   RootsOut := TGocciaChargedMemoryStream.Create;
   Payload := TGocciaChargedMemoryStream.Create;
   ObjectsOut := TGocciaChargedMemoryStream.Create;
+  RecordHeadersOut := TGocciaChargedMemoryStream.Create;
+  RecordsOut := TGocciaChargedMemoryStream.Create;
   try
+    // The module records, every one the run has, and their headers, which
+    // name strings only.
+    if Assigned(FRecordCodec) then
+    begin
+      FRecordCodec.ListRecords(Self);
+      FOut := RecordHeadersOut;
+      for I := 0 to FRecords.Count - 1 do
+      begin
+        Poll;
+        FRecordCodec.WriteHeader(Self, FRecords[I]);
+      end;
+    end;
+
     // The roots first: writing them numbers the objects they reach.
     FOut := RootsOut;
     WriteU32(Length(ARoots));
     for I := 0 to High(ARoots) do
       WriteRef(ARoots[I]);
 
-    // Objects, breadth first: writing one numbers the ones it reaches.
+    // Objects, breadth first: writing one numbers the ones it reaches. A
+    // record's payload is written once the objects so far are, and can
+    // number more.
     Index := 0;
-    while Index < FObjects.Count do
+    RecordIndex := 0;
+    while (Index < FObjects.Count) or (RecordIndex < FRecords.Count) do
     begin
       CheckNativeWork;
+      if Index >= FObjects.Count then
+      begin
+        Payload.Clear;
+        FOut := Payload;
+        FRecordCodec.WritePayload(Self, FRecords[RecordIndex]);
+        if Payload.Size > High(Cardinal) then
+          Refuse('a module record''s payload exceeds 4 GiB');
+        FOut := RecordsOut;
+        WriteU32(Payload.Size);
+        RecordsOut.CopyFrom(Payload, 0);
+        Inc(RecordIndex);
+        Continue;
+      end;
       Obj := FObjects[Index];
       FCurrentId := Index;
       Codec := FindSnapshotCodecByClass(Obj.ClassType);
@@ -1909,7 +2073,8 @@ begin
     for I := 0 to FModuleRefs.Count - 1 do
       ModuleHashIndexes[I] := StringIndex(FTemplates.ModuleHash(FModuleRefs[I]));
 
-    // Header, codecs, strings, built-in names, objects, roots.
+    // Header, codecs, strings, built-in names, module records, modules,
+    // objects, record payloads, roots.
     FOut := AStream;
     AStream.WriteBuffer(HEAP_SNAPSHOT_MAGIC[0], 4);
     WriteU16(HEAP_SNAPSHOT_FORMAT_VERSION);
@@ -1932,11 +2097,18 @@ begin
       WriteU32(LatePathIndexes[I]);
       WriteU32(LateFingerprintIndexes[I]);
     end;
+    WriteU32(FRecords.Count);
+    if FRecords.Count > 0 then
+    begin
+      WriteU16(FRecordCodec.SchemaVersion);
+      AStream.CopyFrom(RecordHeadersOut, 0);
+    end;
     WriteU32(Length(ModuleHashIndexes));
     for I := 0 to High(ModuleHashIndexes) do
       WriteU32(ModuleHashIndexes[I]);
     WriteU32(FObjects.Count);
     AStream.CopyFrom(ObjectsOut, 0);
+    AStream.CopyFrom(RecordsOut, 0);
     AStream.CopyFrom(RootsOut, 0);
   finally
     FOut := nil;
@@ -1944,6 +2116,8 @@ begin
     RootsOut.Free;
     Payload.Free;
     ObjectsOut.Free;
+    RecordHeadersOut.Free;
+    RecordsOut.Free;
   end;
 end;
 
@@ -2385,6 +2559,18 @@ begin
   end;
 end;
 
+function TGocciaHeapSnapshotReader.ReadModuleRecord: TObject;
+var
+  Index: Cardinal;
+begin
+  Index := ReadU32;
+  if Index = 0 then
+    Exit(nil);
+  if Index > Cardinal(Length(FRecords)) then
+    Refuse('a module record index out of range');
+  Result := FRecords[Index - 1];
+end;
+
 function TGocciaHeapSnapshotReader.ReadValue: TGocciaValue;
 begin
   Result := ReadValueOrHole;
@@ -2546,6 +2732,8 @@ function TGocciaHeapSnapshotReader.Restore(
   const AStream: TStream): TGCManagedObjectArray;
 var
   Size: Int64;
+  RecordStart, RecordEnd: array of Int64;
+  RecordLength: Cardinal;
   Magic: array[0..3] of AnsiChar;
   Version: Word;
   Identity, Path, Tag: string;
@@ -2660,6 +2848,32 @@ begin
         ', or this engine does not build it the same way');
   end;
 
+  // The run's module records, each allocated from its header: a record
+  // codec can compile the module a header names, and add it to the
+  // templates, before the modules below are looked up.
+  Count := ReadCount(FLimits.MaxCodecs, MIN_RECORD_HEADER_BYTES,
+    'module records');
+  if Count > 0 then
+  begin
+    Schema := ReadU16;
+    if not Assigned(FRecordCodec) then
+      Refuse('module records, and no way to restore them');
+    if FRecordCodec.SchemaVersion <> Schema then
+      Refuse('module records schema ' + IntToStr(Schema) +
+        ', this engine has ' + IntToStr(FRecordCodec.SchemaVersion));
+    Reserve(Count, SizeOf(Pointer) + 2 * SizeOf(Int64));
+    SetLength(FRecords, Count);
+    SetLength(RecordStart, Count);
+    SetLength(RecordEnd, Count);
+    for I := 0 to Count - 1 do
+    begin
+      Poll;
+      FRecords[I] := FRecordCodec.Allocate(Self);
+      if not Assigned(FRecords[I]) then
+        Refuse('the record codec allocated no module record');
+    end;
+  end;
+
   // The modules whose templates the snapshot's functions run.
   Count := ReadCount(FLimits.MaxCodecs, 4, 'modules');
   Reserve(Count, SizeOf(Integer));
@@ -2708,6 +2922,16 @@ begin
     FPos := FPayloadEnd[I];
   end;
   FLimit := Length(FData);
+  // Where each record's payload is.
+  for I := 0 to High(FRecords) do
+  begin
+    Poll;
+    RecordLength := ReadU32;
+    Need(RecordLength);
+    RecordStart[I] := FPos;
+    RecordEnd[I] := FPos + RecordLength;
+    FPos := RecordEnd[I];
+  end;
   RootStart := FPos;
 
   // Pass 2: fill.
@@ -2722,7 +2946,25 @@ begin
         ' was not read to its end');
   end;
 
-  // Pass 3: finish.
+  // The module records, with every object filled.
+  for I := 0 to High(FRecords) do
+  begin
+    Poll;
+    FPos := RecordStart[I];
+    FLimit := RecordEnd[I];
+    FRecordCodec.Fill(Self, FRecords[I]);
+    if FPos <> RecordEnd[I] then
+      Refuse('the payload of a module record was not read to its end');
+  end;
+
+  // Pass 3: finish, the records first.
+  for I := 0 to High(FRecords) do
+  begin
+    Poll;
+    FPos := RecordStart[I];
+    FLimit := RecordEnd[I];
+    FRecordCodec.Finish(Self, FRecords[I]);
+  end;
   for I := 0 to Count - 1 do
   begin
     Poll;

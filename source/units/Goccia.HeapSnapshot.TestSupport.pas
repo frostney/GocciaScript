@@ -354,6 +354,9 @@ begin
   Result := Result + 4 + 6 * Integer(U32At(Result));  // codecs
   Result := Result + 4 + 4 * Integer(U32At(Result));  // built-in names
   Result := Result + 4 + 8 * Integer(U32At(Result));  // built-ins the run built
+  // Module records: their headers are the record codec's, not walked here.
+  Expect<Integer>(Integer(U32At(Result))).ToBe(0);
+  Inc(Result, 4);
   Result := Result + 4 + 4 * Integer(U32At(Result));  // modules
   Expect<Boolean>(AIndex < Integer(U32At(Result))).ToBe(True);
   Inc(Result, 4);

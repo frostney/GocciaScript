@@ -358,6 +358,9 @@ type
       (last expression value, or undefined). }
     procedure InstantiateModuleFunctions(const AProgram: TGocciaProgram;
       var AContext: TGocciaEvaluationContext);
+    function CompileModuleProgram(const AProgram: TGocciaProgram;
+      const AFilePath: string; const ANonStrictMode,
+      AArgumentsObjectEnabled: Boolean): TGocciaBytecodeModule;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue;
@@ -444,6 +447,13 @@ type
     // The compiled modules this engine keeps, in the order it compiled them:
     // the functions a heap snapshot names run their code (ADR 0148).
     function RetainedModule(const AIndex: Integer): TGocciaBytecodeModule;
+    { Compiles the source module at ASourcePath as linking it would, without
+      linking or running it, and keeps it: a heap snapshot restore needs the
+      code of the modules it restores (ADR 0148). The engine's own source
+      when ASourcePath is its source path, else the loader reads the module
+      under its read policy. }
+    function CompileModuleForSnapshot(const ASourcePath: string;
+      const AIsHostOwned: Boolean): TGocciaBytecodeModule;
     function RunModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
     function RunModuleInScope(const AModule: TGocciaBytecodeModule;
@@ -2594,10 +2604,24 @@ procedure TGocciaEngine.InstantiateModuleFunctions(
   const AProgram: TGocciaProgram; var AContext: TGocciaEvaluationContext);
 var
   BytecodeModule: TGocciaBytecodeModule;
+begin
+  BytecodeModule := CompileModuleProgram(AProgram, AContext.CurrentFilePath,
+    AContext.NonStrictMode, AContext.Scope.EffectiveArgumentsObjectEnabled);
+  AContext.CompiledModule := BytecodeModule;
+  InstantiateCompiledModuleFunctions(BytecodeModule, AContext.Scope,
+    AContext.Realm);
+end;
+
+{ A module-form program compiled for linking, and kept for the engine's
+  life. }
+function TGocciaEngine.CompileModuleProgram(const AProgram: TGocciaProgram;
+  const AFilePath: string; const ANonStrictMode,
+  AArgumentsObjectEnabled: Boolean): TGocciaBytecodeModule;
+var
   Compiler: TGocciaCompiler;
   Options: TGocciaCompilerOptimizationOptions;
 begin
-  Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
+  Compiler := TGocciaCompiler.Create(AFilePath);
   try
     // The module's top-level bindings live in its Module Environment
     // Record, so the module body and its functions read them there by name:
@@ -2607,22 +2631,50 @@ begin
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
     Compiler.PreinitializedTopLevelFunctions := True;
     Compiler.StrictTypes := FStrictTypes;
-    Compiler.NonStrictMode := AContext.NonStrictMode;
-    Compiler.ArgumentsObjectEnabled :=
-      AContext.Scope.EffectiveArgumentsObjectEnabled;
+    Compiler.NonStrictMode := ANonStrictMode;
+    Compiler.ArgumentsObjectEnabled := AArgumentsObjectEnabled;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
     Compiler.OptimizationOptions := Options;
-    BytecodeModule := Compiler.Compile(AProgram);
+    Result := Compiler.Compile(AProgram);
   finally
     Compiler.Free;
   end;
-  FRetainedModules.Add(BytecodeModule);
-  AContext.CompiledModule := BytecodeModule;
-  InstantiateCompiledModuleFunctions(BytecodeModule, AContext.Scope,
-    AContext.Realm);
+  FRetainedModules.Add(Result);
+end;
+
+{ ADR 0148: a restore compiles each source module a snapshot names as linking
+  it compiled it, a module's code being strict and its arguments object the
+  loader's setting, or the engine's for its own source. The snapshot names
+  the bytecode by its hash, so a module compiled differently is refused. }
+function TGocciaEngine.CompileModuleForSnapshot(const ASourcePath: string;
+  const AIsHostOwned: Boolean): TGocciaBytecodeModule;
+var
+  ParseResult: TGocciaSourcePipelineResult;
+  ProgramNode: TGocciaProgram;
+begin
+  if ASourcePath = FSourcePath then
+  begin
+    ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
+      SourcePipelineOptions(stModule));
+    try
+      Result := CompileModuleProgram(ParseResult.ProgramNode, FSourcePath,
+        False, cfArgumentsObject in FCompatibility);
+    finally
+      ParseResult.Free;
+    end;
+    Exit;
+  end;
+  ProgramNode := FModuleLoader.ParseModuleForSnapshot(ASourcePath,
+    AIsHostOwned);
+  try
+    Result := CompileModuleProgram(ProgramNode, ASourcePath, False,
+      FModuleLoader.ArgumentsObjectEnabled);
+  finally
+    ProgramNode.Free;
+  end;
 end;
 
 { Create each top-level function declaration of AModule, compiled for
@@ -3841,6 +3893,8 @@ begin
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then
         EntryModule.LastModified := EntryLastModified;
+      EntryModule.SnapshotKind := mskSource;
+      EntryModule.CompiledModule := AModule;
       FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
       SavedRuntimeModule := FVM.CurrentRuntimeModule;
       FVM.CurrentRuntimeModule := EntryModule;
@@ -4119,6 +4173,8 @@ begin
               ModuleScope);
             InstantiateModuleFunctions(PipelineResult.ProgramNode,
               ModuleContext);
+            EntryModule.SnapshotKind := mskSource;
+            EntryModule.CompiledModule := ModuleContext.CompiledModule;
             if FModuleLoader.VarEnabled then
               HoistVarDeclarations(PipelineResult.ProgramNode.Body,
                 ModuleScope, ModuleContext);
