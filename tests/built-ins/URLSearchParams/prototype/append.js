@@ -50,4 +50,10 @@ describe("URLSearchParams.prototype.append", () => {
     params.append("key", "");
     expect(params.get("key")).toBe("");
   });
+
+  test("appending a non-ASCII value updates a URL's query as UTF-8", () => {
+    const url = new URL("http://h/");
+    url.searchParams.append("k", "éĀ");
+    expect(url.search).toBe("?k=%C3%A9%C4%80");
+  });
 });

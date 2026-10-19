@@ -55,4 +55,16 @@ describe("URLSearchParams.prototype.toString", () => {
     const params = new URLSearchParams("?a=1");
     expect(params.toString()).toBe("a=1");
   });
+
+  test("non-ASCII names and values are percent-encoded as UTF-8", () => {
+    const params = new URLSearchParams();
+    params.set("é", "€\u{1F600}");
+    expect(params.toString()).toBe("%C3%A9=%E2%82%AC%F0%9F%98%80");
+  });
+
+  test("a lone surrogate is encoded as U+FFFD", () => {
+    const params = new URLSearchParams();
+    params.set("a", "\ud800");
+    expect(params.toString()).toBe("a=%EF%BF%BD");
+  });
 });
