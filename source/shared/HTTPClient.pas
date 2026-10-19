@@ -882,10 +882,14 @@ const
   TRUNCATED_BODY_ERROR = 'HTTP response body ended before its declared length';
   MALFORMED_CHUNK_ERROR = 'Invalid HTTP response: malformed chunked body';
 
+const
+  { What a size larger than any Integer body limit parses to. }
+  OVERSIZED_LENGTH = Int64(High(Integer)) + 1;
+
 { A chunk-size line's size: one or more hexadecimal digits and nothing else.
-  A size too large for an Integer is reported as High(Integer), which the
-  body limit then refuses. }
-function TryParseChunkSize(const AText: string; out ASize: Integer): Boolean;
+  A size larger than any Integer parses to OVERSIZED_LENGTH, which every body
+  limit refuses. }
+function TryParseChunkSize(const AText: string; out ASize: Int64): Boolean;
 var
   Digit, I: Integer;
 begin
@@ -900,20 +904,20 @@ begin
     else
       Exit(False);
     end;
-    if ASize > (High(Integer) - Digit) div 16 then
-      ASize := High(Integer)
-    else
+    if ASize < OVERSIZED_LENGTH then
       ASize := ASize * 16 + Digit;
+    if ASize > OVERSIZED_LENGTH then
+      ASize := OVERSIZED_LENGTH;
   end;
 end;
 
-{ A Content-Length value: decimal digits and nothing else. A value too large
-  for an Integer is reported as High(Integer), which the body limit then
+{ A Content-Length value: decimal digits and nothing else. A value larger
+  than any Integer parses to OVERSIZED_LENGTH, which every body limit
   refuses. }
 function TryParseContentLength(const AText: string;
-  out ALength: Integer): Boolean;
+  out ALength: Int64): Boolean;
 var
-  Digit, I: Integer;
+  I: Integer;
 begin
   ALength := 0;
   Result := AText <> '';
@@ -921,12 +925,30 @@ begin
   begin
     if not (AText[I] in ['0'..'9']) then
       Exit(False);
-    Digit := Ord(AText[I]) - Ord('0');
-    if ALength > (High(Integer) - Digit) div 10 then
-      ALength := High(Integer)
-    else
-      ALength := ALength * 10 + Digit;
+    if ALength < OVERSIZED_LENGTH then
+      ALength := ALength * 10 + Ord(AText[I]) - Ord('0');
+    if ALength > OVERSIZED_LENGTH then
+      ALength := OVERSIZED_LENGTH;
   end;
+end;
+
+{ A trailer field line (RFC 9112 section 7.1.2, a field line as in section
+  5): a non-empty token, a colon, and a value without CR, LF or NUL. }
+function IsFieldLine(const ALine: string): Boolean;
+var
+  ColonAt, I: Integer;
+begin
+  ColonAt := Pos(':', ALine);
+  if ColonAt <= 1 then
+    Exit(False);
+  for I := 1 to ColonAt - 1 do
+    if not (ALine[I] in ['!', '#'..'''', '*', '+', '-', '.', '0'..'9',
+      'A'..'Z', '^'..'z', '|', '~']) then
+      Exit(False);
+  for I := ColonAt + 1 to Length(ALine) do
+    if (ALine[I] = #0) or (ALine[I] = #10) or (ALine[I] = #13) then
+      Exit(False);
+  Result := True;
 end;
 
 function HasHeader(const AHeaders: THTTPHeaders; const AName: string): Boolean;
@@ -947,6 +969,8 @@ var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
   N, HeaderEnd, I, J, ContentLen, ChunkSize: Integer;
+  DeclaredLength: Int64;
+  TrailerBytes: Integer;
   Line, HeaderBlock: string;
   Lines: array of string;
   ColonPos: Integer;
@@ -1135,28 +1159,38 @@ begin
       if J > 0 then
         Line := Copy(Line, 1, J - 1);
 
-      if not TryParseChunkSize(Trim(Line), ChunkSize) then
+      if not TryParseChunkSize(Trim(Line), DeclaredLength) then
         raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
+      if DeclaredLength > AMaxBodyBytes - Length(Result.Body) then
+        raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
+          [AMaxBodyBytes]);
+      ChunkSize := Integer(DeclaredLength);
       if ChunkSize = 0 then
       begin
-        { The last chunk is followed by the trailer section, which ends
-          with an empty line; its fields are read and dropped. }
+        { The last chunk is followed by the trailer section: field lines,
+          then an empty line. The fields are checked and dropped, and the
+          section is held to the header size limit. }
+        TrailerBytes := 0;
         repeat
           while FindCRLF(ChunkBuf) < 0 do
           begin
+            if Length(ChunkBuf) > MAX_RESPONSE_HEADER_BYTES - TrailerBytes then
+              raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
             N := Receive(Buf, RECV_BUF_SIZE);
             if N <= 0 then
               raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
             AppendBytes(ChunkBuf, @Buf[0], N, ChunkBufLimit);
           end;
           I := FindCRLF(ChunkBuf);
+          Inc(TrailerBytes, I + 2);
+          if TrailerBytes > MAX_RESPONSE_HEADER_BYTES then
+            raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
+          if (I > 0) and not IsFieldLine(IsomorphicDecode(ChunkBuf, 0, I)) then
+            raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
           RemoveLeadingBytes(ChunkBuf, I + 2);
         until I = 0;
         Break;
       end;
-      if Length(Result.Body) > AMaxBodyBytes - ChunkSize then
-        raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
-          [AMaxBodyBytes]);
 
       while Length(ChunkBuf) < Int64(ChunkSize) + 2 do
       begin
@@ -1177,10 +1211,18 @@ begin
   else
   begin
     ContentLen := -1;
-    if HasHeader(Result.Headers, 'content-length') and
-       not TryParseContentLength(
-         FindHeaderValue(Result.Headers, 'content-length'), ContentLen) then
-      raise EHTTPError.Create('Invalid HTTP response: malformed Content-Length');
+    if HasHeader(Result.Headers, 'content-length') then
+    begin
+      if not TryParseContentLength(
+         FindHeaderValue(Result.Headers, 'content-length'),
+         DeclaredLength) then
+        raise EHTTPError.Create(
+          'Invalid HTTP response: malformed Content-Length');
+      if DeclaredLength > AMaxBodyBytes then
+        raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
+          [AMaxBodyBytes]);
+      ContentLen := Integer(DeclaredLength);
+    end;
 
     if ContentLen >= 0 then
     begin

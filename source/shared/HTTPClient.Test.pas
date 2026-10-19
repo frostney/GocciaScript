@@ -155,6 +155,31 @@ begin
   APort := ntohs(Address.sin_port);
 end;
 
+{ Accepts one connection within 10 s, or returns -1, so a server thread
+  whose client never connected still ends and the test can join it. The
+  connection's receives and sends are bounded by 10 s each too. }
+function AcceptWithin(const AListener: cint): cint;
+const
+  FIXTURE_TIMEOUT_MILLISECONDS = 10000;
+var
+  Descriptor: TPollFd;
+  Timeout: TTimeVal;
+begin
+  Result := -1;
+  Descriptor.fd := AListener;
+  Descriptor.events := POLLIN;
+  Descriptor.revents := 0;
+  if fpPoll(@Descriptor, 1, FIXTURE_TIMEOUT_MILLISECONDS) <= 0 then
+    Exit;
+  Result := fpAccept(AListener, nil, nil);
+  if Result < 0 then
+    Exit;
+  Timeout.tv_sec := FIXTURE_TIMEOUT_MILLISECONDS div 1000;
+  Timeout.tv_usec := 0;
+  fpSetSockOpt(Result, SOL_SOCKET, SO_RCVTIMEO, @Timeout, SizeOf(Timeout));
+  fpSetSockOpt(Result, SOL_SOCKET, SO_SNDTIMEO, @Timeout, SizeOf(Timeout));
+end;
+
 { Reads one request head from AConnection. }
 procedure ReceiveRequestHead(const AConnection: cint);
 var
@@ -205,7 +230,7 @@ procedure TCannedResponseServer.Execute;
 var
   Connection: cint;
 begin
-  Connection := fpAccept(FListener, nil, nil);
+  Connection := AcceptWithin(FListener);
   if Connection < 0 then
     Exit;
   try
@@ -360,7 +385,7 @@ var
   Connection: cint;
   Filler: Byte;
 begin
-  Connection := fpAccept(FListener, nil, nil);
+  Connection := AcceptWithin(FListener);
   if Connection < 0 then
     Exit;
   try
@@ -492,7 +517,7 @@ var
   Deadline: Int64;
   Session: PSSL;
 begin
-  Connection := fpAccept(FListener, nil, nil);
+  Connection := AcceptWithin(FListener);
   if Connection < 0 then
     Exit;
   Context := nil;
@@ -734,6 +759,8 @@ begin
     MALFORMED_CHUNKED_BODY);
   Expect<string>(FetchCanned(CHUNKED_HEAD + '3'#13#10'hello'#13#10 +
     '0'#13#10#13#10)).ToBe(MALFORMED_CHUNKED_BODY);
+  Expect<string>(FetchCanned(CHUNKED_HEAD + '5'#13#10'hello'#13#10 +
+    '0'#13#10'not a field'#13#10#13#10)).ToBe(MALFORMED_CHUNKED_BODY);
   Expect<string>(FetchCanned(CHUNKED_HEAD + 'ffffffffffff'#13#10'A')).ToBe(
     'error: HTTP response body exceeds 8388608 byte limit');
 end;

@@ -684,6 +684,11 @@ begin
       TLSEXT_NAMETYPE_host_name, PAnsiChar(@HostName[0]));
 
     SslSetFd(Data.SSL, AConnection.Socket);
+    { Without auto-retry, SSL_read returns after each record that carries no
+      application data (a TLS 1.3 session ticket, say) instead of reading
+      on, so a peer that streams such records cannot keep one call running
+      past the deadline: every return comes back through WaitForSocket. }
+    SslCtrl(Data.SSL, SSL_CTRL_CLEAR_MODE, SSL_MODE_AUTO_RETRY, nil);
     SetSocketNonBlocking(AConnection.Socket);
     repeat
       Outcome := SslConnect(Data.SSL);
