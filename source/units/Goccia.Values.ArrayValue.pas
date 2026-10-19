@@ -45,6 +45,11 @@ type
     // (a heap snapshot's fingerprint reads them after its last collection).
     function StoredLength: Int64;
     function LengthWritable: Boolean;
+    // A heap snapshot restore of a built-in array the run changed (ADR
+    // 0148): its length, whether that is writable, and its dense elements,
+    // the hole for a missing one. ArrayPartRefusal checked them first.
+    procedure SetArrayPartForRestore(const ALength: Int64;
+      const ALengthWritable: Boolean; const AElements: array of TGocciaValue);
 
     // Index-based element access
     function GetLength: Integer;
@@ -126,6 +131,14 @@ type
   // script has since stored there.  nil before the realm's Array.prototype
   // exists.
   function GetIntrinsicArrayValuesForRealm(const ARealm: TGocciaRealm): TGocciaValue;
+  // Why an array's restored state cannot be, or '': ALength in range and no
+  // shorter than the dense elements, a frozen array's length read-only, and
+  // no key of AKeys (its own property keys) the length or an index the
+  // elements hold a value for or that lies past the length.
+  function ArrayPartRefusal(const ALength: Int64;
+    const ALengthWritable, AFrozen: Boolean;
+    const AElements: array of TGocciaValue;
+    const AKeys: array of string): string;
 
 implementation
 
@@ -4964,6 +4977,47 @@ begin
        ((Index >= Len) or ((Index < Count) and
         (A.FElements[Integer(Index)] <> TGocciaHoleValue.HoleValue))) then
       AReader.Refuse('an array index property the array cannot hold');
+  end;
+end;
+
+procedure TGocciaArrayValue.SetArrayPartForRestore(const ALength: Int64;
+  const ALengthWritable: Boolean; const AElements: array of TGocciaValue);
+var
+  I: Integer;
+begin
+  // Through the element store's gate, as any store grows.
+  FElements.Clear;
+  ExtendElementsWithHoles(FElements, Length(AElements), nil);
+  for I := 0 to High(AElements) do
+    FElements[I] := AElements[I];
+  FLength := ALength;
+  FLengthWritable := ALengthWritable;
+end;
+
+function ArrayPartRefusal(const ALength: Int64;
+  const ALengthWritable, AFrozen: Boolean;
+  const AElements: array of TGocciaValue;
+  const AKeys: array of string): string;
+var
+  Index: Int64;
+  I: Integer;
+begin
+  Result := '';
+  if (ALength < 0) or (ALength > MAX_ARRAY_LENGTH) then
+    Exit('an array length out of range');
+  if Length(AElements) > ALength then
+    Exit('an array with more elements than its length');
+  if AFrozen and ALengthWritable then
+    Exit('a frozen array with a writable length');
+  for I := 0 to High(AKeys) do
+  begin
+    CheckNativeWork;
+    if AKeys[I] = PROP_LENGTH then
+      Exit('an array whose length is an ordinary property');
+    if TryParseArrayElementIndex(AKeys[I], Index) and
+       ((Index >= ALength) or ((Index < Length(AElements)) and
+        (AElements[Integer(Index)] <> TGocciaHoleValue.HoleValue))) then
+      Exit('an array index property the array cannot hold');
   end;
 end;
 

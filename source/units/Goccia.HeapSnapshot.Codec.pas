@@ -53,7 +53,7 @@ uses
 
 const
   HEAP_SNAPSHOT_MAGIC: array[0..3] of AnsiChar = ('G', 'H', 'S', 'N');
-  HEAP_SNAPSHOT_FORMAT_VERSION = 2;
+  HEAP_SNAPSHOT_FORMAT_VERSION = 3;
 
   // Separates the segments of a built-in's name; no property key or symbol
   // description of a built-in contains it.
@@ -77,6 +77,13 @@ const
   // Descriptor kinds in an object's property list.
   HSD_DATA = 0;
   HSD_ACCESSOR = 1;
+  // In a changed built-in's property list only: the restoring engine's own
+  // member of that key, lazy or built, as building it produced.
+  HSD_KEEP = 2;
+
+  // The parts of a changed built-in's state past its object core.
+  HSB_FUNCTION = 1;
+  HSB_ARRAY = 2;
 
 type
   { The snapshot cannot be taken: a class without a codec, a state a codec
@@ -158,6 +165,11 @@ type
 
   TGocciaHeapSnapshotBuiltinTable = class;
 
+  // A lazy member AName of AObject was just built into ADescriptor.
+  TGocciaBuiltinMemberBuilt = procedure(const AObject: TGocciaObjectValue;
+    const AName: string; const ADescriptor: TGocciaPropertyDescriptor)
+    of object;
+
   // Keeps alive the values a table recorded lazy members built into: a
   // replaced member's value could otherwise be freed and its address reused
   // by the replacement, which would then compare as the member it replaced.
@@ -197,7 +209,10 @@ type
     FIndex: THashMap<TGCManagedObject, Integer>;
     FByPath: TDictionary<string, Integer>;
     FFingerprints: array of string;
+    // Per entry: whether FFingerprints holds the state it was recorded in.
+    FRecorded: array of Boolean;
     FFingerprintCount: Integer;
+    FOnMemberBuilt: TGocciaBuiltinMemberBuilt;
     FMaterialized: TDictionary<string, TGocciaMaterializedMember>;
     FObserver: TGocciaBuiltinMaterializationObserver;
     FMaterializedRoots: TGocciaMaterializedMemberRoots;
@@ -234,13 +249,28 @@ type
     function ComputeFingerprint(const AIndex: Integer): string;
     // Records every entry's fingerprint; DirtyPaths compares against it.
     procedure RecordFingerprints;
-    // The names of entries whose own state changed since RecordFingerprints:
+    // Records one entry's fingerprint: a built-in the run built, as building
+    // it produced it.
+    procedure RecordFingerprint(const AIndex: Integer);
+    function IsRecorded(const AIndex: Integer): Boolean;
+    function RecordedFingerprint(const AIndex: Integer): string;
+    // The names of entries whose own state changed since it was recorded:
     // built-ins the run changed. The caller frees the list.
     function DirtyPaths: TStringList;
+    // The indexes of those entries, in table order. The caller frees it.
+    function ChangedIndexes: TList<Integer>;
+    // Whether ADescriptor, AObject's own member AName, is what the engine
+    // gives it: lazy still, or built and unchanged since (a symbol-keyed
+    // member only while lazy, AName '').
+    function IsPristineMember(const AObject: TGocciaObjectValue;
+      const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
     property Count: Integer read GetCount;
     // How many entries RecordFingerprints recorded: the ones after them were
     // added since, as the run built them.
     property FingerprintCount: Integer read FFingerprintCount;
+    // Called after a lazy member of the installed realm is built and noted.
+    property OnMemberBuilt: TGocciaBuiltinMemberBuilt read FOnMemberBuilt
+      write FOnMemberBuilt;
   end;
 
   { The compiled modules whose function templates a snapshot can refer to,
@@ -303,7 +333,10 @@ type
     // The modules the snapshot refers to, in the order first referred to.
     FModuleRefs: TList<Integer>;
     FModuleRefIndex: THashMap<Integer, Integer>;
+    FDifferences: TList<Integer>;
     procedure Reserve(const ABytes: Int64);
+    function BuiltinRefIndex(const ABuiltinIndex: Integer): Integer;
+    procedure WriteDifference(const ABuiltinIndex: Integer);
     function GetObjectCount: Integer;
     function GetBuiltinRefCount: Integer;
     function ReferenceChain(const AId: Integer): string;
@@ -341,8 +374,8 @@ type
     procedure Refuse(const AReason: string);
 
     // Writes the whole snapshot of what ARoots reach. Refuses when something
-    // reachable has no codec. The caller refuses a changed built-in first
-    // (DirtyPaths; the session does).
+    // reachable has no codec. Each built-in in Differences is written as its
+    // whole own state, what the restore makes the same built-in hold.
     procedure Serialize(const ARoots: array of TGCManagedObject;
       const AStream: TStream);
     // Refuses when a live object registered after AFirstOfRun (an object
@@ -366,6 +399,9 @@ type
     // it. Without one, a function refuses.
     property Templates: TGocciaSnapshotTemplateTable read FTemplates
       write FTemplates;
+    // The indexes in the built-in table of the built-ins the run changed
+    // (ChangedIndexes); the caller owns it. Without it, none is written.
+    property Differences: TList<Integer> read FDifferences write FDifferences;
   end;
 
   // Finds the built-in a name refers to, adding it to the reader's table;
@@ -944,6 +980,8 @@ begin
   if TObject(CurrentRealm) <> FTable.FRealm then
     Exit;
   FTable.NoteMaterialized(AObject, AName, ADescriptor);
+  if Assigned(FTable.FOnMemberBuilt) then
+    FTable.FOnMemberBuilt(AObject, AName, ADescriptor);
 end;
 
 procedure TGocciaHeapSnapshotBuiltinTable.Clear;
@@ -954,6 +992,7 @@ begin
   FByPath.Clear;
   FMaterialized.Clear;
   SetLength(FFingerprints, 0);
+  SetLength(FRecorded, 0);
   FFingerprintCount := 0;
 end;
 
@@ -1160,36 +1199,15 @@ const
   procedure EncodeDescriptor(var AEncoder: TFingerprintEncoder;
     const AObject: TGocciaObjectValue; const AName: string;
     const ADescriptor: TGocciaPropertyDescriptor);
-  var
-    Member: TGocciaMaterializedMember;
   begin
     if AEncoder.TooLarge then
       Exit;
-    if ADescriptor is TGocciaLazyPropertyDescriptorData then
+    // Lazy, or built since the table was recorded and still exactly what
+    // building it produced: the lazy member it was.
+    if IsPristineMember(AObject, AName, ADescriptor) then
     begin
       AEncoder.Field(LAZY);
       Exit;
-    end;
-    // Built since the table was recorded, and still exactly what building
-    // it produced: the lazy member it was.
-    if (AName <> '') and
-       FMaterialized.TryGetValue(MemberKey(AObject, AName), Member) and
-       (Member.Flags = ADescriptor.Flags) then
-    begin
-      if Member.Accessor and (ADescriptor is TGocciaPropertyDescriptorAccessor) and
-         (TGocciaPropertyDescriptorAccessor(ADescriptor).Getter = Member.Getter) and
-         (TGocciaPropertyDescriptorAccessor(ADescriptor).Setter = Member.Setter) then
-      begin
-        AEncoder.Field(LAZY);
-        Exit;
-      end;
-      if not Member.Accessor and
-         (ADescriptor.ClassType = TGocciaPropertyDescriptorData) and
-         (TGocciaPropertyDescriptorData(ADescriptor).Value = Member.Value) then
-      begin
-        AEncoder.Field(LAZY);
-        Exit;
-      end;
     end;
     if ADescriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -1295,30 +1313,102 @@ begin
   end;
 end;
 
+function TGocciaHeapSnapshotBuiltinTable.IsPristineMember(
+  const AObject: TGocciaObjectValue; const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+var
+  Member: TGocciaMaterializedMember;
+begin
+  if ADescriptor is TGocciaLazyPropertyDescriptorData then
+    Exit(True);
+  Result := False;
+  if (AName = '') or
+     not FMaterialized.TryGetValue(MemberKey(AObject, AName), Member) or
+     (Member.Flags <> ADescriptor.Flags) then
+    Exit;
+  if Member.Accessor then
+    Result := (ADescriptor is TGocciaPropertyDescriptorAccessor) and
+      (TGocciaPropertyDescriptorAccessor(ADescriptor).Getter = Member.Getter) and
+      (TGocciaPropertyDescriptorAccessor(ADescriptor).Setter = Member.Setter)
+  else
+    Result := (ADescriptor.ClassType = TGocciaPropertyDescriptorData) and
+      (TGocciaPropertyDescriptorData(ADescriptor).Value = Member.Value);
+end;
+
 procedure TGocciaHeapSnapshotBuiltinTable.RecordFingerprints;
 var
   I: Integer;
 begin
   FFingerprintCount := 0;
   SetLength(FFingerprints, FObjects.Count);
+  SetLength(FRecorded, FObjects.Count);
   for I := 0 to FObjects.Count - 1 do
+  begin
     FFingerprints[I] := ComputeFingerprint(I);
+    FRecorded[I] := True;
+  end;
   FFingerprintCount := FObjects.Count;
 end;
 
-function TGocciaHeapSnapshotBuiltinTable.DirtyPaths: TStringList;
+procedure TGocciaHeapSnapshotBuiltinTable.RecordFingerprint(
+  const AIndex: Integer);
+begin
+  if Length(FFingerprints) < FObjects.Count then
+  begin
+    SetLength(FFingerprints, FObjects.Count);
+    SetLength(FRecorded, FObjects.Count);
+  end;
+  FFingerprints[AIndex] := ComputeFingerprint(AIndex);
+  FRecorded[AIndex] := True;
+end;
+
+function TGocciaHeapSnapshotBuiltinTable.IsRecorded(
+  const AIndex: Integer): Boolean;
+begin
+  Result := (AIndex < Length(FRecorded)) and FRecorded[AIndex];
+end;
+
+function TGocciaHeapSnapshotBuiltinTable.RecordedFingerprint(
+  const AIndex: Integer): string;
+begin
+  if IsRecorded(AIndex) then
+    Result := FFingerprints[AIndex]
+  else
+    Result := '';
+end;
+
+function TGocciaHeapSnapshotBuiltinTable.ChangedIndexes: TList<Integer>;
 var
   I: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TList<Integer>.Create;
   try
-    for I := 0 to FFingerprintCount - 1 do
-      if ComputeFingerprint(I) <> FFingerprints[I] then
-        Result.Add(FPaths[I]);
+    for I := 0 to Length(FRecorded) - 1 do
+      if FRecorded[I] and (ComputeFingerprint(I) <> FFingerprints[I]) then
+        Result.Add(I);
   except
     Result.Free;
     raise;
   end;
+end;
+
+function TGocciaHeapSnapshotBuiltinTable.DirtyPaths: TStringList;
+var
+  Changed: TList<Integer>;
+  I: Integer;
+begin
+  Result := TStringList.Create;
+  Changed := nil;
+  try
+    Changed := ChangedIndexes;
+    for I := 0 to Changed.Count - 1 do
+      Result.Add(FPaths[Changed[I]]);
+  except
+    Result.Free;
+    Changed.Free;
+    raise;
+  end;
+  Changed.Free;
 end;
 
 { TGocciaSnapshotTemplateTable }
@@ -1738,9 +1828,113 @@ begin
   end;
 end;
 
+function TGocciaHeapSnapshotWriter.BuiltinRefIndex(
+  const ABuiltinIndex: Integer): Integer;
+begin
+  if not FBuiltinRefIndex.TryGetValue(ABuiltinIndex, Result) then
+  begin
+    Result := FBuiltinRefs.Count;
+    FBuiltinRefs.Add(ABuiltinIndex);
+    FBuiltinRefIndex.Add(ABuiltinIndex, Result);
+  end;
+end;
+
+{ A changed built-in, as its whole own state: the built-in, its prototype
+  and flags, a function's synthesized length and name, an array's length
+  and elements, then every own property in its final order. A member the
+  engine built and the run left alone is HSD_KEEP, the restoring engine's
+  own: written in full it would name what was lazy here. }
+procedure TGocciaHeapSnapshotWriter.WriteDifference(
+  const ABuiltinIndex: Integer);
+var
+  Obj: TGocciaObjectValue;
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  Descriptor: TGocciaPropertyDescriptor;
+  Symbol: TGocciaSymbolValue;
+  Parts: Byte;
+  I: Integer;
+
+  procedure WriteMember(const AName: string;
+    const ADescriptor: TGocciaPropertyDescriptor);
+  begin
+    if FBuiltins.IsPristineMember(Obj, AName, ADescriptor) then
+      WriteU8(HSD_KEEP)
+    else if ADescriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      WriteU8(HSD_ACCESSOR);
+      WriteU8(Byte(ADescriptor.Flags));
+      WriteValue(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter);
+      WriteValue(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter);
+    end
+    else if ADescriptor.ClassType = TGocciaPropertyDescriptorData then
+    begin
+      WriteU8(HSD_DATA);
+      WriteU8(Byte(ADescriptor.Flags));
+      WriteValue(TGocciaPropertyDescriptorData(ADescriptor).Value);
+    end
+    else
+      Refuse('no snapshot codec for a ' + ADescriptor.ClassName +
+        ' on a changed built-in');
+  end;
+
+begin
+  if not (FBuiltins.ObjectAt(ABuiltinIndex) is TGocciaObjectValue) then
+    Refuse('a changed built-in that is not an object');
+  Obj := TGocciaObjectValue(FBuiltins.ObjectAt(ABuiltinIndex));
+  // Internal state outside the property map has no difference written yet.
+  if Obj.HasErrorData or Obj.HasRegExpData or HasDateValue(Obj) then
+    Refuse('the run changed the built-in ' + StringReplace(
+      FBuiltins.PathAt(ABuiltinIndex), HEAP_SNAPSHOT_PATH_SEPARATOR, '.',
+      [rfReplaceAll]) + ', which holds internal state');
+  WriteU32(BuiltinRefIndex(ABuiltinIndex));
+  WriteValue(Obj.Prototype);
+  WriteBool(Obj.Extensible);
+  WriteBool(Obj.Frozen);
+  WriteBool(Obj.Sealed);
+  WriteBool(Obj.HasEverHadIndexedOwnProperty);
+  Parts := 0;
+  if Obj is TGocciaFunctionBase then
+    Parts := Parts or HSB_FUNCTION;
+  if Obj is TGocciaArrayValue then
+    Parts := Parts or HSB_ARRAY;
+  WriteU8(Parts);
+  if Obj is TGocciaFunctionBase then
+  begin
+    WriteBool(TGocciaFunctionBase(Obj).HasOwnLengthProperty);
+    WriteBool(TGocciaFunctionBase(Obj).HasOwnNameProperty);
+  end;
+  if Obj is TGocciaArrayValue then
+  begin
+    WriteI64(TGocciaArrayValue(Obj).StoredLength);
+    WriteBool(TGocciaArrayValue(Obj).LengthWritable);
+    WriteU32(TGocciaArrayValue(Obj).Elements.Count);
+    for I := 0 to TGocciaArrayValue(Obj).Elements.Count - 1 do
+    begin
+      Poll;
+      WriteValue(TGocciaArrayValue(Obj).Elements[I]);
+    end;
+  end;
+  WriteU32(Obj.Properties.Count);
+  for Pair in Obj.Properties do
+  begin
+    Poll;
+    WriteStr(Pair.Key);
+    WriteMember(Pair.Key, Pair.Value);
+  end;
+  WriteU32(Obj.StoredSymbolCount);
+  for I := 0 to Obj.StoredSymbolCount - 1 do
+  begin
+    Poll;
+    Symbol := Obj.StoredSymbolAt(I);
+    Descriptor := Obj.GetOwnSymbolPropertyDescriptor(Symbol);
+    WriteValue(Symbol);
+    WriteMember('', Descriptor);
+  end;
+end;
+
 procedure TGocciaHeapSnapshotWriter.WriteRef(const AObject: TGCManagedObject);
 var
-  Id, BuiltinIndex, RefIndex, I: Integer;
+  Id, BuiltinIndex, I: Integer;
 begin
   if not Assigned(AObject) then
   begin
@@ -1788,14 +1982,8 @@ begin
     BuiltinIndex := FBuiltins.IndexOf(AObject);
     if BuiltinIndex >= 0 then
     begin
-      if not FBuiltinRefIndex.TryGetValue(BuiltinIndex, RefIndex) then
-      begin
-        RefIndex := FBuiltinRefs.Count;
-        FBuiltinRefs.Add(BuiltinIndex);
-        FBuiltinRefIndex.Add(BuiltinIndex, RefIndex);
-      end;
       WriteU8(HSV_BUILTIN);
-      WriteU32(RefIndex);
+      WriteU32(BuiltinRefIndex(BuiltinIndex));
       Exit;
     end;
     if (AObject is TGocciaSymbolValue) and
@@ -1931,7 +2119,7 @@ end;
 procedure TGocciaHeapSnapshotWriter.Serialize(
   const ARoots: array of TGCManagedObject; const AStream: TStream);
 var
-  RootsOut, Payload, ObjectsOut: TMemoryStream;
+  RootsOut, Payload, ObjectsOut, DiffsOut: TMemoryStream;
   I, Index: Integer;
   Codec: TGocciaSnapshotCodec;
   Obj: TGCManagedObject;
@@ -1942,12 +2130,26 @@ begin
   RootsOut := TGocciaChargedMemoryStream.Create;
   Payload := TGocciaChargedMemoryStream.Create;
   ObjectsOut := TGocciaChargedMemoryStream.Create;
+  DiffsOut := TGocciaChargedMemoryStream.Create;
   try
     // The roots first: writing them numbers the objects they reach.
     FOut := RootsOut;
     WriteU32(Length(ARoots));
     for I := 0 to High(ARoots) do
       WriteRef(ARoots[I]);
+    // Then the changed built-ins, which number the run's objects they hold.
+    FOut := DiffsOut;
+    if Assigned(FDifferences) then
+    begin
+      WriteU32(FDifferences.Count);
+      for I := 0 to FDifferences.Count - 1 do
+      begin
+        CheckNativeWork;
+        WriteDifference(FDifferences[I]);
+      end;
+    end
+    else
+      WriteU32(0);
 
     // Objects, breadth first: writing one numbers the ones it reaches.
     Index := 0;
@@ -1992,8 +2194,14 @@ begin
       Poll;
       LatePathIndexes[I] := StringIndex(FBuiltins.PathAt(
         FBuiltins.FingerprintCount + I));
-      LateFingerprints[I] := FBuiltins.ComputeFingerprint(
-        FBuiltins.FingerprintCount + I);
+      // One recorded as it was built is sent as built: what the run changed
+      // since is in the differences.
+      if FBuiltins.IsRecorded(FBuiltins.FingerprintCount + I) then
+        LateFingerprints[I] := FBuiltins.RecordedFingerprint(
+          FBuiltins.FingerprintCount + I)
+      else
+        LateFingerprints[I] := FBuiltins.ComputeFingerprint(
+          FBuiltins.FingerprintCount + I);
       LateFingerprintIndexes[I] := StringIndex(LateFingerprints[I]);
     end;
     for I := 0 to FCodecs.Count - 1 do
@@ -2030,6 +2238,7 @@ begin
       WriteU32(ModuleHashIndexes[I]);
     WriteU32(FObjects.Count);
     AStream.CopyFrom(ObjectsOut, 0);
+    AStream.CopyFrom(DiffsOut, 0);
     AStream.CopyFrom(RootsOut, 0);
   finally
     FOut := nil;
@@ -2037,6 +2246,7 @@ begin
     RootsOut.Free;
     Payload.Free;
     ObjectsOut.Free;
+    DiffsOut.Free;
   end;
 end;
 
