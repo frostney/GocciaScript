@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-19
 **Area:** `embedding`, `garbage collector`, `bytecode runtime`, `modules`
-**Related:** [Heap snapshot prototype spike](../spikes/heap-snapshot-prototype.md), [ADR 0103](0103-layered-untrusted-execution-boundaries.md), [ADR 0133](0133-modules-root-their-value-exports.md), [ADR 0142](0142-the-run-waits-until-no-extension-has-pending-work.md), [ADR 0146](0146-embedder-fetch-transport.md), [#1792](https://github.com/frostney/GocciaScript/pull/1792)
+**Related:** [Heap snapshot prototype spike](../spikes/heap-snapshot-prototype.md), [ADR 0103](0103-layered-untrusted-execution-boundaries.md), [ADR 0133](0133-modules-root-their-value-exports.md), [ADR 0142](0142-the-run-waits-until-no-extension-has-pending-work.md), [ADR 0146](0146-embedder-fetch-transport.md), [ADR 0147](0147-marking-spills-to-an-explicit-mark-stack.md)
 
 ## Context
 
@@ -240,7 +240,7 @@ handler stacks. Two rules follow:
 **Every walk over the heap is iterative.** The writer numbers objects
 breadth first, the reader restores in passes over the object table, and the
 census and the accounting check use the collector. No walk recurses natively
-once per object, the rule [#1792](https://github.com/frostney/GocciaScript/pull/1792)
+once per object, the rule [ADR 0147](0147-marking-spills-to-an-explicit-mark-stack.md)
 sets for marking. Each recursive object shape (chains, nesting, deep closures
 and prototype chains) has a deep-chain round-trip test.
 
