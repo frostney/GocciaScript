@@ -659,6 +659,23 @@ await section("Loader: --print and --output=json convert the last value before i
   if (dateJson.exitCode !== 0 || dateJson.json.files?.[0]?.result !== "1970-01-01T00:00:00.000Z")
     throw new Error(`--output=json of a Date should report its ISO string, got (exit ${dateJson.exitCode}) ${JSON.stringify(dateJson.json.files?.[0]?.result)}\n${dateJson.stderr}`);
 
+  // The error report is built after the engine was freed, so it reads only
+  // string data properties of the thrown value: a `message` getter, a Proxy
+  // trap or a deferred namespace must not run (it crashed this report).
+  const getterJson = await runLoaderJsonAsync(
+    'const e = new Error("x");\n' +
+      'Object.defineProperty(e, "message", { get() { return "m"; } });\n' +
+      "[1].forEach(() => { throw e; });\n",
+  );
+  if (getterJson.json?.ok !== false || getterJson.json?.error?.type !== "Error" || getterJson.json?.error?.message !== "")
+    throw new Error(`--output=json of a throw with a message getter should report an Error with no message, got (exit ${getterJson.exitCode}) ${JSON.stringify(getterJson.json?.error)}\n${getterJson.stderr}`);
+  const proxyJson = await runLoaderJsonAsync(
+    "const p = new Proxy(new Error('x'), { get() { throw new Error('trap'); }, getOwnPropertyDescriptor() { throw new Error('trap'); } });\n" +
+      "[1].forEach(() => { throw p; });\n",
+  );
+  if (proxyJson.json?.ok !== false || proxyJson.json?.error?.message === "trap")
+    throw new Error(`--output=json of a thrown Proxy should not run its traps, got (exit ${proxyJson.exitCode}) ${JSON.stringify(proxyJson.json?.error)}\n${proxyJson.stderr}`);
+
   // Parallel workers print no value, so they do not convert one either: a
   // toString that throws does not fail a --jobs run.
   const tmp = makeTmp();
