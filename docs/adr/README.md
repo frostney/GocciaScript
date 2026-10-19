@@ -155,3 +155,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0143 — A parse's arena owns its tree, a descriptor built for [[GetOwnProperty]] is its caller's, and a collector frees what it still manages](0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)
 - [0144 — Read-only paths are enforced by the virtual filesystem, and refused writes are EROFS](0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md)
 - [0145 — The heap trigger follows growth since the last collection, and gated storage growth samples the heap](0145-heap-trigger-follows-growth-since-the-last-collection.md)
+- [0146 — An embedder can answer an engine's fetch requests through its own transport](0146-embedder-fetch-transport.md)
+- [0147 — Marking nests at most 64 objects deep and spills the rest to an explicit mark stack](0147-marking-spills-to-an-explicit-mark-stack.md)

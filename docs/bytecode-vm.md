@@ -296,7 +296,10 @@ keeps that true:
   Only the line map changes; the instructions are the same. An entry at the
   same PC as the entry before it replaces that entry, which a lookup could
   never reach (`TGocciaDebugInfo.AddLineMapping`); the first entry always
-  stays. Where each position points is in
+  stays. A lookup binary-searches the map while its PCs never decrease, as
+  the compiler emits them, and scans it otherwise, so locating each of a
+  module's import declarations while it links costs the log of its length.
+  Where each position points is in
   [Errors — Stack Traces](errors.md#stack-traces).
 - **Frame source is provenance-bound, not `stack`-selected.** A code frame is
   rendered only from provenance the engine records on a genuine error *when it

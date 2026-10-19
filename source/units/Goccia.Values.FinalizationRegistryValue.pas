@@ -69,7 +69,7 @@ type
     function ToStringTag: string; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     procedure SweepWeakReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
@@ -195,11 +195,10 @@ begin
       SSuggestCallbackRequired);
 end;
 
-procedure TGocciaFinalizationRegistryValue.MarkReferences;
+procedure TGocciaFinalizationRegistryValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FCleanupCallback) then
     FCleanupCallback.MarkReferences;

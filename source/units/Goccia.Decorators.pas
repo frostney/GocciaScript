@@ -26,7 +26,7 @@ type
     procedure AfterConstruction; override;
     procedure Add(const AInitializer: TGocciaValue);
     function GetInitializers: TArray<TGocciaValue>;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   { An initializer addInitializer accepted that is callable but not a
@@ -55,7 +55,7 @@ type
   public
     constructor Create(const ACollector: TGocciaInitializerCollector);
     procedure Finish;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   { The hosts of a decorator context's access.get / access.set functions.
@@ -70,7 +70,7 @@ type
   public
     constructor Create(const ATarget: TGocciaValue; const APropertyName: string);
     constructor CreateWithKey(const ATarget: TGocciaValue; const APropertyKey: TGocciaValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     function Get(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
@@ -81,7 +81,7 @@ type
   public
     constructor Create(const APropertyName: string);
     constructor CreateWithKey(const APropertyKey: TGocciaValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     function SetValue(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
@@ -124,12 +124,10 @@ begin
     Result[I] := FInitializers[I];
 end;
 
-procedure TGocciaInitializerCollector.MarkReferences;
+procedure TGocciaInitializerCollector.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   for I := 0 to High(FInitializers) do
     if Assigned(FInitializers[I]) then
@@ -190,10 +188,8 @@ begin
   FFinished := True;
 end;
 
-procedure TGocciaAddInitializerFunction.MarkReferences;
+procedure TGocciaAddInitializerFunction.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FCollector) then
     FCollector.MarkReferences;
@@ -220,10 +216,8 @@ begin
     FPropertyName := '';
 end;
 
-procedure TGocciaAccessGetter.MarkReferences;
+procedure TGocciaAccessGetter.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FTarget) then
     FTarget.MarkReferences;
@@ -278,10 +272,8 @@ begin
     FPropertyName := '';
 end;
 
-procedure TGocciaAccessSetter.MarkReferences;
+procedure TGocciaAccessSetter.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FPropertyKey) then
     FPropertyKey.MarkReferences;

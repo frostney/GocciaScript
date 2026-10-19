@@ -36,7 +36,7 @@ type
     function GetPropertyWithContext(const AName: string;
       const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Descriptor: TGocciaFFITypeDescriptor read FDescriptor;
   end;
 
@@ -52,7 +52,7 @@ type
     function TypeAt(const AIndex: Integer): TGocciaFFITypeDescriptor;
     function ValueAt(const AIndex: Integer): TGocciaValue;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaFFIAggregatePointerGuardEntry = record
@@ -113,7 +113,7 @@ type
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue;
       const ACanCreate: Boolean = True); override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     procedure EnsureBackingStore;
     function DataPointer: Pointer;
     procedure CopyTo(const ADestination: Pointer);
@@ -253,11 +253,10 @@ begin
   Result := FFI_VARARGS_TAG;
 end;
 
-procedure TGocciaFFIVarArgsValue.MarkReferences;
+procedure TGocciaFFIVarArgsValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
   for I := 0 to High(FValues) do
     if Assigned(FValues[I]) then
@@ -772,9 +771,8 @@ begin
   Result := FFI_TYPE_DESCRIPTOR_TAG;
 end;
 
-procedure TGocciaFFITypeDescriptorValue.MarkReferences;
+procedure TGocciaFFITypeDescriptorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FCreateFunction) then
     FCreateFunction.MarkReferences;
@@ -1149,9 +1147,8 @@ begin
   Result := FFI_AGGREGATE_TAG;
 end;
 
-procedure TGocciaFFIAggregateValue.MarkReferences;
+procedure TGocciaFFIAggregateValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FBuffer) then
     FBuffer.MarkReferences;

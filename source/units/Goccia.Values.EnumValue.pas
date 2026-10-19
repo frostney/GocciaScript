@@ -20,7 +20,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const AName: string);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     function TypeName: string; override;
     property Name: string read FName;
     property Entries: TGocciaArrayValue read FEntries write FEntries;
@@ -42,9 +42,8 @@ begin
   FEntries := nil;
 end;
 
-procedure TGocciaEnumValue.MarkReferences;
+procedure TGocciaEnumValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FEntries) then
     FEntries.MarkReferences;

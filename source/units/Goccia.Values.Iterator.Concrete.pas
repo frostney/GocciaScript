@@ -24,7 +24,7 @@ type
     function DirectNextValue(const AValue: TGocciaValue;
       out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaStringIteratorValue = class(TGocciaIteratorValue)
@@ -37,7 +37,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaMapIteratorKind = (mkEntries, mkKeys, mkValues);
@@ -58,7 +58,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaSetIteratorKind = (skValues, skEntries);
@@ -76,7 +76,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaURLSearchParamsIteratorKind = (spikKeys, spikValues, spikEntries);
@@ -92,7 +92,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaHeadersIteratorKind = (hikEntries, hikKeys, hikValues);
@@ -108,7 +108,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function EnsureArrayIteratorPrototype: TGocciaObjectValue;
@@ -406,9 +406,8 @@ begin
   Result := 'Array Iterator';
 end;
 
-procedure TGocciaArrayIteratorValue.MarkReferences;
+procedure TGocciaArrayIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -505,9 +504,8 @@ begin
   Result := 'String Iterator';
 end;
 
-procedure TGocciaStringIteratorValue.MarkReferences;
+procedure TGocciaStringIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -634,9 +632,8 @@ begin
   Result := 'Map Iterator';
 end;
 
-procedure TGocciaMapIteratorValue.MarkReferences;
+procedure TGocciaMapIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -758,9 +755,8 @@ begin
   Result := 'Set Iterator';
 end;
 
-procedure TGocciaSetIteratorValue.MarkReferences;
+procedure TGocciaSetIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -884,9 +880,8 @@ begin
   Result := 'URLSearchParams Iterator';
 end;
 
-procedure TGocciaURLSearchParamsIteratorValue.MarkReferences;
+procedure TGocciaURLSearchParamsIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -1010,9 +1005,8 @@ begin
   Result := 'Headers Iterator';
 end;
 
-procedure TGocciaHeadersIteratorValue.MarkReferences;
+procedure TGocciaHeadersIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;

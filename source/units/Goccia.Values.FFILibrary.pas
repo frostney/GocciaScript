@@ -32,7 +32,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const ATarget: TGocciaObjectValue);
 
@@ -796,9 +796,8 @@ begin
   Result := FFI_LIBRARY_TAG;
 end;
 
-procedure TGocciaFFILibraryValue.MarkReferences;
+procedure TGocciaFFILibraryValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 end;
 

@@ -36,8 +36,20 @@ type
     FChild: TChildManaged;
   public
     destructor Destroy; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Child: TChildManaged read FChild write FChild;
+  end;
+
+  { A node of any shape the mark-stack tests need: a chain link (one child),
+    a wide node (many), or a leaf. Counts its own sweep. }
+  TFanOutManaged = class(TGCManagedObject)
+  private
+    FChildren: array of TGCManagedObject;
+  protected
+    procedure TraceReferences; override;
+  public
+    destructor Destroy; override;
+    procedure AddChild(const AChild: TGCManagedObject);
   end;
 
   { A foreign thread releasing external bytes against the MAIN thread's
@@ -101,9 +113,14 @@ type
     procedure TestNonCollectingChargeNeverCollectsOrLatches;
     procedure TestTrackedTriggerBacksOffAboveSurvivors;
     procedure TestTrackedTriggerReturnsAfterTrackedBytesAreReleased;
+    procedure TestDeepChainMarksWithoutNativeRecursion;
+    procedure TestMarkReferencesOutsideCollectionTracesWholeGraph;
+    procedure TestFullMarkStackRescansAndLosesNoMark;
+    procedure TestOverflowTracesObjectsTheRescanCannotFind;
   end;
 
 var
+  GFanOutDestructorCount: Integer;
   GParentDestructorCount: Integer;
   GChildDestructorCount: Integer;
   GCountedValueDestructorCount: Integer;
@@ -126,10 +143,29 @@ begin
   inherited;
 end;
 
-procedure TParentManaged.MarkReferences;
+destructor TFanOutManaged.Destroy;
 begin
-  if GCMarked then
-    Exit;
+  Inc(GFanOutDestructorCount);
+  inherited;
+end;
+
+procedure TFanOutManaged.AddChild(const AChild: TGCManagedObject);
+begin
+  SetLength(FChildren, Length(FChildren) + 1);
+  FChildren[High(FChildren)] := AChild;
+end;
+
+procedure TFanOutManaged.TraceReferences;
+var
+  I: Integer;
+begin
+  inherited;
+  for I := 0 to High(FChildren) do
+    FChildren[I].MarkReferences;
+end;
+
+procedure TParentManaged.TraceReferences;
+begin
   inherited;
   if Assigned(FChild) then
     FChild.MarkReferences;
@@ -229,6 +265,196 @@ begin
     TestTrackedTriggerBacksOffAboveSurvivors);
   Test('Released tracked bytes bring the tracked trigger back to the line',
     TestTrackedTriggerReturnsAfterTrackedBytesAreReleased);
+  Test('A chain a million objects deep is marked without native recursion',
+    TestDeepChainMarksWithoutNativeRecursion);
+  Test('MarkReferences outside a collection marks the whole graph',
+    TestMarkReferencesOutsideCollectionTracesWholeGraph);
+  Test('A mark stack that cannot grow rescans and loses no mark',
+    TestFullMarkStackRescansAndLosesNoMark);
+  Test('An overflowing object the rescan cannot find is traced where it overflows',
+    TestOverflowTracesObjectsTheRescanCannotFind);
+end;
+
+function NewRegisteredNode(const AGC: TGarbageCollector): TFanOutManaged;
+begin
+  Result := TFanOutManaged.Create;
+  AGC.RegisterObject(Result);
+end;
+
+{ Builds a chain of ALength registered nodes below AParent and returns the
+  last one. }
+function AppendChain(const AGC: TGarbageCollector;
+  const AParent: TFanOutManaged; const ALength: Integer): TFanOutManaged;
+var
+  I: Integer;
+  Next: TFanOutManaged;
+begin
+  Result := AParent;
+  for I := 1 to ALength do
+  begin
+    Next := NewRegisteredNode(AGC);
+    Result.AddChild(Next);
+    Result := Next;
+  end;
+end;
+
+{ A recursive marker takes one native frame per link, so a million links
+  overflow the 8 MiB main-thread stack many times over; the collector's mark
+  stack holds one entry at a time for a chain (ADR 0147). }
+procedure TTestGarbageCollector.TestDeepChainMarksWithoutNativeRecursion;
+const
+  DEPTH = 1000000;
+var
+  GC: TGarbageCollector;
+  Head: TFanOutManaged;
+  OverflowsBefore: Integer;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GFanOutDestructorCount := 0;
+  Head := NewRegisteredNode(GC);
+  GC.AddRootObject(Head);
+  try
+    AppendChain(GC, Head, DEPTH - 1);
+    OverflowsBefore := TGarbageCollector.MarkStackOverflows;
+
+    GC.Collect;
+
+    Expect<Integer>(GFanOutDestructorCount).ToBe(0);
+    Expect<Integer>(TGarbageCollector.MarkStackOverflows)
+      .ToBe(OverflowsBefore);
+  finally
+    GC.RemoveRootObject(Head);
+  end;
+  GC.Collect;
+  Expect<Integer>(GFanOutDestructorCount).ToBe(DEPTH);
+end;
+
+procedure TTestGarbageCollector.TestMarkReferencesOutsideCollectionTracesWholeGraph;
+const
+  DEPTH = 100000;
+var
+  GC: TGarbageCollector;
+  Head, Tail: TFanOutManaged;
+begin
+  GC := TGarbageCollector.Instance;
+  Head := NewRegisteredNode(GC);
+  GC.AddRootObject(Head);
+  try
+    Tail := AppendChain(GC, Head, DEPTH - 1);
+    TGCManagedObject.AdvanceMark;
+    Expect<Boolean>(Tail.GCMarked).ToBe(False);
+
+    Head.MarkReferences;
+
+    Expect<Boolean>(Head.GCMarked).ToBe(True);
+    Expect<Boolean>(Tail.GCMarked).ToBe(True);
+    { The trace gave back what it grew the stack to. }
+    Expect<Integer>(TGarbageCollector.MarkStackCapacity).ToBe(4096);
+  finally
+    GC.RemoveRootObject(Head);
+    GC.Collect;
+  end;
+end;
+
+{ Caps the stack at 4 entries, far below what a wide node pushes, so most
+  pushes overflow. Every node below an overflowed one has children of its
+  own, so only the rescan can mark them: an overflowed object is marked but
+  untraced, and a sweep after a dropped trace would free its subgraph. }
+procedure TTestGarbageCollector.TestFullMarkStackRescansAndLosesNoMark;
+const
+  WIDTH = 200;
+  BRANCH_DEPTH = 20;
+  CHAIN_DEPTH = 50000;
+  TOTAL = 1 + WIDTH * (1 + BRANCH_DEPTH) + CHAIN_DEPTH;
+var
+  Branch: TFanOutManaged;
+  GC: TGarbageCollector;
+  I: Integer;
+  OverflowsBefore: Integer;
+  Root: TFanOutManaged;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GFanOutDestructorCount := 0;
+  Root := NewRegisteredNode(GC);
+  GC.AddRootObject(Root);
+  try
+    for I := 1 to WIDTH do
+    begin
+      Branch := NewRegisteredNode(GC);
+      Root.AddChild(Branch);
+      AppendChain(GC, Branch, BRANCH_DEPTH);
+    end;
+    AppendChain(GC, Root, CHAIN_DEPTH);
+    OverflowsBefore := TGarbageCollector.MarkStackOverflows;
+    TGarbageCollector.LimitMarkStackForTesting(4);
+    try
+      GC.Collect;
+    finally
+      TGarbageCollector.LimitMarkStackForTesting(0);
+    end;
+
+    Expect<Boolean>(TGarbageCollector.MarkStackOverflows > OverflowsBefore)
+      .ToBe(True);
+    Expect<Integer>(GFanOutDestructorCount).ToBe(0);
+  finally
+    GC.RemoveRootObject(Root);
+  end;
+  GC.Collect;
+  Expect<Integer>(GFanOutDestructorCount).ToBe(TOTAL);
+end;
+
+{ The rescan walks this thread's collector's list, so an object that list
+  does not hold (one no collector manages here, like the unregistered middle
+  nodes below, or a shared intrinsic another thread's collector manages) is
+  traced at the push that overflows instead of being left for it. Each middle
+  node holds registered nodes that have children of their own, so a middle
+  node left untraced would leave them unmarked. }
+procedure TTestGarbageCollector.TestOverflowTracesObjectsTheRescanCannotFind;
+const
+  WIDTH = 16;
+  LEAVES = 4;
+var
+  GC: TGarbageCollector;
+  I, J: Integer;
+  Leaf: TFanOutManaged;
+  Middles: array[1..WIDTH] of TFanOutManaged;
+  Root: TFanOutManaged;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GFanOutDestructorCount := 0;
+  Root := NewRegisteredNode(GC);
+  GC.AddRootObject(Root);
+  try
+    for I := 1 to WIDTH do
+    begin
+      Middles[I] := TFanOutManaged.Create;
+      Root.AddChild(Middles[I]);
+      for J := 1 to LEAVES do
+      begin
+        Leaf := NewRegisteredNode(GC);
+        Middles[I].AddChild(Leaf);
+        AppendChain(GC, Leaf, 1);
+      end;
+    end;
+    TGarbageCollector.LimitMarkStackForTesting(1);
+    try
+      GC.Collect;
+    finally
+      TGarbageCollector.LimitMarkStackForTesting(0);
+    end;
+
+    Expect<Integer>(GFanOutDestructorCount).ToBe(0);
+  finally
+    GC.RemoveRootObject(Root);
+  end;
+  GC.Collect;
+  { Root, and each leaf with its child; the middle nodes are no collector's. }
+  Expect<Integer>(GFanOutDestructorCount).ToBe(1 + WIDTH * LEAVES * 2);
+  for I := 1 to WIDTH do
+    Middles[I].Free;
 end;
 
 const

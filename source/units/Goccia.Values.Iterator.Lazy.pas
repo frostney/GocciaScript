@@ -21,7 +21,7 @@ type
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaLazyFilterIteratorValue = class(TGocciaIteratorHelperValue)
@@ -35,7 +35,7 @@ type
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaLazyTakeIteratorValue = class(TGocciaIteratorHelperValue)
@@ -49,7 +49,7 @@ type
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ALimit: Integer);
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaLazyDropIteratorValue = class(TGocciaIteratorHelperValue)
@@ -63,7 +63,7 @@ type
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ALimit: Integer);
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaLazyFlatMapIteratorValue = class(TGocciaIteratorHelperValue)
@@ -79,7 +79,7 @@ type
   public
     constructor Create(const ASourceIterator: TGocciaIteratorValue; const ACallback: TGocciaValue);
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 implementation
@@ -200,9 +200,8 @@ begin
     FSourceIterator.Close;
 end;
 
-procedure TGocciaLazyMapIteratorValue.MarkReferences;
+procedure TGocciaLazyMapIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSourceIterator) then
     FSourceIterator.MarkReferences;
@@ -311,9 +310,8 @@ begin
     FSourceIterator.Close;
 end;
 
-procedure TGocciaLazyFilterIteratorValue.MarkReferences;
+procedure TGocciaLazyFilterIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSourceIterator) then
     FSourceIterator.MarkReferences;
@@ -390,9 +388,8 @@ begin
     FSourceIterator.Close;
 end;
 
-procedure TGocciaLazyTakeIteratorValue.MarkReferences;
+procedure TGocciaLazyTakeIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSourceIterator) then
     FSourceIterator.MarkReferences;
@@ -473,9 +470,8 @@ begin
     FSourceIterator.Close;
 end;
 
-procedure TGocciaLazyDropIteratorValue.MarkReferences;
+procedure TGocciaLazyDropIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSourceIterator) then
     FSourceIterator.MarkReferences;
@@ -742,9 +738,8 @@ begin
     FSourceIterator.Close;
 end;
 
-procedure TGocciaLazyFlatMapIteratorValue.MarkReferences;
+procedure TGocciaLazyFlatMapIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSourceIterator) then
     FSourceIterator.MarkReferences;

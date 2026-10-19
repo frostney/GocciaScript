@@ -53,7 +53,7 @@ type
     function GetPropertyWithContext(const AName: string;
       const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Descriptor: TGocciaFFITypeDescriptor read FDescriptor;
     property Pointer: Pointer read FCodePointer;
     property Closed: Boolean read FClosed;
@@ -723,11 +723,10 @@ begin
   Result := FFI_CALLBACK_TAG;
 end;
 
-procedure TGocciaFFICallbackValue.MarkReferences;
+procedure TGocciaFFICallbackValue.TraceReferences;
 var
   PendingThrown: TGocciaValue;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FCallable) then FCallable.MarkReferences;
   if Assigned(FCloseFunction) then FCloseFunction.MarkReferences;

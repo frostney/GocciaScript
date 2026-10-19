@@ -56,7 +56,7 @@ type
     function ToStringTag: string; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class function GetSharedPrototypeForRealm(
@@ -270,12 +270,11 @@ begin
   end;
 end;
 
-procedure TGocciaMapValue.MarkReferences;
+procedure TGocciaMapValue.TraceReferences;
 var
   Cursor: Integer;
   Key, Value: TGocciaValue;
 begin
-  if GCMarked then Exit;
   inherited;
 
   Cursor := 0;
