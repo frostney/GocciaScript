@@ -21,10 +21,13 @@ uses
 type
   TGocciaImportCallPhase = (icpEvaluation, icpSource, icpDefer);
   { What a heap snapshot can make of a module record (ADR 0148): a source
-    module the engine compiled, whose state is its environment and exports;
-    a data module (JSON, text, bytes), whose exports are values; or a record
-    a host or a runtime module loader built, which it refuses. }
-  TGocciaModuleSnapshotKind = (mskNone, mskSource, mskData);
+    module the engine compiled, whose state is its environment and exports
+    (mskEntryCompiled: the entry an embedder compiled with CompileModule and
+    ran with RunModuleForSourceType, which keeps its top level in
+    registers); a data module (JSON, text, bytes), whose exports are values;
+    or a record a host or a runtime module loader built, which it refuses. }
+  TGocciaModuleSnapshotKind = (mskNone, mskSource, mskEntryCompiled,
+    mskData);
   EGocciaDeferredModuleNotReady = class(Exception);
   TGocciaModule = class;
   TGocciaModuleList = TList<TGocciaModule>;

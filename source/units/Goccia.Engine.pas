@@ -452,9 +452,10 @@ type
       code of the modules it restores (ADR 0148). The engine's own source
       when ASourcePath is its source path, else the loader reads the module
       under its read policy, and ASource (AHasSource) is what loading it
-      would record. }
+      would record. AAsCompiledEntry: the engine's own source, compiled as
+      CompileModule compiles it. }
     function CompileModuleForSnapshot(const ASourcePath: string;
-      const AIsHostOwned: Boolean; out AHasSource: Boolean;
+      const AIsHostOwned, AAsCompiledEntry: Boolean; out AHasSource: Boolean;
       out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
     function RunModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
@@ -2652,7 +2653,7 @@ end;
   loader's setting, or the engine's for its own source. The snapshot names
   the bytecode by its hash, so a module compiled differently is refused. }
 function TGocciaEngine.CompileModuleForSnapshot(const ASourcePath: string;
-  const AIsHostOwned: Boolean; out AHasSource: Boolean;
+  const AIsHostOwned, AAsCompiledEntry: Boolean; out AHasSource: Boolean;
   out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
 var
   ParseResult: TGocciaSourcePipelineResult;
@@ -2660,6 +2661,19 @@ var
 begin
   AHasSource := False;
   ASource := Default(TGocciaModuleSnapshotSource);
+  if AAsCompiledEntry then
+  begin
+    if ASourcePath <> FSourcePath then
+      raise Exception.Create('an entry module this engine was not made with');
+    ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
+      SourcePipelineOptions(stModule));
+    try
+      Result := CompileModule(ParseResult.ProgramNode);
+    finally
+      ParseResult.Free;
+    end;
+    Exit;
+  end;
   if ASourcePath = FSourcePath then
   begin
     ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
@@ -3899,7 +3913,7 @@ begin
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then
         EntryModule.LastModified := EntryLastModified;
-      EntryModule.SnapshotKind := mskSource;
+      EntryModule.SnapshotKind := mskEntryCompiled;
       EntryModule.CompiledModule := AModule;
       FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
       SavedRuntimeModule := FVM.CurrentRuntimeModule;

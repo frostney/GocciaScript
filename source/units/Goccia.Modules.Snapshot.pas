@@ -84,6 +84,7 @@ uses
 const
   RECORD_SOURCE = 1;
   RECORD_DATA = 2;
+  RECORD_ENTRY_COMPILED = 3;
   // What a key held for a restored record costs, charged before it is kept.
   KEY_ENTRY_BYTES = 96;
   // What a restored record and its bookkeeping hold before its payload: the
@@ -149,7 +150,7 @@ begin
         if Modules[I].SnapshotKind = mskNone then
           AWriter.Refuse('the module ' + Modules[I].Path + ', which a ' +
             'host or a runtime module loader built');
-        if (Modules[I].SnapshotKind = mskSource) and
+        if (Modules[I].SnapshotKind in [mskSource, mskEntryCompiled]) and
            not (Modules[I].CompiledModule is TGocciaBytecodeModule) then
           AWriter.Refuse('the module ' + Modules[I].Path + ', whose ' +
             'bytecode the engine does not keep');
@@ -175,9 +176,12 @@ begin
   Module := TGocciaModule(ARecord);
   AWriter.WriteStr(Module.Path);
   AWriter.WriteBool(Module.IsHostOwned);
-  if Module.SnapshotKind = mskSource then
+  if Module.SnapshotKind in [mskSource, mskEntryCompiled] then
   begin
-    AWriter.WriteU8(RECORD_SOURCE);
+    if Module.SnapshotKind = mskEntryCompiled then
+      AWriter.WriteU8(RECORD_ENTRY_COMPILED)
+    else
+      AWriter.WriteU8(RECORD_SOURCE);
     AWriter.WriteStr(TGocciaBytecodeModule(Module.CompiledModule).SourcePath);
     AWriter.WriteModuleIdentity(TGocciaBytecodeModule(Module.CompiledModule));
   end
@@ -202,7 +206,7 @@ end;
   diagnostics) went with the restore that read them. }
 function EnsureCompiled(const AReader: TGocciaHeapSnapshotReader;
   const AEngine: TGocciaEngine; const APath, ASourcePath, AHash: string;
-  const AIsHostOwned: Boolean;
+  const AIsHostOwned, AAsCompiledEntry: Boolean;
   const ASources: TList<TGocciaModuleSnapshotSource>;
   const ACompiledHere: TList<TObject>;
   out ACompiledNow: Boolean): TGocciaBytecodeModule;
@@ -226,7 +230,7 @@ begin
   begin
     try
       Compiled := AEngine.CompileModuleForSnapshot(ASourcePath, AIsHostOwned,
-        HasSource, Source);
+        AAsCompiledEntry, HasSource, Source);
     except
       // The run's limits end the restore as they end any work, and a
       // refusal is the restore's own.
@@ -277,7 +281,7 @@ begin
   Kind := AReader.ReadU8;
   Compiled := nil;
   case Kind of
-    RECORD_SOURCE:
+    RECORD_SOURCE, RECORD_ENTRY_COMPILED:
       begin
         SourcePath := AReader.ReadStr;
         Hash := AReader.ReadStr;
@@ -309,7 +313,7 @@ begin
     end;
     HasStamp := False;
     Stamp := 0;
-    if Kind = RECORD_SOURCE then
+    if Kind <> RECORD_DATA then
     begin
       // Read before the module is compiled: a file that changes after it
       // reads newer, and a later import reloads it. Bytecode this restore
@@ -318,7 +322,8 @@ begin
       // the record then keeps the run's time.
       HasStamp := FEngine.ModuleLoader.TryGetModuleLastModified(Path, Stamp);
       Compiled := EnsureCompiled(AReader, FEngine, Path, SourcePath, Hash,
-        IsHostOwned, FSources, FCompiledHere, CompiledNow);
+        IsHostOwned, Kind = RECORD_ENTRY_COMPILED, FSources, FCompiledHere,
+        CompiledNow);
       HasStamp := HasStamp and CompiledNow and
         (SourcePath <> FEngine.SourcePath);
     end;
@@ -332,10 +337,14 @@ begin
   if HasStamp then
     FStamps.Add(Module, Stamp);
   Module.IsHostOwned := IsHostOwned;
-  if Kind = RECORD_SOURCE then
-    Module.SnapshotKind := mskSource
+  case Kind of
+    RECORD_SOURCE:
+      Module.SnapshotKind := mskSource;
+    RECORD_ENTRY_COMPILED:
+      Module.SnapshotKind := mskEntryCompiled;
   else
     Module.SnapshotKind := mskData;
+  end;
   Module.CompiledModule := Compiled;
   Result := Module;
 end;

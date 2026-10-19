@@ -83,6 +83,7 @@ type
     procedure AfterAll; override;
 
     procedure TestEntryModuleScope;
+    procedure TestCompiledEntryRoundTrips;
     procedure TestImportedModulesKeepTheirBindings;
     procedure TestRestoreRunsNoModuleBody;
     procedure TestEveryRecordIsRestored;
@@ -384,6 +385,8 @@ procedure THeapSnapshotModulesTests.SetupTests;
 begin
   Test('Closures over an entry module''s scope round-trip and share it',
     TestEntryModuleScope);
+  Test('An entry an embedder compiled and ran itself round-trips',
+    TestCompiledEntryRoundTrips);
   Test('Imported modules keep live bindings, re-exports and namespaces',
     TestImportedModulesKeepTheirBindings);
   Test('A restore runs no module body, and a later import finds the module',
@@ -442,6 +445,56 @@ begin
   Expect<string>(RoundTripEntry('entry.js', Bytes,
     '[restored.k(), restored.bump(), restored.peek(), restored.bump()].join()'))
     .ToBe('7,3,3,4');
+end;
+
+procedure THeapSnapshotModulesTests.TestCompiledEntryRoundTrips;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Run: TModuleRun;
+  Session: TGocciaHeapSnapshotSession;
+  Stream: TBytesStream;
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaSourcePipelineResult;
+begin
+  DefineGraph;
+  // Its top level lives in registers, as CompileModule compiles it.
+  Define('centry.js', 'import { inc } from "./counter.js"; tick(); ' +
+    'let n = 5; export const k = 1; ' +
+    'capture({ bump: () => { n += 1; return n; }, inc });');
+  Bytes := nil;
+  Refusal := '';
+  Stream := TBytesStream.Create;
+  Run := TModuleRun.Create(PathOf('centry.js'));
+  Session := nil;
+  try
+    Session := TGocciaHeapSnapshotSession.Create(Run.Engine);
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.SourceType := stModule;
+    Parsed := TGocciaSourcePipeline.Parse(Run.FLines, PathOf('centry.js'),
+      Options);
+    try
+      Run.Engine.RunModuleForSourceType(
+        Run.Engine.CompileModule(Parsed.ProgramNode), PathOf('centry.js'));
+    finally
+      Parsed.Free;
+    end;
+    try
+      Session.Snapshot([Run.Captured.Value], Stream);
+      Bytes := Copy(Stream.Bytes, 0, Stream.Size);
+    except
+      on E: EGocciaHeapSnapshotRefused do
+        Refusal := E.Message;
+    end;
+  finally
+    Session.Free;
+    Run.Free;
+    Stream.Free;
+  end;
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RoundTripEntry('centry.js', Bytes,
+    '[restored.bump(), restored.bump(), restored.inc()].join()'))
+    .ToBe('6,7,1');
 end;
 
 procedure THeapSnapshotModulesTests.TestImportedModulesKeepTheirBindings;

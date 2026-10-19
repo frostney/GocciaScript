@@ -219,7 +219,9 @@ written as its record and restored as the one the record holds.
 
 A restore compiles each source module from the path its header names,
 through the loader and under its read policy (the engine's own source when
-the path is the engine's source path), without linking or running it. A
+the path is the engine's source path, compiled as `CompileModule` compiles
+it when the run's entry was compiled that way and run with
+`RunModuleForSourceType`), without linking or running it. A
 module whose bytecode is not the one the snapshot ran, one that no longer
 compiles, and one cached under a key the restoring engine's loader already
 holds are refused. Once the whole snapshot is restored, the records are
