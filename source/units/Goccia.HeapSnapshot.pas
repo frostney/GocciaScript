@@ -97,7 +97,7 @@ type
     FResolver: TGocciaBuiltinPathResolver;
     FRoots: TGCManagedObjectArray;
     function VerifyBuiltins(const APaths: TStringArray;
-      const AFingerprints: array of UInt64): string;
+      const AFingerprints: array of string): string;
   public
     constructor Create(const AEngine: TGocciaEngine; const AStream: TStream;
       const ALimits: TGocciaHeapSnapshotLimits);
@@ -105,8 +105,10 @@ type
     property Roots: TGCManagedObjectArray read FRoots;
   end;
 
+// ARecordFingerprints: record each built-in's state now, for DirtyPaths; a
+// session does, a restore does not need to.
 procedure BuildBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
-  const AEngine: TGocciaEngine);
+  const AEngine: TGocciaEngine; const ARecordFingerprints: Boolean = True);
 // Walks the table again for members the run materialized since it was
 // built, and adds the realm slots filled since and what they reach.
 procedure ExtendBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
@@ -115,7 +117,10 @@ procedure ExtendBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
 implementation
 
 uses
+  Generics.Collections,
+
   Goccia.Builtins.Base,
+  Goccia.ExecutionContext,
   Goccia.MicrotaskQueue,
   Goccia.NativeLimits,
   Goccia.Realm,
@@ -183,27 +188,44 @@ begin
   Result := '';
 end;
 
-// The segment name of AObject's own symbol key at AIndex in ASymbols.
-function SymbolSegment(const ASymbols: TArray<TGocciaSymbolValue>;
-  const AIndex: Integer): string;
+// The segment names of an object's own symbol keys, in their order: a
+// well-known symbol's name, else [description]#n for the n-th own symbol with
+// that description. One pass, counting descriptions as it goes.
+function SymbolSegments(
+  const ASymbols: TArray<TGocciaSymbolValue>): TStringArray;
 var
+  Seen: TDictionary<string, Integer>;
   I, Occurrence: Integer;
 begin
-  Result := WellKnownSymbolName(ASymbols[AIndex]);
-  if Result <> '' then
-    Exit;
-  Occurrence := 0;
-  for I := 0 to AIndex - 1 do
-    if (WellKnownSymbolName(ASymbols[I]) = '') and
-       (ASymbols[I].Description = ASymbols[AIndex].Description) then
-      Inc(Occurrence);
-  Result := '[' + ASymbols[AIndex].Description + ']#' + IntToStr(Occurrence);
+  SetLength(Result, Length(ASymbols));
+  Seen := TDictionary<string, Integer>.Create;
+  try
+    for I := 0 to High(ASymbols) do
+    begin
+      Result[I] := WellKnownSymbolName(ASymbols[I]);
+      if Result[I] <> '' then
+        Continue;
+      if not Seen.TryGetValue(ASymbols[I].Description, Occurrence) then
+        Occurrence := 0;
+      Seen.AddOrSetValue(ASymbols[I].Description, Occurrence + 1);
+      Result[I] := '[' + ASymbols[I].Description + ']#' + IntToStr(Occurrence);
+    end;
+  finally
+    Seen.Free;
+  end;
 end;
+
+// Far above any built-in's name. A longer path is not a name: what only a
+// path that long reaches is not named (anything a run hangs on a built-in
+// that deep has changed that built-in anyway), and SplitPath refuses one.
+const
+  MAX_PATH_CHARS = 4096;
 
 procedure AddValue(const ATable: TGocciaHeapSnapshotBuiltinTable;
   const AValue: TGocciaValue; const APath: string);
 begin
-  if (AValue is TGocciaObjectValue) or (AValue is TGocciaSymbolValue) then
+  if ((AValue is TGocciaObjectValue) or (AValue is TGocciaSymbolValue)) and
+     (Length(APath) <= MAX_PATH_CHARS) then
     ATable.Add(AValue, APath);
 end;
 
@@ -215,6 +237,7 @@ var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   Descriptor: TGocciaPropertyDescriptor;
   Symbols: TArray<TGocciaSymbolValue>;
+  Names: TStringArray;
   Name: string;
   I: Integer;
 begin
@@ -232,6 +255,7 @@ begin
     AddValue(ATable, Obj.Prototype, Seg(APath, '%proto'));
   for Pair in Obj.Properties do
   begin
+    CheckNativeWork;
     Descriptor := Pair.Value;
     if Descriptor is TGocciaLazyPropertyDescriptorData then
       Continue;
@@ -247,9 +271,11 @@ begin
         Seg(APath, '.' + Pair.Key));
   end;
   Symbols := Obj.GetOwnSymbols;
+  Names := SymbolSegments(Symbols);
   for I := 0 to High(Symbols) do
   begin
-    Name := SymbolSegment(Symbols, I);
+    CheckNativeWork;
+    Name := Names[I];
     AddValue(ATable, Symbols[I], Seg(APath, 'k@' + Name));
     Descriptor := Obj.GetOwnSymbolPropertyDescriptor(Symbols[I]);
     if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -392,7 +418,7 @@ begin
 end;
 
 procedure BuildBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
-  const AEngine: TGocciaEngine);
+  const AEngine: TGocciaEngine; const ARecordFingerprints: Boolean);
 var
   Names: TGocciaStringArray;
   Binding: TLexicalBinding;
@@ -410,7 +436,8 @@ begin
   AddSlots(ATable, AEngine);
   AddLiveBuiltinObjects(ATable, AEngine);
   WalkFrom(ATable, 0);
-  ATable.RecordFingerprints;
+  if ARecordFingerprints then
+    ATable.RecordFingerprints;
 end;
 
 procedure ExtendBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
@@ -435,8 +462,6 @@ end;
 function SplitPath(const APath: string): TStringArray;
 const
   MAX_PATH_SEGMENTS = 256;
-  // Far above any built-in's name; a longer one names nothing here.
-  MAX_PATH_CHARS = 4096;
 var
   Start, I, Count, Segments: Integer;
 begin
@@ -527,6 +552,7 @@ var
   Obj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   Symbols: TArray<TGocciaSymbolValue>;
+  Names: TStringArray;
   I: Integer;
   Kind, Name: string;
   Owned: Boolean;
@@ -559,8 +585,9 @@ begin
     Kind := Copy(ASegment, 1, I - 1);
     Name := Copy(ASegment, I + 1, MaxInt);
     Symbols := Obj.GetOwnSymbols;
+    Names := SymbolSegments(Symbols);
     for I := 0 to High(Symbols) do
-      if SymbolSegment(Symbols, I) = Name then
+      if Names[I] = Name then
       begin
         if Kind = 'k' then
           Exit(Symbols[I]);
@@ -661,6 +688,20 @@ begin
     FTable.Add(Result, APath);
 end;
 
+procedure RefuseChangedBuiltins(const ATable: TGocciaHeapSnapshotBuiltinTable);
+var
+  Dirty: TStringList;
+begin
+  Dirty := ATable.DirtyPaths;
+  try
+    if Dirty.Count > 0 then
+      raise EGocciaHeapSnapshotRefused.Create('the run changed built-ins: ' +
+        Dirty.CommaText);
+  finally
+    Dirty.Free;
+  end;
+end;
+
 { TGocciaHeapSnapshotSession }
 
 constructor TGocciaHeapSnapshotSession.Create(const AEngine: TGocciaEngine);
@@ -734,6 +775,9 @@ begin
           raise EGocciaHeapSnapshotRefused.Create('the collection before ' +
             'the snapshot queued a job: the run is not idle any more');
       end;
+      // A changed built-in refuses before the table is walked again: what the
+      // run hung on one is not walked for nothing.
+      RefuseChangedBuiltins(FTable);
       ExtendBuiltinTable(FTable, FEngine);
       Writer := TGocciaHeapSnapshotWriter.Create(FTable);
       Buffer := TGocciaChargedMemoryStream.Create;
@@ -761,11 +805,13 @@ end;
 
 constructor TGocciaHeapSnapshotRestore.Create(const AEngine: TGocciaEngine;
   const AStream: TStream; const ALimits: TGocciaHeapSnapshotLimits);
+var
+  Context: TGocciaExecutionContextScope;
 begin
   inherited Create;
   FEngine := AEngine;
   FTable := TGocciaHeapSnapshotBuiltinTable.Create;
-  BuildBuiltinTable(FTable, AEngine);
+  BuildBuiltinTable(FTable, AEngine, False);
   // The lazy members this engine builds while it resolves names are its
   // pristine ones, as the writing engine's were when it built them.
   FTable.Install;
@@ -773,13 +819,26 @@ begin
   FReader := TGocciaHeapSnapshotReader.Create(FTable, ALimits);
   FReader.BuiltinResolve := FResolver.Resolve;
   FReader.BuiltinVerify := VerifyBuiltins;
+  // In this engine's realm, whichever is current on the thread: built-ins
+  // built on first use are built into it.
+  Context := AEngine.ActivateRealmExecutionContext;
   try
-    FRoots := FReader.Restore(AStream);
-  except
-    // The run's memory ceiling, or a script error from building a lazy
-    // built-in a name crossed: the snapshot cannot be restored here.
-    on E: TGocciaThrowValue do
-      raise EGocciaHeapSnapshotInvalid.Create('restore: ' + ThrowMessage(E));
+    try
+      FRoots := FReader.Restore(AStream);
+    except
+      // The run's memory ceiling, or a script error from building a lazy
+      // built-in a name crossed: the snapshot cannot be restored here.
+      on E: TGocciaThrowValue do
+        raise EGocciaHeapSnapshotInvalid.Create('restore: ' + ThrowMessage(E));
+      // A charge of the table's that did not fit.
+      on E: EGocciaHeapSnapshotRefused do
+        if E is EGocciaHeapSnapshotInvalid then
+          raise
+        else
+          raise EGocciaHeapSnapshotInvalid.Create('restore: ' + E.Message);
+    end;
+  finally
+    Context.Free;
   end;
 end;
 
@@ -787,7 +846,7 @@ end;
 // with the fingerprint the run's took: pristine here, so a difference is a
 // change the run made (or an engine that builds it otherwise).
 function TGocciaHeapSnapshotRestore.VerifyBuiltins(const APaths: TStringArray;
-  const AFingerprints: array of UInt64): string;
+  const AFingerprints: array of string): string;
 var
   I, Index: Integer;
 begin

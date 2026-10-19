@@ -675,7 +675,7 @@ begin
     Pos_ := Pos_ + 4 + 2 * Integer(U32At(Pos_));
   Pos_ := Pos_ + 4 + 6 * Integer(U32At(Pos_));       // codecs
   Pos_ := Pos_ + 4 + 4 * Integer(U32At(Pos_));       // built-in names
-  Pos_ := Pos_ + 4 + 12 * Integer(U32At(Pos_));      // built-ins the run built
+  Pos_ := Pos_ + 4 + 8 * Integer(U32At(Pos_));       // built-ins the run built
   Count := U32At(Pos_);                                // objects
   Inc(Pos_, 4);
   Expect<Integer>(Integer(Count)).ToBe(3);

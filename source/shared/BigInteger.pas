@@ -30,6 +30,8 @@ type
     class function FromOctalString(const AValue: string): TBigInteger; static;
     // A value from its magnitude's 32-bit limbs, least significant first,
     // and its sign; leading zero limbs are dropped and zero is not negative.
+    // The value takes ALimbs over: it is not copied unless it has leading
+    // zero limbs to drop.
     class function FromLimbs(const ALimbs: TLimbArray;
       const ANegative: Boolean): TBigInteger; static;
 
@@ -45,8 +47,9 @@ type
     function ToInt64: Int64;
     function ToString: string;
     function ToRadixString(const ARadix: Integer): string;
-    // A copy of the magnitude's 32-bit limbs, least significant first.
-    function Limbs: TLimbArray;
+    // The magnitude's 32-bit limbs, least significant first, read in place.
+    function LimbCount: Integer;
+    function LimbAt(const AIndex: Integer): Cardinal;
 
     function Negate: TBigInteger;
     function AbsValue: TBigInteger;
@@ -328,14 +331,20 @@ end;
 class function TBigInteger.FromLimbs(const ALimbs: TLimbArray;
   const ANegative: Boolean): TBigInteger;
 begin
-  Result.FLimbs := Copy(ALimbs);
+  Result.FLimbs := ALimbs;
   Result.FNegative := ANegative;
-  Result.Normalize;
+  if (Length(ALimbs) = 0) or (ALimbs[High(ALimbs)] = 0) then
+    Result.Normalize;
 end;
 
-function TBigInteger.Limbs: TLimbArray;
+function TBigInteger.LimbCount: Integer;
 begin
-  Result := Copy(FLimbs);
+  Result := Length(FLimbs);
+end;
+
+function TBigInteger.LimbAt(const AIndex: Integer): Cardinal;
+begin
+  Result := FLimbs[AIndex];
 end;
 
 class function TBigInteger.One: TBigInteger;

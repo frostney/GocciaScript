@@ -151,6 +151,16 @@ type
 
   TGocciaHeapSnapshotBuiltinTable = class;
 
+  // Keeps alive the values a table recorded lazy members built into: a
+  // replaced member's value could otherwise be freed and its address reused
+  // by the replacement, which would then compare as the member it replaced.
+  TGocciaMaterializedMemberRoots = class(TGCRootSource)
+  private
+    FTable: TGocciaHeapSnapshotBuiltinTable;
+  public
+    procedure MarkRootReferences; override;
+  end;
+
   // Records into a table each lazy member built while it is installed.
   TGocciaBuiltinMaterializationObserver = class(
     TGocciaLazyMaterializationObserver)
@@ -179,10 +189,15 @@ type
     FPaths: TList<string>;
     FIndex: THashMap<TGCManagedObject, Integer>;
     FByPath: TDictionary<string, Integer>;
-    FFingerprints: array of UInt64;
+    FFingerprints: array of string;
     FFingerprintCount: Integer;
     FMaterialized: TDictionary<string, TGocciaMaterializedMember>;
     FObserver: TGocciaBuiltinMaterializationObserver;
+    FMaterializedRoots: TGocciaMaterializedMemberRoots;
+    // What its entries and names hold, charged to the run's memory ceiling
+    // without collecting as they are added: a run can hang a large graph on
+    // a built-in, and the walk names what it reaches before refusing.
+    FChargedBytes: Int64;
     function GetCount: Integer;
     function MemberKey(const AObject: TGCManagedObject;
       const AName: string): string;
@@ -202,9 +217,11 @@ type
     function FindPath(const APath: string): TGCManagedObject;
     function ObjectAt(const AIndex: Integer): TGCManagedObject;
     function PathAt(const AIndex: Integer): string;
-    // A hash of an entry's own state: prototype, extensibility, integrity,
-    // and every own property's key, attributes and value identity.
-    function ComputeFingerprint(const AIndex: Integer): UInt64;
+    // The SHA-256 (hex) of a canonical encoding of an entry's own state:
+    // prototype, extensibility, integrity, and every own property's key,
+    // attributes and value identity, in order. Values are named by their
+    // built-in names, so engines with the same built-ins agree.
+    function ComputeFingerprint(const AIndex: Integer): string;
     // Records every entry's fingerprint; DirtyPaths compares against it.
     procedure RecordFingerprints;
     // The names of entries whose own state changed since RecordFingerprints:
@@ -264,8 +281,9 @@ type
     procedure Poll;
     procedure Refuse(const AReason: string);
 
-    // Writes the whole snapshot of what ARoots reach. Refuses when the run
-    // changed a built-in or something reachable has no codec.
+    // Writes the whole snapshot of what ARoots reach. Refuses when something
+    // reachable has no codec. The caller refuses a changed built-in first
+    // (DirtyPaths; the session does).
     procedure Serialize(const ARoots: array of TGCManagedObject;
       const AStream: TStream);
     // Refuses when a live object registered after AFirstOfRun (an object
@@ -293,7 +311,7 @@ type
   // fingerprint the writing engine took; the name of the first that differs
   // or is missing, or '' when all match.
   TGocciaBuiltinVerify = function(const APaths: TStringArray;
-    const AFingerprints: array of UInt64): string of object;
+    const AFingerprints: array of string): string of object;
 
   TGocciaHeapSnapshotReader = class
   private
@@ -406,6 +424,7 @@ uses
   Math,
 
   BigInteger,
+  SHA256,
 
   Goccia.Builtins.GlobalSymbol,
   Goccia.NativeLimits,
@@ -495,6 +514,9 @@ const
   // per entry.
   SEEN_ENTRY_BYTES = 48;
   CHAIN_ENTRY_BYTES = 40;
+  // A built-in table entry: its slots in the lists and maps, its fingerprint;
+  // its name is held twice (the list and the map key).
+  TABLE_ENTRY_BYTES = 160;
   // TMemoryStream's growth step, which its capacity is rounded to.
   STREAM_BLOCK_BYTES = 4096;
 
@@ -659,11 +681,15 @@ begin
   FIndex := THashMap<TGCManagedObject, Integer>.Create;
   FByPath := TDictionary<string, Integer>.Create;
   FMaterialized := TDictionary<string, TGocciaMaterializedMember>.Create;
+  FMaterializedRoots := TGocciaMaterializedMemberRoots.Create;
+  FMaterializedRoots.FTable := Self;
 end;
 
 destructor TGocciaHeapSnapshotBuiltinTable.Destroy;
 begin
   Uninstall;
+  ReleaseCharge(FChargedBytes);
+  FMaterializedRoots.Free;
   FObjects.Free;
   FPaths.Free;
   FIndex.Free;
@@ -714,6 +740,23 @@ begin
   FMaterialized.AddOrSetValue(MemberKey(AObject, AName), Member);
 end;
 
+{ TGocciaMaterializedMemberRoots }
+
+procedure TGocciaMaterializedMemberRoots.MarkRootReferences;
+var
+  Member: TGocciaMaterializedMember;
+begin
+  for Member in FTable.FMaterialized.Values do
+  begin
+    if Assigned(Member.Value) then
+      Member.Value.MarkReferences;
+    if Assigned(Member.Getter) then
+      Member.Getter.MarkReferences;
+    if Assigned(Member.Setter) then
+      Member.Setter.MarkReferences;
+  end;
+end;
+
 { TGocciaBuiltinMaterializationObserver }
 
 procedure TGocciaBuiltinMaterializationObserver.Materialized(
@@ -749,6 +792,10 @@ begin
   // object reached by the same path is not named at all.
   if FByPath.ContainsKey(APath) then
     Exit;
+  ChargeWithoutCollecting(TABLE_ENTRY_BYTES + Int64(Length(APath)) * 2 *
+    SizeOf(Char));
+  Inc(FChargedBytes, TABLE_ENTRY_BYTES + Int64(Length(APath)) * 2 *
+    SizeOf(Char));
   FIndex.Add(AObject, FObjects.Count);
   FByPath.Add(APath, FObjects.Count);
   FObjects.Add(AObject);
@@ -785,28 +832,43 @@ begin
   Result := FPaths[AIndex];
 end;
 
-{$PUSH}{$Q-}{$R-}
-function FNV1a(const AHash: UInt64; const AText: string): UInt64;
-var
-  I: Integer;
-begin
-  Result := AHash;
-  for I := 1 to Length(AText) do
-  begin
-    Result := Result xor Ord(AText[I]);
-    Result := Result * UInt64(1099511628211);
+// A canonical encoding: every field length-prefixed, so no two different
+// states encode the same, then hashed with SHA-256.
+type
+  TFingerprintEncoder = record
+    Data: TBytes;
+    Length_: Integer;
+    procedure Field(const AText: string);
+    procedure Count(const AValue: Integer);
   end;
-  // A separator, so adjacent fields cannot run together.
-  Result := (Result xor $FF) * UInt64(1099511628211);
+
+procedure TFingerprintEncoder.Count(const AValue: Integer);
+begin
+  if Length(Data) < Length_ + 4 then
+    SetLength(Data, (Length_ + 4) * 2 + 64);
+  Move(AValue, Data[Length_], 4);
+  Inc(Length_, 4);
 end;
-{$POP}
+
+procedure TFingerprintEncoder.Field(const AText: string);
+var
+  Bytes: Integer;
+begin
+  Count(Length(AText));
+  Bytes := Length(AText) * SizeOf(Char);
+  if Length(Data) < Length_ + Bytes then
+    SetLength(Data, (Length_ + Bytes) * 2 + 64);
+  if Bytes > 0 then
+    Move(AText[1], Data[Length_], Bytes);
+  Inc(Length_, Bytes);
+end;
 
 function TGocciaHeapSnapshotBuiltinTable.ComputeFingerprint(
-  const AIndex: Integer): UInt64;
+  const AIndex: Integer): string;
 const
   LAZY = 'L';
 
-  // A value's identity: a built-in by its number, a primitive by its value,
+  // A value's identity: a built-in by its name, a primitive by its value,
   // anything else (an object the run attached) by its address.
   function Identity(const AValue: TGocciaValue): string;
   var
@@ -836,13 +898,17 @@ const
     Result := 'X' + IntToHex(PtrUInt(AValue), SizeOf(PtrUInt) * 2);
   end;
 
-  function DescriptorText(const AObject: TGocciaObjectValue;
-    const AName: string; const ADescriptor: TGocciaPropertyDescriptor): string;
+  procedure EncodeDescriptor(var AEncoder: TFingerprintEncoder;
+    const AObject: TGocciaObjectValue; const AName: string;
+    const ADescriptor: TGocciaPropertyDescriptor);
   var
     Member: TGocciaMaterializedMember;
   begin
     if ADescriptor is TGocciaLazyPropertyDescriptorData then
-      Exit(LAZY);
+    begin
+      AEncoder.Field(LAZY);
+      Exit;
+    end;
     // Built since the table was recorded, and still exactly what building
     // it produced: the lazy member it was.
     if (AName <> '') and
@@ -852,20 +918,33 @@ const
       if Member.Accessor and (ADescriptor is TGocciaPropertyDescriptorAccessor) and
          (TGocciaPropertyDescriptorAccessor(ADescriptor).Getter = Member.Getter) and
          (TGocciaPropertyDescriptorAccessor(ADescriptor).Setter = Member.Setter) then
-        Exit(LAZY);
+      begin
+        AEncoder.Field(LAZY);
+        Exit;
+      end;
       if not Member.Accessor and
          (ADescriptor.ClassType = TGocciaPropertyDescriptorData) and
          (TGocciaPropertyDescriptorData(ADescriptor).Value = Member.Value) then
-        Exit(LAZY);
+      begin
+        AEncoder.Field(LAZY);
+        Exit;
+      end;
     end;
     if ADescriptor is TGocciaPropertyDescriptorAccessor then
-      Exit('a' + IntToStr(Byte(ADescriptor.Flags)) + '|' +
-        Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter) + '/' +
-        Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter));
-    if ADescriptor is TGocciaPropertyDescriptorData then
-      Exit('d' + IntToStr(Byte(ADescriptor.Flags)) + '|' +
-        Identity(TGocciaPropertyDescriptorData(ADescriptor).Value));
-    Result := '?' + ADescriptor.ClassName;
+    begin
+      AEncoder.Field('a');
+      AEncoder.Count(Byte(ADescriptor.Flags));
+      AEncoder.Field(Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Getter));
+      AEncoder.Field(Identity(TGocciaPropertyDescriptorAccessor(ADescriptor).Setter));
+    end
+    else if ADescriptor is TGocciaPropertyDescriptorData then
+    begin
+      AEncoder.Field('d');
+      AEncoder.Count(Byte(ADescriptor.Flags));
+      AEncoder.Field(Identity(TGocciaPropertyDescriptorData(ADescriptor).Value));
+    end
+    else
+      AEncoder.Field('?' + ADescriptor.ClassName);
   end;
 
 var
@@ -873,22 +952,36 @@ var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   Symbols: TArray<TGocciaSymbolValue>;
   I: Integer;
+  Encoder: TFingerprintEncoder;
 begin
-  Result := UInt64(14695981039346656037);
+  Result := '';
   if not (FObjects[AIndex] is TGocciaObjectValue) then
     Exit;
   Obj := TGocciaObjectValue(FObjects[AIndex]);
-  Result := FNV1a(Result, 'p' + Identity(Obj.Prototype));
-  Result := FNV1a(Result, BoolToStr(Obj.Extensible, True) +
-    BoolToStr(Obj.Sealed, True) + BoolToStr(Obj.Frozen, True));
+  Encoder := Default(TFingerprintEncoder);
+  Encoder.Field('proto');
+  Encoder.Field(Identity(Obj.Prototype));
+  Encoder.Count(Ord(Obj.Extensible) or (Ord(Obj.Sealed) shl 1) or
+    (Ord(Obj.Frozen) shl 2));
   // In order: a deleted and re-added member moves to the end.
+  Encoder.Count(Obj.Properties.Count);
   for Pair in Obj.Properties do
-    Result := FNV1a(Result, Pair.Key + '|' +
-      DescriptorText(Obj, Pair.Key, Pair.Value));
+  begin
+    CheckNativeWork;
+    Encoder.Field(Pair.Key);
+    EncodeDescriptor(Encoder, Obj, Pair.Key, Pair.Value);
+  end;
   Symbols := Obj.GetOwnSymbols;
+  Encoder.Count(Length(Symbols));
   for I := 0 to High(Symbols) do
-    Result := FNV1a(Result, Identity(Symbols[I]) + '|' +
-      DescriptorText(Obj, '', Obj.GetOwnSymbolPropertyDescriptor(Symbols[I])));
+  begin
+    CheckNativeWork;
+    Encoder.Field(Identity(Symbols[I]));
+    EncodeDescriptor(Encoder, Obj, '',
+      Obj.GetOwnSymbolPropertyDescriptor(Symbols[I]));
+  end;
+  SetLength(Encoder.Data, Encoder.Length_);
+  Result := SHA256Hex(Encoder.Data);
 end;
 
 procedure TGocciaHeapSnapshotBuiltinTable.RecordFingerprints;
@@ -1111,7 +1204,6 @@ end;
 procedure TGocciaHeapSnapshotWriter.WriteRef(const AObject: TGCManagedObject);
 var
   Id, BuiltinIndex, RefIndex, I: Integer;
-  Limbs: TLimbArray;
 begin
   if not Assigned(AObject) then
   begin
@@ -1146,13 +1238,12 @@ begin
     // Its limbs, not its decimal text: reading decimal back is quadratic.
     WriteU8(HSV_BIGINT);
     WriteBool(TGocciaBigIntValue(AObject).Value.IsNegative);
-    Limbs := TGocciaBigIntValue(AObject).Value.Limbs;
-    WriteU32(Length(Limbs));
-    for I := 0 to High(Limbs) do
+    WriteU32(TGocciaBigIntValue(AObject).Value.LimbCount);
+    for I := 0 to TGocciaBigIntValue(AObject).Value.LimbCount - 1 do
     begin
       if I and 4095 = 0 then
         Poll;
-      WriteU32(Limbs[I]);
+      WriteU32(TGocciaBigIntValue(AObject).Value.LimbAt(I));
     end;
   end
   else
@@ -1267,18 +1358,9 @@ var
   I, Index: Integer;
   Codec: TGocciaSnapshotCodec;
   Obj: TGCManagedObject;
-  Dirty: TStringList;
-  PathIndexes, LatePathIndexes: array of Integer;
-  LateFingerprints: array of UInt64;
+  PathIndexes, LatePathIndexes, LateFingerprintIndexes: array of Integer;
+  LateFingerprints: array of string;
 begin
-  Dirty := FBuiltins.DirtyPaths;
-  try
-    if Dirty.Count > 0 then
-      Refuse('the run changed built-ins: ' + Dirty.CommaText);
-  finally
-    Dirty.Free;
-  end;
-
   RootsOut := TGocciaChargedMemoryStream.Create;
   Payload := TGocciaChargedMemoryStream.Create;
   ObjectsOut := TGocciaChargedMemoryStream.Create;
@@ -1321,6 +1403,7 @@ begin
     // the restoring engine builds the same ones and compares.
     SetLength(LatePathIndexes, FBuiltins.Count - FBuiltins.FingerprintCount);
     SetLength(LateFingerprints, Length(LatePathIndexes));
+    SetLength(LateFingerprintIndexes, Length(LatePathIndexes));
     for I := 0 to High(LatePathIndexes) do
     begin
       Poll;
@@ -1328,6 +1411,7 @@ begin
         FBuiltins.FingerprintCount + I));
       LateFingerprints[I] := FBuiltins.ComputeFingerprint(
         FBuiltins.FingerprintCount + I);
+      LateFingerprintIndexes[I] := StringIndex(LateFingerprints[I]);
     end;
     for I := 0 to FCodecs.Count - 1 do
       StringIndex(FCodecs[I].Tag);
@@ -1353,7 +1437,7 @@ begin
     for I := 0 to High(LatePathIndexes) do
     begin
       WriteU32(LatePathIndexes[I]);
-      WriteI64(Int64(LateFingerprints[I]));
+      WriteU32(LateFingerprintIndexes[I]);
     end;
     WriteU32(FObjects.Count);
     AStream.CopyFrom(ObjectsOut, 0);
@@ -1684,6 +1768,7 @@ begin
         if not Assigned(Result) and
            not FNewRegistered.TryGetValue(Text, TGocciaSymbolValue(Result)) then
         begin
+          Reserve(1, SEEN_ENTRY_BYTES);
           Result := TGocciaSymbolValue.Create(Text);
           NoteCreated(Result);
           FNewRegistered.Add(Text, TGocciaSymbolValue(Result));
@@ -1876,7 +1961,7 @@ var
   RootStart: Int64;
   Seen: TDictionary<string, Boolean>;
   LatePaths: TStringArray;
-  LateFingerprints: array of UInt64;
+  LateFingerprints: array of string;
   Pair: TPair<string, TGocciaSymbolValue>;
 begin
   if Assigned(FRoots) then
@@ -1917,7 +2002,7 @@ begin
 
   // Codecs, each with the schema version it wrote.
   Count := ReadCount(FLimits.MaxCodecs, MIN_CODEC_BYTES, 'codecs');
-  Reserve(Count, SizeOf(Pointer));
+  Reserve(Count, SizeOf(Pointer) + SEEN_ENTRY_BYTES);
   SetLength(FCodecs, Count);
   Seen := TDictionary<string, Boolean>.Create;
   try
@@ -1958,17 +2043,17 @@ begin
   end;
 
   // The built-ins the writing run built, each with its fingerprint there.
-  Count := ReadCount(FLimits.MaxBuiltins, 12, 'built-ins the run built');
+  Count := ReadCount(FLimits.MaxBuiltins, 8, 'built-ins the run built');
   if Count > 0 then
   begin
-    Reserve(Count, SizeOf(Pointer) + SizeOf(UInt64));
+    Reserve(Count, 2 * SizeOf(Pointer));
     SetLength(LatePaths, Count);
     SetLength(LateFingerprints, Count);
     for I := 0 to Count - 1 do
     begin
       Poll;
       LatePaths[I] := ReadStr;
-      LateFingerprints[I] := UInt64(ReadI64);
+      LateFingerprints[I] := ReadStr;
     end;
     if not Assigned(FBuiltinVerify) then
       Refuse('built-ins the run built, and no way to check them');
@@ -2051,7 +2136,10 @@ begin
     Refuse('bytes after the roots');
   // The restore succeeded: the registered symbols it made are registered.
   for Pair in FNewRegistered do
+  begin
+    Poll;
     RegisterSymbol(Pair.Value);
+  end;
   FNewRegistered.Clear;
   // The input is not needed any more; its reservation is released with the
   // reader.
