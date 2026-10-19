@@ -46,13 +46,13 @@ type
     function StoredLength: Int64;
     function LengthWritable: Boolean;
     // A heap snapshot restore of a built-in array the run changed (ADR
-    // 0148), which ArrayPartRefusal checked first. PrepareElementsForRestore
-    // builds its dense elements aside (the hole for a missing one), through
-    // the element store's gate and polling, so it may raise; the caller
-    // keeps them rooted. CommitArrayPartForRestore installs them, with the
-    // length and whether it is writable, and cannot fail.
-    class function PrepareElementsForRestore(
-      const AElements: array of TGocciaValue): TGocciaElementList;
+    // 0148). CreateElementsForRestore makes its dense elements aside, ACount
+    // holes grown through the element store's gate (it may raise), for the
+    // caller to fill and keep rooted; ArrayPartRefusal checks them, and
+    // CommitArrayPartForRestore installs them, with the length and whether
+    // it is writable, and cannot fail.
+    class function CreateElementsForRestore(
+      const ACount: Integer): TGocciaElementList;
     procedure CommitArrayPartForRestore(const AElements: TGocciaElementList;
       const ALength: Int64; const ALengthWritable: Boolean);
 
@@ -142,7 +142,7 @@ type
   // elements hold a value for or that lies past the length.
   function ArrayPartRefusal(const ALength: Int64;
     const ALengthWritable, AFrozen: Boolean;
-    const AElements: array of TGocciaValue;
+    const AElements: TGocciaElementList;
     const AKeys: array of string): string;
 
 implementation
@@ -4986,21 +4986,13 @@ begin
   end;
 end;
 
-class function TGocciaArrayValue.PrepareElementsForRestore(
-  const AElements: array of TGocciaValue): TGocciaElementList;
-var
-  I: Integer;
+class function TGocciaArrayValue.CreateElementsForRestore(
+  const ACount: Integer): TGocciaElementList;
 begin
   Result := TGocciaElementList.Create(False);
   try
     // Through the element store's gate, as any store grows.
-    ExtendElementsWithHoles(Result, Length(AElements), nil);
-    for I := 0 to High(AElements) do
-    begin
-      if I and 1023 = 1023 then
-        CheckNativeWork;
-      Result[I] := AElements[I];
-    end;
+    ExtendElementsWithHoles(Result, ACount, nil);
   except
     Result.Free;
     raise;
@@ -5019,7 +5011,7 @@ end;
 
 function ArrayPartRefusal(const ALength: Int64;
   const ALengthWritable, AFrozen: Boolean;
-  const AElements: array of TGocciaValue;
+  const AElements: TGocciaElementList;
   const AKeys: array of string): string;
 var
   Index: Int64;
@@ -5028,7 +5020,7 @@ begin
   Result := '';
   if (ALength < 0) or (ALength > MAX_ARRAY_LENGTH) then
     Exit('an array length out of range');
-  if Length(AElements) > ALength then
+  if AElements.Count > ALength then
     Exit('an array with more elements than its length');
   if AFrozen and ALengthWritable then
     Exit('a frozen array with a writable length');
@@ -5038,7 +5030,7 @@ begin
     if AKeys[I] = PROP_LENGTH then
       Exit('an array whose length is an ordinary property');
     if TryParseArrayElementIndex(AKeys[I], Index) and
-       ((Index >= ALength) or ((Index < Length(AElements)) and
+       ((Index >= ALength) or ((Index < AElements.Count) and
         (AElements[Integer(Index)] <> TGocciaHoleValue.HoleValue))) then
       Exit('an array index property the array cannot hold');
   end;

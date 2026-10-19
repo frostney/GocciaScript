@@ -578,6 +578,7 @@ uses
 
   Goccia.Builtins.GlobalSymbol,
   Goccia.Bytecode.Binary,
+  Goccia.Constants.PropertyNames,
   Goccia.NativeLimits,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
@@ -619,7 +620,6 @@ type
     IsArray, LengthWritable: Boolean;
     IsClass, NameDeleted, LengthDeleted: Boolean;
     ArrayLength: Int64;
-    Elements: array of TGocciaValue;
     Keys: array of string;
     Descriptors: array of TGocciaPropertyDescriptor;
     Symbols: array of TGocciaSymbolValue;
@@ -3333,12 +3333,14 @@ begin
         Pending.ArrayLength := ReadI64;
         Pending.LengthWritable := ReadBool;
         ItemCount := ReadItemCount(1);
-        Reserve(ItemCount, SizeOf(Pointer));
-        SetLength(Pending.Elements, ItemCount);
+        // Read straight into the store the commit installs, grown through
+        // its gate as a restored array's is.
+        Pending.PreparedElements :=
+          TGocciaArrayValue.CreateElementsForRestore(ItemCount);
         for J := 0 to ItemCount - 1 do
         begin
           Poll;
-          Pending.Elements[J] := ReadElementValue;
+          Pending.PreparedElements[J] := ReadElementValue;
         end;
       end;
 
@@ -3391,10 +3393,24 @@ begin
         end;
       end;
 
+      // A synthesized length or name that is still there is configurable
+      // unless a definition put it in the property map: a sealed or frozen
+      // built-in lists it.
+      if Pending.Sealed or Pending.Frozen then
+        if (Pending.IsFunction and
+            ((Pending.HasOwnLength and not SeenKeys.ContainsKey(PROP_LENGTH)) or
+             (Pending.HasOwnName and not SeenKeys.ContainsKey(PROP_NAME)))) or
+           (Pending.IsClass and
+            ((not Pending.LengthDeleted and
+              not SeenKeys.ContainsKey(PROP_LENGTH)) or
+             (not Pending.NameDeleted and
+              not SeenKeys.ContainsKey(PROP_NAME)))) then
+          Refuse('a sealed object with a configurable property');
+
       if Pending.IsArray then
       begin
         Refusal := ArrayPartRefusal(Pending.ArrayLength,
-          Pending.LengthWritable, Pending.Frozen, Pending.Elements,
+          Pending.LengthWritable, Pending.Frozen, Pending.PreparedElements,
           Pending.Keys);
         if Refusal <> '' then
           Refuse(Refusal);
@@ -3502,9 +3518,6 @@ begin
     Pending.Prepared := Pending.Target.PrepareOwnPropertiesForRestore(
       Pending.Keys, Pending.Descriptors, Pending.Symbols,
       Pending.SymbolDescriptors);
-    if Pending.IsArray then
-      Pending.PreparedElements :=
-        TGocciaArrayValue.PrepareElementsForRestore(Pending.Elements);
   end;
 end;
 

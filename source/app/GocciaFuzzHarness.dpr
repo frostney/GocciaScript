@@ -426,9 +426,10 @@ begin
 end;
 
 { The graphs the snapshot seeds hold: every codec the reader has, shared
-  references, cycles, symbols, built-ins named and attributes. }
+  references, cycles, symbols, built-ins named and attributes, and built-ins
+  the run changed, one of them built during the run. }
 const
-  HEAP_SNAPSHOT_SEEDS: array[0..5] of string = (
+  HEAP_SNAPSHOT_SEEDS: array[0..6] of string = (
     '({ n: 1.5, s: "text", b: 12345678901234567890n, t: true, u: undefined, ' +
       'z: null, neg: -0 })',
     '(() => { const a = [1, , "three", [4]]; a.length = 8; a.extra = 1; ' +
@@ -441,7 +442,12 @@ const
       'Object.defineProperty(o, "g", { get: Object.prototype.valueOf, ' +
       'enumerable: true }); return [Object.freeze({ f: 1 }), Object.seal([1]), ' +
       'Object.preventExtensions(o), Object.create(null)]; })()',
-    'Array.from({ length: 64 }, (_, i) => ({ i, next: { s: String(i) } }))');
+    'Array.from({ length: 64 }, (_, i) => ({ i, next: { s: String(i) } }))',
+    '(() => { const shared = { s: 1 }; JSON.fuzz = shared; ' +
+      'delete JSON.rawJSON; Object.defineProperty(JSON, "acc", ' +
+      '{ get: Object.prototype.valueOf, configurable: true }); ' +
+      'JSON[Symbol("k")] = [shared]; Goccia.shims.push(shared); ' +
+      'Object.seal(JSON); Reflect.fuzz = shared; return shared; })()');
 
 { The program whose functions and suspended generators the VM seeds hold:
   closures sharing a cell, a generator inside try/finally, one with a binding

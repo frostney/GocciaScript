@@ -136,6 +136,7 @@ implementation
 uses
   Goccia.Builtins.Base,
   Goccia.ExecutionContext,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.NativeLimits,
   Goccia.Realm,
@@ -1077,6 +1078,11 @@ begin
       // built-in a name crossed: the snapshot cannot be restored here.
       on E: TGocciaThrowValue do
         raise EGocciaHeapSnapshotInvalid.Create('restore: ' + ThrowMessage(E));
+      // A store's growth the memory ceiling refused (a large array's
+      // elements, a changed built-in's new properties): ended a run would be,
+      // a restore is refused.
+      on E: TGocciaMemoryLimitError do
+        raise EGocciaHeapSnapshotInvalid.Create('restore: ' + E.Message);
       // A charge of the tables' that did not fit, the built-in table's
       // included.
       on E: EGocciaHeapSnapshotRefused do

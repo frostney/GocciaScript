@@ -314,8 +314,8 @@ snapshots with `--write-heap-snapshot-seeds <dir>`; the scheduled
 them ([Tooling — Fuzzing](contributing/tooling.md#fuzzing-and-memory-safety)).
 
 `source/units/Goccia.HeapSnapshot.Hardening.Test.pas` takes two real
-snapshots apart along the format, one of a plain graph and one holding
-closures and suspended generators: every count, index and length of the
+snapshots apart along the format, one of a plain graph with built-ins the
+run changed and one holding closures and suspended generators: every count, index and length of the
 header and its tables set to its boundary values, every object entry read by
 every other codec, dropped, doubled, swapped and cut short, references to
 objects and built-ins pointed at other objects and built-ins, and payload bytes set

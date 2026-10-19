@@ -68,7 +68,9 @@ const
   // A graph with every value the core codecs write: shared references and a
   // cycle, holes and a grown length, BigInts, -0, a lone surrogate, local,
   // registered and well-known symbols, built-ins, integrity levels, a null
-  // and a restored prototype, and an accessor.
+  // and a restored prototype, and an accessor; and built-ins the run
+  // changed (a member added, deleted and made an accessor, a built-in
+  // array grown, a symbol key, sealing).
   PLAIN_SEED = '(() => { const shared = { s: "shared" }; ' +
     'const local = Symbol("k"); const o = { list: [1, , "two", 3n, -0, ' +
     'shared, [shared]], [local]: Symbol.for("hardening"), ' +
@@ -77,7 +79,11 @@ const
     'bare: Object.create(null), proto: Object.create(shared), ' +
     'acc: Object.defineProperty({}, "g", { get: Object.prototype.valueOf, ' +
     'enumerable: true }), big: -(2n ** 70n), s: "\uD800x" }; ' +
-    'o.self = o; o.list.length = 9; return o; })()';
+    'o.self = o; o.list.length = 9; JSON.hardening = shared; ' +
+    'delete JSON.rawJSON; Object.defineProperty(JSON, "acc", ' +
+    '{ get: Object.prototype.valueOf, configurable: true }); ' +
+    'JSON[local] = o.list; Goccia.shims.push(shared, "x"); ' +
+    'Object.seal(JSON); return o; })()';
 
   // Closures sharing a cell, suspended generators (one inside try/finally,
   // one with a binding in its temporal dead zone, one with rest arguments,
@@ -138,6 +144,8 @@ type
     CodecCount: Integer;
     BuiltinCount: Integer;
     ObjectCountAt: Integer;
+    // The changed built-ins: their count, then their states up to RootsAt.
+    DifferencesAt: Integer;
     RootsAt: Integer;
   end;
 
@@ -295,6 +303,83 @@ var
     end;
   end;
 
+  // The length of the value written at At.
+  function ValueLength: Integer;
+  begin
+    case ABytes[At] of
+      HSV_NUMBER:
+        Result := 9;
+      HSV_STRING, HSV_OBJECT, HSV_BUILTIN, HSV_REGISTERED_SYMBOL:
+        Result := 5;
+      HSV_BIGINT:
+        Result := 1 + 1 + 4 + 4 * Integer(U32At(ABytes, At + 2));
+    else
+      Result := 1;
+    end;
+  end;
+
+  // A member of a changed built-in: kept, or its attributes and its value
+  // or accessor halves.
+  procedure Member;
+  var
+    Kind: Byte;
+  begin
+    Kind := ABytes[At];
+    Inc(At);
+    if Kind = HSD_KEEP then
+      Exit;
+    Inc(At);
+    Inc(At, ValueLength);
+    if Kind = HSD_ACCESSOR then
+      Inc(At, ValueLength);
+  end;
+
+  // A changed built-in's state: the built-in, its prototype, four flags,
+  // its parts (a function's and a class's two flags, an array's length,
+  // writability and elements), its members, its symbol-keyed members.
+  procedure Difference;
+  var
+    Parts: Byte;
+    J, Items: Integer;
+  begin
+    Field(At, 4);
+    Inc(At, 4);
+    Inc(At, ValueLength);
+    Inc(At, 4);
+    Parts := ABytes[At];
+    Inc(At);
+    if Parts and HSB_FUNCTION <> 0 then
+      Inc(At, 2);
+    if Parts and HSB_CLASS <> 0 then
+      Inc(At, 2);
+    if Parts and HSB_ARRAY <> 0 then
+    begin
+      Inc(At, 8 + 1);
+      Field(At, 4);
+      Items := Integer(U32At(ABytes, At));
+      Inc(At, 4);
+      for J := 1 to Items do
+        Inc(At, ValueLength);
+    end;
+    Field(At, 4);
+    Items := Integer(U32At(ABytes, At));
+    Inc(At, 4);
+    for J := 1 to Items do
+    begin
+      Field(At, 4);
+      Inc(At, 4);
+      Member;
+    end;
+    Field(At, 4);
+    Items := Integer(U32At(ABytes, At));
+    Inc(At, 4);
+    for J := 1 to Items do
+    begin
+      Inc(At, ValueLength);
+      Member;
+    end;
+  end;
+
 begin
   Result := Default(TSnapshotLayout);
   Field(4, 2);                                     // format version
@@ -329,6 +414,12 @@ begin
     Result.PayloadAt[I] := At + 6;
     At := At + 6 + Result.PayloadLength[I];
   end;
+  Result.DifferencesAt := At;
+  Field(At, 4);                                    // changed built-ins
+  Count := Integer(U32At(ABytes, At));
+  Inc(At, 4);
+  for I := 1 to Count do
+    Difference;
   Result.RootsAt := At;
   Field(At, 4);                                    // roots
   Expect<Boolean>(At + 4 <= Length(ABytes)).ToBe(True);
@@ -598,8 +689,11 @@ begin
     'restored.list[5] === Object.getPrototypeOf(restored.proto), ' +
     'restored.m === Math, ' +
     'Object.isFrozen(restored.frozen), restored.big, ' +
-    'restored.s.charCodeAt(0)].join()'))
-    .ToBe('true,9,true,true,true,-1180591620717411303424,55296');
+    'restored.s.charCodeAt(0), JSON.hardening === restored.list[5], ' +
+    'typeof JSON.rawJSON, Goccia.shims.at(-2) === restored.list[5], ' +
+    'Object.isSealed(JSON)].join()'))
+    .ToBe('true,9,true,true,true,-1180591620717411303424,55296,true,' +
+    'undefined,true,true');
   Expect<string>(RoundTripModuleBytes(VM_SEED, VMSeed, VM_CHECK))
     .ToBe(VM_CHECKED);
   Feeder := TMutantFeeder.Create('');
@@ -821,6 +915,9 @@ begin
         if IsReference(P) then
           Sites.Add(P);
     end;
+    for P := Layout.DifferencesAt + 4 to Layout.RootsAt - 5 do
+      if IsReference(P) then
+        Sites.Add(P);
     for P := Layout.RootsAt + 4 to Length(ASeed) - 5 do
       if IsReference(P) then
         Sites.Add(P);
@@ -867,7 +964,7 @@ var
   Layout: TSnapshotLayout;
   Feeder: TMutantFeeder;
   Mutant: TBytes;
-  I, P, V, Fed: Integer;
+  I, P, V, Fed, First, Last: Integer;
   Used: array[0..High(INTERESTING_BYTES)] of Boolean;
 begin
   Layout := ParseLayout(ASeed);
@@ -875,9 +972,20 @@ begin
   Fed := 0;
   FillChar(Used, SizeOf(Used), 0);
   try
-    for I := 0 to High(Layout.EntryAt) do
-      for P := Layout.PayloadAt[I] to
-          Layout.PayloadAt[I] + Layout.PayloadLength[I] - 1 do
+    // Each object's payload, and the changed built-ins' states.
+    for I := 0 to Length(Layout.EntryAt) do
+    begin
+      if I < Length(Layout.EntryAt) then
+      begin
+        First := Layout.PayloadAt[I];
+        Last := Layout.PayloadAt[I] + Layout.PayloadLength[I] - 1;
+      end
+      else
+      begin
+        First := Layout.DifferencesAt + 4;
+        Last := Layout.RootsAt - 1;
+      end;
+      for P := First to Last do
         for V := 0 to High(INTERESTING_BYTES) do
           if (V mod ByteShare = P mod ByteShare) and
              (ASeed[P] <> INTERESTING_BYTES[V]) then
@@ -888,6 +996,7 @@ begin
             Used[V] := True;
             Inc(Fed);
           end;
+    end;
     // Every value was used, at a share of the bytes at least.
     for V := 0 to High(INTERESTING_BYTES) do
       Expect<Boolean>(Used[V]).ToBe(True);
@@ -1270,6 +1379,10 @@ begin
   Feeder := TMutantFeeder.Create(AModule);
   GC := TGarbageCollector.Instance;
   try
+    // A restore that changes built-ins leaves the run's objects on them,
+    // which the next restore's walk names: what one needs is measured once
+    // that state is reached, as every restore below starts from it.
+    Expect<string>(Feeder.Feed(ASeed, '1')).ToBe('');
     GC.Collect;
     Before := GC.BytesAllocated;
     GC.ResetPeakBytesAllocated;

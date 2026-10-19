@@ -332,7 +332,8 @@ afl-fuzz -n -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
   -- ./build/GocciaFuzzHarness --heap-snapshot @@
 ```
 
-Four of the seeds hold closures and suspended generators. Functions are named
+Four of the seeds hold closures and suspended generators, and one holds
+built-ins the run changed (their differences). Functions are named
 by the bytecode of the module that compiled them, so the harness runs the
 seeds' program before it restores an input, and then uses what restored: it
 walks up to 600 distinct objects, reading properties, calling functions and

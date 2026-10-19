@@ -24,7 +24,6 @@ uses
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.TestSupport,
-  Goccia.MemoryLimit,
   Goccia.Timeout,
   Goccia.Realm,
   Goccia.Scope.BindingMap,
@@ -807,7 +806,13 @@ begin
     'Object.setPrototypeOf(Math, p); return p; })()',
     '[Object.getPrototypeOf(Math) === restored, Math.inherited].join()'))
     .ToBe('true,2');
-  // Extensibility, sealing, freezing.
+  // Extensibility, sealing, freezing, of functions and classes too, whose
+  // synthesized length and name the freeze defines.
+  Expect<string>(RoundTrip('(() => { Object.freeze(Math.max); ' +
+    'Object.seal(Math.min); Object.freeze(Map); return {}; })()',
+    '[Object.isFrozen(Math.max), Object.isSealed(Math.min), ' +
+    'Object.isFrozen(Map), Math.max.name, Map.length].join()'))
+    .ToBe('true,true,true,max,0');
   Expect<string>(RoundTrip('(() => { Object.seal(JSON); return {}; })()',
     '[Object.isSealed(JSON), Object.isFrozen(JSON), ' +
     'JSON.stringify([1])].join()')).ToBe('true,false,[1]');
@@ -853,6 +858,10 @@ begin
 end;
 
 procedure THeapSnapshotBuiltinsTests.TestHostileDifferencesRefuse;
+const
+  SYNTHESIZED_LEFT: array[0..1] of string = (
+    '(() => { delete Math.max.name; return {}; })()',
+    '(() => { delete Map.name; return {}; })()');
 var
   Refusal: string;
   Bytes, Mutant: TBytes;
@@ -879,6 +888,22 @@ begin
   PutU32(Mutant, At, U32At(Bytes, At + 5));
   Expect<string>(RestoreRefusal(Mutant))
     .ToBe('restore: a changed prototype of Object.prototype');
+
+  // Sealed while a synthesized length is still configurable: a function's,
+  // whose name the run deleted, and a class's.
+  for I := Low(SYNTHESIZED_LEFT) to High(SYNTHESIZED_LEFT) do
+  begin
+    Bytes := Snapshot(SYNTHESIZED_LEFT[I], Refusal);
+    Expect<string>(Refusal).ToBe('');
+    At := DifferencesAt(Bytes) + 4;
+    Expect<Integer>(Bytes[At + 4]).ToBe(HSV_BUILTIN);
+    Mutant := Copy(Bytes);
+    Mutant[At + 9] := 0;
+    Mutant[At + 10] := 1;
+    Mutant[At + 11] := 1;
+    Expect<string>(RestoreRefusal(Mutant))
+      .ToBe('restore: a sealed object with a configurable property');
+  end;
 
   // A loop through a restored object: Math's prototype is o, o's is Math.
   Bytes := Snapshot('(() => { const o = {}; Object.setPrototypeOf(Math, o); ' +
@@ -1019,14 +1044,7 @@ begin
     for I := 0 to 160 do
     begin
       GC.MaxBytes := Floor + Int64(I) * STEP;
-      // The engine's memory limit error ends a run as a resource limit; for
-      // a restore it is a refusal like any other.
-      try
-        Refusal := RestoreRefusalIn(Engine, Bytes);
-      except
-        on E: TGocciaMemoryLimitError do
-          Refusal := E.Message;
-      end;
+      Refusal := RestoreRefusalIn(Engine, Bytes);
       GC.MaxBytes := Previous;
       if Refusal = '' then
       begin
