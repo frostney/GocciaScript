@@ -28,8 +28,9 @@ uses
   whatever value was thrown, nor the one recorded on the error or an
   ASuggestion equal to it. }
 { Reads AName as a string held in a data property of AObject or of its prototype
-  chain, through the ordinary [[GetOwnProperty]] only: an accessor, a Proxy (its
-  traps are guest code) or a non-string value is not read and gives False.
+  chain, through the ordinary [[GetOwnProperty]] only: an accessor, an object
+  with its own [[GetOwnProperty]] (a Proxy, a deferred module namespace: guest
+  code) or a non-string value is not read and gives False.
   Never runs guest code, so it is safe where a throw is rendered or carried
   (ES2026 §14.14 ThrowStatement reads no property of the thrown value). }
 function TryGetStringDataProperty(const AObject: TGocciaObjectValue;
@@ -57,7 +58,6 @@ uses
   Goccia.Error,
   Goccia.Terminal.Colors,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue;
 
 function TryGetStringDataProperty(const AObject: TGocciaObjectValue;
@@ -73,8 +73,9 @@ begin
 
   while Assigned(Current) do
   begin
-    // A Proxy's [[GetOwnProperty]] runs its trap.
-    if Current is TGocciaProxyValue then
+    // An exotic object's [[GetOwnProperty]] can run guest code: a Proxy's
+    // trap, a deferred module namespace evaluating its module.
+    if not InheritsGetOwnProperty(Current) then
       Exit(False);
     Descriptor := Current.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
