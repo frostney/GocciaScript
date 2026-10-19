@@ -113,9 +113,14 @@ codec, or in a state its codec does not handle, refuses the snapshot. A
 refusal is a normal outcome: the embedder resumes by replay. Two checks
 reduce the risk of a silently wrong restore without removing it:
 
-- an **accounting check** collects and then confirms that every live object
-  the run created is either written or named; it detects objects a codec
-  missed, not fields;
+- an **accounting check** confirms that every live object the run created
+  is either written or named; it detects objects a codec missed, not fields.
+  It needs a collection first, and a collection can queue work: a
+  `FinalizationRegistry` whose target died queues its cleanup job. The
+  engine therefore collects before it confirms the checkpoint, and a
+  collection that queued a job means the run is not at a checkpoint: the
+  snapshot is refused this time, the idle wait runs the job, and the next
+  checkpoint can take it. A test covers a registry whose target dies;
 - a **round-trip lane** over the test suite detects missing fields for the
   states the tests reach.
 
@@ -176,8 +181,11 @@ How each kind of module is restored:
   module a version the embedder supplies when it registers the module, which
   it changes whenever the module's exports or behaviour change. Host module
   registration gains that version; a host module registered without one
-  refuses the snapshot, and the snapshot records both name and version. Their state is written
-  only through their codecs; without one they refuse if the run changed them.
+  refuses the snapshot, and the snapshot records both name and version.
+  A host module's native functions can keep state in their Pascal receivers,
+  which no walk of the heap sees. Each host module therefore declares, when
+  it is registered, either that it keeps no such state or a versioned codec
+  for it; a loaded host module that declares neither refuses the snapshot.
 - **Pending dynamic imports and deferred namespaces** refuse until a codec
   covers them.
 
@@ -207,10 +215,14 @@ handler stacks. Two rules follow:
   - it is fuzzed with mutated real snapshots under heaptrc and
     memory-checking tools.
 - The writer is bounded the same way, since the heap it walks can be as
-  large as the run made it: it polls `CheckNativeWork` per object, uses
-  checked size arithmetic, and charges its object tables, string table and
-  output buffers to the run's memory ceiling, as do the census and the
-  accounting check.
+  large as the run made it, and one object can be as large as the heap. It
+  polls `CheckNativeWork` per object and inside every loop whose length the
+  run controls (a property table, an array's elements, a collection's
+  entries, a string or a buffer copied in chunks), as the native-loop rule of
+  `Goccia.Timeout` requires; the census and the accounting check poll per
+  object they scan. It uses checked size arithmetic, and charges its object
+  tables, string table and output buffers to the run's memory ceiling, as do
+  the census and the accounting check.
 - Compression belongs to the embedder. The engine writes and reads the
   uncompressed format; an embedder that compresses snapshots authenticates
   and decompresses them before the reader sees them, and bounds the decoded
@@ -231,6 +243,11 @@ and prototype chains) has a deep-chain round-trip test.
 
 - **Recorded and checked by the engine:** the deterministic clock and the
   engine options and compatibility flags. A mismatch refuses the restore.
+- **Authority.** The run's capability set (ADR 0122) is recorded in its
+  canonical form. A restore refuses unless the restoring engine's set is the
+  same or narrower, by the narrowing rule nested execution already follows,
+  so a snapshot never resumes with grants it did not have. Tests restore into
+  an equal, a narrower and a broader set.
 - **The random source.** The host random provider (`IGocciaHostRandom`) gains
   an optional, versioned interface to save and restore its state. The default
   provider implements it, so `Math.random` continues the same sequence after a
@@ -250,6 +267,11 @@ and prototype chains) has a deep-chain round-trip test.
   else the restore refuses, and the restored run gets the smaller of the new
   limit and what the recorded one had left. Restoring therefore never grants
   a fresh budget.
+- **The memory ceiling.** The run's ceiling (`MaxBytes`, bounded or not) is
+  recorded too. The restoring embedder sets its ceiling before the reader
+  allocates anything; it must be equal or tighter, else the restore refuses,
+  and the reader charges the restored graph and its temporary tables under
+  it.
 - **Carried by the embedder:** its own host state. That includes the sandbox
   file system the run wrote to (or the run's file changes), the ids of its
   pending host calls, and the authentication.
