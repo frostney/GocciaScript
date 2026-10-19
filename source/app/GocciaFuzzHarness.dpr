@@ -23,7 +23,11 @@ program GocciaFuzzHarness;
 
   A heap snapshot names the engine build that wrote it, and a reader refuses
   another build's, so the snapshot seeds are written by the harness that
-  fuzzes them.
+  fuzzes them. Functions and generators are named by the bytecode of the
+  module that compiled them, so the engine a snapshot is restored in runs
+  the seeds' own program first. What restores is then used
+  (Goccia.HeapSnapshot.Exercise): its functions called and its generators
+  resumed, returned or thrown into.
 
   See docs/contributing/tooling.md for the AFL++ and reproduction workflow. }
 
@@ -49,13 +53,18 @@ uses
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
+  Goccia.HeapSnapshot.Exercise,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.Modules.ContentProvider,
+  Goccia.Arguments.Collection,
+  Goccia.Scope.BindingMap,
   Goccia.StackLimit,
   Goccia.TextFiles,
   Goccia.Timeout,
   Goccia.Values.Error,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.NativeFunctionCallback,
   Goccia.Values.Primitives,
   Goccia.VM.Exception;
 
@@ -434,8 +443,88 @@ const
       'Object.preventExtensions(o), Object.create(null)]; })()',
     'Array.from({ length: 64 }, (_, i) => ({ i, next: { s: String(i) } }))');
 
+{ The program whose functions and suspended generators the VM seeds hold:
+  closures sharing a cell, a generator inside try/finally, one with a binding
+  in its temporal dead zone, one with rest arguments and one not started,
+  methods with their home object and a getter. capture(i, v) hands seed i
+  over. Every engine that restores a snapshot runs it first, so the seeds'
+  functions resolve there; it runs in the default dialect, as it was written. }
+const
+  HEAP_SNAPSHOT_VM_PROGRAM =
+    '(() => { let n = 0; const inc = () => { n += 1; return n; }; ' +
+    'const log = []; const source = { *steps(start) { try { ' +
+    'const a = yield start; const b = yield a * 2; return a + b + start; } ' +
+    'finally { log.push(n); } }, *late() { const peek = () => x; ' +
+    'yield peek; let x = 5; yield peek(); }, *wide(...args) { yield 0; ' +
+    'yield args.length + args[args.length - 1]; }, get count() { ' +
+    'return n; } }; const g = source.steps(1); g.next(); g.next(10); ' +
+    'inc(); const late = source.late(); const peek = late.next().value; ' +
+    'const wide = source.wide(1, 2, 3, 4); wide.next(); ' +
+    'capture(0, { inc, g, log }); capture(1, { late, peek }); ' +
+    'capture(2, { wide, source, fresh: source.steps(7) }); ' +
+    'capture(3, Array.from({ length: 16 }, (_, i) => i).reduce(' +
+    '(prev, i) => { const f = () => prev; f.i = i; return f; }, null)); })();';
+  HEAP_SNAPSHOT_VM_SEEDS = 4;
+
+type
+  { capture(i, v): keeps v as VM seed i, rooted until the harness exits. }
+  TFuzzSeedCapture = class
+  public
+    Values: array[0..HEAP_SNAPSHOT_VM_SEEDS - 1] of TGocciaValue;
+    function Capture(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function Ignore(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
+function TFuzzSeedCapture.Capture(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Index: Integer;
+begin
+  Index := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  if (Index >= 0) and (Index < HEAP_SNAPSHOT_VM_SEEDS) and
+     not Assigned(Values[Index]) then
+  begin
+    Values[Index] := AArgs.GetElement(1);
+    TGarbageCollector.Instance.AddTempRoot(Values[Index]);
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TFuzzSeedCapture.Ignore(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+{ An engine that has run the VM seeds' program, with capture(i, v) bound to
+  ACapture. }
+function CreateVMSeedEngine(const ALines: TStringList;
+  const ACapture: TGocciaNativeFunctionCallback): TGocciaEngine;
+begin
+  ALines.Text := HEAP_SNAPSHOT_VM_PROGRAM;
+  Result := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, ALines);
+  Result.GlobalScope.DefineLexicalBinding('capture',
+    TGocciaNativeFunctionValue.Create(ACapture, 'capture', 2), dtConst);
+end;
+
+procedure WriteSeed(const ASession: TGocciaHeapSnapshotSession;
+  const AValue: TGocciaValue; const AFileName: string);
+var
+  Output: TFileStream;
+begin
+  Output := TFileStream.Create(AFileName, fmCreate);
+  try
+    ASession.Snapshot([AValue], Output);
+  finally
+    Output.Free;
+  end;
+end;
+
 { Writes one snapshot per seed graph into ADirectory, from a fresh engine
-  each. Returns the number written. }
+  each, and one per VM seed from one run of their program. Returns the
+  number written. }
 function WriteHeapSnapshotSeeds(const ADirectory: string): Integer;
 var
   I: Integer;
@@ -444,7 +533,7 @@ var
   Session: TGocciaHeapSnapshotSession;
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
-  Output: TFileStream;
+  Capture: TFuzzSeedCapture;
 begin
   Result := 0;
   ForceDirectories(ADirectory);
@@ -461,13 +550,8 @@ begin
         FUZZ_PROGRAM_NAME, Stage);
       TGarbageCollector.Instance.AddTempRoot(Value);
       try
-        Output := TFileStream.Create(IncludeTrailingPathDelimiter(ADirectory) +
-          Format('heap-snapshot-%d.ghsn', [I]), fmCreate);
-        try
-          Session.Snapshot([Value], Output);
-        finally
-          Output.Free;
-        end;
+        WriteSeed(Session, Value, IncludeTrailingPathDelimiter(ADirectory) +
+          Format('heap-snapshot-%d.ghsn', [I]));
       finally
         TGarbageCollector.Instance.RemoveTempRoot(Value);
       end;
@@ -478,11 +562,38 @@ begin
       Lines.Free;
     end;
   end;
+  Lines := TStringList.Create;
+  Capture := TFuzzSeedCapture.Create;
+  Engine := nil;
+  Session := nil;
+  try
+    Engine := CreateVMSeedEngine(Lines, Capture.Capture);
+    Session := TGocciaHeapSnapshotSession.Create(Engine);
+    Session.CheckAccounting := False;
+    Engine.Execute;
+    for I := 0 to HEAP_SNAPSHOT_VM_SEEDS - 1 do
+    begin
+      WriteSeed(Session, Capture.Values[I],
+        IncludeTrailingPathDelimiter(ADirectory) +
+        Format('heap-snapshot-vm-%d.ghsn', [I]));
+      Inc(Result);
+    end;
+  finally
+    for I := 0 to HEAP_SNAPSHOT_VM_SEEDS - 1 do
+      if Assigned(Capture.Values[I]) then
+        TGarbageCollector.Instance.RemoveTempRoot(Capture.Values[I]);
+    Session.Free;
+    Engine.Free;
+    Capture.Free;
+    Lines.Free;
+  end;
 end;
 
-{ Restores one input as a heap snapshot on an engine of its own, under the
-  same bounds as a script run. A refusal is the reader doing its job; only
-  what escapes the typed ladder is a finding. }
+{ Restores one input as a heap snapshot on an engine of its own, which has
+  run the VM seeds' program, under the same bounds as a script run, and uses
+  what restored. A refusal is the reader doing its job, and the run's limits
+  and a script error are outcomes a run can have; only what escapes the
+  typed ladder is a finding. }
 function RestoreOnce(const AFileName: string;
   out ADetail: string): TFuzzOutcome;
 var
@@ -492,6 +603,7 @@ var
   Restore: TGocciaHeapSnapshotRestore;
   Limits: TGocciaHeapSnapshotLimits;
   GC: TGarbageCollector;
+  Capture: TFuzzSeedCapture;
 begin
   ADetail := '';
   if not FileExists(AFileName) then
@@ -501,21 +613,31 @@ begin
   end;
   Limits := TGocciaHeapSnapshotLimits.Defaults;
   Limits.MaxInputBytes := FUZZ_MAX_INPUT_BYTES;
-  StartExecutionTimeout(FUZZ_TIMEOUT_MS);
-  StartInstructionLimit(FUZZ_MAX_INSTRUCTIONS);
-  SetMaxStackDepth(FUZZ_STACK_DEPTH);
   Lines := TStringList.Create;
+  Capture := TFuzzSeedCapture.Create;
   Engine := nil;
   Input := nil;
+  Restore := nil;
   try
-    Engine := TGocciaEngine.Create(FUZZ_PROGRAM_NAME, Lines);
+    Engine := CreateVMSeedEngine(Lines, Capture.Ignore);
+    Engine.Execute;
+    StartExecutionTimeout(FUZZ_TIMEOUT_MS);
+    StartInstructionLimit(FUZZ_MAX_INSTRUCTIONS);
+    SetMaxStackDepth(FUZZ_STACK_DEPTH);
     GC := TGarbageCollector.Instance;
     if Assigned(GC) then
       GC.MaxBytes := FUZZ_MAX_MEMORY_BYTES;
     Input := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
     try
       Restore := TGocciaHeapSnapshotRestore.Create(Engine, Input, Limits);
-      Restore.Free;
+      // A root can be any object a codec writes, a cell among them; what is
+      // used is a value.
+      if (Length(Restore.Roots) > 0) and
+         (Restore.Roots[0] is TGocciaValue) then
+        // The input's size picks how its generators are used, so each
+        // way is fuzzed.
+        ExerciseRestored(Engine, TGocciaValue(Restore.Roots[0]),
+          Integer(Input.Size mod EXERCISE_MODES));
       Result := foCompleted;
     except
       on E: EGocciaHeapSnapshotRefused do
@@ -538,10 +660,17 @@ begin
         Result := foTimeout;
         ADetail := E.Message;
       end;
+      on E: TGocciaThrowValue do
+      begin
+        Result := foScriptThrow;
+        ADetail := E.Message;
+      end;
     end;
   finally
+    Restore.Free;
     Input.Free;
     Engine.Free;
+    Capture.Free;
     Lines.Free;
     ClearInstructionLimit;
     ClearExecutionTimeout;
