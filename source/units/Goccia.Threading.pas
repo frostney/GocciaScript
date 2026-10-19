@@ -225,7 +225,10 @@ type
       AData is an opaque pointer passed through to each worker call.
       AWatchdogMs is the maximum time (in milliseconds) that any single
       worker may go without making progress — i.e. the longest it can
-      sit on one file before the pool cancels remaining work.  0 means
+      sit on one file before the pool abandons that worker.  The file it
+      was on gets a TIMEOUT result, the other workers drain the queue,
+      and the abandoned worker takes no further file and records nothing;
+      a file no worker took keeps an empty, unsuccessful result.  0 means
       no watchdog (wait forever).  Because the bound is per-worker and
       per-file rather than total, it stays constant no matter how many
       files are queued. }
@@ -306,6 +309,22 @@ type
     under it; the process then exits with them still allocated instead. }
   procedure ShutdownMainThreadRuntime;
 
+  { Ends the process at once with AStatus, running no unit finalization and
+    flushing nothing. For a process whose heap the engine no longer vouches
+    for, or whose worker threads are still running: Halt would run code on
+    that heap and tear the RTL down under those threads. Declared against the
+    C runtime (TerminateProcess on Windows) rather than routed through the
+    RTL for that reason. }
+  procedure TerminateProcessNow(AStatus: LongInt);
+
+  { When a thread pool has abandoned a worker, flushes Output and ErrOutput
+    and ends the process with AExitCode through TerminateProcessNow;
+    otherwise returns. A host calls it once its report is written and
+    before it frees anything: the abandoned worker may still be inside its
+    callback, which reads the host's objects and the process-wide runtime,
+    so neither the host's teardown nor unit finalization may run under it. }
+  procedure EndProcessIfWorkerAbandoned(const AExitCode: LongInt);
+
 implementation
 
 uses
@@ -367,6 +386,33 @@ procedure WorkerCheckpoint(const AWorker: TObject;
 begin
   if Assigned(GCheckpointHook) then
     GCheckpointHook(AWorker, ACheckpoint, AFileIndex);
+end;
+
+{$IFDEF WINDOWS}
+{ TerminateProcess rather than ExitProcess: ExitProcess first terminates the
+  peer threads and THEN runs DLL process-detach handlers — a detach handler
+  needing a lock a just-terminated worker held deadlocks the exit. Terminate
+  skips detach handlers entirely, which is the whole contract here. }
+function GetCurrentProcess: THandle; stdcall;
+  external 'kernel32' name 'GetCurrentProcess';
+function TerminateProcess(AProcess: THandle; AExitCode: LongWord): LongBool;
+  stdcall; external 'kernel32' name 'TerminateProcess';
+
+procedure TerminateProcessNow(AStatus: LongInt);
+begin
+  TerminateProcess(GetCurrentProcess, LongWord(AStatus));
+end;
+{$ELSE}
+procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
+{$ENDIF}
+
+procedure EndProcessIfWorkerAbandoned(const AExitCode: LongInt);
+begin
+  if not GWorkerAbandoned then
+    Exit;
+  Flush(Output);
+  Flush(ErrOutput);
+  TerminateProcessNow(AExitCode);
 end;
 
 procedure ShutdownMainThreadRuntime;

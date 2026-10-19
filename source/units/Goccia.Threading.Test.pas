@@ -172,15 +172,13 @@ var
   GParkedWorker: TObject;
   GParkRelease: TEvent;
   { Per-file blocks the slot worker writes into, standing in for a host's
-    per-file result data (GocciaTestRunner's WorkerData).  The test frees
-    the blocks of files the pool reports as never run, as a host may once
-    RunAll has returned. }
+    per-file result data (GocciaTestRunner's WorkerData).  They stay
+    allocated until the worker has exited, and the test checks that the
+    blocks of files the pool reports as never run were never written. }
   GSlots: array of PByte;
 
 const
   SLOT_SIZE = 64;
-  { The slot worker writes into the middle of its block, clear of any
-    allocator bookkeeping at the start of a freed block. }
   SLOT_WRITE_OFFSET = 32;
 
 procedure ParkCheckpoint(const AWorker: TObject;
@@ -298,6 +296,12 @@ begin
   // no progress and abandons this thread while it is still alive here.
   while not StallReleased do
     Sleep(1);
+  // Cancel the flag this worker was handed, as a callback that stops the
+  // queue on its own does (GocciaTestRunner on an integrity fault): an
+  // abandoned worker records no result, so the pool's cancel-on-error never
+  // fires for it, but its callback can still reach the flag.
+  if Assigned(AData) then
+    TGocciaCancellationFlag(AData).Cancel;
   AErrorMessage := 'deliberate failure after resuming';
 end;
 
@@ -714,10 +718,12 @@ begin
     Files.Add('stall.js');
     Pool := TGocciaThreadPool.Create(2);
     try
-      // CancelOnError must be armed here: the zombie captured this at
-      // construction, and it is what makes its later failure call Cancel.
+      // Once released, the zombie's callback cancels run 1's flag, handed
+      // to it as AData.  CancelOnError stays armed so that a pool which
+      // still recorded a zombie's failure would cancel through it as well.
       Pool.CancelOnError := True;
-      Pool.RunAll(Files, Host.StallThenFailWorker, nil, STALL_WATCHDOG_MS);
+      Pool.RunAll(Files, Host.StallThenFailWorker, Pool.CancelFlag,
+        STALL_WATCHDOG_MS);
 
       { Run 2 — a long, entirely healthy batch on the same pool. }
       Files.Clear;
@@ -833,10 +839,10 @@ begin
 end;
 
 { Runs ACount files ('f0.js'...) on one worker with the abandon seam set to
-  park at ACheckpoint on file AParkFile.  Once RunAll returns it frees the
-  slot of every file the pool reports as never run, releases the abandoned
-  worker and waits for it to exit, then returns the files it called back
-  for, in order, joined with ','. }
+  park at ACheckpoint on file AParkFile.  Once RunAll returns it releases
+  the abandoned worker and waits for it to exit, checks that no file the
+  pool reports as never run had its slot written, and returns the files
+  the worker called back for, in order, joined with ','. }
 function RunAbandonedAt(const ACheckpoint: TGocciaWorkerCheckpoint;
   const AParkFile, ACount: Integer;
   out AResults: TGocciaWorkerResultArray): string;
@@ -850,8 +856,7 @@ var
   Pool: TGocciaThreadPool;
   Files: TStringList;
   Host: TTestWorkerHost;
-  ExitBaseline, I, WaitedMs: Integer;
-  Freed: array of Boolean;
+  ExitBaseline, I, WaitedMs, NeverRunWritten: Integer;
 begin
   ResetWorkerState;
   GParkAt := ACheckpoint;
@@ -859,12 +864,8 @@ begin
   GParkedWorker := nil;
   GParkRelease := TEvent.Create(nil, True, False, '');
   SetLength(GSlots, ACount);
-  SetLength(Freed, ACount);
   for I := 0 to ACount - 1 do
-  begin
     GSlots[I] := AllocMem(SLOT_SIZE);
-    Freed[I] := False;
-  end;
   ExitBaseline := WorkerExitCount;
   Host := TTestWorkerHost.Create;
   Files := TStringList.Create;
@@ -880,15 +881,6 @@ begin
     end;
     AResults := Copy(Pool.Results);
 
-    { A file the pool reports as never run (no result, no TIMEOUT) is one
-      nothing may touch any more. }
-    for I := 0 to ACount - 1 do
-      if (not AResults[I].Success) and (AResults[I].ErrorMessage = '') then
-      begin
-        FreeMem(GSlots[I]);
-        Freed[I] := True;
-      end;
-
     GParkRelease.SetEvent;
     WaitedMs := 0;
     while (WorkerExitCount - ExitBaseline < 1) and
@@ -898,6 +890,15 @@ begin
       Inc(WaitedMs);
     end;
     Expect<Integer>(WorkerExitCount - ExitBaseline).ToBe(1);
+
+    { A file the pool reports as never run (no result, no TIMEOUT) is one
+      the host may release once RunAll returns, so nothing may write it. }
+    NeverRunWritten := 0;
+    for I := 0 to ACount - 1 do
+      if (not AResults[I].Success) and (AResults[I].ErrorMessage = '') and
+          (GSlots[I][SLOT_WRITE_OFFSET] <> 0) then
+        Inc(NeverRunWritten);
+    Expect<Integer>(NeverRunWritten).ToBe(0);
 
     CriticalSectionEnter(GWorkerLock);
     try
@@ -916,8 +917,7 @@ begin
     Files.Free;
     Host.Free;
     for I := 0 to ACount - 1 do
-      if not Freed[I] then
-        FreeMem(GSlots[I]);
+      FreeMem(GSlots[I]);
     SetLength(GSlots, 0);
     FreeAndNil(GParkRelease);
   end;

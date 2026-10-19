@@ -258,29 +258,6 @@ type
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
 
-{ Ends the process immediately, running no unit finalization and flushing
-  nothing. The abort path needs a termination that cannot run code on a heap the
-  engine has already declared untrustworthy, and cannot tear down the RTL under
-  peer worker threads that are still running; Halt does both. Declared against
-  the C runtime rather than routed through the RTL for that reason. }
-{$IFDEF WINDOWS}
-{ TerminateProcess rather than ExitProcess: ExitProcess first terminates the
-  peer threads and THEN runs DLL process-detach handlers — a detach handler
-  needing a lock a just-terminated worker held deadlocks the abort. Terminate
-  skips detach handlers entirely, which is the whole contract here. }
-function GetCurrentProcess: THandle; stdcall;
-  external 'kernel32' name 'GetCurrentProcess';
-function TerminateProcess(AProcess: THandle; AExitCode: LongWord): LongBool;
-  stdcall; external 'kernel32' name 'TerminateProcess';
-
-procedure TerminateProcessNow(AStatus: LongInt);
-begin
-  TerminateProcess(GetCurrentProcess, LongWord(AStatus));
-end;
-{$ELSE}
-procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
-{$ENDIF}
-
 var
   { Set once, by whichever thread reports the first engine-integrity fault, and
     never cleared. Two jobs, both of which need it to outlive the pool:
@@ -1664,7 +1641,7 @@ begin
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
     if (TGarbageCollector.Instance <> nil) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-    // Per-worker-idle watchdog: the pool cancels if any single worker
+    // Per-worker-idle watchdog: the pool abandons any single worker that
     // sits on one file longer than this window.  2× the per-file timeout
     // gives the in-engine cooperative timeout slack to fire first; the
     // +10 s grace covers thread-runtime initialisation on the first
@@ -1696,19 +1673,20 @@ begin
     if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
 
-    { Cross-reference Pool.Results with WorkerData. Two silent-drop
-      failure modes have to be surfaced here:
+    { Cross-reference Pool.Results with WorkerData. Three kinds of slot
+      have no result of their own and have to be surfaced here:
 
-      1. Watchdog cancels mid-batch: the stuck worker does not return,
-         so other live workers keep draining the queue but mark each
-         dequeued file as 'Cancelled' in Pool.Results — without ever
-         invoking TestWorkerProc for it.  Pool.Results[I].Success is
-         False and ErrorMessage is 'Cancelled'.
+      1. Cancelled: after a cancel the workers mark each file they take as
+         'Cancelled' in Pool.Results without invoking TestWorkerProc for
+         it.
 
-      2. Stuck worker's in-progress file: the thread pool skips live
-         (unfinished) workers when collecting results, so the file the
-         stuck worker was running on never makes it into Pool.Results
-         at all — its slot stays at the default zero-initialised state
+      2. An abandoned worker's file: the watchdog gave up on the worker
+         while it was on this file, and Pool.Results carries the
+         watchdog's TIMEOUT message.  The worker may still be inside
+         TestWorkerProc for it, so its WorkerData slot is not touched.
+
+      3. Never taken: every worker was abandoned before one took this
+         file, so its Pool.Results slot is the empty default
          (Success=False, ErrorMessage='').
 
       Helper / import-only files (e.g. tests/language/modules/helpers/*)
