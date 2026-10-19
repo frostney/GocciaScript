@@ -48,4 +48,10 @@ describe("URL.prototype.hash", () => {
     url.hash = "";
     expect(url.href).toBe("https://example.com/path");
   });
+
+  test("setter percent-encodes non-ASCII as UTF-8", () => {
+    const url = new URL("https://example.com/");
+    url.hash = "#éĀ\u{1F600}";
+    expect(url.hash).toBe("#%C3%A9%C4%80%F0%9F%98%80");
+  });
 });

@@ -1000,6 +1000,9 @@ begin
   // A non-ASCII host stays the client's own to decide.
   Expect<string>(NormalizeHTTPRequestURL('http://h' + WideChar($00E9) +
     '/a/./b')).ToBe('http://h' + WideChar($00E9) + '/a/./b');
+  // U+012F has the low byte of '/', and is still part of the host.
+  Expect<string>(NormalizeHTTPRequestURL('http://h' + WideChar($012F) +
+    'x/a/./b')).ToBe('http://h' + WideChar($012F) + 'x/a/./b');
 end;
 
 procedure THTTPClientTests.TestResolvesRedirectLocation;
