@@ -57,4 +57,10 @@ describe("URLSearchParams.prototype.set", () => {
     expect(params.get("q")).toBe("hello world");
     expect(params.toString()).toContain("q=hello+world");
   });
+
+  test("setting a name with a lone surrogate replaces the parsed entry", () => {
+    const params = new URLSearchParams("\ud800=x");
+    params.set("\ud800", "y\udc00");
+    expect(params.toString()).toBe("%EF%BF%BD=y%EF%BF%BD");
+  });
 });

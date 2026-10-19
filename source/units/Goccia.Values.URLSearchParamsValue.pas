@@ -101,6 +101,7 @@ uses
   SysUtils,
 
   StringBuffer,
+  TextSemantics,
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -121,6 +122,15 @@ uses
 
 var
   GURLSearchParamsSharedSlot: TGocciaRealmOwnedSlotId;
+
+// Web IDL USVString conversion of an argument: ToString, then every lone
+// surrogate becomes U+FFFD. Names and values are converted where they enter,
+// so a name that came in through a method matches the same name read back
+// from a parsed query.
+function ToUSVString(const AValue: TGocciaValue): string; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := ToWellFormedUTF16(AValue.ToStringLiteral.Value);
+end;
 
 function GetURLSearchParamsShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -283,9 +293,9 @@ begin
   for Key in AObj.GetOwnPropertyKeys do
   begin
     Val := AObj.GetProperty(Key);
-    Param.Name := Key;
+    Param.Name := ToWellFormedUTF16(Key);
     if Assigned(Val) then
-      Param.Value := Val.ToStringLiteral.Value
+      Param.Value := ToUSVString(Val)
     else
       Param.Value := '';
     FList.Add(Param);
@@ -313,9 +323,9 @@ begin
     Param.Name := '';
     Param.Value := '';
     if Assigned(Inner.Elements[0]) then
-      Param.Name := Inner.Elements[0].ToStringLiteral.Value;
+      Param.Name := ToUSVString(Inner.Elements[0]);
     if Assigned(Inner.Elements[1]) then
-      Param.Value := Inner.Elements[1].ToStringLiteral.Value;
+      Param.Value := ToUSVString(Inner.Elements[1]);
     FList.Add(Param);
   end;
 end;
@@ -344,8 +354,8 @@ begin
     ThrowTypeError(SErrorURLSearchParamsAppendNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length < 2 then Exit;
-  Param.Name := AArgs.GetElement(0).ToStringLiteral.Value;
-  Param.Value := AArgs.GetElement(1).ToStringLiteral.Value;
+  Param.Name := ToUSVString(AArgs.GetElement(0));
+  Param.Value := ToUSVString(AArgs.GetElement(1));
   Self_.FList.Add(Param);
   Self_.UpdateURL;
 end;
@@ -365,10 +375,10 @@ begin
     ThrowTypeError(SErrorURLSearchParamsDeleteNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length = 0 then Exit;
-  Name := AArgs.GetElement(0).ToStringLiteral.Value;
+  Name := ToUSVString(AArgs.GetElement(0));
   HasValue := AArgs.Length >= 2;
   if HasValue then
-    Value := AArgs.GetElement(1).ToStringLiteral.Value
+    Value := ToUSVString(AArgs.GetElement(1))
   else
     Value := '';
 
@@ -407,7 +417,7 @@ begin
     Result := TGocciaNullLiteralValue.NullValue;
     Exit;
   end;
-  Name := AArgs.GetElement(0).ToStringLiteral.Value;
+  Name := ToUSVString(AArgs.GetElement(0));
   for I := 0 to Self_.FList.Count - 1 do
     if Self_.FList[I].Name = Name then
     begin
@@ -439,7 +449,7 @@ begin
     AddTempRootIfNeeded(ArrRoot, Arr);
     if AArgs.Length > 0 then
     begin
-      Name := AArgs.GetElement(0).ToStringLiteral.Value;
+      Name := ToUSVString(AArgs.GetElement(0));
       for I := 0 to Self_.FList.Count - 1 do
         if Self_.FList[I].Name = Name then
           Arr.Elements.Add(TGocciaStringLiteralValue.Create(Self_.FList[I].Value));
@@ -468,10 +478,10 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
-  Name := AArgs.GetElement(0).ToStringLiteral.Value;
+  Name := ToUSVString(AArgs.GetElement(0));
   HasValue := AArgs.Length >= 2;
   if HasValue then
-    Value := AArgs.GetElement(1).ToStringLiteral.Value
+    Value := ToUSVString(AArgs.GetElement(1))
   else
     Value := '';
 
@@ -503,8 +513,8 @@ begin
     ThrowTypeError(SErrorURLSearchParamsSetNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length < 2 then Exit;
-  Name := AArgs.GetElement(0).ToStringLiteral.Value;
-  Value := AArgs.GetElement(1).ToStringLiteral.Value;
+  Name := ToUSVString(AArgs.GetElement(0));
+  Value := ToUSVString(AArgs.GetElement(1));
 
   Found := False;
   I := 0;

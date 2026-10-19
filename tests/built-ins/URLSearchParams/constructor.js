@@ -91,4 +91,9 @@ describe("URLSearchParams constructor", () => {
     expect(params.size).toBe(0);
     expect(params.toString()).toBe("");
   });
+
+  test("names and values from an object or a sequence have lone surrogates replaced", () => {
+    expect(new URLSearchParams({ "\ud800": "\udc00" }).get("�")).toBe("�");
+    expect(new URLSearchParams([["\ud800", "\udc00"]]).get("�")).toBe("�");
+  });
 });

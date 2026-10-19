@@ -119,4 +119,9 @@ describe("URL constructor", () => {
   test("the query's searchParams read it back as UTF-8", () => {
     expect(new URL("http://h/?q=é€").searchParams.get("q")).toBe("é€");
   });
+
+  test("removing tabs and newlines does not join two unpaired surrogates", () => {
+    expect(new URL("http://h/\ud83d\t\ude00").pathname).toBe("/%EF%BF%BD%EF%BF%BD");
+    expect(new URL("http://h/?\ud83d\n\ude00").search).toBe("?%EF%BF%BD%EF%BF%BD");
+  });
 });

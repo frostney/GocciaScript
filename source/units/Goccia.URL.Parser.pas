@@ -70,7 +70,8 @@ uses
   SysUtils,
 
   StringBuffer,
-  TextEncoding;
+  TextEncoding,
+  TextSemantics;
 
 // ---------------------------------------------------------------------------
 // Character helpers
@@ -641,18 +642,6 @@ begin
             ((Length(S) = 2) or CharInSet(S[3], ['/', '\', '?', '#']));
 end;
 
-// The number of UTF-16 code units of the code point at AIndex: 2 for a
-// surrogate pair, else 1 (a lone surrogate is one unit, encoded as U+FFFD).
-// A code point is percent-encoded whole, never one half at a time.
-function CodePointLengthAt(const AText: string; const AIndex: Integer): Integer;
-begin
-  Result := 1;
-  if (AIndex < Length(AText)) and (AText[AIndex] >= #$D800) and
-     (AText[AIndex] <= #$DBFF) and (AText[AIndex + 1] >= #$DC00) and
-     (AText[AIndex + 1] <= #$DFFF) then
-    Result := 2;
-end;
-
 const
   // Sentinel for EOF
   EOF_CHAR = #0;
@@ -709,8 +698,12 @@ begin
   URL.HasNullFragment := True;
   URL.Port := URL_NULL_PORT;
 
+  // The URL API converts its argument to USVString before the parser runs,
+  // so a lone surrogate is U+FFFD here, and removing tabs and newlines below
+  // cannot join two unpaired halves into a pair.
+  Input := ToWellFormedUTF16(AInput);
+
   // §4.4 step 1: strip leading/trailing ASCII whitespace
-  Input := AInput;
   while (Length(Input) > 0) and IsASCIIWhitespace(Input[1]) do
     Delete(Input, 1, 1);
   while (Length(Input) > 0) and IsASCIIWhitespace(Input[Length(Input)]) do
@@ -1019,7 +1012,7 @@ begin
           J := 1;
           while J <= Length(Buffer) do
           begin
-            K := CodePointLengthAt(Buffer, J);
+            K := CodePointSequenceLengthAt(Buffer, J);
             if (Buffer[J] = ':') and not PasswordTokenSeen then
               PasswordTokenSeen := True
             else if PasswordTokenSeen then
@@ -1402,7 +1395,7 @@ begin
         else
         begin
           // Add the encoded code point to buffer
-          K := CodePointLengthAt(Input, I);
+          K := CodePointSequenceLengthAt(Input, I);
           Buffer := Buffer + PercentEncodeForPath(Copy(Input, I, K));
           Inc(I, K);
         end;
@@ -1431,7 +1424,7 @@ begin
         end
         else
         begin
-          K := CodePointLengthAt(Input, I);
+          K := CodePointSequenceLengthAt(Input, I);
           URL.OpaquePath := URL.OpaquePath +
             PercentEncodeForPath(Copy(Input, I, K));
           Inc(I, K);

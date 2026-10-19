@@ -51,4 +51,10 @@ describe("URLSearchParams.prototype.get", () => {
     expect(params.get("r")).toBe("é");
     expect(params.get("s")).toBe("�");
   });
+
+  test("a name with a lone surrogate matches the name the constructor parsed", () => {
+    const params = new URLSearchParams("\ud800=x");
+    expect(params.get("\ud800")).toBe("x");
+    expect(params.get("�")).toBe("x");
+  });
 });
