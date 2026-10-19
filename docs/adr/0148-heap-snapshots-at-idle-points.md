@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-19
 **Area:** `embedding`, `garbage collector`, `bytecode runtime`, `modules`
-**Related:** [Heap snapshot prototype spike](../spikes/heap-snapshot-prototype.md), [ADR 0133](0133-modules-root-their-value-exports.md), [ADR 0142](0142-the-run-waits-until-no-extension-has-pending-work.md), [ADR 0146](0146-embedder-fetch-transport.md), [#1792](https://github.com/frostney/GocciaScript/pull/1792)
+**Related:** [Heap snapshot prototype spike](../spikes/heap-snapshot-prototype.md), [ADR 0103](0103-layered-untrusted-execution-boundaries.md), [ADR 0133](0133-modules-root-their-value-exports.md), [ADR 0142](0142-the-run-waits-until-no-extension-has-pending-work.md), [ADR 0146](0146-embedder-fetch-transport.md), [#1792](https://github.com/frostney/GocciaScript/pull/1792)
 
 ## Context
 
@@ -14,18 +14,27 @@ from a record. That works when the run is deterministic, and it costs the
 whole run up to the pause again.
 
 A **heap snapshot** taken at the pause can be restored instead. The
-prototype on the `prototype/heap-snapshot` branch showed this works and
-measured where it pays off (see the [spike](../spikes/heap-snapshot-prototype.md)).
-Its design was a structured object graph written at an idle point, built-ins
+prototype on the `prototype/heap-snapshot` branch showed this works for the
+core language (see the [spike](../spikes/heap-snapshot-prototype.md)). Its
+design was a structured object graph written at an idle point, built-ins
 named rather than written, and a refusal whenever something has no codec.
 
-The prototype also measured programs a sandboxing embedder runs: document
-rendering, data processing, test runs and agent loops. Restoring was 3.8x to
-6.1x faster than replay for programs that did a lot of work before their pause
-and keep little alive. For short programs that pause within a few
-milliseconds, restoring was as fast as replay or slower.
+The measurements split by workload:
 
-Three limits of the prototype stood out in those measurements:
+- Restoring beat replay by 6x to 16x for rendering workloads (markdown, SSR)
+  and by hundreds of times for long computations that keep little alive.
+- It beat replay by about 3x for data-heavy heaps.
+- It was no faster (0.5x to 1x) for short programs that pause within a few
+  milliseconds.
+
+An embedder that measured its own programs (document generation, data
+processing, test runs and agent loops) found the same split. The spike
+recommended waiting for real resume times before building. The decision here
+is to build now, because a fast resume of document and data workloads is
+wanted before that traffic exists. Replay stays the guarantee, so nothing
+depends on snapshots while they mature.
+
+Three limits of the prototype stood out:
 
 - **Imported modules.** Every real program imports a module. The prototype
   writes only the entry module's state, so it refused all of them.
@@ -37,37 +46,73 @@ Three limits of the prototype stood out in those measurements:
 
 ## Decision
 
-**A snapshot is taken only at an idle point.** An idle point is when no
-bytecode frame is running and the microtask queue is empty. Every resume
-point is then a pending promise the host owns (a host call), and all control
+### The pause checkpoint
+
+**A snapshot is taken only at a pause checkpoint, which the engine defines.**
+A run reaches the checkpoint when all of these hold:
+
+- no bytecode frame is running;
+- the microtask queue is empty;
+- every extension except the one that owns the run's host calls reports no
+  pending work (`HasPendingWork`, ADR 0142);
+- the host-call owner reports only host calls the embedder answers.
+
+The engine checks for the checkpoint where it would otherwise call that
+owner's `WaitForIdle`, before any blocking wait. If the embedder asked for a
+snapshot then, the engine:
+
+1. releases the idle VM's scratch (registers, cells and argument stacks);
+2. writes the snapshot;
+3. ends the run with a paused result, not with an exception a script can see.
+
+Other pending work at that point means the run is not at a checkpoint: a
+timer still due, a fetch in flight (ADR 0146), or an extension's own work.
+The snapshot is then refused, and the embedder keeps waiting or replays
+later. Every resume point is a pending promise the host owns, and all control
 state lives in heap objects: suspended async and generator continuations,
-promise reactions, and a module body suspended by top-level `await`. The
-engine releases the idle VM's scratch (registers, cells and argument stacks)
-before it writes a snapshot.
+promise reactions, and a module body suspended by top-level `await`.
+
+### The format
 
 **The format is a structured object graph, versioned and self-describing.**
 A snapshot contains:
 
 - a header: magic, format version, the engine's build identity, and a schema
   version per codec;
-- the SHA-256 of every module's bytecode;
+- each module's identity: its bytecode's SHA-256 for a source module, its
+  content hash for a data module (JSON, text), and its name for a host or
+  runtime module;
 - a string table;
 - the names of the built-ins it refers to;
 - an object table, each entry a tag and a payload;
-- the roots: every module's environment and the pending host promises, by
-  the embedder's ids.
+- the roots:
+  - every module's record;
+  - the pending host promises, by the embedder's ids;
+  - every object the engine roots for the paused run itself (the entry's
+    evaluation promise and pending completion);
+  - the ordered unhandled-rejection tracker.
 
-A mismatched build, schema or bytecode hash refuses the restore.
+Before writing, the engine checks every native temp root against those
+roots. A temp root it cannot account for refuses the snapshot. A mismatched
+build, schema or module identity refuses the restore.
+
+### Codecs and refusal
 
 **Every class is written by a codec it registers.** A live object with no
 codec, or in a state its codec does not handle, refuses the snapshot. A
-refusal is a normal outcome: the embedder resumes by replay. Two checks back
-this up:
+refusal is a normal outcome: the embedder resumes by replay. Two checks
+reduce the risk of a silently wrong restore without removing it:
 
 - an **accounting check** collects and then confirms that every live object
-  the run created is either written or named, so state a codec missed refuses
-  rather than restoring silently wrong;
-- a **round-trip lane** over the test suite catches fields a codec forgot.
+  the run created is either written or named; it detects objects a codec
+  missed, not fields;
+- a **round-trip lane** over the test suite detects missing fields for the
+  states the tests reach.
+
+A codec's schema version changes with its fields, and each codec has its own
+round-trip tests.
+
+### Built-ins
 
 **Built-ins are named, not written.** A built-in is named by the path that
 reaches it from a fresh engine's roots: the global object, the global scope,
@@ -77,14 +122,43 @@ the realm's slots and shared prototypes, and the well-known symbols.
   builds exactly what the path crosses.
 - The internals of built-ins written in JavaScript and built on first use are
   named through the module or scope that holds them.
-- A built-in the run changed is written as its differences from a fresh one.
-  The prototype refused instead; production does not.
+- A built-in the run changed is written as differences from the same
+  built-in in a fresh engine with the same lazy members built. A difference
+  covers:
+  - added, deleted and redefined own properties, string- and symbol-keyed,
+    with their data or accessor descriptors and attributes;
+  - a changed prototype;
+  - a changed integrity level.
+
+  A restore applies the differences after the built-in table is resolved and
+  before the object graph is filled, in the order they were recorded.
+- A change to a built-in's native internal state (its slots) refuses unless
+  a codec covers that state.
+
+### Modules
 
 **Every module's state is written, and a restore evaluates no module body.**
-The embedder gives the restore the same module graph, its sources through the
-engine's source provider. The engine links it, checks each module's bytecode
-hash, then restores every module's environment, its namespace and the
-entry's import bindings instead of running the module bodies.
+The embedder gives the restore the same module graph, its sources through
+the engine's source provider. The loader gains a restore operation that:
+
+1. links the graph without evaluating it;
+2. checks each module's identity;
+3. fills every module record with its restored environment, exports,
+   namespace, evaluation state, evaluation promise and async-cycle root;
+4. retires the records' load states as evaluated, so a later import or
+   dynamic `import()` finds them evaluated and runs no body.
+
+How each kind of module is restored:
+
+- **Source modules** are restored as above.
+- **Data modules** are read again and checked by content hash.
+- **Host and runtime modules** (`fs`, `goccia:*`, an embedder's own modules)
+  are created by the engine as usual. Their state is written only through
+  their codecs; without one they refuse if the run changed them.
+- **Pending dynamic imports and deferred namespaces** refuse until a codec
+  covers them.
+
+### Trust and resource bounds
 
 **Snapshots are untrusted input, even though the engine produces them.** A
 snapshot encodes VM state such as instruction pointers, register counts and
@@ -93,8 +167,13 @@ handler stacks. Two rules follow:
 - The embedder must authenticate every snapshot it restores (for example with
   an HMAC under a key the script cannot reach), and must never accept one
   from a script or a user.
-- The reader is still written for hostile input:
-  - it bounds-checks every count, index and length;
+- The reader is still written for hostile input, as ADR 0103 requires of
+  untrusted processing:
+  - it checks every count, index and length with overflow-safe arithmetic,
+    and against limits on the input's total size, the number of objects and
+    strings, string lengths and nesting depth;
+  - it charges restored objects and its temporary tables to the run's memory
+    ceiling before allocating them;
   - it checks VM state against the bytecode it belongs to (instruction
     pointers on instruction boundaries, register and handler counts within
     the frame's template);
@@ -102,29 +181,34 @@ handler stacks. Two rules follow:
   - it is fuzzed with mutated real snapshots under heaptrc and
     memory-checking tools.
 
+### Iterative walks
+
 **Every walk over the heap is iterative.** The writer numbers objects
 breadth first, the reader restores in passes over the object table, and the
 census and the accounting check use the collector. No walk recurses natively
-once per object, the rule [#1792](https://github.com/frostney/GocciaScript/pull/1792) sets for marking. Each recursive object
-shape (chains, nesting, deep closures and prototype chains) has a deep-chain
-round-trip test.
+once per object, the rule [#1792](https://github.com/frostney/GocciaScript/pull/1792)
+sets for marking. Each recursive object shape (chains, nesting, deep closures
+and prototype chains) has a deep-chain round-trip test.
+
+### State outside the heap
 
 **State outside the heap is recorded or left to the embedder.**
 
 - **Recorded and checked by the engine:** the random source's state, the
   deterministic clock, the engine options and compatibility flags, and the
   limits the run started with. A mismatch refuses the restore.
-- **Refused:** pending host work other than the host calls the embedder
-  answers, such as a timer due or a fetch in flight (ADR 0146), unless that
-  work's owner provides a codec for it.
 - **Carried by the embedder:** its own host state. That includes the sandbox
   file system the run wrote to (or the run's file changes), the ids of its
   pending host calls, and the authentication.
 
-**The API is opt-in.** The engine gains snapshot and restore entry points.
-An embedder asks for a snapshot at an idle point. It restores with a source
-provider and the snapshot, then answers the pending host calls by its ids. An
-engine that is never asked carries no cost beyond a registered codec table.
+### The API
+
+**The API is opt-in.**
+
+- An embedder asks its engine for a snapshot at the next pause checkpoint.
+- It restores with a source provider and the snapshot, then answers the
+  pending host calls by its ids.
+- An engine that is never asked pays only for its registered codec table.
 
 ## Consequences
 
@@ -133,17 +217,18 @@ engine that is never asked carries no cost beyond a registered codec table.
   back to it, so no embedder depends on snapshots.
 - Every new built-in class needs a codec or an explicit refusal, and a change
   to a codec-covered class's fields needs its codec and schema version
-  updated. This is a standing cost on built-in work, which the round-trip
-  lane and the accounting check enforce.
+  updated. This is a standing cost on built-in work. The accounting check and
+  the round-trip lane detect some omissions, not all.
 - Codecs read private state of many classes, so the snapshot units depend on
   the value units. Each family of codecs lives beside the classes it writes,
   registered with one registry.
 - Delivery is phased:
-  1. the format, the registry, built-in naming, the engine API and the
-     reader's fuzzing;
+  1. the format, the registry, built-in naming, the pause checkpoint and API,
+     and the reader's bounds and fuzzing;
   2. the VM-state codecs;
-  3. the codec families (modules, the object model, control state, promise
-     machinery, collections and buffers, Temporal and Intl, host objects);
+  3. the codec families (modules, built-in differences, the object model,
+     control state, promise machinery, collections and buffers, Temporal and
+     Intl, host objects);
   4. the round-trip lane.
 
   Until a family lands, its classes refuse.
@@ -156,10 +241,13 @@ engine that is never asked carries no cost beyond a registered codec table.
 - **Writing the VM's memory as it is.** Pointers, allocator state and
   per-process identities do not survive a new process.
 - **Snapshots at any point, including inside a running frame.** That would
-  need native stack capture. At idle points all control state is already in
-  the heap.
+  need native stack capture. At the checkpoint all control state is already
+  in the heap.
 - **Refusing every changed built-in.** That refuses the bundled runtimes and
   test libraries real programs use.
 - **Re-running imported modules on restore and naming their state.** This is
   the prototype's measurement shortcut. It is wrong for any module whose
   state the run changed, such as a cache filled during the run.
+- **Waiting for real resume times before building.** This was the spike's
+  recommendation. It was overridden because fast resumes of document and
+  data workloads are wanted first, and replay keeps the risk bounded.

@@ -22,20 +22,20 @@ The decision to build snapshots, and how, is [ADR 0148](../adr/0148-heap-snapsho
   Json). Short I/O-bound runs that pause within a few milliseconds replay as
   fast as they restore (0.5-1.0x), and heap-heavy data processing gains only
   about 3x.
-- Snapshots are 0.3-0.7 bytes per byte of live heap uncompressed; zstd at
-  level 3 brings anything above a few KiB to 3-7% of that.
+- Snapshots of the larger, data-heavy heaps are 0.3-0.7 bytes per byte of
+  live heap uncompressed, and zstd at level 3 brings them to 3-7% of that.
+  The small, object-heavy AWFY heaps write 1.3-1.6 bytes per live byte and
+  compress to 25-34%.
 - At the test suite's sampled await points, every heap held classes the
   prototype has no codec for (module namespaces, error objects, async
   generators, async context, test-runner natives). The prototype covers the
   core language; the long tail is the built-in library.
-- The prototype took about 1.2 agent hours of active work. Estimate to
-  production quality: about 30 agent hours (range 20-45), plus a standing
-  cost on every future built-in. A coverage-gated first version that always
-  falls back to replay is about 13 agent hours (range 9-20).
-- Recommendation: keep replay as the guarantee and do not productize
-  snapshots yet. Measure how long real resumes take to replay; build the
-  coverage-gated version only if a meaningful share of resumes replay for
-  more than about 100 ms.
+- The prototype took about 1.2 agent hours of active work; production
+  quality was estimated at about 30 agent hours (range 20-45) plus a standing
+  cost on every future built-in. The recommendation on 2026-10-18 was to keep
+  replay as the guarantee and wait for real resume times before building;
+  [ADR 0148](../adr/0148-heap-snapshots-at-idle-points.md) records the
+  decision taken since.
 
 ## Question
 
@@ -128,9 +128,12 @@ and refuses rather than guessing.
 
 ## Method
 
-Machine: Linux x86_64, 32 cores, FPC 3.2.2, production build (`-O4`), branch
-head at the time of measurement. Each mode ran 5 times; the table shows
-medians. To re-run:
+Machine: Linux x86_64, 32 cores, FPC 3.2.2, production build (`-O4`) of the
+`prototype/heap-snapshot` branch at `f02d802b` (the probe and the harness),
+measured on 2026-10-18. The AWFY programs came from a local are-we-fast-yet
+checkout whose revision was not recorded, and the raw samples were not kept:
+treat the figures as an informal point-in-time measurement. Each mode ran 5
+times; the table shows medians. To re-run:
 
 ```bash
 ./build.pas --prod heapsnapshotprobe
