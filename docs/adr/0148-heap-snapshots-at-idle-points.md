@@ -120,7 +120,11 @@ reduce the risk of a silently wrong restore without removing it:
   engine therefore collects before it confirms the checkpoint, and a
   collection that queued a job means the run is not at a checkpoint: the
   snapshot is refused this time, the idle wait runs the job, and the next
-  checkpoint can take it. A test covers a registry whose target dies;
+  checkpoint can take it. That collection is the only one a snapshot runs.
+  It is a full collection like those the run's own allocations trigger at
+  its safe points: the collector polls no limits inside a collection anywhere
+  in the engine, and its cost is bounded by the heap, which the memory
+  ceiling bounds. A test covers a registry whose target dies;
 - a **round-trip lane** over the test suite detects missing fields for the
   states the tests reach.
 
@@ -222,7 +226,10 @@ handler stacks. Two rules follow:
   `Goccia.Timeout` requires; the census and the accounting check poll per
   object they scan. It uses checked size arithmetic, and charges its object
   tables, string table and output buffers to the run's memory ceiling, as do
-  the census and the accounting check.
+  the census and the accounting check. Those charges never collect: a
+  collection after the checkpoint was confirmed could queue work and leave
+  the snapshot describing a run that is no longer idle. A charge that does
+  not fit refuses the snapshot, and the writer creates no managed objects.
 - Compression belongs to the embedder. The engine writes and reads the
   uncompressed format; an embedder that compresses snapshots authenticates
   and decompresses them before the reader sees them, and bounds the decoded
