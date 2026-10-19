@@ -99,6 +99,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.DurationMath,
@@ -4157,5 +4158,6 @@ end;
 
 initialization
   GTemporalZonedDateTimeSharedSlot := RegisterRealmOwnedSlot('Temporal.ZonedDateTime.shared');
+  RegisterSnapshotSlotGlobalPath('Temporal.ZonedDateTime.shared', 'Temporal.ZonedDateTime');
 
 end.

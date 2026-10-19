@@ -45,6 +45,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -963,5 +964,6 @@ end;
 
 initialization
   GIntlRelativeTimeFormatSharedSlot := RegisterRealmOwnedSlot('Intl.RelativeTimeFormat.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.RelativeTimeFormat.shared', 'Intl.RelativeTimeFormat');
 
 end.

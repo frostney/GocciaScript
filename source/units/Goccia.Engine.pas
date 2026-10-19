@@ -365,8 +365,8 @@ type
       const AModule: TGocciaBytecodeModule; const AScope: TGocciaScope;
       const ARealm: TGocciaRealm);
     { The shim loader's evaluator (TGocciaShimEvaluator). }
-    procedure EvaluateShim(const AProgram: TGocciaProgram;
-      const AScope: TGocciaScope; const AFileName: string);
+    function EvaluateShim(const AProgram: TGocciaProgram;
+      const AScope: TGocciaScope; const AFileName: string): Boolean;
     { The VM's compiler for direct eval at a strict call site. }
     function CompileDirectEvalCode(const AProgram: TGocciaProgram;
       const ASourcePath: string; const ASite: TGocciaDirectEvalEnvironment;
@@ -1352,6 +1352,7 @@ begin
   FShimLoader.Realm := FRealm;
   FShimLoader.GlobalScope := FGlobalScope;
   FShimLoader.Evaluate := EvaluateShim;
+  RememberShimLoader(FShimLoader);
   ExecuteShims;
 
   if Assigned(FFunctionConstructor) then
@@ -2705,9 +2706,33 @@ end;
   compiling and running it must not change it. The shim can be materialized
   while the VM is running user code (a lazy global read), so the VM state the
   module run changes is restored afterwards, as EvaluateModuleBody does. }
-procedure TGocciaEngine.EvaluateShim(const AProgram: TGocciaProgram;
-  const AScope: TGocciaScope; const AFileName: string);
+// Every template of a shim's code is ShimCode (TGocciaVM.BeginShimLoad).
+procedure MarkShimCode(const ATemplate: TGocciaFunctionTemplate);
 var
+  Pending: TList<TGocciaFunctionTemplate>;
+  Template: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Pending := TList<TGocciaFunctionTemplate>.Create;
+  try
+    Pending.Add(ATemplate);
+    while Pending.Count > 0 do
+    begin
+      Template := Pending[Pending.Count - 1];
+      Pending.Delete(Pending.Count - 1);
+      Template.ShimCode := True;
+      for I := 0 to Template.FunctionCount - 1 do
+        Pending.Add(Template.GetFunction(I));
+    end;
+  finally
+    Pending.Free;
+  end;
+end;
+
+function TGocciaEngine.EvaluateShim(const AProgram: TGocciaProgram;
+  const AScope: TGocciaScope; const AFileName: string): Boolean;
+var
+  ShimLoadToken: Int64;
   BytecodeModule: TGocciaBytecodeModule;
   Compiler: TGocciaCompiler;
   GC: TGarbageCollector;
@@ -2729,6 +2754,7 @@ begin
     Compiler.Free;
   end;
   FRetainedModules.Add(BytecodeModule);
+  MarkShimCode(BytecodeModule.TopLevel);
 
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
@@ -2737,6 +2763,7 @@ begin
   SavedRealm := FVM.Realm;
   SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
   SavedRuntimeModule := FVM.CurrentRuntimeModule;
+  ShimLoadToken := FVM.BeginShimLoad;
   try
     PredeclareModuleLexicalDeclarations(AProgram, AScope);
     InstantiateCompiledModuleFunctions(BytecodeModule, AScope, FRealm);
@@ -2747,6 +2774,7 @@ begin
       FVM.Realm := FRealm;
     FVM.ExecuteImportedModule(BytecodeModule);
   finally
+    Result := FVM.EndShimLoad(ShimLoadToken);
     FVM.GlobalScope := SavedGlobalScope;
     FVM.Realm := SavedRealm;
     FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;

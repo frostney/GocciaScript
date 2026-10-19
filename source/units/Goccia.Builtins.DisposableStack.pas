@@ -81,6 +81,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Scope.BindingMap,
   Goccia.ThreadCleanupRegistry,
@@ -1023,6 +1024,12 @@ initialization
   GDisposableStackPrototypeSlot := RegisterRealmSlot('DisposableStack.prototype');
   GAsyncDisposableStackPrototypeSlot :=
     RegisterRealmSlot('AsyncDisposableStack.prototype');
+  // Both are made with the builtin, which the engine builds when either
+  // lazy global is first read (ADR 0148: a restore builds them so).
+  RegisterSnapshotSlotGlobalPath('DisposableStack.prototype',
+    CONSTRUCTOR_DISPOSABLE_STACK);
+  RegisterSnapshotSlotGlobalPath('AsyncDisposableStack.prototype',
+    CONSTRUCTOR_ASYNC_DISPOSABLE_STACK);
   // FPC does not auto-finalize managed threadvars at thread exit. The registry
   // drain releases this thread's slot map on worker exit (ShutdownThreadRuntime)
   // and on the main thread (Goccia.ThreadCleanupRegistry's finalization).

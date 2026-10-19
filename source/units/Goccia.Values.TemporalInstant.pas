@@ -54,6 +54,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
@@ -1572,5 +1573,6 @@ end;
 
 initialization
   GTemporalInstantSharedSlot := RegisterRealmOwnedSlot('Temporal.Instant.shared');
+  RegisterSnapshotSlotGlobalPath('Temporal.Instant.shared', 'Temporal.Instant');
 
 end.

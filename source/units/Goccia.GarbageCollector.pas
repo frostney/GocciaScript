@@ -14,6 +14,9 @@ uses
 type
   TGarbageCollector = class;
 
+  // A pass over marks (TGarbageCollector.InspectMarked).
+  TGCMarkPass = procedure of object;
+
   // A live object that contributes roots the collector cannot otherwise see.
   // Registration is driven by AfterConstruction/BeforeDestruction so it happens
   // once per instance regardless of which constructor ran, including subclass
@@ -359,6 +362,11 @@ type
     // caller can commit a charge past the ceiling on a stale earlier test.
     // Caller must hold FAccountingLock ("Locked" suffix).
     function TryChargeExternalBytesLocked(const ABytes: Int64): Boolean;
+    procedure SetQuarantineSwept(const AValue: Boolean);
+    // Frees AObject, or keeps it in quarantine while QuarantineSwept is on.
+    procedure RecycleSwept(const AObject: TGCManagedObject);
+    procedure ReleaseQuarantine;
+    procedure ForgetQuarantined(const AObject: TGCManagedObject);
   protected
     procedure MarkRoots; virtual;
     procedure TraceWeakReferences;
@@ -415,6 +423,14 @@ type
     // the Enabled flag and always runs. Use when a clean heap is required
     // (e.g. between script executions or before benchmark measurement).
     procedure Collect; virtual;
+
+    // A host's reachability question outside a collection (a heap snapshot's
+    // accounting check): starts a fresh mark, runs AMark, which marks
+    // (MarkReferences, or GCMarked := True to stop the marking there), then
+    // AInspect, which reads the marks. The collection lock is held
+    // throughout, so no collection on any thread starts a new mark in
+    // between; the next collection starts its own. Neither may collect.
+    procedure InspectMarked(const AMark, AInspect: TGCMarkPass);
 
     // Automatic collection: calls Collect only when Enabled is True and
     // allocations since the last collection exceed the Threshold.
@@ -485,11 +501,6 @@ type
     {$IFDEF GC_TIMING}
     procedure PrintTimingSummary;
     {$ENDIF}
-
-    procedure SetQuarantineSwept(const AValue: Boolean);
-    procedure RecycleSwept(const AObject: TGCManagedObject);
-    procedure ReleaseQuarantine;
-    procedure ForgetQuarantined(const AObject: TGCManagedObject);
 
     property Enabled: Boolean read FEnabled write FEnabled;
     // A stress switch for tests: every TryReserveExternalBytes, and every
@@ -1690,6 +1701,18 @@ begin
     finally
       FCollecting := False;
     end;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
+end;
+
+procedure TGarbageCollector.InspectMarked(const AMark, AInspect: TGCMarkPass);
+begin
+  CriticalSectionEnter(GCCollectLock);
+  try
+    TGCManagedObject.AdvanceMark;
+    AMark();
+    AInspect();
   finally
     CriticalSectionLeave(GCCollectLock);
   end;

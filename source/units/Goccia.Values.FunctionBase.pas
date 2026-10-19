@@ -115,6 +115,16 @@ type
     property StrictThis: Boolean read FStrictThis write FStrictThis;
     property StrictCode: Boolean read FStrictCode write FStrictCode;
     property CreationRealm: TGocciaRealm read FCreationRealm;
+    // Whether the original "length" and "name" are still own properties, and
+    // what they hold while they are synthesized (a heap snapshot's built-in
+    // fingerprints, ADR 0148). Neither creates a value.
+    property HasOwnLengthProperty: Boolean read FHasOwnLengthProperty;
+    property HasOwnNameProperty: Boolean read FHasOwnNameProperty;
+    function IntrinsicLength: Integer;
+    function IntrinsicName: string;
+    // Whether the function runs code the engine compiled from a bootstrap
+    // shim (Goccia.Shims), not a script's.
+    function IsShimCode: Boolean; virtual;
   end;
 
   // Helper class for bound functions
@@ -803,6 +813,21 @@ end;
 function TGocciaFunctionBase.GetFunctionLength: Integer;
 begin
   Result := 0;
+end;
+
+function TGocciaFunctionBase.IntrinsicLength: Integer;
+begin
+  Result := GetFunctionLength;
+end;
+
+function TGocciaFunctionBase.IntrinsicName: string;
+begin
+  Result := GetFunctionName;
+end;
+
+function TGocciaFunctionBase.IsShimCode: Boolean;
+begin
+  Result := False;
 end;
 
 function TGocciaFunctionBase.GetFunctionName: string;

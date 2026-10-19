@@ -71,6 +71,11 @@ type
     FFirstOfRun: TGCManagedObject;
     FCheckAccounting: Boolean;
     FLastObjectCount: Integer;
+    FAccountingWriter: TGocciaHeapSnapshotWriter;
+    FMarkOverflows: Integer;
+    procedure MarkBuiltinInternals;
+    procedure CheckAccountingMarked;
+    function IsBuiltinInternal(const AObject: TGCManagedObject): Boolean;
   public
     constructor Create(const AEngine: TGocciaEngine);
     destructor Destroy; override;
@@ -131,6 +136,7 @@ uses
   Goccia.Scope,
   Goccia.Scope.BindingMap,
   Goccia.SharedPrototype,
+  Goccia.Shims,
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
@@ -554,7 +560,6 @@ var
   Slot: Integer;
   Binding: TLexicalBinding;
   Owned: TObject;
-  Materializer: TGocciaSnapshotSlotMaterializer;
 begin
   Result := nil;
   AConsumed := 1;
@@ -581,11 +586,7 @@ begin
       Exit;
     // Filled on first use: filled here as using it would have.
     if not Assigned(AEngine.Realm.GetSlot(Slot)) then
-    begin
-      Materializer := FindSnapshotSlotMaterializer(AParts[1]);
-      if Assigned(Materializer) then
-        Materializer();
-    end;
+      MaterializeSnapshotSlot(AParts[1]);
     Exit(AEngine.Realm.GetSlot(Slot));
   end;
   if (AParts[0] = '%owned') and (Length(AParts) >= 3) then
@@ -596,11 +597,7 @@ begin
       Exit;
     // Filled on first use: filled here as using it would have.
     if not Assigned(AEngine.Realm.GetOwnedSlot(Slot)) then
-    begin
-      Materializer := FindSnapshotSlotMaterializer(AParts[1]);
-      if Assigned(Materializer) then
-        Materializer();
-    end;
+      MaterializeSnapshotSlot(AParts[1]);
     Owned := AEngine.Realm.GetOwnedSlot(Slot);
     if not (Owned is TGocciaSharedPrototype) then
       Exit;
@@ -830,6 +827,49 @@ begin
   inherited;
 end;
 
+{ The internals of built-ins written in JavaScript (a shim's module scope,
+  its closures' cells, its private functions and tables), built on first use
+  and held only by the built-ins, are named through the built-ins that hold
+  them (ADR 0148): nothing writes them, and the accounting check is not to
+  count them as missed. Everything the named built-ins reach is marked, by
+  the collector's own marking outside a collection, and of that only what a
+  shim's load created is passed over: a run's object that a shim took in
+  while it loaded (what a global held then) is still counted. The global
+  scope is marked first, so what the run's own top-level bindings hold,
+  which a built-in's scope chain reaches, is counted too. No limit is
+  polled: marking is bounded by the heap, as the collection before it is. }
+procedure TGocciaHeapSnapshotSession.MarkBuiltinInternals;
+var
+  I: Integer;
+begin
+  FMarkOverflows := TGarbageCollector.MarkStackOverflows;
+  FEngine.GlobalScope.GCMarked := True;
+  for I := 0 to FTable.Count - 1 do
+    FTable.ObjectAt(I).MarkReferences;
+end;
+
+procedure TGocciaHeapSnapshotSession.CheckAccountingMarked;
+begin
+  // A mark stack that could not grow is recovered by tracing every marked
+  // object again, the global scope too: what the run's bindings hold would
+  // then be skipped as a built-in's. The collect lock is held, so only this
+  // marking can have overflowed.
+  if TGarbageCollector.MarkStackOverflows <> FMarkOverflows then
+    raise EGocciaHeapSnapshotRefused.Create('the mark stack overflowed ' +
+      'while the accounting check marked what built-ins reach');
+  FAccountingWriter.CheckAccounting(FFirstOfRun, FBaseline,
+    IsBuiltinInternal);
+end;
+
+function TGocciaHeapSnapshotSession.IsBuiltinInternal(
+  const AObject: TGCManagedObject): Boolean;
+var
+  IsMarker: Boolean;
+begin
+  Result := CreatedByShimLoad(FEngine.Realm, AObject, IsMarker) and
+    (IsMarker or AObject.GCMarked);
+end;
+
 procedure TGocciaHeapSnapshotSession.AddToBaseline(
   const AObject: TGCManagedObject);
 begin
@@ -888,7 +928,15 @@ begin
       Buffer := TGocciaChargedMemoryStream.Create;
       Writer.Serialize(ARoots, Buffer);
       if FCheckAccounting then
-        Writer.CheckAccounting(FFirstOfRun, FBaseline);
+      begin
+        FAccountingWriter := Writer;
+        try
+          TGarbageCollector.Instance.InspectMarked(MarkBuiltinInternals,
+            CheckAccountingMarked);
+        finally
+          FAccountingWriter := nil;
+        end;
+      end;
     except
       // The run's memory ceiling, reached by the writer's own buffers: the
       // snapshot is refused and the run goes on. A timeout or a host stop

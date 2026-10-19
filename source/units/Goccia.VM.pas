@@ -189,6 +189,15 @@ type
   end;
   PGocciaBytecodeSuspension = ^TGocciaBytecodeSuspension;
 
+  // The thread's shim loads (TGocciaVM.BeginShimLoad), shared by every VM
+  // of the thread: how many run, and how many frames of code other than a
+  // shim's were set up while one did.
+  TGocciaShimLoadState = record
+    Depth: Integer;
+    OtherFrames: Int64;
+  end;
+  PGocciaShimLoadState = ^TGocciaShimLoadState;
+
   TGocciaVM = class
   private
     // FRegisters, FLocalCells and FArguments point into stacks that move
@@ -319,6 +328,8 @@ type
     // The dispatch loop polls the timeout through it without a thread-local
     // lookup. Never nil: the constructor points it at the creating thread's.
     FThreadPolls: PGocciaThreadPolls;
+    // The thread's GShimLoadState, kept as FThreadPolls is.
+    FShimLoad: PGocciaShimLoadState;
     // The source path most recently interned for an execution context, and its
     // interned reference. Holding the string keeps its address from being
     // reused, so a path at the same address is the same path.
@@ -686,6 +697,7 @@ type
       const AArgCount: Integer; const APushExecutionContext: Boolean;
       var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
+    procedure NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
     procedure HandleExceptionUnwind(const AErrorValue: TGocciaValue;
       const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
       ASavedHandlerCount: Integer;
@@ -741,6 +753,15 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure EnsureStackRootRegistered;
+    { A shim load brackets its evaluation with these. EndShimLoad says
+      whether a frame of code other than a shim's (a template without
+      ShimCode) was set up since the BeginShimLoad that returned AToken, by
+      any VM on the thread: a run's function the load called, through a
+      built-in the run replaced, or a Proxy trap of another engine's. A heap
+      snapshot then does not take what the load made for a shim's own (ADR
+      0148). }
+    function BeginShimLoad: Int64;
+    function EndShimLoad(const AToken: Int64): Boolean;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     { Runs AModule's top level. AThisValue is its receiver, which a direct
       eval at that top level reads as its caller's `this`; nil passes
@@ -2319,6 +2340,7 @@ type
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     function IsConstructable: Boolean; override;
+    function IsShimCode: Boolean; override;
     procedure TraceReferences; override;
   end;
 
@@ -3167,6 +3189,11 @@ begin
   FCurrentCtorClass := ACurrentCtorClass;
 end;
 
+function TGocciaBytecodeFunctionValue.IsShimCode: Boolean;
+begin
+  Result := Assigned(FClosure) and FClosure.Template.ShimCode;
+end;
+
 function TGocciaBytecodeFunctionValue.GetFunctionLength: Integer;
 begin
   Result := FClosure.Template.FormalParameterCount;
@@ -3239,6 +3266,7 @@ begin
 end;
 
 threadvar
+  GShimLoadState: TGocciaShimLoadState;
   // Non-owning "active generator" pointer: GC-managed and save/restored around
   // each generator activation, so it is not a thread-exit leak (object-reference
   // threadvar audit, #892).
@@ -6473,6 +6501,7 @@ constructor TGocciaVM.Create;
 begin
   inherited Create;
   FThreadPolls := @GThreadPolls;
+  FShimLoad := @GShimLoadState;
   FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   // Teach the shared call stack how to materialise the template-pointer frames
@@ -15622,6 +15651,7 @@ begin
   FCallStack := TGocciaCallStack.Instance;
   FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
   FThreadPolls := @GThreadPolls;
+  FShimLoad := @GShimLoadState;
   FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   // Interned references belong to the thread that interned them.
   if Pointer(FExecutionSourcePath) <> nil then
@@ -15866,6 +15896,30 @@ end;
   callee's argument window before any register is acquired, because acquiring
   registers can move the register arena (growth) or clear the very slots the
   arguments sit in (a tail call reuses the caller's window). }
+function TGocciaVM.BeginShimLoad: Int64;
+begin
+  // The running thread's, bound here: a VM moved to this thread binds the
+  // rest only when code first enters it, which may be inside this load.
+  FShimLoad := @GShimLoadState;
+  Inc(FShimLoad^.Depth);
+  Result := FShimLoad^.OtherFrames;
+end;
+
+function TGocciaVM.EndShimLoad(const AToken: Int64): Boolean;
+begin
+  FShimLoad := @GShimLoadState;
+  Dec(FShimLoad^.Depth);
+  Result := FShimLoad^.OtherFrames <> AToken;
+end;
+
+// Out of line, as SetupNewFrame's rare paths are. Closed numeric frames do
+// not come here, and cannot make anything a load would keep.
+procedure TGocciaVM.NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
+begin
+  if not ATemplate.ShimCode then
+    Inc(FShimLoad^.OtherFrames);
+end;
+
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
   const AArgCount: Integer; const APushExecutionContext: Boolean;
@@ -15883,6 +15937,8 @@ begin
     'A frame was set up above a closed numeric frame');
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
+  if FShimLoad^.Depth > 0 then
+    NoteShimLoadFrame(ATemplate);
   // The frame's source path is the template's own source file, or the running
   // module's path when it has none. This procedure runs on every call and must
   // not hold that string: a managed local costs an implicit exception frame.

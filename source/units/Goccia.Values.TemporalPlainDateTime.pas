@@ -97,6 +97,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.DurationMath,
@@ -1670,5 +1671,6 @@ end;
 
 initialization
   GTemporalPlainDateTimeSharedSlot := RegisterRealmOwnedSlot('Temporal.PlainDateTime.shared');
+  RegisterSnapshotSlotGlobalPath('Temporal.PlainDateTime.shared', 'Temporal.PlainDateTime');
 
 end.

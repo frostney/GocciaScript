@@ -690,6 +690,7 @@ end;
 
 initialization
   GIntlSegmenterSharedSlot := RegisterRealmOwnedSlot('Intl.Segmenter.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.Segmenter.shared', 'Intl.Segmenter');
   GIntlSegmentsSharedSlot := RegisterRealmOwnedSlot('Intl.Segments.shared');
   GIntlSegmentIteratorSharedSlot := RegisterRealmOwnedSlot('Intl.SegmentIterator.shared');
   RegisterSnapshotSlotMaterializer('Intl.Segments.shared',

@@ -126,6 +126,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.Calendar,
   Goccia.Temporal.DurationMath,
@@ -3637,5 +3638,6 @@ end;
 
 initialization
   GTemporalDurationSharedSlot := RegisterRealmOwnedSlot('Temporal.Duration.shared');
+  RegisterSnapshotSlotGlobalPath('Temporal.Duration.shared', 'Temporal.Duration');
 
 end.

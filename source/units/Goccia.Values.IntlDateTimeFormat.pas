@@ -83,6 +83,7 @@ uses
   Goccia.Builtins.Intl,
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -2525,5 +2526,6 @@ end;
 
 initialization
   GIntlDateTimeFormatSharedSlot := RegisterRealmOwnedSlot('Intl.DateTimeFormat.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.DateTimeFormat.shared', 'Intl.DateTimeFormat');
 
 end.
