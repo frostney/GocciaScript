@@ -202,12 +202,17 @@ jobs:
         run: ./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
 
       - name: Sweep the seeds
-        # Every seed is a snapshot this build wrote: each must restore.
+        # Every seed is a snapshot this build wrote: each must restore. One
+        # that does not is kept for the reproducer artifact, since the seeds
+        # are specific to this build.
         run: |
+          mkdir -p build/fuzz/heap-snapshot-replay-failures
           status=0
           for seed in build/fuzz/heap-snapshot-corpus/*.ghsn; do
-            if ! ./build/GocciaFuzzHarness --verbose --heap-snapshot "$seed" 2>&1 | grep -q '\] completed$'; then
+            out=$(./build/GocciaFuzzHarness --verbose --heap-snapshot "$seed" 2>&1 || true)
+            if ! grep -q '\] completed$' <<< "$out"; then
               echo "::error::Seed did not restore: $seed"
+              cp "$seed" build/fuzz/heap-snapshot-replay-failures/seed-"$(basename "$seed")"
               status=1
             fi
           done
@@ -259,12 +264,15 @@ jobs:
           printf 'x' > build/fuzz/not-a-snapshot
           # Every input a replay fails on is kept for the reproducer artifact.
           mkdir -p build/fuzz/heap-snapshot-replay-failures
-          blocks() { ./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$1" 2>&1 | grep -oE '^[0-9]+ unfreed memory blocks' | cut -d' ' -f1; }
+          # A harness that crashes, exits nonzero or prints no heaptrc summary
+          # yields an empty count, which differs from the baseline: the input
+          # is kept like any other mismatch, whatever the shell's options.
+          blocks() { { ./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$1" 2>&1 || true; } | grep -oE '^[0-9]+ unfreed memory blocks' | cut -d' ' -f1 || true; }
           baseline=$(blocks build/fuzz/not-a-snapshot)
           echo "unfreed blocks at exit without a snapshot: ${baseline}"
           status=0
           for f in build/fuzz/heap-snapshot-replay/*; do
-            got=$(blocks "$f")
+            got=$(blocks "$f" || true)
             if [ "$got" != "$baseline" ]; then
               echo "::error::heaptrc: $f leaves ${got} unfreed blocks, ${baseline} without a snapshot"
               cp "$f" build/fuzz/heap-snapshot-replay-failures/heaptrc-"$(basename "$f")"

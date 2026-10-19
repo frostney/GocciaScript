@@ -232,11 +232,16 @@ begin
   Result := WellKnownSymbolName(ASymbol);
   if Result <> '' then
     Exit;
+  // A description too long for a path names nothing: it is neither hashed
+  // nor kept, so the map holds only descriptions within the path cap (the
+  // strings are shared, not copied). Occurrences count per description, so
+  // skipping these leaves every other symbol's number unchanged.
+  if Length(ASymbol.Description) > MAX_PATH_CHARS then
+    Exit;
   if not FSeen.TryGetValue(ASymbol.Description, Occurrence) then
     Occurrence := 0;
   FSeen.AddOrSetValue(ASymbol.Description, Occurrence + 1);
-  if Length(ASymbol.Description) <= MAX_PATH_CHARS then
-    Result := '[' + ASymbol.Description + ']#' + IntToStr(Occurrence);
+  Result := '[' + ASymbol.Description + ']#' + IntToStr(Occurrence);
 end;
 
 function SymbolSegments(
