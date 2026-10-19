@@ -66,7 +66,9 @@ built-in: it finds objects a codec missed, not fields. What the named
 built-ins reach counts as theirs: a built-in written in JavaScript (a shim
 such as `Date`) keeps its module scope, cells and private functions, built
 when the run first used it, and those are not missed objects. What the run's
-own top-level bindings hold still is. Objects the embedder
+own top-level bindings hold still is. Should the collector's mark stack fail
+to grow while it marks what built-ins reach, the snapshot is refused, since
+its recovery traces the global scope as well. Objects the embedder
 keeps alive itself go into the baseline with `AddToBaseline`. The collection
 runs before anything is written; one that queues a job (a
 `FinalizationRegistry` whose target died) refuses the snapshot, since the run
@@ -226,7 +228,9 @@ fills it:
 
 - `RegisterSnapshotSlotMaterializer`, a procedure that builds it in the
   current realm (the iterator prototypes, the function-object intrinsics,
-  Intl's legacy fallback symbol, the segment and module source prototypes);
+  Intl's legacy fallback symbol, the segment and module source prototypes,
+  and the `hasOwnProperty` shim, which native code can load although no
+  script installs it);
 - or `RegisterSnapshotSlotGlobalPath`, the lazy built-in whose first read
   fills it, by its path from the global object (`Temporal.PlainDate` for
   Temporal's and Intl's shared prototypes, `DisposableStack`, and for each

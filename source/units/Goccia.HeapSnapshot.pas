@@ -72,6 +72,7 @@ type
     FCheckAccounting: Boolean;
     FLastObjectCount: Integer;
     FAccountingWriter: TGocciaHeapSnapshotWriter;
+    FMarkOverflows: Integer;
     procedure MarkBuiltinInternals;
     procedure CheckAccountingMarked;
   public
@@ -837,6 +838,7 @@ procedure TGocciaHeapSnapshotSession.MarkBuiltinInternals;
 var
   I: Integer;
 begin
+  FMarkOverflows := TGarbageCollector.MarkStackOverflows;
   FEngine.GlobalScope.GCMarked := True;
   for I := 0 to FTable.Count - 1 do
     FTable.ObjectAt(I).MarkReferences;
@@ -844,6 +846,13 @@ end;
 
 procedure TGocciaHeapSnapshotSession.CheckAccountingMarked;
 begin
+  // A mark stack that could not grow is recovered by tracing every marked
+  // object again, the global scope too: what the run's bindings hold would
+  // then be skipped as a built-in's. The collect lock is held, so only this
+  // marking can have overflowed.
+  if TGarbageCollector.MarkStackOverflows <> FMarkOverflows then
+    raise EGocciaHeapSnapshotRefused.Create('the mark stack overflowed ' +
+      'while the accounting check marked what built-ins reach');
   FAccountingWriter.CheckAccounting(FFirstOfRun, FBaseline, True);
 end;
 
