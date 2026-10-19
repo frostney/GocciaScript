@@ -42,6 +42,7 @@ type
     procedure TestShimLoadedNativelyRestores;
     procedure TestDateRefusesUntilItsCodec;
     procedure TestBuiltinInternalsAreNotMissed;
+    procedure TestShimTakesInRunFunction;
   public
     procedure SetupTests; override;
   end;
@@ -50,13 +51,13 @@ const
   SEP = HEAP_SNAPSHOT_PATH_SEPARATOR;
 
   // Realm and owned slots a fresh engine leaves empty and nothing a script
-  // does fills: the host installs eval; Object.prototype has its own
-  // hasOwnProperty, so that shim is never installed; import.meta's cache
-  // holds no shared prototype; the rest belong to runtime extensions (Fetch,
-  // URL, encoding, events), which this engine does not install.
-  UNFILLED_SLOTS: array[0..12] of string = (
+  // does fills: the host installs eval; import.meta's cache holds no shared
+  // prototype; the rest belong to runtime extensions (Fetch, URL, encoding,
+  // events), which this engine does not install. (Object.prototype has its
+  // own hasOwnProperty, so no script installs that shim, but its slot has a
+  // materializer: native code can load it.)
+  UNFILLED_SLOTS: array[0..11] of string = (
     'eval',
-    '%Shim:hasOwnProperty%',
     'ImportMeta.cache',
     'Headers.shared',
     'URL.shared',
@@ -83,6 +84,8 @@ begin
     TestDateRefusesUntilItsCodec);
   Test('Built-ins written in JavaScript are not missed objects; the run''s are',
     TestBuiltinInternalsAreNotMissed);
+  Test('A run''s function a shim took in while it loaded is not a built-in',
+    TestShimTakesInRunFunction);
 end;
 
 // Builds everything an engine builds lazily: every own property of every
@@ -336,6 +339,7 @@ var
   Value: TGocciaValue;
   Stream: TBytesStream;
   Bytes: TBytes;
+  I: Integer;
 begin
   Lines := TStringList.Create;
   Stream := TBytesStream.Create;
@@ -363,6 +367,29 @@ begin
   end;
   Expect<string>(RestoreAndCheck(Bytes, 'String(restored.a) + "," + ' +
     'new Date(5).getTime()')).ToBe('1,5');
+  // No global path builds the hasOwnProperty shim (Object.prototype has its
+  // own), but native code can load it, and the snapshot then names it.
+  Lines := TStringList.Create;
+  Stream := TBytesStream.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Session := TGocciaHeapSnapshotSession.Create(Engine);
+  try
+    Value := nil;
+    for I := 0 to DefaultShimCount - 1 do
+      if DefaultShim(I).Name = 'hasOwnProperty' then
+        Value := LoadShimValue(Engine.ShimLoader, I);
+    Expect<Boolean>(Assigned(Value)).ToBe(True);
+    Session.Snapshot([Value], Stream);
+    Bytes := Copy(Stream.Bytes, 0, Stream.Size);
+  finally
+    Session.Free;
+    Engine.Free;
+    Stream.Free;
+    Lines.Free;
+  end;
+  Expect<string>(RestoreAndCheck(Bytes, '[restored.call({ x: 1 }, "x"), ' +
+    'restored.call({}, "x"), restored === Object.prototype.hasOwnProperty]' +
+    '.join()')).ToBe('true,false,false');
 end;
 
 procedure THeapSnapshotBuiltinsTests.TestDateRefusesUntilItsCodec;
@@ -386,16 +413,10 @@ begin
     .ToBe('7,true,9');
 end;
 
-procedure THeapSnapshotBuiltinsTests.TestBuiltinInternalsAreNotMissed;
-const
-  // Each loads a shim: its module scope, cells and private functions are
-  // held by the built-in it exports.
-  SOURCES: array[0..2] of string = (
-    '(() => { new Date(0).getTime(); return { a: 1 }; })()',
-    '(() => { [1.5].toLocaleString(); (2.5).toLocaleString(); ' +
-      'return { a: 1 }; })()',
-    '(() => { ({}).__proto__; ({}).__lookupGetter__("x"); ' +
-      'return { a: 1, n: parseInt("12"), s: btoa("x") }; })()');
+// The refusal of a snapshot of a fresh object in a run whose top-level
+// binding `kept` holds an object nothing else does, after the run used
+// Date (whose shim's scope chain reaches the global scope).
+function KeptBindingRefusal: string;
 var
   Engine: TGocciaEngine;
   Session: TGocciaHeapSnapshotSession;
@@ -403,16 +424,8 @@ var
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
   Stream: TBytesStream;
-  Refusal: string;
-  I: Integer;
 begin
-  for I := Low(SOURCES) to High(SOURCES) do
-  begin
-    Snapshot(SOURCES[I], Refusal, True);
-    Expect<string>(Refusal).ToBe('');
-  end;
-  // What only the run's own top-level binding holds is still missed, though
-  // a shim's scope chain reaches the global scope that holds it.
+  Result := '';
   Lines := TStringList.Create;
   Stream := TBytesStream.Create;
   Engine := TGocciaEngine.Create(TEST_PATH, Lines);
@@ -425,25 +438,87 @@ begin
     TGarbageCollector.Instance.AddTempRoot(Value);
     try
       Session.AddToBaseline(Value);
-      Refusal := '';
       try
         Session.Snapshot([Value], Stream);
       except
         on E: EGocciaHeapSnapshotRefused do
-          Refusal := E.Message;
+          Result := E.Message;
       end;
     finally
       TGarbageCollector.Instance.RemoveTempRoot(Value);
     end;
-    Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
-      .ToBe(True);
-    Expect<Boolean>(Pos('Bytecode', Refusal) = 0).ToBe(True);
   finally
     Session.Free;
     Engine.Free;
     Stream.Free;
     Lines.Free;
   end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestBuiltinInternalsAreNotMissed;
+const
+  // Each loads a shim: its module scope, cells and private functions are
+  // held by the built-in it exports.
+  SOURCES: array[0..2] of string = (
+    '(() => { new Date(0).getTime(); return { a: 1 }; })()',
+    '(() => { [1.5].toLocaleString(); (2.5).toLocaleString(); ' +
+      'return { a: 1 }; })()',
+    '(() => { ({}).__proto__; ({}).__lookupGetter__("x"); ' +
+      'return { a: 1, n: parseInt("12"), s: btoa("x") }; })()');
+var
+  Refusal: string;
+  I: Integer;
+begin
+  for I := Low(SOURCES) to High(SOURCES) do
+  begin
+    Snapshot(SOURCES[I], Refusal, True);
+    Expect<string>(Refusal).ToBe('');
+  end;
+  // What only the run's own top-level binding holds is still missed, though
+  // a shim's scope chain reaches the global scope that holds it.
+  Refusal := KeptBindingRefusal;
+  Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
+    .ToBe(True);
+  Expect<Boolean>(Pos('Bytecode', Refusal) = 0).ToBe(True);
+  // A mark stack that cannot grow is recovered by tracing every marked
+  // object again, the global scope too: the snapshot is refused rather than
+  // the binding's object skipped.
+  TGarbageCollector.LimitMarkStackForTesting(1);
+  try
+    Refusal := KeptBindingRefusal;
+  finally
+    TGarbageCollector.LimitMarkStackForTesting(0);
+  end;
+  Expect<Boolean>(Pos('mark stack overflowed', Refusal) > 0).ToBe(True);
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestShimTakesInRunFunction;
+var
+  Refusal: string;
+  Bytes: TBytes;
+begin
+  // The parseInt shim exports what Number.parseInt holds when it loads.
+  // What the run's function holds is the run's, though the shim's export
+  // reaches it.
+  Snapshot('(() => { const original = Number.parseInt; ' +
+    'Number.parseInt = (() => { const hidden = { x: 1 }; ' +
+    'return (a, b) => hidden; })(); const saved = globalThis.parseInt; ' +
+    'Number.parseInt = original; return saved; })()', Refusal, True);
+  Expect<Boolean>(Pos('live objects the snapshot does not hold', Refusal) > 0)
+    .ToBe(True);
+  // A function that holds nothing is named as the built-in, and restores
+  // as no other engine builds it.
+  Bytes := Snapshot('(() => { const original = Number.parseInt; ' +
+    'Number.parseInt = (a, b) => 42; const saved = globalThis.parseInt; ' +
+    'Number.parseInt = original; return saved; })()', Refusal, True);
+  Expect<string>(Refusal).ToBe('');
+  Refusal := RestoreRefusal(Bytes);
+  Expect<Boolean>(Pos('parseInt', Refusal) > 0).ToBe(True);
+  // A function's length and name are its own properties, though synthesized.
+  Snapshot('(() => { delete Math.max.name; return { a: 1 }; })()', Refusal);
+  Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
+  Snapshot('(() => { delete Math.max.length; return { a: 1 }; })()', Refusal);
+  Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
 end;
 
 begin

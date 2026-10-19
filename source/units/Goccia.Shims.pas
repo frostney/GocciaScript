@@ -130,6 +130,19 @@ function LoadShimValue(const ALoader: TGocciaShimLoader;
   global property.  Materializes the Date shim on first use. }
 function GetDateIntrinsic(const ALoader: TGocciaShimLoader): TGocciaValue;
 
+{ Keeps ALoader in its realm, so what fills a shim's realm slot outside a
+  script, a heap snapshot restore (ADR 0148), loads the shim as that
+  realm's engine does. TGocciaEngine calls it once its loader is set up. }
+procedure RememberShimLoader(const ALoader: TGocciaShimLoader);
+
+{ Whether AObject was created while ARealm loaded a shim (its module scope,
+  cells, functions and tables, and the markers that bound each load), so is
+  a shim's internals unless a run's code that the load called made it. A
+  heap snapshot's accounting check (ADR 0148) passes over such objects that
+  built-ins reach. Objects keep the order the collector listed them in. }
+function CreatedByShimLoad(const ARealm: TGocciaRealm;
+  const AObject: TObject; out AIsMarker: Boolean): Boolean;
+
 { Drop the calling thread's cached shim programs. Registered with
   Goccia.ThreadCleanupRegistry, so a thread's runtime shutdown releases them;
   exposed for the registration regression test. }
@@ -141,9 +154,11 @@ function CachedShimProgramCount: Integer;
 implementation
 
 uses
+  Generics.Collections,
   SysUtils,
 
   Goccia.ExecutionContext,
+  Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
   Goccia.SourcePipeline,
   Goccia.ThreadCleanupRegistry,
@@ -153,6 +168,7 @@ uses
 
 const
   DATE_SHIM_NAME = 'Date';
+  HAS_OWN_PROPERTY_SHIM_NAME = 'hasOwnProperty';
   DATE_VALUE_STORE_NAME = '__GocciaDateSlots';
   DEFAULT_SHIMS: array[0..13] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
@@ -1082,6 +1098,9 @@ var
   GShimExportSlots: array[Low(DEFAULT_SHIMS)..High(DEFAULT_SHIMS)] of
     TGocciaRealmSlotId;
 
+  { Each realm's TGocciaShimLoaderHolder (RememberShimLoader). }
+  GShimLoaderSlot: TGocciaRealmOwnedSlotId;
+
   GShimInitIndex: Integer;
 
 threadvar
@@ -1162,6 +1181,114 @@ begin
   Result.ArgumentsObjectEnabled := True;
 end;
 
+type
+  { A shim load's markers: the collector lists what the load created
+    between them. }
+  TGocciaShimLoadWindow = record
+    First, Last: TGCManagedObject;
+  end;
+
+  { A realm's shim loader, and the markers of each shim load, kept alive
+    here. }
+  TGocciaShimLoaderHolder = class(TGCRootSource)
+  private
+    FMarkers: TList<TGCManagedObject>;
+    FWindows: TList<TGocciaShimLoadWindow>;
+  public
+    Loader: TGocciaShimLoader;
+    destructor Destroy; override;
+    function AddMarker: TGCManagedObject;
+    procedure AddWindow(const AFirst, ALast: TGCManagedObject);
+    procedure MarkRootReferences; override;
+  end;
+
+destructor TGocciaShimLoaderHolder.Destroy;
+begin
+  FWindows.Free;
+  FMarkers.Free;
+  inherited;
+end;
+
+function TGocciaShimLoaderHolder.AddMarker: TGCManagedObject;
+begin
+  if not Assigned(FMarkers) then
+    FMarkers := TList<TGCManagedObject>.Create;
+  Result := TGocciaObjectValue.Create;
+  FMarkers.Add(Result);
+end;
+
+procedure TGocciaShimLoaderHolder.AddWindow(const AFirst,
+  ALast: TGCManagedObject);
+var
+  Window: TGocciaShimLoadWindow;
+begin
+  if not Assigned(FWindows) then
+    FWindows := TList<TGocciaShimLoadWindow>.Create;
+  Window.First := AFirst;
+  Window.Last := ALast;
+  FWindows.Add(Window);
+end;
+
+procedure TGocciaShimLoaderHolder.MarkRootReferences;
+var
+  I: Integer;
+begin
+  if Assigned(FMarkers) then
+    for I := 0 to FMarkers.Count - 1 do
+      FMarkers[I].MarkReferences;
+end;
+
+// The current realm's holder, nil when its engine kept none.
+function ShimLoaderHolder(const ARealm: TGocciaRealm): TGocciaShimLoaderHolder;
+var
+  Holder: TObject;
+begin
+  Result := nil;
+  if not Assigned(ARealm) then
+    Exit;
+  Holder := ARealm.GetOwnedSlot(GShimLoaderSlot);
+  if Holder is TGocciaShimLoaderHolder then
+    Result := TGocciaShimLoaderHolder(Holder);
+end;
+
+procedure RememberShimLoader(const ALoader: TGocciaShimLoader);
+var
+  Holder: TGocciaShimLoaderHolder;
+begin
+  Holder := TGocciaShimLoaderHolder.Create;
+  Holder.Loader := ALoader;
+  ALoader.Realm.SetOwnedSlot(GShimLoaderSlot, Holder);
+end;
+
+function CreatedByShimLoad(const ARealm: TGocciaRealm;
+  const AObject: TObject; out AIsMarker: Boolean): Boolean;
+var
+  Holder: TGocciaShimLoaderHolder;
+  Window: TGocciaShimLoadWindow;
+  Index, I: Integer;
+begin
+  Result := False;
+  AIsMarker := False;
+  Holder := ShimLoaderHolder(ARealm);
+  if not Assigned(Holder) or not Assigned(Holder.FMarkers) or
+     not (AObject is TGCManagedObject) then
+    Exit;
+  if Holder.FMarkers.IndexOf(TGCManagedObject(AObject)) >= 0 then
+  begin
+    AIsMarker := True;
+    Exit(True);
+  end;
+  if not Assigned(Holder.FWindows) then
+    Exit;
+  Index := TGCManagedObject(AObject).GCIndex;
+  for I := 0 to Holder.FWindows.Count - 1 do
+  begin
+    Window := Holder.FWindows[I];
+    if (Index > Window.First.GCIndex) and (Index < Window.Last.GCIndex) then
+      Exit(True);
+  end;
+end;
+
 function LoadShimValue(const ALoader: TGocciaShimLoader;
   const AShimIndex: Integer): TGocciaValue;
 var
@@ -1170,6 +1297,8 @@ var
   ForeignGetter, ForeignSetter: TGocciaValue;
   RealmScope: TGocciaExecutionContextScope;
   ShimScope: TGocciaScope;
+  Holder: TGocciaShimLoaderHolder;
+  FirstMarker: TGCManagedObject;
 begin
   { A lazy shim member can be touched from code of another realm (a
     test262 $262.createRealm global, say): the shim belongs to the realm of
@@ -1194,20 +1323,30 @@ begin
       GShimPrograms[AShimIndex] := ProgramNode;
     end;
 
-    ShimScope := CreateShimScope(ALoader.GlobalScope,
-      DEFAULT_SHIMS[AShimIndex].Name);
-    if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
-    begin
-      // The Date shim's access to other realms' [[DateValue]] slots
-      // (Goccia.Values.DateData), bound in its own module environment only.
-      CreateForeignDateValueFunctions(ForeignGetter, ForeignSetter);
-      ShimScope.DefineLexicalBinding('__GocciaForeignDateValue',
-        ForeignGetter, dtConst);
-      ShimScope.DefineLexicalBinding('__GocciaSetForeignDateValue',
-        ForeignSetter, dtConst);
+    // What the load creates lies between two markers.
+    Holder := ShimLoaderHolder(CurrentRealm);
+    FirstMarker := nil;
+    if Assigned(Holder) then
+      FirstMarker := Holder.AddMarker;
+    try
+      ShimScope := CreateShimScope(ALoader.GlobalScope,
+        DEFAULT_SHIMS[AShimIndex].Name);
+      if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
+      begin
+        // The Date shim's access to other realms' [[DateValue]] slots
+        // (Goccia.Values.DateData), bound in its own module environment only.
+        CreateForeignDateValueFunctions(ForeignGetter, ForeignSetter);
+        ShimScope.DefineLexicalBinding('__GocciaForeignDateValue',
+          ForeignGetter, dtConst);
+        ShimScope.DefineLexicalBinding('__GocciaSetForeignDateValue',
+          ForeignSetter, dtConst);
+      end;
+      ALoader.Evaluate(ProgramNode, ShimScope,
+        DEFAULT_SHIMS[AShimIndex].FileName);
+    finally
+      if Assigned(FirstMarker) then
+        Holder.AddWindow(FirstMarker, Holder.AddMarker);
     end;
-    ALoader.Evaluate(ProgramNode, ShimScope,
-      DEFAULT_SHIMS[AShimIndex].FileName);
     Result := ShimScope.GetValue(DEFAULT_SHIMS[AShimIndex].Name);
     CurrentRealm.SetSlot(GShimExportSlots[AShimIndex], Result);
     if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
@@ -1314,6 +1453,24 @@ begin
   end;
 end;
 
+
+{ The hasOwnProperty shim is installed only on an Object.prototype without
+  a hasOwnProperty of its own, so no global path builds it; native code can
+  still load it (LoadShimValue). A restore loads it directly with the
+  current realm's loader. }
+procedure MaterializeHasOwnPropertyShim;
+var
+  Holder: TGocciaShimLoaderHolder;
+  I: Integer;
+begin
+  Holder := ShimLoaderHolder(CurrentRealm);
+  if not Assigned(Holder) then
+    Exit;
+  for I := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
+    if DEFAULT_SHIMS[I].Name = HAS_OWN_PROPERTY_SHIM_NAME then
+      LoadShimValue(Holder.Loader, I);
+end;
+
 { Where a script first reads shim AIndex: its global, or its first
   prototype member. A heap snapshot restore (ADR 0148) fills the shim's
   realm slot, and the Date shim's, by building that lazy member. }
@@ -1336,10 +1493,15 @@ initialization
   begin
     GShimExportSlots[GShimInitIndex] := RegisterRealmSlot(
       '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%');
-    RegisterSnapshotSlotGlobalPath(
-      '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%',
-      ShimGlobalPath(GShimInitIndex));
+    if DEFAULT_SHIMS[GShimInitIndex].Name = HAS_OWN_PROPERTY_SHIM_NAME then
+      RegisterSnapshotSlotMaterializer('%Shim:' + HAS_OWN_PROPERTY_SHIM_NAME +
+        '%', @MaterializeHasOwnPropertyShim)
+    else
+      RegisterSnapshotSlotGlobalPath(
+        '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%',
+        ShimGlobalPath(GShimInitIndex));
   end;
+  GShimLoaderSlot := RegisterRealmOwnedSlot('%ShimLoader%');
   // The Date shim fills the [[DateValue]] slots' WeakMap and %Date% too.
   RegisterSnapshotSlotGlobalPath('%DateValueStore%', DATE_SHIM_NAME);
   RegisterSnapshotSlotGlobalPath('%DateConstructor%', DATE_SHIM_NAME);

@@ -1352,6 +1352,7 @@ begin
   FShimLoader.Realm := FRealm;
   FShimLoader.GlobalScope := FGlobalScope;
   FShimLoader.Evaluate := EvaluateShim;
+  RememberShimLoader(FShimLoader);
   ExecuteShims;
 
   if Assigned(FFunctionConstructor) then
