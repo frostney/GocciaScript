@@ -124,6 +124,7 @@ uses
   HTTPClient,
 
   Goccia.Error.Suggestions,
+  Goccia.URL.Parser,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.ResponseValue,
@@ -787,6 +788,29 @@ begin
   end;
 end;
 
+{ Response.url (WHATWG Fetch, https://fetch.spec.whatwg.org/#dom-response-url):
+  the response's URL serialized by the URL Standard (§4.5) with the fragment
+  excluded, so the scheme and host are lowercase, dot segments are resolved
+  and no fragment is left. The built-in client and a transport both report the
+  URL they were given or followed to, and this is the one place either becomes
+  what a script reads. A URL the URL Standard's parser refuses, which the
+  built-in client's own parser still accepted, keeps its text with only the
+  fragment cut off. }
+function ResponseURLForScript(const AURL: string): string;
+var
+  Parsed: TGocciaURLRecord;
+  FragmentStart: Integer;
+begin
+  Parsed := ParseURL(AURL);
+  if Parsed.IsValid then
+    Exit(SerializeURL(Parsed, True));
+  FragmentStart := Pos('#', AURL);
+  if FragmentStart > 0 then
+    Result := Copy(AURL, 1, FragmentStart - 1)
+  else
+    Result := AURL;
+end;
+
 { Why the engine refuses a transport's response, or '' when it takes it. }
 function TransportResponseError(const AResponse: THTTPResponse;
   const AIsHead: Boolean; const AMaxResponseBytes: Integer): string;
@@ -841,8 +865,9 @@ begin
         Completion.Response.Body := nil
       else
         Completion.Response.Body := Copy(AResponse.Body);
-      { Response.url is the final URL as the built-in client reports it,
-        so a run reads the same with and without a transport. }
+      { Response.url is the final URL the built-in client reports, so a run
+        reads the same with and without a transport; the response value
+        serializes it (ResponseURLForScript). }
       if Completion.Response.FinalURL = '' then
         Completion.Response.FinalURL := FURL;
     end;
@@ -1364,7 +1389,7 @@ begin
         RespValue.InitFromHTTP(
           ACompletion.Response.StatusCode,
           ACompletion.Response.StatusText,
-          ACompletion.Response.FinalURL,
+          ResponseURLForScript(ACompletion.Response.FinalURL),
           RespHeaders,
           ACompletion.Response.Body,
           ACompletion.Response.Redirected);

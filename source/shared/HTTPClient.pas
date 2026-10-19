@@ -842,6 +842,51 @@ type
     Body: TBytes;
   end;
 
+{ A redirect's Location resolved against the URL that answered it (RFC 3986
+  §5.2, the URL Standard's relative references): absolute, scheme-relative,
+  absolute-path, query-only, fragment-only and path-relative forms. }
+function ResolveRedirectLocation(const ABase: THTTPParsedURL;
+  const AHostHeader, ALocation: string): string;
+var
+  I, QueryStart: Integer;
+  HasScheme: Boolean;
+  PathOnly, Origin: string;
+begin
+  Origin := ABase.Scheme + '://' + AHostHeader;
+  HasScheme := (ALocation <> '') and (ALocation[1] in ['A'..'Z', 'a'..'z']);
+  if HasScheme then
+  begin
+    HasScheme := False;
+    for I := 2 to Length(ALocation) do
+      if ALocation[I] = ':' then
+      begin
+        HasScheme := True;
+        Break;
+      end
+      else if not (ALocation[I] in ['A'..'Z', 'a'..'z', '0'..'9', '+', '-', '.']) then
+        Break;
+  end;
+  if HasScheme then
+    Exit(ALocation);
+  if Copy(ALocation, 1, 2) = '//' then
+    Exit(ABase.Scheme + ':' + ALocation);
+  if (ALocation <> '') and (ALocation[1] = '/') then
+    Exit(Origin + ALocation);
+
+  PathOnly := ABase.Path;
+  QueryStart := Pos('?', PathOnly);
+  if QueryStart > 0 then
+    Delete(PathOnly, QueryStart, MaxInt);
+  if (ALocation <> '') and (ALocation[1] = '?') then
+    Exit(Origin + PathOnly + ALocation);
+  if (ALocation <> '') and (ALocation[1] = '#') then
+    Exit(Origin + ABase.Path + ALocation);
+  I := Length(PathOnly);
+  while (I > 0) and (PathOnly[I] <> '/') do
+    Dec(I);
+  Result := Origin + Copy(PathOnly, 1, I) + ALocation;
+end;
+
 function FindHeaderValue(const AHeaders: THTTPHeaders;
   const AName: string): string;
 var
@@ -1399,15 +1444,7 @@ begin
         Inc(Redirects);
         Result.Redirected := True;
 
-        // Handle relative URLs
-        if Copy(Location, 1, 2) = '//' then
-          CurrentURL := Parsed.Scheme + ':' + Location
-        else if (Length(Location) > 0) and (Location[1] = '/') then
-          CurrentURL := Parsed.Scheme + '://' + HostHeader + Location
-        else if Pos('://', Location) = 0 then
-          CurrentURL := Parsed.Scheme + '://' + HostHeader + '/' + Location
-        else
-          CurrentURL := Location;
+        CurrentURL := ResolveRedirectLocation(Parsed, HostHeader, Location);
 
         // 303: change method to GET per RFC 7231
         if Raw.StatusCode = 303 then
