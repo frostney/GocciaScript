@@ -288,6 +288,8 @@ var
   Key: string;
   Param: TGocciaURLSearchParam;
   Val: TGocciaValue;
+  I: Integer;
+  Found: Boolean;
 begin
   FList.Clear;
   for Key in AObj.GetOwnPropertyKeys do
@@ -298,7 +300,19 @@ begin
       Param.Value := ToUSVString(Val)
     else
       Param.Value := '';
-    FList.Add(Param);
+    // Web IDL record<USVString, USVString> conversion: keys that become the
+    // same USVString (two different lone surrogates are both U+FFFD) are one
+    // entry, which keeps its place and takes the later value.
+    Found := False;
+    for I := 0 to FList.Count - 1 do
+      if FList[I].Name = Param.Name then
+      begin
+        FList[I] := Param;
+        Found := True;
+        Break;
+      end;
+    if not Found then
+      FList.Add(Param);
   end;
 end;
 

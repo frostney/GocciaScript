@@ -96,4 +96,16 @@ describe("URLSearchParams constructor", () => {
     expect(new URLSearchParams({ "\ud800": "\udc00" }).get("�")).toBe("�");
     expect(new URLSearchParams([["\ud800", "\udc00"]]).get("�")).toBe("�");
   });
+
+  test("object keys that become the same USVString are one entry holding the later value", () => {
+    const params = new URLSearchParams({ "\ud800": "a", b: "x", "�": "c" });
+    expect(params.size).toBe(2);
+    expect(params.toString()).toBe("%EF%BF%BD=c&b=x");
+  });
+
+  test("sequence pairs that become the same USVString stay separate", () => {
+    const params = new URLSearchParams([["\ud800", "a"], ["�", "b"]]);
+    expect(params.size).toBe(2);
+    expect(params.getAll("�")).toEqual(["a", "b"]);
+  });
 });
