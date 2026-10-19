@@ -3,13 +3,14 @@ description: Compiling a pattern costs time linear in its length for alternation
 features: [RegExp, Goccia]
 ---*/
 
-// ES2026 §22.2.1 gives a pattern no size limit, so compiling it is one pass
-// over its source and costs time linear in its length (#1800). Each `|` used
-// to walk every alternative before it, and every named group was compared with
-// every other, so 30,000 alternatives took 0.7 s. The cost checks compare two
-// sizes on the same machine instead of an absolute time: a pattern 10 times
-// longer costs about 10 times as much when the cost is linear, and about 100
-// times as much when it is quadratic.
+// ES2026 §22.2.1 gives a pattern no size limit, so the bookkeeping for its
+// alternatives and named groups should cost time linear in its length (#1800).
+// Each `|` used to walk every alternative before it, and every named group was
+// compared with every other, so 30,000 alternatives took 0.7 s. (The compiled
+// program can still outgrow the source: a counted quantifier repeats its body.)
+// The cost checks compare two sizes on the same machine instead of an absolute
+// time: a pattern 10 times longer costs about 10 times as much when the cost is
+// linear, and about 100 times as much when it is quadratic.
 
 const alternatives = (n) => "a|".repeat(n) + "b";
 const namedGroups = (n) =>
