@@ -48,9 +48,14 @@ substitute.
 
 ## Agent context
 
-`AGENTS.md` is canonical. `CLAUDE.md` is a symlink to it, or contains only an
-include plus genuine Claude-specific additions when symlinks are unavailable.
-Never maintain divergent copies.
+`AGENTS.md` is canonical. `CLAUDE.md` is a regular file whose first line is
+`@AGENTS.md`, followed only by genuine Claude-specific additions. It covers
+Claude Code sessions that cannot read `AGENTS.md` directly, and an imported
+`AGENTS.md` is never loaded twice. Never a copy, and never a symlink: Git checks
+a symlink out as a one-line text file on Windows without `core.symlinks`, and
+Claude Code's Edit and Write tools refuse to write through one. Replace a
+symlinked or copied `CLAUDE.md` with the import, and update anything that relied
+on the link.
 
 Keep the root `AGENTS.md` lightweight: briefly identify the repository, then
 spend its context on non-obvious gotchas, exact commands, hard constraints, and

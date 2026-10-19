@@ -77,7 +77,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "git-workflow/SKILL.md",
-      "computedHash": "ae0b46e6be6e1e25a12bdf657d7155712708ac415cbd9d50b7ec5df1dab6683a"
+      "computedHash": "d697618c54272a9cbe350489c327e41749c67f4b8f1f604f501720870e91eed1"
     },
     "grill-with-docs": {
       "source": "mattpocock/skills",
@@ -125,13 +125,13 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "project-structure/SKILL.md",
-      "computedHash": "fb38035b4a5654325ff0aa098effe47068d2c5478b7222bec1df06bfc9b05b79"
+      "computedHash": "93e683bf987fa15c67057d4bdbb0380c8624385cc7f455e44bd819cfc85a704e"
     },
     "resolve-reviews": {
       "source": "pbakaus/agent-reviews",
       "sourceType": "github",
       "skillPath": "skills/resolve-reviews/SKILL.md",
-      "computedHash": "dee6ed78c1e17b1079cf2fe751b32bdc9d07ebdc6a976cab8bf5859928054014"
+      "computedHash": "ddbf9dbfead422c99c6818117fc2a981a802b96d8dc3647df17cd544ed77fe14"
     },
     "roadmap-review": {
       "source": "frostney/known-good-route",
