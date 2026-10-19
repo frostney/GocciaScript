@@ -98,6 +98,7 @@ type
     FReader: TGocciaHeapSnapshotReader;
     FTable: TGocciaHeapSnapshotBuiltinTable;
     FResolver: TGocciaBuiltinPathResolver;
+    FTemplates: TGocciaSnapshotTemplateTable;
     FRoots: TGCManagedObjectArray;
     function VerifyBuiltins(const APaths: TStringArray;
       const AFingerprints: array of string): string;
@@ -770,6 +771,25 @@ begin
     FTable.Add(Result, APath);
 end;
 
+// The modules an engine compiled, whose templates a snapshot names.
+function EngineTemplates(
+  const AEngine: TGocciaEngine): TGocciaSnapshotTemplateTable;
+var
+  I: Integer;
+begin
+  Result := TGocciaSnapshotTemplateTable.Create;
+  try
+    for I := 0 to AEngine.RetainedModuleCount - 1 do
+    begin
+      CheckNativeWork;
+      Result.AddModule(AEngine.RetainedModule(I));
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
 procedure RefuseChangedBuiltins(const ATable: TGocciaHeapSnapshotBuiltinTable);
 var
   Dirty: TStringList;
@@ -826,6 +846,7 @@ var
   Queue: TGocciaMicrotaskQueue;
   Roots: TGocciaActiveRootFrame;
   I: Integer;
+  Templates: TGocciaSnapshotTemplateTable;
 begin
   // The run must be idle: no frame, job, waiter or other extension's work
   // the snapshot would drop (ADR 0148).
@@ -834,6 +855,7 @@ begin
     raise EGocciaHeapSnapshotRefused.Create(Reason);
   Writer := nil;
   Buffer := nil;
+  Templates := nil;
   // The roots may be held only by the caller's array: rooted before the
   // collection below, and until the snapshot is written.
   Roots.Initialize;
@@ -861,6 +883,8 @@ begin
       RefuseChangedBuiltins(FTable);
       ExtendBuiltinTable(FTable, FEngine);
       Writer := TGocciaHeapSnapshotWriter.Create(FTable);
+      Templates := EngineTemplates(FEngine);
+      Writer.Templates := Templates;
       Buffer := TGocciaChargedMemoryStream.Create;
       Writer.Serialize(ARoots, Buffer);
       if FCheckAccounting then
@@ -882,6 +906,7 @@ begin
   finally
     Buffer.Free;
     Writer.Free;
+    Templates.Free;
     Roots.Clear;
   end;
 end;
@@ -909,6 +934,11 @@ begin
       FReader := TGocciaHeapSnapshotReader.Create(FTable, ALimits);
       FReader.BuiltinResolve := FResolver.Resolve;
       FReader.BuiltinVerify := VerifyBuiltins;
+      FReader.Context := AEngine.VM;
+      // The functions the snapshot restores run the code of this engine's
+      // own compiled modules, matched by their bytecode.
+      FTemplates := EngineTemplates(AEngine);
+      FReader.Templates := FTemplates;
       FRoots := FReader.Restore(AStream);
     except
       // The run's memory ceiling, or a script error from building a lazy
@@ -954,6 +984,7 @@ end;
 destructor TGocciaHeapSnapshotRestore.Destroy;
 begin
   FReader.Free;
+  FTemplates.Free;
   FResolver.Free;
   FTable.Free;
   inherited;

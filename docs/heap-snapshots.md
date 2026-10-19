@@ -9,7 +9,8 @@
 - **Built-ins are named, not written** — a snapshot refers to `Math`, `Array.prototype.map` or a lazily built `Temporal.PlainDate` by name, and the restoring engine resolves its own
 - **The reader expects hostile input** — every count, index and length is checked against the input and the limits, the run's memory ceiling and execution limits apply, and every truncation and mutant of a real snapshot is refused or restored, never a fault
 - **The pause checkpoint** — an engine with a host-call owner calls `OnPauseCheckpoint` when its run waits on nothing but host calls, and a handler that pauses ends the run with `EGocciaRunPaused`
-- **A foundation** — this release writes plain objects, object literals, arrays and symbols; the codec families that follow (VM state, modules, built-in differences, the object model and the rest) are listed in [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md)
+- **Functions and generators** — closures, the cells they share and suspended generators are written, each function named by its module's bytecode and its place there; the restoring engine must have compiled the same module
+- **Still growing** — plain objects, object literals, arrays, symbols and VM state are written; the codec families that follow (modules, built-in differences, the object model and the rest) are listed in [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md)
 
 The design, its trust model and its phases are recorded in
 [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md); the prototype it grew
@@ -105,7 +106,7 @@ anything for it:
 | `MaxStrings` | 16 Mi | the string table |
 | `MaxStringBytes` | 256 MiB | one string |
 | `MaxBuiltins` | 1 Mi | built-in names |
-| `MaxCodecs` | 4,096 | codecs named in the header |
+| `MaxCodecs` | 4,096 | codecs named in the header, and modules named in the module section |
 | `MaxRoots` | 1 Mi | roots |
 
 The reader also charges its input, its tables and what it restores to the
@@ -152,10 +153,43 @@ through `HeapSnapshotRefusal` (the timer extension does for any scheduled
 timer, a mocked clock or an unreported timer error); while any extension
 does, the run is not at a checkpoint, and `Snapshot` refuses too.
 
-Until the VM-state and module codecs land, a run paused at a checkpoint
+Until the module and promise codecs land, a run paused at a checkpoint
 holds a suspended module body and pending promises that no codec writes yet,
 so a snapshot of a paused run is refused; the values API above already
-round-trips the graphs the foundation's codecs cover.
+round-trips the graphs the codecs so far cover.
+
+## Functions and generators
+
+A function is written as its closure: the code it runs, the cells it
+shares with other closures, its home object and its own properties. The code
+is never written. Each compiled module the engine keeps is named by the
+SHA-256 of its bytecode as the bytecode format writes it, its source path
+included, and each function's code by its depth-first place in its module;
+the restoring engine names its own compiled modules the same way and finds
+one with the same bytecode, so it must compile the module from the same
+path. Two modules with the same bytecode are interchangeable. A snapshot
+naming a module the restoring engine has not compiled is refused. Global
+`eval` code has no bytecode file form and so no name: its functions refuse
+the snapshot. The hashes are streamed and polled. The writer hashes only the
+modules a snapshot names; the reader hashes every module its engine keeps
+(eval code aside), once, at the first function it restores.
+
+A suspended generator is written with its frame: its registers, its cells,
+its exception handlers and where it resumes. The reader checks that frame
+against the code it runs: the resume point on an instruction boundary,
+registers and cells within the frame's windows, and each handler one that
+the function's own push instructions push, no more of them than it has push
+instructions. It charges each frame array to the run's memory ceiling before
+allocating it, and the restored generator keeps that charge, as a suspended
+frame always does. A register may hold the marker of a binding still in its
+temporal dead zone, which stays there until the generator runs the
+declaration. A generator inside `yield*`, an async generator and an async
+function waiting on a promise refuse until the promise and iterator codecs
+land; so does a function whose code closes over a module's scope, until the
+module codecs land.
+
+The reader keeps the frame within its code, but cannot tell a forged
+register value from a real one: that is what authenticating snapshots is for.
 
 ## Writing a codec
 
@@ -190,7 +224,8 @@ nothing fills refuses the restore.
 
 `source/units/Goccia.HeapSnapshot.Test.pas` round-trips graphs through two
 engines and checks them by script, and feeds the reader every truncation
-and 10,000 mutants of a real snapshot. The fuzz harness restores one input
+and 10,000 mutants of a real snapshot, and of one holding closures and a
+suspended generator, which it then resumes. The fuzz harness restores one input
 as a snapshot with `--heap-snapshot <file>` and writes its own seed
 snapshots with `--write-heap-snapshot-seeds <dir>`; the scheduled
 [fuzz workflow](../.github/workflows/fuzz.yml) fuzzes the reader with

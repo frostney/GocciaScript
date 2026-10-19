@@ -441,6 +441,9 @@ type
       programs it compiled, and the code of the Function constructor and of
       eval (ADR 0134, decision 1). }
     function RetainedModuleCount: Integer;
+    // The compiled modules this engine keeps, in the order it compiled them:
+    // the functions a heap snapshot names run their code (ADR 0148).
+    function RetainedModule(const AIndex: Integer): TGocciaBytecodeModule;
     function RunModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
     function RunModuleInScope(const AModule: TGocciaBytecodeModule;
@@ -3225,6 +3228,12 @@ end;
 function TGocciaEngine.RetainedModuleCount: Integer;
 begin
   Result := FRetainedModules.Count;
+end;
+
+function TGocciaEngine.RetainedModule(
+  const AIndex: Integer): TGocciaBytecodeModule;
+begin
+  Result := TGocciaBytecodeModule(FRetainedModules[AIndex]);
 end;
 
 procedure RegisterEntryModuleExports(const AModule: TGocciaModule;
