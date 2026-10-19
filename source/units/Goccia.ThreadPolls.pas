@@ -45,6 +45,11 @@ interface
 type
   TGocciaThreadPolls = packed record
     Collector: Pointer;
+    // Goccia.Shims: how many shim loads run on this thread, and how many
+    // frames of code other than a shim's any VM of the thread set up while
+    // one did (TGocciaVM.BeginShimLoad). Not part of Any.
+    ShimLoadDepth: Integer;
+    ShimLoadOtherFrames: Int64;
     case Boolean of
       False: (
         TimeoutArmed: Boolean;

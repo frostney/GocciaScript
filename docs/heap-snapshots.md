@@ -70,9 +70,10 @@ built-ins reach counts as theirs: a built-in written in JavaScript (a shim
 such as `Date`) keeps its module scope, cells and private functions, built
 when the run first used it, and those are not missed objects. Only what a
 shim's load created counts as its own, and only when the load ran no code
-but shims': a run's object the shim took in as it loaded is still missed, so
-is all a load made that called a run's function (through a built-in the run
-had replaced), and so is what the run's own top-level bindings hold.
+but shims' (the engine marks the code it compiles from a shim): a run's
+object the shim took in as it loaded is still missed, so is all a load made
+that called a run's function on any engine of the thread (through a built-in
+the run had replaced), and so is what the run's own top-level bindings hold.
 Should the collector's mark stack fail
 to grow while it marks what built-ins reach, the snapshot is refused, since
 its recovery traces the global scope as well. Objects the embedder
