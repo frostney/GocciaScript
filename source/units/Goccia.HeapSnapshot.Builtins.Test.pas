@@ -16,6 +16,8 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Bytecode,
+  Goccia.Bytecode.Chunk,
   Goccia.Engine,
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
@@ -32,9 +34,20 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.VM;
 
 type
+  // Shim loads on a VM another thread entered first.
+  TShimLoadOnThread = class(TThread)
+  public
+    VM: TGocciaVM;
+    Template: TGocciaFunctionTemplate;
+    SawOtherCode: Boolean;
+    Outcome: string;
+    procedure Execute; override;
+  end;
+
   THeapSnapshotBuiltinsTests = class(TTestSuite)
   private
     procedure TestEverySlotNameResolvesOnItsOwn;
@@ -45,6 +58,7 @@ type
     procedure TestShimTakesInRunFunction;
     procedure TestShimLoadCallsAnotherEngine;
     procedure TestShimCodeIsNotItsFileName;
+    procedure TestShimLoadOnAMovedVM;
   public
     procedure SetupTests; override;
   end;
@@ -105,6 +119,8 @@ begin
     'engine', TestShimLoadCallsAnotherEngine);
   Test('Shim code is what the engine compiled as a shim, not a file name',
     TestShimCodeIsNotItsFileName);
+  Test('A shim load on a VM another thread entered first counts its frames',
+    TestShimLoadOnAMovedVM);
 end;
 
 // Builds everything an engine builds lazily: every own property of every
@@ -665,6 +681,57 @@ begin
     Session.Free;
     Engine.Free;
     Lines.Free;
+  end;
+end;
+
+procedure TShimLoadOnThread.Execute;
+var
+  Token: Int64;
+begin
+  try
+    // The VM binds to this thread only when code first enters it, inside
+    // this first load.
+    Token := VM.BeginShimLoad;
+    VM.ExecuteFunction(Template);
+    VM.EndShimLoad(Token);
+    // A second load that runs code no shim compiled sees it.
+    Token := VM.BeginShimLoad;
+    VM.ExecuteFunction(Template);
+    SawOtherCode := VM.EndShimLoad(Token);
+    Outcome := 'ok';
+  except
+    on E: Exception do
+      Outcome := E.ClassName + ': ' + E.Message;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestShimLoadOnAMovedVM;
+var
+  VM: TGocciaVM;
+  Template: TGocciaFunctionTemplate;
+  Worker: TShimLoadOnThread;
+begin
+  VM := TGocciaVM.Create;
+  Template := TGocciaFunctionTemplate.Create('run');
+  Worker := TShimLoadOnThread.Create(True);
+  try
+    Template.MaxRegisters := 1;
+    Template.EmitInstruction(EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    // Entered here first, so bound to this thread.
+    VM.ExecuteFunction(Template);
+    Worker.VM := VM;
+    Worker.Template := Template;
+    Worker.Start;
+    Worker.WaitFor;
+    Expect<string>(Worker.Outcome).ToBe('ok');
+    Expect<Boolean>(Worker.SawOtherCode).ToBe(True);
+    // Nothing was left counting on this thread either.
+    Expect<Boolean>(VM.EndShimLoad(VM.BeginShimLoad)).ToBe(False);
+  finally
+    Worker.Free;
+    Template.Free;
+    VM.Free;
   end;
 end;
 

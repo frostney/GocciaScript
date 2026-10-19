@@ -15872,12 +15872,16 @@ end;
   arguments sit in (a tail call reuses the caller's window). }
 function TGocciaVM.BeginShimLoad: Int64;
 begin
+  // The running thread's, bound here: a VM moved to this thread binds the
+  // rest only when code first enters it, which may be inside this load.
+  FShimLoad := @GShimLoadState;
   Inc(FShimLoad^.Depth);
   Result := FShimLoad^.OtherFrames;
 end;
 
 function TGocciaVM.EndShimLoad(const AToken: Int64): Boolean;
 begin
+  FShimLoad := @GShimLoadState;
   Dec(FShimLoad^.Depth);
   Result := FShimLoad^.OtherFrames <> AToken;
 end;
