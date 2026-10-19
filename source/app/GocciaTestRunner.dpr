@@ -139,6 +139,7 @@ type
 
   TTestWorkerDataArray = array[0..MaxInt div SizeOf(TTestWorkerData) - 1] of TTestWorkerData;
   PTestWorkerDataArray = ^TTestWorkerDataArray;
+  TTestWorkerDataDynArray = array of TTestWorkerData;
 
   TTestFileResult = record
     TestResult: TGocciaObjectValue;
@@ -256,29 +257,6 @@ type
       const ACompact: Boolean);
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
-
-{ Ends the process immediately, running no unit finalization and flushing
-  nothing. The abort path needs a termination that cannot run code on a heap the
-  engine has already declared untrustworthy, and cannot tear down the RTL under
-  peer worker threads that are still running; Halt does both. Declared against
-  the C runtime rather than routed through the RTL for that reason. }
-{$IFDEF WINDOWS}
-{ TerminateProcess rather than ExitProcess: ExitProcess first terminates the
-  peer threads and THEN runs DLL process-detach handlers — a detach handler
-  needing a lock a just-terminated worker held deadlocks the abort. Terminate
-  skips detach handlers entirely, which is the whole contract here. }
-function GetCurrentProcess: THandle; stdcall;
-  external 'kernel32' name 'GetCurrentProcess';
-function TerminateProcess(AProcess: THandle; AExitCode: LongWord): LongBool;
-  stdcall; external 'kernel32' name 'TerminateProcess';
-
-procedure TerminateProcessNow(AStatus: LongInt);
-begin
-  TerminateProcess(GetCurrentProcess, LongWord(AStatus));
-end;
-{$ELSE}
-procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
-{$ENDIF}
 
 var
   { Set once, by whichever thread reports the first engine-integrity fault, and
@@ -1565,11 +1543,24 @@ begin
     TGarbageCollector.Instance.Collect;
 end;
 
+{ A worker the watchdog abandoned takes no further file, but it may still be
+  inside TestWorkerProc for the file it was on, which writes that file's
+  WorkerData slot when it returns. Take one more reference to the array and
+  never release it, so the block outlives that write: neither this
+  function's exit nor the program's finalization frees it. }
+procedure KeepWorkerDataAlive(const AWorkerData: TTestWorkerDataDynArray);
+var
+  Holder: Pointer;
+begin
+  Holder := nil;
+  TTestWorkerDataDynArray(Holder) := AWorkerData;
+end;
+
 function TTestRunnerApp.RunScriptsFromFilesParallel(
   const AFiles: TStringList; const AJobCount: Integer): TAggregatedTestResult;
 var
   Pool: TGocciaThreadPool;
-  WorkerData: array of TTestWorkerData;
+  WorkerData: TTestWorkerDataDynArray;
   { Synthesised results for orphaned slots.  We deliberately keep these in a
     main-thread-only array instead of writing them into WorkerData, because
     an abandoned worker that unsticks later in native code will resume
@@ -1650,7 +1641,7 @@ begin
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
     if (TGarbageCollector.Instance <> nil) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-    // Per-worker-idle watchdog: the pool cancels if any single worker
+    // Per-worker-idle watchdog: the pool abandons any single worker that
     // sits on one file longer than this window.  2× the per-file timeout
     // gives the in-engine cooperative timeout slack to fire first; the
     // +10 s grace covers thread-runtime initialisation on the first
@@ -1682,19 +1673,20 @@ begin
     if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
 
-    { Cross-reference Pool.Results with WorkerData. Two silent-drop
-      failure modes have to be surfaced here:
+    { Cross-reference Pool.Results with WorkerData. Three kinds of slot
+      have no result of their own and have to be surfaced here:
 
-      1. Watchdog cancels mid-batch: the stuck worker does not return,
-         so other live workers keep draining the queue but mark each
-         dequeued file as 'Cancelled' in Pool.Results — without ever
-         invoking TestWorkerProc for it.  Pool.Results[I].Success is
-         False and ErrorMessage is 'Cancelled'.
+      1. Cancelled: after a cancel the workers mark each file they take as
+         'Cancelled' in Pool.Results without invoking TestWorkerProc for
+         it.
 
-      2. Stuck worker's in-progress file: the thread pool skips live
-         (unfinished) workers when collecting results, so the file the
-         stuck worker was running on never makes it into Pool.Results
-         at all — its slot stays at the default zero-initialised state
+      2. An abandoned worker's file: the watchdog gave up on the worker
+         while it was on this file, and Pool.Results carries the
+         watchdog's TIMEOUT message.  The worker may still be inside
+         TestWorkerProc for it, so its WorkerData slot is not touched.
+
+      3. Never taken: every worker was abandoned before one took this
+         file, so its Pool.Results slot is the empty default
          (Success=False, ErrorMessage='').
 
       Helper / import-only files (e.g. tests/language/modules/helpers/*)
@@ -1732,14 +1724,30 @@ begin
         Continue;
       end;
 
-      if Pool.Results[I].ErrorMessage <> '' then
+      if StartsStr('TIMEOUT', Pool.Results[I].ErrorMessage) then
+      begin
+        { The file an abandoned worker was on. That worker may still be in
+          TestWorkerProc for it and write WorkerData[I] when it returns, so
+          neither read nor write the slot: report the watchdog's TIMEOUT
+          from OrphanResults. }
+        IsOrphan[I] := True;
+        OrphanResults[I].ErrorMessage := Pool.Results[I].ErrorMessage;
+        OrphanResults[I].Failed := 1;
+        OrphanResults[I].TotalRunTests := 1;
+        SetLength(OrphanResults[I].FailedTestNames, 1);
+        OrphanResults[I].FailedTestNames[0] := AFiles[I] + ': ' +
+          OrphanResults[I].ErrorMessage;
+      end
+      else if Pool.Results[I].ErrorMessage <> '' then
       begin
         if WorkerData[I].ErrorMessage = '' then
         begin
-          { Watchdog-cancelled slot: the worker for this file never ran (a
-            peer stalled), so WorkerData[I] is still the zero-initialised
-            default and no concurrent writer touches it any more.  Safe to
-            keep the synthesis in WorkerData. }
+          { The worker finished this file and recorded a failure that
+            TestWorkerProc did not write into WorkerData[I] (an exception
+            escaped it, or the run was cancelled before the file ran).
+            Either way a worker that was not abandoned recorded it, so no
+            thread writes the slot any more and the synthesis may go into
+            WorkerData. }
           WorkerData[I].ErrorMessage := Pool.Results[I].ErrorMessage;
           WorkerData[I].Failed := 1;
           WorkerData[I].TotalRunTests := 1;
@@ -1753,14 +1761,13 @@ begin
               (WorkerData[I].Failed = 0) and
               (WorkerData[I].TotalRunTests = 0) then
       begin
-        { Stuck-worker slot: the worker is still alive in native code and
-          may eventually unstick and resume writing to WorkerData[I]
-          itself.  Park the synthesis in OrphanResults[I] so we never
-          touch the managed fields the orphan owns. }
+        { No result and no TIMEOUT: the watchdog abandoned every worker
+          before one took this file, and an abandoned worker takes no
+          further file, so it never ran. }
         IsOrphan[I] := True;
         OrphanResults[I].ErrorMessage :=
-          'Worker produced no result (likely stalled in native code and ' +
-          'was orphaned by the watchdog)';
+          'Never ran: the watchdog abandoned every worker before this ' +
+          'file was taken';
         OrphanResults[I].Failed := 1;
         OrphanResults[I].TotalRunTests := 1;
         SetLength(OrphanResults[I].FailedTestNames, 1);
@@ -1770,6 +1777,8 @@ begin
     end;
   finally
     FActiveCancelFlag := nil;
+    if Pool.AnyWorkerAbandoned then
+      KeepWorkerDataAlive(WorkerData);
     Pool.Free;
   end;
 

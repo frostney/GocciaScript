@@ -407,6 +407,13 @@ under `--max-memory` is deliberately **not** one of these: it is a verdict on
 one file delivered by an intact heap, so it stays a per-file failure and the run
 carries on.
 
+Under `--jobs` a watchdog abandons a worker that makes no progress for twice the
+per-file timeout plus 10 s (stuck in native code that never checks the
+timeout). The file it was on fails with a `TIMEOUT (worker stalled …)` message,
+the other workers drain the queue, and the abandoned worker, if it ever runs
+on, takes no further file and records no result. When every worker is
+abandoned, the files none of them took fail as never run.
+
 ### Snapshot Testing
 
 `toMatchSnapshot()` writes external snapshots to
