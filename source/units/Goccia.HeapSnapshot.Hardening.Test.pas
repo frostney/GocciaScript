@@ -22,13 +22,23 @@ program Goccia.HeapSnapshot.Hardening.Test;
   first, as the last resort a reservation over the ceiling runs would, and a
   restore under every ceiling from nothing to what it needs stops at every
   one of those points; a value the reader held only in a local would be
-  freed there. The scheduled workflows also run this program under heaptrc
-  and under the GC-stress build. }
+  freed there. Restoring the same mutants again and again leaves the heap
+  where it was.
+
+  Two sizes; the test names say which ran. By default (every pull request)
+  each payload byte takes a quarter of the values and each reference a
+  quarter of the targets, rotating, so every byte, value, reference and
+  target is used, and the chains are 200,000 links long (50,000
+  generators). With GOCCIA_HEAP_SNAPSHOT_HARDENING=full (the scheduled fuzz
+  workflow) every byte takes every value and every reference every target,
+  and the chains are 1,000,000 long (250,000 generators). The fuzz workflow
+  also runs the default size under heaptrc. }
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
   Generics.Collections,
+  Math,
   SysUtils,
 
   TestingPascalLibrary,
@@ -103,6 +113,12 @@ const
   HSV_OBJECT_TAG = 9;
   HSV_BUILTIN_TAG = 10;
 
+  // The sizes (see above).
+  FULL_ENVIRONMENT = 'GOCCIA_HEAP_SNAPSHOT_HARDENING';
+  FULL_LINKS = 1000000;
+  DEFAULT_LINKS = 200000;
+  DEFAULT_BYTE_SHARE = 4;
+
 type
   // A field of a snapshot's structure: a count, an index or a length.
   TSnapshotField = record
@@ -135,6 +151,7 @@ type
     FEngine: TGocciaEngine;
     FLines: TStringList;
     FCapture: TCapture;
+    FExerciser: THeapSnapshotExerciser;
     FFed: Integer;
   public
     Restored: Integer;
@@ -190,9 +207,20 @@ type
     procedure TestMutantsWhileEveryReservationCollects;
     procedure TestEveryCeilingRestoresOrRefuses;
     procedure TestEveryCeilingWhileEveryReservationCollects;
+    procedure TestRepeatedMutantsLeaveTheHeap;
+    procedure TestEngineBuiltWhileEveryReservationCollects;
+    procedure TestGlobalEvalComputesNaN;
   public
     procedure SetupTests; override;
   end;
+
+var
+  // Set from FULL_ENVIRONMENT before the suite is built.
+  // How long the deep chains are; the generator chain is a quarter of it.
+  DeepLinks: Integer;
+  // Each payload byte takes one in ByteShare of INTERESTING_BYTES, and each
+  // reference one in ByteShare of the objects and built-ins.
+  ByteShare: Integer;
 
 { Layout }
 
@@ -312,6 +340,20 @@ begin
       Length(ABytes) - AAt - ACount);
 end;
 
+// What ChainWalk returns for a chain of ALength links whose values are
+// their indexes.
+function IndexChainWalked(const ALength: Integer): string;
+begin
+  Result := IntToStr(ALength) + ',' +
+    IntToStr(Int64(ALength) * (ALength - 1) div 2);
+end;
+
+// A count of links as the test names write it: 1,000,000.
+function Links(const ACount: Integer): string;
+begin
+  Result := FormatFloat('#,##0', ACount);
+end;
+
 { TMutantFeeder }
 
 constructor TMutantFeeder.Create(const AModuleSource: string);
@@ -328,12 +370,14 @@ begin
       dtConst);
     FEngine.Execute;
   end;
+  FExerciser := THeapSnapshotExerciser.Create(FEngine);
 end;
 
 destructor TMutantFeeder.Destroy;
 begin
   if Assigned(FCapture.Value) then
     TGarbageCollector.Instance.RemoveTempRoot(FCapture.Value);
+  FExerciser.Free;
   FEngine.Free;
   FCapture.Free;
   FLines.Free;
@@ -396,12 +440,15 @@ begin
     StartInstructionLimit(EXERCISE_INSTRUCTIONS);
     try
       try
-        ExerciseRestored(FEngine, TGocciaValue(Root));
+        FExerciser.Exercise(TGocciaValue(Root));
       except
-        // The run's own limits are outcomes a run can have.
-        on E: TGocciaTimeoutError do ;
-        on E: TGocciaInstructionLimitError do ;
-        on E: TGocciaMemoryLimitError do ;
+        // The run's own limits are outcomes a run can have, and so is a
+        // rejection the run left unhandled (a built-in such as
+        // Array.fromAsync called with the wrong arguments).
+        on E: TGocciaThrowValue do;
+        on E: TGocciaTimeoutError do;
+        on E: TGocciaInstructionLimitError do;
+        on E: TGocciaMemoryLimitError do;
       end;
     finally
       ClearInstructionLimit;
@@ -420,6 +467,8 @@ end;
 { THeapSnapshotHardeningTests }
 
 procedure THeapSnapshotHardeningTests.SetupTests;
+var
+  Targets, Shares: string;
 begin
   Test('Both seeds restore, and using them runs', TestSeedsRestoreAndRun);
   Test('Every count, index and length of the plain seed at its boundaries',
@@ -430,27 +479,38 @@ begin
     TestEntriesOfThePlainSeed);
   Test('Every entry of the VM seed retyped, dropped, doubled and moved',
     TestEntriesOfTheVMSeed);
-  Test('Every reference of the plain seed pointed at every object and built-in',
+  if ByteShare = 1 then
+  begin
+    Targets := 'every object and built-in';
+    Shares := 'every value tag';
+  end
+  else
+  begin
+    Targets := Format('a rotating one in %d of the objects and built-ins',
+      [ByteShare]);
+    Shares := Format('a rotating one in %d of the value tags', [ByteShare]);
+  end;
+  Test('Every reference of the plain seed pointed at ' + Targets,
     TestReferencesOfThePlainSeed);
-  Test('Every reference of the VM seed pointed at every object and built-in',
+  Test('Every reference of the VM seed pointed at ' + Targets,
     TestReferencesOfTheVMSeed);
-  Test('Every payload byte of the plain seed set to every value tag',
+  Test('Every payload byte of the plain seed set to ' + Shares,
     TestPayloadBytesOfThePlainSeed);
-  Test('Every payload byte of the VM seed set to every value tag',
+  Test('Every payload byte of the VM seed set to ' + Shares,
     TestPayloadBytesOfTheVMSeed);
-  Test('A chain of 200,000 closures, each closing over the last',
-    TestDeepClosureChain);
-  Test('A chain of 50,000 suspended generators, each holding the last',
-    TestDeepGeneratorChain);
-  Test('A chain of 200,000 getters, each returning the last object',
-    TestDeepAccessorChain);
-  Test('A chain of 1,000,000 objects linked by a symbol-keyed property',
-    TestDeepSymbolKeyedChain);
-  Test('A chain of 300,000 links mixing every kind of link',
-    TestDeepMixedChain);
-  Test('A refusal at the end of a chain of 1,000,000 stays short',
-    TestDeepRefusalStaysBounded);
-  Test('The accounting check over a chain of 1,000,000',
+  Test('A chain of ' + Links(DeepLinks) +
+    ' closures, each closing over the last', TestDeepClosureChain);
+  Test('A chain of ' + Links(DeepLinks div 4) +
+    ' suspended generators, each holding the last', TestDeepGeneratorChain);
+  Test('A chain of ' + Links(DeepLinks) +
+    ' getters, each returning the last object', TestDeepAccessorChain);
+  Test('A chain of ' + Links(DeepLinks) +
+    ' objects linked by a symbol-keyed property', TestDeepSymbolKeyedChain);
+  Test('A chain of ' + Links(DeepLinks) +
+    ' links mixing every kind of link', TestDeepMixedChain);
+  Test('A refusal at the end of a chain of ' + Links(DeepLinks) +
+    ' stays short', TestDeepRefusalStaysBounded);
+  Test('The accounting check over a chain of ' + Links(DeepLinks),
     TestDeepAccountingCheck);
   Test('A deep restore the ceiling stops half way leaves collectable garbage',
     TestDeepRestoreStoppedByTheCeiling);
@@ -462,6 +522,18 @@ begin
     TestEveryCeilingRestoresOrRefuses);
   Test('Every ceiling while every reservation collects first',
     TestEveryCeilingWhileEveryReservationCollects);
+  Test('Restoring the same mutants again leaves the heap where it was',
+    TestRepeatedMutantsLeaveTheHeap);
+  // Found by these tests, outside the reader; each runs once its issue is
+  // fixed.
+  Skip('An engine built while every reservation collects first',
+    TestEngineBuiltWhileEveryReservationCollects,
+    'GocciaScript #1816: engine creation and ' +
+    'EnsureConcreteIteratorPrototype hold new objects unrooted');
+  Skip('EvaluateGlobalEval called directly computes NaN',
+    TestGlobalEvalComputesNaN,
+    'GocciaScript #1817: EvaluateGlobalEval does not set the ' +
+    'floating-point mode');
 end;
 
 function THeapSnapshotHardeningTests.PlainSeed: TBytes;
@@ -639,7 +711,7 @@ var
   Feeder: TMutantFeeder;
   Mutant: TBytes;
   Sites: TList<Integer>;
-  I, P, Target, Count, Last: Integer;
+  I, P, S, Target, Count, Last: Integer;
 begin
   Layout := ParseLayout(ASeed);
   Count := Length(Layout.EntryAt);
@@ -661,23 +733,28 @@ begin
       if (ASeed[P] = HSV_OBJECT_TAG) and
          (U32At(ASeed, P + 1) < Cardinal(Count)) then
         Sites.Add(P);
-    Expect<Boolean>(Sites.Count > 0).ToBe(True);
-    for P in Sites do
+    Expect<Boolean>(Sites.Count >= ByteShare).ToBe(True);
+    // Each site is pointed at the objects and built-ins whose index is the
+    // site's own modulo ByteShare: all of them in the full run.
+    for S := 0 to Sites.Count - 1 do
     begin
+      P := Sites[S];
       for Target := 0 to Count - 1 do
-        if Cardinal(Target) <> U32At(ASeed, P + 1) then
+        if (Target mod ByteShare = S mod ByteShare) and
+           (Cardinal(Target) <> U32At(ASeed, P + 1)) then
         begin
           Mutant := Copy(ASeed);
           PutU32(Mutant, P + 1, Target);
           Feeder.Feed(Mutant);
         end;
       for Target := 0 to Layout.BuiltinCount - 1 do
-      begin
-        Mutant := Copy(ASeed);
-        Mutant[P] := HSV_BUILTIN_TAG;
-        PutU32(Mutant, P + 1, Target);
-        Feeder.Feed(Mutant);
-      end;
+        if Target mod ByteShare = S mod ByteShare then
+        begin
+          Mutant := Copy(ASeed);
+          Mutant[P] := HSV_BUILTIN_TAG;
+          PutU32(Mutant, P + 1, Target);
+          Feeder.Feed(Mutant);
+        end;
     end;
     Expect<Boolean>(Feeder.Restored > 0).ToBe(True);
   finally
@@ -686,27 +763,40 @@ begin
   end;
 end;
 
+// Sets each payload byte to the values of INTERESTING_BYTES whose index is
+// the byte's own position modulo ByteShare: all of them in the full run,
+// else a different share at each of ByteShare neighbouring bytes.
 procedure THeapSnapshotHardeningTests.SweepPayloadBytes(const ASeed: TBytes;
   const AModule: string);
 var
   Layout: TSnapshotLayout;
   Feeder: TMutantFeeder;
   Mutant: TBytes;
-  I, P, V: Integer;
+  I, P, V, Fed: Integer;
+  Used: array[0..High(INTERESTING_BYTES)] of Boolean;
 begin
   Layout := ParseLayout(ASeed);
   Feeder := TMutantFeeder.Create(AModule);
+  Fed := 0;
+  FillChar(Used, SizeOf(Used), 0);
   try
     for I := 0 to High(Layout.EntryAt) do
       for P := Layout.PayloadAt[I] to
           Layout.PayloadAt[I] + Layout.PayloadLength[I] - 1 do
         for V := 0 to High(INTERESTING_BYTES) do
-          if ASeed[P] <> INTERESTING_BYTES[V] then
+          if (V mod ByteShare = P mod ByteShare) and
+             (ASeed[P] <> INTERESTING_BYTES[V]) then
           begin
             Mutant := Copy(ASeed);
             Mutant[P] := INTERESTING_BYTES[V];
             Feeder.Feed(Mutant);
+            Used[V] := True;
+            Inc(Fed);
           end;
+    // Every value was used, at a share of the bytes at least.
+    for V := 0 to High(INTERESTING_BYTES) do
+      Expect<Boolean>(Used[V]).ToBe(True);
+    Expect<Integer>(Feeder.Restored + Feeder.Refused).ToBe(Fed);
     Expect<Boolean>(Feeder.Refused > 0).ToBe(True);
     Expect<Boolean>(Feeder.Restored > 0).ToBe(True);
   finally
@@ -783,10 +873,10 @@ begin
   // Function -> cell -> function ... : each closure keeps the last in the
   // cell of its callback's parameter.
   Expect<string>(RoundTripModule(
-    ChainModule(200000, '(prev, i) => { const f = () => prev; f.i = i; ' +
+    ChainModule(DeepLinks, '(prev, i) => { const f = () => prev; f.i = i; ' +
       'return f; }'),
     ChainWalk('(p) => p()', '(p) => p.i')))
-    .ToBe('200000,19999900000');
+    .ToBe(IndexChainWalked(DeepLinks));
 end;
 
 procedure THeapSnapshotHardeningTests.TestDeepGeneratorChain;
@@ -794,31 +884,31 @@ begin
   // Generator -> its frame's registers -> generator ... : each suspended
   // inside its body with the last in a register.
   Expect<string>(RoundTripModule(
-    ChainModule(50000, '(prev, i) => { const g = source.hold(prev, i); ' +
-      'g.next(); return g; }',
+    ChainModule(DeepLinks div 4, '(prev, i) => { ' +
+      'const g = source.hold(prev, i); g.next(); return g; }',
       'const source = { *hold(inner, i) { const keep = inner; yield i; ' +
       'yield keep; } };'),
     ChainWalk('(p) => p.next().value', '(p) => 1')))
-    .ToBe('50000,50000');
+    .ToBe(IntToStr(DeepLinks div 4) + ',' + IntToStr(DeepLinks div 4));
 end;
 
 procedure THeapSnapshotHardeningTests.TestDeepAccessorChain;
 begin
   // Object -> getter -> cell -> object ... .
   Expect<string>(RoundTripModule(
-    ChainModule(200000, '(prev, i) => Object.defineProperty({ i }, "next", ' +
-      '{ get: () => prev, enumerable: true })'),
+    ChainModule(DeepLinks, '(prev, i) => Object.defineProperty({ i }, ' +
+      '"next", { get: () => prev, enumerable: true })'),
     ChainWalk('(p) => p.next', '(p) => p.i')))
-    .ToBe('200000,19999900000');
+    .ToBe(IndexChainWalked(DeepLinks));
 end;
 
 procedure THeapSnapshotHardeningTests.TestDeepSymbolKeyedChain;
 begin
   Expect<string>(RoundTripModule(
-    ChainModule(1000000, '(prev, i) => ({ [key]: prev, i })',
+    ChainModule(DeepLinks, '(prev, i) => ({ [key]: prev, i })',
       'const key = Symbol("next");', ', key'),
     ChainWalk('(p) => p[restored.key]', '(p) => p.i')))
-    .ToBe('1000000,499999500000');
+    .ToBe(IndexChainWalked(DeepLinks));
 end;
 
 procedure THeapSnapshotHardeningTests.TestDeepMixedChain;
@@ -845,11 +935,11 @@ const
   VALUE = '(p) => Array.isArray(p) ? p[0] : p.i';
 begin
   Expect<string>(RoundTripModule(
-    ChainModule(300000, LINK, 'const key = Symbol("next"); ' +
+    ChainModule(DeepLinks, LINK, 'const key = Symbol("next"); ' +
       'const source = { *hold(inner, i) { const keep = inner; yield i; ' +
       'yield keep; } };', ', key'),
     ChainWalk(STEP, VALUE)))
-    .ToBe('300000,44999850000');
+    .ToBe(IndexChainWalked(DeepLinks));
 end;
 
 procedure THeapSnapshotHardeningTests.TestDeepRefusalStaysBounded;
@@ -873,8 +963,8 @@ begin
     Session := TGocciaHeapSnapshotSession.Create(Engine);
     Session.CheckAccounting := False;
     // The object no codec covers is the last one the writer reaches.
-    Value := Engine.EvaluateGlobalEval('Array.from({ length: 1000000 }, ' +
-      '(_, i) => i).reduce((next, i) => ({ i, next }), { end: opaque() })',
+    Value := Engine.EvaluateGlobalEval('Array.from({ length: ' +
+      IntToStr(DeepLinks) + ' }, (_, i) => i).reduce((next, i) => ({ i, next }), { end: opaque() })',
       TEST_PATH, Stage);
     TGarbageCollector.Instance.AddTempRoot(Value);
     try
@@ -907,11 +997,13 @@ var
   Refusal: string;
   Bytes: TBytes;
 begin
-  // Every one of the million objects is written, so nothing is missed.
-  Bytes := Snapshot('Array.from({ length: 1000000 }, (_, i) => i)' +
-    '.reduce((next, i) => ({ i, next }), null)', Refusal, True);
+  // Every one of the objects is written, so nothing is missed.
+  Bytes := Snapshot('Array.from({ length: ' + IntToStr(DeepLinks) +
+    ' }, (_, i) => i).reduce((next, i) => ({ i, next }), null)', Refusal,
+    True);
   Expect<string>(Refusal).ToBe('');
-  Expect<string>(RestoreAndCheck(Bytes, 'String(restored.i)')).ToBe('999999');
+  Expect<string>(RestoreAndCheck(Bytes, 'String(restored.i)'))
+    .ToBe(IntToStr(DeepLinks - 1));
 end;
 
 procedure THeapSnapshotHardeningTests.TestDeepRestoreStoppedByTheCeiling;
@@ -925,8 +1017,8 @@ var
   Restore: TGocciaHeapSnapshotRestore;
   Stream: TBytesStream;
 begin
-  Bytes := Snapshot('Array.from({ length: 1000000 }, (_, i) => i)' +
-    '.reduce((next, i) => ({ i, next }), null)', Refusal);
+  Bytes := Snapshot('Array.from({ length: ' + IntToStr(DeepLinks) +
+    ' }, (_, i) => i).reduce((next, i) => ({ i, next }), null)', Refusal);
   Expect<string>(Refusal).ToBe('');
   GC := TGarbageCollector.Instance;
   Lines := TStringList.Create;
@@ -954,7 +1046,7 @@ begin
     finally
       GC.MaxBytes := Previous;
     end;
-    // What the stopped restore made is garbage, half a million shells
+    // What the stopped restore made is garbage, half the chain's shells
     // filled or not: collected without native recursion, and the engine
     // restores the whole chain afterwards.
     GC.Collect;
@@ -1014,46 +1106,56 @@ begin
   end;
 end;
 
+// ACount mutants of ASeed, one or two random bytes each, the same ones for
+// the same ASeed and count: a xorshift from a fixed start.
 {$PUSH}{$Q-}{$R-}
+procedure FeedRandomMutants(const AFeeder: TMutantFeeder; const ASeed: TBytes;
+  const ACount: Integer);
+var
+  State: Cardinal;
+  Mutant: TBytes;
+  I: Integer;
+
+  function NextRandom: Cardinal;
+  begin
+    State := State xor (State shl 13);
+    State := State xor (State shr 17);
+    State := State xor (State shl 5);
+    Result := State;
+  end;
+
+begin
+  State := $0DDBA11;
+  for I := 1 to ACount do
+  begin
+    Mutant := Copy(ASeed);
+    Mutant[NextRandom mod Cardinal(Length(Mutant))] := Byte(NextRandom);
+    if NextRandom mod 2 = 0 then
+      Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
+        INTERESTING_BYTES[NextRandom mod Cardinal(Length(INTERESTING_BYTES))];
+    AFeeder.Feed(Mutant);
+  end;
+end;
+{$POP}
+
 procedure THeapSnapshotHardeningTests.TestMutantsWhileEveryReservationCollects;
 const
   STRESSED_MUTANTS = 400;
 var
   Feeder: TMutantFeeder;
-  Seed: Cardinal;
-  Bytes, Mutant: TBytes;
-  I: Integer;
-
-  function NextRandom: Cardinal;
-  begin
-    Seed := Seed xor (Seed shl 13);
-    Seed := Seed xor (Seed shr 17);
-    Seed := Seed xor (Seed shl 5);
-    Result := Seed;
-  end;
-
+  Seed: TBytes;
 begin
-  Bytes := VMSeed;
+  Seed := VMSeed;
   Feeder := TMutantFeeder.Create(VM_SEED);
   try
     Feeder.Stressed := True;
-    Seed := $0DDBA11;
-    for I := 1 to STRESSED_MUTANTS do
-    begin
-      Mutant := Copy(Bytes);
-      Mutant[NextRandom mod Cardinal(Length(Mutant))] := Byte(NextRandom);
-      if NextRandom mod 2 = 0 then
-        Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
-          INTERESTING_BYTES[NextRandom mod Cardinal(Length(INTERESTING_BYTES))];
-      Feeder.Feed(Mutant);
-    end;
+    FeedRandomMutants(Feeder, Seed, STRESSED_MUTANTS);
     Expect<Integer>(Feeder.Restored + Feeder.Refused).ToBe(STRESSED_MUTANTS);
     Expect<Boolean>(Feeder.Restored > 0).ToBe(True);
   finally
     Feeder.Free;
   end;
 end;
-{$POP}
 
 // Restores ASeed under every ceiling from what the engine holds before the
 // restore up to what the restore needs, in steps small enough that each of
@@ -1110,7 +1212,111 @@ begin
   SweepCeilings(VMSeed, VM_SEED, True);
 end;
 
+procedure THeapSnapshotHardeningTests.TestRepeatedMutantsLeaveTheHeap;
+const
+  MUTANTS = 300;
+  PASSES = 4;
+  // What one pass may leave on the heap: far less than one restored seed's
+  // objects per mutant would take.
+  SLACK_BYTES = 256 * 1024;
+var
+  Feeder: TMutantFeeder;
+  GC: TGarbageCollector;
+  Pass: Integer;
+  Heap, Managed: array[1..PASSES] of Int64;
+  Seed: TBytes;
 begin
+  // The heap a restore, its refusal or its use leaves behind is collected
+  // with what it restored: after the first pass (which creates what any run
+  // keeps, such as registered symbols and the exercise's own code), the
+  // same mutants again add nothing that stays.
+  Seed := VMSeed;
+  Feeder := TMutantFeeder.Create(VM_SEED);
+  GC := TGarbageCollector.Instance;
+  try
+    for Pass := 1 to PASSES do
+    begin
+      FeedRandomMutants(Feeder, Seed, MUTANTS);
+      GC.Collect;
+      Heap[Pass] := Int64(GetFPCHeapStatus.CurrHeapUsed);
+      Managed[Pass] := GC.BytesAllocated;
+    end;
+    Expect<Boolean>(Feeder.Restored > 0).ToBe(True);
+    Expect<Boolean>(Feeder.Refused > 0).ToBe(True);
+    if (Managed[PASSES] > Managed[2]) or
+       (Heap[PASSES] - Heap[2] >= SLACK_BYTES) then
+      Fail(Format('after passes 2 and %d: %d and %d managed bytes, ' +
+        '%d and %d heap bytes', [PASSES, Managed[2], Managed[PASSES],
+        Heap[2], Heap[PASSES]]));
+  finally
+    Feeder.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestEngineBuiltWhileEveryReservationCollects;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  Lines := TStringList.Create;
+  Engine := nil;
+  GC.CollectBeforeEveryReservation := True;
+  try
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    // The first iteration builds the concrete iterator prototypes.
+    Expect<string>(Engine.EvaluateGlobalEval('String([...[1, 2].values()]' +
+      '.length)', TEST_PATH, Stage).ToStringLiteral.Value).ToBe('2');
+  finally
+    GC.CollectBeforeEveryReservation := False;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestGlobalEvalComputesNaN;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Mask: TFPUExceptionMask;
+  Value: string;
+begin
+  // Called by an embedder with the process's own floating-point mode (the
+  // test programs run inside the engine's, RunGocciaTests), without the
+  // scope THeapSnapshotExerciser enters itself.
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Mask := GetExceptionMask;
+  try
+    SetExceptionMask([exDenormalized, exUnderflow, exPrecision]);
+    try
+      // Computed when the code runs, not folded when it compiles.
+      Value := Engine.EvaluateGlobalEval('((z) => String(z / z) + ' +
+        'String(1 / z - 1 / z))(0)', TEST_PATH, Stage).ToStringLiteral.Value;
+    finally
+      SetExceptionMask(Mask);
+    end;
+    Expect<string>(Value).ToBe('NaNNaN');
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+begin
+  if GetEnvironmentVariable(FULL_ENVIRONMENT) = 'full' then
+  begin
+    DeepLinks := FULL_LINKS;
+    ByteShare := 1;
+  end
+  else
+  begin
+    DeepLinks := DEFAULT_LINKS;
+    ByteShare := DEFAULT_BYTE_SHARE;
+  end;
   TestRunnerProgram.AddSuite(THeapSnapshotHardeningTests.Create(
     'Heap snapshot hardening'));
   RunGocciaTests;

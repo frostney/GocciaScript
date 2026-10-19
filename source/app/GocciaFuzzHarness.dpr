@@ -629,7 +629,10 @@ begin
     Input := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
     try
       Restore := TGocciaHeapSnapshotRestore.Create(Engine, Input, Limits);
-      if Length(Restore.Roots) > 0 then
+      // A root can be any object a codec writes, a cell among them; what is
+      // used is a value.
+      if (Length(Restore.Roots) > 0) and
+         (Restore.Roots[0] is TGocciaValue) then
         ExerciseRestored(Engine, TGocciaValue(Restore.Roots[0]));
       Result := foCompleted;
     except

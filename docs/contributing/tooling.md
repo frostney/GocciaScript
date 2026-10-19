@@ -332,9 +332,34 @@ afl-fuzz -n -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
   -- ./build/GocciaFuzzHarness --heap-snapshot @@
 ```
 
-A refusal (`snapshot-refused`) is a normal outcome, as are the run limits;
-anything else is a finding. The scheduled workflow runs this as its
-`fuzz-heap-snapshot` job.
+Four of the seeds hold closures and suspended generators. Functions are named
+by the bytecode of the module that compiled them, so the harness runs the
+seeds' program before it restores an input, and then uses what restored: it
+reads every property, calls every function and resumes every generator.
+A refusal (`snapshot-refused`) is a normal outcome, as are the run limits and
+a script error (`script-throw`); anything else is a finding. The scheduled
+workflow runs this as its `fuzz-heap-snapshot` job.
+
+Its `heap-snapshot-hardening` job runs
+`Goccia.HeapSnapshot.Hardening.Test` with
+`GOCCIA_HEAP_SNAPSHOT_HARDENING=full`, which sweeps every payload value and
+every reference target and makes its chains 1,000,000 links long (pull
+requests run a rotating share and 200,000;
+[Heap Snapshots — Testing](../heap-snapshots.md#testing)), and every
+`Goccia.HeapSnapshot*.Test` program under heaptrc. Freed blocks are not kept
+there (`keepreleased` grows past a runner's memory within a minute), so
+heaptrc catches double frees and writes past a block. The job does not judge
+heaptrc's exit leak report, which counts what the test programs leave to
+process exit; the hardening program's leak test checks the heap between
+passes instead.
+
+`TGarbageCollector.CollectBeforeEveryReservation` is a test switch: every
+external reservation (`TryReserveExternalBytes`) runs the last-resort
+collection first, as one over the memory ceiling would, so a value the
+reader holds only in a local is freed at once. The hardening program sets it
+only while the reader runs; engine creation and some lazy built-in
+initialisers are not safe under it yet
+([#1816](https://github.com/frostney/GocciaScript/issues/1816)).
 
 ### Memory safety
 

@@ -7,8 +7,16 @@ unit Goccia.HeapSnapshot.Exercise;
   their own properties and prototypes, every accessor is read, every
   function called and every generator resumed, returned and thrown into.
   Each step is guarded in the script, so a script error is never the
-  outcome; the caller bounds the run with its timeout and instruction limit,
-  and only a Pascal exception that is not one of those is a finding. }
+  outcome; the call runs as a run of its engine (CallAsRun), which waits
+  for the jobs the calls left and raises a rejection left unhandled (the
+  script handles the promises the functions it calls return, so that is
+  rare), a script outcome too. The caller bounds the run with its timeout and
+  instruction limit, and only a Pascal exception that is not one of those
+  is a finding.
+
+  The script is compiled once per engine: an eval's code stays with its
+  engine for the engine's life (ADR 0134), so compiling it for each of
+  thousands of mutants would grow the engine and slow every collection. }
 
 {$I Goccia.inc}
 
@@ -16,10 +24,11 @@ interface
 
 uses
   Goccia.Engine,
+  Goccia.Values.FunctionBase,
   Goccia.Values.Primitives;
 
 const
-  HEAP_SNAPSHOT_EXERCISE = '(() => { const seen = new Set(); ' +
+  HEAP_SNAPSHOT_EXERCISE = '((restored) => { const seen = new Set(); ' +
     'const queue = [restored]; let steps = 0; let out = 0; ' +
     'const note = (v) => { if (queue.length < 4000) queue.push(v); }; ' +
     'for (const v of queue) { steps++; if (steps > 600) break; ' +
@@ -38,44 +47,94 @@ const
     '} catch (e) { out++; } } ' +
     'if (Array.isArray(v)) { try { out += v.length > 64 ? 64 : v.length; ' +
     'for (const x of v.slice(0, 64)) note(x); } catch (e) { out++; } } ' +
-    'if (t === "function") { try { note(v(1, "a")); } catch (e) { out++; } } ' +
+    'if (t === "function") { try { const r = v(1, "a"); ' +
+    'if (r instanceof Promise) r.then(undefined, () => {}); note(r); } ' +
+    'catch (e) { out++; } } ' +
     'let tag = ""; try { tag = Object.prototype.toString.call(v); } ' +
     'catch (e) { out++; } ' +
     'if (tag === "[object Generator]") { for (const step of [' +
     '() => v.next(5), () => v.next(), () => v.throw(new Error("x")), ' +
     '() => v.return(7)]) { try { note(step()); } catch (e) { out++; } } } } ' +
-    'return String(steps + out); })()';
+    'return String(steps + out); })';
 
-// Runs HEAP_SNAPSHOT_EXERCISE in AEngine with ARoot as `restored`, a global
-// it removes again. Limits and Pascal exceptions propagate.
+type
+  // HEAP_SNAPSHOT_EXERCISE compiled in one engine, held as a GC root until
+  // it is freed, which must happen before the engine is.
+  THeapSnapshotExerciser = class
+  private
+    FEngine: TGocciaEngine;
+    FFunction: TGocciaFunctionBase;
+  public
+    constructor Create(const AEngine: TGocciaEngine);
+    destructor Destroy; override;
+    // Uses ARoot as a resumed run might. Limits and Pascal exceptions
+    // propagate.
+    procedure Exercise(const ARoot: TGocciaValue);
+  end;
+
+// Exercises ARoot once with an exerciser of its own.
 procedure ExerciseRestored(const AEngine: TGocciaEngine;
   const ARoot: TGocciaValue);
 
 implementation
 
 uses
+  Goccia.Arguments.Collection,
   Goccia.FloatingPoint,
-  Goccia.SourcePipeline,
-  Goccia.Values.ObjectValue;
+  Goccia.GarbageCollector,
+  Goccia.SourcePipeline;
+
+constructor THeapSnapshotExerciser.Create(const AEngine: TGocciaEngine);
+var
+  Stage: TGocciaGlobalEvalStage;
+  FloatingPointState: TGocciaFloatingPointState;
+  Value: TGocciaValue;
+begin
+  inherited Create;
+  FEngine := AEngine;
+  // EvaluateGlobalEval leaves the engine's floating-point mode to its
+  // caller.
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    Value := AEngine.EvaluateGlobalEval(HEAP_SNAPSHOT_EXERCISE,
+      AEngine.SourcePath, Stage);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
+  FFunction := Value as TGocciaFunctionBase;
+  TGarbageCollector.Instance.AddTempRoot(FFunction);
+end;
+
+destructor THeapSnapshotExerciser.Destroy;
+begin
+  if Assigned(FFunction) then
+    TGarbageCollector.Instance.RemoveTempRoot(FFunction);
+  inherited;
+end;
+
+procedure THeapSnapshotExerciser.Exercise(const ARoot: TGocciaValue);
+var
+  Arguments: TGocciaArgumentsCollection;
+begin
+  Arguments := TGocciaArgumentsCollection.Create([ARoot]);
+  try
+    FEngine.CallAsRun(FFunction, Arguments,
+      TGocciaUndefinedLiteralValue.UndefinedValue);
+  finally
+    Arguments.Free;
+  end;
+end;
 
 procedure ExerciseRestored(const AEngine: TGocciaEngine;
   const ARoot: TGocciaValue);
 var
-  Global: TGocciaObjectValue;
-  Stage: TGocciaGlobalEvalStage;
-  FloatingPointState: TGocciaFloatingPointState;
+  Exerciser: THeapSnapshotExerciser;
 begin
-  // The script's arithmetic needs the engine's floating-point mode, which
-  // EvaluateGlobalEval leaves to its caller.
-  EnterGocciaFloatingPointScope(FloatingPointState);
-  Global := TGocciaObjectValue(AEngine.Realm.GlobalObject);
-  Global.AssignProperty('restored', ARoot);
+  Exerciser := THeapSnapshotExerciser.Create(AEngine);
   try
-    AEngine.EvaluateGlobalEval(HEAP_SNAPSHOT_EXERCISE, AEngine.SourcePath,
-      Stage);
+    Exerciser.Exercise(ARoot);
   finally
-    Global.DeleteProperty('restored');
-    LeaveGocciaFloatingPointScope(FloatingPointState);
+    Exerciser.Free;
   end;
 end;
 
