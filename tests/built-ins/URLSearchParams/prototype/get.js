@@ -44,4 +44,11 @@ describe("URLSearchParams.prototype.get", () => {
     expect(params.get("Key")).toBe("value");
     expect(params.get("key")).toBe(null);
   });
+
+  test("percent-decoded bytes are read as UTF-8", () => {
+    const params = new URLSearchParams("q=%C3%A9%E2%82%AC%F0%9F%98%80&r=é&s=%FF");
+    expect(params.get("q")).toBe("é€\u{1F600}");
+    expect(params.get("r")).toBe("é");
+    expect(params.get("s")).toBe("�");
+  });
 });

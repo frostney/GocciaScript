@@ -44,4 +44,8 @@ describe("URL.canParse", () => {
   test("returns true for file URL", () => {
     expect(URL.canParse("file:///home/user/file.txt")).toBe(true);
   });
+
+  test("returns true for a URL with non-ASCII path, query and fragment", () => {
+    expect(URL.canParse("http://h/éĀ?é#\u{1F600}")).toBe(true);
+  });
 });

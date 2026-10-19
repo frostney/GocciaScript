@@ -69,30 +69,37 @@ implementation
 uses
   SysUtils,
 
-  StringBuffer;
+  StringBuffer,
+  TextEncoding;
 
 // ---------------------------------------------------------------------------
 // Character helpers
 // ---------------------------------------------------------------------------
 
+// A set test on a UTF-16 code unit (`C in ['A'..'Z']`) compares only its low
+// byte, so U+0141 would pass for 'A' and U+012F for '/'. Every test on text
+// that can hold any code unit therefore goes through CharInSet or a range
+// comparison.
+
 function IsASCIIAlpha(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := (C in ['A'..'Z', 'a'..'z']);
+  Result := ((C >= 'A') and (C <= 'Z')) or ((C >= 'a') and (C <= 'z'));
 end;
 
 function IsASCIIDigit(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := (C in ['0'..'9']);
+  Result := (C >= '0') and (C <= '9');
 end;
 
 function IsASCIIAlphanumeric(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := (C in ['A'..'Z', 'a'..'z', '0'..'9']);
+  Result := IsASCIIAlpha(C) or IsASCIIDigit(C);
 end;
 
 function IsASCIIHexDigit(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := (C in ['0'..'9', 'A'..'F', 'a'..'f']);
+  Result := IsASCIIDigit(C) or ((C >= 'A') and (C <= 'F')) or
+            ((C >= 'a') and (C <= 'f'));
 end;
 
 function IsASCIIWhitespace(const C: Char): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -103,7 +110,7 @@ end;
 
 function ASCIILower(const C: Char): Char; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if C in ['A'..'Z'] then
+  if (C >= 'A') and (C <= 'Z') then
     Result := Chr(Ord(C) + 32)
   else
     Result := C;
@@ -115,7 +122,7 @@ var
 begin
   Result := S;
   for I := 1 to Length(Result) do
-    if Result[I] in ['A'..'Z'] then
+    if (Result[I] >= 'A') and (Result[I] <= 'Z') then
       Result[I] := Chr(Ord(Result[I]) + 32);
 end;
 
@@ -143,29 +150,47 @@ begin
   Result := '%' + HEX_DIGITS[(AByte shr 4) + 1] + HEX_DIGITS[(AByte and $0F) + 1];
 end;
 
-// §1.3.2 percent-decode
-function PercentDecodeString(const AInput: string): string;
+// §1.3.2 percent-decode: the input's UTF-8 bytes, with each %XX sequence
+// replaced by its byte. AFormEncoded additionally turns '+' into a space
+// (§5.2 application/x-www-form-urlencoded parsing).
+function PercentDecodeBytes(const AInput: string;
+  const AFormEncoded: Boolean): TBytes;
 var
-  I: Integer;
-  B: Byte;
+  Bytes: TBytes;
+  I, Count: Integer;
 begin
-  Result := '';
-  I := 1;
-  while I <= Length(AInput) do
+  Bytes := EncodeUTF8WithReplacement(AInput);
+  SetLength(Result, Length(Bytes));
+  Count := 0;
+  I := 0;
+  while I <= High(Bytes) do
   begin
-    if (AInput[I] = '%') and (I + 2 <= Length(AInput)) and
-       IsASCIIHexDigit(AInput[I + 1]) and IsASCIIHexDigit(AInput[I + 2]) then
+    if (Bytes[I] = Ord('%')) and (I + 2 <= High(Bytes)) and
+       IsASCIIHexDigit(Char(Bytes[I + 1])) and
+       IsASCIIHexDigit(Char(Bytes[I + 2])) then
     begin
-      B := (HexVal(AInput[I + 1]) shl 4) or HexVal(AInput[I + 2]);
-      Result := Result + Chr(B);
+      Result[Count] := (HexVal(Char(Bytes[I + 1])) shl 4) or
+        HexVal(Char(Bytes[I + 2]));
       Inc(I, 3);
     end
     else
     begin
-      Result := Result + AInput[I];
+      if AFormEncoded and (Bytes[I] = Ord('+')) then
+        Result[Count] := Ord(' ')
+      else
+        Result[Count] := Bytes[I];
       Inc(I);
     end;
+    Inc(Count);
   end;
+  SetLength(Result, Count);
+end;
+
+// §1.3.3 UTF-8 percent-decode, ending in UTF-8 decode without BOM: a byte
+// sequence that is not UTF-8 becomes U+FFFD.
+function PercentDecodeString(const AInput: string): string;
+begin
+  Result := DecodeUTF8WithReplacement(PercentDecodeBytes(AInput, False));
 end;
 
 // WHATWG URL Standard §4.1 Percent-encode sets
@@ -225,135 +250,78 @@ begin
   );
 end;
 
-function PercentEncodeForUserinfo(const AInput: string): string;
+type
+  TPercentEncodeSet = function(const B: Byte): Boolean;
+
+// §1.3 UTF-8 percent-encode: the input as USVString, so a lone surrogate is
+// U+FFFD, then encoded as UTF-8; every byte of a non-ASCII code point is past
+// U+007E and so in each set, and an ASCII byte is encoded when AInSet says so.
+function UTF8PercentEncode(const AInput: string;
+  const AInSet: TPercentEncodeSet): string;
 var
+  Bytes: TBytes;
   I: Integer;
-  B: Byte;
   Buffer: TStringBuffer;
 begin
-  Buffer := TStringBuffer.Create(Length(AInput) * 2);
-  for I := 1 to Length(AInput) do
-  begin
-    B := Ord(AInput[I]);
-    if (B > $7F) or InUserinfoPercentEncodeSet(B) then
-      Buffer.Append(PercentEncode(B))
+  Bytes := EncodeUTF8WithReplacement(AInput);
+  Buffer := TStringBuffer.Create(Length(Bytes) * 2);
+  for I := 0 to High(Bytes) do
+    if (Bytes[I] > $7F) or AInSet(Bytes[I]) then
+      Buffer.Append(PercentEncode(Bytes[I]))
     else
-      Buffer.AppendChar(AInput[I]);
-  end;
+      Buffer.AppendChar(Char(Bytes[I]));
   Result := Buffer.ToString;
 end;
 
-function PercentEncodeForPath(const AInput: string): string;
-var
-  I: Integer;
-  B: Byte;
-  Buffer: TStringBuffer;
+function PercentEncodeForUserinfo(const AInput: string): string;
 begin
-  Buffer := TStringBuffer.Create(Length(AInput) * 2);
-  for I := 1 to Length(AInput) do
-  begin
-    B := Ord(AInput[I]);
-    if (B > $7F) or InPathPercentEncodeSet(B) then
-      Buffer.Append(PercentEncode(B))
-    else
-      Buffer.AppendChar(AInput[I]);
-  end;
-  Result := Buffer.ToString;
+  Result := UTF8PercentEncode(AInput, InUserinfoPercentEncodeSet);
+end;
+
+function PercentEncodeForPath(const AInput: string): string;
+begin
+  Result := UTF8PercentEncode(AInput, InPathPercentEncodeSet);
 end;
 
 function PercentEncodeForQuery(const AInput: string;
   const AIsSpecial: Boolean): string;
-var
-  I: Integer;
-  B: Byte;
-  Buffer: TStringBuffer;
 begin
-  Buffer := TStringBuffer.Create(Length(AInput) * 2);
-  for I := 1 to Length(AInput) do
-  begin
-    B := Ord(AInput[I]);
-    if AIsSpecial then
-    begin
-      if (B > $7F) or InSpecialQueryPercentEncodeSet(B) then
-        Buffer.Append(PercentEncode(B))
-      else
-        Buffer.AppendChar(AInput[I]);
-    end
-    else
-    begin
-      if (B > $7F) or InQueryPercentEncodeSet(B) then
-        Buffer.Append(PercentEncode(B))
-      else
-        Buffer.AppendChar(AInput[I]);
-    end;
-  end;
-  Result := Buffer.ToString;
+  if AIsSpecial then
+    Result := UTF8PercentEncode(AInput, InSpecialQueryPercentEncodeSet)
+  else
+    Result := UTF8PercentEncode(AInput, InQueryPercentEncodeSet);
 end;
 
 function PercentEncodeForFragment(const AInput: string): string;
+begin
+  Result := UTF8PercentEncode(AInput, InFragmentPercentEncodeSet);
+end;
+
+// §5.1 application/x-www-form-urlencoded serializing of one name or value:
+// UTF-8 percent-encode with the form set, a space as '+'.
+function EncodeFormComponent(const AInput: string): string;
 var
+  Bytes: TBytes;
   I: Integer;
-  B: Byte;
   Buffer: TStringBuffer;
 begin
-  Buffer := TStringBuffer.Create(Length(AInput) * 2);
-  for I := 1 to Length(AInput) do
-  begin
-    B := Ord(AInput[I]);
-    if (B > $7F) or InFragmentPercentEncodeSet(B) then
-      Buffer.Append(PercentEncode(B))
+  Bytes := EncodeUTF8WithReplacement(AInput);
+  Buffer := TStringBuffer.Create(Length(Bytes) * 2);
+  for I := 0 to High(Bytes) do
+    if Bytes[I] = $20 then
+      Buffer.AppendChar('+')
+    else if (Bytes[I] > $7F) or InFormPercentEncodeSet(Bytes[I]) then
+      Buffer.Append(PercentEncode(Bytes[I]))
     else
-      Buffer.AppendChar(AInput[I]);
-  end;
+      Buffer.AppendChar(Char(Bytes[I]));
   Result := Buffer.ToString;
 end;
 
-// application/x-www-form-urlencoded encoding
-function EncodeFormComponent(const AInput: string): string;
-var
-  I: Integer;
-  B: Byte;
-begin
-  Result := '';
-  for I := 1 to Length(AInput) do
-  begin
-    B := Ord(AInput[I]);
-    if B = $20 then
-      Result := Result + '+'         // space -> +
-    else if (B > $7F) or InFormPercentEncodeSet(B) then
-      Result := Result + PercentEncode(B)
-    else
-      Result := Result + AInput[I];
-  end;
-end;
-
+// §5.2 step 5: '+' is a space, then percent-decode and UTF-8 decode without
+// BOM.
 function DecodeFormComponent(const AInput: string): string;
-var
-  I: Integer;
-  B: Byte;
 begin
-  Result := '';
-  I := 1;
-  while I <= Length(AInput) do
-  begin
-    if AInput[I] = '+' then
-    begin
-      Result := Result + ' ';
-      Inc(I);
-    end
-    else if (AInput[I] = '%') and (I + 2 <= Length(AInput)) and
-            IsASCIIHexDigit(AInput[I + 1]) and IsASCIIHexDigit(AInput[I + 2]) then
-    begin
-      B := (HexVal(AInput[I + 1]) shl 4) or HexVal(AInput[I + 2]);
-      Result := Result + Chr(B);
-      Inc(I, 3);
-    end
-    else
-    begin
-      Result := Result + AInput[I];
-      Inc(I);
-    end;
-  end;
+  Result := DecodeUTF8WithReplacement(PercentDecodeBytes(AInput, True));
 end;
 
 // WHATWG URL Standard §5.1 application/x-www-form-urlencoded serializing
@@ -447,7 +415,8 @@ begin
     Result[2] := ':';
 end;
 
-// WHATWG §3.5 host parsing (simplified: no IDNA/Punycode)
+// WHATWG §3.5 host parsing (simplified: no IDNA/Punycode, no IP address
+// canonicalisation; see docs/built-ins.md, URL)
 // Returns false if the host is invalid
 function ParseHost(const AInput: string; const AIsSpecial: Boolean;
   out AHost: string): Boolean;
@@ -481,14 +450,15 @@ begin
   begin
     for I := 1 to Length(AInput) do
     begin
-      if AInput[I] in [#0, ' ', '#', '/', ':', '<', '>', '?', '@', '[', '\', ']', '^', '|'] then
+      if CharInSet(AInput[I], [#0, ' ', '#', '/', ':', '<', '>', '?', '@', '[', '\', ']', '^', '|']) then
       begin
         Result := False;
         Exit;
       end;
     end;
-    // Percent-decode and keep
-    AHost := AInput;
+    // §3.5 opaque-host parser step 3: UTF-8 percent-encode with the C0
+    // control percent-encode set
+    AHost := UTF8PercentEncode(AInput, InC0PercentEncodeSet);
     Result := True;
     Exit;
   end;
@@ -500,7 +470,7 @@ begin
   // Validate: no forbidden host code points
   for I := 1 to Length(AHost) do
   begin
-    if AHost[I] in [#0, #9, #10, #13, ' ', '#', '/', '<', '>', '?', '@', '[', '\', ']', '^', '|'] then
+    if CharInSet(AHost[I], [#0, #9, #10, #13, ' ', '#', '/', '<', '>', '?', '@', '[', '\', ']', '^', '|']) then
     begin
       Result := False;
       Exit;
@@ -668,7 +638,19 @@ function StartsWithWindowsDriveLetter(const S: string): Boolean;
 begin
   Result := (Length(S) >= 2) and IsASCIIAlpha(S[1]) and
             ((S[2] = ':') or (S[2] = '|')) and
-            ((Length(S) = 2) or (S[3] in ['/', '\', '?', '#']));
+            ((Length(S) = 2) or CharInSet(S[3], ['/', '\', '?', '#']));
+end;
+
+// The number of UTF-16 code units of the code point at AIndex: 2 for a
+// surrogate pair, else 1 (a lone surrogate is one unit, encoded as U+FFFD).
+// A code point is percent-encoded whole, never one half at a time.
+function CodePointLengthAt(const AText: string; const AIndex: Integer): Integer;
+begin
+  Result := 1;
+  if (AIndex < Length(AText)) and (AText[AIndex] >= #$D800) and
+     (AText[AIndex] <= #$DBFF) and (AText[AIndex + 1] >= #$DC00) and
+     (AText[AIndex + 1] <= #$DFFF) then
+    Result := 2;
 end;
 
 const
@@ -690,7 +672,7 @@ var
   PortNum: Integer;
   Host: string;
   Segment: string;
-  J: Integer;
+  J, K: Integer;
 
   function Peek(const AOffset: Integer): Char;
   begin
@@ -738,7 +720,7 @@ begin
   J := 1;
   while J <= Length(Input) do
   begin
-    if Input[J] in [#9, #10, #13] then
+    if CharInSet(Input[J], [#9, #10, #13]) then
       Delete(Input, J, 1)
     else
       Inc(J);
@@ -1034,20 +1016,25 @@ begin
           URL.Username := '';
           URL.Password := '';
           PasswordTokenSeen := False;
-          for J := 1 to Length(Buffer) do
+          J := 1;
+          while J <= Length(Buffer) do
           begin
+            K := CodePointLengthAt(Buffer, J);
             if (Buffer[J] = ':') and not PasswordTokenSeen then
               PasswordTokenSeen := True
             else if PasswordTokenSeen then
-              URL.Password := URL.Password + PercentEncodeForUserinfo(Buffer[J])
+              URL.Password := URL.Password +
+                PercentEncodeForUserinfo(Copy(Buffer, J, K))
             else
-              URL.Username := URL.Username + PercentEncodeForUserinfo(Buffer[J]);
+              URL.Username := URL.Username +
+                PercentEncodeForUserinfo(Copy(Buffer, J, K));
+            Inc(J, K);
           end;
 
           Buffer := '';
           Inc(I);
         end
-        else if (C in [EOF_CHAR, '/', '?', '#']) or (IsSpecial and (C = '\')) then
+        else if CharInSet(C, [EOF_CHAR, '/', '?', '#']) or (IsSpecial and (C = '\')) then
         begin
           // End of authority — buffer contains host[:port] accumulated since last '@'
           if AtSignSeen and (Buffer = '') then
@@ -1100,7 +1087,7 @@ begin
             end;
           end;
         end
-        else if (C in [EOF_CHAR, '/', '?', '#']) or (IsSpecial and (C = '\')) then
+        else if CharInSet(C, [EOF_CHAR, '/', '?', '#']) or (IsSpecial and (C = '\')) then
         begin
           if IsSpecial and (Buffer = '') then
           begin
@@ -1144,7 +1131,7 @@ begin
           Buffer := Buffer + C;
           Inc(I);
         end
-        else if (C in [EOF_CHAR, '/', '?', '#']) or (IsSpecial and (C = '\')) or
+        else if CharInSet(C, [EOF_CHAR, '/', '?', '#']) or (IsSpecial and (C = '\')) or
                 AHasStateOverride then
         begin
           if Buffer <> '' then
@@ -1265,7 +1252,7 @@ begin
       // §4.4.16 file host state
       upsFileHost:
       begin
-        if (C in [EOF_CHAR, '/', '\', '?', '#']) then
+        if CharInSet(C, [EOF_CHAR, '/', '\', '?', '#']) then
         begin
           // end of host
           if IsWindowsDriveLetter(Buffer) then
@@ -1414,9 +1401,10 @@ begin
         end
         else
         begin
-          // Add encoded character to buffer
-          Buffer := Buffer + PercentEncodeForPath(C);
-          Inc(I);
+          // Add the encoded code point to buffer
+          K := CodePointLengthAt(Input, I);
+          Buffer := Buffer + PercentEncodeForPath(Copy(Input, I, K));
+          Inc(I, K);
         end;
       end;
 
@@ -1443,8 +1431,10 @@ begin
         end
         else
         begin
-          URL.OpaquePath := URL.OpaquePath + PercentEncodeForPath(C);
-          Inc(I);
+          K := CodePointLengthAt(Input, I);
+          URL.OpaquePath := URL.OpaquePath +
+            PercentEncodeForPath(Copy(Input, I, K));
+          Inc(I, K);
         end;
       end;
 
