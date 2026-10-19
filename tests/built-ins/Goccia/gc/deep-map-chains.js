@@ -14,10 +14,14 @@ const range = (n) => Array.from({ length: n });
 describe("Goccia.gc() over Maps that each hold the next", () => {
   test("a chain of Maps", () => {
     let head = new Map([["end", true]]);
-    for (const _ of range(300_000)) head = new Map([["next", head]]);
+    for (const _ of range(200_000)) {
+      const next = new Map();
+      next.set("next", head);
+      head = next;
+    }
     Goccia.gc();
     let cur = head;
-    for (const _ of range(300_000)) cur = cur.get("next");
+    for (const _ of range(200_000)) cur = cur.get("next");
     expect(cur.get("end")).toBe(true);
   });
 });

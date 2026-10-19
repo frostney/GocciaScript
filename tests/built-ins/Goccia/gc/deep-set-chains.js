@@ -14,10 +14,16 @@ const range = (n) => Array.from({ length: n });
 describe("Goccia.gc() over Sets that each hold the next", () => {
   test("a chain of Sets", () => {
     let head = new Set(["end"]);
-    for (const _ of range(300_000)) head = new Set([head]);
+    for (const _ of range(300_000)) {
+      const next = new Set();
+      next.add(head);
+      head = next;
+    }
     Goccia.gc();
     let cur = head;
-    for (const _ of range(300_000)) cur = cur.values().next().value;
+    for (const _ of range(300_000)) {
+      for (const only of cur) cur = only;
+    }
     expect(cur.has("end")).toBe(true);
   });
 });
