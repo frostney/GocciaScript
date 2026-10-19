@@ -234,6 +234,11 @@ function FindSnapshotCodecByTag(const ATag: string): TGocciaSnapshotCodec;
 
 // Builds a plain object's payload codec (exact class TGocciaObjectValue).
 function ModuleBytecodeHash(const AModule: TGocciaBytecodeModule): string;
+// Whether a snapshot can hold an object of this kind: it writes the value
+// inline (undefined, null, booleans, holes, numbers, strings, BigInts) or a
+// codec is registered for its class. Built-ins and the entry module's scope
+// are named instead, whatever their class.
+function SnapshotCanHold(const AObject: TObject): Boolean;
 
 // Native functions whose callback is a method of their captured root are
 // restored by naming the method: each unit registers the code addresses of
@@ -400,6 +405,16 @@ begin
   Result := nil;
   if Assigned(GRegistry) then
     GRegistry.ByTag.TryGetValue(ATag, Result);
+end;
+
+function SnapshotCanHold(const AObject: TObject): Boolean;
+begin
+  Result := (AObject is TGocciaUndefinedLiteralValue) or
+    (AObject is TGocciaNullLiteralValue) or
+    (AObject is TGocciaBooleanLiteralValue) or (AObject is TGocciaHoleValue) or
+    (AObject is TGocciaNumberLiteralValue) or
+    (AObject is TGocciaStringLiteralValue) or (AObject is TGocciaBigIntValue) or
+    Assigned(FindSnapshotCodecByClass(AObject.ClassType));
 end;
 
 function ModuleBytecodeHash(const AModule: TGocciaBytecodeModule): string;

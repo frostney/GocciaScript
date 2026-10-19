@@ -33,6 +33,7 @@ type
   TGocciaHeapCensus = class
   private
     FCounts: TStringList;
+    FNoCodec: TStringList;
     FTotal: Integer;
     FBaselineLive: Integer;
   public
@@ -62,7 +63,9 @@ function CensusDirectory: string;
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.HeapSnapshot.Codec;
 
 function JsonEscape(const AText: string): string;
 var
@@ -129,11 +132,15 @@ begin
   FCounts := TStringList.Create;
   FCounts.Sorted := True;
   FCounts.Duplicates := dupError;
+  FNoCodec := TStringList.Create;
+  FNoCodec.Sorted := True;
+  FNoCodec.Duplicates := dupIgnore;
 end;
 
 destructor TGocciaHeapCensus.Destroy;
 begin
   FCounts.Free;
+  FNoCodec.Free;
   inherited;
 end;
 
@@ -145,6 +152,7 @@ var
   Name: string;
 begin
   FCounts.Clear;
+  FNoCodec.Clear;
   FTotal := 0;
   FBaselineLive := 0;
   GC := TGarbageCollector.Instance;
@@ -162,6 +170,8 @@ begin
       Continue;
     end;
     Name := Obj.ClassName;
+    if not SnapshotCanHold(Obj) then
+      FNoCodec.Add(Name);
     Index := FCounts.IndexOf(Name);
     if Index < 0 then
       FCounts.AddObject(Name, TObject(PtrInt(1)))
@@ -185,7 +195,14 @@ begin
     Result := Result + '"' + JsonEscape(FCounts[I]) + '":' +
       IntToStr(PtrInt(FCounts.Objects[I]));
   end;
-  Result := Result + '}}';
+  Result := Result + '},"noCodec":[';
+  for I := 0 to FNoCodec.Count - 1 do
+  begin
+    if I > 0 then
+      Result := Result + ',';
+    Result := Result + '"' + JsonEscape(FNoCodec[I]) + '"';
+  end;
+  Result := Result + ']}';
 end;
 
 function CensusDirectory: string;
