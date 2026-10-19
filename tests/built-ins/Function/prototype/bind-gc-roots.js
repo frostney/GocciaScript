@@ -135,3 +135,55 @@ describe.runIf(hasGoccia)("Function.prototype.bind GC roots", () => {
     expect(churn()).toBe(467.5);
   });
 });
+
+describe.runIf(hasGoccia)("Function.prototype.bind GC roots with a Proxy target", () => {
+  test("a prototype returned fresh by the getPrototypeOf trap survives the later reads", () => {
+    // ES2026 §10.4.1.3 step 1 runs the trap; the object it returns is held by
+    // nothing but the bound function, which the length and name reads (here a
+    // collection each) are still building.
+    const target = () => {};
+    Object.defineProperty(target, "length", {
+      get() {
+        churn();
+        return 2;
+      },
+    });
+    Object.defineProperty(target, "name", {
+      get() {
+        churn();
+        return "target";
+      },
+    });
+    const proxy = new Proxy(target, {
+      getPrototypeOf() {
+        const fresh = Object.create(Function.prototype);
+        fresh.marker = "kept";
+        return fresh;
+      },
+    });
+    const bound = Function.prototype.bind.call(proxy, null);
+    churn();
+    expect(Object.getPrototypeOf(bound).marker).toBe("kept");
+    expect(bound.name).toBe("bound target");
+    expect(bound.length).toBe(2);
+  });
+
+  test("a prototype survives the extensibility check of a nested Proxy target", () => {
+    // The outer trap's result is held by nothing while its invariant check
+    // asks the inner Proxy whether it is extensible, which collects.
+    const inner = new Proxy(() => {}, {
+      isExtensible() {
+        churn();
+        return true;
+      },
+    });
+    const outer = new Proxy(inner, {
+      getPrototypeOf() {
+        return { marker: "fresh" };
+      },
+    });
+    const bound = Function.prototype.bind.call(outer, null);
+    churn();
+    expect(Object.getPrototypeOf(bound).marker).toBe("fresh");
+  });
+});

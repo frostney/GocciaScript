@@ -1646,6 +1646,8 @@ end;
 procedure TGocciaBoundFunctionValue.InitializeBoundFunctionProperties;
 var
   Roots: TGocciaActiveRootFrame;
+  TargetPrototype: TGocciaValue;
+  ProxySteps: Integer;
 begin
   // ES2026 §20.2.3.2 steps 5-8: the length and name reads run after step 3
   // (BoundFunctionCreate) has captured the bound this and arguments, and both
@@ -1653,18 +1655,34 @@ begin
   // constructor, so it is not yet registered with the collector and nothing
   // marks the values its fields hold — a boxed register value bound by the VM
   // fast path is reachable from nowhere else. Rooting Self marks the target,
-  // the bound this and every bound argument through MarkReferences.
+  // the bound this and every bound argument through MarkReferences. The
+  // prototype read below runs a Proxy's getPrototypeOf trap, which is guest
+  // code too, so it sits inside the same frame, and the result is stored on
+  // Self (which marks it) before anything else can collect.
   Roots.Initialize;
   try
     Roots.Add(Self);
+    // ES2026 §10.4.1.3 BoundFunctionCreate step 1: Let proto be
+    // ? targetFunction.[[GetPrototypeOf]](), called once. A Proxy target runs
+    // its getPrototypeOf trap (an abrupt completion propagates; the trap's
+    // result is checked there); any other target reads its prototype.
+    if FOriginalFunction is TGocciaObjectValue then
+    begin
+      ProxySteps := 0;
+      TargetPrototype := GetPrototypeOfObject(
+        TGocciaObjectValue(FOriginalFunction), ProxySteps);
+      // Step 4: Set obj.[[Prototype]] to proto (an object or null).
+      if TargetPrototype is TGocciaObjectValue then
+        Self.Prototype := TGocciaObjectValue(TargetPrototype)
+      else
+        Self.Prototype := nil;
+    end;
     FBoundLength := SnapshotBoundFunctionLength(FOriginalFunction,
       FBoundArgCount);
     FBoundName := SnapshotBoundFunctionName(FOriginalFunction);
   finally
     Roots.Clear;
   end;
-  if FOriginalFunction is TGocciaObjectValue then
-    Self.Prototype := TGocciaObjectValue(FOriginalFunction).Prototype;
 
   FProperties.Add(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
     TGocciaNumberLiteralValue.Create(FBoundLength), [pfConfigurable]));
