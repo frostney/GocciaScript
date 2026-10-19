@@ -12,7 +12,13 @@ program Goccia.GCStress.Test;
   build (issue #1816).
 
   Each case names the window it pins: before its fix, the case reported a
-  quarantined object. }
+  quarantined object, or, for a window where the swept value is only read
+  and never stored again, an invalid read under Valgrind memcheck.
+
+  With GOCCIA_GC_STRESS_FREE=1 in the environment the sweeps free what they
+  take instead of keeping it, so memcheck (or heaptrc's keepreleased) sees a
+  read of a swept value directly; the scheduled memory-safety job runs the
+  program that way under Valgrind. }
 
 {$I Goccia.inc}
 
@@ -41,6 +47,7 @@ type
       const ASource: TStringList): TGocciaEngine;
     procedure RunStressed(const AFileName, ASource: string);
     procedure ExpectNoQuarantinedReached(const AWhat: string);
+    procedure AddCase(const AName: string; const AMethod: TTestMethod);
   public
     procedure SetupTests; override;
 
@@ -73,6 +80,7 @@ type
     procedure TestSegmentsContaining;
     procedure TestDisposalErrors;
     procedure TestAsyncGeneratorReceivers;
+    procedure TestErroredModuleImport;
   end;
 
 const
@@ -97,51 +105,64 @@ const
     '}' + LineEnding +
     'seen.length;';
 
+{ GOCCIA_GC_STRESS_ONLY=<text> runs only the cases whose name contains it. }
+procedure TGCStressTests.AddCase(const AName: string;
+  const AMethod: TTestMethod);
+var
+  Only: string;
+begin
+  Only := GetEnvironmentVariable('GOCCIA_GC_STRESS_ONLY');
+  if (Only = '') or (Pos(Only, AName) > 0) then
+    Test(AName, AMethod);
+end;
+
 procedure TGCStressTests.SetupTests;
 begin
-  Test('engine creation', TestEngineCreation);
-  Test('every lazy global and its members', TestLazyGlobals);
-  Test('concrete iterator prototypes (EnsureConcreteIteratorPrototype)',
+  AddCase('engine creation', TestEngineCreation);
+  AddCase('every lazy global and its members', TestLazyGlobals);
+  AddCase('concrete iterator prototypes (EnsureConcreteIteratorPrototype)',
     TestIteratorPrototypes);
-  Test('generator, async and async generator intrinsics',
+  AddCase('generator, async and async generator intrinsics',
     TestFunctionObjectIntrinsics);
-  Test('Object.freeze, seal, isFrozen and isSealed key lists',
+  AddCase('Object.freeze, seal, isFrozen and isSealed key lists',
     TestIntegrityLevels);
-  Test('defining a function''s name or length beside its intrinsic',
+  AddCase('defining a function''s name or length beside its intrinsic',
     TestIntrinsicNameAndLength);
-  Test('a bound function''s length and name', TestBoundFunction);
-  Test('decorator context objects', TestDecorators);
-  Test('import.meta', TestImportMeta);
-  Test('DOMException creation and structuredClone', TestDOMExceptionAndClone);
-  Test('AbortSignal.abort and AbortSignal.timeout', TestAbortSignalStatics);
-  Test('Headers and URLSearchParams forEach arguments',
+  AddCase('a bound function''s length and name', TestBoundFunction);
+  AddCase('decorator context objects', TestDecorators);
+  AddCase('import.meta', TestImportMeta);
+  AddCase('DOMException creation and structuredClone', TestDOMExceptionAndClone);
+  AddCase('AbortSignal.abort and AbortSignal.timeout', TestAbortSignalStatics);
+  AddCase('Headers and URLSearchParams forEach arguments',
     TestForEachArguments);
-  Test('String replace and replaceAll replacer arguments',
+  AddCase('String replace and replaceAll replacer arguments',
     TestStringReplaceArguments);
-  Test('RegExp species constructors and replacer captures',
+  AddCase('RegExp species constructors and replacer captures',
     TestRegExpSpeciesAndCaptures);
-  Test('Proxy traps a handler getter returns, and the stored value',
+  AddCase('Proxy traps a handler getter returns, and the stored value',
     TestProxyTraps);
-  Test('Intl resolvedOptions and DisplayNames bootstrap',
+  AddCase('Intl resolvedOptions and DisplayNames bootstrap',
     TestIntlResolvedOptions);
-  Test('Intl.DurationFormat and Temporal.Duration toLocaleString',
+  AddCase('Intl.DurationFormat and Temporal.Duration toLocaleString',
     TestDurationFormat);
-  Test('goccia:ast parse nodes', TestASTParse);
-  Test('custom matcher hints and extractor results', TestCustomMatchers);
-  Test('Response body promises', TestResponseBodies);
-  Test('the goccia:semver namespace', TestSemverNamespace);
-  Test('Array.prototype methods: receiver wrappers and results',
+  AddCase('goccia:ast parse nodes', TestASTParse);
+  AddCase('custom matcher hints and extractor results', TestCustomMatchers);
+  AddCase('Response body promises', TestResponseBodies);
+  AddCase('the goccia:semver namespace', TestSemverNamespace);
+  AddCase('Array.prototype methods: receiver wrappers and results',
     TestArrayMethods);
-  Test('Array.fromAsync with a this-constructor', TestArrayFromAsync);
-  Test('Temporal until and since with a property bag and option getters',
+  AddCase('Array.fromAsync with a this-constructor', TestArrayFromAsync);
+  AddCase('Temporal until and since with a property bag and option getters',
     TestTemporalDifferences);
-  Test('ToPrimitive with a fresh Symbol.toPrimitive method',
+  AddCase('ToPrimitive with a fresh Symbol.toPrimitive method',
     TestToPrimitive);
-  Test('Intl constructors with a newTarget', TestIntlConstructPrototype);
-  Test('Intl Segments containing', TestSegmentsContaining);
-  Test('DisposableStack errors across disposers', TestDisposalErrors);
-  Test('async generator methods on a wrong receiver',
+  AddCase('Intl constructors with a newTarget', TestIntlConstructPrototype);
+  AddCase('Intl Segments containing', TestSegmentsContaining);
+  AddCase('DisposableStack errors across disposers', TestDisposalErrors);
+  AddCase('async generator methods on a wrong receiver',
     TestAsyncGeneratorReceivers);
+  AddCase('a second import of a module whose evaluation threw',
+    TestErroredModuleImport);
 end;
 
 procedure TGCStressTests.BeginStress;
@@ -152,7 +173,7 @@ begin
   GC := TGarbageCollector.Instance;
   GC.Collect;
   TGarbageCollector.ResetQuarantineViolations;
-  GC.QuarantineSwept := True;
+  GC.QuarantineSwept := GetEnvironmentVariable('GOCCIA_GC_STRESS_FREE') <> '1';
   GC.CollectBeforeEveryReservation := True;
 end;
 
@@ -444,8 +465,13 @@ end;
 procedure TGCStressTests.TestCustomMatchers;
 begin
   RunStressed('matchers.js',
-    'const Even = { [Symbol.customMatcher](subject, hint) { return subject % 2 === 0; } };' + LineEnding +
+    // Each matcher allocates, so a collection reaches the hint object
+    // through the arguments while they are still live.
+    'const seen = [];' + LineEnding +
+    'const Even = { [Symbol.customMatcher](subject, hint) {' + LineEnding +
+    '  seen.push(hint.matchType + "!"); return subject % 2 === 0; } };' + LineEnding +
     'const Pair = { [Symbol.customMatcher](subject, hint) {' + LineEnding +
+    '  seen.push(hint.matchType + "!");' + LineEnding +
     '  return subject.kind === "pair" ? [subject.left, subject.right] : false; } };' + LineEnding +
     'let sum = 0;' + LineEnding +
     'if ({ kind: "pair", left: 2, right: 3 } is Pair(const left, const right)) sum = left + right;' + LineEnding +
@@ -569,6 +595,33 @@ begin
     'const proto = Object.getPrototypeOf(({ async *g() {} }).g.prototype);' + LineEnding +
     '[proto.next.call({}), proto.return.call(1), proto.throw.call(null)]' + LineEnding +
     '  .map((p) => p.catch((error) => error.name));');
+end;
+
+// The loader kept an errored module's evaluation error in a map nothing
+// marked, so a collection between two imports freed the error the second
+// import rethrows.
+procedure TGCStressTests.TestErroredModuleImport;
+var
+  Directory: string;
+  Module: TStringList;
+begin
+  Directory := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    Format('goccia-gc-stress-%d', [GetProcessID]);
+  ForceDirectories(Directory);
+  Module := TStringList.Create;
+  try
+    Module.Text := 'throw new Error("evaluation " + "failed");';
+    Module.SaveToFile(IncludeTrailingPathDelimiter(Directory) + 'errored.js');
+    RunStressed(IncludeTrailingPathDelimiter(Directory) + 'main.mjs',
+      'const second = import("./errored.js").catch((first) => first)' + LineEnding +
+      '  .then((first) => ["a", "b", "c"].map((s) => s.repeat(3)) && import("./errored.js")' + LineEnding +
+      '    .catch((again) => again === first));' + LineEnding +
+      'export default second;');
+  finally
+    Module.Free;
+    DeleteFile(IncludeTrailingPathDelimiter(Directory) + 'errored.js');
+    RemoveDir(Directory);
+  end;
 end;
 
 begin

@@ -467,10 +467,14 @@ that certain in a test, in any build:
 
 `Goccia.GCStress.Test` sets both and runs engine creation, every lazy global
 and its members, and the native construction paths issue #1816 found
-unrooted, each case written so it reports a violation without its fix. It
-takes a few seconds, so it runs per PR in the Pascal unit-test loop, and the
-scheduled memory-safety job (`fuzz.yml`) runs it again under heaptrc and
-under Valgrind memcheck.
+unrooted. It takes a few seconds, so it runs per PR in the Pascal unit-test
+loop, and the scheduled memory-safety job (`fuzz.yml`) runs it again under
+heaptrc and under Valgrind memcheck. A swept value that is stored again
+reports a violation; one that native code only reads afterwards (a key list,
+an operand) does not, so the memcheck run sets `GOCCIA_GC_STRESS_FREE=1`,
+which frees what each sweep takes, and memcheck reports the read.
+`GOCCIA_GC_STRESS_ONLY=<text>` runs only the cases whose name contains the
+text.
 
 To sweep a wider workload, set both switches in `TGarbageCollector.Create`
 in a local build of `GocciaTestRunner` or `GocciaTest262Runner` and run each

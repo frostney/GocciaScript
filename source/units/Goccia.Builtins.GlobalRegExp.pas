@@ -1947,6 +1947,7 @@ var
   CaptureIndex: Integer;
   SpeciesConstructor: TGocciaValue;
   UnicodeMatching: Boolean;
+  MatchRoots: TGocciaActiveRootFrame;
   Roots: TGocciaActiveRootFrame;
 begin
   RegexValue := RequireRegExpObjectReceiver(AThisValue,
@@ -2013,49 +2014,58 @@ begin
       end;
       while SearchIndex < Size do
       begin
-        SplitterValue.SetProperty(PROP_LAST_INDEX,
-          TGocciaNumberLiteralValue.Create(SearchIndex));
-        if not MatchRegExpObjectOnce(SplitterValue, Input, MatchValue,
-          ArgumentStringValue(AArgs)) then
-        begin
-          SearchIndex := AdvanceUTF16StringIndex(Input, SearchIndex,
-            UnicodeMatching);
-          Continue;
-        end;
+        // The exec result is held only by this local while the piece before
+        // it is made (a string, which can collect) and while its captures
+        // are read (getters on a custom exec result).
+        MatchRoots.Initialize;
+        try
+          SplitterValue.SetProperty(PROP_LAST_INDEX,
+            TGocciaNumberLiteralValue.Create(SearchIndex));
+          if not MatchRegExpObjectOnce(SplitterValue, Input, MatchValue,
+            ArgumentStringValue(AArgs)) then
+          begin
+            SearchIndex := AdvanceUTF16StringIndex(Input, SearchIndex,
+              UnicodeMatching);
+            Continue;
+          end;
 
-        MatchArray := TGocciaObjectValue(MatchValue);
-        MatchEnd := GetClampedLastIndex(SplitterValue, Size);
-        if MatchEnd = LastMatchEnd then
-        begin
-          SearchIndex := AdvanceUTF16StringIndex(Input, SearchIndex,
-            UnicodeMatching);
-          Continue;
-        end;
+          MatchArray := TGocciaObjectValue(MatchValue);
+          MatchRoots.Add(MatchArray);
+          MatchEnd := GetClampedLastIndex(SplitterValue, Size);
+          if MatchEnd = LastMatchEnd then
+          begin
+            SearchIndex := AdvanceUTF16StringIndex(Input, SearchIndex,
+              UnicodeMatching);
+            Continue;
+          end;
 
-        ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
-          UTF16Substring(Input, LastMatchEnd, SearchIndex - LastMatchEnd)));
-        if Cardinal(ResultArray.Elements.Count) >= Limit then
-        begin
-          Result := ResultArray;
-          Exit;
-        end;
-
-        LastMatchEnd := MatchEnd;
-        NumberOfCaptures := GetRegexMatchLength(MatchArray);
-        if NumberOfCaptures > 1 then
-          Dec(NumberOfCaptures)
-        else
-          NumberOfCaptures := 0;
-        for CaptureIndex := 1 to NumberOfCaptures do
-        begin
-          ResultArray.Elements.Add(GetRegexMatchElement(MatchArray, CaptureIndex));
+          ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
+            UTF16Substring(Input, LastMatchEnd, SearchIndex - LastMatchEnd)));
           if Cardinal(ResultArray.Elements.Count) >= Limit then
           begin
             Result := ResultArray;
             Exit;
           end;
+
+          LastMatchEnd := MatchEnd;
+          NumberOfCaptures := GetRegexMatchLength(MatchArray);
+          if NumberOfCaptures > 1 then
+            Dec(NumberOfCaptures)
+          else
+            NumberOfCaptures := 0;
+          for CaptureIndex := 1 to NumberOfCaptures do
+          begin
+            ResultArray.Elements.Add(GetRegexMatchElement(MatchArray, CaptureIndex));
+            if Cardinal(ResultArray.Elements.Count) >= Limit then
+            begin
+              Result := ResultArray;
+              Exit;
+            end;
+          end;
+          SearchIndex := LastMatchEnd;
+        finally
+          MatchRoots.Clear;
         end;
-        SearchIndex := LastMatchEnd;
       end;
 
       ResultArray.Elements.Add(TGocciaStringLiteralValue.Create(
