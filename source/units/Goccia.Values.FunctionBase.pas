@@ -118,6 +118,9 @@ type
     property HasOwnNameProperty: Boolean read FHasOwnNameProperty;
     function IntrinsicLength: Integer;
     function IntrinsicName: string;
+    // A heap snapshot restore of a built-in function the run changed.
+    procedure SetIntrinsicPropertiesForRestore(const AHasOwnLength,
+      AHasOwnName: Boolean);
   end;
 
   // Helper class for bound functions
@@ -807,6 +810,13 @@ end;
 function TGocciaFunctionBase.IntrinsicName: string;
 begin
   Result := GetFunctionName;
+end;
+
+procedure TGocciaFunctionBase.SetIntrinsicPropertiesForRestore(
+  const AHasOwnLength, AHasOwnName: Boolean);
+begin
+  FHasOwnLengthProperty := AHasOwnLength;
+  FHasOwnNameProperty := AHasOwnName;
 end;
 
 function TGocciaFunctionBase.GetFunctionName: string;

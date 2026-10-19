@@ -195,12 +195,13 @@ type
     procedure SetIntegrityForRestore(const AExtensible, AFrozen, ASealed,
       AHasEverHadIndexedOwnProperty: Boolean);
     // Replaces every own property with AKeys and ASymbols, in their order;
-    // the object takes ownership of the descriptors. A nil descriptor in
-    // ADescriptors keeps the one the object holds for that key now, which
-    // it must hold; every other descriptor it held is freed. When the keys
-    // it holds are the first of AKeys, in order, they keep their places and
-    // its property map its shape. The caller keeps every value rooted and
-    // has checked that no key or symbol is listed twice.
+    // the object takes ownership of the descriptors, even when it raises. A
+    // nil descriptor keeps the one the object holds for that key or symbol
+    // now, which it must hold (else it raises before changing anything);
+    // every other descriptor it held is freed. When the keys it holds are
+    // the first of AKeys, in order, they keep their places and its property
+    // map its shape. The caller keeps every value rooted and has checked
+    // that no key or symbol is listed twice.
     procedure ReplaceOwnPropertiesForRestore(const AKeys: array of string;
       const ADescriptors: array of TGocciaPropertyDescriptor;
       const ASymbols: array of TGocciaSymbolValue;
@@ -1557,19 +1558,50 @@ procedure TGocciaObjectValue.ReplaceOwnPropertiesForRestore(
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   SymPair: TSymbolDescriptorMap.TKeyValuePair;
-  Final: array of TGocciaPropertyDescriptor;
+  Final, SymbolFinal: array of TGocciaPropertyDescriptor;
   Kept: TDictionary<string, Boolean>;
+  KeptSymbols: TDictionary<TGocciaSymbolValue, Boolean>;
   Current: TGocciaPropertyDescriptor;
-  Prefix: Boolean;
-  I, Added: Integer;
+  Prefix, SymbolPhase: Boolean;
+  I, Added, SymbolsAdded: Integer;
+
+  procedure FreeGiven;
+  var
+    J: Integer;
+  begin
+    for J := 0 to High(ADescriptors) do
+      ADescriptors[J].Free;
+    for J := 0 to High(ASymbolDescriptors) do
+      ASymbolDescriptors[J].Free;
+  end;
+
 begin
+  // What each key ends with: its new descriptor, or the one held now.
   SetLength(Final, Length(AKeys));
   for I := 0 to High(AKeys) do
   begin
     Final[I] := ADescriptors[I];
     if not Assigned(Final[I]) and
        not FProperties.TryGetValue(AKeys[I], Final[I]) then
+    begin
+      FreeGiven;
       raise EInvalidOperation.Create('a kept property the object does not have');
+    end;
+  end;
+  SetLength(SymbolFinal, Length(ASymbols));
+  for I := 0 to High(ASymbols) do
+  begin
+    SymbolFinal[I] := ASymbolDescriptors[I];
+    if not Assigned(SymbolFinal[I]) then
+    begin
+      SymbolFinal[I] := GetOwnSymbolPropertyDescriptor(ASymbols[I]);
+      if not Assigned(SymbolFinal[I]) then
+      begin
+        FreeGiven;
+        raise EInvalidOperation.Create(
+          'a kept symbol property the object does not have');
+      end;
+    end;
   end;
   // Whether the keys held now are the first of AKeys, in order.
   Prefix := FProperties.Count <= Length(AKeys);
@@ -1587,6 +1619,8 @@ begin
     end;
   end;
   Added := 0;
+  SymbolsAdded := 0;
+  SymbolPhase := False;
   try
     if Prefix then
     begin
@@ -1620,31 +1654,41 @@ begin
       FProperties.Add(AKeys[Added], Final[Added]);
       Inc(Added);
     end;
+    KeptSymbols := TDictionary<TGocciaSymbolValue, Boolean>.Create;
+    try
+      for I := 0 to High(ASymbols) do
+        if not Assigned(ASymbolDescriptors[I]) then
+          KeptSymbols.Add(ASymbols[I], True);
+      if Assigned(FSymbolDescriptors) then
+      begin
+        for SymPair in FSymbolDescriptors do
+          if not KeptSymbols.ContainsKey(SymPair.Key) then
+            SymPair.Value.Free;
+        FSymbolDescriptors.Clear;
+      end;
+    finally
+      KeptSymbols.Free;
+    end;
+    if Assigned(FSymbolInsertionOrder) then
+      FSymbolInsertionOrder.Clear;
+    SymbolPhase := True;
+    while SymbolsAdded <= High(ASymbols) do
+    begin
+      // Frees its descriptor itself when it fails.
+      Inc(SymbolsAdded);
+      DefineSymbolPropertyForRestore(ASymbols[SymbolsAdded - 1],
+        SymbolFinal[SymbolsAdded - 1]);
+    end;
   except
     // What was not added yet is nobody's: freed with the failure.
     for I := Added to High(Final) do
       Final[I].Free;
-    raise;
-  end;
-  if Assigned(FSymbolDescriptors) then
-  begin
-    for SymPair in FSymbolDescriptors do
-      SymPair.Value.Free;
-    FSymbolDescriptors.Clear;
-  end;
-  if Assigned(FSymbolInsertionOrder) then
-    FSymbolInsertionOrder.Clear;
-  I := 0;
-  try
-    while I <= High(ASymbols) do
-    begin
-      // Frees its descriptor itself when it fails.
-      Inc(I);
-      DefineSymbolPropertyForRestore(ASymbols[I - 1], ASymbolDescriptors[I - 1]);
-    end;
-  except
-    for Added := I to High(ASymbolDescriptors) do
-      ASymbolDescriptors[Added].Free;
+    if SymbolPhase then
+      for I := SymbolsAdded to High(SymbolFinal) do
+        SymbolFinal[I].Free
+    else
+      for I := 0 to High(ASymbolDescriptors) do
+        ASymbolDescriptors[I].Free;
     raise;
   end;
 end;

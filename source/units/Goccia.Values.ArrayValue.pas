@@ -160,6 +160,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
+  Goccia.NativeLimits,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,

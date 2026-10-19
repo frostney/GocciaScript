@@ -447,6 +447,9 @@ type
     FTemplates: TGocciaSnapshotTemplateTable;
     // The snapshot's modules, as indexes into FTemplates.
     FModuleMap: array of Integer;
+    // The changed built-ins' states (TPendingDifference), read and checked
+    // before anything is applied.
+    FDifferences: TObjectList<TObject>;
     function GetObjectCount: Integer;
     procedure Need(const ACount: Int64);
     function ReadCount(const ALimit: Int64; const AMinBytesEach: Int64;
@@ -457,6 +460,9 @@ type
     function ReadRawString: string;
     function ReadValueOrHole: TGocciaValue;
     procedure CheckPrototypeChains;
+    procedure ReadDifferences;
+    procedure CheckDifferenceChains;
+    procedure ApplyDifferences;
   public
     constructor Create(const ABuiltins: TGocciaHeapSnapshotBuiltinTable;
       const ALimits: TGocciaHeapSnapshotLimits);
@@ -594,6 +600,27 @@ type
   public
     Reader: TGocciaHeapSnapshotReader;
     procedure MarkRootReferences; override;
+  end;
+
+  // A changed built-in's state as the snapshot gives it, held from when it
+  // is read and checked until it is applied. It owns its descriptors until
+  // then; a nil one keeps the restoring engine's own member. Its values are
+  // rooted by the reader (restored objects, values it created) or are
+  // built-ins.
+  TPendingDifference = class
+  public
+    Target: TGocciaObjectValue;
+    Prototype: TGocciaObjectValue;
+    Extensible, Frozen, Sealed, HadIndexed: Boolean;
+    IsFunction, HasOwnLength, HasOwnName: Boolean;
+    IsArray, LengthWritable: Boolean;
+    ArrayLength: Int64;
+    Elements: array of TGocciaValue;
+    Keys: array of string;
+    Descriptors: array of TGocciaPropertyDescriptor;
+    Symbols: array of TGocciaSymbolValue;
+    SymbolDescriptors: array of TGocciaPropertyDescriptor;
+    destructor Destroy; override;
   end;
 
   // An ordinary object of exactly TGocciaObjectValue.
@@ -2324,6 +2351,7 @@ begin
   FCreated := TList<TGCManagedObject>.Create;
   FNewRegistered := TDictionary<string, TGocciaSymbolValue>.Create;
   FScratch := TObjectDictionary<TObject, TObject>.Create([doOwnsValues]);
+  FDifferences := TObjectList<TObject>.Create(True);
 end;
 
 destructor TGocciaHeapSnapshotReader.Destroy;
@@ -2332,6 +2360,7 @@ begin
   FCreated.Free;
   FNewRegistered.Free;
   FScratch.Free;
+  FDifferences.Free;
   ReleaseNativeBytes(FReservedBytes);
   inherited;
 end;
@@ -3014,6 +3043,8 @@ begin
     FPos := FPayloadEnd[I];
   end;
   FLimit := Length(FData);
+  // The changed built-ins: every shell exists now for their values to name.
+  ReadDifferences;
   RootStart := FPos;
 
   // Pass 2: fill.
@@ -3052,6 +3083,10 @@ begin
   end;
   if FPos <> FLimit then
     Refuse('bytes after the roots');
+  // Last, once nothing else can refuse: the changed built-ins take their
+  // state, so a refused restore leaves this engine's built-ins as they were.
+  CheckDifferenceChains;
+  ApplyDifferences;
   // The restore succeeded: the registered symbols it made are registered,
   // polling as any loop the input sizes does. A stop between two leaves
   // some registered and the rest not, which is harmless: a registered
@@ -3120,6 +3155,327 @@ begin
   finally
     Path.Free;
     State.Free;
+  end;
+end;
+
+{ TPendingDifference }
+
+destructor TPendingDifference.Destroy;
+var
+  I: Integer;
+begin
+  for I := 0 to High(Descriptors) do
+    Descriptors[I].Free;
+  for I := 0 to High(SymbolDescriptors) do
+    SymbolDescriptors[I].Free;
+  inherited;
+end;
+
+{ The changed built-ins (ADR 0148): each one's whole own state, read into a
+  TPendingDifference and checked as a restored object's state is, against
+  the built-in it names in this engine. Nothing is applied here. }
+procedure TGocciaHeapSnapshotReader.ReadDifferences;
+const
+  KNOWN_FLAGS = [pfEnumerable, pfConfigurable, pfWritable];
+  // The least a changed built-in takes: its reference, a nil prototype,
+  // four flags, its parts and two empty counts.
+  MIN_DIFFERENCE_BYTES = 18;
+  // The least a member takes: its key (or a symbol's tag and index) and the
+  // kept kind.
+  MIN_MEMBER_BYTES = 5;
+  MIN_SYMBOL_MEMBER_BYTES = 6;
+  // A pending difference and the entries of the duplicate checks.
+  DIFFERENCE_ENTRY_BYTES = 96;
+var
+  Count, I, J, ItemCount: Integer;
+  Index: Cardinal;
+  Target: TGCManagedObject;
+  Pending: TPendingDifference;
+  Seen: TDictionary<TObject, Boolean>;
+  SeenKeys: TDictionary<string, Boolean>;
+  SeenSymbols: TDictionary<TObject, Boolean>;
+  Parts: Byte;
+  Proto, Symbol: TGocciaValue;
+  Kept: TGocciaPropertyDescriptor;
+  Refusal: string;
+
+  // A member: nil for a kept one, else a descriptor the caller stores at
+  // once, so the pending difference frees it with a refusal.
+  function ReadMember: TGocciaPropertyDescriptor;
+  var
+    Kind, FlagBits: Byte;
+    Flags: TPropertyFlags;
+    Getter, Setter: TGocciaValue;
+  begin
+    Result := nil;
+    Kind := ReadU8;
+    if Kind = HSD_KEEP then
+      Exit;
+    if (Kind <> HSD_DATA) and (Kind <> HSD_ACCESSOR) then
+      Refuse('an unknown property kind');
+    FlagBits := ReadU8;
+    if FlagBits > Byte(KNOWN_FLAGS) then
+      Refuse('unknown property attributes');
+    Flags := TPropertyFlags(FlagBits);
+    if Kind = HSD_ACCESSOR then
+    begin
+      if pfWritable in Flags then
+        Refuse('an accessor marked writable');
+      Getter := ReadAccessorHalf;
+      Setter := ReadAccessorHalf;
+      Result := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter, Flags);
+    end
+    else
+      Result := TGocciaPropertyDescriptorData.Create(ReadPresentValue, Flags);
+  end;
+
+  // Sealed and frozen are what the members say they are, kept ones included.
+  procedure CheckIntegrity(const ADescriptor: TGocciaPropertyDescriptor);
+  begin
+    if not (Pending.Sealed or Pending.Frozen) then
+      Exit;
+    if pfConfigurable in ADescriptor.Flags then
+      Refuse('a sealed object with a configurable property');
+    if Pending.Frozen and not (ADescriptor is TGocciaPropertyDescriptorAccessor) and
+       (pfWritable in ADescriptor.Flags) then
+      Refuse('a frozen object with a writable property');
+  end;
+
+begin
+  Count := ReadItemCount(MIN_DIFFERENCE_BYTES);
+  Reserve(Count, DIFFERENCE_ENTRY_BYTES);
+  Seen := TDictionary<TObject, Boolean>.Create;
+  SeenKeys := TDictionary<string, Boolean>.Create;
+  SeenSymbols := TDictionary<TObject, Boolean>.Create;
+  try
+    for I := 1 to Count do
+    begin
+      Poll;
+      Index := ReadU32;
+      if Index >= Cardinal(Length(FBuiltinObjects)) then
+        Refuse('a changed built-in reference out of range');
+      Target := FBuiltinObjects[Index];
+      if not (Target is TGocciaObjectValue) then
+        Refuse('a changed built-in that is not an object');
+      if Seen.ContainsKey(Target) then
+        Refuse('a built-in changed twice');
+      Seen.Add(Target, True);
+      Pending := TPendingDifference.Create;
+      FDifferences.Add(Pending);
+      Pending.Target := TGocciaObjectValue(Target);
+
+      Proto := ReadValue;
+      if Assigned(Proto) and not (Proto is TGocciaObjectValue) then
+        Refuse('a prototype that is not an object');
+      Pending.Prototype := TGocciaObjectValue(Proto);
+      // Object.prototype keeps its prototype (ES2026 §10.4.7, an immutable
+      // prototype exotic object): no run can have changed it.
+      if (Pending.Target = TGocciaObjectValue.SharedObjectPrototype) and
+         (Pending.Prototype <> Pending.Target.Prototype) then
+        Refuse('a changed prototype of Object.prototype');
+      Pending.Extensible := ReadBool;
+      Pending.Frozen := ReadBool;
+      Pending.Sealed := ReadBool;
+      Pending.HadIndexed := ReadBool;
+      if (Pending.Frozen and not Pending.Sealed) or
+         (Pending.Sealed and Pending.Extensible) then
+        Refuse('integrity flags that contradict each other');
+
+      Parts := ReadU8;
+      if Parts > (HSB_FUNCTION or HSB_ARRAY) then
+        Refuse('unknown parts of a changed built-in');
+      Pending.IsFunction := Parts and HSB_FUNCTION <> 0;
+      Pending.IsArray := Parts and HSB_ARRAY <> 0;
+      if (Pending.IsFunction <> (Target is TGocciaFunctionBase)) or
+         (Pending.IsArray <> (Target is TGocciaArrayValue)) then
+        Refuse('a changed built-in''s parts that are not its kind''s');
+      if Pending.IsFunction then
+      begin
+        Pending.HasOwnLength := ReadBool;
+        Pending.HasOwnName := ReadBool;
+      end;
+      if Pending.IsArray then
+      begin
+        Pending.ArrayLength := ReadI64;
+        Pending.LengthWritable := ReadBool;
+        ItemCount := ReadItemCount(1);
+        Reserve(ItemCount, SizeOf(Pointer));
+        SetLength(Pending.Elements, ItemCount);
+        for J := 0 to ItemCount - 1 do
+        begin
+          Poll;
+          Pending.Elements[J] := ReadElementValue;
+        end;
+      end;
+
+      ItemCount := ReadItemCount(MIN_MEMBER_BYTES);
+      Reserve(ItemCount, SizeOf(string) + SizeOf(Pointer) + SEEN_ENTRY_BYTES);
+      SetLength(Pending.Keys, ItemCount);
+      SetLength(Pending.Descriptors, ItemCount);
+      SeenKeys.Clear;
+      for J := 0 to ItemCount - 1 do
+      begin
+        Poll;
+        Pending.Keys[J] := ReadStr;
+        if SeenKeys.ContainsKey(Pending.Keys[J]) then
+          Refuse('a property listed twice');
+        SeenKeys.Add(Pending.Keys[J], True);
+        Pending.Descriptors[J] := ReadMember;
+        if Assigned(Pending.Descriptors[J]) then
+          CheckIntegrity(Pending.Descriptors[J])
+        else if Pending.Target.Properties.TryGetValue(Pending.Keys[J], Kept) then
+          CheckIntegrity(Kept)
+        else
+          Refuse('a kept property the built-in does not have here');
+      end;
+
+      ItemCount := ReadItemCount(MIN_SYMBOL_MEMBER_BYTES);
+      Reserve(ItemCount, 2 * SizeOf(Pointer) + SEEN_ENTRY_BYTES);
+      SetLength(Pending.Symbols, ItemCount);
+      SetLength(Pending.SymbolDescriptors, ItemCount);
+      SeenSymbols.Clear;
+      for J := 0 to ItemCount - 1 do
+      begin
+        Poll;
+        Symbol := ReadValue;
+        if not (Symbol is TGocciaSymbolValue) then
+          Refuse('a symbol key that is not a symbol');
+        if SeenSymbols.ContainsKey(Symbol) then
+          Refuse('a symbol property listed twice');
+        SeenSymbols.Add(Symbol, True);
+        Pending.Symbols[J] := TGocciaSymbolValue(Symbol);
+        Pending.SymbolDescriptors[J] := ReadMember;
+        if Assigned(Pending.SymbolDescriptors[J]) then
+          CheckIntegrity(Pending.SymbolDescriptors[J])
+        else
+        begin
+          Kept := Pending.Target.GetOwnSymbolPropertyDescriptor(
+            Pending.Symbols[J]);
+          if not Assigned(Kept) then
+            Refuse('a kept symbol property the built-in does not have here');
+          CheckIntegrity(Kept);
+        end;
+      end;
+
+      if Pending.IsArray then
+      begin
+        Refusal := ArrayPartRefusal(Pending.ArrayLength,
+          Pending.LengthWritable, Pending.Frozen, Pending.Elements,
+          Pending.Keys);
+        if Refusal <> '' then
+          Refuse(Refusal);
+      end;
+    end;
+  finally
+    SeenSymbols.Free;
+    SeenKeys.Free;
+    Seen.Free;
+  end;
+end;
+
+// The changed built-ins' new prototypes, as if applied: a chain that loops
+// would hang every lookup through it. Each chain is followed once, through
+// any object, until it ends or meets one already checked.
+procedure TGocciaHeapSnapshotReader.CheckDifferenceChains;
+const
+  ON_PATH = 1;
+  CHECKED = 2;
+var
+  Prototypes: THashMap<TGCManagedObject, TGocciaObjectValue>;
+  State: THashMap<TGCManagedObject, Byte>;
+  Path: TList<TGCManagedObject>;
+  Pending: TPendingDifference;
+  Current, Next: TGocciaObjectValue;
+  Mark: Byte;
+  I, J: Integer;
+begin
+  if FDifferences.Count = 0 then
+    Exit;
+  Reserve(FDifferences.Count, CHAIN_ENTRY_BYTES);
+  Prototypes := THashMap<TGCManagedObject, TGocciaObjectValue>.Create;
+  State := THashMap<TGCManagedObject, Byte>.Create;
+  Path := TList<TGCManagedObject>.Create;
+  try
+    for I := 0 to FDifferences.Count - 1 do
+    begin
+      Pending := TPendingDifference(FDifferences[I]);
+      Prototypes.AddOrSetValue(Pending.Target, Pending.Prototype);
+    end;
+    for I := 0 to FDifferences.Count - 1 do
+    begin
+      Poll;
+      Current := TPendingDifference(FDifferences[I]).Target;
+      Path.Clear;
+      while Assigned(Current) do
+      begin
+        if Path.Count and 1023 = 1023 then
+          Poll;
+        if State.TryGetValue(Current, Mark) then
+        begin
+          if Mark = ON_PATH then
+            Refuse('a prototype chain that loops');
+          Break;
+        end;
+        // Each object a chain crosses is charged once.
+        Reserve(1, CHAIN_ENTRY_BYTES);
+        State.Add(Current, ON_PATH);
+        Path.Add(Current);
+        if Prototypes.TryGetValue(Current, Next) then
+          Current := Next
+        else
+          Current := Current.Prototype;
+      end;
+      for J := 0 to Path.Count - 1 do
+        State[Path[J]] := CHECKED;
+    end;
+  finally
+    Path.Free;
+    State.Free;
+    Prototypes.Free;
+  end;
+end;
+
+procedure TGocciaHeapSnapshotReader.ApplyDifferences;
+var
+  Pending: TPendingDifference;
+  Descriptors, SymbolDescriptors: array of TGocciaPropertyDescriptor;
+  I, J: Integer;
+begin
+  // A kept member must still be there: nothing since the check may have
+  // removed one, and nothing is applied unless all are.
+  for I := 0 to FDifferences.Count - 1 do
+  begin
+    Pending := TPendingDifference(FDifferences[I]);
+    for J := 0 to High(Pending.Keys) do
+      if not Assigned(Pending.Descriptors[J]) and
+         not Pending.Target.Properties.ContainsKey(Pending.Keys[J]) then
+        Refuse('a kept property the built-in does not have here');
+    for J := 0 to High(Pending.Symbols) do
+      if not Assigned(Pending.SymbolDescriptors[J]) and
+         not Assigned(Pending.Target.GetOwnSymbolPropertyDescriptor(
+           Pending.Symbols[J])) then
+        Refuse('a kept symbol property the built-in does not have here');
+  end;
+  for I := 0 to FDifferences.Count - 1 do
+  begin
+    Poll;
+    Pending := TPendingDifference(FDifferences[I]);
+    // The built-in owns the descriptors from here, even if this raises.
+    Descriptors := Pending.Descriptors;
+    SymbolDescriptors := Pending.SymbolDescriptors;
+    Pending.Descriptors := nil;
+    Pending.SymbolDescriptors := nil;
+    Pending.Target.ReplaceOwnPropertiesForRestore(Pending.Keys, Descriptors,
+      Pending.Symbols, SymbolDescriptors);
+    Pending.Target.Prototype := Pending.Prototype;
+    if Pending.IsFunction then
+      TGocciaFunctionBase(Pending.Target).SetIntrinsicPropertiesForRestore(
+        Pending.HasOwnLength, Pending.HasOwnName);
+    if Pending.IsArray then
+      TGocciaArrayValue(Pending.Target).SetArrayPartForRestore(
+        Pending.ArrayLength, Pending.LengthWritable, Pending.Elements);
+    Pending.Target.SetIntegrityForRestore(Pending.Extensible, Pending.Frozen,
+      Pending.Sealed, Pending.HadIndexed);
   end;
 end;
 
