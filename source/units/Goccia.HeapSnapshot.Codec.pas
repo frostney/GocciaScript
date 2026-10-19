@@ -417,8 +417,9 @@ type
   // current realm, as using it would.
   TGocciaSnapshotSlotMaterializer = procedure;
 
-// A unit whose realm slot is filled on first use registers how to fill it, so
-// a restore can build the intrinsic a snapshot names (ADR 0148).
+// A unit whose realm slot, or owned slot, is filled on first use registers
+// how to fill it, under the slot's name, so a restore can build the intrinsic
+// a snapshot names (ADR 0148).
 procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
   const AMaterializer: TGocciaSnapshotSlotMaterializer);
 function FindSnapshotSlotMaterializer(
@@ -433,7 +434,6 @@ uses
   SHA256,
 
   Goccia.Builtins.GlobalSymbol,
-  Goccia.Constants.PropertyNames,
   Goccia.NativeLimits,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
@@ -982,6 +982,8 @@ const
   var
     Member: TGocciaMaterializedMember;
   begin
+    if AEncoder.TooLarge then
+      Exit;
     if ADescriptor is TGocciaLazyPropertyDescriptorData then
     begin
       AEncoder.Field(LAZY);
@@ -1028,10 +1030,9 @@ const
 var
   Obj: TGocciaObjectValue;
   Pair: TGocciaPropertyMap.TKeyValuePair;
-  Symbols: TArray<TGocciaSymbolValue>;
+  Symbol: TGocciaSymbolValue;
   I: Integer;
   Encoder: TFingerprintEncoder;
-  LengthDescriptor: TGocciaPropertyDescriptor;
 begin
   Result := '';
   if not (FObjects[AIndex] is TGocciaObjectValue) then
@@ -1046,38 +1047,34 @@ begin
   Encoder.Count(Obj.Properties.Count);
   for Pair in Obj.Properties do
   begin
-    if Encoder.TooLarge then
-      Break;
     CheckNativeWork;
     Encoder.Field(Pair.Key);
+    // Past the cap nothing more is encoded, and the key is not copied into
+    // a lookup either.
+    if Encoder.TooLarge then
+      Break;
     EncodeDescriptor(Encoder, Obj, Pair.Key, Pair.Value);
   end;
-  Symbols := Obj.GetOwnSymbols;
-  Encoder.Count(Length(Symbols));
-  for I := 0 to High(Symbols) do
+  Encoder.Count(Obj.StoredSymbolCount);
+  for I := 0 to Obj.StoredSymbolCount - 1 do
   begin
     if Encoder.TooLarge then
       Break;
     CheckNativeWork;
-    Identity(Encoder, Symbols[I]);
+    Symbol := Obj.StoredSymbolAt(I);
+    Identity(Encoder, Symbol);
     EncodeDescriptor(Encoder, Obj, '',
-      Obj.GetOwnSymbolPropertyDescriptor(Symbols[I]));
+      Obj.GetOwnSymbolPropertyDescriptor(Symbol));
   end;
   // An array built-in (Array.prototype is one) keeps its length and dense
   // elements outside the property map.
   if Obj is TGocciaArrayValue then
   begin
     Encoder.Field('array');
-    LengthDescriptor := Obj.GetOwnPropertyDescriptor(PROP_LENGTH);
-    try
-      if LengthDescriptor is TGocciaPropertyDescriptorData then
-      begin
-        Encoder.Count(Byte(LengthDescriptor.Flags));
-        Identity(Encoder, TGocciaPropertyDescriptorData(LengthDescriptor).Value);
-      end;
-    finally
-      ReleaseDescriptor(LengthDescriptor);
-    end;
+    // Read in place: a descriptor would create the length's number value,
+    // and nothing may be created after the snapshot's collection.
+    Encoder.Count(Ord(TGocciaArrayValue(Obj).LengthWritable));
+    Encoder.Field(IntToStr(TGocciaArrayValue(Obj).StoredLength));
     Encoder.Count(TGocciaArrayValue(Obj).Elements.Count);
     for I := 0 to TGocciaArrayValue(Obj).Elements.Count - 1 do
     begin
@@ -1402,7 +1399,7 @@ procedure TGocciaHeapSnapshotWriter.WriteObjectCore(
 var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   Descriptor: TGocciaPropertyDescriptor;
-  Symbols: TArray<TGocciaSymbolValue>;
+  Symbol: TGocciaSymbolValue;
   I: Integer;
 begin
   // Error and RegExp internals belong to their own codecs.
@@ -1438,13 +1435,13 @@ begin
     else
       Refuse('no snapshot codec for a ' + Descriptor.ClassName);
   end;
-  Symbols := AObject.GetOwnSymbols;
-  WriteU32(Length(Symbols));
-  for I := 0 to High(Symbols) do
+  WriteU32(AObject.StoredSymbolCount);
+  for I := 0 to AObject.StoredSymbolCount - 1 do
   begin
     Poll;
-    Descriptor := AObject.GetOwnSymbolPropertyDescriptor(Symbols[I]);
-    WriteValue(Symbols[I]);
+    Symbol := AObject.StoredSymbolAt(I);
+    Descriptor := AObject.GetOwnSymbolPropertyDescriptor(Symbol);
+    WriteValue(Symbol);
     WriteU8(Byte(Descriptor.Flags));
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -1966,7 +1963,6 @@ var
   Count, I: Integer;
   Key: string;
   Pair: TGocciaPropertyMap.TKeyValuePair;
-  Symbols: TArray<TGocciaSymbolValue>;
   SymbolDescriptor: TGocciaPropertyDescriptor;
   FlagBits: Byte;
   Flags: TPropertyFlags;
@@ -2081,10 +2077,11 @@ begin
         if (Pair.Value is TGocciaPropertyDescriptorData) and
            (pfWritable in Pair.Value.Flags) then
           Refuse('a frozen object with a writable property');
-    Symbols := AObject.GetOwnSymbols;
-    for I := 0 to High(Symbols) do
+    for I := 0 to AObject.StoredSymbolCount - 1 do
     begin
-      SymbolDescriptor := AObject.GetOwnSymbolPropertyDescriptor(Symbols[I]);
+      Poll;
+      SymbolDescriptor := AObject.GetOwnSymbolPropertyDescriptor(
+        AObject.StoredSymbolAt(I));
       if pfConfigurable in SymbolDescriptor.Flags then
         Refuse('a sealed object with a configurable property');
       if Frozen and (SymbolDescriptor is TGocciaPropertyDescriptorData) and

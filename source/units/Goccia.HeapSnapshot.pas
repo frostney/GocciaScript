@@ -538,6 +538,13 @@ begin
     Slot := FindOwnedSlotByName(AParts[1]);
     if Slot < 0 then
       Exit;
+    // Filled on first use: filled here as using it would have.
+    if not Assigned(AEngine.Realm.GetOwnedSlot(Slot)) then
+    begin
+      Materializer := FindSnapshotSlotMaterializer(AParts[1]);
+      if Assigned(Materializer) then
+        Materializer();
+    end;
     Owned := AEngine.Realm.GetOwnedSlot(Slot);
     if not (Owned is TGocciaSharedPrototype) then
       Exit;

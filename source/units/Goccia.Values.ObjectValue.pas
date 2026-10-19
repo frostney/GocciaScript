@@ -167,6 +167,10 @@ type
     function DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>; virtual;
+    // The symbol keys this object stores itself, in order, without copying
+    // them (a heap snapshot walks them one at a time). No trap is asked.
+    function StoredSymbolCount: Integer;
+    function StoredSymbolAt(const AIndex: Integer): TGocciaSymbolValue;
 
     procedure Freeze; virtual;
     procedure Seal; virtual;
@@ -2852,6 +2856,20 @@ begin
   for I := 0 to FSymbolInsertionOrder.Count - 1 do
     Symbols[I] := FSymbolInsertionOrder[I];
   Result := Symbols;
+end;
+
+function TGocciaObjectValue.StoredSymbolCount: Integer;
+begin
+  if Assigned(FSymbolInsertionOrder) then
+    Result := FSymbolInsertionOrder.Count
+  else
+    Result := 0;
+end;
+
+function TGocciaObjectValue.StoredSymbolAt(
+  const AIndex: Integer): TGocciaSymbolValue;
+begin
+  Result := FSymbolInsertionOrder[AIndex];
 end;
 
 procedure TGocciaObjectValue.Freeze;
