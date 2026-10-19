@@ -367,10 +367,10 @@ begin
   Test('Pool single worker processes all files', TestPoolSingleWorker);
   Test('ThreadCleanupRegistry runs registered callbacks', TestThreadCleanupRegistryRunsRegistered);
   Test('ShutdownThreadRuntime drains registry once per worker', TestShutdownThreadRuntimeDrainsRegistryPerWorker);
-  { Registered last: this is the only case that deliberately strands a
-    worker thread.  It joins that thread before returning, but running it
-    after the registry tests keeps their exact sentinel counts out of
-    reach of a straggler even if that join ever regressed. }
+  { The abandonment cases come last: each deliberately strands a worker
+    thread.  Each waits for that thread to exit before returning, but
+    running them after the registry tests keeps their exact sentinel
+    counts out of reach of a straggler even if that wait ever regressed. }
   Test('Resumed abandoned worker cannot cancel a later run',
     TestResumedAbandonedWorkerCannotCancelLaterRun);
   Test('A worker abandoned before its file runs runs no file',

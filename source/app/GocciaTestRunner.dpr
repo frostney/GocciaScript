@@ -1742,10 +1742,10 @@ begin
       begin
         if WorkerData[I].ErrorMessage = '' then
         begin
-          { Watchdog-cancelled slot: the worker for this file never ran (a
-            peer stalled), so WorkerData[I] is still the zero-initialised
-            default and no concurrent writer touches it any more.  Safe to
-            keep the synthesis in WorkerData. }
+          { Cancelled slot: the run was cancelled before a worker ran this
+            file, so TestWorkerProc never saw it, WorkerData[I] is still the
+            zero-initialised default and no worker writes it.  Safe to keep
+            the synthesis in WorkerData. }
           WorkerData[I].ErrorMessage := Pool.Results[I].ErrorMessage;
           WorkerData[I].Failed := 1;
           WorkerData[I].TotalRunTests := 1;

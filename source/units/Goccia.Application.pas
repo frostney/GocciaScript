@@ -85,18 +85,19 @@ class function TGocciaApplication.RunApplication(
 var
   App: TGocciaApplication;
 begin
+  Result := 1;
   App := AClass.Create(AName);
   try
     Result := App.Run;
+  finally
     { A worker a thread pool abandoned may still be running its file, and
       that reads this application's objects and the process-wide runtime:
       end the process before App.Free and unit finalization can free them
-      under it. The report is already written. }
+      under it, on every path out of Run. The report is already written. }
     if Result <> 0 then
       EndProcessIfWorkerAbandoned(Result)
     else
       EndProcessIfWorkerAbandoned(ExitCode);
-  finally
     App.Free;
     { Every engine is gone by now. Shutting the main thread's runtime down
       destroys what its collector still manages, as each worker's does when

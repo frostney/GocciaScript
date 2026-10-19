@@ -410,9 +410,30 @@ procedure EndProcessIfWorkerAbandoned(const AExitCode: LongInt);
 begin
   if not GWorkerAbandoned then
     Exit;
-  Flush(Output);
-  Flush(ErrOutput);
-  TerminateProcessNow(AExitCode);
+  // Flushing is best effort (a closed or full stream raises); nothing may
+  // keep the process from ending here.
+  try
+    try
+      Flush(Output);
+    except
+    end;
+    try
+      Flush(ErrOutput);
+    except
+    end;
+  finally
+    TerminateProcessNow(AExitCode);
+  end;
+end;
+
+{ A diagnostic the watchdog writes must not fail the run: a closed or full
+  stderr would otherwise raise in the middle of an abandonment. }
+procedure WarnBestEffort(const AText: string);
+begin
+  try
+    WriteLn(ErrOutput, AText);
+  except
+  end;
 end;
 
 procedure ShutdownMainThreadRuntime;
@@ -624,9 +645,10 @@ begin
       ACurrentFileIndex := -1;
       Exit;
     end;
-    FAbandoned := True;
+    // Copy first: if the copy fails, the worker is not abandoned.
     ACompleted := Copy(FResults, 0, FResultCount);
     ACurrentFileIndex := FCurrentFileIndex;
+    FAbandoned := True;
   finally
     CriticalSectionLeave(FStateLock);
   end;
@@ -759,7 +781,7 @@ var
   FileCount, I, J, StalledIdx: Integer;
   StalledCount: Integer;
   NowNs, ObservedNs: Int64;
-  AllDone, AnyAbandoned: Boolean;
+  AllDone: Boolean;
   StalledFiles: TGocciaWorkerResultArray;
   { The finished results of abandoned workers, copied when each was
     abandoned. Owned by this thread: an abandoned worker never writes them. }
@@ -781,7 +803,6 @@ begin
   else
     FCancelFlag.Reset;
   FMemoryStats := DefaultCLIJSONMemoryStats;
-  AnyAbandoned := False;
   FAnyAbandoned := False;
   FileCount := AFiles.Count;
   if FileCount = 0 then
@@ -847,6 +868,15 @@ begin
                 (Assigned(GStallHook) and GStallHook(FWorkers[I]))) and
                 FWorkers[I].TryAbandon(ObservedNs, Completed, J) then
             begin
+              // Publish the abandonment before anything that can fail
+              // (allocation, output): from here on the worker, its queue
+              // and this run's cancellation flag belong to no one, and
+              // every path out of RunAll, and the host's teardown, must
+              // know it.
+              FAbandoned[I] := True;
+              FAnyAbandoned := True;
+              FCancelFlagLeaked := True;
+              GWorkerAbandoned := True;
               AbandonedResults := Concat(AbandonedResults, Completed);
               SetLength(StalledFiles, StalledCount + 1);
               StalledFiles[StalledCount].Data := nil;
@@ -859,9 +889,9 @@ begin
                 StalledFiles[StalledCount].ErrorMessage := Format(
                   'TIMEOUT (worker stalled in native code, no progress for %dms)',
                   [AWatchdogMs]);
-                WriteLn(ErrOutput, 'Warning: worker #', I,
-                  ' stalled in native code on file: ', AFiles[J],
-                  ' (no progress for ', AWatchdogMs,
+                WarnBestEffort('Warning: worker #' + IntToStr(I) +
+                  ' stalled in native code on file: ' + AFiles[J] +
+                  ' (no progress for ' + IntToStr(AWatchdogMs) +
                   'ms). Abandoning worker; remaining files continue.');
               end
               else
@@ -874,15 +904,11 @@ begin
                 StalledFiles[StalledCount].ErrorMessage := Format(
                   'TIMEOUT (worker stalled, no current file index, no progress for %dms)',
                   [AWatchdogMs]);
-                WriteLn(ErrOutput, 'Warning: worker #', I,
-                  ' stalled with no current file index (no progress for ',
-                  AWatchdogMs, 'ms). Abandoning worker.');
+                WarnBestEffort('Warning: worker #' + IntToStr(I) +
+                  ' stalled with no current file index (no progress for ' +
+                  IntToStr(AWatchdogMs) + 'ms). Abandoning worker.');
               end;
               Inc(StalledCount);
-              FAbandoned[I] := True;
-              AnyAbandoned := True;
-              FAnyAbandoned := True;
-              GWorkerAbandoned := True;
             end;
           end;
 
@@ -908,21 +934,19 @@ begin
       if Assigned(FWorkers[I]) and not FAbandoned[I] then
         FWorkers[I].WaitFor;
 
-    if AnyAbandoned then
-      WriteLn(ErrOutput, 'Warning: ', StalledCount,
-        ' worker(s) abandoned. Leaking their queue/state; ',
+    if FAnyAbandoned then
+      WarnBestEffort('Warning: ' + IntToStr(StalledCount) +
+        ' worker(s) abandoned. Leaking their queue/state; ' +
         'they will be reclaimed on process exit.');
 
     // Only free the queue when no abandoned workers remain — they
     // still hold a reference to it via FQueue.  Each run builds its own
     // queue, so a leaked one belongs to that run's zombie and can never
     // reach a later run.  The cancellation flag is different: it is a
-    // pool field that every run would otherwise share, so marking it
-    // leaked here only settles ownership for THIS run — the next RunAll
-    // replaces it with a fresh instance rather than reusing it.
-    if AnyAbandoned then
-      FCancelFlagLeaked := True
-    else
+    // pool field that every run would otherwise share, so the
+    // abandonment marked it leaked for THIS run (FCancelFlagLeaked) and
+    // the next RunAll replaces it with a fresh instance.
+    if not FAnyAbandoned then
       Queue.Free;
   end;
 
