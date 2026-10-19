@@ -666,10 +666,6 @@ begin
   end;
 end;
 
-function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
-  const AName: string): Integer; forward;
-function FindLocalBySlot(const AScope: TGocciaCompilerScope;
-  const AName: string; const ASlot: UInt16): Integer; forward;
 
 procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
   const ASourceIdx, ATargetIdx: Integer); forward;
@@ -859,7 +855,7 @@ var
 begin
   if ACtx.GlobalBackedTopLevel then
   begin
-    LocalIdx := FindLocalBySlot(ACtx.Scope, AInfo.Name, AVarSlot);
+    LocalIdx := ACtx.Scope.FindLocalBySlot(AInfo.Name, AVarSlot);
     if LocalIdx >= 0 then
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
     EmitGlobalDefine(ACtx, AVarSlot, AInfo.Name, False, True, False);
@@ -960,7 +956,7 @@ begin
     if AStmt.IsVar then
     begin
       // Track whether this is a redeclaration (slot already exists)
-      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
+      LocalIdx := ACtx.Scope.FindVarLocalIndex(Info.Name);
       IsVarRedeclaration := LocalIdx >= 0;
       Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
       if Info.HasInitializer and Assigned(Info.Initializer) and
@@ -989,7 +985,7 @@ begin
       AStmt.IsVar);
     if IsTopLevelGlobalBacked and AStmt.IsVar then
     begin
-      LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
+      LocalIdx := ACtx.Scope.FindLocalBySlot(Info.Name, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
     end;
@@ -1022,7 +1018,7 @@ begin
     // parameter instead (ES2026 B.3.4), which is not the slot written here.
     if (TypeHint = sltUntyped) and IsVarRedeclaration then
     begin
-      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
+      LocalIdx := ACtx.Scope.FindVarLocalIndex(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
         TypeHint := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
     end;
@@ -1050,7 +1046,7 @@ begin
     // depth-0 var local; ResolveLocal could find a same-named catch parameter
     // (ES2026 B.3.4), which would then be typed from a binding it is not.
     if AStmt.IsVar then
-      DeclaredIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+      DeclaredIdx := ACtx.Scope.FindVarLocalIndex(Info.Name)
     else
       DeclaredIdx := ACtx.Scope.ResolveLocal(Info.Name);
 
@@ -1196,7 +1192,7 @@ begin
     else if (not AStmt.IsVar) or HasInitializer then
     begin
       if AStmt.IsVar then
-        LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+        LocalIdx := ACtx.Scope.FindVarLocalIndex(Info.Name)
       else
         LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
@@ -1250,7 +1246,7 @@ begin
       if not UseWithVarInitializer then
         EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
           HasInitializer);
-      LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
+      LocalIdx := ACtx.Scope.FindLocalBySlot(Info.Name, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
     end;
@@ -1284,7 +1280,7 @@ begin
   IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and not IsBlockScoped;
   if IsTopLevelGlobalBacked then
   begin
-    LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.Name, Slot);
+    LocalIdx := ACtx.Scope.FindLocalBySlot(AStmt.Name, Slot);
     if LocalIdx >= 0 then
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
   end;
@@ -1346,7 +1342,7 @@ begin
      (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
     Exit;
 
-  VarLocalIdx := FindVarLocalIndex(ACtx.Scope, AStmt.Name);
+  VarLocalIdx := ACtx.Scope.FindVarLocalIndex(AStmt.Name);
   if VarLocalIdx < 0 then
     Exit;
 
@@ -1537,36 +1533,6 @@ begin
     Result := TGocciaExportFunctionDeclaration(ANode).Declaration
   else
     Result := nil;
-end;
-
-function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
-  const AName: string): Integer;
-var
-  I: Integer;
-  Local: TGocciaCompilerLocal;
-begin
-  for I := 0 to AScope.LocalCount - 1 do
-  begin
-    Local := AScope.GetLocal(I);
-    if (Local.Name = AName) and (Local.Depth = 0) then
-      Exit(I);
-  end;
-  Result := -1;
-end;
-
-function FindLocalBySlot(const AScope: TGocciaCompilerScope;
-  const AName: string; const ASlot: UInt16): Integer;
-var
-  I: Integer;
-  Local: TGocciaCompilerLocal;
-begin
-  for I := 0 to AScope.LocalCount - 1 do
-  begin
-    Local := AScope.GetLocal(I);
-    if (Local.Name = AName) and (Local.Slot = ASlot) then
-      Exit(I);
-  end;
-  Result := -1;
 end;
 
 procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
@@ -3262,7 +3228,7 @@ begin
     else if AStmt.BindingName <> '' then
     begin
       Slot := ACtx.Scope.DeclareVarLocal(AStmt.BindingName);
-      LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.BindingName, Slot);
+      LocalIdx := ACtx.Scope.FindLocalBySlot(AStmt.BindingName, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
       EmitGlobalDefine(ACtx, Slot, AStmt.BindingName, False, True, False);
