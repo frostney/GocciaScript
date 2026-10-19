@@ -106,7 +106,7 @@ anything for it:
 | `MaxStrings` | 16 Mi | the string table |
 | `MaxStringBytes` | 256 MiB | one string |
 | `MaxBuiltins` | 1 Mi | built-in names |
-| `MaxCodecs` | 4,096 | codecs named in the header |
+| `MaxCodecs` | 4,096 | codecs named in the header, and modules named in the module section |
 | `MaxRoots` | 1 Mi | roots |
 
 The reader also charges its input, its tables and what it restores to the
@@ -170,8 +170,9 @@ one with the same bytecode, so it must compile the module from the same
 path. Two modules with the same bytecode are interchangeable. A snapshot
 naming a module the restoring engine has not compiled is refused. Global
 `eval` code has no bytecode file form and so no name: its functions refuse
-the snapshot. The hashes are streamed, polled and computed only for the
-modules a snapshot names.
+the snapshot. The hashes are streamed and polled. The writer hashes only the
+modules a snapshot names; the reader hashes every module its engine keeps
+(eval code aside), once, at the first function it restores.
 
 A suspended generator is written with its frame: its registers, its cells,
 its exception handlers and where it resumes. The reader checks that frame

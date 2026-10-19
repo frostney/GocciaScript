@@ -1238,6 +1238,7 @@ const
   // What one template costs the table: its map entry and its list slot.
   TEMPLATE_ENTRY_BYTES = 48;
   MODULE_ENTRY_BYTES = 160;
+  MODULE_SET_ENTRY_BYTES = 32;
   // Bytes hashed between polls of the run's execution limits.
   HASH_POLL_BYTES = 65536;
 
@@ -1334,6 +1335,9 @@ var
 begin
   if not Assigned(AModule) or FModuleSet.ContainsKey(AModule) then
     Exit;
+  // The set entry is charged when it is made, for a skipped eval module
+  // too: direct eval retains one module per call.
+  Charge(MODULE_SET_ENTRY_BYTES);
   FModuleSet.Add(AModule, True);
   // Depth first, the top level first and each template's children in
   // order, with an explicit stack: the same numbering in every engine that
@@ -1402,6 +1406,9 @@ var
 begin
   if FHashes[AModule] = '' then
   begin
+    // Once per module as well as per 64 KiB hashed: many small modules
+    // hashed in one pass still poll.
+    CheckNativeWork;
     Stream := THashingStream.Create;
     Writer := TGocciaBytecodeWriter.Create(Stream);
     try
@@ -1802,6 +1809,8 @@ begin
     Refuse('a function whose code is in no module the snapshot can name');
   if not FModuleRefIndex.TryGetValue(Module, RefIndex) then
   begin
+    // The list entry, the map entry and the hash index Serialize keeps.
+    Reserve(WRITER_ENTRY_BYTES + SizeOf(Integer));
     RefIndex := FModuleRefs.Count;
     FModuleRefs.Add(Module);
     FModuleRefIndex.Add(Module, RefIndex);

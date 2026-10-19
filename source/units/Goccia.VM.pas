@@ -17526,6 +17526,7 @@ begin
   AWriter.WriteU32(Length(G.FContinuationHandlers));
   for I := 0 to High(G.FContinuationHandlers) do
   begin
+    AWriter.Poll;
     AWriter.WriteI32(G.FContinuationHandlers[I].CatchIP);
     AWriter.WriteU16(G.FContinuationHandlers[I].CatchRegister);
     AWriter.WriteU8(Ord(G.FContinuationHandlers[I].Kind));
@@ -17570,7 +17571,10 @@ begin
   Template := G.FClosure.Template;
   Info := SnapshotFrameInfo(AReader, Template);
   G.FThisValue := AReader.ReadRegister;
-  ReadSnapshotRegisters(AReader, G.FArguments, High(UInt16));
+  // As many arguments as a call can pass: the count is bounded by the
+  // input and charged before it is allocated, and one past it (the
+  // register window) still fits.
+  ReadSnapshotRegisters(AReader, G.FArguments, High(Integer) - 1);
   Kind := AReader.ReadU8;
   if Kind > Ord(High(TGocciaBytecodeGeneratorState)) then
     AReader.Refuse('an unknown generator state');

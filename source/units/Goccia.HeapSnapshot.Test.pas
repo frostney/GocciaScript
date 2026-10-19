@@ -624,6 +624,14 @@ begin
     'catch (e) { before = e.constructor.name; } ' +
     'return [before, restored.g.next().value, restored.peek()].join(); })()'))
     .ToBe('ReferenceError,5,5');
+  // More arguments than a 16-bit count holds: the frame restores as the
+  // call made it.
+  Expect<string>(RoundTripModule(
+    '(() => { const source = { *wide(...args) { yield 0; ' +
+    'yield args.length + args[args.length - 1]; } }; ' +
+    'const g = source.wide(...Array.from({ length: 70000 }, (_, i) => i)); ' +
+    'g.next(); capture(g); })();',
+    'restored.next().value')).ToBe('139999');
 end;
 
 procedure THeapSnapshotTests.TestGeneratorKeepsItsHandlers;
