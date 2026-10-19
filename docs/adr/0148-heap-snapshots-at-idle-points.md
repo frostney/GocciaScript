@@ -58,6 +58,12 @@ A run reaches the checkpoint when all of these hold:
 - no `Atomics.waitAsync` waiter is pending: the engine services those outside
   the extensions, and a waiter's buffer subscription and deadline live outside
   the heap;
+- no extension holds state outside the heap that no codec covers. Extensions
+  answer this separately from `HasPendingWork`, which answers whether the
+  idle wait has work, not whether state would be lost. The timer extension,
+  for one, reports only due real timers as pending work, but any scheduled
+  timer (an interval included), a fake clock or a parked timer error refuses
+  the snapshot until a codec covers it;
 - the host-call owner reports only host calls the embedder answers.
 
 The engine checks for the checkpoint where it would otherwise call that
@@ -84,8 +90,8 @@ A snapshot contains:
 - a header: magic, format version, the engine's build identity, and a schema
   version per codec;
 - each module's identity: its bytecode's SHA-256 for a source module, its
-  content hash for a data module (JSON, text), and its name for a host or
-  runtime module;
+  content hash for a data module (JSON, text), and its name and version for a
+  host or runtime module (see Modules);
 - a string table;
 - the names of the built-ins it refers to;
 - an object table, each entry a tag and a payload;
@@ -131,6 +137,9 @@ the realm's slots and shared prototypes, and the well-known symbols.
   covers:
   - added, deleted and redefined own properties, string- and symbol-keyed,
     with their data or accessor descriptors and attributes;
+  - the final order of the built-in's own keys, string and symbol: deleting
+    and adding a property again moves it to the end, which
+    `Reflect.ownKeys` shows;
   - a changed prototype;
   - a changed `[[Extensible]]` flag (`Object.preventExtensions`), recorded
     apart from sealing and freezing;
@@ -138,8 +147,9 @@ the realm's slots and shared prototypes, and the well-known symbols.
 
   A restore applies the differences after the built-in table is resolved and
   before the object graph is filled: property and prototype changes in the
-  order they were recorded, then extensibility and integrity. Each kind of
-  difference has a round-trip test.
+  order they were recorded, then the key order, then extensibility and
+  integrity. Each kind of difference has a round-trip test, the key order
+  checked through `Reflect.ownKeys`.
 - A change to a built-in's native internal state (its slots) refuses unless
   a codec covers that state.
 
@@ -164,8 +174,9 @@ How each kind of module is restored:
   are created by the engine as usual. Each is identified by its name and a
   version: the engine build for the engine's own modules, and for a host
   module a version the embedder supplies when it registers the module, which
-  it changes whenever the module's exports or behaviour change. A host module
-  registered without a version refuses the snapshot. Their state is written
+  it changes whenever the module's exports or behaviour change. Host module
+  registration gains that version; a host module registered without one
+  refuses the snapshot, and the snapshot records both name and version. Their state is written
   only through their codecs; without one they refuse if the run changed them.
 - **Pending dynamic imports and deferred namespaces** refuse until a codec
   covers them.
@@ -186,8 +197,7 @@ handler stacks. Two rules follow:
     strings, string lengths and nesting depth;
   - it polls the run's execution limits (`CheckNativeWork`, as ADR 0103
     requires of native parsers) in every loop whose length follows the input:
-    the passes over the object table, codec loops, string decoding and
-    decompression;
+    the passes over the object table, codec loops and string decoding;
   - it charges restored objects and its temporary tables to the run's memory
     ceiling before allocating them;
   - it checks VM state against the bytecode it belongs to (instruction
@@ -196,6 +206,15 @@ handler stacks. Two rules follow:
   - it refuses rather than guesses;
   - it is fuzzed with mutated real snapshots under heaptrc and
     memory-checking tools.
+- The writer is bounded the same way, since the heap it walks can be as
+  large as the run made it: it polls `CheckNativeWork` per object, uses
+  checked size arithmetic, and charges its object tables, string table and
+  output buffers to the run's memory ceiling, as do the census and the
+  accounting check.
+- Compression belongs to the embedder. The engine writes and reads the
+  uncompressed format; an embedder that compresses snapshots authenticates
+  and decompresses them before the reader sees them, and bounds the decoded
+  size by the reader's input limit.
 
 ### Iterative walks
 
@@ -210,19 +229,27 @@ and prototype chains) has a deep-chain round-trip test.
 
 **State outside the heap is recorded or left to the embedder.**
 
-- **Recorded and checked by the engine:** the deterministic clock, the engine
-  options and compatibility flags, and the limits the run started with. A
-  mismatch refuses the restore.
+- **Recorded and checked by the engine:** the deterministic clock and the
+  engine options and compatibility flags. A mismatch refuses the restore.
 - **The random source.** The host random provider (`IGocciaHostRandom`) gains
   an optional, versioned interface to save and restore its state. The default
   provider implements it, so `Math.random` continues the same sequence after a
-  restore; a provider without it refuses the snapshot.
-- **Execution budgets.** The instructions the run has consumed and its active
-  instruction-limit scopes are recorded, and the restored run continues with
-  what was left, so restoring never grants a fresh budget. Time limits count
-  only time the run executes: the interval the snapshot is stored does not
-  count, and each active timeout scope is re-armed with the time it had left
-  at the pause. An embedder may give a restored run tighter limits.
+  restore; a provider without it refuses the snapshot. The host environment's
+  child-stream counter, which forks a random stream for each new realm, is
+  recorded with it, so realms created after a restore get the streams they
+  would have got; a round-trip test creates child realms before and after the
+  snapshot.
+- **Execution budgets.** The instruction and timeout state is per thread, and
+  a sandboxed child run nests its own scopes inside its caller's. A snapshot
+  is therefore taken only of a run whose scopes are the outermost on its
+  thread, and refused inside a nested one. It records the run's instruction
+  limit, the instructions it has consumed, its timeout and the time it has
+  run. Time limits count only time the run executes: the interval the
+  snapshot is stored does not count. On restore the embedder passes the
+  limits it wants: each must be equal to or tighter than the recorded one,
+  else the restore refuses, and the restored run gets the smaller of the new
+  limit and what the recorded one had left. Restoring therefore never grants
+  a fresh budget.
 - **Carried by the embedder:** its own host state. That includes the sandbox
   file system the run wrote to (or the run's file changes), the ids of its
   pending host calls, and the authentication.
