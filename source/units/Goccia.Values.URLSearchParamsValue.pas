@@ -86,7 +86,7 @@ type
 
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
@@ -724,9 +724,8 @@ begin
   end;
 end;
 
-procedure TGocciaURLSearchParamsValue.MarkReferences;
+procedure TGocciaURLSearchParamsValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   // Mark the owning URL so it stays live as long as this URLSearchParams is
   // reachable, preventing use-after-free when the user holds only a direct

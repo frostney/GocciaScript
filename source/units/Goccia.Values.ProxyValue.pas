@@ -158,7 +158,7 @@ type
     function IsConstructable: Boolean; override;
     function ToStringTag: string; override;
 
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     procedure Revoke;
 
@@ -176,7 +176,7 @@ type
     constructor Create(const AProxy: TGocciaProxyValue);
     function RevokeCallback(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   { Result object for Proxy.revocable — holds the Revoker via an
@@ -187,7 +187,7 @@ type
     FRevoker: TGocciaProxyRevoker;
   public
     constructor Create(const ARevoker: TGocciaProxyRevoker);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 implementation
@@ -2396,9 +2396,8 @@ begin
   Result := CONSTRUCTOR_PROXY;
 end;
 
-procedure TGocciaProxyValue.MarkReferences;
+procedure TGocciaProxyValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FTarget) then
@@ -2432,9 +2431,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaProxyRevoker.MarkReferences;
+procedure TGocciaProxyRevoker.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FProxy) then
     FProxy.MarkReferences;
@@ -2449,9 +2447,8 @@ begin
   FRevoker := ARevoker;
 end;
 
-procedure TGocciaRevocableProxyResult.MarkReferences;
+procedure TGocciaRevocableProxyResult.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FRevoker) then
     FRevoker.MarkReferences;

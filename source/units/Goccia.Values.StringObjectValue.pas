@@ -44,7 +44,7 @@ type
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
     procedure InitializePrototype;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
     class function GetSharedPrototypeForRealm(
@@ -614,9 +614,8 @@ begin
   inherited Destroy;
 end;
 
-procedure TGocciaStringObjectValue.MarkReferences;
+procedure TGocciaStringObjectValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FPrimitive) then
     FPrimitive.MarkReferences;

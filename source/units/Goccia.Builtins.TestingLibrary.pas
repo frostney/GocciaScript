@@ -95,7 +95,7 @@ type
       const ATable: TGocciaValue; const ATarget: TGocciaParameterizedRegistrationTarget);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   // Expectation object that provides matchers
@@ -110,7 +110,7 @@ type
   public
     constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False;
       const AIsRejectionReason: Boolean = False);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     // Core matchers
     function ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1307,10 +1307,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaParameterizedRegistrationFunction.MarkReferences;
+procedure TGocciaParameterizedRegistrationFunction.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
 
   inherited;
   if Assigned(FTable) then
@@ -1326,7 +1324,7 @@ end;
   getters on the expected side before it is done reading the actual. Without
   this the value is collected mid-assertion. FTestAssertions is a builtin, not a
   collected value, so it is deliberately not marked. }
-procedure TGocciaExpectationValue.MarkReferences;
+procedure TGocciaExpectationValue.TraceReferences;
 begin
   inherited;
   if Assigned(FActualValue) then

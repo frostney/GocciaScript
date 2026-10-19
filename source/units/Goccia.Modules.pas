@@ -233,7 +233,7 @@ type
       const AThisContext: TGocciaValue): TGocciaValue; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function HasProperty(const AName: string): Boolean; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     procedure Freeze; override;
     procedure PreventExtensions; override;
     procedure Seal; override;
@@ -306,7 +306,7 @@ type
     function GetOwnSymbolPropertyDescriptor(
       const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; override;
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function TryReadImportAttributeType(const AOptions: TGocciaValue;
@@ -1457,9 +1457,8 @@ begin
   inherited Freeze;
 end;
 
-procedure TGocciaModuleNamespaceObject.MarkReferences;
+procedure TGocciaModuleNamespaceObject.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FModule) then
     FModule.MarkExportReferences;
@@ -1855,9 +1854,8 @@ begin
   Result := inherited HasSymbolProperty(ASymbol);
 end;
 
-procedure TGocciaDeferredModuleNamespaceObject.MarkReferences;
+procedure TGocciaDeferredModuleNamespaceObject.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FNamespaceObject) then
     FNamespaceObject.MarkReferences;

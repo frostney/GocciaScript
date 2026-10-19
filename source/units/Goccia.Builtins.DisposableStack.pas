@@ -134,7 +134,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function AwaitRejected(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     procedure Start;
   end;
 
@@ -334,9 +334,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TAsyncDisposableStackDisposeJob.MarkReferences;
+procedure TAsyncDisposableStackDisposeJob.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FCurrentError) then
     FCurrentError.MarkReferences;

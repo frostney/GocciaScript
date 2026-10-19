@@ -139,7 +139,7 @@ type
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property OriginalFunction: TGocciaValue read FOriginalFunction;
     property BoundThis: TGocciaValue read FBoundThis;
     property BoundArgCount: Integer read FBoundArgCount;
@@ -1825,11 +1825,10 @@ begin
   Result := FBoundName;
 end;
 
-procedure TGocciaBoundFunctionValue.MarkReferences;
+procedure TGocciaBoundFunctionValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited; // Marks self + object properties/prototype
 
   // Mark the original function and bound this
