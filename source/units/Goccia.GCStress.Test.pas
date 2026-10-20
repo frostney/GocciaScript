@@ -612,6 +612,34 @@ begin
     ' Temporal.PlainYearMonth.compare("2024-01", { year: 2024, get month() { churn(1); return 2; } }),' + LineEnding +
     ' Temporal.ZonedDateTime.compare("2024-01-01T00:00[UTC]",' + LineEnding +
     '   { year: 2024, month: 1, get day() { churn(1); return 2; }, timeZone: "UTC" })];');
+  // Every field a bag reader takes from a getter (a fresh number or string)
+  // was held only by a local while the next getters ran: era and eraYear in
+  // from() and with(), the coercers behind equals(), and relativeTo.
+  RunStressed('temporal-bags.js',
+    'const g = new Temporal.PlainDate(2024, 3, 15, "gregory");' + LineEnding +
+    'const t = Temporal.PlainTime.from("10:20:30");' + LineEnding +
+    // Each getter returns a value made for the call; the string ones reserve,
+    // so a collection runs while the values read before are held natively.
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const eras = () => ({ get era() { return fresh(g.era); }, get eraYear() { fresh("pad"); return g.eraYear; },' + LineEnding +
+    '  get month() { return g.month; }, get monthCode() { return fresh(g.monthCode); } });' + LineEnding +
+    'const fields = () => ({ calendar: "gregory",' + LineEnding +
+    '  get era() { return fresh(g.era); }, get eraYear() { fresh("pad"); return g.eraYear; }, get year() { return g.year; },' + LineEnding +
+    '  get month() { return g.month; }, get monthCode() { return fresh(g.monthCode); },' + LineEnding +
+    '  get day() { return g.day; }, get hour() { return t.hour; }, get minute() { return t.minute; } });' + LineEnding +
+    'const dt = new Temporal.PlainDateTime(2024, 3, 15, 10, 0, 0, 0, 0, 0, "gregory");' + LineEnding +
+    'const zdt = dt.toZonedDateTime("UTC");' + LineEnding +
+    'const ym = Temporal.PlainYearMonth.from(g);' + LineEnding +
+    'const md = Temporal.PlainMonthDay.from(g);' + LineEnding +
+    '[Temporal.PlainDate.from(fields()), Temporal.PlainDateTime.from(fields()),' + LineEnding +
+    ' g.with(eras()), dt.with(eras()), ym.with(eras()), zdt.with(eras()),' + LineEnding +
+    ' md.with({ get monthCode() { return fresh(g.monthCode); }, get day() { return g.day; } }),' + LineEnding +
+    ' md.toPlainDate({ get era() { return fresh(g.era); }, get eraYear() { fresh("pad"); return g.eraYear; } }),' + LineEnding +
+    ' md.equals(fields()), ym.equals(fields()),' + LineEnding +
+    ' Temporal.Duration.from({ days: 1 }).total({ unit: "hours",' + LineEnding +
+    '   relativeTo: { calendar: "gregory", get era() { return fresh(g.era); }, get eraYear() { fresh("pad"); return g.eraYear; },' + LineEnding +
+    '     get month() { return g.month; }, get day() { return g.day; },' + LineEnding +
+    '     get timeZone() { return fresh("UTC"); } } })].map(String);');
   // A field read from a property bag (a getter's fresh number) was held only
   // by a local while the next field's getter made a string.
   RunStressed('temporal-from-bag.js',

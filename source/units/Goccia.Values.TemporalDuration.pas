@@ -126,6 +126,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.Calendar,
@@ -2569,6 +2570,7 @@ const
   MS_PER_HOUR = 3600000;
   MS_PER_DAY = Int64(86400000);
 var
+  FieldRoots: TGocciaActiveRootFrame;
   VCalendar, VDay, VHour, VMicrosecond, VMillisecond, VMinute, VMonth,
   VMonthCode, VNanosecond, VOffset, VSecond, VTimeZone, VYear, VEra,
   VEraYear: TGocciaValue;
@@ -2581,159 +2583,182 @@ var
   ActualOffsetSeconds: Integer;
   ISODate: TTemporalDateRecord;
 begin
-  AIsZoned := False;
-  ACalendarId := 'iso8601';
-  ATimeZone := '';
-  AHour := 0;
-  AMinute := 0;
-  ASecond := 0;
-  AMillisecond := 0;
-  AMicrosecond := 0;
-  ANanosecond := 0;
-  AEpochMilliseconds := 0;
-  ASubMillisecondNanoseconds := 0;
+  // A value read from the property bag (a getter can make it fresh) is
+  // held only by its local while the next fields are read and converted,
+  // which can run getters and allocate.
+  FieldRoots.Initialize;
+  try
+    AIsZoned := False;
+    ACalendarId := 'iso8601';
+    ATimeZone := '';
+    AHour := 0;
+    AMinute := 0;
+    ASecond := 0;
+    AMillisecond := 0;
+    AMicrosecond := 0;
+    ANanosecond := 0;
+    AEpochMilliseconds := 0;
+    ASubMillisecondNanoseconds := 0;
 
-  VCalendar := AObj.GetProperty('calendar');
-  CalendarId := RelativeToCalendarIdFromValue(VCalendar, AMethod);
-  ACalendarId := CalendarId;
+    VCalendar := AObj.GetProperty('calendar');
+    FieldRoots.Add(VCalendar);
+    CalendarId := RelativeToCalendarIdFromValue(VCalendar, AMethod);
+    ACalendarId := CalendarId;
 
-  VDay := AObj.GetProperty(PROP_DAY);
-  Day := RequiredRelativeToIntegerField(VDay, AMethod, PROP_DAY);
-  VHour := AObj.GetProperty(PROP_HOUR);
-  Hour := OptionalRelativeToIntegerField(VHour, 0);
-  VMicrosecond := AObj.GetProperty(PROP_MICROSECOND);
-  Microsecond := OptionalRelativeToIntegerField(VMicrosecond, 0);
-  VMillisecond := AObj.GetProperty(PROP_MILLISECOND);
-  Millisecond := OptionalRelativeToIntegerField(VMillisecond, 0);
-  VMinute := AObj.GetProperty(PROP_MINUTE);
-  Minute := OptionalRelativeToIntegerField(VMinute, 0);
-  VMonth := AObj.GetProperty(PROP_MONTH);
-  HasMonth := not DurationIsUndefinedValue(VMonth);
-  if HasMonth then
-    Month := ToIntegerWithTruncationValue(VMonth)
-  else
-    Month := 0;
-  VMonthCode := AObj.GetProperty(PROP_MONTH_CODE);
-  HasMonthCode := not DurationIsUndefinedValue(VMonthCode);
-  MonthCode := '';
-  IsLeapMonth := False;
-  if HasMonthCode then
-  begin
-    MonthCode := VMonthCode.ToStringLiteral.Value;
-    if not DurationMonthCodeSyntaxValid(MonthCode) then
-      ThrowRangeError(Format(SErrorInvalidMonthCodeFor, [AMethod]),
-        SSuggestTemporalMonthCode);
-  end;
-  VNanosecond := AObj.GetProperty(PROP_NANOSECOND);
-  Nanosecond := OptionalRelativeToIntegerField(VNanosecond, 0);
-  VOffset := AObj.GetProperty('offset');
-  HasOffset := not DurationIsUndefinedValue(VOffset);
-  OffsetSeconds := 0;
-  if HasOffset then
-  begin
-    OffsetString := RelativeToOffsetString(VOffset, AMethod);
-    if (not TryParseTemporalOffsetString(OffsetString, OffsetSeconds,
-      OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax)) or OffsetHasUTCDesignator then
-      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
-        SSuggestTemporalRelativeTo);
-  end;
-  VSecond := AObj.GetProperty(PROP_SECOND);
-  Second := OptionalRelativeToIntegerField(VSecond, 0);
-  if Second = 60 then
-    Second := 59;
-  VTimeZone := AObj.GetProperty('timeZone');
-  HasTimeZone := not DurationIsUndefinedValue(VTimeZone);
-  VYear := AObj.GetProperty(PROP_YEAR);
-  if not DurationIsUndefinedValue(VYear) then
-    Year := ToIntegerWithTruncationValue(VYear)
-  else
-  begin
-    VEra := AObj.GetProperty('era');
-    VEraYear := AObj.GetProperty('eraYear');
-    if DurationIsUndefinedValue(VEra) or DurationIsUndefinedValue(VEraYear) or
-       not TryCalendarYearFromEra(CalendarId, VEra.ToStringLiteral.Value,
-         ToIntegerWithTruncationValue(VEraYear), Year) then
-      ThrowTypeError(AMethod + ' relativeTo requires year property',
-        SSuggestTemporalRelativeTo);
-  end;
-
-  if HasMonthCode then
-  begin
-    if not TryParseTemporalMonthCode(MonthCode, MonthFromCode, IsLeapMonth) then
-      ThrowRangeError(Format(SErrorMonthCodeOutOfRangeIn, [AMethod]),
-        SSuggestTemporalMonthCode);
-    if HasMonth and (Month <> MonthFromCode) then
-      ThrowRangeError(Format(SErrorMonthCodeMismatchIn, [AMethod]),
-        SSuggestTemporalMonthCode);
-    Month := MonthFromCode;
-  end
-  else if not HasMonth then
-    ThrowTypeError(AMethod + ' relativeTo requires month property',
-      SSuggestTemporalRelativeTo);
-
-  if CalendarId = 'iso8601' then
-  begin
-    if not IsValidDate(Year, Month, Day) then
-      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
-        SSuggestTemporalRelativeTo);
-  end
-  else
-  begin
-    if not TryResolveCalendarDateToISO(CalendarId, Year, Month, Day,
-      HasMonthCode, IsLeapMonth, True, ISODate) then
-      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
-        SSuggestTemporalRelativeTo);
-    Year := ISODate.Year;
-    Month := ISODate.Month;
-    Day := ISODate.Day;
-  end;
-  if not IsValidTime(Hour, Minute, Second, Millisecond, Microsecond, Nanosecond) then
-    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
-      SSuggestTemporalRelativeTo);
-
-  if HasTimeZone then
-  begin
-    TimeZoneString := CanonicalizeTemporalTimeZoneIdentifier(
-      RelativeToTimeZoneString(VTimeZone, AMethod));
-    AIsZoned := True;
-    ATimeZone := TimeZoneString;
-    AHour := Hour;
-    AMinute := Minute;
-    ASecond := Second;
-    AMillisecond := Millisecond;
-    AMicrosecond := Microsecond;
-    ANanosecond := Nanosecond;
-    ASubMillisecondNanoseconds := Microsecond * 1000 + Nanosecond;
-
+    VDay := AObj.GetProperty(PROP_DAY);
+    FieldRoots.Add(VDay);
+    Day := RequiredRelativeToIntegerField(VDay, AMethod, PROP_DAY);
+    VHour := AObj.GetProperty(PROP_HOUR);
+    FieldRoots.Add(VHour);
+    Hour := OptionalRelativeToIntegerField(VHour, 0);
+    VMicrosecond := AObj.GetProperty(PROP_MICROSECOND);
+    FieldRoots.Add(VMicrosecond);
+    Microsecond := OptionalRelativeToIntegerField(VMicrosecond, 0);
+    VMillisecond := AObj.GetProperty(PROP_MILLISECOND);
+    FieldRoots.Add(VMillisecond);
+    Millisecond := OptionalRelativeToIntegerField(VMillisecond, 0);
+    VMinute := AObj.GetProperty(PROP_MINUTE);
+    FieldRoots.Add(VMinute);
+    Minute := OptionalRelativeToIntegerField(VMinute, 0);
+    VMonth := AObj.GetProperty(PROP_MONTH);
+    FieldRoots.Add(VMonth);
+    HasMonth := not DurationIsUndefinedValue(VMonth);
+    if HasMonth then
+      Month := ToIntegerWithTruncationValue(VMonth)
+    else
+      Month := 0;
+    VMonthCode := AObj.GetProperty(PROP_MONTH_CODE);
+    FieldRoots.Add(VMonthCode);
+    HasMonthCode := not DurationIsUndefinedValue(VMonthCode);
+    MonthCode := '';
+    IsLeapMonth := False;
+    if HasMonthCode then
+    begin
+      MonthCode := VMonthCode.ToStringLiteral.Value;
+      if not DurationMonthCodeSyntaxValid(MonthCode) then
+        ThrowRangeError(Format(SErrorInvalidMonthCodeFor, [AMethod]),
+          SSuggestTemporalMonthCode);
+    end;
+    VNanosecond := AObj.GetProperty(PROP_NANOSECOND);
+    FieldRoots.Add(VNanosecond);
+    Nanosecond := OptionalRelativeToIntegerField(VNanosecond, 0);
+    VOffset := AObj.GetProperty('offset');
+    FieldRoots.Add(VOffset);
+    HasOffset := not DurationIsUndefinedValue(VOffset);
+    OffsetSeconds := 0;
     if HasOffset then
     begin
-      OffsetEpochMs := DateToEpochDays(Year, Month, Day) * MS_PER_DAY +
-        Int64(Hour) * MS_PER_HOUR + Int64(Minute) * MS_PER_MINUTE +
-        Int64(Second) * MS_PER_SECOND + Millisecond -
-        Int64(OffsetSeconds) * MS_PER_SECOND;
-      ActualOffsetSeconds := GetUtcOffsetSeconds(TimeZoneString,
-        OffsetEpochMs div MS_PER_SECOND);
-      if ActualOffsetSeconds <> OffsetSeconds then
+      OffsetString := RelativeToOffsetString(VOffset, AMethod);
+      if (not TryParseTemporalOffsetString(OffsetString, OffsetSeconds,
+        OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax)) or OffsetHasUTCDesignator then
         ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
           SSuggestTemporalRelativeTo);
-      AEpochMilliseconds := OffsetEpochMs;
     end;
-    if not HasOffset then
-      AEpochMilliseconds := LocalDateTimeToEpochMillisecondsWithDisambiguation(
-        Year, Month, Day, Hour, Minute, Second, Millisecond, TimeZoneString,
-        ttzdCompatible);
-    if not IsValidEpochNanoseconds(EpochNanosecondsFromParts(
-      AEpochMilliseconds, ASubMillisecondNanoseconds)) then
+    VSecond := AObj.GetProperty(PROP_SECOND);
+    FieldRoots.Add(VSecond);
+    Second := OptionalRelativeToIntegerField(VSecond, 0);
+    if Second = 60 then
+      Second := 59;
+    VTimeZone := AObj.GetProperty('timeZone');
+    FieldRoots.Add(VTimeZone);
+    HasTimeZone := not DurationIsUndefinedValue(VTimeZone);
+    VYear := AObj.GetProperty(PROP_YEAR);
+    FieldRoots.Add(VYear);
+    if not DurationIsUndefinedValue(VYear) then
+      Year := ToIntegerWithTruncationValue(VYear)
+    else
+    begin
+      VEra := AObj.GetProperty('era');
+      FieldRoots.Add(VEra);
+      VEraYear := AObj.GetProperty('eraYear');
+      FieldRoots.Add(VEraYear);
+      if DurationIsUndefinedValue(VEra) or DurationIsUndefinedValue(VEraYear) or
+         not TryCalendarYearFromEra(CalendarId, VEra.ToStringLiteral.Value,
+           ToIntegerWithTruncationValue(VEraYear), Year) then
+        ThrowTypeError(AMethod + ' relativeTo requires year property',
+          SSuggestTemporalRelativeTo);
+    end;
+
+    if HasMonthCode then
+    begin
+      if not TryParseTemporalMonthCode(MonthCode, MonthFromCode, IsLeapMonth) then
+        ThrowRangeError(Format(SErrorMonthCodeOutOfRangeIn, [AMethod]),
+          SSuggestTemporalMonthCode);
+      if HasMonth and (Month <> MonthFromCode) then
+        ThrowRangeError(Format(SErrorMonthCodeMismatchIn, [AMethod]),
+          SSuggestTemporalMonthCode);
+      Month := MonthFromCode;
+    end
+    else if not HasMonth then
+      ThrowTypeError(AMethod + ' relativeTo requires month property',
+        SSuggestTemporalRelativeTo);
+
+    if CalendarId = 'iso8601' then
+    begin
+      if not IsValidDate(Year, Month, Day) then
+        ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
+          SSuggestTemporalRelativeTo);
+    end
+    else
+    begin
+      if not TryResolveCalendarDateToISO(CalendarId, Year, Month, Day,
+        HasMonthCode, IsLeapMonth, True, ISODate) then
+        ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
+          SSuggestTemporalRelativeTo);
+      Year := ISODate.Year;
+      Month := ISODate.Month;
+      Day := ISODate.Day;
+    end;
+    if not IsValidTime(Hour, Minute, Second, Millisecond, Microsecond, Nanosecond) then
       ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
         SSuggestTemporalRelativeTo);
-  end;
 
-  Result.Year := Year;
-  Result.Month := Month;
-  Result.Day := Day;
-  if not DurationDateInTemporalRange(Result) then
-    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
-      SSuggestTemporalRelativeTo);
+    if HasTimeZone then
+    begin
+      TimeZoneString := CanonicalizeTemporalTimeZoneIdentifier(
+        RelativeToTimeZoneString(VTimeZone, AMethod));
+      AIsZoned := True;
+      ATimeZone := TimeZoneString;
+      AHour := Hour;
+      AMinute := Minute;
+      ASecond := Second;
+      AMillisecond := Millisecond;
+      AMicrosecond := Microsecond;
+      ANanosecond := Nanosecond;
+      ASubMillisecondNanoseconds := Microsecond * 1000 + Nanosecond;
+
+      if HasOffset then
+      begin
+        OffsetEpochMs := DateToEpochDays(Year, Month, Day) * MS_PER_DAY +
+          Int64(Hour) * MS_PER_HOUR + Int64(Minute) * MS_PER_MINUTE +
+          Int64(Second) * MS_PER_SECOND + Millisecond -
+          Int64(OffsetSeconds) * MS_PER_SECOND;
+        ActualOffsetSeconds := GetUtcOffsetSeconds(TimeZoneString,
+          OffsetEpochMs div MS_PER_SECOND);
+        if ActualOffsetSeconds <> OffsetSeconds then
+          ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
+            SSuggestTemporalRelativeTo);
+        AEpochMilliseconds := OffsetEpochMs;
+      end;
+      if not HasOffset then
+        AEpochMilliseconds := LocalDateTimeToEpochMillisecondsWithDisambiguation(
+          Year, Month, Day, Hour, Minute, Second, Millisecond, TimeZoneString,
+          ttzdCompatible);
+      if not IsValidEpochNanoseconds(EpochNanosecondsFromParts(
+        AEpochMilliseconds, ASubMillisecondNanoseconds)) then
+        ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
+          SSuggestTemporalRelativeTo);
+    end;
+
+    Result.Year := Year;
+    Result.Month := Month;
+    Result.Day := Day;
+    if not DurationDateInTemporalRange(Result) then
+      ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo, [AMethod]),
+        SSuggestTemporalRelativeTo);
+  finally
+    FieldRoots.Clear;
+  end;
 end;
 
 function ParseRelativeTo(const AValue: TGocciaValue; const AMethod: string): TTemporalDateRecord;

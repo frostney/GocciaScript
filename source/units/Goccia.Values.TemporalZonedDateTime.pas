@@ -2400,6 +2400,7 @@ end;
 // TC39 Temporal §6.3.22 Temporal.ZonedDateTime.prototype.with(temporalZonedDateTimeLike [, options])
 function TGocciaTemporalZonedDateTimeValue.ZonedDateTimeWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  FieldRoots: TGocciaActiveRootFrame;
   Zdt: TGocciaTemporalZonedDateTimeValue;
   Obj: TGocciaObjectValue;
   V, VCalendar, VTimeZone, VYear, VMonth, VMonthCode, VDay, VEra,
@@ -2441,208 +2442,231 @@ var
   end;
 
 begin
-  Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.with');
-  V := AArgs.GetElement(0);
-  if not (V is TGocciaObjectValue) then
-    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']), SSuggestTemporalWithObject);
-  if (V is TGocciaTemporalPlainDateValue) or
-     (V is TGocciaTemporalPlainDateTimeValue) or
-     (V is TGocciaTemporalPlainMonthDayValue) or
-     (V is TGocciaTemporalPlainTimeValue) or
-     (V is TGocciaTemporalPlainYearMonthValue) or
-     (V is TGocciaTemporalZonedDateTimeValue) then
-    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']),
-      SSuggestTemporalWithObject);
-  Obj := TGocciaObjectValue(V);
+  // A value read from the property bag (a getter can make it fresh) is
+  // held only by its local while the next fields are read and converted,
+  // which can run getters and allocate.
+  FieldRoots.Initialize;
+  try
+    Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.with');
+    V := AArgs.GetElement(0);
+    if not (V is TGocciaObjectValue) then
+      ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']), SSuggestTemporalWithObject);
+    if (V is TGocciaTemporalPlainDateValue) or
+       (V is TGocciaTemporalPlainDateTimeValue) or
+       (V is TGocciaTemporalPlainMonthDayValue) or
+       (V is TGocciaTemporalPlainTimeValue) or
+       (V is TGocciaTemporalPlainYearMonthValue) or
+       (V is TGocciaTemporalZonedDateTimeValue) then
+      ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']),
+        SSuggestTemporalWithObject);
+    Obj := TGocciaObjectValue(V);
 
-  ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
-  Info := CalendarInfoForZonedDateTime(Zdt, 'ZonedDateTime.prototype.with');
+    ComputeLocalComponents(Zdt, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMs, LUs, LNs);
+    Info := CalendarInfoForZonedDateTime(Zdt, 'ZonedDateTime.prototype.with');
 
-  VCalendar := Obj.GetProperty(PROPERTY_CALENDAR);
-  if not IsUndefinedValue(VCalendar) then
-    ThrowTypeError('ZonedDateTime.prototype.with does not accept calendar',
-      SSuggestTemporalWithObject);
-  VTimeZone := Obj.GetProperty(PROPERTY_TIME_ZONE);
-  if not IsUndefinedValue(VTimeZone) then
-    ThrowTypeError('ZonedDateTime.prototype.with does not accept timeZone',
-      SSuggestTemporalWithObject);
+    VCalendar := Obj.GetProperty(PROPERTY_CALENDAR);
+    FieldRoots.Add(VCalendar);
+    if not IsUndefinedValue(VCalendar) then
+      ThrowTypeError('ZonedDateTime.prototype.with does not accept calendar',
+        SSuggestTemporalWithObject);
+    VTimeZone := Obj.GetProperty(PROPERTY_TIME_ZONE);
+    FieldRoots.Add(VTimeZone);
+    if not IsUndefinedValue(VTimeZone) then
+      ThrowTypeError('ZonedDateTime.prototype.with does not accept timeZone',
+        SSuggestTemporalWithObject);
 
-  VDay := Obj.GetProperty(PROPERTY_DAY);
-  if not IsUndefinedValue(VDay) then
-    NewDay := ToIntegerWithTruncationValue(VDay)
-  else
-    NewDay := Info.Date.Day;
-  HasRecognizedField := not IsUndefinedValue(VDay);
+    VDay := Obj.GetProperty(PROPERTY_DAY);
+    FieldRoots.Add(VDay);
+    if not IsUndefinedValue(VDay) then
+      NewDay := ToIntegerWithTruncationValue(VDay)
+    else
+      NewDay := Info.Date.Day;
+    HasRecognizedField := not IsUndefinedValue(VDay);
 
-  VHour := Obj.GetProperty('hour');
-  if not IsUndefinedValue(VHour) then
-    NewHour := ToIntegerWithTruncationValue(VHour)
-  else
-    NewHour := LHour;
-  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VHour);
+    VHour := Obj.GetProperty('hour');
+    FieldRoots.Add(VHour);
+    if not IsUndefinedValue(VHour) then
+      NewHour := ToIntegerWithTruncationValue(VHour)
+    else
+      NewHour := LHour;
+    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VHour);
 
-  VMicrosecond := Obj.GetProperty('microsecond');
-  if not IsUndefinedValue(VMicrosecond) then
-    NewUs := ToIntegerWithTruncationValue(VMicrosecond)
-  else
-    NewUs := LUs;
-  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMicrosecond);
+    VMicrosecond := Obj.GetProperty('microsecond');
+    FieldRoots.Add(VMicrosecond);
+    if not IsUndefinedValue(VMicrosecond) then
+      NewUs := ToIntegerWithTruncationValue(VMicrosecond)
+    else
+      NewUs := LUs;
+    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMicrosecond);
 
-  VMillisecond := Obj.GetProperty('millisecond');
-  if not IsUndefinedValue(VMillisecond) then
-    NewMs := ToIntegerWithTruncationValue(VMillisecond)
-  else
-    NewMs := LMs;
-  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMillisecond);
+    VMillisecond := Obj.GetProperty('millisecond');
+    FieldRoots.Add(VMillisecond);
+    if not IsUndefinedValue(VMillisecond) then
+      NewMs := ToIntegerWithTruncationValue(VMillisecond)
+    else
+      NewMs := LMs;
+    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMillisecond);
 
-  VMinute := Obj.GetProperty('minute');
-  if not IsUndefinedValue(VMinute) then
-    NewMinute := ToIntegerWithTruncationValue(VMinute)
-  else
-    NewMinute := LMinute;
-  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMinute);
+    VMinute := Obj.GetProperty('minute');
+    FieldRoots.Add(VMinute);
+    if not IsUndefinedValue(VMinute) then
+      NewMinute := ToIntegerWithTruncationValue(VMinute)
+    else
+      NewMinute := LMinute;
+    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VMinute);
 
-  VMonth := Obj.GetProperty(PROPERTY_MONTH);
-  HasMonth := not IsUndefinedValue(VMonth);
-  if HasMonth then
-  begin
-    NewMonth := ToIntegerWithTruncationValue(VMonth);
-    SuppliedMonth := NewMonth;
-  end
-  else
-  begin
-    NewMonth := Info.Date.Month;
-    SuppliedMonth := 0;
-  end;
-  HasRecognizedField := HasRecognizedField or HasMonth;
-
-  VMonthCode := Obj.GetProperty(PROPERTY_MONTH_CODE);
-  HasMonthCode := not IsUndefinedValue(VMonthCode);
-  MonthCodeStr := '';
-  if HasMonthCode then
-    MonthCodeStr := MonthCodeStringFromProperty(VMonthCode,
-      'ZonedDateTime.prototype.with');
-  HasRecognizedField := HasRecognizedField or HasMonthCode;
-
-  VNanosecond := Obj.GetProperty('nanosecond');
-  if not IsUndefinedValue(VNanosecond) then
-    NewNs := ToIntegerWithTruncationValue(VNanosecond)
-  else
-    NewNs := LNs;
-  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VNanosecond);
-
-  VOffset := Obj.GetProperty(PROPERTY_OFFSET);
-  HasOffset := not IsUndefinedValue(VOffset);
-  OffsetHasSubMinuteSyntax := False;
-  if HasOffset then
-    OffsetStr := OffsetStringFromProperty(VOffset, 'ZonedDateTime.prototype.with')
-  else
-    OffsetSeconds := 0;
-  HasRecognizedField := HasRecognizedField or HasOffset;
-
-  VSecond := Obj.GetProperty('second');
-  if not IsUndefinedValue(VSecond) then
-    NewSecond := ToIntegerWithTruncationValue(VSecond)
-  else
-    NewSecond := LSecond;
-  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VSecond);
-
-  VYear := Obj.GetProperty(PROPERTY_YEAR);
-  if not IsUndefinedValue(VYear) then
-    NewYear := ToIntegerWithTruncationValue(VYear)
-  else
-    NewYear := Info.Date.Year;
-  HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VYear);
-
-  if (Zdt.FCalendarId <> 'iso8601') and IsUndefinedValue(VYear) then
-  begin
-    VEra := Obj.GetProperty('era');
-    VEraYear := Obj.GetProperty('eraYear');
-    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VEra) or
-      not IsUndefinedValue(VEraYear);
-    if (not IsUndefinedValue(VEra)) or (not IsUndefinedValue(VEraYear)) then
+    VMonth := Obj.GetProperty(PROPERTY_MONTH);
+    FieldRoots.Add(VMonth);
+    HasMonth := not IsUndefinedValue(VMonth);
+    if HasMonth then
     begin
-      if IsUndefinedValue(VEra) or IsUndefinedValue(VEraYear) or
-         not TryCalendarYearFromEra(Zdt.FCalendarId, VEra.ToStringLiteral.Value,
-           ToIntegerWithTruncationValue(VEraYear), NewYear) then
-        ThrowTypeError('ZonedDateTime.prototype.with requires era and eraYear together',
-          SSuggestTemporalFromArg);
+      NewMonth := ToIntegerWithTruncationValue(VMonth);
+      SuppliedMonth := NewMonth;
+    end
+    else
+    begin
+      NewMonth := Info.Date.Month;
+      SuppliedMonth := 0;
     end;
-  end;
+    HasRecognizedField := HasRecognizedField or HasMonth;
 
-  if not HasRecognizedField then
-    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']),
-      SSuggestTemporalWithObject);
-  if (HasMonth and (SuppliedMonth < 0)) or (NewDay < 0) then
-    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
-      'ZonedDateTime.prototype.with']), SSuggestTemporalDateRange);
+    VMonthCode := Obj.GetProperty(PROPERTY_MONTH_CODE);
+    FieldRoots.Add(VMonthCode);
+    HasMonthCode := not IsUndefinedValue(VMonthCode);
+    MonthCodeStr := '';
+    if HasMonthCode then
+      MonthCodeStr := MonthCodeStringFromProperty(VMonthCode,
+        'ZonedDateTime.prototype.with');
+    HasRecognizedField := HasRecognizedField or HasMonthCode;
 
-  OptionsObj := RequireOptionsObject(AArgs.GetElement(1),
-    'ZonedDateTime.prototype.with');
-  Disambiguation := GetDisambiguationOption(OptionsObj,
-    'ZonedDateTime.prototype.with');
-  OffsetOption := GetWithOffsetOption(OptionsObj);
-  Overflow := GetOverflowOption(OptionsObj);
+    VNanosecond := Obj.GetProperty('nanosecond');
+    FieldRoots.Add(VNanosecond);
+    if not IsUndefinedValue(VNanosecond) then
+      NewNs := ToIntegerWithTruncationValue(VNanosecond)
+    else
+      NewNs := LNs;
+    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VNanosecond);
 
-  if HasOffset and
-     ((not ParseZonedDateTimeOffsetPart(OffsetStr, OffsetSeconds,
-       OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax)) or
-      OffsetHasUTCDesignator) then
-    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
-      'ZonedDateTime.prototype.with']), SSuggestTemporalISOFormat);
+    VOffset := Obj.GetProperty(PROPERTY_OFFSET);
+    FieldRoots.Add(VOffset);
+    HasOffset := not IsUndefinedValue(VOffset);
+    OffsetHasSubMinuteSyntax := False;
+    if HasOffset then
+      OffsetStr := OffsetStringFromProperty(VOffset, 'ZonedDateTime.prototype.with')
+    else
+      OffsetSeconds := 0;
+    HasRecognizedField := HasRecognizedField or HasOffset;
 
-  IsLeapMonth := False;
-  UseMonthCode := False;
-  if HasMonthCode then
-  begin
-    if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
-      ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
-    if (Zdt.FCalendarId = 'iso8601') and (IsLeapMonth or (NewMonth < 1) or
-       (NewMonth > 12)) then
-      ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
-    if HasMonth and (NewMonth <> SuppliedMonth) then
-      ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
-    UseMonthCode := not HasMonth;
-  end
-  else if (not HasMonth) and (Zdt.FCalendarId <> 'iso8601') then
-  begin
-    MonthCodeStr := Info.MonthCode;
-    if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+    VSecond := Obj.GetProperty('second');
+    FieldRoots.Add(VSecond);
+    if not IsUndefinedValue(VSecond) then
+      NewSecond := ToIntegerWithTruncationValue(VSecond)
+    else
+      NewSecond := LSecond;
+    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VSecond);
+
+    VYear := Obj.GetProperty(PROPERTY_YEAR);
+    FieldRoots.Add(VYear);
+    if not IsUndefinedValue(VYear) then
+      NewYear := ToIntegerWithTruncationValue(VYear)
+    else
+      NewYear := Info.Date.Year;
+    HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VYear);
+
+    if (Zdt.FCalendarId <> 'iso8601') and IsUndefinedValue(VYear) then
+    begin
+      VEra := Obj.GetProperty('era');
+      FieldRoots.Add(VEra);
+      VEraYear := Obj.GetProperty('eraYear');
+      FieldRoots.Add(VEraYear);
+      HasRecognizedField := HasRecognizedField or not IsUndefinedValue(VEra) or
+        not IsUndefinedValue(VEraYear);
+      if (not IsUndefinedValue(VEra)) or (not IsUndefinedValue(VEraYear)) then
+      begin
+        if IsUndefinedValue(VEra) or IsUndefinedValue(VEraYear) or
+           not TryCalendarYearFromEra(Zdt.FCalendarId, VEra.ToStringLiteral.Value,
+             ToIntegerWithTruncationValue(VEraYear), NewYear) then
+          ThrowTypeError('ZonedDateTime.prototype.with requires era and eraYear together',
+            SSuggestTemporalFromArg);
+      end;
+    end;
+
+    if not HasRecognizedField then
+      ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['ZonedDateTime']),
+        SSuggestTemporalWithObject);
+    if (HasMonth and (SuppliedMonth < 0)) or (NewDay < 0) then
       ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
         'ZonedDateTime.prototype.with']), SSuggestTemporalDateRange);
-    UseMonthCode := True;
+
+    OptionsObj := RequireOptionsObject(AArgs.GetElement(1),
+      'ZonedDateTime.prototype.with');
+    Disambiguation := GetDisambiguationOption(OptionsObj,
+      'ZonedDateTime.prototype.with');
+    OffsetOption := GetWithOffsetOption(OptionsObj);
+    Overflow := GetOverflowOption(OptionsObj);
+
+    if HasOffset and
+       ((not ParseZonedDateTimeOffsetPart(OffsetStr, OffsetSeconds,
+         OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax)) or
+        OffsetHasUTCDesignator) then
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
+        'ZonedDateTime.prototype.with']), SSuggestTemporalISOFormat);
+
+    IsLeapMonth := False;
+    UseMonthCode := False;
+    if HasMonthCode then
+    begin
+      if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+        ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
+      if (Zdt.FCalendarId = 'iso8601') and (IsLeapMonth or (NewMonth < 1) or
+         (NewMonth > 12)) then
+        ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
+      if HasMonth and (NewMonth <> SuppliedMonth) then
+        ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+      UseMonthCode := not HasMonth;
+    end
+    else if (not HasMonth) and (Zdt.FCalendarId <> 'iso8601') then
+    begin
+      MonthCodeStr := Info.MonthCode;
+      if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
+          'ZonedDateTime.prototype.with']), SSuggestTemporalDateRange);
+      UseMonthCode := True;
+    end;
+
+    if not TryResolveCalendarDateToISO(Zdt.FCalendarId, NewYear, NewMonth, NewDay,
+      UseMonthCode, IsLeapMonth, Overflow = toConstrain, DateRec) then
+      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
+        'ZonedDateTime.prototype.with']), SSuggestTemporalDateRange);
+
+    if (not HasOffset) and (OffsetOption <> tooIgnore) then
+    begin
+      HasOffset := True;
+      OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone,
+        EpochMillisecondsToSeconds(Zdt.FEpochMilliseconds));
+    end;
+
+    if Overflow = toConstrain then
+      ConstrainTemporalTimeFields(NewHour, NewMinute, NewSecond, NewMs, NewUs,
+        NewNs)
+    else if not IsValidTime(NewHour, NewMinute, NewSecond, NewMs, NewUs, NewNs) then
+      ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalDateRange);
+
+    NewTime.Hour := NewHour;
+    NewTime.Minute := NewMinute;
+    NewTime.Second := NewSecond;
+    NewTime.Millisecond := NewMs;
+    NewTime.Microsecond := NewUs;
+    NewTime.Nanosecond := NewNs;
+    NewEpochMs := ApplyOffsetOption(DateRec.Year, DateRec.Month, DateRec.Day,
+      NewTime, Zdt.FTimeZone, HasOffset, OffsetSeconds, False,
+      OffsetHasSubMinuteSyntax, False, OffsetOption, Disambiguation,
+      'ZonedDateTime.prototype.with');
+    Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewUs * 1000 + NewNs, Zdt.FTimeZone,
+      Zdt.FCalendarId);
+  finally
+    FieldRoots.Clear;
   end;
-
-  if not TryResolveCalendarDateToISO(Zdt.FCalendarId, NewYear, NewMonth, NewDay,
-    UseMonthCode, IsLeapMonth, Overflow = toConstrain, DateRec) then
-    ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime',
-      'ZonedDateTime.prototype.with']), SSuggestTemporalDateRange);
-
-  if (not HasOffset) and (OffsetOption <> tooIgnore) then
-  begin
-    HasOffset := True;
-    OffsetSeconds := GetUtcOffsetSeconds(Zdt.FTimeZone,
-      EpochMillisecondsToSeconds(Zdt.FEpochMilliseconds));
-  end;
-
-  if Overflow = toConstrain then
-    ConstrainTemporalTimeFields(NewHour, NewMinute, NewSecond, NewMs, NewUs,
-      NewNs)
-  else if not IsValidTime(NewHour, NewMinute, NewSecond, NewMs, NewUs, NewNs) then
-    ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalDateRange);
-
-  NewTime.Hour := NewHour;
-  NewTime.Minute := NewMinute;
-  NewTime.Second := NewSecond;
-  NewTime.Millisecond := NewMs;
-  NewTime.Microsecond := NewUs;
-  NewTime.Nanosecond := NewNs;
-  NewEpochMs := ApplyOffsetOption(DateRec.Year, DateRec.Month, DateRec.Day,
-    NewTime, Zdt.FTimeZone, HasOffset, OffsetSeconds, False,
-    OffsetHasSubMinuteSyntax, False, OffsetOption, Disambiguation,
-    'ZonedDateTime.prototype.with');
-  Result := TGocciaTemporalZonedDateTimeValue.Create(NewEpochMs, NewUs * 1000 + NewNs, Zdt.FTimeZone,
-    Zdt.FCalendarId);
 end;
 
 // TC39 Temporal §6.3.24 Temporal.ZonedDateTime.prototype.withPlainTime([plainTimeLike])

@@ -159,6 +159,7 @@ end;
 
 function CoercePlainYearMonth(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainYearMonthValue;
 var
+  FieldRoots: TGocciaActiveRootFrame;
   Obj: TGocciaObjectValue;
   V, VMonth, VMonthCode, VEra, VEraYear: TGocciaValue;
   DateRec: TTemporalDateRecord;
@@ -166,82 +167,96 @@ var
   CalendarId, MonthCodeStr: string;
   HasMonth, HasMonthCode, IsLeapMonth: Boolean;
 begin
-  CalendarId := 'iso8601';
-  ReferenceDay := 1;
-  if AValue is TGocciaTemporalPlainYearMonthValue then
-    Result := TGocciaTemporalPlainYearMonthValue(AValue)
-  else if AValue is TGocciaStringLiteralValue then
-  begin
-    if not TryParseTemporalPlainYearMonthString(TGocciaStringLiteralValue(AValue).Value,
-      Year, Month, ReferenceDay, CalendarId) then
-      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
-    Result := TGocciaTemporalPlainYearMonthValue.Create(Year, Month, ReferenceDay, CalendarId);
-  end
-  else if AValue is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(AValue);
-    V := Obj.GetProperty('calendar');
-    CalendarId := CalendarIdFromTemporalCalendarLike(V, AMethod);
-    IsLeapMonth := False;
-
-    VMonth := Obj.GetProperty('month');
-    HasMonth := Assigned(VMonth) and not (VMonth is TGocciaUndefinedLiteralValue);
-    CandidateMonth := 0;
-    if HasMonth then
+  // A value read from the property bag (a getter can make it fresh) is
+  // held only by its local while the next fields are read and converted,
+  // which can run getters and allocate.
+  FieldRoots.Initialize;
+  try
+    CalendarId := 'iso8601';
+    ReferenceDay := 1;
+    if AValue is TGocciaTemporalPlainYearMonthValue then
+      Result := TGocciaTemporalPlainYearMonthValue(AValue)
+    else if AValue is TGocciaStringLiteralValue then
     begin
-      CandidateMonth := ToIntegerWithTruncationValue(VMonth);
-      Month := CandidateMonth;
-    end;
-
-    VMonthCode := Obj.GetProperty('monthCode');
-    HasMonthCode := Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue);
-    if HasMonthCode then
-    begin
-      MonthCodeStr := YearMonthMonthCodeStringFromValue(VMonthCode, AMethod);
-      if not TryParseTemporalMonthCode(MonthCodeStr, Month, IsLeapMonth) then
-        ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
-      if HasMonth and (CandidateMonth <> Month) then
-        ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+      if not TryParseTemporalPlainYearMonthString(TGocciaStringLiteralValue(AValue).Value,
+        Year, Month, ReferenceDay, CalendarId) then
+        ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalISOFormat);
+      Result := TGocciaTemporalPlainYearMonthValue.Create(Year, Month, ReferenceDay, CalendarId);
     end
-    else if not HasMonth then
+    else if AValue is TGocciaObjectValue then
     begin
-      ThrowTypeError(AMethod + ' requires year and month properties',
-        SSuggestTemporalFromArg);
-    end;
+      Obj := TGocciaObjectValue(AValue);
+      V := Obj.GetProperty('calendar');
+      FieldRoots.Add(V);
+      CalendarId := CalendarIdFromTemporalCalendarLike(V, AMethod);
+      IsLeapMonth := False;
 
-    V := Obj.GetProperty('year');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      Year := ToIntegerWithTruncationValue(V)
+      VMonth := Obj.GetProperty('month');
+      FieldRoots.Add(VMonth);
+      HasMonth := Assigned(VMonth) and not (VMonth is TGocciaUndefinedLiteralValue);
+      CandidateMonth := 0;
+      if HasMonth then
+      begin
+        CandidateMonth := ToIntegerWithTruncationValue(VMonth);
+        Month := CandidateMonth;
+      end;
+
+      VMonthCode := Obj.GetProperty('monthCode');
+      FieldRoots.Add(VMonthCode);
+      HasMonthCode := Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue);
+      if HasMonthCode then
+      begin
+        MonthCodeStr := YearMonthMonthCodeStringFromValue(VMonthCode, AMethod);
+        if not TryParseTemporalMonthCode(MonthCodeStr, Month, IsLeapMonth) then
+          ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
+        if HasMonth and (CandidateMonth <> Month) then
+          ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+      end
+      else if not HasMonth then
+      begin
+        ThrowTypeError(AMethod + ' requires year and month properties',
+          SSuggestTemporalFromArg);
+      end;
+
+      V := Obj.GetProperty('year');
+      FieldRoots.Add(V);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+        Year := ToIntegerWithTruncationValue(V)
+      else
+      begin
+        VEra := Obj.GetProperty('era');
+        FieldRoots.Add(VEra);
+        VEraYear := Obj.GetProperty('eraYear');
+        FieldRoots.Add(VEraYear);
+        if (VEra = nil) or (VEra is TGocciaUndefinedLiteralValue) or
+           (VEraYear = nil) or (VEraYear is TGocciaUndefinedLiteralValue) or
+           not TryCalendarYearFromEra(CalendarId, VEra.ToStringLiteral.Value,
+             ToIntegerWithTruncationValue(VEraYear), Year) then
+          ThrowTypeError(AMethod + ' requires year and month properties', SSuggestTemporalFromArg);
+      end;
+      if CalendarId <> 'iso8601' then
+      begin
+        if Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue) then
+        begin
+          if not TryCalendarMonthCodeDateToISO(CalendarId, Year, Month, 1,
+            IsLeapMonth, DateRec) then
+            ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalDateRange);
+        end
+        else if not TryCalendarDateToISO(CalendarId, Year, Month, 1, DateRec) then
+          ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalDateRange);
+        Year := DateRec.Year;
+        Month := DateRec.Month;
+        ReferenceDay := DateRec.Day;
+      end;
+      Result := TGocciaTemporalPlainYearMonthValue.Create(Year, Month, ReferenceDay, CalendarId);
+    end
     else
     begin
-      VEra := Obj.GetProperty('era');
-      VEraYear := Obj.GetProperty('eraYear');
-      if (VEra = nil) or (VEra is TGocciaUndefinedLiteralValue) or
-         (VEraYear = nil) or (VEraYear is TGocciaUndefinedLiteralValue) or
-         not TryCalendarYearFromEra(CalendarId, VEra.ToStringLiteral.Value,
-           ToIntegerWithTruncationValue(VEraYear), Year) then
-        ThrowTypeError(AMethod + ' requires year and month properties', SSuggestTemporalFromArg);
+      ThrowTypeError(AMethod + ' requires a PlainYearMonth, string, or object', SSuggestTemporalFromArg);
+      Result := nil;
     end;
-    if CalendarId <> 'iso8601' then
-    begin
-      if Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue) then
-      begin
-        if not TryCalendarMonthCodeDateToISO(CalendarId, Year, Month, 1,
-          IsLeapMonth, DateRec) then
-          ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalDateRange);
-      end
-      else if not TryCalendarDateToISO(CalendarId, Year, Month, 1, DateRec) then
-        ThrowRangeError(Format(SErrorInvalidYearMonthStringFor, [AMethod]), SSuggestTemporalDateRange);
-      Year := DateRec.Year;
-      Month := DateRec.Month;
-      ReferenceDay := DateRec.Day;
-    end;
-    Result := TGocciaTemporalPlainYearMonthValue.Create(Year, Month, ReferenceDay, CalendarId);
-  end
-  else
-  begin
-    ThrowTypeError(AMethod + ' requires a PlainYearMonth, string, or object', SSuggestTemporalFromArg);
-    Result := nil;
+  finally
+    FieldRoots.Clear;
   end;
 end;
 
@@ -448,6 +463,7 @@ end;
 // TC39 Temporal §10.3.11 Temporal.PlainYearMonth.prototype.with(temporalYearMonthLike)
 function TGocciaTemporalPlainYearMonthValue.YearMonthWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  FieldRoots: TGocciaActiveRootFrame;
   YM: TGocciaTemporalPlainYearMonthValue;
   Obj: TGocciaObjectValue;
   V, VCalendar, VTimeZone, VYear, VMonth, VMonthCode, VEra,
@@ -466,123 +482,138 @@ var
   end;
 
 begin
-  YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.with');
-  V := AArgs.GetElement(0);
-  if (not (V is TGocciaObjectValue)) or
-     (V is TGocciaTemporalPlainDateValue) or
-     (V is TGocciaTemporalPlainDateTimeValue) or
-     (V is TGocciaTemporalPlainMonthDayValue) or
-     (V is TGocciaTemporalPlainYearMonthValue) or
-     (V is TGocciaTemporalZonedDateTimeValue) then
-    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainYearMonth']), SSuggestTemporalWithObject);
-  Obj := TGocciaObjectValue(V);
+  // A value read from the property bag (a getter can make it fresh) is
+  // held only by its local while the next fields are read and converted,
+  // which can run getters and allocate.
+  FieldRoots.Initialize;
+  try
+    YM := AsPlainYearMonth(AThisValue, 'PlainYearMonth.prototype.with');
+    V := AArgs.GetElement(0);
+    if (not (V is TGocciaObjectValue)) or
+       (V is TGocciaTemporalPlainDateValue) or
+       (V is TGocciaTemporalPlainDateTimeValue) or
+       (V is TGocciaTemporalPlainMonthDayValue) or
+       (V is TGocciaTemporalPlainYearMonthValue) or
+       (V is TGocciaTemporalZonedDateTimeValue) then
+      ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainYearMonth']), SSuggestTemporalWithObject);
+    Obj := TGocciaObjectValue(V);
 
-  Info := CalendarInfoForPlainYearMonth(YM, 'PlainYearMonth.prototype.with');
-  VCalendar := Obj.GetProperty('calendar');
-  if IsPresent(VCalendar) then
-    ThrowTypeError('PlainYearMonth.prototype.with does not accept calendar',
-      SSuggestTemporalFromArg);
-  VTimeZone := Obj.GetProperty('timeZone');
-  if IsPresent(VTimeZone) then
-    ThrowTypeError('PlainYearMonth.prototype.with does not accept timeZone',
-      SSuggestTemporalFromArg);
+    Info := CalendarInfoForPlainYearMonth(YM, 'PlainYearMonth.prototype.with');
+    VCalendar := Obj.GetProperty('calendar');
+    FieldRoots.Add(VCalendar);
+    if IsPresent(VCalendar) then
+      ThrowTypeError('PlainYearMonth.prototype.with does not accept calendar',
+        SSuggestTemporalFromArg);
+    VTimeZone := Obj.GetProperty('timeZone');
+    FieldRoots.Add(VTimeZone);
+    if IsPresent(VTimeZone) then
+      ThrowTypeError('PlainYearMonth.prototype.with does not accept timeZone',
+        SSuggestTemporalFromArg);
 
-  VMonth := Obj.GetProperty('month');
-  HasMonth := IsPresent(VMonth);
-  CandidateMonth := 0;
-  if HasMonth then
-  begin
-    CandidateMonth := ToIntegerWithTruncationValue(VMonth);
-    NewMonth := CandidateMonth;
-  end
-  else
-    NewMonth := Info.Date.Month;
-
-  VMonthCode := Obj.GetProperty('monthCode');
-  HasMonthCode := IsPresent(VMonthCode);
-  IsLeapMonth := False;
-  UseMonthCode := False;
-  if HasMonthCode then
-  begin
-    MonthCodeStr := YearMonthMonthCodeStringFromValue(VMonthCode,
-      'PlainYearMonth.prototype.with');
-    if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
-      ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
-    UseMonthCode := not HasMonth;
-  end;
-
-  VYear := Obj.GetProperty('year');
-  HasYear := IsPresent(VYear);
-  HasEra := False;
-  HasEraYear := False;
-  if HasYear then
-    NewYear := ToIntegerWithTruncationValue(VYear)
-  else if YM.FCalendarId <> 'iso8601' then
-  begin
-    VEra := Obj.GetProperty('era');
-    VEraYear := Obj.GetProperty('eraYear');
-    HasEra := IsPresent(VEra);
-    HasEraYear := IsPresent(VEraYear);
-    if HasEra or HasEraYear then
+    VMonth := Obj.GetProperty('month');
+    FieldRoots.Add(VMonth);
+    HasMonth := IsPresent(VMonth);
+    CandidateMonth := 0;
+    if HasMonth then
     begin
-      if (not HasEra) or (not HasEraYear) or
-         not TryCalendarYearFromEra(YM.FCalendarId, VEra.ToStringLiteral.Value,
-           ToIntegerWithTruncationValue(VEraYear), NewYear) then
-        ThrowTypeError('PlainYearMonth.prototype.with requires era and eraYear together',
-          SSuggestTemporalFromArg);
-    end
-    else
-      NewYear := Info.Date.Year;
-  end
-  else
-    NewYear := Info.Date.Year;
-
-  if (not HasYear) and (not HasMonth) and (not HasMonthCode) and
-     (not HasEra) and (not HasEraYear) then
-    ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainYearMonth']),
-      SSuggestTemporalWithObject);
-
-  if (YM.FCalendarId = 'iso8601') and HasMonth and (CandidateMonth < 1) then
-    ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
-      ['PlainYearMonth.prototype.with']), SSuggestTemporalDateRange);
-
-  Overflow := GetOverflowOptionFromValue(AArgs.GetElement(1),
-    'PlainYearMonth.prototype.with');
-
-  if HasMonthCode then
-  begin
-    if HasMonth and (CandidateMonth <> NewMonth) then
-      ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
-  end
-  else if not HasMonth then
-  begin
-    if YM.FCalendarId <> 'iso8601' then
-    begin
-      MonthCodeStr := Info.MonthCode;
-      if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
-        ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
-          ['PlainYearMonth.prototype.with']), SSuggestTemporalDateRange);
-      UseMonthCode := True;
+      CandidateMonth := ToIntegerWithTruncationValue(VMonth);
+      NewMonth := CandidateMonth;
     end
     else
       NewMonth := Info.Date.Month;
+
+    VMonthCode := Obj.GetProperty('monthCode');
+    FieldRoots.Add(VMonthCode);
+    HasMonthCode := IsPresent(VMonthCode);
+    IsLeapMonth := False;
+    UseMonthCode := False;
+    if HasMonthCode then
+    begin
+      MonthCodeStr := YearMonthMonthCodeStringFromValue(VMonthCode,
+        'PlainYearMonth.prototype.with');
+      if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+        ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
+      UseMonthCode := not HasMonth;
+    end;
+
+    VYear := Obj.GetProperty('year');
+    FieldRoots.Add(VYear);
+    HasYear := IsPresent(VYear);
+    HasEra := False;
+    HasEraYear := False;
+    if HasYear then
+      NewYear := ToIntegerWithTruncationValue(VYear)
+    else if YM.FCalendarId <> 'iso8601' then
+    begin
+      VEra := Obj.GetProperty('era');
+      FieldRoots.Add(VEra);
+      VEraYear := Obj.GetProperty('eraYear');
+      FieldRoots.Add(VEraYear);
+      HasEra := IsPresent(VEra);
+      HasEraYear := IsPresent(VEraYear);
+      if HasEra or HasEraYear then
+      begin
+        if (not HasEra) or (not HasEraYear) or
+           not TryCalendarYearFromEra(YM.FCalendarId, VEra.ToStringLiteral.Value,
+             ToIntegerWithTruncationValue(VEraYear), NewYear) then
+          ThrowTypeError('PlainYearMonth.prototype.with requires era and eraYear together',
+            SSuggestTemporalFromArg);
+      end
+      else
+        NewYear := Info.Date.Year;
+    end
+    else
+      NewYear := Info.Date.Year;
+
+    if (not HasYear) and (not HasMonth) and (not HasMonthCode) and
+       (not HasEra) and (not HasEraYear) then
+      ThrowTypeError(Format(SErrorTemporalWithRequiresObject, ['PlainYearMonth']),
+        SSuggestTemporalWithObject);
+
+    if (YM.FCalendarId = 'iso8601') and HasMonth and (CandidateMonth < 1) then
+      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
+        ['PlainYearMonth.prototype.with']), SSuggestTemporalDateRange);
+
+    Overflow := GetOverflowOptionFromValue(AArgs.GetElement(1),
+      'PlainYearMonth.prototype.with');
+
+    if HasMonthCode then
+    begin
+      if HasMonth and (CandidateMonth <> NewMonth) then
+        ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+    end
+    else if not HasMonth then
+    begin
+      if YM.FCalendarId <> 'iso8601' then
+      begin
+        MonthCodeStr := Info.MonthCode;
+        if not TryParseTemporalMonthCode(MonthCodeStr, NewMonth, IsLeapMonth) then
+          ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
+            ['PlainYearMonth.prototype.with']), SSuggestTemporalDateRange);
+        UseMonthCode := True;
+      end
+      else
+        NewMonth := Info.Date.Month;
+    end;
+
+    if (YM.FCalendarId = 'iso8601') and HasMonthCode and
+       (IsLeapMonth or (NewMonth < 1) or (NewMonth > 12)) then
+      ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
+
+    NewDay := Info.Date.Day;
+    if not TryResolveCalendarDateToISO(YM.FCalendarId, NewYear, NewMonth, NewDay,
+      UseMonthCode, IsLeapMonth, Overflow = toConstrain, DateRec) then
+      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
+        ['PlainYearMonth.prototype.with']), SSuggestTemporalDateRange);
+    if not IsTemporalISOYearMonthInSupportedRange(DateRec.Year, DateRec.Month) then
+      ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
+        ['PlainYearMonth.prototype.with']), SSuggestTemporalDateRange);
+
+    Result := TGocciaTemporalPlainYearMonthValue.Create(DateRec.Year, DateRec.Month,
+      DateRec.Day, YM.FCalendarId);
+  finally
+    FieldRoots.Clear;
   end;
-
-  if (YM.FCalendarId = 'iso8601') and HasMonthCode and
-     (IsLeapMonth or (NewMonth < 1) or (NewMonth > 12)) then
-    ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
-
-  NewDay := Info.Date.Day;
-  if not TryResolveCalendarDateToISO(YM.FCalendarId, NewYear, NewMonth, NewDay,
-    UseMonthCode, IsLeapMonth, Overflow = toConstrain, DateRec) then
-    ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
-      ['PlainYearMonth.prototype.with']), SSuggestTemporalDateRange);
-  if not IsTemporalISOYearMonthInSupportedRange(DateRec.Year, DateRec.Month) then
-    ThrowRangeError(Format(SErrorInvalidYearMonthStringFor,
-      ['PlainYearMonth.prototype.with']), SSuggestTemporalDateRange);
-
-  Result := TGocciaTemporalPlainYearMonthValue.Create(DateRec.Year, DateRec.Month,
-    DateRec.Day, YM.FCalendarId);
 end;
 
 // TC39 Temporal §10.3.12 Temporal.PlainYearMonth.prototype.add(temporalDurationLike)
