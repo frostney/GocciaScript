@@ -3,9 +3,10 @@ program TransportSecurityTest;
 {$I Shared.inc}
 
 uses
-  {$IFDEF UNIX}BaseUnix, Sockets,{$ENDIF}
+  {$IFDEF UNIX}cthreads, BaseUnix, Sockets,{$ENDIF}
   {$IFDEF MSWINDOWS}Windows, WinSock2,{$ENDIF}
 
+  Classes,
   SysUtils,
 
   TestingPascalLibrary,
@@ -20,7 +21,10 @@ type
     procedure TestNoExtraInputClearsTheInput;
     procedure TestExtraInputBeyondTheInputIsRefused;
     procedure TestExtraInputOfALargeRecordSurvivesDecryptingInPlace;
+    procedure TestIncompleteMessageKeepsTheInputForTheNextReceive;
+    procedure TestCoalescedRecordsAreConsumedOneAtATime;
     procedure TestSendEndsAtTheDeadlineWhateverTheSocketTimeout;
+    procedure TestSendToASlowlyDrainingPeerEndsAtTheDeadline;
     procedure TestSendAfterTheDeadlineFailsAtOnce;
     procedure TestSendWithoutADeadlineSends;
   public
@@ -38,8 +42,14 @@ begin
     TestExtraInputBeyondTheInputIsRefused);
   Test('Extra input of a large record survives decrypting in place',
     TestExtraInputOfALargeRecordSurvivesDecryptingInPlace);
+  Test('An incomplete message keeps the input for the next receive',
+    TestIncompleteMessageKeepsTheInputForTheNextReceive);
+  Test('Records that arrive in one receive are consumed one at a time',
+    TestCoalescedRecordsAreConsumedOneAtATime);
   Test('A send ends at the deadline whatever the socket timeout',
     TestSendEndsAtTheDeadlineWhateverTheSocketTimeout);
+  Test('A send to a slowly draining peer ends at the deadline',
+    TestSendToASlowlyDrainingPeerEndsAtTheDeadline);
   Test('A send after the deadline fails at once',
     TestSendAfterTheDeadlineFailsAtOnce);
   Test('A send without a deadline sends', TestSendWithoutADeadlineSends);
@@ -60,7 +70,7 @@ var
   Input: TBytes;
 begin
   Input := PatternBytes(10, 0);
-  KeepExtraInput(Input, 3);
+  ConsumeEncryptedInput(Input, False, 3);
   Expect<Integer>(Length(Input)).ToBe(3);
   Expect<Integer>(Input[0]).ToBe(49);
   Expect<Integer>(Input[1]).ToBe(56);
@@ -74,7 +84,7 @@ var
 begin
   Input := PatternBytes(10, 3);
   Expected := Copy(Input);
-  KeepExtraInput(Input, 10);
+  ConsumeEncryptedInput(Input, False, 10);
   Expect<Integer>(Length(Input)).ToBe(10);
   for I := 0 to 9 do
     Expect<Integer>(Input[I]).ToBe(Expected[I]);
@@ -85,7 +95,7 @@ var
   Input: TBytes;
 begin
   Input := PatternBytes(10, 0);
-  KeepExtraInput(Input, 0);
+  ConsumeEncryptedInput(Input, False, 0);
   Expect<Integer>(Length(Input)).ToBe(0);
 end;
 
@@ -98,13 +108,13 @@ begin
   RaisedForLength := False;
   RaisedForNegative := False;
   try
-    KeepExtraInput(Input, 11);
+    ConsumeEncryptedInput(Input, False, 11);
   except
     on E: Exception do
       RaisedForLength := True;
   end;
   try
-    KeepExtraInput(Input, -1);
+    ConsumeEncryptedInput(Input, False, -1);
   except
     on E: Exception do
       RaisedForNegative := True;
@@ -131,13 +141,58 @@ begin
   Expected := Copy(Input, FIRST_RECORD_LENGTH, EXTRA_LENGTH);
   for I := 0 to FIRST_RECORD_LENGTH - 1 do
     Input[I] := Input[I] xor $5A;
-  KeepExtraInput(Input, EXTRA_LENGTH);
+  ConsumeEncryptedInput(Input, False, EXTRA_LENGTH);
   Expect<Integer>(Length(Input)).ToBe(EXTRA_LENGTH);
   Mismatches := 0;
   for I := 0 to EXTRA_LENGTH - 1 do
     if Input[I] <> Expected[I] then
       Inc(Mismatches);
   Expect<Integer>(Mismatches).ToBe(0);
+end;
+
+{ A handshake message split across receives: SChannel reports it incomplete
+  and consumed nothing, so what arrived stays and the next receive extends it
+  (issue #1814 cleared it first). }
+procedure TTransportSecurityTests.TestIncompleteMessageKeepsTheInputForTheNextReceive;
+var
+  Expected, Input, Next: TBytes;
+  I: Integer;
+begin
+  Input := PatternBytes(5, 0);
+  Next := PatternBytes(4, 9);
+  Expected := Copy(Input);
+  ConsumeEncryptedInput(Input, True, 0);
+  Expect<Integer>(Length(Input)).ToBe(5);
+  for I := 0 to 4 do
+    Expect<Integer>(Input[I]).ToBe(Expected[I]);
+  { The receive's bytes are appended, and the message then completes with
+    the last two bytes left over. }
+  SetLength(Input, 9);
+  Move(Next[0], Input[5], 4);
+  ConsumeEncryptedInput(Input, False, 2);
+  Expect<Integer>(Length(Input)).ToBe(2);
+  Expect<Integer>(Input[0]).ToBe(Next[2]);
+  Expect<Integer>(Input[1]).ToBe(Next[3]);
+end;
+
+{ Two records in one receive: the first is consumed and the second stays at
+  the front of the input, to be consumed by the next call. }
+procedure TTransportSecurityTests.TestCoalescedRecordsAreConsumedOneAtATime;
+const
+  FIRST_LENGTH = 21;
+  SECOND_LENGTH = 13;
+var
+  Input, Second: TBytes;
+  I: Integer;
+begin
+  Input := PatternBytes(FIRST_LENGTH + SECOND_LENGTH, 2);
+  Second := Copy(Input, FIRST_LENGTH, SECOND_LENGTH);
+  ConsumeEncryptedInput(Input, False, SECOND_LENGTH);
+  Expect<Integer>(Length(Input)).ToBe(SECOND_LENGTH);
+  for I := 0 to SECOND_LENGTH - 1 do
+    Expect<Integer>(Input[I]).ToBe(Second[I]);
+  ConsumeEncryptedInput(Input, False, 0);
+  Expect<Integer>(Length(Input)).ToBe(0);
 end;
 
 { A TCP connection on loopback, made in one thread: the listener's backlog
@@ -215,16 +270,20 @@ begin
 end;
 {$ENDIF}
 
-procedure CloseSockets(const AClient, AServer: TSocket);
+procedure CloseOneSocket(const ASocket: TSocket);
 begin
   {$IFDEF UNIX}
-  CloseSocket(AClient);
-  CloseSocket(AServer);
+  CloseSocket(ASocket);
   {$ENDIF}
   {$IFDEF MSWINDOWS}
-  WinSock2.closesocket(AClient);
-  WinSock2.closesocket(AServer);
+  WinSock2.closesocket(ASocket);
   {$ENDIF}
+end;
+
+procedure CloseSockets(const AClient, AServer: TSocket);
+begin
+  CloseOneSocket(AClient);
+  CloseOneSocket(AServer);
 end;
 
 { What HTTPClient leaves on the socket before a request's reads: a send
@@ -257,6 +316,32 @@ begin
   {$IFDEF MSWINDOWS}
   Result := WinSock2.recv(ASocket, ABuffer[0], Length(ABuffer), 0);
   {$ENDIF}
+end;
+
+type
+  { Reads a little at a time and never stops until its socket is closed: a
+    peer that drains the connection slowly. }
+  TSlowReader = class(TThread)
+  private
+    FSocket: TSocket;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ASocket: TSocket);
+  end;
+
+constructor TSlowReader.Create(const ASocket: TSocket);
+begin
+  FSocket := ASocket;
+  inherited Create(False);
+end;
+
+procedure TSlowReader.Execute;
+var
+  Buffer: array[0..4095] of Byte;
+begin
+  while not Terminated and (ReceiveSome(FSocket, Buffer) > 0) do
+    Sleep(20);
 end;
 
 { The peer accepts the connection and never reads, so sending fills the
@@ -295,6 +380,44 @@ begin
     Expect<Boolean>(ElapsedMilliseconds >= EARLIEST_END_MILLISECONDS).ToBe(True);
   finally
     CloseSockets(Client, Server);
+  end;
+end;
+
+{ The peer drains the connection, a little at a time, and so makes room
+  again and again. A blocking send's timeout restarts each time it does (on
+  Darwin), so one send of a large buffer could outlast any deadline: the single
+  call here must return by it. }
+procedure TTransportSecurityTests.TestSendToASlowlyDrainingPeerEndsAtTheDeadline;
+const
+  DEADLINE_MILLISECONDS = 500;
+  SOCKET_TIMEOUT_MILLISECONDS = 8000;
+  MAX_ELAPSED_MILLISECONDS = 4000;
+  BUFFER_LENGTH = 16 * 1024 * 1024;
+var
+  Buffer: TBytes;
+  Client, Server: TSocket;
+  ElapsedMilliseconds, Start: Int64;
+  Reader: TSlowReader;
+begin
+  Buffer := nil;
+  SetLength(Buffer, BUFFER_LENGTH);
+  FillChar(Buffer[0], BUFFER_LENGTH, $41);
+  CreateConnectedPair(Client, Server);
+  Reader := TSlowReader.Create(Server);
+  try
+    SetSendTimeout(Client, SOCKET_TIMEOUT_MILLISECONDS);
+    Start := GetNanoseconds;
+    SocketSendBefore(Client, @Buffer[0], BUFFER_LENGTH,
+      Start + Int64(DEADLINE_MILLISECONDS) * 1000000);
+    ElapsedMilliseconds := (GetNanoseconds - Start) div 1000000;
+    Expect<Boolean>(ElapsedMilliseconds < MAX_ELAPSED_MILLISECONDS).ToBe(True);
+  finally
+    { Closing the client ends a receive the reader is waiting in. }
+    Reader.Terminate;
+    CloseOneSocket(Client);
+    Reader.WaitFor;
+    Reader.Free;
+    CloseOneSocket(Server);
   end;
 end;
 

@@ -59,23 +59,29 @@ function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
 
 {$IFNDEF LAKON}
 { A send on the blocking socket that ends by ADeadlineNanoseconds (0 for none,
-  which leaves the socket's own send timeout): the socket's send timeout is set
-  to the time left before the call, so a peer that stops reading cannot hold a
-  send past the deadline by a timeout of its own. Returns the bytes sent, or -1
-  once the deadline has passed or the send failed or timed out. A send that
-  moved part of the buffer before the timeout returns that count. It sends
-  through SocketSend, so it keeps the protection against SIGPIPE that send
-  carries (issue #1815). }
+  which leaves the socket's own send timeout), so a peer that stops reading, or
+  reads slowly, cannot hold a send past the deadline. Returns the bytes sent,
+  which may be fewer than ALength, or -1 once the deadline has passed or the
+  send failed. On Windows the socket's send timeout is set to the time left
+  before the call. Elsewhere the call waits for room with poll and sends without
+  blocking, because a blocking send's timeout restarts each time the peer makes
+  room (Darwin), so a slowly draining peer could keep one send running past it.
+  It sends with the flags SocketSend does, so it keeps the protection against
+  SIGPIPE that send carries (issue #1815). }
 function SocketSendBefore(const ASock: TSocket; const ABuffer: Pointer;
   const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
 
-{ SChannel returns the input it did not consume as a SECBUFFER_EXTRA buffer of
-  AExtraLength bytes: the last AExtraLength bytes of the input, which it
-  decrypts or reads in place (Microsoft, "Extra Buffers Returned by
-  Schannel"). Moves them to the front of AInput while it is still allocated and
-  shrinks AInput to them, so no byte is read from memory that was freed. Zero
-  clears AInput. Raises when AExtraLength is negative or longer than AInput. }
-procedure KeepExtraInput(var AInput: TBytes; const AExtraLength: Integer);
+{ Settles SChannel's encrypted input after a call that reads from it. SChannel
+  decrypts and reads in place and returns what it did not consume as a
+  SECBUFFER_EXTRA buffer of AExtraLength bytes: the last AExtraLength bytes of
+  the input (Microsoft, "Extra Buffers Returned by Schannel"). They move to the
+  front of AInput while it is still allocated, and AInput shrinks to them, so no
+  byte is read from memory that was freed; zero clears it. A message that was
+  incomplete (SEC_E_INCOMPLETE_MESSAGE) consumed nothing: AIncomplete leaves the
+  input as it is for the next receive to extend. Raises when AExtraLength is
+  negative or longer than AInput. }
+procedure ConsumeEncryptedInput(var AInput: TBytes; const AIncomplete: Boolean;
+  const AExtraLength: Integer);
 {$ENDIF}
 
 implementation
@@ -159,10 +165,13 @@ begin
       [ErrorOffset]);
 end;
 
-procedure KeepExtraInput(var AInput: TBytes; const AExtraLength: Integer);
+procedure ConsumeEncryptedInput(var AInput: TBytes; const AIncomplete: Boolean;
+  const AExtraLength: Integer);
 var
   ConsumedLength: Integer;
 begin
+  if AIncomplete then
+    Exit;
   if (AExtraLength < 0) or (AExtraLength > Length(AInput)) then
     raise ETransportSecurityError.Create(TLS_READ_ERROR);
   ConsumedLength := Length(AInput) - AExtraLength;
@@ -215,6 +224,7 @@ begin
     Result := (Remaining + 999999) div 1000000;
 end;
 
+{$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
 { Sets option AOption (SO_RCVTIMEO or SO_SNDTIMEO) of ASock to AMilliseconds,
   which is above 0: a timeout of 0 means none. }
 procedure SetSocketTimeout(const ASock: TSocket; const AOption: Integer;
@@ -238,7 +248,59 @@ begin
     SizeOf(Timeout));
   {$ENDIF}
 end;
+{$IFEND}
 
+{$IFDEF UNIX}
+const
+  {$IFDEF LINUX}
+  SEND_DONTWAIT = $40;
+  {$ELSE}
+  SEND_DONTWAIT = $80;
+  {$ENDIF}
+
+function SocketSendBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+const
+  MAX_POLL_MILLISECONDS = 1 shl 30;
+var
+  Descriptor: TPollFd;
+  Milliseconds: Int64;
+  Outcome: LongInt;
+  Ready: Boolean;
+begin
+  if ADeadlineNanoseconds = 0 then
+    Exit(SocketSend(ASock, ABuffer, ALength));
+  repeat
+    Ready := False;
+    repeat
+      Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
+      if Milliseconds = 0 then
+        Exit(-1);
+      if Milliseconds > MAX_POLL_MILLISECONDS then
+        Milliseconds := MAX_POLL_MILLISECONDS;
+      Descriptor.fd := ASock;
+      Descriptor.events := POLLOUT;
+      Descriptor.revents := 0;
+      Outcome := fpPoll(@Descriptor, 1, Milliseconds);
+      if Outcome > 0 then
+        Ready := True
+      else if (Outcome < 0) and (fpGetErrNo <> ESysEINTR) then
+        Exit(-1);
+    until Ready;
+    {$IFDEF LINUX}
+    Result := fpSend(ASock, ABuffer, ALength, MSG_NOSIGNAL or SEND_DONTWAIT);
+    {$ELSE}
+    Result := fpSend(ASock, ABuffer, ALength, SEND_DONTWAIT);
+    {$ENDIF}
+    { Another thread's send can take the room poll reported: wait again, for
+      the time that is left. }
+  until (Result >= 0) or
+        ((fpGetErrNo <> ESysEAGAIN) and (fpGetErrNo <> ESysEINTR));
+  if Result < 0 then
+    Result := -1;
+end;
+{$ENDIF}
+{$IFDEF MSWINDOWS}
 function SocketSendBefore(const ASock: TSocket; const ABuffer: Pointer;
   const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
 var
@@ -253,6 +315,7 @@ begin
   end;
   Result := SocketSend(ASock, ABuffer, ALength);
 end;
+{$ENDIF}
 
 {$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
 { A receive on the blocking socket that ends by ADeadlineNanoseconds (0 for
@@ -1244,6 +1307,7 @@ var
   ExistingContext: PCtxtHandle;
   ReceiveCount: Integer;
   TokenSent: Boolean;
+  ExtraLength: Integer;
 begin
   Data := TSChannelData.Create;
   FillChar(Data.Credential, SizeOf(Data.Credential), 0);
@@ -1313,15 +1377,12 @@ begin
         and the next receive is appended to it. Otherwise SChannel consumed
         all of it but the extra bytes, the start of the next message, which
         it left in place at the end of the input. }
-      if Status <> SEC_E_INCOMPLETE_MESSAGE then
-      begin
-        if (InputDescPointer <> nil) and
-           (InputBuffers[1].BufferType = SECBUFFER_EXTRA) then
-          KeepExtraInput(Data.EncryptedInput,
-            Integer(InputBuffers[1].cbBuffer))
-        else
-          SetLength(Data.EncryptedInput, 0);
-      end;
+      ExtraLength := 0;
+      if (InputDescPointer <> nil) and
+         (InputBuffers[1].BufferType = SECBUFFER_EXTRA) then
+        ExtraLength := Integer(InputBuffers[1].cbBuffer);
+      ConsumeEncryptedInput(Data.EncryptedInput,
+        Status = SEC_E_INCOMPLETE_MESSAGE, ExtraLength);
 
       if Status = SEC_E_INCOMPLETE_MESSAGE then
       begin
@@ -1530,7 +1591,7 @@ begin
     for I := 0 to High(Buffers) do
       if Buffers[I].BufferType = SECBUFFER_EXTRA then
         ExtraLength := Integer(Buffers[I].cbBuffer);
-    KeepExtraInput(Data.EncryptedInput, ExtraLength);
+    ConsumeEncryptedInput(Data.EncryptedInput, False, ExtraLength);
 
     Available := Length(Data.DecryptedInput);
     if Available > 0 then
