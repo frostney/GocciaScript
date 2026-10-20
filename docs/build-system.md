@@ -148,7 +148,7 @@ current platform, which the folder-configured FFI JavaScript tests need.
 Useful test-runner forms:
 
 ```bash
-./build/GocciaTestRunner -P tests --jobs=4
+./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress
 ./build/GocciaTestRunner -P tests --no-progress --exit-on-first-failure --silent
 ./build/GocciaTestRunner -P tests --output=results.json --log=test-console.log
 ./build/GocciaTestRunner -P tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov

@@ -48,6 +48,8 @@ type
     function HasPendingWork: Boolean; virtual;
     { See TGocciaEngineExtension.HeapSnapshotRefusal. }
     function HeapSnapshotRefusal: string; virtual;
+    { See TGocciaEngineExtension.MaterializeHeapSnapshotBuiltin. }
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); virtual;
     procedure DiscardPending; virtual;
   end;
 
@@ -95,6 +97,7 @@ type
     procedure WaitForIdle; override;
     function HasPendingWork: Boolean; override;
     function HeapSnapshotRefusal: string; override;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); override;
     procedure DiscardPending; override;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; override;
@@ -266,6 +269,11 @@ end;
 function TGocciaRuntimeExtension.HeapSnapshotRefusal: string;
 begin
   Result := '';
+end;
+
+procedure TGocciaRuntimeExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+begin
 end;
 
 procedure TGocciaRuntimeExtension.DiscardPending;
@@ -562,6 +570,15 @@ begin
       Exit;
   end;
   Result := '';
+end;
+
+procedure TGocciaRuntimeCore.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].MaterializeHeapSnapshotBuiltin(AName);
 end;
 
 procedure TGocciaRuntimeCore.DiscardPending;

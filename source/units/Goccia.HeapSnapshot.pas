@@ -571,7 +571,15 @@ begin
     Exit;
   AConsumed := 2;
   if AParts[0] = '%builtin' then
-    Exit(FindLiveBuiltinObject(AEngine, AParts[1]));
+  begin
+    Result := FindLiveBuiltinObject(AEngine, AParts[1]);
+    if not Assigned(Result) then
+    begin
+      AEngine.MaterializeHeapSnapshotBuiltin(AParts[1]);
+      Result := FindLiveBuiltinObject(AEngine, AParts[1]);
+    end;
+    Exit;
+  end;
   if AParts[0] = '%scope' then
   begin
     if AEngine.GlobalScope.TryGetOwnLexicalBindingRaw(AParts[1], Binding) and

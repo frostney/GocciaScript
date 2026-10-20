@@ -330,6 +330,7 @@ Those permission blocks, and the `unsafe-*` keys some folders set, only take eff
 | `--no-results` | Suppress test results summary |
 | `--exit-on-first-failure` | Stop on the first test failure **or suite error** (a throwing `describe`, a failed `beforeAll`/`afterAll`). Under `--jobs` the worker queue is cancelled too; files that never ran are omitted from the report rather than counted as failures. It stops the queue, not the run — see [Stopping behaviour](#--exit-on-first-failure-stopping-behaviour) |
 | `--silent` | Suppress all console output from test scripts |
+| `--heap-snapshots` | Check [heap snapshot round trips](heap-snapshots.md#round-tripping-the-javascript-suite) for objects observed by `expect()` |
 | `--jobs=N` / `-j N` | Number of parallel worker threads (default: CPU count) |
 | `--update-snapshots` / `-u` | Create, update, and prune snapshots |
 | `--update` | Vitest-compatible alias for `--update-snapshots` |

@@ -38,6 +38,10 @@ type
     procedure TestLoadedClosedNumericSelfCallSavesAndReloads;
     procedure TestRejectsClosedNumericSelfCallInNonArrowTemplate;
     procedure TestRoundTripsDebugLocals;
+    procedure TestRoundTripsDebugLineMappings;
+    procedure TestRoundTripsExceptionHandlers;
+    procedure TestRoundTripsBigIntConstants;
+    procedure TestValidatesBigIntPayloads;
     procedure TestRoundTripsDirectEvalSiteRecord;
     procedure TestRejectsMalformedDirectEvalSite;
     procedure TestRefusesGlobalEvalCode;
@@ -61,6 +65,14 @@ begin
     TestLoadedClosedNumericSelfCallSavesAndReloads);
   Test('Rejects a closed numeric self-call in a non-arrow template',
     TestRejectsClosedNumericSelfCallInNonArrowTemplate);
+  Test('Round-trips debug line mappings in wire order and preserves bytes',
+    TestRoundTripsDebugLineMappings);
+  Test('Round-trips exception handlers in wire order and preserves bytes',
+    TestRoundTripsExceptionHandlers);
+  Test('Round-trips BigInt payloads and preserves every constant index',
+    TestRoundTripsBigIntConstants);
+  Test('Rejects malformed BigInt payloads before execution',
+    TestValidatesBigIntPayloads);
   Test('Round-trips debug locals field by field',
     TestRoundTripsDebugLocals);
   Test('Round-trips a direct eval site record field by field',
@@ -774,6 +786,199 @@ begin
   finally
     Module.Free;
     Stream.Free;
+  end;
+end;
+
+// A save/load/save cycle must preserve the module bytes: heap snapshots name
+// compiled templates by this encoding, including their debug information.
+function CheckBinaryRoundTrip(const AModule: TGocciaBytecodeModule):
+  TGocciaBytecodeModule;
+var
+  Original, Rewritten: TMemoryStream;
+  Loaded: TGocciaBytecodeModule;
+  Reader: TGocciaBytecodeReader;
+  Writer: TGocciaBytecodeWriter;
+begin
+  Loaded := nil;
+  Original := TMemoryStream.Create;
+  Rewritten := TMemoryStream.Create;
+  try
+    Writer := TGocciaBytecodeWriter.Create(Original);
+    try
+      Writer.WriteModule(AModule);
+    finally
+      Writer.Free;
+    end;
+    Original.Position := 0;
+    Reader := TGocciaBytecodeReader.Create(Original);
+    try
+      Loaded := Reader.ReadModule;
+    finally
+      Reader.Free;
+    end;
+    Writer := TGocciaBytecodeWriter.Create(Rewritten);
+    try
+      Writer.WriteModule(Loaded);
+    finally
+      Writer.Free;
+    end;
+    Expect<Int64>(Rewritten.Size).ToBe(Original.Size);
+    Expect<Boolean>((Original.Size = Rewritten.Size) and
+      CompareMem(Original.Memory, Rewritten.Memory, SizeInt(Original.Size)))
+      .ToBe(True);
+    Result := Loaded;
+    Loaded := nil;
+  finally
+    Loaded.Free;
+    Rewritten.Free;
+    Original.Free;
+  end;
+end;
+
+procedure TBytecodeBinaryTests.TestValidatesBigIntPayloads;
+const
+  INVALID_PAYLOADS: array[0..9] of string = (
+    '', '+', '-', '1x', '1.5', '0xff', ' 1', '1 ', '1n', '1'#0);
+  VALID_PAYLOADS: array[0..3] of string = ('0', '-0', '+42', '-001');
+var
+  Loaded: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  Reason: string;
+  I: Integer;
+begin
+  for I := Low(INVALID_PAYLOADS) to High(INVALID_PAYLOADS) do
+  begin
+    Template := TGocciaFunctionTemplate.Create('invalid BigInt');
+    Template.MaxRegisters := 1;
+    Template.AddConstantBigInt(INVALID_PAYLOADS[I]);
+    Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, 0));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Loaded := LoadTemplateThroughBinary(Template, Reason);
+    Loaded.Free;
+    Expect<string>(Reason).ToBe('Invalid Goccia bytecode BigInt constant');
+  end;
+  for I := Low(VALID_PAYLOADS) to High(VALID_PAYLOADS) do
+  begin
+    Template := TGocciaFunctionTemplate.Create('valid BigInt');
+    Template.MaxRegisters := 1;
+    Template.AddConstantBigInt(VALID_PAYLOADS[I]);
+    Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, 0));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Loaded := LoadTemplateThroughBinary(Template, Reason);
+    try
+      Expect<string>(Reason).ToBe('');
+      if Assigned(Loaded) then
+        Expect<string>(Loaded.TopLevel.GetConstant(0).StringValue).ToBe(
+          VALID_PAYLOADS[I]);
+    finally
+      Loaded.Free;
+    end;
+  end;
+end;
+
+procedure TBytecodeBinaryTests.TestRoundTripsBigIntConstants;
+const
+  LARGE = '1234567890123456789012345678901234567890';
+var
+  Module, Loaded: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Loaded := nil;
+  Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG, TEST_SOURCE_PATH);
+  try
+    Template := TGocciaFunctionTemplate.Create('bigints');
+    Module.TopLevel := Template;
+    Template.MaxRegisters := TEST_MAX_REGISTERS;
+    Template.AddConstantBigInt(LARGE);
+    Template.AddConstantBigInt('-' + LARGE);
+    Template.AddConstantBigInt(LARGE);
+    Template.AddConstantString('after BigInts');
+    for I := 0 to TEST_MAX_REGISTERS - 1 do
+      Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, UInt16(I), UInt16(I)));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Loaded := CheckBinaryRoundTrip(Module);
+    Expect<Integer>(Loaded.TopLevel.ConstantCount).ToBe(TEST_MAX_REGISTERS);
+    for I := 0 to TEST_MAX_REGISTERS - 1 do
+    begin
+      Expect<Integer>(Ord(Loaded.TopLevel.GetConstant(I).Kind)).ToBe(
+        Ord(Template.GetConstant(I).Kind));
+      Expect<string>(Loaded.TopLevel.GetConstant(I).StringValue).ToBe(
+        Template.GetConstant(I).StringValue);
+    end;
+  finally
+    Loaded.Free;
+    Module.Free;
+  end;
+end;
+
+procedure TBytecodeBinaryTests.TestRoundTripsDebugLineMappings;
+var
+  Module, Loaded: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  Entry: TGocciaLineMapEntry;
+begin
+  Loaded := nil;
+  Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG, TEST_SOURCE_PATH);
+  try
+    Template := TGocciaFunctionTemplate.Create('main');
+    Module.TopLevel := Template;
+    Template.MaxRegisters := TEST_MAX_REGISTERS;
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Template.DebugInfo := TGocciaDebugInfo.Create(TEST_SOURCE_PATH, 3, 5);
+    Template.DebugInfo.AddLineMapping(0, 17, 9);
+    Template.DebugInfo.AddLineMapping(1, 23, 11);
+    Loaded := CheckBinaryRoundTrip(Module);
+    Expect<Integer>(Loaded.TopLevel.DebugInfo.LineMapCount).ToBe(2);
+    Entry := Loaded.TopLevel.DebugInfo.GetLineMapEntry(0);
+    Expect<UInt32>(Entry.PC).ToBe(0);
+    Expect<UInt32>(Entry.Line).ToBe(17);
+    Expect<UInt16>(Entry.Column).ToBe(9);
+    Entry := Loaded.TopLevel.DebugInfo.GetLineMapEntry(1);
+    Expect<UInt32>(Entry.PC).ToBe(1);
+    Expect<UInt32>(Entry.Line).ToBe(23);
+    Expect<UInt16>(Entry.Column).ToBe(11);
+  finally
+    Loaded.Free;
+    Module.Free;
+  end;
+end;
+
+procedure TBytecodeBinaryTests.TestRoundTripsExceptionHandlers;
+var
+  Module, Loaded: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  Handler: TGocciaExceptionHandler;
+  I: Integer;
+begin
+  Loaded := nil;
+  Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG, TEST_SOURCE_PATH);
+  try
+    Template := TGocciaFunctionTemplate.Create('main');
+    Module.TopLevel := Template;
+    Template.MaxRegisters := TEST_MAX_REGISTERS;
+    for I := 0 to 7 do
+      Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Template.AddExceptionHandler(0, 2, 3, 5, 1);
+    Template.AddExceptionHandler(1, 4, High(UInt32), 6, 2);
+    Loaded := CheckBinaryRoundTrip(Module);
+    Expect<Integer>(Loaded.TopLevel.ExceptionHandlerCount).ToBe(2);
+    Handler := Loaded.TopLevel.GetExceptionHandler(0);
+    Expect<UInt32>(Handler.TryStart).ToBe(0);
+    Expect<UInt32>(Handler.TryEnd).ToBe(2);
+    Expect<UInt32>(Handler.CatchTarget).ToBe(3);
+    Expect<UInt32>(Handler.FinallyTarget).ToBe(5);
+    Expect<UInt16>(Handler.CatchRegister).ToBe(1);
+    Handler := Loaded.TopLevel.GetExceptionHandler(1);
+    Expect<UInt32>(Handler.TryStart).ToBe(1);
+    Expect<UInt32>(Handler.TryEnd).ToBe(4);
+    Expect<UInt32>(Handler.CatchTarget).ToBe(High(UInt32));
+    Expect<UInt32>(Handler.FinallyTarget).ToBe(6);
+    Expect<UInt16>(Handler.CatchRegister).ToBe(2);
+  finally
+    Loaded.Free;
+    Module.Free;
   end;
 end;
 

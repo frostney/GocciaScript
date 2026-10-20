@@ -18,7 +18,7 @@ type
     FLibraryGuard: TGocciaFFILibraryGuard;
 
     constructor CreatePrototypeHost;
-    procedure InitializePrototype;
+    class procedure InitializePrototype;
   published
     function Bind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function Symbol(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -52,6 +52,7 @@ uses
   Goccia.FFI.Types,
   Goccia.FFI.UTF8String,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
@@ -730,7 +731,7 @@ begin
   inherited;
 end;
 
-procedure TGocciaFFILibraryValue.InitializePrototype;
+class procedure TGocciaFFILibraryValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   MethodHost: TGocciaFFILibraryValue;
@@ -963,7 +964,15 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
+// Rebuilds only the shared native prototype; it never opens a library.
+procedure MaterializeFFILibraryPrototype;
+begin
+  TGocciaFFILibraryValue.InitializePrototype;
+end;
+
 initialization
   GFFILibrarySharedSlot := RegisterRealmOwnedSlot('FFILibrary.shared');
+  RegisterSnapshotSlotMaterializer('FFILibrary.shared',
+    MaterializeFFILibraryPrototype);
 
 end.

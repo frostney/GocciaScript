@@ -390,6 +390,10 @@ The dispatch loop supports an optional instruction counter (`Goccia.InstructionL
 - Endianness: little-endian
 - File extension: `.gbc`
 
+BigInt constants retain their decimal string payload and their constant-pool
+index. Format version 96 rejects older bytecode, whose BigInt entries omitted
+the payload.
+
 Binary loading is a validation boundary. The reader rejects oversized files,
 declared strings or tables that exceed the remaining stream, excessive nested
 function templates, invalid enum tags, and trailing data. Before a module can

@@ -23,6 +23,7 @@ type
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
     function TryLoadModule(const AResolvedPath, ASpecifier: string;
       const AReadContent: TGocciaModuleContentReader;
@@ -63,6 +64,13 @@ begin
     FBuiltinTOML := TGocciaTOMLBuiltin.Create('TOML',
       Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinTOML.BuiltinObject;
+end;
+
+procedure TGocciaTOMLRuntimeExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+begin
+  if AName = 'TOML' then
+    MaterializeTOML;
 end;
 
 procedure TGocciaTOMLRuntimeExtension.Detach;

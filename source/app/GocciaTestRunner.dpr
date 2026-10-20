@@ -14,6 +14,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Application,
   Goccia.Bytecode.Module,
+  Goccia.Bytecode.Binary,
   Goccia.CLI.Application,
   Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
@@ -30,6 +31,7 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.HeapSnapshot.RoundTrip,
   Goccia.JSON.Utils,
   Goccia.Modules.NodeResolution,
   Goccia.Modules.Resolver,
@@ -197,6 +199,13 @@ type
     FGlobalFiles: TRepeatableOption;
     FInlineGlobals: TRepeatableOption;
     FNoVitestCompat: TFlagOption;
+    FHeapSnapshots: TFlagOption;
+    FHeapSnapshotObservations: Int64;
+    FHeapSnapshotObjects: Int64;
+    FHeapSnapshotPassed: Int64;
+    FHeapSnapshotRefused: Int64;
+    FHeapSnapshotFailed: Int64;
+    FHeapSnapshotRefusals: TStringList;
     { Stop signal of the parallel run currently in flight, or nil. Not owned —
       RunScriptsFromFilesParallel publishes it before RunAll starts any worker
       and clears it once RunAll has joined them. It exists so a worker that hits
@@ -217,6 +226,11 @@ type
       cancelling a later one, which is the mis-cancellation
       TGocciaThreadPool.RunAll guards against on its own side. }
     FActiveCancelFlag: TGocciaCancellationFlag;
+    procedure RecordHeapSnapshots(const ACheck: TGocciaHeapSnapshotRoundTrip;
+      const AFileName: string);
+    procedure PrintHeapSnapshotReport;
+    function CreateHeapSnapshotDestination(const ASourceEngine: TGocciaEngine):
+      TGocciaEngine;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
@@ -544,6 +558,8 @@ begin
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
     'Inject a single global; value is parsed as JSON or kept as a string');
+  FHeapSnapshots := AddFlag('heap-snapshots',
+    'Round-trip objects observed by expect() at file idle; runs files serially');
   FNoVitestCompat := AddFlag('no-vitest-compat',
     'Do not resolve the bare "vitest" specifier to the bundled compatibility shim');
 end;
@@ -712,7 +728,7 @@ procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Files, RawFiles, StdinNames, TempFiles, CoverageSource: TStringList;
   DiscoveredFiles: TStringList;
-  I: Integer;
+  I, JobCount: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   MainMemoryStats: TCLIJSONMemoryStats;
@@ -748,6 +764,8 @@ begin
   GTestRunnerDescribeTimeoutMs := FDescribeTimeout.ValueOr(0);
 
   Files := TStringList.Create;
+  if FHeapSnapshots.Present then
+    FHeapSnapshotRefusals := TStringList.Create;
   StdinSource := nil;
   try
     if UseStdin then
@@ -812,11 +830,14 @@ begin
       end;
     end;
 
+    JobCount := GetJobCount(Files.Count);
+    if FHeapSnapshots.Present then
+      JobCount := 1;
     if (not FNoProgress.Present) and (not IsJsonOutput) then
     begin
-      if GetJobCount(Files.Count) > 1 then
+      if JobCount > 1 then
         WriteLn(SysUtils.Format('Running %d files with %d workers',
-          [Files.Count, GetJobCount(Files.Count)]))
+          [Files.Count, JobCount]))
       else
         WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
     end;
@@ -824,7 +845,7 @@ begin
     ResetPendingInlineSnapshots;
     try
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-      IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
+      IsParallelRun := (Files.Count > 1) and (JobCount > 1);
       if Files.Count = 1 then
       begin
         if (not FNoProgress.Present) and (not IsJsonOutput) then
@@ -836,7 +857,7 @@ begin
       end
       else if IsParallelRun then
         AggregatedResult := RunScriptsFromFilesParallel(Files,
-          GetJobCount(Files.Count))
+          JobCount)
       else
         AggregatedResult := RunScriptsFromFiles(Files);
     except
@@ -866,6 +887,8 @@ begin
     else
       AggregatedResult.MemoryStats := MainMemoryStats;
     PrintTestResults(AggregatedResult);
+    if FHeapSnapshots.Present then
+      PrintHeapSnapshotReport;
 
     if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
         CoverageOptions.OutputPath.Present) and
@@ -907,11 +930,119 @@ begin
           CoverageOptions.OutputPath.ValueOr(''));
     end;
   finally
+    FreeAndNil(FHeapSnapshotRefusals);
     Files.Free;
     { StdinSource is normally consumed by RunScriptFromFile (which frees
       it). Free here only if an early exit left it dangling. }
     StdinSource.Free;
   end;
+end;
+
+procedure TTestRunnerApp.RecordHeapSnapshots(
+  const ACheck: TGocciaHeapSnapshotRoundTrip; const AFileName: string);
+var
+  I: Integer;
+  Reason: string;
+  Count: Int64;
+begin
+  Inc(FHeapSnapshotObservations, ACheck.Observations);
+  Inc(FHeapSnapshotObjects, ACheck.Objects);
+  Inc(FHeapSnapshotPassed, ACheck.Passed);
+  Inc(FHeapSnapshotRefused, ACheck.Refused);
+  Inc(FHeapSnapshotFailed, ACheck.Failed);
+  for I := 0 to ACheck.RefusalReasons.Count - 1 do
+  begin
+    Reason := ACheck.RefusalReasons.Names[I];
+    Count := StrToInt64Def(FHeapSnapshotRefusals.Values[Reason], 0);
+    Inc(Count, StrToInt64(ACheck.RefusalReasons.ValueFromIndex[I]));
+    FHeapSnapshotRefusals.Values[Reason] := IntToStr(Count);
+  end;
+  for I := 0 to ACheck.FailureDetails.Count - 1 do
+    WriteLn(ErrOutput, 'Heap snapshot failure: ', AFileName, ': ',
+      ACheck.FailureDetails[I]);
+end;
+
+function TTestRunnerApp.CreateHeapSnapshotDestination(
+  const ASourceEngine: TGocciaEngine): TGocciaEngine;
+var
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaCLISourcePipelineResult;
+  Stream: TMemoryStream;
+  Writer: TGocciaBytecodeWriter;
+  Reader: TGocciaBytecodeReader;
+  Module: TGocciaBytecodeModule;
+  I: Integer;
+begin
+  Result := CreateEngine(ASourceEngine.SourcePath, ASourceEngine.SourceLines);
+  try
+    DisableRuntimeConsole(Result);
+    Result.SuppressWarnings := True;
+    Result.SourceType := ASourceEngine.SourceType;
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.Preprocessors := Result.Preprocessors;
+    Options.Compatibility := Result.Compatibility;
+    Options.LabelStatementsEnabled := Result.LabelStatementsEnabled;
+    Options.ForInLoopsEnabled := Result.ForInLoopsEnabled;
+    Options.ExperimentalJSModuleSourceEnabled :=
+      Result.ExperimentalJSModuleSourceEnabled;
+    Options.WarningUnsupportedFeatures := Result.WarningUnsupportedFeatures;
+    Options.SourceType := Result.SourceType;
+    Parsed := TGocciaCLISourcePipelineResult.Parse(ASourceEngine.SourceLines,
+      ASourceEngine.SourcePath, Options, True);
+    try
+      Result.CompileModule(Parsed.ProgramNode);
+    finally
+      Parsed.Free;
+    end;
+    // Compiler-generated private identifiers include counters and computed
+    // class keys include source-node identities, so an independent compile
+    // need not have the source module's byte identity. Retain the exact code
+    // images too, including the entry, imports and dynamically made functions.
+    // None of these images is executed in the destination engine.
+    Stream := TMemoryStream.Create;
+    try
+      for I := 0 to ASourceEngine.RetainedModuleCount - 1 do
+      begin
+        Module := ASourceEngine.RetainedModule(I);
+        if Module.TopLevel.GlobalEvalCode or Module.TopLevel.ShimCode then
+          Continue;
+        Stream.Clear;
+        Writer := TGocciaBytecodeWriter.Create(Stream);
+        try
+          Writer.WriteModule(Module);
+        finally
+          Writer.Free;
+        end;
+        Stream.Position := 0;
+        Reader := TGocciaBytecodeReader.Create(Stream);
+        try
+          Result.RetainModule(Reader.ReadModule);
+        finally
+          Reader.Free;
+        end;
+      end;
+    finally
+      Stream.Free;
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+procedure TTestRunnerApp.PrintHeapSnapshotReport;
+var
+  I: Integer;
+begin
+  WriteLn(ErrOutput, Format('Heap snapshots: observations=%d objects=%d ' +
+    'passed=%d refused=%d failed=%d', [FHeapSnapshotObservations,
+    FHeapSnapshotObjects, FHeapSnapshotPassed, FHeapSnapshotRefused,
+    FHeapSnapshotFailed]));
+  FHeapSnapshotRefusals.Sort;
+  for I := 0 to FHeapSnapshotRefusals.Count - 1 do
+    WriteLn(ErrOutput, 'Heap snapshot refusal: ',
+      FHeapSnapshotRefusals.ValueFromIndex[I], ' ',
+      FHeapSnapshotRefusals.Names[I]);
 end;
 
 procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);
@@ -994,6 +1125,8 @@ var
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   Module: TGocciaBytecodeModule;
   Engine: TGocciaEngine;
+  HeapCheck: TGocciaHeapSnapshotRoundTrip;
+  TestingExtension: TGocciaTestingLibraryRuntimeExtension;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
   GC: TGarbageCollector;
@@ -1001,10 +1134,11 @@ var
   ExpectedPrincipal: Int64;
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
-  PlainThrowDetail: string;
+  PlainThrowDetail, HeapFailure: string;
 begin
   ScriptResult := CreateDefaultScriptResult;
   ResultValue := nil;
+  HeapFailure := '';
   GC := TGarbageCollector.Instance;
   ResultValueRooted := False;
   ExpectedPrincipal := 0;
@@ -1034,7 +1168,17 @@ begin
 
     try
       Engine := CreateEngine(AFileName, Source);
+      HeapCheck := nil;
+      TestingExtension := nil;
       try
+        if FHeapSnapshots.Present then
+        begin
+          HeapCheck := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+          TestingExtension := TGocciaTestingLibraryRuntimeExtension(
+            GetRuntime(Engine).FindRuntimeExtension(
+              TGocciaTestingLibraryRuntimeExtension));
+          TestingExtension.OnExpect := HeapCheck.Observe;
+        end;
         ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
         if FSilent.Present or GIsWorkerThread or IsJsonOutput then
         begin
@@ -1100,6 +1244,24 @@ begin
           if ResultValue is TGocciaObjectValue then
             MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
 
+          if Assigned(HeapCheck) then
+          begin
+            TestingExtension.OnExpect := nil;
+            HeapCheck.Verify(CreateHeapSnapshotDestination);
+            RecordHeapSnapshots(HeapCheck, AFileName);
+            if HeapCheck.Failed > 0 then
+            begin
+              // This check runs after the tests. Preserve their counts and
+              // report one file-level error rather than a synthetic test.
+              HeapFailure := 'Heap snapshot round-trip failed';
+              ScriptResult.AssignProperty('suiteErrors',
+                TGocciaNumberLiteralValue.Create(ScriptResult.GetProperty(
+                  'suiteErrors').ToNumberLiteral.Value + 1));
+              TGocciaArrayValue(ScriptResult.GetProperty('failedTests')).Elements.Add(
+                TGocciaStringLiteralValue.Create(AFileName + ': ' + HeapFailure));
+            end;
+          end;
+
           Result.TestResult := ScriptResult;
           Result.Timing.Result := ResultValue;
           Result.Timing.LexTimeNanoseconds := LexTimeNanoseconds;
@@ -1108,8 +1270,11 @@ begin
           Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
           Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
           Result.Timing.FileName := AFileName;
-          Result.ErrorMessage := '';
+          Result.ErrorMessage := HeapFailure;
       finally
+        if Assigned(TestingExtension) then
+          TestingExtension.OnExpect := nil;
+        HeapCheck.Free;
         Engine.Free;
       end;
     except

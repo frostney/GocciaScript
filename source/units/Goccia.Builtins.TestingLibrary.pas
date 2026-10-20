@@ -24,6 +24,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaExpectObserver = procedure(const AValue: TGocciaValue) of object;
+
   TGocciaTestAssertions = class;
   TGocciaRegisteredEntry = class;
   TGocciaTestSuite = class;
@@ -164,6 +166,7 @@ type
   // Main test assertions built-in
   TGocciaTestAssertions = class(TGocciaBuiltin)
   private
+    FOnExpect: TGocciaExpectObserver;
     FTestStats: record
       TotalTests: Integer;
       PassedTests: Integer;
@@ -346,6 +349,9 @@ type
 
     // Test execution
     function RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // Optional host observation, after argument validation and before matchers.
+    property OnExpect: TGocciaExpectObserver read FOnExpect write FOnExpect;
 
     // Exposed for native Pascal unit tests. A plain getter rather
     // than a dotted field-path accessor (read FTestStats.X) so the
@@ -4800,6 +4806,8 @@ end;
 function TGocciaTestAssertions.Expect(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'expect', ThrowError);
+  if Assigned(FOnExpect) then
+    FOnExpect(AArgs.GetElement(0));
 
   Result := TGocciaExpectationValue.Create(AArgs.GetElement(0), Self);
 end;

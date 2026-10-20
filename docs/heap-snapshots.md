@@ -257,6 +257,15 @@ and checks each slot's names, and lists the slots nothing fills: `eval`,
 which the host installs, and the shared prototypes of runtime extensions an
 engine without them never builds.
 
+An extension whose native built-in is created only when imported implements
+`MaterializeHeapSnapshotBuiltin` on its engine or runtime extension. The
+resolver requests a missing `%builtin` name through that hook, then checks
+the resulting object's fingerprint. The hook must build only the named
+native built-in, without guest execution or host I/O, and leave unknown names
+alone. The data-format extensions use it for their native namespace objects.
+FFI slot materializers rebuild shared prototypes without opening libraries;
+ordinary FFI instances still require a codec and remain refused.
+
 A `Date` keeps its time value outside the object, in the `Date` shim's
 WeakMap, which is a built-in and named, not written: an object with a time
 value refuses the snapshot until a codec covers it.
@@ -297,3 +306,27 @@ stays where it was.
 
 The fuzz workflow also runs every heap snapshot test program at its default
 size under heaptrc.
+
+### Round-tripping the JavaScript suite
+
+`./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress`
+collects each distinct object passed to `expect()` and keeps it rooted until
+that file finishes. It writes each object at file idle, with accounting off,
+then restores each accepted object into its own fresh engine that compiled
+the same file without running it. The source's retained compiled modules are
+also copied through the bytecode format without execution, preserving generated
+private identifiers and code from imports and dynamically compiled functions.
+Objects are checked in their **final file state**, not their state at the
+assertion: writing inside `expect()` would violate the idle-frame requirement.
+
+The checker compares a native description of identities, prototypes, stored
+properties and descriptors, symbols, array holes and lengths, and function
+name/length state. It does not call getters, proxy traps, `toJSON` or testing
+serializers. Re-snapshot byte equality also checks state owned by the codecs.
+A writer refusal is counted by reason; a restore refusal, either mismatch or
+an unexpected exception fails the file. An integrity fault aborts the runner.
+
+This diagnostic mode runs files serially, including when `--jobs` is supplied.
+Counts and refusal reasons go to stderr, leaving JSON stdout intact. PR CI
+and the Linux x64 full-CI job run the mode over `tests/` and retain its report,
+so newly supported codec families become checked without another corpus.

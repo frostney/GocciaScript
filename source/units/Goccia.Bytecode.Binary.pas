@@ -41,6 +41,7 @@ type
     function ReadInt64: Int64;
     function ReadDouble: Double;
     function ReadString: string;
+    function ReadBigIntString: string;
     function ReadBoolean: Boolean;
     function ReadFunctionTemplate: TGocciaFunctionTemplate;
   public
@@ -559,7 +560,7 @@ begin
         WriteInt64(Constant.IntValue);
       bckFloat:
         WriteDouble(Constant.FloatValue);
-      bckString:
+      bckString, bckBigInt:
         WriteString(Constant.StringValue);
       bckRegExpLiteral:
       begin
@@ -808,6 +809,26 @@ begin
     Result[I] := Char(ReadUInt16);
 end;
 
+function TGocciaBytecodeReader.ReadBigIntString: string;
+var
+  I: Integer;
+begin
+  Result := ReadString;
+  I := 1;
+  if (Length(Result) > 0) and ((Result[1] = '-') or (Result[1] = '+')) then
+    Inc(I);
+  if I > Length(Result) then
+    raise Exception.Create('Invalid Goccia bytecode BigInt constant');
+  // The VM consumes decimal text. Validate its grammar without constructing
+  // a BigInt or doing the parser's repeated limb multiplication here.
+  while I <= Length(Result) do
+  begin
+    if (Result[I] < '0') or (Result[I] > '9') then
+      raise Exception.Create('Invalid Goccia bytecode BigInt constant');
+    Inc(I);
+  end;
+end;
+
 function TGocciaBytecodeReader.ReadBoolean: Boolean;
 begin
   Result := ReadUInt8 <> 0;
@@ -837,6 +858,8 @@ var
   UpvalueName: string;
   HasDebug: Boolean;
   DebugInfo: TGocciaDebugInfo;
+  LineEntry: TGocciaLineMapEntry;
+  Handler: TGocciaExceptionHandler;
   SourceFile, RegExpPattern, RegExpFlags: string;
   LineMapCount, LocalCount: UInt32;
   LocalName: string;
@@ -862,6 +885,7 @@ begin
   HasDebug := False;
 
   Result := TGocciaFunctionTemplate.Create(Name);
+  try
   Result.MaxRegisters := MaxRegs;
   Result.ParameterCount := ParamCount;
   Result.FormalParameterCount := ReadUInt16;
@@ -891,6 +915,7 @@ begin
       bckInteger: Result.AddConstantInteger(ReadInt64);
       bckFloat:   Result.AddConstantFloat(ReadDouble);
       bckString:  Result.AddConstantString(ReadString);
+      bckBigInt:  Result.AddConstantBigInt(ReadBigIntString);
       bckRegExpLiteral:
       begin
         RegExpPattern := ReadString;
@@ -975,9 +1000,17 @@ begin
   end;
 
   HandlerCount := ReadUInt16;
+  // Read in wire order: Pascal does not fix argument evaluation order.
   for I := 0 to HandlerCount - 1 do
-    Result.AddExceptionHandler(ReadUInt32, ReadUInt32, ReadUInt32,
-      ReadUInt32, ReadUInt16);
+  begin
+    Handler.TryStart := ReadUInt32;
+    Handler.TryEnd := ReadUInt32;
+    Handler.CatchTarget := ReadUInt32;
+    Handler.FinallyTarget := ReadUInt32;
+    Handler.CatchRegister := ReadUInt16;
+    Result.AddExceptionHandler(Handler.TryStart, Handler.TryEnd,
+      Handler.CatchTarget, Handler.FinallyTarget, Handler.CatchRegister);
+  end;
 
   FuncCount := ReadUInt16;
   for I := 0 to FuncCount - 1 do
@@ -992,11 +1025,17 @@ begin
     DeclarationColumn := ReadUInt16;
     DebugInfo := TGocciaDebugInfo.Create(SourceFile, DeclarationLine,
       DeclarationColumn);
+    Result.DebugInfo := DebugInfo;
 
     LineMapCount := ReadUInt32;
     RequireRemaining(Int64(LineMapCount) * 10, 'debug line mappings');
     for I := 0 to Integer(LineMapCount) - 1 do
-      DebugInfo.AddLineMapping(ReadUInt32, ReadUInt32, ReadUInt16);
+    begin
+      LineEntry.PC := ReadUInt32;
+      LineEntry.Line := ReadUInt32;
+      LineEntry.Column := ReadUInt16;
+      DebugInfo.AddLineMapping(LineEntry.PC, LineEntry.Line, LineEntry.Column);
+    end;
 
     LocalCount := ReadUInt32;
     RequireRemaining(Int64(LocalCount) * 14, 'debug local mappings');
@@ -1010,8 +1049,6 @@ begin
       LocalEndPC := ReadUInt32;
       DebugInfo.AddLocal(LocalName, LocalSlot, LocalStartPC, LocalEndPC);
     end;
-
-    Result.DebugInfo := DebugInfo;
   end;
 
   LocalTypeCount := ReadUInt16;
@@ -1035,6 +1072,10 @@ begin
   else
     Result.DirectEvalSyntheticArgumentsSlot := I;
   Result.RejectArgumentsInDirectEval := ReadBoolean;
+  except
+    Result.Free;
+    raise;
+  end;
   finally
     Dec(FFunctionDepth);
   end;
@@ -1069,6 +1110,7 @@ begin
   HasDebug := ReadBoolean;
 
   Result := TGocciaBytecodeModule.Create(RuntimeTag, SourcePath);
+  try
   Result.HasDebugInfo := HasDebug;
 
   ImportCount := ReadUInt16;
@@ -1106,6 +1148,10 @@ begin
   VerifyFunctionTemplate(Result.TopLevel, 1);
   if FStream.Position <> FStream.Size then
     raise Exception.Create('Invalid trailing data in Goccia bytecode file');
+  except
+    Result.Free;
+    raise;
+  end;
 end;
 
 procedure SaveModuleToFile(const AModule: TGocciaBytecodeModule;
