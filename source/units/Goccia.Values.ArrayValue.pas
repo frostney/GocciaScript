@@ -3227,8 +3227,6 @@ var
   Target, Start, EndIdx, Count, I: Integer;
   Target64, Start64, End64, Count64, From64, To64: Int64;
   Direction: Integer;
-  Buffer: TGocciaArrayValue;
-  Present: array of Boolean;
   ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
@@ -3311,29 +3309,25 @@ begin
       Exit;
     end;
 
-    // Steps 10-12: Copy elements (using temp buffer for overlap safety)
-    // Preserve sparsity per ES spec: delete destination when source is absent.
-    // The buffer is a rooted native array: the values read are held only
-    // by it while the next reads and the writes run script code.
-    Buffer := TGocciaArrayValue.Create;
-    ViewRoots.Add(Buffer);
-    Buffer.Elements.Capacity := Count;
-    SetLength(Present, Count);
-    for I := 0 to Count - 1 do
+    // Steps 10-12: one element at a time, backwards when the source starts
+    // before an overlapping target, in the order the specification reads and
+    // writes; an absent source deletes its destination. Each value goes
+    // straight from Get to Put, so no buffer holds one while script code
+    // (a getter, a setter, a proxy trap) runs.
+    if (Start < Target) and (Target < Start + Count) then
     begin
-      Present[I] := View.HasIndex(Start + I);
-      if Present[I] then
-        Buffer.Elements.Add(View.Get(Start + I))
-      else
-        Buffer.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-    for I := 0 to Count - 1 do
-    begin
-      if Present[I] then
-        View.Put(Target + I, Buffer.Elements[I])
-      else
-        View.DeleteIndex(Target + I);
-    end;
+      for I := Count - 1 downto 0 do
+        if View.HasIndex(Start + I) then
+          View.Put(Target + I, View.Get(Start + I))
+        else
+          View.DeleteIndex(Target + I);
+    end
+    else
+      for I := 0 to Count - 1 do
+        if View.HasIndex(Start + I) then
+          View.Put(Target + I, View.Get(Start + I))
+        else
+          View.DeleteIndex(Target + I);
 
     // Step 13: Return O
     Result := View.Obj;
