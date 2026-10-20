@@ -61,6 +61,7 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.StackLimit,
   Goccia.TextFiles,
+  Goccia.Threading,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -700,6 +701,11 @@ begin
     'only for an unexpected fault.');
 end;
 
+{ The whole invocation. A procedure rather than the program block so that its
+  strings are finalized when it returns, before the runtime shuts down and
+  heaptrc counts what is left. It sets ExitCode and returns, never Halt: Halt
+  would skip that shutdown. }
+procedure RunHarness;
 var
   I: Integer;
   Arg, FileName, Detail, Trace, SeedDirectory: string;
@@ -731,7 +737,8 @@ begin
     else if (Arg = '--help') or (Arg = '-h') then
     begin
       PrintUsage;
-      Halt(EXIT_OK);
+      ExitCode := EXIT_OK;
+      Exit;
     end
     else
       FileName := Arg;
@@ -756,14 +763,16 @@ begin
           CaptureBackTrace);
       end;
     end;
-    Halt(1);
+    ExitCode := 1;
+    Exit;
   end;
 
   if SeedDirectory <> '' then
   begin
     WriteLn(Format('%d heap snapshot seeds written to %s',
       [WriteHeapSnapshotSeeds(SeedDirectory), SeedDirectory]));
-    Halt(EXIT_OK);
+    ExitCode := EXIT_OK;
+    Exit;
   end;
 
   if HeapSnapshot then
@@ -784,22 +793,26 @@ begin
       WriteLn(ErrOutput, Format('%s: unexpected fault in the heap snapshot ' +
         'reader: %s', [FUZZ_PROGRAM_NAME, Detail]));
       WriteLn(ErrOutput, Trace);
-      Halt(1);
+      ExitCode := 1;
+      Exit;
     end;
     Report(Outcome, Detail);
-    Halt(EXIT_OK);
+    ExitCode := EXIT_OK;
+    Exit;
   end;
 
   if (FileName = '') and IsInputTerminal then
   begin
     PrintUsage;
-    Halt(EXIT_USAGE);
+    ExitCode := EXIT_USAGE;
+    Exit;
   end;
 
   if not ReadInput(FileName, Source, Detail) then
   begin
     Report(foInputRejected, Detail);
-    Halt(EXIT_OK);
+    ExitCode := EXIT_OK;
+    Exit;
   end;
 
   try
@@ -838,4 +851,19 @@ begin
     ExitCode := 1
   else
     ExitCode := EXIT_OK;
+end;
+
+begin
+  try
+    RunHarness;
+  finally
+    { Every engine is gone by now. As TGocciaApplication.RunApplication does,
+      shut the main thread's runtime down so its collector destroys what it
+      still manages: the garbage of every freed engine (no collection runs
+      after the last one), the thread's caches and the process-wide
+      singletons. A run then ends with nothing left allocated, which the
+      scheduled heaptrc replay requires (#1592, ADR 0143). The harness never
+      starts worker threads, so none can still be reading that runtime. }
+    ShutdownMainThreadRuntime;
+  end;
 end.

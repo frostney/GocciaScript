@@ -249,9 +249,10 @@ jobs:
       - name: Replay under heaptrc and Valgrind
         # ADR 0148 asks for mutated real snapshots under heaptrc and a memory
         # checker. The seeds and a sample of what AFL kept are restored again:
-        # under heaptrc each must leave exactly the unfreed blocks an input
-        # that is not a snapshot leaves (the engine's own process-exit
-        # baseline), and under Valgrind memcheck none may report an error.
+        # under heaptrc each, and an input the reader refuses, must leave no
+        # unfreed block (the harness shuts its runtime down before it exits,
+        # as the application runners do), and under Valgrind memcheck none
+        # may report an error.
         if: ${{ !cancelled() }}
         run: |
           mkdir -p build/fuzz/heap-snapshot-replay
@@ -266,18 +267,16 @@ jobs:
           mkdir -p build/fuzz/heap-snapshot-replay-failures
           # The harness exits 0 on every outcome the reader models (a refusal
           # included) and nonzero on a fault. A replay that exits nonzero, or
-          # whose unfreed-block count (empty when heaptrc printed none)
-          # differs from the baseline, fails and keeps its input.
+          # whose heaptrc report does not say 0 unfreed blocks (none at all
+          # counts as a failure too), fails and keeps its input.
           blocks() { grep -oE '^[0-9]+ unfreed memory blocks' <<< "$1" | cut -d' ' -f1 || true; }
-          baseline=$(blocks "$(./build/GocciaFuzzHarnessHeaptrc --heap-snapshot build/fuzz/not-a-snapshot 2>&1 || true)")
-          echo "unfreed blocks at exit without a snapshot: ${baseline}"
           status=0
-          for f in build/fuzz/heap-snapshot-replay/*; do
+          for f in build/fuzz/not-a-snapshot build/fuzz/heap-snapshot-replay/*; do
             code=0
             out=$(./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$f" 2>&1) || code=$?
             got=$(blocks "$out")
-            if [ "$code" -ne 0 ] || [ "$got" != "$baseline" ]; then
-              echo "::error::heaptrc: $f exits ${code} and leaves ${got} unfreed blocks, ${baseline} without a snapshot"
+            if [ "$code" -ne 0 ] || [ "$got" != "0" ]; then
+              echo "::error::heaptrc: $f exits ${code} and leaves ${got:-an unknown number of} unfreed blocks, expected 0"
               cp "$f" build/fuzz/heap-snapshot-replay-failures/heaptrc-"$(basename "$f")"
               status=1
             fi

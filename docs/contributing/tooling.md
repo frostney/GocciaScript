@@ -73,7 +73,7 @@ These are declared in `.vscode/extensions.json` so VSCode/Cursor will prompt to 
 
 The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not open a terminal or interrupt your workflow. The file is re-read by the editor after formatting, so changes appear immediately.
 
-> **Note:** This requires `instantfpc` (ships with FreePascal) to be on your `PATH`. If you installed FreePascal via the methods in [Getting Started](../../README.md#getting-started), this is already the case.
+> **Note:** This requires `instantfpc` (ships with FreePascal) to be on your `PATH`. If you installed FreePascal via the methods in [Build from source](../../README.md#build-from-source), this is already the case.
 
 #### How the Layers Work Together
 
@@ -359,7 +359,11 @@ walks up to 600 distinct objects, reading properties, calling functions and
 resuming, returning or throwing into generators (the input's size picks
 which). A refusal (`snapshot-refused`) is a normal outcome, as are the run limits and
 a script error (`script-throw`); anything else is a finding. The scheduled
-workflow runs this as its `fuzz-heap-snapshot` job.
+workflow runs this as its `fuzz-heap-snapshot` job. It replays the seeds, a
+sample of what AFL kept and an input the reader refuses under a heaptrc build
+of the harness, and each must end with no unfreed block: like the application
+runners, the harness shuts its runtime down before it exits, which destroys
+what the collector still manages.
 
 Its `heap-snapshot-hardening` job runs
 `Goccia.HeapSnapshot.Hardening.Test` with

@@ -10,13 +10,19 @@ import type {
   PerformanceSuiteData,
 } from "@/lib/performance-dashboard";
 import {
+  NATIVE_PLATFORM_DESCRIPTION,
+  PRODUCTION_READY_ANSWER,
+} from "@/lib/positioning";
+import {
   createSiteMarkdown,
   renderCompatibilityMarkdown,
+  renderHomeMarkdown,
   renderPerformanceMarkdown,
   resolveMarkdownRoute,
   yamlScalar,
 } from "@/lib/site-markdown";
 import type { Test262DashboardData } from "@/lib/test262-dashboard";
+import { compatibilityPercent } from "@/lib/test262-percent";
 
 const emptyPerformanceSuite: PerformanceSuiteData = {
   latest: null,
@@ -239,6 +245,57 @@ describe("createSiteMarkdown", () => {
     expect(flow).toContain("`--modules`");
     // Sandbox mode rejects --globals and ignores config globals.
     expect(flow).not.toMatch(/globals/i);
+  });
+
+  test("home Markdown leads with live evidence and production guidance", () => {
+    const markdown = renderHomeMarkdown(
+      {
+        tagName: "v0.15.0",
+        htmlUrl:
+          "https://github.com/frostney/GocciaScript/releases/tag/v0.15.0",
+        publishedAt: "2026-10-01T00:00:00Z",
+        name: "GocciaScript 0.15.0",
+      },
+      compatibilityData,
+    );
+    const { passed, totalRun } = compatibilityData.latest.summary;
+
+    expect(markdown.indexOf("## Evidence")).toBeLessThan(
+      markdown.indexOf("## Quick install"),
+    );
+    expect(markdown).toContain(
+      `${passed} of ${totalRun} tests passing (${compatibilityPercent(passed, totalRun)})`,
+    );
+    expect(markdown).toContain(
+      "by area on the compatibility dashboard](/compatibility)",
+    );
+    expect(markdown).toContain("15,000+ JavaScript tests in 1,800+ files");
+    expect(markdown).toContain("checked against Bun and Vitest");
+    expect(markdown).toContain("/actions/workflows/fuzz.yml");
+    expect(markdown).toContain("/actions/workflows/gc-stress.yml");
+    expect(markdown).toContain(
+      "Shotcup's hosted sandboxes](https://shotcup.dev)",
+    );
+    expect(markdown).toContain("**Prebuilt for six targets.**");
+    expect(markdown).toContain(PRODUCTION_READY_ANSWER);
+    expect(markdown).toContain(NATIVE_PLATFORM_DESCRIPTION);
+    expect(markdown).toContain(
+      "Pre-1.0: the host API and flags may change between releases; pin a version.",
+    );
+  });
+
+  test("home Markdown links to conformance evidence without inventing a result", () => {
+    const markdown = renderHomeMarkdown(null, {
+      ...compatibilityData,
+      status: "empty",
+      latest: null,
+    });
+
+    expect(markdown).toContain(
+      "by area on the compatibility dashboard](/compatibility)",
+    );
+    expect(markdown).not.toContain("tests passing (");
+    expect(markdown).not.toContain("undefined");
   });
 
   test("renders a concise live compatibility alternate from dashboard data", () => {
