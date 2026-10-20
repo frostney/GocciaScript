@@ -85,6 +85,15 @@ type
     procedure TestDisposalErrors;
     procedure TestAsyncGeneratorReceivers;
     procedure TestErroredModuleImport;
+    procedure TestNumberReceivers;
+    procedure TestFillOperands;
+    procedure TestOwnPropertySymbolsTrap;
+    procedure TestAssignKeyList;
+    procedure TestKeyedPromiseKeyList;
+    procedure TestProxyReceivers;
+    procedure TestRelativeTimeFormatValue;
+    procedure TestTypedArrayFromWrapper;
+    procedure TestIntlPrimitiveOptions;
   end;
 
 const
@@ -172,6 +181,22 @@ begin
     TestAsyncGeneratorReceivers);
   AddCase('a second import of a module whose evaluation threw',
     TestErroredModuleImport);
+  AddCase('a number receiver the VM boxed, across its method''s arguments',
+    TestNumberReceivers);
+  AddCase('fill on a primitive receiver, and a coerced fill value',
+    TestFillOperands);
+  AddCase('Object.getOwnPropertySymbols across a Proxy ownKeys trap',
+    TestOwnPropertySymbolsTrap);
+  AddCase('Object.assign keys an ownKeys trap made',
+    TestAssignKeyList);
+  AddCase('Promise.allKeyed keys an ownKeys trap made', TestKeyedPromiseKeyList);
+  AddCase('a Proxy''s apply and get traps with a receiver only the caller holds',
+    TestProxyReceivers);
+  AddCase('Intl.RelativeTimeFormat value across the unit conversion',
+    TestRelativeTimeFormatValue);
+  AddCase('TypedArray.from over a primitive source''s wrapper',
+    TestTypedArrayFromWrapper);
+  AddCase('Intl options given as a primitive', TestIntlPrimitiveOptions);
 end;
 
 procedure TGCStressTests.BeginStress;
@@ -807,6 +832,161 @@ begin
     DeleteFile(IncludeTrailingPathDelimiter(Directory) + 'errored.js');
     RemoveDir(Directory);
   end;
+end;
+
+// #1834: a number method's receiver, boxed out of a scalar register, was held
+// only by the native call while the arguments' valueOf ran and allocated.
+procedure TGCStressTests.TestNumberReceivers;
+begin
+  RunStressed('number-receivers.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const num = (v) => ({ valueOf() { fresh("pad"); return v; } });' + LineEnding +
+    'const x = 1.234 + 1, y = 255 * 1.5;' + LineEnding +
+    'const out = [x.toFixed(num(2)), y.toString(num(16)), x.toPrecision(num(3)),' + LineEnding +
+    '  x.toExponential(num(1))].join();' + LineEnding +
+    'if (out !== "2.23,17e.8,2.23,2.2e+0") throw new Error(out);');
+end;
+
+// #1834: Array.prototype.fill held a primitive receiver's wrapper only in a
+// local while start and end converted, and %TypedArray%.prototype.fill held
+// its coerced value across them.
+procedure TGCStressTests.TestFillOperands;
+begin
+  RunStressed('fill.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const num = (v) => ({ valueOf() { fresh("pad"); return v; } });' + LineEnding +
+    'const filled = Array.prototype.fill.call(7.5, 1, num(0), num(0));' + LineEnding +
+    'const typed = new Float64Array(4).fill(num(Math.PI * 2), num(1), num(3)).join();' + LineEnding +
+    'if (typeof filled !== "object" || typed !== `0,${Math.PI * 2},${Math.PI * 2},0`)' + LineEnding +
+    '  throw new Error([typeof filled, typed].join());');
+end;
+
+// #1834: Object.getOwnPropertySymbols made its result array before reading
+// the keys, which runs a Proxy's ownKeys trap (or evaluates a deferred
+// module), and held the array only in a local across it.
+procedure TGCStressTests.TestOwnPropertySymbolsTrap;
+begin
+  RunStressed('own-symbols.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const one = Symbol("one");' + LineEnding +
+    'const target = { [one]: 1 };' + LineEnding +
+    'const proxy = new Proxy(target, { ownKeys() { fresh("trap"); return [fresh("k"), one]; },' + LineEnding +
+    '  getOwnPropertyDescriptor(t, k) { fresh("d"); return Reflect.getOwnPropertyDescriptor(t, k); } });' + LineEnding +
+    'const symbols = Object.getOwnPropertySymbols(proxy);' + LineEnding +
+    'if (symbols.length !== 1 || symbols[0] !== one) throw new Error(String(symbols.length));');
+end;
+
+// #1834: Object.assign held the keys an ownKeys trap returned only in a
+// native list while each key's traps ran, so a fresh trap key was freed
+// before its turn.
+procedure TGCStressTests.TestAssignKeyList;
+begin
+  RunStressed('assign-keys.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const proxy = new Proxy({}, {' + LineEnding +
+    '  ownKeys() { fresh("trap"); return [fresh("a"), Symbol(fresh("s")), fresh("b"), fresh("c")]; },' + LineEnding +
+    '  getOwnPropertyDescriptor() { fresh("d"); return { value: 1, enumerable: true, configurable: true }; },' + LineEnding +
+    '  get(t, k) { fresh("g"); return typeof k; } });' + LineEnding +
+    'const fromProxy = Object.assign({}, proxy);' + LineEnding +
+    'if (Reflect.ownKeys(fromProxy).length !== 4) throw new Error("assign");');
+end;
+
+// #1834: Promise.allKeyed kept the symbol keys an ownKeys trap made only in
+// its native key list while each key's value was read and resolved.
+procedure TGCStressTests.TestKeyedPromiseKeyList;
+begin
+  RunStressed('keyed-promise.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const proxy = new Proxy({}, {' + LineEnding +
+    '  ownKeys() { fresh("trap"); return [Symbol(fresh("s")), Symbol(fresh("t")), fresh("u")]; },' + LineEnding +
+    '  getOwnPropertyDescriptor() { fresh("d"); return { value: 1, enumerable: true, configurable: true }; },' + LineEnding +
+    '  get(t, k) { fresh("g"); return Promise.resolve(fresh("v")); } });' + LineEnding +
+    'globalThis.keyed = Promise.allKeyed(proxy).then((r) => {' + LineEnding +
+    '  if (Reflect.ownKeys(r).length !== 3) throw new Error("keyed"); });');
+end;
+
+// #1834: a callable Proxy's [[Call]] read its apply trap, which runs guest
+// code, before the receiver (a number the VM boxed) joined the trap's
+// arguments; its [[Get]] did the same with a receiver a builtin made for a
+// primitive (a wrapper whose prototype chain reaches the Proxy).
+procedure TGCStressTests.TestProxyReceivers;
+begin
+  RunStressed('proxy-receivers.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'Number.prototype.viaProxy = new Proxy(({ m() {} }).m, {' + LineEnding +
+    '  get apply() { fresh("apply"); return (t, receiver) => receiver.toFixed(2); } });' + LineEnding +
+    'const x = 1.234 + 1;' + LineEnding +
+    'const called = x.viaProxy();' + LineEnding +
+    'delete Number.prototype.viaProxy;' + LineEnding +
+    'const base = Object.getPrototypeOf(String.prototype);' + LineEnding +
+    'Object.setPrototypeOf(String.prototype, new Proxy(base, {' + LineEnding +
+    '  get(t, k, r) { fresh("get"); return Reflect.get(t, k, r); } }));' + LineEnding +
+    'let formatted;' + LineEnding +
+    'try { formatted = Temporal.PlainDate.from("2024-01-01").toLocaleString("en", fresh("options")); }' + LineEnding +
+    'finally { Object.setPrototypeOf(String.prototype, base); }' + LineEnding +
+    'if (called !== "2.23" || typeof formatted !== "string") throw new Error(called);');
+end;
+
+// #1834: format and formatToParts held the number valueOf returned and read
+// it again after the unit's conversion ran guest code.
+procedure TGCStressTests.TestRelativeTimeFormatValue;
+begin
+  RunStressed('relative-time.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const value = () => ({ valueOf() { fresh("v"); return -0 * 1; } });' + LineEnding +
+    'const unit = { toString() { fresh("u"); return fresh("day"); } };' + LineEnding +
+    'const rtf = new Intl.RelativeTimeFormat("en");' + LineEnding +
+    'const text = rtf.format(value(), unit);' + LineEnding +
+    'const parts = rtf.formatToParts(value(), unit);' + LineEnding +
+    'if (text !== rtf.format(-0, "day") || parts.length < 1) throw new Error(text);');
+end;
+
+// #1834: TypedArray.from's array-like path held the wrapper ToObject made for
+// a primitive source only in a local across its getters, the constructor and
+// the mapper.
+procedure TGCStressTests.TestTypedArrayFromWrapper;
+begin
+  RunStressed('typed-from.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const define = (k, v) => Object.defineProperty(Number.prototype, k,' + LineEnding +
+    '  { configurable: true, get() { fresh("g"); return v; } });' + LineEnding +
+    'define("length", 2); define("0", 5); define("1", 6);' + LineEnding +
+    'class Sub extends Uint8Array { constructor(n) { fresh("ctor"); super(n); } }' + LineEnding +
+    'let out;' + LineEnding +
+    'try { out = [Uint8Array.from(7, (v) => { fresh("map"); return v + 1; }).join(),' + LineEnding +
+    '  Sub.from(7, (v) => { fresh("map"); return v; }).join()].join(); }' + LineEnding +
+    'finally { for (const k of ["length", "0", "1"]) delete Number.prototype[k]; }' + LineEnding +
+    'if (out !== "6,7,5,6") throw new Error(out);');
+end;
+
+// #1834: Intl constructors read options ToObject made from a primitive (its
+// prototype's getters supply them) without rooting that wrapper.
+procedure TGCStressTests.TestIntlPrimitiveOptions;
+begin
+  // Getters on Number.prototype supply the options; each returns an object
+  // whose conversion allocates after the getter (and its root on the
+  // wrapper as this) has returned.
+  RunStressed('intl-primitive-options.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const names = { localeMatcher: "best fit", usage: "sort", calendar: "gregory" };' + LineEnding +
+    'for (const [k, v] of Object.entries(names)) Object.defineProperty(Number.prototype, k, {' + LineEnding +
+    '  configurable: true, get() { return { toString() { fresh("pad"); return fresh(v); } }; } });' + LineEnding +
+    'const out = [];' + LineEnding +
+    'try {' + LineEnding +
+    '  out.push(new Intl.Collator("en", 5).resolvedOptions().usage,' + LineEnding +
+    '    new Intl.PluralRules("en", 5).resolvedOptions().type,' + LineEnding +
+    '    new Intl.RelativeTimeFormat("en", 5).resolvedOptions().numeric,' + LineEnding +
+    '    new Intl.Segmenter("en", 5).resolvedOptions().granularity,' + LineEnding +
+    '    new Intl.Locale("en", 5).calendar,' + LineEnding +
+    '    new Intl.DurationFormat("en", 5).resolvedOptions().style,' + LineEnding +
+    // Locales whose conversion allocates, read after the options when one
+    // call made both.
+    '    new Intl.DurationFormat({ length: 1, get 0() { return { toString() { fresh("pad"); return fresh("en"); } }; } }, 5)' + LineEnding +
+    '      .resolvedOptions().style,' + LineEnding +
+    '    new Intl.DateTimeFormat("en", 5).resolvedOptions().calendar,' + LineEnding +
+    '    "a".localeCompare("b", "en", 5));' + LineEnding +
+    '} finally { for (const k of Object.keys(names)) delete Number.prototype[k]; }' + LineEnding +
+    'if (out.join() !== "sort,cardinal,always,grapheme,gregory,short,short,gregory,-1") throw new Error(out.join());');
 end;
 
 begin

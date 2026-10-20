@@ -1444,10 +1444,11 @@ var
   FulfillFn: TGocciaNativeFunctionValue;
   RejectFn: TGocciaValue;
   PromiseResolveRoot, ResultRoot, StateRoot: TGocciaTempRoot;
-  IterationRoots, CapabilityRoots: TGocciaActiveRootFrame;
+  IterationRoots, CapabilityRoots, KeyRoots: TGocciaActiveRootFrame;
   I: Integer;
 begin
   CapabilityRoots.Initialize;
+  KeyRoots.Initialize;
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
   RootCapability(CapabilityRoots, Capability);
   InitializeTempRoot(PromiseResolveRoot);
@@ -1473,6 +1474,11 @@ begin
       AddTempRootIfNeeded(StateRoot, State);
 
       Keys := GetPromiseKeyedOwnKeys(InputObject);
+      // A symbol key the ownKeys trap made, or one a getter deletes from the
+      // input, is held only by this list while later keys are read.
+      for I := 0 to High(Keys) do
+        if Keys[I].IsSymbol then
+          KeyRoots.Add(Keys[I].Symbol);
       for I := 0 to High(Keys) do
       begin
         if not PromiseKeyedPropertyIsEnumerable(InputObject, Keys[I]) then
@@ -1528,6 +1534,7 @@ begin
     end;
   finally
     IterationRoots.Clear;
+    KeyRoots.Clear;
     RemoveTempRootIfNeeded(PromiseResolveRoot);
     RemoveTempRootIfNeeded(StateRoot);
     RemoveTempRootIfNeeded(ResultRoot);

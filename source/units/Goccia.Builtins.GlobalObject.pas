@@ -347,6 +347,7 @@ var
   SourceArg: TGocciaValue;
   GC: TGarbageCollector;
   I, J: Integer;
+  KeyRoots: TGocciaActiveRootFrame;
 
   function IsReadonlyStringExoticKey(const ATarget: TGocciaObjectValue;
     const AName: string): Boolean;
@@ -403,11 +404,17 @@ begin
       Source := ToObject(SourceArg);
       if Assigned(GC) and not (SourceArg is TGocciaObjectValue) then
         GC.AddTempRoot(Source);
+      { The ownKeys trap's key list is a native local, and each key's traps
+        run guest code: a key the trap made is held only by the list while
+        the keys before it are copied. }
+      KeyRoots.Initialize;
       try
         // ES2026 §20.1.2.1 step 3.a.ii: [[OwnPropertyKeys]].
         if Source is TGocciaProxyValue then
         begin
           PropertyKeyValues := TGocciaProxyValue(Source).GetOwnPropertyKeyValues;
+          for J := 0 to High(PropertyKeyValues) do
+            KeyRoots.Add(PropertyKeyValues[J]);
           for J := 0 to High(PropertyKeyValues) do
           begin
             if PropertyKeyValues[J] is TGocciaSymbolValue then
@@ -430,6 +437,7 @@ begin
             AssignSymbolKey(SymbolKeys[J]);
         end;
       finally
+        KeyRoots.Clear;
         if Assigned(GC) and not (SourceArg is TGocciaObjectValue) then
           GC.RemoveTempRoot(Source);
       end;
@@ -919,6 +927,7 @@ function TGocciaGlobalObject.ObjectGetOwnPropertySymbols(const AArgs: TGocciaArg
 var
   Obj: TGocciaObjectValue;
   Arr: TGocciaArrayValue;
+  ArrRoot: TGocciaTempRoot;
   OwnSymbols: TArray<TGocciaSymbolValue>;
   I: Integer;
 begin
@@ -929,8 +938,13 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(ArrRoot);
   try
     Arr := TGocciaArrayValue.Create;
+    { Reading the keys can run script code (a deferred module namespace
+      evaluates its module, a Proxy runs its ownKeys trap), so the result
+      array needs a root across it. }
+    AddTempRootIfNeeded(ArrRoot, Arr);
 
     // Step 1: Return GetOwnPropertyKeys(O, symbol)
     OwnSymbols := Obj.GetOwnSymbols;
@@ -939,6 +953,7 @@ begin
 
     Result := Arr;
   finally
+    RemoveTempRootIfNeeded(ArrRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
