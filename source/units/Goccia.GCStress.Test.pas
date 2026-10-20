@@ -572,7 +572,15 @@ begin
     'const p1 = Array.fromAsync.call(Holder, [1, Promise.resolve(2), 3]);' + LineEnding +
     'const p2 = Array.fromAsync({ length: 2, 0: "a", 1: "b" }, (v) => v + v);' + LineEnding +
     'const p3 = Array.fromAsync(new Set(["x", "y"]).values());' + LineEnding +
-    '[p1, p2, p3];');
+    // A primitive source's wrapper was held only by a local while the
+    // result array grew and the elements were read.
+    'const churn = (v) => [String(v) + "~", { v }];' + LineEnding +
+    'Number.prototype.length = 2; Number.prototype[0] = 1; Number.prototype[1] = 2;' + LineEnding +
+    'const p4 = (async () => Array.fromAsync(1))();' + LineEnding +
+    'Object.defineProperty(Boolean.prototype, "length", { configurable: true, get() { churn(1); return 2; } });' + LineEnding +
+    'const p5 = Array.fromAsync(true);' + LineEnding +
+    'delete Number.prototype.length; delete Boolean.prototype.length;' + LineEnding +
+    '[p1, p2, p3, p4, p5];');
 end;
 
 // A property bag coerced to a fresh value was held only by a local while the

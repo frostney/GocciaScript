@@ -617,6 +617,7 @@ var
   GC: TGarbageCollector;
   SourceRoot: TGocciaTempRoot;
   IteratorRoot: TGocciaTempRoot;
+  ArrayLikeRoot: TGocciaTempRoot;
 
   procedure CreateResultObject(const ALen: Integer; const APassLength: Boolean);
   begin
@@ -666,6 +667,7 @@ begin
   // getter runs and while the this-constructor builds the result, both guest
   // code.
   InitializeTempRoot(IteratorRoot);
+  InitializeTempRoot(ArrayLikeRoot);
   Promise := TGocciaPromiseValue.Create;
 
   if Assigned(GC) then
@@ -874,6 +876,9 @@ begin
           begin
             // TC39 Array.fromAsync §2.1.1.1 step 5: Array-like path — Let len be LengthOfArrayLike(arrayLike)
             ArrayLike := ToObject(Source);
+            // A wrapper ToObject made for a primitive source is held only
+            // here while the length getter and the element reads run.
+            AddTempRootIfNeeded(ArrayLikeRoot, ArrayLike);
             LengthValue := ArrayLike.GetProperty(PROP_LENGTH);
             Len := 0;
             if Assigned(LengthValue) and not (LengthValue is TGocciaUndefinedLiteralValue) then
@@ -924,6 +929,7 @@ begin
         GC.RemoveTempRoot(ResultObj);
     end;
   finally
+    RemoveTempRootIfNeeded(ArrayLikeRoot);
     RemoveTempRootIfNeeded(IteratorRoot);
     RemoveTempRootIfNeeded(SourceRoot);
     if Assigned(GC) then
