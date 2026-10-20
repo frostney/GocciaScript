@@ -2704,6 +2704,7 @@ function TGocciaEngine.CompileModuleForSnapshot(const ASourcePath: string;
 var
   ParseResult: TGocciaSourcePipelineResult;
   ProgramNode: TGocciaProgram;
+  SavedSourceType: TGocciaSourceType;
 begin
   AHasSource := False;
   ASource := Default(TGocciaModuleSnapshotSource);
@@ -2713,9 +2714,13 @@ begin
       raise Exception.Create('an entry module this engine was not made with');
     ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
       SourcePipelineOptions(stModule));
+    // The record names a Module, regardless of the host's next parse goal.
+    SavedSourceType := FSourceType;
+    FSourceType := stModule;
     try
       Result := CompileModule(ParseResult.ProgramNode);
     finally
+      FSourceType := SavedSourceType;
       ParseResult.Free;
     end;
     Exit;

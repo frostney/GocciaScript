@@ -463,11 +463,37 @@ var
   Stream: TBytesStream;
   Options: TGocciaSourcePipelineOptions;
   Parsed: TGocciaSourcePipelineResult;
+
+  procedure CheckRestore(const ASourceType: TGocciaSourceType;
+    const AGlobalBackedTopLevel: Boolean);
+  var
+    Restored: TModuleRun;
+  begin
+    Restored := TModuleRun.Create(PathOf('centry.js'));
+    try
+      Restored.Engine.SourceType := ASourceType;
+      Restored.Engine.GlobalBackedTopLevel := AGlobalBackedTopLevel;
+      Restored.Engine.Compatibility := [cfNonStrictMode];
+      Expect<string>(RestoreInto(Restored, Bytes)).ToBe('');
+      Expect<string>(Restored.Check(
+        '[restored.bump(), restored.bump(), restored.inc()].join()'))
+        .ToBe('6,7,1');
+      Expect<Integer>(Restored.Ticks).ToBe(0);
+      Expect<Boolean>(Restored.Engine.SourceType = ASourceType).ToBe(True);
+      Expect<Boolean>(Restored.Engine.GlobalBackedTopLevel)
+        .ToBe(AGlobalBackedTopLevel);
+      Expect<Boolean>(Restored.Engine.Compatibility = [cfNonStrictMode])
+        .ToBe(True);
+    finally
+      Restored.Free;
+    end;
+  end;
+
 begin
   DefineGraph;
   // Its top level lives in registers, as CompileModule compiles it.
   Define('centry.js', 'import { inc } from "./counter.js"; tick(); ' +
-    'let n = 5; export const k = 1; ' +
+    'const o = {}; o.x = 1; let n = 5; export const k = 1; ' +
     'capture({ bump: () => { n += 1; return n; }, inc });');
   Bytes := nil;
   Refusal := '';
@@ -475,6 +501,7 @@ begin
   Run := TModuleRun.Create(PathOf('centry.js'));
   Session := nil;
   try
+    Run.Engine.Compatibility := [cfNonStrictMode];
     Session := TGocciaHeapSnapshotSession.Create(Run.Engine);
     Options := TGocciaSourcePipeline.DefaultOptions;
     Options.SourceType := stModule;
@@ -499,9 +526,28 @@ begin
     Stream.Free;
   end;
   Expect<string>(Refusal).ToBe('');
-  Expect<string>(RoundTripEntry('centry.js', Bytes,
-    '[restored.bump(), restored.bump(), restored.inc()].join()'))
-    .ToBe('6,7,1');
+  CheckRestore(stModule, False);
+  CheckRestore(stModule, True);
+  CheckRestore(stDetect, False);
+  CheckRestore(stDetect, True);
+
+  // A bytecode mismatch still refuses, without changing the host's settings.
+  Define('centry.js', 'const o = {}; o.x = 2; capture({});');
+  Run := TModuleRun.Create(PathOf('centry.js'));
+  try
+    Run.Engine.SourceType := stDetect;
+    Run.Engine.GlobalBackedTopLevel := True;
+    Run.Engine.Compatibility := [cfNonStrictMode];
+    Refusal := RestoreInto(Run, Bytes);
+    Expect<Boolean>(Pos('is not the one the snapshot ran', Refusal) > 0)
+      .ToBe(True);
+    Expect<Boolean>(Run.Engine.SourceType = stDetect).ToBe(True);
+    Expect<Boolean>(Run.Engine.GlobalBackedTopLevel).ToBe(True);
+    Expect<Boolean>(Run.Engine.Compatibility = [cfNonStrictMode]).ToBe(True);
+    Expect<Integer>(Run.Ticks).ToBe(0);
+  finally
+    Run.Free;
+  end;
 end;
 
 procedure THeapSnapshotModulesTests.TestImportedModulesKeepTheirBindings;
