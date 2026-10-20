@@ -69,7 +69,13 @@ Engine.Execute;
 
 `Fork` must return a distinct random stream derived from both the provider's current stream identity and `AStreamId`. The engine shares the clock with child engines because wall and monotonic time belong to the host, while random state is isolated per child.
 
-For a fixed built-in profile, call `Engine.HostEnvironment.UseDeterministicProfile` instead of implementing providers. It supplies epoch and monotonic time `0`, `UTC`, and portable seeded SplitMix64 randomness.
+For a fixed built-in profile, call `Engine.HostEnvironment.UseDeterministicProfile` instead of implementing providers; see [Deterministic Profile](#deterministic-profile).
+
+## Deterministic Profile
+
+`UseDeterministicProfile`, which `--deterministic` and `"deterministic": true` select, supplies epoch and monotonic time `0`, `UTC`, and portable seeded SplitMix64 randomness. `TGocciaHostEnvironment.DeterministicClock` returns the profile's clock, for host state that has to keep time with it.
+
+The sandbox virtual filesystem is such state. In `GocciaRunner`'s sandbox mode, `--deterministic` also stamps the filesystem with the profile's clock: every access, modification, change and birth time is the epoch, for the copied inputs, the files the run writes, and the files of isolated nested runs. `fs.statSync(path).mtimeMs` reads `0` as `Date.now()` does, and two runs print the same times and write the same diff. A JSON diff still lists every content change, but its `metadataChanges` is empty, because no timestamp moves. Nothing is ever newer than the module the loader cached, so a module rewritten during the run is not reloaded by a later import, and a failed import is not retried after its file is rewritten. An embedder keeps its own sandbox in step by passing a clock to the context ([Embedding — Sandbox filesystem](embedding.md#sandbox-filesystem)). [ADR 0151](adr/0151-deterministic-sandbox-runs-stamp-files-with-the-deterministic-clock.md) records the decision.
 
 ## Mocked Clocks
 
