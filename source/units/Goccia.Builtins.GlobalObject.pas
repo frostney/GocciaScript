@@ -347,6 +347,7 @@ var
   SourceArg: TGocciaValue;
   GC: TGarbageCollector;
   I, J: Integer;
+  KeyRoots: TGocciaActiveRootFrame;
 
   function IsReadonlyStringExoticKey(const ATarget: TGocciaObjectValue;
     const AName: string): Boolean;
@@ -403,11 +404,18 @@ begin
       Source := ToObject(SourceArg);
       if Assigned(GC) and not (SourceArg is TGocciaObjectValue) then
         GC.AddTempRoot(Source);
+      { The key lists are native locals, and each key's getter or trap runs
+        guest code: a key the ownKeys trap made, or a symbol a getter deletes
+        from the source, is held only by the list while the next keys are
+        read. }
+      KeyRoots.Initialize;
       try
         // ES2026 §20.1.2.1 step 3.a.ii: [[OwnPropertyKeys]].
         if Source is TGocciaProxyValue then
         begin
           PropertyKeyValues := TGocciaProxyValue(Source).GetOwnPropertyKeyValues;
+          for J := 0 to High(PropertyKeyValues) do
+            KeyRoots.Add(PropertyKeyValues[J]);
           for J := 0 to High(PropertyKeyValues) do
           begin
             if PropertyKeyValues[J] is TGocciaSymbolValue then
@@ -427,9 +435,12 @@ begin
 
           SymbolKeys := Source.GetOwnSymbols;
           for J := 0 to High(SymbolKeys) do
+            KeyRoots.Add(SymbolKeys[J]);
+          for J := 0 to High(SymbolKeys) do
             AssignSymbolKey(SymbolKeys[J]);
         end;
       finally
+        KeyRoots.Clear;
         if Assigned(GC) and not (SourceArg is TGocciaObjectValue) then
           GC.RemoveTempRoot(Source);
       end;

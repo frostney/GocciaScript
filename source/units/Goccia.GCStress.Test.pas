@@ -88,6 +88,8 @@ type
     procedure TestNumberReceivers;
     procedure TestFillOperands;
     procedure TestOwnPropertySymbolsTrap;
+    procedure TestAssignKeyList;
+    procedure TestKeyedPromiseKeyList;
   end;
 
 const
@@ -181,6 +183,9 @@ begin
     TestFillOperands);
   AddCase('Object.getOwnPropertySymbols across a Proxy ownKeys trap',
     TestOwnPropertySymbolsTrap);
+  AddCase('Object.assign keys a trap made or a getter deleted',
+    TestAssignKeyList);
+  AddCase('Promise.allKeyed keys an ownKeys trap made', TestKeyedPromiseKeyList);
 end;
 
 procedure TGCStressTests.BeginStress;
@@ -858,6 +863,41 @@ begin
     '  getOwnPropertyDescriptor(t, k) { fresh("d"); return Reflect.getOwnPropertyDescriptor(t, k); } });' + LineEnding +
     'const symbols = Object.getOwnPropertySymbols(proxy);' + LineEnding +
     'if (symbols.length !== 1 || symbols[0] !== one) throw new Error(String(symbols.length));');
+end;
+
+// #1834: Object.assign held the keys an ownKeys trap returned, and the symbol
+// keys of an ordinary source, only in native lists while each key's trap or
+// getter ran; a fresh trap key, or a symbol a getter deleted, was freed
+// before its turn.
+procedure TGCStressTests.TestAssignKeyList;
+begin
+  RunStressed('assign-keys.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const proxy = new Proxy({}, {' + LineEnding +
+    '  ownKeys() { fresh("trap"); return [fresh("a"), Symbol(fresh("s")), fresh("b"), fresh("c")]; },' + LineEnding +
+    '  getOwnPropertyDescriptor() { fresh("d"); return { value: 1, enumerable: true, configurable: true }; },' + LineEnding +
+    '  get(t, k) { fresh("g"); return typeof k; } });' + LineEnding +
+    'const fromProxy = Object.assign({}, proxy);' + LineEnding +
+    'const second = Symbol("second");' + LineEnding +
+    'const source = { get [Symbol("first")]() { delete source[second]; fresh("pad"); return 1; },' + LineEnding +
+    '  [second]: 2, [Symbol("third")]: 3 };' + LineEnding +
+    'const fromSource = Object.assign({}, source);' + LineEnding +
+    'if (Reflect.ownKeys(fromProxy).length !== 4 || Reflect.ownKeys(fromSource).length !== 2)' + LineEnding +
+    '  throw new Error("assign");');
+end;
+
+// #1834: Promise.allKeyed kept the symbol keys an ownKeys trap made only in
+// its native key list while each key's value was read and resolved.
+procedure TGCStressTests.TestKeyedPromiseKeyList;
+begin
+  RunStressed('keyed-promise.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const proxy = new Proxy({}, {' + LineEnding +
+    '  ownKeys() { fresh("trap"); return [Symbol(fresh("s")), Symbol(fresh("t")), fresh("u")]; },' + LineEnding +
+    '  getOwnPropertyDescriptor() { fresh("d"); return { value: 1, enumerable: true, configurable: true }; },' + LineEnding +
+    '  get(t, k) { fresh("g"); return Promise.resolve(fresh("v")); } });' + LineEnding +
+    'globalThis.keyed = Promise.allKeyed(proxy).then((r) => {' + LineEnding +
+    '  if (Reflect.ownKeys(r).length !== 3) throw new Error("keyed"); });');
 end;
 
 begin
