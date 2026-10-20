@@ -259,9 +259,9 @@ The installers put `GocciaRunner`, `GocciaTestRunner` and `GocciaREPL` on your
 `PATH`. Each [release archive](https://github.com/frostney/GocciaScript/releases)
 carries the whole toolchain; see the
 [installation guide](https://www.gocciascript.dev/installation). The binaries
-link only the system C library: HTTPS uses the platform's TLS stack (OpenSSL
-on Linux), and `Intl` uses the system ICU when present and embedded data
-otherwise.
+need only libraries the operating system provides: HTTPS uses the platform's
+TLS stack (OpenSSL on Linux), and `Intl` uses the system ICU when present and
+embedded data otherwise.
 
 ### Build from source
 
