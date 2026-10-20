@@ -196,30 +196,39 @@ end;
 
 constructor TGocciaIntlSegmenterValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
+  OptionsRoots: TGocciaActiveRootFrame;
   Canonical: string;
   Ignored: string;
 begin
   inherited Create;
-  Canonical := CanonicalizeUnicodeLocaleId(ALocale);
-  if Canonical = '' then
-    FLocale := DefaultLocale
-  else
-    FLocale := Canonical;
+  // Options that ToObject made from a primitive are a wrapper only this call
+  // holds while their getters and conversions run guest code.
+  OptionsRoots.Initialize;
+  try
+    OptionsRoots.Add(AOptions);
+    Canonical := CanonicalizeUnicodeLocaleId(ALocale);
+    if Canonical = '' then
+      FLocale := DefaultLocale
+    else
+      FLocale := Canonical;
 
-  // Default
-  FGranularity := 'grapheme';
+    // Default
+    FGranularity := 'grapheme';
 
-  if Assigned(AOptions) then
-  begin
-    Ignored := ReadSegmenterStringOption(AOptions, 'localeMatcher',
-      'best fit', ['lookup', 'best fit']);
-    FGranularity := ReadSegmenterStringOption(AOptions, 'granularity',
-      FGranularity, ['grapheme', 'word', 'sentence']);
+    if Assigned(AOptions) then
+    begin
+      Ignored := ReadSegmenterStringOption(AOptions, 'localeMatcher',
+        'best fit', ['lookup', 'best fit']);
+      FGranularity := ReadSegmenterStringOption(AOptions, 'granularity',
+        FGranularity, ['grapheme', 'word', 'sentence']);
+    end;
+
+    InitializePrototype;
+    if (GetIntlSegmenterShared <> nil) then
+      FPrototype := GetIntlSegmenterShared.Prototype;
+  finally
+    OptionsRoots.Clear;
   end;
-
-  InitializePrototype;
-  if (GetIntlSegmenterShared <> nil) then
-    FPrototype := GetIntlSegmenterShared.Prototype;
 end;
 
 function TGocciaIntlSegmenterValue.ToStringTag: string;

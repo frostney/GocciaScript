@@ -1966,6 +1966,7 @@ var
   FillNum: TGocciaNumberLiteralValue;
   FillBigInt: Int64;
   First, Final, I, RelStart, RelEnd, Len: Integer;
+  FillRoots: TGocciaActiveRootFrame;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.fill');
   EnsureTypedArrayWritable(TA, 'TypedArray.prototype.fill');
@@ -1989,51 +1990,60 @@ begin
       FillNum := AArgs.GetElement(0).ToNumberLiteral;
   end;
 
-  // ES2026 §23.2.3.8 step 5-6: RelativeIndex → clamp
-  if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
-  begin
-    RelStart := ToIntegerFromArgs(AArgs, 1);
-    if RelStart < 0 then
-      First := Max(Len + RelStart, 0)
-    else
-      First := Min(RelStart, Len);
-  end
-  else
-    First := 0;
+  // The coerced value (a number valueOf returned) is held only here while
+  // start and end convert, which can run guest code.
+  FillRoots.Initialize;
+  try
+    FillRoots.Add(FillNum);
 
-  // ES2026 §23.2.3.8 step 7-8
-  if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-  begin
-    RelEnd := ToIntegerFromArgs(AArgs, 2);
-    if RelEnd < 0 then
-      Final := Max(Len + RelEnd, 0)
-    else
-      Final := Min(RelEnd, Len);
-  end
-  else
-    Final := Len;
-
-  EnsureTypedArrayAttached(TA, 'TypedArray.prototype.fill');
-
-  if IsBigIntKind(TA.FKind) then
-  begin
-    for I := First to Final - 1 do
+    // ES2026 §23.2.3.8 step 5-6: RelativeIndex → clamp
+    if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
     begin
-      if (I and $FF) = 0 then
-        CheckNativeWork;
-      TA.WriteBigIntElement(I, FillBigInt);
-    end;
-  end
-  else
-  begin
-    for I := First to Final - 1 do
+      RelStart := ToIntegerFromArgs(AArgs, 1);
+      if RelStart < 0 then
+        First := Max(Len + RelStart, 0)
+      else
+        First := Min(RelStart, Len);
+    end
+    else
+      First := 0;
+
+    // ES2026 §23.2.3.8 step 7-8
+    if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
     begin
-      if (I and $FF) = 0 then
-        CheckNativeWork;
-      TA.WriteNumberLiteral(I, FillNum);
+      RelEnd := ToIntegerFromArgs(AArgs, 2);
+      if RelEnd < 0 then
+        Final := Max(Len + RelEnd, 0)
+      else
+        Final := Min(RelEnd, Len);
+    end
+    else
+      Final := Len;
+
+    EnsureTypedArrayAttached(TA, 'TypedArray.prototype.fill');
+
+    if IsBigIntKind(TA.FKind) then
+    begin
+      for I := First to Final - 1 do
+      begin
+        if (I and $FF) = 0 then
+          CheckNativeWork;
+        TA.WriteBigIntElement(I, FillBigInt);
+      end;
+    end
+    else
+    begin
+      for I := First to Final - 1 do
+      begin
+        if (I and $FF) = 0 then
+          CheckNativeWork;
+        TA.WriteNumberLiteral(I, FillNum);
+      end;
     end;
+    Result := AThisValue;
+  finally
+    FillRoots.Clear;
   end;
-  Result := AThisValue;
 end;
 
 // ES2026 §23.2.3.6 %TypedArray%.prototype.copyWithin(target, start [, end])
@@ -3739,7 +3749,7 @@ var
   Values: TGocciaValueList;
   SrcObj: TGocciaObjectValue;
   SourceRoot, MapFnRoot, ThisRoot, ResultRoot, IteratorRoot,
-  NextMethodRoot: TGocciaTempRoot;
+  NextMethodRoot, SrcObjRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
 begin
@@ -3767,6 +3777,7 @@ begin
   InitializeTempRoot(MapFnRoot);
   InitializeTempRoot(ThisRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(SrcObjRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
   if HasMapFn then
   begin
@@ -3913,6 +3924,9 @@ begin
 
     // Step 7: array-like path — ToObject(source), LengthOfArrayLike, indexed Get
     SrcObj := ToObject(Source);
+    // A wrapper for a primitive source is held only here while its length
+    // and elements are read, the constructor runs and the mapper runs.
+    AddTempRootIfNeeded(SrcObjRoot, SrcObj);
     Len := LengthOfArrayLike(SrcObj);
     NewTA := CreateTypedArrayFromConstructor(ConstructorValue,
       'TypedArray.from', Len);
@@ -3939,6 +3953,7 @@ begin
       RemoveTempRootIfNeeded(ResultRoot);
     end;
   finally
+    RemoveTempRootIfNeeded(SrcObjRoot);
     RemoveTempRootIfNeeded(ThisRoot);
     RemoveTempRootIfNeeded(MapFnRoot);
     RemoveTempRootIfNeeded(SourceRoot);

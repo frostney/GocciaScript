@@ -1594,7 +1594,15 @@ begin
         RequestText := RequestText + CRLF;
         Request := EncodeUTF8WithReplacement(RequestText);
 
-        SendAll(Sock, Transport, Request);
+        try
+          SendAll(Sock, Transport, Request);
+        except
+          { A send the deadline ended is the request timing out: the TLS
+            backends end a send by it, as they end a read. }
+          if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
+            raise EHTTPError.Create('HTTP request timed out');
+          raise;
+        end;
         Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
           MaxBodyBytes);
       finally

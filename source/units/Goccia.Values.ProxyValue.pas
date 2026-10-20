@@ -1123,6 +1123,9 @@ begin
   TrapRoots.Initialize;
   try
     TrapRoots.Add(Self);
+    // The receiver can be a wrapper a builtin made for a primitive, held only
+    // in the caller's locals while the trap is read and its key is made.
+    TrapRoots.Add(AThisContext);
     Trap := GetTrap(PROP_GET);
     TrapRoots.Add(Trap);
     if Assigned(Trap) then
@@ -1536,6 +1539,7 @@ begin
   TrapRoots.Initialize;
   try
     TrapRoots.Add(Self);
+    TrapRoots.Add(AReceiver);
     Trap := GetTrap(PROP_GET);
     TrapRoots.Add(Trap);
     if Assigned(Trap) then
@@ -2470,10 +2474,12 @@ begin
   // The trap is held only by this local while the arguments it gets are
   // made and while guest code runs (a getter on the handler can return a
   // fresh function), and the proxy itself can be reachable only through the
-  // caller's locals.
+  // caller's locals. So can the receiver (a number the VM boxed for a method
+  // call), which joins the trap's arguments only after the trap is read.
   TrapRoots.Initialize;
   try
     TrapRoots.Add(Self);
+    TrapRoots.Add(AThisValue);
     Trap := GetTrap(PROP_APPLY);
     TrapRoots.Add(Trap);
     if Assigned(Trap) then

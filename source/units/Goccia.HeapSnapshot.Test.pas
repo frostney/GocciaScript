@@ -243,17 +243,17 @@ begin
     TestLoneSurrogates);
   Test('Roots held only by the caller survive the snapshot''s collection',
     TestRootsNeedNoRootingByTheCaller);
-  Test('A lazy member the run replaced, or a primitive it changed, refuses',
+  Test('A lazy member the run replaced, or a primitive it changed, restores',
     TestRefusesReplacedLazyMember);
   Test('A snapshot whose prototypes loop is refused',
     TestRefusesPrototypeCycle);
-  Test('A built-in the run built and then changed is refused on restore',
+  Test('A built-in the run built and then changed restores; a native one refuses',
     TestRefusesChangedLateBuiltin);
   Test('A refused restore registers no symbol; a restored one does',
     TestRegistersSymbolsOnlyOnSuccess);
   Test('A live object with no codec refuses the snapshot',
     TestRefusesWithoutCodec);
-  Test('A built-in the run changed refuses the snapshot',
+  Test('A built-in the run changed restores as it changed',
     TestRefusesChangedBuiltin);
   Test('The accounting check refuses a live object nothing writes',
     TestAccountingRefusesMissedObject);
@@ -279,7 +279,7 @@ begin
     TestNoCheckpointWhileOtherWorkPending);
   Test('State outside the heap no codec covers means no checkpoint',
     TestRefusesStateOutsideHeap);
-  Test('A huge value on a built-in refuses within the fingerprint cap',
+  Test('A huge value on a built-in is written past the fingerprint cap',
     TestFingerprintsStayBounded);
   Test('A snapshot needs an idle run: no job, waiter or frame',
     TestSnapshotNeedsAnIdleRun);
@@ -297,7 +297,7 @@ begin
     TestBuiltinsARunBuildsRestoreOrRefuseEarly);
   Test('Taking a snapshot creates no managed object',
     TestSnapshotCreatesNothing);
-  Test('A huge key on a built-in refuses within the fingerprint cap',
+  Test('A huge key on a built-in is written past the fingerprint cap',
     TestHugeKeyOnBuiltinStaysBounded);
   Test('Built-ins a nested engine builds are not the outer session''s',
     TestNestedEngineBuildsAreItsOwn);
@@ -760,23 +760,28 @@ end;
 procedure THeapSnapshotTests.TestRefusesReplacedLazyMember;
 var
   Refusal: string;
+  Bytes: TBytes;
 begin
   // Building a lazy member is not a change...
   Snapshot('(() => { Temporal.PlainDate; return {}; })()', Refusal);
   Expect<string>(Refusal).ToBe('');
-  // ...replacing one is, before it was built or after.
-  Snapshot('(() => { Object.defineProperty(globalThis, "Temporal", ' +
-    '{ value: {}, configurable: true, writable: true }); return {}; })()',
-    Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
-  Snapshot('(() => { Temporal.PlainDate; ' +
-    'Object.defineProperty(globalThis, "Temporal", { value: {}, ' +
-    'configurable: true, writable: true }); return {}; })()', Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
-  // A primitive changed in place, true to false.
-  Snapshot('(() => { Array.prototype[Symbol.unscopables].at = false; ' +
+  // ...replacing one is, before it was built or after: a difference.
+  Bytes := Snapshot('(() => { Object.defineProperty(globalThis, "Temporal", ' +
+    '{ value: { mine: 1 }, configurable: true, writable: true }); ' +
     'return {}; })()', Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes, 'String(Temporal.mine)')).ToBe('1');
+  Bytes := Snapshot('(() => { Temporal.PlainDate; ' +
+    'Object.defineProperty(globalThis, "Temporal", { value: { mine: 2 }, ' +
+    'configurable: true, writable: true }); return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes, 'String(Temporal.mine)')).ToBe('2');
+  // A primitive changed in place, true to false.
+  Bytes := Snapshot('(() => { Array.prototype[Symbol.unscopables].at = ' +
+    'false; return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes,
+    'String(Array.prototype[Symbol.unscopables].at)')).ToBe('false');
 end;
 
 // Rewrites the prototype of the third object a snapshot of [a, b] (b being
@@ -810,14 +815,20 @@ end;
 procedure THeapSnapshotTests.TestFingerprintsStayBounded;
 var
   Refusal: string;
+  Bytes: TBytes;
 begin
   // Over the fingerprint cap: the built-in fingerprints as changed without
-  // the value being copied first.
-  Snapshot('(() => { Math.big = "x".repeat(6 * 1024 * 1024); return {}; })()',
+  // the value being copied first, and is written as its difference.
+  Bytes := Snapshot('(() => { Math.big = "x".repeat(6 * 1024 * 1024); ' +
+    'return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes, 'String(Math.big.length)'))
+    .ToBe('6291456');
+  Bytes := Snapshot('(() => { Math.big = 1n << 40000000n; return {}; })()',
     Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
-  Snapshot('(() => { Math.big = 1n << 40000000n; return {}; })()', Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes, 'String(Math.big > 0n)'))
+    .ToBe('true');
 end;
 
 function THeapSnapshotTests.SnapNow(const AArgs: TGocciaArgumentsCollection;
@@ -1164,24 +1175,28 @@ var
   Refusal: string;
   Bytes: TBytes;
 begin
-  // The key alone is past the cap: refused as changed, the key copied
-  // nowhere first.
-  Snapshot('(() => { Math["k".repeat(5 * 1024 * 1024)] = 1; return {}; })()',
-    Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  // The key alone is past the cap: changed, the key copied nowhere to tell,
+  // and written as the difference.
+  Bytes := Snapshot('(() => { Math["k".repeat(5 * 1024 * 1024)] = 1; ' +
+    'return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes, 'String(Object.keys(Math)[0].length)'))
+    .ToBe('5242880');
   // So are many symbols.
-  Snapshot('(() => { for (const i of Array.from({ length: 300000 }, ' +
+  Bytes := Snapshot('(() => { for (const i of Array.from({ length: 300000 }, ' +
     '(_, i) => i)) Math[Symbol()] = i; return {}; })()', Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes,
+    'String(Object.getOwnPropertySymbols(Math).length)')).ToBe('300001');
   // A built-in the run built, then grew: walked one key at a time, and the
-  // restoring engine sees the change.
+  // restoring engine gets the change.
   Bytes := Snapshot('(() => { const p = Temporal.PlainDate.prototype; ' +
     'p["k".repeat(5 * 1024 * 1024)] = 1; ' +
     'for (const i of Array.from({ length: 100000 }, (_, i) => i)) ' +
     'p[Symbol("s".repeat(i % 7))] = i; return {}; })()', Refusal);
   Expect<string>(Refusal).ToBe('');
-  Expect<Boolean>(Pos('the run changed the built-in', RestoreRefusal(Bytes)) > 0)
-    .ToBe(True);
+  Expect<string>(RestoreAndCheck(Bytes, 'String(Object.getOwnPropertySymbols(' +
+    'Temporal.PlainDate.prototype).length)')).ToBe('100001');
 end;
 
 procedure THeapSnapshotTests.TestNestedEngineBuildsAreItsOwn;
@@ -1225,13 +1240,15 @@ var
   Refusal: string;
   Bytes: TBytes;
 begin
-  // Built by the run, then changed: the writing engine never saw it pristine,
-  // so the restoring engine builds it and compares.
+  // Built by the run, then changed: recorded as it was built, so the change
+  // is a difference.
   Bytes := Snapshot('(() => { Temporal.PlainDate.prototype.extra = 1; ' +
     'return {}; })()', Refusal);
   Expect<string>(Refusal).ToBe('');
-  Expect<Boolean>(Pos('the run changed the built-in',
-    RestoreRefusal(Bytes)) > 0).ToBe(True);
+  Expect<string>(RestoreAndCheck(Bytes,
+    'String(Temporal.PlainDate.prototype.extra)')).ToBe('1');
+  // Built natively on first use, never seen as built: the restoring engine
+  // builds it and compares.
   Bytes := Snapshot('(() => { Object.getPrototypeOf([][Symbol.iterator]())' +
     '.extra = 1; return {}; })()', Refusal);
   Expect<string>(Refusal).ToBe('');
@@ -1279,20 +1296,16 @@ begin
 end;
 
 procedure THeapSnapshotTests.TestRefusesChangedBuiltin;
-var
-  Refusal: string;
 begin
-  Snapshot('(() => { Object.prototype.polluted = 1; return {}; })()',
-    Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
-  Snapshot('(() => { Object.preventExtensions(Math); return {}; })()',
-    Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  Expect<string>(RoundTrip('(() => { Object.prototype.polluted = 1; ' +
+    'return {}; })()', 'String(({}).polluted)')).ToBe('1');
+  Expect<string>(RoundTrip('(() => { Object.preventExtensions(Math); ' +
+    'return {}; })()', 'String(Object.isExtensible(Math))')).ToBe('false');
   // Array.prototype is an array: its elements and length are its state too.
-  Snapshot('(() => { Array.prototype[0] = 1; return {}; })()', Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
-  Snapshot('(() => { Array.prototype.length = 3; return {}; })()', Refusal);
-  Expect<Boolean>(Pos('the run changed built-ins', Refusal) > 0).ToBe(True);
+  Expect<string>(RoundTrip('(() => { Array.prototype[0] = 1; return {}; })()',
+    'String(Array.prototype[0])')).ToBe('1');
+  Expect<string>(RoundTrip('(() => { Array.prototype.length = 3; ' +
+    'return {}; })()', 'String(Array.prototype.length)')).ToBe('3');
 end;
 
 procedure THeapSnapshotTests.TestAccountingRefusesMissedObject;

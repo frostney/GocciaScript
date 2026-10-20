@@ -438,7 +438,7 @@ The codec accepts `TBytes` or a borrowed pointer and length. File loading
 reads a bounded buffer through the same codec. See
 [Precompiled bytecode modules](bytecode-loading.md) for
 ownership, registration and source fallback, and
-[ADR 0152](adr/0152-precompiled-modules-use-the-module-linker.md) for the
+[ADR 0153](adr/0153-precompiled-modules-use-the-module-linker.md) for the
 linker design.
 
 Binary loading is a validation boundary. The reader rejects oversized files,

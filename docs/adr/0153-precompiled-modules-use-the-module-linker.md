@@ -1,4 +1,4 @@
-# 0152 - Precompiled modules use the module linker
+# 0153 - Precompiled modules use the module linker
 
 **Date:** 2026-10-20
 **Area:** `bytecode`, `modules`, `embedding`

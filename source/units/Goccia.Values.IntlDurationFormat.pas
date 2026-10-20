@@ -668,65 +668,74 @@ end;
 
 procedure TGocciaIntlDurationFormatValue.ReadOptions(const AOptions: TGocciaObjectValue);
 var
+  OptionsRoots: TGocciaActiveRootFrame;
   Ignored, PreviousStyle, NumberingSystemOption: string;
   V: TGocciaValue;
 begin
-  if Assigned(AOptions) then
-  begin
-    Ignored := ReadDurationFormatStringOption(AOptions, 'localeMatcher',
-      'best fit', ['lookup', 'best fit']);
-    V := AOptions.GetProperty('numberingSystem');
-    if IsPresentDurationFieldValue(V) then
+  // Options that ToObject made from a primitive are a wrapper only this call
+  // holds while their getters and conversions run guest code.
+  OptionsRoots.Initialize;
+  try
+    OptionsRoots.Add(AOptions);
+    if Assigned(AOptions) then
     begin
-      NumberingSystemOption := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(NumberingSystemOption) or
-         not IsValidDurationUnicodeLocaleType(NumberingSystemOption) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption,
-          [NumberingSystemOption, 'numberingSystem']));
-      FNumberingSystem := NumberingSystemOption;
+      Ignored := ReadDurationFormatStringOption(AOptions, 'localeMatcher',
+        'best fit', ['lookup', 'best fit']);
+      V := AOptions.GetProperty('numberingSystem');
+      if IsPresentDurationFieldValue(V) then
+      begin
+        NumberingSystemOption := V.ToStringLiteral.Value;
+        if ContainsNulCharacter(NumberingSystemOption) or
+           not IsValidDurationUnicodeLocaleType(NumberingSystemOption) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption,
+            [NumberingSystemOption, 'numberingSystem']));
+        FNumberingSystem := NumberingSystemOption;
+      end;
+      FStyle := ReadDurationFormatStringOption(AOptions, 'style', FStyle,
+        ['long', 'short', 'narrow', 'digital']);
     end;
-    FStyle := ReadDurationFormatStringOption(AOptions, 'style', FStyle,
-      ['long', 'short', 'narrow', 'digital']);
-  end;
 
-  PreviousStyle := '';
-  GetDurationUnitOptions(AOptions, 'years', FStyle, 'short',
-    PreviousStyle, False, False, FYearsStyle, FYearsDisplay);
-  GetDurationUnitOptions(AOptions, 'months', FStyle, 'short',
-    PreviousStyle, False, False, FMonthsStyle, FMonthsDisplay);
-  GetDurationUnitOptions(AOptions, 'weeks', FStyle, 'short',
-    PreviousStyle, False, False, FWeeksStyle, FWeeksDisplay);
-  GetDurationUnitOptions(AOptions, 'days', FStyle, 'short',
-    PreviousStyle, False, False, FDaysStyle, FDaysDisplay);
-  GetDurationUnitOptions(AOptions, 'hours', FStyle, 'numeric',
-    PreviousStyle, True, False, FHoursStyle, FHoursDisplay);
-  PreviousStyle := FHoursStyle;
-  GetDurationUnitOptions(AOptions, 'minutes', FStyle, 'numeric',
-    PreviousStyle, True, False, FMinutesStyle, FMinutesDisplay);
-  PreviousStyle := FMinutesStyle;
-  GetDurationUnitOptions(AOptions, 'seconds', FStyle, 'numeric',
-    PreviousStyle, True, False, FSecondsStyle, FSecondsDisplay);
-  PreviousStyle := FSecondsStyle;
-  GetDurationUnitOptions(AOptions, 'milliseconds', FStyle, 'numeric',
-    PreviousStyle, False, False, FMillisecondsStyle, FMillisecondsDisplay);
-  PreviousStyle := FMillisecondsStyle;
-  GetDurationUnitOptions(AOptions, 'microseconds', FStyle, 'numeric',
-    PreviousStyle, False, False, FMicrosecondsStyle, FMicrosecondsDisplay);
-  PreviousStyle := FMicrosecondsStyle;
-  GetDurationUnitOptions(AOptions, 'nanoseconds', FStyle, 'numeric',
-    PreviousStyle, False, False, FNanosecondsStyle, FNanosecondsDisplay);
+    PreviousStyle := '';
+    GetDurationUnitOptions(AOptions, 'years', FStyle, 'short',
+      PreviousStyle, False, False, FYearsStyle, FYearsDisplay);
+    GetDurationUnitOptions(AOptions, 'months', FStyle, 'short',
+      PreviousStyle, False, False, FMonthsStyle, FMonthsDisplay);
+    GetDurationUnitOptions(AOptions, 'weeks', FStyle, 'short',
+      PreviousStyle, False, False, FWeeksStyle, FWeeksDisplay);
+    GetDurationUnitOptions(AOptions, 'days', FStyle, 'short',
+      PreviousStyle, False, False, FDaysStyle, FDaysDisplay);
+    GetDurationUnitOptions(AOptions, 'hours', FStyle, 'numeric',
+      PreviousStyle, True, False, FHoursStyle, FHoursDisplay);
+    PreviousStyle := FHoursStyle;
+    GetDurationUnitOptions(AOptions, 'minutes', FStyle, 'numeric',
+      PreviousStyle, True, False, FMinutesStyle, FMinutesDisplay);
+    PreviousStyle := FMinutesStyle;
+    GetDurationUnitOptions(AOptions, 'seconds', FStyle, 'numeric',
+      PreviousStyle, True, False, FSecondsStyle, FSecondsDisplay);
+    PreviousStyle := FSecondsStyle;
+    GetDurationUnitOptions(AOptions, 'milliseconds', FStyle, 'numeric',
+      PreviousStyle, False, False, FMillisecondsStyle, FMillisecondsDisplay);
+    PreviousStyle := FMillisecondsStyle;
+    GetDurationUnitOptions(AOptions, 'microseconds', FStyle, 'numeric',
+      PreviousStyle, False, False, FMicrosecondsStyle, FMicrosecondsDisplay);
+    PreviousStyle := FMicrosecondsStyle;
+    GetDurationUnitOptions(AOptions, 'nanoseconds', FStyle, 'numeric',
+      PreviousStyle, False, False, FNanosecondsStyle, FNanosecondsDisplay);
 
-  if Assigned(AOptions) then
-  begin
-    V := AOptions.GetProperty('fractionalDigits');
-    if IsPresentDurationFieldValue(V) then
+    if Assigned(AOptions) then
     begin
-      FFractionalDigits := ToIntegerWithTruncationValue(V);
-      if (FFractionalDigits < 0) or (FFractionalDigits > 9) then
-        ThrowRangeError(Format(SErrorIntlDigitsOutOfRange,
-          ['fractionalDigits', 0, 9]));
-      FHasFractionalDigits := True;
+      V := AOptions.GetProperty('fractionalDigits');
+      if IsPresentDurationFieldValue(V) then
+      begin
+        FFractionalDigits := ToIntegerWithTruncationValue(V);
+        if (FFractionalDigits < 0) or (FFractionalDigits > 9) then
+          ThrowRangeError(Format(SErrorIntlDigitsOutOfRange,
+            ['fractionalDigits', 0, 9]));
+        FHasFractionalDigits := True;
+      end;
     end;
+  finally
+    OptionsRoots.Clear;
   end;
 end;
 
@@ -756,9 +765,15 @@ end;
 
 class function TGocciaIntlDurationFormatValue.CreateFromArguments(
   const ALocales, AOptions: TGocciaValue): TGocciaIntlDurationFormatValue;
+var
+  Locale: string;
 begin
-  Result := TGocciaIntlDurationFormatValue.Create(
-    DurationFormatLocaleArgumentToLocale(ALocales),
+  // The locales are read first, as ECMA-402 orders it: their conversion runs
+  // guest code, and an options wrapper made before it would be held by
+  // nothing until the constructor roots it. One call's arguments have no
+  // guaranteed evaluation order, so the two must not share one.
+  Locale := DurationFormatLocaleArgumentToLocale(ALocales);
+  Result := TGocciaIntlDurationFormatValue.Create(Locale,
     DurationFormatOptionsArgumentToObject(AOptions));
 end;
 

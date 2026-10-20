@@ -79,7 +79,7 @@ with module-linking metadata so imports and declarations are initialized.
 
 Artifacts are versioned and must be regenerated after incompatible format
 changes. See [Bytecode VM — Binary Format](bytecode-vm.md#binary-format) and
-[ADR 0152](adr/0152-precompiled-modules-use-the-module-linker.md).
+[ADR 0153](adr/0153-precompiled-modules-use-the-module-linker.md).
 
 ## Command line
 
