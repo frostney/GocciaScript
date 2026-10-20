@@ -1,7 +1,6 @@
 export const GITHUB_REPO_URL = "https://github.com/frostney/GocciaScript";
 export const GITHUB_RELEASES_URL =
   "https://github.com/frostney/GocciaScript/releases";
-const GITHUB_API_URL = "https://api.github.com/repos/frostney/GocciaScript";
 const GITHUB_RELEASES_API_URL =
   "https://api.github.com/repos/frostney/GocciaScript/releases/latest";
 const GITHUB_RELEASES_LIST_URL =
@@ -21,22 +20,6 @@ export function isPreStable(release: ReleaseInfo | null | undefined): boolean {
   const m = release.tagName.replace(/^v/, "").match(/^(\d+)\./);
   if (!m) return false;
   return Number(m[1]) === 0;
-}
-
-/** Format a star count the way GitHub's own button does:
- *    < 1 000        → exact ("999")
- *    1 000–999 999  → one decimal in `k`, drop trailing `.0` ("1k", "2.4k", "85.3k")
- *    ≥ 1 000 000    → one decimal in `m`, drop trailing `.0` ("1m", "1.2m")
- */
-export function formatStars(count: number): string {
-  if (count < 1_000) return String(count);
-  const [val, suffix] =
-    count >= 1_000_000 ? [count / 1_000_000, "m"] : [count / 1_000, "k"];
-  // toFixed(1) rounds (1099 → "1.1k", 1049 → "1.0k"); strip the trailing
-  // `.0` so we render "1k" instead of "1.0k" for clean integer values.
-  const fixed = val.toFixed(1);
-  const trimmed = fixed.endsWith(".0") ? fixed.slice(0, -2) : fixed;
-  return `${trimmed}${suffix}`;
 }
 
 export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
@@ -186,28 +169,5 @@ export async function fetchRecentStableTags(count = 3): Promise<string[]> {
     return tags;
   } catch {
     return [];
-  }
-}
-
-export async function fetchStars(): Promise<number | null> {
-  try {
-    const headers: Record<string, string> = {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    };
-    if (process.env.GITHUB_TOKEN) {
-      headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-    }
-    const res = await fetch(GITHUB_API_URL, {
-      headers,
-      next: { revalidate: 3600 },
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { stargazers_count?: number };
-    return typeof data.stargazers_count === "number"
-      ? data.stargazers_count
-      : null;
-  } catch {
-    return null;
   }
 }

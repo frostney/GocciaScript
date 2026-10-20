@@ -606,6 +606,8 @@ begin
     TestEveryCeilingWhileEveryReservationCollects);
   Test('Restoring the same mutants again leaves the heap where it was',
     TestRepeatedMutantsLeaveTheHeap);
+  Test('An engine built while every reservation collects first',
+    TestEngineBuiltWhileEveryReservationCollects);
   Test('A reservation past what one allocation can hold is refused before ' +
     'it is charged', TestReservationPastOneAllocationRefuses);
   Test('An input past what one allocation can hold is refused from its ' +
@@ -624,12 +626,6 @@ begin
     TestObservedRestoreRefusalFails);
   Test('Re-snapshot bytes detect private codec state lost at restore',
     TestResnapshotDetectsPrivateStateDrift);
-  // Found by these tests, outside the reader; each runs once its issue is
-  // fixed.
-  Skip('An engine built while every reservation collects first',
-    TestEngineBuiltWhileEveryReservationCollects,
-    'GocciaScript #1816: engine creation and ' +
-    'EnsureConcreteIteratorPrototype hold new objects unrooted');
   Test('EvaluateGlobalEval called directly computes NaN',
     TestGlobalEvalComputesNaN);
 end;

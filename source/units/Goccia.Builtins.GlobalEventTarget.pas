@@ -30,6 +30,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function EventConstruct(const AArgs: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback);
@@ -159,6 +161,22 @@ begin
   finally
     RemoveTempRootIfNeeded(EventRoot);
   end;
+end;
+
+procedure TGocciaGlobalEventTarget.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FEventTargetConstructor) then
+    FEventTargetConstructor.MarkReferences;
+  if Assigned(FEventTargetPrototype) then
+    FEventTargetPrototype.MarkReferences;
+  if Assigned(FEventConstructor) then
+    FEventConstructor.MarkReferences;
+  if Assigned(FEventPrototype) then
+    FEventPrototype.MarkReferences;
 end;
 
 end.

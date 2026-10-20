@@ -66,7 +66,11 @@ type
     function GetFunctionLength: Integer; virtual;
     function GetFunctionName: string; virtual;
     function GetSourceText: string; virtual;
-    procedure MaterializeIntrinsicProperty(const AName: string);
+    // APending and APendingValue are what the caller is about to store: they
+    // are rooted while the intrinsic's value is allocated.
+    procedure MaterializeIntrinsicProperty(const AName: string;
+      const APending: TGocciaPropertyDescriptor = nil;
+      const APendingValue: TGocciaValue = nil);
   public
     constructor Create;
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
@@ -395,6 +399,7 @@ function GetThrowTypeErrorIntrinsic: TGocciaFunctionBase;
 var
   Shared: TGocciaFunctionSharedPrototype;
   Thrower: TGocciaNativeFunctionValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (CurrentRealm = nil) then
     Exit(nil);
@@ -412,14 +417,22 @@ begin
       Exit;
   end;
 
-  Thrower := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    Shared.RestrictedFunctionPropertyThrow, '', 0);
-  Thrower.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
-    TGocciaNumberLiteralValue.ZeroValue, []));
-  Thrower.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-    TGocciaStringLiteralValue.Create(''), []));
-  Thrower.Freeze;
-  CurrentRealm.SetSlot(GThrowTypeErrorSlot, Thrower);
+  // The thrower is reachable from nothing until the slot takes it, and each
+  // property it gets can reserve and so collect: root it from its creation.
+  Roots.Initialize;
+  try
+    Thrower := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      Shared.RestrictedFunctionPropertyThrow, '', 0);
+    Roots.Add(Thrower);
+    Thrower.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.ZeroValue, []));
+    Thrower.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(''), []));
+    Thrower.Freeze;
+    CurrentRealm.SetSlot(GThrowTypeErrorSlot, Thrower);
+  finally
+    Roots.Clear;
+  end;
   Result := Thrower;
 end;
 
@@ -923,16 +936,34 @@ begin
 end;
 
 procedure TGocciaFunctionBase.MaterializeIntrinsicProperty(
-  const AName: string);
+  const AName: string; const APending: TGocciaPropertyDescriptor;
+  const APendingValue: TGocciaValue);
+var
+  Roots: TGocciaActiveRootFrame;
 begin
+  if not (((AName = PROP_LENGTH) and FHasOwnLengthProperty) or
+          ((AName = PROP_NAME) and FHasOwnNameProperty)) then
+    Exit;
   if FProperties.ContainsKey(AName) then
     Exit;
-  if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
-    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
-      TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable]))
-  else if (AName = PROP_NAME) and FHasOwnNameProperty then
-    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable]));
+  // The intrinsic's value is allocated (a name string reserves its payload
+  // and can collect) while the caller's pending descriptor or value is held
+  // by nothing but the caller.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    if Assigned(APending) then
+      APending.PushRoots(Roots);
+    Roots.Add(APendingValue);
+    if AName = PROP_LENGTH then
+      FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+        TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable]))
+    else
+      FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable]));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaFunctionBase.DeleteProperty(const AName: string): Boolean;
@@ -965,14 +996,14 @@ end;
 procedure TGocciaFunctionBase.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 begin
-  MaterializeIntrinsicProperty(AName);
+  MaterializeIntrinsicProperty(AName, ADescriptor);
   inherited DefineProperty(AName, ADescriptor);
 end;
 
 function TGocciaFunctionBase.TryDefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
-  MaterializeIntrinsicProperty(AName);
+  MaterializeIntrinsicProperty(AName, ADescriptor);
   Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
@@ -1680,14 +1711,15 @@ begin
     FBoundLength := SnapshotBoundFunctionLength(FOriginalFunction,
       FBoundArgCount);
     FBoundName := SnapshotBoundFunctionName(FOriginalFunction);
+    // Still rooted: the name string reserves its payload, which can collect,
+    // and only Self (unregistered) holds the length number by then.
+    FProperties.Add(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.Create(FBoundLength), [pfConfigurable]));
+    FProperties.Add(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(FBoundName), [pfConfigurable]));
   finally
     Roots.Clear;
   end;
-
-  FProperties.Add(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
-    TGocciaNumberLiteralValue.Create(FBoundLength), [pfConfigurable]));
-  FProperties.Add(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-    TGocciaStringLiteralValue.Create(FBoundName), [pfConfigurable]));
 end;
 
 destructor TGocciaBoundFunctionValue.Destroy;

@@ -35,6 +35,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -174,60 +175,69 @@ var
   SB: TStringBuffer;
   I: Integer;
   NextSub: TGocciaValue;
+  RawRoots: TGocciaActiveRootFrame;
 begin
-  if AArgs.Length = 0 then
-    ThrowTypeError(Format(SErrorCannotConvertToObject, ['undefined']), SSuggestCheckNullBeforeAccess);
+  RawRoots.Initialize;
+  try
+    if AArgs.Length = 0 then
+      ThrowTypeError(Format(SErrorCannotConvertToObject, ['undefined']), SSuggestCheckNullBeforeAccess);
 
-  // ES2026 §22.1.2.4 step 1-2: Let cooked be ToObject(template)
-  TemplateObj := AArgs.GetElement(0);
-  if (TemplateObj is TGocciaUndefinedLiteralValue) or (TemplateObj is TGocciaNullLiteralValue) then
-    ThrowTypeError(Format(SErrorCannotConvertToObject, [TemplateObj.TypeName]), SSuggestCheckNullBeforeAccess);
+    // ES2026 §22.1.2.4 step 1-2: Let cooked be ToObject(template)
+    TemplateObj := AArgs.GetElement(0);
+    if (TemplateObj is TGocciaUndefinedLiteralValue) or (TemplateObj is TGocciaNullLiteralValue) then
+      ThrowTypeError(Format(SErrorCannotConvertToObject, [TemplateObj.TypeName]), SSuggestCheckNullBeforeAccess);
 
-  // ES2026 §22.1.2.4 step 3: Let raw be ToObject(Get(cooked, "raw"))
-  RawValue := TemplateObj.GetProperty(PROP_RAW);
-  if not Assigned(RawValue) or (RawValue is TGocciaUndefinedLiteralValue) then
-    ThrowTypeError(Format(SErrorCannotConvertToObject, ['undefined']), SSuggestCheckNullBeforeAccess)
-  else if RawValue is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotConvertToObject, ['null']), SSuggestCheckNullBeforeAccess);
-  RawObj := RawValue;
+    // ES2026 §22.1.2.4 step 3: Let raw be ToObject(Get(cooked, "raw"))
+    RawValue := TemplateObj.GetProperty(PROP_RAW);
+    if not Assigned(RawValue) or (RawValue is TGocciaUndefinedLiteralValue) then
+      ThrowTypeError(Format(SErrorCannotConvertToObject, ['undefined']), SSuggestCheckNullBeforeAccess)
+    else if RawValue is TGocciaNullLiteralValue then
+      ThrowTypeError(Format(SErrorCannotConvertToObject, ['null']), SSuggestCheckNullBeforeAccess);
+    RawObj := RawValue;
+    // A getter can return a fresh raw object, held only here while its
+    // length and segments convert (each conversion can allocate and collect).
+    RawRoots.Add(RawObj);
 
-  // ES2026 §22.1.2.4 step 4: Let literalSegments be LengthOfArrayLike(raw)
-  RawElement := RawObj.GetProperty(PROP_LENGTH);
-  if not Assigned(RawElement) or (RawElement is TGocciaUndefinedLiteralValue) then
-    LiteralSegments := 0
-  else
-    LiteralSegments := ToLengthValue(RawElement);
+    // ES2026 §22.1.2.4 step 4: Let literalSegments be LengthOfArrayLike(raw)
+    RawElement := RawObj.GetProperty(PROP_LENGTH);
+    if not Assigned(RawElement) or (RawElement is TGocciaUndefinedLiteralValue) then
+      LiteralSegments := 0
+    else
+      LiteralSegments := ToLengthValue(RawElement);
 
-  // ES2026 §22.1.2.4 step 5: If literalSegments <= 0, return ""
-  if LiteralSegments <= 0 then
-  begin
-    Result := TGocciaStringLiteralValue.Create('');
-    Exit;
-  end;
-
-  // ES2026 §22.1.2.4 steps 6-9: Build result by interleaving raw segments with substitutions
-  SB := TStringBuffer.Create;
-  I := 0;
-  while I < LiteralSegments do
-  begin
-    // ES2026 §22.1.2.4 step 8a: Let nextSeg be ToString(Get(raw, ToString(nextIndex)))
-    RawElement := RawObj.GetProperty(IntToStr(I));
-    if Assigned(RawElement) then
-      SB.Append(RawElement.ToStringLiteral.Value);
-
-    // ES2026 §22.1.2.4 step 8d: Append substitution if not the last segment
-    if I + 1 < LiteralSegments then
+    // ES2026 §22.1.2.4 step 5: If literalSegments <= 0, return ""
+    if LiteralSegments <= 0 then
     begin
-      if I + 1 < AArgs.Length then
-      begin
-        NextSub := AArgs.GetElement(I + 1);
-        SB.Append(NextSub.ToStringLiteral.Value);
-      end;
+      Result := TGocciaStringLiteralValue.Create('');
+      Exit;
     end;
-    Inc(I);
-  end;
 
-  Result := TGocciaStringLiteralValue.Create(SB.ToString);
+    // ES2026 §22.1.2.4 steps 6-9: Build result by interleaving raw segments with substitutions
+    SB := TStringBuffer.Create;
+    I := 0;
+    while I < LiteralSegments do
+    begin
+      // ES2026 §22.1.2.4 step 8a: Let nextSeg be ToString(Get(raw, ToString(nextIndex)))
+      RawElement := RawObj.GetProperty(IntToStr(I));
+      if Assigned(RawElement) then
+        SB.Append(RawElement.ToStringLiteral.Value);
+
+      // ES2026 §22.1.2.4 step 8d: Append substitution if not the last segment
+      if I + 1 < LiteralSegments then
+      begin
+        if I + 1 < AArgs.Length then
+        begin
+          NextSub := AArgs.GetElement(I + 1);
+          SB.Append(NextSub.ToStringLiteral.Value);
+        end;
+      end;
+      Inc(I);
+    end;
+
+    Result := TGocciaStringLiteralValue.Create(SB.ToString);
+  finally
+    RawRoots.Clear;
+  end;
 end;
 
 end.

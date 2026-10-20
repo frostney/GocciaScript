@@ -23,7 +23,7 @@ This file is the authoritative command reference for local builds and CLI usage.
 
 ## Prerequisites
 
-See [Prerequisites](../README.md#prerequisites) in the README for FPC installation instructions.
+See [Build from source](../README.md#build-from-source) in the README for FPC installation instructions.
 
 - **instantfpc** — Comes bundled with FreePascal. Used to run `build.pas` as a script.
 

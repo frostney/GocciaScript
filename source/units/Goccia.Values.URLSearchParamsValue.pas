@@ -668,11 +668,13 @@ begin
   while I < Self_.FList.Count do
   begin
     Pair := Self_.FList[I];
-    CallArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(Pair.Value),
-      TGocciaStringLiteralValue.Create(Pair.Name),
-      AThisValue]);
+    // Added one at a time: the collection roots what it holds, and the name
+    // string's reservation can collect the value string made before it.
+    CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
     try
+      CallArgs.Add(TGocciaStringLiteralValue.Create(Pair.Value));
+      CallArgs.Add(TGocciaStringLiteralValue.Create(Pair.Name));
+      CallArgs.Add(AThisValue);
       InvokeCallable(Callback, CallArgs, ThisArg);
     finally
       CallArgs.Free;

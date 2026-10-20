@@ -26,6 +26,8 @@ type
     function PromiseKeyed(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const AAllSettled: Boolean): TGocciaValue;
     function PromiseConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   published
@@ -2130,6 +2132,18 @@ begin
   finally
     Roots.Clear;
   end;
+end;
+
+procedure TGocciaGlobalPromise.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FPromiseConstructor) then
+    FPromiseConstructor.MarkReferences;
+  if Assigned(FPromiseIntrinsicProto) then
+    FPromiseIntrinsicProto.MarkReferences;
 end;
 
 end.

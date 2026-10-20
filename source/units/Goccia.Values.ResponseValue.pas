@@ -84,6 +84,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.JSON,
   Goccia.Realm,
   Goccia.UncatchableFault,
@@ -308,22 +309,31 @@ var
   R: TGocciaResponseValue;
   BodyText: string;
   P: TGocciaPromiseValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (AThisValue is TGocciaResponseValue) then
     ThrowTypeError(SErrorResponseNotResponse, SSuggestResponseThisType);
   R := TGocciaResponseValue(AThisValue);
-  P := TGocciaPromiseValue.Create;
-  if R.FBodyUsed then
-  begin
-    P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
-    Result := P;
-    Exit;
-  end;
-  R.FBodyUsed := True;
+  // The promise is held only by this local while the body is decoded, parsed
+  // or copied, and every one of those allocates, which can collect.
+  Roots.Initialize;
+  try
+    P := TGocciaPromiseValue.Create;
+    Roots.Add(P);
+    if R.FBodyUsed then
+    begin
+      P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
+      Result := P;
+      Exit;
+    end;
+    R.FBodyUsed := True;
 
-  BodyText := DecodeUTF8WithReplacement(R.FBody);
-  P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
-  Result := P;
+    BodyText := DecodeUTF8WithReplacement(R.FBody);
+    P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
+    Result := P;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaResponseValue.ResponseJSON(
@@ -335,46 +345,56 @@ var
   Parser: TGocciaJSONParser;
   Parsed: TGocciaValue;
   P: TGocciaPromiseValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (AThisValue is TGocciaResponseValue) then
     ThrowTypeError(SErrorResponseNotResponse, SSuggestResponseThisType);
   R := TGocciaResponseValue(AThisValue);
-  P := TGocciaPromiseValue.Create;
-  if R.FBodyUsed then
-  begin
-    P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
-    Result := P;
-    Exit;
-  end;
-  R.FBodyUsed := True;
-
-  BodyText := DecodeUTF8WithReplacement(R.FBody);
-
-  Parser := TGocciaJSONParser.Create;
+  // The promise is held only by this local while the body is decoded, parsed
+  // or copied, and every one of those allocates, which can collect.
+  Roots.Initialize;
   try
-    try
-      Parsed := Parser.Parse(BodyText);
-      P.Resolve(Parsed);
-    except
-      on E: Exception do
-      begin
-        { Two live paths reach this arm, and rejecting with a SyntaxError would
-          let `res.json().catch(...)` absorb either. The parser materializes
-          objects, arrays and strings for a body the guest controls the size
-          of, so a refused allocation and the use-after-free an unrooted
-          temporary produces both arrive here. And Resolve is inside the try:
-          ES2026 §27.2.1.3.2 step 9 reads `then` off the parsed value, which a
-          guest `Object.prototype.then` getter can answer with arbitrary code —
-          including a capability-guarded call whose audit sink fails. }
-        if IsUncatchableFault(E) then
-          raise;
-        P.Reject(CreateErrorObject('SyntaxError', E.Message));
-      end;
+    P := TGocciaPromiseValue.Create;
+    Roots.Add(P);
+    if R.FBodyUsed then
+    begin
+      P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
+      Result := P;
+      Exit;
     end;
+    R.FBodyUsed := True;
+
+    BodyText := DecodeUTF8WithReplacement(R.FBody);
+
+    Parser := TGocciaJSONParser.Create;
+    try
+      try
+        Parsed := Parser.Parse(BodyText);
+        Roots.Add(Parsed);
+        P.Resolve(Parsed);
+      except
+        on E: Exception do
+        begin
+          { Two live paths reach this arm, and rejecting with a SyntaxError would
+            let `res.json().catch(...)` absorb either. The parser materializes
+            objects, arrays and strings for a body the guest controls the size
+            of, so a refused allocation and the use-after-free an unrooted
+            temporary produces both arrive here. And Resolve is inside the try:
+            ES2026 §27.2.1.3.2 step 9 reads `then` off the parsed value, which a
+            guest `Object.prototype.then` getter can answer with arbitrary code —
+            including a capability-guarded call whose audit sink fails. }
+          if IsUncatchableFault(E) then
+            raise;
+          P.Reject(CreateErrorObject('SyntaxError', E.Message));
+        end;
+      end;
+    finally
+      Parser.Free;
+    end;
+    Result := P;
   finally
-    Parser.Free;
+    Roots.Clear;
   end;
-  Result := P;
 end;
 
 function TGocciaResponseValue.ResponseArrayBuffer(
@@ -384,25 +404,34 @@ var
   R: TGocciaResponseValue;
   AB: TGocciaArrayBufferValue;
   P: TGocciaPromiseValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (AThisValue is TGocciaResponseValue) then
     ThrowTypeError(SErrorResponseNotResponse, SSuggestResponseThisType);
   R := TGocciaResponseValue(AThisValue);
-  P := TGocciaPromiseValue.Create;
-  if R.FBodyUsed then
-  begin
-    P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
+  // The promise is held only by this local while the body is decoded, parsed
+  // or copied, and every one of those allocates, which can collect.
+  Roots.Initialize;
+  try
+    P := TGocciaPromiseValue.Create;
+    Roots.Add(P);
+    if R.FBodyUsed then
+    begin
+      P.Reject(CreateErrorObject('TypeError', SErrorResponseBodyAlreadyUsed));
+      Result := P;
+      Exit;
+    end;
+    R.FBodyUsed := True;
+
+    AB := TGocciaArrayBufferValue.Create(Length(R.FBody));
+    if Length(R.FBody) > 0 then
+      Move(R.FBody[0], AB.Data[0], Length(R.FBody));
+
+    P.Resolve(AB);
     Result := P;
-    Exit;
+  finally
+    Roots.Clear;
   end;
-  R.FBodyUsed := True;
-
-  AB := TGocciaArrayBufferValue.Create(Length(R.FBody));
-  if Length(R.FBody) > 0 then
-    Move(R.FBody[0], AB.Data[0], Length(R.FBody));
-
-  P.Resolve(AB);
-  Result := P;
 end;
 
 // ---------------------------------------------------------------------------
@@ -412,6 +441,7 @@ end;
 procedure TGocciaResponseValue.InitializeNativeFromArguments(
   const AArguments: TGocciaArgumentsCollection);
 var
+  HeaderRoots: TGocciaActiveRootFrame;
   BodyArg, InitArg, PropVal: TGocciaValue;
   InitObj, HeadersObj: TGocciaObjectValue;
   PropNames: TArray<string>;
@@ -463,10 +493,18 @@ begin
     else if PropVal is TGocciaObjectValue then
     begin
       HeadersObj := TGocciaObjectValue(PropVal);
-      PropNames := HeadersObj.GetAllPropertyNames;
-      for I := 0 to High(PropNames) do
-        FHeaders.AddHeader(PropNames[I],
-          HeadersObj.GetProperty(PropNames[I]).ToStringLiteral.Value);
+      // A getter can return a fresh headers object, held only here while
+      // each value converts (a toString can allocate and collect).
+      HeaderRoots.Initialize;
+      try
+        HeaderRoots.Add(HeadersObj);
+        PropNames := HeadersObj.GetAllPropertyNames;
+        for I := 0 to High(PropNames) do
+          FHeaders.AddHeader(PropNames[I],
+            HeadersObj.GetProperty(PropNames[I]).ToStringLiteral.Value);
+      finally
+        HeaderRoots.Clear;
+      end;
     end;
   end;
 end;
