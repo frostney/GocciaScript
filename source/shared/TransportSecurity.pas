@@ -138,11 +138,20 @@ begin
       [ErrorOffset]);
 end;
 
+{ A write to a peer that reset the connection must fail the write with EPIPE
+  or ECONNRESET, not end the process with SIGPIPE. Linux takes MSG_NOSIGNAL
+  per send. Darwin and the BSDs take SO_NOSIGPIPE on the socket instead
+  (HTTPClient sets it where it creates the socket), which also covers
+  SecureTransport's writes through the callback below. }
 function SocketSend(const ASock: TSocket; const ABuffer: Pointer;
   const ALength: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
+  {$IFDEF LINUX}
+  Result := fpSend(ASock, ABuffer, ALength, MSG_NOSIGNAL);
+  {$ELSE}
   Result := fpSend(ASock, ABuffer, ALength, 0);
+  {$ENDIF}
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   Result := WinSock2.send(ASock, ABuffer^, ALength, 0);
@@ -655,6 +664,63 @@ begin
       raise ETransportSecurityError.Create('TLS socket wait failed');
   until False;
 end;
+
+{ OpenSSL's socket BIO writes with plain write(2), so MSG_NOSIGNAL cannot reach
+  it, and a write to a peer that reset the connection raises SIGPIPE: the
+  handshake, a read (a key update), a write and SSL_shutdown's close_notify
+  all write. On Linux every OpenSSL call therefore runs with SIGPIPE blocked
+  on the calling thread, and a SIGPIPE that call raised is taken off the
+  thread's pending set before the mask is restored, so the write fails with
+  EPIPE (SSL_ERROR_SYSCALL) and the process, the embedder's own handlers and
+  every other thread are left alone. A SIGPIPE the caller had blocked itself
+  is not touched. Darwin and the BSDs set SO_NOSIGPIPE on the socket
+  instead. }
+type
+  TSigPipeGuard = record
+    Active: Boolean;
+    WasBlocked: Boolean;
+    Previous: TSigSet;
+  end;
+
+procedure BeginSigPipeGuard(out AGuard: TSigPipeGuard);
+{$IFDEF LINUX}
+var
+  Block: TSigSet;
+begin
+  FillChar(AGuard, SizeOf(AGuard), 0);
+  fpSigEmptySet(Block);
+  fpSigAddSet(Block, SIGPIPE);
+  AGuard.Active := fpSigProcMask(SIG_BLOCK, @Block, @AGuard.Previous) = 0;
+  if AGuard.Active then
+    AGuard.WasBlocked := fpSigIsMember(AGuard.Previous, SIGPIPE) = 1;
+end;
+{$ELSE}
+begin
+  FillChar(AGuard, SizeOf(AGuard), 0);
+end;
+{$ENDIF}
+
+procedure EndSigPipeGuard(const AGuard: TSigPipeGuard);
+{$IFDEF LINUX}
+var
+  Wanted: TSigSet;
+  NoWait: TimeSpec;
+begin
+  if not AGuard.Active or AGuard.WasBlocked then
+    Exit;
+  { A zero timeout takes the thread's pending SIGPIPE, if any, and fails with
+    EAGAIN when there is none. (FPC's fpSigPending passes the kernel a wrong
+    set size and fails with EINVAL, so it is not asked.) }
+  fpSigEmptySet(Wanted);
+  fpSigAddSet(Wanted, SIGPIPE);
+  FillChar(NoWait, SizeOf(NoWait), 0);
+  fpSigTimedWait(Wanted, nil, @NoWait);
+  fpSigProcMask(SIG_SETMASK, @AGuard.Previous, nil);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 procedure StartOpenSSL(var AConnection: TTransportSecurityConnection;
   const AHost: string);
@@ -1360,6 +1426,10 @@ end;
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
   const ASocket: TSocket; const AHost: string;
   const ADeadlineNanoseconds: Int64);
+{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
+var
+  Guard: TSigPipeGuard;
+{$IFEND}
 begin
   FillChar(AConnection, SizeOf(AConnection), 0);
   AConnection.Socket := ASocket;
@@ -1372,12 +1442,21 @@ begin
   {$IFDEF MSWINDOWS}
   StartSChannel(AConnection, AHost);
   {$ELSE}
-  StartOpenSSL(AConnection, AHost);
+  BeginSigPipeGuard(Guard);
+  try
+    StartOpenSSL(AConnection, AHost);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
   {$ENDIF}
   {$ENDIF}
 end;
 
 procedure CloseTransportSecurity(var AConnection: TTransportSecurityConnection);
+{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
+var
+  Guard: TSigPipeGuard;
+{$IFEND}
 begin
   if not AConnection.Active then
     Exit;
@@ -1394,7 +1473,14 @@ begin
     {$IFDEF UNIX}
     {$IFNDEF DARWIN}
     TSB_OPENSSL:
-      CloseOpenSSL(AConnection);
+      begin
+        BeginSigPipeGuard(Guard);
+        try
+          CloseOpenSSL(AConnection);
+        finally
+          EndSigPipeGuard(Guard);
+        end;
+      end;
     {$ENDIF}
     {$ENDIF}
   end;
@@ -1406,6 +1492,10 @@ end;
 
 function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
+{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
+var
+  Guard: TSigPipeGuard;
+{$IFEND}
 begin
   if ALength <= 0 then
   begin
@@ -1425,7 +1515,14 @@ begin
     {$IFDEF UNIX}
     {$IFNDEF DARWIN}
     TSB_OPENSSL:
-      Result := ReadOpenSSL(AConnection, ABuffer, ALength);
+      begin
+        BeginSigPipeGuard(Guard);
+        try
+          Result := ReadOpenSSL(AConnection, ABuffer, ALength);
+        finally
+          EndSigPipeGuard(Guard);
+        end;
+      end;
     {$ENDIF}
     {$ENDIF}
   else
@@ -1435,6 +1532,10 @@ end;
 
 function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
   const ABuffer: Pointer; const ALength: Integer): Integer;
+{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
+var
+  Guard: TSigPipeGuard;
+{$IFEND}
 begin
   if ALength <= 0 then
   begin
@@ -1454,7 +1555,14 @@ begin
     {$IFDEF UNIX}
     {$IFNDEF DARWIN}
     TSB_OPENSSL:
-      Result := WriteOpenSSL(AConnection, ABuffer, ALength);
+      begin
+        BeginSigPipeGuard(Guard);
+        try
+          Result := WriteOpenSSL(AConnection, ABuffer, ALength);
+        finally
+          EndSigPipeGuard(Guard);
+        end;
+      end;
     {$ENDIF}
     {$ENDIF}
   else

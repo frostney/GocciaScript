@@ -108,6 +108,8 @@ Each host thread caps requests in flight at 16, and runtimes on the same thread 
 
 A response body that ends early is a network error, as the Fetch Standard requires for an incomplete message: when the connection closes before the `Content-Length` bytes, or before a `chunked` body's last chunk, the fetch rejects with `TypeError: HTTP response body ended before its declared length`, and a `chunked` body that does not follow the chunked coding (a chunk-size line that is not hexadecimal, or chunk data not followed by CRLF) rejects with `TypeError: Invalid HTTP response: malformed chunked body`; the trailer section after the last chunk is read through its closing empty line and its fields are dropped. A `Content-Length` that is not decimal digits rejects with `TypeError: Invalid HTTP response: malformed Content-Length`. A body with neither header ends when the connection closes, and a connection that fails rather than closes rejects.
 
+A peer that resets the connection fails the one fetch with a `TypeError`; it never ends the process with `SIGPIPE`, whichever side of a write the reset lands on (the request, a TLS handshake or alert, or the `close_notify` that closing a TLS connection writes). Sockets send with `MSG_NOSIGNAL` on Linux and carry `SO_NOSIGPIPE` on macOS and FreeBSD; OpenSSL's socket BIO writes without either, so on Linux its calls run with `SIGPIPE` blocked on the calling thread and take back a `SIGPIPE` they raised. The process-wide disposition of `SIGPIPE`, which an embedder may have set, is never changed.
+
 The focused subset has no `Request` object, streaming request or response body, or CORS processing.
 
 ## AbortController and AbortSignal
