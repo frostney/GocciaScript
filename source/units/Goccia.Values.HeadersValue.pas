@@ -328,10 +328,10 @@ begin
     // Added one at a time: the collection roots what it holds, and the name
     // string's reservation can collect the value string made before it.
     CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
-    CallArgs.Add(TGocciaStringLiteralValue.Create(H.FEntries[I].Value));
-    CallArgs.Add(TGocciaStringLiteralValue.Create(H.FEntries[I].Name));
-    CallArgs.Add(AThisValue);
     try
+      CallArgs.Add(TGocciaStringLiteralValue.Create(H.FEntries[I].Value));
+      CallArgs.Add(TGocciaStringLiteralValue.Create(H.FEntries[I].Name));
+      CallArgs.Add(AThisValue);
       InvokeCallable(Callback, CallArgs, ThisArg);
     finally
       CallArgs.Free;

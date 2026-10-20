@@ -274,6 +274,7 @@ end;
 procedure TArrayLikeView.Init(const AThisValue: TGocciaValue);
 var
   ArrayProbe: TGocciaValue;
+  ObjRoots: TGocciaActiveRootFrame;
 begin
   Obj := ToObject(AThisValue);
   SpeciesArr := nil;
@@ -301,7 +302,15 @@ begin
     end;
     if ArrayProbe is TGocciaArrayValue then
       SpeciesArr := TGocciaArrayValue(ArrayProbe);
-    Len := LengthOfArrayLikeEx(Obj, RawLen);
+    // A fresh wrapper for a primitive this is held only here while its
+    // length is read, which can run script code (a getter, valueOf).
+    ObjRoots.Initialize;
+    try
+      ObjRoots.Add(Obj);
+      Len := LengthOfArrayLikeEx(Obj, RawLen);
+    finally
+      ObjRoots.Clear;
+    end;
   end;
 end;
 
@@ -1835,6 +1844,7 @@ begin
           ThrowTypeError(SErrorReduceEmptyArray,
             SSuggestReduceInitialValue);
         Accumulator := View.Get64(Sparse[0]);
+        ViewRoots.Add(Accumulator);
         SparseStart := 1;
       end;
 
@@ -1870,6 +1880,7 @@ begin
         if View.HasIndex(I) then
         begin
           Accumulator := View.Get(I);
+          ViewRoots.Add(Accumulator);
           StartIndex := I + 1;
           Break;
         end;
@@ -1891,6 +1902,8 @@ begin
         CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
         Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
           TGocciaUndefinedLiteralValue.UndefinedValue);
+        // Held by the rooted arguments while the next HasIndex runs.
+        CallArgs.Accumulator := Accumulator;
       end;
     finally
       CallArgs.Free;
@@ -1943,6 +1956,7 @@ begin
           ThrowTypeError(SErrorReduceEmptyArray,
             SSuggestReduceInitialValue);
         Accumulator := View.Get64(Sparse[High(Sparse)]);
+        ViewRoots.Add(Accumulator);
         SparseEnd := High(Sparse) - 1;
       end;
 
@@ -1978,6 +1992,7 @@ begin
         if View.HasIndex(I) then
         begin
           Accumulator := View.Get(I);
+          ViewRoots.Add(Accumulator);
           StartIndex := I - 1;
           Break;
         end;
@@ -1999,6 +2014,8 @@ begin
         CallArgs.Index := TGocciaNumberLiteralValue.Create(I);
         Accumulator := InvokeArrayCallback(Callback, TypedCallback, CallArgs,
           TGocciaUndefinedLiteralValue.UndefinedValue);
+        // Held by the rooted arguments while the next HasIndex runs.
+        CallArgs.Accumulator := Accumulator;
       end;
     finally
       CallArgs.Free;
@@ -2661,6 +2678,7 @@ begin
     begin
       NewLen64 := View.Len64 - 1;
       Result := View.Get64(NewLen64);
+      ViewRoots.Add(Result);
       if not View.Obj.DeleteProperty(IntegerToString(NewLen64)) then
         ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntegerToString(NewLen64)]),
           SSuggestCannotDeleteNonConfigurable);
@@ -2671,6 +2689,8 @@ begin
 
     // Step 5: Let element be Get(O, ToString(newLen))
     Result := View.Get(View.Len - 1);
+    // Deleted below, it is held only here while the length is set.
+    ViewRoots.Add(Result);
 
     // Step 6: DeletePropertyOrThrow(O, ToString(newLen))
     View.DeleteIndex(View.Len - 1);
@@ -3299,7 +3319,11 @@ begin
     begin
       Present[I] := View.HasIndex(Start + I);
       if Present[I] then
+      begin
         Temp[I] := View.Get(Start + I);
+        // The buffer is not a root, and the next reads run script code.
+        ViewRoots.Add(Temp[I]);
+      end;
     end;
     for I := 0 to Count - 1 do
     begin
@@ -3667,6 +3691,7 @@ var
   LowerExists, UpperExists: Boolean;
   Lower, Upper: TGocciaValue;
   ViewRoots: TGocciaActiveRootFrame;
+  PairRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
@@ -3674,6 +3699,10 @@ begin
   // result are held only by locals while guest code (getters, proxy
   // traps, callbacks, ToPrimitive) runs.
   ViewRoots.Initialize;
+  // The pair being swapped: a value read from one end is held only by a
+  // local while the other end is read and written. Cleared each step, so it
+  // never holds more than the two.
+  PairRoots.Initialize;
   try
     ViewRoots.Add(View.Obj);
 
@@ -3683,12 +3712,19 @@ begin
       UpperIndex := View.Len64 - 1;
       while LowerIndex < UpperIndex do
       begin
+        PairRoots.Clear;
         LowerExists := View.HasIndex64(LowerIndex);
         if LowerExists then
+        begin
           Lower := View.Get64(LowerIndex);
+          PairRoots.Add(Lower);
+        end;
         UpperExists := View.HasIndex64(UpperIndex);
         if UpperExists then
+        begin
           Upper := View.Get64(UpperIndex);
+          PairRoots.Add(Upper);
+        end;
 
         if LowerExists and UpperExists then
         begin
@@ -3725,12 +3761,19 @@ begin
     while I < J do
     begin
       // ES2026 §23.1.3.23 steps 4a-i: preserve sparsity via HasProperty/Delete
+      PairRoots.Clear;
       LowerExists := View.HasIndex(I);
       if LowerExists then
+      begin
         Lower := View.Get(I);
+        PairRoots.Add(Lower);
+      end;
       UpperExists := View.HasIndex(J);
       if UpperExists then
+      begin
         Upper := View.Get(J);
+        PairRoots.Add(Upper);
+      end;
 
       if LowerExists and UpperExists then
       begin
@@ -3755,6 +3798,7 @@ begin
     // Step 5: Return O
     Result := View.Obj;
   finally
+    PairRoots.Clear;
     ViewRoots.Clear;
   end;
 end;
@@ -4877,6 +4921,8 @@ begin
 
     // Step 4: Let first be Get(O, "0")
     Result := View.Get(0);
+    // Overwritten below, it is held only here while the rest moves down.
+    ViewRoots.Add(Result);
 
     // Steps 5-7: shift elements down via View for prototype-aware semantics
     for I := 1 to View.Len - 1 do

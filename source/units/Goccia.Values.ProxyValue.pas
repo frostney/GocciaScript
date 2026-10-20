@@ -1134,6 +1134,9 @@ begin
         // ES2026 §10.5.8 step 7: Pass the receiver, not the proxy itself
         Args.Add(AThisContext);
         Result := InvokeTrap(Trap, Args);
+        // Held only here while the target's descriptor is read below,
+        // which runs its trap when the target is a proxy.
+        TrapRoots.Add(Result);
       finally
         Args.Free;
       end;
@@ -1473,6 +1476,9 @@ begin
         Args.Add(ASymbol);
         Args.Add(Self);
         Result := InvokeTrap(Trap, Args);
+        // Held only here while the target's descriptor is read below,
+        // which runs its trap when the target is a proxy.
+        TrapRoots.Add(Result);
       finally
         Args.Free;
       end;
@@ -1540,6 +1546,9 @@ begin
         Args.Add(ASymbol);
         Args.Add(AReceiver);
         Result := InvokeTrap(Trap, Args);
+        // Held only here while the target's descriptor is read below,
+        // which runs its trap when the target is a proxy.
+        TrapRoots.Add(Result);
       finally
         Args.Free;
       end;

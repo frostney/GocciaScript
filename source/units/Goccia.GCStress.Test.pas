@@ -428,6 +428,15 @@ begin
     'const child = Object.create(p);' + LineEnding +
     'child.third = n * 4;' + LineEnding +
     '[p.first, p.second, "first" in p, Object.keys(p).length, child.third];');
+  // A get trap's fresh result was held only by a local while the target's
+  // descriptor was read, which runs the inner proxy's trap.
+  RunStressed('proxy-get.js',
+    'const sym = Symbol("s");' + LineEnding +
+    'const inner = new Proxy({}, { getOwnPropertyDescriptor(t, k) {' + LineEnding +
+    '  const junk = [String(k) + "!", { k }]; return junk.length > 9 ? undefined : Reflect.getOwnPropertyDescriptor(t, k); } });' + LineEnding +
+    'const outer = new Proxy(inner, { get(t, k) { return { fresh: String(k) + "?" }; } });' + LineEnding +
+    'const got = [outer.name, outer[sym], Reflect.get(outer, sym, {}), Reflect.get(outer, "other", {})];' + LineEnding +
+    'got.map((v) => v.fresh).join();');
 end;
 
 procedure TGCStressTests.TestIntlResolvedOptions;
@@ -517,6 +526,34 @@ begin
     'const spliced = [1, 2, 3, 4]; out.push(spliced.splice(1, 2, "a", "b"));' + LineEnding +
     'out.push(Array.prototype.reduce.call("abc", (a, c) => a + c, ""));' + LineEnding +
     'out.push(Array.prototype.indexOf.call("abc", "b"), Array.prototype.at.call("abc", -1));' + LineEnding +
+    'out.length;');
+  // Values read from getters, held only by locals while further getters,
+  // setters or traps ran: pop and shift results, reverse's pair, copyWithin's
+  // buffer, reduce's accumulator, and a primitive receiver's wrapper while
+  // its length is coerced.
+  RunStressed('array-intermediates.js',
+    'const fresh = (tag) => ({ tag: tag + "!" });' + LineEnding +
+    'const churn = (v) => [String(v) + "~", { v }];' + LineEnding +
+    'const like = () => ({ get length() { return 3; }, set length(v) { churn(v); },' + LineEnding +
+    '  get 0() { return fresh("a"); }, set 0(v) { churn(v); },' + LineEnding +
+    '  get 1() { return fresh("b"); }, set 1(v) { churn(v); },' + LineEnding +
+    '  get 2() { return fresh("c"); }, set 2(v) { churn(v); } });' + LineEnding +
+    'const out = [];' + LineEnding +
+    'out.push(Array.prototype.pop.call(like()), Array.prototype.shift.call(like()));' + LineEnding +
+    'const stored = {}; const target = { get length() { return 4; }, set 0(v) { stored.zero = v; churn(v); },' + LineEnding +
+    '  set 3(v) { stored.three = v; churn(v); }, get 0() { return fresh("low"); }, get 3() { return fresh("high"); },' + LineEnding +
+    '  get 1() { return fresh("x"); }, get 2() { return fresh("y"); }, set 1(v) { stored.one = v; churn(v); },' + LineEnding +
+    '  set 2(v) { stored.two = v; churn(v); } };' + LineEnding +
+    'Array.prototype.reverse.call(target);' + LineEnding +
+    'Array.prototype.copyWithin.call(target, 0, 1, 3);' + LineEnding +
+    'out.push(stored);' + LineEnding +
+    'const hasTrap = new Proxy([1, 2, 3], { has(t, k) { churn(k); return Reflect.has(t, k); } });' + LineEnding +
+    'out.push(Array.prototype.reduce.call(hasTrap, (a, v) => ({ sum: (a.sum ?? a) + v }), 0));' + LineEnding +
+    'out.push(Array.prototype.reduceRight.call(hasTrap, (a, v) => ({ sum: (a.sum ?? a) + v })));' + LineEnding +
+    'Object.defineProperty(Number.prototype, "length", { configurable: true,' + LineEnding +
+    '  get() { return { valueOf() { churn(this); return 2; } }; } });' + LineEnding +
+    'out.push(Array.prototype.map.call(7, (v) => v));' + LineEnding +
+    'delete Number.prototype.length;' + LineEnding +
     'out.length;');
 end;
 

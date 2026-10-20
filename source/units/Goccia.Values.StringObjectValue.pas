@@ -1647,10 +1647,10 @@ begin
       // Added one at a time: the collection roots what it holds, and each
       // string's reservation can collect the arguments made before it.
       CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
-      CallArgs.Add(TGocciaStringLiteralValue.Create(SearchValue));
-      CallArgs.Add(TGocciaNumberLiteralValue.Create(FoundPos));
-      CallArgs.Add(TGocciaStringLiteralValue.Create(StringValue));
       try
+        CallArgs.Add(TGocciaStringLiteralValue.Create(SearchValue));
+        CallArgs.Add(TGocciaNumberLiteralValue.Create(FoundPos));
+        CallArgs.Add(TGocciaStringLiteralValue.Create(StringValue));
         CallResult := InvokeCallable(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ReplaceValue := CallResult.ToStringLiteral.Value;
       finally
@@ -1769,10 +1769,10 @@ begin
       // Added one at a time: the collection roots what it holds, and the
       // string's reservation can collect the arguments made before it.
       CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
-      CallArgs.Add(TGocciaStringLiteralValue.Create(''));
-      CallArgs.Add(nil);
-      CallArgs.Add(TGocciaStringLiteralValue.Create(StringValue));
       try
+        CallArgs.Add(TGocciaStringLiteralValue.Create(''));
+        CallArgs.Add(nil);
+        CallArgs.Add(TGocciaStringLiteralValue.Create(StringValue));
         while Offset <= StringLength do
         begin
           CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(Offset));
