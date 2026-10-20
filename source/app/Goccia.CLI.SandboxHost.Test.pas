@@ -11,6 +11,7 @@ uses
   Classes,
   SysUtils,
 
+  SandboxVirtualFileSystem,
   TestingPascalLibrary,
 
   Goccia.CLI.SandboxHost,
@@ -37,6 +38,7 @@ type
     procedure TestEntryPathNamesNoHostProject;
     procedure TestNestedRunsAndReadOnlyPaths;
     procedure TestRootResultPrintedOnlyWhenAsked;
+    procedure TestClockReachesIsolatedChildren;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -53,6 +55,8 @@ begin
   Test('The root run''s last value is converted for printing only when ' +
     'asked, in its own realm; a nested run''s is always copied',
     TestRootResultPrintedOnlyWhenAsked);
+  Test('The host''s filesystem clock stamps its inputs, its run''s files and ' +
+    'an isolated child''s', TestClockReachesIsolatedChildren);
 end;
 
 procedure TSandboxHostTests.BeforeEach;
@@ -206,6 +210,57 @@ begin
       '[3,{"a":4}]');
   finally
     Host.Free;
+  end;
+end;
+
+procedure TSandboxHostTests.TestClockReachesIsolatedChildren;
+const
+  CHILD_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'fs.writeFileSync("/c.txt", "c");' + LineEnding +
+    'const ms = (path) => Math.floor(fs.statSync(path).mtimeMs + 0.5);' +
+      LineEnding +
+    'ms("/c.txt") + " " + ms("/child.js");' + LineEnding;
+  MAIN_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'import { runScript } from "goccia";' + LineEnding +
+    'fs.writeFileSync("/w.txt", "w");' + LineEnding +
+    'const child = runScript("/child.js", ' +
+      '{ sandbox: true, copy: ["/child.js"] });' + LineEnding +
+    'const ms = (path) => Math.floor(fs.statSync(path).mtimeMs + 0.5);' +
+      LineEnding +
+    'fs.writeFileSync("/out.txt", [child.result, ms("/in.txt"), ' +
+      'ms("/w.txt")].join(" "));' + LineEnding;
+var
+  Clock: TGocciaSandboxFsHostClock;
+  Host: TGocciaSandboxHost;
+  RunResult: TGocciaSandboxRunResult;
+begin
+  Clock := TGocciaSandboxFsHostClock.Create(TGocciaFixedHostClock.Create(
+    Int64(1700000000123000000), 0, 'UTC'));
+  try
+    Host := TGocciaSandboxHost.Create(DEFAULT_SANDBOX_BYTE_QUOTA,
+      DEFAULT_SANDBOX_NODE_QUOTA, Clock);
+    try
+      Expect<Boolean>(Host.Context.Clock = Clock).ToBe(True);
+      Host.Context.Fs.WriteAllText('/in.txt', 'input');
+      Host.Context.Fs.WriteAllText('/child.js', CHILD_SOURCE);
+      Host.Context.Fs.WriteAllText('/main.js', MAIN_SOURCE);
+      Host.OnConfigureEngine := InstallSandboxModules;
+      Host.CaptureBaseline;
+
+      RunResult := Host.Run('/main.js');
+      Expect<Boolean>(RunResult.Ok).ToBe(True);
+      { The child ran on a filesystem of its own, created during the run:
+        it keeps its parent's clock. }
+      Expect<string>(Host.Context.Fs.ReadAllText('/out.txt')).ToBe(
+        '1700000000123 1700000000123 1700000000123 1700000000123');
+    finally
+      Host.Free;
+    end;
+  finally
+    { The host does not own the clock. }
+    Clock.Free;
   end;
 end;
 
