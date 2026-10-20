@@ -224,11 +224,15 @@ every 64-bit target and fails on `i386` with `Error: Ordinal expression
 expected`. Keep `for` counters `Integer` (or `SizeInt`) and do any 64-bit
 arithmetic on the bounds outside the loop header.
 
-Lengths need the same care: `SetLength`, `Move` and array indexes take
-`SizeInt`, which is 32 bits there, so an `Int64` length larger than
-`High(SizeInt)` truncates silently instead of failing. Refuse such a length
-before it reaches an allocation, as the heap snapshot reader does for its
-input.
+Sizes need the same care: `SetLength`, `Move` and array indexes take
+`SizeInt`, which is 32 bits there, and FPC works out an array's or string's
+byte size in `SizeInt` too, so an `Int64` length, or a count times its
+element size, past `High(SizeInt)` can wrap to a small allocation in a build
+without range checks. Size a native allocation whose count comes from input
+through `CheckedNativeByteSize` (`Goccia.NativeLimits`), which refuses
+anything past `MAX_NATIVE_ALLOCATION_BYTES`, the most one allocation may ask
+for on the target; the heap snapshot reader refuses such a count, and an
+input that large, before it reserves anything.
 
 ### `WideChar in [set]` Allocates
 

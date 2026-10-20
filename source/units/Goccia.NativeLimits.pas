@@ -6,6 +6,11 @@ interface
 
 const
   MAX_NATIVE_DATA_DEPTH = 256;
+  // The most one native allocation may ask for on this target. FPC works out
+  // a dynamic array's or string's size, its header included, in SizeInt, so
+  // on a 32-bit target a larger byte count wraps to a small allocation
+  // instead of failing. The margin covers the header.
+  MAX_NATIVE_ALLOCATION_BYTES = Int64(High(SizeInt)) - 65536;
 
 procedure EnterNativeDataDepth(const AOperation: string = '');
 procedure LeaveNativeDataDepth;
@@ -61,7 +66,7 @@ function CheckedNativeByteSize(const AElementCount,
 begin
   if (AElementCount < 0) or (AElementSize < 0) or
      ((AElementSize > 0) and
-      (AElementCount > High(Int64) div AElementSize)) then
+      (AElementCount > MAX_NATIVE_ALLOCATION_BYTES div AElementSize)) then
     ThrowRangeError(SErrorMemoryLimitExceeded);
   Result := AElementCount * AElementSize;
 end;

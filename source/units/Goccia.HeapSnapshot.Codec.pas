@@ -2184,6 +2184,12 @@ procedure TGocciaHeapSnapshotReader.Reserve(const ACount, AElementSize: Int64);
 var
   Bytes: Int64;
 begin
+  // A count the input decoded can ask for more than one allocation can hold
+  // on a 32-bit target, where the array's size would wrap: refused here,
+  // before anything allocates it.
+  if (ACount >= 0) and (AElementSize > 0) and
+     (ACount > MAX_NATIVE_ALLOCATION_BYTES div AElementSize) then
+    Refuse('more than this target can allocate at once');
   Bytes := CheckedNativeByteSize(ACount, AElementSize);
   ReserveNativeBytes(Bytes);
   Inc(FReservedBytes, Bytes);
@@ -2667,7 +2673,7 @@ begin
     Refuse('the snapshot is larger than the limit');
   // The input is held in one array: on a 32-bit target a larger limit than
   // the address space would truncate its length below what FLimit allows.
-  if Size > High(SizeInt) then
+  if Size > MAX_NATIVE_ALLOCATION_BYTES then
     Refuse('the snapshot is larger than this target can hold');
   Reserve(Size, 1);
   SetLength(FData, Size);
