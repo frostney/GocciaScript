@@ -1,6 +1,6 @@
 name: Fuzz and memory safety
 
-# Coverage-blind crash fuzzing plus memory-safety tooling over the JavaScript
+# Coverage-guided crash fuzzing plus memory-safety tooling over the JavaScript
 # suite. Scheduled rather than per-PR: a useful fuzz run takes far longer than
 # a PR should wait, and Valgrind slows the suite by about two orders of
 # magnitude. PR-time coverage stays with the ordinary suite in pr.yml.
@@ -28,19 +28,16 @@ env:
   FUZZ_SECONDS: ${{ github.event.inputs.fuzz-seconds || '900' }}
 
 jobs:
-  # ── Coverage-blind fuzzing ───────────────────────────────────────────
+  # ── Coverage-guided fuzzing ──────────────────────────────────────────
   #
-  # FPC emits no AFL instrumentation, so afl-fuzz runs in non-instrumented
-  # (-n) mode. That trades coverage feedback for pure random mutation: it
-  # still finds parser and lexer faults, but it will not discover deep
-  # execution paths on its own. The seed corpus is what carries coverage
-  # here, which is why it is derived from the real test suites.
-  #
-  # Instrumented builds were evaluated and rejected for now: afl-gcc-style
-  # instrumentation requires either an FPC assembler pass rewrite or building
-  # via -Cg + a GCC-compatible IR, neither of which FPC 3.2.2 exposes. The
-  # tractable future path is afl-clang-lto over LLVM bitcode from an LLVM FPC
-  # backend build; recorded as a follow-up rather than attempted here.
+  # FPC has no AFL compiler, so afl-fuzz gets its coverage from the
+  # assembler: the instrumented harness is built with -Aas, and
+  # scripts/afl/as hands FPC's GNU assembly to AFL++'s afl-as, which adds a
+  # coverage trampoline at every function entry, branch target and
+  # conditional branch (and the fork server). AFL keeps each mutant that
+  # reaches new coverage, so the queue grows past the seeds. The plain
+  # harness still sweeps the seeds and replays findings; the two builds come
+  # from the same source with the same checks (-Ct -Cr -Sa).
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -58,6 +55,41 @@ jobs:
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
+
+      - name: Build the AFL-instrumented harness
+        # Its own unit-output directory, per the per-program rule (see the
+        # memory-safety job); fpc does not create it. -B rebuilds every
+        # unit of this repository through scripts/afl/as; FPC's own runtime
+        # library stays uninstrumented.
+        run: |
+          mkdir -p build/compiled/targets/fuzzharness-afl
+          fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+            -FUbuild/compiled/targets/fuzzharness-afl \
+            -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+
+      - name: Verify the instrumented harness reports coverage
+        # Guards against an instrumented build whose coverage map is empty
+        # or does not follow the input, which would leave afl-fuzz unable to
+        # tell a new path from an old one. The same input can differ by a
+        # few edges between runs, so the first probe runs twice to measure
+        # that noise, and the second must reach at least 100 edges, and ten
+        # times the noise, that neither run of the first reached.
+        run: |
+          printf 'let a = 1;' > build/probe-a.js
+          printf 'class A { #x = 2; m() { return [1, 2].map((v) => v * this.#x); } }\nnew A().m();' \
+            > build/probe-b.js
+          for run in a1 a2 b; do
+            afl-showmap -q -t 5000 -o "build/probe-$run.map" \
+              -- ./build/GocciaFuzzHarnessAfl "build/probe-${run%[12]}.js"
+          done
+          edges() { cut -d: -f1 "$@" | sort -u; }
+          noise=$(comm -3 <(edges build/probe-a1.map) <(edges build/probe-a2.map) | wc -l)
+          signal=$(comm -13 <(edges build/probe-a1.map build/probe-a2.map) <(edges build/probe-b.map) | wc -l)
+          echo "Probe edges: $(wc -l < build/probe-a1.map) and $(wc -l < build/probe-b.map); the second reaches ${signal} new; noise ${noise}"
+          if [ ! -s build/probe-a1.map ] || [ "$signal" -lt 100 ] || [ "$signal" -le $((10 * noise)) ]; then
+            echo "::error::The instrumented harness reports no coverage, or coverage that does not follow its input"
+            exit 1
+          fi
 
       - name: Build seed corpus
         run: bun run scripts/build-fuzz-corpus.ts --verbose
@@ -93,8 +125,8 @@ jobs:
           # AFL refuses to run when the host uses a core-dump handler pipe.
           echo core | sudo tee /proc/sys/kernel/core_pattern > /dev/null
           mkdir -p build/fuzz/out
-          # -n: non-instrumented. AFL_SKIP_CPUFREQ/AFL_NO_AFFINITY are the
-          # standard CI accommodations for shared runners.
+          # AFL_SKIP_CPUFREQ/AFL_NO_AFFINITY are the standard CI
+          # accommodations for shared runners.
           # -t 5000: the harness's own budget is 1000ms and a harness timeout
           # is a NORMAL exit-0 outcome, so AFL's exec threshold must sit safely
           # above it — otherwise process overhead around a legitimate slow input
@@ -109,10 +141,10 @@ jobs:
           status=0
           started=${SECONDS}
           AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -n -t 5000 \
+          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -t 5000 \
             -i build/fuzz/corpus \
             -o build/fuzz/out \
-            -- ./build/GocciaFuzzHarness @@ || status=$?
+            -- ./build/GocciaFuzzHarnessAfl @@ || status=$?
           elapsed=$(( SECONDS - started ))
           echo "afl-fuzz exit status: ${status} after ${elapsed}s"
           # 0 = afl-fuzz returned on its own; 124 = deadline reached and the
@@ -190,6 +222,41 @@ jobs:
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
 
+      - name: Build the AFL-instrumented harness
+        # Its own unit-output directory, per the per-program rule (see the
+        # memory-safety job); fpc does not create it. -B rebuilds every
+        # unit of this repository through scripts/afl/as; FPC's own runtime
+        # library stays uninstrumented.
+        run: |
+          mkdir -p build/compiled/targets/fuzzharness-afl
+          fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+            -FUbuild/compiled/targets/fuzzharness-afl \
+            -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+
+      - name: Verify the instrumented harness reports coverage
+        # Guards against an instrumented build whose coverage map is empty
+        # or does not follow the input, which would leave afl-fuzz unable to
+        # tell a new path from an old one. The same input can differ by a
+        # few edges between runs, so the first probe runs twice to measure
+        # that noise, and the second must reach at least 100 edges, and ten
+        # times the noise, that neither run of the first reached.
+        run: |
+          printf 'let a = 1;' > build/probe-a.js
+          printf 'class A { #x = 2; m() { return [1, 2].map((v) => v * this.#x); } }\nnew A().m();' \
+            > build/probe-b.js
+          for run in a1 a2 b; do
+            afl-showmap -q -t 5000 -o "build/probe-$run.map" \
+              -- ./build/GocciaFuzzHarnessAfl "build/probe-${run%[12]}.js"
+          done
+          edges() { cut -d: -f1 "$@" | sort -u; }
+          noise=$(comm -3 <(edges build/probe-a1.map) <(edges build/probe-a2.map) | wc -l)
+          signal=$(comm -13 <(edges build/probe-a1.map build/probe-a2.map) <(edges build/probe-b.map) | wc -l)
+          echo "Probe edges: $(wc -l < build/probe-a1.map) and $(wc -l < build/probe-b.map); the second reaches ${signal} new; noise ${noise}"
+          if [ ! -s build/probe-a1.map ] || [ "$signal" -lt 100 ] || [ "$signal" -le $((10 * noise)) ]; then
+            echo "::error::The instrumented harness reports no coverage, or coverage that does not follow its input"
+            exit 1
+          fi
+
       - name: Build the harness with heaptrc
         # Its own unit-output directory, per the per-program rule (see the
         # memory-safety job); fpc does not create it.
@@ -226,10 +293,10 @@ jobs:
           status=0
           started=${SECONDS}
           AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -n -t 5000 \
+          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -t 5000 \
             -i build/fuzz/heap-snapshot-corpus \
             -o build/fuzz/heap-snapshot-out \
-            -- ./build/GocciaFuzzHarness --heap-snapshot @@ || status=$?
+            -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@ || status=$?
           elapsed=$(( SECONDS - started ))
           echo "afl-fuzz exit status: ${status} after ${elapsed}s"
           case "${status}" in

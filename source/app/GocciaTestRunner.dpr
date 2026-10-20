@@ -9,6 +9,8 @@ uses
   SysUtils,
 
   TimingUtils,
+  OrderedStringMap,
+  UnicodeStringList,
   CriticalSections,
 
   Goccia.Arguments.Collection,
@@ -31,6 +33,7 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.NativeLimits,
   Goccia.HeapSnapshot.RoundTrip,
   Goccia.JSON.Utils,
   Goccia.Modules.NodeResolution,
@@ -205,7 +208,7 @@ type
     FHeapSnapshotPassed: Int64;
     FHeapSnapshotRefused: Int64;
     FHeapSnapshotFailed: Int64;
-    FHeapSnapshotRefusals: TStringList;
+    FHeapSnapshotRefusals: TOrderedStringMap<Int64>;
     { Stop signal of the parallel run currently in flight, or nil. Not owned —
       RunScriptsFromFilesParallel publishes it before RunAll starts any worker
       and clears it once RunAll has joined them. It exists so a worker that hits
@@ -766,7 +769,7 @@ begin
 
   Files := TStringList.Create;
   if FHeapSnapshots.Present then
-    FHeapSnapshotRefusals := TStringList.Create;
+    FHeapSnapshotRefusals := TOrderedStringMap<Int64>.Create;
   StdinSource := nil;
   try
     if UseStdin then
@@ -951,7 +954,7 @@ procedure TTestRunnerApp.RecordHeapSnapshots(
   const ACheck: TGocciaHeapSnapshotRoundTrip; const AFileName: string);
 var
   I: Integer;
-  Reason: string;
+  Pair: TOrderedStringMap<Integer>.TKeyValuePair;
   Count: Int64;
 begin
   Inc(FHeapSnapshotObservations, ACheck.Observations);
@@ -959,13 +962,15 @@ begin
   Inc(FHeapSnapshotPassed, ACheck.Passed);
   Inc(FHeapSnapshotRefused, ACheck.Refused);
   Inc(FHeapSnapshotFailed, ACheck.Failed);
-  for I := 0 to ACheck.RefusalReasons.Count - 1 do
-  begin
-    Reason := ACheck.RefusalReasons.Names[I];
-    Count := StrToInt64Def(FHeapSnapshotRefusals.Values[Reason], 0);
-    Inc(Count, StrToInt64(ACheck.RefusalReasons.ValueFromIndex[I]));
-    FHeapSnapshotRefusals.Values[Reason] := IntToStr(Count);
-  end;
+  for Pair in ACheck.RefusalReasons do
+    if FHeapSnapshotRefusals.TryGetValue(Pair.Key, Count) then
+      FHeapSnapshotRefusals[Pair.Key] := Count + Pair.Value
+    else
+    begin
+      CheckedNativeByteSize(Int64(FHeapSnapshotRefusals.Count) + 1,
+        SizeOf(TOrderedStringMap<Int64>.TEntry) * 4);
+      FHeapSnapshotRefusals.Add(Pair.Key, Pair.Value);
+    end;
   for I := 0 to ACheck.FailureDetails.Count - 1 do
     WriteLn(ErrOutput, 'Heap snapshot failure: ', AFileName, ': ',
       ACheck.FailureDetails[I]);
@@ -1041,17 +1046,27 @@ end;
 
 procedure TTestRunnerApp.PrintHeapSnapshotReport;
 var
-  I: Integer;
+  Pair: TOrderedStringMap<Int64>.TKeyValuePair;
+  Reasons: TUnicodeStringList;
+  Reason: string;
 begin
   WriteLn(ErrOutput, Format('Heap snapshots: observations=%d objects=%d ' +
     'passed=%d refused=%d failed=%d', [FHeapSnapshotObservations,
     FHeapSnapshotObjects, FHeapSnapshotPassed, FHeapSnapshotRefused,
     FHeapSnapshotFailed]));
-  FHeapSnapshotRefusals.Sort;
-  for I := 0 to FHeapSnapshotRefusals.Count - 1 do
-    WriteLn(ErrOutput, 'Heap snapshot refusal: ',
-      FHeapSnapshotRefusals.ValueFromIndex[I], ' ',
-      FHeapSnapshotRefusals.Names[I]);
+  CheckedNativeByteSize(Int64(FHeapSnapshotRefusals.Count) * 2,
+    SizeOf(UnicodeString));
+  Reasons := TUnicodeStringList.Create;
+  try
+    for Pair in FHeapSnapshotRefusals do
+      Reasons.Add(Pair.Key);
+    Reasons.Sort;
+    for Reason in Reasons do
+      WriteLn(ErrOutput, 'Heap snapshot refusal: ',
+        FHeapSnapshotRefusals[Reason], ' ', Reason);
+  finally
+    Reasons.Free;
+  end;
 end;
 
 procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);

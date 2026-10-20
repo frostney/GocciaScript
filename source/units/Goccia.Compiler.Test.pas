@@ -2261,8 +2261,8 @@ begin
       Stream.Position := 0;
       Reader := TGocciaBytecodeReader.Create(Stream);
       try
-        // Loading checks every register against the compiler's frame size,
-        // including the exclusion list at the rest destination's next slot.
+        // Loading checks the OP_MOVE destination that supplies the exclusion
+        // list at the rest destination's next slot against the frame size.
         Loaded := Reader.ReadModule;
         try
           Expect<Boolean>(Assigned(FindFunctionWithOp(Loaded.TopLevel,

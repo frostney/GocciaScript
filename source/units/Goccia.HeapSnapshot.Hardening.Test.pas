@@ -76,6 +76,7 @@ uses
   Goccia.Values.FFIType,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives;
 
 const
@@ -271,6 +272,7 @@ type
     procedure TestInputPastOneAllocationRefuses;
     procedure TestLateBuiltinOrderIsStable;
     procedure TestObservedObjectsRoundTrip;
+    procedure TestRefusalReasonsKeepEquals;
     procedure TestLateFFIPrototypesRoundTrip;
     procedure TestLazyNativeNamespacesRestore;
     procedure TestCanonicalDescriptionDetectsChanges;
@@ -616,6 +618,8 @@ begin
     TestLateBuiltinOrderIsStable);
   Test('Observed objects round-trip at idle, retain identity and count refusals',
     TestObservedObjectsRoundTrip);
+  Test('Refusal reasons retain equals signs and distinct property names',
+    TestRefusalReasonsKeepEquals);
   Test('late FFI prototypes restore without native state codecs',
     TestLateFFIPrototypesRoundTrip);
   Test('Lazy native namespaces restore in a fresh runtime without imports',
@@ -1685,6 +1689,52 @@ begin
     // Rebuilding ordinary prototypes must not grant codecs to native state.
     Expect<Integer>(Check.Refused).ToBe(5);
     Expect<Integer>(Check.Failed).ToBe(0);
+  finally
+    Check.Free;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestRefusalReasonsKeepEquals;
+const
+  KEYS: array[0..2] of string = ('a=b', 'a:b', 'a=b');
+var
+  Lines: TStringList;
+  Engine: TGocciaEngine;
+  Context: TGocciaExecutionContextScope;
+  Check: TGocciaHeapSnapshotRoundTrip;
+  Value: TGocciaObjectValue;
+  I: Integer;
+begin
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+  try
+    Context := Engine.ActivateRealmExecutionContext;
+    try
+      for I := 0 to High(KEYS) do
+      begin
+        Value := TGocciaObjectValue.Create;
+        Check.Observe(Value);
+        Value.DefineProperty(KEYS[I],
+          TGocciaLazyPropertyDescriptorData.Create(nil, [pfConfigurable]));
+      end;
+    finally
+      Context.Free;
+    end;
+    FFactoryCalls := 0;
+    Check.Verify(CreateRoundTripDestination);
+    Expect<string>(Check.FailureDetails.Text).ToBe('');
+    Expect<Integer>(Check.Passed).ToBe(0);
+    Expect<Integer>(Check.Refused).ToBe(3);
+    Expect<Integer>(Check.Failed).ToBe(0);
+    Expect<Integer>(Check.RefusalReasons.Count).ToBe(2);
+    Expect<Integer>(Check.RefusalReasons[
+      'an unmaterialized lazy property "a=b"']).ToBe(2);
+    Expect<Integer>(Check.RefusalReasons[
+      'an unmaterialized lazy property "a:b"']).ToBe(1);
+    Expect<Integer>(FFactoryCalls).ToBe(0);
   finally
     Check.Free;
     Engine.Free;

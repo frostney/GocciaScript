@@ -12,6 +12,8 @@ uses
   Classes,
   Generics.Collections,
 
+  OrderedStringMap,
+
   Goccia.Engine,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot,
@@ -33,7 +35,7 @@ type
     FRefused: Integer;
     FFailed: Integer;
     FVerified: Boolean;
-    FRefusalReasons: TStringList;
+    FRefusalReasons: TOrderedStringMap<Integer>;
     FFailureDetails: TStringList;
     function GetObjects: Integer;
     procedure RecordRefusal(const AReason: string);
@@ -59,7 +61,7 @@ type
     property Passed: Integer read FPassed;
     property Refused: Integer read FRefused;
     property Failed: Integer read FFailed;
-    property RefusalReasons: TStringList read FRefusalReasons;
+    property RefusalReasons: TOrderedStringMap<Integer> read FRefusalReasons;
     property FailureDetails: TStringList read FFailureDetails;
   end;
 
@@ -366,7 +368,7 @@ begin
   FEngine := ASourceEngine;
   FValues := TList<TGocciaValue>.Create;
   FSeen := TDictionary<TGocciaValue, Boolean>.Create;
-  FRefusalReasons := TStringList.Create;
+  FRefusalReasons := TOrderedStringMap<Integer>.Create;
   FFailureDetails := TStringList.Create;
   Context := FEngine.ActivateRealmExecutionContext;
   try
@@ -427,7 +429,7 @@ end;
 procedure TGocciaHeapSnapshotRoundTrip.RecordRefusal(const AReason: string);
 var
   Reason: string;
-  Index, Chain: Integer;
+  Count, Chain: Integer;
 begin
   Inc(FRefused);
   Reason := AReason;
@@ -436,12 +438,14 @@ begin
     SetLength(Reason, Chain - 1);
   if Pos('the run changed built-ins:', Reason) = 1 then
     Reason := 'the run changed built-ins';
-  Index := FRefusalReasons.IndexOfName(Reason);
-  if Index < 0 then
-    FRefusalReasons.Add(Reason + '=1')
+  if FRefusalReasons.TryGetValue(Reason, Count) then
+    FRefusalReasons[Reason] := Count + 1
   else
-    FRefusalReasons.ValueFromIndex[Index] :=
-      IntToStr(StrToInt(FRefusalReasons.ValueFromIndex[Index]) + 1);
+  begin
+    CheckedNativeByteSize(Int64(FRefusalReasons.Count) + 1,
+      SizeOf(TOrderedStringMap<Integer>.TEntry) * 4);
+    FRefusalReasons.Add(Reason, 1);
+  end;
 end;
 
 procedure TGocciaHeapSnapshotRoundTrip.VerifyValue(const AIndex: Integer;

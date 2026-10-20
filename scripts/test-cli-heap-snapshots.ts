@@ -10,6 +10,7 @@ test("observed objects", () => {
   expect(object).toBe(object);
   object.final = 42;
   expect(new Map()).toBeInstanceOf(Map);
+  expect(new ArrayBuffer(1)).toBeInstanceOf(ArrayBuffer);
   expect(1).toBe(1);
 });
 `;
@@ -30,10 +31,16 @@ for (const moduleOnly of [false, true]) {
   const diagnostics = result.stderr.toString();
   if (result.exitCode !== 0 || report.ok !== true || report.jobCount !== 1)
     throw new Error(`Round-trip CLI failed: ${result.exitCode} ${diagnostics}`);
-  if (!/Heap snapshots: observations=3 objects=2 passed=1 refused=1 failed=0/.test(diagnostics))
+  if (!/Heap snapshots: observations=4 objects=3 passed=1 refused=2 failed=0/.test(diagnostics))
     throw new Error(`Unexpected round-trip counts: ${diagnostics}`);
-  if (!/Heap snapshot refusal: 1 /.test(diagnostics))
-    throw new Error(`Missing refusal reason: ${diagnostics}`);
+  const refusals = diagnostics.split(/\r?\n/)
+    .filter((line) => line.startsWith("Heap snapshot refusal:"));
+  const expectedRefusals = [
+    "Heap snapshot refusal: 1 no snapshot codec for TGocciaArrayBufferValue",
+    "Heap snapshot refusal: 1 no snapshot codec for TGocciaMapValue",
+  ];
+  if (JSON.stringify(refusals) !== JSON.stringify(expectedRefusals))
+    throw new Error(`Unexpected refusal counts or order: ${diagnostics}`);
 }
 const collected = Bun.spawnSync([
   TESTRUNNER, "-P", "tests/built-ins/Promise/try.js",
