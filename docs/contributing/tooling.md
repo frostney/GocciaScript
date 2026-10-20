@@ -6,7 +6,7 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing
+- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
 
 ## Auto-Formatting
@@ -214,6 +214,21 @@ Result := NumberBits.IsNegativeZero(V);
 ```
 
 This works because `DoubleToBits` copies the whole `Double` into a `UInt64`, so the sign is bit 63 of the integer regardless of byte ordering. Use `DoubleToBits` / `BitsToDouble` for any other bit-level test.
+
+### `Int64` Loop Counters and Lengths on 32-bit Targets
+
+`i386-win32` is a 32-bit target, and only full CI builds it (see
+[Workflow — Full CI](workflow.md#full-ci)). FPC rejects a `for` loop whose
+counter is wider than the target's word, so an `Int64` counter compiles on
+every 64-bit target and fails on `i386` with `Error: Ordinal expression
+expected`. Keep `for` counters `Integer` (or `SizeInt`) and do any 64-bit
+arithmetic on the bounds outside the loop header.
+
+Lengths need the same care: `SetLength`, `Move` and array indexes take
+`SizeInt`, which is 32 bits there, so an `Int64` length larger than
+`High(SizeInt)` truncates silently instead of failing. Refuse such a length
+before it reaches an allocation, as the heap snapshot reader does for its
+input.
 
 ### `WideChar in [set]` Allocates
 

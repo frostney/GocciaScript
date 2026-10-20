@@ -2291,7 +2291,10 @@ const
   CHUNK_UNITS = 65536;
 var
   Len: Cardinal;
-  I, Start, Count: Int64;
+  Start: Int64;
+  // A for loop's counter cannot be wider than the target's word: an Int64
+  // counter does not compile for a 32-bit target.
+  I, Count: Integer;
   Unit_: Word;
 begin
   Len := ReadU32;
@@ -2304,7 +2307,7 @@ begin
   while Start < Len do
   begin
     Poll;
-    Count := Min(Int64(CHUNK_UNITS), Int64(Len) - Start);
+    Count := Integer(Min(Int64(CHUNK_UNITS), Int64(Len) - Start));
     for I := 0 to Count - 1 do
     begin
       Move(FData[FPos + (Start + I) * 2], Unit_, 2);
@@ -2662,6 +2665,10 @@ begin
   Size := AStream.Size - AStream.Position;
   if Size > FLimits.MaxInputBytes then
     Refuse('the snapshot is larger than the limit');
+  // The input is held in one array: on a 32-bit target a larger limit than
+  // the address space would truncate its length below what FLimit allows.
+  if Size > High(SizeInt) then
+    Refuse('the snapshot is larger than this target can hold');
   Reserve(Size, 1);
   SetLength(FData, Size);
   if Size > 0 then
