@@ -505,6 +505,14 @@ swept while something still held it; running the file again and stopping in
 the collection that swept it (when `TotalCollections` is one less) shows the
 native frame that was holding it.
 
+The quarantine misses a value native code only reads after the sweep. For
+those, set only `CollectBeforeEveryReservation`, build the runner with
+`-Facmem`, and run each file (or each test262 directory with one worker)
+under memcheck with `--trace-children=yes`. Each report names the read, the
+allocation and the collection that freed the value. Sweeping `tests/` and
+parts of test262 this way found the windows that #1816's quarantine sweeps
+missed.
+
 ## Depth and Fuzz Probe
 
 `scripts/depth-probe.ts` runs depth and nesting shapes against a `GocciaRunner`
