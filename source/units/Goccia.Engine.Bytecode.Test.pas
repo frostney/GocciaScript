@@ -50,6 +50,11 @@ type
     procedure TestRegisteredGraphMatchesSourceAndOwnsBuffers;
     procedure TestBufferedEntryUsesPrecompiledImports;
     procedure TestBufferedURIEntryResolvesRelativeImports;
+    procedure AssertBufferedRelativeImport(const AEntryAddress,
+      ADependencyAddress, ASpecifier: string);
+    procedure TestBufferedNativeFileRelativeImport;
+    procedure TestBufferedFileFragmentIsLiteral;
+    procedure TestBufferedURISuffixRelativeImport;
     procedure TestStandaloneBufferedEntryUsesRuntimeAddress;
     procedure TestSourceEntryImportsExactVirtualAddress;
     procedure TestRelativeAliasesAndRelocatedImportMeta;
@@ -93,6 +98,12 @@ begin
     TestBufferedEntryUsesPrecompiledImports);
   Test('A URI-addressed entry buffer resolves relative registered imports',
     TestBufferedURIEntryResolvesRelativeImports);
+  Test('Registered native file entries resolve relative bytecode imports',
+    TestBufferedNativeFileRelativeImport);
+  Test('Registered file paths preserve literal fragment characters',
+    TestBufferedFileFragmentIsLiteral);
+  Test('Registered URI paths retain query and fragment resolution rules',
+    TestBufferedURISuffixRelativeImport);
   Test('A standalone entry buffer relocates relative imports to its runtime address',
     TestStandaloneBufferedEntryUsesRuntimeAddress);
   Test('A source entry imports bytecode registered at an exact virtual address',
@@ -267,6 +278,57 @@ begin
   finally
     Source.Free;
   end;
+end;
+
+procedure TEngineBytecodeTests.AssertBufferedRelativeImport(
+  const AEntryAddress, ADependencyAddress, ASpecifier: string);
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Bytes: TBytes;
+begin
+  Source := TStringList.Create;
+  try
+    Engine := TGocciaEngine.Create(AEntryAddress, Source);
+    try
+      Engine.SourceType := stModule;
+      RegisterAndRelease(Engine, ADependencyAddress,
+        'export const value = 42;');
+      Bytes := CompileBuffer('import { value } from "' + ASpecifier + '";' +
+        'globalThis.answer = value; globalThis.entryURL = import.meta.url;',
+        'memory:/compile/main.mjs');
+      Engine.RunBytecodeBuffer(Bytes, AEntryAddress);
+      Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+        .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+      Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+        .GetProperty('entryURL').ToStringLiteral.Value).ToBe(AEntryAddress);
+    finally
+      Engine.Free;
+    end;
+  finally
+    Source.Free;
+  end;
+end;
+
+procedure TEngineBytecodeTests.TestBufferedNativeFileRelativeImport;
+begin
+  { RuntimeAddress supplies a drive-qualified path with native separators
+    on Windows, and an absolute filesystem path on Unix. }
+  AssertBufferedRelativeImport(RuntimeAddress('native' + PathDelim + 'main.mjs'),
+    RuntimeAddress('native' + PathDelim + 'dep.mjs'), './dep.mjs');
+end;
+
+procedure TEngineBytecodeTests.TestBufferedFileFragmentIsLiteral;
+begin
+  AssertBufferedRelativeImport(RuntimeAddress('files#literal' + PathDelim + 'main.mjs'),
+    RuntimeAddress('files#literal' + PathDelim + 'dep#literal.mjs'), './dep#literal.mjs');
+end;
+
+procedure TEngineBytecodeTests.TestBufferedURISuffixRelativeImport;
+begin
+  AssertBufferedRelativeImport('memory:/runtime/main.mjs?version=1#entry',
+    'memory:/runtime/dep.mjs?version=2#dependency',
+    './dep.mjs?version=2#dependency');
 end;
 
 procedure TEngineBytecodeTests.TestStandaloneBufferedEntryUsesRuntimeAddress;

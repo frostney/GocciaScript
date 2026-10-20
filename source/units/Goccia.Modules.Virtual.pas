@@ -447,8 +447,12 @@ begin
   Candidate := AModulePath;
   if IsRelativeSpecifier(Candidate) then
   begin
+    { Registration does not turn a filesystem path into a URI. Drive and
+      sandbox-rooted paths keep native separators and literal #/? characters. }
     if IsVirtualModuleURI(AImportingAddress) or
-       FDefinitions.ContainsKey(AImportingAddress) then
+       (FDefinitions.ContainsKey(AImportingAddress) and
+        not IsAbsolutePath(AImportingAddress) and
+        ((AImportingAddress = '') or (AImportingAddress[1] <> '/'))) then
       Candidate := ResolveRelativeVirtualAddress(Candidate, AImportingAddress)
     else
       Candidate := NormalizeFilePath(ExtractFilePath(AImportingAddress) +
