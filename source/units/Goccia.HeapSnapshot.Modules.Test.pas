@@ -96,6 +96,7 @@ type
     procedure TestRefusedRestoreLeavesNoRecords;
     procedure TestRefusedRestoreLeavesOwnershipAlone;
     procedure TestRestoreHonorsReadDenial;
+    procedure TestRecordOnlyRefusalHasNoUnrelatedRoot;
     procedure TestRefusesStateOutsideTheRecords;
     procedure TestRefusesForgedLocalExports;
     procedure TestRefusesAMissingExportValue;
@@ -410,6 +411,8 @@ begin
     TestRefusedRestoreLeavesOwnershipAlone);
   Test('A snapshot ownership flag cannot bypass a source read denial',
     TestRestoreHonorsReadDenial);
+  Test('A module-only refusal does not blame an unrelated root',
+    TestRecordOnlyRefusalHasNoUnrelatedRoot);
   Test('Loader state outside the records refuses the snapshot',
     TestRefusesStateOutsideTheRecords);
   Test('A local export forged outside its module''s own bindings is refused',
@@ -786,13 +789,15 @@ end;
 
 procedure THeapSnapshotModulesTests.TestRestoreHonorsReadDenial;
 var
-  Refusal: string;
+  Refusal, ProjectRoot: string;
   Bytes, Forged: TBytes;
   Counter, P, At, Owned: Integer;
   Run: TModuleRun;
   Retained: Int64;
 begin
   DefineGraph;
+  // Temp paths can be short Windows names or symlink aliases.
+  ProjectRoot := CanonicalCapabilityPath(FDir);
   Bytes := SnapshotEntry('main.js', Refusal);
   Expect<string>(Refusal).ToBe('');
   Counter := StringIndexIn(Bytes, PathOf('counter.js'));
@@ -816,7 +821,7 @@ begin
     try
       Run.Engine.ModuleLoader.ConfigureCapabilities(
         TGocciaCapabilities.None.Deny(gcRead, PathOf('counter.js')),
-        FDir, nil);
+        ProjectRoot, nil);
       Retained := Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes;
       Refusal := RestoreInto(Run, Forged);
       Expect<Boolean>(Refusal <> '').ToBe(True);
@@ -833,13 +838,26 @@ begin
   Run := TModuleRun.Create(PathOf('main.js'));
   try
     Run.Engine.ModuleLoader.ConfigureCapabilities(TGocciaCapabilities.None,
-      FDir, nil);
+      ProjectRoot, nil);
     Expect<string>(RestoreInto(Run, Bytes)).ToBe('');
     Expect<string>(Run.Check('String(restored.inc())')).ToBe('2');
     Expect<Integer>(Run.Ticks).ToBe(0);
   finally
     Run.Free;
   end;
+end;
+
+procedure THeapSnapshotModulesTests.TestRecordOnlyRefusalHasNoUnrelatedRoot;
+var
+  Refusal: string;
+begin
+  // The module record retains p through its environment. The captured array
+  // never reached it, so it must not appear in the refusal's ancestry.
+  Define('record-only.js', 'const p = Promise.resolve(1); capture([]);');
+  SnapshotEntry('record-only.js', Refusal);
+  Expect<Boolean>(Pos('TGocciaPromiseValue', Refusal) > 0).ToBe(True);
+  Expect<Boolean>(Pos('TGocciaScope', Refusal) > 0).ToBe(True);
+  Expect<Integer>(Pos('TGocciaArrayValue', Refusal)).ToBe(0);
 end;
 
 procedure THeapSnapshotModulesTests.TestRefusesStateOutsideTheRecords;

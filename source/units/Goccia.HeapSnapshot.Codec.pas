@@ -2109,6 +2109,8 @@ begin
       CheckNativeWork;
       if Index >= FObjects.Count then
       begin
+        // A module record is independent of the last object written.
+        FCurrentId := -1;
         Payload.Clear;
         FOut := Payload;
         FRecordCodec.WritePayload(Self, FRecords[RecordIndex]);
