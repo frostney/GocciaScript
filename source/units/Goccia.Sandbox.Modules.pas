@@ -24,6 +24,8 @@ type
     function Exists(const APath: string): Boolean; override;
     function LoadContent(const APath: string): TGocciaModuleContent; override;
     function LoadContentBytes(const APath: string): TBytes; override;
+    function LoadContentBytesBounded(const APath: string;
+      const AMaxBytes: Int64): TBytes; override;
     function TryGetLastModified(const APath: string;
       out ALastModified: TDateTime): Boolean; override;
   end;
@@ -57,6 +59,7 @@ implementation
 
 uses
   Goccia.FileExtensions,
+  Goccia.NativeLimits,
   Goccia.Packages.Address;
 
 const
@@ -147,6 +150,22 @@ begin
 
   // Read raw bytes directly from the virtual filesystem so Import Bytes
   // preserves the exact file contents instead of round-tripping through text.
+  Result := FFs.ReadAllBytes(APath);
+end;
+
+function TGocciaSandboxModuleContentProvider.LoadContentBytesBounded(
+  const APath: string; const AMaxBytes: Int64): TBytes;
+var
+  Stat: TSandboxFsStat;
+begin
+  if AMaxBytes < 0 then
+    raise EArgumentException.Create('Invalid module byte limit');
+  if not Assigned(FFs) then
+    raise EStreamError.Create('No sandbox filesystem configured.');
+  Stat := FFs.Stat(APath);
+  if (Stat.Size < 0) or (Stat.Size > AMaxBytes) then
+    raise EStreamError.Create('Module byte limit exceeded');
+  CheckedNativeByteSize(Stat.Size, 1);
   Result := FFs.ReadAllBytes(APath);
 end;
 

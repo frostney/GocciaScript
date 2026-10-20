@@ -88,6 +88,7 @@ type
 function ParseVirtualModuleContentType(const AType: string;
   out AContentType: TGocciaVirtualModuleContentType): Boolean;
 function IsRelativeSpecifier(const AValue: string): Boolean;
+function IsVirtualModuleURI(const AValue: string): Boolean;
 function VirtualModuleContentTypeName(
   const AContentType: TGocciaVirtualModuleContentType): string;
 
@@ -102,7 +103,7 @@ begin
     (Copy(AValue, 1, 3) = '../');
 end;
 
-function HasScheme(const AValue: string): Boolean;
+function IsVirtualModuleURI(const AValue: string): Boolean;
 var
   ColonPosition, SlashPosition: NativeInt;
 begin
@@ -142,7 +143,7 @@ begin
   Prefix := '';
   Remainder := AValue;
   SchemeEnd := Pos(':', AValue);
-  if HasScheme(AValue) then
+  if IsVirtualModuleURI(AValue) then
   begin
     Prefix := Copy(AValue, 1, SchemeEnd);
     Remainder := Copy(AValue, SchemeEnd + 1, MaxInt);
@@ -222,7 +223,7 @@ begin
   if SuffixStart > 0 then
     BaseAddress := Copy(BaseAddress, 1, SuffixStart - 1);
   DelimiterPosition := LastDelimiter('/', BaseAddress);
-  if (DelimiterPosition = 0) and HasScheme(BaseAddress) then
+  if (DelimiterPosition = 0) and IsVirtualModuleURI(BaseAddress) then
     DelimiterPosition := Pos(':', BaseAddress);
   BaseAddress := Copy(BaseAddress, 1, DelimiterPosition);
   Result := NormalizeVirtualAddress(BaseAddress + AModulePath);
@@ -306,7 +307,7 @@ var
 begin
   if IsRelativeSpecifier(AAddress) then
   begin
-    if HasScheme(ABaseAddress) then
+    if IsVirtualModuleURI(ABaseAddress) then
       Exit(ResolveRelativeVirtualAddress(AAddress, ABaseAddress));
     BaseDirectory := ABaseAddress;
     if (BaseDirectory = '') or not DirectoryExists(BaseDirectory) then
@@ -429,7 +430,7 @@ begin
   Candidate := AModulePath;
   if IsRelativeSpecifier(Candidate) then
   begin
-    if HasScheme(AImportingAddress) or
+    if IsVirtualModuleURI(AImportingAddress) or
        FDefinitions.ContainsKey(AImportingAddress) then
       Candidate := ResolveRelativeVirtualAddress(Candidate, AImportingAddress)
     else

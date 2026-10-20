@@ -180,6 +180,38 @@ export function verifyAotModules(): void {
     if (!sandboxCompanions.split("\n")[1]?.endsWith("/library.mjs"))
       throw new Error(`Sandbox companion lost its logical address:\n${sandboxCompanions}`);
 
+    const identityDir = join(tmp, "identity");
+    mkdirSync(identityDir);
+    const identityLibrary = join(identityDir, "library.mjs");
+    writeFileSync(identityLibrary, `
+      globalThis.identityRuns = (globalThis.identityRuns ?? 0) + 1;
+      export let value = 0;
+      export const increment = () => { value += 1; };
+    `);
+    compile(identityLibrary);
+    unlinkSync(identityLibrary);
+    for (const artifactFirst of [true, false]) {
+      const first = artifactFirst ? "./library.gbc" : "./library.mjs";
+      const second = artifactFirst ? "./library.mjs" : "./library.gbc";
+      const identityEntry = join(identityDir, "entry.mjs");
+      writeFileSync(identityEntry, `
+        import { value, increment } from "${first}";
+        import { value as other } from "${second}";
+        increment();
+        console.log("AOT:" + JSON.stringify([value, other, globalThis.identityRuns]));
+      `);
+      equal(resultLines(invoke(RUNNER, [identityEntry, "--prefer-bytecode"])),
+        "AOT:[1,1,1]", `artifact identity (artifact first=${artifactFirst})`);
+    }
+    writeFileSync(join(identityDir, "raw.gbc"), new Uint8Array([0, 255, 42]));
+    writeFileSync(join(identityDir, "raw-entry.mjs"), `
+      import bytes from "./raw.gbc" with { type: "bytes" };
+      console.log("AOT:" + JSON.stringify(Array.from(bytes)));
+    `);
+    equal(resultLines(invoke(RUNNER, [
+      join(identityDir, "raw-entry.mjs"), "--prefer-bytecode",
+    ])), "AOT:[0,255,42]", "an attributed byte import remains raw data");
+
     const packageDir = join(tmp, "packages");
     const esmPackage = join(packageDir, "node_modules", "aot-esm");
     const cjsPackage = join(packageDir, "node_modules", "aot-commonjs");

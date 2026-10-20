@@ -194,7 +194,7 @@ type
       AImportingFilePath: string): Boolean;
     function ResolveRequestAddress(const ASpecifier,
       AImportingFilePath: string; const AIsLiteral, AQuiet: Boolean;
-      out APackageRoot: string): string;
+      out APackageRoot: string; const AUseBytecode: Boolean = True): string;
     function ResolveTraversedDependency(const ARequestedPath,
       AAttributeType, AImportingFilePath: string;
       const ADeclaration: TGocciaStatement): string;
@@ -323,7 +323,7 @@ type
       const AProvenance: string = '');
     procedure CopyVirtualModulesFrom(const ASource: TGocciaModuleLoader);
     function ResolveModuleAddress(const AModulePath,
-      AImportingFilePath: string): string;
+      AImportingFilePath: string; const AUseBytecode: Boolean = True): string;
     function ResolveModuleURL(const AModulePath,
       AImportingFilePath: string): string;
     procedure RegisterModule(const AResolvedPath: string;
@@ -1142,7 +1142,7 @@ end;
   was resolved in, or empty. }
 function TGocciaModuleLoader.ResolveRequestAddress(const ASpecifier,
   AImportingFilePath: string; const AIsLiteral, AQuiet: Boolean;
-  out APackageRoot: string): string;
+  out APackageRoot: string; const AUseBytecode: Boolean): string;
 var
   SavedImporter, SavedSpecifier: string;
   SavedActive, SavedLiteral, SavedQuiet: Boolean;
@@ -1151,7 +1151,7 @@ begin
   APackageRoot := '';
   if not GuardsRequest(ASpecifier, AImportingFilePath) then
   begin
-    Result := ResolveModuleAddress(ASpecifier, AImportingFilePath);
+    Result := ResolveModuleAddress(ASpecifier, AImportingFilePath, AUseBytecode);
     APackageRoot := FLastPackageRoot;
     Exit;
   end;
@@ -1169,7 +1169,7 @@ begin
   FProbeQuiet := AQuiet;
   FResolver.ProbeGuard := HostProbeGuard;
   try
-    Result := ResolveModuleAddress(ASpecifier, AImportingFilePath);
+    Result := ResolveModuleAddress(ASpecifier, AImportingFilePath, AUseBytecode);
     APackageRoot := FLastPackageRoot;
   finally
     FResolver.ProbeGuard := SavedGuard;
@@ -1200,7 +1200,7 @@ begin
     ADeclaration.Column, PreviousCallSite);
   try
     Result := ResolveRequestAddress(ARequestedPath, AImportingFilePath, True,
-      False, PackageRoot);
+      False, PackageRoot, AAttributeType = '');
     EnforceHostRead(ARequestedPath, Result, AImportingFilePath, PackageRoot,
       True, IsHostRequest(ARequestedPath, AImportingFilePath));
   finally
@@ -1275,14 +1275,15 @@ begin
   if (AAttributeType = '') and HasGlobalModuleRequest(AModulePath) then
     Exit(AModulePath);
 
-  Result := ResolveModuleAddress(AModulePath, AImportingFilePath);
+  Result := ResolveModuleAddress(AModulePath, AImportingFilePath,
+    AAttributeType = '');
 
   if AAttributeType <> '' then
     Result := EncodeImportSpecifierAttribute(Result, AAttributeType);
 end;
 
 function TGocciaModuleLoader.ResolveModuleAddress(const AModulePath,
-  AImportingFilePath: string): string;
+  AImportingFilePath: string; const AUseBytecode: Boolean): string;
 var
   AliasCandidate, FileSystemAddress: string;
 
@@ -1334,7 +1335,7 @@ var
 begin
   FLastPackageRoot := '';
   if Assigned(FResolver) then
-    FResolver.PreferBytecodeCompanions := FPreferBytecode;
+    FResolver.PreferBytecodeCompanions := FPreferBytecode and AUseBytecode;
   if FVirtualModules.Resolve(AModulePath, AImportingFilePath, Result) then
   begin
     WarnOnCollision(Result);
@@ -1352,14 +1353,20 @@ begin
     end;
     Result := FResolver.Resolve(AModulePath, AImportingFilePath);
     FLastPackageRoot := FResolver.LastPackageDirectory;
+    if not AUseBytecode then
+      Exit;
     if FResolver.LastCompanionSourcePath <> '' then
     begin
       Result := ResolveBytecodeCompanion(Result,
         FResolver.LastCompanionSourcePath, AModulePath, AImportingFilePath);
     end
-    else if SameText(ExtractFileExt(Result), EXT_GBC) and
-       FBytecodeAddresses.TryGetValue(Result, FileSystemAddress) then
-      Result := FileSystemAddress;
+    else if SameText(ExtractFileExt(Result), EXT_GBC) then
+      Result := ResolveBytecodeCompanion(Result, Result,
+        AModulePath, AImportingFilePath)
+    else
+      { A source candidate selected by the resolver must not inherit a
+        companion rejected by its current policy or provider pins. }
+      FBytecodePaths.Remove(Result);
     Exit;
   end;
   raise EGocciaModuleNotFound.CreateFmt(
@@ -1444,8 +1451,6 @@ begin
   end;
   if SameText(ExtractFileExt(AResolvedPath), '.gbc') then
     Exit(AResolvedPath);
-  if not FPreferBytecode then
-    Exit;
   if FBytecodePaths.TryGetValue(AResolvedPath, Result) then
   begin
     if FContentProvider.Exists(Result) then
@@ -1453,9 +1458,6 @@ begin
     FBytecodePaths.Remove(AResolvedPath);
   end;
   Result := '';
-  if IsScriptExtension(ExtractFileExt(AResolvedPath)) and
-     FContentProvider.Exists(ChangeFileExt(AResolvedPath, '.gbc')) then
-    Result := ChangeFileExt(AResolvedPath, '.gbc');
 end;
 
 procedure TGocciaModuleLoader.RegisterPrecompiledModule(const AAddress: string;
@@ -2981,7 +2983,8 @@ begin
 
   try
     ResolvedPath := ResolveRequestAddress(RequestedModulePath,
-      ImportingFilePath, not IsComputedRequest, False, PackageRoot);
+      ImportingFilePath, not IsComputedRequest, False, PackageRoot,
+      AttributeType = '');
   except
     on E: TGocciaRuntimeError do
       raise;
@@ -3275,7 +3278,7 @@ begin
 
   try
     ResolvedPath := ResolveRequestAddress(RequestedModulePath,
-      AImportingFilePath, not IsComputedRequest, False, PackageRoot);
+      AImportingFilePath, not IsComputedRequest, False, PackageRoot, False);
   except
     on E: TGocciaRuntimeError do
       raise;
@@ -3628,7 +3631,8 @@ begin
   begin
     try
       ResolvedPath := ResolveRequestAddress(RequestedModulePath,
-        AImportingFilePath, not IsComputedRequest, False, PackageRoot);
+        AImportingFilePath, not IsComputedRequest, False, PackageRoot,
+        AttributeType = '');
     except
       on E: TGocciaRuntimeError do
         raise;

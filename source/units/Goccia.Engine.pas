@@ -54,6 +54,7 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
+  Goccia.Modules.Virtual,
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Packages.Address,
@@ -3916,6 +3917,8 @@ function EntryModulePath(const ALoader: TGocciaModuleLoader;
 var
   Provider: TGocciaModuleContentProvider;
 begin
+  if IsVirtualModuleURI(ASourcePath) then
+    Exit(ALoader.VirtualModules.CanonicalAddress(ASourcePath, ''));
   Result := ExpandFileName(ASourcePath);
   if Result = ASourcePath then
     Exit;
