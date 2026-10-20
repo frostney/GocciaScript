@@ -187,6 +187,33 @@ const data = await r.json()
 console.log(r.status, r.redirected, data.method)
 " "200 true GET"
 
+# A redirect within one origin keeps caller credentials. A redirect to the
+# same listener under another host name drops them but keeps ordinary headers.
+check "same-origin redirect keeps credentials" 0 "
+const r = await fetch('${BASE}/redirect-headers', {
+  headers: { Authorization: 'Bearer test-secret', Cookie: 'session=test-secret',
+    'Proxy-Authorization': 'Basic test-secret', 'X-Trace': 'keep-me' },
+})
+const lower = {}
+for (const [name, value] of Object.entries((await r.json()).headers))
+  lower[name.toLowerCase()] = value
+console.log(Boolean(lower.authorization), Boolean(lower.cookie),
+  Boolean(lower['proxy-authorization']), lower['x-trace'])
+" "true true true keep-me"
+
+check_with "cross-host redirect drops credentials" \
+  "--allow-net=127.0.0.1,localhost,private" 0 "
+const r = await fetch('${BASE}/redirect-host', {
+  headers: { Authorization: 'Bearer test-secret', Cookie: 'session=test-secret',
+    'Proxy-Authorization': 'Basic test-secret', 'X-Trace': 'keep-me' },
+})
+const lower = {}
+for (const [name, value] of Object.entries((await r.json()).headers))
+  lower[name.toLowerCase()] = value
+console.log(Boolean(lower.authorization), Boolean(lower.cookie),
+  Boolean(lower['proxy-authorization']), lower['x-trace'])
+" "false false false keep-me"
+
 # --- Non-200 status ---
 check "404 returns ok=false" 0 "
 const r = await fetch('${BASE}/status/404')

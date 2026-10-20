@@ -45,6 +45,11 @@ type
     procedure TestRejectsRequestTargetControls;
     procedure TestNormalizesRequestURL;
     procedure TestResolvesRedirectLocation;
+    {$IFDEF UNIX}
+    procedure TestSameOriginRedirectKeepsCredentials;
+    procedure TestCrossOriginRedirectDropsCredentials;
+    procedure TestReturnToOriginDoesNotRestoreCredentials;
+    {$ENDIF}
     procedure TestClassifiesPrivateAddressRanges;
     procedure TestClassifiesPublicAddressesAsRoutable;
     procedure TestRejectsObfuscatedLoopbackForms;
@@ -190,41 +195,48 @@ begin
 end;
 
 { Reads one request head from AConnection. }
-procedure ReceiveRequestHead(const AConnection: cint);
+function ReceiveRequestHead(const AConnection: cint): RawByteString;
 var
   Buffer: array[0..4095] of Byte;
-  Received: RawByteString;
   Count: ssize_t;
 begin
-  Received := '';
+  Result := '';
   repeat
     Count := fpRecv(AConnection, @Buffer[0], SizeOf(Buffer), 0);
     if Count <= 0 then
       Exit;
-    SetLength(Received, Length(Received) + Count);
-    Move(Buffer[0], Received[Length(Received) - Count + 1], Count);
-  until Pos(#13#10#13#10, Received) > 0;
+    SetLength(Result, Length(Result) + Count);
+    Move(Buffer[0], Result[Length(Result) - Count + 1], Count);
+  until Pos(#13#10#13#10, Result) > 0;
 end;
 
 type
-  { Accepts one connection, reads its request, writes a fixed answer and
-    closes the connection: a server that ends a response wherever the test
-    says. }
+  { Reads each request and writes its canned answer, closing after every
+    response so tests can observe redirect hops. A port marker in an answer
+    is replaced with this listener's port. }
   TCannedResponseServer = class(TThread)
   private
     FListener: cint;
-    FResponse: RawByteString;
+    FResponses: array of RawByteString;
+    FRequestHeads: array of RawByteString;
   protected
     procedure Execute; override;
   public
     Port: Word;
-    constructor Create(const AResponse: RawByteString);
+    constructor Create(const AResponses: array of RawByteString);
     destructor Destroy; override;
+    function RequestHead(const AConnection: Integer): RawByteString;
   end;
 
-constructor TCannedResponseServer.Create(const AResponse: RawByteString);
+constructor TCannedResponseServer.Create(
+  const AResponses: array of RawByteString);
+var
+  I: Integer;
 begin
-  FResponse := AResponse;
+  SetLength(FResponses, Length(AResponses));
+  SetLength(FRequestHeads, Length(AResponses));
+  for I := 0 to High(AResponses) do
+    FResponses[I] := AResponses[I];
   FListener := CreateLoopbackListener(Port);
   inherited Create(False);
 end;
@@ -235,20 +247,35 @@ begin
   inherited Destroy;
 end;
 
+function TCannedResponseServer.RequestHead(
+  const AConnection: Integer): RawByteString;
+begin
+  Result := FRequestHeads[AConnection - 1];
+end;
+
 procedure TCannedResponseServer.Execute;
 var
   Connection: cint;
+  I: Integer;
+  Reply: RawByteString;
 begin
-  Connection := AcceptWithin(FListener);
-  if Connection < 0 then
-    Exit;
-  try
-    ReceiveRequestHead(Connection);
-    if FResponse <> '' then
-      fpSend(Connection, @FResponse[1], Length(FResponse),
-        {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF});
-  finally
-    CloseSocket(Connection);
+  for I := 0 to High(FResponses) do
+  begin
+    Connection := AcceptWithin(FListener);
+    if Connection < 0 then
+      Exit;
+    try
+      FRequestHeads[I] := ReceiveRequestHead(Connection);
+      Reply := FResponses[I];
+      if Pos('{port}', Reply) > 0 then
+        Reply := RawByteString(StringReplace(string(Reply),
+          '{port}', IntToStr(Port), [rfReplaceAll]));
+      if Reply <> '' then
+        fpSend(Connection, @Reply[1], Length(Reply),
+          {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF});
+    finally
+      CloseSocket(Connection);
+    end;
   end;
 end;
 
@@ -262,7 +289,7 @@ var
   Server: TCannedResponseServer;
 begin
   SetLength(Headers, 0);
-  Server := TCannedResponseServer.Create(ARawResponse);
+  Server := TCannedResponseServer.Create([ARawResponse]);
   try
     try
       Response := HTTPGet(Format('http://127.0.0.1:%d/', [Server.Port]),
@@ -640,6 +667,14 @@ begin
     TestNormalizesRequestURL);
   Test('Resolves a redirect Location against the response URL',
     TestResolvesRedirectLocation);
+  {$IFDEF UNIX}
+  Test('Same-origin redirects retain request credentials',
+    TestSameOriginRedirectKeepsCredentials);
+  Test('Cross-origin redirects drop request credentials',
+    TestCrossOriginRedirectDropsCredentials);
+  Test('A later redirect back does not restore credentials',
+    TestReturnToOriginDoesNotRestoreCredentials);
+  {$ENDIF}
   Test('Classifies private address ranges',
     TestClassifiesPrivateAddressRanges);
   Test('Classifies public addresses as routable',
@@ -1158,6 +1193,134 @@ begin
   end;
   Expect<Boolean>(Raised).ToBe(True);
 end;
+
+{$IFDEF UNIX}
+function RedirectTestHeaders: THTTPHeaders;
+begin
+  SetLength(Result, 4);
+  Result[0].Name := 'aUtHoRiZaTiOn';
+  Result[0].Value := 'Bearer test-secret';
+  Result[1].Name := 'cOoKiE';
+  Result[1].Value := 'session=test-secret';
+  Result[2].Name := 'pRoXy-AuThOrIzAtIoN';
+  Result[2].Value := 'Basic test-secret';
+  Result[3].Name := 'X-Trace';
+  Result[3].Value := 'keep-me';
+end;
+
+procedure THTTPClientTests.TestSameOriginRedirectKeepsCredentials;
+var
+  Headers: THTTPHeaders;
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+  I: Integer;
+  RequestHead: RawByteString;
+begin
+  Headers := RedirectTestHeaders;
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+      'Content-Length: 0'#13#10'Connection: close'#13#10#13#10,
+    'HTTP/1.1 200 OK'#13#10'Content-Length: 0'#13#10 +
+      'Connection: close'#13#10#13#10]);
+  try
+    Response := HTTPGet(Format('http://127.0.0.1:%d/start', [Server.Port]),
+      Headers, nil, 5000);
+    Server.WaitFor;
+    Expect<Integer>(Response.StatusCode).ToBe(200);
+    for I := 1 to 2 do
+    begin
+      RequestHead := Server.RequestHead(I);
+      Expect<Boolean>(Pos('aUtHoRiZaTiOn: Bearer test-secret',
+        RequestHead) > 0).ToBe(True);
+      Expect<Boolean>(Pos('cOoKiE: session=test-secret',
+        RequestHead) > 0).ToBe(True);
+      Expect<Boolean>(Pos('pRoXy-AuThOrIzAtIoN: Basic test-secret',
+        RequestHead) > 0).ToBe(True);
+      Expect<Boolean>(Pos('X-Trace: keep-me', RequestHead) > 0).ToBe(True);
+    end;
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestCrossOriginRedirectDropsCredentials;
+var
+  Headers: THTTPHeaders;
+  Response: THTTPResponse;
+  Source, Target: TCannedResponseServer;
+  RequestHead: RawByteString;
+begin
+  Headers := RedirectTestHeaders;
+  Target := TCannedResponseServer.Create([
+    'HTTP/1.1 200 OK'#13#10'Content-Length: 0'#13#10 +
+      'Connection: close'#13#10#13#10]);
+  Source := TCannedResponseServer.Create([
+    'HTTP/1.1 302 Found'#13#10'Location: http://127.0.0.1:' +
+      RawByteString(IntToStr(Target.Port)) + '/next'#13#10 +
+      'Content-Length: 0'#13#10'Connection: close'#13#10#13#10]);
+  try
+    Response := HTTPGet(Format('http://127.0.0.1:%d/start', [Source.Port]),
+      Headers, nil, 5000);
+    Source.WaitFor;
+    Target.WaitFor;
+    Expect<Integer>(Response.StatusCode).ToBe(200);
+    RequestHead := Source.RequestHead(1);
+    Expect<Boolean>(Pos('aUtHoRiZaTiOn: Bearer test-secret',
+      RequestHead) > 0).ToBe(True);
+    Expect<Boolean>(Pos('cOoKiE: session=test-secret',
+      RequestHead) > 0).ToBe(True);
+    Expect<Boolean>(Pos('pRoXy-AuThOrIzAtIoN: Basic test-secret',
+      RequestHead) > 0).ToBe(True);
+    RequestHead := Target.RequestHead(1);
+    Expect<Boolean>(Pos('aUtHoRiZaTiOn:', RequestHead) > 0).ToBe(False);
+    Expect<Boolean>(Pos('cOoKiE:', RequestHead) > 0).ToBe(False);
+    Expect<Boolean>(Pos('pRoXy-AuThOrIzAtIoN:', RequestHead) > 0).ToBe(False);
+    Expect<Boolean>(Pos('X-Trace: keep-me', RequestHead) > 0).ToBe(True);
+  finally
+    Source.Free;
+    Target.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestReturnToOriginDoesNotRestoreCredentials;
+var
+  Headers: THTTPHeaders;
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+  I: Integer;
+  RequestHead: RawByteString;
+begin
+  Headers := RedirectTestHeaders;
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 302 Found'#13#10 +
+      'Location: http://localhost:{port}/middle'#13#10 +
+      'Content-Length: 0'#13#10'Connection: close'#13#10#13#10,
+    'HTTP/1.1 302 Found'#13#10 +
+      'Location: http://127.0.0.1:{port}/return'#13#10 +
+      'Content-Length: 0'#13#10'Connection: close'#13#10#13#10,
+    'HTTP/1.1 200 OK'#13#10'Content-Length: 0'#13#10 +
+      'Connection: close'#13#10#13#10]);
+  try
+    Response := HTTPGet(Format('http://127.0.0.1:%d/start', [Server.Port]),
+      Headers, nil, 5000);
+    Server.WaitFor;
+    Expect<Integer>(Response.StatusCode).ToBe(200);
+    RequestHead := Server.RequestHead(1);
+    Expect<Boolean>(Pos('aUtHoRiZaTiOn: Bearer test-secret',
+      RequestHead) > 0).ToBe(True);
+    for I := 2 to 3 do
+    begin
+      RequestHead := Server.RequestHead(I);
+      Expect<Boolean>(Pos('aUtHoRiZaTiOn:', RequestHead) > 0).ToBe(False);
+      Expect<Boolean>(Pos('cOoKiE:', RequestHead) > 0).ToBe(False);
+      Expect<Boolean>(Pos('pRoXy-AuThOrIzAtIoN:', RequestHead) > 0).ToBe(False);
+      Expect<Boolean>(Pos('X-Trace: keep-me', RequestHead) > 0).ToBe(True);
+    end;
+  finally
+    Server.Free;
+  end;
+end;
+{$ENDIF}
 
 { The ranges the net capability refuses unless `private` or an explicit
   address names them (ADR 0122).
