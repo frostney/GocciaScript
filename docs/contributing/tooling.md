@@ -358,7 +358,11 @@ walks up to 600 distinct objects, reading properties, calling functions and
 resuming, returning or throwing into generators (the input's size picks
 which). A refusal (`snapshot-refused`) is a normal outcome, as are the run limits and
 a script error (`script-throw`); anything else is a finding. The scheduled
-workflow runs this as its `fuzz-heap-snapshot` job.
+workflow runs this as its `fuzz-heap-snapshot` job. It replays the seeds, a
+sample of what AFL kept and an input the reader refuses under a heaptrc build
+of the harness, and each must end with no unfreed block: like the application
+runners, the harness shuts its runtime down before it exits, which destroys
+what the collector still manages.
 
 Its `heap-snapshot-hardening` job runs
 `Goccia.HeapSnapshot.Hardening.Test` with
