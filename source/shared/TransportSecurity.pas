@@ -138,11 +138,20 @@ begin
       [ErrorOffset]);
 end;
 
+{ A write to a peer that reset the connection must fail the write with EPIPE
+  or ECONNRESET, not end the process with SIGPIPE. Linux takes MSG_NOSIGNAL
+  per send. Darwin and the BSDs take SO_NOSIGPIPE on the socket instead
+  (HTTPClient sets it where it creates the socket), which also covers
+  SecureTransport's writes through the callback below. }
 function SocketSend(const ASock: TSocket; const ABuffer: Pointer;
   const ALength: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
+  {$IFDEF LINUX}
+  Result := fpSend(ASock, ABuffer, ALength, MSG_NOSIGNAL);
+  {$ELSE}
   Result := fpSend(ASock, ABuffer, ALength, 0);
+  {$ENDIF}
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   Result := WinSock2.send(ASock, ABuffer^, ALength, 0);
@@ -656,6 +665,151 @@ begin
   until False;
 end;
 
+{ OpenSSL's socket BIO writes with plain write(2), so MSG_NOSIGNAL cannot reach
+  it, and a write to a peer that reset the connection raises SIGPIPE: the
+  handshake, a read (a key update), a write and SSL_shutdown's close_notify
+  all write. On Linux each of those calls therefore runs with SIGPIPE blocked
+  on the calling thread, and a SIGPIPE it raised is taken off the pending set
+  before the mask is restored, so the write fails with EPIPE
+  (SSL_ERROR_SYSCALL) and the process, the embedder's own handlers and every
+  other thread are left alone. A caller that blocks SIGPIPE itself keeps the
+  block, and a SIGPIPE it already held pending; one sent to this thread by
+  another party while an unblocked caller's call runs is indistinguishable
+  from ours and is taken too. Darwin and the BSDs set SO_NOSIGPIPE on the
+  socket instead. }
+type
+  TSigPipeGuard = record
+    Active: Boolean;
+    WasBlocked: Boolean;
+    PendingBefore: Boolean;
+    Previous: TSigSet;
+  end;
+
+{$IFDEF LINUX}
+type
+  { glibc's sigset_t is 128 bytes, FPC's TSigSet 16: sigpending is called
+    through libc with room for the larger one, since FPC's own fpSigPending
+    passes the kernel a wrong set size and fails with EINVAL. }
+  TLibcSigSet = array[0..127] of Byte;
+
+function LibcSigPending(var ASet: TLibcSigSet): cint; cdecl;
+  external 'c' name 'sigpending';
+
+function SigPipePending: Boolean;
+var
+  Pending: TLibcSigSet;
+begin
+  FillChar(Pending, SizeOf(Pending), 0);
+  Result := (LibcSigPending(Pending) = 0) and
+    ((Pending[(SIGPIPE - 1) div 8] and (1 shl ((SIGPIPE - 1) mod 8))) <> 0);
+end;
+{$ENDIF}
+
+procedure BeginSigPipeGuard(out AGuard: TSigPipeGuard);
+{$IFDEF LINUX}
+var
+  Block: TSigSet;
+begin
+  FillChar(AGuard, SizeOf(AGuard), 0);
+  fpSigEmptySet(Block);
+  fpSigAddSet(Block, SIGPIPE);
+  AGuard.Active := fpSigProcMask(SIG_BLOCK, @Block, @AGuard.Previous) = 0;
+  if AGuard.Active then
+  begin
+    AGuard.WasBlocked := fpSigIsMember(AGuard.Previous, SIGPIPE) = 1;
+    { A caller that blocks SIGPIPE itself may already hold one pending; that
+      one is its own and stays. }
+    if AGuard.WasBlocked then
+      AGuard.PendingBefore := SigPipePending;
+  end;
+end;
+{$ELSE}
+begin
+  FillChar(AGuard, SizeOf(AGuard), 0);
+end;
+{$ENDIF}
+
+procedure EndSigPipeGuard(const AGuard: TSigPipeGuard);
+{$IFDEF LINUX}
+var
+  Wanted: TSigSet;
+  NoWait: TimeSpec;
+begin
+  if not AGuard.Active then
+    Exit;
+  { Only a SIGPIPE the caller did not already hold pending is taken: a zero
+    timeout takes the thread's pending SIGPIPE, if any, and fails with EAGAIN
+    when there is none. Taken even when the caller blocks SIGPIPE, or
+    unblocking it would end the process for a write that failed with an
+    error. }
+  if not AGuard.PendingBefore then
+  begin
+    fpSigEmptySet(Wanted);
+    fpSigAddSet(Wanted, SIGPIPE);
+    FillChar(NoWait, SizeOf(NoWait), 0);
+    fpSigTimedWait(Wanted, nil, @NoWait);
+  end;
+  if not AGuard.WasBlocked then
+    fpSigProcMask(SIG_SETMASK, @AGuard.Previous, nil);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
+{ The OpenSSL calls that can write, each under the guard, so the window in
+  which a SIGPIPE sent to the thread for another reason would be taken is
+  the call itself and not the waits between calls. }
+function GuardedSslConnect(const ASSL: PSSL): Integer;
+var
+  Guard: TSigPipeGuard;
+begin
+  BeginSigPipeGuard(Guard);
+  try
+    Result := SslConnect(ASSL);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
+end;
+
+function GuardedSslRead(const ASSL: PSSL; const ABuffer: Pointer;
+  const ALength: Integer): Integer;
+var
+  Guard: TSigPipeGuard;
+begin
+  BeginSigPipeGuard(Guard);
+  try
+    Result := SslRead(ASSL, ABuffer, ALength);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
+end;
+
+function GuardedSslWrite(const ASSL: PSSL; const ABuffer: Pointer;
+  const ALength: Integer): Integer;
+var
+  Guard: TSigPipeGuard;
+begin
+  BeginSigPipeGuard(Guard);
+  try
+    Result := SslWrite(ASSL, ABuffer, ALength);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
+end;
+
+function GuardedSslShutdown(const ASSL: PSSL): Integer;
+var
+  Guard: TSigPipeGuard;
+begin
+  BeginSigPipeGuard(Guard);
+  try
+    Result := SslShutdown(ASSL);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
+end;
+
 procedure StartOpenSSL(var AConnection: TTransportSecurityConnection;
   const AHost: string);
 var
@@ -691,7 +845,7 @@ begin
     SslCtrl(Data.SSL, SSL_CTRL_CLEAR_MODE, SSL_MODE_AUTO_RETRY, nil);
     SetSocketNonBlocking(AConnection.Socket);
     repeat
-      Outcome := SslConnect(Data.SSL);
+      Outcome := GuardedSslConnect(Data.SSL);
       if Outcome = 1 then
         Break;
       case SslGetError(Data.SSL, Outcome) of
@@ -733,7 +887,7 @@ begin
   begin
     if Assigned(Data.SSL) then
     begin
-      SslShutdown(Data.SSL);
+      GuardedSslShutdown(Data.SSL);
       SslFree(Data.SSL);
     end;
     if Assigned(Data.Context) then
@@ -763,7 +917,7 @@ var
 begin
   Data := TOpenSSLData(AConnection.BackendData);
   repeat
-    Result := SslRead(Data.SSL, @ABuffer[0], ALength);
+    Result := GuardedSslRead(Data.SSL, @ABuffer[0], ALength);
     if Result > 0 then
       Exit;
 
@@ -803,7 +957,7 @@ var
 begin
   Data := TOpenSSLData(AConnection.BackendData);
   repeat
-    Result := SslWrite(Data.SSL, ABuffer, ALength);
+    Result := GuardedSslWrite(Data.SSL, ABuffer, ALength);
     if Result > 0 then
       Exit;
 
