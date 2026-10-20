@@ -288,8 +288,9 @@ last, after the roots are read and every check has passed: each built-in's
 new properties and elements are built aside first (under the run's memory
 ceiling and execution limits), then installed in a step that allocates
 nothing and cannot fail, so a refused restore leaves this engine's built-ins
-as they were (ADR 0148 had them applied before the object graph is filled;
-nothing the fill does reads a built-in's own state). Resolving names can
+as they were. [ADR 0152](adr/0152-heap-snapshot-builtins-commit-last.md)
+replaces ADR 0148's earlier ordering; nothing the fill does reads a built-in's
+own state. Resolving names can
 still build lazy built-ins, which a later restore into the same engine
 cannot tell from changes: restore into a fresh engine. To snapshot a restored run again, create the session before
 the restore, as for any run; the restore is then the run's first change.
