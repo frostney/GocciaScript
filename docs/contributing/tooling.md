@@ -73,7 +73,7 @@ These are declared in `.vscode/extensions.json` so VSCode/Cursor will prompt to 
 
 The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not open a terminal or interrupt your workflow. The file is re-read by the editor after formatting, so changes appear immediately.
 
-> **Note:** This requires `instantfpc` (ships with FreePascal) to be on your `PATH`. If you installed FreePascal via the methods in [Getting Started](../../README.md#getting-started), this is already the case.
+> **Note:** This requires `instantfpc` (ships with FreePascal) to be on your `PATH`. If you installed FreePascal via the methods in [Build from source](../../README.md#build-from-source), this is already the case.
 
 #### How the Layers Work Together
 

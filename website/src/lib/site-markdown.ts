@@ -27,10 +27,12 @@ import {
   type PerformanceSuiteData,
 } from "@/lib/performance-dashboard";
 import {
-  COMPILER_SUPPORT_ANSWER,
   ECMASCRIPT_SCOPE_ANSWER,
   GOCCIASCRIPT_SUMMARY,
+  NATIVE_PLATFORM_DESCRIPTION,
   NODE_COMPATIBILITY_ANSWER,
+  PRODUCTION_READY_ANSWER,
+  PRODUCTION_READY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
 } from "@/lib/positioning";
 import { SITE_DESCRIPTION } from "@/lib/site-url";
@@ -38,6 +40,7 @@ import {
   loadTest262DashboardData,
   type Test262DashboardData,
 } from "@/lib/test262-dashboard";
+import { compatibilityPercent } from "@/lib/test262-percent";
 import { TOOL_CALL_FLOWS, TOOL_CALL_TASK } from "@/lib/tool-call-comparison";
 
 export type MarkdownRoute =
@@ -86,7 +89,7 @@ function releaseSummary(release: ReleaseInfo | null): string {
     ? `, published ${release.publishedAt.slice(0, 10)}`
     : "";
   const prestable = isPreStable(release)
-    ? " Pre-1.0 releases may include breaking changes before 1.0.0."
+    ? " Pre-1.0: the host API and flags may change between releases; pin a version."
     : "";
   return `Latest release: [${release.tagName}](${release.htmlUrl})${published}.${prestable}`;
 }
@@ -150,7 +153,21 @@ async function docsMarkdown(id: string): Promise<string | null> {
 }
 
 async function homeMarkdown(): Promise<string> {
-  const release = await fetchLatestRelease();
+  const [release, compatibility] = await Promise.all([
+    fetchLatestRelease(),
+    loadTest262DashboardData(),
+  ]);
+  return renderHomeMarkdown(release, compatibility);
+}
+
+export function renderHomeMarkdown(
+  release: ReleaseInfo | null,
+  compatibility: Test262DashboardData,
+): string {
+  const latest = compatibility.status === "ready" ? compatibility.latest : null;
+  const conformanceFigure = latest
+    ? `The latest published run, Annex B excluded, has ${compatibilityNumber(latest.summary.passed)} of ${compatibilityNumber(latest.summary.totalRun)} tests passing (${compatibilityPercent(latest.summary.passed, latest.summary.totalRun)}); see results `
+    : "See results ";
   const heroExample = pickExample("coffee-typed");
 
   return [
@@ -163,6 +180,16 @@ async function homeMarkdown(): Promise<string> {
     GOCCIASCRIPT_SUMMARY,
     "",
     releaseSummary(release),
+    "",
+    "## Evidence",
+    "",
+    list([
+      `**Conformance.** test262, the official ECMAScript conformance suite, runs on every pull request and on main. ${conformanceFigure}[by area on the compatibility dashboard](/compatibility).`,
+      "**Tested on every change.** 15,000+ JavaScript tests in 1,800+ files run on every pull request on Linux x64 and on six targets on main, plus differential suites checked against Bun and Vitest.",
+      `**Fuzzing and memory checks.** Every night, AFL++ fuzzes the engine and heap snapshot reader, and the full test suite runs under FreePascal's heap checker (heaptrc) and Valgrind memcheck; see the [nightly workflow](${GITHUB_REPO_URL}/actions/workflows/fuzz.yml). The [weekly GC-stress run](${GITHUB_REPO_URL}/actions/workflows/gc-stress.yml) collects garbage every 8 instructions across GC-sensitive test262 tests and the test suite.`,
+      "**In production.** GocciaScript is the engine behind [Shotcup's hosted sandboxes](https://shotcup.dev), where every run gets a fresh engine with hard limits.",
+      "**Prebuilt for six targets.** Every release and nightly provides binaries for macOS and Linux (x64 and arm64) and Windows (x64 and x86). [Install with the one-line installer or Homebrew on macOS](/installation).",
+    ]),
     "",
     "## Quick install",
     "",
@@ -219,9 +246,11 @@ async function homeMarkdown(): Promise<string> {
     "",
     "## Native platform",
     "",
-    COMPILER_SUPPORT_ANSWER,
+    NATIVE_PLATFORM_DESCRIPTION,
     "",
-    "Native application embedding is an important secondary goal; the host chooses application globals, modules, capabilities, limits, and result handling.",
+    `## ${PRODUCTION_READY_QUESTION}`,
+    "",
+    PRODUCTION_READY_ANSWER,
     "",
     "## Example",
     "",
@@ -294,11 +323,6 @@ async function installationMarkdown(): Promise<string> {
       `[Source on GitHub](${GITHUB_REPO_URL})`,
     ]),
   ].join("\n");
-}
-
-function compatibilityPercent(passed: number, run: number): string {
-  if (run <= 0) return "0.0%";
-  return `${((passed / run) * 100).toFixed(1)}%`;
 }
 
 function compatibilityNumber(value: number): string {

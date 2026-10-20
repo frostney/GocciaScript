@@ -2,18 +2,60 @@
 
 ![GocciaScript logo](./logo.png)
 
-A drop of JavaScript — sandboxed by default
+A drop of JavaScript, sandboxed by default.
 
-GocciaScript is a JavaScript engine: a sandbox-first ECMAScript runtime and toolchain for AI agents.
-Hosts define the available capabilities, runtime surface, and execution limits.
-It uses modern recommended defaults while tracking ECMAScript compatibility
-through generated test262 reports.
+GocciaScript is a JavaScript engine for running code that AI agents and people
+write, under the capabilities and limits the host sets. A script sees no
+filesystem, network or process unless the host grants it
+([permissions](docs/permissions.md), [capability audit events](docs/capability-audit.md)),
+and a run can be bounded by time, instructions and memory and made
+deterministic, with a fixed clock and seeded randomness.
 
-GocciaScript is implemented in FreePascal, supports Delphi, and can also be
-embedded in native applications. Native embedding is an important secondary
-goal; the primary product goal is AI-agent execution under an explicit
-host-defined capability model. It is not trying to become Node.js or a browser
-host.
+[![test262 pass rate on main, live from the compatibility dashboard](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.gocciascript.dev%2Fapi%2Ftest262%2Fbadge)](https://www.gocciascript.dev/compatibility)
+[![CI](https://github.com/frostney/GocciaScript/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/frostney/GocciaScript/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/frostney/GocciaScript?label=release)](https://github.com/frostney/GocciaScript/releases)
+
+- **Conformance you can check.** test262, the official ECMAScript conformance
+  suite, runs on every pull request and on main. The
+  [compatibility dashboard](https://www.gocciascript.dev/compatibility) shows
+  the current result by area, rendered from the published reports.
+- **Tested beyond the spec.** 15,000+ JavaScript tests in 1,800+ files run on
+  every pull request, and on six targets on main, with differential suites
+  checked against Bun and Vitest.
+- **Fuzzed and memory-checked.** Every night the engine and its heap snapshot
+  reader are [fuzzed](https://github.com/frostney/GocciaScript/actions/workflows/fuzz.yml),
+  and the full test suite runs under FreePascal's heap checker and under
+  Valgrind memcheck. Every week a
+  [GC-stress run](https://github.com/frostney/GocciaScript/actions/workflows/gc-stress.yml)
+  collects garbage every 8 instructions across the test suite and the
+  GC-sensitive part of test262.
+- **In production.** GocciaScript is the engine behind
+  [Shotcup](https://shotcup.dev)'s hosted sandboxes, where every run gets a
+  fresh engine with hard limits.
+- **Native, with nothing underneath.** Its own compiler, bytecode VM and
+  garbage collector, built with FreePascal into native binaries: no Node.js,
+  V8 or other engine, and nothing to install beside the binary. Prebuilt for
+  macOS and Linux (x64 and arm64) and Windows (x64 and x86), and embeddable
+  in FreePascal applications.
+- **Modern JavaScript and TypeScript.** ES modules, classes with private
+  fields, async/await, Temporal, Intl, TC39 type annotations run directly, and
+  a Vitest-compatible test runner.
+- **Status: pre-1.0.** The language follows ECMAScript; the host API and
+  command-line flags may change between releases, so pin a version and read
+  the [changelog](CHANGELOG.md) before you upgrade.
+
+```bash
+curl -fsSL https://www.gocciascript.dev/install | sh
+```
+
+On Windows, `irm https://www.gocciascript.dev/install.ps1 | iex`; on macOS,
+also `brew install frostney/tap/gocciascript`. Or try it in the
+[Playground](https://www.gocciascript.dev/playground). Building from source
+needs the FreePascal compiler; see [Getting Started](#getting-started).
+
+It is not trying to become Node.js or a browser host: the primary goal is
+running agent code under an explicit host-defined capability model, and native
+embedding is the second.
 
 ## Start with an agent sandbox
 
@@ -32,12 +74,14 @@ fs.writeFileSync("/out/result.txt", input.toUpperCase());
 ```
 
 ```bash
-./build.pas runner
-./build/GocciaRunner agent-workspace/main.js \
+GocciaRunner agent-workspace/main.js \
   --copy agent-workspace/task.txt \
   --timeout=5000 \
   --diff
 ```
+
+(From a source build, the binary is `./build/GocciaRunner` after
+`./build.pas runner`.)
 
 The entry file lands at `/main.js` and the copied input at `/task.txt`.
 Nothing the script writes reaches the host unless the host asks for it: an
@@ -56,14 +100,15 @@ and [Built-ins — Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciarunt
 ## ECMAScript implementation and recommended profile
 
 GocciaScript implements core ECMAScript and runs the official test262 corpus on
-every PR and main commit. The exact current result is rendered from published
+every PR and on main. The exact current result is rendered from published
 main-branch data on the live
 [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility);
 canonical prose does not freeze a historical percentage.
 
-The recommended language profile is product policy, not the implementation
-ceiling. Standard core forms disabled by default all have explicit compatibility
-paths:
+The recommended language profile is modern by default, so code an agent writes
+stays explicit, and every legacy form has a flag. It is product policy, not
+the implementation ceiling. Standard core forms disabled by default all have
+explicit compatibility paths:
 
 | Form | Default | Enablement / exposure |
 |------|---------|-----------------------|
@@ -187,14 +232,42 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 
 ## Getting Started
 
-### Prerequisites
+### Install
 
-- [FreePascal](https://www.freepascal.org/) compiler (`fpc`)
-  - macOS: `brew install fpc`
-  - Ubuntu/Debian: `sudo apt-get install fpc`
-  - Windows: `choco install freepascal`
+Prebuilt binaries ship with every release and every nightly for macOS and
+Linux (x64 and arm64) and Windows (x64 and x86):
 
-### Build
+```bash
+# macOS and Linux
+curl -fsSL https://www.gocciascript.dev/install | sh
+
+# a pinned version
+curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.14.0 sh
+
+# macOS with Homebrew
+brew install frostney/tap/gocciascript
+```
+
+```powershell
+# Windows PowerShell
+irm https://www.gocciascript.dev/install.ps1 | iex
+```
+
+The installers put `GocciaRunner`, `GocciaTestRunner` and `GocciaREPL` on your
+`PATH`. Each [release archive](https://github.com/frostney/GocciaScript/releases)
+carries the whole toolchain; see the
+[installation guide](https://www.gocciascript.dev/installation). The binaries
+link only the system C library: HTTPS uses the platform's TLS stack (OpenSSL
+on Linux), and `Intl` uses the system ICU when present and embedded data
+otherwise.
+
+### Build from source
+
+Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`):
+
+- macOS: `brew install fpc`
+- Ubuntu/Debian: `sudo apt-get install fpc`
+- Windows: `choco install freepascal`
 
 ```bash
 # Dev build of everything
@@ -208,7 +281,9 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 ```
 
 See [Build System](docs/build-system.md#build-commands) for build modes,
-targets, clean builds, and troubleshooting.
+targets, clean builds, and troubleshooting. The commands below use
+`./build/<tool>` from a source build; with an installed release, drop the
+`./build/` prefix.
 
 ### Run a Script
 
@@ -256,7 +331,7 @@ For custom providers, pass a JavaScript module to `--host-environment` or implem
 
 ### Run Tests
 
-GocciaScript has 12,000+ JavaScript end-to-end tests across 1,500+ test files, covering language features, built-in objects, and edge cases.
+GocciaScript has 15,000+ JavaScript end-to-end tests across 1,800+ test files, covering language features, built-in objects, and edge cases.
 
 Some test directories request permissions in their configs, so accept them for
 the run with `-P` (or trust the suite once per checkout with
@@ -353,8 +428,9 @@ complete implementation, default-profile, and compatibility-path detail, see
 
 ## FreePascal, Delphi, and native embedding
 
-FreePascal is the cross-platform toolchain used for normal builds, releases, and
-the documented embedding API. The repository also includes
+FreePascal builds GocciaScript's native binaries, so the engine needs no other
+runtime underneath, and it is the toolchain for releases and the documented
+embedding API. The repository also includes
 [`GocciaScript.Delphi.groupproj`](source/app/GocciaScript.Delphi.groupproj) and
 Delphi projects for the REPL, the Runner, the Bare Script Loader, Test Runner,
 Benchmark Runner, and Bundler on Win32 and Win64.
@@ -379,7 +455,7 @@ flowchart LR
     AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result["Result"]
 ```
 
-The VM, the built-ins and the runtime share one set of value types, one scope chain, and one mark-and-sweep GC. The VM is Goccia-owned rather than a generic VM layer: it keeps tagged `TGocciaRegister` values (unboxed scalars) and falls back to `TGocciaValue` for heap objects. GocciaScript 0.15.0 removed the tree-walk interpreter that earlier releases offered as a second execution mode.
+The VM, the built-ins and the runtime share one set of value types, one scope chain, and one mark-and-sweep GC. The VM is Goccia-owned rather than a generic VM layer: it keeps tagged `TGocciaRegister` values (unboxed scalars) and falls back to `TGocciaValue` for heap objects. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; main has removed it, and the next release ships without it.
 
 See [Architecture](docs/architecture.md) for the pipeline and layers, [Bytecode VM](docs/bytecode-vm.md) for bytecode execution, [Core patterns](docs/core-patterns.md) for implementation patterns, and [GocciaScript Context](CONTEXT.md) for canonical terminology.
 

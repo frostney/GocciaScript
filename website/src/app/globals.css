@@ -363,6 +363,7 @@ p {
 .astryx-desktop-nav {
   gap: 0.5rem;
 }
+.astryx-desktop-actions,
 .astryx-nav-actions {
   gap: 0.35rem;
 }
@@ -385,28 +386,22 @@ p {
   text-decoration: none;
   transform: translateY(-1px);
 }
-.nav-cta-github {
-  padding-right: 0.6rem;
-  gap: 0.55rem;
-}
-.nav-stars {
+.nav-conformance {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.15rem 0.5rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--rule-soft);
   border-radius: 999px;
-  background: color-mix(in oklab, var(--paper) 18%, transparent);
+  background: var(--paper-2);
+  color: var(--ink-2);
   font-family: var(--mono);
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--paper);
+  white-space: nowrap;
 }
-.nav-stars svg {
-  color: #f0b57a;
-}
-[data-theme="espresso"] .nav-stars svg {
-  color: #8a4a13;
+.nav-conformance:hover {
+  color: var(--accent);
+  text-decoration: none;
 }
 @media (min-width: 1025px) and (max-width: 1150px) {
   .site-top-nav {

@@ -10,8 +10,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { GithubIcon, MoonIcon, StarIcon, SunIcon } from "@/components/icons";
-import { formatStars, GITHUB_REPO_URL } from "@/lib/github";
+import { GithubIcon, MoonIcon, SunIcon } from "@/components/icons";
+import { GITHUB_REPO_URL } from "@/lib/github";
 
 type Theme = "cream" | "espresso";
 
@@ -31,10 +31,10 @@ function isActive(pathname: string, href: string): boolean {
 
 export function SiteShell({
   children,
-  stars,
+  conformancePercent,
 }: {
   children: React.ReactNode;
-  stars?: number | null;
+  conformancePercent?: string | null;
 }) {
   const [theme, setTheme] = useState<Theme>("cream");
   const userOverrideRef = useRef(false);
@@ -84,7 +84,11 @@ export function SiteShell({
             key={tab.href}
             as={Link}
             href={tab.href}
-            label={tab.label}
+            label={
+              tab.href === "/compatibility" && conformancePercent
+                ? `Compatibility · test262 ${conformancePercent}`
+                : tab.label
+            }
             isSelected={isActive(pathname, tab.href)}
           />
         ))}
@@ -155,24 +159,23 @@ export function SiteShell({
                     }}
                   />
                   <div className="astryx-desktop-actions">
+                    {conformancePercent && (
+                      <Link
+                        className="nav-conformance"
+                        href="/compatibility"
+                        aria-label={`Live test262 pass rate on main: ${conformancePercent}. Open the compatibility dashboard`}
+                      >
+                        test262 {conformancePercent}
+                      </Link>
+                    )}
                     <a
-                      className="nav-cta nav-cta-github"
+                      className="nav-cta"
                       href={GITHUB_REPO_URL}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
                       <GithubIcon size={14} />
                       <span>GitHub</span>
-                      {typeof stars === "number" && (
-                        <span
-                          className="nav-stars"
-                          role="img"
-                          aria-label={`${stars} GitHub stars`}
-                        >
-                          <StarIcon size={14} />
-                          <span>{formatStars(stars)}</span>
-                        </span>
-                      )}
                     </a>
                   </div>
                 </div>
