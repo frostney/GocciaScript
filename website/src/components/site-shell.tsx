@@ -163,7 +163,7 @@ export function SiteShell({
                       <Link
                         className="nav-conformance"
                         href="/compatibility"
-                        aria-label={`Live test262 pass rate on main: ${conformancePercent}. Open the compatibility dashboard`}
+                        aria-label={`test262 ${conformancePercent}: live pass rate on main. Open the compatibility dashboard`}
                       >
                         test262 {conformancePercent}
                       </Link>

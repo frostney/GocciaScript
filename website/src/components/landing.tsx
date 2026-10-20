@@ -1006,7 +1006,8 @@ export function Landing({
                 <Heading level={4}>Conformance</Heading>
                 <Text as="p" type="supporting" display="block">
                   test262, the official ECMAScript conformance suite, runs on
-                  every pull request and on main.{" "}
+                  every pull request and on main, and a regression against main
+                  fails the pull request.{" "}
                   {compatibility ? (
                     <>
                       The latest published run, Annex B excluded, has{" "}
@@ -1061,7 +1062,7 @@ export function Landing({
                     GC-stress run
                   </a>{" "}
                   collects garbage every 8 instructions across the GC-sensitive
-                  part of test262 and the test suite.
+                  parts of the test suite and of test262.
                 </Text>
               </VStack>
             </Card>

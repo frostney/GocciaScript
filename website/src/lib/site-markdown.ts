@@ -184,9 +184,9 @@ export function renderHomeMarkdown(
     "## Evidence",
     "",
     list([
-      `**Conformance.** test262, the official ECMAScript conformance suite, runs on every pull request and on main. ${conformanceFigure}[by area on the compatibility dashboard](/compatibility).`,
+      `**Conformance.** test262, the official ECMAScript conformance suite, runs on every pull request and on main, and a regression against main fails the pull request. ${conformanceFigure}[by area on the compatibility dashboard](/compatibility).`,
       "**Tested on every change.** 15,000+ JavaScript tests in 1,800+ files run on every pull request on Linux x64 and on six targets on main, plus differential suites checked against Bun and Vitest.",
-      `**Fuzzing and memory checks.** Every night, AFL++ fuzzes the engine and heap snapshot reader, and the full test suite runs under FreePascal's heap checker (heaptrc) and Valgrind memcheck; see the [nightly workflow](${GITHUB_REPO_URL}/actions/workflows/fuzz.yml). The [weekly GC-stress run](${GITHUB_REPO_URL}/actions/workflows/gc-stress.yml) collects garbage every 8 instructions across GC-sensitive test262 tests and the test suite.`,
+      `**Fuzzing and memory checks.** Every night, AFL++ fuzzes the engine and heap snapshot reader, and the full test suite runs under FreePascal's heap checker (heaptrc) and Valgrind memcheck; see the [nightly workflow](${GITHUB_REPO_URL}/actions/workflows/fuzz.yml). The [weekly GC-stress run](${GITHUB_REPO_URL}/actions/workflows/gc-stress.yml) collects garbage every 8 instructions across the GC-sensitive parts of the test suite and of test262.`,
       "**In production.** GocciaScript is the engine behind [Shotcup's hosted sandboxes](https://shotcup.dev), where every run gets a fresh engine with hard limits.",
       "**Prebuilt for six targets.** Every release and nightly provides binaries for macOS and Linux (x64 and arm64) and Windows (x64 and x86). [Install with the one-line installer or Homebrew on macOS](/installation).",
     ]),

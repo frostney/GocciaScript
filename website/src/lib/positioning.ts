@@ -1,5 +1,5 @@
 export const GOCCIASCRIPT_SUMMARY =
-  "GocciaScript is a JavaScript engine for running code that AI agents and people write: a sandbox-first ECMAScript runtime. Hosts define the available capabilities, runtime surface, and execution limits. test262 runs on every pull request with live results, 15,000+ tests run on every change, the engine is fuzzed and memory-checked every night, and it runs in production as the engine behind Shotcup's hosted sandboxes. It has its own compiler, bytecode VM and garbage collector with no other engine underneath, built with FreePascal into native binaries, and can be embedded in native applications.";
+  "GocciaScript is a JavaScript engine for running code that AI agents and people write: a sandbox-first ECMAScript runtime. Hosts define the available capabilities, runtime surface, and execution limits. test262 runs on every pull request, where a regression fails CI, with live results; 15,000+ tests run on every change, the engine is fuzzed and memory-checked every night, and it runs in production as the engine behind Shotcup's hosted sandboxes. It has its own compiler, bytecode VM and garbage collector with no other engine underneath, built with FreePascal into native binaries, and can be embedded in native applications.";
 
 export const GOCCIASCRIPT_META_DESCRIPTION =
   "A JavaScript engine for code that AI agents and people write, with host-defined capabilities and limits, live test262 evidence and native application embedding.";
@@ -7,10 +7,10 @@ export const GOCCIASCRIPT_META_DESCRIPTION =
 export const PRODUCTION_READY_QUESTION = "Is GocciaScript production-ready?";
 
 export const PRODUCTION_READY_ANSWER =
-  "It runs in production as the engine behind Shotcup's hosted sandboxes (shotcup.dev). test262 runs on every pull request with the live result on the compatibility page, 15,000+ tests run on every change, and the engine is fuzzed and run under memory checkers every night and GC-stress-tested every week. It is pre-1.0, so the host API and command-line flags can change between releases: pin a version, and check that the supported surface (ES modules, no CommonJS, no general node: modules) covers what you run.";
+  "It runs in production as the engine behind Shotcup's hosted sandboxes (shotcup.dev). test262 runs on every pull request, where a regression fails CI, with the live result on the compatibility page; 15,000+ tests run on every change, and the engine is fuzzed and run under memory checkers every night and GC-stress-tested every week. It is pre-1.0, so the host API and command-line flags can change between releases: pin a version, and check that the supported surface (ES modules, no CommonJS, no general node: modules) covers what you run.";
 
 export const NATIVE_PLATFORM_DESCRIPTION =
-  "Native binaries for macOS, Linux and Windows, with GocciaScript's own compiler, VM and garbage collector and no other engine underneath: nothing to install beside the binary. FreePascal builds them, and Delphi 12 covers the Win32 and Win64 application matrix. Native applications can embed the engine with their own globals, modules, capabilities and limits.";
+  "Native binaries for macOS, Linux and Windows, with GocciaScript's own compiler, VM and garbage collector and no other engine underneath: no other runtime to install beside the binary (HTTPS on Linux uses the system OpenSSL). FreePascal builds them, and Delphi 12 covers the Win32 and Win64 application matrix. Native applications can embed the engine with their own globals, modules, capabilities and limits.";
 
 export const ECMASCRIPT_SCOPE_QUESTION =
   "Does GocciaScript implement only a subset of JavaScript?";

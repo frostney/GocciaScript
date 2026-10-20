@@ -16,7 +16,8 @@ deterministic, with a fixed clock and seeded randomness.
 [![Latest release](https://img.shields.io/github/v/release/frostney/GocciaScript?label=release)](https://github.com/frostney/GocciaScript/releases)
 
 - **Conformance you can check.** test262, the official ECMAScript conformance
-  suite, runs on every pull request and on main. The
+  suite, runs on every pull request and on main, and a pull request that turns
+  a passing test into a failure fails CI. The
   [compatibility dashboard](https://www.gocciascript.dev/compatibility) shows
   the current result by area, rendered from the published reports.
 - **Tested beyond the spec.** 15,000+ JavaScript tests in 1,800+ files run on
@@ -27,14 +28,15 @@ deterministic, with a fixed clock and seeded randomness.
   and the full test suite runs under FreePascal's heap checker and under
   Valgrind memcheck. Every week a
   [GC-stress run](https://github.com/frostney/GocciaScript/actions/workflows/gc-stress.yml)
-  collects garbage every 8 instructions across the test suite and the
-  GC-sensitive part of test262.
+  collects garbage every 8 instructions across the GC-sensitive parts of the
+  test suite and of test262.
 - **In production.** GocciaScript is the engine behind
   [Shotcup](https://shotcup.dev)'s hosted sandboxes, where every run gets a
   fresh engine with hard limits.
 - **Native, with nothing underneath.** Its own compiler, bytecode VM and
   garbage collector, built with FreePascal into native binaries: no Node.js,
-  V8 or other engine, and nothing to install beside the binary. Prebuilt for
+  V8 or other runtime to install beside the binary (HTTPS on Linux uses the
+  system's OpenSSL). Prebuilt for
   macOS and Linux (x64 and arm64) and Windows (x64 and x86), and embeddable
   in FreePascal applications.
 - **Modern JavaScript and TypeScript.** ES modules, classes with private
@@ -106,7 +108,7 @@ main-branch data on the live
 canonical prose does not freeze a historical percentage.
 
 The recommended language profile is modern by default, so code an agent writes
-stays explicit, and every legacy form has a flag. It is product policy, not
+stays explicit, and each core form it disables has a flag. It is product policy, not
 the implementation ceiling. Standard core forms disabled by default all have
 explicit compatibility paths:
 

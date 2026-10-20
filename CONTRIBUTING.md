@@ -37,8 +37,8 @@ When your change affects behavior visible to users or contributors, update the r
 These rules apply to the README's first screen, the website and `llms.txt`:
 
 - **Lead with what it is for, then the evidence.** First what it does (runs code that agents and people write, under host-set capabilities and limits), then what a reader can check: the live test262 result, the tests and differential suites, the nightly fuzzing and memory checks, the weekly GC stress, the prebuilt binaries, and that it runs in production behind [Shotcup](https://shotcup.dev). Stars and the implementation language are never the only signals on a page.
-- **State each trade-off as a choice and what it buys.** FreePascal gives native binaries with GocciaScript's own compiler, VM and collector and nothing underneath; the recommended profile keeps agent code explicit, and every legacy form has a flag.
-- **Say only what CI enforces.** Check the workflow before you write a claim, and word it to match: test262 runs on every pull request but does not gate it; fuzzing and the memory checks run nightly, not per change.
+- **State each trade-off as a choice and what it buys.** FreePascal gives native binaries with GocciaScript's own compiler, VM and collector and nothing underneath; the recommended profile keeps agent code explicit, and each core form it disables has a flag.
+- **Say only what CI enforces.** Check the workflow before you write a claim, and word it to match: test262 runs on every pull request and fails it only on a regression against main, not on the failures main already has; fuzzing and the memory checks run nightly, not per change.
 - **Status is one neutral line with what it means.** Pre-1.0: the host API and command-line flags may change between releases, so pin a version.
 - **Figures stay live.** A conformance figure comes from the published reports (the dashboard, a rendered value or the badge), as the rule above requires.
 
