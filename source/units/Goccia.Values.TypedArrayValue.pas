@@ -3266,6 +3266,7 @@ var
   NewNum: TGocciaNumberLiteralValue;
   NewBigInt: Int64;
   NewVal: TGocciaValue;
+  NumRoots: TGocciaActiveRootFrame;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.with');
   Len := TA.Length;
@@ -3304,13 +3305,21 @@ begin
       NewNum := TGocciaNumberLiteralValue.NaNValue;
     if not TA.IsValidIntegerIndexedElement(ActualIndex, False, ValidIndex) then
       ThrowRangeError(SErrorInvalidTypedArrayIndex, SSuggestTypedArrayLength);
-    NewTA := CreateSameKindArray(TA, Len);
-    for I := 0 to Len - 1 do
-    begin
-      if I = ActualIndex then
-        NewTA.WriteNumberLiteral(I, NewNum)
-      else
-        NewTA.WriteElement(I, TA.ReadElement(I));
+    // A number valueOf returned is held only here while the result is made,
+    // which can collect.
+    NumRoots.Initialize;
+    try
+      NumRoots.Add(NewNum);
+      NewTA := CreateSameKindArray(TA, Len);
+      for I := 0 to Len - 1 do
+      begin
+        if I = ActualIndex then
+          NewTA.WriteNumberLiteral(I, NewNum)
+        else
+          NewTA.WriteElement(I, TA.ReadElement(I));
+      end;
+    finally
+      NumRoots.Clear;
     end;
   end;
   Result := NewTA;

@@ -709,7 +709,9 @@ begin
     '  get next() { return () => { fresh("n"); return Promise.resolve(this.i < 2 ? { value: steps[this.i++], done: false } : { done: true }); }; } }); } };' + LineEnding +
     // TypedArray.prototype.set with a string: the wrapper ToObject made.
     'const bytes = new Uint8Array(6); bytes.set("123456");' + LineEnding +
-    'globalThis.getterResults = [out, bytes.join(),' + LineEnding +
+    // TypedArray.prototype.with: the number valueOf returned.
+    'const swapped = new Float64Array(1200).with(3, { valueOf() { return Math.PI * 2; } });' + LineEnding +
+    'globalThis.getterResults = [out, bytes.join(), swapped[3],' + LineEnding +
     '  Array.fromAsync.call(Holder, asyncSource, (v) => fresh(String(v)))];');
 end;
 
