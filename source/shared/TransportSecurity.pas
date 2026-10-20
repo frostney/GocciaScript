@@ -672,16 +672,38 @@ end;
   on the calling thread, and a SIGPIPE it raised is taken off the pending set
   before the mask is restored, so the write fails with EPIPE
   (SSL_ERROR_SYSCALL) and the process, the embedder's own handlers and every
-  other thread are left alone. A SIGPIPE the caller had blocked itself is
-  not touched; one sent to this thread by another party while such a call
-  runs is indistinguishable from ours and is taken too. Darwin and the BSDs
-  set SO_NOSIGPIPE on the socket instead. }
+  other thread are left alone. A caller that blocks SIGPIPE itself keeps the
+  block, and a SIGPIPE it already held pending; one sent to this thread by
+  another party while an unblocked caller's call runs is indistinguishable
+  from ours and is taken too. Darwin and the BSDs set SO_NOSIGPIPE on the
+  socket instead. }
 type
   TSigPipeGuard = record
     Active: Boolean;
     WasBlocked: Boolean;
+    PendingBefore: Boolean;
     Previous: TSigSet;
   end;
+
+{$IFDEF LINUX}
+type
+  { glibc's sigset_t is 128 bytes, FPC's TSigSet 16: sigpending is called
+    through libc with room for the larger one, since FPC's own fpSigPending
+    passes the kernel a wrong set size and fails with EINVAL. }
+  TLibcSigSet = array[0..127] of Byte;
+
+function LibcSigPending(var ASet: TLibcSigSet): cint; cdecl;
+  external 'c' name 'sigpending';
+
+function SigPipePending: Boolean;
+var
+  Pending: TLibcSigSet;
+begin
+  FillChar(Pending, SizeOf(Pending), 0);
+  Result := (LibcSigPending(Pending) = 0) and
+    ((Pending[(SIGPIPE - 1) div 8] and (1 shl ((SIGPIPE - 1) mod 8))) <> 0);
+end;
+{$ENDIF}
 
 procedure BeginSigPipeGuard(out AGuard: TSigPipeGuard);
 {$IFDEF LINUX}
@@ -693,7 +715,13 @@ begin
   fpSigAddSet(Block, SIGPIPE);
   AGuard.Active := fpSigProcMask(SIG_BLOCK, @Block, @AGuard.Previous) = 0;
   if AGuard.Active then
+  begin
     AGuard.WasBlocked := fpSigIsMember(AGuard.Previous, SIGPIPE) = 1;
+    { A caller that blocks SIGPIPE itself may already hold one pending; that
+      one is its own and stays. }
+    if AGuard.WasBlocked then
+      AGuard.PendingBefore := SigPipePending;
+  end;
 end;
 {$ELSE}
 begin
@@ -707,16 +735,22 @@ var
   Wanted: TSigSet;
   NoWait: TimeSpec;
 begin
-  if not AGuard.Active or AGuard.WasBlocked then
+  if not AGuard.Active then
     Exit;
-  { A zero timeout takes the thread's pending SIGPIPE, if any, and fails with
-    EAGAIN when there is none. (FPC's fpSigPending passes the kernel a wrong
-    set size and fails with EINVAL, so it is not asked.) }
-  fpSigEmptySet(Wanted);
-  fpSigAddSet(Wanted, SIGPIPE);
-  FillChar(NoWait, SizeOf(NoWait), 0);
-  fpSigTimedWait(Wanted, nil, @NoWait);
-  fpSigProcMask(SIG_SETMASK, @AGuard.Previous, nil);
+  { Only a SIGPIPE the caller did not already hold pending is taken: a zero
+    timeout takes the thread's pending SIGPIPE, if any, and fails with EAGAIN
+    when there is none. Taken even when the caller blocks SIGPIPE, or
+    unblocking it would end the process for a write that failed with an
+    error. }
+  if not AGuard.PendingBefore then
+  begin
+    fpSigEmptySet(Wanted);
+    fpSigAddSet(Wanted, SIGPIPE);
+    FillChar(NoWait, SizeOf(NoWait), 0);
+    fpSigTimedWait(Wanted, nil, @NoWait);
+  end;
+  if not AGuard.WasBlocked then
+    fpSigProcMask(SIG_SETMASK, @AGuard.Previous, nil);
 end;
 {$ELSE}
 begin

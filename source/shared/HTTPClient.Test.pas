@@ -33,7 +33,9 @@ type
     {$ENDIF}
     {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
     procedure TestSilentTLSPeerTimesOut;
+    procedure ExpectResetFailsTheRequestOnly(const ABlockSigPipe: Boolean);
     procedure TestTLSPeerThatResetsDoesNotRaiseSigPipe;
+    procedure TestResetWithSigPipeBlockedLeavesNoneToDeliver;
     {$IFEND}
     procedure TestRejectsAmbiguousAuthority;
     procedure TestAcceptsValidIPv6Literals;
@@ -297,9 +299,14 @@ type
   protected
     procedure Execute; override;
   public
+    { An embedder that blocks SIGPIPE on the thread that fetches: the signal
+      a failed write raises must not stay pending to end the process when the
+      block is lifted. }
+    BlockSigPipe: Boolean;
     ErrorMessage: string;
     constructor Create(const AURL: string;
-      const ATimeoutMilliseconds: Integer);
+      const ATimeoutMilliseconds: Integer;
+      const ABlockSigPipe: Boolean = False);
     destructor Destroy; override;
     function WaitDone(const AMilliseconds: Cardinal): Boolean;
   end;
@@ -322,8 +329,9 @@ type
   end;
 
 constructor TClientRequest.Create(const AURL: string;
-  const ATimeoutMilliseconds: Integer);
+  const ATimeoutMilliseconds: Integer; const ABlockSigPipe: Boolean);
 begin
+  BlockSigPipe := ABlockSigPipe;
   FURL := AURL;
   FTimeoutMilliseconds := ATimeoutMilliseconds;
   FDone := RTLEventCreate;
@@ -339,9 +347,14 @@ end;
 procedure TClientRequest.Execute;
 var
   Headers: THTTPHeaders;
+  PipeSet: TSigSet;
 begin
   SetLength(Headers, 0);
+  fpSigEmptySet(PipeSet);
+  fpSigAddSet(PipeSet, SIGPIPE);
   try
+    if BlockSigPipe then
+      fpSigProcMask(SIG_BLOCK, @PipeSet, nil);
     try
       HTTPGet(FURL, Headers, nil, FTimeoutMilliseconds);
       ErrorMessage := '(no error)';
@@ -349,6 +362,10 @@ begin
       on E: Exception do
         ErrorMessage := E.Message;
     end;
+    { Lifting the block delivers a SIGPIPE left pending, which the handler
+      counts. }
+    if BlockSigPipe then
+      fpSigProcMask(SIG_UNBLOCK, @PipeSet, nil);
   finally
     RTLEventSetEvent(FDone);
   end;
@@ -609,6 +626,8 @@ begin
     TestSilentTLSPeerTimesOut);
   Test('A TLS peer that resets the connection fails the request, not the process',
     TestTLSPeerThatResetsDoesNotRaiseSigPipe);
+  Test('A reset leaves no SIGPIPE pending for a thread that blocks it',
+    TestResetWithSigPipeBlockedLeavesNoneToDeliver);
   {$IFEND}
   Test('Rejects ambiguous authority', TestRejectsAmbiguousAuthority);
   Test('Accepts valid IPv6 literals', TestAcceptsValidIPv6Literals);
@@ -911,7 +930,8 @@ end;
   pipe: with SIGPIPE at its default that write ended the process (issue
   #1815). The request must fail with an error and raise no SIGPIPE; the
   handler counts one instead of ending the run, so a regression fails here. }
-procedure THTTPClientTests.TestTLSPeerThatResetsDoesNotRaiseSigPipe;
+procedure THTTPClientTests.ExpectResetFailsTheRequestOnly(
+  const ABlockSigPipe: Boolean);
 const
   DEADLINE_MILLISECONDS = 10000;
   WAIT_MILLISECONDS = 15000;
@@ -946,7 +966,7 @@ begin
       SigPipesBefore := GSigPipeCount;
       Client := TClientRequest.Create(
         Format('https://localhost:%d/', [Server.Port]),
-        DEADLINE_MILLISECONDS);
+        DEADLINE_MILLISECONDS, ABlockSigPipe);
       try
         Finished := Client.WaitDone(WAIT_MILLISECONDS);
         Server.Release;
@@ -967,6 +987,19 @@ begin
     DeleteFile(CertificateFile);
     DeleteFile(KeyFile);
   end;
+end;
+
+procedure THTTPClientTests.TestTLSPeerThatResetsDoesNotRaiseSigPipe;
+begin
+  ExpectResetFailsTheRequestOnly(False);
+end;
+
+{ The same reset on a thread whose embedder blocks SIGPIPE: the signal the
+  failed write raises must not stay pending, or lifting the block (the
+  client thread does, after the request) delivers it. }
+procedure THTTPClientTests.TestResetWithSigPipeBlockedLeavesNoneToDeliver;
+begin
+  ExpectResetFailsTheRequestOnly(True);
 end;
 {$IFEND}
 
