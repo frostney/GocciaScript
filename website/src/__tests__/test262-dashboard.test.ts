@@ -7,11 +7,13 @@ import {
 } from "@/components/test262-dashboard";
 import type { Test262BlobRun } from "@/lib/test262-blob-store";
 import {
+  createTest262DashboardFallback,
   extractJsonFromZip,
+  latestTest262Summary,
   normalizeTest262Report,
   rankGroupCoverage,
   readNewestValidTest262Report,
-  test262HeadlineFromTimeline,
+  type Test262DashboardData,
 } from "@/lib/test262-dashboard";
 
 function buildZip(name: string, text: string): Uint8Array {
@@ -47,8 +49,19 @@ function buildZip(name: string, text: string): Uint8Array {
   return Buffer.concat([local, compressed, central, eocd]);
 }
 
-describe("test262 headline from timeline", () => {
-  const older = {
+describe("latest test262 summary selection", () => {
+  const latest = {
+    runId: 1,
+    runNumber: 1,
+    title: "CI",
+    headSha: "abc1234",
+    shortSha: "abc1234",
+    runUrl: "https://example.test/runs/1",
+    createdAt: "2026-06-10T01:00:00.000Z",
+    updatedAt: "2026-06-10T01:05:00.000Z",
+    artifactId: 1001,
+    artifactCreatedAt: "2026-06-10T01:05:00.000Z",
+    jsonUrl: "/api/test262/results/1001",
     summary: {
       totalDiscovered: 3,
       totalRun: 3,
@@ -60,59 +73,27 @@ describe("test262 headline from timeline", () => {
       byCategory: [],
     },
   };
+  const data: Test262DashboardData = {
+    ...createTest262DashboardFallback("empty", "No reports"),
+    status: "ready",
+    latest,
+    timeline: [{ ...latest, summary: { ...latest.summary, passed: 3 } }],
+  };
 
-  test("returns null for an empty timeline", () => {
-    expect(test262HeadlineFromTimeline([])).toBeNull();
+  test("uses the ready dashboard's readable latest report, not the timeline", () => {
+    expect(latestTest262Summary(data)).toEqual(latest.summary);
   });
 
-  test("uses the last timeline point", () => {
-    const newest = {
-      summary: { ...older.summary, passed: 4, totalRun: 5 },
-    };
-    expect(test262HeadlineFromTimeline([older, newest])).toEqual({
-      passed: 4,
-      totalRun: 5,
-    });
-  });
-
-  test("skips zero totalRun and returns null if no usable points remain", () => {
-    const empty = {
-      summary: { ...older.summary, passed: 0, totalRun: 0 },
-    };
-    expect(test262HeadlineFromTimeline([older, empty])).toEqual({
-      passed: 2,
-      totalRun: 3,
-    });
-    expect(test262HeadlineFromTimeline([empty])).toBeNull();
+  test("returns null when ready data has no latest report", () => {
+    expect(latestTest262Summary({ ...data, latest: null })).toBeNull();
   });
 
   test.each([
-    undefined,
-    null,
-    {},
-    { passed: "2", totalRun: 3 },
-    { passed: 2, totalRun: "3" },
-    { passed: -1, totalRun: 3 },
-    { passed: 2, totalRun: -1 },
-    { passed: Number.NaN, totalRun: 3 },
-    { passed: 2, totalRun: Number.NaN },
-    { passed: Number.POSITIVE_INFINITY, totalRun: 3 },
-    { passed: 2, totalRun: Number.POSITIVE_INFINITY },
-  ])("skips malformed summary %j", (summary) => {
-    const malformed = { summary } as typeof older;
-    expect(test262HeadlineFromTimeline([older, malformed])).toEqual({
-      passed: 2,
-      totalRun: 3,
-    });
-    expect(test262HeadlineFromTimeline([malformed])).toBeNull();
-  });
-
-  test("accepts a valid zero pass count", () => {
-    const newest = { summary: { ...older.summary, passed: 0 } };
-    expect(test262HeadlineFromTimeline([older, newest])).toEqual({
-      passed: 0,
-      totalRun: 3,
-    });
+    "error",
+    "empty",
+    "needs-blob-credentials",
+  ] as const)("returns null for %s even if a latest report is present", (status) => {
+    expect(latestTest262Summary({ ...data, status })).toBeNull();
   });
 });
 

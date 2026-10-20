@@ -37,6 +37,7 @@ import {
 } from "@/lib/positioning";
 import { SITE_DESCRIPTION } from "@/lib/site-url";
 import {
+  latestTest262Summary,
   loadTest262DashboardData,
   type Test262DashboardData,
 } from "@/lib/test262-dashboard";
@@ -164,9 +165,9 @@ export function renderHomeMarkdown(
   release: ReleaseInfo | null,
   compatibility: Test262DashboardData,
 ): string {
-  const latest = compatibility.status === "ready" ? compatibility.latest : null;
-  const conformanceFigure = latest
-    ? `The latest published run, Annex B excluded, has ${compatibilityNumber(latest.summary.passed)} of ${compatibilityNumber(latest.summary.totalRun)} tests passing (${compatibilityPercent(latest.summary.passed, latest.summary.totalRun)}); see results `
+  const summary = latestTest262Summary(compatibility);
+  const conformanceFigure = summary
+    ? `The latest published run, Annex B excluded, has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} tests passing (${compatibilityPercent(summary.passed, summary.totalRun)}); see results `
     : "See results ";
   const heroExample = pickExample("coffee-typed");
 
@@ -338,49 +339,51 @@ function compatibilityDate(value: string): string {
 export function renderCompatibilityMarkdown(
   data: Test262DashboardData,
 ): string {
-  const latest = data.status === "ready" ? data.latest : null;
-  const currentResult = latest
-    ? [
-        "## Latest main-branch result",
-        "",
-        `- Overall test262 corpus pass rate: **${compatibilityPercent(
-          latest.summary.passed,
-          latest.summary.totalRun,
-        )}** (${compatibilityNumber(
-          latest.summary.passed,
-        )} passed / ${compatibilityNumber(latest.summary.totalRun)} run)`,
-        `- Failed: ${compatibilityNumber(latest.summary.failed)}`,
-        `- Timeouts: ${compatibilityNumber(latest.summary.timeouts)}`,
-        `- Wrapper infrastructure failures: ${compatibilityNumber(
-          latest.summary.wrapperInfraFailures,
-        )}`,
-        `- Commit: \`${latest.shortSha}\``,
-        `- CI run: [#${latest.runNumber}](${latest.runUrl})`,
-        `- Run date: ${compatibilityDate(latest.createdAt)}`,
-        "",
-        "### Top-level test262 groups",
-        "",
-        "| Group | Pass rate | Passing |",
-        "|-------|-----------|---------|",
-        ...latest.summary.byCategory.map(
-          (category) =>
-            `| ${category.category} | ${compatibilityPercent(
-              category.passed,
-              category.run,
-            )} | ${compatibilityNumber(
-              category.passed,
-            )} / ${compatibilityNumber(category.run)} |`,
-        ),
-      ]
-    : [
-        "## Latest main-branch result",
-        "",
-        // The HTML dashboard shows the loader's diagnosis; carry the same one.
-        data.message ??
-          "The current test262 result is temporarily unavailable.",
-        "",
-        "Open the HTML dashboard or CI workflow for status.",
-      ];
+  const summary = latestTest262Summary(data);
+  const latest = data.latest;
+  const currentResult =
+    summary && latest
+      ? [
+          "## Latest main-branch result",
+          "",
+          `- Overall test262 corpus pass rate: **${compatibilityPercent(
+            summary.passed,
+            summary.totalRun,
+          )}** (${compatibilityNumber(
+            summary.passed,
+          )} passed / ${compatibilityNumber(summary.totalRun)} run)`,
+          `- Failed: ${compatibilityNumber(summary.failed)}`,
+          `- Timeouts: ${compatibilityNumber(summary.timeouts)}`,
+          `- Wrapper infrastructure failures: ${compatibilityNumber(
+            summary.wrapperInfraFailures,
+          )}`,
+          `- Commit: \`${latest.shortSha}\``,
+          `- CI run: [#${latest.runNumber}](${latest.runUrl})`,
+          `- Run date: ${compatibilityDate(latest.createdAt)}`,
+          "",
+          "### Top-level test262 groups",
+          "",
+          "| Group | Pass rate | Passing |",
+          "|-------|-----------|---------|",
+          ...summary.byCategory.map(
+            (category) =>
+              `| ${category.category} | ${compatibilityPercent(
+                category.passed,
+                category.run,
+              )} | ${compatibilityNumber(
+                category.passed,
+              )} / ${compatibilityNumber(category.run)} |`,
+          ),
+        ]
+      : [
+          "## Latest main-branch result",
+          "",
+          // The HTML dashboard shows the loader's diagnosis; carry the same one.
+          data.message ??
+            "The current test262 result is temporarily unavailable.",
+          "",
+          "Open the HTML dashboard or CI workflow for status.",
+        ];
 
   return [
     frontmatter(

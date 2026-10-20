@@ -29,16 +29,33 @@ function isActive(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
-export function SiteShell({
-  children,
-  conformancePercent,
-}: {
-  children: React.ReactNode;
-  conformancePercent?: string | null;
-}) {
+export function SiteShell({ children }: { children: React.ReactNode }) {
+  const [conformancePercent, setConformancePercent] = useState<string | null>(
+    null,
+  );
   const [theme, setTheme] = useState<Theme>("cream");
   const userOverrideRef = useRef(false);
   const pathname = usePathname() ?? "/";
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadHeadline() {
+      try {
+        const response = await fetch("/api/test262/headline", {
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!controller.signal.aborted && typeof data.percent === "string") {
+          setConformancePercent(data.percent);
+        }
+      } catch {
+        // The live figure is optional; leave navigation unchanged on failure.
+      }
+    }
+    void loadHeadline();
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const fromDom = document.documentElement.dataset.theme;

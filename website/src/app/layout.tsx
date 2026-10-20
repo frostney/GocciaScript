@@ -9,8 +9,6 @@ import { Analytics } from "@/components/analytics";
 import { SiteShell } from "@/components/site-shell";
 import { WebMcpTools } from "@/components/webmcp-tools";
 import { getSiteUrlObject, SITE_DESCRIPTION, SITE_TITLE } from "@/lib/site-url";
-import { loadTest262Headline } from "@/lib/test262-dashboard";
-import { compatibilityPercent } from "@/lib/test262-percent";
 import "./globals.css";
 
 const instrumentSerif = Instrument_Serif({
@@ -87,13 +85,9 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const headline = await loadTest262Headline();
-  const conformancePercent = headline
-    ? compatibilityPercent(headline.passed, headline.totalRun)
-    : null;
   return (
     <html
       lang="en"
@@ -102,9 +96,7 @@ export default async function RootLayout({
       suppressHydrationWarning
     >
       <body data-grain="true">
-        <SiteShell conformancePercent={conformancePercent}>
-          {children}
-        </SiteShell>
+        <SiteShell>{children}</SiteShell>
         {/* `<Analytics>` reads `useSearchParams()` for page-view URLs,
             which Next requires inside `<Suspense>` for a stable SSR
             boundary. Covers page views, web vitals, and uncaught
