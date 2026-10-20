@@ -68,6 +68,7 @@ type
     procedure AssertSandboxEntryAddress(const ALinked: Boolean);
     procedure TestLinkedSandboxEntryWithoutSource;
     procedure TestStandaloneSandboxEntryWithoutSource;
+    procedure TestRuntimeEvalProfileParity;
   public
     procedure SetupTests; override;
   end;
@@ -79,6 +80,8 @@ end;
 
 procedure TEngineBytecodeTests.SetupTests;
 begin
+  Test('Buffered runs preserve runtime eval parser options through await',
+    TestRuntimeEvalProfileParity);
   Test('Registered bytecode matches source with live bindings and source fallback',
     TestRegisteredGraphMatchesSourceAndOwnsBuffers);
   Test('An entry buffer resolves registered precompiled imports',
@@ -626,6 +629,48 @@ end;
 procedure TEngineBytecodeTests.TestLegacyRunRejectsLinkedArtifact;
 begin
   AssertLegacyRunRejected(True, 'RunModuleForSourceType');
+end;
+
+procedure TEngineBytecodeTests.TestRuntimeEvalProfileParity;
+const
+  PROGRAM_SOURCE =
+    'globalThis.answer = eval("var first = 20; first");' +
+    'await Promise.resolve();' +
+    'globalThis.answer += eval("var second = 22; second");';
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Bytes: TBytes;
+  Linked, Buffered: Boolean;
+begin
+  for Linked := False to True do
+  begin
+    Bytes := CompileBuffer(PROGRAM_SOURCE, 'memory:/compile/eval.mjs',
+      [cfVar], False, Linked);
+    for Buffered := False to True do
+    begin
+      Source := TStringList.Create;
+      try
+        if not Buffered then
+          Source.Text := PROGRAM_SOURCE;
+        Engine := TGocciaEngine.Create(RuntimeAddress('eval.mjs'), Source);
+        try
+          Engine.SourceType := stModule;
+          Engine.Compatibility := [cfVar];
+          if Buffered then
+            Engine.RunBytecodeBuffer(Bytes, RuntimeAddress('eval.mjs'))
+          else
+            Engine.Execute;
+          Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+            .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+        finally
+          Engine.Free;
+        end;
+      finally
+        Source.Free;
+      end;
+    end;
+  end;
 end;
 
 procedure TEngineBytecodeTests.AssertDeferredDiskRetention(

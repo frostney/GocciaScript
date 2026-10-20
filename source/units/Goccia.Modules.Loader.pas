@@ -739,6 +739,7 @@ begin
     FContentProvider := TGocciaUnavailableModuleContentProvider.Create;
     FOwnsContentProvider := True;
   end;
+  FVirtualModules.NormalizeFileAddress := FContentProvider.NormalizeEntryAddress;
 end;
 
 destructor TGocciaModuleLoader.Destroy;
@@ -949,6 +950,7 @@ begin
 
   FContentProvider := AContentProvider;
   FOwnsContentProvider := AOwnsContentProvider;
+  FVirtualModules.NormalizeFileAddress := FContentProvider.NormalizeEntryAddress;
 end;
 
 procedure TGocciaModuleLoader.ConfigureCapabilities(

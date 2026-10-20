@@ -3839,6 +3839,7 @@ end;
 function TGocciaEngine.RunModule(
   const AModule: TGocciaBytecodeModule): TGocciaValue;
 var
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
   PreviousRunningEngine: TGocciaEngine;
@@ -3850,7 +3851,10 @@ begin
   PreviousRunningEngine := GRunningEngine;
   GRunningEngine := Self;
   Completed := False;
+  OptionsScope := nil;
   try
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(
+      SourcePipelineOptions(FSourceType));
     Result := RunBytecodeModule(AModule, nil);
     GC := TGarbageCollector.Instance;
     if Assigned(Result) and Assigned(GC) then
@@ -3867,6 +3871,7 @@ begin
     if not Completed then
       ClearPendingWorkOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
+    OptionsScope.Free;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
@@ -3875,6 +3880,7 @@ function TGocciaEngine.RunModuleInScope(
   const AModule: TGocciaBytecodeModule;
   const AScope: TGocciaScope): TGocciaValue;
 var
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
   GC: TGarbageCollector;
   SavedGlobalScope: TGocciaScope;
   FloatingPointState: TGocciaFloatingPointState;
@@ -3887,7 +3893,10 @@ begin
   PreviousRunningEngine := GRunningEngine;
   GRunningEngine := Self;
   Completed := False;
+  OptionsScope := nil;
   try
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(
+      SourcePipelineOptions(FSourceType));
     SavedGlobalScope := FVM.GlobalScope;
     FVM.GlobalScope := AScope;
     try
@@ -3910,6 +3919,7 @@ begin
     if not Completed then
       ClearPendingWorkOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
+    OptionsScope.Free;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
@@ -4249,6 +4259,7 @@ end;
 
 function TGocciaEngine.RunRegisteredBytecodeEntry(const AAddress: string): TGocciaValue;
 var
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
   Module: TGocciaModule;
   FloatingPointState: TGocciaFloatingPointState;
   PreviousRunningEngine: TGocciaEngine;
@@ -4262,11 +4273,14 @@ begin
   PreviousRunningEngine := GRunningEngine;
   GRunningEngine := Self;
   Completed := False;
+  OptionsScope := nil;
   Queue := TGocciaMicrotaskQueue.Instance;
   NestedRun := Assigned(PreviousRunningEngine) and (PreviousRunningEngine <> Self);
   OwnsMicrotaskScope := False;
   MicrotaskScopeToken := 0;
   try
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(
+      SourcePipelineOptions(stModule));
     if NestedRun and Assigned(Queue) then
     begin
       MicrotaskScopeToken := Queue.EnterScope;
@@ -4292,6 +4306,7 @@ begin
       Queue.ClearQueue;
     DiscardRuntimePending;
     GRunningEngine := PreviousRunningEngine;
+    OptionsScope.Free;
     LeaveGocciaFloatingPointScope(FloatingPointState);
     TGocciaDiagnosticSourceRegistry.Deactivate(PreviousDiagnosticScope);
   end;

@@ -54,9 +54,13 @@ type
     property Text: string read FText;
   end;
 
+  TGocciaNormalizeModuleFileAddress = function(const APath: string): string of object;
+
   TGocciaVirtualModuleRegistry = class
   private
     FDefinitions: TOrderedStringMap<TGocciaVirtualModuleDefinition>;
+    FNormalizeFileAddress: TGocciaNormalizeModuleFileAddress;
+    function NormalizeFilePath(const APath: string): string;
     function CanonicalizeAddress(const AAddress,
       ABaseAddress: string): string;
     procedure FreeDefinitions;
@@ -83,6 +87,9 @@ type
       AImportingAddress: string; out AResolvedAddress: string): Boolean;
     function TryGetDefinition(const AAddress: string;
       out ADefinition: TGocciaVirtualModuleDefinition): Boolean;
+
+    property NormalizeFileAddress: TGocciaNormalizeModuleFileAddress
+      read FNormalizeFileAddress write FNormalizeFileAddress;
   end;
 
 function ParseVirtualModuleContentType(const AType: string;
@@ -300,6 +307,14 @@ begin
   FDefinitions.Clear;
 end;
 
+function TGocciaVirtualModuleRegistry.NormalizeFilePath(const APath: string): string;
+begin
+  if Assigned(FNormalizeFileAddress) then
+    Result := FNormalizeFileAddress(APath)
+  else
+    Result := ExpandFileName(APath);
+end;
+
 function TGocciaVirtualModuleRegistry.CanonicalizeAddress(
   const AAddress, ABaseAddress: string): string;
 var
@@ -314,11 +329,13 @@ begin
       BaseDirectory := ExtractFilePath(BaseDirectory);
     if BaseDirectory = '' then
       BaseDirectory := GetCurrentDir;
-    Exit(ExpandFileName(IncludeTrailingPathDelimiter(BaseDirectory) +
+    Exit(NormalizeFilePath(IncludeTrailingPathDelimiter(BaseDirectory) +
       AAddress));
   end;
-  if IsAbsolutePath(AAddress) then
-    Exit(ExpandFileName(AAddress));
+  if IsAbsolutePath(AAddress) or
+     (Assigned(FNormalizeFileAddress) and (AAddress <> '') and
+      (AAddress[1] = '/')) then
+    Exit(NormalizeFilePath(AAddress));
   Result := NormalizeVirtualAddress(AAddress);
 end;
 
@@ -434,11 +451,13 @@ begin
        FDefinitions.ContainsKey(AImportingAddress) then
       Candidate := ResolveRelativeVirtualAddress(Candidate, AImportingAddress)
     else
-      Candidate := ExpandFileName(ExtractFilePath(AImportingAddress) +
+      Candidate := NormalizeFilePath(ExtractFilePath(AImportingAddress) +
         Candidate);
   end
-  else if IsAbsolutePath(Candidate) then
-    Candidate := ExpandFileName(Candidate)
+  else if IsAbsolutePath(Candidate) or
+          (Assigned(FNormalizeFileAddress) and (Candidate <> '') and
+           (Candidate[1] = '/')) then
+    Candidate := NormalizeFilePath(Candidate)
   else
     Candidate := NormalizeVirtualAddress(Candidate);
   AResolvedAddress := Candidate;
