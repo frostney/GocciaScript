@@ -2781,10 +2781,16 @@ var
   Arg: TGocciaValue;
   OptionsObj: TGocciaObjectValue;
   Overflow: TTemporalOverflow;
+  DurRoots: TGocciaActiveRootFrame;
 begin
+  // A duration made from a string or a property bag is held only by Dur
+  // while the options are read, which can run a getter.
+  DurRoots.Initialize;
+  try
   try
   Zdt := AsZonedDateTime(AThisValue, 'ZonedDateTime.prototype.add');
   Dur := CoerceDuration(AArgs.GetElement(0), 'ZonedDateTime.prototype.add');
+  DurRoots.Add(Dur);
   Arg := AArgs.GetElement(1);
   OptionsObj := RequireOptionsObject(Arg, 'ZonedDateTime.prototype.add');
   Overflow := GetOverflowOption(OptionsObj);
@@ -2822,6 +2828,9 @@ begin
   except
     on E: ETemporalDurationInt64Overflow do
       ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
+  finally
+    DurRoots.Clear;
   end;
 end;
 

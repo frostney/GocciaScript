@@ -582,6 +582,18 @@ begin
     ' Temporal.PlainDate.from("2024-01-01").until({ year: 2024, month: 2, day: 1 },' + LineEnding +
     '   { get largestUnit() { return "month" + ""; } }),' + LineEnding +
     ' Temporal.PlainTime.from("01:00").since({ hour: 3 }, { get largestUnit() { return "hour"; } })];');
+  // A duration made from a string or a property bag was held only by a local
+  // while the overflow option's getter ran.
+  RunStressed('temporal-add.js',
+    'const churn = (v) => [String(v) + "~", { v }];' + LineEnding +
+    'const options = { get overflow() { churn(1); return "constrain"; } };' + LineEnding +
+    '[Temporal.PlainDate.from("2024-01-31").add({ months: 1, days: 2 }, options),' + LineEnding +
+    ' Temporal.PlainDate.from("2024-01-31").subtract("P1M2D", options),' + LineEnding +
+    ' Temporal.PlainDateTime.from("2024-01-31T10:00").add({ months: 1, hours: 3 }, options),' + LineEnding +
+    ' Temporal.PlainYearMonth.from("2024-01").add("P1Y2M", options),' + LineEnding +
+    ' Temporal.PlainYearMonth.from("2024-01").subtract({ years: 1 }, options),' + LineEnding +
+    ' Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]").add({ months: 1, hours: 2 }, options),' + LineEnding +
+    ' Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]").subtract("P1MT2H", options)].map(String);');
 end;
 
 // A fresh Symbol.toPrimitive method, and the input it converts, were held

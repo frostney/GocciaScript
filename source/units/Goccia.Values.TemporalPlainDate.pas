@@ -724,7 +724,12 @@ var
   Overflow: TTemporalOverflow;
   DateRec: TTemporalDateRecord;
   ExtraDays: Int64;
+  DurRoots: TGocciaActiveRootFrame;
 begin
+  // A duration made from a string or a property bag is held only by Dur
+  // while the options are read, which can run a getter.
+  DurRoots.Initialize;
+  try
   try
   D := AsPlainDate(AThisValue, 'PlainDate.prototype.add');
   Arg := AArgs.GetElement(0);
@@ -742,6 +747,7 @@ begin
     Dur := nil;
   end;
 
+  DurRoots.Add(Dur);
   Overflow := GetOverflowOptionFromValue(AArgs.GetElement(1), 'PlainDate.prototype.add');
   ExtraDays := DurationTimeWholeDays(Dur);
   if not TryAddCalendarDate(D.FCalendarId, D.FYear, D.FMonth, D.FDay,
@@ -758,6 +764,9 @@ begin
   except
     on E: ETemporalDurationInt64Overflow do
       ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
+  finally
+    DurRoots.Clear;
   end;
 end;
 

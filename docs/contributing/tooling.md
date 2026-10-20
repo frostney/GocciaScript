@@ -491,7 +491,10 @@ loop, and the scheduled memory-safety job (`fuzz.yml`) runs it again under
 heaptrc and under Valgrind memcheck. A swept value that is stored again
 reports a violation; one that native code only reads afterwards (a key list,
 an operand) does not, so the memcheck run sets `GOCCIA_GC_STRESS_FREE=1`,
-which frees what each sweep takes, and memcheck reports the read.
+which frees what each sweep takes, and memcheck reports the read. That build
+loads `cmem` first (`fpc -Facmem`): FPC's own heap keeps a freed block as
+valid memory, so memcheck sees a read of it only when the C allocator owns
+it.
 `GOCCIA_GC_STRESS_ONLY=<text>` runs only the cases whose name contains the
 text.
 

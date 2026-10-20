@@ -1918,15 +1918,17 @@ begin
       APending.PushRoots(Roots);
     Roots.Add(APendingValue);
     Descriptor := GetOwnPropertyDescriptor(AName);
+    if not Assigned(Descriptor) then
+      Exit;
+    // Adding can grow the map, and its gate roots only the map's owner and
+    // the descriptor added, not the caller's pending one.
+    if Descriptor.CallerOwned then
+      FProperties.Add(AName, Descriptor.TakeOwnership)
+    else
+      FProperties.Add(AName, ClonePropertyDescriptor(Descriptor));
   finally
     Roots.Clear;
   end;
-  if not Assigned(Descriptor) then
-    Exit;
-  if Descriptor.CallerOwned then
-    FProperties.Add(AName, Descriptor.TakeOwnership)
-  else
-    FProperties.Add(AName, ClonePropertyDescriptor(Descriptor));
 end;
 
 procedure TGocciaClassValue.DefineProperty(const AName: string;

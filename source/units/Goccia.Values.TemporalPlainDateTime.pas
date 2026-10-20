@@ -1074,7 +1074,12 @@ var
   DateRec: TTemporalDateRecord;
   ExtraDays: Int64;
   Balanced: TTemporalTimeRecord;
+  DurRoots: TGocciaActiveRootFrame;
 begin
+  // A duration made from a string or a property bag is held only by Dur
+  // while the options are read, which can run a getter.
+  DurRoots.Initialize;
+  try
   try
   D := AsPlainDateTime(AThisValue, 'PlainDateTime.prototype.add');
   Arg := AArgs.GetElement(0);
@@ -1092,6 +1097,7 @@ begin
     Dur := nil;
   end;
 
+  DurRoots.Add(Dur);
   Overflow := GetOverflowOptionFromValue(AArgs.GetElement(1), 'PlainDateTime.prototype.add');
   BalancePlainDateTimeTimeAddition(D.FHour, D.FMinute, D.FSecond,
     D.FMillisecond, D.FMicrosecond, D.FNanosecond, Dur, Balanced, ExtraDays);
@@ -1111,6 +1117,9 @@ begin
   except
     on E: ETemporalDurationInt64Overflow do
       ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+  end;
+  finally
+    DurRoots.Clear;
   end;
 end;
 
