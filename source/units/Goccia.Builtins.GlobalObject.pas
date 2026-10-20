@@ -919,6 +919,7 @@ function TGocciaGlobalObject.ObjectGetOwnPropertySymbols(const AArgs: TGocciaArg
 var
   Obj: TGocciaObjectValue;
   Arr: TGocciaArrayValue;
+  ArrRoot: TGocciaTempRoot;
   OwnSymbols: TArray<TGocciaSymbolValue>;
   I: Integer;
 begin
@@ -929,8 +930,13 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(ArrRoot);
   try
     Arr := TGocciaArrayValue.Create;
+    { Reading the keys can run script code (a deferred module namespace
+      evaluates its module, a Proxy runs its ownKeys trap), so the result
+      array needs a root across it. }
+    AddTempRootIfNeeded(ArrRoot, Arr);
 
     // Step 1: Return GetOwnPropertyKeys(O, symbol)
     OwnSymbols := Obj.GetOwnSymbols;
@@ -939,6 +945,7 @@ begin
 
     Result := Arr;
   finally
+    RemoveTempRootIfNeeded(ArrRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);

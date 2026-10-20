@@ -5053,65 +5053,75 @@ var
   FillValue: TGocciaValue;
   StartIdx, EndIdx, I: Integer;
   Start64, End64, I64: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) is held only
+  // here while start and end convert and every element is written, which can
+  // run guest code; it is also the result.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: Let value (default undefined)
-  if AArgs.Length < 1 then
-    FillValue := TGocciaUndefinedLiteralValue.UndefinedValue
-  else
-    FillValue := AArgs.GetElement(0);
-
-  if View.NeedsSparsePath then
-  begin
-    Start64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 1), View.Len64);
-    if (AArgs.Length > 2) and
-       not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-      End64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 2), View.Len64)
+    // Step 3: Let value (default undefined)
+    if AArgs.Length < 1 then
+      FillValue := TGocciaUndefinedLiteralValue.UndefinedValue
     else
-      End64 := View.Len64;
+      FillValue := AArgs.GetElement(0);
 
-    if (View.Obj is TGocciaStringObjectValue) and (Start64 < End64) then
-      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(Start64)]),
-        SSuggestCannotDeleteNonConfigurable);
-
-    I64 := Start64;
-    while I64 < End64 do
+    if View.NeedsSparsePath then
     begin
-      View.Obj.AssignProperty(IntegerToString(I64), FillValue);
-      Inc(I64);
+      Start64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 1), View.Len64);
+      if (AArgs.Length > 2) and
+         not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+        End64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 2), View.Len64)
+      else
+        End64 := View.Len64;
+
+      if (View.Obj is TGocciaStringObjectValue) and (Start64 < End64) then
+        ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(Start64)]),
+          SSuggestCannotDeleteNonConfigurable);
+
+      I64 := Start64;
+      while I64 < End64 do
+      begin
+        View.Obj.AssignProperty(IntegerToString(I64), FillValue);
+        Inc(I64);
+      end;
+
+      Result := View.Obj;
+      Exit;
     end;
 
+    // Step 4: Let relativeStart be ToIntegerOrInfinity(start)
+    StartIdx := ToIntegerFromArgs(AArgs, 1);
+
+    // Step 6: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
+    if (AArgs.Length > 2) and
+       not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+      EndIdx := ToIntegerFromArgs(AArgs, 2)
+    else
+      EndIdx := View.Len;
+
+    // Step 5: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
+    StartIdx := NormalizeRelativeIndex(StartIdx, View.Len);
+    // Step 7: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
+    EndIdx := NormalizeRelativeIndex(EndIdx, View.Len);
+
+    if (View.Obj is TGocciaStringObjectValue) and (StartIdx < EndIdx) then
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(StartIdx)]),
+        SSuggestCannotDeleteNonConfigurable);
+
+    // Step 8: Repeat, while k < final — Set(O, ToString(k), value)
+    for I := StartIdx to EndIdx - 1 do
+      View.Put(I, FillValue);
+
+    // Step 9: Return O
     Result := View.Obj;
-    Exit;
+  finally
+    ViewRoots.Clear;
   end;
-
-  // Step 4: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIdx := ToIntegerFromArgs(AArgs, 1);
-
-  // Step 6: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
-  if (AArgs.Length > 2) and
-     not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-    EndIdx := ToIntegerFromArgs(AArgs, 2)
-  else
-    EndIdx := View.Len;
-
-  // Step 5: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
-  StartIdx := NormalizeRelativeIndex(StartIdx, View.Len);
-  // Step 7: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
-  EndIdx := NormalizeRelativeIndex(EndIdx, View.Len);
-
-  if (View.Obj is TGocciaStringObjectValue) and (StartIdx < EndIdx) then
-    ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(StartIdx)]),
-      SSuggestCannotDeleteNonConfigurable);
-
-  // Step 8: Repeat, while k < final — Set(O, ToString(k), value)
-  for I := StartIdx to EndIdx - 1 do
-    View.Put(I, FillValue);
-
-  // Step 9: Return O
-  Result := View.Obj;
 end;
 
 // ES2026 §23.1.3.1 Array.prototype.at(index)

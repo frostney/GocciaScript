@@ -85,6 +85,9 @@ type
     procedure TestDisposalErrors;
     procedure TestAsyncGeneratorReceivers;
     procedure TestErroredModuleImport;
+    procedure TestNumberReceivers;
+    procedure TestFillOperands;
+    procedure TestOwnPropertySymbolsTrap;
   end;
 
 const
@@ -172,6 +175,12 @@ begin
     TestAsyncGeneratorReceivers);
   AddCase('a second import of a module whose evaluation threw',
     TestErroredModuleImport);
+  AddCase('a number receiver the VM boxed, across its method''s arguments',
+    TestNumberReceivers);
+  AddCase('fill on a primitive receiver, and a coerced fill value',
+    TestFillOperands);
+  AddCase('Object.getOwnPropertySymbols across a Proxy ownKeys trap',
+    TestOwnPropertySymbolsTrap);
 end;
 
 procedure TGCStressTests.BeginStress;
@@ -807,6 +816,48 @@ begin
     DeleteFile(IncludeTrailingPathDelimiter(Directory) + 'errored.js');
     RemoveDir(Directory);
   end;
+end;
+
+// #1834: a number method's receiver, boxed out of a scalar register, was held
+// only by the native call while the arguments' valueOf ran and allocated.
+procedure TGCStressTests.TestNumberReceivers;
+begin
+  RunStressed('number-receivers.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const num = (v) => ({ valueOf() { fresh("pad"); return v; } });' + LineEnding +
+    'const x = 1.234 + 1, y = 255 * 1.5;' + LineEnding +
+    'const out = [x.toFixed(num(2)), y.toString(num(16)), x.toPrecision(num(3)),' + LineEnding +
+    '  x.toExponential(num(1))].join();' + LineEnding +
+    'if (out !== "2.23,17e.8,2.23,2.2e+0") throw new Error(out);');
+end;
+
+// #1834: Array.prototype.fill held a primitive receiver's wrapper only in a
+// local while start and end converted, and %TypedArray%.prototype.fill held
+// its coerced value across them.
+procedure TGCStressTests.TestFillOperands;
+begin
+  RunStressed('fill.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const num = (v) => ({ valueOf() { fresh("pad"); return v; } });' + LineEnding +
+    'const filled = Array.prototype.fill.call(7.5, 1, num(0), num(0));' + LineEnding +
+    'const typed = new Float64Array(4).fill(num(Math.PI * 2), num(1), num(3)).join();' + LineEnding +
+    'if (typeof filled !== "object" || typed !== `0,${Math.PI * 2},${Math.PI * 2},0`)' + LineEnding +
+    '  throw new Error([typeof filled, typed].join());');
+end;
+
+// #1834: Object.getOwnPropertySymbols made its result array before reading
+// the keys, which runs a Proxy's ownKeys trap (or evaluates a deferred
+// module), and held the array only in a local across it.
+procedure TGCStressTests.TestOwnPropertySymbolsTrap;
+begin
+  RunStressed('own-symbols.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const one = Symbol("one");' + LineEnding +
+    'const target = { [one]: 1 };' + LineEnding +
+    'const proxy = new Proxy(target, { ownKeys() { fresh("trap"); return [fresh("k"), one]; },' + LineEnding +
+    '  getOwnPropertyDescriptor(t, k) { fresh("d"); return Reflect.getOwnPropertyDescriptor(t, k); } });' + LineEnding +
+    'const symbols = Object.getOwnPropertySymbols(proxy);' + LineEnding +
+    'if (symbols.length !== 1 || symbols[0] !== one) throw new Error(String(symbols.length));');
 end;
 
 begin

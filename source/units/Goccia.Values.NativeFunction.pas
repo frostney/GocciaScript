@@ -66,6 +66,8 @@ type
     FDirectEvalHost: Boolean;
     FCapturedRoot: TGocciaValue;
     FIntrinsicKind: TGocciaNativeIntrinsicKind;
+    function CallWithRootedReceiver(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
@@ -128,6 +130,7 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ObjectPropertyDescriptor;
 
 var
@@ -236,6 +239,13 @@ var
   PreviousRealm: TGocciaRealm;
   RealmSwitched: Boolean;
 begin
+  // A number receiver is usually one the VM just boxed out of a scalar
+  // register: nothing but this call holds it. The arguments collection roots
+  // the arguments (ADR 0105); the receiver needs the same while the builtin
+  // runs guest code (valueOf, a getter, a callback) and reads it afterwards.
+  if Assigned(AThisValue) and
+     (AThisValue.ClassType = TGocciaNumberLiteralValue) then
+    Exit(CallWithRootedReceiver(AArguments, AThisValue));
   PreviousRealm := CurrentRealm;
   RealmSwitched := Assigned(FCreationRealm) and
     (FCreationRealm <> PreviousRealm);
@@ -248,6 +258,33 @@ begin
     Result := FFunction(AArguments, AThisValue);
   finally
     SetCurrentRealm(PreviousRealm);
+  end;
+end;
+
+function TGocciaNativeFunctionValue.CallWithRootedReceiver(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  PreviousRealm: TGocciaRealm;
+  RealmSwitched: Boolean;
+  ReceiverRoots: TGocciaActiveRootFrame;
+begin
+  PreviousRealm := CurrentRealm;
+  RealmSwitched := Assigned(FCreationRealm) and
+    (FCreationRealm <> PreviousRealm);
+  ReceiverRoots.Initialize;
+  try
+    ReceiverRoots.Add(AThisValue);
+    if RealmSwitched then
+      SetCurrentRealm(FCreationRealm);
+    try
+      Result := FFunction(AArguments, AThisValue);
+    finally
+      if RealmSwitched then
+        SetCurrentRealm(PreviousRealm);
+    end;
+  finally
+    ReceiverRoots.Clear;
   end;
 end;
 
