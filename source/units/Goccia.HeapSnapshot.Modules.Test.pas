@@ -1129,7 +1129,8 @@ procedure THeapSnapshotModulesTests.TestStoppedCacheLeavesNoRecords;
 var
   Refusal: string;
   Bytes: TBytes;
-  Low, High, Mid, Limit: Int64;
+  Low, High, Mid: Int64;
+  Offset: Integer;
 
   // Whether the restore completes within ALimit polls; a stopped one must
   // leave no record in the loader.
@@ -1192,8 +1193,8 @@ begin
       Low := Mid + 1;
   end;
   Expect<Boolean>(High > 16).ToBe(True);
-  for Limit := High - 16 to High - 1 do
-    Expect<Boolean>(RestoresWithin(Limit)).ToBe(False);
+  for Offset := 16 downto 1 do
+    Expect<Boolean>(RestoresWithin(High - Offset)).ToBe(False);
 end;
 
 procedure THeapSnapshotModulesTests.TestSourceTextIsCharged;
