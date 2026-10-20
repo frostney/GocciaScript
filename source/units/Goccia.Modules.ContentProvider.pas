@@ -44,6 +44,9 @@ type
 
   TGocciaModuleContentProvider = class
   public
+    { Normalize an entry address even when only its bytecode exists.
+      Providers with their own namespace override host-path normalization. }
+    function NormalizeEntryAddress(const APath: string): string; virtual;
     function Exists(const APath: string): Boolean; virtual; abstract;
     function LoadContent(const APath: string): TGocciaModuleContent; virtual; abstract;
     function TryGetLastModified(const APath: string;
@@ -166,6 +169,14 @@ begin
 end;
 
 { TGocciaModuleContentProvider }
+
+function TGocciaModuleContentProvider.NormalizeEntryAddress(
+  const APath: string): string;
+begin
+  Result := ExpandFileName(APath);
+  if (Result <> APath) and Exists(APath) and not Exists(Result) then
+    Result := APath;
+end;
 
 function TGocciaModuleContentProvider.LoadContentBytes(
   const APath: string): TBytes;

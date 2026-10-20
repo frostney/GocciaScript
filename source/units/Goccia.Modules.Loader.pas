@@ -172,8 +172,12 @@ type
       node_modules, or empty. }
     FLastPackageRoot: string;
 
+    { ATemporaryBytecode identifies a fresh disk acquisition: release it
+      after a declaration-only scan, or transfer it to linked execution.
+      Registered virtual artifacts remain borrowed from the engine. }
     function ReadModuleProgram(const AResolvedPath: string;
       var AIsHostOwned: Boolean; out ACompiledModule: TGocciaBytecodeModule;
+      out ATemporaryBytecode: Boolean;
       out ALastModified: TDateTime;
       out AOptions: TGocciaSourcePipelineOptions): TGocciaProgram;
     function BytecodePath(const AResolvedPath: string): string;
@@ -197,7 +201,8 @@ type
       out APackageRoot: string; const AUseBytecode: Boolean = True): string;
     function ResolveTraversedDependency(const ARequestedPath,
       AAttributeType, AImportingFilePath: string;
-      const ADeclaration: TGocciaStatement): string;
+      const ADeclaration: TGocciaStatement;
+      out AResolvedPath: string): Boolean;
     procedure EnforceHostRead(const ASpecifier, APath, AImportingFilePath,
       APackageRoot: string; const AIsLiteral, AIsHostOwned: Boolean);
     function GuardsRequest(const ASpecifier,
@@ -1185,29 +1190,44 @@ end;
   linking, deferred async evaluation) are about to read and parse, and
   judges it first exactly as the eager path does: every probe through the
   guard, then the resolved path, with the declaration as the call site. The
-  result carries the import attribute, as ResolveModuleRequestWithAttribute
-  returns it. }
+  resolved path carries the import attribute. Source-phase edges validate
+  their own source and return False: their dependencies are not traversed. }
 function TGocciaModuleLoader.ResolveTraversedDependency(const ARequestedPath,
   AAttributeType, AImportingFilePath: string;
-  const ADeclaration: TGocciaStatement): string;
+  const ADeclaration: TGocciaStatement;
+  out AResolvedPath: string): Boolean;
 var
   PackageRoot: string;
   PreviousCallSite: TGocciaCallSite;
 begin
-  if (AAttributeType = '') and HasGlobalModuleRequest(ARequestedPath) then
-    Exit(ARequestedPath);
+  AResolvedPath := '';
+  Result := True;
   EnterGocciaCallSite(AImportingFilePath, ADeclaration.Line,
     ADeclaration.Column, PreviousCallSite);
   try
-    Result := ResolveRequestAddress(ARequestedPath, AImportingFilePath, True,
+    if (ADeclaration is TGocciaImportDeclaration) and
+       (TGocciaImportDeclaration(ADeclaration).Phase = icpSource) then
+    begin
+      { A source object validates its own source, but its imports and awaits
+        are not dependencies of this module's evaluation. }
+      LoadModuleSourceValue(EncodeImportSpecifierAttribute(ARequestedPath,
+        AAttributeType), AImportingFilePath);
+      Exit(False);
+    end;
+    if (AAttributeType = '') and HasGlobalModuleRequest(ARequestedPath) then
+    begin
+      AResolvedPath := ARequestedPath;
+      Exit;
+    end;
+    AResolvedPath := ResolveRequestAddress(ARequestedPath, AImportingFilePath, True,
       False, PackageRoot, AAttributeType = '');
-    EnforceHostRead(ARequestedPath, Result, AImportingFilePath, PackageRoot,
+    EnforceHostRead(ARequestedPath, AResolvedPath, AImportingFilePath, PackageRoot,
       True, IsHostRequest(ARequestedPath, AImportingFilePath));
   finally
     LeaveGocciaCallSite(PreviousCallSite);
   end;
   if AAttributeType <> '' then
-    Result := EncodeImportSpecifierAttribute(Result, AAttributeType);
+    AResolvedPath := EncodeImportSpecifierAttribute(AResolvedPath, AAttributeType);
 end;
 
 { Judges the path a request resolved to, before any cache serves it. A
@@ -1488,6 +1508,7 @@ end;
 
 function TGocciaModuleLoader.ReadModuleProgram(const AResolvedPath: string;
   var AIsHostOwned: Boolean; out ACompiledModule: TGocciaBytecodeModule;
+  out ATemporaryBytecode: Boolean;
   out ALastModified: TDateTime;
   out AOptions: TGocciaSourcePipelineOptions): TGocciaProgram;
 var
@@ -1501,6 +1522,7 @@ var
   I: Integer;
 begin
   ACompiledModule := nil;
+  ATemporaryBytecode := False;
   ALastModified := 0;
   AOptions := TGocciaSourcePipeline.DefaultOptions;
   AOptions.Preprocessors := FPreprocessors;
@@ -1513,38 +1535,63 @@ begin
   CompiledPath := BytecodePath(AResolvedPath);
   if CompiledPath <> '' then
   begin
-    if not Assigned(FReadModuleBytecode) then
-      raise EInvalidOperation.Create('The module loader has no bytecode reader');
-    { Companion files have their own read policy, including explicit denies.
-      Selection falls back only when absent, never after verification fails. }
-    EnforceHostRead(ExtractFileName(CompiledPath), CompiledPath,
-      AResolvedPath, '', True, AIsHostOwned);
-    if not FPrecompiledModules.TryGetValue(AResolvedPath, ACompiledModule) then
-    begin
+    try
+      if not Assigned(FReadModuleBytecode) then
+        raise EInvalidOperation.Create('The module loader has no bytecode reader');
+      { Companion files have their own read policy, including explicit denies.
+        Selection falls back only when absent, never after verification fails. }
+      EnforceHostRead(ExtractFileName(CompiledPath), CompiledPath,
+        AResolvedPath, '', True, AIsHostOwned);
+      if not FPrecompiledModules.TryGetValue(AResolvedPath, ACompiledModule) then
+      begin
+        if FPendingBytecodeModules.TryGetValue(CompiledPath, Pending) then
+        begin
+          FPendingBytecodeModules.Remove(CompiledPath);
+          ACompiledModule := Pending.Module;
+          ATemporaryBytecode := True;
+          CurrentModified := 0;
+          FContentProvider.TryGetLastModified(CompiledPath, CurrentModified);
+          if CurrentModified <> Pending.LastModified then
+          begin
+            if Assigned(FReleaseModuleBytecode) then
+              FReleaseModuleBytecode(ACompiledModule);
+            ACompiledModule := nil;
+            ATemporaryBytecode := False;
+          end;
+        end;
+        if not Assigned(ACompiledModule) then
+        begin
+          ACompiledModule := FReadModuleBytecode(LoadResolvedContentBytes(CompiledPath,
+            MAX_BYTECODE_FILE_BYTES));
+          ATemporaryBytecode := True;
+        end;
+        ACompiledModule.RelocateSourcePath(AResolvedPath);
+        if FVirtualModules.Contains(AResolvedPath) then
+        begin
+          FPrecompiledModules.AddOrSetValue(AResolvedPath, ACompiledModule);
+          ATemporaryBytecode := False;
+        end;
+      end;
+      if Assigned(FValidateModuleBytecode) then
+        FValidateModuleBytecode(ACompiledModule);
+      if FVirtualModules.TryGetDefinition(AResolvedPath, Definition) then
+        Definition.Loaded := True
+      else
+        FContentProvider.TryGetLastModified(CompiledPath, ALastModified);
+      Result := ACompiledModule.LinkPlan.Materialize;
+    except
+      if ATemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+        FReleaseModuleBytecode(ACompiledModule);
       if FPendingBytecodeModules.TryGetValue(CompiledPath, Pending) then
       begin
         FPendingBytecodeModules.Remove(CompiledPath);
-        CurrentModified := 0;
-        FContentProvider.TryGetLastModified(CompiledPath, CurrentModified);
-        if CurrentModified = Pending.LastModified then
-          ACompiledModule := Pending.Module
-        else if Assigned(FReleaseModuleBytecode) then
+        if Assigned(FReleaseModuleBytecode) then
           FReleaseModuleBytecode(Pending.Module);
       end;
-      if not Assigned(ACompiledModule) then
-        ACompiledModule := FReadModuleBytecode(LoadResolvedContentBytes(CompiledPath,
-          MAX_BYTECODE_FILE_BYTES));
-      ACompiledModule.RelocateSourcePath(AResolvedPath);
-      if FVirtualModules.Contains(AResolvedPath) then
-        FPrecompiledModules.AddOrSetValue(AResolvedPath, ACompiledModule);
+      ACompiledModule := nil;
+      ATemporaryBytecode := False;
+      raise;
     end;
-    if Assigned(FValidateModuleBytecode) then
-      FValidateModuleBytecode(ACompiledModule);
-    if FVirtualModules.TryGetDefinition(AResolvedPath, Definition) then
-      Definition.Loaded := True
-    else
-      FContentProvider.TryGetLastModified(CompiledPath, ALastModified);
-    Result := ACompiledModule.LinkPlan.Materialize;
     Exit;
   end;
   Content := LoadResolvedContent(AResolvedPath, AIsHostOwned);
@@ -2544,6 +2591,7 @@ var
   AttributeType: string;
   CacheKey: string;
   CompiledModule: TGocciaBytecodeModule;
+  TemporaryBytecode: Boolean;
   LastModified: TDateTime;
   Context: TGocciaEvaluationContext;
   ExportClassDecl: TGocciaExportClassDeclaration;
@@ -3113,7 +3161,7 @@ begin
   end;
 
   ProgramNode := ReadModuleProgram(ResolvedPath, IsHostOwned,
-    CompiledModule, LastModified, PipelineOptions);
+    CompiledModule, TemporaryBytecode, LastModified, PipelineOptions);
   RequestedModules := nil;
   LoadState := nil;
   try
@@ -3171,6 +3219,9 @@ begin
         raise EInvalidOperation.Create(
           'The module loader has no function instantiator; attach it ' +
           'to an engine before loading modules');
+      { Function instantiation can publish closures before it raises; from
+        this boundary the engine retains code for the linked module. }
+      TemporaryBytecode := False;
       FInstantiateModuleFunctions(ProgramNode, Context);
       if GetVarEnabled then
         HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
@@ -3223,6 +3274,8 @@ begin
   finally
     RequestedModules.Free;
     ProgramNode.Free;
+    if TemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(CompiledModule);
   end;
 end;
 
@@ -3368,6 +3421,7 @@ function TGocciaModuleLoader.DeferredGraphTouchesEvaluating(
 var
   AttributeType: string;
   CompiledModule: TGocciaBytecodeModule;
+  TemporaryBytecode: Boolean;
   LastModified: TDateTime;
   ExistingModule: TGocciaModule;
   ExistingPromise: TGocciaPromiseValue;
@@ -3415,7 +3469,7 @@ begin
   if IsHostOwned then
     MarkHostOwnedAddress(PhysicalPath);
   ProgramNode := ReadModuleProgram(PhysicalPath, IsHostOwned,
-    CompiledModule, LastModified, PipelineOptions);
+    CompiledModule, TemporaryBytecode, LastModified, PipelineOptions);
   try
     for I := 0 to ProgramNode.Body.Count - 1 do
     begin
@@ -3435,14 +3489,17 @@ begin
       else
         Continue;
 
-      ResolvedPath := ResolveTraversedDependency(RequestedPath,
-        RequestedAttributeType, PhysicalPath, Stmt);
+      if not ResolveTraversedDependency(RequestedPath,
+        RequestedAttributeType, PhysicalPath, Stmt, ResolvedPath) then
+        Continue;
       if DeferredGraphTouchesEvaluating(ResolvedPath, PhysicalPath,
          ASeen) then
         Exit(True);
     end;
   finally
     ProgramNode.Free;
+    if TemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(CompiledModule);
   end;
 
   Result := False;
@@ -3455,6 +3512,7 @@ procedure TGocciaModuleLoader.EvaluateDeferredAsyncDependencies(
 var
   AttributeType: string;
   CompiledModule: TGocciaBytecodeModule;
+  TemporaryBytecode: Boolean;
   LastModified: TDateTime;
   IsHostOwned: Boolean;
   LoadedModule: TGocciaModule;
@@ -3483,7 +3541,7 @@ begin
   if IsHostOwned then
     MarkHostOwnedAddress(PhysicalPath);
   ProgramNode := ReadModuleProgram(PhysicalPath, IsHostOwned,
-    CompiledModule, LastModified, PipelineOptions);
+    CompiledModule, TemporaryBytecode, LastModified, PipelineOptions);
   try
     if ProgramNode.HasTopLevelAwait then
     begin
@@ -3520,13 +3578,16 @@ begin
       else
         Continue;
 
-      ResolvedPath := ResolveTraversedDependency(RequestedPath,
-        RequestedAttributeType, PhysicalPath, Stmt);
+      if not ResolveTraversedDependency(RequestedPath,
+        RequestedAttributeType, PhysicalPath, Stmt, ResolvedPath) then
+        Continue;
       EvaluateDeferredAsyncDependencies(ResolvedPath, PhysicalPath, ASeen,
         ARequestedModules);
     end;
   finally
     ProgramNode.Free;
+    if TemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(CompiledModule);
   end;
 end;
 
@@ -3536,6 +3597,7 @@ procedure TGocciaModuleLoader.ValidateDeferredModuleLinks(
 var
   AttributeType: string;
   CompiledModule: TGocciaBytecodeModule;
+  TemporaryBytecode: Boolean;
   LastModified: TDateTime;
   ImportDecl: TGocciaImportDeclaration;
   IsHostOwned: Boolean;
@@ -3565,7 +3627,7 @@ begin
   if IsHostOwned then
     MarkHostOwnedAddress(PhysicalPath);
   ProgramNode := ReadModuleProgram(PhysicalPath, IsHostOwned,
-    CompiledModule, LastModified, PipelineOptions);
+    CompiledModule, TemporaryBytecode, LastModified, PipelineOptions);
   try
     for I := 0 to ProgramNode.Body.Count - 1 do
     begin
@@ -3585,12 +3647,15 @@ begin
       else
         Continue;
 
-      ResolvedPath := ResolveTraversedDependency(RequestedPath,
-        RequestedAttributeType, PhysicalPath, Stmt);
+      if not ResolveTraversedDependency(RequestedPath,
+        RequestedAttributeType, PhysicalPath, Stmt, ResolvedPath) then
+        Continue;
       ValidateDeferredModuleLinks(ResolvedPath, PhysicalPath, ASeen);
     end;
   finally
     ProgramNode.Free;
+    if TemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(CompiledModule);
   end;
 end;
 

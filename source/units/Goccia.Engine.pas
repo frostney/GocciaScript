@@ -2785,6 +2785,7 @@ var
   ShimLoadToken: Int64;
   BytecodeModule: TGocciaBytecodeModule;
   Compiler: TGocciaCompiler;
+  PipelineOptions: TGocciaSourcePipelineOptions;
   GC: TGarbageCollector;
   SavedGlobalBackedTopLevel: Boolean;
   SavedGlobalScope: TGocciaScope;
@@ -2800,6 +2801,11 @@ begin
     Compiler.ArgumentsObjectEnabled := AScope.EffectiveArgumentsObjectEnabled;
     Compiler.HideSourceText := True;
     BytecodeModule := Compiler.Compile(AProgram);
+    PipelineOptions := ShimSourcePipelineOptions;
+    if Compiler.ArgumentsObjectEnabled then
+      Include(PipelineOptions.Compatibility, cfArgumentsObject);
+    BytecodeModule.CompileProfile := BuildBytecodeCompileProfile(
+      PipelineOptions, Compiler.StrictTypes);
   finally
     Compiler.Free;
   end;
@@ -2937,6 +2943,8 @@ begin
     Compiler.OptimizationOptions := Options;
     Module := Compiler.CompileDirectEval(AProgram, ASite, AStrictEval,
       ADeclaredVarNames);
+    Module.CompileProfile := BuildBytecodeCompileProfile(
+      SourcePipelineOptions(stScript), FStrictTypes);
   finally
     Compiler.Free;
   end;
@@ -3285,6 +3293,8 @@ begin
             Compiler.OptimizationOptions := CompilerOptions;
             Module := Compiler.CompileGlobalEval(ParseResult.ProgramNode,
               StrictEval, DeclaredVarNames);
+            Module.CompileProfile := BuildBytecodeCompileProfile(
+              Options, FStrictTypes);
           finally
             Compiler.Free;
           end;
@@ -3904,14 +3914,9 @@ begin
   end;
 end;
 
-{ The path an entry module is registered and stamped under: the one the
-  loader's resolver gives an import of the entry's file. That is the expanded
-  host path, unless the content provider knows the file only by the name the
-  host gave it. The sandbox's virtual filesystem names files by `/`-rooted
-  paths on every platform, and its resolver answers an import of `./cyc.js`
-  with `/cyc.js`, while on Windows ExpandFileName turns `/cyc.js` into a drive
-  path the filesystem does not have. Registered under that, the entry was
-  missed by an import of its own file, which loaded a second copy of it. }
+{ The provider owns its entry namespace independently of source-file
+  existence. In particular, a source-free sandbox entry stays `/`-rooted on
+  Windows instead of acquiring a host drive prefix. }
 function EntryModulePath(const ALoader: TGocciaModuleLoader;
   const ASourcePath: string): string;
 var
@@ -3919,13 +3924,11 @@ var
 begin
   if IsVirtualModuleURI(ASourcePath) then
     Exit(ALoader.VirtualModules.CanonicalAddress(ASourcePath, ''));
-  Result := ExpandFileName(ASourcePath);
-  if Result = ASourcePath then
-    Exit;
   Provider := ALoader.ContentProvider;
-  if Assigned(Provider) and Provider.Exists(ASourcePath) and
-     not Provider.Exists(Result) then
-    Result := ASourcePath;
+  if Assigned(Provider) then
+    Result := Provider.NormalizeEntryAddress(ASourcePath)
+  else
+    Result := ExpandFileName(ASourcePath);
 end;
 
 function TGocciaEngine.RunModuleForSourceType(

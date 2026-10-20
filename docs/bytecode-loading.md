@@ -42,7 +42,9 @@ Result := Engine.Execute;
 address for relative registrations. It uses the existing virtual module
 registry's normalization, alias and replacement rules. The registered address
 governs relative imports and `import.meta`, so an artifact can be relocated
-without trusting its original compiler filename.
+without trusting its original compiler filename. A custom content provider with
+its own path namespace overrides `NormalizeEntryAddress`; the sandbox provider
+normalizes buffered entries without requiring their source files to exist.
 
 `Engine.RunBytecodeBuffer(Bytes, Address)` runs a compiled entry with normal
 module linking and runtime-idle handling. It returns the entry's completion

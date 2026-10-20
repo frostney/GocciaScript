@@ -21,6 +21,7 @@ type
   public
     constructor Create(const AFs: TSandboxVirtualFileSystem);
 
+    function NormalizeEntryAddress(const APath: string): string; override;
     function Exists(const APath: string): Boolean; override;
     function LoadContent(const APath: string): TGocciaModuleContent; override;
     function LoadContentBytes(const APath: string): TBytes; override;
@@ -121,6 +122,14 @@ constructor TGocciaSandboxModuleContentProvider.Create(
 begin
   inherited Create;
   FFs := AFs;
+end;
+
+function TGocciaSandboxModuleContentProvider.NormalizeEntryAddress(
+  const APath: string): string;
+begin
+  if not Assigned(FFs) then
+    raise EStreamError.Create('No sandbox filesystem configured.');
+  Result := FFs.Normalize(APath);
 end;
 
 function TGocciaSandboxModuleContentProvider.Exists(

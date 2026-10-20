@@ -350,6 +350,37 @@ export function verifyAotModules(): void {
       sourceExpected,
       "compiled importer keeps source-phase semantics",
     );
+    const deferredSourceDir = join(tmp, "deferred-source");
+    mkdirSync(deferredSourceDir);
+    writeFileSync(join(deferredSourceDir, "target.mjs"), `
+      await Promise.resolve();
+      globalThis.sourcePhaseTargetRan = true;
+      export const value = 42;
+    `);
+    writeFileSync(join(deferredSourceDir, "target.gbc"), "invalid unused companion");
+    const deferredSourceLibrary = join(deferredSourceDir, "library.mjs");
+    writeFileSync(deferredSourceLibrary, `
+      import source target from "./target.mjs";
+      export const kind = Object.prototype.toString.call(target);
+    `);
+    const deferredSourceEntry = join(deferredSourceDir, "entry.mjs");
+    for (const access of [false, true]) {
+      writeFileSync(deferredSourceEntry, `
+        import defer * as library from "./library.mjs";
+        console.log("AOT:" + ${access ? "library.kind" : '"unaccessed"'}
+          + ":" + String(globalThis.sourcePhaseTargetRan));
+      `);
+      const expectedDeferredSource = `AOT:${access ? "[object ModuleSource]" : "unaccessed"}:undefined`;
+      if (!access) {
+        equal(resultLines(invoke(RUNNER, [deferredSourceEntry, ...sourceFlags])),
+          expectedDeferredSource, "deferred source-phase source oracle");
+        compile(deferredSourceLibrary, sourceFlags);
+        unlinkSync(deferredSourceLibrary);
+      }
+      equal(resultLines(invoke(RUNNER, [
+        deferredSourceEntry, "--prefer-bytecode", ...sourceFlags,
+      ])), expectedDeferredSource, `deferred source-phase ignores companion (access=${access})`);
+    }
 
     const largeSource = join(tmp, "large.mjs");
     writeFileSync(largeSource, Array.from({ length: 1000 }, (_, index) =>

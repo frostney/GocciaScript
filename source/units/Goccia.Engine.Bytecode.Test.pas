@@ -7,11 +7,14 @@ uses
   Classes,
   SysUtils,
 
+  SandboxVirtualFileSystem,
   TestingPascalLibrary,
 
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.Engine,
+  Goccia.Modules.Loader,
+  Goccia.Sandbox.Modules,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.Values.Error,
@@ -58,6 +61,13 @@ type
       const AExpectedReason: string);
     procedure TestLegacyRunRejectsLoadedProfileMismatch;
     procedure TestLegacyRunRejectsLinkedArtifact;
+    procedure AssertDeferredDiskRetention(const AAccess, AInvalid: Boolean);
+    procedure TestDeferredDiskScanReleasesBytecode;
+    procedure TestDeferredDiskExecutionRetainsOneBody;
+    procedure TestDeferredDiskFailureReleasesBytecode;
+    procedure AssertSandboxEntryAddress(const ALinked: Boolean);
+    procedure TestLinkedSandboxEntryWithoutSource;
+    procedure TestStandaloneSandboxEntryWithoutSource;
   public
     procedure SetupTests; override;
   end;
@@ -97,6 +107,16 @@ begin
     TestLegacyRunRejectsLoadedProfileMismatch);
   Test('Legacy execution APIs refuse linked artifacts without a runtime address',
     TestLegacyRunRejectsLinkedArtifact);
+  Test('Deferred disk scans release their temporary bytecode',
+    TestDeferredDiskScanReleasesBytecode);
+  Test('Deferred disk execution retains one library body',
+    TestDeferredDiskExecutionRetainsOneBody);
+  Test('Failed deferred disk scans release their temporary bytecode',
+    TestDeferredDiskFailureReleasesBytecode);
+  Test('Linked source-free sandbox entries retain their provider address',
+    TestLinkedSandboxEntryWithoutSource);
+  Test('Standalone source-free sandbox entries retain their provider address',
+    TestStandaloneSandboxEntryWithoutSource);
 end;
 
 { A compilation engine is destroyed before any consumer uses these bytes.
@@ -606,6 +626,181 @@ end;
 procedure TEngineBytecodeTests.TestLegacyRunRejectsLinkedArtifact;
 begin
   AssertLegacyRunRejected(True, 'RunModuleForSourceType');
+end;
+
+procedure TEngineBytecodeTests.AssertDeferredDiskRetention(
+  const AAccess, AInvalid: Boolean);
+var
+  Directory, ArtifactPath, LibrarySource: string;
+  Bytes: TBytes;
+  Source: TStringList;
+  Stream: TFileStream;
+  Engine: TGocciaEngine;
+  Before, ExpectedRetained: Integer;
+  Failed: Boolean;
+begin
+  Directory := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-aot-retention-' + IntToStr(GetProcessID);
+  ForceDirectories(Directory);
+  ArtifactPath := IncludeTrailingPathDelimiter(Directory) + 'lazy.gbc';
+  if AInvalid then
+    LibrarySource := 'import { value } from "./missing.mjs"; export { value };'
+  else
+    LibrarySource := 'globalThis.lazyRuns = (globalThis.lazyRuns ?? 0) + 1;' +
+      'export const value = 42;';
+  try
+    Bytes := CompileBuffer(LibrarySource, '/compile/lazy.mjs');
+    Stream := TFileStream.Create(ArtifactPath, fmCreate);
+    try
+      Stream.WriteBuffer(Bytes[0], Length(Bytes));
+    finally
+      Stream.Free;
+    end;
+    Source := TStringList.Create;
+    try
+      Source.Text := 'import defer * as lazy from "./lazy.mjs";';
+      if AAccess then
+        Source.Add('globalThis.answer = lazy.value;');
+      Engine := TGocciaEngine.Create(
+        IncludeTrailingPathDelimiter(Directory) + 'entry.mjs', Source);
+      try
+        Engine.SourceType := stModule;
+        Engine.ModuleLoader.PreferBytecode := True;
+        Before := Engine.RetainedModuleCount;
+        Failed := False;
+        try
+          Engine.Execute;
+        except
+          on Exception do
+            Failed := True;
+        end;
+        Expect<Boolean>(Failed).ToBe(AInvalid);
+        { The entry is compiled once. Only actual namespace access should
+          retain a library body; declaration scans have no executable owner. }
+        ExpectedRetained := Before + 1;
+        if AAccess and not AInvalid then
+          Inc(ExpectedRetained);
+        Expect<Integer>(Engine.RetainedModuleCount).ToBe(ExpectedRetained);
+        if not AInvalid then
+        begin
+          if AAccess then
+          begin
+            Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+              .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+            Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+              .GetProperty('lazyRuns').ToStringLiteral.Value).ToBe('1');
+          end
+          else
+            Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+              .GetProperty('lazyRuns').ToStringLiteral.Value).ToBe('undefined');
+        end;
+      finally
+        Engine.Free;
+      end;
+    finally
+      Source.Free;
+    end;
+  finally
+    DeleteFile(ArtifactPath);
+    RemoveDir(Directory);
+  end;
+end;
+
+procedure TEngineBytecodeTests.TestDeferredDiskScanReleasesBytecode;
+begin
+  AssertDeferredDiskRetention(False, False);
+end;
+
+procedure TEngineBytecodeTests.TestDeferredDiskExecutionRetainsOneBody;
+begin
+  AssertDeferredDiskRetention(True, False);
+end;
+
+procedure TEngineBytecodeTests.TestDeferredDiskFailureReleasesBytecode;
+begin
+  AssertDeferredDiskRetention(False, True);
+end;
+
+procedure TEngineBytecodeTests.AssertSandboxEntryAddress(const ALinked: Boolean);
+const
+  ENTRY_SOURCE =
+    'import { value } from "./dep.mjs";' +
+    'import { extra } from "./source.mjs";' +
+    'globalThis.answer = value + extra;' +
+    'globalThis.entryURL = import.meta.url;';
+var
+  FS: TSandboxVirtualFileSystem;
+  Resolver: TGocciaSandboxModuleResolver;
+  Provider: TGocciaSandboxModuleContentProvider;
+  Loader: TGocciaModuleLoader;
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Module: TGocciaBytecodeModule;
+  EntryBytes, DependencyBytes: TBytes;
+  EntryFound: Boolean;
+  I: Integer;
+begin
+  EntryBytes := CompileBuffer(ENTRY_SOURCE, '/compile/main.mjs',
+    [], False, ALinked);
+  DependencyBytes := CompileBuffer('export const value = 40;',
+    '/compile/dep.mjs');
+  FS := TSandboxVirtualFileSystem.Create;
+  Resolver := nil;
+  Provider := nil;
+  Loader := nil;
+  Source := nil;
+  Engine := nil;
+  Module := nil;
+  try
+    FS.MakeDirectory('/work');
+    FS.WriteAllText('/work/source.mjs', 'export const extra = 2;');
+    Resolver := TGocciaSandboxModuleResolver.Create(FS);
+    Provider := TGocciaSandboxModuleContentProvider.Create(FS);
+    Loader := TGocciaModuleLoader.Create('/work/main.mjs', Resolver, Provider);
+    Source := TStringList.Create;
+    Engine := TGocciaEngine.Create('/work/main.mjs', Source, Loader);
+    Engine.SourceType := stModule;
+    Engine.RegisterBytecodeModule('/work/dep.mjs', DependencyBytes);
+    if ALinked then
+    begin
+      Module := LoadModuleFromBuffer(EntryBytes);
+      Engine.ValidateBytecodeModule(Module);
+      Engine.RetainModule(Module);
+      Module := nil;
+      Engine.RunModuleForSourceType(
+        Engine.RetainedModule(Engine.RetainedModuleCount - 1), '/work/main.mjs');
+      Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+        .GetProperty('entryURL').ToStringLiteral.Value).ToBe('/work/main.mjs');
+    end
+    else
+      Engine.RunBytecodeBuffer(EntryBytes, '/work/main.mjs');
+    Expect<Boolean>(FS.Exists('/work/main.mjs')).ToBe(False);
+    Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+    EntryFound := False;
+    for I := 0 to Engine.RetainedModuleCount - 1 do
+      EntryFound := EntryFound or
+        (Engine.RetainedModule(I).SourcePath = '/work/main.mjs');
+    Expect<Boolean>(EntryFound).ToBe(True);
+  finally
+    Module.Free;
+    Engine.Free;
+    Source.Free;
+    Loader.Free;
+    Provider.Free;
+    Resolver.Free;
+    FS.Free;
+  end;
+end;
+
+procedure TEngineBytecodeTests.TestLinkedSandboxEntryWithoutSource;
+begin
+  AssertSandboxEntryAddress(True);
+end;
+
+procedure TEngineBytecodeTests.TestStandaloneSandboxEntryWithoutSource;
+begin
+  AssertSandboxEntryAddress(False);
 end;
 
 begin
