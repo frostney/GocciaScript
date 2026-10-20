@@ -71,6 +71,7 @@ uses
   Math,
   SysUtils,
 
+  OrderedStringMap,
   TextEncoding,
   TextSemantics,
   UnicodeICU,
@@ -93,6 +94,15 @@ type
     OriginalStart: Integer;
   end;
 
+  // The named groups that share one name: the first and last positions in
+  // FNamedGroups, in source order, and how many there are. The groups between
+  // them are chained through FNamedGroupNext.
+  TRegExpNameEntry = record
+    First: Integer;
+    Last: Integer;
+    Count: Integer;
+  end;
+
   TRegExpClassContents = record
     Ranges: array of TRegExpCharRange;
     RangeCount: Integer;
@@ -109,7 +119,33 @@ type
     FCharClasses: TRegExpCharClassArray;
     FStringSets: TRegExpStringSetArray;
     FCaptureCount: Integer;
+    // The named groups the pre-scan found, in source order. The array grows
+    // geometrically while FNamedGroupCount counts the used part; the pre-scan
+    // trims it to that count.
     FNamedGroups: TGocciaRegExpNamedGroups;
+    FNamedGroupCount: Integer;
+    // For each position in FNamedGroups, the next position with the same name
+    // or -1.
+    FNamedGroupNext: array of Integer;
+    // For each position in FNamedGroups, the group's node in the tree below.
+    FNamedGroupPathNode: array of Integer;
+    // The tree of the pattern's groups and alternatives, as far as named
+    // groups need it: a group node is a group or lookaround (the pattern
+    // itself is the root), and its children are the alternatives of its
+    // disjunction; an alternative node's children are the groups directly in
+    // it. Two groups can take part in one match unless their paths part below
+    // a group node, into different alternatives (ES2026 §22.2.1.1
+    // MightBothParticipate). Nodes are added only when a named group needs
+    // them, so a group shares the nodes of the groups before it and costs the
+    // nodes that changed, never a copy of the whole path.
+    FPathParent: array of Integer;
+    FPathIsGroup: array of Boolean;
+    FPathNodeCount: Integer;
+    // Name -> index into FNameEntries, so a name is found, and a duplicate
+    // name checked, without scanning every group.
+    FNameIndex: TOrderedStringMap<Integer>;
+    FNameEntries: array of TRegExpNameEntry;
+    FNameEntryCount: Integer;
     FAltStack: array of Integer;
     FAltStackDepth: Integer;
     FModifier: TModifierState;
@@ -185,11 +221,17 @@ type
       AOrigStart: Integer);
     procedure ValidateNamedGroups;
     procedure PreScanNamedGroups;
+    procedure AddNamedGroup(const AName: string; AGroupIndex: Integer;
+      var AGroupNodes, AAltNodes: array of Integer; ADepth: Integer);
+    function NewPathNode(AParent: Integer; AIsGroup: Boolean): Integer;
+    function FindNameEntry(const AName: string;
+      out AEntry: TRegExpNameEntry): Boolean;
     procedure InsertSplitAt(APos: Integer);
     procedure EmitDuplicateNamedBackref(const AName: string;
       ABackrefFlags: Integer);
   public
     constructor Create(const APattern, AFlags: string);
+    destructor Destroy; override;
     function Compile: TRegExpProgram;
   end;
 
@@ -349,6 +391,15 @@ begin
   SetLength(FStringSets, 0);
   FCaptureCount := 0;
   SetLength(FNamedGroups, 0);
+  FNamedGroupCount := 0;
+  SetLength(FNamedGroupNext, 0);
+  SetLength(FNamedGroupPathNode, 0);
+  SetLength(FPathParent, 0);
+  SetLength(FPathIsGroup, 0);
+  FPathNodeCount := 0;
+  FNameIndex := TOrderedStringMap<Integer>.Create;
+  SetLength(FNameEntries, 0);
+  FNameEntryCount := 0;
   SetLength(FAltStack, 64);
   FAltStackDepth := 0;
   FAltStack[0] := 0;
@@ -360,6 +411,12 @@ begin
   FPreScanCaptureCount := 0;
   FPendingCodeUnit := -1;
   FBackward := False;
+end;
+
+destructor TRegExpCompiler.Destroy;
+begin
+  FNameIndex.Free;
+  inherited Destroy;
 end;
 
 function TRegExpCompiler.Peek: Char;
@@ -2132,20 +2189,25 @@ end;
 procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string;
   ABackrefFlags: Integer);
 var
+  Entry: TRegExpNameEntry;
   Indices: array of Integer;
-  Count, I: Integer;
+  Count, I, Position: Integer;
   UndefinedJumpHole: Integer;
   JumpHoles: array of Integer;
   JumpCount: Integer;
 begin
   Count := 0;
-  SetLength(Indices, Length(FNamedGroups));
-  for I := 0 to High(FNamedGroups) do
-    if FNamedGroups[I].Name = AName then
+  if FindNameEntry(AName, Entry) then
+  begin
+    SetLength(Indices, Entry.Count);
+    Position := Entry.First;
+    while Position >= 0 do
     begin
-      Indices[Count] := FNamedGroups[I].Index;
+      Indices[Count] := FNamedGroups[Position].Index;
       Inc(Count);
+      Position := FNamedGroupNext[Position];
     end;
+  end;
   SetLength(Indices, Count);
   if Count = 1 then
   begin
@@ -2177,6 +2239,7 @@ var
   PropertyName: string;
   Negated: Boolean;
   GroupName: string;
+  NameEntry: TRegExpNameEntry;
   Contents: TRegExpClassContents;
   BackrefIdx, I, GroupCount, BackrefFlags, WordAssertFlags: Integer;
   CodePoint: Cardinal;
@@ -2243,13 +2306,11 @@ begin
           GroupName := ParseGroupName;
           BackrefIdx := -1;
           GroupCount := 0;
-          for I := 0 to High(FNamedGroups) do
-            if FNamedGroups[I].Name = GroupName then
-            begin
-              if BackrefIdx < 0 then
-                BackrefIdx := FNamedGroups[I].Index;
-              Inc(GroupCount);
-            end;
+          if FindNameEntry(GroupName, NameEntry) then
+          begin
+            BackrefIdx := FNamedGroups[NameEntry.First].Index;
+            GroupCount := NameEntry.Count;
+          end;
           if BackrefIdx < 0 then
           begin
             if FUnicode or (Length(FNamedGroups) > 0) then
@@ -3287,11 +3348,11 @@ begin
     Inc(FPos);
     if FAltStackDepth < Length(FAltStack) then
       Inc(FAltStack[FAltStackDepth]);
+    // The split goes in front of the alternative just compiled, so only that
+    // alternative's code moves. The jump holes of earlier alternatives all sit
+    // before StartPC and stay where they are; walking them here would cost
+    // time quadratic in the number of alternatives.
     InsertSplitAt(StartPC);
-    // Update existing jump holes since they shifted by 1
-    for I := 0 to JumpCount - 1 do
-      if JumpHoles[I] >= StartPC then
-        Inc(JumpHoles[I]);
     if JumpCount >= Length(JumpHoles) then
       SetLength(JumpHoles, JumpCount * 2 + 8);
     JumpHoles[JumpCount] := CurrentPC;
@@ -3318,15 +3379,19 @@ end;
 
 procedure TRegExpCompiler.PreScanNamedGroups;
 var
-  I, GroupIndex, CloseAngle, J: Integer;
+  I, GroupIndex, CloseAngle: Integer;
   InCharClass: Boolean;
   GroupName: string;
-  AltStack: array of Integer;
+  // The tree node of each open level's group and of the alternative it is in,
+  // or -1 until a named group needs it.
+  GroupNodes, AltNodes: array of Integer;
   AltStackDepth: Integer;
 begin
-  SetLength(AltStack, 64);
+  SetLength(GroupNodes, 64);
+  SetLength(AltNodes, 64);
   AltStackDepth := 0;
-  AltStack[0] := 0;
+  GroupNodes[0] := -1;
+  AltNodes[0] := -1;
   I := 1;
   GroupIndex := 0;
   InCharClass := False;
@@ -3359,7 +3424,7 @@ begin
     end;
     if FPattern[I] = '|' then
     begin
-      Inc(AltStack[AltStackDepth]);
+      AltNodes[AltStackDepth] := -1;
       Inc(I);
       Continue;
     end;
@@ -3380,9 +3445,13 @@ begin
       // same one.
       if AltStackDepth > MAX_NESTING_DEPTH then
         RaiseRegExpNestingLimit(AltStackDepth);
-      if AltStackDepth >= Length(AltStack) then
-        SetLength(AltStack, AltStackDepth * 2 + 4);
-      AltStack[AltStackDepth] := 0;
+      if AltStackDepth >= Length(GroupNodes) then
+      begin
+        SetLength(GroupNodes, AltStackDepth * 2 + 4);
+        SetLength(AltNodes, Length(GroupNodes));
+      end;
+      GroupNodes[AltStackDepth] := -1;
+      AltNodes[AltStackDepth] := -1;
       if (I + 1 <= Length(FPattern)) and (FPattern[I + 1] = '?') then
       begin
         if (I + 2 <= Length(FPattern)) and (FPattern[I + 2] = '<') then
@@ -3402,13 +3471,8 @@ begin
             Inc(GroupIndex);
             GroupName := DecodeRegExpGroupName(
               Copy(FPattern, I + 3, CloseAngle - I - 3));
-            SetLength(FNamedGroups, Length(FNamedGroups) + 1);
-            FNamedGroups[High(FNamedGroups)].Name := GroupName;
-            FNamedGroups[High(FNamedGroups)].Index := GroupIndex;
-            SetLength(FNamedGroups[High(FNamedGroups)].DisjunctionPath,
-              AltStackDepth + 1);
-            for J := 0 to AltStackDepth do
-              FNamedGroups[High(FNamedGroups)].DisjunctionPath[J] := AltStack[J];
+            AddNamedGroup(GroupName, GroupIndex, GroupNodes, AltNodes,
+              AltStackDepth);
             I := CloseAngle + 1;
             Continue;
           end;
@@ -3420,33 +3484,149 @@ begin
     end;
     Inc(I);
   end;
+  SetLength(FNamedGroups, FNamedGroupCount);
+  SetLength(FNamedGroupNext, FNamedGroupCount);
+  SetLength(FNamedGroupPathNode, FNamedGroupCount);
   FPreScanCaptureCount := GroupIndex;
 end;
 
+function TRegExpCompiler.NewPathNode(AParent: Integer;
+  AIsGroup: Boolean): Integer;
+begin
+  if FPathNodeCount >= Length(FPathParent) then
+  begin
+    SetLength(FPathParent, FPathNodeCount * 2 + 16);
+    SetLength(FPathIsGroup, Length(FPathParent));
+  end;
+  FPathParent[FPathNodeCount] := AParent;
+  FPathIsGroup[FPathNodeCount] := AIsGroup;
+  Result := FPathNodeCount;
+  Inc(FPathNodeCount);
+end;
+
+// Records a named group found by the pre-scan: its node in the tree of groups
+// and alternatives, and its place in the chain of the groups that share its
+// name. A level of the pre-scan's stack has its nodes only once a named group
+// has needed them, and loses its alternative node when a `|` starts another
+// alternative, so the levels walked here are the ones that changed since the
+// previous group. ADepth is the group's own level.
+procedure TRegExpCompiler.AddNamedGroup(const AName: string;
+  AGroupIndex: Integer; var AGroupNodes, AAltNodes: array of Integer;
+  ADepth: Integer);
+var
+  EntryIndex, Position, Level, Node: Integer;
+begin
+  Level := ADepth - 1;
+  while (Level >= 0) and (AAltNodes[Level] < 0) do
+    Dec(Level);
+  if Level < 0 then
+    Node := -1
+  else
+    Node := AAltNodes[Level];
+  for Level := Level + 1 to ADepth do
+  begin
+    if AGroupNodes[Level] < 0 then
+      AGroupNodes[Level] := NewPathNode(Node, True);
+    Node := AGroupNodes[Level];
+    if Level < ADepth then
+    begin
+      AAltNodes[Level] := NewPathNode(Node, False);
+      Node := AAltNodes[Level];
+    end;
+  end;
+
+  if FNamedGroupCount >= Length(FNamedGroups) then
+  begin
+    SetLength(FNamedGroups, FNamedGroupCount * 2 + 8);
+    SetLength(FNamedGroupNext, Length(FNamedGroups));
+    SetLength(FNamedGroupPathNode, Length(FNamedGroups));
+  end;
+  Position := FNamedGroupCount;
+  Inc(FNamedGroupCount);
+  FNamedGroups[Position].Name := AName;
+  FNamedGroups[Position].Index := AGroupIndex;
+  FNamedGroupPathNode[Position] := Node;
+  FNamedGroupNext[Position] := -1;
+  if FNameIndex.TryGetValue(AName, EntryIndex) then
+  begin
+    FNamedGroupNext[FNameEntries[EntryIndex].Last] := Position;
+    FNameEntries[EntryIndex].Last := Position;
+    Inc(FNameEntries[EntryIndex].Count);
+  end
+  else
+  begin
+    if FNameEntryCount >= Length(FNameEntries) then
+      SetLength(FNameEntries, FNameEntryCount * 2 + 8);
+    FNameEntries[FNameEntryCount].First := Position;
+    FNameEntries[FNameEntryCount].Last := Position;
+    FNameEntries[FNameEntryCount].Count := 1;
+    FNameIndex.Add(AName, FNameEntryCount);
+    Inc(FNameEntryCount);
+  end;
+end;
+
+function TRegExpCompiler.FindNameEntry(const AName: string;
+  out AEntry: TRegExpNameEntry): Boolean;
+var
+  EntryIndex: Integer;
+begin
+  Result := FNameIndex.TryGetValue(AName, EntryIndex);
+  if Result then
+    AEntry := FNameEntries[EntryIndex];
+end;
+
+// A name may repeat only in groups that cannot both take part in one match
+// (ES2026 §22.2.1.1 MightBothParticipate): their paths in the tree of groups
+// and alternatives must part below a group node, into different alternatives.
+// The groups of one name are taken in source order and each marks the nodes
+// from its group up to the root, stopping where an earlier group of the name
+// marked already; that node is where the two paths meet. Meeting at a group
+// node that is not itself a group of the name means different alternatives;
+// meeting anywhere else (an alternative node, or a group the new one sits in)
+// means they share an alternative. A node is marked once per name, so the work
+// is the number of nodes the groups of the name reach, not a comparison of
+// every pair.
 procedure TRegExpCompiler.ValidateNamedGroups;
 var
-  K, L, MinLen, I: Integer;
-  ShareBranch: Boolean;
+  EntryIndex, Position, Node, Mark: Integer;
+  Reached, IsGroupOfName: array of Integer;
+  Conflict: Boolean;
 begin
-  for K := 0 to High(FNamedGroups) - 1 do
-    for L := K + 1 to High(FNamedGroups) do
-      if FNamedGroups[K].Name = FNamedGroups[L].Name then
+  for EntryIndex := 0 to FNameEntryCount - 1 do
+  begin
+    if FNameEntries[EntryIndex].Count < 2 then
+      Continue;
+    if Length(Reached) = 0 then
+    begin
+      SetLength(Reached, FPathNodeCount);
+      SetLength(IsGroupOfName, FPathNodeCount);
+      FillChar(Reached[0], FPathNodeCount * SizeOf(Integer), 0);
+      FillChar(IsGroupOfName[0], FPathNodeCount * SizeOf(Integer), 0);
+    end;
+    Mark := EntryIndex + 1;
+    Position := FNameEntries[EntryIndex].First;
+    while Position >= 0 do
+    begin
+      Node := FNamedGroupPathNode[Position];
+      IsGroupOfName[Node] := Mark;
+      Conflict := False;
+      while Node >= 0 do
       begin
-        MinLen := Length(FNamedGroups[K].DisjunctionPath);
-        if Length(FNamedGroups[L].DisjunctionPath) < MinLen then
-          MinLen := Length(FNamedGroups[L].DisjunctionPath);
-        ShareBranch := True;
-        for I := 0 to MinLen - 1 do
-          if FNamedGroups[K].DisjunctionPath[I] <>
-             FNamedGroups[L].DisjunctionPath[I] then
-          begin
-            ShareBranch := False;
-            Break;
-          end;
-        if ShareBranch then
-          raise EConvertError.CreateFmt(
-            'Duplicate named capture group: %s', [FNamedGroups[K].Name]);
+        if Reached[Node] = Mark then
+        begin
+          Conflict := (not FPathIsGroup[Node]) or (IsGroupOfName[Node] = Mark);
+          Break;
+        end;
+        Reached[Node] := Mark;
+        Node := FPathParent[Node];
       end;
+      if Conflict then
+        raise EConvertError.CreateFmt(
+          'Duplicate named capture group: %s',
+          [FNamedGroups[Position].Name]);
+      Position := FNamedGroupNext[Position];
+    end;
+  end;
 end;
 
 function TRegExpCompiler.Compile: TRegExpProgram;
