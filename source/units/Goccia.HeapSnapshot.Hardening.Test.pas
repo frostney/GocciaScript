@@ -177,7 +177,10 @@ type
     Stressed: Boolean;
     // What ACheck returned for the last input that restored.
     LastCheck: string;
-    // Exercise what restored before ACheck runs, rather than instead.
+    // Exercise what restored before ACheck runs, rather than instead, bound
+    // by the instruction limit alone: what ACheck counts then does not
+    // depend on how fast the machine is (under Valgrind the wall-clock
+    // timeout stopped the exercise before it called anything).
     ExerciseBeforeCheck: Boolean;
     constructor Create(const AModuleSource: string);
     destructor Destroy; override;
@@ -508,7 +511,8 @@ procedure TMutantFeeder.Exercise(const ARoot: TGCManagedObject);
 begin
   if not (ARoot is TGocciaValue) then
     Exit;
-  StartExecutionTimeout(EXERCISE_TIMEOUT_MS);
+  if not ExerciseBeforeCheck then
+    StartExecutionTimeout(EXERCISE_TIMEOUT_MS);
   StartInstructionLimit(EXERCISE_INSTRUCTIONS);
   try
     try
@@ -526,7 +530,8 @@ begin
     end;
   finally
     ClearInstructionLimit;
-    ClearExecutionTimeout;
+    if not ExerciseBeforeCheck then
+      ClearExecutionTimeout;
   end;
 end;
 
@@ -597,16 +602,14 @@ begin
     TestEveryCeilingWhileEveryReservationCollects);
   Test('Restoring the same mutants again leaves the heap where it was',
     TestRepeatedMutantsLeaveTheHeap);
+  Test('An engine built while every reservation collects first',
+    TestEngineBuiltWhileEveryReservationCollects);
   Test('A reservation past what one allocation can hold is refused before ' +
     'it is charged', TestReservationPastOneAllocationRefuses);
   Test('An input past what one allocation can hold is refused from its ' +
     'size', TestInputPastOneAllocationRefuses);
-  // Found by these tests, outside the reader; each runs once its issue is
+  // Found by these tests, outside the reader; it runs once its issue is
   // fixed.
-  Skip('An engine built while every reservation collects first',
-    TestEngineBuiltWhileEveryReservationCollects,
-    'GocciaScript #1816: engine creation and ' +
-    'EnsureConcreteIteratorPrototype hold new objects unrooted');
   Skip('EvaluateGlobalEval called directly computes NaN',
     TestGlobalEvalComputesNaN,
     'GocciaScript #1817: EvaluateGlobalEval does not set the ' +

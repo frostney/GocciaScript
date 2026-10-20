@@ -33,6 +33,9 @@ type
     {$ENDIF}
     {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
     procedure TestSilentTLSPeerTimesOut;
+    procedure ExpectResetFailsTheRequestOnly(const ABlockSigPipe: Boolean);
+    procedure TestTLSPeerThatResetsDoesNotRaiseSigPipe;
+    procedure TestResetWithSigPipeBlockedLeavesNoneToDeliver;
     {$IFEND}
     procedure TestRejectsAmbiguousAuthority;
     procedure TestAcceptsValidIPv6Literals;
@@ -58,6 +61,12 @@ type
 var
   GHostsFileName: string;
   GHostsFileAddresses: TStringList;
+  GSigPipeCount: LongInt;
+
+procedure CountSigPipe(ASignal: cint); cdecl;
+begin
+  InterlockedIncrement(GSigPipeCount);
+end;
 
 { A loopback name in /etc/hosts other than localhost (which the client
   answers itself), and every address the file lists for it. Debian and
@@ -290,9 +299,14 @@ type
   protected
     procedure Execute; override;
   public
+    { An embedder that blocks SIGPIPE on the thread that fetches: the signal
+      a failed write raises must not stay pending to end the process when the
+      block is lifted. }
+    BlockSigPipe: Boolean;
     ErrorMessage: string;
     constructor Create(const AURL: string;
-      const ATimeoutMilliseconds: Integer);
+      const ATimeoutMilliseconds: Integer;
+      const ABlockSigPipe: Boolean = False);
     destructor Destroy; override;
     function WaitDone(const AMilliseconds: Cardinal): Boolean;
   end;
@@ -315,8 +329,9 @@ type
   end;
 
 constructor TClientRequest.Create(const AURL: string;
-  const ATimeoutMilliseconds: Integer);
+  const ATimeoutMilliseconds: Integer; const ABlockSigPipe: Boolean);
 begin
+  BlockSigPipe := ABlockSigPipe;
   FURL := AURL;
   FTimeoutMilliseconds := ATimeoutMilliseconds;
   FDone := RTLEventCreate;
@@ -332,9 +347,14 @@ end;
 procedure TClientRequest.Execute;
 var
   Headers: THTTPHeaders;
+  PipeSet: TSigSet;
 begin
   SetLength(Headers, 0);
+  fpSigEmptySet(PipeSet);
+  fpSigAddSet(PipeSet, SIGPIPE);
   try
+    if BlockSigPipe then
+      fpSigProcMask(SIG_BLOCK, @PipeSet, nil);
     try
       HTTPGet(FURL, Headers, nil, FTimeoutMilliseconds);
       ErrorMessage := '(no error)';
@@ -342,6 +362,10 @@ begin
       on E: Exception do
         ErrorMessage := E.Message;
     end;
+    { Lifting the block delivers a SIGPIPE left pending, which the handler
+      counts. }
+    if BlockSigPipe then
+      fpSigProcMask(SIG_UNBLOCK, @PipeSet, nil);
   finally
     RTLEventSetEvent(FDone);
   end;
@@ -480,6 +504,9 @@ type
   public
     Port: Word;
     HandshakeCompleted: Boolean;
+    { Reads the client's first record, then resets the connection (RST, no
+      close_notify) instead of going silent. }
+    ResetAfterRequest: Boolean;
     Failure: string;
     constructor Create(const ACertificateFile, AKeyFile: string);
     destructor Destroy; override;
@@ -515,6 +542,8 @@ var
   Connection: cint;
   Context: PSSL_CTX;
   Deadline: Int64;
+  Linger: TLinger;
+  Request: array[0..4095] of Byte;
   Session: PSSL;
 begin
   Connection := AcceptWithin(FListener);
@@ -548,7 +577,17 @@ begin
     SslSetFd(Session, Connection);
     HandshakeCompleted := SslAccept(Session) = 1;
     if not HandshakeCompleted then
-      Failure := 'the TLS handshake failed';
+      Failure := 'the TLS handshake failed'
+    else if ResetAfterRequest then
+    begin
+      if SslRead(Session, @Request[0], SizeOf(Request)) <= 0 then
+        Failure := 'the client sent no request';
+      Linger.l_onoff := 1;
+      Linger.l_linger := 0;
+      fpSetSockOpt(Connection, SOL_SOCKET, SO_LINGER, @Linger,
+        SizeOf(Linger));
+      Exit;
+    end;
     RTLEventWaitFor(FRelease, 60000);
   finally
     if Assigned(Session) then
@@ -585,6 +624,10 @@ begin
   {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
   Test('A TLS peer that goes silent after the handshake times out',
     TestSilentTLSPeerTimesOut);
+  Test('A TLS peer that resets the connection fails the request, not the process',
+    TestTLSPeerThatResetsDoesNotRaiseSigPipe);
+  Test('A reset leaves no SIGPIPE pending for a thread that blocks it',
+    TestResetWithSigPipeBlockedLeavesNoneToDeliver);
   {$IFEND}
   Test('Rejects ambiguous authority', TestRejectsAmbiguousAuthority);
   Test('Accepts valid IPv6 literals', TestAcceptsValidIPv6Literals);
@@ -880,6 +923,84 @@ begin
     DeleteFile(KeyFile);
   end;
 end;
+
+{ The peer reads the request and resets the connection. The client's read
+  fails with ECONNRESET, which consumes the socket's pending error, so the
+  close_notify that CloseOpenSSL's SSL_shutdown then writes hits a broken
+  pipe: with SIGPIPE at its default that write ended the process (issue
+  #1815). The request must fail with an error and raise no SIGPIPE; the
+  handler counts one instead of ending the run, so a regression fails here. }
+procedure THTTPClientTests.ExpectResetFailsTheRequestOnly(
+  const ABlockSigPipe: Boolean);
+const
+  DEADLINE_MILLISECONDS = 10000;
+  WAIT_MILLISECONDS = 15000;
+var
+  CertificateFile, KeyFile: string;
+  Client: TClientRequest;
+  Finished: Boolean;
+  Server: TSilentTLSServer;
+  SigPipesBefore: LongInt;
+
+  procedure WriteText(const AFileName: string; const AText: RawByteString);
+  var
+    Stream: TFileStream;
+  begin
+    Stream := TFileStream.Create(AFileName, fmCreate);
+    try
+      Stream.WriteBuffer(AText[1], Length(AText));
+    finally
+      Stream.Free;
+    end;
+  end;
+begin
+  CertificateFile := GetTempFileName('', 'goccia-tls-cert');
+  KeyFile := GetTempFileName('', 'goccia-tls-key');
+  WriteText(CertificateFile, TEST_CERTIFICATE);
+  WriteText(KeyFile, TEST_PRIVATE_KEY);
+  Setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(CertificateFile)), 1);
+  try
+    Server := TSilentTLSServer.Create(CertificateFile, KeyFile);
+    Server.ResetAfterRequest := True;
+    try
+      SigPipesBefore := GSigPipeCount;
+      Client := TClientRequest.Create(
+        Format('https://localhost:%d/', [Server.Port]),
+        DEADLINE_MILLISECONDS, ABlockSigPipe);
+      try
+        Finished := Client.WaitDone(WAIT_MILLISECONDS);
+        Server.Release;
+        Client.WaitFor;
+        Server.WaitFor;
+        Expect<string>(Server.Failure).ToBe('');
+        Expect<Boolean>(Server.HandshakeCompleted).ToBe(True);
+        Expect<Boolean>(Finished).ToBe(True);
+        Expect<Boolean>(Client.ErrorMessage <> '(no error)').ToBe(True);
+        Expect<Integer>(GSigPipeCount - SigPipesBefore).ToBe(0);
+      finally
+        Client.Free;
+      end;
+    finally
+      Server.Free;
+    end;
+  finally
+    DeleteFile(CertificateFile);
+    DeleteFile(KeyFile);
+  end;
+end;
+
+procedure THTTPClientTests.TestTLSPeerThatResetsDoesNotRaiseSigPipe;
+begin
+  ExpectResetFailsTheRequestOnly(False);
+end;
+
+{ The same reset on a thread whose embedder blocks SIGPIPE: the signal the
+  failed write raises must not stay pending, or lifting the block (the
+  client thread does, after the request) delivers it. }
+procedure THTTPClientTests.TestResetWithSigPipeBlockedLeavesNoneToDeliver;
+begin
+  ExpectResetFailsTheRequestOnly(True);
+end;
 {$IFEND}
 
 procedure THTTPClientTests.TestRejectsAmbiguousAuthority;
@@ -1159,10 +1280,9 @@ end;
 
 begin
   {$IFDEF UNIX}
-  { The loopback servers close connections the client may still write to
-    (a TLS close_notify); a test that regresses should fail, not end the
-    process with SIGPIPE. }
-  fpSignal(SIGPIPE, SignalHandler(SIG_IGN));
+  { A test that regresses should fail, not end the process with SIGPIPE:
+    the handler keeps the run alive and counts the signal. }
+  fpSignal(SIGPIPE, SignalHandler(@CountSigPipe));
   GHostsFileAddresses := TStringList.Create;
   try
   {$ENDIF}

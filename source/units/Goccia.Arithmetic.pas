@@ -195,6 +195,7 @@ function EvaluateAddition(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   PrimLeft, PrimRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   ToPrimitiveOperands(ALeft, ARight, PrimLeft, PrimRight);
 
@@ -203,8 +204,23 @@ begin
 
   if (PrimLeft is TGocciaStringLiteralValue) or
      (PrimRight is TGocciaStringLiteralValue) then
-    Exit(TGocciaStringLiteralValue.Create(
-      PrimLeft.ToStringLiteral.Value + PrimRight.ToStringLiteral.Value));
+  begin
+    // The caller roots the operands. A primitive ToPrimitive made for an
+    // object operand (a toString result) is held only here while the other
+    // side becomes a string, which reserves and can collect.
+    if (PrimLeft = ALeft) and (PrimRight = ARight) then
+      Exit(TGocciaStringLiteralValue.Create(
+        PrimLeft.ToStringLiteral.Value + PrimRight.ToStringLiteral.Value));
+    Roots.Initialize;
+    try
+      Roots.Add(PrimLeft);
+      Roots.Add(PrimRight);
+      Exit(TGocciaStringLiteralValue.Create(
+        PrimLeft.ToStringLiteral.Value + PrimRight.ToStringLiteral.Value));
+    finally
+      Roots.Clear;
+    end;
+  end;
 
   // ES2026 §6.1.6.2.1 BigInt::add
   if (PrimLeft is TGocciaBigIntValue) and (PrimRight is TGocciaBigIntValue) then

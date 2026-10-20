@@ -101,6 +101,10 @@ type
     FEvaluatingModules: TOrderedStringMap<Boolean>;
     FFailedModuleErrors: TOrderedStringMap<TGocciaValue>;
     FFailedModuleErrorModifiedTimes: TOrderedStringMap<TDateTime>;
+    { The root source that marks FFailedModuleErrors' values: nothing else
+      holds an errored module's [[EvaluationError]] once its import has
+      settled, and every later import rethrows it (#1816). }
+    FFailedModuleErrorRoots: TObject;
     FGlobalModules: TOrderedStringMap<TGocciaModule>;
     FGlobalModuleProviders: TOrderedStringMap<TGocciaGlobalModuleProvider>;
     { Durable ownership by resolved module address. A host-owned import marks
@@ -442,6 +446,31 @@ uses
   Goccia.Values.TypedArrayValue,
   Goccia.VM.Exception;
 
+type
+  TGocciaFailedModuleErrorRoots = class(TGCRootSource)
+  private
+    FErrors: TOrderedStringMap<TGocciaValue>;
+  public
+    constructor Create(const AErrors: TOrderedStringMap<TGocciaValue>);
+    procedure MarkRootReferences; override;
+  end;
+
+constructor TGocciaFailedModuleErrorRoots.Create(
+  const AErrors: TOrderedStringMap<TGocciaValue>);
+begin
+  inherited Create;
+  FErrors := AErrors;
+end;
+
+procedure TGocciaFailedModuleErrorRoots.MarkRootReferences;
+var
+  Pair: TOrderedStringMap<TGocciaValue>.TKeyValuePair;
+begin
+  for Pair in FErrors do
+    if Assigned(Pair.Value) then
+      Pair.Value.MarkReferences;
+end;
+
 const
   MODULE_SOURCE_SENTINEL = '<module source>';
 
@@ -754,6 +783,7 @@ begin
   end;
   FDeferredModuleNamespaces.Free;
   FEvaluatingModules.Free;
+  FreeAndNil(FFailedModuleErrorRoots);
   FFailedModuleErrors.Free;
   FFailedModuleErrorModifiedTimes.Free;
   FModules.Free;
@@ -1530,7 +1560,21 @@ end;
 
 procedure TGocciaModuleLoader.RecordFailedModuleError(const ACacheKey: string;
   const AValue: TGocciaValue; const ALastModified: TDateTime);
+var
+  Collector: TGarbageCollector;
 begin
+  // Registered with the collector the thread has now, as a module's own root
+  // source is (TGocciaModule.EnsureRoots): a host can keep a loader across
+  // a collector replacement.
+  Collector := TGarbageCollector.Instance;
+  if Assigned(Collector) and (not Assigned(FFailedModuleErrorRoots) or
+     (TGocciaFailedModuleErrorRoots(FFailedModuleErrorRoots).RegisteredCollector
+       <> Collector)) then
+  begin
+    FreeAndNil(FFailedModuleErrorRoots);
+    FFailedModuleErrorRoots :=
+      TGocciaFailedModuleErrorRoots.Create(FFailedModuleErrors);
+  end;
   FFailedModuleErrors.AddOrSetValue(ACacheKey, AValue);
   FFailedModuleErrorModifiedTimes.AddOrSetValue(ACacheKey, ALastModified);
 end;

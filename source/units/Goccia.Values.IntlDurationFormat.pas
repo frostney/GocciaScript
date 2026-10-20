@@ -981,40 +981,50 @@ function CreateDurationNumberFormatOptions(
   const AFormat: TGocciaIntlDurationFormatValue; const AStyle, AUnit: string;
   const AUseGroupingFalse, ASignNever, AMinimumTwoDigits: Boolean;
   const AHasFractionDigits: Boolean): TGocciaObjectValue;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
-  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Result.AssignProperty('numberingSystem',
-    TGocciaStringLiteralValue.Create(AFormat.FNumberingSystem));
-  if ASignNever then
-    Result.AssignProperty('signDisplay', TGocciaStringLiteralValue.Create('never'));
-  if AMinimumTwoDigits then
-    Result.AssignProperty('minimumIntegerDigits',
-      TGocciaNumberLiteralValue.Create(2));
-  if AUseGroupingFalse then
-    Result.AssignProperty('useGrouping', TGocciaBooleanLiteralValue.FalseValue);
-  if AStyle <> '' then
-  begin
-    Result.AssignProperty('style', TGocciaStringLiteralValue.Create('unit'));
-    Result.AssignProperty('unit', TGocciaStringLiteralValue.Create(AUnit));
-    Result.AssignProperty('unitDisplay', TGocciaStringLiteralValue.Create(AStyle));
-  end;
-  if AHasFractionDigits then
-  begin
-    if AFormat.FHasFractionalDigits then
+  // Held only by this local while the values stored into it are made;
+  // each can reserve, and a reservation can collect.
+  Roots.Initialize;
+  try
+    Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(Result);
+    Result.AssignProperty('numberingSystem',
+      TGocciaStringLiteralValue.Create(AFormat.FNumberingSystem));
+    if ASignNever then
+      Result.AssignProperty('signDisplay', TGocciaStringLiteralValue.Create('never'));
+    if AMinimumTwoDigits then
+      Result.AssignProperty('minimumIntegerDigits',
+        TGocciaNumberLiteralValue.Create(2));
+    if AUseGroupingFalse then
+      Result.AssignProperty('useGrouping', TGocciaBooleanLiteralValue.FalseValue);
+    if AStyle <> '' then
     begin
-      Result.AssignProperty('maximumFractionDigits',
-        TGocciaNumberLiteralValue.Create(AFormat.FFractionalDigits));
-      Result.AssignProperty('minimumFractionDigits',
-        TGocciaNumberLiteralValue.Create(AFormat.FFractionalDigits));
-    end
-    else
-    begin
-      Result.AssignProperty('maximumFractionDigits',
-        TGocciaNumberLiteralValue.Create(9));
-      Result.AssignProperty('minimumFractionDigits',
-        TGocciaNumberLiteralValue.Create(0));
+      Result.AssignProperty('style', TGocciaStringLiteralValue.Create('unit'));
+      Result.AssignProperty('unit', TGocciaStringLiteralValue.Create(AUnit));
+      Result.AssignProperty('unitDisplay', TGocciaStringLiteralValue.Create(AStyle));
     end;
-    Result.AssignProperty('roundingMode', TGocciaStringLiteralValue.Create('trunc'));
+    if AHasFractionDigits then
+    begin
+      if AFormat.FHasFractionalDigits then
+      begin
+        Result.AssignProperty('maximumFractionDigits',
+          TGocciaNumberLiteralValue.Create(AFormat.FFractionalDigits));
+        Result.AssignProperty('minimumFractionDigits',
+          TGocciaNumberLiteralValue.Create(AFormat.FFractionalDigits));
+      end
+      else
+      begin
+        Result.AssignProperty('maximumFractionDigits',
+          TGocciaNumberLiteralValue.Create(9));
+        Result.AssignProperty('minimumFractionDigits',
+          TGocciaNumberLiteralValue.Create(0));
+      end;
+      Result.AssignProperty('roundingMode', TGocciaStringLiteralValue.Create('trunc'));
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -1028,15 +1038,25 @@ var
   PartObj: TGocciaObjectValue;
   I: Integer;
   PartType, PartValue: string;
+  Roots: TGocciaActiveRootFrame;
 begin
   SetLength(Result, 0);
-  NumberFormat := TGocciaIntlNumberFormatValue.Create(AFormat.FLocale, AOptions);
-  FormatArgs := TGocciaArgumentsCollection.Create([AValue]);
+  // The formatter is held only here while it formats, which allocates, and
+  // the number argument can be one the caller made for this call.
+  Roots.Initialize;
   try
-    PartsArray := TGocciaArrayValue(NumberFormat.IntlNumberFormatFormatToParts(
-      FormatArgs, NumberFormat));
+    Roots.Add(AValue);
+    NumberFormat := TGocciaIntlNumberFormatValue.Create(AFormat.FLocale, AOptions);
+    Roots.Add(NumberFormat);
+    FormatArgs := TGocciaArgumentsCollection.Create([AValue]);
+    try
+      PartsArray := TGocciaArrayValue(NumberFormat.IntlNumberFormatFormatToParts(
+        FormatArgs, NumberFormat));
+    finally
+      FormatArgs.Free;
+    end;
   finally
-    FormatArgs.Free;
+    Roots.Clear;
   end;
 
   for I := 0 to PartsArray.Elements.Count - 1 do
@@ -1145,6 +1165,7 @@ var
   I, GroupIndex: Integer;
   NeedSeparator, SignDisplayed, SignNever, Done, HasFractionalCombination: Boolean;
   ValueIsZero, DisplayRequired: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   SetLength(Groups, 0);
   NeedSeparator := False;
@@ -1152,86 +1173,105 @@ begin
 
   for I := 0 to 9 do
   begin
-    NumberFormatUnit := DurationNumberFormatUnit(I);
-    Style := DurationResolvedUnitStyleByIndex(AFormat, I);
-    Display := DurationUnitDisplayByIndex(AFormat, I);
-    FieldValue := DurationFieldByIndex(AFields, I);
-    Numerator := DurationFieldBigByIndex(AFields, I);
-    Done := False;
-    HasFractionalCombination := False;
+    // The number argument and the options object are held only by these
+    // locals while the next ones are made and the number is formatted.
+    Roots.Initialize;
+    try
+      NumberFormatUnit := DurationNumberFormatUnit(I);
+      Style := DurationResolvedUnitStyleByIndex(AFormat, I);
+      Display := DurationUnitDisplayByIndex(AFormat, I);
+      FieldValue := DurationFieldByIndex(AFields, I);
+      Numerator := DurationFieldBigByIndex(AFields, I);
+      Done := False;
+      HasFractionalCombination := False;
 
-    if (I >= 6) and (I <= 8) and NextDurationUnitIsFractional(AFormat, I) then
-    begin
-      Numerator := DurationFractionalNumerator(AFields, I);
-      ValueArg := TGocciaStringLiteralValue.Create(DurationFractionalString(
-        Numerator, DurationFractionalExponent(I)));
-      Value := BigIntegerToDouble(Numerator) /
-        Power(10, DurationFractionalExponent(I));
-      HasFractionalCombination := True;
-      Done := True;
-    end
-    else
-    begin
-      Value := FieldValue;
-      ValueArg := TGocciaStringLiteralValue.Create(Numerator.ToString);
-    end;
-
-    DisplayRequired := False;
-    if (I = 5) and NeedSeparator then
-      DisplayRequired := (AFormat.FSecondsDisplay = 'always') or
-        (not AFields.SecondsBig.IsZero) or
-        (not AFields.MillisecondsBig.IsZero) or
-        (not AFields.MicrosecondsBig.IsZero) or
-        (not AFields.NanosecondsBig.IsZero);
-
-    ValueIsZero := Numerator.IsZero;
-    if (not ValueIsZero) or (Display = 'always') or DisplayRequired then
-    begin
-      SignNever := False;
-      if SignDisplayed then
+      if (I >= 6) and (I <= 8) and NextDurationUnitIsFractional(AFormat, I) then
       begin
-        if ValueIsZero and (AFields.Sign = -1) then
-          ValueArg := NumberArgumentForDurationValue(0, True);
-        SignDisplayed := False;
-      end
-      else
-        SignNever := True;
-
-      Options := CreateDurationNumberFormatOptions(AFormat,
-        DurationNumberUnitDisplayStyle(Style),
-        NumberFormatUnit, IsDurationNumericStyle(Style), SignNever,
-        Style = '2-digit', HasFractionalCombination);
-      NumberParts := NumberFormatPartsForDuration(AFormat, ValueArg, Options,
-        NumberFormatUnit);
-
-      if NeedSeparator and (Length(Groups) > 0) then
-      begin
-        GroupIndex := Length(Groups) - 1;
-        AppendDurationPart(Groups[GroupIndex], 'literal', ':', '');
-        AppendDurationPartArray(Groups[GroupIndex], NumberParts);
+        Numerator := DurationFractionalNumerator(AFields, I);
+        ValueArg := TGocciaStringLiteralValue.Create(DurationFractionalString(
+          Numerator, DurationFractionalExponent(I)));
+        Roots.Add(ValueArg);
+        Value := BigIntegerToDouble(Numerator) /
+          Power(10, DurationFractionalExponent(I));
+        HasFractionalCombination := True;
+        Done := True;
       end
       else
       begin
-        SetLength(GroupParts, 0);
-        AppendDurationPartArray(GroupParts, NumberParts);
-        SetLength(Groups, Length(Groups) + 1);
-        Groups[Length(Groups) - 1] := GroupParts;
-        if IsDurationNumericStyle(Style) then
-          NeedSeparator := True;
+        Value := FieldValue;
+        ValueArg := TGocciaStringLiteralValue.Create(Numerator.ToString);
+        Roots.Add(ValueArg);
       end;
-    end;
 
-    if Done then
-      Break;
+      DisplayRequired := False;
+      if (I = 5) and NeedSeparator then
+        DisplayRequired := (AFormat.FSecondsDisplay = 'always') or
+          (not AFields.SecondsBig.IsZero) or
+          (not AFields.MillisecondsBig.IsZero) or
+          (not AFields.MicrosecondsBig.IsZero) or
+          (not AFields.NanosecondsBig.IsZero);
+
+      ValueIsZero := Numerator.IsZero;
+      if (not ValueIsZero) or (Display = 'always') or DisplayRequired then
+      begin
+        SignNever := False;
+        if SignDisplayed then
+        begin
+          if ValueIsZero and (AFields.Sign = -1) then
+          begin
+            ValueArg := NumberArgumentForDurationValue(0, True);
+            Roots.Add(ValueArg);
+          end;
+          SignDisplayed := False;
+        end
+        else
+          SignNever := True;
+
+        Options := CreateDurationNumberFormatOptions(AFormat,
+          DurationNumberUnitDisplayStyle(Style),
+          NumberFormatUnit, IsDurationNumericStyle(Style), SignNever,
+          Style = '2-digit', HasFractionalCombination);
+        Roots.Add(Options);
+        NumberParts := NumberFormatPartsForDuration(AFormat, ValueArg, Options,
+          NumberFormatUnit);
+
+        if NeedSeparator and (Length(Groups) > 0) then
+        begin
+          GroupIndex := Length(Groups) - 1;
+          AppendDurationPart(Groups[GroupIndex], 'literal', ':', '');
+          AppendDurationPartArray(Groups[GroupIndex], NumberParts);
+        end
+        else
+        begin
+          SetLength(GroupParts, 0);
+          AppendDurationPartArray(GroupParts, NumberParts);
+          SetLength(Groups, Length(Groups) + 1);
+          Groups[Length(Groups) - 1] := GroupParts;
+          if IsDurationNumericStyle(Style) then
+            NeedSeparator := True;
+        end;
+      end;
+
+      if Done then
+        Break;
+    finally
+      Roots.Clear;
+    end;
   end;
 
   if Length(Groups) = 0 then
   begin
-    Options := CreateDurationNumberFormatOptions(AFormat,
-      DurationNumberUnitDisplayStyle(AFormat.FSecondsStyle), 'second', False,
-      False, AFormat.FSecondsStyle = '2-digit', False);
-    NumberParts := NumberFormatPartsForDuration(AFormat,
-      NumberArgumentForDurationValue(0, AFields.Sign = -1), Options, 'second');
+    Roots.Initialize;
+    try
+      Options := CreateDurationNumberFormatOptions(AFormat,
+        DurationNumberUnitDisplayStyle(AFormat.FSecondsStyle), 'second', False,
+        False, AFormat.FSecondsStyle = '2-digit', False);
+      Roots.Add(Options);
+      NumberParts := NumberFormatPartsForDuration(AFormat,
+        NumberArgumentForDurationValue(0, AFields.Sign = -1), Options, 'second');
+    finally
+      Roots.Clear;
+    end;
     SetLength(GroupParts, 0);
     AppendDurationPartArray(GroupParts, NumberParts);
     SetLength(Groups, 1);
@@ -1288,14 +1328,23 @@ function FormatTemporalDurationToLocaleString(const AValue, ALocales,
 var
   DurationFormat: TGocciaIntlDurationFormatValue;
   FormatArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
-  DurationFormat := TGocciaIntlDurationFormatValue.CreateFromArguments(
-    ALocales, AOptions);
-  FormatArgs := TGocciaArgumentsCollection.Create([AValue]);
+  // The formatter is held only by this local while it formats, which
+  // allocates, and a reservation can collect.
+  Roots.Initialize;
   try
-    Result := DurationFormat.IntlDurationFormatFormat(FormatArgs, DurationFormat);
+    DurationFormat := TGocciaIntlDurationFormatValue.CreateFromArguments(
+      ALocales, AOptions);
+    Roots.Add(DurationFormat);
+    FormatArgs := TGocciaArgumentsCollection.Create([AValue]);
+    try
+      Result := DurationFormat.IntlDurationFormatFormat(FormatArgs, DurationFormat);
+    finally
+      FormatArgs.Free;
+    end;
   finally
-    FormatArgs.Free;
+    Roots.Clear;
   end;
 end;
 
@@ -1305,32 +1354,41 @@ function FormatTemporalDurationFieldsToLocaleString(const ALocales,
 var
   DurationFormat: TGocciaIntlDurationFormatValue;
   Fields: TDurationFields;
+  Roots: TGocciaActiveRootFrame;
 begin
-  DurationFormat := TGocciaIntlDurationFormatValue.CreateFromArguments(
-    ALocales, AOptions);
-  InitializeDurationFields(Fields);
-  Fields.Years := AYears;
-  Fields.Months := AMonths;
-  Fields.Weeks := AWeeks;
-  Fields.Days := ADays;
-  Fields.Hours := AHours;
-  Fields.Minutes := AMinutes;
-  Fields.Seconds := ASeconds;
-  Fields.Milliseconds := AMilliseconds;
-  Fields.Microseconds := AMicroseconds;
-  Fields.Nanoseconds := ANanoseconds;
-  Fields.YearsBig := TBigInteger.FromDouble(AYears);
-  Fields.MonthsBig := TBigInteger.FromDouble(AMonths);
-  Fields.WeeksBig := TBigInteger.FromDouble(AWeeks);
-  Fields.DaysBig := TBigInteger.FromDouble(ADays);
-  Fields.HoursBig := TBigInteger.FromDouble(AHours);
-  Fields.MinutesBig := TBigInteger.FromDouble(AMinutes);
-  Fields.SecondsBig := TBigInteger.FromDouble(ASeconds);
-  Fields.MillisecondsBig := TBigInteger.FromDouble(AMilliseconds);
-  Fields.MicrosecondsBig := TBigInteger.FromDouble(AMicroseconds);
-  Fields.NanosecondsBig := TBigInteger.FromDouble(ANanoseconds);
-  ValidateDurationFields(Fields);
-  Result := FormatDurationFieldsWithFormat(DurationFormat, Fields);
+  // The formatter is held only by this local while it formats, which
+  // allocates, and a reservation can collect.
+  Roots.Initialize;
+  try
+    DurationFormat := TGocciaIntlDurationFormatValue.CreateFromArguments(
+      ALocales, AOptions);
+    Roots.Add(DurationFormat);
+    InitializeDurationFields(Fields);
+    Fields.Years := AYears;
+    Fields.Months := AMonths;
+    Fields.Weeks := AWeeks;
+    Fields.Days := ADays;
+    Fields.Hours := AHours;
+    Fields.Minutes := AMinutes;
+    Fields.Seconds := ASeconds;
+    Fields.Milliseconds := AMilliseconds;
+    Fields.Microseconds := AMicroseconds;
+    Fields.Nanoseconds := ANanoseconds;
+    Fields.YearsBig := TBigInteger.FromDouble(AYears);
+    Fields.MonthsBig := TBigInteger.FromDouble(AMonths);
+    Fields.WeeksBig := TBigInteger.FromDouble(AWeeks);
+    Fields.DaysBig := TBigInteger.FromDouble(ADays);
+    Fields.HoursBig := TBigInteger.FromDouble(AHours);
+    Fields.MinutesBig := TBigInteger.FromDouble(AMinutes);
+    Fields.SecondsBig := TBigInteger.FromDouble(ASeconds);
+    Fields.MillisecondsBig := TBigInteger.FromDouble(AMilliseconds);
+    Fields.MicrosecondsBig := TBigInteger.FromDouble(AMicroseconds);
+    Fields.NanosecondsBig := TBigInteger.FromDouble(ANanoseconds);
+    ValidateDurationFields(Fields);
+    Result := FormatDurationFieldsWithFormat(DurationFormat, Fields);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaIntlDurationFormatValue.ToStringTag: string;
@@ -1419,36 +1477,45 @@ function TGocciaIntlDurationFormatValue.IntlDurationFormatResolvedOptions(const 
 var
   DF: TGocciaIntlDurationFormatValue;
   Obj: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   DF := AsDurationFormat(AThisValue, 'Intl.DurationFormat.prototype.resolvedOptions');
-  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(DF.FLocale));
-  Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(DF.FNumberingSystem));
-  Obj.AssignProperty('style', TGocciaStringLiteralValue.Create(DF.FStyle));
-  Obj.AssignProperty('years', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 0)));
-  Obj.AssignProperty('yearsDisplay', TGocciaStringLiteralValue.Create(DF.FYearsDisplay));
-  Obj.AssignProperty('months', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 1)));
-  Obj.AssignProperty('monthsDisplay', TGocciaStringLiteralValue.Create(DF.FMonthsDisplay));
-  Obj.AssignProperty('weeks', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 2)));
-  Obj.AssignProperty('weeksDisplay', TGocciaStringLiteralValue.Create(DF.FWeeksDisplay));
-  Obj.AssignProperty('days', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 3)));
-  Obj.AssignProperty('daysDisplay', TGocciaStringLiteralValue.Create(DF.FDaysDisplay));
-  Obj.AssignProperty('hours', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 4)));
-  Obj.AssignProperty('hoursDisplay', TGocciaStringLiteralValue.Create(DF.FHoursDisplay));
-  Obj.AssignProperty('minutes', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 5)));
-  Obj.AssignProperty('minutesDisplay', TGocciaStringLiteralValue.Create(DF.FMinutesDisplay));
-  Obj.AssignProperty('seconds', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 6)));
-  Obj.AssignProperty('secondsDisplay', TGocciaStringLiteralValue.Create(DF.FSecondsDisplay));
-  Obj.AssignProperty('milliseconds', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 7)));
-  Obj.AssignProperty('millisecondsDisplay', TGocciaStringLiteralValue.Create(DF.FMillisecondsDisplay));
-  Obj.AssignProperty('microseconds', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 8)));
-  Obj.AssignProperty('microsecondsDisplay', TGocciaStringLiteralValue.Create(DF.FMicrosecondsDisplay));
-  Obj.AssignProperty('nanoseconds', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 9)));
-  Obj.AssignProperty('nanosecondsDisplay', TGocciaStringLiteralValue.Create(DF.FNanosecondsDisplay));
-  if DF.FHasFractionalDigits then
-    Obj.AssignProperty('fractionalDigits',
-      TGocciaNumberLiteralValue.Create(DF.FFractionalDigits));
-  Result := Obj;
+  // Held only by this local while the values stored into it are made;
+  // each can reserve, and a reservation can collect.
+  Roots.Initialize;
+  try
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(Obj);
+    Obj.AssignProperty('locale', TGocciaStringLiteralValue.Create(DF.FLocale));
+    Obj.AssignProperty('numberingSystem', TGocciaStringLiteralValue.Create(DF.FNumberingSystem));
+    Obj.AssignProperty('style', TGocciaStringLiteralValue.Create(DF.FStyle));
+    Obj.AssignProperty('years', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 0)));
+    Obj.AssignProperty('yearsDisplay', TGocciaStringLiteralValue.Create(DF.FYearsDisplay));
+    Obj.AssignProperty('months', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 1)));
+    Obj.AssignProperty('monthsDisplay', TGocciaStringLiteralValue.Create(DF.FMonthsDisplay));
+    Obj.AssignProperty('weeks', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 2)));
+    Obj.AssignProperty('weeksDisplay', TGocciaStringLiteralValue.Create(DF.FWeeksDisplay));
+    Obj.AssignProperty('days', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 3)));
+    Obj.AssignProperty('daysDisplay', TGocciaStringLiteralValue.Create(DF.FDaysDisplay));
+    Obj.AssignProperty('hours', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 4)));
+    Obj.AssignProperty('hoursDisplay', TGocciaStringLiteralValue.Create(DF.FHoursDisplay));
+    Obj.AssignProperty('minutes', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 5)));
+    Obj.AssignProperty('minutesDisplay', TGocciaStringLiteralValue.Create(DF.FMinutesDisplay));
+    Obj.AssignProperty('seconds', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 6)));
+    Obj.AssignProperty('secondsDisplay', TGocciaStringLiteralValue.Create(DF.FSecondsDisplay));
+    Obj.AssignProperty('milliseconds', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 7)));
+    Obj.AssignProperty('millisecondsDisplay', TGocciaStringLiteralValue.Create(DF.FMillisecondsDisplay));
+    Obj.AssignProperty('microseconds', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 8)));
+    Obj.AssignProperty('microsecondsDisplay', TGocciaStringLiteralValue.Create(DF.FMicrosecondsDisplay));
+    Obj.AssignProperty('nanoseconds', TGocciaStringLiteralValue.Create(DurationResolvedUnitStyleByIndex(DF, 9)));
+    Obj.AssignProperty('nanosecondsDisplay', TGocciaStringLiteralValue.Create(DF.FNanosecondsDisplay));
+    if DF.FHasFractionalDigits then
+      Obj.AssignProperty('fractionalDigits',
+        TGocciaNumberLiteralValue.Create(DF.FFractionalDigits));
+    Result := Obj;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 initialization

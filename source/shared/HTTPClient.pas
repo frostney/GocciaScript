@@ -286,6 +286,32 @@ end;
 // ---------------------------------------------------------------------------
 
 {$IFDEF UNIX}
+{ Darwin and the BSDs raise SIGPIPE for a write to a reset connection unless
+  the socket says not to, and SecureTransport and OpenSSL write to the
+  socket themselves. Linux has no such option; it sends with MSG_NOSIGNAL
+  and runs OpenSSL with SIGPIPE blocked on the thread (TransportSecurity). }
+{$IF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
+const
+  {$IFDEF DARWIN}
+  SO_NOSIGPIPE = $1022;
+  {$ELSE}
+  SO_NOSIGPIPE = $800;
+  {$ENDIF}
+{$IFEND}
+
+procedure DisableSocketSigPipe(const ASocket: TSocket);
+{$IF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
+var
+  Enabled: Integer;
+begin
+  Enabled := 1;
+  fpSetSockOpt(ASocket, SOL_SOCKET, SO_NOSIGPIPE, @Enabled, SizeOf(Enabled));
+end;
+{$ELSE}
+begin
+end;
+{$IFEND}
+
 procedure ConfigureSocketTimeout(const ASocket: TSocket;
   const ATimeoutMilliseconds: Integer);
 var
@@ -326,6 +352,7 @@ begin
   Result := fpSocket(AF_INET, SOCK_STREAM, 0);
   if Result < 0 then
     raise EHTTPError.Create('Failed to create socket');
+  DisableSocketSigPipe(Result);
 
   FillChar(SockAddr, SizeOf(SockAddr), 0);
   SockAddr.sin_family := AF_INET;
@@ -464,7 +491,14 @@ function SocketSend(const ASock: TSocket; const ABuf: Pointer;
   const ALen: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
+  { MSG_NOSIGNAL (Linux) makes a send to a peer that reset the connection
+    fail with EPIPE instead of ending the process with SIGPIPE; Darwin and
+    the BSDs get SO_NOSIGPIPE on the socket in ConnectSocketBlocking. }
+  {$IFDEF LINUX}
+  Result := fpSend(ASock, ABuf, ALen, MSG_NOSIGNAL);
+  {$ELSE}
   Result := fpSend(ASock, ABuf, ALen, 0);
+  {$ENDIF}
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   Result := WinSock2.send(ASock, ABuf^, ALen, 0);

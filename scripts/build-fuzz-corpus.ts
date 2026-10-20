@@ -9,7 +9,7 @@
  * Seeds are deduplicated by content hash and capped in size, because AFL++
  * spends its early cycles trimming large inputs and a corpus of near-identical
  * multi-kilobyte test files wastes that budget. Small, syntactically diverse
- * seeds are what make coverage-blind fuzzing productive here.
+ * seeds give the fuzzer the most coverage for its time.
  *
  * Written in GocciaScript-compatible style (arrow functions, const/let,
  * for...of, no var, strict equality) so it can be bootstrapped later.

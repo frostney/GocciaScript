@@ -290,18 +290,28 @@ end;
 
 function CreateDOMExceptionObject(const AName, AMessage: string;
   const ASkipTop: Integer): TGocciaObjectValue;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := CreateErrorObject(AName, AMessage, ASkipTop);
-  Result.HasErrorData := False;
-  if GetDOMExceptionProto <> nil then
-    Result.Prototype := GetDOMExceptionProto;
-  if Result.ErrorStack <> '' then
-    Result.DefineProperty(PROP_STACK,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(Result.ErrorStack),
-        [pfConfigurable, pfWritable]));
-  Result.AssignProperty(PROP_CODE,
-    TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(AName)));
+  // Nothing else holds the error yet, and the stack string reserves its
+  // payload, which can collect.
+  Roots.Initialize;
+  try
+    Roots.Add(Result);
+    Result.HasErrorData := False;
+    if GetDOMExceptionProto <> nil then
+      Result.Prototype := GetDOMExceptionProto;
+    if Result.ErrorStack <> '' then
+      Result.DefineProperty(PROP_STACK,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaStringLiteralValue.Create(Result.ErrorStack),
+          [pfConfigurable, pfWritable]));
+    Result.AssignProperty(PROP_CODE,
+      TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(AName)));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 // ES2026 §10.4.4.4 [[ErrorData]]
@@ -478,12 +488,22 @@ end;
 
 function CreatePermissionDeniedError(const ACapability,
   AScope: string): TGocciaObjectValue;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := CreateErrorObject(PERMISSION_DENIED_NAME,
     ACapability + ': ' + AScope);
-  Result.AssignProperty(PROP_CAPABILITY,
-    TGocciaStringLiteralValue.Create(ACapability));
-  Result.AssignProperty(PROP_SCOPE, TGocciaStringLiteralValue.Create(AScope));
+  // Nothing else holds the error yet, and each string reserves its payload,
+  // which can collect.
+  Roots.Initialize;
+  try
+    Roots.Add(Result);
+    Result.AssignProperty(PROP_CAPABILITY,
+      TGocciaStringLiteralValue.Create(ACapability));
+    Result.AssignProperty(PROP_SCOPE, TGocciaStringLiteralValue.Create(AScope));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure ThrowPermissionDenied(const ACapability, AScope,
