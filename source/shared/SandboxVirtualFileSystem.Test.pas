@@ -72,6 +72,7 @@ type
     procedure TestDirectoryEntryChangesUpdateParentMetadata;
     procedure TestRecursiveMkdirReportsFirstCreatedPath;
     procedure TestDefaultClockUsesUnixEpoch;
+    procedure TestUnixNanosecondsConvertToDateTime;
     procedure TestDefaultQuotasAreBounded;
     procedure TestNodeQuotaRejectsAtomically;
     procedure TestRootClampCallback;
@@ -109,6 +110,8 @@ begin
   Test('Recursive mkdir reports its first created path',
     TestRecursiveMkdirReportsFirstCreatedPath);
   Test('Default clock tracks the Unix epoch', TestDefaultClockUsesUnixEpoch);
+  Test('Unix nanoseconds convert to the filesystem''s TDateTime',
+    TestUnixNanosecondsConvertToDateTime);
   Test('Default quotas are bounded', TestDefaultQuotasAreBounded);
   Test('Node quota rejects atomically', TestNodeQuotaRejectsAtomically);
   Test('Root clamp callback reports one attempted escape',
@@ -400,6 +403,22 @@ begin
 
   Expect<Boolean>((ActualMilliseconds >= BeforeMilliseconds - 1) and
     (ActualMilliseconds <= AfterMilliseconds + 1)).ToBe(True);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestUnixNanosecondsConvertToDateTime;
+begin
+  Expect<Boolean>(SandboxUnixNanosecondsToDateTime(0) =
+    EncodeDate(1970, 1, 1)).ToBe(True);
+  Expect<Double>(SandboxDateTimeToUnixMilliseconds(
+    SandboxUnixNanosecondsToDateTime(0))).ToBe(0);
+  { A day and a half second past the epoch, and the same before it. }
+  Expect<Double>(Round(SandboxDateTimeToUnixMilliseconds(
+    SandboxUnixNanosecondsToDateTime(86400500000000)))).ToBe(86400500);
+  Expect<Double>(Round(SandboxDateTimeToUnixMilliseconds(
+    SandboxUnixNanosecondsToDateTime(-86400500000000)))).ToBe(-86400500);
+  Expect<Double>(Round(SandboxDateTimeToUnixMilliseconds(
+    SandboxUnixNanosecondsToDateTime(1700000000123000000)))).ToBe(
+    1700000000123);
 end;
 
 procedure TTestSandboxVirtualFileSystem.TestDefaultQuotasAreBounded;

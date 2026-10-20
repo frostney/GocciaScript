@@ -62,6 +62,7 @@ uses
   Goccia.StackLimit,
   Goccia.TextFiles,
   Goccia.Timeout,
+  Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
   Goccia.Values.NativeFunctionCallback,
@@ -488,7 +489,9 @@ function TFuzzSeedCapture.Capture(const AArgs: TGocciaArgumentsCollection;
 var
   Index: Integer;
 begin
-  Index := Trunc(AArgs.GetElement(0).ToNumberLiteral.Value);
+  { A fuzz input picks the index, so NaN and the infinities must not reach a
+    bare Trunc; a missing index is out of range. }
+  Index := ToIntegerFromArgs(AArgs, 0, -1);
   if (Index >= 0) and (Index < HEAP_SNAPSHOT_VM_SEEDS) and
      not Assigned(Values[Index]) then
   begin
