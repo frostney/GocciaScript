@@ -78,7 +78,10 @@ Delegated work runs through the same skills. A worker packet routes each step
 it hands over through the skill that owns it, such as `/implement`,
 `/create-pr`, `/update-pr` or `/address-feedback`. It never prescribes raw
 publication or merge commands such as `gh pr create` or `gh pr merge`; those
-bypass the skill's gates, native stack detection and readiness checks.
+bypass the skill's gates, native stack detection and readiness checks. Each
+packet records the capability tier its lane runs on. Read
+[capability tiers](../milestone-rush/references/orchestration.md#capability-tiers)
+when you write a packet, run one, or receive a lane's escalation.
 
 Use required companion skills when available; when one is unavailable, follow
 its reachable documented contract directly or report the specific missing

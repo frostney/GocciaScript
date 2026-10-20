@@ -36,19 +36,22 @@ Give a worker only what its lane needs:
 
 ```markdown
 - Parent objective: <why this result is needed>
-- Lane outcome: <one bounded result>
+- Lane outcome: <one scoped result>
 - Fresh state: <repository, branch, exact head, external identities>
 - Applicable decisions: <stable IDs and selected contracts>
 - In scope: <owned files, questions, or mutations>
 - Out of scope: <explicit exclusions>
 - Dependencies: <inputs and blocked successors>
 - Authority and gates: <what the worker may do and where it must stop>
+- Capability tier: <mechanical | bounded | open>
 - Required evidence: <tests, source, rendered result, or external proof>
 - Return contract: <result envelope fields below>
 ```
 
-Full conversation inheritance, instead of an isolated context with only the
-directly relevant recent turns, requires a recorded reason.
+The [capability tiers](../../milestone-rush/references/orchestration.md#capability-tiers)
+define what each tier covers and how a lane escalates. Full conversation
+inheritance, instead of an isolated context with only the directly relevant
+recent turns, requires a recorded reason.
 
 ## Result envelope
 
@@ -56,7 +59,7 @@ Every worker returns:
 
 ```markdown
 - Lane status: complete | blocked | checkpoint
-- Delivered: <bounded result>
+- Delivered: <scoped result>
 - Evidence: <exact observations and validation>
 - Mutations: <files, commits, issues, PRs, or external state changed>
 - Remaining obligations: <new or unresolved work>
