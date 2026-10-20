@@ -292,16 +292,19 @@ begin
   CloseOneSocket(AServer);
 end;
 
-{ What HTTPClient leaves on the socket before a request's reads: a send
-  timeout counted from then, not from the request's deadline. }
-procedure SetSendTimeout(const ASocket: TSocket; const AMilliseconds: Integer);
+{ Sets a send or receive timeout (SO_SNDTIMEO or SO_RCVTIMEO). Used to leave
+  what HTTPClient leaves on its socket before a request's reads, a timeout
+  counted from then and not from the request's deadline, and to keep a test
+  that goes wrong from waiting for ever. }
+procedure SetSocketTimeoutOption(const ASocket: TSocket;
+  const AOption: Integer; const AMilliseconds: Integer);
 {$IFDEF UNIX}
 var
   Timeout: TTimeVal;
 begin
   Timeout.tv_sec := AMilliseconds div 1000;
   Timeout.tv_usec := (AMilliseconds mod 1000) * 1000;
-  fpSetSockOpt(ASocket, SOL_SOCKET, SO_SNDTIMEO, @Timeout, SizeOf(Timeout));
+  fpSetSockOpt(ASocket, SOL_SOCKET, AOption, @Timeout, SizeOf(Timeout));
 end;
 {$ENDIF}
 {$IFDEF MSWINDOWS}
@@ -309,10 +312,15 @@ var
   Timeout: LongInt;
 begin
   Timeout := AMilliseconds;
-  WinSock2.setsockopt(ASocket, SOL_SOCKET, SO_SNDTIMEO, PAnsiChar(@Timeout),
+  WinSock2.setsockopt(ASocket, SOL_SOCKET, AOption, PAnsiChar(@Timeout),
     SizeOf(Timeout));
 end;
 {$ENDIF}
+
+procedure SetSendTimeout(const ASocket: TSocket; const AMilliseconds: Integer);
+begin
+  SetSocketTimeoutOption(ASocket, SO_SNDTIMEO, AMilliseconds);
+end;
 
 function ReceiveSome(const ASocket: TSocket; var ABuffer: array of Byte): Integer;
 begin
@@ -351,6 +359,9 @@ procedure TSlowReader.Execute;
 var
   Buffer: array[0..4095] of Byte;
 begin
+  { A receive that waits too long ends the reader, so a test that goes wrong
+    does not wait for ever. }
+  SetSocketTimeoutOption(FSocket, SO_RCVTIMEO, 10000);
   while not Terminated and (ReceiveSome(FSocket, Buffer) > 0) do
     if FDelayMilliseconds > 0 then
       Sleep(FDelayMilliseconds);
@@ -452,6 +463,7 @@ begin
   CreateConnectedPair(Client, Server);
   Reader := TSlowReader.Create(Server, 0);
   try
+    SetSendTimeout(Client, 10000);
     Sent := SocketSendAllBefore(Client, @Buffer[0], BUFFER_LENGTH,
       GetNanoseconds + Int64(30) * 1000000000);
     Expect<Integer>(Sent).ToBe(BUFFER_LENGTH);
@@ -486,6 +498,7 @@ begin
   CreateConnectedPair(Client, Server);
   Reader := TSlowReader.Create(Server, 20);
   try
+    SetSendTimeout(Client, 10000);
     Start := GetNanoseconds;
     Sent := SocketSendAllBefore(Client, @Buffer[0], BUFFER_LENGTH,
       Start + Int64(DEADLINE_MILLISECONDS) * 1000000);

@@ -257,12 +257,31 @@ end;
 {$IFEND}
 
 {$IFDEF UNIX}
-const
+{ One send that never blocks: it takes what fits and returns, or returns -1
+  with EAGAIN. Linux takes that per send. Darwin and the BSDs ignore
+  MSG_DONTWAIT on a send, so the socket is made non-blocking around the call
+  (the connection is used by one thread; a send that SO_NOSIGPIPE covers
+  raises no signal). errno is the send's. }
+function SocketSendNoWait(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer): Integer;
+{$IFNDEF LINUX}
+var
+  Flags: LongInt;
+  SendError: LongInt;
+{$ENDIF}
+begin
   {$IFDEF LINUX}
-  SEND_DONTWAIT = $40;
+  Result := fpSend(ASock, ABuffer, ALength, MSG_NOSIGNAL or $40);
   {$ELSE}
-  SEND_DONTWAIT = $80;
+  Flags := fpFcntl(ASock, F_GETFL, 0);
+  if (Flags < 0) or (fpFcntl(ASock, F_SETFL, Flags or O_NONBLOCK) < 0) then
+    Exit(-1);
+  Result := fpSend(ASock, ABuffer, ALength, 0);
+  SendError := fpGetErrNo;
+  fpFcntl(ASock, F_SETFL, Flags);
+  fpSetErrNo(SendError);
   {$ENDIF}
+end;
 
 function SocketSendBefore(const ASock: TSocket; const ABuffer: Pointer;
   const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
@@ -293,11 +312,7 @@ begin
       else if (Outcome < 0) and (fpGetErrNo <> ESysEINTR) then
         Exit(-1);
     until Ready;
-    {$IFDEF LINUX}
-    Result := fpSend(ASock, ABuffer, ALength, MSG_NOSIGNAL or SEND_DONTWAIT);
-    {$ELSE}
-    Result := fpSend(ASock, ABuffer, ALength, SEND_DONTWAIT);
-    {$ENDIF}
+    Result := SocketSendNoWait(ASock, ABuffer, ALength);
     { Another thread's send can take the room poll reported: wait again, for
       the time that is left. }
   until (Result >= 0) or
@@ -777,7 +792,7 @@ end;
   to be retried for ever. }
 procedure SetSocketNonBlocking(const ASocket: TSocket);
 var
-  Flags: cint;
+  Flags: LongInt;
 begin
   Flags := FpFcntl(ASocket, F_GETFL);
   if (Flags < 0) or (FpFcntl(ASocket, F_SETFL, Flags or O_NONBLOCK) < 0) then
