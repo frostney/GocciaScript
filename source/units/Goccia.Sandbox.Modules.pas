@@ -35,6 +35,7 @@ type
       out AResolvedPath: string): Boolean;
     function NormalizeImportBase(const AImportingFilePath: string): string;
   protected
+    function CandidateExists(const APath: string): Boolean; override;
     function IsAbsoluteImportMapPath(const APath: string): Boolean; override;
     function IsRelativeImportMapPath(const APath: string): Boolean; override;
     function NormalizeImportMapBaseDirectory(
@@ -241,6 +242,11 @@ begin
     Result := Copy(Result, 1, SlashIndex - 1);
 end;
 
+function TGocciaSandboxModuleResolver.CandidateExists(const APath: string): Boolean;
+begin
+  Result := Assigned(FFs) and FFs.IsFile(APath);
+end;
+
 function TGocciaSandboxModuleResolver.TryResolveWithSandboxExtensions(
   const ABasePath: string; out AResolvedPath: string): Boolean;
 var
@@ -249,31 +255,22 @@ var
   Candidate: string;
   TypeScriptCandidates: TFileExtensionArray;
 begin
-  if FFs.IsFile(ABasePath) then
-  begin
-    AResolvedPath := ABasePath;
+  if TryResolveFileCandidate(ABasePath, AResolvedPath) then
     Exit(True);
-  end;
 
   TypeScriptCandidates := TypeScriptSourceCandidates(ABasePath);
   for I := 0 to High(TypeScriptCandidates) do
   begin
-    if FFs.IsFile(TypeScriptCandidates[I]) then
-    begin
-      AResolvedPath := TypeScriptCandidates[I];
+    if TryResolveFileCandidate(TypeScriptCandidates[I], AResolvedPath) then
       Exit(True);
-    end;
   end;
 
   Extensions := GetExtensions;
   for I := 0 to High(Extensions) do
   begin
     Candidate := ABasePath + Extensions[I];
-    if FFs.IsFile(Candidate) then
-    begin
-      AResolvedPath := Candidate;
+    if TryResolveFileCandidate(Candidate, AResolvedPath) then
       Exit(True);
-    end;
   end;
 
   for I := 0 to High(Extensions) do
@@ -282,11 +279,8 @@ begin
     if Candidate <> '/' then
       Candidate := Candidate + '/';
     Candidate := Candidate + 'index' + Extensions[I];
-    if FFs.IsFile(Candidate) then
-    begin
-      AResolvedPath := Candidate;
+    if TryResolveFileCandidate(Candidate, AResolvedPath) then
       Exit(True);
-    end;
   end;
 
   Result := False;
@@ -299,6 +293,7 @@ var
   BaseDirectoryPath: string;
   Candidate: string;
 begin
+  ResetCompanionResolution;
   if not Assigned(FFs) then
     raise EModuleNotFound.Create('No sandbox filesystem configured.');
 

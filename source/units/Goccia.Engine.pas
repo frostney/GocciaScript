@@ -377,6 +377,10 @@ type
     procedure PrintSourcePipelineWarnings(
       const APipelineResult: TGocciaSourcePipelineResult);
     { The parse options of this engine's language profile. }
+    procedure ValidateImportedBytecode(const AModule: TGocciaBytecodeModule);
+    function DecodeModuleBytecode(const ABytes: TBytes): TGocciaBytecodeModule;
+    procedure ReleaseModuleBytecode(const AModule: TGocciaBytecodeModule);
+    function RunRegisteredBytecodeEntry(const AAddress: string): TGocciaValue;
     function SourcePipelineOptions(
       const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
     function ExtensionsHavePendingWork: Boolean;
@@ -436,6 +440,12 @@ type
       const AOuterRunningEngine: TGocciaEngine);
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    function CompileImportableModule(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    procedure ValidateBytecodeModule(const AModule: TGocciaBytecodeModule);
+    procedure RegisterBytecodeModule(const AAddress: string;
+      const ABytes: TBytes; const ABaseAddress: string = '');
+    function RunBytecodeBuffer(const ABytes: TBytes;
+      const AAddress: string): TGocciaValue;
     procedure RetainModule(const AModule: TGocciaBytecodeModule);
     { How many compiled modules the engine keeps for its lifetime: the
       programs it compiled, and the code of the Function constructor and of
@@ -671,6 +681,9 @@ uses
   TimingUtils,
 
   Goccia.AsyncContext,
+  Goccia.Bytecode.Binary,
+  Goccia.Bytecode.Profile,
+  Goccia.Bytecode.Profile.Options,
   Goccia.CallStack,
   Goccia.Compiler,
   Goccia.Compiler.ConstantValue,
@@ -1363,6 +1376,9 @@ begin
   FVM.CompileDirectEval := CompileDirectEvalCode;
   FModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
   FModuleLoader.InstantiateModuleFunctions := InstantiateModuleFunctions;
+  FModuleLoader.ReadModuleBytecode := DecodeModuleBytecode;
+  FModuleLoader.ReleaseModuleBytecode := ReleaseModuleBytecode;
+  FModuleLoader.ValidateModuleBytecode := ValidateImportedBytecode;
   // A shim runs on the VM, so the VM is set up first.
   FShimLoader.Realm := FRealm;
   FShimLoader.GlobalScope := FGlobalScope;
@@ -2623,6 +2639,10 @@ begin
       TGocciaCoverageTracker.Instance.Enabled;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
+    if FSourceType = stModule then
+      Result.CompileProfile := BuildBytecodeCompileProfile(SourcePipelineOptions(stModule), FStrictTypes)
+    else
+      Result.CompileProfile := BuildBytecodeCompileProfile(SourcePipelineOptions(stScript), FStrictTypes);
   finally
     Compiler.Free;
   end;
@@ -2643,6 +2663,13 @@ var
   Compiler: TGocciaCompiler;
   Options: TGocciaCompilerOptimizationOptions;
 begin
+  if AContext.CompiledModule is TGocciaBytecodeModule then
+  begin
+    ValidateImportedBytecode(TGocciaBytecodeModule(AContext.CompiledModule));
+    InstantiateCompiledModuleFunctions(TGocciaBytecodeModule(AContext.CompiledModule),
+      AContext.Scope, AContext.Realm);
+    Exit;
+  end;
   Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
   try
     // The module's top-level bindings live in its Module Environment
@@ -2662,6 +2689,8 @@ begin
       TGocciaCoverageTracker.Instance.Enabled;
     Compiler.OptimizationOptions := Options;
     BytecodeModule := Compiler.Compile(AProgram);
+    BytecodeModule.CompileProfile := BuildBytecodeCompileProfile(
+      SourcePipelineOptions(stModule), FStrictTypes);
   finally
     Compiler.Free;
   end;
@@ -2831,6 +2860,8 @@ begin
     BytecodeModule := TGocciaBytecodeModule(
       InstantiationContext.CompiledModule);
   end;
+  if BytecodeModule.WasLoadedFromBytecode then
+    ValidateImportedBytecode(BytecodeModule);
   SavedGlobalScope := FVM.GlobalScope;
   SavedRealm := FVM.Realm;
   SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
@@ -3098,6 +3129,15 @@ var
   SavedEntryRequestsLeft: Integer;
   WasEnabled: Boolean;
 begin
+  if not Assigned(AModule) then
+    raise EArgumentNilException.Create('Bytecode module is nil');
+  { Every public raw execution path meets here. Loaded artifacts must keep
+    their recorded profile even when callers bypass the file/buffer helpers. }
+  if AModule.WasLoadedFromBytecode then
+    ValidateBytecodeModule(AModule);
+  if Assigned(AModule.LinkPlan) then
+    raise EInvalidOperation.Create(
+      'Linked bytecode requires RunModuleForSourceType or RunBytecodeBuffer');
   GC := TGarbageCollector.Instance;
   WasEnabled := GC.Enabled;
   GC.Enabled := False;
@@ -3109,7 +3149,10 @@ begin
   FVM.ProfilingFunctions := (TGocciaProfiler.Instance <> nil)
     and TGocciaProfiler.Instance.Enabled
     and (pmFunctions in TGocciaProfiler.Instance.Mode);
-  FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+  if AModule.WasLoadedFromBytecode then
+    FVM.GlobalBackedTopLevel := AModule.GlobalBackedTopLevel
+  else
+    FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;
   { A run can nest (the Function constructor runs its body here), so the
     outer run's linked modules are set aside, not overwritten. }
   SavedLinkedModules := FLinkedModules;
@@ -3893,6 +3936,15 @@ var
   SavedGlobalBackedTopLevel: Boolean;
   SavedRuntimeModule: TGocciaModule;
 begin
+  ValidateBytecodeModule(AModule);
+  if Assigned(AModule.LinkPlan) then
+  begin
+    FModuleLoader.RegisterPrecompiledModule(EntryModulePath(FModuleLoader, AFileName),
+      AModule, nil);
+    Exit(RunRegisteredBytecodeEntry(EntryModulePath(FModuleLoader, AFileName)));
+  end;
+  if AModule.WasLoadedFromBytecode then
+    AModule.RelocateSourcePath(EntryModulePath(FModuleLoader, AFileName));
   // Entry for an already compiled module (Execute parses and compiles the
   // engine's source itself). Bind code-frame capture to this engine's own
   // scope for the run, as Execute does.
@@ -3947,7 +3999,15 @@ begin
       end;
     end
     else
-      Result := RunModule(AModule);
+    begin
+      SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
+      FGlobalBackedTopLevel := AModule.GlobalBackedTopLevel;
+      try
+        Result := RunModule(AModule);
+      finally
+        FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+      end;
+    end;
   finally
     TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
   end;
@@ -4062,6 +4122,172 @@ begin
         ThrowTypeError(SErrorAwaitPromiseUnsettled,
           SSuggestAwaitMicrotaskDrain);
       end;
+  end;
+end;
+
+procedure TGocciaEngine.ValidateBytecodeModule(const AModule: TGocciaBytecodeModule);
+var
+  Goal: TGocciaSourceType;
+  Expected: TGocciaCompileProfile;
+begin
+  if not Assigned(AModule) then
+    raise EArgumentNilException.Create('Bytecode module is nil');
+  Goal := FSourceType;
+  if Goal = stDetect then
+    if AModule.CompileProfile.SourceType = bstModule then
+      Goal := stModule
+    else
+      Goal := stScript;
+  Expected := BuildBytecodeCompileProfile(SourcePipelineOptions(Goal), FStrictTypes);
+  if not AModule.HasCompileProfile or not AModule.CompileProfile.Matches(Expected) then
+    raise EArgumentException.Create('Bytecode compile profile does not match the engine');
+  if FSourceType = stDetect then
+    FSourceType := Goal;
+end;
+
+procedure TGocciaEngine.ValidateImportedBytecode(const AModule: TGocciaBytecodeModule);
+var
+  Expected: TGocciaCompileProfile;
+begin
+  Expected := BuildBytecodeCompileProfile(SourcePipelineOptions(stModule), FStrictTypes);
+  if not AModule.HasCompileProfile or not AModule.CompileProfile.Matches(Expected) then
+    raise EArgumentException.Create('Bytecode compile profile does not match the engine');
+  if (AModule.ExecutionKind <> bekLinkedModule) or not Assigned(AModule.LinkPlan) then
+    raise EArgumentException.Create('Imported bytecode requires a linked module artifact');
+end;
+
+function TGocciaEngine.DecodeModuleBytecode(const ABytes: TBytes): TGocciaBytecodeModule;
+begin
+  Result := LoadModuleFromBuffer(ABytes);
+  try
+    ValidateImportedBytecode(Result);
+    FRetainedModules.Add(Result);
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TGocciaEngine.CompileImportableModule(
+  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+var
+  Compiler: TGocciaCompiler;
+  FloatingPointState: TGocciaFloatingPointState;
+begin
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    Compiler := TGocciaCompiler.Create(FSourcePath);
+    try
+      Compiler.GlobalBackedTopLevel := True;
+      Compiler.PreinitializedTopLevelFunctions := True;
+      Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
+      Compiler.NonStrictMode := False;
+      Compiler.StrictTypes := FStrictTypes;
+      Compiler.ArgumentsObjectEnabled := cfArgumentsObject in FCompatibility;
+      Result := Compiler.Compile(AProgram);
+      Result.CompileProfile := BuildBytecodeCompileProfile(SourcePipelineOptions(stModule), FStrictTypes);
+      FRetainedModules.Add(Result);
+    finally
+      Compiler.Free;
+    end;
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
+end;
+
+procedure TGocciaEngine.ReleaseModuleBytecode(const AModule: TGocciaBytecodeModule);
+begin
+  FRetainedModules.Remove(AModule);
+end;
+
+procedure TGocciaEngine.RegisterBytecodeModule(const AAddress: string;
+  const ABytes: TBytes; const ABaseAddress: string);
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := DecodeModuleBytecode(ABytes);
+  try
+    FModuleLoader.RegisterPrecompiledModule(AAddress, Module, ABytes, ABaseAddress);
+  except
+    FRetainedModules.Remove(Module);
+    raise;
+  end;
+end;
+
+function TGocciaEngine.RunBytecodeBuffer(const ABytes: TBytes;
+  const AAddress: string): TGocciaValue;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := LoadModuleFromBuffer(ABytes);
+  try
+    ValidateBytecodeModule(Module);
+  except
+    Module.Free;
+    raise;
+  end;
+  FRetainedModules.Add(Module);
+  if Assigned(Module.LinkPlan) then
+  begin
+    try
+      FModuleLoader.RegisterPrecompiledModule(AAddress, Module, ABytes);
+    except
+      FRetainedModules.Remove(Module);
+      raise;
+    end;
+    Result := RunRegisteredBytecodeEntry(AAddress);
+  end
+  else
+    Result := RunModuleForSourceType(Module, AAddress);
+end;
+
+function TGocciaEngine.RunRegisteredBytecodeEntry(const AAddress: string): TGocciaValue;
+var
+  Module: TGocciaModule;
+  FloatingPointState: TGocciaFloatingPointState;
+  PreviousRunningEngine: TGocciaEngine;
+  PreviousDiagnosticScope: TGocciaDiagnosticSourceScope;
+  Completed, NestedRun, OwnsMicrotaskScope: Boolean;
+  Queue: TGocciaMicrotaskQueue;
+  MicrotaskScopeToken: Integer;
+begin
+  PreviousDiagnosticScope := TGocciaDiagnosticSourceRegistry.Activate(FModuleLoader.DiagnosticScope);
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  PreviousRunningEngine := GRunningEngine;
+  GRunningEngine := Self;
+  Completed := False;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  NestedRun := Assigned(PreviousRunningEngine) and (PreviousRunningEngine <> Self);
+  OwnsMicrotaskScope := False;
+  MicrotaskScopeToken := 0;
+  try
+    if NestedRun and Assigned(Queue) then
+    begin
+      MicrotaskScopeToken := Queue.EnterScope;
+      OwnsMicrotaskScope := True;
+    end;
+    Module := FModuleLoader.LinkModuleRequest(AAddress, FSourcePath, [], 0, 0);
+    Module.CaptureEvaluationResult := True;
+    FModuleLoader.EvaluateModule(Module);
+    WaitForRuntimeIdle;
+    if Module.EvaluationPromise is TGocciaPromiseValue then
+      RaiseUnlessEntryPromiseFulfilled(Self, TGocciaPromiseValue(Module.EvaluationPromise));
+    RaiseUnhandledRejection;
+    Result := Module.EvaluationResult;
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Completed := True;
+  finally
+    if not Completed then
+      ClearPendingWorkOfFailedRun(PreviousRunningEngine);
+    if OwnsMicrotaskScope then
+      Queue.LeaveScope(MicrotaskScopeToken)
+    else if (not NestedRun) and Assigned(Queue) then
+      Queue.ClearQueue;
+    DiscardRuntimePending;
+    GRunningEngine := PreviousRunningEngine;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+    TGocciaDiagnosticSourceRegistry.Deactivate(PreviousDiagnosticScope);
   end;
 end;
 

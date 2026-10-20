@@ -20,13 +20,15 @@ const
     Declared here rather than in the shim so the loader can recognise the stamp
     without depending on the runtime extension. }
   VIRTUAL_MODULE_PROVENANCE_VITEST_MOCK = 'vitest:vi.mock';
+  VIRTUAL_MODULE_PROVENANCE_BYTECODE = 'precompiled';
 
 type
   TGocciaVirtualModuleContentType = (
     vmctJavaScript,
     vmctJSON,
     vmctText,
-    vmctBytes
+    vmctBytes,
+    vmctBytecode
   );
 
   TGocciaVirtualModuleDefinition = class
@@ -251,6 +253,7 @@ begin
     vmctJSON: Result := 'json';
     vmctText: Result := 'text';
     vmctBytes: Result := 'bytes';
+    vmctBytecode: Result := 'bytecode';
   end;
 end;
 
@@ -412,7 +415,7 @@ begin
   if not FDefinitions.TryGetValue(AAddress, Definition) then
     raise EStreamError.Create('Virtual module not found: ' + AAddress);
   Definition.Loaded := True;
-  if Definition.ContentType = vmctBytes then
+  if Definition.ContentType in [vmctBytes, vmctBytecode] then
     Result := Copy(Definition.Bytes, 0, Length(Definition.Bytes))
   else
     Result := BytesOf(Definition.Text);

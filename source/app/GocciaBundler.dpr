@@ -12,6 +12,7 @@ uses
   Goccia.Application,
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
+  Goccia.Bytecode.Profile.Options,
   CLI.ConfigFile,
   Goccia.CLI.Application,
   Goccia.CLI.Stdin,
@@ -194,7 +195,16 @@ begin
         (SourcePipelineResult.SourceType = stScript);
       Compiler.ArgumentsObjectEnabled :=
         cfArgumentsObject in EffectiveCompatibility;
+      if SourcePipelineResult.SourceType = stModule then
+      begin
+        Compiler.GlobalBackedTopLevel := True;
+        Compiler.PreinitializedTopLevelFunctions := True;
+        Compiler.AsyncTopLevel := SourcePipelineResult.ProgramNode.HasTopLevelAwait;
+      end;
       CompiledModule := Compiler.Compile(SourcePipelineResult.ProgramNode);
+      PipelineOptions.SourceType := SourcePipelineResult.SourceType;
+      CompiledModule.CompileProfile := BuildBytecodeCompileProfile(
+        PipelineOptions, EffectiveStrictTypes);
       ASourceMap := SourcePipelineResult.TakeSourceMap;
       Result := CompiledModule;
       CompiledModule := nil;

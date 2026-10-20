@@ -104,6 +104,7 @@ type
     FAsyncCycleRoot: TGocciaModule;
     FEnvironment: TGCManagedObject;
     FEvaluationPromise: TGocciaValue;
+    FEvaluationResult: TGocciaValue;
     FExportBindings: TGocciaModuleExportBindingMap;
     FExportsTable: TGocciaValueMap;
     FLastModified: TDateTime;
@@ -125,6 +126,8 @@ type
     FIsHostOwned: Boolean;
     FNamespaceObject: TGocciaObjectValue;
     FEvaluationPromise: TGocciaValue;
+    FEvaluationResult: TGocciaValue;
+    FCaptureEvaluationResult: Boolean;
     FAsyncCycleRoot: TGocciaModule;
     FStarExportNames: TOrderedStringMap<Boolean>;
     FExportResolutionVersion: Cardinal;
@@ -192,6 +195,8 @@ type
       out AValue: TGocciaValue): Boolean;
     property Path: string read FPath;
     property ExportsTable: TGocciaValueMap read GetExportsTable;
+    property CaptureEvaluationResult: Boolean read FCaptureEvaluationResult write FCaptureEvaluationResult;
+    property EvaluationResult: TGocciaValue read FEvaluationResult write FEvaluationResult;
     property EvaluationPromise: TGocciaValue read FEvaluationPromise write FEvaluationPromise;
     property AsyncCycleRoot: TGocciaModule read FAsyncCycleRoot
       write FAsyncCycleRoot;
@@ -680,12 +685,16 @@ begin
   MarkHeldExportValues(FExportBindings, FExportsTable);
   if Assigned(FEvaluationPromise) then
     FEvaluationPromise.MarkReferences;
+  if Assigned(FEvaluationResult) then
+    FEvaluationResult.MarkReferences;
   // What a reload set aside stays alive until the reload commits or rolls
   // back; its environment stays registered as a root of its own until then.
   if Assigned(FReplacedState) then
   begin
     MarkHeldExportValues(FReplacedState.FExportBindings,
       FReplacedState.FExportsTable);
+    if Assigned(FReplacedState.FEvaluationResult) then
+      FReplacedState.FEvaluationResult.MarkReferences;
     if Assigned(FReplacedState.FEvaluationPromise) then
       FReplacedState.FEvaluationPromise.MarkReferences;
   end;
@@ -851,6 +860,7 @@ begin
   // put it back whatever the collector ran in between.
   FReplacedState.FEnvironment := FEnvironment;
   FReplacedState.FEvaluationPromise := FEvaluationPromise;
+  FReplacedState.FEvaluationResult := FEvaluationResult;
   FReplacedState.FExportBindings := FExportBindings;
   FReplacedState.FExportsTable := FExportsTable;
   FReplacedState.FLastModified := FLastModified;
@@ -859,6 +869,7 @@ begin
   FAsyncCycleRoot := nil;
   FEnvironment := nil;
   FEvaluationPromise := nil;
+  FEvaluationResult := nil;
   FExportBindings := TGocciaModuleExportBindingMap.Create;
   FExportsTable := TGocciaValueMap.Create;
   FStarExportNames := TOrderedStringMap<Boolean>.Create;
@@ -912,6 +923,7 @@ begin
   Replaced.FStarExportNames := nil;
   FAsyncCycleRoot := Replaced.FAsyncCycleRoot;
   FEvaluationPromise := Replaced.FEvaluationPromise;
+  FEvaluationResult := Replaced.FEvaluationResult;
   FLastModified := Replaced.FLastModified;
   Replaced.Free;
   InvalidateNamespaceObject;
@@ -1246,6 +1258,8 @@ begin
       ExportPair.Value.MarkReferences;
   if Assigned(FEvaluationPromise) then
     FEvaluationPromise.MarkReferences;
+  if Assigned(FEvaluationResult) then
+    FEvaluationResult.MarkReferences;
 end;
 
 function TGocciaModule.TryGetExportValue(const AExportName: string;

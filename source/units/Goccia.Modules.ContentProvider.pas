@@ -55,6 +55,14 @@ type
       should override it to avoid the UTF-8/source-line round trip. }
     function LoadContentBytes(const APath: string): TBytes; virtual;
 
+    { Providers that allocate while reading must enforce this bound before
+      allocating. The base adapter bounds already-owned/custom provider data. }
+    function LoadContentBytesBounded(const APath: string;
+      const AMaxBytes: Int64): TBytes; virtual;
+    function LoadVerifiedContentBytesBounded(const APath: string;
+      const AMaxBytes: Int64;
+      const AVerifier: TGocciaModuleContentVerifier): TBytes; virtual;
+
     { LoadContent and LoadContentBytes with AVerifier (when assigned) shown
       the bytes first. A provider that reads bytes once overrides them so the
       bytes verified are the bytes used; the base implementations read the
@@ -84,6 +92,8 @@ type
     function Exists(const APath: string): Boolean; override;
     function LoadContent(const APath: string): TGocciaModuleContent; override;
     function LoadContentBytes(const APath: string): TBytes; override;
+    function LoadContentBytesBounded(const APath: string;
+      const AMaxBytes: Int64): TBytes; override;
     function LoadVerifiedContent(const APath: string;
       const AVerifier: TGocciaModuleContentVerifier): TGocciaModuleContent;
       override;
@@ -108,6 +118,7 @@ uses
   TextSemantics,
 
   Goccia.Modules.Errors,
+  Goccia.NativeLimits,
   Goccia.TextFiles;
 
 function TryGetFileLastModified(const APath: string;
@@ -182,6 +193,26 @@ function TGocciaModuleContentProvider.LoadVerifiedContentBytes(
   const APath: string; const AVerifier: TGocciaModuleContentVerifier): TBytes;
 begin
   Result := LoadContentBytes(APath);
+  if Assigned(AVerifier) then
+    AVerifier(APath, Result);
+end;
+
+function TGocciaModuleContentProvider.LoadContentBytesBounded(
+  const APath: string; const AMaxBytes: Int64): TBytes;
+begin
+  if AMaxBytes < 0 then
+    raise EArgumentException.Create('Invalid module byte limit');
+  Result := LoadContentBytes(APath);
+  if Int64(Length(Result)) > AMaxBytes then
+    raise EStreamError.Create('Module byte limit exceeded');
+  CheckedNativeByteSize(Length(Result), 1);
+end;
+
+function TGocciaModuleContentProvider.LoadVerifiedContentBytesBounded(
+  const APath: string; const AMaxBytes: Int64;
+  const AVerifier: TGocciaModuleContentVerifier): TBytes;
+begin
+  Result := LoadContentBytesBounded(APath, AMaxBytes);
   if Assigned(AVerifier) then
     AVerifier(APath, Result);
 end;
@@ -293,6 +324,28 @@ function TGocciaFileSystemModuleContentProvider.LoadContentBytes(
   const APath: string): TBytes;
 begin
   Result := ReadFileBytes(APath);
+end;
+
+function TGocciaFileSystemModuleContentProvider.LoadContentBytesBounded(
+  const APath: string; const AMaxBytes: Int64): TBytes;
+var
+  Stream: TFileStream;
+  ByteCount: Int64;
+begin
+  if AMaxBytes < 0 then
+    raise EArgumentException.Create('Invalid module byte limit');
+  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+  try
+    ByteCount := Stream.Size;
+    if (ByteCount < 0) or (ByteCount > AMaxBytes) then
+      raise EStreamError.Create('Module byte limit exceeded');
+    CheckedNativeByteSize(ByteCount, 1);
+    SetLength(Result, SizeInt(ByteCount));
+    if Length(Result) > 0 then
+      Stream.ReadBuffer(Result[0], Length(Result));
+  finally
+    Stream.Free;
+  end;
 end;
 
 function TGocciaFileSystemModuleContentProvider.LoadVerifiedContentBytes(
