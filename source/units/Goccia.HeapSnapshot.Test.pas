@@ -381,10 +381,10 @@ begin
     'restored()')).ToBe('17');
   Expect<string>(RoundTripModule(
     'eval(''"use strict"; 1;''); capture(() => 18);',
-    'restored()')).ToBe('18');
+    'restored()', True)).ToBe('18');
   Expect<string>(RoundTripModule(
     '(0, eval)(''"use strict"; 1;''); capture(() => 19);',
-    'restored()')).ToBe('19');
+    'restored()', True)).ToBe('19');
 end;
 
 procedure THeapSnapshotTests.TestRefusesPromisesUntilTheirCodec;

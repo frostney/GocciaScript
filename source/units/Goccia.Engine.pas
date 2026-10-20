@@ -4234,7 +4234,9 @@ function TGocciaEngine.RunBytecodeBuffer(const ABytes: TBytes;
   const AAddress: string): TGocciaValue;
 var
   Module: TGocciaBytecodeModule;
+  Address: string;
 begin
+  Address := FModuleLoader.VirtualModules.CanonicalAddress(AAddress, '');
   Module := LoadModuleFromBuffer(ABytes);
   try
     ValidateBytecodeModule(Module);
@@ -4246,15 +4248,15 @@ begin
   if Assigned(Module.LinkPlan) then
   begin
     try
-      FModuleLoader.RegisterPrecompiledModule(AAddress, Module, ABytes);
+      FModuleLoader.RegisterPrecompiledModule(Address, Module, ABytes);
     except
       FRetainedModules.Remove(Module);
       raise;
     end;
-    Result := RunRegisteredBytecodeEntry(AAddress);
+    Result := RunRegisteredBytecodeEntry(Address);
   end
   else
-    Result := RunModuleForSourceType(Module, AAddress);
+    Result := RunModuleForSourceType(Module, Address);
 end;
 
 function TGocciaEngine.RunRegisteredBytecodeEntry(const AAddress: string): TGocciaValue;

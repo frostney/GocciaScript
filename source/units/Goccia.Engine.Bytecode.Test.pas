@@ -13,9 +13,11 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.Engine,
+  Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Sandbox.Modules,
   Goccia.SourcePipeline,
+  Goccia.Test262.Host,
   Goccia.TestSetup,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
@@ -69,6 +71,7 @@ type
     procedure TestLinkedSandboxEntryWithoutSource;
     procedure TestStandaloneSandboxEntryWithoutSource;
     procedure TestRuntimeEvalProfileParity;
+    procedure TestRelativeBufferedEntryAddress;
   public
     procedure SetupTests; override;
   end;
@@ -80,6 +83,8 @@ end;
 
 procedure TEngineBytecodeTests.SetupTests;
 begin
+  Test('Relative buffered entry addresses use one canonical registration address',
+    TestRelativeBufferedEntryAddress);
   Test('Buffered runs preserve runtime eval parser options through await',
     TestRuntimeEvalProfileParity);
   Test('Registered bytecode matches source with live bindings and source fallback',
@@ -631,6 +636,31 @@ begin
   AssertLegacyRunRejected(True, 'RunModuleForSourceType');
 end;
 
+procedure TEngineBytecodeTests.TestRelativeBufferedEntryAddress;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Bytes: TBytes;
+begin
+  Bytes := CompileBuffer('globalThis.answer = 42;', '/compile/relative.mjs');
+  Source := TStringList.Create;
+  try
+    { The engine's source directory deliberately differs from the working
+      directory that relative buffer registration uses. }
+    Engine := TGocciaEngine.Create(RuntimeAddress('host.mjs'), Source);
+    try
+      Engine.SourceType := stModule;
+      Engine.RunBytecodeBuffer(Bytes, './relative-buffer.mjs');
+      Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+        .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+    finally
+      Engine.Free;
+    end;
+  finally
+    Source.Free;
+  end;
+end;
+
 procedure TEngineBytecodeTests.TestRuntimeEvalProfileParity;
 const
   PROGRAM_SOURCE =
@@ -640,9 +670,14 @@ const
 var
   Source: TStringList;
   Engine: TGocciaEngine;
+  Host: TGocciaTest262Host;
+  HostOptions: TGocciaTest262EngineOptions;
   Bytes: TBytes;
   Linked, Buffered: Boolean;
 begin
+  HostOptions := Default(TGocciaTest262EngineOptions);
+  HostOptions.Compatibility := [cfVar];
+  HostOptions.SourceType := stModule;
   for Linked := False to True do
   begin
     Bytes := CompileBuffer(PROGRAM_SOURCE, 'memory:/compile/eval.mjs',
@@ -654,7 +689,11 @@ begin
         if not Buffered then
           Source.Text := PROGRAM_SOURCE;
         Engine := TGocciaEngine.Create(RuntimeAddress('eval.mjs'), Source);
+        Host := nil;
         try
+          Host := TGocciaTest262Host.Create(HostOptions);
+          Host.ConfigureHostEnvironment(Engine.HostEnvironment);
+          Host.Install(Engine);
           Engine.SourceType := stModule;
           Engine.Compatibility := [cfVar];
           if Buffered then
@@ -664,6 +703,7 @@ begin
           Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
             .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
         finally
+          Host.Free;
           Engine.Free;
         end;
       finally
@@ -676,7 +716,7 @@ end;
 procedure TEngineBytecodeTests.AssertDeferredDiskRetention(
   const AAccess, AInvalid: Boolean);
 var
-  Directory, ArtifactPath, LibrarySource: string;
+  Directory, ArtifactPath, LibrarySource, FailureReason: string;
   Bytes: TBytes;
   Source: TStringList;
   Stream: TFileStream;
@@ -710,16 +750,33 @@ begin
         IncludeTrailingPathDelimiter(Directory) + 'entry.mjs', Source);
       try
         Engine.SourceType := stModule;
+        Engine.ModuleLoader.SetContentProvider(
+          TGocciaFileSystemModuleContentProvider.Create, True);
         Engine.ModuleLoader.PreferBytecode := True;
         Before := Engine.RetainedModuleCount;
         Failed := False;
+        FailureReason := '';
         try
           Engine.Execute;
         except
-          on Exception do
+          on E: Exception do
+          begin
+            if not AInvalid then
+              raise;
             Failed := True;
+            if E is TGocciaThrowValue then
+              FailureReason := TGocciaThrowValue(E).Value
+                .GetProperty('message').ToStringLiteral.Value
+            else if E is EGocciaBytecodeThrow then
+              FailureReason := EGocciaBytecodeThrow(E).ThrownValue
+                .GetProperty('message').ToStringLiteral.Value
+            else
+              FailureReason := E.Message;
+          end;
         end;
         Expect<Boolean>(Failed).ToBe(AInvalid);
+        if AInvalid then
+          Expect<Boolean>(Pos('missing.mjs', FailureReason) > 0).ToBe(True);
         { The entry is compiled once. Only actual namespace access should
           retain a library body; declaration scans have no executable owner. }
         ExpectedRetained := Before + 1;
