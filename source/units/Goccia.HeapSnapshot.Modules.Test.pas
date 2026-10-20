@@ -21,6 +21,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
+  Goccia.Capabilities,
   Goccia.Engine,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot,
@@ -94,6 +95,7 @@ type
     procedure TestRefusesAModuleAlreadyLoaded;
     procedure TestRefusedRestoreLeavesNoRecords;
     procedure TestRefusedRestoreLeavesOwnershipAlone;
+    procedure TestRestoreHonorsReadDenial;
     procedure TestRefusesStateOutsideTheRecords;
     procedure TestRefusesForgedLocalExports;
     procedure TestRefusesAMissingExportValue;
@@ -406,6 +408,8 @@ begin
     TestRefusedRestoreLeavesNoRecords);
   Test('A refused restore marks no module host-owned',
     TestRefusedRestoreLeavesOwnershipAlone);
+  Test('A snapshot ownership flag cannot bypass a source read denial',
+    TestRestoreHonorsReadDenial);
   Test('Loader state outside the records refuses the snapshot',
     TestRefusesStateOutsideTheRecords);
   Test('A local export forged outside its module''s own bindings is refused',
@@ -776,6 +780,64 @@ begin
   finally
     Modules.Free;
     Keys.Free;
+    Run.Free;
+  end;
+end;
+
+procedure THeapSnapshotModulesTests.TestRestoreHonorsReadDenial;
+var
+  Refusal: string;
+  Bytes, Forged: TBytes;
+  Counter, P, At, Owned: Integer;
+  Run: TModuleRun;
+  Retained: Int64;
+begin
+  DefineGraph;
+  Bytes := SnapshotEntry('main.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Counter := StringIndexIn(Bytes, PathOf('counter.js'));
+  Expect<Boolean>(Counter >= 0).ToBe(True);
+  At := -1;
+  for P := 0 to Length(Bytes) - 10 do
+    if (U32In(Bytes, P) = Cardinal(Counter)) and (Bytes[P + 4] = 0) and
+       (Bytes[P + 5] = 1) and (U32In(Bytes, P + 6) = Cardinal(Counter)) then
+    begin
+      Expect<Integer>(At).ToBe(-1);
+      At := P;
+    end;
+  Expect<Boolean>(At >= 0).ToBe(True);
+  // A real guest record and the same record forged as host-owned must both
+  // obey the restoring loader's explicit denial, even inside its project.
+  for Owned := 0 to 1 do
+  begin
+    Forged := Copy(Bytes);
+    Forged[At + 4] := Owned;
+    Run := TModuleRun.Create(PathOf('main.js'));
+    try
+      Run.Engine.ModuleLoader.ConfigureCapabilities(
+        TGocciaCapabilities.None.Deny(gcRead, PathOf('counter.js')),
+        FDir, nil);
+      Retained := Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes;
+      Refusal := RestoreInto(Run, Forged);
+      Expect<Boolean>(Refusal <> '').ToBe(True);
+      Expect<Boolean>(Run.Engine.ModuleLoader.HasCachedModule(
+        PathOf('counter.js'))).ToBe(False);
+      Expect<Int64>(Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes)
+        .ToBe(Retained);
+    finally
+      Run.Free;
+    end;
+  end;
+  // The same graph remains restorable under the project-graph read policy
+  // when no explicit denial covers its source.
+  Run := TModuleRun.Create(PathOf('main.js'));
+  try
+    Run.Engine.ModuleLoader.ConfigureCapabilities(TGocciaCapabilities.None,
+      FDir, nil);
+    Expect<string>(RestoreInto(Run, Bytes)).ToBe('');
+    Expect<string>(Run.Check('String(restored.inc())')).ToBe('2');
+    Expect<Integer>(Run.Ticks).ToBe(0);
+  finally
     Run.Free;
   end;
 end;

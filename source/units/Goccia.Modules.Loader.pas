@@ -2002,8 +2002,9 @@ var
 begin
   ASource := Default(TGocciaModuleSnapshotSource);
   IsHostOwned := AIsHostOwned;
-  // Read as a literal import of the module would be.
-  EnforceHostRead(AResolvedPath, AResolvedPath, '', '', True, IsHostOwned);
+  // Ownership is provenance from the snapshot, not a host request: it must
+  // never exempt this source read from the restoring loader's policy.
+  EnforceHostRead(AResolvedPath, AResolvedPath, '', '', True, False);
   // Not LoadResolvedContent: what it records about the module waits for the
   // restore to commit (ASource), so a refused one leaves the loader as it
   // was.
