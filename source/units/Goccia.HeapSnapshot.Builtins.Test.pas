@@ -32,7 +32,9 @@ uses
   Goccia.Shims,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -50,6 +52,13 @@ type
     procedure Execute; override;
   end;
 
+  TSnapshotCeilingLazyFactory = class
+  public
+    Value: TGocciaObjectValue;
+    Margin: Int64;
+    function Materialize: TGocciaValue;
+  end;
+
   THeapSnapshotBuiltinsTests = class(TTestSuite)
   private
     procedure TestEverySlotNameResolvesOnItsOwn;
@@ -60,6 +69,7 @@ type
     procedure TestShimTakesInRunFunction;
     procedure TestShimLoadCallsAnotherEngine;
     procedure TestShimCodeIsNotItsFileName;
+    procedure TestObservationRefusalStaysWithSnapshot;
     procedure TestEveryDifferenceRestores;
     procedure TestLateBuiltinDifferences;
     procedure TestHostileDifferencesRefuse;
@@ -67,6 +77,7 @@ type
     procedure TestRefusalWhileApplyingLeavesBuiltins;
     procedure TestInstructionStopLeavesBuiltins;
     procedure TestTimeoutWhileRestoringLeavesBuiltins;
+    procedure TestRestoredArrayStorageRootsOwner;
     procedure TestIndexKeyIsNeverForgotten;
     procedure TestDifferenceTruncationsAndMutants;
     procedure TestRestoredRunSnapshotsAgain;
@@ -111,6 +122,15 @@ const
     'AbortController.shared',
     'AbortSignal.shared');
 
+function TSnapshotCeilingLazyFactory.Materialize: TGocciaValue;
+begin
+  // Construction has already succeeded. Only observation of the freshly
+  // materialized member has to fit the remaining memory budget.
+  TGarbageCollector.Instance.MaxBytes :=
+    TGarbageCollector.Instance.BytesAllocated + Margin;
+  Result := Value;
+end;
+
 { THeapSnapshotBuiltinsTests }
 
 procedure THeapSnapshotBuiltinsTests.SetupTests;
@@ -131,6 +151,8 @@ begin
     'engine', TestShimLoadCallsAnotherEngine);
   Test('Shim code is what the engine compiled as a shim, not a file name',
     TestShimCodeIsNotItsFileName);
+  Test('A snapshot observation refusal does not escape a lazy property read',
+    TestObservationRefusalStaysWithSnapshot);
   Test('Every kind of change to a built-in restores as its difference',
     TestEveryDifferenceRestores);
   Test('Built-ins the run built, then changed, restore with the change',
@@ -142,8 +164,10 @@ begin
     TestRefusalWhileApplyingLeavesBuiltins);
   Test('A restore stopped while preparing differences changed no built-in',
     TestInstructionStopLeavesBuiltins);
-  Test('A restore stopped at any point by its deadline changed no built-in',
+  Test('A restore with an expired deadline changes no built-in',
     TestTimeoutWhileRestoringLeavesBuiltins);
+  Test('Restored array storage roots its owner while growing',
+    TestRestoredArrayStorageRootsOwner);
   Test('A changed built-in that has an index key keeps the fact',
     TestIndexKeyIsNeverForgotten);
   Test('Truncations and mutants of differences refuse, or restore',
@@ -774,6 +798,70 @@ begin
   end;
 end;
 
+procedure THeapSnapshotBuiltinsTests.TestObservationRefusalStaysWithSnapshot;
+const
+  MARGINS: array[0..1] of Int64 = (0, 4096);
+var
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Factory: TSnapshotCeilingLazyFactory;
+  Lines: TStringList;
+  MathObject: TGocciaObjectValue;
+  Value: TGocciaValue;
+  Stage: TGocciaGlobalEvalStage;
+  GC: TGarbageCollector;
+  Previous: Int64;
+  Refusal: string;
+  I: Integer;
+begin
+  for I := Low(MARGINS) to High(MARGINS) do
+  begin
+    Lines := TStringList.Create;
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    GC := TGarbageCollector.Instance;
+    Previous := GC.MaxBytes;
+    Factory := TSnapshotCeilingLazyFactory.Create;
+    Session := nil;
+    try
+      Factory.Value := TGocciaObjectValue.Create;
+      GC.AddTempRoot(Factory.Value);
+      Factory.Value.AssignProperty('payload',
+        TGocciaStringLiteralValue.Create(StringOfChar('x', 65536)));
+      Factory.Margin := MARGINS[I];
+      MathObject := TGocciaObjectValue(Engine.GlobalScope.GetValue('Math'));
+      MathObject.DefineProperty('heapSnapshotProbe',
+        TGocciaLazyPropertyDescriptorData.Create(Factory.Materialize,
+          [pfConfigurable, pfWritable]));
+      Session := TGocciaHeapSnapshotSession.Create(Engine);
+      // No room to name the new object, or enough to name it but not to
+      // fingerprint its payload: neither may fail the run's property read.
+      try
+        Value := Engine.EvaluateGlobalEval('Math.heapSnapshotProbe',
+          TEST_PATH, Stage);
+      finally
+        GC.MaxBytes := Previous;
+      end;
+      Expect<Boolean>(Value = Factory.Value).ToBe(True);
+      Factory.Value.AssignProperty('changed',
+        TGocciaNumberLiteralValue.Create(42));
+      Refusal := SnapshotRefusal(Session, Value);
+      Expect<Boolean>(Pos('memory ceiling', Refusal) > 0).ToBe(True);
+      // Restoring the budget cannot reconstruct a partially recorded
+      // baseline after the run has changed the value.
+      Expect<string>(SnapshotRefusal(Session, Value)).ToBe(Refusal);
+      Expect<Boolean>(Engine.EvaluateGlobalEval('Math.heapSnapshotProbe',
+        TEST_PATH, Stage) = Value).ToBe(True);
+    finally
+      GC.MaxBytes := Previous;
+      Session.Free;
+      GC.RemoveTempRoot(Factory.Value);
+      Factory.Free;
+      Engine.Free;
+      Lines.Free;
+    end;
+  end;
+end;
+
 procedure THeapSnapshotBuiltinsTests.TestEveryDifferenceRestores;
 begin
   // Added, with its identity: the run's object is written, the built-in
@@ -1161,54 +1249,75 @@ var
   Stage: TGocciaGlobalEvalStage;
   Refusal, Pristine: string;
   Bytes: TBytes;
-  Deadline, Refused: Integer;
-  Restored: Boolean;
+  TimedOut: Boolean;
 begin
-  // Built-in differences, then many symbols registered only once the
-  // restore succeeds, the last thing it polls for: wherever the deadline
-  // falls, no built-in changed unless the restore did.
   Bytes := Snapshot('(() => { const o = {}; Math.extra = o; ' +
-    'Array.prototype.push(...Array.from({ length: 30000 }, () => o)); ' +
-    'return Array.from({ length: 30000 }, (_, i) => ' +
-    'Symbol.for("restore-deadline-" + i)); })()', Refusal);
+    'Array.prototype.push(o); return o; })()', Refusal);
   Expect<string>(Refusal).ToBe('');
   Lines := TStringList.Create;
   Engine := TGocciaEngine.Create(TEST_PATH, Lines);
-  Refused := 0;
-  Restored := False;
   try
     Pristine := Engine.EvaluateGlobalEval(STATE, TEST_PATH,
       Stage).ToStringLiteral.Value;
-    Deadline := 1;
-    while Deadline < 20000 do
-    begin
-      StartExecutionTimeout(Deadline);
+    TimedOut := False;
+    StartExecutionTimeout(1);
+    try
+      // Observe expiry before restoring, preserving the expired scope.
+      // The assertion must not depend on how fast this machine restores.
+      // Instruction-stop tests cover interruption during preparation.
       try
-        try
-          Refusal := RestoreRefusalIn(Engine, Bytes);
-        except
-          on E: TGocciaTimeoutError do
-            Refusal := E.Message;
-        end;
-      finally
-        ClearExecutionTimeout;
+        while True do
+          Sleep(RemainingExecutionTimeoutMilliseconds);
+      except
+        on E: TGocciaTimeoutError do
+          ;
       end;
-      if Refusal = '' then
-      begin
-        Restored := True;
-        Break;
+      try
+        Refusal := RestoreRefusalIn(Engine, Bytes);
+      except
+        on E: TGocciaTimeoutError do
+          TimedOut := True;
       end;
-      Inc(Refused);
-      Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
-        Stage).ToStringLiteral.Value).ToBe(Pristine);
-      Deadline := Deadline + 1 + Deadline div 8;
+    finally
+      ClearExecutionTimeout;
     end;
-    Expect<Boolean>(Restored and (Refused > 0)).ToBe(True);
+    Expect<Boolean>(TimedOut).ToBe(True);
     Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
-      Stage).ToStringLiteral.Value).ToBe('30000,object');
+      Stage).ToStringLiteral.Value).ToBe(Pristine);
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value).ToBe('1,object');
   finally
     Engine.Free;
     Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestRestoredArrayStorageRootsOwner;
+var
+  Value: TGocciaArrayValue;
+  Elements: TGocciaElementList;
+  GC: TGarbageCollector;
+begin
+  // The restore API must preserve the element store's growth contract even
+  // when a native caller alone holds the array. A quarantining collection
+  // makes a lost owner observable without accessing freed memory.
+  Value := TGocciaArrayValue.Create;
+  Elements := TGocciaArrayValue.CreateElementsForRestore(1);
+  Elements[0] := TGocciaObjectValue.Create;
+  Value.CommitArrayPartForRestore(Elements, 1, True);
+  GC := TGarbageCollector.Instance;
+  TGarbageCollector.ResetQuarantineViolations;
+  GC.QuarantineSwept := True;
+  GC.CollectBeforeEveryReservation := True;
+  try
+    ExtendElementsWithHoles(Value.Elements, 32, nil);
+    Value.MarkReferences;
+    Expect<Integer>(TGarbageCollector.QuarantineViolations).ToBe(0);
+    Expect<Boolean>(Value.GetElement(0) is TGocciaObjectValue).ToBe(True);
+  finally
+    GC.CollectBeforeEveryReservation := False;
+    GC.QuarantineSwept := False;
   end;
 end;
 

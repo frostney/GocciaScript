@@ -5333,6 +5333,7 @@ procedure TGocciaArrayValue.CommitArrayPartForRestore(
 begin
   FElements.Free;
   FElements := AElements;
+  FElements.Owner := Self;
   FLength := ALength;
   FLengthWritable := ALengthWritable;
 end;

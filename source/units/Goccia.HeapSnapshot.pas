@@ -77,6 +77,7 @@ type
     FLastObjectCount: Integer;
     FAccountingWriter: TGocciaHeapSnapshotWriter;
     FMarkOverflows: Integer;
+    FPendingRefusal: string;
     procedure MarkBuiltinInternals;
     procedure CheckAccountingMarked;
     function IsBuiltinInternal(const AObject: TGCManagedObject): Boolean;
@@ -931,24 +932,34 @@ var
   Index, Start, I: Integer;
   Path: string;
 begin
+  if FPendingRefusal <> '' then
+    Exit;
   Index := FTable.IndexOf(AObject);
   if Index < 0 then
     Exit;
   Path := FTable.PathAt(Index);
   Start := FTable.Count;
-  if ADescriptor is TGocciaPropertyDescriptorAccessor then
-  begin
-    AddMember(FTable, TGocciaPropertyDescriptorAccessor(ADescriptor).Getter,
-      Path, 'g.', AName);
-    AddMember(FTable, TGocciaPropertyDescriptorAccessor(ADescriptor).Setter,
-      Path, 's.', AName);
-  end
-  else if ADescriptor is TGocciaPropertyDescriptorData then
-    AddMember(FTable, TGocciaPropertyDescriptorData(ADescriptor).Value, Path,
-      '.', AName);
-  WalkFrom(FTable, Start);
-  for I := Start to FTable.Count - 1 do
-    FTable.RecordFingerprint(I);
+  try
+    if ADescriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      AddMember(FTable, TGocciaPropertyDescriptorAccessor(ADescriptor).Getter,
+        Path, 'g.', AName);
+      AddMember(FTable, TGocciaPropertyDescriptorAccessor(ADescriptor).Setter,
+        Path, 's.', AName);
+    end
+    else if ADescriptor is TGocciaPropertyDescriptorData then
+      AddMember(FTable, TGocciaPropertyDescriptorData(ADescriptor).Value, Path,
+        '.', AName);
+    WalkFrom(FTable, Start);
+    for I := Start to FTable.Count - 1 do
+      FTable.RecordFingerprint(I);
+  except
+    // Observation must not turn an ordinary property read into a snapshot
+    // refusal. Its partially recorded table cannot describe a later pause.
+    on E: EGocciaHeapSnapshotRefused do
+      if FPendingRefusal = '' then
+        FPendingRefusal := E.Message;
+  end;
 end;
 
 procedure TGocciaHeapSnapshotSession.AddToBaseline(
@@ -975,6 +986,8 @@ begin
   Reason := FEngine.SnapshotIdleRefusal;
   if Reason <> '' then
     raise EGocciaHeapSnapshotRefused.Create(Reason);
+  if FPendingRefusal <> '' then
+    raise EGocciaHeapSnapshotRefused.Create(FPendingRefusal);
   Writer := nil;
   Buffer := nil;
   Templates := nil;
