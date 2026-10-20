@@ -32,6 +32,8 @@ type
     function SymbolConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SymbolKeyFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
     destructor Destroy; override;
@@ -282,6 +284,18 @@ begin
 
   { Step 4: Return undefined }
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaGlobalSymbol.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FSymbolFunction) then
+    FSymbolFunction.MarkReferences;
+  if Assigned(FIteratorSymbol) then
+    FIteratorSymbol.MarkReferences;
 end;
 
 end.

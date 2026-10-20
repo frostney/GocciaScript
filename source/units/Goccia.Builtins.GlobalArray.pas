@@ -176,6 +176,7 @@ function TArrayFromAsyncSyncIteratorJob.ContinueJob(
 var
   DoneValue, KValue: TGocciaValue;
   Done: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if FSettled then
@@ -192,20 +193,31 @@ begin
       Exit;
     end;
 
-    KValue := FNextResult.GetProperty(PROP_VALUE);
-    if not Assigned(KValue) then
-      KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    KValue := AwaitValue(KValue);
-
-    if FMapping then
-    begin
-      FMapArgs.SetElement(0, KValue);
-      FMapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(FK));
-      KValue := InvokeCallable(FMapCallback, FMapArgs, FThisArg);
+    // Each value is held only by this local while it is awaited (which reads
+    // its then, guest code) and while the mapped value is computed.
+    Roots.Initialize;
+    try
+      KValue := FNextResult.GetProperty(PROP_VALUE);
+      if not Assigned(KValue) then
+        KValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Roots.Add(KValue);
       KValue := AwaitValue(KValue);
-    end;
+      Roots.Add(KValue);
 
-    FResultObj.CreateDataPropertyOrThrow(IntToStr(FK), KValue);
+      if FMapping then
+      begin
+        FMapArgs.SetElement(0, KValue);
+        FMapArgs.SetElement(1, TGocciaNumberLiteralValue.Create(FK));
+        KValue := InvokeCallable(FMapCallback, FMapArgs, FThisArg);
+        Roots.Add(KValue);
+        KValue := AwaitValue(KValue);
+        Roots.Add(KValue);
+      end;
+
+      FResultObj.CreateDataPropertyOrThrow(IntToStr(FK), KValue);
+    finally
+      Roots.Clear;
+    end;
     Inc(FK);
     FNextResult := FIterator.AdvanceNext;
     Schedule;
@@ -351,7 +363,7 @@ var
   K, Len: Integer;
   SourceRoot, ResultRoot, MapCallbackRoot, ThisArgRoot, ValueRoot,
   MapValueRoot, MapIndexRoot, IteratorObjRoot, IteratorRoot,
-  ArrayLikeRoot: TGocciaTempRoot;
+  ArrayLikeRoot, MethodRoot: TGocciaTempRoot;
 
   // ES2026 §7.3.5 CreateDataPropertyOrThrow(A, P, V)
   procedure CreateDataProperty(const AIndex: Integer; const AValue: TGocciaValue);
@@ -435,6 +447,7 @@ begin
   InitializeTempRoot(IteratorObjRoot);
   InitializeTempRoot(IteratorRoot);
   InitializeTempRoot(ArrayLikeRoot);
+  InitializeTempRoot(MethodRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
   if Mapping then
   begin
@@ -446,7 +459,12 @@ begin
     Iterator := nil;
     IteratorMethod := nil;
     if Source is TGocciaObjectValue then
-      IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator)
+    begin
+      IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownIterator);
+      // A getter can return a fresh function, held only here while the
+      // result array is constructed (which can run a constructor).
+      AddTempRootIfNeeded(MethodRoot, IteratorMethod);
+    end
     else if not (Source is TGocciaNullLiteralValue) and
             not (Source is TGocciaUndefinedLiteralValue) then
       Iterator := GetIteratorFromValue(Source);
@@ -579,6 +597,7 @@ begin
       end;
     end;
   finally
+    RemoveTempRootIfNeeded(MethodRoot);
     RemoveTempRootIfNeeded(ThisArgRoot);
     RemoveTempRootIfNeeded(MapCallbackRoot);
     RemoveTempRootIfNeeded(SourceRoot);
@@ -604,6 +623,9 @@ var
   LengthValue: TGocciaValue;
   GC: TGarbageCollector;
   SourceRoot: TGocciaTempRoot;
+  IteratorRoot: TGocciaTempRoot;
+  ArrayLikeRoot: TGocciaTempRoot;
+  MethodRoot, NextRoot: TGocciaTempRoot;
 
   procedure CreateResultObject(const ALen: Integer; const APassLength: Boolean);
   begin
@@ -649,6 +671,13 @@ var
 begin
   GC := TGarbageCollector.Instance;
   InitializeTempRoot(SourceRoot);
+  // The iterator @@iterator returned is held only by locals while its next
+  // getter runs and while the this-constructor builds the result, both guest
+  // code.
+  InitializeTempRoot(IteratorRoot);
+  InitializeTempRoot(ArrayLikeRoot);
+  InitializeTempRoot(MethodRoot);
+  InitializeTempRoot(NextRoot);
   Promise := TGocciaPromiseValue.Create;
 
   if Assigned(GC) then
@@ -696,7 +725,12 @@ begin
         // TC39 Array.fromAsync §2.1.1.1 step 3.c: GetMethod(asyncItems, @@asyncIterator)
         IteratorMethod := nil;
         if Source is TGocciaObjectValue then
+        begin
           IteratorMethod := TGocciaObjectValue(Source).GetSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator);
+          // A getter can return a fresh function, held only here while the
+          // result array is constructed.
+          AddTempRootIfNeeded(MethodRoot, IteratorMethod);
+        end;
 
         if Assigned(IteratorMethod) and
            not (IteratorMethod is TGocciaUndefinedLiteralValue) and
@@ -720,6 +754,8 @@ begin
             GC.AddTempRoot(IteratorObj);
           try
             NextMethod := IteratorObj.GetProperty(PROP_NEXT);
+            // Called once per step, across awaits and the mapping callback.
+            AddTempRootIfNeeded(NextRoot, NextMethod);
             if not Assigned(NextMethod) or not NextMethod.IsCallable then
               ThrowTypeError(SErrorAsyncIteratorNextNotCallable, SSuggestIteratorProtocol);
 
@@ -804,6 +840,7 @@ begin
               finally
                 EmptyArgs.Free;
               end;
+              AddTempRootIfNeeded(IteratorRoot, IteratorObj);
 
               if IteratorObj is TGocciaIteratorValue then
                 Iterator := TGocciaIteratorValue(IteratorObj)
@@ -830,6 +867,8 @@ begin
 
           if Assigned(Iterator) then
           begin
+            // The iterator record (a wrapper marks the object it wraps).
+            AddTempRootIfNeeded(IteratorRoot, Iterator);
             CreateResultObject(0, False);
             if Assigned(GC) then
               GC.AddTempRoot(Iterator);
@@ -854,6 +893,9 @@ begin
           begin
             // TC39 Array.fromAsync §2.1.1.1 step 5: Array-like path — Let len be LengthOfArrayLike(arrayLike)
             ArrayLike := ToObject(Source);
+            // A wrapper ToObject made for a primitive source is held only
+            // here while the length getter and the element reads run.
+            AddTempRootIfNeeded(ArrayLikeRoot, ArrayLike);
             LengthValue := ArrayLike.GetProperty(PROP_LENGTH);
             Len := 0;
             if Assigned(LengthValue) and not (LengthValue is TGocciaUndefinedLiteralValue) then
@@ -904,6 +946,10 @@ begin
         GC.RemoveTempRoot(ResultObj);
     end;
   finally
+    RemoveTempRootIfNeeded(NextRoot);
+    RemoveTempRootIfNeeded(MethodRoot);
+    RemoveTempRootIfNeeded(ArrayLikeRoot);
+    RemoveTempRootIfNeeded(IteratorRoot);
     RemoveTempRootIfNeeded(SourceRoot);
     if Assigned(GC) then
       GC.RemoveTempRoot(Promise);

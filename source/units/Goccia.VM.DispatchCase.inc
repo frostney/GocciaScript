@@ -2318,6 +2318,9 @@
         OperandRoots.Add(LeftValue);
         try
           CustomMatcherValue := GetCustomMatcher(RightValue);
+          // A getter can return a fresh matcher, and the hint object is
+          // held only here while its string is made.
+          OperandRoots.Add(CustomMatcherValue);
           if Assigned(CustomMatcherValue) then
           begin
             if not CustomMatcherValue.IsCallable then
@@ -2325,6 +2328,7 @@
             CallArgs := AcquireArguments(2);
             try
               MatchHintObject := TGocciaObjectValue.Create;
+              OperandRoots.Add(MatchHintObject);
               MatchHintObject.AssignProperty(PROP_MATCH_TYPE,
                 TGocciaStringLiteralValue.Create('boolean'));
               CallArgs.Add(LeftValue);

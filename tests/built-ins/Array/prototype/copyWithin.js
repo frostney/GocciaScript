@@ -38,4 +38,25 @@ describe("Array.prototype.copyWithin", () => {
     expect(0 in arr).toBe(false);
     expect(arr[1]).toBe(3);
   });
+
+  test("reads and writes one element at a time, in the specified order", () => {
+    const log = [];
+    const backing = { 0: "a", 1: "b", 2: "c", 3: "d" };
+    const target = new Proxy({ ...backing, length: 4 }, {
+      get(t, k, r) {
+        if (k !== "length") log.push(`get ${String(k)}`);
+        return Reflect.get(t, k, r);
+      },
+      set(t, k, v, r) {
+        log.push(`set ${String(k)}=${v}`);
+        return Reflect.set(t, k, v, r);
+      },
+    });
+    // The source starts before an overlapping target, so it copies backwards.
+    Array.prototype.copyWithin.call(target, 1, 0, 3);
+    expect(log).toEqual(["get 2", "set 3=c", "get 1", "set 2=b", "get 0", "set 1=a"]);
+    log.length = 0;
+    Array.prototype.copyWithin.call(target, 0, 2, 4);
+    expect(log).toEqual(["get 2", "set 0=b", "get 3", "set 1=c"]);
+  });
 });
