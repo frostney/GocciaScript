@@ -979,10 +979,14 @@ begin
     '    new Intl.Segmenter("en", 5).resolvedOptions().granularity,' + LineEnding +
     '    new Intl.Locale("en", 5).calendar,' + LineEnding +
     '    new Intl.DurationFormat("en", 5).resolvedOptions().style,' + LineEnding +
+    // Locales whose conversion allocates, read after the options when one
+    // call made both.
+    '    new Intl.DurationFormat({ length: 1, get 0() { return { toString() { fresh("pad"); return fresh("en"); } }; } }, 5)' + LineEnding +
+    '      .resolvedOptions().style,' + LineEnding +
     '    new Intl.DateTimeFormat("en", 5).resolvedOptions().calendar,' + LineEnding +
     '    "a".localeCompare("b", "en", 5));' + LineEnding +
     '} finally { for (const k of Object.keys(names)) delete Number.prototype[k]; }' + LineEnding +
-    'if (out.join() !== "sort,cardinal,always,grapheme,gregory,short,gregory,-1") throw new Error(out.join());');
+    'if (out.join() !== "sort,cardinal,always,grapheme,gregory,short,short,gregory,-1") throw new Error(out.join());');
 end;
 
 begin

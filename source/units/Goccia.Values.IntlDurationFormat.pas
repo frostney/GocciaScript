@@ -765,9 +765,15 @@ end;
 
 class function TGocciaIntlDurationFormatValue.CreateFromArguments(
   const ALocales, AOptions: TGocciaValue): TGocciaIntlDurationFormatValue;
+var
+  Locale: string;
 begin
-  Result := TGocciaIntlDurationFormatValue.Create(
-    DurationFormatLocaleArgumentToLocale(ALocales),
+  // The locales are read first, as ECMA-402 orders it: their conversion runs
+  // guest code, and an options wrapper made before it would be held by
+  // nothing until the constructor roots it. One call's arguments have no
+  // guaranteed evaluation order, so the two must not share one.
+  Locale := DurationFormatLocaleArgumentToLocale(ALocales);
+  Result := TGocciaIntlDurationFormatValue.Create(Locale,
     DurationFormatOptionsArgumentToObject(AOptions));
 end;
 
