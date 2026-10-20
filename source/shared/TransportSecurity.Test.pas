@@ -25,6 +25,8 @@ type
     procedure TestCoalescedRecordsAreConsumedOneAtATime;
     procedure TestSendEndsAtTheDeadlineWhateverTheSocketTimeout;
     procedure TestSendToASlowlyDrainingPeerEndsAtTheDeadline;
+    procedure TestSendAllKeepsSendingToAPeerThatMakesRoom;
+    procedure TestSendAllStopsAtTheDeadlineWithTheBytesSent;
     procedure TestSendAfterTheDeadlineFailsAtOnce;
     procedure TestSendWithoutADeadlineSends;
   public
@@ -50,6 +52,10 @@ begin
     TestSendEndsAtTheDeadlineWhateverTheSocketTimeout);
   Test('A send to a slowly draining peer ends at the deadline',
     TestSendToASlowlyDrainingPeerEndsAtTheDeadline);
+  Test('A send of everything continues while the peer makes room',
+    TestSendAllKeepsSendingToAPeerThatMakesRoom);
+  Test('A send of everything stops at the deadline and reports what went out',
+    TestSendAllStopsAtTheDeadlineWithTheBytesSent);
   Test('A send after the deadline fails at once',
     TestSendAfterTheDeadlineFailsAtOnce);
   Test('A send without a deadline sends', TestSendWithoutADeadlineSends);
@@ -319,20 +325,25 @@ begin
 end;
 
 type
-  { Reads a little at a time and never stops until its socket is closed: a
-    peer that drains the connection slowly. }
+  { Reads 4 KiB at a time, pausing between reads, until it is told to stop
+    or its socket is closed: a peer that drains the connection at its own
+    pace. }
   TSlowReader = class(TThread)
   private
     FSocket: TSocket;
+    FDelayMilliseconds: Integer;
   protected
     procedure Execute; override;
   public
-    constructor Create(const ASocket: TSocket);
+    constructor Create(const ASocket: TSocket;
+      const ADelayMilliseconds: Integer);
   end;
 
-constructor TSlowReader.Create(const ASocket: TSocket);
+constructor TSlowReader.Create(const ASocket: TSocket;
+  const ADelayMilliseconds: Integer);
 begin
   FSocket := ASocket;
+  FDelayMilliseconds := ADelayMilliseconds;
   inherited Create(False);
 end;
 
@@ -341,7 +352,8 @@ var
   Buffer: array[0..4095] of Byte;
 begin
   while not Terminated and (ReceiveSome(FSocket, Buffer) > 0) do
-    Sleep(20);
+    if FDelayMilliseconds > 0 then
+      Sleep(FDelayMilliseconds);
 end;
 
 { The peer accepts the connection and never reads, so sending fills the
@@ -403,7 +415,7 @@ begin
   SetLength(Buffer, BUFFER_LENGTH);
   FillChar(Buffer[0], BUFFER_LENGTH, $41);
   CreateConnectedPair(Client, Server);
-  Reader := TSlowReader.Create(Server);
+  Reader := TSlowReader.Create(Server, 20);
   try
     SetSendTimeout(Client, SOCKET_TIMEOUT_MILLISECONDS);
     Start := GetNanoseconds;
@@ -413,6 +425,76 @@ begin
     Expect<Boolean>(ElapsedMilliseconds < MAX_ELAPSED_MILLISECONDS).ToBe(True);
   finally
     { Closing the client ends a receive the reader is waiting in. }
+    Reader.Terminate;
+    CloseOneSocket(Client);
+    Reader.WaitFor;
+    Reader.Free;
+    CloseOneSocket(Server);
+  end;
+end;
+
+{ SecureTransport counts the bytes its write callback accepts as written, so the
+  callback sends all of its buffer: a peer that makes room (here a fast reader)
+  gets every byte, however many sends it takes, where one non-blocking send
+  takes only what fits. }
+procedure TTransportSecurityTests.TestSendAllKeepsSendingToAPeerThatMakesRoom;
+const
+  BUFFER_LENGTH = 24 * 1024 * 1024;
+var
+  Buffer: TBytes;
+  Client, Server: TSocket;
+  Reader: TSlowReader;
+  Sent: Integer;
+begin
+  Buffer := nil;
+  SetLength(Buffer, BUFFER_LENGTH);
+  FillChar(Buffer[0], BUFFER_LENGTH, $41);
+  CreateConnectedPair(Client, Server);
+  Reader := TSlowReader.Create(Server, 0);
+  try
+    Sent := SocketSendAllBefore(Client, @Buffer[0], BUFFER_LENGTH,
+      GetNanoseconds + Int64(30) * 1000000000);
+    Expect<Integer>(Sent).ToBe(BUFFER_LENGTH);
+  finally
+    Reader.Terminate;
+    CloseOneSocket(Client);
+    Reader.WaitFor;
+    Reader.Free;
+    CloseOneSocket(Server);
+  end;
+end;
+
+{ The peer drains slowly, so the buffer cannot all go by the deadline: the call
+  returns at the deadline with the count that did, more than nothing and less
+  than all of it. }
+procedure TTransportSecurityTests.TestSendAllStopsAtTheDeadlineWithTheBytesSent;
+const
+  DEADLINE_MILLISECONDS = 500;
+  EARLIEST_END_MILLISECONDS = 400;
+  MAX_ELAPSED_MILLISECONDS = 4000;
+  BUFFER_LENGTH = 64 * 1024 * 1024;
+var
+  Buffer: TBytes;
+  Client, Server: TSocket;
+  ElapsedMilliseconds, Start: Int64;
+  Reader: TSlowReader;
+  Sent: Integer;
+begin
+  Buffer := nil;
+  SetLength(Buffer, BUFFER_LENGTH);
+  FillChar(Buffer[0], BUFFER_LENGTH, $41);
+  CreateConnectedPair(Client, Server);
+  Reader := TSlowReader.Create(Server, 20);
+  try
+    Start := GetNanoseconds;
+    Sent := SocketSendAllBefore(Client, @Buffer[0], BUFFER_LENGTH,
+      Start + Int64(DEADLINE_MILLISECONDS) * 1000000);
+    ElapsedMilliseconds := (GetNanoseconds - Start) div 1000000;
+    Expect<Boolean>(Sent > 0).ToBe(True);
+    Expect<Boolean>(Sent < BUFFER_LENGTH).ToBe(True);
+    Expect<Boolean>(ElapsedMilliseconds >= EARLIEST_END_MILLISECONDS).ToBe(True);
+    Expect<Boolean>(ElapsedMilliseconds < MAX_ELAPSED_MILLISECONDS).ToBe(True);
+  finally
     Reader.Terminate;
     CloseOneSocket(Client);
     Reader.WaitFor;

@@ -71,6 +71,12 @@ function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
 function SocketSendBefore(const ASock: TSocket; const ABuffer: Pointer;
   const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
 
+{ Sends until all ALength bytes have gone or the deadline passes or a send
+  fails, each send as SocketSendBefore does. Returns how many bytes went out,
+  from 0 to ALength: fewer than ALength only when it stopped early. }
+function SocketSendAllBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+
 { Settles SChannel's encrypted input after a call that reads from it. SChannel
   decrypts and reads in place and returns what it did not consume as a
   SECBUFFER_EXTRA buffer of AExtraLength bytes: the last AExtraLength bytes of
@@ -317,6 +323,32 @@ begin
 end;
 {$ENDIF}
 
+function SocketSendAllBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+const
+  {$IFDEF MSWINDOWS}
+  { A Windows send that times out says nothing of how much of its buffer went
+    out, so no call is given more than a chunk and the count stays within one
+    chunk of the truth. }
+  MAX_SEND_LENGTH = 65536;
+  {$ELSE}
+  MAX_SEND_LENGTH = High(Integer);
+  {$ENDIF}
+var
+  Written: Integer;
+begin
+  Result := 0;
+  while Result < ALength do
+  begin
+    Written := SocketSendBefore(ASock,
+      Pointer(NativeUInt(ABuffer) + NativeUInt(Result)),
+      Min(ALength - Result, MAX_SEND_LENGTH), ADeadlineNanoseconds);
+    if Written <= 0 then
+      Exit;
+    Inc(Result, Written);
+  end;
+end;
+
 {$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
 { A receive on the blocking socket that ends by ADeadlineNanoseconds (0 for
   none): the socket's receive timeout is set to the time left before every
@@ -344,21 +376,9 @@ end;
   unknown. }
 function SendSocketAll(const ASocket: TSocket; const ABuffer: Pointer;
   const ALength: Integer; const ADeadlineNanoseconds: Int64): Boolean;
-var
-  Sent: Integer;
-  Written: Integer;
 begin
-  Sent := 0;
-  while Sent < ALength do
-  begin
-    Written := SocketSendBefore(ASocket,
-      Pointer(NativeUInt(ABuffer) + NativeUInt(Sent)), ALength - Sent,
-      ADeadlineNanoseconds);
-    if Written <= 0 then
-      Exit(False);
-    Inc(Sent, Written);
-  end;
-  Result := True;
+  Result := SocketSendAllBefore(ASocket, ABuffer, ALength,
+    ADeadlineNanoseconds) = ALength;
 end;
 {$ENDIF}
 
@@ -466,7 +486,11 @@ var
 begin
   Data := TSecureTransportData(AConnection);
   RequestedLength := ADataLength;
-  Written := SocketSendBefore(Data.Socket, AData, ADataLength,
+  { SSLWrite counts what this callback accepts as written, so it takes all of
+    it unless the deadline or the connection stops it. A send that moves part
+    of the buffer, as a non-blocking one does under backpressure, would
+    otherwise leave the rest queued while the request looks sent. }
+  Written := SocketSendAllBefore(Data.Socket, AData, ADataLength,
     Data.DeadlineNanoseconds);
   if Written > 0 then
   begin
