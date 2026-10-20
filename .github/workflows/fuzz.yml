@@ -69,21 +69,27 @@ jobs:
 
       - name: Verify the instrumented harness reports coverage
         # Guards against an instrumented build whose coverage map is empty
-        # or the same for every input, which would leave afl-fuzz unable to
-        # tell a new path from an old one.
+        # or does not follow the input, which would leave afl-fuzz unable to
+        # tell a new path from an old one. The same input can differ by a
+        # few edges between runs, so the first probe runs twice to measure
+        # that noise, and the second must reach at least 100 edges, and ten
+        # times the noise, that neither run of the first reached.
         run: |
           printf 'let a = 1;' > build/probe-a.js
           printf 'class A { #x = 2; m() { return [1, 2].map((v) => v * this.#x); } }\nnew A().m();' \
             > build/probe-b.js
-          for probe in a b; do
-            afl-showmap -q -t 5000 -o "build/probe-$probe.map" \
-              -- ./build/GocciaFuzzHarnessAfl "build/probe-$probe.js"
+          for run in a1 a2 b; do
+            afl-showmap -q -t 5000 -o "build/probe-$run.map" \
+              -- ./build/GocciaFuzzHarnessAfl "build/probe-${run%[12]}.js"
           done
-          if [ ! -s build/probe-a.map ] || cmp -s build/probe-a.map build/probe-b.map; then
-            echo "::error::The instrumented harness reports no coverage, or the same coverage for different inputs"
+          edges() { cut -d: -f1 "$@" | sort -u; }
+          noise=$(comm -3 <(edges build/probe-a1.map) <(edges build/probe-a2.map) | wc -l)
+          signal=$(comm -13 <(edges build/probe-a1.map build/probe-a2.map) <(edges build/probe-b.map) | wc -l)
+          echo "Probe edges: $(wc -l < build/probe-a1.map) and $(wc -l < build/probe-b.map); the second reaches ${signal} new; noise ${noise}"
+          if [ ! -s build/probe-a1.map ] || [ "$signal" -lt 100 ] || [ "$signal" -le $((10 * noise)) ]; then
+            echo "::error::The instrumented harness reports no coverage, or coverage that does not follow its input"
             exit 1
           fi
-          echo "Coverage: $(wc -l < build/probe-a.map) and $(wc -l < build/probe-b.map) map entries"
 
       - name: Build seed corpus
         run: bun run scripts/build-fuzz-corpus.ts --verbose
@@ -229,21 +235,27 @@ jobs:
 
       - name: Verify the instrumented harness reports coverage
         # Guards against an instrumented build whose coverage map is empty
-        # or the same for every input, which would leave afl-fuzz unable to
-        # tell a new path from an old one.
+        # or does not follow the input, which would leave afl-fuzz unable to
+        # tell a new path from an old one. The same input can differ by a
+        # few edges between runs, so the first probe runs twice to measure
+        # that noise, and the second must reach at least 100 edges, and ten
+        # times the noise, that neither run of the first reached.
         run: |
           printf 'let a = 1;' > build/probe-a.js
           printf 'class A { #x = 2; m() { return [1, 2].map((v) => v * this.#x); } }\nnew A().m();' \
             > build/probe-b.js
-          for probe in a b; do
-            afl-showmap -q -t 5000 -o "build/probe-$probe.map" \
-              -- ./build/GocciaFuzzHarnessAfl "build/probe-$probe.js"
+          for run in a1 a2 b; do
+            afl-showmap -q -t 5000 -o "build/probe-$run.map" \
+              -- ./build/GocciaFuzzHarnessAfl "build/probe-${run%[12]}.js"
           done
-          if [ ! -s build/probe-a.map ] || cmp -s build/probe-a.map build/probe-b.map; then
-            echo "::error::The instrumented harness reports no coverage, or the same coverage for different inputs"
+          edges() { cut -d: -f1 "$@" | sort -u; }
+          noise=$(comm -3 <(edges build/probe-a1.map) <(edges build/probe-a2.map) | wc -l)
+          signal=$(comm -13 <(edges build/probe-a1.map build/probe-a2.map) <(edges build/probe-b.map) | wc -l)
+          echo "Probe edges: $(wc -l < build/probe-a1.map) and $(wc -l < build/probe-b.map); the second reaches ${signal} new; noise ${noise}"
+          if [ ! -s build/probe-a1.map ] || [ "$signal" -lt 100 ] || [ "$signal" -le $((10 * noise)) ]; then
+            echo "::error::The instrumented harness reports no coverage, or coverage that does not follow its input"
             exit 1
           fi
-          echo "Coverage: $(wc -l < build/probe-a.map) and $(wc -l < build/probe-b.map) map entries"
 
       - name: Build the harness with heaptrc
         # Its own unit-output directory, per the per-program rule (see the
