@@ -1143,8 +1143,12 @@ begin
   Low := High - FINAL_BUDGETS;
   if Low < 1 then
     Low := 1;
-  for Limit := Low to High - 1 do
+  Limit := Low;
+  while Limit < High do
+  begin
     Expect<Boolean>(RestoresWithin(Limit)).ToBe(False);
+    Inc(Limit);
+  end;
   Expect<Boolean>(RestoresWithin(High)).ToBe(True);
 end;
 
