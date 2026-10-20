@@ -209,8 +209,10 @@ type
     Stressed: Boolean;
     // What ACheck returned for the last input that restored.
     LastCheck: string;
-    // This reach check is bounded by instructions, so its result is
-    // independent of the speed of a memory checker.
+    // Exercise what restored before ACheck runs, rather than instead, bound
+    // by the instruction limit alone: what ACheck counts then does not
+    // depend on how fast the machine is (under Valgrind the wall-clock
+    // timeout stopped the exercise before it called anything).
     ExerciseBeforeCheck: Boolean;
     constructor Create(const AModuleSource: string);
     destructor Destroy; override;
@@ -532,7 +534,8 @@ begin
     end;
   finally
     ClearInstructionLimit;
-    ClearExecutionTimeout;
+    if not ExerciseBeforeCheck then
+      ClearExecutionTimeout;
   end;
 end;
 
