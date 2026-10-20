@@ -3227,7 +3227,7 @@ var
   Target, Start, EndIdx, Count, I: Integer;
   Target64, Start64, End64, Count64, From64, To64: Int64;
   Direction: Integer;
-  Temp: array of TGocciaValue;
+  Buffer: TGocciaArrayValue;
   Present: array of Boolean;
   ViewRoots: TGocciaActiveRootFrame;
 begin
@@ -3313,22 +3313,24 @@ begin
 
     // Steps 10-12: Copy elements (using temp buffer for overlap safety)
     // Preserve sparsity per ES spec: delete destination when source is absent.
-    SetLength(Temp, Count);
+    // The buffer is a rooted native array: the values read are held only
+    // by it while the next reads and the writes run script code.
+    Buffer := TGocciaArrayValue.Create;
+    ViewRoots.Add(Buffer);
+    Buffer.Elements.Capacity := Count;
     SetLength(Present, Count);
     for I := 0 to Count - 1 do
     begin
       Present[I] := View.HasIndex(Start + I);
       if Present[I] then
-      begin
-        Temp[I] := View.Get(Start + I);
-        // The buffer is not a root, and the next reads run script code.
-        ViewRoots.Add(Temp[I]);
-      end;
+        Buffer.Elements.Add(View.Get(Start + I))
+      else
+        Buffer.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
     for I := 0 to Count - 1 do
     begin
       if Present[I] then
-        View.Put(Target + I, Temp[I])
+        View.Put(Target + I, Buffer.Elements[I])
       else
         View.DeleteIndex(Target + I);
     end;
