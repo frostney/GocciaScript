@@ -10,7 +10,6 @@ type
   TGocciaRegExpNamedGroup = record
     Name: string;
     Index: Integer;
-    DisjunctionPath: array of Integer;
   end;
 
   TGocciaRegExpNamedGroups = array of TGocciaRegExpNamedGroup;
