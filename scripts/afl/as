@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# The assembler FPC calls for an AFL-instrumented build:
+#
+#   fpc @config.cfg -Aas -FDscripts/afl ... source/app/GocciaFuzzHarness.dpr
+#
+# -Aas makes FPC write GNU assembly and -FD makes it look for `as` here first.
+# This script reshapes that assembly into the form AFL++'s afl-as recognises
+# and hands it on; afl-as adds a coverage trampoline at every function entry,
+# branch target and conditional branch, then runs the real `as`. Unchanged
+# FPC output gives afl-as nothing to instrument, for two reasons:
+#
+# - FPC opens each procedure with `.section .text.n_<name>` at column 0, and
+#   afl-as enters a text section only on a tab-indented `.section<TAB>.text`.
+# - FPC names its jump targets `.Lj<n>`, and afl-as counts only `.L<digit>`
+#   labels as branch targets. `.L0j<n>` is still unique in the file: no other
+#   FPC label starts with `.L0`. String data is left as it is.
+#
+# afl-as comes from AFL_PATH (default /usr/lib/afl, where Debian and Ubuntu
+# install it). FPC passes the source file last.
+set -euo pipefail
+
+afl_as="${AFL_PATH:-/usr/lib/afl}/afl-as"
+if [ ! -x "$afl_as" ]; then
+  echo "scripts/afl/as: no afl-as at $afl_as (install AFL++ or set AFL_PATH)" >&2
+  exit 1
+fi
+
+src="${!#}"
+tmp=$(mktemp "${TMPDIR:-/tmp}/goccia-afl-XXXXXX.s")
+trap 'rm -f "$tmp"' EXIT
+sed -E \
+  -e 's/^\.section /\t.section\t/' \
+  -e '/^[[:space:]]*\.(ascii|asciz|string)[[:space:]]/!s/\.Lj([0-9]+)/.L0j\1/g' \
+  "$src" > "$tmp"
+# afl-as passes a file outside the temporary directory through untouched
+# unless told otherwise.
+AFL_AS_FORCE_INSTRUMENT=1 AFL_QUIET=1 "$afl_as" "${@:1:$#-1}" "$tmp"
