@@ -404,10 +404,9 @@ begin
       Source := ToObject(SourceArg);
       if Assigned(GC) and not (SourceArg is TGocciaObjectValue) then
         GC.AddTempRoot(Source);
-      { The key lists are native locals, and each key's getter or trap runs
-        guest code: a key the ownKeys trap made, or a symbol a getter deletes
-        from the source, is held only by the list while the next keys are
-        read. }
+      { The ownKeys trap's key list is a native local, and each key's traps
+        run guest code: a key the trap made is held only by the list while
+        the keys before it are copied. }
       KeyRoots.Initialize;
       try
         // ES2026 §20.1.2.1 step 3.a.ii: [[OwnPropertyKeys]].
@@ -434,8 +433,6 @@ begin
             AssignStringKey(PropertyNames[J]);
 
           SymbolKeys := Source.GetOwnSymbols;
-          for J := 0 to High(SymbolKeys) do
-            KeyRoots.Add(SymbolKeys[J]);
           for J := 0 to High(SymbolKeys) do
             AssignSymbolKey(SymbolKeys[J]);
         end;

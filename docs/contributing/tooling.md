@@ -523,10 +523,14 @@ probe that does finds more: call every method and getter of each builtin with
 receivers (a number held in a register, a primitive through `.call`, a
 Proxy) and arguments whose coercions, getters, callbacks and traps make a
 fresh string first (`({ valueOf() { (s + "x").slice(0, -1); return 2; } })`),
-under the same `-Facmem` build and memcheck. Issue #1834's probes found the
-unrooted number receiver of every native call, `fill`'s wrapper and coerced
-value, and the key lists of `Object.assign`, `Object.getOwnPropertySymbols`
-and `Promise.allKeyed` this way.
+under the same `-Facmem` build and memcheck. Giving the
+primitives' prototypes an allocating getter or a Proxy in their chain
+reaches the wrappers builtins make with `ToObject`. Issue #1834's probes
+found the unrooted number receiver of every native call (and of a callable
+Proxy's `apply` trap), the receiver of a Proxy `get` trap, `fill`'s wrapper
+and coerced value, Intl options given as a primitive, and the key lists of
+`Object.assign`, `Object.getOwnPropertySymbols` and `Promise.allKeyed` this
+way.
 
 ## Depth and Fuzz Probe
 

@@ -3749,7 +3749,7 @@ var
   Values: TGocciaValueList;
   SrcObj: TGocciaObjectValue;
   SourceRoot, MapFnRoot, ThisRoot, ResultRoot, IteratorRoot,
-  NextMethodRoot: TGocciaTempRoot;
+  NextMethodRoot, SrcObjRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
 begin
@@ -3777,6 +3777,7 @@ begin
   InitializeTempRoot(MapFnRoot);
   InitializeTempRoot(ThisRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(SrcObjRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
   if HasMapFn then
   begin
@@ -3923,6 +3924,9 @@ begin
 
     // Step 7: array-like path — ToObject(source), LengthOfArrayLike, indexed Get
     SrcObj := ToObject(Source);
+    // A wrapper for a primitive source is held only here while its length
+    // and elements are read, the constructor runs and the mapper runs.
+    AddTempRootIfNeeded(SrcObjRoot, SrcObj);
     Len := LengthOfArrayLike(SrcObj);
     NewTA := CreateTypedArrayFromConstructor(ConstructorValue,
       'TypedArray.from', Len);
@@ -3949,6 +3953,7 @@ begin
       RemoveTempRootIfNeeded(ResultRoot);
     end;
   finally
+    RemoveTempRootIfNeeded(SrcObjRoot);
     RemoveTempRootIfNeeded(ThisRoot);
     RemoveTempRootIfNeeded(MapFnRoot);
     RemoveTempRootIfNeeded(SourceRoot);
