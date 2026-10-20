@@ -78,6 +78,10 @@ type
     procedure TestRuntimeEvalProfileParity;
     procedure TestRelativeBufferedEntryAddress;
     procedure TestExplicitArtifactAfterPreferenceChange;
+    procedure AssertBytecodePreservesDetection(const AMode: Integer;
+      const AThrow: Boolean);
+    procedure TestBytecodeValidationPreservesDetection;
+    procedure TestBytecodeRunsPreserveDetection;
   public
     procedure SetupTests; override;
   end;
@@ -89,6 +93,10 @@ end;
 
 procedure TEngineBytecodeTests.SetupTests;
 begin
+  Test('Bytecode validation leaves automatic source detection unchanged',
+    TestBytecodeValidationPreservesDetection);
+  Test('Bytecode runs and failures preserve later source detection',
+    TestBytecodeRunsPreserveDetection);
   Test('Explicit artifacts survive preference changes during resolution',
     TestExplicitArtifactAfterPreferenceChange);
   Test('Relative buffered entry addresses use one canonical registration address',
@@ -957,6 +965,89 @@ begin
     Provider.Free;
     Resolver.Free;
     FS.Free;
+  end;
+end;
+
+procedure TEngineBytecodeTests.AssertBytecodePreservesDetection(
+  const AMode: Integer; const AThrow: Boolean);
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Module: TGocciaBytecodeModule;
+  Bytes: TBytes;
+  Body, FailureValue: string;
+  Failed: Boolean;
+begin
+  Body := 'globalThis.bytecodeThis = this === undefined;';
+  if AThrow then
+    Body := Body + 'throw 17;';
+  Bytes := CompileBuffer(Body, '/compile/library.mjs', [cfVar], False,
+    AMode in [0, 1, 3]);
+  Source := TStringList.Create;
+  Module := nil;
+  Engine := nil;
+  try
+    Source.Text := 'var laterValue = 42;' +
+      'globalThis.laterThis = this === globalThis;';
+    Engine := TGocciaEngine.Create(RuntimeAddress('detect.js'), Source);
+    Engine.Compatibility := [cfVar];
+    Engine.GlobalBackedTopLevel := True;
+    Expect<Boolean>(Engine.SourceType = stDetect).ToBe(True);
+    Module := LoadModuleFromBuffer(Bytes);
+    Failed := False;
+    FailureValue := '';
+    try
+      case AMode of
+        0: Engine.ValidateBytecodeModule(Module);
+        1, 2: Engine.RunBytecodeBuffer(Bytes, RuntimeAddress('artifact.js'));
+        3, 4: Engine.RunModuleForSourceType(Module, RuntimeAddress('artifact.js'));
+        5: Engine.RunModule(Module);
+        6: Engine.RunModuleInScope(Module, Engine.GlobalScope);
+      end;
+    except
+      on E: TGocciaThrowValue do
+      begin
+        Failed := True;
+        FailureValue := E.Value.ToStringLiteral.Value;
+      end;
+      on E: EGocciaBytecodeThrow do
+      begin
+        Failed := True;
+        FailureValue := E.ThrownValue.ToStringLiteral.Value;
+      end;
+    end;
+    Expect<Boolean>(Failed).ToBe(AThrow);
+    if AThrow then
+      Expect<string>(FailureValue).ToBe('17');
+    Expect<Boolean>(Engine.SourceType = stDetect).ToBe(True);
+    if AMode in [1..4] then
+      Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+        .GetProperty('bytecodeThis').ToStringLiteral.Value).ToBe('true');
+    Engine.Execute;
+    Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('laterThis').ToStringLiteral.Value).ToBe('true');
+    Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('laterValue').ToStringLiteral.Value).ToBe('42');
+  finally
+    Engine.Free;
+    Module.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TEngineBytecodeTests.TestBytecodeValidationPreservesDetection;
+begin
+  AssertBytecodePreservesDetection(0, False);
+end;
+
+procedure TEngineBytecodeTests.TestBytecodeRunsPreserveDetection;
+var
+  Mode: Integer;
+begin
+  for Mode := 1 to 6 do
+  begin
+    AssertBytecodePreservesDetection(Mode, False);
+    AssertBytecodePreservesDetection(Mode, True);
   end;
 end;
 

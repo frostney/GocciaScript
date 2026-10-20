@@ -442,7 +442,7 @@ type
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaBytecodeModule;
     function CompileImportableModule(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
-    procedure ValidateBytecodeModule(const AModule: TGocciaBytecodeModule);
+    function ValidateBytecodeModule(const AModule: TGocciaBytecodeModule): TGocciaSourceType;
     procedure RegisterBytecodeModule(const AAddress: string;
       const ABytes: TBytes; const ABaseAddress: string = '');
     function RunBytecodeBuffer(const ABytes: TBytes;
@@ -609,9 +609,9 @@ type
     { The entry's goal. stDetect (the default unless the file name is .mjs or
       .mts) leaves it to the source (ADR 0140): Execute settles it for each
       run. A host that parses the entry itself assigns the goal its parse
-      settled (TGocciaSourcePipelineResult.SourceType) before CompileModule
-      and RunModuleForSourceType, which run anything but stModule as a
-      Script. }
+      settled (TGocciaSourcePipelineResult.SourceType) before CompileModule.
+      Bytecode execution settles stDetect from the artifact's profile
+      without changing this setting. }
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
     property StrictTypes: Boolean read FStrictTypes write SetStrictTypes;
     property Shims: TStringList read FShims;
@@ -3840,6 +3840,7 @@ function TGocciaEngine.RunModule(
   const AModule: TGocciaBytecodeModule): TGocciaValue;
 var
   OptionsScope: TGocciaSourcePipelineOptionsScope;
+  RunSourceType: TGocciaSourceType;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
   PreviousRunningEngine: TGocciaEngine;
@@ -3853,8 +3854,11 @@ begin
   Completed := False;
   OptionsScope := nil;
   try
+    RunSourceType := FSourceType;
+    if Assigned(AModule) and AModule.WasLoadedFromBytecode then
+      RunSourceType := ValidateBytecodeModule(AModule);
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(
-      SourcePipelineOptions(FSourceType));
+      SourcePipelineOptions(RunSourceType));
     Result := RunBytecodeModule(AModule, nil);
     GC := TGarbageCollector.Instance;
     if Assigned(Result) and Assigned(GC) then
@@ -3881,6 +3885,7 @@ function TGocciaEngine.RunModuleInScope(
   const AScope: TGocciaScope): TGocciaValue;
 var
   OptionsScope: TGocciaSourcePipelineOptionsScope;
+  RunSourceType: TGocciaSourceType;
   GC: TGarbageCollector;
   SavedGlobalScope: TGocciaScope;
   FloatingPointState: TGocciaFloatingPointState;
@@ -3895,8 +3900,11 @@ begin
   Completed := False;
   OptionsScope := nil;
   try
+    RunSourceType := FSourceType;
+    if Assigned(AModule) and AModule.WasLoadedFromBytecode then
+      RunSourceType := ValidateBytecodeModule(AModule);
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(
-      SourcePipelineOptions(FSourceType));
+      SourcePipelineOptions(RunSourceType));
     SavedGlobalScope := FVM.GlobalScope;
     FVM.GlobalScope := AScope;
     try
@@ -3951,8 +3959,9 @@ var
   PrevScope: TGocciaDiagnosticSourceScope;
   SavedGlobalBackedTopLevel: Boolean;
   SavedRuntimeModule: TGocciaModule;
+  RunSourceType: TGocciaSourceType;
 begin
-  ValidateBytecodeModule(AModule);
+  RunSourceType := ValidateBytecodeModule(AModule);
   if Assigned(AModule.LinkPlan) then
   begin
     FModuleLoader.RegisterPrecompiledModule(EntryModulePath(FModuleLoader, AFileName),
@@ -3967,7 +3976,7 @@ begin
   PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
     FModuleLoader.DiagnosticScope);
   try
-    if FSourceType = stModule then
+    if RunSourceType = stModule then
     begin
       ModuleScope := FGlobalScope.CreateChild(skModule,
         'Module:' + AFileName);
@@ -4141,7 +4150,8 @@ begin
   end;
 end;
 
-procedure TGocciaEngine.ValidateBytecodeModule(const AModule: TGocciaBytecodeModule);
+function TGocciaEngine.ValidateBytecodeModule(
+  const AModule: TGocciaBytecodeModule): TGocciaSourceType;
 var
   Goal: TGocciaSourceType;
   Expected: TGocciaCompileProfile;
@@ -4157,8 +4167,7 @@ begin
   Expected := BuildBytecodeCompileProfile(SourcePipelineOptions(Goal), FStrictTypes);
   if not AModule.HasCompileProfile or not AModule.CompileProfile.Matches(Expected) then
     raise EArgumentException.Create('Bytecode compile profile does not match the engine');
-  if FSourceType = stDetect then
-    FSourceType := Goal;
+  Result := Goal;
 end;
 
 procedure TGocciaEngine.ValidateImportedBytecode(const AModule: TGocciaBytecodeModule);

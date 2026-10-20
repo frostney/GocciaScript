@@ -67,10 +67,11 @@ module read capabilities still apply.
 The artifact records the effective compatibility switches, preprocessors,
 strict-types setting, unsupported-feature warning recovery and script/module
 goal. Execution refuses a profile
-mismatch before the module body runs. With `stDetect`, an entry adopts the
-recorded goal; an explicit conflicting goal is an error. Use
-`Engine.ValidateBytecodeModule(Module)` before retaining a low-level loaded
-module or running host setup that depends on its acceptance.
+mismatch before the module body runs. With `stDetect`, each entry uses the
+recorded goal without changing `Engine.SourceType`; an explicit conflicting
+goal is an error. Use `Engine.ValidateBytecodeModule(Module)` before retaining a low-level loaded
+module or running host setup that depends on its acceptance. It returns the
+settled goal without changing engine settings.
 
 The older `RunModule` and `RunModuleInScope` APIs also check profiles for
 loaded artifacts. They accept standalone bytecode only. Use
