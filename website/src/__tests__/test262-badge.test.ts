@@ -2,17 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { TEST262_DASHBOARD_CACHE_CONTROL } from "@/lib/test262-dashboard";
 
 describe("test262 badge endpoint", () => {
-  test("returns the latest report figure or a successful dashboard fallback", () => {
+  test("returns the latest headline or a successful dashboard fallback", () => {
     // Keep loader fixtures in a separate process so other suites use the real loader.
     const script = `
       import { mock } from "bun:test";
       const fixtures = [
-        { latest: { summary: { passed: 2, totalRun: 3 } } },
-        { status: "empty", latest: null },
-        { status: "error", latest: null },
+        { passed: 2, totalRun: 3 },
+        null,
+        null,
       ];
       mock.module(${JSON.stringify(import.meta.resolve("@/lib/test262-dashboard"))}, () => ({
-        loadTest262DashboardData: async () => fixtures.shift(),
+        loadTest262Headline: async () => fixtures.shift(),
         TEST262_DASHBOARD_CACHE_CONTROL: ${JSON.stringify(TEST262_DASHBOARD_CACHE_CONTROL)},
       }));
       const { GET } = await import(${JSON.stringify(import.meta.resolve("@/app/api/test262/badge/route"))});

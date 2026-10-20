@@ -9,7 +9,7 @@ import { Analytics } from "@/components/analytics";
 import { SiteShell } from "@/components/site-shell";
 import { WebMcpTools } from "@/components/webmcp-tools";
 import { getSiteUrlObject, SITE_DESCRIPTION, SITE_TITLE } from "@/lib/site-url";
-import { loadTest262DashboardData } from "@/lib/test262-dashboard";
+import { loadTest262Headline } from "@/lib/test262-dashboard";
 import { compatibilityPercent } from "@/lib/test262-percent";
 import "./globals.css";
 
@@ -90,9 +90,9 @@ export const metadata: Metadata = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const { latest } = await loadTest262DashboardData();
-  const conformancePercent = latest
-    ? compatibilityPercent(latest.summary.passed, latest.summary.totalRun)
+  const headline = await loadTest262Headline();
+  const conformancePercent = headline
+    ? compatibilityPercent(headline.passed, headline.totalRun)
     : null;
   return (
     <html

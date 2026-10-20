@@ -11,6 +11,7 @@ import {
   normalizeTest262Report,
   rankGroupCoverage,
   readNewestValidTest262Report,
+  test262HeadlineFromTimeline,
 } from "@/lib/test262-dashboard";
 
 function buildZip(name: string, text: string): Uint8Array {
@@ -45,6 +46,75 @@ function buildZip(name: string, text: string): Uint8Array {
 
   return Buffer.concat([local, compressed, central, eocd]);
 }
+
+describe("test262 headline from timeline", () => {
+  const older = {
+    summary: {
+      totalDiscovered: 3,
+      totalRun: 3,
+      passed: 2,
+      failed: 1,
+      wrapperInfraFailures: 0,
+      timeouts: 0,
+      durationSeconds: 1,
+      byCategory: [],
+    },
+  };
+
+  test("returns null for an empty timeline", () => {
+    expect(test262HeadlineFromTimeline([])).toBeNull();
+  });
+
+  test("uses the last timeline point", () => {
+    const newest = {
+      summary: { ...older.summary, passed: 4, totalRun: 5 },
+    };
+    expect(test262HeadlineFromTimeline([older, newest])).toEqual({
+      passed: 4,
+      totalRun: 5,
+    });
+  });
+
+  test("skips zero totalRun and returns null if no usable points remain", () => {
+    const empty = {
+      summary: { ...older.summary, passed: 0, totalRun: 0 },
+    };
+    expect(test262HeadlineFromTimeline([older, empty])).toEqual({
+      passed: 2,
+      totalRun: 3,
+    });
+    expect(test262HeadlineFromTimeline([empty])).toBeNull();
+  });
+
+  test.each([
+    undefined,
+    null,
+    {},
+    { passed: "2", totalRun: 3 },
+    { passed: 2, totalRun: "3" },
+    { passed: -1, totalRun: 3 },
+    { passed: 2, totalRun: -1 },
+    { passed: Number.NaN, totalRun: 3 },
+    { passed: 2, totalRun: Number.NaN },
+    { passed: Number.POSITIVE_INFINITY, totalRun: 3 },
+    { passed: 2, totalRun: Number.POSITIVE_INFINITY },
+  ])("skips malformed summary %j", (summary) => {
+    const malformed = { summary } as typeof older;
+    expect(test262HeadlineFromTimeline([older, malformed])).toEqual({
+      passed: 2,
+      totalRun: 3,
+    });
+    expect(test262HeadlineFromTimeline([malformed])).toBeNull();
+  });
+
+  test("accepts a valid zero pass count", () => {
+    const newest = { summary: { ...older.summary, passed: 0 } };
+    expect(test262HeadlineFromTimeline([older, newest])).toEqual({
+      passed: 0,
+      totalRun: 3,
+    });
+  });
+});
 
 describe("test262 dashboard data helpers", () => {
   test("normalizes report JSON and ranks path groups", () => {

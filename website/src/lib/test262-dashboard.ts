@@ -73,6 +73,8 @@ export type Test262TimelinePoint = Test262RunMeta & {
   summary: Test262SuiteSummary;
 };
 
+export type Test262Headline = Pick<Test262SuiteSummary, "passed" | "totalRun">;
+
 export type Test262GroupCoverage = {
   key: string;
   attempted: number;
@@ -363,6 +365,42 @@ export async function readNewestValidTest262Report(
   }
   return { latestReport: null, usableTimeline: timeline };
 }
+
+export function test262HeadlineFromTimeline(
+  timeline: readonly Pick<Test262TimelinePoint, "summary">[],
+): Test262Headline | null {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const summary = timeline[i]?.summary;
+    if (
+      !summary ||
+      !Number.isFinite(summary.passed) ||
+      summary.passed < 0 ||
+      !Number.isFinite(summary.totalRun) ||
+      summary.totalRun <= 0
+    ) {
+      continue;
+    }
+    return { passed: summary.passed, totalRun: summary.totalRun };
+  }
+  return null;
+}
+
+async function loadUncachedTest262Headline(): Promise<Test262Headline | null> {
+  try {
+    return test262HeadlineFromTimeline(await listTest262BlobDailyRuns());
+  } catch {
+    return null;
+  }
+}
+
+export const loadTest262Headline = unstable_cache(
+  loadUncachedTest262Headline,
+  ["test262-headline"],
+  {
+    revalidate: TEST262_DASHBOARD_CACHE_SECONDS,
+    tags: ["test262-dashboard"],
+  },
+);
 
 async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData> {
   try {
