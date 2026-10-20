@@ -600,6 +600,18 @@ begin
     ' Temporal.PlainYearMonth.from("2024-01").subtract({ years: 1 }, options),' + LineEnding +
     ' Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]").add({ months: 1, hours: 2 }, options),' + LineEnding +
     ' Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]").subtract("P1MT2H", options)].map(String);');
+  // compare held its first operand, made from a string, only in a local
+  // while the second one's getters ran.
+  RunStressed('temporal-compare.js',
+    'const churn = (v) => [String(v) + "~", { v }];' + LineEnding +
+    '[Temporal.Duration.compare("PT1H", { get hours() { churn(1); return 2; } }),' + LineEnding +
+    ' Temporal.Instant.compare("2024-01-01T00:00Z", { toString() { churn(1); return "2024-01-02T00:00Z"; } }),' + LineEnding +
+    ' Temporal.PlainDate.compare("2024-01-01", { year: 2024, get month() { churn(1); return 2; }, day: 1 }),' + LineEnding +
+    ' Temporal.PlainTime.compare("10:00", { get hour() { churn(1); return 11; } }),' + LineEnding +
+    ' Temporal.PlainDateTime.compare("2024-01-01T10:00", { year: 2024, month: 1, get day() { churn(1); return 2; } }),' + LineEnding +
+    ' Temporal.PlainYearMonth.compare("2024-01", { year: 2024, get month() { churn(1); return 2; } }),' + LineEnding +
+    ' Temporal.ZonedDateTime.compare("2024-01-01T00:00[UTC]",' + LineEnding +
+    '   { year: 2024, month: 1, get day() { churn(1); return 2; }, timeZone: "UTC" })];');
   // A field read from a property bag (a getter's fresh number) was held only
   // by a local while the next field's getter made a string.
   RunStressed('temporal-from-bag.js',

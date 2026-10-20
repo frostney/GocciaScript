@@ -461,6 +461,7 @@ end;
 function TGocciaTemporalBuiltin.DurationCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D1, D2: TGocciaTemporalDurationValue;
+  Roots: TGocciaActiveRootFrame;
   Comparison: Integer;
 
   function CoerceDuration(const AArg: TGocciaValue): TGocciaTemporalDurationValue;
@@ -480,16 +481,25 @@ var
   end;
 
 begin
-  D1 := CoerceDuration(AArgs.GetElement(0));
-  D2 := CoerceDuration(AArgs.GetElement(1));
+  // The first operand can be a value made from a string or a property bag,
+  // held only here while the second is coerced, which can run getters.
+  Roots.Initialize;
+  try
+    D1 := CoerceDuration(AArgs.GetElement(0));
+    Roots.Add(D1);
+    D2 := CoerceDuration(AArgs.GetElement(1));
+    Roots.Add(D2);
 
-  Comparison := CompareTemporalDurations(D1, D2, AArgs.GetElement(2));
-  if Comparison < 0 then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if Comparison > 0 then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else
-    Result := TGocciaNumberLiteralValue.ZeroValue;
+    Comparison := CompareTemporalDurations(D1, D2, AArgs.GetElement(2));
+    if Comparison < 0 then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if Comparison > 0 then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else
+      Result := TGocciaNumberLiteralValue.ZeroValue;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { Instant }
@@ -601,20 +611,30 @@ end;
 function TGocciaTemporalBuiltin.InstantCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   I1, I2: TGocciaTemporalInstantValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  I1 := CoerceTemporalInstant(AArgs.GetElement(0), 'Temporal.Instant.compare');
-  I2 := CoerceTemporalInstant(AArgs.GetElement(1), 'Temporal.Instant.compare');
+  // The first operand can be a value made from a string or a property bag,
+  // held only here while the second is coerced, which can run getters.
+  Roots.Initialize;
+  try
+    I1 := CoerceTemporalInstant(AArgs.GetElement(0), 'Temporal.Instant.compare');
+    Roots.Add(I1);
+    I2 := CoerceTemporalInstant(AArgs.GetElement(1), 'Temporal.Instant.compare');
+    Roots.Add(I2);
 
-  if I1.EpochMilliseconds < I2.EpochMilliseconds then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if I1.EpochMilliseconds > I2.EpochMilliseconds then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else if I1.SubMillisecondNanoseconds < I2.SubMillisecondNanoseconds then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if I1.SubMillisecondNanoseconds > I2.SubMillisecondNanoseconds then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else
-    Result := TGocciaNumberLiteralValue.ZeroValue;
+    if I1.EpochMilliseconds < I2.EpochMilliseconds then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if I1.EpochMilliseconds > I2.EpochMilliseconds then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else if I1.SubMillisecondNanoseconds < I2.SubMillisecondNanoseconds then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if I1.SubMillisecondNanoseconds > I2.SubMillisecondNanoseconds then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else
+      Result := TGocciaNumberLiteralValue.ZeroValue;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { PlainDate }
@@ -819,6 +839,7 @@ end;
 function TGocciaTemporalBuiltin.PlainDateCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   D1, D2: TGocciaTemporalPlainDateValue;
+  Roots: TGocciaActiveRootFrame;
   CoerceArgs: TGocciaArgumentsCollection;
 
   function CoerceDateForCompare(const AArg: TGocciaValue): TGocciaTemporalPlainDateValue;
@@ -835,11 +856,20 @@ var
   end;
 
 begin
-  D1 := CoerceDateForCompare(AArgs.GetElement(0));
-  D2 := CoerceDateForCompare(AArgs.GetElement(1));
+  // The first operand can be a value made from a string or a property bag,
+  // held only here while the second is coerced, which can run getters.
+  Roots.Initialize;
+  try
+    D1 := CoerceDateForCompare(AArgs.GetElement(0));
+    Roots.Add(D1);
+    D2 := CoerceDateForCompare(AArgs.GetElement(1));
+    Roots.Add(D2);
 
-  Result := TGocciaNumberLiteralValue.Create(
-    CompareDates(D1.Year, D1.Month, D1.Day, D2.Year, D2.Month, D2.Day));
+    Result := TGocciaNumberLiteralValue.Create(
+      CompareDates(D1.Year, D1.Month, D1.Day, D2.Year, D2.Month, D2.Day));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { PlainTime }
@@ -1001,6 +1031,7 @@ end;
 function TGocciaTemporalBuiltin.PlainTimeCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   T1, T2: TGocciaTemporalPlainTimeValue;
+  Roots: TGocciaActiveRootFrame;
   CoerceArgs: TGocciaArgumentsCollection;
 
   function CoerceTime(const AArg: TGocciaValue): TGocciaTemporalPlainTimeValue;
@@ -1017,12 +1048,21 @@ var
   end;
 
 begin
-  T1 := CoerceTime(AArgs.GetElement(0));
-  T2 := CoerceTime(AArgs.GetElement(1));
+  // The first operand can be a value made from a string or a property bag,
+  // held only here while the second is coerced, which can run getters.
+  Roots.Initialize;
+  try
+    T1 := CoerceTime(AArgs.GetElement(0));
+    Roots.Add(T1);
+    T2 := CoerceTime(AArgs.GetElement(1));
+    Roots.Add(T2);
 
-  Result := TGocciaNumberLiteralValue.Create(
-    CompareTimes(T1.Hour, T1.Minute, T1.Second, T1.Millisecond, T1.Microsecond, T1.Nanosecond,
-                 T2.Hour, T2.Minute, T2.Second, T2.Millisecond, T2.Microsecond, T2.Nanosecond));
+    Result := TGocciaNumberLiteralValue.Create(
+      CompareTimes(T1.Hour, T1.Minute, T1.Second, T1.Millisecond, T1.Microsecond, T1.Nanosecond,
+                   T2.Hour, T2.Minute, T2.Second, T2.Millisecond, T2.Microsecond, T2.Nanosecond));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { PlainDateTime }
@@ -1276,6 +1316,7 @@ end;
 function TGocciaTemporalBuiltin.PlainDateTimeCompare(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   DT1, DT2: TGocciaTemporalPlainDateTimeValue;
+  Roots: TGocciaActiveRootFrame;
   Cmp: Integer;
   CoerceArgs: TGocciaArgumentsCollection;
 
@@ -1293,15 +1334,24 @@ var
   end;
 
 begin
-  DT1 := CoerceDateTimeForCompare(AArgs.GetElement(0));
-  DT2 := CoerceDateTimeForCompare(AArgs.GetElement(1));
+  // The first operand can be a value made from a string or a property bag,
+  // held only here while the second is coerced, which can run getters.
+  Roots.Initialize;
+  try
+    DT1 := CoerceDateTimeForCompare(AArgs.GetElement(0));
+    Roots.Add(DT1);
+    DT2 := CoerceDateTimeForCompare(AArgs.GetElement(1));
+    Roots.Add(DT2);
 
-  Cmp := CompareDates(DT1.Year, DT1.Month, DT1.Day, DT2.Year, DT2.Month, DT2.Day);
-  if Cmp = 0 then
-    Cmp := CompareTimes(DT1.Hour, DT1.Minute, DT1.Second, DT1.Millisecond, DT1.Microsecond, DT1.Nanosecond,
-                        DT2.Hour, DT2.Minute, DT2.Second, DT2.Millisecond, DT2.Microsecond, DT2.Nanosecond);
+    Cmp := CompareDates(DT1.Year, DT1.Month, DT1.Day, DT2.Year, DT2.Month, DT2.Day);
+    if Cmp = 0 then
+      Cmp := CompareTimes(DT1.Hour, DT1.Minute, DT1.Second, DT1.Millisecond, DT1.Microsecond, DT1.Nanosecond,
+                          DT2.Hour, DT2.Minute, DT2.Second, DT2.Millisecond, DT2.Microsecond, DT2.Nanosecond);
 
-  Result := TGocciaNumberLiteralValue.Create(Cmp);
+    Result := TGocciaNumberLiteralValue.Create(Cmp);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { PlainYearMonth }
@@ -1509,6 +1559,7 @@ function TGocciaTemporalBuiltin.PlainYearMonthCompare(const AArgs: TGocciaArgume
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   YM1, YM2: TGocciaTemporalPlainYearMonthValue;
+  Roots: TGocciaActiveRootFrame;
   CoerceArgs: TGocciaArgumentsCollection;
 
   function CoerceYearMonthForCompare(const AArg: TGocciaValue): TGocciaTemporalPlainYearMonthValue;
@@ -1525,23 +1576,32 @@ var
   end;
 
 begin
-  YM1 := CoerceYearMonthForCompare(AArgs.GetElement(0));
-  YM2 := CoerceYearMonthForCompare(AArgs.GetElement(1));
+  // The first operand can be a value made from a string or a property bag,
+  // held only here while the second is coerced, which can run getters.
+  Roots.Initialize;
+  try
+    YM1 := CoerceYearMonthForCompare(AArgs.GetElement(0));
+    Roots.Add(YM1);
+    YM2 := CoerceYearMonthForCompare(AArgs.GetElement(1));
+    Roots.Add(YM2);
 
-  if YM1.Year < YM2.Year then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if YM1.Year > YM2.Year then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else if YM1.Month < YM2.Month then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if YM1.Month > YM2.Month then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else if YM1.ReferenceDay < YM2.ReferenceDay then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if YM1.ReferenceDay > YM2.ReferenceDay then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else
-    Result := TGocciaNumberLiteralValue.ZeroValue;
+    if YM1.Year < YM2.Year then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if YM1.Year > YM2.Year then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else if YM1.Month < YM2.Month then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if YM1.Month > YM2.Month then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else if YM1.ReferenceDay < YM2.ReferenceDay then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if YM1.ReferenceDay > YM2.ReferenceDay then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else
+      Result := TGocciaNumberLiteralValue.ZeroValue;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { PlainMonthDay }
@@ -2106,6 +2166,7 @@ function TGocciaTemporalBuiltin.PlainMonthDayCompare(const AArgs: TGocciaArgumen
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   MD1, MD2: TGocciaTemporalPlainMonthDayValue;
+  Roots: TGocciaActiveRootFrame;
   CoerceArgs: TGocciaArgumentsCollection;
 
   function CoerceMD(const AArg: TGocciaValue): TGocciaTemporalPlainMonthDayValue;
@@ -2122,19 +2183,28 @@ var
   end;
 
 begin
-  MD1 := CoerceMD(AArgs.GetElement(0));
-  MD2 := CoerceMD(AArgs.GetElement(1));
+  // The first operand can be a value made from a string or a property bag,
+  // held only here while the second is coerced, which can run getters.
+  Roots.Initialize;
+  try
+    MD1 := CoerceMD(AArgs.GetElement(0));
+    Roots.Add(MD1);
+    MD2 := CoerceMD(AArgs.GetElement(1));
+    Roots.Add(MD2);
 
-  if MD1.Month < MD2.Month then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if MD1.Month > MD2.Month then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else if MD1.Day < MD2.Day then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if MD1.Day > MD2.Day then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else
-    Result := TGocciaNumberLiteralValue.ZeroValue;
+    if MD1.Month < MD2.Month then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if MD1.Month > MD2.Month then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else if MD1.Day < MD2.Day then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if MD1.Day > MD2.Day then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else
+      Result := TGocciaNumberLiteralValue.ZeroValue;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { ZonedDateTime }
@@ -2211,20 +2281,30 @@ function TGocciaTemporalBuiltin.ZonedDateTimeCompare(const AArgs: TGocciaArgumen
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Z1, Z2: TGocciaTemporalZonedDateTimeValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  Z1 := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'Temporal.ZonedDateTime.compare');
-  Z2 := CoerceTemporalZonedDateTime(AArgs.GetElement(1), 'Temporal.ZonedDateTime.compare');
+  // The first operand can be a value made from a string or a property bag,
+  // held only here while the second is coerced, which can run getters.
+  Roots.Initialize;
+  try
+    Z1 := CoerceTemporalZonedDateTime(AArgs.GetElement(0), 'Temporal.ZonedDateTime.compare');
+    Roots.Add(Z1);
+    Z2 := CoerceTemporalZonedDateTime(AArgs.GetElement(1), 'Temporal.ZonedDateTime.compare');
+    Roots.Add(Z2);
 
-  if Z1.EpochMilliseconds < Z2.EpochMilliseconds then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if Z1.EpochMilliseconds > Z2.EpochMilliseconds then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else if Z1.SubMillisecondNanoseconds < Z2.SubMillisecondNanoseconds then
-    Result := TGocciaNumberLiteralValue.Create(-1)
-  else if Z1.SubMillisecondNanoseconds > Z2.SubMillisecondNanoseconds then
-    Result := TGocciaNumberLiteralValue.Create(1)
-  else
-    Result := TGocciaNumberLiteralValue.ZeroValue;
+    if Z1.EpochMilliseconds < Z2.EpochMilliseconds then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if Z1.EpochMilliseconds > Z2.EpochMilliseconds then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else if Z1.SubMillisecondNanoseconds < Z2.SubMillisecondNanoseconds then
+      Result := TGocciaNumberLiteralValue.Create(-1)
+    else if Z1.SubMillisecondNanoseconds > Z2.SubMillisecondNanoseconds then
+      Result := TGocciaNumberLiteralValue.Create(1)
+    else
+      Result := TGocciaNumberLiteralValue.ZeroValue;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 { Temporal.Now }
