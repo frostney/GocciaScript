@@ -612,13 +612,30 @@ begin
   try
     Module.Text := 'throw new Error("evaluation " + "failed");';
     Module.SaveToFile(IncludeTrailingPathDelimiter(Directory) + 'errored.js');
+    Module.Text := 'throw new Error("deferred " + "failed");' + LineEnding +
+      'export const unreached = true;';
+    Module.SaveToFile(IncludeTrailingPathDelimiter(Directory) + 'deferred.js');
+    // Nothing in the script keeps the first error, so between the two reads
+    // only the loader's record of it does; the second one rethrows it.
     RunStressed(IncludeTrailingPathDelimiter(Directory) + 'main.mjs',
-      'const second = import("./errored.js").catch((first) => first)' + LineEnding +
-      '  .then((first) => ["a", "b", "c"].map((s) => s.repeat(3)) && import("./errored.js")' + LineEnding +
-      '    .catch((again) => again === first));' + LineEnding +
-      'export default second;');
+      'import defer * as ns from "./deferred.js";' + LineEnding +
+      'const read = () => { try { return ns.unreached; } catch (e) { return e.message; } };' + LineEnding +
+      'read();' + LineEnding +
+      'let filler = ["a", "b", "c"].map((s) => s.repeat(3));' + LineEnding +
+      'const deferred = read();' + LineEnding +
+      // A finished async function's frame no longer holds the first error.
+      'const attempt = async () => { try { await import("./errored.js"); return "loaded"; } catch { return "threw"; } };' + LineEnding +
+      'const first = await attempt();' + LineEnding +
+      'filler = filler.map((s) => s.repeat(2));' + LineEnding +
+      'let message = "none";' + LineEnding +
+      'try { await import("./errored.js"); } catch (again) { message = again.message; }' + LineEnding +
+      'if (deferred !== "deferred failed") throw new Error("deferred: " + deferred);' + LineEnding +
+      'if (first !== "threw") throw new Error("first import: " + first);' + LineEnding +
+      'if (message !== "evaluation failed") throw new Error("second import: " + message);' + LineEnding +
+      'globalThis.secondImport = [deferred, message, filler.length];');
   finally
     Module.Free;
+    DeleteFile(IncludeTrailingPathDelimiter(Directory) + 'deferred.js');
     DeleteFile(IncludeTrailingPathDelimiter(Directory) + 'errored.js');
     RemoveDir(Directory);
   end;

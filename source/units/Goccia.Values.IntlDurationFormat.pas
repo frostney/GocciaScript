@@ -1328,14 +1328,23 @@ function FormatTemporalDurationToLocaleString(const AValue, ALocales,
 var
   DurationFormat: TGocciaIntlDurationFormatValue;
   FormatArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
-  DurationFormat := TGocciaIntlDurationFormatValue.CreateFromArguments(
-    ALocales, AOptions);
-  FormatArgs := TGocciaArgumentsCollection.Create([AValue]);
+  // The formatter is held only by this local while it formats, which
+  // allocates, and a reservation can collect.
+  Roots.Initialize;
   try
-    Result := DurationFormat.IntlDurationFormatFormat(FormatArgs, DurationFormat);
+    DurationFormat := TGocciaIntlDurationFormatValue.CreateFromArguments(
+      ALocales, AOptions);
+    Roots.Add(DurationFormat);
+    FormatArgs := TGocciaArgumentsCollection.Create([AValue]);
+    try
+      Result := DurationFormat.IntlDurationFormatFormat(FormatArgs, DurationFormat);
+    finally
+      FormatArgs.Free;
+    end;
   finally
-    FormatArgs.Free;
+    Roots.Clear;
   end;
 end;
 
@@ -1345,32 +1354,41 @@ function FormatTemporalDurationFieldsToLocaleString(const ALocales,
 var
   DurationFormat: TGocciaIntlDurationFormatValue;
   Fields: TDurationFields;
+  Roots: TGocciaActiveRootFrame;
 begin
-  DurationFormat := TGocciaIntlDurationFormatValue.CreateFromArguments(
-    ALocales, AOptions);
-  InitializeDurationFields(Fields);
-  Fields.Years := AYears;
-  Fields.Months := AMonths;
-  Fields.Weeks := AWeeks;
-  Fields.Days := ADays;
-  Fields.Hours := AHours;
-  Fields.Minutes := AMinutes;
-  Fields.Seconds := ASeconds;
-  Fields.Milliseconds := AMilliseconds;
-  Fields.Microseconds := AMicroseconds;
-  Fields.Nanoseconds := ANanoseconds;
-  Fields.YearsBig := TBigInteger.FromDouble(AYears);
-  Fields.MonthsBig := TBigInteger.FromDouble(AMonths);
-  Fields.WeeksBig := TBigInteger.FromDouble(AWeeks);
-  Fields.DaysBig := TBigInteger.FromDouble(ADays);
-  Fields.HoursBig := TBigInteger.FromDouble(AHours);
-  Fields.MinutesBig := TBigInteger.FromDouble(AMinutes);
-  Fields.SecondsBig := TBigInteger.FromDouble(ASeconds);
-  Fields.MillisecondsBig := TBigInteger.FromDouble(AMilliseconds);
-  Fields.MicrosecondsBig := TBigInteger.FromDouble(AMicroseconds);
-  Fields.NanosecondsBig := TBigInteger.FromDouble(ANanoseconds);
-  ValidateDurationFields(Fields);
-  Result := FormatDurationFieldsWithFormat(DurationFormat, Fields);
+  // The formatter is held only by this local while it formats, which
+  // allocates, and a reservation can collect.
+  Roots.Initialize;
+  try
+    DurationFormat := TGocciaIntlDurationFormatValue.CreateFromArguments(
+      ALocales, AOptions);
+    Roots.Add(DurationFormat);
+    InitializeDurationFields(Fields);
+    Fields.Years := AYears;
+    Fields.Months := AMonths;
+    Fields.Weeks := AWeeks;
+    Fields.Days := ADays;
+    Fields.Hours := AHours;
+    Fields.Minutes := AMinutes;
+    Fields.Seconds := ASeconds;
+    Fields.Milliseconds := AMilliseconds;
+    Fields.Microseconds := AMicroseconds;
+    Fields.Nanoseconds := ANanoseconds;
+    Fields.YearsBig := TBigInteger.FromDouble(AYears);
+    Fields.MonthsBig := TBigInteger.FromDouble(AMonths);
+    Fields.WeeksBig := TBigInteger.FromDouble(AWeeks);
+    Fields.DaysBig := TBigInteger.FromDouble(ADays);
+    Fields.HoursBig := TBigInteger.FromDouble(AHours);
+    Fields.MinutesBig := TBigInteger.FromDouble(AMinutes);
+    Fields.SecondsBig := TBigInteger.FromDouble(ASeconds);
+    Fields.MillisecondsBig := TBigInteger.FromDouble(AMilliseconds);
+    Fields.MicrosecondsBig := TBigInteger.FromDouble(AMicroseconds);
+    Fields.NanosecondsBig := TBigInteger.FromDouble(ANanoseconds);
+    ValidateDurationFields(Fields);
+    Result := FormatDurationFieldsWithFormat(DurationFormat, Fields);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaIntlDurationFormatValue.ToStringTag: string;
