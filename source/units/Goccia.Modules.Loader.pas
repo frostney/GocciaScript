@@ -1426,6 +1426,7 @@ begin
   if FBytecodeAddresses.TryGetValue(APhysicalPath, Result) then
   begin
     FResolver.ValidateCompanionSourcePath(Result);
+    RecordBytecodeCompanion(Result, APhysicalPath);
     Exit;
   end;
   Result := ASourceCandidate;

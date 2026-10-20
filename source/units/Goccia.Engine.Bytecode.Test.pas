@@ -77,6 +77,7 @@ type
     procedure TestStandaloneSandboxEntryWithoutSource;
     procedure TestRuntimeEvalProfileParity;
     procedure TestRelativeBufferedEntryAddress;
+    procedure TestExplicitArtifactAfterPreferenceChange;
   public
     procedure SetupTests; override;
   end;
@@ -88,6 +89,8 @@ end;
 
 procedure TEngineBytecodeTests.SetupTests;
 begin
+  Test('Explicit artifacts survive preference changes during resolution',
+    TestExplicitArtifactAfterPreferenceChange);
   Test('Relative buffered entry addresses use one canonical registration address',
     TestRelativeBufferedEntryAddress);
   Test('Buffered runs preserve runtime eval parser options through await',
@@ -948,6 +951,53 @@ begin
     Expect<Boolean>(EntryFound).ToBe(True);
   finally
     Module.Free;
+    Engine.Free;
+    Source.Free;
+    Loader.Free;
+    Provider.Free;
+    Resolver.Free;
+    FS.Free;
+  end;
+end;
+
+procedure TEngineBytecodeTests.TestExplicitArtifactAfterPreferenceChange;
+var
+  FS: TSandboxVirtualFileSystem;
+  Resolver: TGocciaSandboxModuleResolver;
+  Provider: TGocciaSandboxModuleContentProvider;
+  Loader: TGocciaModuleLoader;
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Bytes: TBytes;
+begin
+  Bytes := CompileBuffer('export const value = 42;', '/compile/library.mjs');
+  FS := TSandboxVirtualFileSystem.Create;
+  Resolver := nil;
+  Provider := nil;
+  Loader := nil;
+  Source := nil;
+  Engine := nil;
+  try
+    FS.WriteAllText('/library.mjs', 'export const value = 7;');
+    FS.WriteAllBytes('/library.gbc', Bytes);
+    Resolver := TGocciaSandboxModuleResolver.Create(FS);
+    Provider := TGocciaSandboxModuleContentProvider.Create(FS);
+    Loader := TGocciaModuleLoader.Create('/entry.mjs', Resolver, Provider);
+    Source := TStringList.Create;
+    Source.Text := 'import { value } from "./library.gbc";' +
+      'globalThis.answer = value;';
+    Engine := TGocciaEngine.Create('/entry.mjs', Source, Loader);
+    Engine.SourceType := stModule;
+    Loader.PreferBytecode := True;
+    Expect<string>(Loader.ResolveModuleAddress('./library.mjs', '/entry.mjs'))
+      .ToBe('/library.mjs');
+    Loader.PreferBytecode := False;
+    Expect<string>(Loader.ResolveModuleAddress('./library.mjs', '/entry.mjs'))
+      .ToBe('/library.mjs');
+    Engine.Execute;
+    Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+  finally
     Engine.Free;
     Source.Free;
     Loader.Free;
