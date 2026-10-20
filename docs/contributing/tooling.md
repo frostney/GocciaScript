@@ -290,18 +290,28 @@ TEST262_PATH=../test262 bun run scripts/build-fuzz-corpus.ts
 
 ### Fuzzing locally
 
+AFL++ needs a coverage-instrumented harness, and FPC has no AFL compiler, so
+the instrumentation comes from the assembler. On x86-64 Linux with AFL++
+installed (`afl++` on Debian and Ubuntu):
+
 ```bash
-afl-fuzz -n -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarness @@
+mkdir -p build/compiled/targets/fuzzharness-afl
+fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+  -FUbuild/compiled/targets/fuzzharness-afl \
+  -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl @@
 ```
 
-The `-n` is **not** optional. FPC emits no AFL instrumentation, so AFL++ runs
-in non-instrumented ("dumb") mode: pure random mutation with no coverage
-feedback. Practically this means the seed corpus carries the coverage, which is
-why it is derived from the real suites rather than generated. Instrumented
-builds were evaluated and deferred — `afl-gcc`-style instrumentation needs
-either an FPC assembler-pass rewrite or a GCC-compatible IR, and FPC 3.2.2
-exposes neither. The tractable path is `afl-clang-lto` over bitcode from an
-LLVM-backend FPC build.
+`-Aas` makes FPC write GNU assembly and `-FD` makes it run
+[`scripts/afl/as`](../../scripts/afl/as) as its assembler. That script reshapes
+FPC's section directives and jump labels into the form AFL++'s `afl-as`
+recognises, and `afl-as` adds a coverage trampoline at every function entry,
+branch target and conditional branch, plus the fork server. Set `AFL_PATH`
+when `afl-as` is not in `/usr/lib/afl`. FPC's runtime library stays
+uninstrumented. AFL keeps every mutant that reaches new coverage, so the queue
+grows past the seeds; `afl-showmap` on two different inputs shows different
+maps. Both builds come from the same source with the same checks, so either
+replays a finding.
 
 ### Reproducing a finding
 
@@ -347,8 +357,8 @@ the harness itself:
 
 ```bash
 ./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
-afl-fuzz -n -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
-  -- ./build/GocciaFuzzHarness --heap-snapshot @@
+afl-fuzz -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
+  -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@
 ```
 
 Four of the seeds hold closures and suspended generators. Functions are named
