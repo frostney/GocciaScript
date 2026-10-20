@@ -14,6 +14,9 @@ uses
 type
   TGarbageCollector = class;
 
+  // A pass over marks (TGarbageCollector.InspectMarked).
+  TGCMarkPass = procedure of object;
+
   // A live object that contributes roots the collector cannot otherwise see.
   // Registration is driven by AfterConstruction/BeforeDestruction so it happens
   // once per instance regardless of which constructor ran, including subclass
@@ -187,6 +190,7 @@ type
     FGCThreshold: Integer;
     FEnabled: Boolean;
     FCollecting: Boolean;
+    FCollectBeforeEveryReservation: Boolean;
     FTotalCollected: Int64;
     FTotalCollections: Integer;
 
@@ -409,6 +413,14 @@ type
     // (e.g. between script executions or before benchmark measurement).
     procedure Collect; virtual;
 
+    // A host's reachability question outside a collection (a heap snapshot's
+    // accounting check): starts a fresh mark, runs AMark, which marks
+    // (MarkReferences, or GCMarked := True to stop the marking there), then
+    // AInspect, which reads the marks. The collection lock is held
+    // throughout, so no collection on any thread starts a new mark in
+    // between; the next collection starts its own. Neither may collect.
+    procedure InspectMarked(const AMark, AInspect: TGCMarkPass);
+
     // Automatic collection: calls Collect only when Enabled is True and
     // allocations since the last collection exceed the Threshold.
     procedure CollectIfNeeded; overload;
@@ -480,6 +492,14 @@ type
     {$ENDIF}
 
     property Enabled: Boolean read FEnabled write FEnabled;
+    // A stress switch for tests: every TryReserveExternalBytes first runs
+    // the full collection a reservation over the ceiling runs as its last
+    // resort, so native code that holds an unrooted value across a
+    // reservation fails at once instead of only near the ceiling (the heap
+    // snapshot reader's hardening tests set it). Off by default.
+    property CollectBeforeEveryReservation: Boolean
+      read FCollectBeforeEveryReservation
+      write FCollectBeforeEveryReservation;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
@@ -1623,6 +1643,18 @@ begin
   end;
 end;
 
+procedure TGarbageCollector.InspectMarked(const AMark, AInspect: TGCMarkPass);
+begin
+  CriticalSectionEnter(GCCollectLock);
+  try
+    TGCManagedObject.AdvanceMark;
+    AMark();
+    AInspect();
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
+end;
+
 procedure TGarbageCollector.Collect;
 var
   BeforeCount: Integer;
@@ -2189,6 +2221,8 @@ function TGarbageCollector.TryReserveExternalBytes(
 begin
   if ABytes <= 0 then
     Exit(True);
+  if FCollectBeforeEveryReservation then
+    CollectForMemoryPressure(AProtect, True);
   // External-byte accounting is a read-modify-write on FBytesAllocated and
   // FExternalBytes that a cross-thread error destructor can drive concurrently
   // through ReleaseExternalBytes on this same (reserving) collector, so both

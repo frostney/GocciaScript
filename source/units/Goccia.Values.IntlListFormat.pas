@@ -41,6 +41,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -493,5 +494,6 @@ end;
 
 initialization
   GIntlListFormatSharedSlot := RegisterRealmOwnedSlot('Intl.ListFormat.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.ListFormat.shared', 'Intl.ListFormat');
 
 end.

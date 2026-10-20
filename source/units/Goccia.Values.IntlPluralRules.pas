@@ -48,6 +48,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -471,5 +472,6 @@ end;
 
 initialization
   GIntlPluralRulesSharedSlot := RegisterRealmOwnedSlot('Intl.PluralRules.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.PluralRules.shared', 'Intl.PluralRules');
 
 end.

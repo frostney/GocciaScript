@@ -42,6 +42,7 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -425,5 +426,6 @@ end;
 
 initialization
   GIntlDisplayNamesSharedSlot := RegisterRealmOwnedSlot('Intl.DisplayNames.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.DisplayNames.shared', 'Intl.DisplayNames');
 
 end.
