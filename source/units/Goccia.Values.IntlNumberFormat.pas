@@ -71,6 +71,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -2096,5 +2097,6 @@ end;
 
 initialization
   GIntlNumberFormatSharedSlot := RegisterRealmOwnedSlot('Intl.NumberFormat.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.NumberFormat.shared', 'Intl.NumberFormat');
 
 end.

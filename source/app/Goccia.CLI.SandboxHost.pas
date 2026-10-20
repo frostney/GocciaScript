@@ -20,6 +20,7 @@ uses
   SysUtils,
 
   SandboxHostInputs,
+  SandboxVirtualFileSystem,
 
   Goccia.Capabilities,
   Goccia.Engine,
@@ -72,7 +73,12 @@ type
       const AEntryPath: string; const AOptions: TGocciaSandboxRunOptions):
       TGocciaSandboxRunResult;
   public
-    constructor Create(const AQuotaBytes: Int64; const ANodeQuota: Integer);
+    { AClock stamps the files of the host's sandbox filesystem and of every
+      isolated nested run's (see TGocciaSandboxContext.Create); nil reads the
+      wall clock. Pass it here, before any input is copied in. The host does
+      not own AClock: free it after the host. }
+    constructor Create(const AQuotaBytes: Int64; const ANodeQuota: Integer;
+      const AClock: TSandboxFsClock = nil);
     destructor Destroy; override;
 
     { Copies a host input into the sandbox; see TSandboxHostInputs.CopyIn. }
@@ -120,7 +126,6 @@ type
 implementation
 
 uses
-  SandboxVirtualFileSystem,
   TextSemantics,
 
   Goccia.CapabilityAudit,
@@ -344,10 +349,10 @@ end;
 { TGocciaSandboxHost }
 
 constructor TGocciaSandboxHost.Create(const AQuotaBytes: Int64;
-  const ANodeQuota: Integer);
+  const ANodeQuota: Integer; const AClock: TSandboxFsClock);
 begin
   inherited Create;
-  FContext := TGocciaSandboxContext.Create(AQuotaBytes, ANodeQuota);
+  FContext := TGocciaSandboxContext.Create(AQuotaBytes, ANodeQuota, AClock);
   FContext.RunScriptCallback := ExecuteNested;
   FInputs := TSandboxHostInputs.Create(FContext.Fs);
   FAliases := TStringList.Create;
@@ -713,8 +718,10 @@ begin
       raise ESandboxFsQuotaExceeded.Create('sandbox byte quota exhausted');
     if RemainingNodes <= 0 then
       raise ESandboxFsQuotaExceeded.Create('sandbox node quota exhausted');
+    { The child's filesystem keeps its parent's clock, as its quotas are
+      inherited: a deterministic run's children are deterministic too. }
     ChildContext := TGocciaSandboxContext.Create(RemainingBytes,
-      RemainingNodes);
+      RemainingNodes, AContext.Clock);
     try
       try
         ChildContext.RunScriptCallback := ExecuteNested;

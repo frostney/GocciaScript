@@ -318,6 +318,83 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  # ── Heap snapshot hardening at full size ─────────────────────────────
+  #
+  # Goccia.HeapSnapshot.Hardening.Test takes real snapshots apart along the
+  # format. On pull requests it samples, to stay under a minute: a rotating
+  # one in four of the payload values and reference targets, and chains of
+  # 200,000 links. Here it sweeps all of them with chains of 1,000,000 links
+  # (about 140 s and 9.4 GB resident on a workstation, though no one test
+  # needs more than 3.6 GB), and every heap snapshot test program runs under
+  # heaptrc at its pull-request size.
+  heap-snapshot-hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC
+        run: |
+          sudo apt-get update
+          sudo apt-get install fpc -qq > /dev/null
+
+      - name: Build the hardening tests
+        # ./build.pas writes the version include every program reads; each
+        # program then gets its own unit-output directory (see the
+        # memory-safety job), and fpc does not create one.
+        run: |
+          ./build.pas fuzzharness
+          mkdir -p build/compiled/targets/heap-snapshot-hardening
+          fpc @config.cfg -O4 -dPRODUCTION -Xs -CX -XX -B \
+            -FUbuild/compiled/targets/heap-snapshot-hardening \
+            -obuild/Goccia.HeapSnapshot.Hardening.Test \
+            source/units/Goccia.HeapSnapshot.Hardening.Test.pas
+
+      - name: Run them at full size
+        env:
+          GOCCIA_HEAP_SNAPSHOT_HARDENING: full
+        run: ./build/Goccia.HeapSnapshot.Hardening.Test
+
+      - name: Build the heap snapshot tests with heaptrc
+        run: |
+          mkdir -p build/heaptrc
+          for src in source/units/Goccia.HeapSnapshot*.Test.pas; do
+            name="$(basename "${src%.pas}")"
+            mkdir -p "build/compiled/targets/heaptrc-${name}"
+            fpc @config.cfg -gh -gl -FU"build/compiled/targets/heaptrc-${name}" \
+              -o"build/heaptrc/${name}" "$src"
+          done
+
+      - name: Run them under heaptrc
+        # heaptrc halts a program on a double free or a block written past
+        # its end. Freed blocks are not kept out of reuse (keepreleased grows
+        # past a runner's memory within a minute), and the exit leak report
+        # counts what a test program leaves to process exit, so only the exit
+        # status is judged; the hardening program checks the heap between
+        # passes of the same mutants itself.
+        run: |
+          status=0
+          for test_bin in build/heaptrc/*.Test; do
+            echo "=== ${test_bin}"
+            if ! "$test_bin" 2> "${test_bin}.heaptrc.log"; then
+              echo "::error::${test_bin} failed under heaptrc"
+              tail -40 "${test_bin}.heaptrc.log"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Upload heaptrc logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: heap-snapshot-hardening-heaptrc
+          path: build/heaptrc/*.log
+          if-no-files-found: ignore
+          retention-days: 30
+
   # ── Memory safety over the real suite ────────────────────────────────
   #
   # heaptrc and Valgrind answer different questions: heaptrc reports FPC-level

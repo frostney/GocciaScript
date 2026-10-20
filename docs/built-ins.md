@@ -755,6 +755,8 @@ writes and truncation advance modification and change time; renames preserve
 access, modification, and birth time while advancing change time and affected
 directory metadata. Birth time is immutable. Copies receive fresh timestamps,
 while VFS forks used for baselines preserve the source timestamps.
+Under `--deterministic` every timestamp is the Unix epoch
+([Host Environment — Deterministic Profile](host-environment.md#deterministic-profile)).
 
 Filesystem failures are real JavaScript `Error` objects with Node-shaped
 `code`, `errno`, `path`, `syscall`, and optional `dest` metadata. Synchronous

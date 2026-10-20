@@ -246,6 +246,11 @@ type
 function SandboxFsKindName(const AKind: TSandboxFsNodeKind): string;
 function SandboxHumanBytes(const ABytes: Int64): string;
 function SandboxDateTimeToUnixMilliseconds(const AValue: TDateTime): Double;
+{ The TDateTime of an instant given in nanoseconds since the Unix epoch, the
+  unit host clocks report; a TSandboxFsClock built over such a clock returns
+  this from Now. }
+function SandboxUnixNanosecondsToDateTime(
+  const AEpochNanoseconds: Int64): TDateTime;
 function NormalizeSandboxPathSeparators(const APath: string): string;
 
 implementation
@@ -296,6 +301,25 @@ end;
 function SandboxDateTimeToUnixMilliseconds(const AValue: TDateTime): Double;
 begin
   Result := (AValue - EncodeDate(1970, 1, 1)) * MillisecondsPerDay;
+end;
+
+function SandboxUnixNanosecondsToDateTime(
+  const AEpochNanoseconds: Int64): TDateTime;
+var
+  EpochSeconds: Int64;
+  WholeDays: Int64;
+  SecondsOfDay: Int64;
+  SecondsOfDayValue: Double;
+  NanosecondRemainderValue: Double;
+begin
+  EpochSeconds := AEpochNanoseconds div 1000000000;
+  WholeDays := EpochSeconds div (24 * 60 * 60);
+  SecondsOfDay := EpochSeconds mod (24 * 60 * 60);
+  SecondsOfDayValue := SecondsOfDay;
+  NanosecondRemainderValue := AEpochNanoseconds mod 1000000000;
+  Result := EncodeDate(1970, 1, 1) + WholeDays +
+    (SecondsOfDayValue / (24 * 60 * 60)) +
+    (NanosecondRemainderValue / (MillisecondsPerDay * 1000000.0));
 end;
 
 function SplitPath(const ACanonicalPath: string): TStringArray;
@@ -440,29 +464,11 @@ begin
 end;
 
 function TSandboxVirtualFileSystem.CurrentTime: TDateTime;
-var
-  EpochNanoseconds: Int64;
-  EpochSeconds: Int64;
-  WholeDays: Int64;
-  SecondsOfDay: Int64;
-  SecondsOfDayValue: Double;
-  NanosecondRemainderValue: Double;
 begin
   if Assigned(FClock) then
     Result := FClock.Now
   else
-  begin
-    EpochNanoseconds := GetEpochNanoseconds;
-    EpochSeconds := EpochNanoseconds div 1000000000;
-    WholeDays := EpochSeconds div (24 * 60 * 60);
-    SecondsOfDay := EpochSeconds mod (24 * 60 * 60);
-    SecondsOfDayValue := SecondsOfDay;
-    NanosecondRemainderValue := EpochNanoseconds mod 1000000000;
-    Result := EncodeDate(1970, 1, 1) + WholeDays +
-      (SecondsOfDayValue / (24 * 60 * 60)) +
-      (NanosecondRemainderValue /
-        (MillisecondsPerDay * 1000000.0));
-  end;
+    Result := SandboxUnixNanosecondsToDateTime(GetEpochNanoseconds);
 end;
 
 destructor TSandboxVirtualFileSystem.Destroy;

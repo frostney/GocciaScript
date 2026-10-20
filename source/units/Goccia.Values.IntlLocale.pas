@@ -78,6 +78,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -1452,5 +1453,6 @@ end;
 
 initialization
   GIntlLocaleSharedSlot := RegisterRealmOwnedSlot('Intl.Locale.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.Locale.shared', 'Intl.Locale');
 
 end.
