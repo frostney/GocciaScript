@@ -20,6 +20,7 @@ program Goccia.Engine.GlobalEval.Test;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
+  Math,
   SysUtils,
 
   TestingPascalLibrary,
@@ -27,6 +28,7 @@ uses
   Goccia.Capabilities,
   Goccia.Engine,
   Goccia.Error,
+  Goccia.Runtime,
   Goccia.SourcePipeline,
   Goccia.Test262.Host,
   Goccia.TestSetup,
@@ -61,6 +63,9 @@ type
     procedure TestBytecodeEvalReportsRunStage;
     procedure AssertDirectiveFreeEvalIsNonStrict;
     procedure TestBytecodeEvalIsNonStrictInStrictEngine;
+    procedure TestEvalEstablishesFloatingPointMode;
+    procedure TestWaitForRuntimeIdleEstablishesFloatingPointMode;
+    procedure TestInjectModulesEstablishFloatingPointMode;
   public
     procedure SetupTests; override;
   end;
@@ -87,6 +92,12 @@ begin
     TestBytecodeEvalReportsRunStage);
   Test('Bytecode directive-free global eval is non-strict in a strict engine',
     TestBytecodeEvalIsNonStrictInStrictEngine);
+  Test('Global eval runs NaN arithmetic when called outside a run scope',
+    TestEvalEstablishesFloatingPointMode);
+  Test('WaitForRuntimeIdle runs NaN arithmetic when called outside a run scope',
+    TestWaitForRuntimeIdleEstablishesFloatingPointMode);
+  Test('Injecting a module of globals or a manifest runs NaN arithmetic outside a run scope',
+    TestInjectModulesEstablishFloatingPointMode);
 end;
 
 function TGlobalEvalTests.CreateEngine(const ASource: TStringList): TGocciaEngine;
@@ -464,6 +475,159 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalIsNonStrictInStrictEngine;
 begin
   AssertDirectiveFreeEvalIsNonStrict;
+end;
+
+// ES2026 §6.1.6.1.4, §6.1.6.1.5 and §6.1.6.1.8 (Number::multiply,
+// Number::divide, Number::subtract): NaN and infinity arithmetic follows
+// IEEE 754 and never traps. An
+// embedder that calls EvaluateGlobalEval directly runs with whatever
+// floating-point mode its own process has, FPC's default among them, which
+// raises EInvalidOp on 0/0. The entry establishes the mode and restores the
+// caller's.
+procedure TGlobalEvalTests.TestEvalEstablishesFloatingPointMode;
+const
+  // FPC's startup mask: invalid operation, zero divide and overflow trap.
+  EMBEDDER_MASK: TFPUExceptionMask = [exDenormalized, exUnderflow,
+    exPrecision];
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  SavedMask: TFPUExceptionMask;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  SavedMask := GetExceptionMask;
+  try
+    Engine := CreateEngine(Source);
+    SetExceptionMask(EMBEDDER_MASK);
+    try
+      Value := Engine.EvaluateGlobalEval('0 / 0', '<global-eval-test>',
+        Stage);
+      Expect<Boolean>((Value as TGocciaNumberLiteralValue).IsNaN).ToBe(True);
+      Value := Engine.EvaluateGlobalEval('Infinity - Infinity',
+        '<global-eval-test>', Stage);
+      Expect<Boolean>((Value as TGocciaNumberLiteralValue).IsNaN).ToBe(True);
+      // Operands the compiler cannot fold.
+      Value := Engine.EvaluateGlobalEval(
+        'var zero = 0, inf = Infinity; [zero / zero, inf - inf, inf * zero]' +
+        '.every((n) => n !== n)', '<global-eval-test>', Stage);
+      Expect<Boolean>((Value as TGocciaBooleanLiteralValue).Value).ToBe(True);
+      // The caller's mask is back once the entry returns.
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+    finally
+      SetExceptionMask(SavedMask);
+    end;
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+// Jobs a run left queued run script too: a promise reaction that divides 0
+// by 0 runs inside WaitForRuntimeIdle, which an embedder can call on its own.
+procedure TGlobalEvalTests.TestWaitForRuntimeIdleEstablishesFloatingPointMode;
+const
+  EMBEDDER_MASK: TFPUExceptionMask = [exDenormalized, exUnderflow,
+    exPrecision];
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  SavedMask: TFPUExceptionMask;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  SavedMask := GetExceptionMask;
+  try
+    Engine := CreateEngine(Source);
+    Engine.EvaluateGlobalEval(
+      'var zero = 0; var settled = "pending";' +
+      'Promise.resolve().then(() => { settled = zero / zero; });',
+      '<global-eval-test>', Stage);
+    SetExceptionMask(EMBEDDER_MASK);
+    try
+      Engine.WaitForRuntimeIdle;
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+    finally
+      SetExceptionMask(SavedMask);
+    end;
+    Value := Engine.EvaluateGlobalEval('settled !== settled',
+      '<global-eval-test>', Stage);
+    Expect<Boolean>((Value as TGocciaBooleanLiteralValue).Value).ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+// The two host-module injectors compile and run a module of the embedder's:
+// its top level divides 0 by 0 under the embedder's own mask.
+procedure TGlobalEvalTests.TestInjectModulesEstablishFloatingPointMode;
+const
+  EMBEDDER_MASK: TFPUExceptionMask = [exDenormalized, exUnderflow,
+    exPrecision];
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  SavedMask: TFPUExceptionMask;
+  Directory, GlobalsPath, ManifestPath: string;
+
+  procedure WriteModule(const APath, AContent: string);
+  var
+    Lines: TStringList;
+  begin
+    Lines := TStringList.Create;
+    try
+      Lines.Text := AContent;
+      Lines.SaveToFile(APath);
+    finally
+      Lines.Free;
+    end;
+  end;
+
+begin
+  Directory := IncludeTrailingPathDelimiter(GetTempDir) +
+    'goccia-fp-inject-' + IntToStr(GetProcessID);
+  ForceDirectories(Directory);
+  GlobalsPath := Directory + DirectorySeparator + 'globals.js';
+  ManifestPath := Directory + DirectorySeparator + 'manifest.js';
+  WriteModule(GlobalsPath,
+    'export const nan = 0 / 0;' + LineEnding +
+    'export const diff = Infinity - Infinity;');
+  WriteModule(ManifestPath,
+    'export const unused = 0 / 0;' + LineEnding +
+    'export default { "virtual:one": { content: "export const one = 1;" } };');
+  Source := TStringList.Create;
+  Engine := nil;
+  SavedMask := GetExceptionMask;
+  try
+    Engine := CreateEngine(Source);
+    // The runtime gives the engine the content provider that reads the files.
+    AttachRuntime(Engine);
+    SetExceptionMask(EMBEDDER_MASK);
+    try
+      Engine.InjectGlobalsFromModule(GlobalsPath);
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+      Engine.InjectModulesFromModule(ManifestPath);
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+    finally
+      SetExceptionMask(SavedMask);
+    end;
+    Value := Engine.EvaluateGlobalEval('nan !== nan && diff !== diff',
+      '<global-eval-test>', Stage);
+    Expect<Boolean>((Value as TGocciaBooleanLiteralValue).Value).ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
+    DeleteFile(GlobalsPath);
+    DeleteFile(ManifestPath);
+    RemoveDir(Directory);
+  end;
 end;
 
 begin
