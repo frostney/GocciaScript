@@ -14,6 +14,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.Engine,
+  Goccia.HostEnvironment,
   Goccia.Modules,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Sandbox,
@@ -27,6 +28,8 @@ type
       const ASource: string);
     procedure TestReadOnlyPathsRefuseEveryWriteForm;
     procedure TestRefusedAppendChangesNoMetadata;
+    procedure TestContextClockStampsEveryFile;
+    procedure TestDeterministicClockFreezesTimestampsAtTheEpoch;
   public
     procedure SetupTests; override;
   end;
@@ -127,6 +130,11 @@ begin
     'a read-only path', TestReadOnlyPathsRefuseEveryWriteForm);
   Test('A refused append leaves even the file''s timestamps unchanged',
     TestRefusedAppendChangesNoMetadata);
+  Test('A context''s clock stamps every file, its baseline keeps it, and a ' +
+    'script reads its time', TestContextClockStampsEveryFile);
+  Test('Over the deterministic clock every timestamp is the epoch and the ' +
+    'diff reports content changes only',
+    TestDeterministicClockFreezesTimestampsAtTheEpoch);
 end;
 
 procedure TSandboxRuntimeExtensionTests.RunModule(
@@ -262,6 +270,137 @@ begin
     Expect<Boolean>(Pos('/data', Diff) > 0).ToBe(False);
   finally
     Context.Free;
+  end;
+end;
+
+const
+  { Writes a file, then records the four timestamps of an embedder-written
+    file and of the file it wrote, to the millisecond: the filesystem keeps
+    a TDateTime, which is exact at the epoch but not to the nanosecond for
+    every instant. }
+  STAT_PROBE_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'fs.writeFileSync("/out/written.txt", "w");' + LineEnding +
+    'fs.readFileSync("/data/input.txt", "utf8");' + LineEnding +
+    'const times = (path) => {' + LineEnding +
+    '  const stat = fs.statSync(path);' + LineEnding +
+    '  return [stat.atimeMs, stat.mtimeMs, stat.ctimeMs, stat.birthtimeMs]' +
+      '.map((ms) => Math.floor(ms + 0.5)).join(" ");' + LineEnding +
+    '};' + LineEnding +
+    'fs.writeFileSync("/out/log.txt", [times("/data/input.txt"), ' +
+      'times("/out/written.txt")].join("\n"));' + LineEnding;
+
+procedure TSandboxRuntimeExtensionTests.TestContextClockStampsEveryFile;
+const
+  FIXED_EPOCH_NANOSECONDS = Int64(1700000000123000000);
+  FIXED_MILLISECONDS = '1700000000123';
+  FIXED_TIMES = FIXED_MILLISECONDS + ' ' + FIXED_MILLISECONDS + ' ' +
+    FIXED_MILLISECONDS + ' ' + FIXED_MILLISECONDS;
+var
+  Clock: TGocciaSandboxFsHostClock;
+  Context: TGocciaSandboxContext;
+  DefaultContext: TGocciaSandboxContext;
+  Lines: TStringList;
+  Stat: TSandboxFsStat;
+begin
+  DefaultContext := TGocciaSandboxContext.Create;
+  try
+    Expect<Boolean>(DefaultContext.Clock = nil).ToBe(True);
+  finally
+    DefaultContext.Free;
+  end;
+
+  Clock := TGocciaSandboxFsHostClock.Create(TGocciaFixedHostClock.Create(
+    FIXED_EPOCH_NANOSECONDS, 0, 'UTC'));
+  try
+    Context := TGocciaSandboxContext.Create(DEFAULT_SANDBOX_BYTE_QUOTA,
+      DEFAULT_SANDBOX_NODE_QUOTA, Clock);
+    Lines := TStringList.Create;
+    try
+      Expect<Boolean>(Context.Clock = Clock).ToBe(True);
+      { The root directory exists before the embedder writes anything, and
+        is stamped by the clock too. }
+      Expect<Double>(Round(SandboxDateTimeToUnixMilliseconds(
+        Context.Fs.Stat('/').BirthTime))).ToBe(1700000000123);
+      Context.Fs.MakeDirectory('/data');
+      Context.Fs.WriteAllText('/data/input.txt', 'input');
+      Context.Fs.MakeDirectory('/out');
+      Context.CaptureBaseline;
+
+      { The baseline is a fork, and a fork keeps the clock. }
+      Context.Baseline.WriteAllText('/baseline-only.txt', 'b');
+      Stat := Context.Baseline.Stat('/baseline-only.txt');
+      Expect<Double>(Round(SandboxDateTimeToUnixMilliseconds(
+        Stat.BirthTime))).ToBe(1700000000123);
+
+      RunModule(Context, STAT_PROBE_SOURCE);
+
+      Lines.Text := Context.Fs.ReadAllText('/out/log.txt');
+      Expect<Integer>(Lines.Count).ToBe(2);
+      if Lines.Count = 2 then
+      begin
+        Expect<string>(Lines[0]).ToBe(FIXED_TIMES);
+        Expect<string>(Lines[1]).ToBe(FIXED_TIMES);
+      end;
+    finally
+      Lines.Free;
+      Context.Free;
+    end;
+  finally
+    { The context does not own its clock. }
+    Clock.Free;
+  end;
+end;
+
+procedure TSandboxRuntimeExtensionTests.
+  TestDeterministicClockFreezesTimestampsAtTheEpoch;
+const
+  REWRITE_SOURCE =
+    'import fs from "fs";' + LineEnding +
+    'fs.writeFileSync("/data/input.txt", "changed");' + LineEnding;
+var
+  Clock: TGocciaSandboxFsHostClock;
+  Context: TGocciaSandboxContext;
+  Lines: TStringList;
+  Diff: string;
+begin
+  Clock := TGocciaSandboxFsHostClock.Create(
+    TGocciaHostEnvironment.DeterministicClock);
+  try
+    Context := TGocciaSandboxContext.Create(DEFAULT_SANDBOX_BYTE_QUOTA,
+      DEFAULT_SANDBOX_NODE_QUOTA, Clock);
+    Lines := TStringList.Create;
+    try
+      Context.Fs.MakeDirectory('/data');
+      Context.Fs.WriteAllText('/data/input.txt', 'input');
+      Context.Fs.MakeDirectory('/out');
+      Context.CaptureBaseline;
+
+      RunModule(Context, STAT_PROBE_SOURCE);
+      Lines.Text := Context.Fs.ReadAllText('/out/log.txt');
+      Expect<Integer>(Lines.Count).ToBe(2);
+      if Lines.Count = 2 then
+      begin
+        Expect<string>(Lines[0]).ToBe('0 0 0 0');
+        Expect<string>(Lines[1]).ToBe('0 0 0 0');
+      end;
+
+      RunModule(Context, REWRITE_SOURCE);
+      { Every timestamp is the epoch before and after, so the metadata
+        dimension is empty; the content changes are still reported. }
+      Diff := Context.DiffJson(True);
+      Expect<Boolean>(Pos('"kind": "modify", "path": "/data/input.txt"',
+        Diff) > 0).ToBe(True);
+      Expect<Boolean>(Pos('"kind": "create", "path": "/out/written.txt"',
+        Diff) > 0).ToBe(True);
+      Expect<Boolean>(Pos('"metadataChanges": [' + LineEnding + '  ]',
+        Diff) > 0).ToBe(True);
+    finally
+      Lines.Free;
+      Context.Free;
+    end;
+  finally
+    Clock.Free;
   end;
 end;
 

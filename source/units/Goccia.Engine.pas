@@ -910,15 +910,22 @@ var
   ExportNames: TArray<string>;
   ExportValue: TGocciaValue;
   Module: TGocciaModule;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  // Host enrollment is durable on the root module/address. Every static,
-  // dynamic or deferred import from it inherits host ownership regardless of
-  // when the import resolves.
-  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
-  ExportNames := Module.GetExportNames;
-  for ExportName in ExportNames do
-    if Module.TryGetExportValue(ExportName, ExportValue) then
-      RegisterGlobal(ExportName, ExportValue);
+  // The module is compiled and run here, possibly outside any run.
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    // Host enrollment is durable on the root module/address. Every static,
+    // dynamic or deferred import from it inherits host ownership regardless
+    // of when the import resolves.
+    Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
+    ExportNames := Module.GetExportNames;
+    for ExportName in ExportNames do
+      if Module.TryGetExportValue(ExportName, ExportValue) then
+        RegisterGlobal(ExportName, ExportValue);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
 end;
 
 procedure TGocciaEngine.InjectModule(const AName, AContent: string;
@@ -1056,14 +1063,22 @@ procedure TGocciaEngine.InjectModulesFromModule(const APath: string);
 var
   DefaultValue: TGocciaValue;
   Module: TGocciaModule;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  // The manifest module is host-provided config. Durable ownership also covers
-  // imports its exported code may initiate after manifest evaluation returns.
-  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
-  if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
-    raise EArgumentException.Create(
-      'Virtual modules manifest module must have a default export.');
-  InjectModulesFromValue(DefaultValue, Module.Path, Module.Path);
+  // The manifest module is compiled and run here, possibly outside any run.
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    // The manifest module is host-provided config. Durable ownership also
+    // covers imports its exported code may initiate after manifest evaluation
+    // returns.
+    Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
+    if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
+      raise EArgumentException.Create(
+        'Virtual modules manifest module must have a default export.');
+    InjectModulesFromValue(DefaultValue, Module.Path, Module.Path);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
 end;
 
 procedure TGocciaEngine.ClearTransientCaches;
@@ -2414,8 +2429,12 @@ var
   Queue: TGocciaMicrotaskQueue;
   GC: TGarbageCollector;
   Repeating, Pause: Boolean;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
   Repeating := False;
+  { The jobs this runs are script, and an embedder can call it outside a run:
+    establish the floating-point mode as the run entries do. }
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
     repeat
       { A further round waits again: the deadline and a host's stop end it. }
@@ -2478,6 +2497,7 @@ begin
     GC := TGarbageCollector.Instance;
     if Assigned(GC) then
       GC.ClearKeptObjects;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 
@@ -3142,12 +3162,18 @@ var
   CompilerOptions: TGocciaCompilerOptimizationOptions;
   SavedGlobalScope: TGocciaScope;
   SavedGlobalBackedTopLevel: Boolean;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
   AStage := gesCompile;
   VarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
   SourceLines := CreateECMAScriptSourceLines(ASourceText);
+  // An embedder can call this entry outside any run, so it establishes the
+  // floating-point mode (NaN and infinity arithmetic without traps, ES2026
+  // §6.1.6.1) for the compile and the run, as Execute does, and restores the
+  // caller's.
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
     Options := SourcePipelineOptions(stScript);
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
@@ -3227,6 +3253,7 @@ begin
       OptionsScope.Free;
     end;
   finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
     SourceLines.Free;
     DeclaredVarNames.Free;
     FunctionNames.Free;

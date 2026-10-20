@@ -527,6 +527,16 @@ Context.Fs.AddReadOnlyPath('/data');
 Runtime.Install(TGocciaSandboxRuntimeExtension.Create(Context));
 ```
 
+The filesystem stamps its files with the wall clock unless the context is given a clock. `TGocciaSandboxContext.Create(QuotaBytes, NodeQuota, Clock)` and `TGocciaSandboxHost.Create(QuotaBytes, NodeQuota, Clock)` take an optional `TSandboxFsClock` (`nil`, the default, is the wall clock). It stamps the root directory, every file the embedder or a script writes, the baseline `CaptureBaseline` forks, and the filesystem of every isolated nested run the host creates, so pass it at creation, before anything is written; `Context.Clock` returns it. The context does not own the clock: free it after the context. `TGocciaSandboxFsHostClock.Create(HostClock)` follows an `IGocciaHostClock`; over `TGocciaHostEnvironment.DeterministicClock` every timestamp is the epoch, in step with an engine that uses the [deterministic profile](host-environment.md#deterministic-profile), which is what `GocciaRunner --deterministic` does in sandbox mode.
+
+```pascal
+FsClock := TGocciaSandboxFsHostClock.Create(TGocciaHostEnvironment.DeterministicClock);
+Context := TGocciaSandboxContext.Create(DEFAULT_SANDBOX_BYTE_QUOTA, DEFAULT_SANDBOX_NODE_QUOTA, FsClock);
+{ ...fill Context.Fs, run engines over it, then free the context before its clock }
+Context.Free;
+FsClock.Free;
+```
+
 ### Preprocessors and Compatibility
 
 | System | Type | Default | Purpose |

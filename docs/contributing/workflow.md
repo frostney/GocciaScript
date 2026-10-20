@@ -109,7 +109,8 @@ six targets including Windows, macOS and AArch64) runs only on `main`, tags,
 and manual dispatch. Before marking a pull request ready, run
 `gh workflow run ci.yml --ref <branch>` for every stacked branch and for any
 platform-sensitive change: file-system paths, processes, sockets or TLS, FFI,
-time zones, `Int64`/`Double` conversion or byte layout (see
+time zones, `Int64`/`Double` conversion, `Int64` loop counters or lengths
+(32-bit `i386-win32`), byte layout (see
 [Tooling: Platform-Specific Pitfalls](tooling.md#platform-specific-pitfalls)),
 any `{$IFDEF}` platform branch, or a new or changed `scripts/test-cli*.ts` check
 that compares a program's output text or a path it reports. Windows ends lines
