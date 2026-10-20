@@ -1367,6 +1367,7 @@ end;
 function CoerceTemporalZonedDateTime(const AValue: TGocciaValue;
   const AMethod: string; const AOptions: TGocciaValue): TGocciaTemporalZonedDateTimeValue;
 var
+  FieldRoots: TGocciaActiveRootFrame;
   TimeRec: TTemporalTimeRecord;
   OffsetSeconds: Integer;
   TimeZoneStr: string;
@@ -1404,208 +1405,231 @@ var
       Result := ToIntegerWithTruncationValue(AValue);
   end;
 begin
-  if AValue is TGocciaTemporalZonedDateTimeValue then
-  begin
-    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
-      Disambiguation);
-    Result := TGocciaTemporalZonedDateTimeValue(AValue);
-  end
-  else if AValue is TGocciaStringLiteralValue then
-  begin
-    if not TryParseZonedDateTimeString(
-      NormalizeLeapSecondForTemporalDateTime(TGocciaStringLiteralValue(AValue).Value), Parsed) then
-      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
-    if Parsed.TimeZoneFromOffset then
-      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
-    TimeZoneStr := CanonicalizeTimeZoneIdentifier(Parsed.TimeZone);
-
-    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
-      Disambiguation);
-    if Parsed.HasOffset and not (OffsetOption in [tooUse, tooIgnore]) then
-      ValidateZonedDateTimeLocalRange(Parsed.Date.Year, Parsed.Date.Month,
-        Parsed.Date.Day, Parsed.Time,
-        Parsed.Time.Microsecond * 1000 + Parsed.Time.Nanosecond, AMethod);
-    if (not Parsed.HasExplicitTime) and (not Parsed.HasOffset) then
-      EpochMs := StartOfDayToEpochMilliseconds(Parsed.Date.Year,
-        Parsed.Date.Month, Parsed.Date.Day, TimeZoneStr)
-    else
-      EpochMs := ApplyOffsetOption(Parsed.Date.Year, Parsed.Date.Month, Parsed.Date.Day,
-        Parsed.Time, TimeZoneStr, Parsed.HasOffset, Parsed.OffsetSeconds,
-        Parsed.HasUTCDesignator, Parsed.OffsetHasSubMinuteSyntax, True,
-        OffsetOption, Disambiguation, AMethod);
-    SubMs := Parsed.Time.Microsecond * 1000 + Parsed.Time.Nanosecond;
-    ValidateZonedDateTimeEpoch(EpochMs, SubMs, AMethod);
-    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr, Parsed.CalendarId);
-  end
-  else if AValue is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(AValue);
-
-    VCalendar := Obj.GetProperty(PROPERTY_CALENDAR);
-    CalendarId := CalendarFromProperty(VCalendar);
-    if (CalendarId = 'islamic') or (CalendarId = 'islamic-rgsa') then
-      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
-        SSuggestTemporalDateRange);
-    IsLeapMonth := False;
-    HasEra := False;
-    HasEraYear := False;
-    CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
-    EraResolvedYear := 0;
-    if CalendarHasEra then
+  // A value read from the property bag (a getter can make it fresh) is
+  // held only by its local while the next fields are read and converted,
+  // which can run getters and allocate.
+  FieldRoots.Initialize;
+  try
+    if AValue is TGocciaTemporalZonedDateTimeValue then
     begin
-      VEra := Obj.GetProperty('era');
-      VEraYear := Obj.GetProperty('eraYear');
-      HasEra := not IsUndefinedValue(VEra);
-      HasEraYear := not IsUndefinedValue(VEraYear);
-      if HasEra <> HasEraYear then
-        ThrowTypeError(AMethod + ' requires era and eraYear together',
-          SSuggestTemporalFromArg);
-      if HasEra and not TryCalendarYearFromEra(CalendarId,
-        VEra.ToStringLiteral.Value, ToIntegerWithTruncationValue(VEraYear),
-        EraResolvedYear) then
+      ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
+        Disambiguation);
+      Result := TGocciaTemporalZonedDateTimeValue(AValue);
+    end
+    else if AValue is TGocciaStringLiteralValue then
+    begin
+      if not TryParseZonedDateTimeString(
+        NormalizeLeapSecondForTemporalDateTime(TGocciaStringLiteralValue(AValue).Value), Parsed) then
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
+      if Parsed.TimeZoneFromOffset then
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
+      TimeZoneStr := CanonicalizeTimeZoneIdentifier(Parsed.TimeZone);
+
+      ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
+        Disambiguation);
+      if Parsed.HasOffset and not (OffsetOption in [tooUse, tooIgnore]) then
+        ValidateZonedDateTimeLocalRange(Parsed.Date.Year, Parsed.Date.Month,
+          Parsed.Date.Day, Parsed.Time,
+          Parsed.Time.Microsecond * 1000 + Parsed.Time.Nanosecond, AMethod);
+      if (not Parsed.HasExplicitTime) and (not Parsed.HasOffset) then
+        EpochMs := StartOfDayToEpochMilliseconds(Parsed.Date.Year,
+          Parsed.Date.Month, Parsed.Date.Day, TimeZoneStr)
+      else
+        EpochMs := ApplyOffsetOption(Parsed.Date.Year, Parsed.Date.Month, Parsed.Date.Day,
+          Parsed.Time, TimeZoneStr, Parsed.HasOffset, Parsed.OffsetSeconds,
+          Parsed.HasUTCDesignator, Parsed.OffsetHasSubMinuteSyntax, True,
+          OffsetOption, Disambiguation, AMethod);
+      SubMs := Parsed.Time.Microsecond * 1000 + Parsed.Time.Nanosecond;
+      ValidateZonedDateTimeEpoch(EpochMs, SubMs, AMethod);
+      Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr, Parsed.CalendarId);
+    end
+    else if AValue is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(AValue);
+
+      VCalendar := Obj.GetProperty(PROPERTY_CALENDAR);
+      FieldRoots.Add(VCalendar);
+      CalendarId := CalendarFromProperty(VCalendar);
+      if (CalendarId = 'islamic') or (CalendarId = 'islamic-rgsa') then
         ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
           SSuggestTemporalDateRange);
-    end;
+      IsLeapMonth := False;
+      HasEra := False;
+      HasEraYear := False;
+      CalendarHasEra := TemporalCalendarUsesEra(CalendarId);
+      EraResolvedYear := 0;
+      if CalendarHasEra then
+      begin
+        VEra := Obj.GetProperty('era');
+        FieldRoots.Add(VEra);
+        VEraYear := Obj.GetProperty('eraYear');
+        FieldRoots.Add(VEraYear);
+        HasEra := not IsUndefinedValue(VEra);
+        HasEraYear := not IsUndefinedValue(VEraYear);
+        if HasEra <> HasEraYear then
+          ThrowTypeError(AMethod + ' requires era and eraYear together',
+            SSuggestTemporalFromArg);
+        if HasEra and not TryCalendarYearFromEra(CalendarId,
+          VEra.ToStringLiteral.Value, ToIntegerWithTruncationValue(VEraYear),
+          EraResolvedYear) then
+          ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+            SSuggestTemporalDateRange);
+      end;
 
-    VDay := Obj.GetProperty(PROPERTY_DAY);
-    Day := RequiredIntegerField(VDay, PROPERTY_DAY);
-    VHour := Obj.GetProperty(PROPERTY_HOUR);
-    TimeRec.Hour := OptionalIntegerField(VHour, 0);
-    VMicrosecond := Obj.GetProperty(PROPERTY_MICROSECOND);
-    TimeRec.Microsecond := OptionalIntegerField(VMicrosecond, 0);
-    VMillisecond := Obj.GetProperty(PROPERTY_MILLISECOND);
-    TimeRec.Millisecond := OptionalIntegerField(VMillisecond, 0);
-    VMinute := Obj.GetProperty(PROPERTY_MINUTE);
-    TimeRec.Minute := OptionalIntegerField(VMinute, 0);
-    VMonth := Obj.GetProperty(PROPERTY_MONTH);
-    HasMonth := not IsUndefinedValue(VMonth);
-    SuppliedMonth := 0;
-    if HasMonth then
-    begin
-      Month := ToIntegerWithTruncationValue(VMonth);
-      SuppliedMonth := Month;
-    end
-    else
-      Month := 0;
-
-    VMonthCode := Obj.GetProperty(PROPERTY_MONTH_CODE);
-    HasMonthCode := not IsUndefinedValue(VMonthCode);
-    MonthCodeStr := '';
-    if HasMonthCode then
-    begin
-      MonthCodeStr := MonthCodeStringFromProperty(VMonthCode, AMethod);
-      if not IsMonthCodeSyntaxValid(MonthCodeStr) then
-        ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
-    end;
-
-    VNanosecond := Obj.GetProperty(PROPERTY_NANOSECOND);
-    TimeRec.Nanosecond := OptionalIntegerField(VNanosecond, 0);
-    VOffset := Obj.GetProperty(PROPERTY_OFFSET);
-    HasOffset := not IsUndefinedValue(VOffset);
-    OffsetStr := '';
-    if HasOffset then
-    begin
-      OffsetStr := OffsetStringFromProperty(VOffset, AMethod);
-      if (not ParseZonedDateTimeOffsetPart(OffsetStr, OffsetSeconds,
-        OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax)) or OffsetHasUTCDesignator then
-        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
-    end
-    else
-      OffsetSeconds := 0;
-    VSecond := Obj.GetProperty(PROPERTY_SECOND);
-    TimeRec.Second := OptionalIntegerField(VSecond, 0);
-    VTimeZone := Obj.GetProperty(PROPERTY_TIME_ZONE);
-    TimeZoneStr := TimeZoneFromProperty(VTimeZone, AMethod);
-    VYear := Obj.GetProperty(PROPERTY_YEAR);
-    if not IsUndefinedValue(VYear) then
-      Year := ToIntegerWithTruncationValue(VYear)
-    else if CalendarHasEra and HasEra then
-      Year := EraResolvedYear
-    else
-      ThrowTypeError(AMethod + ' requires year property', SSuggestTemporalFromArg);
-
-    ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
-      Disambiguation);
-
-    if HasMonthCode then
-    begin
-      if not TryParseTemporalMonthCode(MonthCodeStr, MonthPart, IsLeapMonth) then
-        ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
-      if (CalendarId = 'iso8601') and (IsLeapMonth or (MonthPart < 1) or
-         (MonthPart > 12)) then
-        ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
-      if (CalendarId = 'iso8601') and HasMonth and (Month <> MonthPart) then
-        ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
-      Month := MonthPart;
-    end
-    else if not HasMonth then
-      ThrowTypeError(AMethod + ' requires month property', SSuggestTemporalFromArg);
-
-    if Month < 0 then
-      ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Month]), SSuggestTemporalDateRange);
-    if (CalendarId = 'iso8601') and ((Month < 1) or (Month > 12)) then
-    begin
-      if Overflow = toReject then
-        ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Month]), SSuggestTemporalDateRange);
-      if Month < 1 then
-        Month := 1
+      VDay := Obj.GetProperty(PROPERTY_DAY);
+      FieldRoots.Add(VDay);
+      Day := RequiredIntegerField(VDay, PROPERTY_DAY);
+      VHour := Obj.GetProperty(PROPERTY_HOUR);
+      FieldRoots.Add(VHour);
+      TimeRec.Hour := OptionalIntegerField(VHour, 0);
+      VMicrosecond := Obj.GetProperty(PROPERTY_MICROSECOND);
+      FieldRoots.Add(VMicrosecond);
+      TimeRec.Microsecond := OptionalIntegerField(VMicrosecond, 0);
+      VMillisecond := Obj.GetProperty(PROPERTY_MILLISECOND);
+      FieldRoots.Add(VMillisecond);
+      TimeRec.Millisecond := OptionalIntegerField(VMillisecond, 0);
+      VMinute := Obj.GetProperty(PROPERTY_MINUTE);
+      FieldRoots.Add(VMinute);
+      TimeRec.Minute := OptionalIntegerField(VMinute, 0);
+      VMonth := Obj.GetProperty(PROPERTY_MONTH);
+      FieldRoots.Add(VMonth);
+      HasMonth := not IsUndefinedValue(VMonth);
+      SuppliedMonth := 0;
+      if HasMonth then
+      begin
+        Month := ToIntegerWithTruncationValue(VMonth);
+        SuppliedMonth := Month;
+      end
       else
-        Month := 12;
-    end;
+        Month := 0;
 
-    if Day < 0 then
-      ThrowRangeError(Format(SErrorTemporalDayOutOfRange, [Day]), SSuggestTemporalDateRange);
-    if Day < 1 then
-    begin
-      if Overflow = toReject then
-        ThrowRangeError(Format(SErrorTemporalDayOutOfRange, [Day]), SSuggestTemporalDateRange);
-      Day := 1;
-    end;
-    if CalendarId = 'iso8601' then
-    begin
-      MaxDay := DaysInMonth(Year, Month);
-      if Day > MaxDay then
+      VMonthCode := Obj.GetProperty(PROPERTY_MONTH_CODE);
+      FieldRoots.Add(VMonthCode);
+      HasMonthCode := not IsUndefinedValue(VMonthCode);
+      MonthCodeStr := '';
+      if HasMonthCode then
+      begin
+        MonthCodeStr := MonthCodeStringFromProperty(VMonthCode, AMethod);
+        if not IsMonthCodeSyntaxValid(MonthCodeStr) then
+          ThrowRangeError(SErrorInvalidMonthCodeYearMonth, SSuggestTemporalMonthCode);
+      end;
+
+      VNanosecond := Obj.GetProperty(PROPERTY_NANOSECOND);
+      FieldRoots.Add(VNanosecond);
+      TimeRec.Nanosecond := OptionalIntegerField(VNanosecond, 0);
+      VOffset := Obj.GetProperty(PROPERTY_OFFSET);
+      FieldRoots.Add(VOffset);
+      HasOffset := not IsUndefinedValue(VOffset);
+      OffsetStr := '';
+      if HasOffset then
+      begin
+        OffsetStr := OffsetStringFromProperty(VOffset, AMethod);
+        if (not ParseZonedDateTimeOffsetPart(OffsetStr, OffsetSeconds,
+          OffsetHasUTCDesignator, OffsetHasSubMinuteSyntax)) or OffsetHasUTCDesignator then
+          ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]), SSuggestTemporalISOFormat);
+      end
+      else
+        OffsetSeconds := 0;
+      VSecond := Obj.GetProperty(PROPERTY_SECOND);
+      FieldRoots.Add(VSecond);
+      TimeRec.Second := OptionalIntegerField(VSecond, 0);
+      VTimeZone := Obj.GetProperty(PROPERTY_TIME_ZONE);
+      FieldRoots.Add(VTimeZone);
+      TimeZoneStr := TimeZoneFromProperty(VTimeZone, AMethod);
+      VYear := Obj.GetProperty(PROPERTY_YEAR);
+      FieldRoots.Add(VYear);
+      if not IsUndefinedValue(VYear) then
+        Year := ToIntegerWithTruncationValue(VYear)
+      else if CalendarHasEra and HasEra then
+        Year := EraResolvedYear
+      else
+        ThrowTypeError(AMethod + ' requires year property', SSuggestTemporalFromArg);
+
+      ReadZonedDateTimeOptions(AOptions, AMethod, Overflow, OffsetOption,
+        Disambiguation);
+
+      if HasMonthCode then
+      begin
+        if not TryParseTemporalMonthCode(MonthCodeStr, MonthPart, IsLeapMonth) then
+          ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
+        if (CalendarId = 'iso8601') and (IsLeapMonth or (MonthPart < 1) or
+           (MonthPart > 12)) then
+          ThrowRangeError(SErrorMonthCodeOutOfRange, SSuggestTemporalMonthCode);
+        if (CalendarId = 'iso8601') and HasMonth and (Month <> MonthPart) then
+          ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+        Month := MonthPart;
+      end
+      else if not HasMonth then
+        ThrowTypeError(AMethod + ' requires month property', SSuggestTemporalFromArg);
+
+      if Month < 0 then
+        ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Month]), SSuggestTemporalDateRange);
+      if (CalendarId = 'iso8601') and ((Month < 1) or (Month > 12)) then
       begin
         if Overflow = toReject then
-          ThrowRangeError(Format(SErrorTemporalDayOutOfRangeForMonth, [Day, Month]), SSuggestTemporalDateRange);
-        Day := MaxDay;
+          ThrowRangeError(Format(SErrorTemporalMonthOutOfRange, [Month]), SSuggestTemporalDateRange);
+        if Month < 1 then
+          Month := 1
+        else
+          Month := 12;
       end;
-    end;
 
-    if CalendarId <> 'iso8601' then
+      if Day < 0 then
+        ThrowRangeError(Format(SErrorTemporalDayOutOfRange, [Day]), SSuggestTemporalDateRange);
+      if Day < 1 then
+      begin
+        if Overflow = toReject then
+          ThrowRangeError(Format(SErrorTemporalDayOutOfRange, [Day]), SSuggestTemporalDateRange);
+        Day := 1;
+      end;
+      if CalendarId = 'iso8601' then
+      begin
+        MaxDay := DaysInMonth(Year, Month);
+        if Day > MaxDay then
+        begin
+          if Overflow = toReject then
+            ThrowRangeError(Format(SErrorTemporalDayOutOfRangeForMonth, [Day, Month]), SSuggestTemporalDateRange);
+          Day := MaxDay;
+        end;
+      end;
+
+      if CalendarId <> 'iso8601' then
+      begin
+        if not TryResolveCalendarDateToISO(CalendarId, Year, Month, Day,
+          HasMonthCode, IsLeapMonth, Overflow = toConstrain, ISODate) then
+          ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
+            SSuggestTemporalDateRange);
+        if HasMonth and HasMonthCode and
+           ((not TryGetCalendarDateInfo(CalendarId, ISODate.Year,
+             ISODate.Month, ISODate.Day, Info)) or
+            (Info.Date.Month <> SuppliedMonth)) then
+          ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
+        Year := ISODate.Year;
+        Month := ISODate.Month;
+        Day := ISODate.Day;
+      end;
+
+      if not IsValidTime(TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
+        TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond) then
+        ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalDateRange);
+
+      EpochMs := ApplyOffsetOption(Year, Month, Day, TimeRec, TimeZoneStr,
+        HasOffset, OffsetSeconds, False, OffsetHasSubMinuteSyntax, False,
+        OffsetOption, Disambiguation, AMethod);
+
+      SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
+      if HasOffset and not (OffsetOption in [tooUse, tooIgnore]) then
+        ValidateZonedDateTimeLocalRange(Year, Month, Day, TimeRec, SubMs, AMethod);
+      ValidateZonedDateTimeEpoch(EpochMs, SubMs, AMethod);
+      Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr, CalendarId);
+    end
+    else
     begin
-      if not TryResolveCalendarDateToISO(CalendarId, Year, Month, Day,
-        HasMonthCode, IsLeapMonth, Overflow = toConstrain, ISODate) then
-        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['ZonedDateTime', AMethod]),
-          SSuggestTemporalDateRange);
-      if HasMonth and HasMonthCode and
-         ((not TryGetCalendarDateInfo(CalendarId, ISODate.Year,
-           ISODate.Month, ISODate.Day, Info)) or
-          (Info.Date.Month <> SuppliedMonth)) then
-        ThrowRangeError(SErrorMonthCodeMismatch, SSuggestTemporalMonthCode);
-      Year := ISODate.Year;
-      Month := ISODate.Month;
-      Day := ISODate.Day;
+      ThrowTypeError(AMethod + ' requires a ZonedDateTime, string, or object', SSuggestTemporalFromArg);
+      Result := nil;
     end;
-
-    if not IsValidTime(TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
-      TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond) then
-      ThrowRangeError(SErrorInvalidISOTime, SSuggestTemporalDateRange);
-
-    EpochMs := ApplyOffsetOption(Year, Month, Day, TimeRec, TimeZoneStr,
-      HasOffset, OffsetSeconds, False, OffsetHasSubMinuteSyntax, False,
-      OffsetOption, Disambiguation, AMethod);
-
-    SubMs := TimeRec.Microsecond * 1000 + TimeRec.Nanosecond;
-    if HasOffset and not (OffsetOption in [tooUse, tooIgnore]) then
-      ValidateZonedDateTimeLocalRange(Year, Month, Day, TimeRec, SubMs, AMethod);
-    ValidateZonedDateTimeEpoch(EpochMs, SubMs, AMethod);
-    Result := TGocciaTemporalZonedDateTimeValue.Create(EpochMs, SubMs, TimeZoneStr, CalendarId);
-  end
-  else
-  begin
-    ThrowTypeError(AMethod + ' requires a ZonedDateTime, string, or object', SSuggestTemporalFromArg);
-    Result := nil;
+  finally
+    FieldRoots.Clear;
   end;
 end;
 

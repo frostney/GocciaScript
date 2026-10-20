@@ -3332,115 +3332,124 @@ var
   RelRecord: TDurationRelativeToRecord;
   ResolvedDays: Int64;
   TotalNsBig: TBigInteger;
+  RelToRoots: TGocciaActiveRootFrame;
 begin
+  // relativeTo can be a value its getter made; it is read again after the
+  // unit getter and the other options run.
+  RelToRoots.Initialize;
   try
-  D := AsDuration(AThisValue, 'Duration.prototype.total');
-  Arg := AArgs.GetElement(0);
-  HasRelativeTo := False;
-  HasZonedRelativeTo := False;
+    try
+    D := AsDuration(AThisValue, 'Duration.prototype.total');
+    Arg := AArgs.GetElement(0);
+    HasRelativeTo := False;
+    HasZonedRelativeTo := False;
 
-  if Arg is TGocciaStringLiteralValue then
-    UnitStr := TGocciaStringLiteralValue(Arg).Value
-  else if Arg is TGocciaObjectValue then
-  begin
-    OptionsObj := TGocciaObjectValue(Arg);
-
-    RelToArg := OptionsObj.GetProperty('relativeTo');
-    HasRelativeTo := (RelToArg <> nil) and not (RelToArg is TGocciaUndefinedLiteralValue);
-    if HasRelativeTo then
+    if Arg is TGocciaStringLiteralValue then
+      UnitStr := TGocciaStringLiteralValue(Arg).Value
+    else if Arg is TGocciaObjectValue then
     begin
-      RelRecord := ParseRelativeToRecord(RelToArg, 'Duration.prototype.total');
-      HasZonedRelativeTo := RelRecord.IsZoned;
-      RelDate := RelRecord.Date;
+      OptionsObj := TGocciaObjectValue(Arg);
+
+      RelToArg := OptionsObj.GetProperty('relativeTo');
+      RelToRoots.Add(RelToArg);
+      HasRelativeTo := (RelToArg <> nil) and not (RelToArg is TGocciaUndefinedLiteralValue);
+      if HasRelativeTo then
+      begin
+        RelRecord := ParseRelativeToRecord(RelToArg, 'Duration.prototype.total');
+        HasZonedRelativeTo := RelRecord.IsZoned;
+        RelDate := RelRecord.Date;
+      end;
+
+      Arg := OptionsObj.GetProperty('unit');
+      if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
+        ThrowRangeError(SErrorDurationTotalRequiresUnit, SSuggestTemporalValidUnits);
+      UnitStr := Arg.ToStringLiteral.Value;
+    end
+    else
+    begin
+      ThrowTypeError(SErrorDurationTotalRequiresStringOrOptions, SSuggestTemporalValidUnits);
+      UnitStr := '';
     end;
 
-    Arg := OptionsObj.GetProperty('unit');
-    if (Arg = nil) or (Arg is TGocciaUndefinedLiteralValue) then
-      ThrowRangeError(SErrorDurationTotalRequiresUnit, SSuggestTemporalValidUnits);
-    UnitStr := Arg.ToStringLiteral.Value;
-  end
-  else
-  begin
-    ThrowTypeError(SErrorDurationTotalRequiresStringOrOptions, SSuggestTemporalValidUnits);
-    UnitStr := '';
-  end;
+    // Validate unit (accepts both singular and plural: 'hour'/'hours', 'day'/'days', etc.)
+    if not GetTemporalUnitFromString(UnitStr, TargetUnit) or
+       (TargetUnit = tuAuto) or (TargetUnit = tuNone) then
+    begin
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Duration.prototype.total', UnitStr]), SSuggestTemporalValidUnits);
+      TargetUnit := tuNanosecond;
+    end;
 
-  // Validate unit (accepts both singular and plural: 'hour'/'hours', 'day'/'days', etc.)
-  if not GetTemporalUnitFromString(UnitStr, TargetUnit) or
-     (TargetUnit = tuAuto) or (TargetUnit = tuNone) then
-  begin
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Duration.prototype.total', UnitStr]), SSuggestTemporalValidUnits);
-    TargetUnit := tuNanosecond;
-  end;
-
-  if HasRelativeTo and (not HasZonedRelativeTo) and
-     (IsDurationDateUnit(TargetUnit) or DurationHasDateUnits(D)) then
-    ValidateDurationTotalPlainDateRange(D, RelRecord.CalendarId, RelDate,
-      'Duration.prototype.total');
-  if HasRelativeTo and (not HasZonedRelativeTo) and
-     (not IsDurationDateUnit(TargetUnit)) and (D.ComputeSign <> 0) and
-     DurationDateBefore(RelDate.Year, RelDate.Month, RelDate.Day,
-       -271821, 4, 20) then
-    ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
-      ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
-
-  if HasZonedRelativeTo then
-  begin
-    ValidateDurationTotalZonedRange(D, RelRecord, TargetUnit,
-      'Duration.prototype.total');
-    Result := TGocciaNumberLiteralValue.Create(DurationTotalZoned(D,
-      RelRecord, TargetUnit));
-    Exit;
-  end;
-
-  // Calendar target units always require relativeTo.
-  if (TargetUnit = tuMonth) or (TargetUnit = tuYear) then
-  begin
-    if not HasRelativeTo then
-      ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
-    if DurationExactTimeZonedEndOutOfRange(D, RelToArg,
-      'Duration.prototype.total') then
+    if HasRelativeTo and (not HasZonedRelativeTo) and
+       (IsDurationDateUnit(TargetUnit) or DurationHasDateUnits(D)) then
+      ValidateDurationTotalPlainDateRange(D, RelRecord.CalendarId, RelDate,
+        'Duration.prototype.total');
+    if HasRelativeTo and (not HasZonedRelativeTo) and
+       (not IsDurationDateUnit(TargetUnit)) and (D.ComputeSign <> 0) and
+       DurationDateBefore(RelDate.Year, RelDate.Month, RelDate.Day,
+         -271821, 4, 20) then
       ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
         ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
-    if TargetUnit = tuMonth then
-      Result := TotalInMonths(D, RelRecord.CalendarId, RelDate)
-    else
-      Result := TotalInYears(D, RelRecord.CalendarId, RelDate);
-    Exit;
-  end;
-  if (TargetUnit = tuWeek) and (not HasRelativeTo) then
-    ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
 
-  // Calendar source components (years/months/weeks) require relativeTo.
-  if DurationHasCalendarUnits(D) then
-  begin
-    if not HasRelativeTo then
+    if HasZonedRelativeTo then
+    begin
+      ValidateDurationTotalZonedRange(D, RelRecord, TargetUnit,
+        'Duration.prototype.total');
+      Result := TGocciaNumberLiteralValue.Create(DurationTotalZoned(D,
+        RelRecord, TargetUnit));
+      Exit;
+    end;
+
+    // Calendar target units always require relativeTo.
+    if (TargetUnit = tuMonth) or (TargetUnit = tuYear) then
+    begin
+      if not HasRelativeTo then
+        ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
+      if DurationExactTimeZonedEndOutOfRange(D, RelToArg,
+        'Duration.prototype.total') then
+        ThrowRangeError(Format(SErrorTemporalInvalidRelativeTo,
+          ['Duration.prototype.total']), SSuggestTemporalRelativeTo);
+      if TargetUnit = tuMonth then
+        Result := TotalInMonths(D, RelRecord.CalendarId, RelDate)
+      else
+        Result := TotalInYears(D, RelRecord.CalendarId, RelDate);
+      Exit;
+    end;
+    if (TargetUnit = tuWeek) and (not HasRelativeTo) then
       ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
 
-    ResolvedDays := ResolveRelativeDays(RelRecord.CalendarId, RelDate,
-      BigIntToCheckedInt64(D.FYearsBig, 'years'),
-      BigIntToCheckedInt64(D.FMonthsBig, 'months'),
-      BigIntToCheckedInt64(D.FWeeksBig, 'weeks'),
-      BigIntToCheckedInt64(D.FDaysBig, 'days'));
+    // Calendar source components (years/months/weeks) require relativeTo.
+    if DurationHasCalendarUnits(D) then
+    begin
+      if not HasRelativeTo then
+        ThrowRangeError(SErrorDurationTotalRequiresRelativeTo, SSuggestTemporalRelativeTo);
 
-    TotalNsBig := DurationSubDayNanosecondsBig(D)
-      .Add(BigIntUnit(ResolvedDays).Multiply(BigIntUnit(NANOSECONDS_PER_DAY)));
-  end
-  else
-    TotalNsBig := DurationTotalNanosecondsBig(D);
+      ResolvedDays := ResolveRelativeDays(RelRecord.CalendarId, RelDate,
+        BigIntToCheckedInt64(D.FYearsBig, 'years'),
+        BigIntToCheckedInt64(D.FMonthsBig, 'months'),
+        BigIntToCheckedInt64(D.FWeeksBig, 'weeks'),
+        BigIntToCheckedInt64(D.FDaysBig, 'days'));
 
-  if TargetUnit = tuNanosecond then
-    Result := TGocciaNumberLiteralValue.Create(TotalNsBig.ToDouble)
-  else if TargetUnit = tuWeek then
-    Result := TGocciaNumberLiteralValue.Create(
-      TotalNanosecondsToUnitDouble(TotalNsBig, 7 * NANOSECONDS_PER_DAY))
-  else
-    Result := TGocciaNumberLiteralValue.Create(
-      TotalNanosecondsToUnitDouble(TotalNsBig,
-        UnitToNanoseconds(TargetUnit)));
-  except
-    on E: ETemporalDurationInt64Overflow do
-      ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+      TotalNsBig := DurationSubDayNanosecondsBig(D)
+        .Add(BigIntUnit(ResolvedDays).Multiply(BigIntUnit(NANOSECONDS_PER_DAY)));
+    end
+    else
+      TotalNsBig := DurationTotalNanosecondsBig(D);
+
+    if TargetUnit = tuNanosecond then
+      Result := TGocciaNumberLiteralValue.Create(TotalNsBig.ToDouble)
+    else if TargetUnit = tuWeek then
+      Result := TGocciaNumberLiteralValue.Create(
+        TotalNanosecondsToUnitDouble(TotalNsBig, 7 * NANOSECONDS_PER_DAY))
+    else
+      Result := TGocciaNumberLiteralValue.Create(
+        TotalNanosecondsToUnitDouble(TotalNsBig,
+          UnitToNanoseconds(TargetUnit)));
+    except
+      on E: ETemporalDurationInt64Overflow do
+        ThrowRangeError(E.Message, SSuggestTemporalDurationRange);
+    end;
+  finally
+    RelToRoots.Clear;
   end;
 end;
 

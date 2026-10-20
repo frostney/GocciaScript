@@ -648,6 +648,32 @@ begin
     '   relativeTo: { calendar: "gregory", get era() { return fresh(g.era); }, get eraYear() { fresh("pad"); return g.eraYear; },' + LineEnding +
     '     get month() { return g.month; }, get day() { return g.day; },' + LineEnding +
     '     get timeZone() { return fresh("UTC"); } } })].map(String);');
+  // Review round 5: a getter's fresh result held natively across later
+  // getters or conversions.
+  RunStressed('getter-results.js',
+    'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
+    'const g = new Temporal.PlainDate(2024, 3, 15, "gregory");' + LineEnding +
+    'const eraBag = (extra) => ({ calendar: "gregory", get era() { return fresh(g.era); },' + LineEnding +
+    '  get eraYear() { fresh("pad"); return g.eraYear; }, month: 3, day: 15, ...extra });' + LineEnding +
+    'class Holder { constructor() { this.made = fresh("made"); } }' + LineEnding +
+    'const out = [' + LineEnding +
+    '  g.equals(eraBag({})),' + LineEnding +
+    '  new Temporal.PlainDateTime(2024, 3, 15, 0, 0, 0, 0, 0, 0, "gregory").equals(eraBag({})),' + LineEnding +
+    '  Temporal.ZonedDateTime.from(eraBag({ timeZone: "UTC" })).toString(),' + LineEnding +
+    '  Temporal.Duration.from({ hours: 30 }).total({ get relativeTo() { return Temporal.PlainDate.from("2024-01-01"); },' + LineEnding +
+    '    get unit() { fresh("pad"); return "months"; } }),' + LineEnding +
+    '  Temporal.Duration.from({ hours: 30 }).total({' + LineEnding +
+    '    get relativeTo() { return Temporal.ZonedDateTime.from("2024-01-01T00:00[UTC]"); },' + LineEnding +
+    '    get unit() { fresh("pad"); return "months"; } }),' + LineEnding +
+    '  Array.from.call(Holder, { get [Symbol.iterator]() { return () => [1, 2][Symbol.iterator](); } }).made,' + LineEnding +
+    '  new Response("x", { get headers() { return { a: { toString() { return fresh("v"); } }, b: "c" }; } }).headers.get("b"),' + LineEnding +
+    '  String.raw({ get raw() { return { length: 3, 0: "a", 1: "b", 2: "c" }; } },' + LineEnding +
+    '    { toString() { return fresh("s"); } }, { toString() { return fresh("t"); } }),' + LineEnding +
+    '];' + LineEnding +
+    'const steps = [1, 2];' + LineEnding +
+    'const asyncSource = { get [Symbol.asyncIterator]() { return () => ({ i: 0,' + LineEnding +
+    '  get next() { return () => { fresh("n"); return Promise.resolve(this.i < 2 ? { value: steps[this.i++], done: false } : { done: true }); }; } }); } };' + LineEnding +
+    'globalThis.getterResults = [out, Array.fromAsync.call(Holder, asyncSource, (v) => fresh(String(v)))];');
   // A field read from a property bag (a getter's fresh number) was held only
   // by a local while the next field's getter made a string.
   RunStressed('temporal-from-bag.js',

@@ -441,6 +441,7 @@ end;
 procedure TGocciaResponseValue.InitializeNativeFromArguments(
   const AArguments: TGocciaArgumentsCollection);
 var
+  HeaderRoots: TGocciaActiveRootFrame;
   BodyArg, InitArg, PropVal: TGocciaValue;
   InitObj, HeadersObj: TGocciaObjectValue;
   PropNames: TArray<string>;
@@ -492,10 +493,18 @@ begin
     else if PropVal is TGocciaObjectValue then
     begin
       HeadersObj := TGocciaObjectValue(PropVal);
-      PropNames := HeadersObj.GetAllPropertyNames;
-      for I := 0 to High(PropNames) do
-        FHeaders.AddHeader(PropNames[I],
-          HeadersObj.GetProperty(PropNames[I]).ToStringLiteral.Value);
+      // A getter can return a fresh headers object, held only here while
+      // each value converts (a toString can allocate and collect).
+      HeaderRoots.Initialize;
+      try
+        HeaderRoots.Add(HeadersObj);
+        PropNames := HeadersObj.GetAllPropertyNames;
+        for I := 0 to High(PropNames) do
+          FHeaders.AddHeader(PropNames[I],
+            HeadersObj.GetProperty(PropNames[I]).ToStringLiteral.Value);
+      finally
+        HeaderRoots.Clear;
+      end;
     end;
   end;
 end;

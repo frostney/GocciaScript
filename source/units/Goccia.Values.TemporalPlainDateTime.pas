@@ -420,6 +420,7 @@ end;
 
 function CoercePlainDateTime(const AValue: TGocciaValue; const AMethod: string): TGocciaTemporalPlainDateTimeValue;
 var
+  FieldRoots: TGocciaActiveRootFrame;
   DateRec: TTemporalDateRecord;
   TimeRec: TTemporalTimeRecord;
   Obj: TGocciaObjectValue;
@@ -448,122 +449,137 @@ var
   end;
 
 begin
-  CalendarId := 'iso8601';
-  if AValue is TGocciaTemporalPlainDateTimeValue then
-    Result := TGocciaTemporalPlainDateTimeValue(AValue)
-  else if AValue is TGocciaTemporalPlainDateValue then
-  begin
-    Result := TGocciaTemporalPlainDateTimeValue.Create(
-      TGocciaTemporalPlainDateValue(AValue).Year,
-      TGocciaTemporalPlainDateValue(AValue).Month,
-      TGocciaTemporalPlainDateValue(AValue).Day,
-      0, 0, 0, 0, 0, 0,
-      TGocciaTemporalPlainDateValue(AValue).CalendarId);
-  end
-  else if AValue is TGocciaTemporalZonedDateTimeValue then
-  begin
-    EmptyArgs := TGocciaArgumentsCollection.Create([]);
-    try
-      Converted := TGocciaTemporalZonedDateTimeValue(AValue).ZonedDateTimeToPlainDateTime(EmptyArgs, AValue);
-      Result := TGocciaTemporalPlainDateTimeValue(Converted);
-    finally
-      EmptyArgs.Free;
-    end;
-  end
-  else if AValue is TGocciaStringLiteralValue then
-  begin
-    if (not TryExtractTemporalCalendarAnnotation(
-         TGocciaStringLiteralValue(AValue).Value, CalendarId)) or
-       (not CoerceToISODateTime(
-         PlainDateTimeStringWithConstrainedLeapSecond(
-           TGocciaStringLiteralValue(AValue).Value), DateRec, TimeRec)) then
-      ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalISOFormat);
-    ValidatePlainDateTimeRange(DateRec.Year, DateRec.Month, DateRec.Day,
-      TimeRec.Hour, TimeRec.Minute, TimeRec.Second, TimeRec.Millisecond,
-      TimeRec.Microsecond, TimeRec.Nanosecond, AMethod);
-    Result := TGocciaTemporalPlainDateTimeValue.Create(
-      DateRec.Year, DateRec.Month, DateRec.Day,
-      TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
-      TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond, CalendarId);
-  end
-  else if AValue is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(AValue);
-    V := Obj.GetProperty('calendar');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      CalendarId := CalendarFromProperty(V, AMethod);
-    V := Obj.GetProperty('day');
-    HasDay := Assigned(V) and not (V is TGocciaUndefinedLiteralValue);
-    if HasDay then
-      VDay := ToIntegerWithTruncationValue(V);
-    VHour := GetOptionalField('hour', 0);
-    VMicrosecond := GetOptionalField('microsecond', 0);
-    VMillisecond := GetOptionalField('millisecond', 0);
-    VMinute := GetOptionalField('minute', 0);
-    VMonthValue := Obj.GetProperty(PROP_MONTH);
-    HasMonth := Assigned(VMonthValue) and not (VMonthValue is TGocciaUndefinedLiteralValue);
-    if HasMonth then
+  // A value read from the property bag (a getter can make it fresh) is
+  // held only by its local while the next fields are read and converted,
+  // which can run getters and allocate.
+  FieldRoots.Initialize;
+  try
+    CalendarId := 'iso8601';
+    if AValue is TGocciaTemporalPlainDateTimeValue then
+      Result := TGocciaTemporalPlainDateTimeValue(AValue)
+    else if AValue is TGocciaTemporalPlainDateValue then
     begin
-      MonthFieldValue := ToIntegerWithTruncationValue(VMonthValue);
-      VMonth := MonthFieldValue;
-    end;
-    VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
-    HasMonthCode := Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue);
-    if HasMonthCode then
-    begin
-      MonthCodeStr := VMonthCode.ToStringLiteral.Value;
-      if not TryParseTemporalMonthCode(MonthCodeStr, VMonth, IsLeapMonth) then
-        ThrowTypeError(Format(SErrorInvalidMonthCodeFor, [AMethod]), SSuggestTemporalMonthCode);
-      if HasMonth and (MonthFieldValue <> VMonth) then
-        ThrowRangeError(Format(SErrorMonthCodeMismatchIn, [AMethod]), SSuggestTemporalMonthCode);
+      Result := TGocciaTemporalPlainDateTimeValue.Create(
+        TGocciaTemporalPlainDateValue(AValue).Year,
+        TGocciaTemporalPlainDateValue(AValue).Month,
+        TGocciaTemporalPlainDateValue(AValue).Day,
+        0, 0, 0, 0, 0, 0,
+        TGocciaTemporalPlainDateValue(AValue).CalendarId);
     end
-    else if not HasMonth then
-      VMonth := 0;
-    VNanosecond := GetOptionalField('nanosecond', 0);
-    VSecond := GetOptionalField('second', 0);
-    V := Obj.GetProperty('year');
-    HasYear := Assigned(V) and not (V is TGocciaUndefinedLiteralValue);
-    if HasYear then
-      VYear := ToIntegerWithTruncationValue(V);
-
-    if not HasDay or (not HasMonth and not HasMonthCode) then
-      ThrowTypeError(AMethod + ' requires year, month, day properties',
-        SSuggestTemporalFromArg);
-    if not HasYear then
+    else if AValue is TGocciaTemporalZonedDateTimeValue then
     begin
-      VEra := Obj.GetProperty('era');
-      VEraYear := Obj.GetProperty('eraYear');
-      if (VEra = nil) or (VEra is TGocciaUndefinedLiteralValue) or
-         (VEraYear = nil) or (VEraYear is TGocciaUndefinedLiteralValue) or
-         not TryCalendarYearFromEra(CalendarId, VEra.ToStringLiteral.Value,
-           ToIntegerWithTruncationValue(VEraYear), VYear) then
-        ThrowTypeError(AMethod + ' requires year property', SSuggestTemporalFromArg);
-    end;
-    ConstrainPlainDateTimeLeapSecond(VSecond);
-    if CalendarId <> 'iso8601' then
+      EmptyArgs := TGocciaArgumentsCollection.Create([]);
+      try
+        Converted := TGocciaTemporalZonedDateTimeValue(AValue).ZonedDateTimeToPlainDateTime(EmptyArgs, AValue);
+        Result := TGocciaTemporalPlainDateTimeValue(Converted);
+      finally
+        EmptyArgs.Free;
+      end;
+    end
+    else if AValue is TGocciaStringLiteralValue then
     begin
+      if (not TryExtractTemporalCalendarAnnotation(
+           TGocciaStringLiteralValue(AValue).Value, CalendarId)) or
+         (not CoerceToISODateTime(
+           PlainDateTimeStringWithConstrainedLeapSecond(
+             TGocciaStringLiteralValue(AValue).Value), DateRec, TimeRec)) then
+        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalISOFormat);
+      ValidatePlainDateTimeRange(DateRec.Year, DateRec.Month, DateRec.Day,
+        TimeRec.Hour, TimeRec.Minute, TimeRec.Second, TimeRec.Millisecond,
+        TimeRec.Microsecond, TimeRec.Nanosecond, AMethod);
+      Result := TGocciaTemporalPlainDateTimeValue.Create(
+        DateRec.Year, DateRec.Month, DateRec.Day,
+        TimeRec.Hour, TimeRec.Minute, TimeRec.Second,
+        TimeRec.Millisecond, TimeRec.Microsecond, TimeRec.Nanosecond, CalendarId);
+    end
+    else if AValue is TGocciaObjectValue then
+    begin
+      Obj := TGocciaObjectValue(AValue);
+      V := Obj.GetProperty('calendar');
+      FieldRoots.Add(V);
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+        CalendarId := CalendarFromProperty(V, AMethod);
+      V := Obj.GetProperty('day');
+      FieldRoots.Add(V);
+      HasDay := Assigned(V) and not (V is TGocciaUndefinedLiteralValue);
+      if HasDay then
+        VDay := ToIntegerWithTruncationValue(V);
+      VHour := GetOptionalField('hour', 0);
+      VMicrosecond := GetOptionalField('microsecond', 0);
+      VMillisecond := GetOptionalField('millisecond', 0);
+      VMinute := GetOptionalField('minute', 0);
+      VMonthValue := Obj.GetProperty(PROP_MONTH);
+      FieldRoots.Add(VMonthValue);
+      HasMonth := Assigned(VMonthValue) and not (VMonthValue is TGocciaUndefinedLiteralValue);
+      if HasMonth then
+      begin
+        MonthFieldValue := ToIntegerWithTruncationValue(VMonthValue);
+        VMonth := MonthFieldValue;
+      end;
+      VMonthCode := Obj.GetProperty(PROP_MONTH_CODE);
+      FieldRoots.Add(VMonthCode);
+      HasMonthCode := Assigned(VMonthCode) and not (VMonthCode is TGocciaUndefinedLiteralValue);
       if HasMonthCode then
       begin
-        if not TryCalendarMonthCodeDateToISO(CalendarId, VYear, VMonth, VDay,
-          IsLeapMonth, DateRec) then
-          ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalDateRange);
+        MonthCodeStr := VMonthCode.ToStringLiteral.Value;
+        if not TryParseTemporalMonthCode(MonthCodeStr, VMonth, IsLeapMonth) then
+          ThrowTypeError(Format(SErrorInvalidMonthCodeFor, [AMethod]), SSuggestTemporalMonthCode);
+        if HasMonth and (MonthFieldValue <> VMonth) then
+          ThrowRangeError(Format(SErrorMonthCodeMismatchIn, [AMethod]), SSuggestTemporalMonthCode);
       end
-      else if not TryCalendarDateToISO(CalendarId, VYear, VMonth, VDay, DateRec) then
-        ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalDateRange);
-      VYear := DateRec.Year;
-      VMonth := DateRec.Month;
-      VDay := DateRec.Day;
+      else if not HasMonth then
+        VMonth := 0;
+      VNanosecond := GetOptionalField('nanosecond', 0);
+      VSecond := GetOptionalField('second', 0);
+      V := Obj.GetProperty('year');
+      FieldRoots.Add(V);
+      HasYear := Assigned(V) and not (V is TGocciaUndefinedLiteralValue);
+      if HasYear then
+        VYear := ToIntegerWithTruncationValue(V);
+
+      if not HasDay or (not HasMonth and not HasMonthCode) then
+        ThrowTypeError(AMethod + ' requires year, month, day properties',
+          SSuggestTemporalFromArg);
+      if not HasYear then
+      begin
+        VEra := Obj.GetProperty('era');
+        FieldRoots.Add(VEra);
+        VEraYear := Obj.GetProperty('eraYear');
+        FieldRoots.Add(VEraYear);
+        if (VEra = nil) or (VEra is TGocciaUndefinedLiteralValue) or
+           (VEraYear = nil) or (VEraYear is TGocciaUndefinedLiteralValue) or
+           not TryCalendarYearFromEra(CalendarId, VEra.ToStringLiteral.Value,
+             ToIntegerWithTruncationValue(VEraYear), VYear) then
+          ThrowTypeError(AMethod + ' requires year property', SSuggestTemporalFromArg);
+      end;
+      ConstrainPlainDateTimeLeapSecond(VSecond);
+      if CalendarId <> 'iso8601' then
+      begin
+        if HasMonthCode then
+        begin
+          if not TryCalendarMonthCodeDateToISO(CalendarId, VYear, VMonth, VDay,
+            IsLeapMonth, DateRec) then
+            ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalDateRange);
+        end
+        else if not TryCalendarDateToISO(CalendarId, VYear, VMonth, VDay, DateRec) then
+          ThrowRangeError(Format(SErrorTemporalInvalidISOStringFor, ['date-time', AMethod]), SSuggestTemporalDateRange);
+        VYear := DateRec.Year;
+        VMonth := DateRec.Month;
+        VDay := DateRec.Day;
+      end;
+      ValidatePlainDateTimeRange(VYear, VMonth, VDay, VHour, VMinute, VSecond,
+        VMillisecond, VMicrosecond, VNanosecond, AMethod);
+      Result := TGocciaTemporalPlainDateTimeValue.Create(
+        VYear, VMonth, VDay, VHour, VMinute, VSecond, VMillisecond, VMicrosecond,
+        VNanosecond, CalendarId);
+    end
+    else
+    begin
+      ThrowTypeError(AMethod + ' requires a PlainDateTime, string, or object', SSuggestTemporalFromArg);
+      Result := nil;
     end;
-    ValidatePlainDateTimeRange(VYear, VMonth, VDay, VHour, VMinute, VSecond,
-      VMillisecond, VMicrosecond, VNanosecond, AMethod);
-    Result := TGocciaTemporalPlainDateTimeValue.Create(
-      VYear, VMonth, VDay, VHour, VMinute, VSecond, VMillisecond, VMicrosecond,
-      VNanosecond, CalendarId);
-  end
-  else
-  begin
-    ThrowTypeError(AMethod + ' requires a PlainDateTime, string, or object', SSuggestTemporalFromArg);
-    Result := nil;
+  finally
+    FieldRoots.Clear;
   end;
 end;
 
