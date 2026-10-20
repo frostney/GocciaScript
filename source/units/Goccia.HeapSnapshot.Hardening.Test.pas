@@ -655,16 +655,14 @@ begin
     TestEveryCeilingWhileEveryReservationCollects);
   Test('Restoring the same mutants again leaves the heap where it was',
     TestRepeatedMutantsLeaveTheHeap);
+  Test('An engine built while every reservation collects first',
+    TestEngineBuiltWhileEveryReservationCollects);
   Test('A reservation past what one allocation can hold is refused before ' +
     'it is charged', TestReservationPastOneAllocationRefuses);
   Test('An input past what one allocation can hold is refused from its ' +
     'size', TestInputPastOneAllocationRefuses);
-  // Found by these tests, outside the reader; each runs once its issue is
+  // Found by these tests, outside the reader; it runs once its issue is
   // fixed.
-  Skip('An engine built while every reservation collects first',
-    TestEngineBuiltWhileEveryReservationCollects,
-    'GocciaScript #1816: engine creation and ' +
-    'EnsureConcreteIteratorPrototype hold new objects unrooted');
   Skip('EvaluateGlobalEval called directly computes NaN',
     TestGlobalEvalComputesNaN,
     'GocciaScript #1817: EvaluateGlobalEval does not set the ' +

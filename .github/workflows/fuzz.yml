@@ -502,6 +502,41 @@ jobs:
           done
           exit $status
 
+      - name: GC stress under heaptrc and Valgrind
+        # Goccia.GCStress.Test collects before every reservation over engine
+        # creation, the lazy initialisers and the native construction paths,
+        # keeping what each sweep takes in quarantine (issue #1816; see
+        # docs/contributing/tooling.md, "GC stress at every reservation"). It
+        # also runs per PR with the other unit tests. Here heaptrc checks that
+        # every block it allocated is freed by the end. Under memcheck it runs
+        # with GOCCIA_GC_STRESS_FREE=1, so each sweep frees what it takes
+        # rather than keeping it: a native path that only reads a value after
+        # it was swept (a key list, an operand) is an invalid read there,
+        # which the quarantine cannot see. The memcheck build loads cmem first
+        # (-Facmem), so a freed object goes back to the C allocator, which
+        # memcheck tracks; FPC's own heap would keep it as valid memory and
+        # hide the read. Under memcheck it takes about two and a half minutes.
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p build/compiled/targets/gcstress-heaptrc \
+            build/compiled/targets/gcstress-memcheck
+          fpc @config.cfg -gh -gl -FUbuild/compiled/targets/gcstress-heaptrc \
+            -obuild/GCStressHeaptrc source/units/Goccia.GCStress.Test.pas
+          ./build/GCStressHeaptrc 2> build/gc-stress-heaptrc.log
+          tail -5 build/gc-stress-heaptrc.log
+          if ! grep -qE '^0 unfreed memory blocks' build/gc-stress-heaptrc.log; then
+            echo "::error::heaptrc reported unfreed blocks after the GC stress test"
+            exit 1
+          fi
+          fpc @config.cfg -Facmem -O- -gw -gl -FUbuild/compiled/targets/gcstress-memcheck \
+            -obuild/GCStressMemcheck source/units/Goccia.GCStress.Test.pas
+          GOCCIA_GC_STRESS_FREE=1 valgrind --tool=memcheck --error-exitcode=42 \
+            --suppressions=scripts/valgrind/fpc-rtl.supp \
+            --errors-for-leak-kinds=none --leak-check=no \
+            --log-file=build/valgrind-gc-stress.log \
+            ./build/GCStressMemcheck > build/gc-stress-memcheck.log 2>&1
+          tail -5 build/valgrind-gc-stress.log
+
       - name: Upload memory-safety logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

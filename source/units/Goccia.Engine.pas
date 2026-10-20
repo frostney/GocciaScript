@@ -1799,261 +1799,275 @@ var
   BooleanConstructor: TGocciaBooleanClassValue;
   TypeDef: TGocciaTypeDefinition;
   TypedArrayStatic: TGocciaTypedArrayStaticFrom;
+  Roots: TGocciaActiveRootFrame;
 begin
-  TGocciaObjectValue.InitializeSharedPrototype;
-  TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaObjectClassValue;
-  TypeDef.ExposePrototype := nil;
-  TypeDef.PrototypeProvider := @ObjectPrototypeProvider;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
-  TypeDef.PrototypeParent := nil;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
-  FObjectConstructor := ObjectConstructor;
-  if (GetErrorProto <> nil) and (GetErrorProto.Prototype = nil) then
-    GetErrorProto.Prototype := ObjectConstructor.Prototype;
+  // The constructors made here directly are reachable from nothing until the
+  // global scope binds them (%TypedArray% until a typed array constructor
+  // inherits from it), and every allocation in between can collect.
+  Roots.Initialize;
+  try
+    TGocciaObjectValue.InitializeSharedPrototype;
+    TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaObjectClassValue;
+    TypeDef.ExposePrototype := nil;
+    TypeDef.PrototypeProvider := @ObjectPrototypeProvider;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
+    TypeDef.PrototypeParent := nil;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
+    FObjectConstructor := ObjectConstructor;
+    if (GetErrorProto <> nil) and (GetErrorProto.Prototype = nil) then
+      GetErrorProto.Prototype := ObjectConstructor.Prototype;
 
-  TypeDef.ConstructorName := CONSTRUCTOR_ARRAY;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaArrayClassValue;
-  TypeDef.ExposePrototype := @ExposeArrayPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalArray);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  ArrayConstructor := TGocciaArrayClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_ARRAY;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaArrayClassValue;
+    TypeDef.ExposePrototype := @ExposeArrayPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalArray);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := True;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    ArrayConstructor := TGocciaArrayClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_MAP;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaMapClassValue;
-  TypeDef.ExposePrototype := @ExposeMapPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinMap);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  MapConstructor := TGocciaMapClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_MAP;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaMapClassValue;
+    TypeDef.ExposePrototype := @ExposeMapPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinMap);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := True;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    MapConstructor := TGocciaMapClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_SET;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaSetClassValue;
-  TypeDef.ExposePrototype := @ExposeSetPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  SetConstructor := TGocciaSetClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_SET;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaSetClassValue;
+    TypeDef.ExposePrototype := @ExposeSetPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := True;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    SetConstructor := TGocciaSetClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_MAP;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaWeakMapClassValue;
-  TypeDef.ExposePrototype := @ExposeWeakMapPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  WeakMapConstructor := TGocciaWeakMapClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_WEAK_MAP;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaWeakMapClassValue;
+    TypeDef.ExposePrototype := @ExposeWeakMapPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    WeakMapConstructor := TGocciaWeakMapClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_SET;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaWeakSetClassValue;
-  TypeDef.ExposePrototype := @ExposeWeakSetPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  WeakSetConstructor := TGocciaWeakSetClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_WEAK_SET;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaWeakSetClassValue;
+    TypeDef.ExposePrototype := @ExposeWeakSetPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    WeakSetConstructor := TGocciaWeakSetClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_REF;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaWeakRefClassValue;
-  TypeDef.ExposePrototype := @ExposeWeakRefPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  WeakRefConstructor := TGocciaWeakRefClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_WEAK_REF;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaWeakRefClassValue;
+    TypeDef.ExposePrototype := @ExposeWeakRefPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    WeakRefConstructor := TGocciaWeakRefClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_FINALIZATION_REGISTRY;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaFinalizationRegistryClassValue;
-  TypeDef.ExposePrototype := @ExposeFinalizationRegistryPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  FinalizationRegistryConstructor :=
-    TGocciaFinalizationRegistryClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_FINALIZATION_REGISTRY;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaFinalizationRegistryClassValue;
+    TypeDef.ExposePrototype := @ExposeFinalizationRegistryPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    FinalizationRegistryConstructor :=
+      TGocciaFinalizationRegistryClassValue(GenericConstructor);
 
-  ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
-  TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
-  ArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  ArrayBufferConstructor.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownSpecies,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        SpeciesGetter, 'get [Symbol.species]', 0),
-      nil, [pfConfigurable]));
-  if Assigned(FBuiltinArrayBuffer) then
-    for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
-      ArrayBufferConstructor.DefineProperty(Key,
-        TGocciaPropertyDescriptorData.Create(
-          FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key),
-          [pfConfigurable, pfWritable]));
-  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst, True);
+    ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
+    Roots.Add(ArrayBufferConstructor);
+    TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
+    ArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    ArrayBufferConstructor.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
+    if Assigned(FBuiltinArrayBuffer) then
+      for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
+        ArrayBufferConstructor.DefineProperty(Key,
+          TGocciaPropertyDescriptorData.Create(
+            FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key),
+            [pfConfigurable, pfWritable]));
+    FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst, True);
 
-  SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
-  TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
-  SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  SharedArrayBufferConstructor.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownSpecies,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        SpeciesGetter, 'get [Symbol.species]', 0),
-      nil, [pfConfigurable]));
-  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
+    SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
+    Roots.Add(SharedArrayBufferConstructor);
+    TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
+    SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    SharedArrayBufferConstructor.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
+    FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
 
-  DataViewConstructor := TGocciaDataViewClassValue.Create(CONSTRUCTOR_DATA_VIEW, nil);
-  TGocciaDataViewValue.ExposePrototype(DataViewConstructor);
-  DataViewConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_DATA_VIEW, DataViewConstructor, dtConst, True);
+    DataViewConstructor := TGocciaDataViewClassValue.Create(CONSTRUCTOR_DATA_VIEW, nil);
+    Roots.Add(DataViewConstructor);
+    TGocciaDataViewValue.ExposePrototype(DataViewConstructor);
+    DataViewConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_DATA_VIEW, DataViewConstructor, dtConst, True);
 
-  // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
-  FTypedArrayIntrinsic := TGocciaTypedArrayIntrinsicClassValue.Create('TypedArray', nil);
-  // §17: built-in name/length are {writable: false, enumerable: false, configurable: true}
-  FTypedArrayIntrinsic.DefineProperty(PROP_NAME,
-    TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
-  FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
-    TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
-  TypedArrayStatic := TGocciaTypedArrayStaticFrom.Create;
-  FLazyThunks.Add(TypedArrayStatic);
-  FTypedArrayIntrinsic.DefineProperty(PROP_FROM,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        TypedArrayStatic.TypedArrayFrom, PROP_FROM, 1),
-      [pfConfigurable, pfWritable]));
-  FTypedArrayIntrinsic.DefineProperty(PROP_OF,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        TypedArrayStatic.TypedArrayOf, PROP_OF, 0),
-      [pfConfigurable, pfWritable]));
-  FTypedArrayIntrinsic.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownSpecies,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        SpeciesGetter, 'get [Symbol.species]', 0),
-      nil, [pfConfigurable]));
-
-  RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_CLAMPED_ARRAY, takUint8Clamped, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_INT16_ARRAY, takInt16, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_UINT16_ARRAY, takUint16, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_INT32_ARRAY, takInt32, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_UINT32_ARRAY, takUint32, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT16_ARRAY, takFloat16, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT32_ARRAY, takFloat32, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_BIGINT64_ARRAY, takBigInt64, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
-
-  // Wire %TypedArray%.prototype to the shared prototype (which has all methods)
-  if TGocciaTypedArrayValue.GetSharedPrototypeObject <> nil then
-  begin
-    FTypedArrayIntrinsic.ReplacePrototype(TGocciaTypedArrayValue.GetSharedPrototypeObject);
-    // §23.2.3: %TypedArray%.prototype.constructor = %TypedArray%
-    TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(FTypedArrayIntrinsic, [pfConfigurable, pfWritable]));
-    // §23.2.3.33: %TypedArray%.prototype.toString is the same function object
-    // as Array.prototype.toString.
-    TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_TO_STRING,
+    // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
+    FTypedArrayIntrinsic := TGocciaTypedArrayIntrinsicClassValue.Create('TypedArray', nil);
+    Roots.Add(FTypedArrayIntrinsic);
+    // §17: built-in name/length are {writable: false, enumerable: false, configurable: true}
+    FTypedArrayIntrinsic.DefineProperty(PROP_NAME,
+      TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
+    FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
+      TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
+    TypedArrayStatic := TGocciaTypedArrayStaticFrom.Create;
+    FLazyThunks.Add(TypedArrayStatic);
+    FTypedArrayIntrinsic.DefineProperty(PROP_FROM,
       TGocciaPropertyDescriptorData.Create(
-        ArrayConstructor.Prototype.GetProperty(PROP_TO_STRING),
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          TypedArrayStatic.TypedArrayFrom, PROP_FROM, 1),
         [pfConfigurable, pfWritable]));
+    FTypedArrayIntrinsic.DefineProperty(PROP_OF,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          TypedArrayStatic.TypedArrayOf, PROP_OF, 0),
+        [pfConfigurable, pfWritable]));
+    FTypedArrayIntrinsic.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
+
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_CLAMPED_ARRAY, takUint8Clamped, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT16_ARRAY, takInt16, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT16_ARRAY, takUint16, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT32_ARRAY, takInt32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT32_ARRAY, takUint32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT16_ARRAY, takFloat16, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT32_ARRAY, takFloat32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_BIGINT64_ARRAY, takBigInt64, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
+
+    // Wire %TypedArray%.prototype to the shared prototype (which has all methods)
+    if TGocciaTypedArrayValue.GetSharedPrototypeObject <> nil then
+    begin
+      FTypedArrayIntrinsic.ReplacePrototype(TGocciaTypedArrayValue.GetSharedPrototypeObject);
+      // §23.2.3: %TypedArray%.prototype.constructor = %TypedArray%
+      TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(FTypedArrayIntrinsic, [pfConfigurable, pfWritable]));
+      // §23.2.3.33: %TypedArray%.prototype.toString is the same function object
+      // as Array.prototype.toString.
+      TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_TO_STRING,
+        TGocciaPropertyDescriptorData.Create(
+          ArrayConstructor.Prototype.GetProperty(PROP_TO_STRING),
+          [pfConfigurable, pfWritable]));
+    end;
+
+    TypeDef.ConstructorName := CONSTRUCTOR_STRING;
+    TypeDef.Kind := gtdkPrimitiveWrapper;
+    TypeDef.ClassValueClass := TGocciaStringClassValue;
+    TypeDef.ExposePrototype := nil;
+    TypeDef.PrototypeProvider := @StringPrototypeProvider;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalString);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    StringConstructor := TGocciaStringClassValue(GenericConstructor);
+
+    FBuiltinRegExp := TGocciaGlobalRegExp.Create(CONSTRUCTOR_REGEXP,
+      FGlobalScope, ThrowError, ObjectConstructor.Prototype);
+
+    TypeDef.ConstructorName := CONSTRUCTOR_NUMBER;
+    TypeDef.Kind := gtdkPrimitiveWrapper;
+    TypeDef.ClassValueClass := TGocciaNumberClassValue;
+    TypeDef.ExposePrototype := nil;
+    TypeDef.PrototypeProvider := @NumberPrototypeProvider;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalNumber);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    NumberConstructor := TGocciaNumberClassValue(GenericConstructor);
+
+    TypeDef.ConstructorName := CONSTRUCTOR_BOOLEAN;
+    TypeDef.Kind := gtdkPrimitiveWrapper;
+    TypeDef.ClassValueClass := TGocciaBooleanClassValue;
+    TypeDef.ExposePrototype := nil;
+    TypeDef.PrototypeProvider := @BooleanPrototypeProvider;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
+
+    FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
+    Roots.Add(FFunctionConstructor);
+    FunctionConstructor := FFunctionConstructor;
+    // Wire Function.prototype to be the shared function prototype (which has
+    // call/apply/bind/toString) so that Object.getPrototypeOf(fn) === Function.prototype.
+    // Chain: Function.prototype (= FSharedPrototype) → ObjectConstructor.Prototype
+    TGocciaFunctionBase.GetSharedPrototype.Prototype := ObjectConstructor.Prototype;
+    FunctionConstructor.ReplacePrototype(TGocciaFunctionBase.GetSharedPrototype);
+    FunctionConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(FunctionConstructor, [pfConfigurable, pfWritable]));
+    // Set Function.prototype as the default [[Prototype]] for all class constructors
+    // (§15.7.3 step 7.a: classes without extends have [[Prototype]] = Function.prototype)
+    TGocciaClassValue.SetDefaultPrototype(FunctionConstructor.Prototype);
+    // Retroactively set [[Prototype]] on constructors created before FunctionConstructor
+    TGocciaClassValue.PatchDefaultPrototype(ObjectConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(GenericConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(ArrayConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(MapConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(SetConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(WeakMapConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(WeakSetConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(WeakRefConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(FinalizationRegistryConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(DataViewConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);
+    TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
+    FGlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst, True);
+
+    // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
+    if TGocciaSymbolValue.SharedPrototype <> nil then
+      TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype).Prototype := ObjectConstructor.Prototype;
+
+    RegisterGocciaScriptGlobal;
+    RegisterGlobalThis;
+    RegisterLazyBuiltinGlobalProperties;
+  finally
+    Roots.Clear;
   end;
-
-  TypeDef.ConstructorName := CONSTRUCTOR_STRING;
-  TypeDef.Kind := gtdkPrimitiveWrapper;
-  TypeDef.ClassValueClass := TGocciaStringClassValue;
-  TypeDef.ExposePrototype := nil;
-  TypeDef.PrototypeProvider := @StringPrototypeProvider;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalString);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  StringConstructor := TGocciaStringClassValue(GenericConstructor);
-
-  FBuiltinRegExp := TGocciaGlobalRegExp.Create(CONSTRUCTOR_REGEXP,
-    FGlobalScope, ThrowError, ObjectConstructor.Prototype);
-
-  TypeDef.ConstructorName := CONSTRUCTOR_NUMBER;
-  TypeDef.Kind := gtdkPrimitiveWrapper;
-  TypeDef.ClassValueClass := TGocciaNumberClassValue;
-  TypeDef.ExposePrototype := nil;
-  TypeDef.PrototypeProvider := @NumberPrototypeProvider;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalNumber);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  NumberConstructor := TGocciaNumberClassValue(GenericConstructor);
-
-  TypeDef.ConstructorName := CONSTRUCTOR_BOOLEAN;
-  TypeDef.Kind := gtdkPrimitiveWrapper;
-  TypeDef.ClassValueClass := TGocciaBooleanClassValue;
-  TypeDef.ExposePrototype := nil;
-  TypeDef.PrototypeProvider := @BooleanPrototypeProvider;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
-
-  FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
-  FunctionConstructor := FFunctionConstructor;
-  // Wire Function.prototype to be the shared function prototype (which has
-  // call/apply/bind/toString) so that Object.getPrototypeOf(fn) === Function.prototype.
-  // Chain: Function.prototype (= FSharedPrototype) → ObjectConstructor.Prototype
-  TGocciaFunctionBase.GetSharedPrototype.Prototype := ObjectConstructor.Prototype;
-  FunctionConstructor.ReplacePrototype(TGocciaFunctionBase.GetSharedPrototype);
-  FunctionConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
-    TGocciaPropertyDescriptorData.Create(FunctionConstructor, [pfConfigurable, pfWritable]));
-  // Set Function.prototype as the default [[Prototype]] for all class constructors
-  // (§15.7.3 step 7.a: classes without extends have [[Prototype]] = Function.prototype)
-  TGocciaClassValue.SetDefaultPrototype(FunctionConstructor.Prototype);
-  // Retroactively set [[Prototype]] on constructors created before FunctionConstructor
-  TGocciaClassValue.PatchDefaultPrototype(ObjectConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(GenericConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(ArrayConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(MapConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(SetConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(WeakMapConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(WeakSetConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(WeakRefConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(FinalizationRegistryConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(DataViewConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);
-  TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
-  FGlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst, True);
-
-  // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
-  if TGocciaSymbolValue.SharedPrototype <> nil then
-    TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype).Prototype := ObjectConstructor.Prototype;
-
-  RegisterGocciaScriptGlobal;
-  RegisterGlobalThis;
-  RegisterLazyBuiltinGlobalProperties;
 end;
 
 procedure TGocciaEngine.RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
@@ -2061,62 +2075,73 @@ var
   TAConstructor: TGocciaTypedArrayClassValue;
   BPE: TGocciaNumberLiteralValue;
   Encoding: TGocciaUint8ArrayEncoding;
+  Roots: TGocciaActiveRootFrame;
 begin
-  TAConstructor := TGocciaTypedArrayClassValue.Create(AName, FTypedArrayIntrinsic, AKind);
-  TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
-  TGocciaTypedArrayValue.SetKindPrototype(AKind, TAConstructor.Prototype);
-  TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
-  BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
-  TAConstructor.DefineProperty(PROP_BYTES_PER_ELEMENT,
-    TGocciaPropertyDescriptorData.Create(BPE, []));
-  TAConstructor.Prototype.DefineProperty(PROP_BYTES_PER_ELEMENT,
-    TGocciaPropertyDescriptorData.Create(BPE, []));
+  // The constructor and the shared BYTES_PER_ELEMENT number are reachable
+  // from nothing until they are stored or bound, and the steps between them
+  // allocate.
+  Roots.Initialize;
+  try
+    TAConstructor := TGocciaTypedArrayClassValue.Create(AName, FTypedArrayIntrinsic, AKind);
+    Roots.Add(TAConstructor);
+    TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
+    TGocciaTypedArrayValue.SetKindPrototype(AKind, TAConstructor.Prototype);
+    TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
+    BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
+    Roots.Add(BPE);
+    TAConstructor.DefineProperty(PROP_BYTES_PER_ELEMENT,
+      TGocciaPropertyDescriptorData.Create(BPE, []));
+    TAConstructor.Prototype.DefineProperty(PROP_BYTES_PER_ELEMENT,
+      TGocciaPropertyDescriptorData.Create(BPE, []));
 
-  // Uint8Array-only: Base64/Hex encoding methods (TC39 Uint8Array Base64)
-  if AKind = takUint8 then
-  begin
-    Encoding := TGocciaUint8ArrayEncoding.Create;
-    FLazyThunks.Add(Encoding);
+    // Uint8Array-only: Base64/Hex encoding methods (TC39 Uint8Array Base64)
+    if AKind = takUint8 then
+    begin
+      Encoding := TGocciaUint8ArrayEncoding.Create;
+      FLazyThunks.Add(Encoding);
 
-    // Static methods on Uint8Array constructor
-    TAConstructor.DefineProperty(PROP_FROM_BASE64,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.FromBase64, PROP_FROM_BASE64, 1),
-        [pfConfigurable, pfWritable]));
-    TAConstructor.DefineProperty(PROP_FROM_HEX,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.FromHex, PROP_FROM_HEX, 1),
-        [pfConfigurable, pfWritable]));
+      // Static methods on Uint8Array constructor
+      TAConstructor.DefineProperty(PROP_FROM_BASE64,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.FromBase64, PROP_FROM_BASE64, 1),
+          [pfConfigurable, pfWritable]));
+      TAConstructor.DefineProperty(PROP_FROM_HEX,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.FromHex, PROP_FROM_HEX, 1),
+          [pfConfigurable, pfWritable]));
 
-    // Prototype methods on Uint8Array.prototype
-    TAConstructor.Prototype.DefineProperty(PROP_TO_BASE64,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.ToBase64, PROP_TO_BASE64, 0),
-        [pfConfigurable, pfWritable]));
-    TAConstructor.Prototype.DefineProperty(PROP_TO_HEX,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.ToHex, PROP_TO_HEX, 0),
-        [pfConfigurable, pfWritable]));
-    TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_BASE64,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.SetFromBase64, PROP_SET_FROM_BASE64, 1),
-        [pfConfigurable, pfWritable]));
-    TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_HEX,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.SetFromHex, PROP_SET_FROM_HEX, 1),
-        [pfConfigurable, pfWritable]));
+      // Prototype methods on Uint8Array.prototype
+      TAConstructor.Prototype.DefineProperty(PROP_TO_BASE64,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.ToBase64, PROP_TO_BASE64, 0),
+          [pfConfigurable, pfWritable]));
+      TAConstructor.Prototype.DefineProperty(PROP_TO_HEX,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.ToHex, PROP_TO_HEX, 0),
+          [pfConfigurable, pfWritable]));
+      TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_BASE64,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.SetFromBase64, PROP_SET_FROM_BASE64, 1),
+          [pfConfigurable, pfWritable]));
+      TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_HEX,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.SetFromHex, PROP_SET_FROM_HEX, 1),
+          [pfConfigurable, pfWritable]));
 
-    // Uint8Array instances use constructor's prototype (encoding methods + shared chain)
-    TGocciaTypedArrayValue.SetUint8Prototype(TAConstructor.Prototype);
+      // Uint8Array instances use constructor's prototype (encoding methods + shared chain)
+      TGocciaTypedArrayValue.SetUint8Prototype(TAConstructor.Prototype);
+    end;
+
+    FGlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst, True);
+  finally
+    Roots.Clear;
   end;
-
-  FGlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst, True);
 end;
 
 procedure TGocciaEngine.RegisterGlobalThis;

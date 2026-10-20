@@ -476,6 +476,48 @@ fails the job. On a scheduled or `main` run, it also opens one tracking issue
 or comments on the open one (`.github/scripts/report-gc-stress.sh`). Runs on
 other branches only print what they would file.
 
+### GC stress at every reservation
+
+The GC-stress build collects at instruction boundaries. Native code also
+collects at a reservation: making a string, a buffer or an error, or growing
+element or property storage past the gate, collects first when the request
+would cross the `--max-memory` ceiling. Two switches on the collector make
+that certain in a test, in any build:
+
+| Switch | Effect |
+|---|---|
+| `CollectBeforeEveryReservation` | Every `TryReserveExternalBytes` and every gated growth (`RequireNativeBytes`) runs the full collection a request over the ceiling runs. |
+| `QuarantineSwept` | A sweep keeps what it would free, intact. A later collection that reaches a kept object counts a violation instead of reading freed memory: `QuarantineViolations`, with the first one's class (`FirstQuarantineViolation`) and the collection that swept it (`FirstQuarantineViolationSweptIn`, a `TotalCollections` value). Turning it off frees what it kept. |
+
+`Goccia.GCStress.Test` sets both and runs engine creation, every lazy global
+and its members, and the native construction paths issue #1816 found
+unrooted. It takes a few seconds, so it runs per PR in the Pascal unit-test
+loop, and the scheduled memory-safety job (`fuzz.yml`) runs it again under
+heaptrc and under Valgrind memcheck. A swept value that is stored again
+reports a violation; one that native code only reads afterwards (a key list,
+an operand) does not, so the memcheck run sets `GOCCIA_GC_STRESS_FREE=1`,
+which frees what each sweep takes, and memcheck reports the read. That build
+loads `cmem` first (`fpc -Facmem`): FPC's own heap keeps a freed block as
+valid memory, so memcheck sees a read of it only when the C allocator owns
+it.
+`GOCCIA_GC_STRESS_ONLY=<text>` runs only the cases whose name contains the
+text.
+
+To sweep a wider workload, set both switches in `TGarbageCollector.Create`
+in a local build of `GocciaTestRunner` or `GocciaTest262Runner` and run each
+file in its own process with one worker. A violation names the class that was
+swept while something still held it; running the file again and stopping in
+the collection that swept it (when `TotalCollections` is one less) shows the
+native frame that was holding it.
+
+The quarantine misses a value native code only reads after the sweep. For
+those, set only `CollectBeforeEveryReservation`, build the runner with
+`-Facmem`, and run each file (or each test262 directory with one worker)
+under memcheck with `--trace-children=yes`. Each report names the read, the
+allocation and the collection that freed the value. Sweeping `tests/` and
+parts of test262 this way found the windows that #1816's quarantine sweeps
+missed.
+
 ## Depth and Fuzz Probe
 
 `scripts/depth-probe.ts` runs depth and nesting shapes against a `GocciaRunner`

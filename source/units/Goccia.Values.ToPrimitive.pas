@@ -123,24 +123,30 @@ begin
       // GetMethod step 3: If IsCallable(func) is false, throw a TypeError.
       if not ExoticToPrim.IsCallable then
         ThrowTypeError(SErrorToPrimitiveNotCallable, SSuggestToPrimitiveNotCallable);
-      // Step 2.b: Call(exoticToPrim, input, « hint »)
-      Args := TGocciaArgumentsCollection.Create;
-      try
-        Args.Add(HintValue(AHint));
-        // A callable Proxy or a class passes GetMethod too (§7.3.10 step 3
-        // asks only IsCallable), so only a function object takes the direct
-        // path.
-        if ExoticToPrim is TGocciaFunctionBase then
-          Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue)
-        else
-          Result := InvokeCallable(ExoticToPrim, Args, AValue);
-      finally
-        Args.Free;
-      end;
       { Frame-rooted for the same reason as TryCallMethod: a shared temp-root
-        entry removed here is removed for whoever else was holding it. }
+        entry removed here is removed for whoever else was holding it. A getter
+        can return a fresh method, held only here while the hint string is
+        made on first use, which can collect. }
       Roots.Initialize;
       try
+        // And the input, which the caller can hold only in a local (a
+        // comparator's result, an operand).
+        Roots.Add(AValue);
+        Roots.Add(ExoticToPrim);
+        // Step 2.b: Call(exoticToPrim, input, « hint »)
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          Args.Add(HintValue(AHint));
+          // A callable Proxy or a class passes GetMethod too (§7.3.10 step 3
+          // asks only IsCallable), so only a function object takes the direct
+          // path.
+          if ExoticToPrim is TGocciaFunctionBase then
+            Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue)
+          else
+            Result := InvokeCallable(ExoticToPrim, Args, AValue);
+        finally
+          Args.Free;
+        end;
         Roots.Add(Result);
         // Step 2.b.ii: If result is not an Object, return result.
         if Result.IsPrimitive then
