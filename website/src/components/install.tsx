@@ -237,10 +237,9 @@ export function Install({
           <div className="install-hero-meta">
             {isPreStable(release) && (
               <div className="prestable-banner" role="note">
-                <strong>Pre-1.0 release.</strong> The public API is still being
-                shaped — anything documented can change between any two releases
-                until <code>1.0.0</code> ships. Pin a specific version in CI and
-                check the{" "}
+                <strong>Pre-1.0 release.</strong> The host API and command-line
+                flags may change between releases. Pin a version in CI and check
+                the{" "}
                 <a
                   href={GITHUB_RELEASES_URL}
                   target="_blank"

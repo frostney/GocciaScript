@@ -364,6 +364,12 @@ export async function readNewestValidTest262Report(
   return { latestReport: null, usableTimeline: timeline };
 }
 
+export function latestTest262Summary(
+  data: Test262DashboardData,
+): Test262SuiteSummary | null {
+  return data.status === "ready" ? (data.latest?.summary ?? null) : null;
+}
+
 async function loadUncachedTest262DashboardData(): Promise<Test262DashboardData> {
   try {
     const timeline = await listTest262BlobDailyRuns();
