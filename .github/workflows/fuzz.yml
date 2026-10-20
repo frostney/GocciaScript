@@ -516,7 +516,7 @@ jobs:
         # which the quarantine cannot see. The memcheck build loads cmem first
         # (-Facmem), so a freed object goes back to the C allocator, which
         # memcheck tracks; FPC's own heap would keep it as valid memory and
-        # hide the read. Under memcheck it takes about a minute and a half.
+        # hide the read. Under memcheck it takes about two and a half minutes.
         if: ${{ !cancelled() }}
         run: |
           mkdir -p build/compiled/targets/gcstress-heaptrc \

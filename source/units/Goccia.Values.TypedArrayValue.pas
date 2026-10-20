@@ -2221,6 +2221,7 @@ end;
 // ES2026 §23.2.3.26 %TypedArray%.prototype.set(source [, offset])
 function TGocciaTypedArrayValue.TypedArraySet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  SrcRoots: TGocciaActiveRootFrame;
   TA, SrcTA: TGocciaTypedArrayValue;
   TargetOffset, I, SrcLen, TargetLen, SourceLen: Integer;
   SrcObj: TGocciaObjectValue;
@@ -2286,14 +2287,23 @@ begin
   else
   begin
     // ES2026 §23.2.3.26.1 SetTypedArrayFromArrayLike
-    SrcObj := ToObject(AArgs.GetElement(0));
-    SrcLen := LengthOfArrayLike(SrcObj);
-    if (TargetOffset > TargetLen) or
-       (SrcLen > TargetLen - TargetOffset) then
-      ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
-    for I := 0 to SrcLen - 1 do
-      TA.SetIntegerIndexedElement(TargetOffset + I, False,
-        SrcObj.GetProperty(IntegerToString(I)));
+    // A wrapper ToObject makes for a primitive source is held only here
+    // while its length and elements are read (a string's element is a new
+    // string, which reserves and can collect).
+    SrcRoots.Initialize;
+    try
+      SrcObj := ToObject(AArgs.GetElement(0));
+      SrcRoots.Add(SrcObj);
+      SrcLen := LengthOfArrayLike(SrcObj);
+      if (TargetOffset > TargetLen) or
+         (SrcLen > TargetLen - TargetOffset) then
+        ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
+      for I := 0 to SrcLen - 1 do
+        TA.SetIntegerIndexedElement(TargetOffset + I, False,
+          SrcObj.GetProperty(IntegerToString(I)));
+    finally
+      SrcRoots.Clear;
+    end;
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;

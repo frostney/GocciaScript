@@ -75,6 +75,10 @@ type
     procedure TestArrayMethods;
     procedure TestArrayFromAsync;
     procedure TestTemporalDifferences;
+    procedure TestStringAddition;
+    procedure TestTemporalArithmeticAndCompare;
+    procedure TestTemporalPropertyBags;
+    procedure TestGetterResults;
     procedure TestToPrimitive;
     procedure TestIntlConstructPrototype;
     procedure TestSegmentsContaining;
@@ -154,6 +158,11 @@ begin
   AddCase('Array.fromAsync with a this-constructor', TestArrayFromAsync);
   AddCase('Temporal until and since with a property bag and option getters',
     TestTemporalDifferences);
+  AddCase('string + with an object operand', TestStringAddition);
+  AddCase('Temporal add, subtract and compare with fresh operands',
+    TestTemporalArithmeticAndCompare);
+  AddCase('Temporal property bags read through getters', TestTemporalPropertyBags);
+  AddCase('getter results read again after other script code', TestGetterResults);
   AddCase('ToPrimitive with a fresh Symbol.toPrimitive method',
     TestToPrimitive);
   AddCase('Intl constructors with a newTarget', TestIntlConstructPrototype);
@@ -555,12 +564,6 @@ begin
     'out.push(Array.prototype.map.call(7, (v) => v));' + LineEnding +
     'delete Number.prototype.length;' + LineEnding +
     'out.length;');
-  // The string an object operand's toString made was held only by a local
-  // while the other operand became a string.
-  RunStressed('addition.js',
-    'const fn = (a) => a + 1;' + LineEnding +
-    'const tagged = { toString() { return "tag" + "ged"; } };' + LineEnding +
-    '[1.5 + fn, fn + 2.5, 3 + tagged, tagged + 4, 5n + String(tagged)].join("|").length;');
 end;
 
 // The iterator @@iterator returned was held only by locals while the
@@ -596,6 +599,20 @@ begin
     ' Temporal.PlainDate.from("2024-01-01").until({ year: 2024, month: 2, day: 1 },' + LineEnding +
     '   { get largestUnit() { return "month" + ""; } }),' + LineEnding +
     ' Temporal.PlainTime.from("01:00").since({ hour: 3 }, { get largestUnit() { return "hour"; } })];');
+end;
+
+procedure TGCStressTests.TestStringAddition;
+begin
+  // The string an object operand's toString made was held only by a local
+  // while the other operand became a string.
+  RunStressed('addition.js',
+    'const fn = (a) => a + 1;' + LineEnding +
+    'const tagged = { toString() { return "tag" + "ged"; } };' + LineEnding +
+    '[1.5 + fn, fn + 2.5, 3 + tagged, tagged + 4, 5n + String(tagged)].join("|").length;');
+end;
+
+procedure TGCStressTests.TestTemporalArithmeticAndCompare;
+begin
   // A duration made from a string or a property bag was held only by a local
   // while the overflow option's getter ran.
   RunStressed('temporal-add.js',
@@ -620,6 +637,10 @@ begin
     ' Temporal.PlainYearMonth.compare("2024-01", { year: 2024, get month() { churn(1); return 2; } }),' + LineEnding +
     ' Temporal.ZonedDateTime.compare("2024-01-01T00:00[UTC]",' + LineEnding +
     '   { year: 2024, month: 1, get day() { churn(1); return 2; }, timeZone: "UTC" })];');
+end;
+
+procedure TGCStressTests.TestTemporalPropertyBags;
+begin
   // Every field a bag reader takes from a getter (a fresh number or string)
   // was held only by a local while the next getters ran: era and eraYear in
   // from() and with(), the coercers behind equals(), and relativeTo.
@@ -648,8 +669,21 @@ begin
     '   relativeTo: { calendar: "gregory", get era() { return fresh(g.era); }, get eraYear() { fresh("pad"); return g.eraYear; },' + LineEnding +
     '     get month() { return g.month; }, get day() { return g.day; },' + LineEnding +
     '     get timeZone() { return fresh("UTC"); } } })].map(String);');
-  // Review round 5: a getter's fresh result held natively across later
-  // getters or conversions.
+  // A field read from a property bag (a getter's fresh number) was held only
+  // by a local while the next field's getter made a string.
+  RunStressed('temporal-from-bag.js',
+    'const date = Temporal.PlainDate.from("2024-03-15");' + LineEnding +
+    'const hebrew = new Temporal.PlainDate(2024, 1, 1, "hebrew");' + LineEnding +
+    '[Temporal.PlainMonthDay.from(date), Temporal.PlainYearMonth.from(date),' + LineEnding +
+    ' Temporal.PlainMonthDay.from(hebrew), Temporal.PlainYearMonth.from(hebrew),' + LineEnding +
+    ' Temporal.PlainMonthDay.from({ get month() { return 3 + 0; }, get monthCode() { return "M0" + "3"; },' + LineEnding +
+    '   get day() { return 15 + 0; } })].map(String);');
+end;
+
+procedure TGCStressTests.TestGetterResults;
+begin
+  // A getter's fresh result held natively across later getters or
+  // conversions.
   RunStressed('getter-results.js',
     'const fresh = (s) => (s + "x").slice(0, -1);' + LineEnding +
     'const g = new Temporal.PlainDate(2024, 3, 15, "gregory");' + LineEnding +
@@ -673,16 +707,10 @@ begin
     'const steps = [1, 2];' + LineEnding +
     'const asyncSource = { get [Symbol.asyncIterator]() { return () => ({ i: 0,' + LineEnding +
     '  get next() { return () => { fresh("n"); return Promise.resolve(this.i < 2 ? { value: steps[this.i++], done: false } : { done: true }); }; } }); } };' + LineEnding +
-    'globalThis.getterResults = [out, Array.fromAsync.call(Holder, asyncSource, (v) => fresh(String(v)))];');
-  // A field read from a property bag (a getter's fresh number) was held only
-  // by a local while the next field's getter made a string.
-  RunStressed('temporal-from-bag.js',
-    'const date = Temporal.PlainDate.from("2024-03-15");' + LineEnding +
-    'const hebrew = new Temporal.PlainDate(2024, 1, 1, "hebrew");' + LineEnding +
-    '[Temporal.PlainMonthDay.from(date), Temporal.PlainYearMonth.from(date),' + LineEnding +
-    ' Temporal.PlainMonthDay.from(hebrew), Temporal.PlainYearMonth.from(hebrew),' + LineEnding +
-    ' Temporal.PlainMonthDay.from({ get month() { return 3 + 0; }, get monthCode() { return "M0" + "3"; },' + LineEnding +
-    '   get day() { return 15 + 0; } })].map(String);');
+    // TypedArray.prototype.set with a string: the wrapper ToObject made.
+    'const bytes = new Uint8Array(6); bytes.set("123456");' + LineEnding +
+    'globalThis.getterResults = [out, bytes.join(),' + LineEnding +
+    '  Array.fromAsync.call(Holder, asyncSource, (v) => fresh(String(v)))];');
 end;
 
 // A fresh Symbol.toPrimitive method, and the input it converts, were held
