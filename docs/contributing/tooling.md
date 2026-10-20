@@ -6,7 +6,7 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing
+- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
 
 ## Auto-Formatting
@@ -214,6 +214,25 @@ Result := NumberBits.IsNegativeZero(V);
 ```
 
 This works because `DoubleToBits` copies the whole `Double` into a `UInt64`, so the sign is bit 63 of the integer regardless of byte ordering. Use `DoubleToBits` / `BitsToDouble` for any other bit-level test.
+
+### `Int64` Loop Counters and Lengths on 32-bit Targets
+
+`i386-win32` is a 32-bit target, and only full CI builds it (see
+[Workflow — Full CI](workflow.md#full-ci)). FPC rejects a `for` loop whose
+counter is wider than the target's word, so an `Int64` counter compiles on
+every 64-bit target and fails on `i386` with `Error: Ordinal expression
+expected`. Keep `for` counters `Integer` (or `SizeInt`) and do any 64-bit
+arithmetic on the bounds outside the loop header.
+
+Sizes need the same care: `SetLength`, `Move` and array indexes take
+`SizeInt`, which is 32 bits there, and FPC works out an array's or string's
+byte size in `SizeInt` too, so an `Int64` length, or a count times its
+element size, past `High(SizeInt)` can wrap to a small allocation in a build
+without range checks. Size a native allocation whose count comes from input
+through `CheckedNativeByteSize` (`Goccia.NativeLimits`), which refuses
+anything past `MAX_NATIVE_ALLOCATION_BYTES`, the most one allocation may ask
+for on the target; the heap snapshot reader refuses such a count, and an
+input that large, before it reserves anything.
 
 ### `WideChar in [set]` Allocates
 

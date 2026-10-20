@@ -55,6 +55,7 @@ uses
   Goccia.HeapSnapshot.TestSupport,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
+  Goccia.NativeLimits,
   Goccia.Scope.BindingMap,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
@@ -145,6 +146,16 @@ type
   // reaches one is refused.
   TOpaqueValue = class(TGocciaObjectValue);
 
+  // A stream that reports more bytes than one allocation can hold on this
+  // target, without holding any: the reader must refuse it from its size.
+  TOversizedStream = class(TStream)
+  protected
+    function GetSize: Int64; override;
+  public
+    function Read(var ABuffer; ACount: Longint): Longint; override;
+    function Seek(const AOffset: Int64; AOrigin: TSeekOrigin): Int64; override;
+  end;
+
   // One engine for many restores of mutants of one seed: it compiled the
   // seed's module when there is one, so functions resolve. Counts what
   // restored and what was refused; anything else propagates and fails the
@@ -218,6 +229,8 @@ type
     procedure TestRepeatedMutantsLeaveTheHeap;
     procedure TestEngineBuiltWhileEveryReservationCollects;
     procedure TestGlobalEvalComputesNaN;
+    procedure TestReservationPastOneAllocationRefuses;
+    procedure TestInputPastOneAllocationRefuses;
   public
     procedure SetupTests; override;
   end;
@@ -548,6 +561,10 @@ begin
     TestRepeatedMutantsLeaveTheHeap);
   Test('An engine built while every reservation collects first',
     TestEngineBuiltWhileEveryReservationCollects);
+  Test('A reservation past what one allocation can hold is refused before ' +
+    'it is charged', TestReservationPastOneAllocationRefuses);
+  Test('An input past what one allocation can hold is refused from its ' +
+    'size', TestInputPastOneAllocationRefuses);
   // Found by these tests, outside the reader; it runs once its issue is
   // fixed.
   Skip('EvaluateGlobalEval called directly computes NaN',
@@ -1366,6 +1383,84 @@ begin
     GC.CollectBeforeEveryReservation := False;
     Engine.Free;
     Lines.Free;
+  end;
+end;
+
+{ TOversizedStream }
+
+function TOversizedStream.GetSize: Int64;
+begin
+  Result := MAX_NATIVE_ALLOCATION_BYTES + 1;
+end;
+
+function TOversizedStream.Read(var ABuffer; ACount: Longint): Longint;
+begin
+  raise EStreamError.Create('an oversized stream is never read');
+end;
+
+function TOversizedStream.Seek(const AOffset: Int64;
+  AOrigin: TSeekOrigin): Int64;
+begin
+  Result := 0;
+end;
+
+// On a 32-bit target such a count would wrap the array's size to a small
+// allocation that the codec then writes past.
+procedure THeapSnapshotHardeningTests.TestReservationPastOneAllocationRefuses;
+const
+  ELEMENT_BYTES = 16;
+var
+  Table: TGocciaHeapSnapshotBuiltinTable;
+  Reader: TGocciaHeapSnapshotReader;
+  Refusal: string;
+begin
+  Table := TGocciaHeapSnapshotBuiltinTable.Create;
+  Reader := TGocciaHeapSnapshotReader.Create(Table,
+    TGocciaHeapSnapshotLimits.Defaults);
+  try
+    Refusal := '';
+    try
+      Reader.ReserveItems(
+        MAX_NATIVE_ALLOCATION_BYTES div ELEMENT_BYTES + 1, ELEMENT_BYTES);
+    except
+      on E: EGocciaHeapSnapshotInvalid do
+        Refusal := E.Message;
+    end;
+    Expect<string>(Refusal).ToBe(
+      'restore: more than this target can allocate at once');
+  finally
+    Reader.Free;
+    Table.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestInputPastOneAllocationRefuses;
+var
+  Table: TGocciaHeapSnapshotBuiltinTable;
+  Reader: TGocciaHeapSnapshotReader;
+  Limits: TGocciaHeapSnapshotLimits;
+  Stream: TOversizedStream;
+  Refusal: string;
+begin
+  Limits := TGocciaHeapSnapshotLimits.Defaults;
+  Limits.MaxInputBytes := High(Int64);
+  Table := TGocciaHeapSnapshotBuiltinTable.Create;
+  Reader := TGocciaHeapSnapshotReader.Create(Table, Limits);
+  Stream := TOversizedStream.Create;
+  try
+    Refusal := '';
+    try
+      Reader.Restore(Stream);
+    except
+      on E: EGocciaHeapSnapshotInvalid do
+        Refusal := E.Message;
+    end;
+    Expect<string>(Refusal).ToBe(
+      'restore: the snapshot is larger than this target can hold');
+  finally
+    Stream.Free;
+    Reader.Free;
+    Table.Free;
   end;
 end;
 
