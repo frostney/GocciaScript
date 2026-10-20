@@ -668,13 +668,14 @@ end;
 { OpenSSL's socket BIO writes with plain write(2), so MSG_NOSIGNAL cannot reach
   it, and a write to a peer that reset the connection raises SIGPIPE: the
   handshake, a read (a key update), a write and SSL_shutdown's close_notify
-  all write. On Linux every OpenSSL call therefore runs with SIGPIPE blocked
-  on the calling thread, and a SIGPIPE that call raised is taken off the
-  thread's pending set before the mask is restored, so the write fails with
-  EPIPE (SSL_ERROR_SYSCALL) and the process, the embedder's own handlers and
-  every other thread are left alone. A SIGPIPE the caller had blocked itself
-  is not touched. Darwin and the BSDs set SO_NOSIGPIPE on the socket
-  instead. }
+  all write. On Linux each of those calls therefore runs with SIGPIPE blocked
+  on the calling thread, and a SIGPIPE it raised is taken off the pending set
+  before the mask is restored, so the write fails with EPIPE
+  (SSL_ERROR_SYSCALL) and the process, the embedder's own handlers and every
+  other thread are left alone. A SIGPIPE the caller had blocked itself is
+  not touched; one sent to this thread by another party while such a call
+  runs is indistinguishable from ours and is taken too. Darwin and the BSDs
+  set SO_NOSIGPIPE on the socket instead. }
 type
   TSigPipeGuard = record
     Active: Boolean;
@@ -722,6 +723,59 @@ begin
 end;
 {$ENDIF}
 
+{ The OpenSSL calls that can write, each under the guard, so the window in
+  which a SIGPIPE sent to the thread for another reason would be taken is
+  the call itself and not the waits between calls. }
+function GuardedSslConnect(const ASSL: PSSL): Integer;
+var
+  Guard: TSigPipeGuard;
+begin
+  BeginSigPipeGuard(Guard);
+  try
+    Result := SslConnect(ASSL);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
+end;
+
+function GuardedSslRead(const ASSL: PSSL; const ABuffer: Pointer;
+  const ALength: Integer): Integer;
+var
+  Guard: TSigPipeGuard;
+begin
+  BeginSigPipeGuard(Guard);
+  try
+    Result := SslRead(ASSL, ABuffer, ALength);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
+end;
+
+function GuardedSslWrite(const ASSL: PSSL; const ABuffer: Pointer;
+  const ALength: Integer): Integer;
+var
+  Guard: TSigPipeGuard;
+begin
+  BeginSigPipeGuard(Guard);
+  try
+    Result := SslWrite(ASSL, ABuffer, ALength);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
+end;
+
+function GuardedSslShutdown(const ASSL: PSSL): Integer;
+var
+  Guard: TSigPipeGuard;
+begin
+  BeginSigPipeGuard(Guard);
+  try
+    Result := SslShutdown(ASSL);
+  finally
+    EndSigPipeGuard(Guard);
+  end;
+end;
+
 procedure StartOpenSSL(var AConnection: TTransportSecurityConnection;
   const AHost: string);
 var
@@ -757,7 +811,7 @@ begin
     SslCtrl(Data.SSL, SSL_CTRL_CLEAR_MODE, SSL_MODE_AUTO_RETRY, nil);
     SetSocketNonBlocking(AConnection.Socket);
     repeat
-      Outcome := SslConnect(Data.SSL);
+      Outcome := GuardedSslConnect(Data.SSL);
       if Outcome = 1 then
         Break;
       case SslGetError(Data.SSL, Outcome) of
@@ -799,7 +853,7 @@ begin
   begin
     if Assigned(Data.SSL) then
     begin
-      SslShutdown(Data.SSL);
+      GuardedSslShutdown(Data.SSL);
       SslFree(Data.SSL);
     end;
     if Assigned(Data.Context) then
@@ -829,7 +883,7 @@ var
 begin
   Data := TOpenSSLData(AConnection.BackendData);
   repeat
-    Result := SslRead(Data.SSL, @ABuffer[0], ALength);
+    Result := GuardedSslRead(Data.SSL, @ABuffer[0], ALength);
     if Result > 0 then
       Exit;
 
@@ -869,7 +923,7 @@ var
 begin
   Data := TOpenSSLData(AConnection.BackendData);
   repeat
-    Result := SslWrite(Data.SSL, ABuffer, ALength);
+    Result := GuardedSslWrite(Data.SSL, ABuffer, ALength);
     if Result > 0 then
       Exit;
 
@@ -1426,10 +1480,6 @@ end;
 procedure StartTransportSecurity(var AConnection: TTransportSecurityConnection;
   const ASocket: TSocket; const AHost: string;
   const ADeadlineNanoseconds: Int64);
-{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
-var
-  Guard: TSigPipeGuard;
-{$IFEND}
 begin
   FillChar(AConnection, SizeOf(AConnection), 0);
   AConnection.Socket := ASocket;
@@ -1442,21 +1492,12 @@ begin
   {$IFDEF MSWINDOWS}
   StartSChannel(AConnection, AHost);
   {$ELSE}
-  BeginSigPipeGuard(Guard);
-  try
-    StartOpenSSL(AConnection, AHost);
-  finally
-    EndSigPipeGuard(Guard);
-  end;
+  StartOpenSSL(AConnection, AHost);
   {$ENDIF}
   {$ENDIF}
 end;
 
 procedure CloseTransportSecurity(var AConnection: TTransportSecurityConnection);
-{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
-var
-  Guard: TSigPipeGuard;
-{$IFEND}
 begin
   if not AConnection.Active then
     Exit;
@@ -1473,14 +1514,7 @@ begin
     {$IFDEF UNIX}
     {$IFNDEF DARWIN}
     TSB_OPENSSL:
-      begin
-        BeginSigPipeGuard(Guard);
-        try
-          CloseOpenSSL(AConnection);
-        finally
-          EndSigPipeGuard(Guard);
-        end;
-      end;
+      CloseOpenSSL(AConnection);
     {$ENDIF}
     {$ENDIF}
   end;
@@ -1492,10 +1526,6 @@ end;
 
 function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
   var ABuffer: array of Byte; const ALength: Integer): Integer;
-{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
-var
-  Guard: TSigPipeGuard;
-{$IFEND}
 begin
   if ALength <= 0 then
   begin
@@ -1515,14 +1545,7 @@ begin
     {$IFDEF UNIX}
     {$IFNDEF DARWIN}
     TSB_OPENSSL:
-      begin
-        BeginSigPipeGuard(Guard);
-        try
-          Result := ReadOpenSSL(AConnection, ABuffer, ALength);
-        finally
-          EndSigPipeGuard(Guard);
-        end;
-      end;
+      Result := ReadOpenSSL(AConnection, ABuffer, ALength);
     {$ENDIF}
     {$ENDIF}
   else
@@ -1532,10 +1555,6 @@ end;
 
 function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
   const ABuffer: Pointer; const ALength: Integer): Integer;
-{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
-var
-  Guard: TSigPipeGuard;
-{$IFEND}
 begin
   if ALength <= 0 then
   begin
@@ -1555,14 +1574,7 @@ begin
     {$IFDEF UNIX}
     {$IFNDEF DARWIN}
     TSB_OPENSSL:
-      begin
-        BeginSigPipeGuard(Guard);
-        try
-          Result := WriteOpenSSL(AConnection, ABuffer, ALength);
-        finally
-          EndSigPipeGuard(Guard);
-        end;
-      end;
+      Result := WriteOpenSSL(AConnection, ABuffer, ALength);
     {$ENDIF}
     {$ENDIF}
   else
