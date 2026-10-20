@@ -517,6 +517,17 @@ allocation and the collection that freed the value. Sweeping `tests/` and
 parts of test262 this way found the windows that #1816's quarantine sweeps
 missed.
 
+A window opens only when guest code allocates while a builtin holds a fresh
+value, and test262's getters, `valueOf` methods and traps rarely allocate. A
+probe that does finds more: call every method and getter of each builtin with
+receivers (a number held in a register, a primitive through `.call`, a
+Proxy) and arguments whose coercions, getters, callbacks and traps make a
+fresh string first (`({ valueOf() { (s + "x").slice(0, -1); return 2; } })`),
+under the same `-Facmem` build and memcheck. Issue #1834's probes found the
+unrooted number receiver of every native call, `fill`'s wrapper and coerced
+value, and the key lists of `Object.assign`, `Object.getOwnPropertySymbols`
+and `Promise.allKeyed` this way.
+
 ## Depth and Fuzz Probe
 
 `scripts/depth-probe.ts` runs depth and nesting shapes against a `GocciaRunner`
