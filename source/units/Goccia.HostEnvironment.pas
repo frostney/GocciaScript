@@ -88,6 +88,12 @@ type
     procedure Configure(const AClock: IGocciaHostClock;
       const ARandom: IGocciaHostRandom);
     procedure UseDeterministicProfile;
+    { The clock UseDeterministicProfile installs: epoch and monotonic time
+      DeterministicEpochNanoseconds and DeterministicMonotonicNanoseconds, in
+      DeterministicTimeZone. A host that keeps other script-visible time in
+      step with the profile, such as a sandbox filesystem's timestamps, reads
+      this rather than repeating the constants. }
+    class function DeterministicClock: IGocciaHostClock; static;
     procedure ConfigureAsChildOf(const AParent: TGocciaHostEnvironment);
 
     { A mocked clock, layered over the configured providers rather than
@@ -271,9 +277,14 @@ end;
 
 procedure TGocciaHostEnvironment.UseDeterministicProfile;
 begin
-  Configure(TGocciaFixedHostClock.Create(DeterministicEpochNanoseconds,
-    DeterministicMonotonicNanoseconds, DeterministicTimeZone),
+  Configure(DeterministicClock,
     TGocciaSeededHostRandom.Create(DeterministicSeed));
+end;
+
+class function TGocciaHostEnvironment.DeterministicClock: IGocciaHostClock;
+begin
+  Result := TGocciaFixedHostClock.Create(DeterministicEpochNanoseconds,
+    DeterministicMonotonicNanoseconds, DeterministicTimeZone);
 end;
 
 procedure TGocciaHostEnvironment.ForkProviders(out AClock: IGocciaHostClock;

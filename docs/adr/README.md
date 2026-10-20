@@ -159,3 +159,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0147 — Marking nests at most 64 objects deep and spills the rest to an explicit mark stack](0147-marking-spills-to-an-explicit-mark-stack.md)
 - [0148 — A paused run's heap can be snapshotted at an idle point and restored in a fresh engine, behind an embedder option with replay as the fallback](0148-heap-snapshots-at-idle-points.md)
 - [0149 — A fetch request's URL and a redirect's Location go through the URL parser](0149-fetch-urls-go-through-the-url-parser.md)
+- [0151 — A deterministic sandbox run stamps its files with the deterministic clock](0151-deterministic-sandbox-runs-stamp-files-with-the-deterministic-clock.md)
