@@ -24,6 +24,7 @@ uses
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.TestSupport,
+  Goccia.InstructionLimit,
   Goccia.Timeout,
   Goccia.Realm,
   Goccia.Scope.BindingMap,
@@ -64,6 +65,7 @@ type
     procedure TestHostileDifferencesRefuse;
     procedure TestRefusedRestoreLeavesBuiltins;
     procedure TestRefusalWhileApplyingLeavesBuiltins;
+    procedure TestInstructionStopLeavesBuiltins;
     procedure TestTimeoutWhileRestoringLeavesBuiltins;
     procedure TestIndexKeyIsNeverForgotten;
     procedure TestDifferenceTruncationsAndMutants;
@@ -138,6 +140,8 @@ begin
     TestRefusedRestoreLeavesBuiltins);
   Test('A restore refused at any memory ceiling changed no built-in',
     TestRefusalWhileApplyingLeavesBuiltins);
+  Test('A restore stopped while preparing differences changed no built-in',
+    TestInstructionStopLeavesBuiltins);
   Test('A restore stopped at any point by its deadline changed no built-in',
     TestTimeoutWhileRestoringLeavesBuiltins);
   Test('A changed built-in that has an index key keeps the fact',
@@ -1065,6 +1069,83 @@ begin
     Engine.Free;
     Lines.Free;
   end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestInstructionStopLeavesBuiltins;
+const
+  STATE = '[Math.extra, Reflect.extra, JSON.extra].join()';
+  FINAL_BUDGETS = 16;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Low, High, Mid, Limit: Int64;
+
+  function RestoresWithin(const ALimit: Int64): Boolean;
+  var
+    Engine: TGocciaEngine;
+    Lines: TStringList;
+    Stage: TGocciaGlobalEvalStage;
+    Outcome: string;
+  begin
+    Lines := TStringList.Create;
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    try
+      StartInstructionLimit(ALimit);
+      try
+        try
+          Outcome := RestoreRefusalIn(Engine, Bytes);
+        except
+          on E: TGocciaInstructionLimitError do
+            Outcome := 'stopped';
+        end;
+      finally
+        ClearInstructionLimit;
+      end;
+      Result := Outcome = '';
+      if Result then
+        Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+          Stage).ToStringLiteral.Value).ToBe('1,2,3')
+      else
+      begin
+        Expect<string>(Outcome).ToBe('stopped');
+        Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+          Stage).ToStringLiteral.Value).ToBe(',,');
+      end;
+    finally
+      Engine.Free;
+      Lines.Free;
+    end;
+  end;
+
+begin
+  Bytes := Snapshot('(() => { Math.extra = 1; Reflect.extra = 2; ' +
+    'JSON.extra = 3; return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // Find the first successful budget, then stop at each of its last polls.
+  // Preparation polls between built-ins, so committing one before the next
+  // is ready would leave a partial change at these instruction boundaries.
+  Low := 1;
+  High := 1;
+  while not RestoresWithin(High) do
+  begin
+    Low := High + 1;
+    High := High * 2;
+  end;
+  while Low < High do
+  begin
+    Mid := (Low + High) div 2;
+    if RestoresWithin(Mid) then
+      High := Mid
+    else
+      Low := Mid + 1;
+  end;
+  Expect<Boolean>(High > 1).ToBe(True);
+  Low := High - FINAL_BUDGETS;
+  if Low < 1 then
+    Low := 1;
+  for Limit := Low to High - 1 do
+    Expect<Boolean>(RestoresWithin(Limit)).ToBe(False);
+  Expect<Boolean>(RestoresWithin(High)).ToBe(True);
 end;
 
 procedure THeapSnapshotBuiltinsTests.TestTimeoutWhileRestoringLeavesBuiltins;
