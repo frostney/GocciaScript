@@ -11,6 +11,7 @@ import {
   ECMASCRIPT_SCOPE_ANSWER,
   GOCCIASCRIPT_SUMMARY,
   NODE_COMPATIBILITY_ANSWER,
+  PRODUCTION_READY_ANSWER,
   TYPE_ANNOTATIONS_ANSWER,
   VITEST_COMPATIBILITY_ANSWER,
 } from "./positioning";
@@ -149,6 +150,9 @@ Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN
 
 ## Important distinctions
 
+- Purpose: GocciaScript runs JavaScript written by AI agents and people under the capabilities and execution limits the host sets.
+- Evidence: test262 on every pull request (a regression fails CI), live results on the compatibility page; 15,000+ tests; nightly fuzzing and memory checks; weekly GC stress; the engine behind Shotcup's hosted sandboxes (shotcup.dev).
+- Production readiness: ${PRODUCTION_READY_ANSWER}
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
 - Type annotations: ${TYPE_ANNOTATIONS_ANSWER}
 - Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
@@ -206,6 +210,9 @@ export function buildLlmsTxt(origin: string) {
 
 ## Important distinctions
 
+- Purpose: GocciaScript runs JavaScript written by AI agents and people under the capabilities and execution limits the host sets.
+- Evidence: test262 on every pull request (a regression fails CI), live results on the compatibility page; 15,000+ tests; nightly fuzzing and memory checks; weekly GC stress; the engine behind Shotcup's hosted sandboxes (shotcup.dev).
+- Production readiness: ${PRODUCTION_READY_ANSWER}
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
 - Type annotations: ${TYPE_ANNOTATIONS_ANSWER}
 - Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
