@@ -555,6 +555,12 @@ begin
     'out.push(Array.prototype.map.call(7, (v) => v));' + LineEnding +
     'delete Number.prototype.length;' + LineEnding +
     'out.length;');
+  // The string an object operand's toString made was held only by a local
+  // while the other operand became a string.
+  RunStressed('addition.js',
+    'const fn = (a) => a + 1;' + LineEnding +
+    'const tagged = { toString() { return "tag" + "ged"; } };' + LineEnding +
+    '[1.5 + fn, fn + 2.5, 3 + tagged, tagged + 4, 5n + String(tagged)].join("|").length;');
 end;
 
 // The iterator @@iterator returned was held only by locals while the
@@ -594,6 +600,15 @@ begin
     ' Temporal.PlainYearMonth.from("2024-01").subtract({ years: 1 }, options),' + LineEnding +
     ' Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]").add({ months: 1, hours: 2 }, options),' + LineEnding +
     ' Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]").subtract("P1MT2H", options)].map(String);');
+  // A field read from a property bag (a getter's fresh number) was held only
+  // by a local while the next field's getter made a string.
+  RunStressed('temporal-from-bag.js',
+    'const date = Temporal.PlainDate.from("2024-03-15");' + LineEnding +
+    'const hebrew = new Temporal.PlainDate(2024, 1, 1, "hebrew");' + LineEnding +
+    '[Temporal.PlainMonthDay.from(date), Temporal.PlainYearMonth.from(date),' + LineEnding +
+    ' Temporal.PlainMonthDay.from(hebrew), Temporal.PlainYearMonth.from(hebrew),' + LineEnding +
+    ' Temporal.PlainMonthDay.from({ get month() { return 3 + 0; }, get monthCode() { return "M0" + "3"; },' + LineEnding +
+    '   get day() { return 15 + 0; } })].map(String);');
 end;
 
 // A fresh Symbol.toPrimitive method, and the input it converts, were held

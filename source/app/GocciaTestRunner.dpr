@@ -719,6 +719,7 @@ var
   IsParallelRun: Boolean;
   StdinSource: TStringList;
   UseStdin: Boolean;
+  ResultRoots: TGocciaActiveRootFrame;
 begin
   { stdin support — match GocciaRunner and GocciaBenchmarkRunner.
     Source is read from stdin and tagged as <stdin> when either:
@@ -843,29 +844,37 @@ begin
       DiscardPendingInlineSnapshots;
       raise;
     end;
+    // The aggregated result is held only by this record until it is
+    // printed, while the snapshot write-back and the report allocate.
+    ResultRoots.Initialize;
     try
-      FlushPendingInlineSnapshots;
-    except
-      on E: Exception do
-      begin
-        { Host tier once more. Write-back re-reads the recorded snapshot values
-          and rewrites test sources from them, so an integrity fault here is a
-          fault over the results the run is about to report — filing it as one
-          recorded finalization failure would publish those results anyway
-          (ADR 0109). }
-        if IsEngineIntegrityFault(E) then
-          AbortRunOnIntegrityFault(INLINE_SNAPSHOT_FLUSH_SITE, E);
-        RecordSnapshotFinalizationFailure(AggregatedResult,
-          'Snapshot finalization failed: ' + E.Message);
+      ResultRoots.Add(AggregatedResult.TestResult);
+      try
+        FlushPendingInlineSnapshots;
+      except
+        on E: Exception do
+        begin
+          { Host tier once more. Write-back re-reads the recorded snapshot values
+            and rewrites test sources from them, so an integrity fault here is a
+            fault over the results the run is about to report — filing it as one
+            recorded finalization failure would publish those results anyway
+            (ADR 0109). }
+          if IsEngineIntegrityFault(E) then
+            AbortRunOnIntegrityFault(INLINE_SNAPSHOT_FLUSH_SITE, E);
+          RecordSnapshotFinalizationFailure(AggregatedResult,
+            'Snapshot finalization failed: ' + E.Message);
+        end;
       end;
+      MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      if IsParallelRun then
+        AggregatedResult.MemoryStats := CombineCLIJSONMemoryStats(
+          MainMemoryStats, AggregatedResult.MemoryStats, True)
+      else
+        AggregatedResult.MemoryStats := MainMemoryStats;
+      PrintTestResults(AggregatedResult);
+    finally
+      ResultRoots.Clear;
     end;
-    MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
-    if IsParallelRun then
-      AggregatedResult.MemoryStats := CombineCLIJSONMemoryStats(
-        MainMemoryStats, AggregatedResult.MemoryStats, True)
-    else
-      AggregatedResult.MemoryStats := MainMemoryStats;
-    PrintTestResults(AggregatedResult);
 
     if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
         CoverageOptions.OutputPath.Present) and
@@ -1394,12 +1403,6 @@ begin
   end;
   SetLength(Result.FileResults, ProcessedCount);
 
-  if Assigned(GC) then
-  begin
-    GC.RemoveTempRoot(AllTestResults);
-    GC.RemoveTempRoot(AllFailedTests);
-  end;
-
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
@@ -1408,6 +1411,14 @@ begin
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
+
+  // Released only once it is complete: the caller roots it again before it
+  // allocates.
+  if Assigned(GC) then
+  begin
+    GC.RemoveTempRoot(AllTestResults);
+    GC.RemoveTempRoot(AllFailedTests);
+  end;
 
   Result.JobCount := 1;
   Result.TestResult := AllTestResults;
