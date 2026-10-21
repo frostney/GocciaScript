@@ -32,3 +32,14 @@ describe("Math.ceil", () => {
     expect(() => Math.ceil(1n)).toThrow(TypeError);
   });
 });
+
+test("Math.ceil retains Number range beyond 32-bit integers", () => {
+  for (const base of [2 ** 31, 2 ** 32, 2 ** 40]) {
+    expect(Math.ceil(base + 0.75)).toBe(base + 1);
+    expect(Math.ceil(-base - 0.75)).toBe(-base);
+  }
+  for (const value of [2 ** 52 + 1, 2 ** 53 + 2, Number.MAX_VALUE]) {
+    expect(Math.ceil(value)).toBe(value);
+    expect(Math.ceil(-value)).toBe(-value);
+  }
+});

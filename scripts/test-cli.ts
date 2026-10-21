@@ -1051,7 +1051,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     );
     const deleteOutPath = join(tmp, "delete-nonstrict.gbc");
     await $`${BUNDLER} ${deleteSrc} --output=${deleteOutPath} --compat-non-strict-mode`.quiet();
-    const bundledDeleteOut = await $`${RUNNER} --print ${deleteOutPath} 2>&1`.text();
+    const bundledDeleteOut = await $`${RUNNER} --print ${deleteOutPath} --compat-non-strict-mode 2>&1`.text();
     if (!containsLine(bundledDeleteOut, "12")) throw new Error(`Bundled non-strict delete expected 12, got: ${bundledDeleteOut}`);
 
     const assignmentSrc = join(tmp, "assignment-nonstrict.js");
@@ -1077,7 +1077,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     );
     const assignmentOutPath = join(tmp, "assignment-nonstrict.gbc");
     await $`${BUNDLER} ${assignmentSrc} --output=${assignmentOutPath} --compat-non-strict-mode`.quiet();
-    const bundledAssignmentOut = await $`${RUNNER} --print ${assignmentOutPath} 2>&1`.text();
+    const bundledAssignmentOut = await $`${RUNNER} --print ${assignmentOutPath} --compat-non-strict-mode 2>&1`.text();
     if (!containsLine(bundledAssignmentOut, "9")) throw new Error(`Bundled non-strict assignment expected 9, got: ${bundledAssignmentOut}`);
 
     const moduleWithSrc = join(tmp, "module-with.js");

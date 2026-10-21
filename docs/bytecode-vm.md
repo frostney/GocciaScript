@@ -390,9 +390,56 @@ The dispatch loop supports an optional instruction counter (`Goccia.InstructionL
 - Endianness: little-endian
 - File extension: `.gbc`
 
-BigInt constants retain their decimal string payload and their constant-pool
-index. Format version 96 rejects older bytecode, whose BigInt entries omitted
-the payload.
+### Format 96
+
+Format 96 adds importable module artifacts and compilation-profile checks.
+Earlier artifacts must be rebuilt. All integer fields are little-endian;
+Booleans have one byte and only `0` and `1` are valid.
+
+After the existing magic, version, runtime tag, source path and debug-info
+flag, the header contains:
+
+| Field | Encoding |
+|-------|----------|
+| Compatibility switches | `UInt32` mask with explicit assignments in `Goccia.Bytecode.Profile` |
+| Preprocessors | `UInt32` mask |
+| Strict types | Boolean |
+| Unsupported-feature warning recovery | Boolean |
+| Settled source goal | `UInt8`: script or module |
+| Execution layout | `UInt8`: standalone or linked module |
+| Global-backed top level | Boolean |
+| Declaration-plan presence | Boolean, followed by the plan when present |
+
+The existing entry import/export tables and function templates follow.
+Linked modules carry a declaration plan: top-level-await flag, binding
+names and kinds, and ordered import/local-export/re-export records with
+module paths, attributes, phases, namespace names and name mappings. The
+reader validates this plan before the loader materializes declaration nodes.
+It does not reconstruct executable AST bodies.
+
+Templates now preserve `StrictCode`, `SourceText`,
+`DerivedThisInitializedSlot` and `ModuleEnvironmentBinding` as well as
+`StrictThis`. BigInt constant payloads are canonical signed decimal strings:
+`0`, or a nonzero decimal digit followed by decimal digits, optionally
+preceded by `-`. The reader rejects noncanonical payloads and constant pools
+whose encoded slots would collapse during reconstruction. This fixes valid
+smol-toml output that previously lost a BigInt slot and failed verification;
+the compiler's constant references and the verifier were correct.
+
+The profile records effective compatibility flags, including separately
+configured label, for-in and experimental module-source switches. It
+also records warning recovery, which can replace unsupported syntax with
+recovered expressions and therefore changes compilation. Loading
+for execution checks exact profile equality. A detected entry adopts the
+artifact's source goal, while an explicit goal mismatch is rejected.
+Execution layout is checked separately from language settings.
+
+The codec accepts `TBytes` or a borrowed pointer and length. File loading
+reads a bounded buffer through the same codec. See
+[Precompiled bytecode modules](bytecode-loading.md) for
+ownership, registration and source fallback, and
+[ADR 0153](adr/0153-precompiled-modules-use-the-module-linker.md) for the
+linker design.
 
 Binary loading is a validation boundary. The reader rejects oversized files,
 declared strings or tables that exceed the remaining stream, excessive nested

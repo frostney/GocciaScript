@@ -312,6 +312,10 @@ Goccia VM, and `GocciaBundler` compiles source to the public `.gbc` artifact.
 ```
 
 See [Bytecode VM](docs/bytecode-vm.md) for the compiler and VM architecture.
+Module artifacts can also satisfy imports: use `GocciaRunner
+--prefer-bytecode app.mjs` for disk companions, or register cached buffers
+through the [embedding API](docs/bytecode-loading.md). Loading
+checks that the artifact's compile profile matches the engine.
 
 ### Reproduce An Execution
 
