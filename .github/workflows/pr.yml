@@ -13,6 +13,9 @@ on:
 # accumulate: a new push cancels the previous run for the same pull request.
 # This also keeps the surviving verdict attached to the current head instead of
 # leaving a green result that belongs to an already-replaced commit.
+# Jobs that must run after a failed dependency use !cancelled(), not always():
+# always() also runs them in the cancelled run, where they fail on artifacts the
+# cancellation never produced or post comments for the replaced commit.
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -604,7 +607,9 @@ jobs:
 
   jetstream-report:
     needs: jetstream-workload
-    if: always()
+    # Runs when a shard failed, so a missing shard still fails this job, but
+    # not when a newer push cancelled the run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -626,7 +631,10 @@ jobs:
       - name: Merge JetStream report
         id: jetstream-merge
         continue-on-error: true
+        # nullglob: with no workload reports, the script gets no paths and names
+        # every missing workload instead of failing on the literal pattern.
         run: |
+          shopt -s nullglob
           node scripts/jetstream-merge-reports.js \
             --output jetstream-report.json \
             jetstream-reports/*.json
@@ -736,7 +744,9 @@ jobs:
 
   web-tooling-report:
     needs: web-tooling-workload
-    if: always()
+    # Runs when a shard failed, so a missing shard still fails this job, but
+    # not when a newer push cancelled the run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -756,7 +766,10 @@ jobs:
           merge-multiple: true
 
       - name: Merge Web Tooling report
+        # nullglob: with no workload reports, the script gets no paths and names
+        # every missing workload instead of failing on the literal pattern.
         run: |
+          shopt -s nullglob
           node scripts/web-tooling-merge-reports.js \
             --output web-tooling-report.json \
             web-tooling-reports/*.json
@@ -1001,7 +1014,9 @@ jobs:
 
   test262-merge:
     needs: test262
-    if: always()
+    # Runs when a shard failed, so a missing shard still fails this job, but
+    # not when a newer push cancelled the run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1021,7 +1036,10 @@ jobs:
           merge-multiple: true
 
       - name: Merge test262 shards
+        # nullglob: with no shard reports, the merge gets no paths and reports
+        # every shard missing instead of failing on the literal pattern.
         run: |
+          shopt -s nullglob
           bun scripts/run_test262_suite.ts \
             --merge-shards \
             --output=test262-results.json \
@@ -1119,7 +1137,9 @@ jobs:
 
   awfy-comment:
     needs: awfy-report
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1155,7 +1175,9 @@ jobs:
 
   jetstream-comment:
     needs: jetstream-report
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1191,7 +1213,9 @@ jobs:
 
   web-tooling-comment:
     needs: web-tooling-report
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1227,7 +1251,9 @@ jobs:
 
   timing-comment:
     needs: [test, benchmark, boot-timing]
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -1403,7 +1429,9 @@ jobs:
 
   test262-comment:
     needs: test262-merge
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

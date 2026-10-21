@@ -1609,6 +1609,41 @@ await section("test262 runner: deterministic shards merge into one complete repo
         `test262 merge should reject duplicate shards: ${duplicateProc.stderr.toString()}`,
       );
     }
+
+    const missingProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "missing.json"),
+        shardReports[0],
+        shardReports[1],
+        shardReports[3],
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (missingProc.exitCode !== 1 ||
+        !missingProc.stderr.toString().includes("Expected 4 shard reports, got 3; missing shards: 2")) {
+      throw new Error(
+        `test262 merge should name the missing shard: ${missingProc.stderr.toString()}`,
+      );
+    }
+
+    const noneProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "none.json"),
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (noneProc.exitCode !== 1 ||
+        !noneProc.stderr.toString().includes("found no shard reports: every shard is missing")) {
+      throw new Error(
+        `test262 merge should fail when every shard is missing: ${noneProc.stderr.toString()}`,
+      );
+    }
   } finally {
     clean(tmp);
   }
