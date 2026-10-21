@@ -19,8 +19,8 @@ The default-on feature configuration that realises the recommended defaults: the
 _Avoid_: Language ceiling, hard limit, runtime profile.
 
 **Engine**:
-The core language execution layer. It owns language semantics, source type, execution mode dispatch, and core language built-ins.
-_Avoid_: Runtime when referring only to core language behavior.
+The core language execution layer. It owns language semantics, source type, bytecode compilation and the Goccia VM it runs on, and core language built-ins.
+_Avoid_: Runtime when referring only to core language behavior, executor.
 
 **Runtime**:
 The host integration layer attached to an engine. It installs optional globals, file-backed helpers, and runtime extensions.
@@ -192,17 +192,9 @@ _Avoid_: Polyfill, compatibility flag.
 
 ### Execution
 
-**Execution mode**:
-The selected way to execute source: interpreter mode or bytecode mode.
-_Avoid_: Runtime, runtime profile.
-
 **Deterministic execution**:
 An engine profile in which JavaScript-observable time is frozen at the Unix epoch, the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams.
 _Avoid_: Deterministic profiling, frozen timeout clock, seeded sandbox filesystem.
-
-**Executor**:
-The implementation object behind an execution mode. GocciaScript has an interpreter executor and a bytecode executor.
-_Avoid_: Execution backend, runtime.
 
 **Source pipeline**:
 The shared source-processing pipeline that turns source text into an AST before execution. It owns parser policy and exposes purpose-specific parse entry points for full source, module source, dynamic Function parsing, and expression fragments.
@@ -217,7 +209,7 @@ A command-line program that hosts the engine or runtime for a specific workflow.
 _Avoid_: CLI frontend, source pipeline.
 
 **CLI option**:
-A named command-line control such as `--mode=bytecode`, `--output=json`, or `--print`. Use it as the umbrella term for named CLI controls, whether they take a value or not.
+A named command-line control such as `--source-type=module`, `--output=json`, or `--print`. Use it as the umbrella term for named CLI controls, whether they take a value or not.
 _Avoid_: CLI flag when the option takes a value.
 
 **CLI flag**:
@@ -237,20 +229,16 @@ Any file processed by a CLI host, especially batch-capable tools such as the Tes
 _Avoid_: Entry file when referring to a batch member or per-file result.
 
 **Config key**:
-A field name in a GocciaScript config file, such as `"mode"`, `"strict-types"`, or `"permissions"`. Capability grants are keys inside the `permissions` object (`"allow-net"`), never top-level config keys.
+A field name in a GocciaScript config file, such as `"source-type"`, `"strict-types"`, or `"permissions"`. Capability grants are keys inside the `permissions` object (`"allow-net"`), never top-level config keys.
 _Avoid_: Config option when referring to the field name.
 
 **Config value**:
-The value assigned to a config key and the selected setting it carries, such as `"bytecode"`, `true`, or `["api.example.com"]`.
+The value assigned to a config key and the selected setting it carries, such as `"module"`, `true`, or `["api.example.com"]`.
 _Avoid_: Config option when referring to the serialized value.
 
-**Tree-walk execution**:
-Execution by walking the AST through the interpreter and evaluator.
-_Avoid_: Bytecode execution.
-
 **Bytecode execution**:
-Execution by compiling the AST to Goccia bytecode and running it on the Goccia VM.
-_Avoid_: VM mode.
+Execution by compiling the AST to Goccia bytecode and running it on the Goccia VM. Since 0.15.0 it is the only way GocciaScript executes source.
+_Avoid_: VM mode, bytecode mode, execution mode, interpreted mode, tree-walk execution.
 
 **Goccia bytecode**:
 The GocciaScript-owned instruction format used by bytecode execution and stored in `.gbc` artifacts.
@@ -555,20 +543,17 @@ _Avoid_: Separate compatibility booleans when a caller is passing the whole pars
 **Runtime**:
 Use **Runtime** for the host integration layer. Use **runtime value**, **runtime behavior**, or **runtime error** when speaking generically about behavior during execution.
 
-**Executor vs mode**:
-Use **execution mode** for the user-visible selection. Use **executor** for the implementation object that makes the mode work.
+**Execution mode, executor, tree-walk execution**:
+Retired in 0.15.0, when the tree-walk interpreter, the `--mode` option and the executor were removed. Use them only for releases up to 0.14 and in historical records such as ADRs; say **bytecode execution**, **engine**, or **Goccia VM** for current behavior.
 
 **Option vs flag**:
-Use **CLI option** as the umbrella term. Use **CLI flag** only for boolean options; call value-taking controls such as `--mode=bytecode`, `--output=json`, and `--timeout=1000` options.
+Use **CLI option** as the umbrella term. Use **CLI flag** only for boolean options; call value-taking controls such as `--source-type=module`, `--output=json`, and `--timeout=1000` options.
 
 **Config key vs config value**:
 Use **config key** for the field name in a config file. Use **config value** for the assigned value and the selected setting it configures.
 
 **Entry file vs input file**:
 Use **entry file** for the initial script or module file path that starts a single program run. Use **input file** for files processed by batch-style tools or per-file result envelopes.
-
-**Source type vs execution mode**:
-Use **source type** for script-vs-module entry semantics. Use **execution mode** for interpreter-vs-bytecode execution.
 
 **Native vs built-in**:
 Use **native function** for Pascal-backed callables. Use **built-in** for APIs supplied by GocciaScript. Use **core language built-in** or **runtime global** when availability matters.
@@ -591,19 +576,19 @@ Dev: Should `fetch` be registered by the engine?
 Domain expert: No. `fetch` is a runtime global installed by a runtime extension, usually through the loader runtime profile.
 
 Dev: Is this an executor bug?
-Domain expert: It depends. If interpreter mode and bytecode mode disagree, it is probably an executor issue. If both execution modes agree but the language behavior is wrong, it is an engine semantics issue.
+Domain expert: GocciaScript has no executor since 0.15.0. If the AST is right but the bytecode is wrong, it is a compiler bug; if the bytecode is right but running it goes wrong, it is a VM bug. If Vitest or Bun disagree with GocciaScript on the same test, check the language behavior against the spec first.
 
-Dev: Is `--mode=bytecode` a flag?
+Dev: Is `--source-type=module` a flag?
 Domain expert: No. It is a CLI option because it takes a value. `--print` is a CLI flag because it is boolean.
 
-Dev: Is `"mode"` a config option?
-Domain expert: Call `"mode"` the config key. Call `"bytecode"` the config value.
+Dev: Is `"source-type"` a config option?
+Domain expert: Call `"source-type"` the config key. Call `"module"` the config value.
 
 Dev: Should this JSON envelope say entry files?
 Domain expert: If it reports every file a batch run processed, say input files. Use entry file only for the initial program path.
 
 Dev: Is `--source-type=module` module mode?
-Domain expert: No. It sets the source type to module source. Execution mode is interpreter or bytecode.
+Domain expert: No. It sets the source type to module source.
 
 Dev: The callback is a built-in function because it is written in Pascal, right?
 Domain expert: It is a native function because it is Pascal-backed. It is only a built-in if the engine or runtime surface provides it as part of GocciaScript.

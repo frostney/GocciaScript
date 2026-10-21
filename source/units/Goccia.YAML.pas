@@ -157,7 +157,7 @@ type
     FValue: TGocciaValue;
   public
     constructor Create(const ATagName: string; const AValue: TGocciaValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     function RuntimeCopy: TGocciaValue; override;
     function IsPrimitive: Boolean; override;
     function IsCallable: Boolean; override;
@@ -198,9 +198,8 @@ begin
   FValue := AValue;
 end;
 
-procedure TGocciaYAMLTaggedValue.MarkReferences;
+procedure TGocciaYAMLTaggedValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FValue) then
     FValue.MarkReferences;
@@ -1228,7 +1227,10 @@ begin
         begin
           ItemText := Trim(Copy(AText, ItemStart, I - ItemStart));
           if ItemText = '' then
+          begin
+            Result.Free;
             raise EGocciaYAMLParseError.Create('Invalid flow collection entry.');
+          end;
           Result.Add(ItemText);
           ItemStart := I + 1;
         end;

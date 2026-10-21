@@ -5,16 +5,13 @@ program Goccia.Engine.GlobalEval.Test;
 { ADR 0134 Phase 2: eval code whose variable environment is the global one
   (indirect eval, a ShadowRealm child realm's eval and
   ShadowRealm.prototype.evaluate) runs through TGocciaEngine.EvaluateGlobalEval.
-  In bytecode mode the code is compiled and run on the VM, so a function or
-  class it creates is a VM value; only the tree-walk evaluator creates
-  AST-backed ones, which interpreter mode still does. These tests call the
-  entry directly and through the Test262 host's eval; the ShadowRealm unit
-  reaches the same entry and no longer links the evaluator.
+  The code is compiled and run on the VM, so a function or class it creates
+  is a VM value. These tests call the entry directly and through the Test262
+  host's eval; the ShadowRealm unit reaches the same entry.
 
   ADR 0134 Phase 3: a direct eval is compiled too, as a closure of the call
   site, so what it creates is a VM value as well, at a strict call site and
-  at a sloppy one. The VM no longer reaches the tree-walk evaluator for eval
-  code.
+  at a sloppy one.
 
   ADR 0134 Phase 4: each direct eval site keeps the code it compiled, keyed on
   the source text, so evaluating the same source at the site again compiles
@@ -23,6 +20,7 @@ program Goccia.Engine.GlobalEval.Test;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
+  Math,
   SysUtils,
 
   TestingPascalLibrary,
@@ -30,13 +28,10 @@ uses
   Goccia.Capabilities,
   Goccia.Engine,
   Goccia.Error,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
+  Goccia.Runtime,
   Goccia.SourcePipeline,
   Goccia.Test262.Host,
   Goccia.TestSetup,
-  Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Error,
@@ -52,13 +47,11 @@ const
 type
   TGlobalEvalTests = class(TTestSuite)
   private
-    function CreateEngine(const AExecutor: TGocciaExecutor;
-      const ASource: TStringList): TGocciaEngine;
+    function CreateEngine(const ASource: TStringList): TGocciaEngine;
     function EvalStage(const AEngine: TGocciaEngine;
       const ASource: string): TGocciaGlobalEvalStage;
     procedure TestBytecodeEvalCreatesVMFunctions;
     procedure TestBytecodeEvalCreatesVMClasses;
-    procedure TestInterpreterEvalCreatesASTFunctions;
     procedure TestBytecodeTest262HostEvalCreatesVMFunctions;
     procedure TestBytecodeStrictDirectEvalCreatesVMValues;
     function DirectEvalRetainedModules(const ASource: string;
@@ -68,22 +61,21 @@ type
     procedure TestBytecodeEvalReturnsCompletionValue;
     procedure TestBytecodeEvalReportsCompileStage;
     procedure TestBytecodeEvalReportsRunStage;
-    procedure AssertDirectiveFreeEvalIsNonStrict(
-      const AExecutor: TGocciaExecutor);
+    procedure AssertDirectiveFreeEvalIsNonStrict;
     procedure TestBytecodeEvalIsNonStrictInStrictEngine;
-    procedure TestInterpreterEvalIsNonStrictInStrictEngine;
+    procedure TestEvalEstablishesFloatingPointMode;
+    procedure TestWaitForRuntimeIdleEstablishesFloatingPointMode;
+    procedure TestInjectModulesEstablishFloatingPointMode;
   public
     procedure SetupTests; override;
   end;
 
 procedure TGlobalEvalTests.SetupTests;
 begin
-  Test('Bytecode global eval creates VM functions, not AST functions',
+  Test('Bytecode global eval creates VM functions',
     TestBytecodeEvalCreatesVMFunctions);
   Test('Bytecode global eval creates VM classes',
     TestBytecodeEvalCreatesVMClasses);
-  Test('Interpreter global eval still creates AST functions',
-    TestInterpreterEvalCreatesASTFunctions);
   Test('Bytecode Test262 host eval creates VM functions',
     TestBytecodeTest262HostEvalCreatesVMFunctions);
   Test('Bytecode direct eval creates VM values at strict and sloppy sites',
@@ -100,14 +92,17 @@ begin
     TestBytecodeEvalReportsRunStage);
   Test('Bytecode directive-free global eval is non-strict in a strict engine',
     TestBytecodeEvalIsNonStrictInStrictEngine);
-  Test('Interpreter directive-free global eval is non-strict in a strict ' +
-    'engine', TestInterpreterEvalIsNonStrictInStrictEngine);
+  Test('Global eval runs NaN arithmetic when called outside a run scope',
+    TestEvalEstablishesFloatingPointMode);
+  Test('WaitForRuntimeIdle runs NaN arithmetic when called outside a run scope',
+    TestWaitForRuntimeIdleEstablishesFloatingPointMode);
+  Test('Injecting a module of globals or a manifest runs NaN arithmetic outside a run scope',
+    TestInjectModulesEstablishFloatingPointMode);
 end;
 
-function TGlobalEvalTests.CreateEngine(const AExecutor: TGocciaExecutor;
-  const ASource: TStringList): TGocciaEngine;
+function TGlobalEvalTests.CreateEngine(const ASource: TStringList): TGocciaEngine;
 begin
-  Result := TGocciaEngine.Create('<global-eval-test>', ASource, AExecutor);
+  Result := TGocciaEngine.Create('<global-eval-test>', ASource);
   Result.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
   Result.LabelStatementsEnabled := True;
 end;
@@ -129,20 +124,17 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalCreatesVMFunctions;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Value := Engine.EvaluateGlobalEval('function made() {} made',
       '<global-eval-test>', Stage);
     Expect<Boolean>(Value.ClassName = BYTECODE_FUNCTION_CLASS).ToBe(True);
-    Expect<Boolean>(Value is TGocciaFunctionValue).ToBe(False);
     Value := Engine.EvaluateGlobalEval('(x) => x', '<global-eval-test>',
       Stage);
     Expect<Boolean>(Value.ClassName = BYTECODE_FUNCTION_CLASS).ToBe(True);
@@ -151,7 +143,6 @@ begin
     Expect<Boolean>(Value.ClassName = BYTECODE_FUNCTION_CLASS).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -159,46 +150,19 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalCreatesVMClasses;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Value := Engine.EvaluateGlobalEval('class Made {} Made',
       '<global-eval-test>', Stage);
     Expect<Boolean>(Value.ClassName = VM_CLASS_CLASS).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
-    Source.Free;
-  end;
-end;
-
-procedure TGlobalEvalTests.TestInterpreterEvalCreatesASTFunctions;
-var
-  Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
-  Source: TStringList;
-  Stage: TGocciaGlobalEvalStage;
-  Value: TGocciaValue;
-begin
-  Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := nil;
-  try
-    Engine := CreateEngine(Executor, Source);
-    Value := Engine.EvaluateGlobalEval('function made() {} made',
-      '<global-eval-test>', Stage);
-    Expect<Boolean>(Value is TGocciaFunctionValue).ToBe(True);
-    Expect<Boolean>(Value.ClassName = BYTECODE_FUNCTION_CLASS).ToBe(False);
-  finally
-    Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -207,7 +171,6 @@ procedure TGlobalEvalTests.TestBytecodeTest262HostEvalCreatesVMFunctions;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   Source: TStringList;
   GlobalObject: TGocciaObjectValue;
@@ -219,16 +182,14 @@ begin
     'globalThis.childEval = (0, eval)("eval")("(function () {})");';
   EngineOptions := Default(TGocciaTest262EngineOptions);
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
-  EngineOptions.Mode := t262emBytecode;
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor(t262emBytecode);
   Engine := nil;
   Host := nil;
   try
-    Engine := TGocciaEngine.Create('<global-eval-test>', Source, Executor,
+    Engine := TGocciaEngine.Create('<global-eval-test>', Source,
       EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    ConfigureTest262Engine(Engine, EngineOptions);
     Host := TGocciaTest262Host.Create(EngineOptions);
     Host.ConfigureHostEnvironment(Engine.HostEnvironment);
     Host.Install(Engine);
@@ -243,7 +204,6 @@ begin
   finally
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -252,7 +212,6 @@ procedure TGlobalEvalTests.TestBytecodeStrictDirectEvalCreatesVMValues;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   Source: TStringList;
   GlobalObject: TGocciaObjectValue;
@@ -271,16 +230,14 @@ begin
       ' return eval("var v = 1; (function () { return v; })"); })();';
   EngineOptions := Default(TGocciaTest262EngineOptions);
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
-  EngineOptions.Mode := t262emBytecode;
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor(t262emBytecode);
   Engine := nil;
   Host := nil;
   try
-    Engine := TGocciaEngine.Create('<direct-eval-test>', Source, Executor,
+    Engine := TGocciaEngine.Create('<direct-eval-test>', Source,
       EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    ConfigureTest262Engine(Engine, EngineOptions);
     Host := TGocciaTest262Host.Create(EngineOptions);
     Host.ConfigureHostEnvironment(Engine.HostEnvironment);
     Host.Install(Engine);
@@ -296,12 +253,9 @@ begin
       BYTECODE_FUNCTION_CLASS).ToBe(True);
     Expect<Boolean>(GlobalObject.GetProperty('sloppyInFunction').ClassName =
       BYTECODE_FUNCTION_CLASS).ToBe(True);
-    Expect<Boolean>(GlobalObject.GetProperty('sloppyFunction') is
-      TGocciaFunctionValue).ToBe(False);
   finally
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -313,7 +267,6 @@ function TGlobalEvalTests.DirectEvalRetainedModules(const ASource: string;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   Source: TStringList;
 begin
@@ -323,16 +276,14 @@ begin
   EngineOptions := Default(TGocciaTest262EngineOptions);
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode,
     cfTraditionalFor];
-  EngineOptions.Mode := t262emBytecode;
   EngineOptions.SourceType := stScript;
   EngineOptions.Capabilities := TGocciaCapabilities.None;
-  Executor := CreateTest262Executor(t262emBytecode);
   Engine := nil;
   Host := nil;
   try
     Engine := TGocciaEngine.Create('<direct-eval-cache-test>', Source,
-      Executor, EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+      EngineOptions.Capabilities);
+    ConfigureTest262Engine(Engine, EngineOptions);
     Host := TGocciaTest262Host.Create(EngineOptions);
     Host.ConfigureHostEnvironment(Engine.HostEnvironment);
     Host.Install(Engine);
@@ -341,7 +292,6 @@ begin
   finally
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -398,17 +348,15 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalVarIsDeletableGlobal;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Descriptor: TGocciaPropertyDescriptor;
   GlobalObject: TGocciaObjectValue;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Engine.EvaluateGlobalEval('var made = 1; function madeFn() {}',
       '<global-eval-test>', Stage);
     GlobalObject := TGocciaObjectValue(Engine.Realm.GlobalObject);
@@ -420,7 +368,6 @@ begin
     Expect<Boolean>(Descriptor.Configurable).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -428,16 +375,14 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalReturnsCompletionValue;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
   Stage: TGocciaGlobalEvalStage;
   Value: TGocciaValue;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Value := Engine.EvaluateGlobalEval('1; if (true) { 2 } else { 3 }',
       '<global-eval-test>', Stage);
     Expect<Double>((Value as TGocciaNumberLiteralValue).Value).ToBe(2);
@@ -458,7 +403,6 @@ begin
     Expect<Boolean>(Value is TGocciaUndefinedLiteralValue).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -466,19 +410,16 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalReportsCompileStage;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Expect<Boolean>(EvalStage(Engine, 'new.target') = gesCompile).ToBe(True);
     Expect<Boolean>(EvalStage(Engine, 'return 1') = gesCompile).ToBe(True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -486,14 +427,12 @@ end;
 procedure TGlobalEvalTests.TestBytecodeEvalReportsRunStage;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaBytecodeExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaBytecodeExecutor.Create;
   Engine := nil;
   try
-    Engine := CreateEngine(Executor, Source);
+    Engine := CreateEngine(Source);
     Expect<Boolean>(EvalStage(Engine, 'throw 1') = gesRun).ToBe(True);
     TGocciaObjectValue(Engine.Realm.GlobalObject).PreventExtensions;
     // EvalDeclarationInstantiation's CanDeclareGlobalVar check runs after
@@ -502,15 +441,13 @@ begin
       True);
   finally
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
 
 // ES2026 §19.2.1.1 step 13: eval code is strict only by its own directive,
 // also in an engine without the non-strict compatibility profile.
-procedure TGlobalEvalTests.AssertDirectiveFreeEvalIsNonStrict(
-  const AExecutor: TGocciaExecutor);
+procedure TGlobalEvalTests.AssertDirectiveFreeEvalIsNonStrict;
 var
   Engine: TGocciaEngine;
   Source: TStringList;
@@ -520,7 +457,7 @@ begin
   Source := TStringList.Create;
   Engine := nil;
   try
-    Engine := TGocciaEngine.Create('<global-eval-test>', Source, AExecutor);
+    Engine := TGocciaEngine.Create('<global-eval-test>', Source);
     Engine.Compatibility := [cfASI, cfVar, cfFunction];
     Value := Engine.EvaluateGlobalEval(
       'implicitFromEval = 1; typeof implicitFromEval', '<global-eval-test>',
@@ -536,26 +473,160 @@ begin
 end;
 
 procedure TGlobalEvalTests.TestBytecodeEvalIsNonStrictInStrictEngine;
-var
-  Executor: TGocciaBytecodeExecutor;
 begin
-  Executor := TGocciaBytecodeExecutor.Create;
+  AssertDirectiveFreeEvalIsNonStrict;
+end;
+
+// ES2026 §6.1.6.1.4, §6.1.6.1.5 and §6.1.6.1.8 (Number::multiply,
+// Number::divide, Number::subtract): NaN and infinity arithmetic follows
+// IEEE 754 and never traps. An
+// embedder that calls EvaluateGlobalEval directly runs with whatever
+// floating-point mode its own process has, FPC's default among them, which
+// raises EInvalidOp on 0/0. The entry establishes the mode and restores the
+// caller's.
+procedure TGlobalEvalTests.TestEvalEstablishesFloatingPointMode;
+const
+  // FPC's startup mask: invalid operation, zero divide and overflow trap.
+  EMBEDDER_MASK: TFPUExceptionMask = [exDenormalized, exUnderflow,
+    exPrecision];
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  SavedMask: TFPUExceptionMask;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  SavedMask := GetExceptionMask;
   try
-    AssertDirectiveFreeEvalIsNonStrict(Executor);
+    Engine := CreateEngine(Source);
+    SetExceptionMask(EMBEDDER_MASK);
+    try
+      Value := Engine.EvaluateGlobalEval('0 / 0', '<global-eval-test>',
+        Stage);
+      Expect<Boolean>((Value as TGocciaNumberLiteralValue).IsNaN).ToBe(True);
+      Value := Engine.EvaluateGlobalEval('Infinity - Infinity',
+        '<global-eval-test>', Stage);
+      Expect<Boolean>((Value as TGocciaNumberLiteralValue).IsNaN).ToBe(True);
+      // Operands the compiler cannot fold.
+      Value := Engine.EvaluateGlobalEval(
+        'var zero = 0, inf = Infinity; [zero / zero, inf - inf, inf * zero]' +
+        '.every((n) => n !== n)', '<global-eval-test>', Stage);
+      Expect<Boolean>((Value as TGocciaBooleanLiteralValue).Value).ToBe(True);
+      // The caller's mask is back once the entry returns.
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+    finally
+      SetExceptionMask(SavedMask);
+    end;
   finally
-    Executor.Free;
+    Engine.Free;
+    Source.Free;
   end;
 end;
 
-procedure TGlobalEvalTests.TestInterpreterEvalIsNonStrictInStrictEngine;
+// Jobs a run left queued run script too: a promise reaction that divides 0
+// by 0 runs inside WaitForRuntimeIdle, which an embedder can call on its own.
+procedure TGlobalEvalTests.TestWaitForRuntimeIdleEstablishesFloatingPointMode;
+const
+  EMBEDDER_MASK: TFPUExceptionMask = [exDenormalized, exUnderflow,
+    exPrecision];
 var
-  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  SavedMask: TFPUExceptionMask;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
+  Source := TStringList.Create;
+  Engine := nil;
+  SavedMask := GetExceptionMask;
   try
-    AssertDirectiveFreeEvalIsNonStrict(Executor);
+    Engine := CreateEngine(Source);
+    Engine.EvaluateGlobalEval(
+      'var zero = 0; var settled = "pending";' +
+      'Promise.resolve().then(() => { settled = zero / zero; });',
+      '<global-eval-test>', Stage);
+    SetExceptionMask(EMBEDDER_MASK);
+    try
+      Engine.WaitForRuntimeIdle;
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+    finally
+      SetExceptionMask(SavedMask);
+    end;
+    Value := Engine.EvaluateGlobalEval('settled !== settled',
+      '<global-eval-test>', Stage);
+    Expect<Boolean>((Value as TGocciaBooleanLiteralValue).Value).ToBe(True);
   finally
-    Executor.Free;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+// The two host-module injectors compile and run a module of the embedder's:
+// its top level divides 0 by 0 under the embedder's own mask.
+procedure TGlobalEvalTests.TestInjectModulesEstablishFloatingPointMode;
+const
+  EMBEDDER_MASK: TFPUExceptionMask = [exDenormalized, exUnderflow,
+    exPrecision];
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+  SavedMask: TFPUExceptionMask;
+  Directory, GlobalsPath, ManifestPath: string;
+
+  procedure WriteModule(const APath, AContent: string);
+  var
+    Lines: TStringList;
+  begin
+    Lines := TStringList.Create;
+    try
+      Lines.Text := AContent;
+      Lines.SaveToFile(APath);
+    finally
+      Lines.Free;
+    end;
+  end;
+
+begin
+  Directory := IncludeTrailingPathDelimiter(GetTempDir) +
+    'goccia-fp-inject-' + IntToStr(GetProcessID);
+  ForceDirectories(Directory);
+  GlobalsPath := Directory + DirectorySeparator + 'globals.js';
+  ManifestPath := Directory + DirectorySeparator + 'manifest.js';
+  WriteModule(GlobalsPath,
+    'export const nan = 0 / 0;' + LineEnding +
+    'export const diff = Infinity - Infinity;');
+  WriteModule(ManifestPath,
+    'export const unused = 0 / 0;' + LineEnding +
+    'export default { "virtual:one": { content: "export const one = 1;" } };');
+  Source := TStringList.Create;
+  Engine := nil;
+  SavedMask := GetExceptionMask;
+  try
+    Engine := CreateEngine(Source);
+    // The runtime gives the engine the content provider that reads the files.
+    AttachRuntime(Engine);
+    SetExceptionMask(EMBEDDER_MASK);
+    try
+      Engine.InjectGlobalsFromModule(GlobalsPath);
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+      Engine.InjectModulesFromModule(ManifestPath);
+      Expect<Boolean>(GetExceptionMask = EMBEDDER_MASK).ToBe(True);
+    finally
+      SetExceptionMask(SavedMask);
+    end;
+    Value := Engine.EvaluateGlobalEval('nan !== nan && diff !== diff',
+      '<global-eval-test>', Stage);
+    Expect<Boolean>((Value as TGocciaBooleanLiteralValue).Value).ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
+    DeleteFile(GlobalsPath);
+    DeleteFile(ManifestPath);
+    RemoveDir(Directory);
   end;
 end;
 

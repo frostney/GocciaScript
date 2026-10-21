@@ -112,4 +112,33 @@ describe("Uint8Array.prototype.toBase64", () => {
     const bytes = new Uint8Array([255, 255, 255]);
     expect(bytes.toBase64()).toBe("////");
   });
+
+  test("encodes a length-tracking view after its buffer grew, with zeros past the old end", () => {
+    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    view.fill(255);
+    rab.resize(8);
+    expect(view.toBase64()).toBe("//8AAAAAAAA=");
+  });
+
+  test("encodes the bytes the view holds after the options getter grew the buffer", () => {
+    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    view.fill(255);
+    const options = {
+      get alphabet() {
+        rab.resize(8);
+        return "base64";
+      },
+    };
+    expect(view.toBase64(options)).toBe("//8AAAAAAAA=");
+  });
+
+  test("encodes a length-tracking view after its buffer shrank", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    view.fill(9);
+    rab.resize(4);
+    expect(view.toBase64()).toBe("CQkJCQ==");
+  });
 });

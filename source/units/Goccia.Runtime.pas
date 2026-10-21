@@ -11,8 +11,6 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Capabilities,
   Goccia.Engine,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
   Goccia.ModuleResolver,
   Goccia.Modules,
   Goccia.Modules.Loader,
@@ -46,6 +44,12 @@ type
     function TryInjectModules(const AFormat: string;
       const AContent: string; const ABaseAddress: string): Boolean; virtual;
     procedure WaitForIdle; virtual;
+    { See TGocciaEngineExtension.HasPendingWork. }
+    function HasPendingWork: Boolean; virtual;
+    { See TGocciaEngineExtension.HeapSnapshotRefusal. }
+    function HeapSnapshotRefusal: string; virtual;
+    { See TGocciaEngineExtension.MaterializeHeapSnapshotBuiltin. }
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); virtual;
     procedure DiscardPending; virtual;
   end;
 
@@ -91,6 +95,9 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure WaitForIdle; override;
+    function HasPendingWork: Boolean; override;
+    function HeapSnapshotRefusal: string; override;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); override;
     procedure DiscardPending; override;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; override;
@@ -112,7 +119,9 @@ type
     FEngine: TGocciaEngine;
     FCore: TGocciaRuntimeCore;
     FOwnsEngine: Boolean;
-    FOwnedExecutor: TGocciaExecutor;
+    { Whether the runtime created its engine from a file name and source,
+      rather than being given one. }
+    FCreatedEngine: Boolean;
 
     constructor CreateWithEngine(const AEngine: TGocciaEngine;
       const AOwnsEngine: Boolean);
@@ -120,17 +129,11 @@ type
     constructor Create(const AEngine: TGocciaEngine); overload;
     constructor Create(const AEngine: TGocciaEngine;
       const AOwnsEngine: Boolean); overload;
-    { The overloads without an executor run in a bytecode executor the
-      runtime owns. }
+    { The overloads with a file name create an engine the runtime owns. }
     constructor Create(const AFileName: string;
       const ASourceLines: TStringList); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AExecutor: TGocciaExecutor); overload;
     constructor Create(const AFileName: string;
       const ASourceLines: TStringList;
-      const ACapabilities: TGocciaCapabilities); overload;
-    constructor Create(const AFileName: string; const ASourceLines: TStringList;
-      const AExecutor: TGocciaExecutor;
       const ACapabilities: TGocciaCapabilities); overload;
     destructor Destroy; override;
 
@@ -255,6 +258,21 @@ begin
 end;
 
 procedure TGocciaRuntimeExtension.WaitForIdle;
+begin
+end;
+
+function TGocciaRuntimeExtension.HasPendingWork: Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaRuntimeExtension.HeapSnapshotRefusal: string;
+begin
+  Result := '';
+end;
+
+procedure TGocciaRuntimeExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
 begin
 end;
 
@@ -531,6 +549,38 @@ begin
     FExtensions[I].WaitForIdle;
 end;
 
+function TGocciaRuntimeCore.HasPendingWork: Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].HasPendingWork then
+      Exit(True);
+  Result := False;
+end;
+
+function TGocciaRuntimeCore.HeapSnapshotRefusal: string;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+  begin
+    Result := FExtensions[I].HeapSnapshotRefusal;
+    if Result <> '' then
+      Exit;
+  end;
+  Result := '';
+end;
+
+procedure TGocciaRuntimeCore.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].MaterializeHeapSnapshotBuiltin(AName);
+end;
+
 procedure TGocciaRuntimeCore.DiscardPending;
 var
   I: Integer;
@@ -614,30 +664,11 @@ begin
 end;
 
 constructor TGocciaRuntime.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor);
-begin
-  Create(AFileName, ASourceLines, AExecutor, TGocciaCapabilities.None);
-end;
-
-constructor TGocciaRuntime.Create(const AFileName: string;
   const ASourceLines: TStringList; const ACapabilities: TGocciaCapabilities);
 begin
-  FOwnedExecutor := TGocciaBytecodeExecutor.Create;
-  try
-    CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines,
-      FOwnedExecutor, ACapabilities), True);
-  except
-    FreeAndNil(FOwnedExecutor);
-    raise;
-  end;
-end;
-
-constructor TGocciaRuntime.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor;
-  const ACapabilities: TGocciaCapabilities);
-begin
-  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AExecutor,
+  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines,
     ACapabilities), True);
+  FCreatedEngine := True;
 end;
 
 destructor TGocciaRuntime.Destroy;
@@ -646,8 +677,6 @@ begin
     FEngine.Free;
   FEngine := nil;
   FCore := nil;
-  FOwnedExecutor.Free;
-  FOwnedExecutor := nil;
   inherited;
 end;
 
@@ -671,12 +700,13 @@ end;
 
 function TGocciaRuntime.Execute: TGocciaScriptResult;
 begin
-  { The runtime's own executor backs a script's top-level bindings with the
-    global object, as the CLI hosts configure theirs; module source keeps
-    them in its module scope. }
-  if FOwnedExecutor is TGocciaBytecodeExecutor then
-    TGocciaBytecodeExecutor(FOwnedExecutor).GlobalBackedTopLevel :=
-      FEngine.SourceType = stScript;
+  { An engine the runtime created backs a script's top-level bindings with
+    the global object, as the CLI hosts configure theirs; module source keeps
+    them in its module scope. A detected entry is configured as a Script, and
+    Execute keeps one that turns out a Module off the global object. An
+    engine the host passed in keeps its own setting. }
+  if FCreatedEngine then
+    FEngine.GlobalBackedTopLevel := FEngine.SourceType <> stModule;
   Result := FEngine.Execute;
 end;
 

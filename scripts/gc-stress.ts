@@ -189,7 +189,6 @@ async function runTest262(
     runner,
     `--suite-dir=${options.suiteDir}`,
     `--categories=${TEST262_CATEGORIES.join(",")}`,
-    "--mode=bytecode",
     `--jobs=${options.jobs}`,
     `--timeout=${options.test262Timeout}`,
     `--output=${output}`,

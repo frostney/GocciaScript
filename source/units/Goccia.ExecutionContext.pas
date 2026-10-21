@@ -119,8 +119,8 @@ function CreateExecutionContext(const ARealm: TGocciaRealm;
 
 // The stable, thread-owned reference an execution context stores in place of
 // its source path (nil for the empty path). Equal paths give the same
-// reference, which stays valid for the life of the process, so a caller that
-// pushes many contexts for one path can look it up once.
+// reference, which stays valid until the thread's runtime shuts down, so a
+// caller that pushes many contexts for one path can look it up once.
 function InternSourcePath(const ASourcePath: string): Pointer;
 
 function RunningExecutionContext: TGocciaExecutionContext; {$IFDEF FPC}inline;{$ENDIF}
@@ -129,7 +129,9 @@ function HasRunningExecutionContext: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.ThreadCleanupRegistry;
 
 type
   PGocciaInternedSourcePath = ^TGocciaInternedSourcePath;
@@ -155,25 +157,24 @@ threadvar
   //     frame into FTempSavedStateRoots rather than dropping it, so a
   //     displaced frame's entry stays covered too.
   //   * TGocciaVM.ExecuteModule / .ExecuteFunction and every
-  //     TGocciaExecutionContextScope in the engine and the tree-walking
-  //     interpreter — FunctionValue is nil, and Scope is a scope the collector
-  //     roots outright rather than one it reaches through a frame.  The VM
-  //     entries, TGocciaEngine and TGocciaInterpreter.Execute carry the engine
-  //     global scope (an explicit AddRootObject); the two module paths
-  //     (EvaluateModuleProgram and
-  //     TGocciaInterpreterAsyncModuleEvaluation.Resume) carry the *module*
-  //     scope, which TGocciaModule.SetEnvironment likewise registers with
-  //     AddRootObject for as long as the module holds it.  The async
-  //     evaluation additionally marks FContext.Scope itself, so the entry
-  //     stays covered without depending on the module's registration or on
-  //     the continuation's own bookkeeping.
+  //     TGocciaExecutionContextScope (the engine's realm context and
+  //     ActivateRealmExecutionContext, and Goccia.Shims' lazy shim load) —
+  //     FunctionValue is nil, and Scope is a scope the collector roots
+  //     outright rather than one it reaches through a frame.  The engine
+  //     entries and a script's VM run carry the engine global scope (an
+  //     explicit AddRootObject); an imported module body runs with the VM's
+  //     global scope set to the *module* scope, which
+  //     TGocciaModule.SetEnvironment likewise registers with AddRootObject
+  //     for as long as the module holds it, and a shim body with its module
+  //     scope, which TGocciaEngine.EvaluateShim temp-roots for the
+  //     run.
   //   * TGocciaVM direct eval — Scope is the eval activation scope, temp-
   //     rooted around the whole eval, and FunctionValue is the caller
   //     closure's function value, covered as above.
   //
   // Verified empirically: an instrumented sweep probe that reports whenever a
-  // swept object is still named by an entry stayed silent across both engine
-  // modes of the full suite (2.9M sweeps per mode, stacks up to 66 deep), and
+  // swept object is still named by an entry stayed silent across the full
+  // suite (2.9M sweeps, stacks up to 66 deep), and
   // across an adversarial file that forces collections from getters, native
   // callbacks, Proxy traps, coercion hooks, error unwinding, direct eval,
   // generators and async resumptions with the callee dropped by its caller.
@@ -396,18 +397,6 @@ begin
     Result := State^.Entries[State^.Count - 1].Context
   else
     Result := Default(TGocciaExecutionContext);
-
-  // The tree-walking evaluator reports its running function through the
-  // Goccia.Realm facade (see the rooting note on GCurrentFunctionContextStack
-  // there); the bytecode VM writes its function value straight into the entry
-  // it pushes, so an empty facade stack leaves the entry's own value in place.
-  if Goccia.Realm.HasCurrentFunctionExecutionContext then
-  begin
-    Result.Scope := TGocciaScope(
-      Goccia.Realm.CurrentFunctionExecutionContextScope);
-    Result.FunctionValue := TGocciaValue(
-      Goccia.Realm.CurrentFunctionExecutionContextValue);
-  end;
 end;
 
 class function TGocciaExecutionContextStack.HasRunning: Boolean;
@@ -461,11 +450,27 @@ begin
   FPopped := True;
 end;
 
-initialization
-
-finalization
+{ The calling thread's context stack and interned source paths, released when
+  its runtime shuts down (Goccia.ThreadCleanupRegistry): every engine on the
+  thread is gone by then, so no context still refers to a path. }
+procedure ReleaseExecutionContextThreadState;
+var
+  Node, Next: PGocciaInternedSourcePath;
+begin
   SetLength(GExecutionContextState.Entries, 0);
   GExecutionContextState.Capacity := 0;
   GExecutionContextState.Count := 0;
+  Node := GInternedSourcePaths;
+  GInternedSourcePaths := nil;
+  while Node <> nil do
+  begin
+    Next := Node.Next;
+    Dispose(Node);
+    Node := Next;
+  end;
+end;
+
+initialization
+  RegisterThreadvarCleanup(@ReleaseExecutionContextThreadState);
 
 end.

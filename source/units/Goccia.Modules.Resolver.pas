@@ -132,8 +132,8 @@ const
   RESOLVED_CANDIDATE_DIAGNOSTIC_FORMAT = '  Resolved to: %s';
 
 { A failure is located at the import that asked for the module — a static
-  import declaration or an import() call — which both executors enter as the
-  call site while the load runs, as they do for a PermissionDenied. A load
+  import declaration or an import() call — which the VM enters as the call
+  site while the load runs, as it does for a PermissionDenied. A load
   with no call site in the importing file (an entry module, a preload) has no
   position. }
 constructor TGocciaModuleResolutionError.CreateResolutionFailure(
@@ -314,6 +314,7 @@ var
   CandidatePath: string;
   Package: TGocciaMaterializedPackage;
 begin
+  ResetCompanionResolution;
   { A package names its own files by relative specifier. An absolute path
     is let through to CheckPathCandidate, which keeps it inside the package:
     the loader reloads a changed module by its own resolved path. }
@@ -351,7 +352,7 @@ function TGocciaModuleResolver.ResolveExternalAliasTarget(const AModulePath,
 var
   Address: TGocciaProviderAddress;
   Candidates: TGocciaPackagePathArray;
-  Error, ImportMapPath, Pin: string;
+  Error, ImportMapPath, CandidatePath: string;
   I: Integer;
   Package: TGocciaMaterializedPackage;
 begin
@@ -388,10 +389,8 @@ begin
   try
     for I := 0 to High(Candidates) do
     begin
-      Result := Package.Root + PathDelim + ToHostRelativePath(Candidates[I]);
-      if Assigned(ProbeGuard) then
-        ProbeGuard(Result);
-      if Package.TryGetPin(Candidates[I], Pin) then
+      CandidatePath := Package.Root + PathDelim + ToHostRelativePath(Candidates[I]);
+      if TryResolveFileCandidate(CandidatePath, Result) then
       begin
         SetLastPackageDirectory(Package.Root);
         Exit;

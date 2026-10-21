@@ -32,8 +32,8 @@ type
 
     Opacity is a property of the handlers, not of the class. Every boundary
     that would otherwise convert a Pascal exception into something the guest
-    can observe — the evaluator's try/catch statement paths, the VM's
-    async-iterator and dynamic-import arms, the microtask, await, generator
+    can observe — the VM's async-iterator and dynamic-import arms, the
+    microtask, await, generator
     and promise-reaction boundaries, Array.fromAsync, the sandbox's
     fs.promises and shell boundaries, Response.json, the benchmark run loop,
     and the test library's toThrow — names this class in its re-raise
@@ -41,7 +41,7 @@ type
     explicit `on E: TGocciaMemoryLimitError do raise;` or through the shared
     IsUncatchableFault predicate in Goccia.UncatchableFault.pas. A new
     boundary that omits it makes the ceiling catchable again, which is what
-    Goccia.MemoryLimit.Test.pas guards against in both execution modes.
+    Goccia.MemoryLimit.Test.pas guards against.
     Prefer the shared predicate at new boundaries: an allowlist spelled out by
     hand is one that can be spelled out incompletely.
 
@@ -50,7 +50,7 @@ type
     `if IsEngineIntegrityFault(E) then raise;`. This ceiling is opaque because
     a ceiling the guest can catch is one it can ignore; an integrity fault is
     opaque for a stronger reason still, and is the backstop for the failure
-    this family cannot describe — an evaluator temporary left unrooted across a
+    this family cannot describe — a temporary left unrooted across a
     collecting safe point surfaces as a use-after-free, which without the guard
     `catch (e)` absorbs. The family, its two deliberate carve-outs and the
     reasoning live in Goccia.EngineFault.pas and
@@ -109,8 +109,14 @@ function CanAllocateNativeBytes(const ABytes: Int64): Boolean;
   TGocciaShapedPropertyMap.RequireStorageBytes and
   TGocciaElementList.RequireStorageBytes each open a TGocciaActiveRootFrame
   over the store's owner and its pending value and call the budget from inside
-  it. That is why nothing is passed here to protect. }
-procedure RequireNativeBytes(const ABytes: Int64);
+  it. That is why nothing is passed here to protect.
+
+  A granted request is reported to the heap trigger as AGrowthBytes, the part
+  of ABytes not in use yet (ADR 0145): a property map's gate asks about the
+  block it allocates plus the one it replaces, which the heap already holds.
+  The one-argument form reports all of ABytes. }
+procedure RequireNativeBytes(const ABytes: Int64); overload;
+procedure RequireNativeBytes(const ABytes, AGrowthBytes: Int64); overload;
 
 implementation
 
@@ -151,12 +157,30 @@ begin
 end;
 
 procedure RequireNativeBytes(const ABytes: Int64);
+begin
+  RequireNativeBytes(ABytes, ABytes);
+end;
+
+procedure RequireNativeBytes(const ABytes, AGrowthBytes: Int64);
 var
   GC: TGarbageCollector;
   Budget: Int64;
 begin
+  { The test stress switch makes every gated growth the collecting safe point
+    it is near the ceiling, as it does every charged reservation. }
+  GC := TGarbageCollector.Instance;
+  if (ABytes > 0) and Assigned(GC) and GC.CollectBeforeEveryReservation then
+    GC.CollectForMemoryPressure(nil, True);
   if CanAllocateNativeBytes(ABytes) then
+  begin
+    { Granted without a charge (ADR 0106), so no registration accounts for
+      it: report it to the heap trigger, which samples once enough such
+      growth has built up (ADR 0145). This never collects. }
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) and (AGrowthBytes > 0) then
+      GC.NoteNativeGrowth(AGrowthBytes);
     Exit;
+  end;
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
   begin
@@ -174,7 +198,11 @@ begin
       already opened their rooting window around the consult (see the contract
       above), so a value this call could be handed is one they have rooted. }
     if GC.TryCollectForLimitedBytes(ABytes) then
+    begin
+      if AGrowthBytes > 0 then
+        GC.NoteNativeGrowth(AGrowthBytes);
       Exit;
+    end;
     Budget := GC.MaxBytes;
   end
   else

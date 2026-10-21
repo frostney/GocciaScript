@@ -14,8 +14,8 @@ uses
   and, when that module is in the engine's own source scope, the ±context
   window of its source. Bound to real frames, never to the guest-writable
   `.stack` string, so a guest-forged error object gets neither and renders no
-  code frame. Every error factory must call this so the two executors and every
-  host agree on what a genuine error's frame shows. Safe to call with no active
+  code frame. Every error factory must call this so the engine and every host
+  agree on what a genuine error's frame shows. Safe to call with no active
   call stack (records nothing). }
 procedure AttachErrorSourceProvenance(const AError: TGocciaObjectValue;
   const ASkipTop: Integer);
@@ -27,7 +27,7 @@ function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Intege
 { The error that import() rejects with when loading its module raised a host
   exception rather than a guest throw — a module that cannot be found, say.
   It is located at the import() call (AFilePath, ALine, AColumn), the call
-  site both executors enter while the load runs, as a PermissionDenied from
+  site the VM enters while the load runs, as a PermissionDenied from
   the same load is. Without a position it is a plain CreateErrorObject. }
 function CreateImportCallErrorObject(const AName, AMessage, AFilePath: string;
   const ALine, AColumn: Integer): TGocciaObjectValue;
@@ -290,18 +290,28 @@ end;
 
 function CreateDOMExceptionObject(const AName, AMessage: string;
   const ASkipTop: Integer): TGocciaObjectValue;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := CreateErrorObject(AName, AMessage, ASkipTop);
-  Result.HasErrorData := False;
-  if GetDOMExceptionProto <> nil then
-    Result.Prototype := GetDOMExceptionProto;
-  if Result.ErrorStack <> '' then
-    Result.DefineProperty(PROP_STACK,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(Result.ErrorStack),
-        [pfConfigurable, pfWritable]));
-  Result.AssignProperty(PROP_CODE,
-    TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(AName)));
+  // Nothing else holds the error yet, and the stack string reserves its
+  // payload, which can collect.
+  Roots.Initialize;
+  try
+    Roots.Add(Result);
+    Result.HasErrorData := False;
+    if GetDOMExceptionProto <> nil then
+      Result.Prototype := GetDOMExceptionProto;
+    if Result.ErrorStack <> '' then
+      Result.DefineProperty(PROP_STACK,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaStringLiteralValue.Create(Result.ErrorStack),
+          [pfConfigurable, pfWritable]));
+    Result.AssignProperty(PROP_CODE,
+      TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(AName)));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 // ES2026 §10.4.4.4 [[ErrorData]]
@@ -478,12 +488,22 @@ end;
 
 function CreatePermissionDeniedError(const ACapability,
   AScope: string): TGocciaObjectValue;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := CreateErrorObject(PERMISSION_DENIED_NAME,
     ACapability + ': ' + AScope);
-  Result.AssignProperty(PROP_CAPABILITY,
-    TGocciaStringLiteralValue.Create(ACapability));
-  Result.AssignProperty(PROP_SCOPE, TGocciaStringLiteralValue.Create(AScope));
+  // Nothing else holds the error yet, and each string reserves its payload,
+  // which can collect.
+  Roots.Initialize;
+  try
+    Roots.Add(Result);
+    Result.AssignProperty(PROP_CAPABILITY,
+      TGocciaStringLiteralValue.Create(ACapability));
+    Result.AssignProperty(PROP_SCOPE, TGocciaStringLiteralValue.Create(AScope));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure ThrowPermissionDenied(const ACapability, AScope,
@@ -501,9 +521,9 @@ begin
       denial surfaces through a rejected import() or fetch() promise. }
     ErrorObject.ErrorHostSuggestion := ASuggestion;
     { A denial is located at the guest call that asked for the resource —
-      fetch(), FFI.open(), import() — which both executors record the same
-      way. Without one (a static import being linked) it carries no location
-      rather than whatever frame an executor happens to have on its stack. }
+      fetch(), FFI.open(), import() — which the VM records as the current
+      call site. Without one (a static import being linked) it carries no
+      location rather than whatever frame happens to be on the stack. }
     if CurrentGocciaCallSite(CallSite) and (CallSite.FilePath <> '') and
        (CallSite.Line > 0) then
       AttachErrorSourceLocation(ErrorObject, CallSite.FilePath, CallSite.Line,

@@ -49,7 +49,7 @@ type
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class function SharedPrototypeObject: TGocciaObjectValue;
 
@@ -268,10 +268,8 @@ begin
   Result := CONSTRUCTOR_EVENT;
 end;
 
-procedure TGocciaEventValue.MarkReferences;
+procedure TGocciaEventValue.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FTarget) then
     FTarget.MarkReferences;

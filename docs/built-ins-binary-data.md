@@ -17,7 +17,7 @@ Implements the [ECMAScript ArrayBuffer](https://developer.mozilla.org/en-US/docs
 
 **Full standard compliance** — includes resizable buffers (`maxByteLength`), `transfer`, and `transferToFixedLength`.
 
-**Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are refused: TypedArray indexed assignment is silently ignored, while `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, and `DataView` setters throw `TypeError`. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
+**Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are refused: TypedArray indexed assignment is silently ignored, while `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, `DataView` setters, and `TextEncoder.prototype.encodeInto` throw `TypeError`. `slice`, `map`, `filter`, `TypedArray.from`, and `TypedArray.of` also throw `TypeError` when the species or `this` constructor returns a view of an immutable buffer, including the source's own buffer; `subarray` only reads, so its result may view one. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
 
 Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances are cloneable via `structuredClone`, and so are typed arrays and `DataView`, each keeping its kind, byte offset and length (see [Global Constants, Functions, and Error Constructors](built-ins.md#global-constants-functions-and-error-constructors-gocciabuiltinsglobalspas)).
 
@@ -27,6 +27,8 @@ Implements the [ECMAScript SharedArrayBuffer](https://developer.mozilla.org/en-U
 
 **Full standard compliance.** `SharedArrayBuffer` is a distinct type (not an instance of `ArrayBuffer`). It is fixed-length by default, or growable when constructed with `maxByteLength` (`growable`, `maxByteLength`, `grow`); it has no `resize`, `transfer`, or detachment. SharedArrayBuffer instances are cloneable via `structuredClone`.
 
+**Growing.** A growable buffer keeps one data block from construction to collection, so every agent that holds it sees every other agent's writes, `Atomics` included, before and after a grow. The block is allocated at `maxByteLength` bytes when the buffer is constructed, all zero, and `grow` only makes more of it visible. It never allocates or moves the bytes. **Memory accounting:** a growable buffer is charged `maxByteLength` bytes against the memory limit when it is constructed, because that is what it allocates, and a fixed-length buffer is charged its byte length. A `maxByteLength` larger than the limit allows is a `RangeError` at construction, as ECMA-262's AllocateSharedArrayBuffer allows ("if it is impossible to create a new Shared Data Block value consisting of allocLength bytes").
+
 ## Atomics (`Goccia.Builtins.Atomics.pas`)
 
 Implements the [ECMAScript Atomics](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics) namespace for integer TypedArray views.
@@ -34,6 +36,10 @@ Implements the [ECMAScript Atomics](https://developer.mozilla.org/en-US/docs/Web
 Supported operations: `add`, `and`, `compareExchange`, `exchange`, `isLockFree`, `load`, `notify`, `or`, `pause`, `store`, `sub`, `wait`, `waitAsync`, and `xor`.
 
 Atomic operations accept an integer TypedArray over an `ArrayBuffer` or a `SharedArrayBuffer`. `wait`, `waitAsync`, and `notify` require `Int32Array` or `BigInt64Array` views, and `wait` and `waitAsync` also require a `SharedArrayBuffer` (`notify` on a non-shared view returns `0`).
+
+Every waiter has one result, and `notify`'s count agrees with it. Inside the waiter list's critical section `notify` claims and counts the waiters it wakes: it removes a `wait` waiter from the list at once, and marks a `waitAsync` waiter of another thread ready for its owner thread to remove. A `wait` decides its result in the same critical section once its suspension ends: a waiter that `notify` already removed returns `"ok"`, even when its timeout passed before the wait got back into the critical section; a waiter still in the list timed out, removes itself and returns `"timed-out"`, and no later `notify` counts it. `waitAsync` decides its timeout under the same lock.
+
+A view that is detached or past the end of its shrunk resizable buffer is a `TypeError` before the index is converted. `load`, `store`, `compareExchange` and the read-modify-write operations convert every argument first, then check the access again (RevalidateAtomicAccess) before they touch the element, because a `valueOf` can resize or detach the buffer: a view that is now detached or out of bounds is a `TypeError`, and an element past the end of a shrunk length-tracking view is a `RangeError`, so nothing is read or written. V8 throws a `TypeError` in that last case too; ECMA-262 specifies the `RangeError`.
 
 ## DataView (`Goccia.Values.DataViewValue.pas`)
 

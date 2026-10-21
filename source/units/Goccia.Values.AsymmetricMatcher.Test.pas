@@ -5,7 +5,7 @@ program Goccia.Values.AsymmetricMatcher.Test;
 uses
   TestingPascalLibrary,
 
-  Goccia.Evaluator.Comparison,
+  Goccia.Builtins.Testing.DeepEquality,
   Goccia.TestSetup,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsymmetricMatcher,

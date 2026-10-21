@@ -3,7 +3,7 @@ description: Under strict types a return-type annotation is still not enforced, 
 features: [types-as-comments, strict-type-enforcement]
 ---*/
 
-// Return-type annotations are not enforced in either mode (#1276). A binding
+// Return-type annotations are not enforced (#1276). A binding
 // initialized from a call takes no inferred type, and an enforced binding
 // checks the value the call actually returns.
 

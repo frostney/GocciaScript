@@ -22,7 +22,7 @@ type
     // code, so its lastIndex can live in FLastIndex between scanner matches.
     FMatcherIsPrivate: Boolean;
     FScanner: TGocciaRegExpScanner;
-    // Not traced: cleared at every collection (see MarkReferences).
+    // Not traced: cleared at every collection (see TraceReferences).
     FInputValue: TGocciaStringLiteralValue;
     FLastIndex: Integer;
     FLastIndexPending: Boolean;
@@ -42,7 +42,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 implementation
@@ -54,6 +54,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.RegExp.Runtime,
   Goccia.RegExp.VM,
@@ -142,7 +143,7 @@ begin
       Result := FScanner.Exec(StartIndex, FSticky);
     except
       on E: ERegExpRuntimeError do
-        ThrowError(E.Message);
+        ThrowRegExpRuntimeError(E);
     end;
   finally
     // next() calls may be far apart, and an unfinished iterator may live
@@ -164,7 +165,7 @@ begin
   else
     FLastIndex := FScanner.MatchEnd;
   FLastIndexPending := True;
-  // FInputValue is not marked (see MarkReferences), so a collection while
+  // FInputValue is not marked (see TraceReferences), so a collection while
   // the match array is built could free it: root it until the array holds it.
   if not Assigned(FInputValue) then
     FInputValue := TGocciaStringLiteralValue.Create(FInput);
@@ -276,9 +277,8 @@ begin
   Result := REGEXP_STRING_ITERATOR_TAG;
 end;
 
-procedure TGocciaRegExpMatchAllIteratorValue.MarkReferences;
+procedure TGocciaRegExpMatchAllIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FRegExp) then
     FRegExp.MarkReferences;
@@ -291,8 +291,17 @@ begin
   FInputValue := nil;
 end;
 
+// A heap snapshot's slot materializer (ADR 0148): built on first use.
+procedure MaterializeRegExpStringIteratorPrototype;
+begin
+  TGocciaRegExpMatchAllIteratorValue.EnsureConcreteIteratorPrototype(
+    GRegExpStringIteratorPrototypeSlot, REGEXP_STRING_ITERATOR_TAG);
+end;
+
 initialization
   GRegExpStringIteratorPrototypeSlot := RegisterRealmSlot(
     'RegExpStringIterator.prototype');
+  RegisterSnapshotSlotMaterializer('RegExpStringIterator.prototype',
+    MaterializeRegExpStringIteratorPrototype);
 
 end.

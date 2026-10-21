@@ -45,6 +45,7 @@ type
 
     procedure InitializePrototype;
     procedure SyncBufferData;
+    function GetBufferData: TBytes;
     function GetLength: Integer;
     function GetByteLength: Integer;
     function GetObservableByteOffset: Integer;
@@ -98,7 +99,7 @@ type
     function ToStringTag: string; override;
     function TryPreventExtensions: Boolean; override;
 
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class function BytesPerElement(const AKind: TGocciaTypedArrayKind): Integer;
     class function IsFloatKind(const AKind: TGocciaTypedArrayKind): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -116,8 +117,18 @@ type
     class function GetKindPrototype(
       const AKind: TGocciaTypedArrayKind): TGocciaObjectValue;
 
+    { The viewed buffer's current byte length: ArrayBufferByteLength, 0 for a
+      detached buffer. A growable SharedArrayBuffer's block is longer than
+      this; bound every access by it, never by the block's length. }
+    function BufferByteLength: Integer;
+
     property BufferValue: TGocciaValue read FBufferValue;
-    property BufferData: TBytes read FBufferData;
+    // The buffer's current data block, read again on every access: resize
+    // and detach give an ArrayBuffer a new block, so a block read before one
+    // of them is stale (a SharedArrayBuffer keeps its block when it grows). BufferData and Length describe the same block while no
+    // script code runs between the two reads; a caller that runs script code
+    // in between measures again. A per-byte loop reads it once before the loop.
+    property BufferData: TBytes read GetBufferData;
     property ByteOffset: Integer read FByteOffset;
     property Length: Integer read GetLength;
     property Kind: TGocciaTypedArrayKind read FKind;
@@ -256,6 +267,10 @@ const
 type
   TGocciaTypedArrayIteratorKind = (taikValues, taikKeys, taikEntries);
 
+  // TC39 Immutable ArrayBuffers: the accessMode (~read~ or ~write~) that
+  // TypedArraySpeciesCreate validates its result against.
+  TGocciaTypedArrayAccessMode = (taamRead, taamWrite);
+
   TGocciaTypedArrayIteratorValue = class(TGocciaIteratorValue)
   private
     FSource: TGocciaTypedArrayValue;
@@ -268,7 +283,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function GetTypedArrayShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
@@ -410,10 +425,43 @@ end;
 
 procedure TGocciaTypedArrayValue.SyncBufferData;
 begin
+  // Assign only when the buffer has a new block: the usual case is the same
+  // block, and assigning a dynamic array adjusts two reference counts.
   if FBufferValue is TGocciaArrayBufferValue then
-    FBufferData := TGocciaArrayBufferValue(FBufferValue).Data
+  begin
+    if Pointer(FBufferData) <> Pointer(TGocciaArrayBufferValue(FBufferValue).Data) then
+      FBufferData := TGocciaArrayBufferValue(FBufferValue).Data;
+  end
   else if FBufferValue is TGocciaSharedArrayBufferValue then
-    FBufferData := TGocciaSharedArrayBufferValue(FBufferValue).Data;
+  begin
+    if Pointer(FBufferData) <>
+       Pointer(TGocciaSharedArrayBufferValue(FBufferValue).Data) then
+      FBufferData := TGocciaSharedArrayBufferValue(FBufferValue).Data;
+  end;
+end;
+
+// ArrayBuffer.prototype.resize and detaching give an ArrayBuffer a new data
+// block, and FBufferData keeps naming the old one until SyncBufferData runs
+// (a SharedArrayBuffer keeps one block, grown or not). Every reader outside this unit gets the block
+// through here, so it never copies Length's elements out of a smaller, older
+// block.
+function TGocciaTypedArrayValue.GetBufferData: TBytes;
+begin
+  SyncBufferData;
+  Result := FBufferData;
+end;
+
+// ES2026 §25.1.3.2 ArrayBufferByteLength(arrayBuffer, order)
+function TGocciaTypedArrayValue.BufferByteLength: Integer;
+begin
+  if (FBufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(FBufferValue).Detached then
+    Exit(0);
+  SyncBufferData;
+  if FBufferValue is TGocciaSharedArrayBufferValue then
+    Result := TGocciaSharedArrayBufferValue(FBufferValue).ByteLength
+  else
+    Result := System.Length(FBufferData);
 end;
 
 function TGocciaTypedArrayValue.GetLength: Integer;
@@ -425,11 +473,10 @@ begin
      TGocciaArrayBufferValue(FBufferValue).Detached then
     Exit(0);
 
-  SyncBufferData;
   if FAutoLength then
   begin
     BPE := BytesPerElement(FKind);
-    AvailableBytes := System.Length(FBufferData) - FByteOffset;
+    AvailableBytes := BufferByteLength - FByteOffset;
     if AvailableBytes <= 0 then
       Exit(0);
     Exit(AvailableBytes div BPE);
@@ -465,9 +512,8 @@ begin
      TGocciaArrayBufferValue(FBufferValue).Detached then
     Exit(False);
 
-  SyncBufferData;
   RequiredBytes := Int64(FByteOffset) + Int64(ALength) * Int64(BytesPerElement(FKind));
-  Result := RequiredBytes <= System.Length(FBufferData);
+  Result := RequiredBytes <= BufferByteLength;
 end;
 
 function TGocciaTypedArrayValue.HasValidElementIndex(const AIndex: Integer): Boolean;
@@ -839,6 +885,8 @@ function TGocciaTypedArrayValue.OrdinarySetIntegerIndexedElementWithReceiver(
 var
   Index: Integer;
   ReceiverDesc: TGocciaPropertyDescriptor;
+  ReceiverWritableData: Boolean;
+  ReceiverFlags: TPropertyFlags;
   ReceiverObj: TGocciaObjectValue;
   ReceiverTypedArray: TGocciaTypedArrayValue;
 begin
@@ -863,11 +911,17 @@ begin
   ReceiverDesc := ReceiverObj.GetOwnPropertyDescriptor(AName);
   if Assigned(ReceiverDesc) then
   begin
-    if (ReceiverDesc is TGocciaPropertyDescriptorAccessor) or
-       (not ReceiverDesc.Writable) then
+    // Read before the release: the definition below may replace a stored
+    // descriptor.
+    ReceiverWritableData :=
+      not (ReceiverDesc is TGocciaPropertyDescriptorAccessor) and
+      ReceiverDesc.Writable;
+    ReceiverFlags := ReceiverDesc.Flags;
+    ReleaseDescriptor(ReceiverDesc);
+    if not ReceiverWritableData then
       Exit(False);
     Exit(ReceiverObj.TryDefineProperty(AName,
-      TGocciaPropertyDescriptorData.Create(AValue, ReceiverDesc.Flags)));
+      TGocciaPropertyDescriptorData.Create(AValue, ReceiverFlags)));
   end;
 
   Result := ReceiverObj.TryDefineProperty(AName,
@@ -963,7 +1017,7 @@ begin
   if ALength >= 0 then
     FLength := ALength
   else
-    FLength := (System.Length(ASharedBuffer.Data) - AByteOffset) div BPE;
+    FLength := (ASharedBuffer.ByteLength - AByteOffset) div BPE;
 
   InitializePrototype;
   Shared := GetTypedArrayShared;
@@ -1356,7 +1410,7 @@ begin
   begin
     if IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
       Exit(TGocciaPropertyDescriptorData.Create(GetElementAsValue(Index),
-        [pfEnumerable, pfConfigurable, pfWritable]));
+        [pfEnumerable, pfConfigurable, pfWritable]).AsCallerOwned);
     Exit(nil);
   end;
 
@@ -1492,9 +1546,8 @@ begin
   Result := KindName(FKind);
 end;
 
-procedure TGocciaTypedArrayValue.MarkReferences;
+procedure TGocciaTypedArrayValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FBufferValue) and not FBufferValue.GCMarked then
     FBufferValue.MarkReferences;
@@ -1523,8 +1576,7 @@ begin
   if IsDetachedTypedArray(AArray) then
     Exit(True);
 
-  AArray.SyncBufferData;
-  BufferByteLength := System.Length(AArray.FBufferData);
+  BufferByteLength := AArray.BufferByteLength;
   if AArray.FAutoLength then
     Exit(AArray.FByteOffset > BufferByteLength);
 
@@ -1539,6 +1591,34 @@ function IsTypedArrayBackedByImmutableArrayBuffer(
 begin
   Result := (AArray.FBufferValue is TGocciaArrayBufferValue) and
     TGocciaArrayBufferValue(AArray.FBufferValue).Immutable;
+end;
+
+// Copies AByteCount bytes from ASource's data block at ASourceByteIndex to
+// ATarget's data block at ATargetByteIndex as one block. The copy has memmove
+// semantics: when both ranges share a data block the result is as if the
+// source bytes were cloned first, as ES2026 §23.2.3.26.2
+// SetTypedArrayFromTypedArray step 19 clones a source on the target's buffer.
+// Callers have validated detachment and lengths; this repeats one explicit
+// range check against the current data blocks and copies nothing, answering
+// False, when either range falls outside its block, so the caller can fall
+// back to its element-wise path.
+function TryCopyTypedArrayBytes(const ASource: TGocciaTypedArrayValue;
+  const ASourceByteIndex: Integer; const ATarget: TGocciaTypedArrayValue;
+  const ATargetByteIndex, AByteCount: Integer): Boolean;
+begin
+  if AByteCount <= 0 then
+    Exit(True);
+  if IsDetachedTypedArray(ASource) or IsDetachedTypedArray(ATarget) then
+    Exit(False);
+  ASource.SyncBufferData;
+  ATarget.SyncBufferData;
+  if (ASourceByteIndex < 0) or (ATargetByteIndex < 0) or
+     (Int64(ASourceByteIndex) + AByteCount > ASource.BufferByteLength) or
+     (Int64(ATargetByteIndex) + AByteCount > ATarget.BufferByteLength) then
+    Exit(False);
+  Move(ASource.FBufferData[ASourceByteIndex],
+    ATarget.FBufferData[ATargetByteIndex], AByteCount);
+  Result := True;
 end;
 
 procedure EnsureTypedArrayAttached(const AArray: TGocciaTypedArrayValue; const AMethod: string);
@@ -1604,8 +1684,11 @@ begin
 end;
 
 // ES2026 §23.2.4.3 TypedArraySpeciesCreate(exemplar, argumentList)
+// TC39 Immutable ArrayBuffers TypedArraySpeciesCreate(exemplar, argumentList [, accessMode])
 function TypedArraySpeciesCreate(const AExemplar: TGocciaTypedArrayValue;
-  const AArguments: TGocciaArgumentsCollection): TGocciaTypedArrayValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const AAccessMode: TGocciaTypedArrayAccessMode;
+  const AMethod: string): TGocciaTypedArrayValue;
 var
   ConstructorValue, ConstructedValue: TGocciaValue;
   ExpectedLength: Integer;
@@ -1617,6 +1700,12 @@ begin
       ['TypedArraySpeciesCreate']), SSuggestTypedArrayConstructorReceiver);
 
   Result := TGocciaTypedArrayValue(ConstructedValue);
+  // TC39 Immutable ArrayBuffers ValidateTypedArray step 4: if accessMode is
+  // ~write~ and IsImmutableBuffer(O.[[ViewedArrayBuffer]]), throw a TypeError.
+  // This holds even when the result views the exemplar's own buffer.
+  if (AAccessMode = taamWrite) and
+     IsTypedArrayBackedByImmutableArrayBuffer(Result) then
+    ThrowTypeError(AMethod + ' cannot write to an immutable ArrayBuffer');
   if TGocciaTypedArrayValue.IsBigIntKind(Result.FKind) <>
      TGocciaTypedArrayValue.IsBigIntKind(AExemplar.FKind) then
     ThrowTypeError(SErrorBigIntTypedArrayCannotMix, SSuggestBigIntTypedArrayValue);
@@ -1767,10 +1856,8 @@ begin
   Result := 'Array Iterator';
 end;
 
-procedure TGocciaTypedArrayIteratorValue.MarkReferences;
+procedure TGocciaTypedArrayIteratorValue.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FSource) and not FSource.GCMarked then
     FSource.MarkReferences;
@@ -1796,7 +1883,9 @@ begin
     Args.Add(AElement);
     Args.Add(AIndex);
     Args.Add(AArray);
-    Result := TGocciaFunctionBase(ACallback).Call(Args, AThisArg);
+    // The caller checked IsCallable, which a callable Proxy or a class also
+    // passes; DispatchCall reaches each through its own [[Call]].
+    Result := DispatchCall(ACallback, Args, AThisArg);
   finally
     Args.Free;
     RemoveTempRootIfNeeded(ThisRoot);
@@ -1877,6 +1966,7 @@ var
   FillNum: TGocciaNumberLiteralValue;
   FillBigInt: Int64;
   First, Final, I, RelStart, RelEnd, Len: Integer;
+  FillRoots: TGocciaActiveRootFrame;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.fill');
   EnsureTypedArrayWritable(TA, 'TypedArray.prototype.fill');
@@ -1900,60 +1990,68 @@ begin
       FillNum := AArgs.GetElement(0).ToNumberLiteral;
   end;
 
-  // ES2026 §23.2.3.8 step 5-6: RelativeIndex → clamp
-  if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
-  begin
-    RelStart := ToIntegerFromArgs(AArgs, 1);
-    if RelStart < 0 then
-      First := Max(Len + RelStart, 0)
-    else
-      First := Min(RelStart, Len);
-  end
-  else
-    First := 0;
+  // The coerced value (a number valueOf returned) is held only here while
+  // start and end convert, which can run guest code.
+  FillRoots.Initialize;
+  try
+    FillRoots.Add(FillNum);
 
-  // ES2026 §23.2.3.8 step 7-8
-  if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-  begin
-    RelEnd := ToIntegerFromArgs(AArgs, 2);
-    if RelEnd < 0 then
-      Final := Max(Len + RelEnd, 0)
-    else
-      Final := Min(RelEnd, Len);
-  end
-  else
-    Final := Len;
-
-  EnsureTypedArrayAttached(TA, 'TypedArray.prototype.fill');
-
-  if IsBigIntKind(TA.FKind) then
-  begin
-    for I := First to Final - 1 do
+    // ES2026 §23.2.3.8 step 5-6: RelativeIndex → clamp
+    if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
     begin
-      if (I and $FF) = 0 then
-        CheckNativeWork;
-      TA.WriteBigIntElement(I, FillBigInt);
-    end;
-  end
-  else
-  begin
-    for I := First to Final - 1 do
+      RelStart := ToIntegerFromArgs(AArgs, 1);
+      if RelStart < 0 then
+        First := Max(Len + RelStart, 0)
+      else
+        First := Min(RelStart, Len);
+    end
+    else
+      First := 0;
+
+    // ES2026 §23.2.3.8 step 7-8
+    if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
     begin
-      if (I and $FF) = 0 then
-        CheckNativeWork;
-      TA.WriteNumberLiteral(I, FillNum);
+      RelEnd := ToIntegerFromArgs(AArgs, 2);
+      if RelEnd < 0 then
+        Final := Max(Len + RelEnd, 0)
+      else
+        Final := Min(RelEnd, Len);
+    end
+    else
+      Final := Len;
+
+    EnsureTypedArrayAttached(TA, 'TypedArray.prototype.fill');
+
+    if IsBigIntKind(TA.FKind) then
+    begin
+      for I := First to Final - 1 do
+      begin
+        if (I and $FF) = 0 then
+          CheckNativeWork;
+        TA.WriteBigIntElement(I, FillBigInt);
+      end;
+    end
+    else
+    begin
+      for I := First to Final - 1 do
+      begin
+        if (I and $FF) = 0 then
+          CheckNativeWork;
+        TA.WriteNumberLiteral(I, FillNum);
+      end;
     end;
+    Result := AThisValue;
+  finally
+    FillRoots.Clear;
   end;
-  Result := AThisValue;
 end;
 
-// ES2026 §23.2.3.3 %TypedArray%.prototype.copyWithin(target, start [, end])
+// ES2026 §23.2.3.6 %TypedArray%.prototype.copyWithin(target, start [, end])
 function TGocciaTypedArrayValue.TypedArrayCopyWithin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA: TGocciaTypedArrayValue;
   Target, Start, Final, Count, Direction, From, To_, Len, CurrentLen: Integer;
   BPE: Integer;
-  TempBuf: TBytes;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.copyWithin');
   EnsureTypedArrayWritable(TA, 'TypedArray.prototype.copyWithin');
@@ -1984,11 +2082,11 @@ begin
     Exit(AThisValue);
 
   BPE := BytesPerElement(TA.FKind);
-  SetLength(TempBuf, Count * BPE);
   From := TA.FByteOffset + Start * BPE;
   To_ := TA.FByteOffset + Target * BPE;
-  Move(TA.FBufferData[From], TempBuf[0], Count * BPE);
-  Move(TempBuf[0], TA.FBufferData[To_], Count * BPE);
+  // The spec copies backwards when the target overlaps the source from above,
+  // so overlapping ranges behave as a memmove, which one block move is.
+  TryCopyTypedArrayBytes(TA, From, TA, To_, Count * BPE);
 
   Result := AThisValue;
 end;
@@ -2024,15 +2122,16 @@ begin
   ConstructorArgs := TGocciaArgumentsCollection.Create(
     [TGocciaNumberLiteralValue.Create(NewLen)]);
   try
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers %TypedArray%.prototype.slice step 13:
+    // TypedArraySpeciesCreate(O, « 𝔽(countBytes) », ~write~)
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+      'TypedArray.prototype.slice');
   finally
     ConstructorArgs.Free;
   end;
 
   if NewLen > 0 then
     EnsureTypedArrayAttached(TA, 'TypedArray.prototype.slice');
-  if NewTA.FBufferValue <> TA.FBufferValue then
-    EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.slice');
   CurrentLength := TA.Length;
   CopyElements := Max(Min(Final, CurrentLength) - First, 0);
   if CopyElements > NewLen then
@@ -2043,9 +2142,24 @@ begin
     CopyBytes := CopyElements * BPE;
     SourceByteIndex := TA.FByteOffset + First * BPE;
     TargetByteIndex := NewTA.FByteOffset;
-    for I := 0 to CopyBytes - 1 do
-      NewTA.FBufferData[TargetByteIndex + I] :=
-        TA.FBufferData[SourceByteIndex + I];
+    // ES2026 §23.2.3.27 step 14.g.ix: the same element type is copied byte by
+    // byte in ascending order. A block move is the same copy unless a species
+    // result views the source's data block at a higher overlapping index,
+    // where ascending order repeats source bytes.
+    TA.SyncBufferData;
+    NewTA.SyncBufferData;
+    if (Pointer(TA.FBufferData) = Pointer(NewTA.FBufferData)) and
+       (TargetByteIndex > SourceByteIndex) and
+       (TargetByteIndex < SourceByteIndex + CopyBytes) then
+    begin
+      for I := 0 to CopyBytes - 1 do
+        NewTA.FBufferData[TargetByteIndex + I] :=
+          TA.FBufferData[SourceByteIndex + I];
+    end
+    else if not TryCopyTypedArrayBytes(TA, SourceByteIndex, NewTA,
+      TargetByteIndex, CopyBytes) then
+      for I := 0 to CopyElements - 1 do
+        NewTA.WriteValueToElement(I, TA.GetElementAsValue(First + I));
   end
   else if IsBigIntKind(TA.FKind) then
   begin
@@ -2104,16 +2218,20 @@ begin
       TA.FByteOffset + BeginIdx * BPE));
     if not UseAutoLengthResult then
       ConstructorArgs.Add(TGocciaNumberLiteralValue.Create(NewLen));
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers: subarray keeps the default ~read~ access,
+    // so a view of an immutable buffer is a valid result.
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamRead,
+      'TypedArray.prototype.subarray');
   finally
     ConstructorArgs.Free;
   end;
   Result := NewTA;
 end;
 
-// ES2026 §23.2.3.25 %TypedArray%.prototype.set(source [, offset])
+// ES2026 §23.2.3.26 %TypedArray%.prototype.set(source [, offset])
 function TGocciaTypedArrayValue.TypedArraySet(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
+  SrcRoots: TGocciaActiveRootFrame;
   TA, SrcTA: TGocciaTypedArrayValue;
   TargetOffset, I, SrcLen, TargetLen, SourceLen: Integer;
   SrcObj: TGocciaObjectValue;
@@ -2147,9 +2265,18 @@ begin
     if (TargetOffset > TargetLen) or
        (SourceLen > TargetLen - TargetOffset) then
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
-    // ES2026 §23.2.3.25.1 step 1.b: mixed BigInt/Number content types throw
+    // ES2026 §23.2.3.26.2 step 17: mixed BigInt/Number content types throw
     if IsBigIntKind(TA.FKind) <> IsBigIntKind(SrcTA.FKind) then
       ThrowTypeError(SErrorBigIntTypedArrayRequiresBigInt, SSuggestBigIntTypedArrayValue);
+    // ES2026 §23.2.3.26.2 SetTypedArrayFromTypedArray steps 19 and 23: the
+    // same element type transfers the bytes unchanged. One block move is that
+    // transfer, and covers the clone of a source sharing the target's data
+    // block, since the move handles overlap.
+    if (SrcTA.FKind = TA.FKind) and
+       TryCopyTypedArrayBytes(SrcTA, SrcTA.FByteOffset, TA,
+         TA.FByteOffset + TargetOffset * TA.FElementSize,
+         SourceLen * TA.FElementSize) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
     if IsBigIntKind(TA.FKind) then
     begin
       SetLength(BigIntSnapshot, SourceLen);
@@ -2169,15 +2296,24 @@ begin
   end
   else
   begin
-    // ES2026 §23.2.3.25.2 SetTypedArrayFromArrayLike
-    SrcObj := ToObject(AArgs.GetElement(0));
-    SrcLen := LengthOfArrayLike(SrcObj);
-    if (TargetOffset > TargetLen) or
-       (SrcLen > TargetLen - TargetOffset) then
-      ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
-    for I := 0 to SrcLen - 1 do
-      TA.SetIntegerIndexedElement(TargetOffset + I, False,
-        SrcObj.GetProperty(IntegerToString(I)));
+    // ES2026 §23.2.3.26.1 SetTypedArrayFromArrayLike
+    // A wrapper ToObject makes for a primitive source is held only here
+    // while its length and elements are read (a string's element is a new
+    // string, which reserves and can collect).
+    SrcRoots.Initialize;
+    try
+      SrcObj := ToObject(AArgs.GetElement(0));
+      SrcRoots.Add(SrcObj);
+      SrcLen := LengthOfArrayLike(SrcObj);
+      if (TargetOffset > TargetLen) or
+         (SrcLen > TargetLen - TargetOffset) then
+        ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
+      for I := 0 to SrcLen - 1 do
+        TA.SetIntegerIndexedElement(TargetOffset + I, False,
+          SrcObj.GetProperty(IntegerToString(I)));
+    finally
+      SrcRoots.Clear;
+    end;
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -2790,7 +2926,7 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-// ES2026 §23.2.3.20 %TypedArray%.prototype.map(callbackfn [, thisArg])
+// ES2026 §23.2.3.22 %TypedArray%.prototype.map(callbackfn [, thisArg])
 function TGocciaTypedArrayValue.TypedArrayMap(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
@@ -2810,11 +2946,13 @@ begin
   ConstructorArgs := TGocciaArgumentsCollection.Create(
     [TGocciaNumberLiteralValue.Create(SourceLength)]);
   try
-    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+    // TC39 Immutable ArrayBuffers %TypedArray%.prototype.map step 5:
+    // TypedArraySpeciesCreate(O, « 𝔽(len) », ~write~)
+    NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+      'TypedArray.prototype.map');
   finally
     ConstructorArgs.Free;
   end;
-  EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.map');
   InitializeTempRoot(ResultRoot);
   AddTempRootIfNeeded(ResultRoot, NewTA);
   try
@@ -2831,7 +2969,7 @@ begin
   end;
 end;
 
-// ES2026 §23.2.3.9 %TypedArray%.prototype.filter(callbackfn [, thisArg])
+// ES2026 §23.2.3.10 %TypedArray%.prototype.filter(callbackfn [, thisArg])
 function TGocciaTypedArrayValue.TypedArrayFilter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   TA, NewTA: TGocciaTypedArrayValue;
@@ -2866,11 +3004,13 @@ begin
     ConstructorArgs := TGocciaArgumentsCollection.Create(
       [TGocciaNumberLiteralValue.Create(Kept.Count)]);
     try
-      NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs);
+      // TC39 Immutable ArrayBuffers %TypedArray%.prototype.filter step 9:
+      // TypedArraySpeciesCreate(O, « 𝔽(captured) », ~write~)
+      NewTA := TypedArraySpeciesCreate(TA, ConstructorArgs, taamWrite,
+        'TypedArray.prototype.filter');
     finally
       ConstructorArgs.Free;
     end;
-    EnsureTypedArrayWritable(NewTA, 'TypedArray.prototype.filter');
     for I := 0 to Kept.Count - 1 do
       NewTA.WriteValueToElement(I, Kept[I]);
     Result := NewTA;
@@ -2998,6 +3138,13 @@ begin
 end;
 
 // ECMA-402 §17.1.6 %TypedArray%.prototype.toLocaleString([locales [, options]])
+//
+// An element is a fresh number or BigInt value, held only here while its
+// toLocaleString is looked up and called. The lookup can run a getter, and
+// the first lookup of Number.prototype.toLocaleString in a realm loads its
+// shim as bytecode, which reaches the VM's memory-pressure checkpoint. One
+// TGocciaActiveRootFrame per element holds it, its wrapper object, the method
+// and the method's result until that is converted (issue #1655).
 function TGocciaTypedArrayValue.TypedArrayToLocaleString(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -3007,6 +3154,7 @@ var
   Element, Method, Formatted: TGocciaValue;
   ElementObject: TGocciaObjectValue;
   CallArgs: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   TA := RequireAttachedTypedArray(AThisValue, '%TypedArray%.prototype.toLocaleString');
   Len := TA.Length;
@@ -3018,26 +3166,35 @@ begin
     if (Element is TGocciaUndefinedLiteralValue) or
        (Element is TGocciaNullLiteralValue) then
       Continue;
-    ElementObject := ToObject(Element);
-    Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
-    if (Method = nil) or not Method.IsCallable then
-      ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
-
-    CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+    Roots.Initialize;
     try
-      if AArgs.Length > 0 then
-        CallArgs.Add(AArgs.GetElement(0))
-      else
-        CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-      if AArgs.Length > 1 then
-        CallArgs.Add(AArgs.GetElement(1))
-      else
-        CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-      Formatted := InvokeCallable(Method, CallArgs, Element);
+      Roots.Add(Element);
+      ElementObject := ToObject(Element);
+      Roots.Add(ElementObject);
+      Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
+      if (Method = nil) or not Method.IsCallable then
+        ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
+      Roots.Add(Method);
+
+      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+      try
+        if AArgs.Length > 0 then
+          CallArgs.Add(AArgs.GetElement(0))
+        else
+          CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        if AArgs.Length > 1 then
+          CallArgs.Add(AArgs.GetElement(1))
+        else
+          CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+        Formatted := InvokeCallable(Method, CallArgs, Element);
+      finally
+        CallArgs.Free;
+      end;
+      Roots.Add(Formatted);
+      S := S + Formatted.ToStringLiteral.Value;
     finally
-      CallArgs.Free;
+      Roots.Clear;
     end;
-    S := S + Formatted.ToStringLiteral.Value;
   end;
   Result := TGocciaStringLiteralValue.Create(S);
 end;
@@ -3119,6 +3276,7 @@ var
   NewNum: TGocciaNumberLiteralValue;
   NewBigInt: Int64;
   NewVal: TGocciaValue;
+  NumRoots: TGocciaActiveRootFrame;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.with');
   Len := TA.Length;
@@ -3157,13 +3315,21 @@ begin
       NewNum := TGocciaNumberLiteralValue.NaNValue;
     if not TA.IsValidIntegerIndexedElement(ActualIndex, False, ValidIndex) then
       ThrowRangeError(SErrorInvalidTypedArrayIndex, SSuggestTypedArrayLength);
-    NewTA := CreateSameKindArray(TA, Len);
-    for I := 0 to Len - 1 do
-    begin
-      if I = ActualIndex then
-        NewTA.WriteNumberLiteral(I, NewNum)
-      else
-        NewTA.WriteElement(I, TA.ReadElement(I));
+    // A number valueOf returned is held only here while the result is made,
+    // which can collect.
+    NumRoots.Initialize;
+    try
+      NumRoots.Add(NewNum);
+      NewTA := CreateSameKindArray(TA, Len);
+      for I := 0 to Len - 1 do
+      begin
+        if I = ActualIndex then
+          NewTA.WriteNumberLiteral(I, NewNum)
+        else
+          NewTA.WriteElement(I, TA.ReadElement(I));
+      end;
+    finally
+      NumRoots.Clear;
     end;
   end;
   Result := NewTA;
@@ -3215,8 +3381,8 @@ begin
 end;
 
 // ES2026 §23.2.5.1: %TypedArray% is abstract and rejects direct construction,
-// so the tree-walk instantiation path must not build an ordinary instance for
-// it either.
+// so the implicit-constructor chain walk stops at it rather than build an
+// ordinary instance for it.
 function TGocciaTypedArrayIntrinsicClassValue.UsesOwnInstantiation: Boolean;
 begin
   Result := True;
@@ -3275,8 +3441,9 @@ begin
 end;
 
 // ES2026 §23.2.5.1 TypedArray(...): the constructor allocates an exotic
-// integer-indexed receiver from newTarget, which the tree-walk instantiation
-// path cannot produce.
+// integer-indexed receiver from newTarget, which the generic class
+// instantiation path cannot produce, so the implicit-constructor chain walk
+// stops at it.
 function TGocciaTypedArrayClassValue.UsesOwnInstantiation: Boolean;
 begin
   Result := True;
@@ -3303,6 +3470,7 @@ var
   ResultRoot, IteratorRoot, NextMethodRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
+  ResultRoots: TGocciaActiveRootFrame;
 begin
   BPE := TGocciaTypedArrayValue.BytesPerElement(FKind);
 
@@ -3319,7 +3487,14 @@ begin
     if TGocciaTypedArrayValue.IsBigIntKind(FKind) <>
        TGocciaTypedArrayValue.IsBigIntKind(SrcTA.Kind) then
       ThrowTypeError(SErrorBigIntTypedArrayCannotMix, SSuggestBigIntTypedArrayValue);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, SrcTA.Length);
+    Len := SrcTA.Length;
+    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+    // ES2026 §23.2.5.1.2 InitializeTypedArrayFromTypedArray step 11: the same
+    // element type clones the source bytes (CloneArrayBuffer), which one block
+    // move does.
+    if (SrcTA.Kind = FKind) and
+       TryCopyTypedArrayBytes(SrcTA, SrcTA.FByteOffset, NewTA, 0, Len * BPE) then
+      Exit(NewTA);
     if TGocciaTypedArrayValue.IsBigIntKind(FKind) then
     begin
       for I := 0 to SrcTA.Length - 1 do
@@ -3412,7 +3587,7 @@ begin
     else
       ElemLen := -1;
 
-    BufferByteLength := System.Length(SAB.Data);
+    BufferByteLength := SAB.ByteLength;
     if ByteOff > BufferByteLength then
       ThrowRangeError(SErrorTypedArrayStartOffsetBounds, SSuggestTypedArrayLength);
 
@@ -3502,22 +3677,32 @@ begin
       Exit(NewTA);
     end;
 
-    if FirstArg is TGocciaArrayValue then
-    begin
-      SrcArr := TGocciaArrayValue(FirstArg);
-      NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
-      for I := 0 to SrcArr.Elements.Count - 1 do
-        NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
-      Exit(NewTA);
-    end;
+    // Each element's valueOf, and on the array-like path each element
+    // getter, can collect while the new typed array is held only here
+    // (issue #1679).
+    ResultRoots.Initialize;
+    try
+      if FirstArg is TGocciaArrayValue then
+      begin
+        SrcArr := TGocciaArrayValue(FirstArg);
+        NewTA := TGocciaTypedArrayValue.Create(FKind, SrcArr.Elements.Count);
+        ResultRoots.Add(NewTA);
+        for I := 0 to SrcArr.Elements.Count - 1 do
+          NewTA.WriteValueToElement(I, SrcArr.Elements[I]);
+        Exit(NewTA);
+      end;
 
-    Len := LengthOfArrayLikeEx(TGocciaObjectValue(FirstArg), RawLen);
-    if RawLen > High(Integer) then
-      ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
-    NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
-    for I := 0 to Len - 1 do
-      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
-    Exit(NewTA);
+      Len := LengthOfArrayLikeEx(TGocciaObjectValue(FirstArg), RawLen);
+      if RawLen > High(Integer) then
+        ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
+      NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
+      ResultRoots.Add(NewTA);
+      for I := 0 to Len - 1 do
+        NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
+      Exit(NewTA);
+    finally
+      ResultRoots.Clear;
+    end;
   end;
 
   // new TypedArray(length) — ES2026 §23.2.1.2 step 5: ToIndex(length)
@@ -3564,7 +3749,7 @@ var
   Values: TGocciaValueList;
   SrcObj: TGocciaObjectValue;
   SourceRoot, MapFnRoot, ThisRoot, ResultRoot, IteratorRoot,
-  NextMethodRoot: TGocciaTempRoot;
+  NextMethodRoot, SrcObjRoot: TGocciaTempRoot;
   ValueRoots: array of TGocciaTempRoot;
   ValueRootCount: Integer;
 begin
@@ -3592,6 +3777,7 @@ begin
   InitializeTempRoot(MapFnRoot);
   InitializeTempRoot(ThisRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(SrcObjRoot);
   AddTempRootIfNeeded(SourceRoot, Source);
   if HasMapFn then
   begin
@@ -3738,6 +3924,9 @@ begin
 
     // Step 7: array-like path — ToObject(source), LengthOfArrayLike, indexed Get
     SrcObj := ToObject(Source);
+    // A wrapper for a primitive source is held only here while its length
+    // and elements are read, the constructor runs and the mapper runs.
+    AddTempRootIfNeeded(SrcObjRoot, SrcObj);
     Len := LengthOfArrayLike(SrcObj);
     NewTA := CreateTypedArrayFromConstructor(ConstructorValue,
       'TypedArray.from', Len);
@@ -3764,6 +3953,7 @@ begin
       RemoveTempRootIfNeeded(ResultRoot);
     end;
   finally
+    RemoveTempRootIfNeeded(SrcObjRoot);
     RemoveTempRootIfNeeded(ThisRoot);
     RemoveTempRootIfNeeded(MapFnRoot);
     RemoveTempRootIfNeeded(SourceRoot);

@@ -20,9 +20,6 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
@@ -56,8 +53,6 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-  TBareExecutionMode = (bemInterpreted, bemBytecode);
-
   TBareOptions = record
     Compatibility: TGocciaCompatibilityFlags;
     LabelStatementsEnabled: Boolean;
@@ -69,7 +64,6 @@ type
     UnsafeShadowRealm: Boolean;
     Deterministic: Boolean;
     Print: Boolean;
-    Mode: TBareExecutionMode;
     SourceType: TGocciaSourceType;
     SourceTypeExplicit: Boolean;
     FileName: string;
@@ -118,8 +112,8 @@ begin
   WriteLn(AOut, '  --strict-types                Enforce type annotations at runtime');
   WriteLn(AOut, '  --warning-unsupported-features');
   WriteLn(AOut, '                                Warn and recover for unsupported/default-disabled syntax');
-  WriteLn(AOut, '  --mode=interpreted|bytecode   Execution mode (default: bytecode)');
-  WriteLn(AOut, '  --source-type=script|module   Load entry as script source or module source (.mjs infers module)');
+  WriteLn(AOut, '  --source-type=script|module   Load entry as script source or module source (default: module if the');
+  WriteLn(AOut, '                                source has a top-level import or export; .mjs and .mts infer module)');
   WriteLn(AOut, '  --source-name=PATH            Name stdin source as PATH for diagnostics and module resolution');
   WriteLn(AOut, '  --unsafe-function-constructor Enable dynamic Function constructor');
   WriteLn(AOut, '  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
@@ -130,21 +124,11 @@ begin
   WriteLn(AOut, '  --max-instructions=N          Maximum bytecode steps before aborting');
   WriteLn(AOut, '  --max-stack=N                 Maximum call stack depth (default: 10000; 0 = no limit)');
   WriteLn(AOut, '  --profile=opcodes|functions|all');
-  WriteLn(AOut, '                                Enable bytecode VM profiling (forces bytecode mode)');
+  WriteLn(AOut, '                                Enable bytecode VM profiling');
   WriteLn(AOut, '  --profile-output=PATH         Write profiler JSON to PATH');
   WriteLn(AOut, '  --help                        Show this help');
   WriteLn(AOut);
   Write(AOut, StdinUsageNote(BARE_PROGRAM_NAME, BARE_STDIN_USAGE));
-end;
-
-procedure ParseMode(const AValue: string; var AOptions: TBareOptions);
-begin
-  if AValue = 'interpreted' then
-    AOptions.Mode := bemInterpreted
-  else if AValue = 'bytecode' then
-    AOptions.Mode := bemBytecode
-  else
-    raise Exception.Create('Invalid --mode value: ' + AValue);
 end;
 
 procedure ParseSourceType(const AValue: string; var AOptions: TBareOptions);
@@ -215,7 +199,6 @@ begin
   else
     raise Exception.Create('Invalid --profile value: ' + AValue);
   AOptions.ProfileModePresent := True;
-  AOptions.Mode := bemBytecode;
 end;
 
 procedure InitializeProfiler(const AOptions: TBareOptions);
@@ -295,8 +278,7 @@ begin
   AOptions.UnsafeShadowRealm := False;
   AOptions.Deterministic := False;
   AOptions.Print := False;
-  AOptions.Mode := bemBytecode;
-  AOptions.SourceType := stScript;
+  AOptions.SourceType := stDetect;
   AOptions.SourceTypeExplicit := False;
   AOptions.FileName := STDIN_PATH_MARKER;
   AOptions.FileNameExplicit := False;
@@ -343,8 +325,8 @@ begin
       AOptions.Deterministic := True
     else if Arg = '--print' then
       AOptions.Print := True
-    else if StartsStr('--mode=', Arg) then
-      ParseMode(Copy(Arg, Length('--mode=') + 1, MaxInt), AOptions)
+    else if (Arg = '--mode') or StartsStr('--mode=', Arg) then
+      RejectRemovedExecutionModeArgument(Arg)
     else if StartsStr('--source-type=', Arg) then
       ParseSourceType(Copy(Arg, Length('--source-type=') + 1, MaxInt),
         AOptions)
@@ -389,8 +371,6 @@ begin
   if not AOptions.SourceTypeExplicit and
      IsModuleSourceFileName(AOptions.FileName) then
     AOptions.SourceType := stModule;
-  if AOptions.ProfileModePresent then
-    AOptions.Mode := bemBytecode;
   if (AOptions.ProfileOutputPath <> '') and
      not AOptions.ProfileModePresent then
     raise Exception.Create(
@@ -406,7 +386,7 @@ begin
 end;
 
 procedure ConfigureEngine(const AEngine: TGocciaEngine;
-  const AExecutor: TGocciaExecutor; const AOptions: TBareOptions);
+  const AOptions: TBareOptions);
 begin
   if AOptions.Deterministic then
     AEngine.HostEnvironment.UseDeterministicProfile;
@@ -421,9 +401,7 @@ begin
   AEngine.FunctionConstructor.Enabled := AOptions.UnsafeFunctionConstructor;
   if AOptions.UnsafeShadowRealm then
     EnableShadowRealm(AEngine);
-  if AExecutor is TGocciaBytecodeExecutor then
-    TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
-      AOptions.SourceType = stScript;
+  AEngine.GlobalBackedTopLevel := AOptions.SourceType <> stModule;
 end;
 
 procedure RegisterBareGlobals(const AEngine: TGocciaEngine;
@@ -441,20 +419,10 @@ begin
     WriteLn(AResult.ToStringLiteral.Value);
 end;
 
-function CreateExecutorForMode(
-  const AMode: TBareExecutionMode): TGocciaExecutor;
-begin
-  case AMode of
-    bemInterpreted: Result := TGocciaInterpreterExecutor.Create;
-    bemBytecode: Result := TGocciaBytecodeExecutor.Create;
-  end;
-end;
-
 function RunBare(const AOptions: TBareOptions): Integer;
 var
   DisplayName: string;
   Engine: TGocciaEngine;
-  Executor: TGocciaExecutor;
   GC: TGarbageCollector;
   PrintHost: TBarePrintHost;
   ScriptResult: TGocciaScriptResult;
@@ -476,41 +444,36 @@ begin
     SetMaxStackDepth(AOptions.StackSize);
     PrintHost := TBarePrintHost.Create;
     try
-      Executor := CreateExecutorForMode(AOptions.Mode);
+      Engine := TGocciaEngine.Create(DisplayName, Source);
       try
-        Engine := TGocciaEngine.Create(DisplayName, Source, Executor);
+        ConfigureEngine(Engine, AOptions);
+        GC := TGarbageCollector.Instance;
+        if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
+          GC.MaxBytes := AOptions.MaxMemoryBytes;
+        RegisterBareGlobals(Engine, PrintHost);
         try
-          ConfigureEngine(Engine, Executor, AOptions);
-          GC := TGarbageCollector.Instance;
-          if Assigned(GC) and (AOptions.MaxMemoryBytes > 0) then
-            GC.MaxBytes := AOptions.MaxMemoryBytes;
-          RegisterBareGlobals(Engine, PrintHost);
-          try
-            ScriptResult := Engine.Execute;
-            PrintResult(ScriptResult.Result, AOptions.Print);
-          except
-            on E: EGocciaBytecodeThrow do
-            begin
-              WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
-                DisplayName, Source, IsColorTerminal,
-                Engine.ModuleLoader.DiagnosticScope.Principal,
-                E.Suggestion));
-              Result := 1;
-            end;
-            on E: TGocciaThrowValue do
-            begin
-              WriteLn(ErrOutput, FormatThrowDetail(E.Value, DisplayName,
-                Source, IsColorTerminal,
-                Engine.ModuleLoader.DiagnosticScope.Principal,
-                E.Suggestion));
-              Result := 1;
-            end;
+          ScriptResult := Engine.Execute;
+          PrintResult(ScriptResult.Result, AOptions.Print);
+        except
+          on E: EGocciaBytecodeThrow do
+          begin
+            WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
+              DisplayName, Source, IsColorTerminal,
+              Engine.ModuleLoader.DiagnosticScope.Principal,
+              E.Suggestion));
+            Result := 1;
           end;
-        finally
-          Engine.Free;
+          on E: TGocciaThrowValue do
+          begin
+            WriteLn(ErrOutput, FormatThrowDetail(E.Value, DisplayName,
+              Source, IsColorTerminal,
+              Engine.ModuleLoader.DiagnosticScope.Principal,
+              E.Suggestion));
+            Result := 1;
+          end;
         end;
       finally
-        Executor.Free;
+        Engine.Free;
       end;
     finally
       PrintHost.Free;

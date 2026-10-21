@@ -23,10 +23,14 @@ type
     FSourceFile: string;
     FLineMap: array of TGocciaLineMapEntry;
     FLineMapCount: Integer;
+    // Whether the line map's PCs never decrease, as the compiler emits them,
+    // so a PC's entry can be found by binary search.
+    FLineMapSorted: Boolean;
     FLocals: array of TGocciaLocalInfo;
     FLocalCount: Integer;
     FDeclarationLine: UInt32;
     FDeclarationColumn: UInt16;
+    function LineMapIndexForPC(const APC: UInt32): Integer;
   public
     (* ADeclarationLine/ADeclarationColumn locate the function's declaration
        (`const f = () => {`), which is what LCOV's FN: record means. They are
@@ -60,7 +64,7 @@ type
     function CoverageLine: UInt32;
     function CoverageColumn: UInt16;
 
-    property SourceFile: string read FSourceFile;
+    property SourceFile: string read FSourceFile write FSourceFile;
     property LineMapCount: Integer read FLineMapCount;
     property LocalCount: Integer read FLocalCount;
     property DeclarationLine: UInt32 read FDeclarationLine
@@ -78,6 +82,7 @@ begin
   inherited Create;
   FSourceFile := ASourceFile;
   FLineMapCount := 0;
+  FLineMapSorted := True;
   FLocalCount := 0;
   FDeclarationLine := ADeclarationLine;
   FDeclarationColumn := ADeclarationColumn;
@@ -115,6 +120,8 @@ begin
     FLineMap[FLineMapCount - 1].Column := AColumn;
     Exit;
   end;
+  if (FLineMapCount > 0) and (APC < FLineMap[FLineMapCount - 1].PC) then
+    FLineMapSorted := False;
   if FLineMapCount >= Length(FLineMap) then
     SetLength(FLineMap, FLineMapCount * 2 + 8);
   FLineMap[FLineMapCount].PC := APC;
@@ -141,24 +148,57 @@ begin
   FLocals[AIndex].EndPC := AEndPC;
 end;
 
+{ The last entry at or before APC, or -1. A binary search over a map whose
+  PCs never decrease, so finding an instruction's position costs the log of
+  the function's length rather than the length: a module of many import
+  declarations asks once per declaration. }
+function TGocciaDebugInfo.LineMapIndexForPC(const APC: UInt32): Integer;
+var
+  I, Low, High, Middle: Integer;
+begin
+  if not FLineMapSorted then
+  begin
+    for I := FLineMapCount - 1 downto 0 do
+      if FLineMap[I].PC <= APC then
+        Exit(I);
+    Exit(-1);
+  end;
+
+  // Invariant: entries below Low are at or before APC, entries above High
+  // after it.
+  Low := 0;
+  High := FLineMapCount - 1;
+  while Low <= High do
+  begin
+    Middle := Low + (High - Low) div 2;
+    if FLineMap[Middle].PC <= APC then
+      Low := Middle + 1
+    else
+      High := Middle - 1;
+  end;
+  Result := High;
+end;
+
 function TGocciaDebugInfo.GetLineForPC(const APC: UInt32): UInt32;
 var
-  I: Integer;
+  Index: Integer;
 begin
-  Result := 0;
-  for I := FLineMapCount - 1 downto 0 do
-    if FLineMap[I].PC <= APC then
-      Exit(FLineMap[I].Line);
+  Index := LineMapIndexForPC(APC);
+  if Index >= 0 then
+    Result := FLineMap[Index].Line
+  else
+    Result := 0;
 end;
 
 function TGocciaDebugInfo.GetColumnForPC(const APC: UInt32): UInt16;
 var
-  I: Integer;
+  Index: Integer;
 begin
-  Result := 0;
-  for I := FLineMapCount - 1 downto 0 do
-    if FLineMap[I].PC <= APC then
-      Exit(FLineMap[I].Column);
+  Index := LineMapIndexForPC(APC);
+  if Index >= 0 then
+    Result := FLineMap[Index].Column
+  else
+    Result := 0;
 end;
 
 function TGocciaDebugInfo.GetLineMapEntry(const AIndex: Integer): TGocciaLineMapEntry;

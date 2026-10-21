@@ -9,6 +9,7 @@ uses
   Goccia.Builtins.GlobalEventTarget,
   Goccia.Builtins.GlobalFetch,
   Goccia.Engine,
+  Goccia.FetchTransport,
   Goccia.Runtime;
 
 type
@@ -18,10 +19,12 @@ type
     FBuiltinEventTarget: TGocciaGlobalEventTarget;
     FBuiltinFetch: TGocciaGlobalFetch;
     function EngineMaxResponseBytes: Integer;
+    function EngineFetchTransport: IGocciaFetchTransport;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
     procedure WaitForIdle; override;
+    function HasPendingWork: Boolean; override;
     procedure DiscardPending; override;
 
     property BuiltinFetch: TGocciaGlobalFetch read FBuiltinFetch;
@@ -72,7 +75,7 @@ begin
     Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit,
     Runtime.Engine.EmitCapabilityAuditAt, EngineMaxResponseBytes,
-    Runtime.Engine.Realm);
+    Runtime.Engine.Realm, EngineFetchTransport);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;
@@ -110,6 +113,15 @@ begin
     Result := 0;
 end;
 
+function TGocciaFetchRuntimeExtension.EngineFetchTransport:
+  IGocciaFetchTransport;
+begin
+  if Assigned(Runtime) then
+    Result := Runtime.Engine.FetchTransport
+  else
+    Result := nil;
+end;
+
 procedure TGocciaFetchRuntimeExtension.Detach;
 begin
   FBuiltinFetch.Free;
@@ -125,6 +137,12 @@ procedure TGocciaFetchRuntimeExtension.WaitForIdle;
 begin
   if Assigned(FBuiltinFetch) then
     WaitForFetchIdle(FBuiltinFetch.Realm);
+end;
+
+function TGocciaFetchRuntimeExtension.HasPendingWork: Boolean;
+begin
+  Result := Assigned(FBuiltinFetch) and
+    HasPendingFetches(FBuiltinFetch.Realm);
 end;
 
 procedure TGocciaFetchRuntimeExtension.DiscardPending;

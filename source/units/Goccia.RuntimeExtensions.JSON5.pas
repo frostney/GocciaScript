@@ -23,6 +23,7 @@ type
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
     function TryLoadModule(const AResolvedPath, ASpecifier: string;
       const AReadContent: TGocciaModuleContentReader;
@@ -63,6 +64,13 @@ begin
     FBuiltinJSON5 := TGocciaJSON5Builtin.Create('JSON5',
       Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinJSON5.BuiltinObject;
+end;
+
+procedure TGocciaJSON5RuntimeExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+begin
+  if AName = 'JSON5' then
+    MaterializeJSON5;
 end;
 
 procedure TGocciaJSON5RuntimeExtension.Detach;

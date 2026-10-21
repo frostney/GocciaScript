@@ -229,11 +229,13 @@ procedure EmitGlobalDefinesForPattern(const ACtx: TGocciaCompilationContext;
 
 threadvar
   // GBreakJumps/GContinueJumps are created and freed within
-  // BeginLoopControl/EndLoopControl; GPendingFinally is save/restored and freed
-  // via Save/RestorePendingFinally — all nil at rest, so no thread-exit leak.
-  // GLabelControls is a lazily-created container reused across compilations and
-  // never freed otherwise; it is released at thread teardown (see
-  // ClearCompilerWorkingState, #892).
+  // BeginLoopControl/EndLoopControl, so they are nil at rest.
+  // GPendingFinally is saved and restored around each program and function
+  // body compilation (TGocciaCompiler.Compile, DoCompileFunctionBody), so an
+  // entry a compile error leaves behind, which points into a tree that is
+  // freed with its program, goes with the compilation. GLabelControls is
+  // reused across compilations. Both are also released at thread teardown
+  // (see ClearCompilerWorkingState, #892, #1592).
   GBreakJumps: TList<Integer>;
   GContinueJumps: TList<Integer>;
   GPendingFinally: TList<TPendingFinallyEntry>;
@@ -664,10 +666,6 @@ begin
   end;
 end;
 
-function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
-  const AName: string): Integer; forward;
-function FindLocalBySlot(const AScope: TGocciaCompilerScope;
-  const AName: string; const ASlot: UInt16): Integer; forward;
 
 procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
   const ASourceIdx, ATargetIdx: Integer); forward;
@@ -857,7 +855,7 @@ var
 begin
   if ACtx.GlobalBackedTopLevel then
   begin
-    LocalIdx := FindLocalBySlot(ACtx.Scope, AInfo.Name, AVarSlot);
+    LocalIdx := ACtx.Scope.FindLocalBySlot(AInfo.Name, AVarSlot);
     if LocalIdx >= 0 then
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
     EmitGlobalDefine(ACtx, AVarSlot, AInfo.Name, False, True, False);
@@ -911,6 +909,7 @@ var
   ProbeEndJumps: array of Integer;
   Probes: TArray<string>;
   ProbeEndCount: Integer;
+  PatternCtx: TGocciaCompilationContext;
 begin
   PrepareLexicalDeclarationLocals(ACtx, AStmt);
 
@@ -935,25 +934,29 @@ begin
       if IsTopLevelGlobalBacked and AStmt.IsVar then
         EmitGlobalDefinesForPattern(ACtx, Info.Pattern, False, True, False);
 
+      // A global-backed lexical pattern defines each global binding as its
+      // element completes (EmitGlobalLexicalPatternDefine).
+      PatternCtx := ACtx;
+      if IsTopLevelGlobalBacked and not AStmt.IsVar then
+      begin
+        PatternCtx.GlobalLexicalPatternScope := ACtx.Scope;
+        PatternCtx.GlobalLexicalPatternIsConst := AStmt.IsConst;
+      end;
       InitSlot := ACtx.Scope.AllocateRegister;
       try
         ACtx.CompileExpression(Info.Initializer, InitSlot);
-        EmitDestructuring(ACtx, Info.Pattern, InitSlot,
+        EmitDestructuring(PatternCtx, Info.Pattern, InitSlot,
           IsTopLevelGlobalBacked and AStmt.IsVar);
       finally
         ACtx.Scope.FreeRegister;
       end;
-
-      if IsTopLevelGlobalBacked and not AStmt.IsVar then
-        EmitGlobalDefinesForPattern(ACtx, Info.Pattern, AStmt.IsConst,
-          False, True);
       Continue;
     end;
 
     if AStmt.IsVar then
     begin
       // Track whether this is a redeclaration (slot already exists)
-      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
+      LocalIdx := ACtx.Scope.FindVarLocalIndex(Info.Name);
       IsVarRedeclaration := LocalIdx >= 0;
       Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
       if Info.HasInitializer and Assigned(Info.Initializer) and
@@ -982,7 +985,7 @@ begin
       AStmt.IsVar);
     if IsTopLevelGlobalBacked and AStmt.IsVar then
     begin
-      LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
+      LocalIdx := ACtx.Scope.FindLocalBySlot(Info.Name, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
     end;
@@ -997,7 +1000,7 @@ begin
 
     // Under strict types a hint is enforced on every assignment, so a
     // reassignable binding takes one only from the initializer forms
-    // InferLocalType names, the rule the interpreter applies. The wider
+    // InferLocalType names. The wider
     // inference is not kept as an unenforced hint there: typed opcodes do not
     // check their operands, and the binding may hold another type by then.
     if (AnnotationType <> sltUntyped) and ACtx.StrictTypes then
@@ -1015,7 +1018,7 @@ begin
     // parameter instead (ES2026 B.3.4), which is not the slot written here.
     if (TypeHint = sltUntyped) and IsVarRedeclaration then
     begin
-      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
+      LocalIdx := ACtx.Scope.FindVarLocalIndex(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
         TypeHint := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
     end;
@@ -1043,7 +1046,7 @@ begin
     // depth-0 var local; ResolveLocal could find a same-named catch parameter
     // (ES2026 B.3.4), which would then be typed from a binding it is not.
     if AStmt.IsVar then
-      DeclaredIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+      DeclaredIdx := ACtx.Scope.FindVarLocalIndex(Info.Name)
     else
       DeclaredIdx := ACtx.Scope.ResolveLocal(Info.Name);
 
@@ -1189,7 +1192,7 @@ begin
     else if (not AStmt.IsVar) or HasInitializer then
     begin
       if AStmt.IsVar then
-        LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+        LocalIdx := ACtx.Scope.FindVarLocalIndex(Info.Name)
       else
         LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
@@ -1243,7 +1246,7 @@ begin
       if not UseWithVarInitializer then
         EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
           HasInitializer);
-      LocalIdx := FindLocalBySlot(ACtx.Scope, Info.Name, Slot);
+      LocalIdx := ACtx.Scope.FindLocalBySlot(Info.Name, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
     end;
@@ -1277,7 +1280,7 @@ begin
   IsTopLevelGlobalBacked := ACtx.GlobalBackedTopLevel and not IsBlockScoped;
   if IsTopLevelGlobalBacked then
   begin
-    LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.Name, Slot);
+    LocalIdx := ACtx.Scope.FindLocalBySlot(AStmt.Name, Slot);
     if LocalIdx >= 0 then
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
   end;
@@ -1339,7 +1342,7 @@ begin
      (ACtx.Scope.GetLocal(LocalIdx).Depth <> ACtx.Scope.Depth) then
     Exit;
 
-  VarLocalIdx := FindVarLocalIndex(ACtx.Scope, AStmt.Name);
+  VarLocalIdx := ACtx.Scope.FindVarLocalIndex(AStmt.Name);
   if VarLocalIdx < 0 then
     Exit;
 
@@ -1530,36 +1533,6 @@ begin
     Result := TGocciaExportFunctionDeclaration(ANode).Declaration
   else
     Result := nil;
-end;
-
-function FindVarLocalIndex(const AScope: TGocciaCompilerScope;
-  const AName: string): Integer;
-var
-  I: Integer;
-  Local: TGocciaCompilerLocal;
-begin
-  for I := 0 to AScope.LocalCount - 1 do
-  begin
-    Local := AScope.GetLocal(I);
-    if (Local.Name = AName) and (Local.Depth = 0) then
-      Exit(I);
-  end;
-  Result := -1;
-end;
-
-function FindLocalBySlot(const AScope: TGocciaCompilerScope;
-  const AName: string; const ASlot: UInt16): Integer;
-var
-  I: Integer;
-  Local: TGocciaCompilerLocal;
-begin
-  for I := 0 to AScope.LocalCount - 1 do
-  begin
-    Local := AScope.GetLocal(I);
-    if (Local.Name = AName) and (Local.Slot = ASlot) then
-      Exit(I);
-  end;
-  Result := -1;
 end;
 
 procedure CopyLocalTypeMetadata(const ACtx: TGocciaCompilationContext;
@@ -3255,7 +3228,7 @@ begin
     else if AStmt.BindingName <> '' then
     begin
       Slot := ACtx.Scope.DeclareVarLocal(AStmt.BindingName);
-      LocalIdx := FindLocalBySlot(ACtx.Scope, AStmt.BindingName, Slot);
+      LocalIdx := ACtx.Scope.FindLocalBySlot(AStmt.BindingName, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
       EmitGlobalDefine(ACtx, Slot, AStmt.BindingName, False, True, False);
@@ -4638,8 +4611,8 @@ begin
   InitializesGlobalBindings := ACtx.GlobalBackedTopLevel and
     (ACtx.Scope.Depth = 0) and not ACtx.PreinitializedTopLevelFunctions;
   // Linking binds a module's evaluation-phase imports in its environment;
-  // a source-phase or deferred import is bound when its declaration runs,
-  // as the interpreter binds it. The module's function declarations, which
+  // a source-phase or deferred import is bound when its declaration runs.
+  // The module's function declarations, which
   // exist before the body, read their imports from that environment by name
   // (TGocciaCompilerScope.ImportUpvaluesByName).
   if ACtx.PreinitializedTopLevelFunctions and (ACtx.Scope.Depth = 0) and
@@ -6960,9 +6933,14 @@ begin
   end;
 end;
 
+// ASessionReg holds the decoration session OP_BEGIN_DECORATORS created for
+// this class definition. Each decorator opcode reads it from the register
+// after its decorator's, R[A+1], so it acts on this class even when the
+// decorator defines and decorates another class.
 procedure CompileDecoratorOrchestration(
   const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition;
+  const AClassReg, ASessionReg: UInt16;
+  const AClassDef: TGocciaClassDefinition;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
   I, J: Integer;
@@ -6971,7 +6949,7 @@ var
   ClassDecoRegs: array of UInt16;
   DescIdx: UInt16;
   Desc: string;
-  PairReg, ExtraReg: UInt16;
+  PairReg, ExtraReg, KeyReg: UInt16;
   HasElementDecorators: Boolean;
   ComputedKeyName: string;
   LocalIdx: Integer;
@@ -7037,6 +7015,7 @@ begin
       PairReg := ACtx.Scope.AllocateRegister;
       ExtraReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, DecoRegs[I][J], 0));
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, ASessionReg, 0));
       if Elem.IsComputed then
       begin
         ComputedKeyName := FindComputedFieldKeyLocalName(
@@ -7044,17 +7023,18 @@ begin
         LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
         if LocalIdx < 0 then
           raise Exception.Create('Compiler error: computed decorator element key was not captured');
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg,
+        // B = 0 means no computed key, so the key is copied into a register
+        // allocated after PairReg, which is never register 0.
+        KeyReg := ACtx.Scope.AllocateRegister;
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, KeyReg,
           ACtx.Scope.GetLocal(LocalIdx).Slot, 0));
         EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
-          PairReg, ExtraReg, UInt16(DescIdx)));
+          PairReg, KeyReg, UInt16(DescIdx)));
+        ACtx.Scope.FreeRegister;
       end
       else
-      begin
-        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
         EmitInstruction(ACtx, EncodeABC(OP_APPLY_ELEMENT_DECORATOR_CONST,
           PairReg, 0, UInt16(DescIdx)));
-      end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
     end;
@@ -7065,7 +7045,7 @@ begin
     PairReg := ACtx.Scope.AllocateRegister;
     ExtraReg := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, ClassDecoRegs[I], 0));
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, ASessionReg, 0));
     EmitInstruction(ACtx, EncodeABC(OP_APPLY_CLASS_DECORATOR, PairReg, 0, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -7084,11 +7064,14 @@ procedure CompileDecoratorAndAccessorPass(
   const ASuperReg: Integer;
   const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
 var
-  PairReg, ExtraReg: UInt16;
+  SessionReg, PairReg, ExtraReg: UInt16;
 begin
   if not HasDecoratorsOrAccessors(AClassDef) then
     Exit;
 
+  // The session register lives until OP_FINISH_DECORATORS. A class definition
+  // that completes abruptly leaves its session there for the collector.
+  SessionReg := ACtx.Scope.AllocateRegister;
   PairReg := ACtx.Scope.AllocateRegister;
   ExtraReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, AClassReg, 0));
@@ -7096,19 +7079,20 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, UInt16(ASuperReg), 0))
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_BEGIN_DECORATORS, PairReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_BEGIN_DECORATORS, PairReg, SessionReg, 0));
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 
-  CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef,
+  CompileDecoratorOrchestration(ACtx, AClassReg, SessionReg, AClassDef,
     AComputedFieldKeyLocals);
 
   PairReg := ACtx.Scope.AllocateRegister;
   ExtraReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, PairReg, AClassReg, 0));
-  EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ExtraReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_MOVE, ExtraReg, SessionReg, 0));
   EmitInstruction(ACtx, EncodeABC(OP_FINISH_DECORATORS, PairReg, 0, 0));
   EmitInstruction(ACtx, EncodeABC(OP_MOVE, AClassReg, PairReg, 0));
+  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
@@ -7418,11 +7402,18 @@ begin
     KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
   EmitInstruction(ACtx, EncodeABx(OP_SET_CLASS_SOURCE_CONST, ADest, KeyIdx));
 
-  // ES2026 §15.7.14: Named class expressions bind the name in an inner
-  // block scope visible to methods/static initializers via upvalue capture
+  // ES2026 §15.7.14 ClassDefinitionEvaluation steps 2-3 and 8.a: the class
+  // has its own scope (classEnv), which holds the inner name binding of a
+  // named class expression, visible to methods and static initializers
+  // through upvalue capture, and the compiler's hidden `__super__` local.
+  // An anonymous class with a heritage gets the scope too: declared in the
+  // enclosing block instead, `__super__` would have its register released
+  // here and again when that block ends, and the next local of the function
+  // would share a register with a live one.
+  if HasNameBinding or HasSuper then
+    ACtx.Scope.BeginScope;
   if HasNameBinding then
   begin
-    ACtx.Scope.BeginScope;
     NameSlot := ACtx.Scope.DeclareLocal(ClassDef.Name, True);
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, NameSlot, 0, 0));
   end;
@@ -7594,20 +7585,17 @@ begin
   for I := 0 to ClosedCount - 1 do
     EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
-  // Only free __super__ manually when there is no name binding scope — when
-  // HasNameBinding is true, __super__ lives inside the inner scope and EndScope
-  // below will free it together with the name binding local.
-  if HasSuper and not HasNameBinding then
-  begin
-    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(SuperReg)));
-    ACtx.Scope.FreeRegister;
-  end;
-
-  if HasNameBinding then
+  if HasNameBinding or HasSuper then
   begin
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
-    for I := 0 to ClosedCount - 1 do
-      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
+    if HasNameBinding then
+      for I := 0 to ClosedCount - 1 do
+        EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0,
+          UInt16(ClosedLocals[I])))
+    else
+      // The scope of an anonymous class holds only `__super__`, which is
+      // closed whether or not a method captured it.
+      EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(SuperReg)));
   end;
 
   ACtx.Scope.PrivateClassReg := OldPrivateClassReg;
@@ -7684,6 +7672,7 @@ procedure CompileDestructuringDeclaration(const ACtx: TGocciaCompilationContext;
 var
   SrcReg: UInt16;
   IsTopLevelGlobalBacked: Boolean;
+  PatternCtx: TGocciaCompilationContext;
 begin
   IsTopLevelGlobalBacked := TopLevelBindingIsGlobalBacked(ACtx, AStmt.IsVar);
 
@@ -7695,18 +7684,19 @@ begin
   if IsTopLevelGlobalBacked and AStmt.IsVar then
     EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, False, True, False);
 
+  // A global-backed lexical pattern defines each global binding as its
+  // element completes (EmitGlobalLexicalPatternDefine).
+  PatternCtx := ACtx;
+  if IsTopLevelGlobalBacked and not AStmt.IsVar then
+  begin
+    PatternCtx.GlobalLexicalPatternScope := ACtx.Scope;
+    PatternCtx.GlobalLexicalPatternIsConst := AStmt.IsConst;
+  end;
   SrcReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AStmt.Initializer, SrcReg);
-  EmitDestructuring(ACtx, AStmt.Pattern, SrcReg,
+  EmitDestructuring(PatternCtx, AStmt.Pattern, SrcReg,
     IsTopLevelGlobalBacked and AStmt.IsVar);
   ACtx.Scope.FreeRegister;
-
-  if IsTopLevelGlobalBacked then
-  begin
-    if not AStmt.IsVar then
-      EmitGlobalDefinesForPattern(ACtx, AStmt.Pattern, AStmt.IsConst,
-        False, True);
-  end;
 end;
 
 procedure CompileEnumDeclaration(const ACtx: TGocciaCompilationContext;
@@ -7807,6 +7797,7 @@ procedure ClearCompilerWorkingState;
 begin
   FreeAndNil(GUsingResources);
   FreeAndNil(GLabelControls);
+  FreeAndNil(GPendingFinally);
 end;
 
 initialization

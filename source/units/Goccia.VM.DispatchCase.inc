@@ -276,6 +276,9 @@
             NumericComparisonResult := FRegisters[A].IntValue <= Int16(B)
           else if FRegisters[A].Kind = grkFloat then
             NumericComparisonResult := FRegisters[A].FloatValue <= Int16(B)
+          else if VMBoxedNumberRegister(FRegisters[A]) then
+            NumericComparisonResult := TGocciaNumberLiteralValue(
+              FRegisters[A].ObjectValue).Value <= Int16(B)
           else
             raise Exception.Create(
               'Invalid non-numeric source for OP_JUMP_IF_NUM_NOT_LTE_IMM');
@@ -464,11 +467,16 @@
           FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
         end;
 
+      // A proven Number can also arrive boxed: NaN, the infinities and -0
+      // are kept as number values rather than scalar registers.
       OP_SUB_NUM_IMM:
         if FRegisters[B].Kind = grkInt then
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue - Int16(C))
         else if FRegisters[B].Kind = grkFloat then
           FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - Int16(C))
+        else if VMBoxedNumberRegister(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
+            FRegisters[B].ObjectValue).Value - Int16(C))
         else
           raise Exception.Create(
             'Invalid non-numeric source for OP_SUB_NUM_IMM');
@@ -478,6 +486,9 @@
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue + Int16(C))
         else if FRegisters[B].Kind = grkFloat then
           FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + Int16(C))
+        else if VMBoxedNumberRegister(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
+            FRegisters[B].ObjectValue).Value + Int16(C))
         else
           raise Exception.Create(
             'Invalid non-numeric source for OP_ADD_NUM_IMM');
@@ -712,7 +723,11 @@
         end;
 
       OP_NEG_INT, OP_NEG_FLOAT:
-        FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]));
+      begin
+        // ToNumber of an object operand runs guest code (see FRegisters).
+        LeftDouble := RegisterToDouble(FRegisters[B]);
+        FRegisters[A] := VMNumberRegister(-LeftDouble);
+      end;
 
       OP_CONCAT:
       begin
@@ -1216,10 +1231,9 @@
               RightValue);
             goto LDispatchNext;
           end;
-          TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
-            GlobalName,
-            TGocciaPropertyDescriptorData.Create(
-              RightValue, [pfEnumerable, pfConfigurable, pfWritable]));
+          DefineOwnDataProperty(
+            TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
+            RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
         end
         else
           SetPropertyValue(GetRegister(A), GlobalName, RightValue);
@@ -1233,10 +1247,8 @@
         begin
           PropKey := ClassifyPropertyKey(FRegisters[B], False);
           if PropKey.Kind = pkkSymbol then
-            TGocciaObjectValue(TargetValue).DefineSymbolProperty(
-              PropKey.Symbol,
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfEnumerable, pfConfigurable, pfWritable]))
+            DefineOwnDataSymbolProperty(TGocciaObjectValue(TargetValue),
+              PropKey.Symbol, RightValue, [pfEnumerable, pfConfigurable, pfWritable])
           else
           begin
             GlobalName := PropertyKeyName(PropKey);
@@ -1262,10 +1274,8 @@
               goto LDispatchNext;
             end;
 
-            TGocciaObjectValue(TargetValue).DefineProperty(
-              GlobalName,
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfEnumerable, pfConfigurable, pfWritable]));
+            DefineOwnDataProperty(TGocciaObjectValue(TargetValue),
+              GlobalName, RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
           end;
         end
         else
@@ -1281,15 +1291,11 @@
         begin
           PropKey := ClassifyPropertyKey(FRegisters[B], False);
           if PropKey.Kind = pkkSymbol then
-            TGocciaObjectValue(TargetValue).DefineSymbolProperty(
-              PropKey.Symbol,
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfEnumerable, pfConfigurable, pfWritable]))
+            DefineOwnDataSymbolProperty(TGocciaObjectValue(TargetValue),
+              PropKey.Symbol, RightValue, [pfEnumerable, pfConfigurable, pfWritable])
           else
-            TGocciaObjectValue(TargetValue).DefineProperty(
-              PropertyKeyName(PropKey),
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfEnumerable, pfConfigurable, pfWritable]));
+            DefineOwnDataProperty(TGocciaObjectValue(TargetValue),
+              PropertyKeyName(PropKey), RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
         end
         else
           SetPropertyValue(TargetValue,
@@ -1320,10 +1326,9 @@
           if FRegisters[A].ObjectValue is TGocciaVMClassValue then
             SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
               True);
-          TGocciaObjectValue(FRegisters[A].ObjectValue).DefineProperty(
-            GlobalName,
-            TGocciaPropertyDescriptorData.Create(
-              RightValue, [pfConfigurable, pfWritable]));
+          DefineOwnDataProperty(
+            TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
+            RightValue, [pfConfigurable, pfWritable]);
         end
         else
           SetPropertyValue(GetRegister(A), GlobalName, RightValue);
@@ -1350,15 +1355,12 @@
             SetBytecodeHomeObject(RightValue, TargetValue);
 
           if PropKey.Kind = pkkSymbol then
-            TGocciaObjectValue(TargetValue).DefineSymbolProperty(
-              PropKey.Symbol,
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfConfigurable, pfWritable]))
+            DefineOwnDataSymbolProperty(TGocciaObjectValue(TargetValue),
+              PropKey.Symbol, RightValue, [pfConfigurable, pfWritable])
           else
-            TGocciaObjectValue(TargetValue).DefineProperty(
-              PropertyKeyName(PropKey),
-              TGocciaPropertyDescriptorData.Create(
-                RightValue, [pfConfigurable, pfWritable]));
+            DefineOwnDataProperty(TGocciaObjectValue(TargetValue),
+              PropertyKeyName(PropKey), RightValue,
+              [pfConfigurable, pfWritable]);
         end
         else
           SetPropertyValue(TargetValue,
@@ -2150,8 +2152,12 @@
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) < 0)
           else
-            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.LessThan, LeftValue, RightValue));
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.LessThan, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
         end;
       end;
 
@@ -2183,8 +2189,12 @@
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) > 0)
           else
-            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.GreaterThan, LeftValue, RightValue));
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.GreaterThan, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
         end;
       end;
 
@@ -2216,8 +2226,12 @@
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) <= 0)
           else
-            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue));
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
         end;
       end;
 
@@ -2249,8 +2263,12 @@
                 TGocciaStringLiteralValue(LeftValue).Value,
                 TGocciaStringLiteralValue(RightValue).Value) >= 0)
           else
-            FRegisters[A] := RegisterBoolean(VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue));
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
         end;
       end;
 
@@ -2300,6 +2318,9 @@
         OperandRoots.Add(LeftValue);
         try
           CustomMatcherValue := GetCustomMatcher(RightValue);
+          // A getter can return a fresh matcher, and the hint object is
+          // held only here while its string is made.
+          OperandRoots.Add(CustomMatcherValue);
           if Assigned(CustomMatcherValue) then
           begin
             if not CustomMatcherValue.IsCallable then
@@ -2307,6 +2328,7 @@
             CallArgs := AcquireArguments(2);
             try
               MatchHintObject := TGocciaObjectValue.Create;
+              OperandRoots.Add(MatchHintObject);
               MatchHintObject.AssignProperty(PROP_MATCH_TYPE,
                 TGocciaStringLiteralValue.Create('boolean'));
               CallArgs.Add(LeftValue);
@@ -2670,9 +2692,9 @@
               SavedConstructFrameOk := False;
             // Also stamps the executing frame with this call's position so an
             // error a native callee creates captures the call site (deferred
-            // frames are 0:0). Uses the recorded call-site column, matching the
-            // tree-walk evaluator's per-call frame (the instruction line map
-            // resolves only to the enclosing statement). Snapshotted above and
+            // frames are 0:0). Uses the recorded call-site column (the
+            // instruction line map resolves only to the enclosing
+            // statement). Snapshotted above and
             // restored below.
             EnterNativeCallSite(PreviousCallSite);
             try
@@ -2732,23 +2754,31 @@
             if (CalleeIntrinsicKind = nikFunctionBind) and
                (FRegisters[A - 1].ObjectValue is TGocciaFunctionBase) then
             begin
+              // Binding reads the target's length and name, which can be
+              // getters that run guest code (see FRegisters).
               case B of
                 0:
-                  FRegisters[A] := RegisterObject(
-                    TGocciaBoundFunctionValue.CreateWithoutArgs(
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithoutArgs(
                       FRegisters[A - 1].ObjectValue,
-                      TGocciaUndefinedLiteralValue.UndefinedValue));
+                      TGocciaUndefinedLiteralValue.UndefinedValue);
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
                 1:
-                  FRegisters[A] := RegisterObject(
-                    TGocciaBoundFunctionValue.CreateWithoutArgs(
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithoutArgs(
                       FRegisters[A - 1].ObjectValue,
-                      RegisterToValue(FRegisters[A + 1])));
+                      RegisterToValue(FRegisters[A + 1]));
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
                 2:
-                  FRegisters[A] := RegisterObject(
-                    TGocciaBoundFunctionValue.CreateWithSingleArg(
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithSingleArg(
                       FRegisters[A - 1].ObjectValue,
                       RegisterToValue(FRegisters[A + 1]),
-                      RegisterToValue(FRegisters[A + 2])));
+                      RegisterToValue(FRegisters[A + 2]));
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
               else
                 BytecodeFunction := nil;
               end;
@@ -2798,8 +2828,7 @@
                 // whose length was grown past its element count falls through
                 // to the generic call, which runs Function.prototype.apply and
                 // therefore CreateListFromArrayLike — ascending Get order, a
-                // rooted arguments collection, and the spec argument count,
-                // exactly as the interpreter does.
+                // rooted arguments collection, and the spec argument count.
                 else if (CalleeIntrinsicKind = nikFunctionApply) and (B >= 2) and
                         (FRegisters[A + 2].Kind = grkObject) and
                         (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) and
@@ -2956,8 +2985,10 @@
           SetLength(RegisterArgs, C);
           for I := 0 to C - 1 do
             RegisterArgs[I] := FRegisters[B + 1 + I];
-          FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+          // The constructor runs guest code (see FRegisters).
+          GuestCallRegister := TGocciaVMClassValue(FRegisters[B].ObjectValue)
             .InstantiateRegisters(RegisterArgs);
+          FRegisters[A] := GuestCallRegister;
         end
         else
         begin
@@ -3004,8 +3035,10 @@
           for I := 0 to SpreadArray.Elements.Count - 1 do
             RegisterArgs[I] := VMValueToRegisterFast(
               SpreadArray.GetProperty(IntegerToString(I)));
-          FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+          // The constructor runs guest code (see FRegisters).
+          GuestCallRegister := TGocciaVMClassValue(FRegisters[B].ObjectValue)
             .InstantiateRegisters(RegisterArgs);
+          FRegisters[A] := GuestCallRegister;
         end
         else
         begin
@@ -3089,7 +3122,9 @@
             end
             else
             begin
-              FRegisters[A] := VMValueToRegisterFast(IterResult.GetProperty(PROP_VALUE));
+              // A `value` getter runs guest code (see FRegisters).
+              GuestCallValue := IterResult.GetProperty(PROP_VALUE);
+              FRegisters[A] := VMValueToRegisterFast(GuestCallValue);
               FRegisters[B] := RegisterBoolean(False);
             end;
           end;
@@ -3293,23 +3328,30 @@
         SetupAutoAccessorValue(Template.GetConstantUnchecked(C).StringValue,
           B, RegisterToValue(FRegisters[A]));
 
+      // R[A+1] of the decorator opcodes after OP_BEGIN_DECORATORS holds the
+      // session OP_BEGIN_DECORATORS stored in R[B] for the same class.
       OP_BEGIN_DECORATORS:
-        BeginDecorators(RegisterToValue(FRegisters[A]), RegisterToValue(FRegisters[A + 1]));
+        SetRegister(B, BeginDecorators(RegisterToValue(FRegisters[A]),
+          RegisterToValue(FRegisters[A + 1])));
 
       OP_APPLY_ELEMENT_DECORATOR_CONST:
         if B <> 0 then
-          ApplyElementDecorator(RegisterToValue(FRegisters[A]),
+          ApplyElementDecorator(RegisterToValue(FRegisters[A + 1]),
+            RegisterToValue(FRegisters[A]),
             Template.GetConstantUnchecked(C).StringValue,
             RegisterToValue(FRegisters[B]))
         else
-          ApplyElementDecorator(RegisterToValue(FRegisters[A]),
+          ApplyElementDecorator(RegisterToValue(FRegisters[A + 1]),
+            RegisterToValue(FRegisters[A]),
             Template.GetConstantUnchecked(C).StringValue);
 
       OP_APPLY_CLASS_DECORATOR:
-        ApplyClassDecorator(RegisterToValue(FRegisters[A]));
+        ApplyClassDecorator(RegisterToValue(FRegisters[A + 1]),
+          RegisterToValue(FRegisters[A]));
 
       OP_FINISH_DECORATORS:
-        SetRegister(A, FinishDecorators(RegisterToValue(FRegisters[A])));
+        SetRegister(A, FinishDecorators(RegisterToValue(FRegisters[A + 1]),
+          RegisterToValue(FRegisters[A])));
 
       OP_GET_GLOBAL, OP_GET_GLOBAL_DECLARED:
       begin
@@ -3510,17 +3552,24 @@
 
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
-        FRegisters[A] := RegisterBoolean(
-          (Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName)));
+        // Contains can materialize a lazy global (a shim) or reach a Proxy
+        // trap on the global object's prototype chain, either of which runs
+        // guest code (see FRegisters).
+        GuestCallBoolean := Assigned(FGlobalScope) and
+          FGlobalScope.Contains(GlobalName);
+        FRegisters[A] := RegisterBoolean(GuestCallBoolean);
       end;
 
       OP_DELETE_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+        // Deleting through the global object can reach a Proxy trap on its
+        // prototype chain, which runs guest code (see FRegisters).
         if Assigned(FGlobalScope) then
-          FRegisters[A] := RegisterBoolean(FGlobalScope.DeleteBinding(GlobalName))
+          GuestCallBoolean := FGlobalScope.DeleteBinding(GlobalName)
         else
-          FRegisters[A] := RegisterBoolean(True);
+          GuestCallBoolean := True;
+        FRegisters[A] := RegisterBoolean(GuestCallBoolean);
       end;
 
       OP_IMPORT:
@@ -3680,8 +3729,8 @@
             if DynImportComputed then
               SpecifierString := MarkComputedImportSpecifier(SpecifierString);
             { The import() is the call site of whatever its load decides or
-              refuses (audit events, PermissionDenied), as in the tree-walk
-              evaluator; a deferred start re-enters it. }
+              refuses (audit events, PermissionDenied); a deferred start
+              re-enters it. }
             CurrentCallExpressionLocation(DebugLine, DebugColumn);
             EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
               PreviousCallSite);
@@ -3925,8 +3974,8 @@
       begin
         // Stamp the disposal site onto the top frame so an auto-SuppressedError
         // created below (a double fault: dispose throws while an error is
-        // pending) records this location instead of the deferred frame's 0:0,
-        // matching the tree-walk interpreter. Snapshot/restore so it does not
+        // pending) records this location instead of the deferred frame's 0:0.
+        // Snapshot/restore so it does not
         // perturb the location seen by later instructions.
         if FCallStack <> nil then
           SavedConstructFrameOk :=
@@ -3944,7 +3993,8 @@
             // Clear B before the call so that if it throws, the follow-up
             // OP_AWAIT sees null instead of the stale dispose function.
             FRegisters[B] := RegisterNull;
-            RightValue := TGocciaFunctionBase(LeftValue).CallNoArgs(
+            // GetDisposeMethod admits any callable, a callable Proxy too.
+            RightValue := DispatchCallNoArgs(LeftValue,
               RegisterToValue(FRegisters[C]));
             // Store result in B so a follow-up OP_AWAIT can await it
             if Assigned(RightValue) then

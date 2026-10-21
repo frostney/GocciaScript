@@ -28,7 +28,7 @@ type
     constructor Create(const AIterators: array of TGocciaIteratorValue;
       const APadding: array of TGocciaValue; const AMode: TGocciaZipMode);
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaZipKeyedIteratorValue = class(TGocciaIteratorHelperValue)
@@ -49,7 +49,7 @@ type
       const AIterators: array of TGocciaIteratorValue;
       const APadding: array of TGocciaValue; const AMode: TGocciaZipMode);
     procedure Close; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function GetIteratorFromIterable(const AValue: TGocciaValue): TGocciaIteratorValue;
@@ -410,11 +410,10 @@ begin
   FDone := True;
 end;
 
-procedure TGocciaZipIteratorValue.MarkReferences;
+procedure TGocciaZipIteratorValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
   for I := 0 to High(FIterators) do
   begin
@@ -665,11 +664,10 @@ begin
   FDone := True;
 end;
 
-procedure TGocciaZipKeyedIteratorValue.MarkReferences;
+procedure TGocciaZipKeyedIteratorValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
   for I := 0 to High(FIterators) do
   begin

@@ -174,9 +174,9 @@ const shouldScan = (repoPath: string): boolean => {
 /**
  * What the scan will actually read, or null when the entry must not be read.
  *
- * The repository contains symlinks (AGENTS.md and CLAUDE.md are one document)
- * and a pull request can add more, so the link target — not the link — decides
- * whether an entry is scanned:
+ * The repository contains symlinks (`.claude/skills`, `.mcp.json`) and a pull
+ * request can add more, so the link target — not the link — decides whether an
+ * entry is scanned:
  *
  *   - Outside the checkout (`docs/x.md -> /etc/passwd`): reading it would scan
  *     host state that no reviewer of the diff ever sees.
@@ -220,7 +220,7 @@ const collectFiles = (): ScanTarget[] => {
     if (!shouldScan(repoPath)) return;
     const realPath = resolveScannable(full);
     if (realPath === null) return;
-    // AGENTS.md and CLAUDE.md are the same document behind a symlink.
+    // Two paths that resolve to the same file (a symlink) are scanned once.
     if (seen.has(realPath)) return;
     seen.add(realPath);
     files.push({ repoPath, realPath });

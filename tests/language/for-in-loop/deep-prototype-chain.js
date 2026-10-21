@@ -35,10 +35,10 @@ describe("for...in over a deep prototype chain", () => {
     expect(enumerate(chain(5000, false))).toEqual(["root"]);
   });
 
-  // A super() call into a native constructor in bytecode mode sets the new
-  // object's prototype after running the constructor's own code, without a
-  // cycle check, so a user hook can close the stored chain into a loop
-  // (interpreted mode and Node.js read the prototype first). Whatever the
+  // A super() call into a native constructor sets the new object's prototype
+  // after running the constructor's own code, without a cycle check, so a
+  // user hook can close the stored chain into a loop (Node.js reads the
+  // prototype first). Whatever the
   // chain looks like, for...in must end: with the keys, or with RangeError.
   test("for...in ends on an object whose stored chain loops back", () => {
     let captured = null;

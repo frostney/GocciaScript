@@ -67,6 +67,32 @@ describe("ShadowRealm.prototype.evaluate", () => {
     expect(realm.evaluate("const ok = 2; ok")).toBe(2);
   });
 
+  // PerformShadowRealmEval step 2 (ShadowRealm proposal §3.1.3): a parse
+  // failure, and a body containing new.target, a super property or a super
+  // call, throw a SyntaxError in the caller realm. The message is the
+  // implementation's; it should be the one the early error carries, not an
+  // empty one.
+  test.each([
+    ["new.target", "new.target is not allowed in this eval context"],
+    ["super()", "super() is not allowed in this eval context"],
+    ["super.x", "super property access is not allowed in this eval context"],
+    ['import x from "./y.js";', "Module declarations are not allowed in eval code"],
+    ["export default 1;", "Module declarations are not allowed in eval code"],
+    ["using x = null;", "Using declarations are not allowed at the top level of eval"],
+    ["let x; let x;", "Identifier 'x' has already been declared"],
+  ])("an early error in %s keeps its message", (source, message) => {
+    const realm = new ShadowRealm();
+    let caught;
+    try {
+      realm.evaluate(source);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(SyntaxError);
+    expect(caught.message).toBe(message);
+    expect(String(caught)).toBe(`SyntaxError: ${message}`);
+  });
+
   test("throws a SyntaxError for illegal top-level control flow", () => {
     const realm = new ShadowRealm();
     expect(() => realm.evaluate("return 1;")).toThrow(SyntaxError);

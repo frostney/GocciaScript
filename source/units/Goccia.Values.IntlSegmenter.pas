@@ -81,6 +81,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Utils,
@@ -195,30 +196,39 @@ end;
 
 constructor TGocciaIntlSegmenterValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
+  OptionsRoots: TGocciaActiveRootFrame;
   Canonical: string;
   Ignored: string;
 begin
   inherited Create;
-  Canonical := CanonicalizeUnicodeLocaleId(ALocale);
-  if Canonical = '' then
-    FLocale := DefaultLocale
-  else
-    FLocale := Canonical;
+  // Options that ToObject made from a primitive are a wrapper only this call
+  // holds while their getters and conversions run guest code.
+  OptionsRoots.Initialize;
+  try
+    OptionsRoots.Add(AOptions);
+    Canonical := CanonicalizeUnicodeLocaleId(ALocale);
+    if Canonical = '' then
+      FLocale := DefaultLocale
+    else
+      FLocale := Canonical;
 
-  // Default
-  FGranularity := 'grapheme';
+    // Default
+    FGranularity := 'grapheme';
 
-  if Assigned(AOptions) then
-  begin
-    Ignored := ReadSegmenterStringOption(AOptions, 'localeMatcher',
-      'best fit', ['lookup', 'best fit']);
-    FGranularity := ReadSegmenterStringOption(AOptions, 'granularity',
-      FGranularity, ['grapheme', 'word', 'sentence']);
+    if Assigned(AOptions) then
+    begin
+      Ignored := ReadSegmenterStringOption(AOptions, 'localeMatcher',
+        'best fit', ['lookup', 'best fit']);
+      FGranularity := ReadSegmenterStringOption(AOptions, 'granularity',
+        FGranularity, ['grapheme', 'word', 'sentence']);
+    end;
+
+    InitializePrototype;
+    if (GetIntlSegmenterShared <> nil) then
+      FPrototype := GetIntlSegmenterShared.Prototype;
+  finally
+    OptionsRoots.Clear;
   end;
-
-  InitializePrototype;
-  if (GetIntlSegmenterShared <> nil) then
-    FPrototype := GetIntlSegmenterShared.Prototype;
 end;
 
 function TGocciaIntlSegmenterValue.ToStringTag: string;
@@ -359,6 +369,7 @@ var
   Iter: TGocciaIntlSegmentIteratorValue;
   I: Integer;
   Seg: TIntlSegment;
+  Roots: TGocciaActiveRootFrame;
 begin
   Segs := AsSegments(AThisValue, 'Segments.prototype.containing');
   if AArgs.Length < 1 then
@@ -366,10 +377,15 @@ begin
   else
     Idx := ToIntegerFromArgs(AArgs, 0);
 
-  // Build all segments and find the one containing the index
+  // Build all segments and find the one containing the index. The iterator
+  // is a managed value this call frees itself, so it is rooted until then: a
+  // collection inside CreateSegmentObject would otherwise sweep it, and the
+  // Free below would free it a second time.
   Iter := TGocciaIntlSegmentIteratorValue.Create(Segs.FLocale, Segs.FGranularity,
     Segs.FText);
+  Roots.Initialize;
   try
+    Roots.Add(Iter);
     for I := 0 to Length(Iter.FSegments) - 1 do
     begin
       Seg := Iter.FSegments[I];
@@ -382,6 +398,7 @@ begin
     end;
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   finally
+    Roots.Clear;
     Iter.Free;
   end;
 end;
@@ -667,9 +684,27 @@ begin
   Result := AThisValue;
 end;
 
+{ Heap snapshot slot materializers (ADR 0148): the segments and segment
+  iterator prototypes are made with their first instance, and no global name
+  reaches them. A throwaway instance makes them as using them would. }
+procedure MaterializeIntlSegmentsShared;
+begin
+  TGocciaIntlSegmentsValue.Create('en', 'grapheme', '');
+end;
+
+procedure MaterializeIntlSegmentIteratorShared;
+begin
+  TGocciaIntlSegmentIteratorValue.Create('en', 'grapheme', '');
+end;
+
 initialization
   GIntlSegmenterSharedSlot := RegisterRealmOwnedSlot('Intl.Segmenter.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.Segmenter.shared', 'Intl.Segmenter');
   GIntlSegmentsSharedSlot := RegisterRealmOwnedSlot('Intl.Segments.shared');
   GIntlSegmentIteratorSharedSlot := RegisterRealmOwnedSlot('Intl.SegmentIterator.shared');
+  RegisterSnapshotSlotMaterializer('Intl.Segments.shared',
+    MaterializeIntlSegmentsShared);
+  RegisterSnapshotSlotMaterializer('Intl.SegmentIterator.shared',
+    MaterializeIntlSegmentIteratorShared);
 
 end.

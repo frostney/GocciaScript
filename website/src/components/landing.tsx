@@ -50,13 +50,17 @@ import {
   ECMASCRIPT_SCOPE_ANSWER,
   ECMASCRIPT_SCOPE_QUESTION,
   GOCCIASCRIPT_SUMMARY,
+  NATIVE_PLATFORM_DESCRIPTION,
   NODE_COMPATIBILITY_ANSWER,
   NODE_COMPATIBILITY_QUESTION,
+  PRODUCTION_READY_ANSWER,
+  PRODUCTION_READY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
   TYPE_ANNOTATIONS_QUESTION,
   VITEST_COMPATIBILITY_ANSWER,
   VITEST_COMPATIBILITY_QUESTION,
 } from "@/lib/positioning";
+import { compatibilityPercent } from "@/lib/test262-percent";
 
 const FEATURE_ICONS: Record<
   FeatureIcon,
@@ -533,7 +537,7 @@ console.log("total:", total);`;
       label: "Compiler & VM",
       small: "register bytecode → .gbc",
       overview:
-        "By default the compiler lowers the AST to a register-based bytecode and the VM executes that. With --mode=interpreted a tree-walk evaluator runs the AST directly — same object model, same scope chain, just a different backend.",
+        "The compiler lowers the AST to a register-based bytecode and the VM executes that. Bytecode is the only backend: the VM works directly on the engine's object model and scope chain, and the same bytecode can be saved as a .gbc file.",
       docId: "bytecode-vm",
       docLabel: "Bytecode VM",
     },
@@ -840,18 +844,8 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
     answer: COMPILER_SUPPORT_ANSWER,
   },
   {
-    question: "Is GocciaScript production-ready?",
-    answer: (
-      <>
-        GocciaScript is still pre-1.0, so APIs and compatibility behavior can
-        change between releases. Its current{" "}
-        <Link href="/compatibility" className="link-button">
-          test262 results
-        </Link>{" "}
-        already make it suitable for serious experiments and bounded production
-        use where the supported surface matches your needs.
-      </>
-    ),
+    question: PRODUCTION_READY_QUESTION,
+    answer: PRODUCTION_READY_ANSWER,
   },
   {
     question: "How does the sandbox model work?",
@@ -918,7 +912,8 @@ export function Landing({
                 A Java<span className="script">Script</span> engine.
               </h1>
               <p className="hero-lede">
-                A JavaScript engine: a sandbox-first{" "}
+                A JavaScript engine for running code that AI agents and people
+                write: a sandbox-first{" "}
                 <a
                   href="https://tc39.es/ecma262/"
                   target="_blank"
@@ -937,8 +932,8 @@ export function Landing({
                     conformance with generated test262 reports.
                   </span>
                 </a>{" "}
-                runtime and toolchain for AI agents. The host defines the
-                available capabilities, runtime surface, and execution limits.
+                runtime. The host defines the available capabilities, runtime
+                surface, and execution limits.
               </p>
               <div className="hero-cta-row">
                 <Link
@@ -978,14 +973,124 @@ export function Landing({
               </div>
               {isPreStable(release) && (
                 <p className="prestable-note mt-3">
-                  <strong>Pre-1.0:</strong> the API is still in motion — expect
-                  breaking changes between any two releases until 1.0.
+                  <strong>Pre-1.0:</strong> the host API and flags may change
+                  between releases. Pin a version; the{" "}
+                  <a
+                    href="https://github.com/frostney/GocciaScript/blob/main/CHANGELOG.md"
+                    className="link-button"
+                  >
+                    changelog
+                  </a>{" "}
+                  lists what changed.
                 </p>
               )}
             </div>
             <div className="hero-visual">
               <HeroRunnableCard code={HERO_CODE} />
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="content-section">
+        <div className="container">
+          <div className="section-head">
+            <div className="section-kicker">Evidence</div>
+            <AnchorH2 id="evidence">
+              What you can check before you rely on it.
+            </AnchorH2>
+          </div>
+          <div className="feature-grid">
+            <Card className="paper-card feature-card" padding={6}>
+              <VStack gap={2}>
+                <Heading level={4}>Conformance</Heading>
+                <Text as="p" type="supporting" display="block">
+                  test262, the official ECMAScript conformance suite, runs on
+                  every pull request and on main, and a regression against main
+                  fails the pull request.{" "}
+                  {compatibility ? (
+                    <>
+                      The latest published run, Annex B excluded, has{" "}
+                      <strong>
+                        {compatibility.passed.toLocaleString(locale)} of{" "}
+                        {compatibility.totalRun.toLocaleString(locale)}
+                      </strong>{" "}
+                      cases passing (
+                      {compatibilityPercent(
+                        compatibility.passed,
+                        compatibility.totalRun,
+                      )}
+                      ); see results{" "}
+                    </>
+                  ) : (
+                    <>See results </>
+                  )}
+                  <Link href="/compatibility" className="link-button">
+                    by area on the compatibility dashboard
+                  </Link>
+                  .
+                </Text>
+              </VStack>
+            </Card>
+            <Card className="paper-card feature-card" padding={6}>
+              <VStack gap={2}>
+                <Heading level={4}>Tested on every change</Heading>
+                <Text as="p" type="supporting" display="block">
+                  15,000+ JavaScript tests in 1,800+ files run on every pull
+                  request on Linux x64 and on six targets on main. Differential
+                  suites are checked against Bun and Vitest.
+                </Text>
+              </VStack>
+            </Card>
+            <Card className="paper-card feature-card" padding={6}>
+              <VStack gap={2}>
+                <Heading level={4}>Fuzzing and memory checks</Heading>
+                <Text as="p" type="supporting" display="block">
+                  Every night,{" "}
+                  <a
+                    href="https://github.com/frostney/GocciaScript/actions/workflows/fuzz.yml"
+                    className="link-button"
+                  >
+                    AFL++ fuzzes the engine and heap snapshot reader
+                  </a>
+                  , and the full test suite runs under FreePascal&apos;s heap
+                  checker (heaptrc) and Valgrind memcheck. Every week, a{" "}
+                  <a
+                    href="https://github.com/frostney/GocciaScript/actions/workflows/gc-stress.yml"
+                    className="link-button"
+                  >
+                    GC-stress run
+                  </a>{" "}
+                  collects garbage every 8 instructions across the GC-sensitive
+                  parts of the test suite and of test262.
+                </Text>
+              </VStack>
+            </Card>
+            <Card className="paper-card feature-card" padding={6}>
+              <VStack gap={2}>
+                <Heading level={4}>In production</Heading>
+                <Text as="p" type="supporting" display="block">
+                  GocciaScript is the engine behind{" "}
+                  <a href="https://shotcup.dev" className="link-button">
+                    Shotcup&apos;s hosted sandboxes
+                  </a>
+                  , where every run gets a fresh engine with hard limits.
+                </Text>
+              </VStack>
+            </Card>
+            <Card className="paper-card feature-card" padding={6}>
+              <VStack gap={2}>
+                <Heading level={4}>Prebuilt for six targets</Heading>
+                <Text as="p" type="supporting" display="block">
+                  Every release and nightly has native binaries for macOS and
+                  Linux (x64 and arm64) and Windows (x64 and x86). Use the{" "}
+                  <Link href="/installation" className="link-button">
+                    one-line installer or Homebrew on macOS
+                  </Link>
+                  .
+                </Text>
+              </VStack>
+            </Card>
           </div>
         </div>
       </section>
@@ -1006,18 +1111,6 @@ export function Landing({
               , which is exposed only by the private test262 conformance host.
             </p>
             <p className="compat-note">
-              {compatibility ? (
-                <>
-                  Current generated evidence:{" "}
-                  <strong>
-                    {compatibility.passed.toLocaleString(locale)} of{" "}
-                    {compatibility.totalRun.toLocaleString(locale)}
-                  </strong>{" "}
-                  cases pass in the latest published non-Annex-B test262 run.
-                </>
-              ) : (
-                <>Current generated test262 evidence is published separately.</>
-              )}{" "}
               <Link href="/compatibility" className="link-button">
                 Open the live compatibility dashboard
               </Link>
@@ -1198,12 +1291,7 @@ export function Landing({
               Portable by design,{" "}
               <span className="wave-under">embeddable by choice.</span>
             </AnchorH2>
-            <p>
-              FreePascal is the cross-platform toolchain. Delphi support covers
-              the complete shipped Win32 and Win64 application matrix under the
-              same runtime semantics. Native application embedding remains an
-              important secondary goal.
-            </p>
+            <p>{NATIVE_PLATFORM_DESCRIPTION}</p>
           </div>
           <div className="feature-grid">
             <Card className="paper-card feature-card" padding={6}>

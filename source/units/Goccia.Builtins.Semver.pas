@@ -1381,172 +1381,188 @@ var
   Members: TGocciaMemberCollection;
   StaticMembers: TArray<TGocciaMemberDefinition>;
   ReleaseTypesArray: TGocciaSemverStringArray;
+  Roots: TGocciaActiveRootFrame;
 begin
   Host := TGocciaSemverNamespaceHost.Create;
   if not Assigned(GSemverHosts) then
     GSemverHosts := TSemverHostList.Create(True);
   GSemverHosts.Add(Host);
 
-  Host.FSemverPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Members := TGocciaMemberCollection.Create;
+  // Every object built here is held only by a local (or the host's plain
+  // fields) until the namespace holds it, and the strings and members added
+  // in between reserve, which can collect.
+  Roots.Initialize;
   try
-    Members.AddNamedMethod(PROP_TO_STRING, Host.SemVerToStringMethod, 0);
-    Members.AddNamedMethod('format', Host.SemVerFormat, 0);
-    Members.AddNamedMethod('compare', Host.SemVerCompareMethod, 1);
-    Members.AddNamedMethod('compareMain', Host.SemVerCompareMainMethod, 1);
-    Members.AddNamedMethod('comparePre', Host.SemVerComparePreMethod, 1);
-    Members.AddNamedMethod('compareBuild', Host.SemVerCompareBuildMethod, 1);
-    Members.AddNamedMethod('inc', Host.SemVerIncMethod, 1);
-    StaticMembers := Members.ToDefinitions;
+    Host.FSemverPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(Host.FSemverPrototype);
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod(PROP_TO_STRING, Host.SemVerToStringMethod, 0);
+      Members.AddNamedMethod('format', Host.SemVerFormat, 0);
+      Members.AddNamedMethod('compare', Host.SemVerCompareMethod, 1);
+      Members.AddNamedMethod('compareMain', Host.SemVerCompareMainMethod, 1);
+      Members.AddNamedMethod('comparePre', Host.SemVerComparePreMethod, 1);
+      Members.AddNamedMethod('compareBuild', Host.SemVerCompareBuildMethod, 1);
+      Members.AddNamedMethod('inc', Host.SemVerIncMethod, 1);
+      StaticMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+    RegisterMemberDefinitions(Host.FSemverPrototype, StaticMembers);
+
+    Host.FComparatorPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(Host.FComparatorPrototype);
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod(PROP_TO_STRING, Host.ComparatorToStringMethod, 0);
+      Members.AddNamedMethod('test', Host.ComparatorTestMethod, 1);
+      Members.AddNamedMethod('intersects', Host.ComparatorIntersectsMethod, 1);
+      StaticMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+    RegisterMemberDefinitions(Host.FComparatorPrototype, StaticMembers);
+
+    Host.FRangePrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(Host.FRangePrototype);
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod(PROP_TO_STRING, Host.RangeToStringMethod, 0);
+      Members.AddNamedMethod('format', Host.RangeFormatMethod, 0);
+      Members.AddNamedMethod('test', Host.RangeTestMethod, 1);
+      Members.AddNamedMethod('intersects', Host.RangeIntersectsMethod, 1);
+      StaticMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+    RegisterMemberDefinitions(Host.FRangePrototype, StaticMembers);
+
+    NamespaceObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(NamespaceObject);
+    NamespaceObject.AssignProperty('SemVer',
+      TGocciaNativeFunctionValue.Create(Host.SemVerConstructor, CONSTRUCTOR_SEMVER, 2));
+    NamespaceObject.AssignProperty('Comparator',
+      TGocciaNativeFunctionValue.Create(Host.ComparatorConstructor, CONSTRUCTOR_COMPARATOR, 2));
+    NamespaceObject.AssignProperty('Range',
+      TGocciaNativeFunctionValue.Create(Host.RangeConstructor, CONSTRUCTOR_RANGE, 2));
+
+    TGocciaObjectValue(NamespaceObject.GetProperty('SemVer')).AssignProperty(
+      PROP_PROTOTYPE, Host.FSemverPrototype);
+    TGocciaObjectValue(NamespaceObject.GetProperty('Comparator')).AssignProperty(
+      PROP_PROTOTYPE, Host.FComparatorPrototype);
+    TGocciaObjectValue(NamespaceObject.GetProperty('Range')).AssignProperty(
+      PROP_PROTOTYPE, Host.FRangePrototype);
+
+    NamespaceObject.AssignProperty('SEMVER_SPEC_VERSION',
+      TGocciaStringLiteralValue.Create(SEMVER_SPEC_VERSION));
+    SetLength(ReleaseTypesArray, Length(RELEASE_TYPES));
+    ReleaseTypesArray[0] := RELEASE_TYPES[0];
+    ReleaseTypesArray[1] := RELEASE_TYPES[1];
+    ReleaseTypesArray[2] := RELEASE_TYPES[2];
+    ReleaseTypesArray[3] := RELEASE_TYPES[3];
+    ReleaseTypesArray[4] := RELEASE_TYPES[4];
+    ReleaseTypesArray[5] := RELEASE_TYPES[5];
+    ReleaseTypesArray[6] := RELEASE_TYPES[6];
+    NamespaceObject.AssignProperty('RELEASE_TYPES', Host.StringArrayValue(ReleaseTypesArray));
+
+    Members := TGocciaMemberCollection.Create;
+    try
+      Members.AddNamedMethod('valid', Host.NamespaceValid, 1, gmkStaticMethod);
+      Members.AddNamedMethod('clean', Host.NamespaceClean, 1, gmkStaticMethod);
+      Members.AddNamedMethod('parse', Host.NamespaceParse, 1, gmkStaticMethod);
+      Members.AddNamedMethod('inc', Host.NamespaceInc, 2, gmkStaticMethod);
+      Members.AddNamedMethod('prerelease', Host.NamespacePrerelease, 1, gmkStaticMethod);
+      Members.AddNamedMethod('major', Host.NamespaceMajor, 1, gmkStaticMethod);
+      Members.AddNamedMethod('minor', Host.NamespaceMinor, 1, gmkStaticMethod);
+      Members.AddNamedMethod('patch', Host.NamespacePatch, 1, gmkStaticMethod);
+      Members.AddNamedMethod('intersects', Host.NamespaceIntersects, 2, gmkStaticMethod);
+      Members.AddNamedMethod('gt', Host.NamespaceGT, 2, gmkStaticMethod);
+      Members.AddNamedMethod('gte', Host.NamespaceGTE, 2, gmkStaticMethod);
+      Members.AddNamedMethod('lt', Host.NamespaceLT, 2, gmkStaticMethod);
+      Members.AddNamedMethod('lte', Host.NamespaceLTE, 2, gmkStaticMethod);
+      Members.AddNamedMethod('eq', Host.NamespaceEQ, 2, gmkStaticMethod);
+      Members.AddNamedMethod('neq', Host.NamespaceNEQ, 2, gmkStaticMethod);
+      Members.AddNamedMethod('cmp', Host.NamespaceCMP, 3, gmkStaticMethod);
+      Members.AddNamedMethod('compare', Host.NamespaceCompare, 2, gmkStaticMethod);
+      Members.AddNamedMethod('rcompare', Host.NamespaceRCompare, 2, gmkStaticMethod);
+      Members.AddNamedMethod('compareBuild', Host.NamespaceCompareBuild, 2, gmkStaticMethod);
+      Members.AddNamedMethod('compareLoose', Host.NamespaceCompareLoose, 2, gmkStaticMethod);
+      Members.AddNamedMethod('diff', Host.NamespaceDiff, 2, gmkStaticMethod);
+      Members.AddNamedMethod('sort', Host.NamespaceSort, 1, gmkStaticMethod);
+      Members.AddNamedMethod('rsort', Host.NamespaceRSort, 1, gmkStaticMethod);
+      Members.AddNamedMethod('validRange', Host.NamespaceValidRange, 1, gmkStaticMethod);
+      Members.AddNamedMethod('satisfies', Host.NamespaceSatisfies, 2, gmkStaticMethod);
+      Members.AddNamedMethod('maxSatisfying', Host.NamespaceMaxSatisfying, 2, gmkStaticMethod);
+      Members.AddNamedMethod('minSatisfying', Host.NamespaceMinSatisfying, 2, gmkStaticMethod);
+      Members.AddNamedMethod('minVersion', Host.NamespaceMinVersion, 1, gmkStaticMethod);
+      Members.AddNamedMethod('gtr', Host.NamespaceGTR, 2, gmkStaticMethod);
+      Members.AddNamedMethod('ltr', Host.NamespaceLTR, 2, gmkStaticMethod);
+      Members.AddNamedMethod('outside', Host.NamespaceOutside, 3, gmkStaticMethod);
+      Members.AddNamedMethod('simplifyRange', Host.NamespaceSimplifyRange, 2, gmkStaticMethod);
+      Members.AddNamedMethod('subset', Host.NamespaceSubset, 2, gmkStaticMethod);
+      Members.AddNamedMethod('toComparators', Host.NamespaceToComparators, 1, gmkStaticMethod);
+      Members.AddNamedMethod('coerce', Host.NamespaceCoerce, 1, gmkStaticMethod);
+      StaticMembers := Members.ToDefinitions;
+    finally
+      Members.Free;
+    end;
+    RegisterMemberDefinitions(NamespaceObject, StaticMembers);
+
+    ClassesObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(ClassesObject);
+    ClassesObject.AssignProperty('Comparator', NamespaceObject.GetProperty('Comparator'));
+    ClassesObject.AssignProperty('Range', NamespaceObject.GetProperty('Range'));
+    ClassesObject.AssignProperty('SemVer', NamespaceObject.GetProperty('SemVer'));
+    ClassesObject.AssignProperty('comparator', NamespaceObject.GetProperty('Comparator'));
+    ClassesObject.AssignProperty('range', NamespaceObject.GetProperty('Range'));
+    ClassesObject.AssignProperty('semver', NamespaceObject.GetProperty('SemVer'));
+    NamespaceObject.AssignProperty('classes', ClassesObject);
+
+    FunctionsObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(FunctionsObject);
+    FunctionsObject.AssignProperty('clean', NamespaceObject.GetProperty('clean'));
+    FunctionsObject.AssignProperty('cmp', NamespaceObject.GetProperty('cmp'));
+    FunctionsObject.AssignProperty('coerce', NamespaceObject.GetProperty('coerce'));
+    FunctionsObject.AssignProperty('compare', NamespaceObject.GetProperty('compare'));
+    FunctionsObject.AssignProperty('compareBuild', NamespaceObject.GetProperty('compareBuild'));
+    FunctionsObject.AssignProperty('compareLoose', NamespaceObject.GetProperty('compareLoose'));
+    FunctionsObject.AssignProperty('diff', NamespaceObject.GetProperty('diff'));
+    FunctionsObject.AssignProperty('eq', NamespaceObject.GetProperty('eq'));
+    FunctionsObject.AssignProperty('gt', NamespaceObject.GetProperty('gt'));
+    FunctionsObject.AssignProperty('gte', NamespaceObject.GetProperty('gte'));
+    FunctionsObject.AssignProperty('inc', NamespaceObject.GetProperty('inc'));
+    FunctionsObject.AssignProperty('lt', NamespaceObject.GetProperty('lt'));
+    FunctionsObject.AssignProperty('lte', NamespaceObject.GetProperty('lte'));
+    FunctionsObject.AssignProperty('major', NamespaceObject.GetProperty('major'));
+    FunctionsObject.AssignProperty('minor', NamespaceObject.GetProperty('minor'));
+    FunctionsObject.AssignProperty('neq', NamespaceObject.GetProperty('neq'));
+    FunctionsObject.AssignProperty('parse', NamespaceObject.GetProperty('parse'));
+    FunctionsObject.AssignProperty('patch', NamespaceObject.GetProperty('patch'));
+    FunctionsObject.AssignProperty('prerelease', NamespaceObject.GetProperty('prerelease'));
+    FunctionsObject.AssignProperty('rcompare', NamespaceObject.GetProperty('rcompare'));
+    FunctionsObject.AssignProperty('rsort', NamespaceObject.GetProperty('rsort'));
+    FunctionsObject.AssignProperty('satisfies', NamespaceObject.GetProperty('satisfies'));
+    FunctionsObject.AssignProperty('sort', NamespaceObject.GetProperty('sort'));
+    FunctionsObject.AssignProperty('valid', NamespaceObject.GetProperty('valid'));
+    NamespaceObject.AssignProperty('functions', FunctionsObject);
+
+    RangesObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(RangesObject);
+    RangesObject.AssignProperty('gtr', NamespaceObject.GetProperty('gtr'));
+    RangesObject.AssignProperty('intersects', NamespaceObject.GetProperty('intersects'));
+    RangesObject.AssignProperty('ltr', NamespaceObject.GetProperty('ltr'));
+    RangesObject.AssignProperty('maxSatisfying', NamespaceObject.GetProperty('maxSatisfying'));
+    RangesObject.AssignProperty('minSatisfying', NamespaceObject.GetProperty('minSatisfying'));
+    RangesObject.AssignProperty('minVersion', NamespaceObject.GetProperty('minVersion'));
+    RangesObject.AssignProperty('outside', NamespaceObject.GetProperty('outside'));
+    RangesObject.AssignProperty('simplify', NamespaceObject.GetProperty('simplifyRange'));
+    RangesObject.AssignProperty('subset', NamespaceObject.GetProperty('subset'));
+    RangesObject.AssignProperty('toComparators', NamespaceObject.GetProperty('toComparators'));
+    RangesObject.AssignProperty('valid', NamespaceObject.GetProperty('validRange'));
+    NamespaceObject.AssignProperty('ranges', RangesObject);
   finally
-    Members.Free;
+    Roots.Clear;
   end;
-  RegisterMemberDefinitions(Host.FSemverPrototype, StaticMembers);
-
-  Host.FComparatorPrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Members := TGocciaMemberCollection.Create;
-  try
-    Members.AddNamedMethod(PROP_TO_STRING, Host.ComparatorToStringMethod, 0);
-    Members.AddNamedMethod('test', Host.ComparatorTestMethod, 1);
-    Members.AddNamedMethod('intersects', Host.ComparatorIntersectsMethod, 1);
-    StaticMembers := Members.ToDefinitions;
-  finally
-    Members.Free;
-  end;
-  RegisterMemberDefinitions(Host.FComparatorPrototype, StaticMembers);
-
-  Host.FRangePrototype := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  Members := TGocciaMemberCollection.Create;
-  try
-    Members.AddNamedMethod(PROP_TO_STRING, Host.RangeToStringMethod, 0);
-    Members.AddNamedMethod('format', Host.RangeFormatMethod, 0);
-    Members.AddNamedMethod('test', Host.RangeTestMethod, 1);
-    Members.AddNamedMethod('intersects', Host.RangeIntersectsMethod, 1);
-    StaticMembers := Members.ToDefinitions;
-  finally
-    Members.Free;
-  end;
-  RegisterMemberDefinitions(Host.FRangePrototype, StaticMembers);
-
-  NamespaceObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  NamespaceObject.AssignProperty('SemVer',
-    TGocciaNativeFunctionValue.Create(Host.SemVerConstructor, CONSTRUCTOR_SEMVER, 2));
-  NamespaceObject.AssignProperty('Comparator',
-    TGocciaNativeFunctionValue.Create(Host.ComparatorConstructor, CONSTRUCTOR_COMPARATOR, 2));
-  NamespaceObject.AssignProperty('Range',
-    TGocciaNativeFunctionValue.Create(Host.RangeConstructor, CONSTRUCTOR_RANGE, 2));
-
-  TGocciaObjectValue(NamespaceObject.GetProperty('SemVer')).AssignProperty(
-    PROP_PROTOTYPE, Host.FSemverPrototype);
-  TGocciaObjectValue(NamespaceObject.GetProperty('Comparator')).AssignProperty(
-    PROP_PROTOTYPE, Host.FComparatorPrototype);
-  TGocciaObjectValue(NamespaceObject.GetProperty('Range')).AssignProperty(
-    PROP_PROTOTYPE, Host.FRangePrototype);
-
-  NamespaceObject.AssignProperty('SEMVER_SPEC_VERSION',
-    TGocciaStringLiteralValue.Create(SEMVER_SPEC_VERSION));
-  SetLength(ReleaseTypesArray, Length(RELEASE_TYPES));
-  ReleaseTypesArray[0] := RELEASE_TYPES[0];
-  ReleaseTypesArray[1] := RELEASE_TYPES[1];
-  ReleaseTypesArray[2] := RELEASE_TYPES[2];
-  ReleaseTypesArray[3] := RELEASE_TYPES[3];
-  ReleaseTypesArray[4] := RELEASE_TYPES[4];
-  ReleaseTypesArray[5] := RELEASE_TYPES[5];
-  ReleaseTypesArray[6] := RELEASE_TYPES[6];
-  NamespaceObject.AssignProperty('RELEASE_TYPES', Host.StringArrayValue(ReleaseTypesArray));
-
-  Members := TGocciaMemberCollection.Create;
-  try
-    Members.AddNamedMethod('valid', Host.NamespaceValid, 1, gmkStaticMethod);
-    Members.AddNamedMethod('clean', Host.NamespaceClean, 1, gmkStaticMethod);
-    Members.AddNamedMethod('parse', Host.NamespaceParse, 1, gmkStaticMethod);
-    Members.AddNamedMethod('inc', Host.NamespaceInc, 2, gmkStaticMethod);
-    Members.AddNamedMethod('prerelease', Host.NamespacePrerelease, 1, gmkStaticMethod);
-    Members.AddNamedMethod('major', Host.NamespaceMajor, 1, gmkStaticMethod);
-    Members.AddNamedMethod('minor', Host.NamespaceMinor, 1, gmkStaticMethod);
-    Members.AddNamedMethod('patch', Host.NamespacePatch, 1, gmkStaticMethod);
-    Members.AddNamedMethod('intersects', Host.NamespaceIntersects, 2, gmkStaticMethod);
-    Members.AddNamedMethod('gt', Host.NamespaceGT, 2, gmkStaticMethod);
-    Members.AddNamedMethod('gte', Host.NamespaceGTE, 2, gmkStaticMethod);
-    Members.AddNamedMethod('lt', Host.NamespaceLT, 2, gmkStaticMethod);
-    Members.AddNamedMethod('lte', Host.NamespaceLTE, 2, gmkStaticMethod);
-    Members.AddNamedMethod('eq', Host.NamespaceEQ, 2, gmkStaticMethod);
-    Members.AddNamedMethod('neq', Host.NamespaceNEQ, 2, gmkStaticMethod);
-    Members.AddNamedMethod('cmp', Host.NamespaceCMP, 3, gmkStaticMethod);
-    Members.AddNamedMethod('compare', Host.NamespaceCompare, 2, gmkStaticMethod);
-    Members.AddNamedMethod('rcompare', Host.NamespaceRCompare, 2, gmkStaticMethod);
-    Members.AddNamedMethod('compareBuild', Host.NamespaceCompareBuild, 2, gmkStaticMethod);
-    Members.AddNamedMethod('compareLoose', Host.NamespaceCompareLoose, 2, gmkStaticMethod);
-    Members.AddNamedMethod('diff', Host.NamespaceDiff, 2, gmkStaticMethod);
-    Members.AddNamedMethod('sort', Host.NamespaceSort, 1, gmkStaticMethod);
-    Members.AddNamedMethod('rsort', Host.NamespaceRSort, 1, gmkStaticMethod);
-    Members.AddNamedMethod('validRange', Host.NamespaceValidRange, 1, gmkStaticMethod);
-    Members.AddNamedMethod('satisfies', Host.NamespaceSatisfies, 2, gmkStaticMethod);
-    Members.AddNamedMethod('maxSatisfying', Host.NamespaceMaxSatisfying, 2, gmkStaticMethod);
-    Members.AddNamedMethod('minSatisfying', Host.NamespaceMinSatisfying, 2, gmkStaticMethod);
-    Members.AddNamedMethod('minVersion', Host.NamespaceMinVersion, 1, gmkStaticMethod);
-    Members.AddNamedMethod('gtr', Host.NamespaceGTR, 2, gmkStaticMethod);
-    Members.AddNamedMethod('ltr', Host.NamespaceLTR, 2, gmkStaticMethod);
-    Members.AddNamedMethod('outside', Host.NamespaceOutside, 3, gmkStaticMethod);
-    Members.AddNamedMethod('simplifyRange', Host.NamespaceSimplifyRange, 2, gmkStaticMethod);
-    Members.AddNamedMethod('subset', Host.NamespaceSubset, 2, gmkStaticMethod);
-    Members.AddNamedMethod('toComparators', Host.NamespaceToComparators, 1, gmkStaticMethod);
-    Members.AddNamedMethod('coerce', Host.NamespaceCoerce, 1, gmkStaticMethod);
-    StaticMembers := Members.ToDefinitions;
-  finally
-    Members.Free;
-  end;
-  RegisterMemberDefinitions(NamespaceObject, StaticMembers);
-
-  ClassesObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  ClassesObject.AssignProperty('Comparator', NamespaceObject.GetProperty('Comparator'));
-  ClassesObject.AssignProperty('Range', NamespaceObject.GetProperty('Range'));
-  ClassesObject.AssignProperty('SemVer', NamespaceObject.GetProperty('SemVer'));
-  ClassesObject.AssignProperty('comparator', NamespaceObject.GetProperty('Comparator'));
-  ClassesObject.AssignProperty('range', NamespaceObject.GetProperty('Range'));
-  ClassesObject.AssignProperty('semver', NamespaceObject.GetProperty('SemVer'));
-  NamespaceObject.AssignProperty('classes', ClassesObject);
-
-  FunctionsObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  FunctionsObject.AssignProperty('clean', NamespaceObject.GetProperty('clean'));
-  FunctionsObject.AssignProperty('cmp', NamespaceObject.GetProperty('cmp'));
-  FunctionsObject.AssignProperty('coerce', NamespaceObject.GetProperty('coerce'));
-  FunctionsObject.AssignProperty('compare', NamespaceObject.GetProperty('compare'));
-  FunctionsObject.AssignProperty('compareBuild', NamespaceObject.GetProperty('compareBuild'));
-  FunctionsObject.AssignProperty('compareLoose', NamespaceObject.GetProperty('compareLoose'));
-  FunctionsObject.AssignProperty('diff', NamespaceObject.GetProperty('diff'));
-  FunctionsObject.AssignProperty('eq', NamespaceObject.GetProperty('eq'));
-  FunctionsObject.AssignProperty('gt', NamespaceObject.GetProperty('gt'));
-  FunctionsObject.AssignProperty('gte', NamespaceObject.GetProperty('gte'));
-  FunctionsObject.AssignProperty('inc', NamespaceObject.GetProperty('inc'));
-  FunctionsObject.AssignProperty('lt', NamespaceObject.GetProperty('lt'));
-  FunctionsObject.AssignProperty('lte', NamespaceObject.GetProperty('lte'));
-  FunctionsObject.AssignProperty('major', NamespaceObject.GetProperty('major'));
-  FunctionsObject.AssignProperty('minor', NamespaceObject.GetProperty('minor'));
-  FunctionsObject.AssignProperty('neq', NamespaceObject.GetProperty('neq'));
-  FunctionsObject.AssignProperty('parse', NamespaceObject.GetProperty('parse'));
-  FunctionsObject.AssignProperty('patch', NamespaceObject.GetProperty('patch'));
-  FunctionsObject.AssignProperty('prerelease', NamespaceObject.GetProperty('prerelease'));
-  FunctionsObject.AssignProperty('rcompare', NamespaceObject.GetProperty('rcompare'));
-  FunctionsObject.AssignProperty('rsort', NamespaceObject.GetProperty('rsort'));
-  FunctionsObject.AssignProperty('satisfies', NamespaceObject.GetProperty('satisfies'));
-  FunctionsObject.AssignProperty('sort', NamespaceObject.GetProperty('sort'));
-  FunctionsObject.AssignProperty('valid', NamespaceObject.GetProperty('valid'));
-  NamespaceObject.AssignProperty('functions', FunctionsObject);
-
-  RangesObject := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  RangesObject.AssignProperty('gtr', NamespaceObject.GetProperty('gtr'));
-  RangesObject.AssignProperty('intersects', NamespaceObject.GetProperty('intersects'));
-  RangesObject.AssignProperty('ltr', NamespaceObject.GetProperty('ltr'));
-  RangesObject.AssignProperty('maxSatisfying', NamespaceObject.GetProperty('maxSatisfying'));
-  RangesObject.AssignProperty('minSatisfying', NamespaceObject.GetProperty('minSatisfying'));
-  RangesObject.AssignProperty('minVersion', NamespaceObject.GetProperty('minVersion'));
-  RangesObject.AssignProperty('outside', NamespaceObject.GetProperty('outside'));
-  RangesObject.AssignProperty('simplify', NamespaceObject.GetProperty('simplifyRange'));
-  RangesObject.AssignProperty('subset', NamespaceObject.GetProperty('subset'));
-  RangesObject.AssignProperty('toComparators', NamespaceObject.GetProperty('toComparators'));
-  RangesObject.AssignProperty('valid', NamespaceObject.GetProperty('validRange'));
-  NamespaceObject.AssignProperty('ranges', RangesObject);
 
   Result := NamespaceObject;
 end;

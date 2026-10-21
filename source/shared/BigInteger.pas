@@ -28,6 +28,12 @@ type
     class function FromHexString(const AValue: string): TBigInteger; static;
     class function FromBinaryString(const AValue: string): TBigInteger; static;
     class function FromOctalString(const AValue: string): TBigInteger; static;
+    // A value from its magnitude's 32-bit limbs, least significant first,
+    // and its sign; leading zero limbs are dropped and zero is not negative.
+    // The value takes ALimbs over: it is not copied unless it has leading
+    // zero limbs to drop.
+    class function FromLimbs(const ALimbs: TLimbArray;
+      const ANegative: Boolean): TBigInteger; static;
 
     function IsZero: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function IsNegative: Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -41,6 +47,9 @@ type
     function ToInt64: Int64;
     function ToString: string;
     function ToRadixString(const ARadix: Integer): string;
+    // The magnitude's 32-bit limbs, least significant first, read in place.
+    function LimbCount: Integer;
+    function LimbAt(const AIndex: Integer): Cardinal;
 
     function Negate: TBigInteger;
     function AbsValue: TBigInteger;
@@ -317,6 +326,25 @@ class function TBigInteger.Zero: TBigInteger;
 begin
   Result.FNegative := False;
   Result.FLimbs := nil;
+end;
+
+class function TBigInteger.FromLimbs(const ALimbs: TLimbArray;
+  const ANegative: Boolean): TBigInteger;
+begin
+  Result.FLimbs := ALimbs;
+  Result.FNegative := ANegative;
+  if (Length(ALimbs) = 0) or (ALimbs[High(ALimbs)] = 0) then
+    Result.Normalize;
+end;
+
+function TBigInteger.LimbCount: Integer;
+begin
+  Result := Length(FLimbs);
+end;
+
+function TBigInteger.LimbAt(const AIndex: Integer): Cardinal;
+begin
+  Result := FLimbs[AIndex];
 end;
 
 class function TBigInteger.One: TBigInteger;
@@ -611,6 +639,7 @@ var
   BitLen, Shift: Integer;
   TopLimb: Cardinal;
   Mag64, Mantissa: UInt64;
+  MantissaValue: Double;
   Shifted: TBigInteger;
   RoundBit, Sticky: Boolean;
 begin
@@ -651,8 +680,12 @@ begin
     Sticky := not AbsValue.Equal(Shifted.ShiftLeft(Shift));
     if RoundBit and (Sticky or ((Mantissa and 1) = 1)) then
       Inc(Mantissa);
-    // Mantissa contains at most 53 bits and therefore also fits Int64.
-    Result := Ldexp(Int64(Mantissa), Shift + 1);
+    // Mantissa is at most 2^53 (53 bits, or 2^53 after rounding up), so it
+    // fits Int64 and converts to Double exactly. Pass Ldexp a Double: given an integer
+    // argument, FPC 3.2.4 picks its Single overload and rounds the
+    // mantissa to 24 bits.
+    MantissaValue := Int64(Mantissa);
+    Result := Ldexp(MantissaValue, Shift + 1);
   end;
 
   if FNegative then

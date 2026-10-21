@@ -82,7 +82,7 @@ function BuildCLIReportJSON(const AOk: Boolean; const AOutputText,
 function SerializeScriptResult(const AValue: TGocciaValue): string;
 function ExceptionToCLIJSONErrorInfo(const E: Exception): TCLIJSONErrorInfo;
 function BuildCLIScriptFileSuccessJSON(const AFileName: string;
-  const AValue: TGocciaValue; const AOutputText, AStdoutText,
+  const AResultJSON: string; const AOutputText, AStdoutText,
   AStderrText: string; const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
   const ACompact: Boolean = False): string;
@@ -91,7 +91,7 @@ function BuildCLIScriptFileErrorJSON(const AFileName, AOutputText,
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
   const ACompact: Boolean = False): string;
-function BuildCLIScriptSuccessJSON(const AFileName: string; const AValue: TGocciaValue;
+function BuildCLIScriptSuccessJSON(const AFileName, AResultJSON: string;
   const AOutputText, AStdoutText, AStderrText: string;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
@@ -113,6 +113,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.Error.Detail,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.JSON,
@@ -123,6 +124,7 @@ uses
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
+  Goccia.Values.SymbolValue,
   Goccia.Version,
   Goccia.VM.Exception;
 
@@ -205,6 +207,8 @@ begin
     '}';
 end;
 
+// One element per console line: every line a line feed ends, empty ones
+// included, then the text after the last line feed when there is any.
 function BuildCLIOutputJSON(const AOutputText: string): string;
 var
   I, StartIndex: Integer;
@@ -222,13 +226,10 @@ begin
       Line := Copy(AOutputText, StartIndex, I - StartIndex);
       if (Length(Line) > 0) and (Line[Length(Line)] = #13) then
         Delete(Line, Length(Line), 1);
-      if (Line <> '') or (I < Length(AOutputText)) then
-      begin
-        if not IsFirstLine then
-          Buffer.Append(',');
-        Buffer.Append(QuoteJSONString(Line));
-        IsFirstLine := False;
-      end;
+      if not IsFirstLine then
+        Buffer.Append(',');
+      Buffer.Append(QuoteJSONString(Line));
+      IsFirstLine := False;
       StartIndex := I + 1;
     end;
 
@@ -522,20 +523,20 @@ function TryPopulateErrorInfoFromValue(const AValue: TGocciaValue;
   var AErrorInfo: TCLIJSONErrorInfo): Boolean;
 var
   ErrorObject: TGocciaObjectValue;
-  NameValue, MessageValue: TGocciaValue;
+  NameText, MessageText: string;
 begin
   Result := False;
   if not (AValue is TGocciaObjectValue) then
     Exit;
 
   ErrorObject := TGocciaObjectValue(AValue);
-  NameValue := ErrorObject.GetProperty(PROP_NAME);
-  MessageValue := ErrorObject.GetProperty(PROP_MESSAGE);
-
-  if Assigned(NameValue) and not (NameValue is TGocciaUndefinedLiteralValue) then
-    AErrorInfo.ErrorType := NameValue.ToStringLiteral.Value;
-  if Assigned(MessageValue) and not (MessageValue is TGocciaUndefinedLiteralValue) then
-    AErrorInfo.Message := MessageValue.ToStringLiteral.Value;
+  // The report is built after the run's engine was freed, so it reads string
+  // data properties only: an accessor or a Proxy trap would run guest code
+  // against that engine (the same rule as the human-readable renderer).
+  if TryGetStringDataProperty(ErrorObject, PROP_NAME, NameText) then
+    AErrorInfo.ErrorType := NameText;
+  if TryGetStringDataProperty(ErrorObject, PROP_MESSAGE, MessageText) then
+    AErrorInfo.Message := MessageText;
 
   // Where the engine recorded the error was created: the same location the
   // human-readable output's `-->` line shows. The guest-writable `stack`
@@ -551,6 +552,19 @@ begin
   end;
 
   Result := (AErrorInfo.ErrorType <> '') or (AErrorInfo.Message <> '');
+end;
+
+{ The message of a thrown value that carries no string name or message. An
+  object is not converted to a string: that would run its toString() against
+  an engine that was freed. }
+function ThrownValueFallbackText(const AValue: TGocciaValue): string;
+begin
+  if AValue is TGocciaObjectValue then
+    Result := '[object ' + TGocciaObjectValue(AValue).ToStringTag + ']'
+  else if AValue is TGocciaSymbolValue then
+    Result := TGocciaSymbolValue(AValue).ToDisplayString.Value
+  else
+    Result := AValue.ToStringLiteral.Value;
 end;
 
 function ExceptionClassToErrorType(const E: Exception): string;
@@ -582,7 +596,7 @@ begin
     if not TryPopulateErrorInfoFromValue(TGocciaThrowValue(E).Value, Result) then
     begin
       Result.ErrorType := 'Error';
-      Result.Message := TGocciaThrowValue(E).Value.ToStringLiteral.Value;
+      Result.Message := ThrownValueFallbackText(TGocciaThrowValue(E).Value);
     end;
     Exit;
   end;
@@ -612,7 +626,7 @@ begin
   Result.Message := E.Message;
 end;
 
-function BuildCLIScriptSuccessJSON(const AFileName: string; const AValue: TGocciaValue;
+function BuildCLIScriptSuccessJSON(const AFileName, AResultJSON: string;
   const AOutputText, AStdoutText, AStderrText: string;
   const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
@@ -621,7 +635,7 @@ function BuildCLIScriptSuccessJSON(const AFileName: string; const AValue: TGocci
 begin
   Result := BuildCLIReportJSON(True, AOutputText, AStdoutText, AStderrText,
     'null', ATiming, AMemoryStats, AWorkerCount, AAvailableWorkerCount,
-    BuildCLIScriptFileSuccessJSON(AFileName, AValue, AOutputText,
+    BuildCLIScriptFileSuccessJSON(AFileName, AResultJSON, AOutputText,
       AStdoutText, AStderrText, ATiming, AMemoryStats, ACompact),
     '', ACompact);
 end;
@@ -642,7 +656,7 @@ begin
 end;
 
 function BuildCLIScriptFileSuccessJSON(const AFileName: string;
-  const AValue: TGocciaValue; const AOutputText, AStdoutText,
+  const AResultJSON: string; const AOutputText, AStdoutText,
   AStderrText: string; const ATiming: TCLIJSONTiming;
   const AMemoryStats: TCLIJSONMemoryStats;
   const ACompact: Boolean): string;
@@ -657,7 +671,7 @@ begin
     '{' +
       BuildCLIFileBaseJSON(AFileName, True, AOutputText, AStdoutText,
         AStderrText, 'null', ATiming, MemoryJSON, ACompact) + ',' +
-      '"result":' + SerializeScriptResult(AValue) +
+      '"result":' + AResultJSON +
     '}';
 end;
 

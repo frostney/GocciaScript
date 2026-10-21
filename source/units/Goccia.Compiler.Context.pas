@@ -67,6 +67,14 @@ type
       declarative environment (§19.2.1.1 PerformEval step 17), so they are
       locals of the eval template. }
     GlobalBackedTopLevelLexicals: Boolean;
+    { The scope of a global-backed top-level `let` or `const` binding pattern
+      being initialized, or nil. EmitDestructuring defines each of its names
+      as a global binding as soon as the element that binds it completes, so
+      a later element's initializer reads it (ES2026 §8.6.2
+      BindingInitialization, §8.6.3 IteratorBindingInitialization, §14.3.3.3
+      KeyedBindingInitialization). }
+    GlobalLexicalPatternScope: TGocciaCompilerScope;
+    GlobalLexicalPatternIsConst: Boolean;
     { The register that holds the completion value of eval code (§19.2.1.1
       PerformEval steps 29-30), or -1 outside the top level of eval code. }
     CompletionRegister: Integer;

@@ -10,7 +10,7 @@
 - **Shared prototype singleton** — Each built-in type shares one prototype per realm, stored in a realm slot (often through a `TGocciaSharedPrototype` helper)
 - **Define vs Assign** — `Define` creates a new binding; `Assign` changes an existing one — distinct operations throughout the codebase
 
-For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **pipelines and layers**, see [Architecture](architecture.md). For the **execution modes**, see [Interpreter](interpreter.md) (tree-walk) and [Bytecode VM](bytecode-vm.md) (register VM, `.gbc`).
+For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **pipelines and layers**, see [Architecture](architecture.md). For **execution**, see [Bytecode VM](bytecode-vm.md) (register VM, `.gbc`).
 
 ## Recurring implementation patterns
 
@@ -40,14 +40,11 @@ The same pattern applies to `TGocciaNullLiteralValue.NullValue`, `TGocciaBoolean
 
 ### Factory method (scope creation)
 
-Plain scopes are created via `CreateChild(AScopeKind, ACustomLabel, ACapacity)`. Scopes that carry extra state — call, arrow-call and method-call scopes, catch, class-init, function-name and `with` scopes — are `TGocciaScope` subclasses, constructed directly with their parent as the first argument. Either way the parent's callbacks and mode flags are copied by the `TGocciaScope` constructor. Never build a bare `TGocciaScope` by hand:
+Child scopes are created via `CreateChild(AScopeKind, ACustomLabel, ACapacity)`, which links the parent and copies its callbacks, mode flags and `this` value. The realm's `TGocciaGlobalScope` is the only scope subclass. Never build a bare `TGocciaScope` by hand:
 
 ```pascal
-// Correct — plain block scope
-ChildScope := AContext.Scope.CreateChild(skBlock);
-
-// Correct — specialized scope, parent first (TGocciaFunctionValue.CreateCallScope)
-Result := TGocciaCallScope.Create(FClosure, FName, Length(FParameters) + 2);
+// Correct — a module scope under the global scope
+ModuleScope := FGlobalScope.CreateChild(skModule, 'Module:' + AFileName);
 
 // WRONG — never do this
 ChildScope := TGocciaScope.Create(ParentScope, skBlock);
@@ -74,7 +71,7 @@ AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 
 ### Ordered own property keys
 
-`TGocciaObjectValue.GetOwnPropertyKeys` owns string-key enumeration order. Ordinary objects return array indices in ascending numeric order followed by other strings in creation order; exotic values retain their own ordering. `OwnPropertyKeyValues` includes symbols and preserves a proxy trap's mixed string/symbol order. Both executors consume these existing value-layer operations for object spread, rest, and `for...in`, without sorting the returned keys again. Classes include their synthesized `length`, `name`, and `prototype` keys through their override, just as other exotic values include their virtual properties.
+`TGocciaObjectValue.GetOwnPropertyKeys` owns string-key enumeration order. Ordinary objects return array indices in ascending numeric order followed by other strings in creation order; exotic values retain their own ordering. `OwnPropertyKeyValues` includes symbols and preserves a proxy trap's mixed string/symbol order. The VM consumes these existing value-layer operations for object spread, rest, and `for...in`, without sorting the returned keys again. Classes include their synthesized `length`, `name`, and `prototype` keys through their override, just as other exotic values include their virtual properties.
 
 ### Binary expression levels (parser)
 
@@ -170,7 +167,7 @@ When two standard properties must contain the **same function object**, declare 
 
 Built-in prototypes are not module-level singletons; they live in a per-engine **realm** (`Goccia.Realm.pas`, `TGocciaRealm`). Each `TGocciaEngine` constructs its initial ECMA-262 Realm Record and frees it in `Destroy`, which unpins every prototype and cached template object the realm owns. The next engine on the same worker thread starts from pristine intrinsics — userland mutations of `Array.prototype`, including non-configurable property additions, do not leak across engine boundaries.
 
-`CurrentRealm` is set by `TGocciaExecutionContextStack` (`Goccia.ExecutionContext.pas`) as interpreter and bytecode code enters script, module, and function execution. Treat it as a lookup facade for realm-scoped state, not as process-global ownership.
+`CurrentRealm` is set by `TGocciaExecutionContextStack` (`Goccia.ExecutionContext.pas`) as the engine and the VM enter script, module, and function execution. Treat it as a lookup facade for realm-scoped state, not as process-global ownership.
 
 Two slot kinds are registered at unit `initialization` time:
 
@@ -283,7 +280,7 @@ classDiagram
     TGocciaValue <|-- TGocciaObjectValue
 
     TGocciaObjectValue <|-- TGocciaFunctionBase
-    TGocciaFunctionBase <|-- TGocciaFunctionValue
+    TGocciaFunctionBase <|-- TGocciaBytecodeFunctionValue
     TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
     TGocciaInstanceValue <|-- TGocciaArrayValue
@@ -302,7 +299,7 @@ Beyond property access, the base class provides two additional virtual methods f
 
 - **Single hierarchy** — Every type that supports property access is in the `TGocciaValue` hierarchy. Virtual methods leverage this directly without extra interface indirection.
 - **Simple call sites** — `Value.GetProperty(Name)` is a single virtual call. `Value.IsPrimitive` and `Value.IsCallable` are likewise single VMT calls. No capability queries, no casting.
-- **Safe defaults** — The base class returns `nil` for `GetProperty`, no-ops for `SetProperty`, `False` for `IsPrimitive`, and `False` for `IsCallable`, so the evaluator can call these on any value without type-checking first.
+- **Safe defaults** — The base class returns `nil` for `GetProperty`, no-ops for `SetProperty`, `False` for `IsPrimitive`, and `False` for `IsCallable`, so the VM and the built-ins can call these on any value without type-checking first.
 - **Extensible** — New value types added to the hierarchy automatically participate by overriding the virtual methods.
 - **Dispatch shape** — A single VMT call replaces multi-`is` type check chains. For `IsPrimitive`, this replaces one sequential `is` check per primitive type; for `IsCallable`, two. See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for the underlying comparison of virtual, interface, and manual VMT dispatch mechanics.
 
@@ -329,10 +326,10 @@ const
 
 **Why dedicated units?**
 
-- **No magic strings** — The evaluator, scope, parser, and other units reference `KEYWORD_THIS` or `KEYWORD_GET` instead of `'this'` or `'get'`, preventing typos and enabling compiler-checked usage.
+- **No magic strings** — The compiler, scope, parser, and other units reference `KEYWORD_THIS` or `KEYWORD_GET` instead of `'this'` or `'get'`, preventing typos and enabling compiler-checked usage.
 - **Reserved vs contextual** — Reserved keywords always produce a dedicated token type and cannot be used as identifiers. Contextual keywords have special meaning only in specific syntactic positions (e.g., `get`/`set` in object literals, `type`/`interface` in declaration position) but are otherwise valid identifiers.
 - **Minimal dependencies** — Neither unit has `uses` clause dependencies, so any unit can import them without introducing circular references.
-- **Single source of truth** — All keyword strings are defined once. The lexer's token mapping, the parser's contextual checks, and the evaluator's identifier handling all reference the same constants.
+- **Single source of truth** — All keyword strings are defined once. The lexer's token mapping, the parser's contextual checks, and the compiler's identifier handling all reference the same constants.
 
 ### Inlining Hot-Path Methods
 
@@ -347,7 +344,7 @@ The identifier lookups themselves — `GetValue`, `ResolveIdentifier` and `Conta
 
 **Why selective inlining?**
 
-- **Virtual methods cannot be inlined** — `GetProperty`, `IsPrimitive`, `IsCallable`, and scope chain walkers (`GetThisValue`, `GetOwningClass`, `GetSuperClass`) rely on VMT dispatch and are never candidates for inlining.
+- **Virtual methods cannot be inlined** — `GetProperty`, `IsPrimitive`, `IsCallable`, and scope lookups (`GetThisValue`, `ResolveIdentifier`) rely on VMT dispatch and are never candidates for inlining.
 - **Only non-virtual wrappers** — Inlined methods are thin wrappers (dictionary lookups, bit-pattern compares) where the call overhead is significant relative to the method body.
 - **Measurable on hot paths** — Scope lookups happen on every identifier reference. Eliminating function call overhead here compounds across deeply nested expressions.
 - **Not into the bytecode dispatch loop by default** — `ExecuteClosureRegistersInternal` is too large for FPC to keep values in registers, so a body inlined there works through stack slots. `TryGetLexicalValueAt`, the `OP_GET_GLOBAL` cache re-read, is deliberately a small out-of-line leaf: 44 instructions per read including the call, against 54 inlined. Measure before marking a dispatch-loop helper `inline`.
@@ -373,6 +370,9 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 | `CheckStackDepth`, `CheckNativeStackHeadroom` | `ThrowMaxCallStackExceeded`, `CheckNativeStackHeadroomSlow` |
 | `TGocciaVM.SetupNewFrame` | `TGocciaVM.InternExecutionSourcePath` |
 | `TGocciaVM.ExecuteClosure` | `TGocciaVM.ExecuteClosureWithHeapArguments` |
+| `TGocciaVM.SetPropertyValue` | `SetPropertyValueGeneric` |
+| `TGocciaInstanceValue.AssignProperty` | `AssignPropertySlow` |
+| `CachedASCIIStringValue` | `CreateCachedASCIIStringValue` |
 
 The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, to a function that returns a managed record by value, and to a resource string passed as an argument: `ThrowRangeError(SErrorMaxCallStackExceeded)` on a path that is never taken still gives the procedure around it a frame.
 
@@ -395,6 +395,12 @@ Turn the switch back on explicitly, as above. `{$PUSH}` and `{$POP}` do not save
 
 FPC also does not inline a procedure into another unit when it calls one that is local to the implementation section. `ThrowMaxCallStackExceeded` is declared in the interface of `Goccia.StackLimit` for that reason: the VM inlines `CheckStackDepth` and `CheckNativeStackHeadroom` as a compare and a branch.
 
+A constructor carries the same frame even with no managed local: FPC wraps it so that an exception destroys the half-built instance, and `TObject.Create` has one of its own. In production builds the constructors every value or property allocation runs are compiled without it, inside `{$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}{$IMPLICITEXCEPTIONS OFF}{$ENDIF}` and an explicit `ON` afterwards: `TGocciaNumberLiteralValue.Create` and the property descriptor constructors. `Goccia.inc` defines the symbol for FPC production builds only: a development build checks the stack in every prologue (`-Ct`), and an overflow raised in an inherited constructor's or `AfterConstruction`'s prologue, after the instance exists, would leak it without the frame. Constructors whose only ancestor constructor is `TObject.Create` (property maps, string values) skip `inherited Create` in every build. Three rules come with this:
+
+- A frameless constructor must not be able to raise once its instance exists, or what it raises must leave the instance reachable. The descriptor constructors only store fields. A number box's constructor stores a field. In `TGocciaValue.AfterConstruction`, `RegisterObject` either registers it or, when growing the collector's list fails, frees it before re-raising (`AppendManagedObjectGrowing`); everything raised after it (the memory limit, a timeout, an instruction limit) leaves it registered. A constructor that allocates (a property map's) keeps its frame: without it, a failed allocation would leak the instance.
+- A value class whose constructor has no frame overrides `TGCManagedObject.ConstructorDestroysOnException` to return `False` under the same symbol. When the memory limit refuses such a value in `AfterConstruction`, FPC does not destroy it, so it stays registered and the next collection frees it; a value with the frame is unregistered first, because FPC destroys it. `Goccia.GarbageCollector.Test` catches an override that disagrees with the frameless constructor only in a production build, so run it from one (`./build.pas --prod tests`) after changing either side.
+- The bracket must not cover the first routine of a unit's implementation section. FPC 3.2.2 compiles the generic specializations a unit declares with the implicit-exception state in force there, so the bracket would silently drop the frames of every specialized method as well.
+
 An explicit `try..finally` installs the same frame when control reaches it (on targets where FPC uses `setjmp` frames; Win64 uses table-based unwinding). Around a lock it is only needed if the locked region can raise: `TGarbageCollector.RegisterObject` reads the instance size first, so that what runs under the accounting lock is integer arithmetic on its own fields, and takes the lock without one.
 
 ### Thread Variables on Hot Paths
@@ -405,11 +411,11 @@ Three patterns keep them off those paths:
 
 | Pattern | Where | What it replaces |
 |---------|-------|------------------|
-| One mirrored word for checks that are normally off | `GThreadPolls` (`Goccia.ThreadPolls`): `TGocciaValue.AfterConstruction` reads `GThreadPolls.Any` once and calls `RunAllocationPolls` only when a timeout, an instruction limit or the allocation profiler is armed | Four lookups per allocated value (`CheckExecutionTimeout` one, `CheckInstructionLimit` two, the profiling flag one) |
+| One record for the collector and a mirrored word for checks that are normally off | `GThreadPolls` (`Goccia.ThreadPolls`): `TGocciaValue.AfterConstruction` takes the record's address once, registers with `Collector`, reads `Any`, and calls `RunAllocationPolls` only when a timeout, an instruction limit or the allocation profiler is armed | Five lookups per allocated value (`TGarbageCollector.Instance` one, `CheckExecutionTimeout` one, `CheckInstructionLimit` two, the profiling flag one) |
 | A pointer bound per outermost entry | `TGocciaVM.FThreadPolls`, `FCallStack`, `FExecutionContextThread`, set by `BindToCurrentThread`, and `FNativeStackLimit`, which it clears for the first deep native entry to look up | A lookup per bytecode call, backward jump and native call site |
 | A handle captured at the loop boundary | `CaptureInstructionLimitState` / `PollInstructionLimit` | A lookup per opcode in the instrumented loop |
 
-Two of the three flags are mirrors, not the source of truth: `TimeoutArmed` and `InstructionLimitActive` are written in the same procedure that changes the state they mirror (`RecomputeMinDeadline` and the two resets in `Goccia.Timeout`, `SetInstructionLimitActive` in `Goccia.InstructionLimit`), and the check behind each flag still decides for itself. `Goccia.ThreadPolls.Test` walks every way either state can change and compares the flag after each. `ProfilingAllocations` has no other owner: the VM sets it around a native entry and restores it on the way out.
+Two of the three flags are mirrors, not the source of truth: `TimeoutArmed` and `InstructionLimitActive` are written in the same procedure that changes the state they mirror (`RecomputeMinDeadline` and the two resets in `Goccia.Timeout`, `SetInstructionLimitActive` in `Goccia.InstructionLimit`), and the check behind each flag still decides for itself. `Goccia.ThreadPolls.Test` walks every way either state can change and compares the flag after each. `ProfilingAllocations` has no other owner: the VM sets it around a native entry and restores it on the way out. `Collector` mirrors `TGarbageCollector.Instance` and is written only by `Initialize` and `Shutdown`; `Instance` keeps its own thread variable, because FPC 3.2.2 at `-O4` miscompiled a virtual call on a collector read back through the mirror ([#1699](https://github.com/frostney/GocciaScript/issues/1699)).
 
 A thread variable that other units read on a hot path is declared in the interface section, so that they reference it directly: an accessor function adds a call to the lookup, and FPC does not inline one that reads an implementation-section variable into another unit (`TGarbageCollector.Instance`, `CurrentRealm`). A bound pointer is valid from the outermost entry until that entry returns, on that thread, and must be rebound on the next one, because a VM can be entered from another thread between two entries ([ADR 0126](adr/0126-bytecode-call-path-arena-fills-and-thread-binding.md)).
 
@@ -433,11 +439,11 @@ TGocciaNumberLiteralValue.InfinityValue      // also NaNValue, NegativeInfinityV
 
 The codebase enforces a strict rule: **no global mutable state**. All runtime state flows through explicit parameters — the `TGocciaEvaluationContext` record, the scope chain, and value objects.
 
-- **`OnError` propagation** — The error handler callback is stored on `TGocciaScope` (`FOnError` field) and copied to every child scope by the `TGocciaScope` constructor, whether the child comes from `CreateChild` or a specialized scope subclass. Functions retrieve it from their closure scope, which is always the scope where they were defined.
+- **`OnError` propagation** — The error handler callback is stored on `TGocciaScope` (`FOnError` field) and copied to every child scope by the `TGocciaScope` constructor. The engine seeds it on the global scope, so every module and shim scope inherits it.
 - **`LoadModule` propagation** — The module loading callback is stored on `TGocciaScope` (`FLoadModule` field) and copied to child scopes the same way as `OnError`. Functions retrieve it from their closure scope. This enables dynamic `import()` expressions (ES2026 §13.3.10) to work inside functions, conditionals, and callbacks — not just at the top level.
-- **`CurrentFilePath` propagation** — Each `TGocciaEvaluationContext` carries the path of the file being evaluated. The interpreter sets this to `FFileName` for the main script and to the resolved module path for each module. The evaluator passes it to `LoadModule` so import paths are resolved relative to the importing file, not the working directory.
+- **`CurrentFilePath` propagation** — Each `TGocciaEvaluationContext` carries the path of the file being evaluated: the entry file for the main program and the resolved module path for each module. Module loading resolves import paths against it, relative to the importing file rather than the working directory.
 
-This keeps the evaluator fully reentrant — all dependencies are explicit, making the code safe for concurrent execution and trivial to reason about.
+This keeps the engine reentrant: all dependencies are explicit, making the code safe for concurrent execution and easy to reason about.
 
 ### Configurable Built-ins
 
@@ -452,7 +458,7 @@ This keeps the evaluator fully reentrant — all dependencies are explicit, maki
 
 ### Capability Checks
 
-Anything that reaches outside the process asks the owning engine's immutable `TGocciaCapabilities` ([Permissions](permissions.md)), fixed at engine construction. Read it from the engine that owns the operation; never cache a decision or a policy in thread-global state. Engines nest on one thread — a sandbox `runScript` child runs inside its parent's call — so per-thread state is shared by engines with different sets. The fetch manager is per thread for exactly that reason and holds no policy: each request carries its engine's `TGocciaFetchPolicy` (capability set, response ceiling, audit emitter) to the worker that performs it. A denial throws `ThrowPermissionDenied` with the guest-visible scope and a host-only suggestion, and emits an audit event named after the capability.
+Anything that reaches outside the process asks the owning engine's immutable `TGocciaCapabilities` ([Permissions](permissions.md)), fixed at engine construction. Read it from the engine that owns the operation; never cache a decision or a policy in thread-global state. Engines nest on one thread — a sandbox `runScript` child runs inside its parent's call — so per-thread state is shared by engines with different sets. The fetch manager is per thread for exactly that reason and holds no policy: each request carries its engine's `TGocciaFetchPolicy` (capability set, response ceiling, audit emitter, the engine's [fetch transport](embedding.md#fetch-transport) if it has one) to the worker or transport that performs it. A denial throws `ThrowPermissionDenied` with the guest-visible scope and a host-only suggestion, and emits an audit event named after the capability.
 
 ### Shimmed Legacy Globals
 
@@ -460,9 +466,9 @@ Legacy ECMAScript globals such as `parseInt`, `parseFloat`, `isNaN`, and `isFini
 
 No shim loads at boot. A shim that provides a global (`Date`, `btoa`, `parseInt`, ...) is bound to a lazy global property and loads the first time the global is touched; a shim that provides members of a built-in prototype (`Object.prototype.__proto__`, `__defineGetter__` and its siblings, `Number.prototype.toLocaleString` and `Array.prototype.toLocaleString`) installs each member as a lazy property of its prototype, in the order the members always had, and loads the first time any of its members is read, written, deleted or reflected on (`ShimPrototypeMembers`, `TGocciaLazyPropertyDescriptorData.CreateAccessor` for `__proto__`). A shim loads once per realm: `LoadShimValue` keeps its export in a realm slot, and loads it in the realm of the engine that owns it even when another realm's code touches the member. A member shim's top level creates its functions on null-prototype object literals, so loading it does not look up, and so re-materialize, the placeholder it is loading for.
 
-`LoadShimValue` runs a shim through the engine's executor (`TGocciaExecutor.EvaluateShim`), in a module environment of its own under the global scope. The bytecode executor compiles the shim as a module, the way the loader compiles one while linking it ([ADR 0136](adr/0136-module-function-declarations-are-compiled-while-linking.md)), so every function a shim defines is a VM closure and the engine builds no tree-walk interpreter. A shim is engine code: it is compiled strict, with `arguments` available, never with strict types, and its functions and classes keep no source text, so `Function.prototype.toString` shows them as `function name() { [native code] }`. Its frames are located in the shim (`<shim:Date>:508:19`), and the coverage tracker leaves its file out of every report (`TGocciaCoverageTracker.ExcludeFile`).
+`LoadShimValue` runs a shim through the engine's shim loader (`TGocciaEngine.ShimLoader`, a `TGocciaShimLoader`), in a module environment of its own under the global scope. The engine compiles the shim as a module, the way the loader compiles one while linking it ([ADR 0136](adr/0136-module-function-declarations-are-compiled-while-linking.md)), so every function a shim defines is a VM closure. A shim is engine code: it is compiled strict, with `arguments` available, never with strict types, and its functions and classes keep no source text, so `Function.prototype.toString` shows them as `function name() { [native code] }`. Its frames are located in the shim (`<shim:Date>:508:19`), and the coverage tracker leaves its file out of every report (`TGocciaCoverageTracker.ExcludeFile`).
 
-A default shim is lexed and parsed once per thread runtime, not once per engine: `LoadShimValue` keeps each parsed program in a per-thread cache. The bytecode executor compiles the cached program into each engine. The interpreter executor evaluates it into each engine's scope, and the functions it defines point into the AST, which is why a parsed program is never released while code may still run it (`TGocciaProgram.Free` frees only the program node). Parsing per engine leaked the shim ASTs of every engine, about 1.1 MB per engine that used `Date` on 64-bit, and the test runner builds one engine per file. Reuse is sound because neither executor writes runtime values into the AST. The one node that could cache a value on itself is a tagged template: the evaluator keeps its template object on the node only when the evaluation context has no realm. A shim is always evaluated with the engine's realm, so the template object goes into that realm's template map (ES2026 §13.2.8.3 GetTemplateObject), and `Goccia.Shims.Test` checks that a shared program leaves it there. `Goccia.ThreadCleanupRegistry` releases the cache when the thread's runtime shuts down.
+A default shim is lexed and parsed once per thread runtime, not once per engine: `LoadShimValue` keeps each parsed program in a per-thread cache. Each engine compiles the cached program itself, and a parsed program is never released while the thread's engines run (`TGocciaProgram.Free` frees only the program node). Parsing per engine leaked the shim ASTs of every engine, about 1.1 MB per engine that used `Date` on 64-bit, and the test runner builds one engine per file. Reuse is sound because compiling a program writes no runtime values into its AST: a tagged template's object goes into the realm's template map (ES2026 §13.2.8.3 GetTemplateObject), and `Goccia.Shims.Test` checks that a shared program keeps its template objects in each realm. `Goccia.ThreadCleanupRegistry` releases the cache when the thread's runtime shuts down.
 
 Use the same shim pattern for future legacy names: if the modern implementation already exists (`Number.*`, `Object.*`, Temporal-backed date behavior, etc.), expose the old spelling through the Goccia.shims registry and list it there instead of duplicating the core built-in implementation. Do not generalize this into broad Annex B support: browser-only Annex B semantics are deferred before 1.0, and parser/runtime/object-model compatibility work needs a separate design decision tied to a future Web API or browser-compatibility profile.
 
@@ -500,7 +506,6 @@ The same result holds for **boxed numbers**: adding a small-integer range cache 
 ## Related documents
 
 - [Architecture](architecture.md) — Pipelines, main layers, design direction, duplication boundaries
-- [Interpreter](interpreter.md) — Tree-walk pipeline and evaluator model
 - [Bytecode VM](bytecode-vm.md) — Register VM and bytecode format
 - [Value system](value-system.md) — `TGocciaValue` hierarchy and property access
 - [Contributing](../CONTRIBUTING.md) — Workflow and Pascal code style when you modify the repository

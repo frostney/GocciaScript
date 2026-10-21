@@ -59,6 +59,8 @@ type
     procedure RegisterDisplayNames;
     procedure RegisterSegmenter;
     procedure RegisterDurationFormat;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
@@ -113,6 +115,7 @@ constructor TGocciaIntlBuiltin.Create(const AName: string;
   const ADefineGlobalBinding: Boolean = True);
 var
   IntlMembers: array[0..2] of TGocciaMemberDefinition;
+  MemberRoots: TGocciaActiveRootFrame;
 begin
   inherited Create(AName, AScope, AThrowError);
   FHostEnvironment := AHostEnvironment;
@@ -131,17 +134,26 @@ begin
     RegisterSegmenter;
     RegisterDurationFormat;
 
-    IntlMembers[0] := DefineDataProperty('getCanonicalLocales',
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(GetCanonicalLocales, 'getCanonicalLocales', 1),
-      [pfConfigurable, pfWritable]);
-    IntlMembers[1] := DefineDataProperty('supportedValuesOf',
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(SupportedValuesOf, 'supportedValuesOf', 1),
-      [pfConfigurable, pfWritable]);
-    IntlMembers[2] := DefineSymbolDataProperty(
-      TGocciaSymbolValue.WellKnownToStringTag,
-      TGocciaStringLiteralValue.Create('Intl'),
-      [pfConfigurable]);
-    RegisterMemberDefinitions(FIntlNamespace, IntlMembers);
+    // The two functions are held only by this array while the tag string
+    // reserves its payload, which can collect.
+    MemberRoots.Initialize;
+    try
+      IntlMembers[0] := DefineDataProperty('getCanonicalLocales',
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(GetCanonicalLocales, 'getCanonicalLocales', 1),
+        [pfConfigurable, pfWritable]);
+      MemberRoots.Add(IntlMembers[0].DataValue);
+      IntlMembers[1] := DefineDataProperty('supportedValuesOf',
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(SupportedValuesOf, 'supportedValuesOf', 1),
+        [pfConfigurable, pfWritable]);
+      MemberRoots.Add(IntlMembers[1].DataValue);
+      IntlMembers[2] := DefineSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Intl'),
+        [pfConfigurable]);
+      RegisterMemberDefinitions(FIntlNamespace, IntlMembers);
+    finally
+      MemberRoots.Clear;
+    end;
 
     if ADefineGlobalBinding then
       AScope.DefineLexicalBinding(AName, FIntlNamespace, dtLet, True);
@@ -215,10 +227,22 @@ end;
 
 procedure ApplyIntlConstructPrototype(const AObject: TGocciaValue;
   const ANewTarget: TGocciaValue; const AConstructorName: string);
+var
+  Roots: TGocciaActiveRootFrame;
 begin
-  if AObject is TGocciaObjectValue then
+  if not (AObject is TGocciaObjectValue) then
+    Exit;
+  // The new instance is held only by its constructor's local while the
+  // prototype is looked up, which reads newTarget.prototype (guest code) and
+  // can build another realm's Intl namespace.
+  Roots.Initialize;
+  try
+    Roots.Add(AObject);
     TGocciaObjectValue(AObject).Prototype :=
       IntlPrototypeFromNewTarget(ANewTarget, AConstructorName);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure RequireIntlConstructCall(const AThisValue: TGocciaValue;
@@ -1024,6 +1048,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(LocaleConstructorFn, 'Locale', 1);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('Locale',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := LocaleConstructFn;
   TGocciaIntlLocaleValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1031,8 +1059,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('Locale',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { Collator }
@@ -1107,6 +1133,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(CollatorConstructorFn, 'Collator', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('Collator',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := CollatorConstructFn;
   TGocciaIntlCollatorValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1114,8 +1144,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('Collator',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { NumberFormat }
@@ -1152,6 +1180,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(NumberFormatConstructorFn, 'NumberFormat', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('NumberFormat',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := NumberFormatConstructFn;
   TGocciaIntlNumberFormatValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1159,8 +1191,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('NumberFormat',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { DateTimeFormat }
@@ -1202,6 +1232,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(DateTimeFormatConstructorFn, 'DateTimeFormat', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('DateTimeFormat',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := DateTimeFormatConstructFn;
   TGocciaIntlDateTimeFormatValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1209,8 +1243,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('DateTimeFormat',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { PluralRules }
@@ -1248,6 +1280,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(PluralRulesConstructorFn, 'PluralRules', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('PluralRules',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := PluralRulesConstructFn;
   TGocciaIntlPluralRulesValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1255,8 +1291,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('PluralRules',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { RelativeTimeFormat }
@@ -1294,6 +1328,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(RelativeTimeFormatConstructorFn, 'RelativeTimeFormat', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('RelativeTimeFormat',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := RelativeTimeFormatConstructFn;
   TGocciaIntlRelativeTimeFormatValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1301,8 +1339,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('RelativeTimeFormat',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { ListFormat }
@@ -1341,6 +1377,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(ListFormatConstructorFn, 'ListFormat', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('ListFormat',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := ListFormatConstructFn;
   TGocciaIntlListFormatValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1348,8 +1388,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('ListFormat',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { DisplayNames }
@@ -1386,6 +1424,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(DisplayNamesConstructorFn, 'DisplayNames', 2);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('DisplayNames',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := DisplayNamesConstructFn;
   TGocciaIntlDisplayNamesValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1393,8 +1435,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('DisplayNames',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { Segmenter }
@@ -1432,6 +1472,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(SegmenterConstructorFn, 'Segmenter', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('Segmenter',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := SegmenterConstructFn;
   TGocciaIntlSegmenterValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1439,8 +1483,6 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('Segmenter',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
 end;
 
 { DurationFormat }
@@ -1474,6 +1516,10 @@ var
   ConstructorMethod: TGocciaNativeFunctionValue;
 begin
   ConstructorMethod := TGocciaNativeFunctionValue.Create(DurationFormatConstructorFn, 'DurationFormat', 0);
+  // Attached to the namespace before it is built: building it allocates,
+  // and an allocation can collect.
+  FIntlNamespace.DefineProperty('DurationFormat',
+    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
   ConstructorMethod.ConstructCallback := DurationFormatConstructFn;
   TGocciaIntlDurationFormatValue.ExposePrototype(ConstructorMethod);
   ConstructorMethod.DefineProperty('supportedLocalesOf',
@@ -1481,8 +1527,16 @@ begin
       TGocciaNativeFunctionValue.CreateWithoutPrototype(
         SupportedLocalesOfFn, 'supportedLocalesOf', 1),
       [pfConfigurable, pfWritable]));
-  FIntlNamespace.DefineProperty('DurationFormat',
-    TGocciaPropertyDescriptorData.Create(ConstructorMethod, [pfConfigurable, pfWritable]));
+end;
+
+procedure TGocciaIntlBuiltin.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FIntlNamespace) then
+    FIntlNamespace.MarkReferences;
 end;
 
 end.

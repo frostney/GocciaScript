@@ -42,6 +42,8 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -358,6 +360,7 @@ class procedure TGocciaIntlDisplayNamesValue.ExposePrototype(const AConstructor:
 var
   Shared: TGocciaSharedPrototype;
   DefaultOpts: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   Shared := GetIntlDisplayNamesShared;
   if not Assigned(Shared) then
@@ -367,9 +370,17 @@ begin
     // after user code has installed accessors on Object.prototype) never reads
     // or [[Set]]s through a tainted inherited "type"/etc. accessor. ECMA-402
     // option records are CreateDataProperty-populated and not user-observable.
-    DefaultOpts := TGocciaObjectValue.Create(nil);
-    DefaultOpts.AssignProperty('type', TGocciaStringLiteralValue.Create('language'));
-    TGocciaIntlDisplayNamesValue.Create(DefaultLocale, DefaultOpts);
+    // Held only by this local while the bootstrap instance builds the shared
+    // prototype, which allocates and can collect.
+    Roots.Initialize;
+    try
+      DefaultOpts := TGocciaObjectValue.Create(nil);
+      Roots.Add(DefaultOpts);
+      DefaultOpts.AssignProperty('type', TGocciaStringLiteralValue.Create('language'));
+      TGocciaIntlDisplayNamesValue.Create(DefaultLocale, DefaultOpts);
+    finally
+      Roots.Clear;
+    end;
     Shared := GetIntlDisplayNamesShared;
   end;
   if Assigned(Shared) then
@@ -410,20 +421,30 @@ function TGocciaIntlDisplayNamesValue.IntlDisplayNamesResolvedOptions(const AArg
 var
   DN: TGocciaIntlDisplayNamesValue;
   Obj: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   DN := AsDisplayNames(AThisValue, 'Intl.DisplayNames.prototype.resolvedOptions');
-  Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  DefineDisplayNamesResolvedProperty(Obj, 'locale', DN.FLocale);
-  DefineDisplayNamesResolvedProperty(Obj, 'style', DN.FStyle);
-  DefineDisplayNamesResolvedProperty(Obj, 'type', DN.FType);
-  DefineDisplayNamesResolvedProperty(Obj, 'fallback', DN.FFallback);
-  if DN.FType = 'language' then
-    DefineDisplayNamesResolvedProperty(Obj, 'languageDisplay',
-      DN.FLanguageDisplay);
-  Result := Obj;
+  // Held only by this local while the values stored into it are made;
+  // each can reserve, and a reservation can collect.
+  Roots.Initialize;
+  try
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+    Roots.Add(Obj);
+    DefineDisplayNamesResolvedProperty(Obj, 'locale', DN.FLocale);
+    DefineDisplayNamesResolvedProperty(Obj, 'style', DN.FStyle);
+    DefineDisplayNamesResolvedProperty(Obj, 'type', DN.FType);
+    DefineDisplayNamesResolvedProperty(Obj, 'fallback', DN.FFallback);
+    if DN.FType = 'language' then
+      DefineDisplayNamesResolvedProperty(Obj, 'languageDisplay',
+        DN.FLanguageDisplay);
+    Result := Obj;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 initialization
   GIntlDisplayNamesSharedSlot := RegisterRealmOwnedSlot('Intl.DisplayNames.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.DisplayNames.shared', 'Intl.DisplayNames');
 
 end.

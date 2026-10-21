@@ -11,6 +11,7 @@ uses
   SandboxShell,
   SandboxVirtualFileSystem,
 
+  Goccia.HostEnvironment,
   Goccia.Values.Primitives;
 
 const
@@ -23,6 +24,19 @@ const
 
 type
   TGocciaSandboxContext = class;
+
+  { A sandbox filesystem clock that reads a host clock's epoch time, so file
+    timestamps follow the same clock as the script's Date and Temporal.Now.
+    Over TGocciaHostEnvironment.DeterministicClock every timestamp is the
+    deterministic profile's epoch instant. Holds a reference to AClock,
+    which must be assigned. }
+  TGocciaSandboxFsHostClock = class(TSandboxFsClock)
+  private
+    FClock: IGocciaHostClock;
+  public
+    constructor Create(const AClock: IGocciaHostClock);
+    function Now: TDateTime; override;
+  end;
 
   { What a nested run copies into its isolated child filesystem: a path of
     the parent sandbox (runScript's `copy` / `goccia --copy`, the analogue
@@ -105,7 +119,13 @@ type
     FailureKind: TGocciaSandboxFailureKind;
     Diff: string;
     DiffRequested: Boolean;
+    { A nested run's completion value, copied into the calling program's
+      realm; nil for the root run. }
     ResultValue: TGocciaValue;
+    { The root run's completion value as --print shows it, when the host was
+      asked for it (TGocciaSandboxHost.PrintRootResult). }
+    ResultText: string;
+    HasResultText: Boolean;
   end;
 
   TGocciaSandboxRunScriptCallback = function(
@@ -116,6 +136,7 @@ type
   private
     FFs: TSandboxVirtualFileSystem;
     FBaseline: TSandboxVirtualFileSystem;
+    FClock: TSandboxFsClock;
     FShell: TSandboxShell;
     FRunScriptCallback: TGocciaSandboxRunScriptCallback;
 
@@ -128,7 +149,6 @@ type
       out AError: string): Boolean;
     procedure CollectPaths(const AFs: TSandboxVirtualFileSystem;
       const APath: string; const APaths: TStrings);
-    function BytesEqual(const ALeft, ARight: TBytes): Boolean;
     function JsonEscape(const AValue: string): string;
     procedure AppendJsonChange(const ABuilder: TStrings; var AFirst: Boolean;
       const AKind, APath: string; const AOldBytes, ANewBytes: Int64);
@@ -139,9 +159,15 @@ type
       const APath: string; const ABaselineStat,
       ACurrentStat: TSandboxFsStat);
   public
+    { AClock stamps every file and directory the context's filesystem holds,
+      from its root on, and the baseline CaptureBaseline forks keeps it; nil
+      reads the wall clock. The context does not own AClock: the caller
+      frees it after the context, and after any context that was given the
+      same clock (an isolated nested run's, for one). }
     constructor Create(
       const AQuotaBytes: Int64 = DEFAULT_SANDBOX_BYTE_QUOTA;
-      const ANodeQuota: Integer = DEFAULT_SANDBOX_NODE_QUOTA);
+      const ANodeQuota: Integer = DEFAULT_SANDBOX_NODE_QUOTA;
+      const AClock: TSandboxFsClock = nil);
     destructor Destroy; override;
 
     procedure CaptureBaseline;
@@ -150,6 +176,8 @@ type
 
     property Fs: TSandboxVirtualFileSystem read FFs;
     property Baseline: TSandboxVirtualFileSystem read FBaseline;
+    { The clock the context was created with; nil for the wall clock. }
+    property Clock: TSandboxFsClock read FClock;
     property Shell: TSandboxShell read FShell;
     property RunScriptCallback: TGocciaSandboxRunScriptCallback
       read FRunScriptCallback write FRunScriptCallback;
@@ -173,11 +201,6 @@ const
     'host-error',
     'child-process-crash'
   );
-
-function BytesLength(const ABytes: TBytes): Int64;
-begin
-  Result := Length(ABytes);
-end;
 
 function SandboxFailureKindName(
   const AKind: TGocciaSandboxFailureKind): string;
@@ -216,13 +239,30 @@ begin
   Result := (Path = '/') or ((Path <> '') and (Path[Length(Path)] = '/'));
 end;
 
+{ TGocciaSandboxFsHostClock }
+
+constructor TGocciaSandboxFsHostClock.Create(const AClock: IGocciaHostClock);
+begin
+  if not Assigned(AClock) then
+    raise EArgumentException.Create(
+      'TGocciaSandboxFsHostClock needs a host clock');
+  inherited Create;
+  FClock := AClock;
+end;
+
+function TGocciaSandboxFsHostClock.Now: TDateTime;
+begin
+  Result := SandboxUnixNanosecondsToDateTime(FClock.EpochNanoseconds);
+end;
+
 { TGocciaSandboxContext }
 
 constructor TGocciaSandboxContext.Create(const AQuotaBytes: Int64;
-  const ANodeQuota: Integer);
+  const ANodeQuota: Integer; const AClock: TSandboxFsClock);
 begin
   inherited Create;
-  FFs := TSandboxVirtualFileSystem.Create(AQuotaBytes, ANodeQuota);
+  FClock := AClock;
+  FFs := TSandboxVirtualFileSystem.Create(AQuotaBytes, ANodeQuota, AClock);
   FShell := TSandboxShell.Create(FFs, False);
   FShell.CommandHandler := HandleShellCommand;
 end;
@@ -431,19 +471,6 @@ begin
     CollectPaths(AFs, Entries[I].Path, APaths);
 end;
 
-function TGocciaSandboxContext.BytesEqual(const ALeft,
-  ARight: TBytes): Boolean;
-var
-  I: Integer;
-begin
-  if Length(ALeft) <> Length(ARight) then
-    Exit(False);
-  for I := 0 to High(ALeft) do
-    if ALeft[I] <> ARight[I] then
-      Exit(False);
-  Result := True;
-end;
-
 function TGocciaSandboxContext.JsonEscape(const AValue: string): string;
 var
   I: Integer;
@@ -575,8 +602,6 @@ var
   Path: string;
   CurrentStat: TSandboxFsStat;
   BaselineStat: TSandboxFsStat;
-  CurrentBytes: TBytes;
-  BaselineBytes: TBytes;
 begin
   Builder := TStringList.Create;
   CurrentPaths := TStringList.Create;
@@ -618,11 +643,9 @@ begin
 
       if CurrentStat.Kind = nkFile then
       begin
-        CurrentBytes := FFs.SnapshotReadAllBytes(Path);
-        BaselineBytes := FBaseline.SnapshotReadAllBytes(Path);
-        if not BytesEqual(CurrentBytes, BaselineBytes) then
+        if not FFs.SnapshotSameBytes(Path, FBaseline, Path) then
           AppendJsonChange(Builder, First, 'modify', Path,
-            BytesLength(BaselineBytes), BytesLength(CurrentBytes));
+            BaselineStat.Size, CurrentStat.Size);
       end;
     end;
 
@@ -690,8 +713,7 @@ begin
       if (Path = '/') or (not FFs.IsFile(Path)) then
         Continue;
       if Assigned(FBaseline) and FBaseline.IsFile(Path) and
-         BytesEqual(FBaseline.SnapshotReadAllBytes(Path),
-           FFs.SnapshotReadAllBytes(Path)) then
+         FBaseline.SnapshotSameBytes(Path, FFs, Path) then
         Continue;
       Result := Result + '--- ' + Path + sLineBreak;
       Result := Result + '+++ ' + Path + sLineBreak;

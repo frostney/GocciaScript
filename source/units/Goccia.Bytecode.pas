@@ -249,7 +249,16 @@ const
   //               binding is gone, as after a script `var` that redeclared a
   //               configurable global property is deleted. v93 code reads
   //               such a binding with OP_GET_GLOBAL, which yields undefined.
-  GOCCIA_FORMAT_VERSION = 94;
+  //   v94 -> v95: each decorated class definition keeps its decoration
+  //               state in a register instead of one slot per VM, so a
+  //               class decorated while another is being decorated no
+  //               longer ends the other's decoration. OP_BEGIN_DECORATORS
+  //               stores the session in R[B], and
+  //               OP_APPLY_ELEMENT_DECORATOR_CONST,
+  //               OP_APPLY_CLASS_DECORATOR and OP_FINISH_DECORATORS read it
+  //               from R[A+1], which v94 code loads with undefined or a
+  //               computed element key.
+  GOCCIA_FORMAT_VERSION = 96;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -557,7 +566,7 @@ type
     // "<name> is not defined" for an unresolvable reference (ES2026 §6.2.5.5
     // GetValue step 2, §6.2.5.6 PutValue step 2.a), created from the
     // intrinsic %ReferenceError% whatever the global `ReferenceError` binding
-    // holds, and carrying the evaluator's suggestion.
+    // holds, and carrying the declare-before-use suggestion.
     OP_THROW_UNDEFINED_VARIABLE = 236,
     // A = callee register, Bx = index of the template's eval site record.
     // Always followed by the OP_CALL or OP_CALL_METHOD of an `eval(...)`
@@ -661,7 +670,7 @@ begin
     OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_TO_NUMBER, OP_TO_STRING,
     OP_NEG, OP_BNOT, OP_EQ, OP_NEQ, OP_LOOSE_EQ, OP_LOOSE_NEQ,
     OP_LT, OP_GT, OP_LTE, OP_GTE, OP_TYPEOF, OP_IS_INSTANCE,
-    OP_HAS_PROPERTY
+    OP_HAS_PROPERTY, OP_BEGIN_DECORATORS
   ];
 end;
 

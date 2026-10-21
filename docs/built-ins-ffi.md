@@ -80,6 +80,8 @@ result.point.x;
 
 Pointer arguments accept `FFIPointer`, `ArrayBuffer`, `SharedArrayBuffer`, `TypedArray`, FFI aggregate values, persistent callback handles, or `null`.
 
+A `TypedArray` passes the address of its first element in the buffer's current data block, so a view of a resized or grown buffer passes the bytes it views now. A view with no elements passes a native null pointer: an empty view, a view of a detached buffer, or a view past the end of its shrunk buffer. An empty `ArrayBuffer` or `SharedArrayBuffer` also passes null. The address is valid only during the call; script code that resizes the buffer while the native function runs (from a callback) leaves it pointing at the old block.
+
 ## Nullable UTF-8 Arguments
 
 Plain `utf8string` retains its existing JavaScript string-coercion behavior. Use `FFI.nullable("utf8string")` when JavaScript `null` must map to a native null pointer:
@@ -110,7 +112,11 @@ const sum = library.bind("sum_values", {
 sum(3, FFI.varargs(["i8", "i16", "i32"], [10, 20, 12]));
 ```
 
-The variadic planner applies the C default argument promotions: `f32` becomes `f64`, while `bool`, `i8`, `i16`, `u8`, and `u16` become `i32`. Other supported argument descriptors retain their ordinary ABI classification. Variadic callbacks are not supported.
+The variadic planner applies the C default argument promotions: `f32` becomes `f64`, while `bool`, `i8`, `i16`, `u8`, and `u16` become `i32`. Other argument descriptors follow the platform's variadic calling convention. On most targets that is the ordinary classification; Windows x64 also copies a floating-point argument in the first four positions into the matching integer register, and Apple ARM64 passes the variadic tail on the stack.
+
+Windows ARM64 passes every argument of a variadic function, fixed ones included, as 8-byte slots in `x0`-`x7` and then on the stack. It uses no floating-point registers, gives homogeneous floating-point aggregates no special treatment, passes an aggregate larger than 16 bytes by pointer, and splits an aggregate that starts in `x7` between that register and the stack.
+
+Variadic callbacks are not supported.
 
 ## Callbacks
 

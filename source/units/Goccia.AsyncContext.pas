@@ -8,7 +8,7 @@
   that created it does afterwards.
 
   Two seams keep the current snapshot travelling with continuations, and both
-  live in the machinery both executors share:
+  live in the runtime machinery below the VM:
 
     - a promise reaction records the snapshot in effect when it is registered
       (Goccia.Values.PromiseValue), and
@@ -48,7 +48,7 @@ type
     constructor Create;
     function TryGetStore(const AKey: TGocciaValue;
       out AStore: TGocciaValue): Boolean;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 { The snapshot in effect on this thread, or nil when no binding is in effect.
@@ -183,11 +183,10 @@ begin
     AStore := FStores[Index];
 end;
 
-procedure TGocciaAsyncContextSnapshot.MarkReferences;
+procedure TGocciaAsyncContextSnapshot.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
 
   for I := 0 to FCount - 1 do

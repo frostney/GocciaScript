@@ -42,4 +42,10 @@ describe("URL.prototype.username", () => {
     url.username = "admin";
     expect(url.href).toBe("https://admin@example.com/path");
   });
+
+  test("setter percent-encodes non-ASCII as UTF-8", () => {
+    const url = new URL("https://example.com/");
+    url.username = "üĀ\u{1F600}";
+    expect(url.username).toBe("%C3%BC%C4%80%F0%9F%98%80");
+  });
 });

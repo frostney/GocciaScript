@@ -23,7 +23,6 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
-  Goccia.Executor,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.JSON.Utils,
@@ -40,6 +39,8 @@ uses
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.VM.Exception;
 
@@ -55,7 +56,16 @@ const
   ASYNC_FAIL_MARKER = 'Test262:AsyncTestFailure:';
   NEGATIVE_NO_ERROR_MARKER = 'Test262:NegativeTestNoError';
   NEGATIVE_ERROR_MARKER = 'Test262:NegativeTestError:';
+  { The value stock harness/sta.js $DONOTEVALUATE() throws. raw negative
+    tests throw the same string literal themselves. Seeing it thrown means
+    the test body was evaluated. }
+  DONOTEVALUATE_THROWN = 'Test262: This statement should not be evaluated.';
   WORKER_RESULT_VERSION = 1;
+  { Version of the grading contract in docs/test262.md, published as
+    run.gradingContract. Bump it whenever a grading change can move a test
+    between PASS and FAIL without an engine change, so the PR comparison
+    does not block on a baseline graded under the old contract. }
+  GRADING_CONTRACT_VERSION = 2;
 
 type
   TTest262Outcome = (toPass, toFail, toWrapperInfra, toTimeout);
@@ -104,7 +114,6 @@ type
     MaxTests: Integer;
     TimeoutMs: Integer;
     MaxMemoryBytes: Int64;
-    Mode: TGocciaTest262ExecutionMode;
     ProfileMode: TTest262ProfileMode;
     ShardIndex: Integer;
     ShardCount: Integer;
@@ -427,7 +436,6 @@ begin
   FOptions.Jobs := DEFAULT_JOBS;
   FOptions.TimeoutMs := DEFAULT_TIMEOUT_MS;
   FOptions.MaxMemoryBytes := DEFAULT_MAX_MEMORY_BYTES;
-  FOptions.Mode := t262emBytecode;
   FOptions.ProfileMode := tpmAll;
   FOptions.ShardIndex := -1;
   FOptions.ShardCount := 0;
@@ -456,7 +464,6 @@ begin
   WriteLn('  --filter=GLOB                Test ID glob');
   WriteLn('  --max-tests=N                Cap before sharding (0 = unlimited)');
   WriteLn('  --jobs=N                     Concurrent native workers (default: 4)');
-  WriteLn('  --mode=interpreted|bytecode  Execution mode (default: bytecode)');
   WriteLn('  --timeout=DURATION           Per-test cooperative timeout: 500ms, 20s, 2m, or plain milliseconds');
   WriteLn('  --max-memory=BYTES           Per-test GC heap ceiling: 512MiB, 1GiB, or plain bytes');
   WriteLn('  --shard-index=N              Zero-based shard index');
@@ -615,16 +622,7 @@ begin
       FOptions.ShardCount := PositiveInteger('--shard-count',
         ArgumentValue('--shard-count'))
     else if (Argument = '--mode') or StartsStr('--mode=', Argument) then
-    begin
-      Value := ArgumentValue('--mode');
-      if Value = 'interpreted' then
-        FOptions.Mode := t262emInterpreted
-      else if Value = 'bytecode' then
-        FOptions.Mode := t262emBytecode
-      else
-        raise TParseError.Create(
-          '--mode requires interpreted or bytecode');
-    end
+      RejectRemovedExecutionModeArgument(Argument)
     else if (Argument = '--profile-mode') or
         StartsStr('--profile-mode=', Argument) then
     begin
@@ -657,9 +655,6 @@ begin
   if (FOptions.ShardIndex >= 0) and
      (FOptions.ShardIndex >= FOptions.ShardCount) then
     raise TParseError.Create('--shard-index must be less than --shard-count');
-  if (FOptions.ProfileDir <> '') and
-     (FOptions.Mode <> t262emBytecode) then
-    raise TCLIUsageError.Create('--profile-dir requires --mode=bytecode');
 end;
 
 function TTest262App.NormalizeId(const APath: string): string;
@@ -915,6 +910,10 @@ begin
   finally
     HeaderLines.Free;
   end;
+  { INTERPRETING.md: a raw test's source "must not be modified in any
+    way", so it keeps its frontmatter comment and original layout. }
+  if AMetadata.HasFlag('raw') then
+    ABody := ASource;
   Result := True;
 end;
 
@@ -962,6 +961,60 @@ begin
   end;
 end;
 
+{ Unwrapped negative-runtime tests are graded against negative.type, which
+  names the thrown value's constructor (test262's Test262Error has no own or
+  inherited "name" data property). Mirror the wrapped path's
+  e.constructor.name, reading data properties only so grading never calls
+  an accessor's getter. }
+function DataPropertyValue(const AObject: TGocciaObjectValue;
+  const AName: string): TGocciaValue;
+var
+  Current: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Result := nil;
+  Current := AObject;
+  while Assigned(Current) do
+  begin
+    Descriptor := Current.GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      if Descriptor is TGocciaPropertyDescriptorData then
+        Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+      ReleaseDescriptor(Descriptor);
+      Exit;
+    end;
+    Current := Current.Prototype;
+  end;
+end;
+
+function NegativeErrorName(const AKind: TTest262WrapperKind;
+  const AThrown: TGocciaValue): string;
+var
+  Constructor_, Name: TGocciaValue;
+begin
+  Result := ThrownErrorName(AThrown);
+  if (AKind <> twNegativeRuntimeUnwrapped) or
+     not (AThrown is TGocciaObjectValue) then
+    Exit;
+  Constructor_ := DataPropertyValue(TGocciaObjectValue(AThrown),
+    'constructor');
+  if not (Constructor_ is TGocciaObjectValue) then
+    Exit;
+  Name := DataPropertyValue(TGocciaObjectValue(Constructor_), 'name');
+  if (Name is TGocciaStringLiteralValue) and
+     (TGocciaStringLiteralValue(Name).Value <> '') then
+    Result := TGocciaStringLiteralValue(Name).Value;
+end;
+
+{ True when the escaped value is the string sta.js $DONOTEVALUATE() throws,
+  i.e. the engine evaluated a body that should have been rejected first. }
+function IsDoNotEvaluateThrow(const AThrown: TGocciaValue): Boolean;
+begin
+  Result := (AThrown is TGocciaStringLiteralValue) and
+    (TGocciaStringLiteralValue(AThrown).Value = DONOTEVALUATE_THROWN);
+end;
+
 function TTest262App.BuildSource(const AHarness, ABody: string;
   const AKind: TTest262WrapperKind;
   const AStrictMode: Boolean): string;
@@ -973,8 +1026,6 @@ begin
   else
     Prefix := '';
 
-  if AKind = twNegativeParse then
-    Exit(Prefix + ABody);
   if AKind = twNegativeRuntimeUnwrapped then
     Exit(Prefix + AHarness + sLineBreak + ABody);
   if AKind = twNegativeRuntime then
@@ -1008,9 +1059,12 @@ begin
   begin
     if (AMetadata.NegativePhase = 'parse') or
        (AMetadata.NegativePhase = 'early') or
-       (AMetadata.NegativePhase = 'resolution') or
-       AMetadata.HasFlag('module') then
+       (AMetadata.NegativePhase = 'resolution') then
       Exit(twNegativeParse);
+    { A module body cannot be wrapped in try/catch (import/export must stay
+      top-level), so runtime-phase module negatives are graded unwrapped. }
+    if AMetadata.HasFlag('module') then
+      Exit(twNegativeRuntimeUnwrapped);
     if (AMetadata.NegativePhase = 'runtime') and
        (AMetadata.NegativeType = 'SyntaxError') and
        StartsStr('language/global-code/', ACase.Id) then
@@ -1050,7 +1104,8 @@ end;
 
 procedure ClassifyResult(const AKind: TTest262WrapperKind;
   const AExpectedErrorType, AOutput, AErrorName, ADiagnostic: string;
-  const AExecutionFailed, ATimedOut: Boolean;
+  const AExecutionFailed, ATimedOut, AHostError,
+    ADoNotEvaluateReached: Boolean;
   out AOutcome: TTest262Outcome; out AMessage, AResultDiagnostic: string);
 var
   Actual: string;
@@ -1065,13 +1120,33 @@ begin
   end;
   if AKind = twNegativeParse then
   begin
-    if AExecutionFailed then
-      AOutcome := toPass
-    else
+    { A parse/early/resolution negative passes only when the source is
+      rejected before evaluation with the expected error constructor.
+      Parse, early-error and module-linking failures surface as host-level
+      TGocciaError exceptions before any statement runs; once evaluation has
+      started, errors escape as JS throw values instead. }
+    AOutcome := toFail;
+    if not AExecutionFailed then
+      AMessage := 'expected ' + AExpectedErrorType +
+        ' before evaluation, body executed cleanly'
+    else if ADoNotEvaluateReached then
+      AMessage := 'expected ' + AExpectedErrorType +
+        ' before evaluation, body was evaluated ($DONOTEVALUATE reached)'
+    else if not AHostError then
     begin
-      AOutcome := toFail;
-      AMessage := 'expected parse error, body executed cleanly';
-    end;
+      AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, ' +
+        AErrorName + ' was thrown as a JS value during evaluation';
+      AResultDiagnostic := Copy(ADiagnostic, 1, 300);
+    end
+    else if (AExpectedErrorType <> '') and
+            (AErrorName <> AExpectedErrorType) then
+    begin
+      AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, got ' +
+        AErrorName;
+      AResultDiagnostic := Copy(ADiagnostic, 1, 300);
+    end
+    else
+      AOutcome := toPass;
     Exit;
   end;
 
@@ -1165,10 +1240,11 @@ var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
   ErrorName: string;
+  DoNotEvaluateReached: Boolean;
   ExecutionFailed: Boolean;
-  Executor: TGocciaExecutor;
   Harness: string;
   Host: TGocciaTest262Host;
+  HostError: Boolean;
   Kind: TTest262WrapperKind;
   Metadata: TTest262Metadata;
   PrintHost: TTest262PrintHost;
@@ -1183,11 +1259,12 @@ begin
   StartNanoseconds := GetNanoseconds;
   Metadata := nil;
   Source := nil;
-  Executor := nil;
   Engine := nil;
   Host := nil;
   PrintHost := nil;
   ExecutionFailed := False;
+  DoNotEvaluateReached := False;
+  HostError := False;
   TimedOut := False;
   ErrorName := '';
   Diagnostic := '';
@@ -1197,10 +1274,14 @@ begin
       if not ParseTest(ReadUTF8FileText(ACase.Path), Body, Metadata) then
         raise Exception.Create('frontmatter parse failed');
       Kind := DetermineKind(ACase, Metadata);
+      { Negative parse and resolution tests get the harness like every
+        other non-raw test (INTERPRETING.md, "Test262-Defined Bindings"),
+        so a body that is evaluated reaches sta.js $DONOTEVALUATE(). raw
+        tests run unmodified, once, in non-strict mode. }
       Harness := BuildHarness(Metadata, Metadata.HasFlag('async'),
-        Metadata.HasFlag('raw') or (Kind = twNegativeParse));
+        Metadata.HasFlag('raw'));
       SourceText := BuildSource(Harness, Body, Kind,
-        Metadata.HasFlag('onlyStrict'));
+        Metadata.HasFlag('onlyStrict') and not Metadata.HasFlag('raw'));
       Source := CreateECMAScriptSourceLines(SourceText);
 
       EngineOptions := Default(TGocciaTest262EngineOptions);
@@ -1219,7 +1300,6 @@ begin
         Metadata.HasFeature('realms-tests');
       EngineOptions.AgentCanSuspend :=
         Test262SourceCanSuspendAgent(ACase.Path);
-      EngineOptions.Mode := FOptions.Mode;
       if Metadata.HasFlag('module') then
         EngineOptions.SourceType := stModule
       else
@@ -1244,10 +1324,9 @@ begin
         ForceHostDirectories(ExtractFileDir(ProfilePath));
       end;
 
-      Executor := CreateTest262Executor(FOptions.Mode);
-      Engine := TGocciaEngine.Create(ACase.Path, Source, Executor,
+      Engine := TGocciaEngine.Create(ACase.Path, Source,
         EngineOptions.Capabilities);
-      ConfigureTest262Engine(Engine, Executor, EngineOptions);
+      ConfigureTest262Engine(Engine, EngineOptions);
       Host := TGocciaTest262Host.Create(EngineOptions);
       Host.ConfigureHostEnvironment(Engine.HostEnvironment);
       PrintHost := TTest262PrintHost.Create;
@@ -1268,7 +1347,8 @@ begin
         on E: EGocciaBytecodeThrow do
         begin
           ExecutionFailed := True;
-          ErrorName := ThrownErrorName(E.ThrownValue);
+          ErrorName := NegativeErrorName(Kind, E.ThrownValue);
+          DoNotEvaluateReached := IsDoNotEvaluateThrow(E.ThrownValue);
           Diagnostic := FormatThrowDetail(E.ThrownValue, ACase.Path,
             Source, False, Engine.ModuleLoader.DiagnosticScope.Principal,
             E.Suggestion);
@@ -1276,7 +1356,8 @@ begin
         on E: TGocciaThrowValue do
         begin
           ExecutionFailed := True;
-          ErrorName := ThrownErrorName(E.Value);
+          ErrorName := NegativeErrorName(Kind, E.Value);
+          DoNotEvaluateReached := IsDoNotEvaluateThrow(E.Value);
           Diagnostic := FormatThrowDetail(E.Value, ACase.Path, Source,
             False, Engine.ModuleLoader.DiagnosticScope.Principal,
             E.Suggestion);
@@ -1284,19 +1365,25 @@ begin
         on E: TGocciaError do
         begin
           ExecutionFailed := True;
+          { Parse, early-error and module-linking failures arrive here, as
+            host-level errors. JS-level throws arrive as TGocciaThrowValue or
+            EGocciaBytecodeThrow above instead. }
+          HostError := True;
           ErrorName := ErrorDisplayName(E);
           Diagnostic := E.GetDetailedMessage(False);
         end;
         on E: Exception do
         begin
           ExecutionFailed := True;
+          HostError := True;
           ErrorName := E.ClassName;
           Diagnostic := E.ClassName + ': ' + E.Message;
         end;
       end;
 
       ClassifyResult(Kind, Metadata.NegativeType, PrintHost.Text,
-        ErrorName, Diagnostic, ExecutionFailed, TimedOut, AResult.Status,
+        ErrorName, Diagnostic, ExecutionFailed, TimedOut, HostError,
+        DoNotEvaluateReached, AResult.Status,
         AResult.Message, AResult.Diagnostic);
     except
       on E: Exception do
@@ -1329,7 +1416,6 @@ begin
     PrintHost.Free;
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
     Metadata.Free;
     AResult.DurationMs := Round(
@@ -1764,10 +1850,6 @@ begin
       Lines.Add('    "test262Sha": null,')
     else
       Lines.Add('    "test262Sha": ' + JSONString(Test262SHA) + ',');
-    if FOptions.Mode = t262emBytecode then
-      Lines.Add('    "mode": "bytecode",')
-    else
-      Lines.Add('    "mode": "interpreted",');
     Lines.Add('    "categories": [');
     for I := 0 to Categories.Count - 1 do
     begin
@@ -1780,7 +1862,8 @@ begin
     Lines.Add('    "jobs": ' + IntToStr(FOptions.Jobs) + ',');
     Lines.Add('    "timeoutMs": ' + IntToStr(FOptions.TimeoutMs) + ',');
     Lines.Add('    "maxMemoryBytes": ' +
-      IntToStr(FOptions.MaxMemoryBytes));
+      IntToStr(FOptions.MaxMemoryBytes) + ',');
+    Lines.Add('    "gradingContract": ' + IntToStr(GRADING_CONTRACT_VERSION));
     Lines.Add('  }' + IfThen(FOptions.ShardCount > 0, ',', ''));
     if FOptions.ShardCount > 0 then
     begin
@@ -1809,14 +1892,12 @@ function TTest262App.RunHostEval: Integer;
 var
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  Executor: TGocciaExecutor;
   Host: TGocciaTest262Host;
   PrintHost: TTest262PrintHost;
   Source: TStringList;
 begin
   Result := 0;
   Source := ReadSourceFromText(Input);
-  Executor := nil;
   Engine := nil;
   Host := nil;
   PrintHost := nil;
@@ -1827,7 +1908,6 @@ begin
       cfArgumentsObject, cfLabel, cfForIn];
     EngineOptions.UnsafeShadowRealm := True;
     EngineOptions.AgentCanSuspend := True;
-    EngineOptions.Mode := FOptions.Mode;
     EngineOptions.SourceType := FOptions.HostEvalSourceType;
     EngineOptions.TimeoutMs := FOptions.TimeoutMs;
     EngineOptions.MaxMemoryBytes := FOptions.MaxMemoryBytes;
@@ -1837,10 +1917,9 @@ begin
       GetCurrentDir);
     StartExecutionTimeout(FOptions.TimeoutMs);
     SetMaxStackDepth(DEFAULT_STACK_DEPTH);
-    Executor := CreateTest262Executor(FOptions.Mode);
-    Engine := TGocciaEngine.Create('<test262-host-eval>', Source, Executor,
+    Engine := TGocciaEngine.Create('<test262-host-eval>', Source,
       EngineOptions.Capabilities);
-    ConfigureTest262Engine(Engine, Executor, EngineOptions);
+    ConfigureTest262Engine(Engine, EngineOptions);
     if FOptions.HostEvalDeterministic then
       Engine.HostEnvironment.UseDeterministicProfile;
     Engine.WarningUnsupportedFeatures :=
@@ -1886,7 +1965,6 @@ begin
     PrintHost.Free;
     Host.Free;
     Engine.Free;
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -1898,10 +1976,6 @@ begin
     Exit(RunHostEval);
   WriteLn('Suite:         ', FOptions.SuiteDir);
   WriteLn('Categories:    ', FOptions.Categories);
-  if FOptions.Mode = t262emBytecode then
-    WriteLn('Mode:          bytecode')
-  else
-    WriteLn('Mode:          interpreted');
   WriteLn('Jobs:          ', FOptions.Jobs);
   WriteLn('Timeout:       ', FOptions.TimeoutMs, 'ms');
   if FOptions.ShardCount > 0 then
@@ -1950,6 +2024,13 @@ begin
       end;
     end;
   finally
+    { As TGocciaApplication.RunApplication does: a worker the watchdog
+      abandoned may still read the application, so end the process before
+      freeing it. }
+    EndProcessIfWorkerAbandoned(ExitCode);
     App.Free;
+    { As TGocciaApplication.RunApplication does: the main thread's collector
+      destroys what it still manages (#1592), unless a worker was abandoned. }
+    ShutdownMainThreadRuntime;
   end;
 end.

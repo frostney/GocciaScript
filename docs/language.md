@@ -37,7 +37,9 @@ Annex B is not a general compatibility target before 1.0. ECMA-262 describes Ann
 | `--compat-for-in-loop` | `for...in` property enumeration | Use `Object.keys()` / `Object.entries()` with `for...of` |
 | `--compat-while-loops` | `while` and `do...while` | Use `for...of`, iterators, or array methods when possible |
 
-Runtime type enforcement (`--strict-types`) is a GocciaScript extension separate from ECMAScript compatibility. The TC39 proposal gives annotations no runtime effect by default; the extension enforces supported annotations and inferred primitive contracts in interpreter and bytecode modes. It is not a static structural checker.
+`--compat-non-strict-mode`, the mapped `arguments` object, and the global-object binding of a top-level `var` apply to script source only. An entry with a top-level `import` or `export` declaration is module source unless `--source-type=script` names it, so those behaviours do not apply to it; see [Entry source type](#modules).
+
+Runtime type enforcement (`--strict-types`) is a GocciaScript extension separate from ECMAScript compatibility. The TC39 proposal gives annotations no runtime effect by default; the extension enforces supported annotations and inferred primitive contracts at runtime. It is not a static structural checker.
 
 `--warning-unsupported-features` is also separate from ECMAScript compatibility. It changes parser diagnostics for disabled syntax from hard errors back into the historical warning/recovery path, but it does not enable `var`, `function`, loose equality, labels, legacy loops, `for...in`, or `with` semantics. Use the matching `--compat-*` flag when code needs those semantics.
 
@@ -104,9 +106,11 @@ class C {
 }
 ```
 
-**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason. Top-level `await` works identically in interpreter mode and bytecode mode.
+**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason.
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
+
+**Unsettled top-level `await`:** A top-level `await` on a promise that nothing left in the run can settle fails the run with `TypeError: await: Promise did not settle after microtask drain`.
 
 ### Classes
 
@@ -162,7 +166,7 @@ class Counter {
 
 ### Explicit Resource Management
 
-`using` and `await using` declarations (ES2026 §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported in interpreter and bytecode mode. In interpreter mode, a `using` or `await using` declared directly in a function body currently throws `using declaration outside of a block scope`; wrap it in an explicit block inside the function, as in the sample below ([#1275](https://github.com/frostney/GocciaScript/issues/1275)). Bytecode mode accepts both forms.
+`using` and `await using` declarations (ES2026 §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported, in a block or directly in a function body.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
 - `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
@@ -186,7 +190,9 @@ const fn = async () => {
 
 ### Modules
 
-ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`; `.mjs` and `.mts` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. A module is evaluated once: an import that resolves to a module-source entry file, directly or through an import cycle, gets the entry's own module record, which is already evaluating. A script-source entry is not a module, so an import of its own file loads that file as a separate module, which evaluates once on its own. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery. Bare specifiers such as `import "zod"` resolve against `node_modules` only when the `import` capability grants it (`--allow-import=node_modules`); see [Module Resolution](module-resolution.md) for the resolution order, the supported `exports` subset, and the deviations from Node.
+ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`. Structured-data imports are also supported for `.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. A module is evaluated once: an import that resolves to a module-source entry file, directly or through an import cycle, gets the entry's own module record, which is already evaluating. A script-source entry is not a module, so an import of its own file loads that file as a separate module, which evaluates once on its own. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery. Bare specifiers such as `import "zod"` resolve against `node_modules` only when the `import` capability grants it (`--allow-import=node_modules`); see [Module Resolution](module-resolution.md) for the resolution order, the supported `exports` subset, and the deviations from Node.
+
+**Entry source type.** An imported module is always module source. An entry file is module source when it is `.mjs` or `.mts`, when `--source-type=module` or `"source-type": "module"` names it, or, with no source type named, when it has a top-level `import` or `export` declaration ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). Any other entry is script source, and so is any entry run with `--source-type=script` or `"source-type": "script"`, which keep accepting `import` and `export` declarations. A dynamic `import()` or an `import.meta` reference does not make an entry module source; `import.meta` in a script-source entry stays a `SyntaxError`. An entry that becomes module source this way behaves as an imported module: its top-level `var` and function declarations are not properties of `globalThis`, top-level `this` is `undefined`, `import.meta` is available, and it is strict, so the script-only compatibility behaviour (`--compat-non-strict-mode`, mapped `arguments`, Annex B block functions, and the global `var` binding of `--compat-var`) does not apply to it. Name `--source-type=script` to keep that behaviour for such a file. Node.js detects module syntax the same way for an ambiguous `.js` file, except that it also counts `import.meta`, top-level `await` and a lexical redeclaration of a CommonJS wrapper name (`require`, `module`, `exports`, `__filename` or `__dirname`).
 
 Hosts can supply ordinary ES modules through virtual-module configuration. See
 [Virtual Module Configuration](virtual-modules.md) for the complete reference.
@@ -273,7 +279,7 @@ import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx,
 
 Side-effect imports (`import "module";`) are supported and evaluate the dependency for its side effects. Wildcard re-exports (`export * from "module";`) are supported and forward named exports from the dependency; as in ECMAScript, they do not forward the dependency's default export.
 
-`import.meta` (ES2026 §13.3.12) is supported in module source and provides per-module metadata. Module source means an imported module, an `.mjs`/`.mts` entry, or an entry run with `--source-type=module`; in a default `.js` script entry, `import.meta` is a `SyntaxError`. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
+`import.meta` (ES2026 §13.3.12) is supported in module source and provides per-module metadata. Module source means an imported module, an `.mjs`/`.mts` entry, an entry with a top-level `import` or `export` declaration, or an entry run with `--source-type=module` (see [Entry source type](#modules)); in a script-source entry, `import.meta` is a `SyntaxError`. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
 
 - **`import.meta.url`** — the current module's canonical address. Filesystem modules use a `file://` URL for the absolute path (e.g., `file:///Users/me/project/src/main.js`); virtual modules preserve configured addresses such as `host:config`.
 - **`import.meta.resolve(specifier)`** — a synchronous function that resolves a module specifier relative to the current module through the ordinary module loader. Filesystem targets return `file://` URLs, while virtual targets preserve their canonical configured addresses. Throws `TypeError` if called without arguments.
@@ -403,7 +409,7 @@ Each value is awaited before the loop body runs. Works with sync iterables too �
 
 ### JSX
 
-**Enabled by default** via `DefaultPreprocessors`. JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer/parser/evaluator untouched. Embedders can disable JSX via `Engine.Preprocessors := []`.
+**Enabled by default** via `DefaultPreprocessors`. JSX is handled by a source-to-source pre-pass transformer that converts JSX syntax into `createElement` function calls before the main compilation pipeline. This keeps the core lexer, parser and compiler untouched. Embedders can disable JSX via `Engine.Preprocessors := []`.
 
 Users must provide their own `createElement` (and `Fragment` for `<>...</>`) in scope:
 
@@ -447,6 +453,7 @@ Current gaps from full ECMAScript RegExp semantics:
 
 - The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
 - The `v` flag (Unicode sets) supports set notation: nested classes, intersection (`&&`), subtraction (`--`), string literals (`\q{…}`), and properties of strings such as `\p{RGI_Emoji}`.
+- Groups, lookarounds and nested `v`-flag classes may nest 1,023 levels deep (1,024 with the pattern itself); a deeper pattern is a `SyntaxError` (`Invalid regular expression: nesting exceeds the supported limit of 1024 levels`). See [Nesting Depth](#nesting-depth).
 - A match attempt stops with an `Error` at either of two engine limits: 100 steps per subject code unit, at least 10,000,000 (`Maximum regular expression step count exceeded`), or 10,000,000 backtrack entries (`Maximum regular expression backtrack stack size exceeded`). A greedy loop over one character, class or dot (`a*`, `.*`, `[a-z]+`) keeps one entry for its whole run; loops over wider bodies such as `(?:ab)*`, and any loop inside a lookbehind, keep one per iteration. See [ADR 0128](adr/0128-regexp-vm-resource-limits.md).
 
 ## TC39 Proposal Details
@@ -466,7 +473,7 @@ TC39 Stage 2.7 decorators ([proposal-decorators](https://github.com/tc39/proposa
 - Auto-accessors (`@decorator accessor prop = value;`)
 - Private elements (`@decorator #method() {}`)
 
-**Decorator context object properties:** `kind`, `name`, `access` (with `get`/`set`), `static`, `private`, `addInitializer`, `metadata`.
+**Decorator context object properties:** `kind`, `name`, `access` (with `get`/`set`; a private method's has `get` and `has`, which check the class's brand and return the decorated method), `static`, `private`, `addInitializer`, `metadata`.
 
 **Decorator expressions:** Identifiers (`@log`), member access (`@decorators.log`), call expressions (`@factory(arg)`), and parenthesized expressions (`@(expr)`).
 
@@ -487,6 +494,8 @@ The storage is a private name of its own, so it is not an own property, and the 
 - Static method/getter/setter: during class definition, after static methods are placed.
 - Non-static method/getter/setter: during class construction, before field initialization.
 - Field/accessor: during construction, immediately after the decorated element is initialized.
+
+`addInitializer` throws a `TypeError` when its argument is not callable, and when it is called after its decorator has returned, for example through a context the decorator kept. Each decorator gets its own context, so a later decorator cannot add initializers through an earlier one's `addInitializer` either.
 
 **`Symbol.metadata`:** Each decorated class receives a `[Symbol.metadata]` property containing a null-prototype object. Metadata objects inherit from the parent class's metadata via prototype chain.
 
@@ -523,13 +532,13 @@ Decorator metadata works as described in [Decorators](#decorators-stage-27) — 
 
 Supported — the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/)
 proposal's types-as-comments semantics by default, with the optional
-`--strict-types` runtime extension adding enforcement in both execution modes.
+`--strict-types` runtime extension adding runtime enforcement.
 See [Type Annotations](type-annotations.md) for the supported syntax, the
 extension-driven `<` disambiguation, and the unsupported forms.
 
 ### Pattern Matching (Stage 1)
 
-GocciaScript supports the Stage 1 [TC39 Pattern Matching](https://tc39.es/proposal-pattern-matching/) draft in interpreter mode and bytecode mode.
+GocciaScript supports the Stage 1 [TC39 Pattern Matching](https://tc39.es/proposal-pattern-matching/) draft.
 
 ```javascript
 const result = match (message) {
@@ -657,7 +666,7 @@ With `let`/`const`, accessing before declaration is a `ReferenceError` (Temporal
 
 When disabled (default), `var` declarations are a `SyntaxError`. With `--warning-unsupported-features`, the parser warns and skips the declaration for migration diagnostics, but no `var` binding is created. Use `--compat-var` for real `var` semantics.
 
-When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring, for-of, and enabled for-in support. Script-level `var` bindings are global-backed: they create or reuse own `globalThis` properties, new properties are writable/enumerable/non-configurable, and declaration-only redeclarations preserve an existing own global property value. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [interpreter.md § Scope Chain Design](interpreter.md#scope-chain-design).
+When enabled (CLI: `--compat-var`, engine API: include `cfVar` in `Engine.Compatibility`, config: `{"compat-var": true}`), `var` declarations follow ES2026 §14.3.2 semantics: function-scoped (escapes blocks), hoisted to function top as `undefined`, redeclaration allowed, no TDZ, with destructuring, for-of, and enabled for-in support. Script-level `var` bindings are global-backed: they create or reuse own `globalThis` properties, new properties are writable/enumerable/non-configurable, and declaration-only redeclarations preserve an existing own global property value. Var bindings are stored in a separate binding map (`FVarBindings`) on function/module/global scopes, distinct from lexical bindings. See [Architecture § Scope Chain Design](architecture.md#scope-chain-design).
 
 ### `function` Keyword
 
@@ -681,17 +690,17 @@ GocciaScript provides two function definition styles that cover most use cases w
 When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Engine.Compatibility`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-arguments-object`.
 
 - **Function declarations** (`function name(params) { body }`) parse as `TGocciaFunctionDeclaration` nodes whose body is backed by `TGocciaFunctionExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.4 (InstantiateOrdinaryFunctionObject) / §10.2.11 (FunctionDeclarationInstantiation) semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
-- **Sloppy block-level function declarations** follow Annex B web-compatibility semantics only when both `--compat-function` and `--compat-non-strict-mode` are active for script source. In that mode, entering a block or switch case initializes the block lexical binding, and reaching an ordinary `function` declaration updates the var binding of its name. The declaration stays purely block-scoped, with no var binding, when a parameter of the enclosing function has its name or when a `var` in its place would be an early error: a `let`, `const`, `class` or other lexical declaration of the name in the function body, the script, or an enclosing block or loop head, another function declaration of the name in an enclosing block, or a destructured catch parameter (duplicate declarations in one block all keep the var binding, as in SpiderMonkey and V8). A function declaration that is the whole body of an `if` or `else` clause behaves as if it were in a block of its own. The bytecode compiler decides this in `Goccia.Compiler.BlockFunctions`; the interpreter still updates the outer binding when the parameter list has an expression, for `if`-clause declarations, and for a lexical declaration in an enclosing block ([#1491](https://github.com/frostney/GocciaScript/issues/1491)). Strict code, module source, `async function`, `function*`, and `async function*` keep GocciaScript's block-scoped behavior.
+- **Sloppy block-level function declarations** follow Annex B web-compatibility semantics only when both `--compat-function` and `--compat-non-strict-mode` are active for script source. In that mode, entering a block or switch case initializes the block lexical binding, and reaching an ordinary `function` declaration updates the var binding of its name. The declaration stays purely block-scoped, with no var binding, when a parameter of the enclosing function has its name or when a `var` in its place would be an early error: a `let`, `const`, `class` or other lexical declaration of the name in the function body, the script, or an enclosing block or loop head, another function declaration of the name in an enclosing block, or a destructured catch parameter (duplicate declarations in one block all keep the var binding, as in SpiderMonkey and V8). A function declaration that is the whole body of an `if` or `else` clause behaves as if it were in a block of its own. The bytecode compiler decides this in `Goccia.Compiler.BlockFunctions`. Strict code, module source, `async function`, `function*`, and `async function*` keep GocciaScript's block-scoped behavior.
 - **Function expressions** (`const f = function(params) { body }`) parse as `TGocciaFunctionExpression` nodes. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.5 (InstantiateOrdinaryFunctionExpression) semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
 - **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
-- **`prototype` property** — Per ES2026 §10.2.5 MakeConstructor, function declarations and expressions, generator declarations and expressions, and async generator declarations and expressions all carry an own `prototype` data property whose value is a fresh ordinary object. Plain async functions, arrow functions, concise object/class methods, and getter/setter functions do not. The `prototype` descriptor is `{ writable: true, enumerable: false, configurable: false }` for ordinary functions and the same `{ writable: true, enumerable: false, configurable: false }` for generators and async generators (§15.5 / §15.6). For ordinary functions only, the prototype object additionally carries an own `constructor` data property — `{ writable: true, enumerable: false, configurable: true }` — back-referencing the function. Generator and async-generator prototypes do **not** receive an own `constructor`: per §27.5.1.1 / §27.7.1.1, `g.prototype.constructor` is inherited from `%GeneratorFunction.prototype.prototype%` / `%AsyncGeneratorFunction.prototype.prototype%` (resolving to the corresponding non-callable function prototype object), not the specific generator function — so an own back-reference would be incorrect. Generator prototype objects inherit from `%GeneratorPrototype%`, and async-generator prototype objects inherit from `%AsyncGeneratorPrototype%`; those intrinsic prototype objects are realm-owned and shared by interpreter and bytecode execution.
+- **`prototype` property** — Per ES2026 §10.2.5 MakeConstructor, function declarations and expressions, generator declarations and expressions, and async generator declarations and expressions all carry an own `prototype` data property whose value is a fresh ordinary object. Plain async functions, arrow functions, concise object/class methods, and getter/setter functions do not. The `prototype` descriptor is `{ writable: true, enumerable: false, configurable: false }` for ordinary functions and the same `{ writable: true, enumerable: false, configurable: false }` for generators and async generators (§15.5 / §15.6). For ordinary functions only, the prototype object additionally carries an own `constructor` data property — `{ writable: true, enumerable: false, configurable: true }` — back-referencing the function. Generator and async-generator prototypes do **not** receive an own `constructor`: per §27.5.1.1 / §27.7.1.1, `g.prototype.constructor` is inherited from `%GeneratorFunction.prototype.prototype%` / `%AsyncGeneratorFunction.prototype.prototype%` (resolving to the corresponding non-callable function prototype object), not the specific generator function — so an own back-reference would be incorrect. Generator prototype objects inherit from `%GeneratorPrototype%`, and async-generator prototype objects inherit from `%AsyncGeneratorPrototype%`; those intrinsic prototype objects are realm-owned.
 
 ### Loose Equality (`==` and `!=`)
 
 **Implemented; disabled by the recommended profile.** Use `===` and `!==` by default. Enable `--compat-loose-equality` (CLI flag, `cfLooseEquality` in `Engine.Compatibility`, or `{"compat-loose-equality": true}` in config) when standard loose-equality semantics are required.
 
-When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal) in both interpreter and bytecode modes, including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
+When enabled, `==` and `!=` follow [ES2026 §7.2.13 IsLooselyEqual](https://tc39.es/ecma262/2026/multipage/abstract-operations.html#sec-islooselyequal), including `null == undefined`, string/number coercion, boolean-to-number coercion, BigInt/string and BigInt/number comparisons, and object `ToPrimitive` conversion.
 
 When disabled (default), `==` and `!=` are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by making the expression evaluate to `undefined`:
 
@@ -749,17 +758,12 @@ ASI also interacts with the type syntax; see [Type Annotations](type-annotations
 
 ```pascal
 // Enable ASI via the engine API
-Executor := TGocciaInterpreterExecutor.Create;
+Engine := TGocciaEngine.Create(FileName, Source);
 try
-  Engine := TGocciaEngine.Create(FileName, Source, Executor);
-  try
-    Engine.Compatibility := [cfASI];
-    Engine.Execute;
-  finally
-    Engine.Free;
-  end;
+  Engine.Compatibility := [cfASI];
+  Engine.Execute;
 finally
-  Executor.Free;
+  Engine.Free;
 end;
 ```
 
@@ -768,12 +772,14 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 - A semicolon is inserted when a newline separates the current and next token
 - A semicolon is inserted before `}` or at EOF
 - Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules
+- Only a newline between two tokens counts, including one inside a multi-line comment. A newline inside a token, such as a multi-line template literal or a string's line continuation, is part of that token: `return`, `throw` or `yield` followed on the same line by a template that spans lines returns, throws or yields the template
+- With or without ASI, a line break between `yield` and `*` or before an arrow function's `=>` is a `SyntaxError`, and a line break after `async` before a method name or `*` makes `async` a property name rather than an async method's prefix: an object literal then needs a comma, and in a class body it is a field named `async` that ASI ends
 
 ### Traditional `for(init; test; update)` Loop
 
 **Implemented; disabled by the recommended profile.** Enable `--compat-traditional-for-loop` (CLI flag, `cfTraditionalFor` in `Engine.Compatibility`, or `{"compat-traditional-for-loop": true}` in config) when a program or conformance suite needs ECMAScript `for(init; test; update)` semantics.
 
-When disabled (default), `for(init; test; update)` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
+When disabled (default), `for(init; test; update)` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, `for(init; test; update) body` is fully supported:
 
 - `let`/`const` in init create a fresh per-iteration lexical environment per [ES2026 §14.7.4.3](https://tc39.es/ecma262/#sec-forbodyevaluation), so closures captured during iteration N pin to that iteration's binding (the textbook `fns.push(() => i)` case yields `[0, 1, 2]`, not `[3, 3, 3]`).
 - `var` in init requires both `--compat-var` and `--compat-traditional-for-loop`, hoists out of the loop, and is shared across iterations (closures all see the final value).
@@ -797,7 +803,7 @@ items.reduce((acc, item) => acc + item, 0);
 
 **Implemented; disabled by the recommended profile.** Enable `--compat-for-in-loop` (CLI flag, `cfForIn` in `Engine.Compatibility`, or `{"compat-for-in-loop": true}` in config) when a program or conformance suite needs ECMAScript property enumeration semantics.
 
-When disabled (default), `for...in` declaration and assignment-target forms are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, declaration-head loops such as `for (const key in object) body` / `for (let key in object) body` and assignment-target loops such as `for (key in object) body` are supported in interpreter and bytecode modes:
+When disabled (default), `for...in` declaration and assignment-target forms are `SyntaxError`s. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, declaration-head loops such as `for (const key in object) body` / `for (let key in object) body` and assignment-target loops such as `for (key in object) body` are supported:
 
 - The right-hand side follows ECMAScript `ForIn/OfHeadEvaluation`: `null` and `undefined` produce an empty loop; other primitives are boxed with `ToObject`.
 - The loop enumerates enumerable string property names, including inherited enumerable properties, and never returns symbol keys.
@@ -817,7 +823,7 @@ for (const key of Object.keys(obj)) {
 
 **Implemented; disabled by the recommended profile.** Enable `--compat-while-loops` (CLI flag, `cfWhileLoops` in `Engine.Compatibility`, or `{"compat-while-loops": true}` in config) when a program or conformance suite needs ECMAScript `while` or `do...while` semantics.
 
-When disabled (default), `while` and `do...while` syntax is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating each loop as a no-op. When enabled, both loop forms are supported in interpreter and bytecode modes:
+When disabled (default), `while` and `do...while` syntax is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating each loop as a no-op. When enabled, both loop forms are supported:
 
 - `while (condition) body` evaluates the condition before each iteration and skips the body when the initial condition is falsy.
 - `do body while (condition);` runs the body once before testing the condition.
@@ -850,7 +856,7 @@ By default, assigning to a read-only property, setter-less accessor, or non-exte
 
 ### `delete` Semantics
 
-By default, GocciaScript follows strict delete behavior: deleting an unqualified identifier is an error, and deleting a non-configurable property throws `TypeError`. With `--compat-non-strict-mode` in script source, legacy non-strict delete return values are enabled in both interpreter and bytecode modes. `delete name` returns `false` for declared bindings, deletes configurable global object properties when the identifier resolves there, and returns `true` for unresolvable names. `delete obj.prop` and `delete obj[key]` return `false` for non-configurable properties instead of throwing. Accessing a property through `null` or `undefined` still throws `TypeError`.
+By default, GocciaScript follows strict delete behavior: deleting an unqualified identifier is an error, and deleting a non-configurable property throws `TypeError`. With `--compat-non-strict-mode` in script source, legacy non-strict delete return values are enabled. `delete name` returns `false` for declared bindings, deletes configurable global object properties when the identifier resolves there, and returns `true` for unresolvable names. `delete obj.prop` and `delete obj[key]` return `false` for non-configurable properties instead of throwing. Accessing a property through `null` or `undefined` still throws `TypeError`.
 
 ### Labeled Statements
 
@@ -866,10 +872,11 @@ Warning: Labeled statements are not supported in GocciaScript
 
 In warning mode, the labeled statement itself (the statement after the `:`) is still parsed and executed normally. For example, `myLabel: x = 2;` strips the label and executes `x = 2;`. If the labeled statement is itself unsupported (e.g., `outer: for (...)`), both a label warning and a loop warning are emitted.
 
-When enabled, labels can target `break` and `continue` statements in interpreter and bytecode modes:
+When enabled, labels can target `break` and `continue` statements:
 
 - `break label;` exits the matching enclosing labeled statement, including labeled blocks, `switch`, `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
 - `continue label;` targets matching enclosing iteration statements only: `for...of`, `for await...of`, traditional `for(;;)` with `--compat-traditional-for-loop`, `for...in` with `--compat-for-in-loop`, and `while`/`do...while` with `--compat-while-loops`.
+- A label is any ECMAScript `LabelIdentifier`, including contextual words such as `as`, `from` and `async`. `let` and `static` are labels only in non-strict code (`--compat-non-strict-mode`); reserved words such as `enum` never are.
 
 With `--compat-function` and `--compat-non-strict-mode`, sloppy labeled function declarations follow the same Annex B compatibility rules as unlabeled block-level function declarations. Direct sloppy labeled function declarations are valid, but a labeled function declaration cannot be the immediate body of `if`, `else`, `with`, or an iteration statement; wrap it in a block if that legacy shape is required.
 
@@ -904,6 +911,12 @@ parseInt("10", 10);
 isNaN("abc"); // true, because the global form coerces
 ```
 
+### Nesting Depth
+
+**Limited to 1,024 levels of nesting and a syntax tree 4,096 levels tall.** ECMA-262 sets no limit on how deeply source nests, but parsing and compiling nested source recurses on the native stack, so every engine has one. GocciaScript counts a level of nesting for each nested statement; each expression in an operand position (an array element, a property value, a call argument, a template substitution, a parenthesized expression, an arrow body, a conditional branch, an assignment's right-hand side); and each prefix operator, `new`, `**` operand, `extends` clause, binding pattern and match pattern. Past 1,024 the parser reports `SyntaxError: Nesting exceeds the supported limit of 1024 levels`. Operator, member and call chains (`a + b + c`, `a.b().c`) are parsed in a loop and are not nesting, but the tree they build is as tall as the chain is long and every later pass walks it recursively. So the syntax tree of a statement may be at most 4,096 levels tall, counting each level of nesting and each link of a chain (a method call `.m()` is two links); a taller one is `SyntaxError: Nesting, counting each link of operator and call chains, exceeds the supported limit of 4096 levels`. The parser bounds the height from below each level up, adding all the links parsed directly inside the level, so chains that sit side by side in one expression (`a.b + c.d`) count together. Lists do not count: the statements of a block, array elements, call arguments and comma-separated expressions can be as long as memory allows. Both limits apply in the runner, the bundler and the test runner, where a deep or long enough program used to crash the process. Real code stays far below them: in the bundles the benchmarks run (Web Tooling, JetStream, are-we-fast-yet) and 542 distinct npm files, the deepest nesting is 172 levels and the tallest tree 1,339, from a chain of 658 `.addRange(a, b)` calls in the Unicode tables that Babel bundles.
+
+Source parsed, or a pattern compiled, where the native stack is already deep, such as `ShadowRealm.prototype.evaluate` or `new RegExp` at the bottom of a deep recursion, can run out of stack before 1,024 levels. It then fails with `SyntaxError: Nesting is too deep for the native stack that is left` instead of overflowing. Matching recurses once per nested lookaround, so a pattern compiled earlier and matched at the bottom of a deep recursion can run out of stack too; the match then throws `RangeError: Maximum call stack size exceeded`, as a call past the call stack limit does, since the pattern itself is valid. Regular expression patterns share the limit; see [Regular Expressions](#regular-expressions) and [Embedding — Call Stack Depth Limit](embedding.md#call-stack-depth-limit).
+
 ## Strictness Guarantees
 
 GocciaScript operates in an implicit strict mode (see [Errors](errors.md) for the full error type reference):
@@ -926,7 +939,7 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 | Context | `this` value |
 |---------|-------------|
 | Module level (module source) | `undefined` |
-| Script top level (default `.js` entry) | `globalThis` |
+| Script top level (`.js` entry without `import`/`export`, or `--source-type=script`) | `globalThis` |
 | Arrow function | Inherited from lexical (enclosing) scope |
 | Shorthand method (`method() {}`) | Call-site object (the receiver) |
 | Class method | Call-site object (the instance) |
@@ -938,7 +951,7 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 Arrow functions **never** receive their own `this` — they always inherit from their defining scope:
 
 ```javascript
-// Module source (.mjs, --source-type=module, or an imported module)
+// Module source (.mjs, an entry with import/export, --source-type=module, or an imported module)
 const obj = {
   value: 42,
   arrow: () => typeof this,     // "undefined" — arrow inherits module-level this ("object" in a script, where this is globalThis)

@@ -8,6 +8,8 @@ import {
   GOCCIASCRIPT_SUMMARY,
   NODE_COMPATIBILITY_ANSWER,
   POSITIONING_FAQS,
+  PRODUCTION_READY_ANSWER,
+  PRODUCTION_READY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
   VITEST_COMPATIBILITY_ANSWER,
 } from "@/lib/positioning";
@@ -45,8 +47,32 @@ describe("GocciaScript positioning", () => {
       /embedded in native applications/i,
     ]);
     expect(GOCCIASCRIPT_SUMMARY).toMatch(
-      /AI agents[\s\S]+embedded in native applications/i,
+      /AI agents[\s\S]+sandbox-first ECMAScript runtime[\s\S]+Hosts define[\s\S]+embedded in native applications/,
     );
+    expect(GOCCIASCRIPT_SUMMARY.indexOf("AI agents")).toBeLessThan(
+      GOCCIASCRIPT_SUMMARY.indexOf("FreePascal"),
+    );
+    expect(GOCCIASCRIPT_SUMMARY.indexOf("test262")).toBeLessThan(
+      GOCCIASCRIPT_SUMMARY.indexOf("FreePascal"),
+    );
+    expect(GOCCIASCRIPT_SUMMARY).toContain("Shotcup");
+  });
+
+  test("states production use and pre-1.0 upgrade guidance together", () => {
+    expectConcepts(PRODUCTION_READY_ANSWER, [
+      /Shotcup/,
+      /test262/,
+      /fuzz/,
+      /pre-1\.0/,
+      /pin a version/,
+    ]);
+    expect(PRODUCTION_READY_ANSWER).not.toContain(
+      "expect breaking changes between any two releases",
+    );
+    expect(POSITIONING_FAQS).toContainEqual({
+      question: PRODUCTION_READY_QUESTION,
+      answer: PRODUCTION_READY_ANSWER,
+    });
   });
 
   test("distinguishes the implementation from the recommended profile", () => {
@@ -67,7 +93,7 @@ describe("GocciaScript positioning", () => {
       /TC39 Type Annotations proposal/i,
       /types-as-comments runtime model/i,
       /optional --strict-types.+runtime enforcement/i,
-      /interpreter and bytecode modes/i,
+      /inferred primitive contracts/i,
       /not a replacement.+static structural type checker/i,
     ]);
   });
@@ -198,6 +224,20 @@ describe("GocciaScript positioning", () => {
       expect(output).toContain(NODE_COMPATIBILITY_ANSWER);
       expect(output).toContain(VITEST_COMPATIBILITY_ANSWER);
       expect(output).toContain(COMPILER_SUPPORT_ANSWER);
+      expect(output).toContain(
+        `- Production readiness: ${PRODUCTION_READY_ANSWER}`,
+      );
+      const distinctions = output.slice(
+        output.indexOf("## Important distinctions"),
+      );
+      expect(distinctions).toMatch(/## Important distinctions\s+- Purpose:/);
+      expect(distinctions).toContain(
+        "- Evidence: test262 on every pull request",
+      );
+      expect(distinctions).toContain("weekly GC stress");
+      expect(distinctions).toContain(
+        "Shotcup's hosted sandboxes (shotcup.dev)",
+      );
     }
   });
 });

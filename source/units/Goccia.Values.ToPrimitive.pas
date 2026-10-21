@@ -17,14 +17,13 @@ function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitive
 // else is coerced via ToString. Callers must check the returned type.
 function ToPropertyKey(const AValue: TGocciaValue): TGocciaValue;
 
-// Every computed property access on a possibly-nullish base must call
-// ToPropertyKeyForBase rather than a bare ToPropertyKey. Pass AForWrite for store
-// targets so the message reads "cannot set properties" rather than "cannot read
-// properties".
+// Every computed property access on a possibly-nullish base must reject the
+// nullish base with this before it converts the key with ToPropertyKey
+// (ES2026 §6.2.5.5 GetValue steps 3.a then 3.c, §6.2.5.6 PutValue the same).
+// Pass AForWrite for store targets so the message reads "cannot set
+// properties" rather than "cannot read properties".
 procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
   const AForWrite: Boolean = False); {$IFDEF FPC}inline;{$ENDIF}
-function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
-  const AForWrite: Boolean = False): TGocciaValue;
 
 implementation
 
@@ -36,6 +35,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
@@ -58,7 +58,13 @@ begin
     Roots.Initialize;
     Args := TGocciaArgumentsCollection.Create;
     try
-      AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
+      // ES2026 §7.1.1.1 OrdinaryToPrimitive step 3.b.i: Call(method, O).
+      // IsCallable admits any callable; only a function object takes the
+      // direct path, and a callable Proxy or a class goes through [[Call]].
+      if Method is TGocciaFunctionBase then
+        AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue)
+      else
+        AResult := InvokeCallable(Method, Args, AThisValue);
       Roots.Add(AResult);
       Result := AResult.IsPrimitive;
     finally
@@ -117,18 +123,30 @@ begin
       // GetMethod step 3: If IsCallable(func) is false, throw a TypeError.
       if not ExoticToPrim.IsCallable then
         ThrowTypeError(SErrorToPrimitiveNotCallable, SSuggestToPrimitiveNotCallable);
-      // Step 2.b: Call(exoticToPrim, input, « hint »)
-      Args := TGocciaArgumentsCollection.Create;
-      try
-        Args.Add(HintValue(AHint));
-        Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue);
-      finally
-        Args.Free;
-      end;
       { Frame-rooted for the same reason as TryCallMethod: a shared temp-root
-        entry removed here is removed for whoever else was holding it. }
+        entry removed here is removed for whoever else was holding it. A getter
+        can return a fresh method, held only here while the hint string is
+        made on first use, which can collect. }
       Roots.Initialize;
       try
+        // And the input, which the caller can hold only in a local (a
+        // comparator's result, an operand).
+        Roots.Add(AValue);
+        Roots.Add(ExoticToPrim);
+        // Step 2.b: Call(exoticToPrim, input, « hint »)
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          Args.Add(HintValue(AHint));
+          // A callable Proxy or a class passes GetMethod too (§7.3.10 step 3
+          // asks only IsCallable), so only a function object takes the direct
+          // path.
+          if ExoticToPrim is TGocciaFunctionBase then
+            Result := TGocciaFunctionBase(ExoticToPrim).Call(Args, AValue)
+          else
+            Result := InvokeCallable(ExoticToPrim, Args, AValue);
+        finally
+          Args.Free;
+        end;
         Roots.Add(Result);
         // Step 2.b.ii: If result is not an Object, return result.
         if Result.IsPrimitive then
@@ -248,15 +266,6 @@ begin
   if (ABase is TGocciaNullLiteralValue) or
      (ABase is TGocciaUndefinedLiteralValue) then
     ThrowNullishBasePropertyAccess(ABase, AUncoercedKey, AForWrite);
-end;
-
-// ES2026 §6.2.5.5 GetValue steps 3.a then 3.c (or §6.2.5.6 PutValue, same order):
-// reject a nullish base, then convert the referenced name with ToPropertyKey.
-function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
-  const AForWrite: Boolean): TGocciaValue;
-begin
-  RequireCoercibleBaseForPropertyAccess(ABase, AUncoercedKey, AForWrite);
-  Result := ToPropertyKey(AUncoercedKey);
 end;
 
 end.

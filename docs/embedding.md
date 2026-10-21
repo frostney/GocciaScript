@@ -1,12 +1,12 @@
-<!-- doc-length-limit: 1010 -->
+<!-- doc-length-limit: 1060 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
 
 ## Executive Summary
 
-- **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM)
-- **Sandboxing** — Fix what the engine may reach with an immutable [capability set](permissions.md) (`None` by default); choose runtime extensions explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
+- **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders; the engine compiles to bytecode and runs it on a VM of its own
+- **Sandboxing** — Fix what the engine may reach with an immutable [capability set](permissions.md) (`None` by default); choose runtime extensions explicitly; answer `fetch` through a [transport](#fetch-transport) of your own; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
@@ -47,9 +47,9 @@ These helpers create, execute, and clean up in a single call. The `TGocciaEngine
 | `TGocciaRuntime.RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` through the runtime layer |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
-`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
+`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided; any other entry defaults to `stDetect`, which runs it as module source when it has a top-level `import` or `export` declaration and as script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md); see [Preprocessors and Compatibility](#preprocessors-and-compatibility)). File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
 
-`TGocciaEngine.Execute` remains the public "run the whole source pipeline and execute" API for embedders. Hosts that need parse artifacts without executing can call `TGocciaSourcePipeline.Parse` directly; its result object owns the AST and source map until the caller frees the result or transfers ownership with `TakeProgramNode` / `TakeSourceMap`. Hosts should use the source-pipeline entry points for module source, dynamic `Function` validation, and expression fragments rather than constructing `TGocciaParser` directly; this keeps parser policy in one place.
+`TGocciaEngine.Execute` remains the public "run the whole source pipeline and execute" API for embedders. Hosts that need parse artifacts without executing can call `TGocciaSourcePipeline.Parse` directly; its result object owns the AST and source map until the caller frees the result or transfers ownership with `TakeProgramNode` / `TakeSourceMap`. Hosts should use the source-pipeline entry points for module source, dynamic `Function` validation, and expression fragments rather than constructing `TGocciaParser` directly; this keeps parser policy in one place. For compiled libraries and buffered imports, see [Precompiled bytecode modules](bytecode-loading.md).
 
 ### Instance Usage (Long-Lived Engine)
 
@@ -60,20 +60,20 @@ uses
   Classes,
 
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
   Goccia.Values.Primitives;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   ScriptResult: TGocciaScriptResult;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('session', Source, Executor);
+    Engine := TGocciaEngine.Create('session', Source);
     try
+      // Keep each execution's top-level bindings in the global scope
+      Engine.GlobalBackedTopLevel := True;
+
       // First execution — defines a variable
       Source.Text := 'const x = 42;';
       Engine.Execute;
@@ -86,31 +86,40 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
   end;
 end;
 ```
 
-The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. Variables, functions, and classes defined in previous executions remain available.
+The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. With `GlobalBackedTopLevel` set, variables, functions, and classes defined in previous executions remain available. Each source above has no `import` or `export` declaration, so the default `SourceType` (`stDetect`) runs it as script source. A session whose input may contain such declarations and must keep sharing one global scope sets `Engine.SourceType := stScript`, as `GocciaREPL` does; see [Preprocessors and Compatibility](#preprocessors-and-compatibility).
 
-### Engine Constructor and Executor Ownership
+### Engine Constructor
 
-Callers must pass an explicit executor — `TGocciaInterpreterExecutor` (in `Goccia.Executor.Interpreter`) for tree-walk or `TGocciaBytecodeExecutor` (in `Goccia.Executor.Bytecode`) for the bytecode VM. The engine does not own the executor; the caller frees it after the engine. `TGocciaRuntime`'s file/source convenience overloads handle this internally for embedders who want the default bytecode setup. The realm's global scope is `Engine.GlobalScope`; `Engine.Interpreter` is the tree-walk interpreter, which the engine builds only for a `TGocciaInterpreterExecutor` and leaves nil for a `TGocciaBytecodeExecutor`. Every constructor also has an overload taking a `TGocciaCapabilities` that fixes what the engine may reach outside the process; the overloads without one use `TGocciaCapabilities.None`. See [Permissions](permissions.md). For `net`, `AllowsNetHost(host, port)` judges a URL before any lookup and `AllowsNetAddress(host, port, address)` judges the address the host resolved to. A private, loopback, or link-local address passes only when every layer names it — with the standalone `private` scope or an IP or CIDR scope covering it — so `TGocciaCapabilities.None.Allow(gcNet, 'private')` reaches local services and nothing public, while a host allow alone never reaches a name that resolves privately. Config trust is a CLI policy, not an engine one: nothing in the engine reads a `goccia.json` or a trust store. An embedder that honors project config files reads a file's permission request with `ReadConfigPermissionRequest` (in `Goccia.CLI.Permissions`, from the entries `CLI.ConfigFile.ParseConfigFile` returns) and decides for itself whether to grant it — for example by passing it to `ResolveCapabilities` with `AConfigGrantsAccepted` set to its own decision. `NormalizedPermissionBlock` and `PermissionBlockHash` give the same canonical block and SHA-256 the CLI trusts, if the host wants to keep its own record. Set `Engine.CapabilityProvenance` to say where the set came from in the `capabilities.effective` audit event. See [Permissions — Config trust](permissions.md#config-trust).
+The engine compiles everything it runs to bytecode and runs it on a VM it creates and frees itself, so there is nothing to create or free besides the engine. Settings that shape compilation are engine properties: `StrictTypes`, `Compatibility`, and `GlobalBackedTopLevel`, which binds a program's top-level declarations in the global scope the way a Script's are. It is `False` by default; the CLI hosts set it to `Engine.SourceType <> stModule`, so a Script entry and an entry whose goal is still to be detected bind globally and the engine clears it for a run that settles on module source, and `TGocciaRuntime`'s file/source overloads do the same when they run. The realm's global scope is `Engine.GlobalScope`. Every constructor also has an overload taking a `TGocciaCapabilities` that fixes what the engine may reach outside the process; the overloads without one use `TGocciaCapabilities.None`. See [Permissions](permissions.md). For `net`, `AllowsNetHost(host, port)` judges a URL before any lookup and `AllowsNetAddress(host, port, address)` judges the address the host resolved to. A private, loopback, or link-local address passes only when every layer names it — with the standalone `private` scope or an IP or CIDR scope covering it — so `TGocciaCapabilities.None.Allow(gcNet, 'private')` reaches local services and nothing public, while a host allow alone never reaches a name that resolves privately. Config trust is a CLI policy, not an engine one: nothing in the engine reads a `goccia.json` or a trust store. An embedder that honors project config files reads a file's permission request with `ReadConfigPermissionRequest` (in `Goccia.CLI.Permissions`, from the entries `CLI.ConfigFile.ParseConfigFile` returns) and decides for itself whether to grant it — for example by passing it to `ResolveCapabilities` with `AConfigGrantsAccepted` set to its own decision. `NormalizedPermissionBlock` and `PermissionBlockHash` give the same canonical block and SHA-256 the CLI trusts, if the host wants to keep its own record. Set `Engine.CapabilityProvenance` to say where the set came from in the `capabilities.effective` audit event. See [Permissions — Config trust](permissions.md#config-trust).
+
+#### Upgrading from 0.14
+
+GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor into the engine ([ADR 0138](adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)). Embedding code written for 0.14 stops compiling until it drops the executor:
+
+- **Construction.** Remove the executor argument from every `TGocciaEngine.Create` call, and stop creating and freeing an executor. The units Goccia.Executor, Goccia.Executor.Bytecode and Goccia.Executor.Interpreter are gone, with TGocciaExecutor, TGocciaBytecodeExecutor, TGocciaInterpreterExecutor and TGocciaCompiledModule. `TGocciaRuntime` no longer has constructor overloads that take an executor.
+- **Settings.** Set `GlobalBackedTopLevel` on the engine where 0.14 code set it on the executor. `StrictTypes` and `Compatibility` were already engine properties.
+- **Global scope.** Read `Engine.GlobalScope` where 0.14 code read the global scope through `Engine.Interpreter`. `Engine.Interpreter` and `Engine.Executor` are removed.
+- **Compiled modules.** `CompileModule`, `RetainModule`, `RunModule`, `RunModuleInScope` and `RunModuleForSourceType` take or return `TGocciaBytecodeModule`.
+- **Behavior.** A host that created an interpreter executor now runs bytecode. Where the two executors behaved differently, the bytecode behavior applies.
+
+CLI users have one change: `--mode` and the `"mode"` config key now exit with status 2 ([Build System — Execution Mode](build-system.md#execution-mode)).
 
 ### Automatic Semicolon Insertion
 
 ASI is disabled by default. To enable ECMAScript-compliant automatic semicolon insertion (ES2026 §12.10), include `cfASI` in the engine compatibility set after creating the engine:
 
 ```pascal
-Executor := TGocciaInterpreterExecutor.Create;
+Engine := TGocciaEngine.Create('app.js', Source);
 try
-  Engine := TGocciaEngine.Create('app.js', Source, Executor);
   Engine.Compatibility := [cfASI];  // Semicolons are now optional per ES2026 rules
   Engine.Execute;
 finally
   Engine.Free;
-  Executor.Free;
 end;
 ```
 
@@ -160,7 +169,7 @@ This is the **strongest** isolation boundary the engine provides. Two engines cr
 
 ### What you do not need to do
 
-- **Do not** call `SetCurrentRealm` directly. Engine, interpreter, and bytecode entry points make the realm current through `TGocciaExecutionContextStack`; `CurrentRealm` remains only as the lookup facade used by value units.
+- **Do not** call `SetCurrentRealm` directly. The engine's and the VM's entry points make the realm current through `TGocciaExecutionContextStack`; `CurrentRealm` remains only as the lookup facade used by value units.
 - **Do not** pin or unpin prototype objects manually after engine startup. The realm pins everything stored in a slot via `SetSlot`, and unpins them all at tear-down.
 - **Do not** cache prototype object pointers in long-lived Pascal state. Those objects are realm-scoped — they become invalid the moment the engine that owns them is freed. If you need the current `Array.prototype`, look it up live (e.g. via `Engine.GlobalScope`).
 
@@ -231,7 +240,6 @@ For resolution logic outside that surface (URL imports, in-memory modules, or a 
 ```pascal
 uses
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
   Goccia.Modules.Resolver;
 
 type
@@ -249,19 +257,16 @@ end;
 var
   Resolver: TMyResolver;
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
 begin
   Resolver := TMyResolver.Create('/path/to/project');
-  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('app.js', Source, Resolver, Executor);
+    Engine := TGocciaEngine.Create('app.js', Source, Resolver);
     try
       Engine.Execute;
     finally
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Resolver.Free;  // caller owns the resolver when injected
   end;
 end;
@@ -281,7 +286,6 @@ uses
   SysUtils,
 
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver;
@@ -329,20 +333,17 @@ end;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
   ModuleLoader: TGocciaModuleLoader;
   Resolver: TMemoryResolver;
   Provider: TMemoryContentProvider;
 begin
   Resolver := TMemoryResolver.Create;
   Provider := TMemoryContentProvider.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
   try
     ModuleLoader := TGocciaModuleLoader.Create('memory:/app.js', Resolver,
       Provider);
     try
-      Engine := TGocciaEngine.Create('memory:/app.js', Source,
-        ModuleLoader, Executor);
+      Engine := TGocciaEngine.Create('memory:/app.js', Source, ModuleLoader);
       try
         Engine.Execute;
       finally
@@ -352,14 +353,13 @@ begin
       ModuleLoader.Free;  // caller owns injected module loaders
     end;
   finally
-    Executor.Free;
     Provider.Free;  // caller owns injected providers
     Resolver.Free;
   end;
 end;
 ```
 
-`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached, and the loader checks every read through it against the set: static imports inside the project are exempt, everything else needs a `read` grant ([Permissions](permissions.md#the-module-graph-exemption)). Untrusted-source hosts can deny `read` and supply virtual modules, host modules, or a bounded custom content provider explicitly. Core-language-only embedders that need imports should inject their own provider. With no provider installed, a module load that gets as far as retrieval is refused with a script-catchable `Error` carrying `code === "ERR_MODULE_LOADING_UNSUPPORTED"` rather than a Pascal exception. That covers retrieval only: resolution runs first, so a specifier the resolver rejects — with the default resolver, one whose file is absent from the host filesystem — fails before the provider is consulted, carries no `code`, and raises `TGocciaRuntimeError` across the engine boundary for a static import. Keep guarding the boundary; see [Module loading errors](errors.md#module-loading-errors).
+`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached, and the loader checks every read through it against the set: static imports inside the project are exempt, everything else needs a `read` grant ([Permissions](permissions.md#the-module-graph-exemption)). Untrusted-source hosts can deny `read` and supply virtual modules, host modules, or a bounded custom content provider explicitly. Core-language-only embedders that need imports should inject their own provider. With no provider installed, a module load that gets as far as retrieval is refused with a script-catchable `Error` carrying `code === "ERR_MODULE_LOADING_UNSUPPORTED"` rather than a Pascal exception. That covers retrieval only: resolution runs first, so a specifier the resolver rejects — with the default resolver, one whose file is absent from the host filesystem — fails before the provider is consulted, carries no `code`, and raises `TGocciaRuntimeError` across the engine boundary for a static import. Keep guarding the boundary; see [Module loading errors](errors.md#module-loading-errors). A loader that stays alive across edits reloads a cached module whose provider reports a newer `TryGetLastModified` time: the new version links into the same `TGocciaModule`, so importers and namespace objects read its exports, functions and objects the old version created keep reading the old bindings, and a version that fails to link, or links inside a request that then fails, leaves the old one in place ([ADR 0139](adr/0139-a-reload-links-into-the-cached-module-record.md)).
 
 ### Virtual Modules
 
@@ -472,23 +472,18 @@ Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arr
 When you already have an engine, pass it to the runtime constructor:
 
 ```pascal
-Executor := TGocciaInterpreterExecutor.Create;
+Engine := TGocciaEngine.Create('app.js', Source);
+Runtime := TGocciaRuntime.Create(Engine);
 try
-  Engine := TGocciaEngine.Create('app.js', Source, Executor);
-  Runtime := TGocciaRuntime.Create(Engine);
-  try
-    ApplyLoaderRuntimeProfile(Runtime.Core);
-    Runtime.Execute;
-  finally
-    Runtime.Free;
-    Engine.Free;
-  end;
+  ApplyLoaderRuntimeProfile(Runtime.Core);
+  Runtime.Execute;
 finally
-  Executor.Free;
+  Runtime.Free;
+  Engine.Free;
 end;
 ```
 
-Passing an engine does not transfer ownership by default. Use `TGocciaRuntime.Create(Engine, True)` when the runtime should free the engine. The executor is always owned by the caller — free it after the engine.
+Passing an engine does not transfer ownership by default. Use `TGocciaRuntime.Create(Engine, True)` when the runtime should free the engine. A runtime given an engine leaves its `GlobalBackedTopLevel` setting alone.
 
 ### Runtime Extensions
 
@@ -496,32 +491,51 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 
 | Extension/profile | Provides | Notes |
 |------|----------|-------|
-| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by GocciaRunner (both modes) and GocciaREPL |
+| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by GocciaRunner (host and sandbox mode) and GocciaREPL |
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--allow-ffi` or `"allow-ffi"` in a config file's `permissions` block |
+| `TGocciaSandboxRuntimeExtension` | the import-only `"fs"` and `"goccia"` [sandbox modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas) over a `TGocciaSandboxContext`'s virtual filesystem | GocciaRunner's sandbox mode installs it; see [Sandbox filesystem](#sandbox-filesystem) |
 
 When embedding, grant `ffi` in the engine's capability set and call `InstallFFIIfGranted(Runtime)`; the extension refuses to attach without the grant, and `FFI.open` checks each library path against the `ffi` scopes.
 
 To add the test framework for a custom test runner:
 
 ```pascal
-Executor := TGocciaInterpreterExecutor.Create;
+Engine := TGocciaEngine.Create('tests/my-test.js', Source);
+Runtime := TGocciaRuntime.Create(Engine, True);
 try
-  Engine := TGocciaEngine.Create('tests/my-test.js', Source, Executor);
-  Runtime := TGocciaRuntime.Create(Engine, True);
-  try
-    ApplyTestRunnerRuntimeProfile(Runtime.Core);
-    Runtime.Execute;
-  finally
-    Runtime.Free;
-  end;
+  ApplyTestRunnerRuntimeProfile(Runtime.Core);
+  Runtime.Execute;
 finally
-  Executor.Free;
+  Runtime.Free;
 end;
 ```
 
-Runtime globals and runtime modules can be reduced by installing only concrete extensions, for example `Runtime.Install(TGocciaConsoleRuntimeExtension.Create)`.
+Runtime globals and runtime modules can be reduced by installing only concrete extensions, for example `Runtime.Install(TGocciaConsoleRuntimeExtension.Create)`. An extension with host work of its own (a request, a timer, a callback from another thread) settles it in `WaitForIdle`, which the engine calls when a run has nothing else to do. A job the engine drains afterwards can start more of that work, so the engine repeats its round while any extension's `HasPendingWork` returns True ([ADR 0142](adr/0142-the-run-waits-until-no-extension-has-pending-work.md)). Return True only when `WaitForIdle` will block on that work or make progress on it; a True it does nothing about spins the engine thread. An extension that does not override `HasPendingWork` gets a single pass, so work a late job starts is not waited for. A wait inside `WaitForIdle` should call `CheckExecutionTimeoutNow` and `CheckInstructionLimit` between polls, so the run deadline and a host stop end it.
+
+#### Sandbox filesystem
+
+A script that imports `"fs"` under `TGocciaSandboxRuntimeExtension` sees only the context's in-memory `TSandboxVirtualFileSystem` (`Context.Fs`), which the embedder fills before the run. `Fs.AddReadOnlyPath(Path)` makes a path and everything under it read-only, whether or not it exists yet: every `fs` call that would change something there fails with an `Error` whose `code` is `"EROFS"` ([Sandbox filesystem errors](errors.md#sandbox-filesystem-errors)), thrown by the synchronous form, passed to the callback, or rejecting the promise, and so does deleting or moving a directory that holds it; a `$` shell command that writes there exits with code 1 and prints `read-only file system` on standard error. Reads are unaffected. Mark paths after filling them, because the marks refuse the embedder's own writes too; `Fs.IsReadOnly(Path)` reports whether a path is covered. [ADR 0144](adr/0144-read-only-paths-are-enforced-by-the-virtual-filesystem.md) has the details.
+
+```pascal
+Context := TGocciaSandboxContext.Create;
+Context.Fs.MakeDirectory('/data', True);
+Context.Fs.WriteAllText('/data/input.json', InputJson);
+Context.Fs.MakeDirectory('/out');
+Context.Fs.AddReadOnlyPath('/data');
+Runtime.Install(TGocciaSandboxRuntimeExtension.Create(Context));
+```
+
+The filesystem stamps its files with the wall clock unless the context is given a clock. `TGocciaSandboxContext.Create(QuotaBytes, NodeQuota, Clock)` and `TGocciaSandboxHost.Create(QuotaBytes, NodeQuota, Clock)` take an optional `TSandboxFsClock` (`nil`, the default, is the wall clock). It stamps the root directory, every file the embedder or a script writes, the baseline `CaptureBaseline` forks, and the filesystem of every isolated nested run the host creates, so pass it at creation, before anything is written; `Context.Clock` returns it. The context does not own the clock: free it after the context. `TGocciaSandboxFsHostClock.Create(HostClock)` follows an `IGocciaHostClock`; over `TGocciaHostEnvironment.DeterministicClock` every timestamp is the epoch, in step with an engine that uses the [deterministic profile](host-environment.md#deterministic-profile), which is what `GocciaRunner --deterministic` does in sandbox mode.
+
+```pascal
+FsClock := TGocciaSandboxFsHostClock.Create(TGocciaHostEnvironment.DeterministicClock);
+Context := TGocciaSandboxContext.Create(DEFAULT_SANDBOX_BYTE_QUOTA, DEFAULT_SANDBOX_NODE_QUOTA, FsClock);
+{ ...fill Context.Fs, run engines over it, then free the context before its clock }
+Context.Free;
+FsClock.Free;
+```
 
 ### Preprocessors and Compatibility
 
@@ -530,13 +544,13 @@ Runtime globals and runtime modules can be reduced by installing only concrete e
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
 | `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
-| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` and `.mts` file names infer `stModule` |
-| `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
+| `SourceType` | `TGocciaSourceType` | `stDetect` | Load entry as module source when it has a top-level `import` or `export` (`stDetect`), or always as script (`stScript`) or module (`stModule`) source; `.mjs` and `.mts` file names infer `stModule` |
+| `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations; applies to code compiled after it is set, and the setter updates the global scope |
+| `GlobalBackedTopLevel` | `Boolean` | `False` | Bind a program's top-level declarations in the global scope, as a Script's are; see [Engine Constructor](#engine-constructor) |
 
 ```pascal
-Executor := TGocciaInterpreterExecutor.Create;
+Engine := TGocciaEngine.Create('app.js', Source);
 try
-  Engine := TGocciaEngine.Create('app.js', Source, Executor);
   Engine.Preprocessors := [];              // Disable JSX
   Engine.Compatibility := [
     cfASI,
@@ -549,20 +563,21 @@ try
     cfExperimentalJSModuleSource
   ];                                       // Enable selected source-pipeline flags
   Engine.WarningUnsupportedFeatures := True; // Optional migration mode for disabled syntax diagnostics
-  Engine.SourceType := stModule;           // Run entry as module source (top-level this is undefined; import.meta resolves)
-  Engine.StrictTypes := True;              // Enforce type annotations in both execution modes
+  Engine.SourceType := stScript;           // Always script source, as before ADR 0140; the default stDetect runs an entry with import/export as module source
+  Engine.StrictTypes := True;              // Enforce type annotations
+  Engine.Execute;
 finally
-  Executor.Free;
+  Engine.Free;
 end;
 ```
 
-When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source.
+When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source, and any other entry is detected ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)): the default, `stDetect`, settles the goal in the parse the engine does anyway, so a top-level `import` or `export` declaration makes the entry module source and anything else, a dynamic `import()` or an `import.meta` reference alone included, script source. `Execute` settles the goal of each run and leaves `SourceType` at `stDetect`, so a long-lived engine settles each source on its own. An embedder that wants every entry to run as script source, the behaviour before ADR 0140, sets `Engine.SourceType := stScript`; `stModule` makes every entry module source. A host that parses the entry itself passes `Engine.SourceType` as the source type of its `TGocciaSourcePipelineOptions` and, before `CompileModule` and `RunModuleForSourceType`, assigns the goal the parse settled (`TGocciaSourcePipelineResult.SourceType`, never `stDetect`) to `Engine.SourceType`; those two run anything but `stModule` as script source. A host configures the engine before the parse, so it sets `Engine.GlobalBackedTopLevel := Engine.SourceType <> stModule`, and the engine turns the flag off itself for a run that settles on module source.
 
-**Top-level binding persistence differs between source types.** With `SourceType = stScript`, the engine reuses its global scope (`Engine.GlobalScope`) across every call to `Execute`, which is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, keep `SourceType` at `stScript` (the default) or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
+**Top-level binding persistence differs between source types.** With `SourceType = stScript` and `GlobalBackedTopLevel` set, the engine binds each run's top-level declarations in its global scope (`Engine.GlobalScope`), which it reuses across every call to `Execute`; that is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. Without `GlobalBackedTopLevel` they stay in the run's own frame, and the next `Execute` throws a `ReferenceError` for `x`. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, set `SourceType` to `stScript` (with the default `stDetect`, a source with an `import` or `export` declaration runs as module source) and set `GlobalBackedTopLevel`, or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
 
 ## Injecting Custom Globals
 
-You can inject Pascal functions and values into the script's global scope by working with the engine's interpreter scope directly.
+You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly.
 
 ### Injecting a Value
 
@@ -572,20 +587,17 @@ uses
   SysUtils,
 
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
 begin
   Source := TStringList.Create;
   Source.Text := 'APP_VERSION;';
-  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    Engine := TGocciaEngine.Create('app.js', Source);
     try
       // Inject a constant into the global scope
       Engine.GlobalScope.DefineLexicalBinding(
@@ -598,7 +610,6 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
   end;
 end;
@@ -616,7 +627,6 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
   Goccia.Values.Primitives;
@@ -635,7 +645,6 @@ end;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   Host: TMyHost;
   Func: TGocciaNativeFunctionValue;
@@ -643,9 +652,8 @@ begin
   Host := TMyHost.Create;
   Source := TStringList.Create;
   Source.Text := 'getTimestamp();';
-  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    Engine := TGocciaEngine.Create('app.js', Source);
     try
       // Create a native function: callback, name, arity (-1 for variadic)
       Func := TGocciaNativeFunctionValue.Create(Host.GetTimestamp, 'getTimestamp', 0);
@@ -655,7 +663,6 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
     Host.Free;
   end;
@@ -684,7 +691,6 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
-  Goccia.Executor.Interpreter,
   Goccia.Scope,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
@@ -724,7 +730,6 @@ end;
 
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   API: TFileSystemAPI;
   FSObject: TGocciaObjectValue;
@@ -732,9 +737,8 @@ begin
   API := TFileSystemAPI.Create;
   Source := TStringList.Create;
   Source.Text := 'fs.readFile("data.txt");';
-  Executor := TGocciaInterpreterExecutor.Create;
   try
-    Engine := TGocciaEngine.Create('app.js', Source, Executor);
+    Engine := TGocciaEngine.Create('app.js', Source);
     try
       FSObject := TGocciaObjectValue.Create;
       FSObject.RegisterNativeMethod(
@@ -748,7 +752,6 @@ begin
       Engine.Free;
     end;
   finally
-    Executor.Free;
     Source.Free;
     API.Free;
   end;
@@ -790,7 +793,7 @@ end;
 | `TGocciaUndefinedLiteralValue` | `undefined` | Singleton via `.UndefinedValue` |
 | `TGocciaObjectValue` | `object` | `.GetProperty(Name)`, `.AssignProperty(Name, Value)` |
 | `TGocciaArrayValue` | `object` (array) | `.Elements: TGocciaValueList` |
-| `TGocciaFunctionValue` | `function` | `.Call(Args, ThisValue)` |
+| `TGocciaFunctionBase` | `function` | `.Call(Args, ThisValue)` |
 | `TGocciaInstanceValue` | `object` (class instance) | `.ClassValue`, `.GetProperty(Name)` |
 
 ## Error Handling
@@ -854,7 +857,7 @@ Raises `TGocciaTimeoutError` when the deadline is exceeded. A value of zero disa
 
 ### Instruction Limit
 
-`StartInstructionLimit` caps the number of execution steps. In bytecode mode the counter increments on every dispatched instruction (exact). In interpreter mode it increments at function-call and loop-iteration checkpoints (approximate).
+`StartInstructionLimit` caps the number of execution steps: the counter increments on every dispatched VM instruction.
 
 ```pascal
 uses
@@ -872,11 +875,11 @@ Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero
 
 ### Call Stack Depth Limit
 
-`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The `TGocciaCLIApplication` hosts set 2 200 frames (`DEFAULT_MAX_STACK_DEPTH`) and `GocciaScriptLoaderBare` sets 10 000, unless `--max-stack` overrides it; an embedder that never calls `SetMaxStackDepth` has no limit. A value of zero disables the limit entirely. In bytecode mode the memory ceiling then bounds the recursion instead: the VM's stacks are charged to `TGarbageCollector.MaxBytes`, and a recursion that would grow them past it throws the same catchable `RangeError` ([ADR 0130](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md)). A module's top level is not a call. The entry's top level, and that of every module evaluated for a static import, an `import()` or a deferred namespace, allows the whole limit less the calls live when that module starts to evaluate, so a module imported from a top level allows all of it.
+`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The `TGocciaCLIApplication` hosts set 2 200 frames (`DEFAULT_MAX_STACK_DEPTH`) and `GocciaScriptLoaderBare` sets 10 000, unless `--max-stack` overrides it; an embedder that never calls `SetMaxStackDepth` has no limit. A value of zero disables the limit entirely. The memory ceiling then bounds the recursion instead: the VM's stacks are charged to `TGarbageCollector.MaxBytes`, and a recursion that would grow them past it throws the same catchable `RangeError` ([ADR 0130](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md)). A module's top level is not a call. The entry's top level, and that of every module evaluated for a static import, an `import()` or a deferred namespace, allows the whole limit less the calls live when that module starts to evaluate, so a module imported from a top level allows all of it.
 
-In bytecode mode the VM uses a trampoline: bytecode-to-bytecode calls are dispatched iteratively via an explicit frame stack, so the Pascal call stack stays flat regardless of JS call depth. The interpreter mode uses Pascal recursion and relies on the depth check to prevent overflow.
+The VM uses a trampoline: bytecode-to-bytecode calls are dispatched iteratively via an explicit frame stack, so the Pascal call stack stays flat regardless of JS call depth. Parsing and compiling recurse on the Pascal stack too, and are bounded on their own: source and RegExp patterns may nest `MAX_NESTING_DEPTH` (1 024, `Goccia.NestingLimit`) levels, the syntax tree of a statement may be `MAX_TREE_HEIGHT` (4 096) levels tall counting each link of an operator or call chain, so the passes that walk it after the parser fit an 8 MiB stack, and past `NESTING_UNCHECKED_DEPTH` (32) levels the parser, the compiler, the RegExp compiler and lookarounds in a match also stop once less than `NATIVE_STACK_RESERVE` of the stack is left. Source or a pattern compiled inside deep native re-entries then reports a `SyntaxError` instead of overflowing ([Language — Nesting Depth](language.md#nesting-depth)), and a match whose nested lookarounds run out of stack throws `RangeError: Maximum call stack size exceeded`.
 
-Every call of a function written in script counts as one nested call, however it is made: a plain or method call, `new` and `super()`, a getter or setter, a Proxy trap, a `toString`, `valueOf` or `Symbol.toPrimitive` method, an iterator's `next`, or a callback a built-in calls. A built-in function itself adds no frame, so `[n].map(f)` and the `f` it calls count as one. The interpreter does not count `super()` calls, accessors, Proxy traps, `ToPrimitive` methods or iterator methods. Most of those calls are native re-entries into the bytecode VM: the bytecode loop runs on a fresh Pascal stack frame instead of the trampoline, and each one costs a few kilobytes of native stack. How many fit depends on the thread's stack size and on the build. Once less than `NATIVE_STACK_RESERVE` (256 KiB, or a quarter of a stack smaller than 1 MiB) of the thread's stack is left, the VM throws the same `RangeError` instead of entering again, so no `--max-stack` value, including 0, lets these re-entries overflow the native stack. The check runs only where the bytecode loop is entered: a chain of native calls, such as Proxies forwarding to their targets or bound functions calling theirs, is not checked against the stack in between, and the delegation caps below bound only some of those chains. The bounds come from the operating system (`/proc/self/maps` and `RLIMIT_STACK` on Linux, `pthread_get_stackaddr_np` on Darwin, `GetCurrentThreadStackLimits` on Windows) and from the RTL's `StackBottom` where that is higher. On Linux the main thread's stack is taken to grow down to `RLIMIT_STACK` even where its mapping is not marked `[stack]`, as under Valgrind. The first `NATIVE_REENTRY_UNCHECKED_DEPTH` (8) nested re-entries are not checked, so a program that does not nest them never looks the bounds up. Where they cannot be found, at most `MAX_NATIVE_REENTRY_DEPTH` (512) re-entries are live at once. A production x86-64 build on an 8 MiB stack, the Linux and macOS main-thread default and the test runner's worker size, fits 2 200 nested constructor, async-function, generator-`next()` or getter calls. A setter, a Proxy trap, a `toString` method or a callback from `sort`, `JSON.stringify` or `Reflect.construct` costs more, and recursion through one stops at between about 1 600 and 2 100 calls. Property lookups walk a chain of ordinary objects in a loop, with no length limit. A Proxy in the chain, a Proxy's target, a Proxy's trap and a handler that is itself a Proxy are entered by native calls, for every internal method a Proxy forwards (`[[GetPrototypeOf]]`, `[[SetPrototypeOf]]`, `[[IsExtensible]]`, `[[PreventExtensions]]`, `[[GetOwnProperty]]`, `[[DefineOwnProperty]]`, `[[HasProperty]]`, `[[Get]]`, `[[Set]]`, `[[Delete]]`, `[[OwnPropertyKeys]]`, `[[Call]]` and `[[Construct]]`); at most `MAX_PROPERTY_DELEGATION_DEPTH` (2 000) of them are live at once, and past that the operation throws the same `RangeError`. A bound function between two Proxies is not counted, so a chain that alternates Proxies with bound functions, or a trap wrapped in several bound functions, can still exhaust the native stack. `typeof` and the callable check step through directly nested Proxies in a loop, since they cannot throw. Arrays, functions, classes and class instances in the chain are entered by native calls too, counted against `MAX_OBJECT_DELEGATION_DEPTH` (3 000). A prototype cycle closed through a Proxy, which ES2026 §10.1.2.1 OrdinarySetPrototypeOf accepts, ends this way. `instanceof` and `Object.prototype.isPrototypeOf` follow `[[GetPrototypeOf]]` in a loop instead and throw after `MAX_PROXY_PROTOTYPE_STEPS` (100 000) steps through a Proxy.
+Every call of a function written in script counts as one nested call, however it is made: a plain or method call, `new` and `super()`, a getter or setter, a Proxy trap, a `toString`, `valueOf` or `Symbol.toPrimitive` method, an iterator's `next`, or a callback a built-in calls. A built-in function itself adds no frame, so `[n].map(f)` and the `f` it calls count as one. Most of those calls are native re-entries into the bytecode VM: the bytecode loop runs on a fresh Pascal stack frame instead of the trampoline, and each one costs a few kilobytes of native stack. How many fit depends on the thread's stack size and on the build. Once less than `NATIVE_STACK_RESERVE` (256 KiB, or a quarter of a stack smaller than 1 MiB) of the thread's stack is left, the VM throws the same `RangeError` instead of entering again, so no `--max-stack` value, including 0, lets these re-entries overflow the native stack. The same check runs in a chain of native calls that does not enter the bytecode loop, such as Proxies forwarding to their targets, once more than `NATIVE_REENTRY_UNCHECKED_DEPTH` of the counted delegations below are live. The bounds come from the operating system (`/proc/self/maps` and `RLIMIT_STACK` on Linux, `pthread_get_stackaddr_np` on Darwin, `GetCurrentThreadStackLimits` on Windows) and from the RTL's `StackBottom` where that is higher. On Linux the main thread's stack is taken to grow down to `RLIMIT_STACK` even where its mapping is not marked `[stack]`, as under Valgrind. The first `NATIVE_REENTRY_UNCHECKED_DEPTH` (8) nested re-entries are not checked, so a program that does not nest them never looks the bounds up. Where they cannot be found, at most `MAX_NATIVE_REENTRY_DEPTH` (512) re-entries are live at once. A production x86-64 build on an 8 MiB stack, the Linux and macOS main-thread default and the test runner's worker size, fits 2 200 nested constructor, async-function, generator-`next()` or getter calls. A setter, a Proxy trap, a `toString` method or a callback from `sort`, `JSON.stringify` or `Reflect.construct` costs more, and recursion through one stops at between about 1 600 and 2 100 calls. Property lookups walk a chain of ordinary objects in a loop, with no length limit. Constructing a class walks the classes above it whose constructors are default ones in a loop as well, with no length limit. A Proxy in the chain, a Proxy's target, a Proxy's trap and a handler that is itself a Proxy are entered by native calls, for every internal method a Proxy forwards (`[[GetPrototypeOf]]`, `[[SetPrototypeOf]]`, `[[IsExtensible]]`, `[[PreventExtensions]]`, `[[GetOwnProperty]]`, `[[DefineOwnProperty]]`, `[[HasProperty]]`, `[[Get]]`, `[[Set]]`, `[[Delete]]`, `[[OwnPropertyKeys]]`, `[[Call]]` and `[[Construct]]`); at most `MAX_PROPERTY_DELEGATION_DEPTH` (2 000) of them are live at once, and past that the operation throws the same `RangeError`. A Proxy's `[[Call]]` or `[[Construct]]` forward to a bound function counts too, and so does its `[[Construct]]` forward to a class, which a class that extends a Proxy reaches from its implicit constructor; so a chain that alternates Proxies with bound functions, or classes that each extend a Proxy of the previous one, end in the same `RangeError`. A chain of bound functions alone is followed in a loop for `[[Call]]` and `[[Construct]]` (ES2026 §10.4.1.1 and §10.4.1.2), with no length limit, while `instanceof` against one counts each bound function, because each step reads the next target's `@@hasInstance`. `typeof`, the callable check and the constructor check step through directly nested Proxies in a loop, since they cannot throw, and the constructor check steps through bound functions between them as well. Arrays, functions, classes and class instances in the chain are entered by native calls too, counted against `MAX_OBJECT_DELEGATION_DEPTH` (3 000). A prototype cycle closed through a Proxy, which ES2026 §10.1.2.1 OrdinarySetPrototypeOf accepts, ends this way. `instanceof` and `Object.prototype.isPrototypeOf` follow `[[GetPrototypeOf]]` in a loop instead and throw after `MAX_PROXY_PROTOTYPE_STEPS` (100 000) steps through a Proxy.
 
 ```pascal
 uses
@@ -914,7 +917,54 @@ Source.Text := 'Promise.resolve(42).then((v) => { globalThis.answer = v; });';
 Engine.Execute;  // microtasks drain before Execute returns
 ```
 
-For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block. Engines can also nest on a thread: an `Execute` that starts while a different engine's run is in progress (a sandbox `runScript` child, or another engine's `Execute` called from a native callback) drains and discards only its own jobs and leaves the enclosing engine's jobs queued, while a nested `ExecuteProgram` or `RunModule` drains the queue it was called in. [Interpreter — Synchronous Microtask Queue](interpreter.md#synchronous-microtask-queue) describes the scopes behind this.
+For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block. Engines can also nest on a thread: an `Execute` that starts while a different engine's run is in progress (a sandbox `runScript` child, or another engine's `Execute` called from a native callback) drains and discards only its own jobs and leaves the enclosing engine's jobs queued, while a nested `ExecuteProgram` or `RunModule` drains the queue it was called in. [Architecture — Synchronous Microtask Queue](architecture.md#synchronous-microtask-queue) describes the scopes behind this.
+
+## Fetch Transport
+
+By default an engine's `fetch()` requests go to the network. Set `Engine.FetchTransport` to an `IGocciaFetchTransport` (unit `Goccia.FetchTransport`) to answer them yourself, for example to record a run's responses and replay them later without the network ([ADR 0146](adr/0146-embedder-fetch-transport.md), [ADR 0149](adr/0149-fetch-urls-go-through-the-url-parser.md)). The transport belongs to the engine: it is read when each request starts, so it can be replaced between runs, and no other engine on the thread, nested or not, and no engine on another thread uses it. A child engine the host creates (a sandbox `runScript` child) needs its own.
+
+`fetch()` still makes every decision it makes before network work: the URL, the `net` capability's name check and its audit event, `GET`/`HEAD` only, an already-aborted signal, and the cap of 16 requests in flight per thread. A request the built-in client would refuse to send (an unsupported scheme, a control character in the request target or a header) rejects with that client's `TypeError` and never reaches the transport. The transport's `Fetch` then receives a `TGocciaFetchTransportRequest` (method, request URL (the URL as `fetch()` received it, parsed by the URL Standard and serialized without its fragment, dot segments removed), header list, an empty body, the milliseconds left before the run's deadline or the signal's timeout, the response ceiling, the capability set) and an `IGocciaFetchResponder`:
+
+- `Respond(Response)` answers with a `THTTPResponse` (`HTTPTypes`); `FinalURL` must be an absolute http(s) URL, and `Response.url` is that URL serialized by the engine's URL parser (the one behind `URL`) without its fragment, scheme and host in lowercase and dot segments resolved, as the built-in client's final URL is, and the URL must parse there too; empty means the request URL as `fetch()` received it, serialized the same way. `Fail(Message)` rejects the fetch with `TypeError: Message`; `Fail(Message, Scope)` rejects it with `PermissionDenied` for that net scope.
+- Answer inside `Fetch` or later, from any thread; the first answer wins and each call returns whether it was taken. The promise settles at the engine's next completion pump, never inside the `fetch()` call, and the run waits for an unanswered request as for a network one. The run deadline or the request's signal ends that wait. The wait runs no script and consumes no instruction budget, so an instruction limit stops it only when the budget was already exhausted.
+- An abort, or the engine discarding its requests when a run fails or ends, cancels the request, even after an answer was taken but before it settled: `IsCancelled` turns true and a later answer is refused. An exception from `Fetch` cancels the request too: an ordinary exception rejects the fetch with `TypeError: fetch failed: <message>`, while the run's timeout, instruction-limit, memory-limit and engine-integrity errors propagate and end the run.
+- A response is held to the rules a network response meets: status 200 to 599, status text that is a reason phrase (tab, space, visible ASCII, U+0080 to U+00FF), header names that are tokens, header values without NUL, CR, LF or any character past U+00FF (header values and status text are bytes), a body within the ceiling; a `HEAD`, 204, 205 or 304 response has no body, whatever its size. Anything else rejects with `TypeError`.
+
+`Fetch` runs on the engine's thread and must not run script or call into the engine. To forward a request to the network, as a recording transport does, call `FetchOverNetwork(Request, Responder)` (`Goccia.FetchManager`) from a thread of your own: it applies the redirect-hop and resolved-address checks, ceiling and timeout of a run without a transport, and does not audit those hop decisions. Its answer passes through the rules above, which a conforming server's response meets unchanged, so a forwarded response reads as a direct one.
+
+A replay transport answers from its recording, keyed by a fingerprint of the request, in recorded order (`TTape` and `Fingerprint` are the host's own):
+
+```pascal
+type
+  TReplayTransport = class(TInterfacedObject, IGocciaFetchTransport)
+  private
+    FTape: TTape;
+  public
+    constructor Create(const ATape: TTape);
+    procedure Fetch(const ARequest: TGocciaFetchTransportRequest;
+      const AResponder: IGocciaFetchResponder);
+  end;
+
+procedure TReplayTransport.Fetch(const ARequest: TGocciaFetchTransportRequest;
+  const AResponder: IGocciaFetchResponder);
+var
+  Entry: TTapeEntry;
+begin
+  if not FTape.TakeNext(Fingerprint(ARequest), Entry) then
+    AResponder.Fail('no recorded response for ' + ARequest.URL)
+  else if Entry.Succeeded then
+    AResponder.Respond(Entry.Response)
+  else
+    AResponder.Fail(Entry.ErrorMessage, Entry.DeniedScope);
+end;
+
+Engine.FetchTransport := TReplayTransport.Create(Tape);
+Engine.Execute;
+```
+
+The recording side wraps the responder it is given in one that passes each `Respond` or `Fail` on and appends it to the tape only when the engine took it (the call returned True), and hands the request and that wrapper to `FetchOverNetwork` on a worker thread. A taken answer whose responder then reports `IsCancelled` was never seen by the script. `source/units/Goccia.FetchTransport.Test.pas` records a run against a loopback server this way and replays it.
+
+An embedder that pauses runs and resumes them later can also write what a run's heap holds and restore it in a fresh engine instead of replaying the run: see [Heap Snapshots](heap-snapshots.md).
 
 ## Garbage Collector
 

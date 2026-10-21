@@ -14,9 +14,11 @@ uses
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
+  Goccia.Bytecode.Profile,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Context,
-  Goccia.Compiler.Scope;
+  Goccia.Compiler.Scope,
+  Goccia.Modules.LinkPlan;
 
 type
   TGocciaCompiler = class
@@ -59,9 +61,17 @@ type
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     FDerivedConstructorThisGuard: Boolean;
     FTemplateDerivedConstructorThisGuards: TDictionary<TGocciaFunctionTemplate, Boolean>;
+    // Expressions and statements open in the walk over the tree; see
+    // EnterNesting.
+    FNestingDepth: Integer;
+    procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
+    procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt16);
+    procedure CompileExpressionNode(const AExpr: TGocciaExpression;
+      const ADest: UInt16);
     function DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
+    function CompileStatementNode(const AStmt: TGocciaStatement): Boolean;
     procedure DoCompileFunctionBody(const ABody: TGocciaASTNode);
     procedure DoSwapState(const ATemplate: TGocciaFunctionTemplate;
       const AScope: TGocciaCompilerScope);
@@ -92,7 +102,7 @@ type
       every declaration local (§19.2.1.1 step 18: varEnv is lexEnv). The eval
       code is strict only by its own directive, also in an engine whose
       profile is strict (no non-strict compatibility): a directive-free eval
-      is non-strict code there too, as the interpreter evaluates it. The
+      is non-strict code there too. The
       profile still decides the Annex B block-function var bindings and,
       in the parser, which syntax is accepted.
       ADeclaredVarNames is declaredVarNames (§19.2.1.3 steps 11-12). The host
@@ -143,12 +153,15 @@ type
       read FArgumentsObjectEnabled write FArgumentsObjectEnabled;
     { Compile engine code (a bootstrap shim): no function or class it defines
       keeps its source text, so Function.prototype.toString shows each as a
-      built-in function with native code, as the interpreter does for a
-      shim. Runtime-only: such code is never serialized. }
+      built-in function with native code. Runtime-only: such code is never
+      serialized. }
     property HideSourceText: Boolean read FHideSourceText
       write FHideSourceText;
     property OptimizationOptions: TGocciaCompilerOptimizationOptions
       read FOptimizationOptions write FOptimizationOptions;
+    // Expressions and statements open in the walk over the tree: 0 after a
+    // compile that completed.
+    property NestingDepth: Integer read FNestingDepth;
   end;
 
 const
@@ -173,8 +186,12 @@ uses
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements,
+  Goccia.Error,
+  Goccia.Error.Messages,
+  Goccia.Error.Suggestions,
   Goccia.Keywords.Reserved,
-  Goccia.Modules;
+  Goccia.Modules,
+  Goccia.NestingLimit;
 
 const
   // The first growth step of a compiler scope's locals table.
@@ -235,6 +252,8 @@ begin
     (FCurrentTemplate = FTopLevelTemplate);
   Result.GlobalBackedTopLevelLexicals := Result.GlobalBackedTopLevel and
     not FGlobalEvalVarEnvironment;
+  Result.GlobalLexicalPatternScope := nil;
+  Result.GlobalLexicalPatternIsConst := False;
   if FCurrentTemplate = FTopLevelTemplate then
     Result.CompletionRegister := FCompletionRegister
   else
@@ -317,7 +336,47 @@ begin
     FDerivedConstructorThisGuard := False;
 end;
 
+// Out of line, for the same reason as the parser's: raising needs managed
+// temporaries.
+procedure TGocciaCompiler.RaiseNestingLimitExceeded(
+  const ANode: TGocciaASTNode);
+begin
+  raise TGocciaSyntaxError.Create(SErrorNestingStackExhausted,
+    ANode.Line, ANode.Column, FSourcePath, nil, SSuggestNestingLimitExceeded);
+end;
+
+// The parser bounds how tall a tree is (Goccia.NestingLimit), so a walk
+// over one fits the stack of a thread that starts it near the top. A compile
+// can also start deep in the native stack, inside native re-entries of the
+// VM: ShadowRealm.prototype.evaluate or eval called from a getter that
+// recursion has entered many times. Every expression and statement the
+// compiler visits passes through here and reports a SyntaxError, as the
+// parser does, once the native stack is nearly used up, before the walk runs
+// off its end.
+procedure TGocciaCompiler.EnterNesting(const ANode: TGocciaASTNode);
+begin
+  Inc(FNestingDepth);
+  if NestingStackExhausted(FNestingDepth) then
+    RaiseNestingLimitExceeded(ANode);
+end;
+
 procedure TGocciaCompiler.DoCompileExpression(
+  const AExpr: TGocciaExpression; const ADest: UInt16);
+begin
+  EnterNesting(AExpr);
+  CompileExpressionNode(AExpr, ADest);
+  Dec(FNestingDepth);
+end;
+
+function TGocciaCompiler.DoCompileStatement(
+  const AStmt: TGocciaStatement): Boolean;
+begin
+  EnterNesting(AStmt);
+  Result := CompileStatementNode(AStmt);
+  Dec(FNestingDepth);
+end;
+
+procedure TGocciaCompiler.CompileExpressionNode(
   const AExpr: TGocciaExpression; const ADest: UInt16);
 var
   Ctx: TGocciaCompilationContext;
@@ -429,7 +488,8 @@ begin
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
 end;
 
-function TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement): Boolean;
+function TGocciaCompiler.CompileStatementNode(
+  const AStmt: TGocciaStatement): Boolean;
 var
   Ctx: TGocciaCompilationContext;
   PreviousLabelReentryStatement: TGocciaStatement;
@@ -1251,15 +1311,20 @@ begin
       ABlockFunctionVarBindings, True, ASkipUninitializedVars);
 end;
 
-procedure AddUniqueVarName(const ANames: TUnicodeStringList;
+type
+  { Names once each, in the order first seen: a hash map, so collecting a
+    script's many `var x;` declarations is linear in them. }
+  TUniqueVarNames = TOrderedStringMap<Boolean>;
+
+procedure AddUniqueVarName(const ANames: TUniqueVarNames;
   const AName: string);
 begin
-  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
-    ANames.Add(AName);
+  if AName <> '' then
+    ANames.Add(AName, True);
 end;
 
 procedure CollectUninitializedVarDeclarations(const ANode: TGocciaASTNode;
-  const ANames: TUnicodeStringList);
+  const ANames: TUniqueVarNames);
 var
   Block: TGocciaBlockStatement;
   DoWhileStmt: TGocciaDoWhileStatement;
@@ -1376,13 +1441,19 @@ procedure EmitUninitializedTopLevelGlobalVarDeclarations(
 var
   I: Integer;
   Names: TUnicodeStringList;
+  Pair: TUniqueVarNames.TKeyValuePair;
+  UniqueNames: TUniqueVarNames;
 begin
   Names := TUnicodeStringList.Create;
+  UniqueNames := TUniqueVarNames.Create;
   try
     for I := 0 to AStatements.Count - 1 do
-      CollectUninitializedVarDeclarations(AStatements[I], Names);
+      CollectUninitializedVarDeclarations(AStatements[I], UniqueNames);
+    for Pair in UniqueNames do
+      Names.Add(Pair.Key);
     EmitHoistedGlobalVarDeclarationsForNames(ACtx, Names);
   finally
+    UniqueNames.Free;
     Names.Free;
   end;
 end;
@@ -1444,8 +1515,8 @@ begin
 end;
 
 { Records a static module request of a program no loader links (the entry,
-  a REPL input) in the module's request table, which the bytecode executor
-  links before running it (ES2026 §16.2.1.6.1.2 Link()). Source- and
+  a REPL input) in the module's request table, which the engine links
+  before running it (ES2026 §16.2.1.6.1.2 Link()). Source- and
   defer-phase imports keep their own load paths and are not recorded. }
 procedure AddModuleRequest(const AModule: TGocciaBytecodeModule;
   const AStmt: TGocciaStatement);
@@ -1868,7 +1939,11 @@ var
   HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
+  SavedFinally: TObject;
 begin
+  // A compile that raised left the levels it had entered open; this one
+  // starts at the top of the tree.
+  FNestingDepth := 0;
   if Assigned(FNumericParameterProofs) then
     FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
@@ -1917,6 +1992,10 @@ begin
   FCurrentScope.DeclareLocal('__receiver', False);
   FCurrentScope.GlobalBackedBindingsByName := FGlobalEvalVarEnvironment;
 
+  // A compile error inside a try statement leaves its pending-finally entry,
+  // which points into this program's tree; restoring drops it with the list,
+  // so no later compilation sees an entry whose tree has been freed.
+  SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
   try
     DiscoverProgramNumberBindings(AProgram, FCurrentScope,
       NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
@@ -2057,10 +2136,20 @@ begin
     if FHideSourceText then
       ClearFunctionSourceText(FCurrentTemplate);
 
+    { The module now owns its top-level template. Metadata extraction can
+      allocate and raise, so exception cleanup must not free it twice. }
+    FCurrentTemplate := nil;
+    FModule.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+    if FGlobalBackedTopLevel and FPreinitializedTopLevelFunctions then
+    begin
+      FModule.LinkPlan := TGocciaModuleLinkPlan.CreateFromProgram(AProgram);
+      FModule.ExecutionKind := bekLinkedModule;
+    end;
     Result := FModule;
     FModule := nil;
     FCurrentTemplate := nil;
   finally
+    Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
     FCompletionRegister := -1;
     FreeAndNil(FCurrentScope);
     FTopLevelTemplate := nil;

@@ -19,6 +19,7 @@ type
     FGeneratedSourceLines: TStringList;
     FLexTimeNanoseconds: Int64;
     FParseTimeNanoseconds: Int64;
+    FSourceType: TGocciaSourceType;
   public
     destructor Destroy; override;
 
@@ -33,6 +34,8 @@ type
     property SourceMap: TGocciaSourceMap read FSourceMap;
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
+    { The goal the parse settled; see TGocciaSourcePipelineResult.SourceType. }
+    property SourceType: TGocciaSourceType read FSourceType;
   end;
 
 implementation
@@ -85,6 +88,7 @@ begin
     try
       Result.FLexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
       Result.FParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
+      Result.FSourceType := PipelineResult.SourceType;
       PrintPipelineWarnings(AFileName, PipelineResult, ASuppressWarnings);
 
       Result.FProgramNode := PipelineResult.TakeProgramNode;

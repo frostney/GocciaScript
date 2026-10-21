@@ -693,8 +693,8 @@ begin
         (LineTerminatorLengthAt(ASource, LineEnd) = 0) do
     Inc(LineEnd);
 
-  { Normal interpreter and bytecode locations both identify the containing
-    source line, even when bytecode points at the start of expect(...). }
+  { A bytecode location identifies the containing source line, even when it
+    points at the start of expect(...). }
   Result := FindOnReportedLine;
   if Result <> 0 then
     Exit;

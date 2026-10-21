@@ -107,6 +107,8 @@ type
       const ASetupResult: TGocciaValue;
       const ARunArgs: TGocciaArgumentsCollection): Int64;
     procedure UnrootRegisteredBenchmarks;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
     destructor Destroy; override;
@@ -441,10 +443,6 @@ var
   ConstructorValue: TGocciaValue;
   ConstructorName: TGocciaValue;
 begin
-  if (AFunction is TGocciaGeneratorFunctionValue) or
-     (AFunction is TGocciaGeneratorMethodValue) then
-    Exit(True);
-
   ConstructorValue := AFunction.GetProperty(PROP_CONSTRUCTOR);
   if ConstructorValue is TGocciaObjectValue then
   begin
@@ -1289,6 +1287,18 @@ begin
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
+end;
+
+procedure TGocciaBenchmark.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FNamespaceObject) then
+    FNamespaceObject.MarkReferences;
+  if Assigned(FLastRunResult) then
+    FLastRunResult.MarkReferences;
 end;
 
 initialization

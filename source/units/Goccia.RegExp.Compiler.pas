@@ -53,6 +53,10 @@ const
   REGEXP_MAX_OPERAND = $FFFFFF;
   REGEXP_MAX_PROGRAM_LENGTH = REGEXP_MAX_OPERAND;
   SErrorRegExpTooLarge = 'Invalid regular expression: regular expression too large';
+  // A group, lookaround or nested class past Goccia.NestingLimit's
+  // MAX_NESTING_DEPTH.
+  SErrorRegExpNestingLimit = 'Invalid regular expression: nesting exceeds the supported limit of %d levels';
+  SErrorRegExpNestingStack = 'Invalid regular expression: nesting is too deep for the native stack that is left';
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
 { An instruction word for AOp with operand AOperand. Raises EConvertError
@@ -67,11 +71,13 @@ uses
   Math,
   SysUtils,
 
+  OrderedStringMap,
   TextEncoding,
   TextSemantics,
   UnicodeICU,
 
   Goccia.Identifier,
+  Goccia.NestingLimit,
   Goccia.RegExp.Engine,
   Goccia.RegExp.UnicodeData;
 
@@ -86,6 +92,15 @@ type
     Code: array of UInt32;
     Length: Integer;
     OriginalStart: Integer;
+  end;
+
+  // The named groups that share one name: the first and last positions in
+  // FNamedGroups, in source order, and how many there are. The groups between
+  // them are chained through FNamedGroupNext.
+  TRegExpNameEntry = record
+    First: Integer;
+    Last: Integer;
+    Count: Integer;
   end;
 
   TRegExpClassContents = record
@@ -104,7 +119,33 @@ type
     FCharClasses: TRegExpCharClassArray;
     FStringSets: TRegExpStringSetArray;
     FCaptureCount: Integer;
+    // The named groups the pre-scan found, in source order. The array grows
+    // geometrically while FNamedGroupCount counts the used part; the pre-scan
+    // trims it to that count.
     FNamedGroups: TGocciaRegExpNamedGroups;
+    FNamedGroupCount: Integer;
+    // For each position in FNamedGroups, the next position with the same name
+    // or -1.
+    FNamedGroupNext: array of Integer;
+    // For each position in FNamedGroups, the group's node in the tree below.
+    FNamedGroupPathNode: array of Integer;
+    // The tree of the pattern's groups and alternatives, as far as named
+    // groups need it: a group node is a group or lookaround (the pattern
+    // itself is the root), and its children are the alternatives of its
+    // disjunction; an alternative node's children are the groups directly in
+    // it. Two groups can take part in one match unless their paths part below
+    // a group node, into different alternatives (ES2026 §22.2.1.1
+    // MightBothParticipate). Nodes are added only when a named group needs
+    // them, so a group shares the nodes of the groups before it and costs the
+    // nodes that changed, never a copy of the whole path.
+    FPathParent: array of Integer;
+    FPathIsGroup: array of Boolean;
+    FPathNodeCount: Integer;
+    // Name -> index into FNameEntries, so a name is found, and a duplicate
+    // name checked, without scanning every group.
+    FNameIndex: TOrderedStringMap<Integer>;
+    FNameEntries: array of TRegExpNameEntry;
+    FNameEntryCount: Integer;
     FAltStack: array of Integer;
     FAltStackDepth: Integer;
     FModifier: TModifierState;
@@ -113,6 +154,12 @@ type
     FPreScanCaptureCount: Integer;
     FPendingCodeUnit: Integer;
     FBackward: Boolean;
+    // Groups, lookarounds and nested classes open at the current position.
+    // Each is compiled by a recursive call, so the pattern compiles on the
+    // native stack as deep as it nests.
+    FNestingDepth: Integer;
+    procedure EnterNesting; {$IFDEF FPC}inline;{$ENDIF}
+    procedure LeaveNesting; {$IFDEF FPC}inline;{$ENDIF}
     function Peek: Char;
     function PeekAt(AOffset: Integer): Char;
     function AtEnd: Boolean;
@@ -138,10 +185,13 @@ type
     procedure CompileQuantifier(AAtomStart: Integer);
     procedure CompileCharacterClass;
     procedure CompileUnicodeSetsClass;
-    procedure ApplyNestedSetOps(var AContents: TRegExpClassContents);
-    procedure ParseClassUnion(var AContents: TRegExpClassContents);
-    procedure ParseClassEscape(var AContents: TRegExpClassContents);
-    procedure ParseStringDisjunction(var AContents: TRegExpClassContents);
+    procedure ParseClassSetExpression(var AContents: TRegExpClassContents;
+      out AMayContainStrings: Boolean);
+    function ParseClassSetOperand(var AContents: TRegExpClassContents;
+      out AMayContainStrings: Boolean): Boolean;
+    function ParseClassSetCharacter: Cardinal;
+    procedure ParseStringDisjunction(var AContents: TRegExpClassContents;
+      out AMayContainStrings: Boolean);
     procedure CompileEscape(var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
     procedure CompileEscapeAtom;
     procedure CompileGroup;
@@ -171,11 +221,17 @@ type
       AOrigStart: Integer);
     procedure ValidateNamedGroups;
     procedure PreScanNamedGroups;
+    procedure AddNamedGroup(const AName: string; AGroupIndex: Integer;
+      var AGroupNodes, AAltNodes: array of Integer; ADepth: Integer);
+    function NewPathNode(AParent: Integer; AIsGroup: Boolean): Integer;
+    function FindNameEntry(const AName: string;
+      out AEntry: TRegExpNameEntry): Boolean;
     procedure InsertSplitAt(APos: Integer);
     procedure EmitDuplicateNamedBackref(const AName: string;
       ABackrefFlags: Integer);
   public
     constructor Create(const APattern, AFlags: string);
+    destructor Destroy; override;
     function Compile: TRegExpProgram;
   end;
 
@@ -335,6 +391,15 @@ begin
   SetLength(FStringSets, 0);
   FCaptureCount := 0;
   SetLength(FNamedGroups, 0);
+  FNamedGroupCount := 0;
+  SetLength(FNamedGroupNext, 0);
+  SetLength(FNamedGroupPathNode, 0);
+  SetLength(FPathParent, 0);
+  SetLength(FPathIsGroup, 0);
+  FPathNodeCount := 0;
+  FNameIndex := TOrderedStringMap<Integer>.Create;
+  SetLength(FNameEntries, 0);
+  FNameEntryCount := 0;
   SetLength(FAltStack, 64);
   FAltStackDepth := 0;
   FAltStack[0] := 0;
@@ -346,6 +411,12 @@ begin
   FPreScanCaptureCount := 0;
   FPendingCodeUnit := -1;
   FBackward := False;
+end;
+
+destructor TRegExpCompiler.Destroy;
+begin
+  FNameIndex.Free;
+  inherited Destroy;
 end;
 
 function TRegExpCompiler.Peek: Char;
@@ -404,6 +475,25 @@ end;
 procedure RaiseRegExpTooLarge;
 begin
   raise EConvertError.Create(SErrorRegExpTooLarge);
+end;
+
+procedure RaiseRegExpNestingLimit(const ADepth: Integer);
+begin
+  if ADepth > MAX_NESTING_DEPTH then
+    raise EConvertError.CreateFmt(SErrorRegExpNestingLimit, [MAX_NESTING_DEPTH]);
+  raise EConvertError.Create(SErrorRegExpNestingStack);
+end;
+
+procedure TRegExpCompiler.EnterNesting;
+begin
+  Inc(FNestingDepth);
+  if NestingDepthExceeded(FNestingDepth) then
+    RaiseRegExpNestingLimit(FNestingDepth);
+end;
+
+procedure TRegExpCompiler.LeaveNesting;
+begin
+  Dec(FNestingDepth);
 end;
 
 function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
@@ -1528,45 +1618,178 @@ begin
     raise EConvertError.Create('Invalid Unicode property of strings: ' + APropertyName);
 end;
 
-procedure TRegExpCompiler.ParseClassEscape(var AContents: TRegExpClassContents);
+const
+  // ES2026 §22.2.1 ClassSetSyntaxCharacter
+  CLASS_SET_SYNTAX_CHARACTERS = ['(', ')', '[', ']', '{', '}', '/', '-',
+    '\', '|'];
+  // ES2026 §22.2.1 ClassSetReservedDoublePunctuator: each is one of these
+  // characters twice.
+  CLASS_SET_DOUBLE_PUNCTUATOR_CHARACTERS = ['&', '!', '#', '$', '%', '*',
+    '+', ',', '.', ':', ';', '<', '=', '>', '?', '@', '^', '`', '~'];
+  // ES2026 §22.2.1 SyntaxCharacter, `/` (IdentityEscape[+UnicodeMode]) and
+  // ClassSetReservedPunctuator: the characters a class may escape as
+  // themselves.
+  CLASS_SET_IDENTITY_ESCAPES = ['^', '$', '\', '.', '*', '+', '?', '(', ')',
+    '[', ']', '{', '}', '|', '/', '&', '-', '!', '#', '%', ',', ':', ';',
+    '<', '=', '>', '@', '`', '~'];
+  SErrorClassSetOperation =
+    'Invalid regular expression: invalid set operation in character class';
+  SErrorNegatedClassStrings =
+    'Invalid regular expression: negated character class may contain strings';
+
+// ES2026 §22.2.1 ClassSetCharacter
+function TRegExpCompiler.ParseClassSetCharacter: Cardinal;
 var
   C: Char;
-  PropertyName: string;
-  CodePoint: Cardinal;
-  NegContents: TRegExpClassContents;
 begin
+  if AtEnd then
+    raise EConvertError.Create('Unterminated character class');
+  C := Peek;
+  if C <> '\' then
+  begin
+    // [lookahead ∉ ClassSetReservedDoublePunctuator]
+    if CharInSet(C, CLASS_SET_DOUBLE_PUNCTUATOR_CHARACTERS) and
+       (PeekAt(1) = C) then
+      raise EConvertError.Create('Invalid regular expression: unescaped ' +
+        C + C + ' in unicode sets mode character class');
+    // SourceCharacter but not ClassSetSyntaxCharacter
+    if CharInSet(C, CLASS_SET_SYNTAX_CHARACTERS) then
+      raise EConvertError.Create('Invalid regular expression: unescaped ' +
+        C + ' in unicode sets mode character class');
+    Exit(ReadCodePoint);
+  end;
+  Inc(FPos);
+  if AtEnd then
+    raise EConvertError.Create('Invalid regular expression: \ at end of pattern');
   C := Advance;
   case C of
-    'd', 'D', 'w', 'W', 's', 'S':
-      begin
-        AddBuiltinCharClass(C, AContents.Ranges, AContents.RangeCount);
-      end;
-    'n': AddClassRange(AContents, $0A, $0A);
-    'r': AddClassRange(AContents, $0D, $0D);
-    't': AddClassRange(AContents, $09, $09);
-    'v': AddClassRange(AContents, $0B, $0B);
-    'f': AddClassRange(AContents, $0C, $0C);
+    // \ CharacterEscape[+UnicodeMode]
+    'n': Result := $0A;
+    'r': Result := $0D;
+    't': Result := $09;
+    'v': Result := $0B;
+    'f': Result := $0C;
     '0':
       begin
-        if not AtEnd and (Peek >= '0') and (Peek <= '9') then
-          AddClassRange(AContents, Ord(C), Ord(C))
+        // 0 [lookahead ∉ DecimalDigit]
+        if (Peek >= '0') and (Peek <= '9') then
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid decimal escape in unicode mode');
+        Result := 0;
+      end;
+    'x': Result := ParseHexEscape(2);
+    'u': Result := ParseUnicodeEscape;
+    'c':
+      begin
+        if ((Peek >= 'a') and (Peek <= 'z')) or
+           ((Peek >= 'A') and (Peek <= 'Z')) then
+          Result := Ord(Advance) mod 32
         else
-          AddClassRange(AContents, 0, 0);
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid control escape in unicode mode');
       end;
-    'x':
-      begin
-        CodePoint := ParseHexEscape(2);
-        AddClassRange(AContents, CodePoint, CodePoint);
-      end;
-    'u':
-      begin
-        CodePoint := ParseUnicodeEscape;
-        AddClassRange(AContents, CodePoint, CodePoint);
-      end;
-    'p', 'P':
-      begin
-        if Match('{') then
+    // \b
+    'b': Result := $08;
+  else
+    // IdentityEscape[+UnicodeMode] and \ ClassSetReservedPunctuator
+    if not CharInSet(C, CLASS_SET_IDENTITY_ESCAPES) then
+      raise EConvertError.Create(
+        'Invalid regular expression: invalid escape in unicode mode');
+    Result := Ord(C);
+  end;
+end;
+
+// ES2026 §22.2.1 ClassStringDisjunction :: \q{ ClassStringDisjunctionContents }
+// Called after `\q{`. AMayContainStrings is MayContainStrings (§22.2.1.8):
+// True when a ClassString is empty or longer than one code point.
+procedure TRegExpCompiler.ParseStringDisjunction(
+  var AContents: TRegExpClassContents; out AMayContainStrings: Boolean);
+var
+  CodePoints: array of Cardinal;
+  CodePointCount: Integer;
+begin
+  AMayContainStrings := False;
+  SetLength(CodePoints, 16);
+  repeat
+    // ClassString :: [empty] | NonEmptyClassString
+    CodePointCount := 0;
+    while not AtEnd and (Peek <> '|') and (Peek <> '}') do
+    begin
+      if CodePointCount >= Length(CodePoints) then
+        SetLength(CodePoints, CodePointCount * 2);
+      CodePoints[CodePointCount] := ParseClassSetCharacter;
+      Inc(CodePointCount);
+    end;
+    if CodePointCount <> 1 then
+      AMayContainStrings := True;
+    if CodePointCount = 1 then
+      AddClassRange(AContents, CodePoints[0], CodePoints[0])
+    else if CodePointCount > 0 then
+      AddClassString(AContents, Copy(CodePoints, 0, CodePointCount));
+  until not Match('|');
+  if not Match('}') then
+    raise EConvertError.Create('Unterminated string disjunction \\q{}');
+end;
+
+// ES2026 §22.2.1 ClassSetOperand, or in a ClassUnion a ClassSetRange.
+// Returns True when it read a ClassSetRange. AMayContainStrings is
+// MayContainStrings (§22.2.1.8) of what it read.
+function TRegExpCompiler.ParseClassSetOperand(
+  var AContents: TRegExpClassContents; out AMayContainStrings: Boolean): Boolean;
+var
+  Nested: TRegExpClassContents;
+  NestedMayContainStrings: Boolean;
+  C: Char;
+  PropertyName: string;
+  Lo, Hi: Cardinal;
+begin
+  Result := False;
+  AMayContainStrings := False;
+  if Peek = '[' then
+  begin
+    // NestedClass :: [ [lookahead ≠ ^] ClassContents ] | [^ ClassContents ]
+    Inc(FPos);
+    if Match('^') then
+    begin
+      ParseClassSetExpression(Nested, NestedMayContainStrings);
+      if not Match(']') then
+        raise EConvertError.Create('Unterminated character class');
+      // ES2026 §22.2.1.1 Early Errors: NestedClass :: [^ ClassContents ]
+      if NestedMayContainStrings then
+        raise EConvertError.Create(SErrorNegatedClassStrings);
+      NormalizeRanges(Nested.Ranges, Nested.RangeCount);
+      ComplementContents(Nested);
+    end
+    else
+    begin
+      ParseClassSetExpression(Nested, NestedMayContainStrings);
+      if not Match(']') then
+        raise EConvertError.Create('Unterminated character class');
+      AMayContainStrings := NestedMayContainStrings;
+    end;
+    MergeClassContents(AContents, Nested);
+    Exit;
+  end;
+  if (Peek = '\') and CharInSet(PeekAt(1),
+     ['d', 'D', 's', 'S', 'w', 'W', 'p', 'P', 'q']) then
+  begin
+    Inc(FPos);
+    C := Advance;
+    case C of
+      'q':
         begin
+          // ClassStringDisjunction
+          if not Match('{') then
+            raise EConvertError.Create(
+              'Invalid regular expression: invalid escape in unicode mode');
+          ParseStringDisjunction(AContents, AMayContainStrings);
+        end;
+      'p', 'P':
+        begin
+          // NestedClass :: \ CharacterClassEscape[+UnicodeMode]
+          if not Match('{') then
+            raise EConvertError.Create(
+              'Invalid regular expression: invalid escape in unicode mode');
           PropertyName := '';
           while not AtEnd and (Peek <> '}') do
             PropertyName := PropertyName + Advance;
@@ -1578,276 +1801,110 @@ begin
               raise EConvertError.Create(
                 'Negated \\P{} cannot be used with properties of strings');
             GetStringPropertySequences(PropertyName, AContents);
+            AMayContainStrings := True;
           end
           else if C = 'P' then
           begin
-            InitClassContents(NegContents);
-            GetUnicodePropertyRanges(PropertyName, NegContents.Ranges,
-              NegContents.RangeCount);
-            NormalizeRanges(NegContents.Ranges, NegContents.RangeCount);
-            ComplementContents(NegContents);
-            MergeClassContents(AContents, NegContents);
+            InitClassContents(Nested);
+            GetUnicodePropertyRanges(PropertyName, Nested.Ranges,
+              Nested.RangeCount);
+            NormalizeRanges(Nested.Ranges, Nested.RangeCount);
+            ComplementContents(Nested);
+            MergeClassContents(AContents, Nested);
           end
           else
             GetUnicodePropertyRanges(PropertyName, AContents.Ranges,
               AContents.RangeCount);
-        end
-        else
-          raise EConvertError.Create(
-            'Invalid regular expression: invalid escape in unicode mode');
-      end;
-    'q':
-      begin
-        if FUnicodeSets and Match('{') then
-          ParseStringDisjunction(AContents)
-        else
-          raise EConvertError.Create(
-            'Invalid regular expression: invalid escape in unicode mode');
-      end;
-    'b':
-      AddClassRange(AContents, $08, $08);
-    'c':
-      begin
-        if not AtEnd and (((Peek >= 'a') and (Peek <= 'z')) or
-           ((Peek >= 'A') and (Peek <= 'Z'))) then
-          AddClassRange(AContents, Ord(Advance) mod 32, Ord(FPattern[FPos - 1]) mod 32)
-        else
-          raise EConvertError.Create(
-            'Invalid regular expression: invalid control escape in unicode mode');
-      end;
-  else
-    if not CharInSet(C, ['/', '^', '$', '\', '.', '*', '+',
-       '?', '(', ')', '[', ']', '{', '}', '|', '-', '&', '!', '#',
-       '%', ',', ':', ';', '<', '=', '>', '@', '`', '~']) then
-      raise EConvertError.Create(
-        'Invalid regular expression: invalid escape in unicode mode')
+        end;
     else
-      AddClassRange(AContents, Ord(C), Ord(C));
-  end;
-end;
-
-procedure TRegExpCompiler.ParseStringDisjunction(
-  var AContents: TRegExpClassContents);
-var
-  CodePoints: array of Cardinal;
-  CodePointCount: Integer;
-  CodePoint: Cardinal;
-begin
-  CodePointCount := 0;
-  SetLength(CodePoints, 16);
-  while not AtEnd and (Peek <> '}') do
-  begin
-    if Peek = '|' then
-    begin
-      if CodePointCount = 1 then
-        AddClassRange(AContents, CodePoints[0], CodePoints[0])
-      else if CodePointCount > 0 then
-      begin
-        SetLength(CodePoints, CodePointCount);
-        AddClassString(AContents, CodePoints);
-        SetLength(CodePoints, 16);
-      end;
-      CodePointCount := 0;
-      Inc(FPos);
-      Continue;
+      AddBuiltinCharClass(C, AContents.Ranges, AContents.RangeCount);
     end;
-    if Peek = '\' then
-    begin
-      Inc(FPos);
-      case Peek of
-        'u':
-          begin
-            Inc(FPos);
-            CodePoint := ParseUnicodeEscape;
-          end;
-        'n': begin Inc(FPos); CodePoint := $0A; end;
-        'r': begin Inc(FPos); CodePoint := $0D; end;
-        't': begin Inc(FPos); CodePoint := $09; end;
-      else
-        CodePoint := Ord(Advance);
-      end;
-    end
-    else
-      CodePoint := ReadCodePoint;
-    if CodePointCount >= Length(CodePoints) then
-      SetLength(CodePoints, CodePointCount * 2);
-    CodePoints[CodePointCount] := CodePoint;
-    Inc(CodePointCount);
+    Exit;
   end;
-  if not Match('}') then
-    raise EConvertError.Create('Unterminated string disjunction \\q{}');
-  if CodePointCount = 1 then
-    AddClassRange(AContents, CodePoints[0], CodePoints[0])
-  else if CodePointCount > 0 then
+  // ClassSetCharacter, or ClassSetRange :: ClassSetCharacter - ClassSetCharacter
+  Lo := ParseClassSetCharacter;
+  if (Peek = '-') and (PeekAt(1) <> '-') then
   begin
-    SetLength(CodePoints, CodePointCount);
-    AddClassString(AContents, CodePoints);
+    Inc(FPos);
+    Hi := ParseClassSetCharacter;
+    // ES2026 §22.2.1.1 Early Errors: ClassSetRange
+    if Lo > Hi then
+      raise EConvertError.Create(
+        'Invalid regular expression: range out of order in character class');
+    AddClassRange(AContents, Lo, Hi);
+    Exit(True);
   end;
+  AddClassRange(AContents, Lo, Lo);
 end;
 
-procedure TRegExpCompiler.ApplyNestedSetOps(
-  var AContents: TRegExpClassContents);
+// ES2026 §22.2.1 ClassContents[+UnicodeMode, +UnicodeSetsMode]
+//   :: [empty] | ClassSetExpression
+// ClassSetExpression :: ClassUnion | ClassIntersection | ClassSubtraction
+// Stops before the closing `]`. AMayContainStrings is MayContainStrings
+// (§22.2.1.8).
+procedure TRegExpCompiler.ParseClassSetExpression(
+  var AContents: TRegExpClassContents; out AMayContainStrings: Boolean);
 var
-  RightContents: TRegExpClassContents;
-  HaveIntersect, HaveSubtract: Boolean;
+  Operand: TRegExpClassContents;
+  OperandMayContainStrings, FirstIsRange: Boolean;
+  SetOperator: Char;
 begin
-  HaveIntersect := False;
-  HaveSubtract := False;
-  while not AtEnd and (Peek <> ']') do
+  // A nested class (`[[a]]`) recurses through here.
+  EnterNesting;
+  InitClassContents(AContents);
+  AMayContainStrings := False;
+  if AtEnd or (Peek = ']') then
   begin
-    if (Peek = '&') and (PeekAt(1) = '&') then
-    begin
-      if HaveSubtract then
-        raise EConvertError.Create(
-          'Invalid regular expression: cannot mix && and -- in the same class');
-      HaveIntersect := True;
-      Inc(FPos, 2);
-      InitClassContents(RightContents);
-      ParseClassUnion(RightContents);
-      IntersectClassContents(AContents, RightContents);
-    end
-    else if (Peek = '-') and (PeekAt(1) = '-') then
-    begin
-      if HaveIntersect then
-        raise EConvertError.Create(
-          'Invalid regular expression: cannot mix && and -- in the same class');
-      HaveSubtract := True;
-      Inc(FPos, 2);
-      InitClassContents(RightContents);
-      ParseClassUnion(RightContents);
-      SubtractClassContents(AContents, RightContents);
-    end
-    else
-      Break;
+    LeaveNesting;
+    Exit;
   end;
-end;
-
-procedure TRegExpCompiler.ParseClassUnion(var AContents: TRegExpClassContents);
-var
-  Lo, Hi: Cardinal;
-  SavePos, SaveStringPos: Integer;
-  IsClassEscape: Boolean;
-  EscContents: TRegExpClassContents;
-begin
-  while not AtEnd and (Peek <> ']') do
+  FirstIsRange := ParseClassSetOperand(AContents, AMayContainStrings);
+  if ((Peek = '&') and (PeekAt(1) = '&')) or
+     ((Peek = '-') and (PeekAt(1) = '-')) then
   begin
-    if (Peek = '&') and (PeekAt(1) = '&') then
-      Break;
-    if (Peek = '-') and (PeekAt(1) = '-') then
-      Break;
-    if Peek = '[' then
+    // ClassIntersection :: ClassSetOperand && [lookahead ≠ &] ClassSetOperand
+    //   | ClassIntersection && [lookahead ≠ &] ClassSetOperand
+    // ClassSubtraction :: ClassSetOperand -- ClassSetOperand
+    //   | ClassSubtraction -- ClassSetOperand
+    // Both join single operands, never a range, with one kind of operator.
+    if FirstIsRange then
+      raise EConvertError.Create(SErrorClassSetOperation);
+    SetOperator := Peek;
+    while (Peek = SetOperator) and (PeekAt(1) = SetOperator) do
     begin
-      Inc(FPos);
-      InitClassContents(EscContents);
-      if Match('^') then
+      Inc(FPos, 2);
+      if (SetOperator = '&') and (Peek = '&') then
+        raise EConvertError.Create(SErrorClassSetOperation);
+      InitClassContents(Operand);
+      if ParseClassSetOperand(Operand, OperandMayContainStrings) then
+        raise EConvertError.Create(SErrorClassSetOperation);
+      if SetOperator = '&' then
       begin
-        ParseClassUnion(EscContents);
-        ApplyNestedSetOps(EscContents);
-        if not Match(']') then
-          raise EConvertError.Create('Unterminated character class');
-        if EscContents.StringCount > 0 then
-          raise EConvertError.Create(
-            'Negated character class cannot contain strings');
-        NormalizeRanges(EscContents.Ranges, EscContents.RangeCount);
-        ComplementContents(EscContents);
-        MergeClassContents(AContents, EscContents);
+        IntersectClassContents(AContents, Operand);
+        // §22.2.1.8: an intersection may contain strings only when every
+        // operand may.
+        AMayContainStrings := AMayContainStrings and OperandMayContainStrings;
       end
       else
-      begin
-        ParseClassUnion(EscContents);
-        ApplyNestedSetOps(EscContents);
-        if not Match(']') then
-          raise EConvertError.Create('Unterminated character class');
-        MergeClassContents(AContents, EscContents);
-      end;
-      Continue;
+        // §22.2.1.8: a subtraction may contain strings when its first
+        // operand may.
+        SubtractClassContents(AContents, Operand);
     end;
-    if Peek = '\' then
-    begin
-      Inc(FPos);
-      IsClassEscape := FUnicodeSets and CharInSet(Peek,
-        ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P', 'q']);
-      SavePos := AContents.RangeCount;
-      SaveStringPos := AContents.StringCount;
-      ParseClassEscape(AContents);
-      if (AContents.StringCount > SaveStringPos) and
-         (AContents.Strings[AContents.StringCount - 1].CodePoints <> nil) then
-        Continue;
-      if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') and
-         (PeekAt(1) <> '-') then
-      begin
-        if IsClassEscape then
-          raise EConvertError.Create(
-            'Invalid regular expression: character class escape in range');
-        if AContents.RangeCount > SavePos then
-        begin
-          Lo := AContents.Ranges[AContents.RangeCount - 1].Lo;
-          Dec(AContents.RangeCount);
-          Inc(FPos);
-          if Peek = '\' then
-          begin
-            Inc(FPos);
-            if FUnicodeSets and CharInSet(Peek,
-               ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P', 'q']) then
-              raise EConvertError.Create(
-                'Invalid regular expression: character class escape in range');
-            InitClassContents(EscContents);
-            ParseClassEscape(EscContents);
-            if EscContents.RangeCount > 0 then
-            begin
-              Hi := EscContents.Ranges[0].Lo;
-              if Lo > Hi then
-                raise EConvertError.Create(
-                  'Invalid regular expression: range out of order in character class');
-              AddClassRange(AContents, Lo, Hi);
-            end;
-          end
-          else
-          begin
-            Hi := ReadCodePoint;
-            if Lo > Hi then
-              raise EConvertError.Create(
-                'Invalid regular expression: range out of order in character class');
-            AddClassRange(AContents, Lo, Hi);
-          end;
-        end;
-      end;
-      Continue;
-    end;
-    if FUnicodeSets and CharInSet(Peek, ['(', ')', '/', '|']) then
-      raise EConvertError.Create(
-        'Invalid regular expression: unescaped ' + Peek + ' in unicode sets mode character class');
-    Lo := ReadCodePoint;
-    if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') and
-       (PeekAt(1) <> '-') then
-    begin
-      Inc(FPos);
-      if Peek = '\' then
-      begin
-        Inc(FPos);
-        InitClassContents(EscContents);
-        ParseClassEscape(EscContents);
-        if EscContents.RangeCount > 0 then
-        begin
-          Hi := EscContents.Ranges[0].Lo;
-          if Lo > Hi then
-            raise EConvertError.Create(
-              'Invalid regular expression: range out of order in character class');
-          AddClassRange(AContents, Lo, Hi);
-        end;
-      end
-      else
-      begin
-        Hi := ReadCodePoint;
-        if Lo > Hi then
-          raise EConvertError.Create(
-            'Invalid regular expression: range out of order in character class');
-        AddClassRange(AContents, Lo, Hi);
-      end;
-    end
-    else
-      AddClassRange(AContents, Lo, Lo);
+    if not AtEnd and (Peek <> ']') then
+      raise EConvertError.Create(SErrorClassSetOperation);
+    LeaveNesting;
+    Exit;
   end;
+  // ClassUnion :: ClassSetRange ClassUnion_opt | ClassSetOperand ClassUnion_opt
+  while not AtEnd and (Peek <> ']') do
+  begin
+    if ((Peek = '&') and (PeekAt(1) = '&')) or
+       ((Peek = '-') and (PeekAt(1) = '-')) then
+      raise EConvertError.Create(SErrorClassSetOperation);
+    ParseClassSetOperand(AContents, OperandMayContainStrings);
+    AMayContainStrings := AMayContainStrings or OperandMayContainStrings;
+  end;
+  LeaveNesting;
 end;
 
 procedure TRegExpCompiler.EmitClassContents(
@@ -1906,20 +1963,19 @@ begin
     FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
 end;
 
+// ES2026 §22.2.1 CharacterClass[+UnicodeMode, +UnicodeSetsMode], after `[`
 procedure TRegExpCompiler.CompileUnicodeSetsClass;
 var
   Contents: TRegExpClassContents;
-  Negated: Boolean;
+  Negated, MayContainStrings: Boolean;
 begin
   Negated := Match('^');
-  InitClassContents(Contents);
-  ParseClassUnion(Contents);
-  ApplyNestedSetOps(Contents);
+  ParseClassSetExpression(Contents, MayContainStrings);
   if not Match(']') then
     raise EConvertError.Create('Unterminated character class');
-  if Negated and (Contents.StringCount > 0) then
-    raise EConvertError.Create(
-      'Negated character class cannot contain strings');
+  // ES2026 §22.2.1.1 Early Errors: CharacterClass :: [^ ClassContents ]
+  if Negated and MayContainStrings then
+    raise EConvertError.Create(SErrorNegatedClassStrings);
   EmitClassContents(Contents, Negated);
 end;
 
@@ -2133,20 +2189,25 @@ end;
 procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string;
   ABackrefFlags: Integer);
 var
+  Entry: TRegExpNameEntry;
   Indices: array of Integer;
-  Count, I: Integer;
+  Count, I, Position: Integer;
   UndefinedJumpHole: Integer;
   JumpHoles: array of Integer;
   JumpCount: Integer;
 begin
   Count := 0;
-  SetLength(Indices, Length(FNamedGroups));
-  for I := 0 to High(FNamedGroups) do
-    if FNamedGroups[I].Name = AName then
+  if FindNameEntry(AName, Entry) then
+  begin
+    SetLength(Indices, Entry.Count);
+    Position := Entry.First;
+    while Position >= 0 do
     begin
-      Indices[Count] := FNamedGroups[I].Index;
+      Indices[Count] := FNamedGroups[Position].Index;
       Inc(Count);
+      Position := FNamedGroupNext[Position];
     end;
+  end;
   SetLength(Indices, Count);
   if Count = 1 then
   begin
@@ -2178,6 +2239,7 @@ var
   PropertyName: string;
   Negated: Boolean;
   GroupName: string;
+  NameEntry: TRegExpNameEntry;
   Contents: TRegExpClassContents;
   BackrefIdx, I, GroupCount, BackrefFlags, WordAssertFlags: Integer;
   CodePoint: Cardinal;
@@ -2244,13 +2306,11 @@ begin
           GroupName := ParseGroupName;
           BackrefIdx := -1;
           GroupCount := 0;
-          for I := 0 to High(FNamedGroups) do
-            if FNamedGroups[I].Name = GroupName then
-            begin
-              if BackrefIdx < 0 then
-                BackrefIdx := FNamedGroups[I].Index;
-              Inc(GroupCount);
-            end;
+          if FindNameEntry(GroupName, NameEntry) then
+          begin
+            BackrefIdx := FNamedGroups[NameEntry.First].Index;
+            GroupCount := NameEntry.Count;
+          end;
           if BackrefIdx < 0 then
           begin
             if FUnicode or (Length(FNamedGroups) > 0) then
@@ -3277,6 +3337,8 @@ var
   JumpHoles: array of Integer;
   JumpCount, I: Integer;
 begin
+  // Every group and lookaround compiles its body from here.
+  EnterNesting;
   JumpCount := 0;
   SetLength(JumpHoles, 8);
   StartPC := CurrentPC;
@@ -3286,11 +3348,11 @@ begin
     Inc(FPos);
     if FAltStackDepth < Length(FAltStack) then
       Inc(FAltStack[FAltStackDepth]);
+    // The split goes in front of the alternative just compiled, so only that
+    // alternative's code moves. The jump holes of earlier alternatives all sit
+    // before StartPC and stay where they are; walking them here would cost
+    // time quadratic in the number of alternatives.
     InsertSplitAt(StartPC);
-    // Update existing jump holes since they shifted by 1
-    for I := 0 to JumpCount - 1 do
-      if JumpHoles[I] >= StartPC then
-        Inc(JumpHoles[I]);
     if JumpCount >= Length(JumpHoles) then
       SetLength(JumpHoles, JumpCount * 2 + 8);
     JumpHoles[JumpCount] := CurrentPC;
@@ -3302,6 +3364,7 @@ begin
   end;
   for I := 0 to JumpCount - 1 do
     FCode[JumpHoles[I]] := EncodeOpBx(RX_JUMP, CurrentPC);
+  LeaveNesting;
 end;
 
 procedure TRegExpCompiler.CompilePattern;
@@ -3316,15 +3379,19 @@ end;
 
 procedure TRegExpCompiler.PreScanNamedGroups;
 var
-  I, GroupIndex, CloseAngle, J: Integer;
+  I, GroupIndex, CloseAngle: Integer;
   InCharClass: Boolean;
   GroupName: string;
-  AltStack: array of Integer;
+  // The tree node of each open level's group and of the alternative it is in,
+  // or -1 until a named group needs it.
+  GroupNodes, AltNodes: array of Integer;
   AltStackDepth: Integer;
 begin
-  SetLength(AltStack, 64);
+  SetLength(GroupNodes, 64);
+  SetLength(AltNodes, 64);
   AltStackDepth := 0;
-  AltStack[0] := 0;
+  GroupNodes[0] := -1;
+  AltNodes[0] := -1;
   I := 1;
   GroupIndex := 0;
   InCharClass := False;
@@ -3357,7 +3424,7 @@ begin
     end;
     if FPattern[I] = '|' then
     begin
-      Inc(AltStack[AltStackDepth]);
+      AltNodes[AltStackDepth] := -1;
       Inc(I);
       Continue;
     end;
@@ -3371,9 +3438,20 @@ begin
     if FPattern[I] = '(' then
     begin
       Inc(AltStackDepth);
-      if AltStackDepth >= Length(AltStack) then
-        SetLength(AltStack, AltStackDepth * 2 + 4);
-      AltStack[AltStackDepth] := 0;
+      // Each named group copies the path of open groups down to it, so a deep
+      // nest of them would cost memory and time quadratic in the depth before
+      // the compiler's own nesting check. Every parenthesis counted here opens
+      // a group or lookaround the compiler nests into, so the limit is the
+      // same one.
+      if AltStackDepth > MAX_NESTING_DEPTH then
+        RaiseRegExpNestingLimit(AltStackDepth);
+      if AltStackDepth >= Length(GroupNodes) then
+      begin
+        SetLength(GroupNodes, AltStackDepth * 2 + 4);
+        SetLength(AltNodes, Length(GroupNodes));
+      end;
+      GroupNodes[AltStackDepth] := -1;
+      AltNodes[AltStackDepth] := -1;
       if (I + 1 <= Length(FPattern)) and (FPattern[I + 1] = '?') then
       begin
         if (I + 2 <= Length(FPattern)) and (FPattern[I + 2] = '<') then
@@ -3393,13 +3471,8 @@ begin
             Inc(GroupIndex);
             GroupName := DecodeRegExpGroupName(
               Copy(FPattern, I + 3, CloseAngle - I - 3));
-            SetLength(FNamedGroups, Length(FNamedGroups) + 1);
-            FNamedGroups[High(FNamedGroups)].Name := GroupName;
-            FNamedGroups[High(FNamedGroups)].Index := GroupIndex;
-            SetLength(FNamedGroups[High(FNamedGroups)].DisjunctionPath,
-              AltStackDepth + 1);
-            for J := 0 to AltStackDepth do
-              FNamedGroups[High(FNamedGroups)].DisjunctionPath[J] := AltStack[J];
+            AddNamedGroup(GroupName, GroupIndex, GroupNodes, AltNodes,
+              AltStackDepth);
             I := CloseAngle + 1;
             Continue;
           end;
@@ -3411,33 +3484,149 @@ begin
     end;
     Inc(I);
   end;
+  SetLength(FNamedGroups, FNamedGroupCount);
+  SetLength(FNamedGroupNext, FNamedGroupCount);
+  SetLength(FNamedGroupPathNode, FNamedGroupCount);
   FPreScanCaptureCount := GroupIndex;
 end;
 
+function TRegExpCompiler.NewPathNode(AParent: Integer;
+  AIsGroup: Boolean): Integer;
+begin
+  if FPathNodeCount >= Length(FPathParent) then
+  begin
+    SetLength(FPathParent, FPathNodeCount * 2 + 16);
+    SetLength(FPathIsGroup, Length(FPathParent));
+  end;
+  FPathParent[FPathNodeCount] := AParent;
+  FPathIsGroup[FPathNodeCount] := AIsGroup;
+  Result := FPathNodeCount;
+  Inc(FPathNodeCount);
+end;
+
+// Records a named group found by the pre-scan: its node in the tree of groups
+// and alternatives, and its place in the chain of the groups that share its
+// name. A level of the pre-scan's stack has its nodes only once a named group
+// has needed them, and loses its alternative node when a `|` starts another
+// alternative, so the levels walked here are the ones that changed since the
+// previous group. ADepth is the group's own level.
+procedure TRegExpCompiler.AddNamedGroup(const AName: string;
+  AGroupIndex: Integer; var AGroupNodes, AAltNodes: array of Integer;
+  ADepth: Integer);
+var
+  EntryIndex, Position, Level, Node: Integer;
+begin
+  Level := ADepth - 1;
+  while (Level >= 0) and (AAltNodes[Level] < 0) do
+    Dec(Level);
+  if Level < 0 then
+    Node := -1
+  else
+    Node := AAltNodes[Level];
+  for Level := Level + 1 to ADepth do
+  begin
+    if AGroupNodes[Level] < 0 then
+      AGroupNodes[Level] := NewPathNode(Node, True);
+    Node := AGroupNodes[Level];
+    if Level < ADepth then
+    begin
+      AAltNodes[Level] := NewPathNode(Node, False);
+      Node := AAltNodes[Level];
+    end;
+  end;
+
+  if FNamedGroupCount >= Length(FNamedGroups) then
+  begin
+    SetLength(FNamedGroups, FNamedGroupCount * 2 + 8);
+    SetLength(FNamedGroupNext, Length(FNamedGroups));
+    SetLength(FNamedGroupPathNode, Length(FNamedGroups));
+  end;
+  Position := FNamedGroupCount;
+  Inc(FNamedGroupCount);
+  FNamedGroups[Position].Name := AName;
+  FNamedGroups[Position].Index := AGroupIndex;
+  FNamedGroupPathNode[Position] := Node;
+  FNamedGroupNext[Position] := -1;
+  if FNameIndex.TryGetValue(AName, EntryIndex) then
+  begin
+    FNamedGroupNext[FNameEntries[EntryIndex].Last] := Position;
+    FNameEntries[EntryIndex].Last := Position;
+    Inc(FNameEntries[EntryIndex].Count);
+  end
+  else
+  begin
+    if FNameEntryCount >= Length(FNameEntries) then
+      SetLength(FNameEntries, FNameEntryCount * 2 + 8);
+    FNameEntries[FNameEntryCount].First := Position;
+    FNameEntries[FNameEntryCount].Last := Position;
+    FNameEntries[FNameEntryCount].Count := 1;
+    FNameIndex.Add(AName, FNameEntryCount);
+    Inc(FNameEntryCount);
+  end;
+end;
+
+function TRegExpCompiler.FindNameEntry(const AName: string;
+  out AEntry: TRegExpNameEntry): Boolean;
+var
+  EntryIndex: Integer;
+begin
+  Result := FNameIndex.TryGetValue(AName, EntryIndex);
+  if Result then
+    AEntry := FNameEntries[EntryIndex];
+end;
+
+// A name may repeat only in groups that cannot both take part in one match
+// (ES2026 §22.2.1.1 MightBothParticipate): their paths in the tree of groups
+// and alternatives must part below a group node, into different alternatives.
+// The groups of one name are taken in source order and each marks the nodes
+// from its group up to the root, stopping where an earlier group of the name
+// marked already; that node is where the two paths meet. Meeting at a group
+// node that is not itself a group of the name means different alternatives;
+// meeting anywhere else (an alternative node, or a group the new one sits in)
+// means they share an alternative. A node is marked once per name, so the work
+// is the number of nodes the groups of the name reach, not a comparison of
+// every pair.
 procedure TRegExpCompiler.ValidateNamedGroups;
 var
-  K, L, MinLen, I: Integer;
-  ShareBranch: Boolean;
+  EntryIndex, Position, Node, Mark: Integer;
+  Reached, IsGroupOfName: array of Integer;
+  Conflict: Boolean;
 begin
-  for K := 0 to High(FNamedGroups) - 1 do
-    for L := K + 1 to High(FNamedGroups) do
-      if FNamedGroups[K].Name = FNamedGroups[L].Name then
+  for EntryIndex := 0 to FNameEntryCount - 1 do
+  begin
+    if FNameEntries[EntryIndex].Count < 2 then
+      Continue;
+    if Length(Reached) = 0 then
+    begin
+      SetLength(Reached, FPathNodeCount);
+      SetLength(IsGroupOfName, FPathNodeCount);
+      FillChar(Reached[0], FPathNodeCount * SizeOf(Integer), 0);
+      FillChar(IsGroupOfName[0], FPathNodeCount * SizeOf(Integer), 0);
+    end;
+    Mark := EntryIndex + 1;
+    Position := FNameEntries[EntryIndex].First;
+    while Position >= 0 do
+    begin
+      Node := FNamedGroupPathNode[Position];
+      IsGroupOfName[Node] := Mark;
+      Conflict := False;
+      while Node >= 0 do
       begin
-        MinLen := Length(FNamedGroups[K].DisjunctionPath);
-        if Length(FNamedGroups[L].DisjunctionPath) < MinLen then
-          MinLen := Length(FNamedGroups[L].DisjunctionPath);
-        ShareBranch := True;
-        for I := 0 to MinLen - 1 do
-          if FNamedGroups[K].DisjunctionPath[I] <>
-             FNamedGroups[L].DisjunctionPath[I] then
-          begin
-            ShareBranch := False;
-            Break;
-          end;
-        if ShareBranch then
-          raise EConvertError.CreateFmt(
-            'Duplicate named capture group: %s', [FNamedGroups[K].Name]);
+        if Reached[Node] = Mark then
+        begin
+          Conflict := (not FPathIsGroup[Node]) or (IsGroupOfName[Node] = Mark);
+          Break;
+        end;
+        Reached[Node] := Mark;
+        Node := FPathParent[Node];
       end;
+      if Conflict then
+        raise EConvertError.CreateFmt(
+          'Duplicate named capture group: %s',
+          [FNamedGroups[Position].Name]);
+      Position := FNamedGroupNext[Position];
+    end;
+  end;
 end;
 
 function TRegExpCompiler.Compile: TRegExpProgram;

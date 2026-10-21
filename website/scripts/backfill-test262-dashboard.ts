@@ -625,6 +625,21 @@ async function runCommand(
   return exitCode;
 }
 
+/**
+ * Whether a historical native test262 runner still takes `--mode`. Runners
+ * from before GocciaScript 0.15.0 document `--mode=interpreted|bytecode` in
+ * their help and need `--mode=bytecode`; later runners run bytecode only and
+ * reject the option.
+ */
+function nativeRunnerTakesMode(worktree: string): boolean {
+  const help = Bun.spawnSync(["./build/GocciaTest262Runner", "--help"], {
+    cwd: worktree,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return help.stdout.toString().includes("--mode=");
+}
+
 async function pathExists(value: string): Promise<boolean> {
   try {
     await access(value);
@@ -702,7 +717,7 @@ async function runHistoricalRunner(
       "./build/GocciaTest262Runner",
       [
         `--suite-dir=${suiteDir}`,
-        "--mode=bytecode",
+        ...(nativeRunnerTakesMode(worktree) ? ["--mode=bytecode"] : []),
         `--jobs=${options.jobs}`,
         `--output=${reportPath}`,
       ],
@@ -710,6 +725,8 @@ async function runHistoricalRunner(
     );
   }
 
+  // The TypeScript and Python runners only exist in commits from before
+  // --mode was removed, so they always take it.
   if (await pathExists(tsRunner)) {
     log("using TypeScript test262 runner from historical commit");
     await runCommand("./build.pas", ["--clean", "loaderbare"], {

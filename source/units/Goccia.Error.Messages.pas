@@ -9,18 +9,15 @@ resourcestring
   SErrorIdentifierAlreadyDeclared = 'Identifier ''%s'' has already been declared';
   SErrorCannotAccessBeforeInit = 'Cannot access ''%s'' before initialization';
   SErrorAssignToConstant = 'Assignment to constant variable ''%s''';
-  // Node's wording. The bytecode VM already emitted this form, so the
-  // tree-walk evaluator uses the same constant and the two modes report an
-  // unresolved identifier identically.
+  // Node's wording.
   SErrorUndefinedVariable = '%s is not defined';
 
   // Type errors — function calls.
   // One form for every non-callable callee: what goes in the slot is the
   // callee as the author wrote it when that is known, and the runtime type
-  // name otherwise. Both executors build it through
-  // Goccia.Error.CallDiagnostics so the text cannot drift between modes; the
-  // older per-shape variants ('obj.m is not a function' assembled from two
-  // parts, and a quoted-identifier form) were retired for that reason.
+  // name otherwise. The VM builds it through Goccia.Error.CallDiagnostics;
+  // the older per-shape variants ('obj.m is not a function' assembled from
+  // two parts, and a quoted-identifier form) were retired.
   SErrorValueNotFunction = '%s is not a function';
   SErrorSymbolToNumber = 'Cannot convert a Symbol value to a number';
   SErrorSymbolToString = 'Cannot convert a Symbol value to a string';
@@ -39,27 +36,26 @@ resourcestring
   SErrorNotANumber = 'Value is not a Number';
 
   // Type errors — property access.
-  // Both executors use the "Cannot read properties of X (reading 'k')" form —
-  // Node's wording — so a nullish-base fault reads identically in interpreter
-  // and bytecode mode. The older "Cannot read property 'k' of X" phrasing was
-  // retired for that reason; do not reintroduce it.
+  // The "Cannot read properties of X (reading 'k')" form is Node's wording.
+  // The older "Cannot read property 'k' of X" phrasing was retired; do not
+  // reintroduce it.
   SErrorCannotReadPropertiesOf = 'Cannot read properties of %s (reading ''%s'')';
 
   // Type errors — constructors.
-  // One Node-form (unquoted) constant for both modes; the slot holds the callee
-  // as written when known (via Goccia.Error.CallDiagnostics), else the type or
+  // One Node-form (unquoted) constant; the slot holds the callee as written
+  // when known (via Goccia.Error.CallDiagnostics), else the type or
   // constructor name. The quoted `'%s' is not a constructor` variant was
-  // retired so the two executors cannot drift.
+  // retired.
   SErrorValueNotConstructor = '%s is not a constructor';
   SErrorSuperNotConstructor = 'Super constructor is not a constructor';
 
   { ES2026 §10.2.2 [[Construct]] step 13.c and §13.3.7.1 SuperCall: a derived
     constructor leaves `this` uninitialized until super() returns, and both
     reading `this` and returning report it. Which of the two fires first is an
-    implementation detail — the interpreter reaches the return check for a body
-    that never touches `this`, the compiler's OP_CHECK_DERIVED_THIS reaches the
-    access check for one that does — so both modes and both checks share this
-    one message rather than describing the route they took. Node v24.0.1 words
+    implementation detail — the VM reaches the return check for a body that
+    never touches `this`, the compiler's OP_CHECK_DERIVED_THIS reaches the
+    access check for one that does — so both checks share this one message
+    rather than describing the route they took. Node v24.0.1 words
     it the same way for the same reason. }
   SErrorSuperConstructorNotCalled = 'Must call super constructor in derived ' +
     'class before accessing ''this'' or returning from derived constructor';
@@ -77,6 +73,8 @@ resourcestring
 
   // Type errors — classes, decorators, private fields
   SErrorDecoratorMustBeFunction = 'Decorator must be a function';
+  SErrorAddInitializerAfterDecoration = 'Cannot add initializers after decoration has completed';
+  SErrorAddInitializerNotCallable = 'Initializer must be a function';
   SErrorPrivateGetterMissing = 'Private accessor #%s was defined without a getter';
   SErrorPrivateSetterMissing = 'Private accessor #%s was defined without a setter';
   SErrorPrivateFieldInaccessible = 'Private field #%s is not accessible';
@@ -548,6 +546,14 @@ resourcestring
   SErrorCannotUseInOperator = 'Cannot use ''in'' operator to search for ''%s'' in %s';
   SErrorCannotDestructureNotObject = 'Cannot destructure %s as it is not an object';
   SErrorMaxCallStackExceeded = 'Maximum call stack size exceeded';
+  // Source nested past Goccia.NestingLimit's MAX_NESTING_DEPTH, or, parsed or
+  // compiled where the native stack is already deep, nested further than the
+  // stack left allows (both SyntaxErrors).
+  SErrorNestingLimitExceeded = 'Nesting exceeds the supported limit of %d levels';
+  SErrorNestingStackExhausted = 'Nesting is too deep for the native stack that is left';
+  // An expression or statement whose syntax tree, counting each link of its
+  // operator, member and call chains, is taller than MAX_TREE_HEIGHT.
+  SErrorTreeHeightExceeded = 'Nesting, counting each link of operator and call chains, exceeds the supported limit of %d levels';
 
   // Module loading errors
   // Names no module address on purpose: the only address available where this
@@ -586,7 +592,6 @@ resourcestring
   SErrorTextDecoderFatalIllegalInvocation = 'TextDecoder.prototype.fatal: illegal invocation';
   SErrorTextDecoderIgnoreBOMIllegalInvocation = 'TextDecoder.prototype.ignoreBOM: illegal invocation';
   SErrorTextDecoderDecodeIllegalInvocation = 'TextDecoder.prototype.decode: illegal invocation';
-  SErrorTextDecoderDecodeInputType = 'TextDecoder.prototype.decode: input must be an ArrayBuffer or ArrayBufferView';
   SErrorTextDecoderDecodeInvalidUTF8 = 'TextDecoder.prototype.decode: invalid UTF-8 byte sequence';
 
   // SharedArrayBuffer errors
@@ -681,7 +686,12 @@ resourcestring
   // TextEncoder errors
   SErrorTextEncoderIllegalInvocation = '%s: illegal invocation';
   SErrorTextEncoderEncodeIntoArgs = 'TextEncoder.prototype.encodeInto requires source and destination arguments';
-  SErrorTextEncoderEncodeIntoDestType = 'TextEncoder.prototype.encodeInto: destination must be a Uint8Array';
+  SErrorTextEncoderEncodeIntoImmutable = 'TextEncoder.prototype.encodeInto: destination is backed by an immutable ArrayBuffer';
+
+  // Web IDL buffer source conversion errors (Goccia.WebIDL.BufferSource)
+  SErrorBufferSourceType = '%s must be an ArrayBuffer, SharedArrayBuffer or ArrayBufferView';
+  SErrorBufferSourceUint8ArrayType = '%s must be a Uint8Array';
+  SErrorBufferSourceNotFixedLength = '%s must not be backed by a resizable ArrayBuffer or a growable SharedArrayBuffer';
 
   // Promise prototype errors
   SErrorPromiseThenNonPromise = 'Promise.prototype.then called on non-Promise';

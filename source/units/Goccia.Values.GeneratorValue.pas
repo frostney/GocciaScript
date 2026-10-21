@@ -1,9 +1,6 @@
-// Generator machinery both executors share: the generator object base
-// classes, the next/return/throw methods on the generator prototypes, and the
-// generator function value classes the evaluator creates. The interpreter's
-// generator objects and the call path that creates them live in
-// Goccia.Evaluator.Generators, which registers that path with
-// RegisterGeneratorObjectFactory; the bytecode VM's live in Goccia.VM.
+// Generator machinery shared by the VM's generator objects: the generator
+// object base classes and the next/return/throw methods on the generator
+// prototypes. The generator objects themselves live in Goccia.VM.
 unit Goccia.Values.GeneratorValue;
 
 {$I Goccia.inc}
@@ -12,9 +9,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
-  Goccia.Intrinsics.FunctionObjects,
   Goccia.Realm,
-  Goccia.Values.FunctionValue,
   Goccia.Values.IteratorValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -41,49 +36,9 @@ type
       const AThisValue: TGocciaValue): TGocciaValue; virtual; abstract;
   end;
 
-  { Creates the object a call to AFunction returns: an async generator object
-    when AIsAsync, a generator object otherwise. The caller sets its
-    prototype. }
-  TGocciaGeneratorObjectFactory = function(
-    const AFunction: TGocciaFunctionValue;
-    const AArguments: TGocciaArgumentsCollection;
-    const AThisValue: TGocciaValue;
-    const AIsAsync: Boolean): TGocciaObjectValue;
-
-  TGocciaGeneratorFunctionValue = class(TGocciaFunctionValue)
-  public
-    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
-    function IsConstructable: Boolean; override;
-  end;
-
-  TGocciaAsyncGeneratorFunctionValue = class(TGocciaGeneratorFunctionValue)
-  public
-    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
-  end;
-
-  TGocciaGeneratorMethodValue = class(TGocciaMethodValue)
-  public
-    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
-  end;
-
-  TGocciaAsyncGeneratorMethodValue = class(TGocciaGeneratorMethodValue)
-  public
-    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
-  end;
-
 procedure EnsureGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
 procedure EnsureAsyncGeneratorPrototypeMethods(const APrototype: TGocciaObjectValue);
 
-{ Registers how the interpreter creates generator objects.
-  Goccia.Evaluator.Generators does this when it is linked. }
-procedure RegisterGeneratorObjectFactory(
-  const AFactory: TGocciaGeneratorObjectFactory);
-
-{ The realm's %GeneratorPrototype% or %AsyncGeneratorPrototype%, created on
-  first use. ARealm defaults to the current realm. }
-function GeneratorObjectIntrinsicParent(
-  const AKind: TGocciaFunctionObjectIntrinsicKind;
-  const ARealm: TGocciaRealm = nil): TGocciaObjectValue;
 function GeneratorIncompatibleReceiverError: TGocciaValue;
 function RejectedTypeErrorPromise(const AMessage: string): TGocciaPromiseValue;
 
@@ -94,9 +49,9 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor;
 
@@ -125,38 +80,6 @@ var
   GGeneratorPrototypeMethodHostSlot: TGocciaRealmOwnedSlotId;
   GAsyncGeneratorPrototypeMethodHostSlot: TGocciaRealmOwnedSlotId;
 
-function GeneratorObjectIntrinsicParent(
-  const AKind: TGocciaFunctionObjectIntrinsicKind;
-  const ARealm: TGocciaRealm = nil): TGocciaObjectValue;
-var
-  IteratorPrototype: TGocciaObjectValue;
-  PreviousRealm: TGocciaRealm;
-  ShouldSwitchRealm: Boolean;
-begin
-  PreviousRealm := CurrentRealm;
-  ShouldSwitchRealm := Assigned(ARealm) and (ARealm <> PreviousRealm);
-  if ShouldSwitchRealm then
-    SetCurrentRealm(ARealm);
-  try
-    if TGocciaObjectValue.SharedObjectPrototype = nil then
-      TGocciaObjectValue.InitializeSharedPrototype;
-    IteratorPrototype := nil;
-    if AKind = foikGenerator then
-      IteratorPrototype := TGocciaIteratorValue.SharedPrototype;
-    Result := GeneratorObjectIntrinsicPrototype(AKind,
-      TGocciaFunctionBase.GetSharedPrototype,
-      TGocciaObjectValue.SharedObjectPrototype,
-      IteratorPrototype);
-    if AKind = foikGenerator then
-      EnsureGeneratorPrototypeMethods(Result)
-    else if AKind = foikAsyncGenerator then
-      EnsureAsyncGeneratorPrototypeMethods(Result);
-  finally
-    if ShouldSwitchRealm then
-      SetCurrentRealm(PreviousRealm);
-  end;
-end;
-
 function GeneratorIncompatibleReceiverError: TGocciaValue;
 begin
   Result := CreateErrorObject(TYPE_ERROR_NAME,
@@ -164,13 +87,24 @@ begin
 end;
 
 function RejectedTypeErrorPromise(const AMessage: string): TGocciaPromiseValue;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := TGocciaPromiseValue.Create;
+  // The error's strings reserve their payloads, which can collect, and only
+  // this local holds the promise.
+  Roots.Initialize;
   try
-    Result.Reject(CreateErrorObject(TYPE_ERROR_NAME, AMessage));
-  except
-    Result.Free;
-    raise;
+    Roots.Add(Result);
+    try
+      Result.Reject(CreateErrorObject(TYPE_ERROR_NAME, AMessage));
+    except
+      Roots.Clear;
+      Result.Free;
+      raise;
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -336,90 +270,6 @@ begin
           Host.AsyncGeneratorThrow, PROP_THROW, 1),
         [pfConfigurable, pfWritable]));
   end;
-end;
-
-var
-  GCreateGeneratorObject: TGocciaGeneratorObjectFactory;
-
-procedure RegisterGeneratorObjectFactory(
-  const AFactory: TGocciaGeneratorObjectFactory);
-begin
-  GCreateGeneratorObject := AFactory;
-end;
-
-function CreateGeneratorObject(const AFunction: TGocciaFunctionValue;
-  const AArguments: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue;
-  const AIsAsync: Boolean): TGocciaObjectValue;
-begin
-  if not Assigned(GCreateGeneratorObject) then
-    raise Exception.Create(
-      'A generator function was called, but no interpreter generator factory is registered');
-  Result := GCreateGeneratorObject(AFunction, AArguments, AThisValue, AIsAsync);
-end;
-
-{ ES2026 §10.1.13 OrdinaryCreateFromConstructor(callee,
-  "%GeneratorFunction.prototype.prototype%"): the generator object's prototype
-  is the function's own `prototype` when that is an object, else the
-  intrinsic. }
-procedure SetGeneratorObjectPrototype(const AObject: TGocciaObjectValue;
-  const AFunction: TGocciaFunctionValue;
-  const AKind: TGocciaFunctionObjectIntrinsicKind);
-var
-  PrototypeValue: TGocciaValue;
-begin
-  PrototypeValue := AFunction.GetProperty(PROP_PROTOTYPE);
-  if PrototypeValue is TGocciaObjectValue then
-    AObject.Prototype := TGocciaObjectValue(PrototypeValue)
-  else
-    AObject.Prototype := GeneratorObjectIntrinsicParent(AKind,
-      AFunction.CreationRealm);
-end;
-
-{ TGocciaGeneratorFunctionValue }
-
-function TGocciaGeneratorFunctionValue.Call(
-  const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  GeneratorObject: TGocciaObjectValue;
-begin
-  GeneratorObject := CreateGeneratorObject(Self, AArguments, AThisValue, False);
-  SetGeneratorObjectPrototype(GeneratorObject, Self, foikGenerator);
-  Result := GeneratorObject;
-end;
-
-function TGocciaGeneratorFunctionValue.IsConstructable: Boolean;
-begin
-  Result := False;
-end;
-
-{ TGocciaAsyncGeneratorFunctionValue }
-
-function TGocciaAsyncGeneratorFunctionValue.Call(
-  const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-var
-  AsyncGeneratorObject: TGocciaObjectValue;
-begin
-  AsyncGeneratorObject := CreateGeneratorObject(Self, AArguments, AThisValue,
-    True);
-  SetGeneratorObjectPrototype(AsyncGeneratorObject, Self, foikAsyncGenerator);
-  Result := AsyncGeneratorObject;
-end;
-
-{ TGocciaGeneratorMethodValue }
-
-function TGocciaGeneratorMethodValue.Call(
-  const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := CreateGeneratorObject(Self, AArguments, AThisValue, False);
-end;
-
-{ TGocciaAsyncGeneratorMethodValue }
-
-function TGocciaAsyncGeneratorMethodValue.Call(
-  const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := CreateGeneratorObject(Self, AArguments, AThisValue, True);
 end;
 
 initialization

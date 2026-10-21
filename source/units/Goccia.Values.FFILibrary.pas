@@ -18,7 +18,7 @@ type
     FLibraryGuard: TGocciaFFILibraryGuard;
 
     constructor CreatePrototypeHost;
-    procedure InitializePrototype;
+    class procedure InitializePrototype;
   published
     function Bind(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function Symbol(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -32,7 +32,7 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const ATarget: TGocciaObjectValue);
 
@@ -52,6 +52,7 @@ uses
   Goccia.FFI.Types,
   Goccia.FFI.UTF8String,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
@@ -174,6 +175,19 @@ begin
   ThrowTypeError(Message, SSuggestFFIUsage);
 end;
 
+{ The address of a typed array's first element in the buffer's current data
+  block, or nil when the view has no element there: a detached buffer, a view
+  past the end of its shrunk buffer, or an empty view. }
+function TypedArrayDataPointer(const AArray: TGocciaTypedArrayValue): Pointer;
+var
+  Data: TBytes;
+begin
+  if AArray.Length = 0 then
+    Exit(nil);
+  Data := AArray.BufferData;
+  Result := @Data[AArray.ByteOffset];
+end;
+
 function PointerFromFFIValue(const AValue: TGocciaValue;
   const AArgumentIndex: Integer): Pointer;
 begin
@@ -193,19 +207,13 @@ begin
   end
   else if AValue is TGocciaSharedArrayBufferValue then
   begin
-    if Length(TGocciaSharedArrayBufferValue(AValue).Data) = 0 then
+    if TGocciaSharedArrayBufferValue(AValue).ByteLength = 0 then
       Result := nil
     else
       Result := @TGocciaSharedArrayBufferValue(AValue).Data[0];
   end
   else if AValue is TGocciaTypedArrayValue then
-  begin
-    if Length(TGocciaTypedArrayValue(AValue).BufferData) = 0 then
-      Result := nil
-    else
-      Result := @TGocciaTypedArrayValue(AValue).BufferData[
-        TGocciaTypedArrayValue(AValue).ByteOffset];
-  end
+    Result := TypedArrayDataPointer(TGocciaTypedArrayValue(AValue))
   else if AValue is TGocciaFFIAggregateValue then
     Result := TGocciaFFIAggregateValue(AValue).DataPointer
   else if AValue is TGocciaNullLiteralValue then
@@ -723,7 +731,7 @@ begin
   inherited;
 end;
 
-procedure TGocciaFFILibraryValue.InitializePrototype;
+class procedure TGocciaFFILibraryValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   MethodHost: TGocciaFFILibraryValue;
@@ -789,9 +797,8 @@ begin
   Result := FFI_LIBRARY_TAG;
 end;
 
-procedure TGocciaFFILibraryValue.MarkReferences;
+procedure TGocciaFFILibraryValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 end;
 
@@ -957,7 +964,15 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
+// Rebuilds only the shared native prototype; it never opens a library.
+procedure MaterializeFFILibraryPrototype;
+begin
+  TGocciaFFILibraryValue.InitializePrototype;
+end;
+
 initialization
   GFFILibrarySharedSlot := RegisterRealmOwnedSlot('FFILibrary.shared');
+  RegisterSnapshotSlotMaterializer('FFILibrary.shared',
+    MaterializeFFILibraryPrototype);
 
 end.

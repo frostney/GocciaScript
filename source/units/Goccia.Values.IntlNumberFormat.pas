@@ -48,7 +48,7 @@ type
     class function CreateFromArguments(const ALocales, AOptions: TGocciaValue): TGocciaIntlNumberFormatValue; static;
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
   published
     function IntlNumberFormatFormatGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -71,6 +71,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -97,7 +98,7 @@ type
     function Format(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const ANumberFormat: TGocciaIntlNumberFormatValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function GetIntlNumberFormatShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
@@ -512,9 +513,8 @@ begin
   Result := FNumberFormat.IntlNumberFormatFormat(AArgs, FNumberFormat);
 end;
 
-procedure TGocciaIntlNumberFormatBoundFormatValue.MarkReferences;
+procedure TGocciaIntlNumberFormatBoundFormatValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FNumberFormat) then
     FNumberFormat.MarkReferences;
@@ -1767,9 +1767,8 @@ begin
   Result := 'Object';
 end;
 
-procedure TGocciaIntlNumberFormatValue.MarkReferences;
+procedure TGocciaIntlNumberFormatValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FBoundFormat) then
     FBoundFormat.MarkReferences;
@@ -2098,5 +2097,6 @@ end;
 
 initialization
   GIntlNumberFormatSharedSlot := RegisterRealmOwnedSlot('Intl.NumberFormat.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.NumberFormat.shared', 'Intl.NumberFormat');
 
 end.

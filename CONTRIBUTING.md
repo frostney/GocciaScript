@@ -19,7 +19,7 @@ When your change affects behavior visible to users or contributors, update the r
 |-------------|--------|
 | New language feature | [docs/language.md](docs/language.md) + [docs/built-ins.md](docs/built-ins.md) if it adds API surface |
 | New built-in type | [docs/built-ins.md](docs/built-ins.md) + follow the [Adding Built-in Types](docs/adding-built-in-types.md) checklist |
-| Architecture change | The relevant `docs/` file ([interpreter.md](docs/interpreter.md), [bytecode-vm.md](docs/bytecode-vm.md), [core-patterns.md](docs/core-patterns.md), etc.) |
+| Architecture change | The relevant `docs/` file ([architecture.md](docs/architecture.md), [bytecode-vm.md](docs/bytecode-vm.md), [core-patterns.md](docs/core-patterns.md), etc.) |
 | New design decision | ADR under [docs/adr/](docs/adr/) |
 | User-facing feature | [README.md](README.md) |
 | Workflow or style change | The relevant file under [docs/contributing/](docs/contributing/) |
@@ -31,6 +31,16 @@ When your change affects behavior visible to users or contributors, update the r
 - **No hand-typed conformance numbers** — Never type a test262 pass rate, pass count, or percentage into documentation or website copy. Link the [compatibility dashboard](https://www.gocciascript.dev/compatibility) or render the figure from the generated reports; a frozen number is stale by the next main-branch run. `scripts/check-conformance-claims.ts` enforces this in the pre-commit hook and in CI. A deliberate version-stamped figure needs an explicit `conformance-claim-ok: <reason>` comment, placed on the claim line or on the nearest non-blank line above it.
 - **Spikes are snapshots** — Files under `docs/spikes/` are point-in-time investigation records. Do not update them after the initial creation; if findings change, add a new ADR and link to it.
 - **Decision records are immutable** — Each ADR under `docs/adr/` records what was decided at that point in time. Do not retroactively update ADRs to match the current implementation. If the implementation changes, add a new ADR with the new decision. Links from ADRs to other docs may be updated if targets are renamed.
+
+### How we describe GocciaScript
+
+These rules apply to the README's first screen, the website and `llms.txt`:
+
+- **Lead with what it is for, then the evidence.** First what it does (runs code that agents and people write, under host-set capabilities and limits), then what a reader can check: the live test262 result, the tests and differential suites, the nightly fuzzing and memory checks, the weekly GC stress, the prebuilt binaries, and that it runs in production behind [Shotcup](https://shotcup.dev). Stars and the implementation language are never the only signals on a page.
+- **State each trade-off as a choice and what it buys.** FreePascal gives native binaries with GocciaScript's own compiler, VM and collector and nothing underneath; the recommended profile keeps agent code explicit, and each core form it disables has a flag.
+- **Say only what CI enforces.** Check the workflow before you write a claim, and word it to match: test262 runs on every pull request and fails it only on a regression against main, not on the failures main already has; fuzzing and the memory checks run nightly, not per change.
+- **Status is one neutral line with what it means.** Pre-1.0: the host API and command-line flags may change between releases, so pin a version.
+- **Figures stay live.** A conformance figure comes from the published reports (the dashboard, a rendered value or the badge), as the rule above requires.
 
 `docs/` files are about the GocciaScript project (engine, language, runtime). Contributing guides are about FreePascal contribution standards. Match the voice and structure of the target document.
 
@@ -47,9 +57,9 @@ Before implementation, use [DEFINITION_OF_READY.md](DEFINITION_OF_READY.md) to c
 
 These rules **must** be followed when modifying the codebase:
 
-### 1. Evaluator Purity and VMT Dispatch
+### 1. Explicit State and Virtual Dispatch
 
-Evaluation is **pure** — same expression + context always produces the same result. State changes happen through scope and value objects, never evaluator-internal state. Expression and statement evaluation uses VMT dispatch on AST nodes. See [docs/interpreter.md](docs/interpreter.md) for the full evaluator model.
+Runtime state flows through explicit parameters (the `TGocciaEvaluationContext` record, the scope chain, and value objects), never through global mutable state. Value behavior such as property access and type discrimination uses virtual methods on `TGocciaValue` rather than `is` check chains. See [Architecture § Evaluation Context](docs/architecture.md#evaluation-context) and [Core patterns § Virtual Dispatch Value System](docs/core-patterns.md#virtual-dispatch-value-system).
 
 ### 2. Scope Creation
 
@@ -68,14 +78,18 @@ ChildScope := TGocciaScope.Create(ParentScope, skBlock);
 JavaScript end-to-end tests are the **primary** way of testing GocciaScript. When implementing a new feature or fixing a bug:
 
 - Add JavaScript tests under the `tests/` directory, following the existing directory structure.
+- For real-network fetch behavior that needs a live listener, use the existing
+  `scripts/fetch-e2e.sh` JavaScript runner and `scripts/fetch_test_server.py`
+  loopback fixture instead. PR CI and non-Windows main CI run this check; the
+  ordinary `tests/` suite has no server fixture. Add native HTTP client tests
+  for the shared transport boundary as well.
 - **One method per file** — each test file focuses on a single method or operation.
 - **Edge cases are co-located** — edge case tests belong in the same file as the happy-path tests.
-- Always verify changes by running the all-executor JavaScript suite:
+- Always verify changes by running the JavaScript suite:
 
   ```bash
   ./build.pas testrunner
   ./build/GocciaTestRunner -P tests
-  ./build/GocciaTestRunner -P tests --mode=bytecode
   ```
 
   `-P` accepts the test configs' permission requests for that run only and
@@ -125,5 +139,5 @@ benchmark, bundler, and configuration command reference.
 ## Further reading
 
 - **[README.md](README.md)** — What GocciaScript is, how to get started, and the [documentation index](README.md#documentation)
-- **Engine docs** — [Architecture](docs/architecture.md), [Interpreter](docs/interpreter.md), [Bytecode VM](docs/bytecode-vm.md), [Core patterns](docs/core-patterns.md)
+- **Engine docs** — [Architecture](docs/architecture.md), [Bytecode VM](docs/bytecode-vm.md), [Core patterns](docs/core-patterns.md)
 - **[AGENTS.md](AGENTS.md)** — Agent-only operating manual for coding assistants

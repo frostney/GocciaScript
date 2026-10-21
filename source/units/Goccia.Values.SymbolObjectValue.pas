@@ -14,7 +14,7 @@ type
     FSymbolData: TGocciaValue;
   public
     constructor Create(const ASymbolData: TGocciaValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     property SymbolData: TGocciaValue read FSymbolData;
   end;
@@ -37,9 +37,8 @@ begin
     FPrototype := TGocciaObjectValue(Proto);
 end;
 
-procedure TGocciaSymbolObjectValue.MarkReferences;
+procedure TGocciaSymbolObjectValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSymbolData) then
     FSymbolData.MarkReferences;

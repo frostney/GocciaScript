@@ -29,7 +29,7 @@ type
     constructor Create(const AClass: TGocciaClassValue = nil);
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
   end;
@@ -48,11 +48,13 @@ uses
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
-  Goccia.Values.TypedArrayValue;
+  Goccia.Values.TypedArrayValue,
+  Goccia.WebIDL.BufferSource;
 
 var
   GTextEncoderSharedSlot: TGocciaRealmOwnedSlotId;
@@ -162,13 +164,12 @@ begin
   Result := CONSTRUCTOR_TEXT_ENCODER;
 end;
 
-procedure TGocciaTextEncoderValue.MarkReferences;
+procedure TGocciaTextEncoderValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 end;
 
-// WHATWG Encoding §8.3.1 get TextEncoder.prototype.encoding
+// WHATWG Encoding §7.3 get TextEncoder.prototype.encoding
 function TGocciaTextEncoderValue.EncodingGetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
@@ -180,14 +181,14 @@ begin
   Result := TGocciaStringLiteralValue.Create(ENCODING_UTF8);
 end;
 
-// WHATWG Encoding §8.3.2 TextEncoder.prototype.encode(input = '')
+// WHATWG Encoding §7.4 TextEncoder.prototype.encode(input = '')
 function TGocciaTextEncoderValue.Encode(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Input: string;
   Bytes: TBytes;
   NewTA: TGocciaTypedArrayValue;
-  I: Integer;
+  Data: TBytes;
 begin
   if not (AThisValue is TGocciaTextEncoderValue) then
     ThrowTypeError(Format(SErrorTextEncoderIllegalInvocation,
@@ -203,19 +204,23 @@ begin
   // and return the resulting Uint8Array.
   Bytes := StringToUTF8Bytes(Input);
   NewTA := TGocciaTypedArrayValue.Create(takUint8, Length(Bytes));
-  for I := 0 to Length(Bytes) - 1 do
-    NewTA.BufferData[NewTA.ByteOffset + I] := Bytes[I];
+  // The new array owns its block, which holds exactly Length(Bytes) bytes.
+  Data := NewTA.BufferData;
+  if Length(Bytes) > 0 then
+    Move(Bytes[0], Data[NewTA.ByteOffset], Length(Bytes));
   Result := NewTA;
 end;
 
-// WHATWG Encoding §8.3.3 TextEncoder.prototype.encodeInto(source, destination)
+// WHATWG Encoding §7.4 TextEncoder.prototype.encodeInto(source, destination)
 function TGocciaTextEncoderValue.EncodeInto(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+const
+  ENCODE_INTO_DESTINATION_CONTEXT = 'TextEncoder.prototype.encodeInto: destination';
 var
   Source: string;
   Dest: TGocciaTypedArrayValue;
-  Bytes: TBytes;
-  I, J, SeqLen, Written, Read, DestLen: Integer;
+  Bytes, Data: TBytes;
+  I, J, SeqLen, Written, Read, DestLen, Offset: Integer;
   ResultObj: TGocciaObjectValue;
 begin
   if not (AThisValue is TGocciaTextEncoderValue) then
@@ -225,20 +230,30 @@ begin
   if AArgs.Length < 2 then
     ThrowTypeError(SErrorTextEncoderEncodeIntoArgs, SSuggestTextEncoderEncodeIntoArgs);
 
-  if AArgs.GetElement(0) is TGocciaUndefinedLiteralValue then
-    Source := ''
-  else
-    Source := AArgs.GetElement(0).ToStringLiteral.Value;
+  // source is a required USVString: undefined converts to "undefined".
+  Source := AArgs.GetElement(0).ToStringLiteral.Value;
 
-  if not (AArgs.GetElement(1) is TGocciaTypedArrayValue) then
-    ThrowTypeError(SErrorTextEncoderEncodeIntoDestType, SSuggestTextEncoderEncodeIntoArgs);
-  Dest := TGocciaTypedArrayValue(AArgs.GetElement(1));
-  if Dest.Kind <> takUint8 then
-    ThrowTypeError(SErrorTextEncoderEncodeIntoDestType, SSuggestTextEncoderEncodeIntoArgs);
+  // Web IDL converts the arguments in order, so source's toString has run
+  // before destination converts to [AllowShared] Uint8Array, which has no
+  // [AllowResizable] and so refuses a view of a resizable or growable buffer.
+  Dest := ConvertToAllowSharedUint8Array(AArgs.GetElement(1),
+    ENCODE_INTO_DESTINATION_CONTEXT, SSuggestTextEncoderEncodeIntoArgs);
+  // Immutable ArrayBuffers proposal: an immutable buffer's bytes never
+  // change, so a write through a view of one is refused before any byte is
+  // written, as DataView setters and Atomics refuse it.
+  if (Dest.BufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(Dest.BufferValue).Immutable then
+    ThrowTypeError(SErrorTextEncoderEncodeIntoImmutable,
+      SSuggestTextEncoderEncodeIntoImmutable);
 
   // Convert source to USVString bytes (lone surrogates normalized to U+FFFD).
   Bytes := StringToUTF8Bytes(Source);
+  // The buffer is fixed-length, and the source's conversion above can only
+  // have detached it; no script code runs from here on, so the block and the
+  // length read once describe every byte the loop writes.
+  Data := Dest.BufferData;
   DestLen := Dest.Length;
+  Offset := Dest.ByteOffset;
   Written := 0;
   Read := 0;
   I := 0;
@@ -250,7 +265,7 @@ begin
     if Written + SeqLen > DestLen then Break;
 
     for J := 0 to SeqLen - 1 do
-      Dest.BufferData[Dest.ByteOffset + Written + J] := Bytes[I + J];
+      Data[Offset + Written + J] := Bytes[I + J];
 
     Inc(Written, SeqLen);
     Inc(I, SeqLen);

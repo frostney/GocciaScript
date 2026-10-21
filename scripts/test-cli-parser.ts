@@ -12,21 +12,6 @@ import { RUNNER } from "./test-cli/binaries";
 import { assertSyntaxError, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { clean, mkdtemp } from "./test-cli/tmpdir";
 
-function assertSyntaxErrorInBothModes(
-  source: string,
-  desc: string,
-  args: readonly string[] = [],
-  opts?: { timeout?: number; messageIncludes?: string; line?: number },
-): void {
-  assertSyntaxError(source, desc, [...args, "--mode=interpreted"], opts);
-  assertSyntaxError(
-    source,
-    `${desc} (bytecode)`,
-    [...args, "--mode=bytecode"],
-    opts,
-  );
-}
-
 // -- Error display (SyntaxError with caret and suggestion) ----------------------
 
 console.log("Error display (SyntaxError with caret and suggestion)...");
@@ -46,24 +31,12 @@ console.log("Error display (SyntaxError with caret and suggestion)...");
 
 console.log("Error display (JSON error output)...");
 {
-  const { exitCode, json } = runLoaderJson("const x = ;\n", ["--mode=interpreted"]);
+  const { exitCode, json } = runLoaderJson("const x = ;\n");
   if (exitCode !== 1) throw new Error(`Syntax error exit code should be 1, got ${exitCode}`);
   if (json.ok !== false) throw new Error(`JSON error ok should be false`);
   if (json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError, got ${json.error?.type}`);
   if (typeof json.error?.line !== "number") throw new Error(`JSON error should include numeric line, got ${json.error?.line}`);
   if (typeof json.error?.column !== "number") throw new Error(`JSON error should include numeric column, got ${json.error?.column}`);
-}
-
-// -- Error display (bytecode mode) ----------------------------------------------
-
-console.log("Error display (bytecode SyntaxError)...");
-{
-  const { exitCode, json } = runLoaderJson("const x = ;\n", ["--mode=bytecode"]);
-  if (exitCode !== 1) throw new Error(`Bytecode syntax error exit code should be 1, got ${exitCode}`);
-  if (json.ok !== false) throw new Error(`Bytecode JSON error ok should be false`);
-  if (json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError in bytecode, got ${json.error?.type}`);
-  if (typeof json.error?.line !== "number") throw new Error(`Bytecode JSON error should include numeric line, got ${json.error?.line}`);
-  if (typeof json.error?.column !== "number") throw new Error(`Bytecode JSON error should include numeric column, got ${json.error?.column}`);
 }
 
 // -- Malformed optional private field access ------------------------------------
@@ -72,7 +45,6 @@ console.log("Malformed optional private field access...");
 {
   const source = "class Box { #value = 1; read(obj) { return obj?.#; } }\n";
   assertSyntaxError(source, "optional private access without name");
-  assertSyntaxError(source, "optional private access without name (bytecode)", ["--mode=bytecode"]);
 }
 
 // -- Malformed literal class accessors ------------------------------------------
@@ -87,8 +59,7 @@ console.log("Malformed literal class accessors...");
     ["class C { set 1; }\n", "numeric-named setter declaration"],
     ["class C { set class = 1; }\n", "keyword-named setter field"],
   ] as const) {
-    assertSyntaxError(source, desc, ["--mode=interpreted"]);
-    assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
+    assertSyntaxError(source, desc);
   }
 }
 
@@ -102,8 +73,7 @@ console.log("Accessor properties are invalid destructuring assignment targets...
     ["let obj = {}; ({ get ['x']() { return 1; } } = obj);\n", "computed getter destructuring target"],
     ["let obj = {}; ({ set ['x'](value) {} } = obj);\n", "computed setter destructuring target"],
   ] as const) {
-    assertSyntaxError(source, desc, ["--mode=interpreted"]);
-    assertSyntaxError(source, `${desc} (bytecode)`, ["--mode=bytecode"]);
+    assertSyntaxError(source, desc);
   }
 }
 
@@ -165,8 +135,23 @@ console.log("Function parameter-list early errors...");
   ] as const;
 
   for (const { desc, source, args } of cases) {
-    assertSyntaxError(source, desc, [...args, "--mode=interpreted"]);
-    assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
+    assertSyntaxError(source, desc, [...args]);
+  }
+}
+
+console.log("Strict mode code rejects static as a pattern or for-head binding...");
+{
+  const cases = [
+    { desc: "static as an array-pattern element", source: "const [static] = [1];\n" },
+    { desc: "static as a rest element", source: "const [...static] = [1];\n" },
+    { desc: "static as an object-pattern target", source: "const { a: static } = { a: 1 };\n" },
+    { desc: "static as a for...of binding", source: "for (const static of [1]) {}\n" },
+  ] as const;
+
+  for (const { desc, source } of cases) {
+    assertSyntaxError(source, desc, [], {
+      messageIncludes: "must not bind reserved word 'static'",
+    });
   }
 }
 
@@ -291,6 +276,36 @@ console.log("Language early errors use the CLI parser...");
       args: ["--compat-label", "--compat-non-strict-mode"],
     },
     {
+      desc: "strict let label",
+      source: '"use strict"; let: {}\n',
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "strict static label",
+      source: '"use strict"; static: {}\n',
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "let label in default strict code",
+      source: "let: {}\n",
+      args: ["--compat-label"],
+    },
+    {
+      desc: "enum label in sloppy code",
+      source: "enum: {}\n",
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "escaped enum label in sloppy code",
+      source: "en\\u0075m: {}\n",
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "escaped let label in strict code",
+      source: '"use strict"; l\\u0065t: {}\n',
+      args: ["--compat-label", "--compat-non-strict-mode"],
+    },
+    {
       desc: "break crossing an arrow-function boundary",
       source: "outer: while (true) { const fn = () => { break outer; }; }\n",
       args: ["--compat-label", "--compat-while-loops"],
@@ -408,7 +423,7 @@ console.log("Language early errors use the CLI parser...");
   ] as const;
 
   for (const { source, desc, args } of cases)
-    assertSyntaxErrorInBothModes(source, desc, args);
+    assertSyntaxError(source, desc, [...args]);
 }
 
 // -- Annex B labelled-function early errors -----------------------------------
@@ -475,7 +490,7 @@ console.log("Annex B labelled-function early errors...");
   ] as const;
 
   for (const { source, desc, args } of cases)
-    assertSyntaxErrorInBothModes(source, desc, args);
+    assertSyntaxError(source, desc, [...args]);
 }
 
 // -- Strict-mode legacy octal literal rejection ---------------------------------
@@ -485,11 +500,6 @@ console.log("Strict-mode legacy octal literal rejection...");
   const source = '"use strict";\n01;\n';
   assertSyntaxError(source, "legacy octal literal in strict code", [
     "--compat-non-strict-mode",
-    "--mode=interpreted",
-  ]);
-  assertSyntaxError(source, "legacy octal literal in strict bytecode", [
-    "--compat-non-strict-mode",
-    "--mode=bytecode",
   ]);
 }
 
@@ -530,6 +540,85 @@ console.log("ASI after do...while...");
     throw new Error(`do...while followed by newline should apply ASI, got: ${JSON.stringify(newline.json)}`);
   if (normalizeLineEndings(newline.json.output) !== "after\n")
     throw new Error(`Expected do...while newline ASI output after, got: ${newline.json.output}`);
+}
+
+// -- ASI and line breaks inside a token ---------------------------------------
+
+console.log("ASI and line breaks inside a token...");
+{
+  // ES2026 §12.10 rule 1 needs a LineTerminator between the offending token
+  // and the one before it. A string's LineContinuation is inside the token,
+  // so a string that starts on the same line is still an offending token.
+  assertSyntaxError(
+    'const a = 1 "x\\\ny";\n',
+    "string with a line continuation after an expression on its line",
+    ["--compat-asi"],
+    { messageIncludes: "Expected \";\"" },
+  );
+
+  const separated = runLoaderJson('const a = 1\n"x\\\ny";\nconsole.log(a);\n', ["--compat-asi"]);
+  if (separated.exitCode !== 0 || separated.json.ok !== true)
+    throw new Error(`A string on the next line should end the statement by ASI, got: ${JSON.stringify(separated.json)}`);
+  if (normalizeLineEndings(separated.json.output) !== "1\n")
+    throw new Error(`Expected ASI before a string on the next line to print 1, got: ${separated.json.output}`);
+
+  // `throw` followed on its own line by a template that spans lines throws the
+  // template; the error points at the throw statement, not at a line break.
+  const thrown = runLoaderJson("throw `a\nb`;\n", ["--compat-asi"]);
+  if (thrown.exitCode !== 1 || thrown.json.ok !== false || thrown.json.error?.type === "SyntaxError")
+    throw new Error(`throw with a multi-line template should throw the template, got: ${JSON.stringify(thrown.json)}`);
+}
+
+// -- [no LineTerminator here] restrictions ------------------------------------
+
+console.log("[no LineTerminator here] restrictions...");
+{
+  // ES2026 §15.5, §15.3, §15.9, §15.8 and §15.6: a line break is not allowed
+  // between `yield` and `*`, before an arrow's `=>`, or after the `async` of
+  // a method. The restriction holds with and without ASI.
+  const yieldStar = "const o = { *g() { yield\n* [1]; } };\n";
+  const beforeArrow: [string, string][] = [
+    ["const f = (a)\n=> 1;\n", "parenthesized arrow parameters"],
+    ["const f = ()\n=> 1;\n", "empty arrow parameters"],
+    ["const f = (a): number\n=> 1;\n", "arrow return type"],
+    ["const f = async (a)\n=> 1;\n", "async arrow parameters"],
+    ["const f = async x\n=> 1;\n", "async arrow binding identifier"],
+  ];
+  for (const flags of [[], ["--compat-asi"]]) {
+    const mode = flags.length > 0 ? " with --compat-asi" : "";
+    assertSyntaxError(yieldStar, `line break between yield and *${mode}`, flags, {
+      messageIncludes: 'Line break between "yield" and "*"',
+      line: 2,
+    });
+    for (const [source, desc] of beforeArrow)
+      assertSyntaxError(source, `line break before => after ${desc}${mode}`, flags, {
+        messageIncludes: 'Line break before "=>"',
+        line: 2,
+      });
+    // After a line break `async` is a property name, so the object literal is
+    // missing a comma.
+    assertSyntaxError(
+      "const o = { async\nm() { return 1; } };\n",
+      `line break after async in an object method${mode}`,
+      flags,
+      { line: 2 },
+    );
+    assertSyntaxError(
+      "const o = { async\n*m() {} };\n",
+      `line break after async in an object generator method${mode}`,
+      flags,
+      { line: 2 },
+    );
+  }
+
+  // In a class, `async` followed by a line break is a field: ASI ends it
+  // (tests/language/asi/class-members.js); without ASI it needs a semicolon.
+  assertSyntaxError(
+    "class C { async\nm() { return 1; } }\n",
+    "line break after async in a class method without ASI",
+    [],
+    { line: 2 },
+  );
 }
 
 // -- Unsupported/default-disabled syntax errors by default ----------------------
@@ -600,26 +689,23 @@ console.log("Unsupported/default-disabled syntax errors by default...");
   ];
 
   for (const { desc, source, message, expectedWarningOutput } of cases) {
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
-      const defaultRes = runLoaderJson(source, modeArgs);
-      if (defaultRes.exitCode === 0)
-        throw new Error(`${label}: unsupported syntax should fail by default`);
-      if (defaultRes.json.ok !== false || defaultRes.json.error?.type !== "SyntaxError")
-        throw new Error(`${label}: expected SyntaxError JSON, got ${JSON.stringify(defaultRes.json.error)}`);
-      if (!String(defaultRes.json.error?.message ?? "").includes(message))
-        throw new Error(`${label}: expected message containing ${message}, got ${defaultRes.json.error?.message}`);
+    const defaultRes = runLoaderJson(source);
+    if (defaultRes.exitCode === 0)
+      throw new Error(`${desc}: unsupported syntax should fail by default`);
+    if (defaultRes.json.ok !== false || defaultRes.json.error?.type !== "SyntaxError")
+      throw new Error(`${desc}: expected SyntaxError JSON, got ${JSON.stringify(defaultRes.json.error)}`);
+    if (!String(defaultRes.json.error?.message ?? "").includes(message))
+      throw new Error(`${desc}: expected message containing ${message}, got ${defaultRes.json.error?.message}`);
 
-      const warningRes = runLoaderJson(source, ["--warning-unsupported-features", ...modeArgs]);
-      if (warningRes.exitCode !== 0)
-        throw new Error(`${label}: --warning-unsupported-features should recover, got exit ${warningRes.exitCode}`);
-      if (warningRes.json.ok !== true)
-        throw new Error(`${label}: warning recovery should succeed, got ${JSON.stringify(warningRes.json.error)}`);
-      if (normalizeLineEndings(warningRes.json.output) !== expectedWarningOutput)
-        throw new Error(
-          `${label}: expected warning recovery output ${JSON.stringify(expectedWarningOutput)}, got ${JSON.stringify(warningRes.json.output)}`,
-        );
-    }
+    const warningRes = runLoaderJson(source, ["--warning-unsupported-features"]);
+    if (warningRes.exitCode !== 0)
+      throw new Error(`${desc}: --warning-unsupported-features should recover, got exit ${warningRes.exitCode}`);
+    if (warningRes.json.ok !== true)
+      throw new Error(`${desc}: warning recovery should succeed, got ${JSON.stringify(warningRes.json.error)}`);
+    if (normalizeLineEndings(warningRes.json.output) !== expectedWarningOutput)
+      throw new Error(
+        `${desc}: expected warning recovery output ${JSON.stringify(expectedWarningOutput)}, got ${JSON.stringify(warningRes.json.output)}`,
+      );
   }
 
   const sourceBeforeDeclaration = [
@@ -662,28 +748,26 @@ console.log("Unsupported syntax in imported modules follows the entry policy..."
     writeFileSync(dep, 'var dep = 1;\nconsole.log("dep");\n');
     writeFileSync(entry, 'import "./dep.js";\nconsole.log("entry");\n');
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? "module dependency (bytecode)" : "module dependency";
-      const defaultProc = Bun.spawnSync([RUNNER, "--source-type=module", ...modeArgs, entry], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const defaultOut = `${defaultProc.stdout.toString()}${defaultProc.stderr.toString()}`;
-      if (defaultProc.exitCode === 0)
-        throw new Error(`${label}: imported unsupported syntax should fail by default`);
-      if (!defaultOut.includes("SyntaxError") || !defaultOut.includes("'var' declarations are not supported"))
-        throw new Error(`${label}: expected imported SyntaxError, got: ${defaultOut}`);
+    const label = "module dependency";
+    const defaultProc = Bun.spawnSync([RUNNER, "--source-type=module", entry], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const defaultOut = `${defaultProc.stdout.toString()}${defaultProc.stderr.toString()}`;
+    if (defaultProc.exitCode === 0)
+      throw new Error(`${label}: imported unsupported syntax should fail by default`);
+    if (!defaultOut.includes("SyntaxError") || !defaultOut.includes("'var' declarations are not supported"))
+      throw new Error(`${label}: expected imported SyntaxError, got: ${defaultOut}`);
 
-      const warningProc = Bun.spawnSync(
-        [RUNNER, "--source-type=module", "--warning-unsupported-features", ...modeArgs, entry],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const warningOut = `${warningProc.stdout.toString()}${warningProc.stderr.toString()}`;
-      if (warningProc.exitCode !== 0)
-        throw new Error(`${label}: warning mode should recover imported unsupported syntax, got: ${warningOut}`);
-      if (!warningOut.includes("dep") || !warningOut.includes("entry"))
-        throw new Error(`${label}: warning mode should execute dependency and entry, got: ${warningOut}`);
-    }
+    const warningProc = Bun.spawnSync(
+      [RUNNER, "--source-type=module", "--warning-unsupported-features", entry],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const warningOut = `${warningProc.stdout.toString()}${warningProc.stderr.toString()}`;
+    if (warningProc.exitCode !== 0)
+      throw new Error(`${label}: warning mode should recover imported unsupported syntax, got: ${warningOut}`);
+    if (!warningOut.includes("dep") || !warningOut.includes("entry"))
+      throw new Error(`${label}: warning mode should execute dependency and entry, got: ${warningOut}`);
   } finally {
     clean(tmp);
   }
@@ -760,28 +844,25 @@ console.log("Disabled-feature diagnostics with interpolated template literals...
   ];
 
   for (const { desc, compatFlag, source, expected } of recoveryCases) {
-    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = args[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
-      const defaultRes = runLoaderJson(source, args);
-      if (defaultRes.exitCode === 0)
-        throw new Error(`${label}: disabled syntax should fail by default`);
-      if (defaultRes.json.error?.type !== "SyntaxError")
-        throw new Error(`${label}: expected SyntaxError, got ${JSON.stringify(defaultRes.json.error)}`);
-      if (defaultRes.json.error?.message === "Unterminated template literal")
-        throw new Error(`${label}: regressed to unterminated-template syntax error`);
+    const defaultRes = runLoaderJson(source);
+    if (defaultRes.exitCode === 0)
+      throw new Error(`${desc}: disabled syntax should fail by default`);
+    if (defaultRes.json.error?.type !== "SyntaxError")
+      throw new Error(`${desc}: expected SyntaxError, got ${JSON.stringify(defaultRes.json.error)}`);
+    if (defaultRes.json.error?.message === "Unterminated template literal")
+      throw new Error(`${desc}: regressed to unterminated-template syntax error`);
 
-      const warningRes = runLoaderJson(source, ["--warning-unsupported-features", ...args]);
-      if (warningRes.json.ok !== true) {
-        if (warningRes.json.error?.message === "Unterminated template literal")
-          throw new Error(
-            `${label}: regressed -- warning recovery surfaced "Unterminated template literal"`,
-          );
-        throw new Error(`${label}: warning mode should recover, got ok=${warningRes.json.ok} error=${JSON.stringify(warningRes.json.error)}`);
-      }
-      if (warningRes.exitCode !== 0) throw new Error(`${label}: warning mode should exit 0, got ${warningRes.exitCode}`);
-      if (normalizeLineEndings(warningRes.json.output) !== expected)
-        throw new Error(`${label}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(warningRes.json.output)}`);
+    const warningRes = runLoaderJson(source, ["--warning-unsupported-features"]);
+    if (warningRes.json.ok !== true) {
+      if (warningRes.json.error?.message === "Unterminated template literal")
+        throw new Error(
+          `${desc}: regressed -- warning recovery surfaced "Unterminated template literal"`,
+        );
+      throw new Error(`${desc}: warning mode should recover, got ok=${warningRes.json.ok} error=${JSON.stringify(warningRes.json.error)}`);
     }
+    if (warningRes.exitCode !== 0) throw new Error(`${desc}: warning mode should exit 0, got ${warningRes.exitCode}`);
+    if (normalizeLineEndings(warningRes.json.output) !== expected)
+      throw new Error(`${desc}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(warningRes.json.output)}`);
 
     const diag = Bun.spawnSync([RUNNER], {
       stdin: new TextEncoder().encode(source),
@@ -874,7 +955,7 @@ console.log("JSX preprocessor termination...");
   ];
 
   for (const { desc, source, messageIncludes, line } of cases)
-    assertSyntaxErrorInBothModes(source, desc, [], {
+    assertSyntaxError(source, desc, [], {
       timeout: JSX_SCAN_TIMEOUT_MS,
       messageIncludes,
       line,
@@ -888,23 +969,19 @@ console.log("JSX preprocessor termination...");
   // before the attribute scan ever begins.
   {
     const nonAsciiSource = 'const element = <svg fill="a" \u00fcnter="b" />;\n';
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode"
-        ? "non-ASCII attribute byte (bytecode)"
-        : "non-ASCII attribute byte";
-      const res = runLoaderJson(nonAsciiSource, modeArgs, {
-        timeout: JSX_SCAN_TIMEOUT_MS,
-      });
-      const message = String(res.json.error?.message ?? "");
-      if (res.json.error?.type !== "SyntaxError")
-        throw new Error(`${label}: expected a SyntaxError, got ${JSON.stringify(res.json.error)}`);
-      if (!/Unsupported attribute syntax at "\\x[0-9a-f]{2}"/.test(message))
-        throw new Error(`${label}: the stalled byte should be reported as a complete lowercase hex escape, got ${message}`);
-      // The whole point of the escape: nothing outside printable ASCII may
-      // reach the envelope, because a lone high byte is not valid UTF-8.
-      if (/[^\x09\x0a\x0d\x20-\x7e]/.test(message))
-        throw new Error(`${label}: the diagnostic should stay ASCII-only, got ${JSON.stringify(message)}`);
-    }
+    const label = "non-ASCII attribute byte";
+    const res = runLoaderJson(nonAsciiSource, [], {
+      timeout: JSX_SCAN_TIMEOUT_MS,
+    });
+    const message = String(res.json.error?.message ?? "");
+    if (res.json.error?.type !== "SyntaxError")
+      throw new Error(`${label}: expected a SyntaxError, got ${JSON.stringify(res.json.error)}`);
+    if (!/Unsupported attribute syntax at "\\x[0-9a-f]{2}"/.test(message))
+      throw new Error(`${label}: the stalled byte should be reported as a complete lowercase hex escape, got ${message}`);
+    // The whole point of the escape: nothing outside printable ASCII may
+    // reach the envelope, because a lone high byte is not valid UTF-8.
+    if (/[^\x09\x0a\x0d\x20-\x7e]/.test(message))
+      throw new Error(`${label}: the diagnostic should stay ASCII-only, got ${JSON.stringify(message)}`);
   }
 
   // The attribute-list stall is extension-sensitive, so it is pinned to real
@@ -926,11 +1003,9 @@ console.log("JSX preprocessor termination...");
     const jsxFile = join(tmp, "stall.jsx");
     writeFileSync(jsxFile, angleBracketSource);
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode"
-        ? "attribute list stall in .jsx (bytecode)"
-        : "attribute list stall in .jsx";
-      const res = runLoaderJson("", [...modeArgs, jsxFile], {
+    {
+      const label = "attribute list stall in .jsx";
+      const res = runLoaderJson("", [jsxFile], {
         timeout: JSX_SCAN_TIMEOUT_MS,
       });
       if (res.exitCode !== 1)
@@ -946,11 +1021,9 @@ console.log("JSX preprocessor termination...");
     const tsFile = join(tmp, "annotations.ts");
     writeFileSync(tsFile, angleBracketSource);
 
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode"
-        ? "angle-bracket type syntax in .ts (bytecode)"
-        : "angle-bracket type syntax in .ts";
-      const res = runLoaderJson("", [...modeArgs, tsFile], {
+    {
+      const label = "angle-bracket type syntax in .ts";
+      const res = runLoaderJson("", [tsFile], {
         timeout: JSX_SCAN_TIMEOUT_MS,
       });
       if (res.exitCode !== 0)
@@ -1012,9 +1085,9 @@ console.log("Malformed type annotations...");
   ] as const;
 
   for (const { desc, source, messageIncludes } of malformed)
-    assertSyntaxErrorInBothModes(source, desc, [], { messageIncludes });
+    assertSyntaxError(source, desc, [], { messageIncludes });
 
-  // assertSyntaxErrorInBothModes feeds the source over stdin, which the
+  // assertSyntaxError feeds the source over stdin, which the
   // pipeline names `<stdin>`; the accepted forms below are written to a `.ts`
   // file. Those are different parser paths — JSX preprocessing is skipped only
   // for TypeScript extensions — so the rejections are repeated as real `.ts`
@@ -1025,16 +1098,14 @@ console.log("Malformed type annotations...");
       for (const { desc, source, messageIncludes } of malformed) {
         const path = join(tmp, "malformed.ts");
         writeFileSync(path, source);
-        for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-          const res = await $`${RUNNER} ${path} ${args} 2>&1`.quiet().nothrow();
-          const out = res.text();
-          if (res.exitCode === 0)
-            throw new Error(`${desc} (.ts file) should be rejected, got exit 0`);
-          if (!out.includes(messageIncludes))
-            throw new Error(
-              `${desc} (.ts file) should mention "${messageIncludes}", got: ${out}`,
-            );
-        }
+        const res = await $`${RUNNER} ${path} 2>&1`.quiet().nothrow();
+        const out = res.text();
+        if (res.exitCode === 0)
+          throw new Error(`${desc} (.ts file) should be rejected, got exit 0`);
+        if (!out.includes(messageIncludes))
+          throw new Error(
+            `${desc} (.ts file) should mention "${messageIncludes}", got: ${out}`,
+          );
       }
     } finally {
       clean(tmp);
@@ -1075,13 +1146,11 @@ console.log("Malformed type annotations...");
       for (const source of accepted) {
         const path = join(tmp, "accepted.ts");
         writeFileSync(path, `${source}\n`);
-        for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-          const res = await $`${RUNNER} ${path} ${args} 2>&1`.quiet().nothrow();
-          if (res.exitCode !== 0)
-            throw new Error(
-              `Valid type syntax must still parse: ${source}\n  got: ${res.text()}`,
-            );
-        }
+        const res = await $`${RUNNER} ${path} 2>&1`.quiet().nothrow();
+        if (res.exitCode !== 0)
+          throw new Error(
+            `Valid type syntax must still parse: ${source}\n  got: ${res.text()}`,
+          );
       }
     } finally {
       clean(tmp);
@@ -1142,7 +1211,7 @@ console.log("Definite assignment assertion rules...");
   ] as const;
 
   for (const { desc, source, messageIncludes, args } of cases)
-    assertSyntaxErrorInBothModes(source, desc, args ?? [], { messageIncludes });
+    assertSyntaxError(source, desc, [...(args ?? [])], { messageIncludes });
 
   // The '!' is a restricted production: on the next line it starts a new
   // expression statement rather than being absorbed as an assertion.
@@ -1152,14 +1221,12 @@ console.log("Definite assignment assertion rules...");
     "console.log(typeof x)",
     "",
   ].join("\n");
-  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-    const label = modeArgs[0] === "--mode=bytecode" ? "leading-! after ASI (bytecode)" : "leading-! after ASI";
-    const res = runLoaderJson(asiSource, ["--compat-asi", ...modeArgs]);
-    if (res.exitCode !== 0)
-      throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
-    if (normalizeLineEndings(res.json.output) !== "ran\nundefined\n")
-      throw new Error(`${label}: expected "ran\\nundefined", got ${JSON.stringify(res.json.output)}`);
-  }
+  const label = "leading-! after ASI";
+  const res = runLoaderJson(asiSource, ["--compat-asi"]);
+  if (res.exitCode !== 0)
+    throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+  if (normalizeLineEndings(res.json.output) !== "ran\nundefined\n")
+    throw new Error(`${label}: expected "ran\\nundefined", got ${JSON.stringify(res.json.output)}`);
 }
 
 // -- Type alias skipping across line breaks under ASI ---------------------------
@@ -1179,9 +1246,9 @@ console.log("Type alias skipping under ASI...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-    const label = modeArgs[0] === "--mode=bytecode" ? "multi-line type alias (bytecode)" : "multi-line type alias";
-    const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
+  {
+    const label = "multi-line type alias";
+    const res = runLoaderJson(source, ["--compat-asi"]);
     if (res.exitCode !== 0)
       throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
     if (normalizeLineEndings(res.json.output) !== "2\n")
@@ -1197,12 +1264,11 @@ console.log("Type alias skipping under ASI...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-    const label = modeArgs[0] === "--mode=bytecode" ? "relational in skipped var (bytecode)" : "relational in skipped var";
+  {
+    const label = "relational in skipped var";
     const res = runLoaderJson(relationalSource, [
       "--warning-unsupported-features",
       "--compat-asi",
-      ...modeArgs,
     ]);
     if (res.exitCode !== 0)
       throw new Error(`${label}: should recover, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
@@ -1247,15 +1313,201 @@ console.log("Parenthesized ternary consequent...");
     },
   ] as const;
 
-  for (const { desc, source, output } of cases)
-    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
-      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
-      const res = runLoaderJson(source, [...COMPAT, ...modeArgs]);
-      if (res.exitCode !== 0)
-        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
-      if (normalizeLineEndings(res.json.output) !== output)
-        throw new Error(`${label}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+  for (const { desc, source, output } of cases) {
+    const res = runLoaderJson(source, COMPAT);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== output)
+      throw new Error(`${desc}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+  }
+}
+
+// -- Arrow in a ternary consequent under automatic semicolon insertion ----------
+
+console.log("Arrow in a ternary consequent under ASI...");
+{
+  // #1533: inside a conditional's consequent, `(x) : y => z` is a return-typed
+  // arrow only when its body is followed by the conditional's ':'. The probe
+  // that looks for that ':' must stop at the end of the statement when ASI
+  // ends it, or a later `name:` (a type annotation or a label) would be read
+  // as the conditional's ':'. ASI needs the compatibility flag, so these
+  // shapes cannot live in the JS suite.
+  const cases = [
+    {
+      desc: "parenthesized consequent, arrow alternate, then an annotated declaration",
+      source: "const a = 1, x = 7\nconst r = a ? (x) : c => 9\nlet z: number = 1\nconsole.log(r, z)\n",
+      output: "7 1\n",
+    },
+    {
+      desc: "object-literal arrow body with the ':' on the next line",
+      source: "const a = 0\nconst r = a\n  ? (l) => ({ a: 1 })\n  : (l) => ({ y: l })\nconsole.log(JSON.stringify(r(3)))\n",
+      output: '{"y":3}\n',
+    },
+  ] as const;
+
+  for (const { desc, source, output } of cases) {
+    const res = runLoaderJson(source, ["--compat-asi"]);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== output)
+      throw new Error(`${desc}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+  }
+
+  // Neither reading closes every conditional, so these stay SyntaxErrors.
+  assertSyntaxError(
+    "const r = 1 ? (l) => ({ a: 1 });\n",
+    "arrow consequent with no ':' is rejected",
+    [],
+    { messageIncludes: 'Expected ":" in conditional expression' },
+  );
+  assertSyntaxError(
+    "const r = 1 ? (x): number => x : 2 : 3;\n",
+    "return-typed arrow consequent with a surplus ':' is rejected",
+  );
+}
+
+// -- Nesting limit (#1500, #1501) ------------------------------------------------
+//
+// The parser, the bytecode compiler and the RegExp compiler are recursive
+// descent, and the production build has no stack check of its own: source or
+// a pattern nested deeply enough used to kill the process with SIGSEGV. Past
+// 1,024 levels of nesting, or a syntax tree taller than 4,096 levels counting
+// each link of an operator or call chain, the parser now reports a
+// SyntaxError through the ordinary error envelope. The JS suite covers each construct through
+// ShadowRealm.prototype.evaluate (tests/language/nesting-limit); these cases
+// check the top-level script path that no JS test can reach.
+
+console.log("Nesting limit...");
+{
+  const NESTING = "Nesting exceeds the supported limit of 1024 levels";
+  const HEIGHT = "counting each link of operator and call chains, exceeds the supported limit of 4096 levels";
+  const deep = 30000;
+  const shapes: Array<[string, string]> = [
+    ["arrays", `console.log(${"[".repeat(deep)}${"]".repeat(deep)}.length);\n`],
+    ["objects", `console.log(typeof ${"{ o: ".repeat(deep)}1${" }".repeat(deep)});\n`],
+    ["calls", `const id = (v) => v;\nconsole.log(${"id(".repeat(deep)}1${")".repeat(deep)});\n`],
+    ["templates", `console.log(${"`${".repeat(deep)}1${"}`".repeat(deep)});\n`],
+    ["blocks", `${"{ ".repeat(deep)}${"} ".repeat(deep)}\n`],
+    ["unary operators", `console.log(${"!".repeat(deep)}true);\n`],
+    ["conditionals", `console.log(${"true ? ".repeat(deep)}1${" : 0".repeat(deep)});\n`],
+    ["an addition chain", `console.log(1${" + 1".repeat(deep)});\n`],
+    ["a call chain", `const f = () => f;\nconsole.log(typeof f${"()".repeat(deep)});\n`],
+  ];
+  for (const [desc, source] of shapes)
+    assertSyntaxError(source, `${desc} nested ${deep} deep`, [], {
+      messageIncludes: desc.startsWith("an addition") || desc.startsWith("a call") ? HEIGHT : NESTING,
+      line: desc === "calls" || desc === "a call chain" ? 2 : 1,
+    });
+
+  // Below the limits the same shapes run: nested arrays, and a chain of
+  // 2,000 method calls, the shape of the Unicode tables in Babel's bundle.
+  const belowLimit: Array<[string, string, string]> = [
+    ["1,000 nested arrays", `console.log(${"[".repeat(1000)}${"]".repeat(1000)}.length);\n`, "1\n"],
+    ["2,000 chained method calls",
+      `const set = { n: 0, addRange(a, b) { this.n += b - a; return this; } };\n` +
+      `console.log(set${".addRange(1, 2)".repeat(2000)}.n);\n`, "2000\n"],
+  ];
+  for (const [desc, source, expected] of belowLimit) {
+    const res = runLoaderJson(source);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc} should run, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== expected)
+      throw new Error(`${desc} printed ${JSON.stringify(res.json.output)}`);
+  }
+
+  // A regular expression literal compiles its pattern when it is evaluated.
+  {
+    const { exitCode, json } = runLoaderJson(`/${"(".repeat(deep)}a${")".repeat(deep)}/.test("a");\n`);
+    if (exitCode !== 1 || json.error?.type !== "SyntaxError" ||
+        !String(json.error?.message).includes("nesting exceeds the supported limit of 1024 levels"))
+      throw new Error(`deep regular expression literal should be a SyntaxError, got exit ${exitCode} ${JSON.stringify(json.error)}`);
+  }
+
+  // Source parsed, and a pattern compiled, at the bottom of a recursion that
+  // has used up the native stack: the Array.prototype.map callbacks are native
+  // re-entries of the bytecode VM. The limit then comes from the stack that is
+  // left, still as a SyntaxError the script can catch.
+  //
+  // The recursion has to end because the native stack ran out, not at the
+  // default --max-stack of 2,200 calls: a re-entry here costs about 4 KiB in a
+  // production x86-64 build, so on a stack above about 9.5 MiB the call cap
+  // comes first and leaves megabytes of stack below it, and the expression
+  // then simply runs. A --max-stack far above what any test stack holds makes
+  // the native stack the limit on every platform and stack size; the VM's
+  // NATIVE_STACK_RESERVE check still ends the recursion before the stack
+  // overflows.
+  const LOW_STACK_ARGS = ["--max-stack=100000"];
+  const lowStack = (expression: string): string =>
+    "let result = \"none\";\n" +
+    "const down = () => { try { return [0].map(down)[0]; } catch (e) { if (result === \"none\") { " +
+    `try { result = String(${expression}); } catch (inner) { result = inner.constructor.name + ": " + inner.message; } ` +
+    "} return 0; } };\ndown();\nconsole.log(result);\n";
+  const lowStackCases: Array<[string, string, readonly string[]]> = [
+    ["new RegExp", `new RegExp("(".repeat(1000) + "a" + ")".repeat(1000)).test("a")`, []],
+    ["ShadowRealm.prototype.evaluate", `new ShadowRealm().evaluate("[".repeat(1000) + "]".repeat(1000) + ".length")`, ["--unsafe-shadowrealm"]],
+    // A chain costs the parser no stack but the passes after it recurse once
+    // per link, some without a stack check of their own (the compiler's
+    // closure scan of a loop body, freeing the tree).
+    ["a 4,000-link member chain", `new ShadowRealm().evaluate("const o = {}; o.o = o; typeof o" + ".o".repeat(4000))`, ["--unsafe-shadowrealm"]],
+    ["a 4,000-link member chain in a loop body", `new ShadowRealm().evaluate("const o = {}; o.o = o; for (const x of []) { o" + ".o".repeat(4000) + "; } 1")`, ["--unsafe-shadowrealm"]],
+  ];
+  for (const [desc, expression, args] of lowStackCases) {
+    const res = runLoaderJson(lowStack(expression), [...LOW_STACK_ARGS, ...args], { timeout: 60000 });
+    const printed = normalizeLineEndings(res.json.output);
+    if (res.exitCode !== 0 || !/^SyntaxError: .*native stack.*\n$/.test(printed))
+      throw new Error(`${desc} on a nearly exhausted native stack should throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+  }
+
+  // The same chains evaluated a few native re-entries above the bottom of
+  // that recursion. Where the recursion ends inside a re-entry's frame
+  // depends on the frames below the run, so the room left above the reserve
+  // differs by build and platform; with a few re-entries of room the checked
+  // passes can accept a chain that an unchecked one then runs off the end of
+  // the stack. Whatever the room, the chain either evaluates or is the
+  // native-stack SyntaxError, never a crash.
+  const aboveBottom = (levels: number, expression: string): string =>
+    "let maxDepth = 0;\n" +
+    "const measure = (d) => { maxDepth = d; try { return [d + 1].map(measure)[0]; } catch (e) { return 0; } };\n" +
+    "measure(1);\n" +
+    `const target = maxDepth - ${levels};\n` +
+    "let result = \"none\";\n" +
+    "const down = (d) => { if (d >= target) { " +
+    `try { result = String(${expression}); } catch (inner) { result = inner.constructor.name + ": " + inner.message; } ` +
+    "return 0; } return [d + 1].map(down)[0]; };\ndown(1);\nconsole.log(result);\n";
+  for (const [desc, expression, args] of lowStackCases.slice(2)) {
+    for (const levels of [2, 4, 16]) {
+      const res = runLoaderJson(aboveBottom(levels, expression), [...LOW_STACK_ARGS, ...args], { timeout: 60000 });
+      const printed = normalizeLineEndings(res.json.output);
+      if (res.exitCode !== 0 || !/^(object|1|SyntaxError: .*native stack.*)\n$/.test(printed))
+        throw new Error(`${desc} ${levels} re-entries above a nearly exhausted native stack should evaluate or throw a SyntaxError, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
     }
+  }
+
+  // A pattern compiled on a shallow stack and matched both there and at the
+  // bottom of that recursion: matching recurses once per nested lookaround,
+  // and running out of stack there is the call stack's RangeError, not a
+  // SyntaxError (the pattern is valid) or a plain Error (as the step and
+  // backtrack limits are). The pattern consumes the "a" after its
+  // lookarounds, so every match is non-empty and the shallow result is
+  // distinct from no output. Each case reaches the VM through a different
+  // entry point.
+  const lowStackMatch = (flags: string, expression: string): string =>
+    `const re = new RegExp("(?=".repeat(1000) + "a" + ")".repeat(1000) + "a", "${flags}");\n` +
+    `console.log(String(${expression}));\n` +
+    lowStack(expression);
+  const lowStackMatchCases: Array<[string, string, string, string]> = [
+    ["RegExp.prototype.test", "", `re.test("a")`, "true"],
+    ["RegExp.prototype.exec", "", `re.exec("a")`, "a"],
+    ["String.prototype.search", "", `"aaa".search(re)`, "0"],
+    ["a global String.prototype.replace", "g", `"aaa".replace(re, "b")`, "bbb"],
+    ["a global String.prototype.match", "g", `"aaa".match(re)`, "a,a,a"],
+  ];
+  for (const [desc, flags, expression, matched] of lowStackMatchCases) {
+    const res = runLoaderJson(lowStackMatch(flags, expression), LOW_STACK_ARGS, { timeout: 60000 });
+    const printed = normalizeLineEndings(res.json.output);
+    if (res.exitCode !== 0 || printed !== `${matched}\nRangeError: Maximum call stack size exceeded\n`)
+      throw new Error(`${desc} with nested lookarounds should match on a shallow stack and throw a RangeError on a nearly exhausted native stack, got exit ${res.exitCode} ${JSON.stringify(printed)} ${JSON.stringify(res.json.error)}`);
+  }
 }
 
 console.log("\nAll test-cli-parser.ts tests passed.");

@@ -2,9 +2,8 @@
 /**
  * depth-probe.ts
  *
- * Runs depth and nesting probes against a GocciaRunner binary, in each
- * execution mode it supports, and classifies how each one ends: completed, a
- * catchable error, an engine fatal error, a crash, a timeout, or a kill by the
+ * Runs depth and nesting probes against a GocciaRunner binary and classifies
+ * how each one ends: completed, a catchable error, an engine fatal error, a crash, a timeout, or a kill by the
  * memory cap. A seeded fuzz mode composes the same shapes pseudo-randomly.
  *
  * MANUAL USE ONLY. This is a developer and agent tool; it is deliberately not
@@ -91,6 +90,24 @@ const bindChain = (depth, fn) => {
     bound = bound.bind(null);
   }
   return bound;
+};
+// bind names each level "bound " + its target's name, so these chains hide
+// the name to keep their memory linear in the depth.
+const namelessBindChain = (depth, fn) => {
+  let bound = fn;
+  for (const _ of Array.from({ length: depth })) {
+    bound = bound.bind(null);
+    Object.defineProperty(bound, "name", { value: "" });
+  }
+  return bound;
+};
+const proxyBindChain = (depth, fn) => {
+  const handler = { get: (target, key, receiver) => (key === "name" ? undefined : Reflect.get(target, key, receiver)) };
+  let f = fn;
+  for (const _ of Array.from({ length: depth })) {
+    f = Function.prototype.bind.call(new Proxy(f, handler), null);
+  }
+  return f;
 };
 const describeError = (error) => {
   if (error !== null && typeof error === "object") {
@@ -264,11 +281,72 @@ const CATALOG: Probe[] = [
     body: (d) => `report(() => bindChain(${d}, () => 1)());\n`,
   },
   {
+    id: "bind-chain-construct",
+    growth: "linear",
+    summary: "new on a class bound DEPTH times",
+    body: (d) => `report(() => typeof new (namelessBindChain(${d}, class {}))());\n`,
+  },
+  {
+    id: "bind-chain-instanceof",
+    growth: "linear",
+    summary: "instanceof against a class bound DEPTH times (each level reads @@hasInstance)",
+    body: (d) => `report(() => { const C = class {}; return new C() instanceof namelessBindChain(${d}, C); });\n`,
+  },
+  {
+    id: "proxy-bind-alternating-call",
+    growth: "linear",
+    summary: "Call a chain that alternates a Proxy and a bound function DEPTH times (#1497)",
+    body: (d) =>
+      `report(() => proxyBindChain(${d}, () => 1)());\n`,
+  },
+  {
+    id: "proxy-bind-alternating-construct",
+    growth: "linear",
+    summary: "new on a chain that alternates a Proxy and a bound function DEPTH times (#1497)",
+    body: (d) =>
+      `report(() => typeof new (proxyBindChain(${d}, class {}))());\n`,
+  },
+  {
+    id: "class-extends-proxy-chain",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH classes that each extend a Proxy of the previous one (#1497)",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = new Proxy(C, {}); C = class extends B {}; } return typeof new C(); });\n`,
+  },
+  {
     id: "class-extends-chain",
     growth: "linear",
     summary: "Construct the most derived of DEPTH chained subclasses",
     body: (d) =>
       `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B {}; } return typeof new C(); });\n`,
+  },
+  {
+    id: "class-extends-chain-fields",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses that each declare a field",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B { x = 1; }; } return new C().x; });\n`,
+  },
+  {
+    id: "class-extends-chain-constructors",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses whose constructors call super()",
+    body: (d) =>
+      `report(() => { let C = class {}; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B { constructor(...a) { super(...a); } }; } return typeof new C(); });\n`,
+  },
+  {
+    id: "class-extends-chain-super",
+    growth: "linear",
+    summary: "super() and Reflect.construct into the most derived of DEPTH chained subclasses",
+    body: (d) =>
+      `report(() => { let C = class { first = 1; }; for (const _ of Array.from({ length: ${d} })) { const B = C; C = class extends B {}; } const Leaf = C; const Top = class extends Leaf { constructor() { super(); } }; return new Top().first + Reflect.construct(Leaf, []).first; });\n`,
+  },
+  {
+    id: "class-extends-chain-mixed",
+    growth: "linear",
+    summary: "Construct the most derived of DEPTH chained subclasses, alternating default and super()-calling constructors",
+    body: (d) =>
+      `report(() => { let C = class {}; let i = 0; for (const _ of Array.from({ length: ${d} })) { const B = C; C = i % 2 === 0 ? class extends B {} : class extends B { constructor(...a) { super(...a); } }; i += 1; } return typeof new C(); });\n`,
   },
   {
     id: "json-stringify-array",
@@ -325,6 +403,48 @@ const CATALOG: Probe[] = [
     growth: "linear",
     summary: "RegExp with DEPTH nested groups",
     body: (d) => `report(() => new RegExp("(".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
+    id: "regexp-named-groups",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested named groups, each with its own name",
+    body: (d) => `report(() => new RegExp(Array.from({ length: ${d} }, (_, i) => "(?<g" + i + ">").join("") + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
+    id: "regexp-noncapturing",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested non-capturing groups",
+    body: (d) => `report(() => new RegExp("(?:".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
+    id: "regexp-lookaheads",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested lookaheads; matching recurses once per lookaround",
+    body: (d) => `report(() => new RegExp("(?=".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
+    id: "regexp-lookbehinds",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested lookbehinds",
+    body: (d) => `report(() => new RegExp("(?<=".repeat(${d}) + "a" + ")".repeat(${d})).test("a"));\n`,
+  },
+  {
+    id: "regexp-class-sets",
+    growth: "linear",
+    summary: "RegExp with DEPTH nested character classes under the v flag",
+    body: (d) => `report(() => new RegExp("[".repeat(${d}) + "a" + "]".repeat(${d}), "v").test("a"));\n`,
+  },
+  {
+    id: "regexp-groups-low-stack",
+    growth: "linear",
+    // The callbacks are native re-entries of the bytecode VM, each on a
+    // fresh native frame, so the recursion ends where the native stack does.
+    summary: "RegExp with DEPTH nested groups, compiled at the bottom of a recursion through Array.prototype.map callbacks that used up the native stack",
+    body: (d) =>
+      `let compiled = "none";\n` +
+      `const down = () => { try { return [0].map(down)[0]; } catch (e) { if (compiled === "none") { try { compiled = String(new RegExp("(".repeat(${d}) + "a" + ")".repeat(${d})).test("a")); } catch (inner) { compiled = describeError(inner); } } return 0; } };\n` +
+      `report(() => { down(); return compiled; });\n` +
+      `check(sanity, SANITY);\n`,
   },
   // Parser probes: the nesting is in the program text, so a parse-time error
   // ends the run before any report() and is classified from the runner's
@@ -388,6 +508,78 @@ const CATALOG: Probe[] = [
     growth: "linear",
     summary: "Parse and evaluate a DEPTH-term left-associative + chain",
     body: (d) => `report(() => 1${" + 1".repeat(d)});\n`,
+  },
+  {
+    id: "parse-logical-chain",
+    growth: "linear",
+    summary: "Parse and evaluate a DEPTH-term && chain",
+    body: (d) => `report(() => true${" && true".repeat(d)});\n`,
+  },
+  {
+    id: "parse-member-chain",
+    growth: "linear",
+    summary: "Parse a DEPTH-long member chain o.o.o...",
+    body: (d) => `const o = {};\no.o = o;\nreport(() => typeof o${".o".repeat(d)});\n`,
+  },
+  {
+    id: "parse-member-chain-tag",
+    growth: "linear",
+    summary: "Parse a DEPTH-long member chain o.o.o... used as a template tag",
+    body: (d) => `const o = () => o;\no.o = o;\nreport(() => typeof o${".o".repeat(d)}\`\`);\n`,
+  },
+  {
+    id: "parse-call-chain",
+    growth: "linear",
+    summary: "Parse a DEPTH-long call chain f()()()...",
+    body: (d) => `const f = () => f;\nreport(() => typeof f${"()".repeat(d)});\n`,
+  },
+  {
+    id: "parse-exponent",
+    growth: "linear",
+    summary: "Parse a DEPTH-term right-associative ** chain",
+    body: (d) => `report(() => ${"1 ** ".repeat(d)}1);\n`,
+  },
+  {
+    id: "parse-assignment-chain",
+    growth: "linear",
+    summary: "Parse a DEPTH-long right-associative assignment chain a = a = ...",
+    body: (d) => `let a = 0;\nreport(() => ${"a = ".repeat(d)}1);\n`,
+  },
+  {
+    id: "parse-arrow-chain",
+    growth: "linear",
+    summary: "Parse DEPTH nested unparenthesized arrow functions x => x => ...",
+    body: (d) => `report(() => typeof (${"x => ".repeat(d)}1));\n`,
+  },
+  {
+    id: "parse-new-chain",
+    growth: "linear",
+    summary: "Parse DEPTH chained new operators",
+    body: (d) => `class C { constructor() { return C; } }\nreport(() => typeof ${"new ".repeat(d)}C);\n`,
+  },
+  {
+    id: "parse-else-if",
+    growth: "linear",
+    summary: "Parse a DEPTH-long else-if chain",
+    body: (d) => `report(() => { ${"if (false) {} else ".repeat(d)}{} return 1; });\n`,
+  },
+  {
+    id: "parse-binding-pattern",
+    growth: "linear",
+    summary: "Parse a DEPTH-deep array binding pattern",
+    body: (d) => `report(() => { const ${"[".repeat(d)}x${"]".repeat(d)} = ${"[".repeat(d)}1${"]".repeat(d)}; return x; });\n`,
+  },
+  {
+    id: "parse-class-heritage",
+    growth: "linear",
+    summary: "Parse DEPTH nested class expressions in extends clauses",
+    body: (d) => `report(() => typeof ${"class extends ".repeat(d)}Object${" {}".repeat(d)});\n`,
+  },
+  {
+    id: "parse-regexp-literal",
+    growth: "linear",
+    summary: "Compile a regular expression literal with DEPTH nested groups",
+    body: (d) => `report(() => /${"(".repeat(d)}a${")".repeat(d)}/.test("a"));\n`,
   },
 ];
 
@@ -561,9 +753,6 @@ and a timeout. Manual use only; see docs/contributing/tooling.md.
 Selection:
   --list                       List the catalog and exit
   --probe=a,b                  Only these probes (an exact id, or part of one)
-  --modes=a,b                  Execution modes to probe (default interpreted,bytecode);
-                               a mode the runner rejects is reported and skipped
-  --mode=NAME                  One execution mode; same as --modes=NAME
   --depth=N                    Run every selected probe at exactly N
   --depths=a,b                 Depths for linear probes (default 1000,30000)
   --quadratic-depths=a,b       Depths for quadratic probes (default 300,3000)
@@ -604,7 +793,6 @@ interface Options {
   runner: string;
   list: boolean;
   probes: string[];
-  modes: string[];
   depth?: number;
   depths: Record<Growth, number[]>;
   fuzz: boolean;
@@ -650,7 +838,6 @@ const parseOptions = (argv: string[]): Options => {
     runner: "",
     list: false,
     probes: [],
-    modes: ["interpreted", "bytecode"],
     depths: structuredClone(DEFAULTS.depths),
     fuzz: false,
     seed: Math.floor(Math.random() * 2 ** 31),
@@ -675,16 +862,6 @@ const parseOptions = (argv: string[]): Options => {
         process.exit(0);
       case "--list": options.list = true; break;
       case "--probe": options.probes = value.split(",").filter(Boolean); break;
-      // Mode names are passed through to the runner, which decides which it
-      // supports; see the preflight in main().
-      case "--mode":
-      case "--modes": {
-        const modes = value.split(",").map((mode) => mode.trim());
-        if (modes.some((mode) => !/^[a-z][a-z0-9-]*$/.test(mode))) fail(`${name} takes mode names such as bytecode, got: ${value}`);
-        options.modes = [...new Set(modes)];
-        if (name === "--mode" && options.modes.length !== 1) fail(`--mode takes one mode; use --modes=${value}`);
-        break;
-      }
       case "--depth": options.depth = parseInteger(name, value, 0); break;
       case "--depths": options.depths.linear = parseList(name, value); break;
       case "--quadratic-depths": options.depths.quadratic = parseList(name, value); break;
@@ -850,10 +1027,10 @@ const killGroup = (pid: number | undefined): void => {
   }
 };
 
-const runProgram = (launcher: Launcher, options: Options, file: string, mode: string): Promise<RunResult> =>
+const runProgram = (launcher: Launcher, options: Options, file: string): Promise<RunResult> =>
   new Promise((resolveRun) => {
     const start = process.hrtime.bigint();
-    const [command, ...args] = [...launcher.prefix, options.runner, file, `--mode=${mode}`, ...options.runnerArgs];
+    const [command, ...args] = [...launcher.prefix, options.runner, file, ...options.runnerArgs];
     // A process group of its own, so a timeout or Ctrl-C kills the runner
     // and not just the wrapper around it.
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -982,7 +1159,7 @@ interface Job {
   depth: number;
   source: string;
   shape?: string;
-  replay: (mode: string) => string;
+  replay: string;
 }
 
 const truncate = (text: string, width: number): string =>
@@ -1022,9 +1199,8 @@ const main = async (): Promise<void> => {
     options.allowUncapped ? "--no-memory-cap" : "",
     ...options.runnerArgs.map((arg) => `--runner-arg=${arg}`),
   ];
-  const replayCommand = (args: string[], mode: string): string =>
-    [...RUNTIME, SCRIPT, displayPath(options.runner), ...args, `--mode=${mode}`,
-      ...commonFlags.filter(Boolean)]
+  const replayCommand = (args: string[]): string =>
+    [...RUNTIME, SCRIPT, displayPath(options.runner), ...args, ...commonFlags.filter(Boolean)]
       .map(quote)
       .join(" ");
 
@@ -1050,7 +1226,7 @@ const main = async (): Promise<void> => {
         depth: program.depth,
         source: program.source,
         shape: program.shape,
-        replay: (mode) => replayCommand(["--fuzz", `--seed=${options.seed}`, `--index=${index}`, ...limitFlags], mode),
+        replay: replayCommand(["--fuzz", `--seed=${options.seed}`, `--index=${index}`, ...limitFlags]),
       });
     }
   } else {
@@ -1070,7 +1246,7 @@ const main = async (): Promise<void> => {
           growth: probe.growth,
           depth,
           source: probe.body(depth),
-          replay: (mode) => replayCommand([`--probe=${probe.id}`, `--depth=${depth}`], mode),
+          replay: replayCommand([`--probe=${probe.id}`, `--depth=${depth}`]),
         });
       }
     }
@@ -1092,37 +1268,18 @@ const main = async (): Promise<void> => {
     });
   }
 
-  // Preflight: run a trivial program in each requested mode. A mode the
-  // runner rejects as an option (for example after an executor is removed)
-  // is skipped and reported, not counted as a finding; a runner that cannot
-  // run the trivial program at all is a setup error.
+  // Preflight: a runner that cannot run a trivial program is a setup error,
+  // not a finding.
   const preflight = join(work, "preflight.js");
   writeFileSync(preflight, PRELUDE + "report(() => 1 + 1);\n");
-  const modes: string[] = [];
-  const skipped: string[] = [];
-  for (const mode of options.modes) {
-    const result = await runProgram(launcher, options, preflight, mode);
-    if (result.outcome === "completed" && result.detail === "2") {
-      modes.push(mode);
-      continue;
-    }
-    const message = result.output.trim().split("\n")[0] ?? "";
-    if (/\bmode\b/i.test(message) && result.outcome !== "crash" && result.outcome !== "timeout") {
-      skipped.push(`${mode} (${truncate(message, 100)})`);
-      continue;
-    }
+  const preflightResult = await runProgram(launcher, options, preflight);
+  if (preflightResult.outcome !== "completed" || preflightResult.detail !== "2") {
     removeWorkDir();
-    fail(`the runner cannot run a trivial program in --mode=${mode}: ${result.outcome}: ${result.detail}`);
+    fail(`the runner cannot run a trivial program: ${preflightResult.outcome}: ${preflightResult.detail}`);
   }
-  console.log(`modes:       ${modes.join(", ") || "none"}`);
-  if (skipped.length > 0) console.log(`skipped:     ${skipped.join("; ")}: not supported by this runner`);
   console.log("");
-  if (modes.length === 0) {
-    removeWorkDir();
-    fail("the runner supports none of the requested modes");
-  }
 
-  const header = `${"probe".padEnd(32)}${"growth".padEnd(7)}${"depth".padEnd(8)}${"mode".padEnd(12)}${"outcome".padEnd(12)}${"time".padEnd(9)}detail`;
+  const header = `${"probe".padEnd(32)}${"growth".padEnd(7)}${"depth".padEnd(8)}${"outcome".padEnd(12)}${"time".padEnd(9)}detail`;
   console.log(header);
   console.log("-".repeat(header.length + 20));
 
@@ -1135,39 +1292,36 @@ const main = async (): Promise<void> => {
       const file = join(work, `probe-${jobIndex}.js`);
       writeFileSync(file, source);
       if (job.shape) console.log(`${job.id}  ${job.shape}`);
-      for (const mode of modes) {
-        const result = await runProgram(launcher, options, file, mode);
-        counts.set(result.outcome, (counts.get(result.outcome) ?? 0) + 1);
-        console.log(
-          truncate(job.id, 31).padEnd(32) +
-            (GROWTH_LABEL[job.growth] ?? job.growth).padEnd(7) +
-            String(job.depth).padEnd(8) +
-            mode.padEnd(12) +
-            result.outcome.padEnd(12) +
-            `${result.seconds.toFixed(2)}s`.padEnd(9) +
-            truncate(result.detail.replaceAll("\n", " "), 90),
+      const result = await runProgram(launcher, options, file);
+      counts.set(result.outcome, (counts.get(result.outcome) ?? 0) + 1);
+      console.log(
+        truncate(job.id, 31).padEnd(32) +
+          (GROWTH_LABEL[job.growth] ?? job.growth).padEnd(7) +
+          String(job.depth).padEnd(8) +
+          result.outcome.padEnd(12) +
+          `${result.seconds.toFixed(2)}s`.padEnd(9) +
+          truncate(result.detail.replaceAll("\n", " "), 90),
+      );
+      if (options.verbose && result.outcome !== "completed") {
+        for (const line of result.output.trim().split("\n").slice(0, 20)) console.log(`    | ${truncate(line, 200)}`);
+      }
+      if (FINDINGS.includes(result.outcome)) {
+        findings.push(`${result.outcome.padEnd(11)} ${job.id} depth ${job.depth}: ${result.detail}\n    replay: ${job.replay}`);
+      }
+      if (options.keep && KEPT.includes(result.outcome)) {
+        mkdirSync(options.out, { recursive: true });
+        const name = `${job.id.replaceAll(":", "-")}-d${job.depth}.js`;
+        const target = join(options.out, name);
+        writeFileSync(
+          target,
+          `// depth-probe: ${result.outcome}: ${result.detail.replaceAll("\n", " ")}\n` +
+            (job.shape ? `// shape: ${job.shape}\n` : "") +
+            `// runner: ${options.runner}${options.runnerArgs.length ? " " + options.runnerArgs.join(" ") : ""}\n` +
+            `// memory cap: ${launcher.description}; timeout ${options.timeoutSeconds}s\n` +
+            `// replay: ${job.replay}\n` +
+            source,
         );
-        if (options.verbose && result.outcome !== "completed") {
-          for (const line of result.output.trim().split("\n").slice(0, 20)) console.log(`    | ${truncate(line, 200)}`);
-        }
-        if (FINDINGS.includes(result.outcome)) {
-          findings.push(`${result.outcome.padEnd(11)} ${job.id} depth ${job.depth} ${mode}: ${result.detail}\n    replay: ${job.replay(mode)}`);
-        }
-        if (options.keep && KEPT.includes(result.outcome)) {
-          mkdirSync(options.out, { recursive: true });
-          const name = `${job.id.replaceAll(":", "-")}-d${job.depth}-${mode}.js`;
-          const target = join(options.out, name);
-          writeFileSync(
-            target,
-            `// depth-probe: ${result.outcome}: ${result.detail.replaceAll("\n", " ")}\n` +
-              (job.shape ? `// shape: ${job.shape}\n` : "") +
-              `// runner: ${options.runner} --mode=${mode}${options.runnerArgs.length ? " " + options.runnerArgs.join(" ") : ""}\n` +
-              `// memory cap: ${launcher.description}; timeout ${options.timeoutSeconds}s\n` +
-              `// replay: ${job.replay(mode)}\n` +
-              source,
-          );
-          kept.push(target);
-        }
+        kept.push(target);
       }
     }
   } finally {

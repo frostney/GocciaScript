@@ -32,12 +32,26 @@ type
     function SymbolConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SymbolKeyFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
     destructor Destroy; override;
 
     property GlobalRegistry: TOrderedStringMap<TGocciaSymbolValue> read FGlobalRegistry;
   end;
+
+// ES2026 §20.4.2.2 Symbol.for(key) steps 2-6 on this thread's
+// GlobalSymbolRegistry: the registered symbol for AKey, created and
+// registered when there is none yet.
+function RegisteredSymbolFor(const AKey: string): TGocciaSymbolValue;
+// The registered symbol for AKey, or nil: registers nothing.
+function FindRegisteredSymbol(const AKey: string): TGocciaSymbolValue;
+// Registers ASymbol, a symbol no registry holds, as the one for its
+// description, which no registered symbol has yet; as Symbol.for would have
+// for a symbol it created (a heap snapshot's restore registers the ones it
+// restored only once the restore succeeded, ADR 0148).
+procedure RegisterSymbol(const ASymbol: TGocciaSymbolValue);
 
 implementation
 
@@ -196,31 +210,48 @@ end;
   5. Append the Record ([[Key]]: stringKey, [[Symbol]]: newSymbol) to
      the GlobalSymbolRegistry List.
   6. Return newSymbol. }
+function RegisteredSymbolFor(const AKey: string): TGocciaSymbolValue;
+var
+  Registry: TOrderedStringMap<TGocciaSymbolValue>;
+begin
+  Registry := SharedSymbolRegistry;
+  { Step 2: Search GlobalSymbolRegistry for existing entry }
+  if Registry.TryGetValue(AKey, Result) then
+    Exit;
+  { Steps 4-5: Create new symbol, append to GlobalSymbolRegistry }
+  Result := TGocciaSymbolValue.Create(AKey);
+  Result.Registered := True;
+  if (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.PinObject(Result);
+  Registry.Add(AKey, Result);
+  { Step 6: Return newSymbol }
+end;
+
+function FindRegisteredSymbol(const AKey: string): TGocciaSymbolValue;
+begin
+  if not SharedSymbolRegistry.TryGetValue(AKey, Result) then
+    Result := nil;
+end;
+
+procedure RegisterSymbol(const ASymbol: TGocciaSymbolValue);
+begin
+  // Into the registry first: if that raises, the symbol is as it was.
+  SharedSymbolRegistry.Add(ASymbol.Description, ASymbol);
+  ASymbol.Registered := True;
+  if (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.PinObject(ASymbol);
+end;
+
 function TGocciaGlobalSymbol.SymbolFor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Key: string;
-  Symbol: TGocciaSymbolValue;
 begin
   { Step 1: Let stringKey = ToString(key) }
   if AArgs.Length > 0 then
     Key := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Key := 'undefined';
-
-  { Step 2: Search GlobalSymbolRegistry for existing entry }
-  if FGlobalRegistry.TryGetValue(Key, Symbol) then
-    Result := Symbol
-  else
-  begin
-    { Steps 4-5: Create new symbol, append to GlobalSymbolRegistry }
-    Symbol := TGocciaSymbolValue.Create(Key);
-    Symbol.Registered := True;
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.PinObject(Symbol);
-    FGlobalRegistry.Add(Key, Symbol);
-    { Step 6: Return newSymbol }
-    Result := Symbol;
-  end;
+  Result := RegisteredSymbolFor(Key);
 end;
 
 { Symbol.keyFor ( sym ) — §20.4.2.5
@@ -253,6 +284,18 @@ begin
 
   { Step 4: Return undefined }
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TGocciaGlobalSymbol.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FSymbolFunction) then
+    FSymbolFunction.MarkReferences;
+  if Assigned(FIteratorSymbol) then
+    FIteratorSymbol.MarkReferences;
 end;
 
 end.

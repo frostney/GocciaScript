@@ -336,8 +336,9 @@ begin
   end;
 
   // The source-order table is the authority, but it is built by the parser
-  // and the maps are what the evaluator reads; walking both and deduplicating
-  // means a shape the table does not describe still gets its body walked.
+  // beside the maps, which the compiler also reads; walking both and
+  // deduplicating means a shape the table does not describe still gets its
+  // body walked.
   for I := 0 to AObject.Properties.CountFast - 1 do
     VisitExpression(AObject.Properties.EntryAt(I).Value);
   for I := 0 to AObject.Getters.CountFast - 1 do
@@ -762,36 +763,43 @@ begin
   Result.AssignProperty('end', Position);
 end;
 
-{ Nodes are materialized parent-first and attached to the parent's children
-  array before their own properties are filled, so a collection triggered
-  anywhere inside this walk still finds every object already built reachable
-  from the rooted result. }
+{ Nodes are materialized parent-first. A node is held only by this call (its
+  parent attaches it on return) while its kind string and its children are
+  made, and each of those can collect, so it is rooted until it returns; every
+  object it has attached by then is reachable from it. }
 function MaterializeNode(const AFlattener: TASTFlattener;
   const AIndex: Integer): TGocciaObjectValue;
 var
   Children: TGocciaArrayValue;
   Node: TASTFlatNode;
   ChildIndex, Position: Integer;
+  Roots: TGocciaActiveRootFrame;
 begin
   Node := AFlattener.NodeAt(AIndex);
-  Result := TGocciaObjectValue.Create;
-  Children := TGocciaArrayValue.Create;
-  Result.AssignProperty('children', Children);
-  Result.AssignProperty('kind', TGocciaStringLiteralValue.Create(Node.Kind));
-  Result.AssignProperty('start',
-    TGocciaNumberLiteralValue.Create(Node.StartOffset));
-  Result.AssignProperty('end',
-    TGocciaNumberLiteralValue.Create(Node.EndOffset));
-  Result.AssignProperty('loc', CreateLocObject(Node.StartLine,
-    Node.StartColumn, Node.EndLine, Node.EndColumn));
+  Roots.Initialize;
+  try
+    Result := TGocciaObjectValue.Create;
+    Roots.Add(Result);
+    Children := TGocciaArrayValue.Create;
+    Result.AssignProperty('children', Children);
+    Result.AssignProperty('kind', TGocciaStringLiteralValue.Create(Node.Kind));
+    Result.AssignProperty('start',
+      TGocciaNumberLiteralValue.Create(Node.StartOffset));
+    Result.AssignProperty('end',
+      TGocciaNumberLiteralValue.Create(Node.EndOffset));
+    Result.AssignProperty('loc', CreateLocObject(Node.StartLine,
+      Node.StartColumn, Node.EndLine, Node.EndColumn));
 
-  Position := 0;
-  ChildIndex := Node.FirstChild;
-  while ChildIndex >= 0 do
-  begin
-    Children.SetElement(Position, MaterializeNode(AFlattener, ChildIndex));
-    Inc(Position);
-    ChildIndex := AFlattener.NodeAt(ChildIndex).NextSibling;
+    Position := 0;
+    ChildIndex := Node.FirstChild;
+    while ChildIndex >= 0 do
+    begin
+      Children.SetElement(Position, MaterializeNode(AFlattener, ChildIndex));
+      Inc(Position);
+      ChildIndex := AFlattener.NodeAt(ChildIndex).NextSibling;
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 

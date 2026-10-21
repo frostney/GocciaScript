@@ -7,7 +7,7 @@ Instructions for **AI coding assistants** (Cursor, Claude Code, and similar) wor
 | | Purpose |
 |---|--------|
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | **Contributing guide for all contributors**—humans and agents. Workflow, critical rules, testing, Pascal code style, formatting, build/run reference, documentation index. If it affects what may be merged, it belongs there. |
-| **This file (`AGENTS.md` / `CLAUDE.md`)** | **Agent-only** context: how assistants should operate in this repo, where to read first, and what not to duplicate. It does **not** replace CONTRIBUTING. |
+| **This file (`AGENTS.md`; `CLAUDE.md` imports it)** | **Agent-only** context: how assistants should operate in this repo, where to read first, and what not to duplicate. It does **not** replace CONTRIBUTING. |
 
 Assistants should treat CONTRIBUTING as authoritative for contribution requirements. Use this file for assistant-specific expectations and navigation, not a second copy of CONTRIBUTING.
 
@@ -44,7 +44,7 @@ Use `spec.search` when you do not know the clause id, `clause.get` when you do, 
 ## Quick checks
 
 ```bash
-./build.pas testrunner && ./build/GocciaTestRunner -P tests && ./build/GocciaTestRunner -P tests --mode=bytecode  # after substantive changes
+./build.pas testrunner && ./build/GocciaTestRunner -P tests  # after substantive changes
 ./build.pas bundler && ./build/GocciaBundler example.js  # build and run the bundler
 ./format.pas --check # before push / PR
 ```
@@ -61,6 +61,6 @@ runtime command lists here.
 
 ## Where to go next
 
-- **Engine shape:** [docs/architecture.md](docs/architecture.md), [docs/interpreter.md](docs/interpreter.md), [docs/bytecode-vm.md](docs/bytecode-vm.md), [docs/core-patterns.md](docs/core-patterns.md)
+- **Engine shape:** [docs/architecture.md](docs/architecture.md), [docs/bytecode-vm.md](docs/bytecode-vm.md), [docs/core-patterns.md](docs/core-patterns.md)
 - **Optional extended agent skills:** [.agents/skills/](.agents/skills/) (installable playbooks; not a substitute for CONTRIBUTING)
 - **Runtime optimization waves:** [.agents/skills/optimize-runtime/SKILL.md](.agents/skills/optimize-runtime/SKILL.md) — Use when closing the bytecode-vs-QuickJS gap or running a measured runtime optimization wave. Benchmark-gated; keep only measured wins

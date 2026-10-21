@@ -190,7 +190,7 @@ String prototype methods are implemented on string values:
 
 Implements the [ECMAScript RegExp](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp) including modifiers, duplicate named groups, and `RegExp.escape`.
 
-RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported in interpreter mode and bytecode mode. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
+RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pattern/flags`) are also supported. Calling `RegExp(existingRegExp)` without `new` and without an explicit `flags` argument returns the original regex object; `new RegExp(existingRegExp)` clones it.
 
 **Supported flags:** `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 
@@ -236,13 +236,14 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 - **Named capture groups** (`(?<name>...)`) are supported. Group names must use valid identifier-name code points. Match results include a `groups` property (an object with `null` prototype) mapping group names to matched strings. Non-participating named groups are `undefined`. When no named groups exist, `groups` is `undefined`.
 - **Duplicate named capture groups:** the same group name may appear in different alternatives of a disjunction (`|`). For example, `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property on the match result returns the value from whichever alternative participated; non-participating duplicates are `undefined`. Using the same name in the same alternative (where both groups could participate) is a `SyntaxError`.
 - **Named backreferences** (`\k<name>`) reference a previously captured named group within the same pattern. With duplicate named capture groups, `\k<name>` resolves to the group with that name in the same alternative branch.
+- **Compile cost:** the bookkeeping of a pattern's alternatives and named groups costs time linear in the pattern's length, including patterns with tens of thousands of either. A name is looked up in a hash map, and duplicate named groups are checked for sharing an alternative (ES2026 §22.2.1.1 `MightBothParticipate`) by walking the tree of groups and alternatives once per name, not by comparing every pair (so that part also scales with how deeply the groups nest, which the 1,024-level nesting limit bounds). The compiled program can still grow faster than the source: a counted quantifier repeats its body, and `\k<name>` to a name that many groups share tries each of them.
 - Replacement strings in `replace()` and `replaceAll()` support `$$`, `$&`, the pre-match token `$` followed by a backtick, `$'`, numeric captures such as `$1`, and **named group references** `$<name>` for regex matches with named groups. An unmatched `$<name>` produces an empty string when named groups exist; `$<` without a closing `>` is literal.
 - When the replacer is a function and named groups are present, the `groups` object is passed as the last argument after `input`.
 - RegExp prototype symbol methods accept RegExp protocol objects with a callable `exec` method, while `exec()` and `test()` still require real RegExp instances.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
 - `matchAll()` returns a lazy iterator that advances matches on demand per the specification.
 - The `u` flag enables Unicode-aware pattern matching. Unicode property escapes (`\p{Letter}`, `\P{ASCII}`, etc.) are matched against Unicode code point range tables. Unicode code point escapes (`\u{41}`, `\u{1F600}`) are converted to UTF-8 byte sequences. Supported: General_Category values by long or short name (`Letter`/`L`, `Nonspacing_Mark`/`Mn`), bare or as `General_Category=`/`gc=`; binary properties such as `ASCII`, `Alphabetic`, `Emoji` and `White_Space`; and `Script=`/`sc=` and `Script_Extensions=`/`scx=` values (`\p{sc=Greek}`). Unknown names throw `SyntaxError`. With `i`, Unicode-aware matching uses Unicode simple case folding, including single-code-point folds such as `ſ` to `s`, `K` to `k`, and `ẞ` to `ß`; it does not use full multi-code-point expansions such as `ß` to `ss`. The `u` flag enables correct `AdvanceStringIndex` for multi-byte UTF-8 sequences.
-- The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Under `v`, classes support nesting, difference (`[\p{L}--[a-z]]`), intersection (`&&`), string literals (`\q{abc|d}`), and properties of strings such as `\p{RGI_Emoji}`, which match multi-code-point sequences.
+- The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Under `v`, classes support nesting, difference (`[\p{L}--[a-z]]`), intersection (`&&`), string literals (`\q{abc|d}`), and properties of strings such as `\p{RGI_Emoji}`, which match multi-code-point sequences. Class syntax follows ECMA-262's `ClassSetExpression` grammar: `&&` and `--` join single operands (a character, a nested class, `\q{…}`, or an escape such as `\p{L}`), so a range or a run of characters goes in a nested class (`[[a-z]--[aeiou]]`), and a class mixing `&&` with `--` or with a union is a `SyntaxError`. In a class and inside `\q{…}`, an unescaped `( ) [ ] { } / - \ |` or a doubled punctuator such as `&&` or `!!` is a `SyntaxError`; escapes inside `\q{…}` mean what they mean elsewhere in the class (`\q{\x41}` is `A`). A negated class whose contents may contain strings (`[^\q{ab}]`, `[^\q{}]`) is a `SyntaxError`, decided from the syntax as the specification's MayContainStrings does.
 - The `d` flag (indices) is accepted and exposed through `.flags` and `.hasIndices`. Match arrays include `indices` entries as UTF-16 code unit `[start, end]` pairs, plus `indices.groups` for named captures.
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
@@ -591,7 +592,7 @@ Targets must satisfy ECMAScript `CanBeHeldWeakly`: objects and non-registered sy
 
 Implements the [ECMAScript FinalizationRegistry](https://tc39.es/ecma262/#sec-finalization-registry-objects).
 
-A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`.
+A finalization registry associates weakly held targets with held values. When a target becomes unreachable and `Goccia.gc()` runs, GocciaScript enqueues a cleanup job; cleanup callbacks run after the normal microtask queue rather than synchronously inside `Goccia.gc()`. The registration stays in the registry until its cleanup job runs, so `unregister` can still remove it in the meantime, and then its callback never runs.
 
 | Method/Property | Description |
 |--------|-------------|
@@ -708,8 +709,8 @@ filesystem. This covers the listed `fs` surface, not the entire Node.js host or 
 | Method / Property | Description |
 |-------------------|-------------|
 | `fs.readFileSync(path, options?)` | Read text when `options` is `"utf8"` / `"utf-8"` or `{ encoding: "utf8" }`; otherwise returns `Uint8Array` |
-| `fs.writeFileSync(path, data)` | Write UTF-8 string data or bytes from `Uint8Array` |
-| `fs.appendFileSync(path, data)` | Append UTF-8 string data or bytes from `Uint8Array` |
+| `fs.writeFileSync(path, data)` | Write UTF-8 string data, or the bytes a TypedArray or `DataView` views (`byteLength` bytes from `byteOffset`) |
+| `fs.appendFileSync(path, data)` | Append UTF-8 string data, or the bytes a TypedArray or `DataView` views |
 | `fs.mkdirSync(path, options?)` | Create a directory; `{ recursive: true }` creates parents |
 | `fs.readdirSync(path)` | Return child names |
 | `fs.statSync(path)` | Return a Stats snapshot with `path`, `name`, `type`, `size`, `atimeMs`, `mtimeMs`, `ctimeMs`, `birthtimeMs`, lazy Date accessors, and type predicates |
@@ -754,6 +755,8 @@ writes and truncation advance modification and change time; renames preserve
 access, modification, and birth time while advancing change time and affected
 directory metadata. Birth time is immutable. Copies receive fresh timestamps,
 while VFS forks used for baselines preserve the source timestamps.
+Under `--deterministic` every timestamp is the Unix epoch
+([Host Environment — Deterministic Profile](host-environment.md#deterministic-profile)).
 
 Filesystem failures are real JavaScript `Error` objects with Node-shaped
 `code`, `errno`, `path`, `syscall`, and optional `dest` metadata. Synchronous
@@ -767,7 +770,7 @@ The `"goccia"` module exposes sandbox orchestration helpers.
 | Export | Description |
 |--------|-------------|
 | `$` | Bun-like shell tagged template / command factory. Commands run against the sandbox filesystem and return a lazy command object with `.run()`, `.text()`, `.json()`, `.quiet()`, and `.nothrow()` |
-| `runScript(path, options?)` | Execute another sandbox entry path with the same execution mode. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff, failureKind }` |
+| `runScript(path, options?)` | Execute another sandbox entry path on an engine of its own. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff, failureKind }` |
 
 `$` accepts tagged templates or command strings. Tagged-template substitutions are shell-quoted before command parsing.
 
@@ -794,7 +797,7 @@ if (child.failureKind === "resource-limit") {
 }
 ```
 
-A nested run is synchronous and runs only its own jobs. The caller's pending Promise callbacks, `queueMicrotask` callbacks, and `async` continuations do not run during the call, do not appear in the child's `stdout`, and are still pending when it returns, whether the child succeeds or fails. The same holds for `{ sandbox: true }` children and for shell `goccia`. [Interpreter — Synchronous Microtask Queue](interpreter.md#synchronous-microtask-queue) describes the mechanism.
+A nested run is synchronous and runs only its own jobs. The caller's pending Promise callbacks, `queueMicrotask` callbacks, and `async` continuations do not run during the call, do not appear in the child's `stdout`, and are still pending when it returns, whether the child succeeds or fails. The same holds for `{ sandbox: true }` children and for shell `goccia`. [Architecture — Synchronous Microtask Queue](architecture.md#synchronous-microtask-queue) describes the mechanism.
 
 By default, nested execution shares the current virtual filesystem:
 
@@ -999,17 +1002,21 @@ Implements the [Encoding Standard TextEncoder](https://developer.mozilla.org/en-
 
 **GocciaScript differences:** None -- full standard compliance (UTF-8 only, with `encode` and `encodeInto`).
 
+`encodeInto`'s destination converts as Web IDL's `[AllowShared] Uint8Array`: a `Uint8Array` over a fixed-length `ArrayBuffer` or `SharedArrayBuffer`. A view of a resizable `ArrayBuffer` or a growable `SharedArrayBuffer` is a `TypeError`, because the signature has no `[AllowResizable]`.
+
 ### TextDecoder (`Goccia.RuntimeExtensions.TextEncoding.pas`, `Goccia.Values.TextDecoderValue.pas`)
 
 Implements the [Encoding Standard TextDecoder](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder). See [MDN TextDecoder reference](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder) for the full API.
 
 **GocciaScript differences:** Only `"utf-8"` encoding is supported. The `fatal` and `ignoreBOM` options are accepted.
 
+`decode`'s input converts as Web IDL's `AllowSharedBufferSource`: an `ArrayBuffer`, a `SharedArrayBuffer`, a typed array or a `DataView`. A resizable `ArrayBuffer`, a growable `SharedArrayBuffer` and every view of one are a `TypeError`, because the signature has no `[AllowResizable]`; `buffer.slice()` or `transferToFixedLength()` gives a fixed-length copy that decodes. A detached fixed-length buffer decodes as `""`.
+
 ### URL (`Goccia.Builtins.GlobalURL.pas`)
 
-Implements the [WHATWG URL Standard](https://developer.mozilla.org/en-US/docs/Web/API/URL). See [MDN URL reference](https://developer.mozilla.org/en-US/docs/Web/API/URL) for the full API.
+Implements the [WHATWG URL Standard](https://developer.mozilla.org/en-US/docs/Web/API/URL). See [MDN URL reference](https://developer.mozilla.org/en-US/docs/Web/API/URL) for the full API. A path, query, fragment, userinfo, opaque path and non-special host are percent-encoded as UTF-8 (a surrogate pair is one code point, a lone surrogate is U+FFFD); `URLSearchParams` encodes and decodes names and values as UTF-8 too.
 
-**GocciaScript differences:** None -- full standard compliance.
+**GocciaScript differences:** Host parsing is simplified. A special-scheme domain is percent-decoded and lowercased, but there is no IDNA or Punycode processing (a non-ASCII domain stays as written, where the standard gives its `xn--` form), and IPv4 and IPv6 addresses are kept as written rather than canonicalised.
 
 ### URLSearchParams (`Goccia.Values.URLSearchParamsValue.pas`)
 

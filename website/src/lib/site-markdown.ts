@@ -27,17 +27,21 @@ import {
   type PerformanceSuiteData,
 } from "@/lib/performance-dashboard";
 import {
-  COMPILER_SUPPORT_ANSWER,
   ECMASCRIPT_SCOPE_ANSWER,
   GOCCIASCRIPT_SUMMARY,
+  NATIVE_PLATFORM_DESCRIPTION,
   NODE_COMPATIBILITY_ANSWER,
+  PRODUCTION_READY_ANSWER,
+  PRODUCTION_READY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
 } from "@/lib/positioning";
 import { SITE_DESCRIPTION } from "@/lib/site-url";
 import {
+  latestTest262Summary,
   loadTest262DashboardData,
   type Test262DashboardData,
 } from "@/lib/test262-dashboard";
+import { compatibilityPercent } from "@/lib/test262-percent";
 import { TOOL_CALL_FLOWS, TOOL_CALL_TASK } from "@/lib/tool-call-comparison";
 
 export type MarkdownRoute =
@@ -86,7 +90,7 @@ function releaseSummary(release: ReleaseInfo | null): string {
     ? `, published ${release.publishedAt.slice(0, 10)}`
     : "";
   const prestable = isPreStable(release)
-    ? " Pre-1.0 releases may include breaking changes before 1.0.0."
+    ? " Pre-1.0: the host API and flags may change between releases; pin a version."
     : "";
   return `Latest release: [${release.tagName}](${release.htmlUrl})${published}.${prestable}`;
 }
@@ -150,7 +154,21 @@ async function docsMarkdown(id: string): Promise<string | null> {
 }
 
 async function homeMarkdown(): Promise<string> {
-  const release = await fetchLatestRelease();
+  const [release, compatibility] = await Promise.all([
+    fetchLatestRelease(),
+    loadTest262DashboardData(),
+  ]);
+  return renderHomeMarkdown(release, compatibility);
+}
+
+export function renderHomeMarkdown(
+  release: ReleaseInfo | null,
+  compatibility: Test262DashboardData,
+): string {
+  const summary = latestTest262Summary(compatibility);
+  const conformanceFigure = summary
+    ? `The latest published run, Annex B excluded, has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} tests passing (${compatibilityPercent(summary.passed, summary.totalRun)}); see results `
+    : "See results ";
   const heroExample = pickExample("coffee-typed");
 
   return [
@@ -163,6 +181,16 @@ async function homeMarkdown(): Promise<string> {
     GOCCIASCRIPT_SUMMARY,
     "",
     releaseSummary(release),
+    "",
+    "## Evidence",
+    "",
+    list([
+      `**Conformance.** test262, the official ECMAScript conformance suite, runs on every pull request and on main, and a regression against main fails the pull request. ${conformanceFigure}[by area on the compatibility dashboard](/compatibility).`,
+      "**Tested on every change.** 15,000+ JavaScript tests in 1,800+ files run on every pull request on Linux x64 and on six targets on main, plus differential suites checked against Bun and Vitest.",
+      `**Fuzzing and memory checks.** Every night, AFL++ fuzzes the engine and heap snapshot reader, and the full test suite runs under FreePascal's heap checker (heaptrc) and Valgrind memcheck; see the [nightly workflow](${GITHUB_REPO_URL}/actions/workflows/fuzz.yml). The [weekly GC-stress run](${GITHUB_REPO_URL}/actions/workflows/gc-stress.yml) collects garbage every 8 instructions across the GC-sensitive parts of the test suite and of test262.`,
+      "**In production.** GocciaScript is the engine behind [Shotcup's hosted sandboxes](https://shotcup.dev), where every run gets a fresh engine with hard limits.",
+      "**Prebuilt for six targets.** Every release and nightly provides binaries for macOS and Linux (x64 and arm64) and Windows (x64 and x86). [Install with the one-line installer or Homebrew on macOS](/installation).",
+    ]),
     "",
     "## Quick install",
     "",
@@ -219,9 +247,11 @@ async function homeMarkdown(): Promise<string> {
     "",
     "## Native platform",
     "",
-    COMPILER_SUPPORT_ANSWER,
+    NATIVE_PLATFORM_DESCRIPTION,
     "",
-    "Native application embedding is an important secondary goal; the host chooses application globals, modules, capabilities, limits, and result handling.",
+    `## ${PRODUCTION_READY_QUESTION}`,
+    "",
+    PRODUCTION_READY_ANSWER,
     "",
     "## Example",
     "",
@@ -296,11 +326,6 @@ async function installationMarkdown(): Promise<string> {
   ].join("\n");
 }
 
-function compatibilityPercent(passed: number, run: number): string {
-  if (run <= 0) return "0.0%";
-  return `${((passed / run) * 100).toFixed(1)}%`;
-}
-
 function compatibilityNumber(value: number): string {
   return value.toLocaleString("en-US");
 }
@@ -314,49 +339,51 @@ function compatibilityDate(value: string): string {
 export function renderCompatibilityMarkdown(
   data: Test262DashboardData,
 ): string {
-  const latest = data.status === "ready" ? data.latest : null;
-  const currentResult = latest
-    ? [
-        "## Latest main-branch result",
-        "",
-        `- Overall test262 corpus pass rate: **${compatibilityPercent(
-          latest.summary.passed,
-          latest.summary.totalRun,
-        )}** (${compatibilityNumber(
-          latest.summary.passed,
-        )} passed / ${compatibilityNumber(latest.summary.totalRun)} run)`,
-        `- Failed: ${compatibilityNumber(latest.summary.failed)}`,
-        `- Timeouts: ${compatibilityNumber(latest.summary.timeouts)}`,
-        `- Wrapper infrastructure failures: ${compatibilityNumber(
-          latest.summary.wrapperInfraFailures,
-        )}`,
-        `- Commit: \`${latest.shortSha}\``,
-        `- CI run: [#${latest.runNumber}](${latest.runUrl})`,
-        `- Run date: ${compatibilityDate(latest.createdAt)}`,
-        "",
-        "### Top-level test262 groups",
-        "",
-        "| Group | Pass rate | Passing |",
-        "|-------|-----------|---------|",
-        ...latest.summary.byCategory.map(
-          (category) =>
-            `| ${category.category} | ${compatibilityPercent(
-              category.passed,
-              category.run,
-            )} | ${compatibilityNumber(
-              category.passed,
-            )} / ${compatibilityNumber(category.run)} |`,
-        ),
-      ]
-    : [
-        "## Latest main-branch result",
-        "",
-        // The HTML dashboard shows the loader's diagnosis; carry the same one.
-        data.message ??
-          "The current test262 result is temporarily unavailable.",
-        "",
-        "Open the HTML dashboard or CI workflow for status.",
-      ];
+  const summary = latestTest262Summary(data);
+  const latest = data.latest;
+  const currentResult =
+    summary && latest
+      ? [
+          "## Latest main-branch result",
+          "",
+          `- Overall test262 corpus pass rate: **${compatibilityPercent(
+            summary.passed,
+            summary.totalRun,
+          )}** (${compatibilityNumber(
+            summary.passed,
+          )} passed / ${compatibilityNumber(summary.totalRun)} run)`,
+          `- Failed: ${compatibilityNumber(summary.failed)}`,
+          `- Timeouts: ${compatibilityNumber(summary.timeouts)}`,
+          `- Wrapper infrastructure failures: ${compatibilityNumber(
+            summary.wrapperInfraFailures,
+          )}`,
+          `- Commit: \`${latest.shortSha}\``,
+          `- CI run: [#${latest.runNumber}](${latest.runUrl})`,
+          `- Run date: ${compatibilityDate(latest.createdAt)}`,
+          "",
+          "### Top-level test262 groups",
+          "",
+          "| Group | Pass rate | Passing |",
+          "|-------|-----------|---------|",
+          ...summary.byCategory.map(
+            (category) =>
+              `| ${category.category} | ${compatibilityPercent(
+                category.passed,
+                category.run,
+              )} | ${compatibilityNumber(
+                category.passed,
+              )} / ${compatibilityNumber(category.run)} |`,
+          ),
+        ]
+      : [
+          "## Latest main-branch result",
+          "",
+          // The HTML dashboard shows the loader's diagnosis; carry the same one.
+          data.message ??
+            "The current test262 result is temporarily unavailable.",
+          "",
+          "Open the HTML dashboard or CI workflow for status.",
+        ];
 
   return [
     frontmatter(
@@ -476,12 +503,12 @@ function playgroundMarkdown(searchParams: URLSearchParams): string {
   return [
     frontmatter(
       "Playground - GocciaScript",
-      "Run GocciaScript in the browser with example programs and selectable backends.",
+      "Run GocciaScript in the browser with example programs and selectable engine versions.",
     ),
     "",
     "# Playground",
     "",
-    "Run GocciaScript in the browser. Choose an example, select the bytecode VM backend (the default) or the tree-walk interpreter on versions that support `--mode`, toggle ASI, and execute the script.",
+    "Run GocciaScript in the browser. Choose an example and an engine version, toggle ASI, and execute the script. Versions up to 0.14 also offer their tree-walk interpreter through `--mode`; bytecode is the default for every version and the only backend from 0.15.",
     "",
     "## Examples",
     "",
@@ -505,9 +532,7 @@ function sandboxMarkdown(): string {
 # once: review and trust the sandbox section
 ./build/GocciaRunner --trust goccia.json
 
-./build/GocciaRunner main.js \\
-  --mode=bytecode \\
-  --diff=unified`;
+./build/GocciaRunner main.js --diff=unified`;
   const sandboxConfig = `{
   "sandbox": {
     "copy": ["project=/", "tools"],

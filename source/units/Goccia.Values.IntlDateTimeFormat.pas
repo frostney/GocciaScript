@@ -56,7 +56,7 @@ type
     destructor Destroy; override;
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaObjectValue);
   published
     function IntlDateTimeFormatFormatGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -83,6 +83,7 @@ uses
   Goccia.Builtins.Intl,
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -128,7 +129,7 @@ type
     function Format(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create(const ADateTimeFormat: TGocciaIntlDateTimeFormatValue);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TDateTimeFormattableKind = (dtfkNumber, dtfkPlainDate, dtfkPlainDateTime,
@@ -752,9 +753,8 @@ begin
   Result := FDateTimeFormat.IntlDateTimeFormatFormat(AArgs, FDateTimeFormat);
 end;
 
-procedure TGocciaIntlDateTimeFormatBoundFormatValue.MarkReferences;
+procedure TGocciaIntlDateTimeFormatBoundFormatValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FDateTimeFormat) then
     FDateTimeFormat.MarkReferences;
@@ -1931,62 +1931,71 @@ end;
 
 procedure TGocciaIntlDateTimeFormatValue.ReadOptions(const AOptions: TGocciaObjectValue);
 var
+  OptionsRoots: TGocciaActiveRootFrame;
   V: TGocciaValue;
   CalendarOption, NumberingSystemOption: string;
   Ignored: string;
   TimeZoneOption: string;
 begin
-  if not Assigned(AOptions) then Exit;
+  // Options that ToObject made from a primitive are a wrapper only this call
+  // holds while their getters and conversions run guest code.
+  OptionsRoots.Initialize;
+  try
+    OptionsRoots.Add(AOptions);
+    if not Assigned(AOptions) then Exit;
 
-  Ignored := ReadDateTimeStringOption(AOptions, 'localeMatcher',
-    'lookup|best fit', '');
-  if TryReadDateTimeStringOption(AOptions, 'calendar', CalendarOption) then
-    TryResolveDateTimeCalendarOption(CalendarOption, 'calendar', FCalendar);
-  if TryReadDateTimeStringOption(AOptions, 'numberingSystem',
-    NumberingSystemOption) then
-    TryResolveDateTimeNumberingSystemOption(NumberingSystemOption,
-      'numberingSystem', FNumberingSystem);
-  V := AOptions.GetProperty('hour12');
-  if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-  begin
-    if V.ToBooleanLiteral.Value then
-      FHour12 := 1
-    else
-      FHour12 := 0;
+    Ignored := ReadDateTimeStringOption(AOptions, 'localeMatcher',
+      'lookup|best fit', '');
+    if TryReadDateTimeStringOption(AOptions, 'calendar', CalendarOption) then
+      TryResolveDateTimeCalendarOption(CalendarOption, 'calendar', FCalendar);
+    if TryReadDateTimeStringOption(AOptions, 'numberingSystem',
+      NumberingSystemOption) then
+      TryResolveDateTimeNumberingSystemOption(NumberingSystemOption,
+        'numberingSystem', FNumberingSystem);
+    V := AOptions.GetProperty('hour12');
+    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    begin
+      if V.ToBooleanLiteral.Value then
+        FHour12 := 1
+      else
+        FHour12 := 0;
+    end;
+    FHourCycle := ReadDateTimeStringOption(AOptions, 'hourCycle',
+      'h11|h12|h23|h24', FHourCycle);
+    if TryReadDateTimeStringOption(AOptions, 'timeZone', TimeZoneOption) then
+    begin
+      if TimeZoneOption = '' then
+        ThrowRangeError(Format(SErrorUnknownTimezone, [TimeZoneOption]));
+      FTimeZone := CanonicalizeDateTimeFormatTimeZone(TimeZoneOption);
+    end;
+    FWeekday := ReadDateTimeStringOption(AOptions, 'weekday',
+      'narrow|short|long', FWeekday);
+    FEra := ReadDateTimeStringOption(AOptions, 'era', 'narrow|short|long', FEra);
+    FYear := ReadDateTimeStringOption(AOptions, 'year', '2-digit|numeric', FYear);
+    FMonth := ReadDateTimeStringOption(AOptions, 'month',
+      '2-digit|numeric|narrow|short|long', FMonth);
+    FDay := ReadDateTimeStringOption(AOptions, 'day', '2-digit|numeric', FDay);
+    FDayPeriod := ReadDateTimeStringOption(AOptions, 'dayPeriod',
+      'narrow|short|long', FDayPeriod);
+    FHour := ReadDateTimeStringOption(AOptions, 'hour', '2-digit|numeric', FHour);
+    FMinute := ReadDateTimeStringOption(AOptions, 'minute',
+      '2-digit|numeric', FMinute);
+    FSecond := ReadDateTimeStringOption(AOptions, 'second',
+      '2-digit|numeric', FSecond);
+    TryReadDateTimeIntegerOption(AOptions, 'fractionalSecondDigits', 1, 3,
+      FFractionalSecondDigits);
+    FTimeZoneName := ReadDateTimeStringOption(AOptions, 'timeZoneName',
+      'short|long|shortOffset|longOffset|shortGeneric|longGeneric',
+      FTimeZoneName);
+    Ignored := ReadDateTimeStringOption(AOptions, 'formatMatcher',
+      'basic|best fit', '');
+    FDateStyle := ReadDateTimeStringOption(AOptions, 'dateStyle',
+      'full|long|medium|short', FDateStyle);
+    FTimeStyle := ReadDateTimeStringOption(AOptions, 'timeStyle',
+      'full|long|medium|short', FTimeStyle);
+  finally
+    OptionsRoots.Clear;
   end;
-  FHourCycle := ReadDateTimeStringOption(AOptions, 'hourCycle',
-    'h11|h12|h23|h24', FHourCycle);
-  if TryReadDateTimeStringOption(AOptions, 'timeZone', TimeZoneOption) then
-  begin
-    if TimeZoneOption = '' then
-      ThrowRangeError(Format(SErrorUnknownTimezone, [TimeZoneOption]));
-    FTimeZone := CanonicalizeDateTimeFormatTimeZone(TimeZoneOption);
-  end;
-  FWeekday := ReadDateTimeStringOption(AOptions, 'weekday',
-    'narrow|short|long', FWeekday);
-  FEra := ReadDateTimeStringOption(AOptions, 'era', 'narrow|short|long', FEra);
-  FYear := ReadDateTimeStringOption(AOptions, 'year', '2-digit|numeric', FYear);
-  FMonth := ReadDateTimeStringOption(AOptions, 'month',
-    '2-digit|numeric|narrow|short|long', FMonth);
-  FDay := ReadDateTimeStringOption(AOptions, 'day', '2-digit|numeric', FDay);
-  FDayPeriod := ReadDateTimeStringOption(AOptions, 'dayPeriod',
-    'narrow|short|long', FDayPeriod);
-  FHour := ReadDateTimeStringOption(AOptions, 'hour', '2-digit|numeric', FHour);
-  FMinute := ReadDateTimeStringOption(AOptions, 'minute',
-    '2-digit|numeric', FMinute);
-  FSecond := ReadDateTimeStringOption(AOptions, 'second',
-    '2-digit|numeric', FSecond);
-  TryReadDateTimeIntegerOption(AOptions, 'fractionalSecondDigits', 1, 3,
-    FFractionalSecondDigits);
-  FTimeZoneName := ReadDateTimeStringOption(AOptions, 'timeZoneName',
-    'short|long|shortOffset|longOffset|shortGeneric|longGeneric',
-    FTimeZoneName);
-  Ignored := ReadDateTimeStringOption(AOptions, 'formatMatcher',
-    'basic|best fit', '');
-  FDateStyle := ReadDateTimeStringOption(AOptions, 'dateStyle',
-    'full|long|medium|short', FDateStyle);
-  FTimeStyle := ReadDateTimeStringOption(AOptions, 'timeStyle',
-    'full|long|medium|short', FTimeStyle);
 end;
 
 constructor TGocciaIntlDateTimeFormatValue.Create(const ALocale: string;
@@ -2138,9 +2147,8 @@ begin
   Result := 'Object';
 end;
 
-procedure TGocciaIntlDateTimeFormatValue.MarkReferences;
+procedure TGocciaIntlDateTimeFormatValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FBoundFormat) then
     FBoundFormat.MarkReferences;
@@ -2527,5 +2535,6 @@ end;
 
 initialization
   GIntlDateTimeFormatSharedSlot := RegisterRealmOwnedSlot('Intl.DateTimeFormat.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.DateTimeFormat.shared', 'Intl.DateTimeFormat');
 
 end.

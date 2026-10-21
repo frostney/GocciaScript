@@ -11,10 +11,12 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Realm,
   Goccia.TestSetup,
+  Goccia.Values.ArrayBufferValue,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.Values.SharedArrayBufferValue,
   Goccia.Values.TypedArrayValue;
 
 type
@@ -34,6 +36,8 @@ type
     procedure TestSlotNamesAreReadThroughThePrototype;
     procedure TestUnmarkedNativeGetterIsCalled;
     procedure TestStampedGetterIsAnsweredWithoutACall;
+    procedure TestBufferDataFollowsAResize;
+    procedure TestAGrowKeepsTheBlock;
   end;
 
 procedure TTestTypedArrayValue.SetupTests;
@@ -46,6 +50,10 @@ begin
     TestUnmarkedNativeGetterIsCalled);
   Test('a getter stamped as the length getter is answered from the slots',
     TestStampedGetterIsAnsweredWithoutACall);
+  Test('BufferData is the current block after a resize or a detach, read before Length',
+    TestBufferDataFollowsAResize);
+  Test('a SharedArrayBuffer grows in place: its one block keeps every byte',
+    TestAGrowKeepsTheBlock);
 end;
 
 function TTestTypedArrayValue.GetterKind(const APrototype: TGocciaObjectValue;
@@ -200,6 +208,109 @@ begin
     Expect<Double>(TypedArray.GetProperty(PROP_LENGTH)
       .ToNumberLiteral.Value).ToBe(5);
     Expect<Integer>(FGetterCalls).ToBe(0);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Realm.Free;
+  end;
+end;
+
+procedure ResizeBuffer(const ABuffer: TGocciaArrayBufferValue;
+  const ANewLength: Integer);
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  Args := TGocciaArgumentsCollection.Create(
+    [TGocciaNumberLiteralValue.Create(ANewLength)]);
+  try
+    ABuffer.ArrayBufferResize(Args, ABuffer);
+  finally
+    Args.Free;
+  end;
+end;
+
+{ resize gives the buffer a new data block. A view that last synced before it
+  must not hand a native reader the old one: the reader would copy Length's
+  elements, measured on the new block, out of the old, smaller one. Nothing
+  reads Length or an element between the resize and BufferData here, so only
+  the accessor itself can refresh the block. }
+procedure TTestTypedArrayValue.TestBufferDataFollowsAResize;
+var
+  Buffer: TGocciaArrayBufferValue;
+  PreviousRealm: TGocciaRealm;
+  Realm: TGocciaRealm;
+  Tracking, Fixed: TGocciaTypedArrayValue;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('typed-array-buffer-data-resize');
+  SetCurrentRealm(Realm);
+  try
+    Buffer := TGocciaArrayBufferValue.Create(4, 4096);
+    Tracking := TGocciaTypedArrayValue.Create(takUint8, Buffer);
+    Fixed := TGocciaTypedArrayValue.Create(takUint16, Buffer, 0, 2);
+    Expect<Integer>(System.Length(Tracking.BufferData)).ToBe(4);
+
+    ResizeBuffer(Buffer, 4096);
+    Expect<Integer>(System.Length(Tracking.BufferData)).ToBe(4096);
+    Expect<Boolean>(Pointer(Tracking.BufferData) = Pointer(Buffer.Data))
+      .ToBe(True);
+    Expect<Integer>(Tracking.Length).ToBe(4096);
+
+    ResizeBuffer(Buffer, 2);
+    Expect<Integer>(System.Length(Fixed.BufferData)).ToBe(2);
+    Expect<Integer>(Fixed.Length).ToBe(0);
+
+    Buffer.Detach;
+    Expect<Integer>(System.Length(Tracking.BufferData)).ToBe(0);
+    Expect<Integer>(Tracking.Length).ToBe(0);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Realm.Free;
+  end;
+end;
+
+{ Every agent that holds a growable SharedArrayBuffer must see the same
+  memory before and after a grow, so the buffer is allocated at its maximum
+  length once and a grow only raises the length it exposes. A grow that
+  moved the bytes to a new block would leave another agent writing into the
+  old one. }
+procedure TTestTypedArrayValue.TestAGrowKeepsTheBlock;
+var
+  Args: TGocciaArgumentsCollection;
+  Block: TBytes;
+  Buffer: TGocciaSharedArrayBufferValue;
+  PreviousRealm: TGocciaRealm;
+  Realm: TGocciaRealm;
+  Tracking, Fixed: TGocciaTypedArrayValue;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('typed-array-buffer-data-grow');
+  SetCurrentRealm(Realm);
+  try
+    Buffer := TGocciaSharedArrayBufferValue.Create(4, 4096);
+    Tracking := TGocciaTypedArrayValue.Create(takInt32, Buffer);
+    Fixed := TGocciaTypedArrayValue.Create(takUint8, Buffer, 0, 4);
+    Block := Tracking.BufferData;
+    Expect<Integer>(System.Length(Block)).ToBe(4096);
+    Expect<Integer>(Buffer.ByteLength).ToBe(4);
+    Expect<Integer>(Tracking.BufferByteLength).ToBe(4);
+    Expect<Integer>(Tracking.Length).ToBe(1);
+    Block[0] := 42;
+
+    Args := TGocciaArgumentsCollection.Create(
+      [TGocciaNumberLiteralValue.Create(4096)]);
+    try
+      Buffer.SharedArrayBufferGrow(Args, Buffer);
+    finally
+      Args.Free;
+    end;
+    Expect<Boolean>(Pointer(Tracking.BufferData) = Pointer(Block)).ToBe(True);
+    Expect<Boolean>(Pointer(Fixed.BufferData) = Pointer(Block)).ToBe(True);
+    Expect<Boolean>(Pointer(Buffer.Data) = Pointer(Block)).ToBe(True);
+    Expect<Integer>(Buffer.ByteLength).ToBe(4096);
+    Expect<Integer>(Tracking.BufferByteLength).ToBe(4096);
+    Expect<Integer>(Tracking.Length).ToBe(1024);
+    Expect<Integer>(Fixed.Length).ToBe(4);
+    Expect<Integer>(Tracking.BufferData[0]).ToBe(42);
   finally
     SetCurrentRealm(PreviousRealm);
     Realm.Free;

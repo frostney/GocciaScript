@@ -23,7 +23,7 @@ This file is the authoritative command reference for local builds and CLI usage.
 
 ## Prerequisites
 
-See [Prerequisites](../README.md#prerequisites) in the README for FPC installation instructions.
+See [Build from source](../README.md#build-from-source) in the README for FPC installation instructions.
 
 - **instantfpc** — Comes bundled with FreePascal. Used to run `build.pas` as a script.
 
@@ -65,7 +65,7 @@ when you need to remove stale build artifacts.
 ./build.pas repl             # Interactive REPL
 ./build.pas runner           # Runner (host mode and sandbox mode)
 ./build.pas loaderbare       # Bare Script Loader (core engine only)
-./build.pas fuzzharness      # Fuzz harness (both executors)
+./build.pas fuzzharness      # Fuzz harness
 ./build.pas testrunner       # JavaScript test runner + native FFI fixture
 ./build.pas test262runner    # Native Test262 conformance runner
 ./build.pas tomlcompliancerunner # Native TOML compliance runner
@@ -104,7 +104,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaRunner
 printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
 ```
 
-`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`. The timing banner's `Total` (and `timing.total_ns` in JSON) is end to end in both execution modes: from before the engine is created to the end of the run, so it includes engine boot as well as the lex, parse, compile, and execute phases listed beside it.
+`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`. In `GocciaRunner`, host and sandbox mode alike, the value is converted while the run's engine is still alive and counts as part of the run: a `toString`, `valueOf`, `Symbol.toPrimitive` or `toJSON` it calls runs under `--timeout` and `--max-instructions`, and an error it throws fails the run like the script's own (a Symbol, which has no string form, fails `--print` with a `TypeError`). The timing banner's `Total` (and `timing.total_ns` in JSON) is end to end: from before the engine is created to the end of the run, so it includes engine boot as well as the lex, parse, compile, and execute phases listed beside it.
 
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
 
@@ -121,7 +121,6 @@ Run a pinned Test262 checkout with the dedicated native runner:
 ./build.pas test262runner
 ./build/GocciaTest262Runner \
   --suite-dir=/path/to/test262 \
-  --mode=bytecode \
   --jobs=4 \
   --output=test262-results.json
 ```
@@ -141,7 +140,6 @@ Coverage and profiling output are available from the runner:
 ```bash
 ./build.pas testrunner
 ./build/GocciaTestRunner -P tests
-./build/GocciaTestRunner -P tests --mode=bytecode
 ```
 
 `./build.pas testrunner` also builds `fixtures/ffi/libfixture.*` for the
@@ -150,7 +148,7 @@ current platform, which the folder-configured FFI JavaScript tests need.
 Useful test-runner forms:
 
 ```bash
-./build/GocciaTestRunner -P tests --jobs=4
+./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress
 ./build/GocciaTestRunner -P tests --no-progress --exit-on-first-failure --silent
 ./build/GocciaTestRunner -P tests --output=results.json --log=test-console.log
 ./build/GocciaTestRunner -P tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
@@ -158,15 +156,19 @@ Useful test-runner forms:
 
 ### Execution Mode
 
-Every execution tool compiles and runs source in the Goccia bytecode VM by default. `--mode=interpreted` (or `"mode": "interpreted"` in a config file) selects the tree-walk interpreter instead, until the interpreter is removed; `--mode=bytecode` names the default explicitly. `--profile` (see [Profiling](profiling.md)) and `--coverage` (see [Testing — Coverage](testing.md#coverage)) select bytecode on their own and ignore `--mode`.
+Every execution tool compiles source to Goccia bytecode and runs it in the Goccia VM; there is no other execution mode to select. GocciaScript 0.15.0 removed `--mode` and the `"mode"` config key without an alias. Any `--mode` option, with or without a value, fails with status 2, as does a `"mode"` key in a config file, and the message names the release. `GocciaScriptLoaderBare` and `GocciaTest262Runner` reject `--mode` the same way:
+
+```text
+Error: --mode was removed in GocciaScript 0.15.0; bytecode is the only execution mode, so drop the option
+Error: /repo/goccia.json: "mode" was removed in GocciaScript 0.15.0; bytecode is the only execution mode, so drop the key
+```
+
+The capability flags and keys removed in 0.14.0 are listed in [Permissions — Removed flags and keys](permissions.md#removed-flags-and-keys).
 
 ```bash
-# Execute via bytecode VM (the default)
+# Execute a script
 ./build/GocciaRunner example.js
 printf "const x = 2 + 2; x;" | ./build/GocciaRunner --print
-
-# Execute via the tree-walk interpreter
-./build/GocciaRunner example.js --mode=interpreted
 
 # Load and execute a pre-compiled .gbc file
 ./build/GocciaRunner output.gbc
@@ -239,15 +241,14 @@ printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaRunner
 printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner --timeout=100ms
 
 # Abort after a fixed number of bytecode instructions
-printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner --max-instructions=1000000 --mode=bytecode
+printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner --max-instructions=1000000
 
 # Set call stack depth limit (default 2200; 0 = no depth limit, bytecode recursion then stops at --max-memory, ADR 0130)
 ./build/GocciaRunner example.js --max-stack=5000
 ./build/GocciaRunner example.js --max-stack=0
-# Caveat (#1274): with 0, deep interpreted recursion exits 1 with "Fatal error: Stack overflow"
 
 # Write .map source map alongside execution
-./build/GocciaRunner example.jsx --source-map --mode=bytecode
+./build/GocciaRunner example.jsx --source-map
 
 # Control parallel worker threads (default: CPU count; --jobs=1 forces sequential)
 ./build/GocciaRunner example.js --jobs=4
@@ -262,9 +263,9 @@ mkdir -p dist   # the bundler does not create --output directories
 ./build/GocciaBundler scenarios.js --multifile --output=dist/
 printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaRunner --multifile
 
-# Run benchmarks via bytecode VM
-./build/GocciaBenchmarkRunner benchmarks --mode=bytecode
-printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner - --source-type=module --mode=bytecode
+# Run benchmarks
+./build/GocciaBenchmarkRunner benchmarks
+printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner - --source-type=module
 ```
 
 ### `--multifile` (split a single input on `---` separators)
@@ -322,11 +323,10 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
-`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source; other script extensions default to script source.
+`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source, and any other entry, stdin included, is module source when it has a top-level `import` or `export` declaration and script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). `"source-type": "script"` keeps such an entry script source. The REPL runs script source unless `--source-type=module` names otherwise. A `.gbc` entry adopts its recorded compile-time goal unless an explicit source type is supplied; a conflicting explicit goal is rejected.
 
 ```json
 {
-  "mode": "bytecode",
   "source-type": "module",
   "warning-unsupported-features": true,
   "compat-asi": true,
@@ -355,13 +355,13 @@ Relative paths are resolved against the current working directory. A missing fil
 }
 ```
 
-Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags must be exactly `true` or `false`, and array-valued options like `alias` use JSON arrays. Capability grants and denies go in a `permissions` object, never at the top level; limits take the same units as on the command line. See [Permissions](permissions.md#config-files) for the `permissions` block, how its relative scopes resolve, and the removed keys that now fail with status 2. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
+Config keys mirror CLI option names (e.g. `--source-type` -> `"source-type"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags must be exactly `true` or `false`, and array-valued options like `alias` use JSON arrays. Capability grants and denies go in a `permissions` object, never at the top level; limits take the same units as on the command line. See [Permissions](permissions.md#config-files) for the `permissions` block, how its relative scopes resolve, and the removed keys that now fail with status 2. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream, and in sandbox mode stamps every virtual-filesystem timestamp at the epoch too; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
 ```json
 {
   "extends": "../goccia.json",
-  "mode": "bytecode"
+  "source-type": "module"
 }
 ```
 
@@ -383,7 +383,7 @@ Likewise, `tests/built-ins/FFI/goccia.json` grants `ffi` only for the FFI tests,
 }
 ```
 
-**Inputs named in config** — A `modules` manifest, a `globals` file or module, and a `host-environment` module named in a config are read under the capability set of the script the config governs, judged with the directory of the config that names them as the project: relative paths resolve from that config file, and outside its directory they need a read grant. Under `extends`, a file a base config names is judged against the base's own directory. A JavaScript or TypeScript manifest or globals module runs in an engine of its own on the script's executor (interpreter or bytecode), so an error it throws is reported as it is for the same module passed with `--globals`. Only data crosses back, so a globals module a config names may export only values JSON carries as they are, at any depth; a function, symbol, BigInt, or other non-JSON value fails the run, naming its export path. A host-environment module is loaded as a guest module, never host-owned. The same options on the command line are unchanged. See [Permissions](permissions.md#config-files) and [Virtual Modules](virtual-modules.md).
+**Inputs named in config** — A `modules` manifest, a `globals` file or module, and a `host-environment` module named in a config are read under the capability set of the script the config governs, judged with the directory of the config that names them as the project: relative paths resolve from that config file, and outside its directory they need a read grant. Under `extends`, a file a base config names is judged against the base's own directory. A JavaScript or TypeScript manifest or globals module runs in an engine of its own, so an error it throws is reported as it is for the same module passed with `--globals`. Only data crosses back, so a globals module a config names may export only values JSON carries as they are, at any depth; a function, symbol, BigInt, or other non-JSON value fails the run, naming its export path. A host-environment module is loaded as a guest module, never host-owned. The same options on the command line are unchanged. See [Permissions](permissions.md#config-files) and [Virtual Modules](virtual-modules.md).
 
 **Output paths in config** — A config may set the options that write host files — `log`, `audit-log`, `coverage-output`, `profile-output`, `source-map`, the test runner's, benchmark runner's, and bundler's `output` (when it names a file), and, in `GocciaRunner`'s `sandbox` section, the `copy-rw` inputs and `diff-file` — only to a path inside its own directory. A relative value resolves against the directory of the config file that declares it, existing directories along the path are resolved, and a symbolic link at the name itself is refused; anything else fails with status 1, naming the key and the config. The write itself is opened from the config's directory, checked to be the same directory it was, and walked one component at a time without following links (`openat` with `O_NOFOLLOW` on POSIX hosts), so a directory on the path swapped for a link during the run refuses the write rather than redirecting it; Windows re-checks the path just before writing instead. Sandbox write-back and the diff file are pinned the same way whether a config or the command line names them ([Permissions — Write-back](permissions.md#write-back)). The same options on the command line write wherever they are told to.
 
@@ -403,7 +403,6 @@ TOML equivalent (`goccia.toml`):
 
 ```toml
 compat-asi = true
-mode = "bytecode"
 timeout = "5s"
 max-memory = "10MiB"
 max-stack = 2200
@@ -413,7 +412,7 @@ inspect-depth = 5
 allow-ffi = true
 ```
 
-**CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaRunner`, in both modes, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
+**CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaRunner`, in host and sandbox mode, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
 
 **Note:** `ApplyConfigFile` only handles `.json` out of the box. To support `.json5` and `.toml` config files, call `EnsureConfigParsersRegistered` (in `Goccia.CLI.Application`) first, as `TGocciaCLIApplication.Execute` does, or register your own parsers with `RegisterConfigParser`.
 
@@ -444,7 +443,7 @@ if ConfigPath <> '' then
 
 ### GocciaBundler (Bundler)
 
-GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as GocciaRunner (file, multiple files, directory, stdin):
+GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. Module-goal artifacts also satisfy imports with `GocciaRunner --prefer-bytecode`; see [Precompiled bytecode modules](bytecode-loading.md) for profile checks, companions and source fallback. It accepts the same input modes as GocciaRunner (file, multiple files, directory, stdin):
 
 ```bash
 # Compile a single file (output: example.gbc alongside the source)
@@ -529,7 +528,7 @@ reach, how inputs are copied in and written back, and the config section.
 | `--max-fs-bytes=<bytes>` | Maximum bytes in the sandbox filesystem (default: `16MiB`) |
 | `--max-fs-nodes=<N>` | Maximum files and directories in the sandbox filesystem (default: 4096) |
 
-The engine options and limits apply as in host mode: `--mode`, `--source-type`,
+The engine options and limits apply as in host mode: `--source-type`,
 `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack`, and
 `--max-fetch-bytes` all bound the sandboxed program, and configuration is
 discovered as for any other run. Options that only make sense against the host
@@ -548,13 +547,15 @@ to standard error.
 
 Standard output carries only what the guest prints — `--print` prints the last
 value, `undefined` included, as in host mode — followed by a printed diff.
-There is no timing banner. The `write-back:` report goes to standard error.
+Without `--print` the last value is not read at all, and its getters do not
+run. There is no timing banner. The `write-back:` report goes to standard error.
 
 Diff output is explicit. JSON is the default format; it always includes a
 separate `metadataChanges` array whose per-path `changes` object contains only
 changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields, so
-timestamp-only changes never appear as content modifications. The unified
-format never includes metadata. `--diff-file=<path>` writes the diff to a host
+timestamp-only changes never appear as content modifications; under
+`--deterministic` it is empty ([Deterministic Profile](host-environment.md#deterministic-profile)).
+The unified format never includes metadata. `--diff-file=<path>` writes the diff to a host
 file instead of printing it, choosing JSON for `.json` and unified for `.diff`.
 An explicit `--diff=<format>` wins over the extension, and any other extension
 (`.patch` included) without one is an error.
@@ -575,7 +576,7 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaTest262Runner` | `source/app/GocciaTest262Runner.dpr` | Discover, shard, execute, classify, and report the pinned Test262 corpus using isolated native workers |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaTOMLComplianceRunner` | `source/app/compliance/GocciaTOMLComplianceRunner.dpr` | Native pinned `toml-test` runner |
-| `build/GocciaFuzzHarness` | `source/app/GocciaFuzzHarness.dpr` | Crash harness that drives one input through the lexer, parser, and both executors |
+| `build/GocciaFuzzHarness` | `source/app/GocciaFuzzHarness.dpr` | Crash harness that drives one input through the lexer, parser, compiler, and VM |
 | `build/GocciaWasmTestRunner` | `source/app/GocciaWasmTestRunner.dpr` | Single-threaded, manifest-driven test runner for the Wasm/LAKON host |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
@@ -655,7 +656,7 @@ It:
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
 5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
 6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
-7. For the `tests` target, auto-discovers all `*.Test.pas` files in `source/units/` and `source/shared/`, compiling each program with its own `build/compiled/tests/<test-program>/` unit-output directory.
+7. For the `tests` target, auto-discovers all `*.Test.pas` files under `source/units/`, `source/shared/` and `source/app/` (including `source/app/compliance/`), compiling each program with its own `build/compiled/tests/<test-program>/` unit-output directory.
 
 The GitHub Actions cross-compilation workflow (`.github/workflows/toolchain.yml`) uses two reduced cached FPC toolchains rather than a full target-side FCL install: a macOS-hosted one for the Darwin targets and a Linux-hosted one for the Linux and Windows targets. Both start from the same patched FPC 3.2.2 source and build their target units with `.github/scripts/build-fpc-cross-units.sh`. Each prebuilds the RTL, `rtl-objpas`, `rtl-generics`, and `fcl-process`, and also caches the official `fcl-base` sources so cross builds can resolve units such as `Base64` on demand from the shipped FPC packages.
 
@@ -767,7 +768,7 @@ Runs on the full platform matrix:
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), it additionally emits JSON and validates the report shape. PR comparison no longer reads a cached baseline from here — each PR builds and benchmarks `main` on its own runner ([ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The main bytecode benchmark lane also captures deterministic VM profile details, uploads the `benchmark-profile` artifact, and publishes aggregate/detail profile payloads under the separate `benchmark-profiles/` Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
-**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: the shared test assertions, options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, app-specific features including the runner's sandbox mode, capability flags, limits and permission defaults (`scripts/test-cli-permissions.ts`), embedded resources, Intl taint robustness, FFI callback-slot exhaustion in a process of its own (`scripts/test-cli-ffi-callback-slots.ts`, after building the FFI fixture library), the differential suites, and coverage parity between execution modes. Windows runs additionally assert that `GocciaRunner` does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
+**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: the shared test assertions, options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, app-specific features including the runner's sandbox mode, capability flags, limits and permission defaults (`scripts/test-cli-permissions.ts`), embedded resources, Intl taint robustness, FFI callback-slot exhaustion in a process of its own (`scripts/test-cli-ffi-callback-slots.ts`, after building the FFI fixture library), and the differential suites. Windows runs additionally assert that `GocciaRunner` does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints. The rolling `nightly` prerelease is not a `ci.yml` job: `.github/workflows/nightly.yml` runs on a schedule, every three hours, and looks for the newest `CI` run that concluded `success` for a `push` to `main`, so a cancelled, failed, tag, or dispatched run is never published. It publishes when that run's commit is ahead of the commit the `nightly` tag points at (or has diverged from it, after a rewritten `main`), and does nothing when no newer commit has passed or the run's one-day artifacts have expired; a manual run on `main` publishes the newest passing build at once. It checks out the run's `head_sha` and downloads that run's `gocciascript-<target>` artifacts. If any of the six target artifacts or packaged archives is missing, the job fails without touching the existing release; otherwise it restores the executable bit on the binaries (artifacts do not keep file modes), packages the six targets with `tests/`, `benchmarks/`, and `examples/`, and deletes and recreates the `nightly` prerelease at that commit under the non-cancelling `nightly-release` concurrency group. A commit newer than that run's, still in CI or failed, does not hold the nightly back: the newest build that passed is what gets published. Keeping the job out of `ci.yml` means a cancelled `main` run can never stop between deleting and recreating the release. A scheduled workflow uses the default branch's copy of `nightly.yml`, so changes to it take effect only after merge.
 
@@ -793,7 +794,7 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 
 **`web-tooling-workload` / `web-tooling-report`** (needs build) — Runs the same direct-invocation workload matrix as full CI on the PR x64 build, using Goccia bytecode only, then validates and merges the shards into the normalized `web-tooling-report` JSON artifact. The downstream `web-tooling-comment` job posts or updates a `Web Tooling Benchmark` comment with per-workload build/execution status and Goccia `runs/s` where available; full stdout/stderr for failures and min/max/CV remain in the artifact.
 
-**`cli`** (needs build) — Builds the FFI fixture library and runs CLI behavior smoke tests via Bun (`scripts/test-cli-assertions.ts`, `scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`, `scripts/test-cli-permissions.ts`, `scripts/test-cli-embedded-resources.ts`, `scripts/test-cli-intl-taint.ts`, `scripts/test-cli-ffi-callback-slots.ts`, `scripts/test-cli-differential.ts`). `test-cli-permissions.ts` covers the capability flags, limits, and permission defaults. `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaRunner` sandbox-mode coverage for `--copy` / `--copy-rw` inputs, the `sandbox` config section, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
+**`cli`** (needs build) — Builds the FFI fixture library and runs CLI behavior smoke tests via Bun (`scripts/test-cli-assertions.ts`, `scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`, `scripts/test-cli-permissions.ts`, `scripts/test-cli-embedded-resources.ts`, `scripts/test-cli-intl-taint.ts`, `scripts/test-cli-ffi-callback-slots.ts`, `scripts/test-cli-differential.ts`). `test-cli-permissions.ts` covers the capability flags, limits, and permission defaults. `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, and absence of the loader runtime profile, plus `GocciaRunner` sandbox-mode coverage for `--copy` / `--copy-rw` inputs, the `sandbox` config section, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
 

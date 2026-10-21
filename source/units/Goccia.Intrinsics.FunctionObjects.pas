@@ -260,6 +260,7 @@ procedure TGocciaFunctionObjectIntrinsics.EnsureAsyncFunctionPrototype(
 var
   ConstructorFunction: TGocciaFunctionConstructorClassValue;
   Prototype: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if Assigned(FAsyncFunctionPrototype) then
     Exit;
@@ -269,13 +270,23 @@ begin
     CurrentRealm.GetSlot(GAsyncFunctionPrototypeSlot));
   if not Assigned(Prototype) then
   begin
-    Prototype := TGocciaObjectValue.Create(AFunctionPrototype);
-    ConstructorFunction := CreateHiddenFunctionConstructor('AsyncFunction',
-      AFunctionPrototype, Prototype, dfkAsync);
-    Prototype.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(ConstructorFunction, [pfConfigurable]));
-    DefineToStringTag(Prototype, 'AsyncFunction');
-    CurrentRealm.SetSlot(GAsyncFunctionPrototypeSlot, Prototype);
+    // The new objects are held only by these locals until the realm slot
+    // takes them, and the tag strings reserve their payloads, which can
+    // collect.
+    Roots.Initialize;
+    try
+      Prototype := TGocciaObjectValue.Create(AFunctionPrototype);
+      Roots.Add(Prototype);
+      ConstructorFunction := CreateHiddenFunctionConstructor('AsyncFunction',
+        AFunctionPrototype, Prototype, dfkAsync);
+      Roots.Add(ConstructorFunction);
+      Prototype.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(ConstructorFunction, [pfConfigurable]));
+      DefineToStringTag(Prototype, 'AsyncFunction');
+      CurrentRealm.SetSlot(GAsyncFunctionPrototypeSlot, Prototype);
+    finally
+      Roots.Clear;
+    end;
   end
   else
   begin
@@ -292,6 +303,7 @@ var
   ConstructorFunction: TGocciaFunctionConstructorClassValue;
   FunctionPrototype: TGocciaObjectValue;
   GeneratorPrototype: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if Assigned(FGeneratorFunctionPrototype) and Assigned(FGeneratorPrototype) then
     Exit;
@@ -304,26 +316,36 @@ begin
     CurrentRealm.GetSlot(GGeneratorPrototypeSlot));
   if not Assigned(FunctionPrototype) or not Assigned(GeneratorPrototype) then
   begin
-    FunctionPrototype := TGocciaObjectValue.Create(AFunctionPrototype);
-    GeneratorPrototype := TGocciaObjectValue.Create(AIteratorPrototype);
-    ConstructorFunction := CreateHiddenFunctionConstructor('GeneratorFunction',
-      AFunctionPrototype, FunctionPrototype, dfkGenerator);
+    // As in EnsureAsyncFunctionPrototype: rooted until the realm slots take
+    // them.
+    Roots.Initialize;
+    try
+      FunctionPrototype := TGocciaObjectValue.Create(AFunctionPrototype);
+      Roots.Add(FunctionPrototype);
+      GeneratorPrototype := TGocciaObjectValue.Create(AIteratorPrototype);
+      Roots.Add(GeneratorPrototype);
+      ConstructorFunction := CreateHiddenFunctionConstructor('GeneratorFunction',
+        AFunctionPrototype, FunctionPrototype, dfkGenerator);
+      Roots.Add(ConstructorFunction);
 
-    FunctionPrototype.DefineProperty(PROP_PROTOTYPE,
-      TGocciaPropertyDescriptorData.Create(GeneratorPrototype,
-        [pfConfigurable]));
-    FunctionPrototype.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(ConstructorFunction, [pfConfigurable]));
-    DefineToStringTag(FunctionPrototype, 'GeneratorFunction');
+      FunctionPrototype.DefineProperty(PROP_PROTOTYPE,
+        TGocciaPropertyDescriptorData.Create(GeneratorPrototype,
+          [pfConfigurable]));
+      FunctionPrototype.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(ConstructorFunction, [pfConfigurable]));
+      DefineToStringTag(FunctionPrototype, 'GeneratorFunction');
 
-    GeneratorPrototype.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(FunctionPrototype,
-        [pfConfigurable]));
-    EnsureGeneratorPrototypeMethods(GeneratorPrototype);
-    DefineToStringTag(GeneratorPrototype, 'Generator');
+      GeneratorPrototype.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(FunctionPrototype,
+          [pfConfigurable]));
+      EnsureGeneratorPrototypeMethods(GeneratorPrototype);
+      DefineToStringTag(GeneratorPrototype, 'Generator');
 
-    CurrentRealm.SetSlot(GGeneratorFunctionPrototypeSlot, FunctionPrototype);
-    CurrentRealm.SetSlot(GGeneratorPrototypeSlot, GeneratorPrototype);
+      CurrentRealm.SetSlot(GGeneratorFunctionPrototypeSlot, FunctionPrototype);
+      CurrentRealm.SetSlot(GGeneratorPrototypeSlot, GeneratorPrototype);
+    finally
+      Roots.Clear;
+    end;
   end
   else
   begin
@@ -343,6 +365,7 @@ var
   FunctionPrototype: TGocciaObjectValue;
   AsyncIteratorPrototype: TGocciaObjectValue;
   AsyncGeneratorPrototype: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if Assigned(FAsyncGeneratorFunctionPrototype) and
      Assigned(FAsyncGeneratorPrototype) and
@@ -361,43 +384,54 @@ begin
      not Assigned(AsyncIteratorPrototype) or
      not Assigned(AsyncGeneratorPrototype) then
   begin
-    FunctionPrototype := TGocciaObjectValue.Create(AFunctionPrototype);
-    AsyncIteratorPrototype := TGocciaObjectValue.Create(AObjectPrototype);
-    AsyncGeneratorPrototype := TGocciaObjectValue.Create(
-      AsyncIteratorPrototype);
-    ConstructorFunction := CreateHiddenFunctionConstructor('AsyncGeneratorFunction',
-      AFunctionPrototype, FunctionPrototype, dfkAsyncGenerator);
+    // As in EnsureAsyncFunctionPrototype: rooted until the realm slots take
+    // them.
+    Roots.Initialize;
+    try
+      FunctionPrototype := TGocciaObjectValue.Create(AFunctionPrototype);
+      Roots.Add(FunctionPrototype);
+      AsyncIteratorPrototype := TGocciaObjectValue.Create(AObjectPrototype);
+      Roots.Add(AsyncIteratorPrototype);
+      AsyncGeneratorPrototype := TGocciaObjectValue.Create(
+        AsyncIteratorPrototype);
+      Roots.Add(AsyncGeneratorPrototype);
+      ConstructorFunction := CreateHiddenFunctionConstructor('AsyncGeneratorFunction',
+        AFunctionPrototype, FunctionPrototype, dfkAsyncGenerator);
+      Roots.Add(ConstructorFunction);
 
-    AsyncIteratorPrototype.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownAsyncIterator,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          AsyncIteratorSelf, '[Symbol.asyncIterator]', 0),
-        [pfConfigurable, pfWritable]));
-    AsyncIteratorPrototype.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownAsyncDispose,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          AsyncIteratorAsyncDispose, '[Symbol.asyncDispose]', 0),
-        [pfConfigurable, pfWritable]));
+      AsyncIteratorPrototype.DefineSymbolProperty(
+        TGocciaSymbolValue.WellKnownAsyncIterator,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            AsyncIteratorSelf, '[Symbol.asyncIterator]', 0),
+          [pfConfigurable, pfWritable]));
+      AsyncIteratorPrototype.DefineSymbolProperty(
+        TGocciaSymbolValue.WellKnownAsyncDispose,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            AsyncIteratorAsyncDispose, '[Symbol.asyncDispose]', 0),
+          [pfConfigurable, pfWritable]));
 
-    FunctionPrototype.DefineProperty(PROP_PROTOTYPE,
-      TGocciaPropertyDescriptorData.Create(AsyncGeneratorPrototype,
-        [pfConfigurable]));
-    FunctionPrototype.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(ConstructorFunction, [pfConfigurable]));
-    DefineToStringTag(FunctionPrototype, 'AsyncGeneratorFunction');
+      FunctionPrototype.DefineProperty(PROP_PROTOTYPE,
+        TGocciaPropertyDescriptorData.Create(AsyncGeneratorPrototype,
+          [pfConfigurable]));
+      FunctionPrototype.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(ConstructorFunction, [pfConfigurable]));
+      DefineToStringTag(FunctionPrototype, 'AsyncGeneratorFunction');
 
-    AsyncGeneratorPrototype.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(FunctionPrototype,
-        [pfConfigurable]));
-    EnsureAsyncGeneratorPrototypeMethods(AsyncGeneratorPrototype);
-    DefineToStringTag(AsyncGeneratorPrototype, 'AsyncGenerator');
+      AsyncGeneratorPrototype.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(FunctionPrototype,
+          [pfConfigurable]));
+      EnsureAsyncGeneratorPrototypeMethods(AsyncGeneratorPrototype);
+      DefineToStringTag(AsyncGeneratorPrototype, 'AsyncGenerator');
 
-    CurrentRealm.SetSlot(GAsyncGeneratorFunctionPrototypeSlot,
-      FunctionPrototype);
-    CurrentRealm.SetSlot(GAsyncIteratorPrototypeSlot, AsyncIteratorPrototype);
-    CurrentRealm.SetSlot(GAsyncGeneratorPrototypeSlot, AsyncGeneratorPrototype);
+      CurrentRealm.SetSlot(GAsyncGeneratorFunctionPrototypeSlot,
+        FunctionPrototype);
+      CurrentRealm.SetSlot(GAsyncIteratorPrototypeSlot, AsyncIteratorPrototype);
+      CurrentRealm.SetSlot(GAsyncGeneratorPrototypeSlot, AsyncGeneratorPrototype);
+    finally
+      Roots.Clear;
+    end;
   end
   else
   begin

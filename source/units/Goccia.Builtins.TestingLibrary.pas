@@ -24,6 +24,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaExpectObserver = procedure(const AValue: TGocciaValue) of object;
+
   TGocciaTestAssertions = class;
   TGocciaRegisteredEntry = class;
   TGocciaTestSuite = class;
@@ -61,7 +63,7 @@ type
       const AIsSkipped: Boolean = False; const AIsFocused: Boolean = False);
     destructor Destroy; override;
     procedure AddEntry(const AEntry: TGocciaRegisteredEntry);
-    procedure AddHook(const ACallback: TGocciaFunctionBase; const APhase: TGocciaTestHookPhase);
+    procedure AddHook(const ACallback: TGocciaValue; const APhase: TGocciaTestHookPhase);
     procedure ClearRegisteredContent;
     function DisplayName: string; override;
     function GetFullName: string; override;
@@ -95,7 +97,7 @@ type
       const ATable: TGocciaValue; const ATarget: TGocciaParameterizedRegistrationTarget);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   // Expectation object that provides matchers
@@ -110,7 +112,7 @@ type
   public
     constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False;
       const AIsRejectionReason: Boolean = False);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     // Core matchers
     function ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -164,6 +166,7 @@ type
   // Main test assertions built-in
   TGocciaTestAssertions = class(TGocciaBuiltin)
   private
+    FOnExpect: TGocciaExpectObserver;
     FTestStats: record
       TotalTests: Integer;
       PassedTests: Integer;
@@ -347,6 +350,9 @@ type
     // Test execution
     function RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
+    // Optional host observation, after argument validation and before matchers.
+    property OnExpect: TGocciaExpectObserver read FOnExpect write FOnExpect;
+
     // Exposed for native Pascal unit tests. A plain getter rather
     // than a dotted field-path accessor (read FTestStats.X) so the
     // declaration stays inside lakon's supported property surface.
@@ -374,14 +380,13 @@ uses
 
   Goccia.Arithmetic,
   Goccia.Builtins.Globals,
+  Goccia.Builtins.Testing.DeepEquality,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.Evaluator,
-  Goccia.Evaluator.Comparison,
   Goccia.Execution.CallSite,
   Goccia.FetchManager,
   Goccia.FloatingPoint,
@@ -1138,7 +1143,7 @@ begin
   Entries.Add(AEntry);
 end;
 
-procedure TGocciaTestSuite.AddHook(const ACallback: TGocciaFunctionBase;
+procedure TGocciaTestSuite.AddHook(const ACallback: TGocciaValue;
   const APhase: TGocciaTestHookPhase);
 begin
   AddTempRootIfNeeded(ACallback);
@@ -1308,10 +1313,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaParameterizedRegistrationFunction.MarkReferences;
+procedure TGocciaParameterizedRegistrationFunction.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
 
   inherited;
   if Assigned(FTable) then
@@ -1327,7 +1330,7 @@ end;
   getters on the expected side before it is done reading the actual. Without
   this the value is collected mid-assertion. FTestAssertions is a builtin, not a
   collected value, so it is deliberately not marked. }
-procedure TGocciaExpectationValue.MarkReferences;
+procedure TGocciaExpectationValue.TraceReferences;
 begin
   inherited;
   if Assigned(FActualValue) then
@@ -3721,11 +3724,11 @@ procedure TGocciaTestAssertions.RegisterHook(
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, AHookName, ThrowError);
 
-  if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
+  // Any callable, a callable Proxy included: RunCallbacks dispatches it.
+  if not AArgs.GetElement(0).IsCallable then
     Goccia.Values.ErrorHelper.ThrowTypeError(Format(SErrorFunctionExpectsFunctionArg, [AHookName]), SSuggestTestUsage);
 
-  GetCurrentRegistrationSuite.AddHook(TGocciaFunctionBase(AArgs.GetElement(0)),
-    APhase);
+  GetCurrentRegistrationSuite.AddHook(AArgs.GetElement(0), APhase);
 end;
 
 function TGocciaTestAssertions.GetEachRowArguments(
@@ -4642,7 +4645,8 @@ begin
         try
         try
           HookFailed := False;
-          CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+          CallbackResult := DispatchCall(Callback, EmptyArgs,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
 
           if (TGarbageCollector.Instance <> nil) then
             TGarbageCollector.Instance.AddTempRoot(CallbackResult);
@@ -4802,6 +4806,8 @@ end;
 function TGocciaTestAssertions.Expect(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'expect', ThrowError);
+  if Assigned(FOnExpect) then
+    FOnExpect(AArgs.GetElement(0));
 
   Result := TGocciaExpectationValue.Create(AArgs.GetElement(0), Self);
 end;
@@ -5233,7 +5239,8 @@ function TGocciaTestAssertions.OnTestFinished(const AArgs: TGocciaArgumentsColle
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'onTestFinished', ThrowError);
 
-  if not (AArgs.GetElement(0) is TGocciaFunctionBase) then
+  // Any callable, a callable Proxy included: RunCallbacks dispatches it.
+  if not AArgs.GetElement(0).IsCallable then
     Goccia.Values.ErrorHelper.ThrowTypeError(SErrorOnTestFinishedExpectsFunction, SSuggestTestUsage);
 
   AddTempRootIfNeeded(AArgs.GetElement(0));
@@ -5265,10 +5272,10 @@ var
   ResultObjRoot: TGocciaTempRoot;
 begin
   { What the file's own top level left rejected is the file's failure, raised
-    like an uncaught throw before anything is collected. The interpreted
-    runner calls this after the engine's run has already drained and raised
-    it; the bytecode runner calls it from the end of the module body, where
-    the queued jobs that could still attach a handler have yet to run. }
+    like an uncaught throw before anything is collected. The test runners
+    call this after the engine's run has already drained and raised it;
+    draining here covers a call made while queued jobs that could still
+    attach a handler have yet to run. }
   DrainMicrotasksAndFetchCompletions;
   if Assigned(TGocciaMicrotaskQueue.Instance) and
      TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection(

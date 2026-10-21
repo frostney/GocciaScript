@@ -32,6 +32,7 @@ uses
   Classes,
   Generics.Collections,
   Math,
+  SysUtils,
 
   OrderedStringMap,
 
@@ -42,9 +43,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.ExecutionContext,
-  Goccia.Executor,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.Modules,
   Goccia.Modules.Loader,
@@ -81,7 +79,6 @@ type
   private
     FEngine: TGocciaEngine;
     FSource: TStringList;
-    FExecutor: TGocciaExecutor;
     FEvalHost: TGocciaShadowRealmEvalHost;
   public
     constructor Create(const AParentEngine: TGocciaEngine);
@@ -183,17 +180,11 @@ var
 begin
   inherited Create;
   FSource := TStringList.Create;
-  // Match the parent's execution mode so bytecode-mode hosts get bytecode
-  // child realms (and interpreter hosts get interpreter child realms):
-  // evaluate() and the child's eval run through the child engine's executor
+  // evaluate() and the child's eval run on the child engine
   // (TGocciaEngine.EvaluateGlobalEval).
-  if AParentEngine.Executor is TGocciaBytecodeExecutor then
-    FExecutor := TGocciaBytecodeExecutor.Create
-  else
-    FExecutor := TGocciaInterpreterExecutor.Create;
   { A child realm inherits its creator's capability set and project: it may
     never reach more of the host than the realm that created it (ADR 0122). }
-  FEngine := TGocciaEngine.Create('<shadow-realm>', FSource, FExecutor,
+  FEngine := TGocciaEngine.Create('<shadow-realm>', FSource,
     AParentEngine.Capabilities);
   FEngine.ProjectRoot := AParentEngine.ProjectRoot;
   FEngine.HostEnvironment.ConfigureAsChildOf(
@@ -269,7 +260,6 @@ begin
       RealmScope.Free;
     end;
   end;
-  FExecutor.Free;
   FSource.Free;
   FEvalHost.Free;
   inherited;
@@ -417,6 +407,37 @@ begin
   Result := Instance;
 end;
 
+{ The message of an error the eval realm threw as a script value: an early
+  error the eval checks raise as a SyntaxError object of that realm, whose
+  text is its own `message`, not the Pascal exception's (AFallback, usually
+  empty). Only the stored data property is read, so no ECMAScript code runs
+  (no getter, no proxy trap, no toString), and only the string crosses into
+  the caller realm, never the object. }
+function ThrownErrorMessage(const AValue: TGocciaValue;
+  const AFallback: string): string;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  ErrorObject: TGocciaObjectValue;
+begin
+  Result := AFallback;
+  if not (AValue is TGocciaObjectValue) then
+    Exit;
+  ErrorObject := TGocciaObjectValue(AValue);
+  if not ErrorObject.HasErrorData or
+     not InheritsGetOwnProperty(ErrorObject) then
+    Exit;
+  Descriptor := ErrorObject.GetOwnPropertyDescriptor(PROP_MESSAGE);
+  try
+    if (Descriptor is TGocciaPropertyDescriptorData) and
+       (TGocciaPropertyDescriptorData(Descriptor).Value is
+         TGocciaStringLiteralValue) then
+      Result := TGocciaStringLiteralValue(
+        TGocciaPropertyDescriptorData(Descriptor).Value).Value;
+  finally
+    ReleaseDescriptor(Descriptor);
+  end;
+end;
+
 // TC39 ShadowRealm §3.4.1 ShadowRealm.prototype.evaluate ( sourceText )
 // (delegates to PerformShadowRealmEval §3.1.3)
 function TGocciaShadowRealmHost.Evaluate(
@@ -431,6 +452,7 @@ var
   Stage: TGocciaGlobalEvalStage;
   Threw: Boolean;
   ErrorMessage: string;
+  ThrownValue: TGocciaValue;
 begin
   // PerformShadowRealmEval runs with the caller realm current. That caller
   // realm is this evaluate method's realm (FEngine) — not the ambient realm of
@@ -469,20 +491,18 @@ begin
         TGocciaStringLiteralValue(SourceValue).Value, '<shadow-realm-eval>',
         Stage);
     except
-      on E: TGocciaThrowValue do
+      on E: Exception do
       begin
+        // A guest throw carries its value (UnwrapThrownValue knows the
+        // carriers); an engine error carries its message; anything else is
+        // not the source's completion and propagates.
+        if UnwrapThrownValue(E, ThrownValue) then
+          ErrorMessage := ThrownErrorMessage(ThrownValue, E.Message)
+        else if E is TGocciaError then
+          ErrorMessage := E.Message
+        else
+          raise;
         Threw := True;
-        ErrorMessage := E.Message;
-      end;
-      on E: EGocciaBytecodeThrow do
-      begin
-        Threw := True;
-        ErrorMessage := E.Message;
-      end;
-      on E: TGocciaError do
-      begin
-        Threw := True;
-        ErrorMessage := E.Message;
       end;
     end;
 

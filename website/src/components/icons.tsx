@@ -223,12 +223,6 @@ export const MoonIcon = (p: IconProps) => (
   </Icon>
 );
 
-export const StarIcon = (p: IconProps) => (
-  <Icon {...p} fill="currentColor" sw={0}>
-    <path d="M12 3 l 2.6 5.7 l 6.2 0.6 l -4.7 4.2 l 1.4 6.1 l -5.5 -3.3 l -5.5 3.3 l 1.4 -6.1 l -4.7 -4.2 l 6.2 -0.6 z" />
-  </Icon>
-);
-
 export const GithubIcon = ({ size = 22 }: { size?: number }) => (
   <svg
     width={size}

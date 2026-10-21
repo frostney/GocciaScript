@@ -53,7 +53,7 @@ type
     function GetPropertyWithContext(const AName: string;
       const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Descriptor: TGocciaFFITypeDescriptor read FDescriptor;
     property Pointer: Pointer read FCodePointer;
     property Closed: Boolean read FClosed;
@@ -72,6 +72,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.FFI.UTF8String,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -438,7 +439,7 @@ begin
     case FSignature.ABI of
       fabiSysVX64, fabiWin64:
         HiddenResultLocation := fhrGPR0;
-      fabiAAPCS64, fabiDarwinARM64:
+      fabiAAPCS64, fabiDarwinARM64, fabiWinARM64:
         HiddenResultLocation := fhrDedicated;
       fabiI386Win:
         HiddenResultLocation := fhrStack0;
@@ -575,7 +576,7 @@ begin
       {$IF defined(GOCCIA_CPU_64)}
       Result := Pointer(NativeUInt(AState.GPR[0]))
       {$ENDIF};
-    fabiAAPCS64, fabiDarwinARM64:
+    fabiAAPCS64, fabiDarwinARM64, fabiWinARM64:
       {$IF defined(GOCCIA_CPU_64)}
       Result := AState.HiddenResult
       {$ENDIF};
@@ -723,11 +724,10 @@ begin
   Result := FFI_CALLBACK_TAG;
 end;
 
-procedure TGocciaFFICallbackValue.MarkReferences;
+procedure TGocciaFFICallbackValue.TraceReferences;
 var
   PendingThrown: TGocciaValue;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FCallable) then FCallable.MarkReferences;
   if Assigned(FCloseFunction) then FCloseFunction.MarkReferences;
@@ -748,9 +748,16 @@ begin
   TGocciaFFICallbackValue(AContext).InvokeFromNative(AState);
 end;
 
+procedure MaterializeFFICallbackPrototype;
+begin
+  FFITaggedPrototype(GFFICallbackPrototypeSlot, FFI_CALLBACK_TAG);
+end;
+
 initialization
   SetFFICallbackDispatchHook(@DispatchCallbackHook);
   GFFICallbackPrototypeSlot := RegisterRealmSlot('%FFICallback.prototype%');
+  RegisterSnapshotSlotMaterializer('%FFICallback.prototype%',
+    MaterializeFFICallbackPrototype);
 
 finalization
   SetFFICallbackDispatchHook(nil);

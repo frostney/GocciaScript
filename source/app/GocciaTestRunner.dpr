@@ -9,11 +9,14 @@ uses
   SysUtils,
 
   TimingUtils,
+  OrderedStringMap,
+  UnicodeStringList,
   CriticalSections,
 
   Goccia.Arguments.Collection,
   Goccia.Application,
   Goccia.Bytecode.Module,
+  Goccia.Bytecode.Binary,
   Goccia.CLI.Application,
   Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
@@ -25,14 +28,13 @@ uses
   Goccia.Coverage.Report,
   Goccia.Engine,
   Goccia.EngineFault,
-  Goccia.Executor.Interpreter,
-  Goccia.Executor.Bytecode,
-  Goccia.Executor,
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.NativeLimits,
+  Goccia.HeapSnapshot.RoundTrip,
   Goccia.JSON.Utils,
   Goccia.Modules.NodeResolution,
   Goccia.Modules.Resolver,
@@ -142,6 +144,7 @@ type
 
   TTestWorkerDataArray = array[0..MaxInt div SizeOf(TTestWorkerData) - 1] of TTestWorkerData;
   PTestWorkerDataArray = ^TTestWorkerDataArray;
+  TTestWorkerDataDynArray = array of TTestWorkerData;
 
   TTestFileResult = record
     TestResult: TGocciaObjectValue;
@@ -199,6 +202,13 @@ type
     FGlobalFiles: TRepeatableOption;
     FInlineGlobals: TRepeatableOption;
     FNoVitestCompat: TFlagOption;
+    FHeapSnapshots: TFlagOption;
+    FHeapSnapshotObservations: Int64;
+    FHeapSnapshotObjects: Int64;
+    FHeapSnapshotPassed: Int64;
+    FHeapSnapshotRefused: Int64;
+    FHeapSnapshotFailed: Int64;
+    FHeapSnapshotRefusals: TOrderedStringMap<Int64>;
     { Stop signal of the parallel run currently in flight, or nil. Not owned —
       RunScriptsFromFilesParallel publishes it before RunAll starts any worker
       and clears it once RunAll has joined them. It exists so a worker that hits
@@ -219,6 +229,11 @@ type
       cancelling a later one, which is the mis-cancellation
       TGocciaThreadPool.RunAll guards against on its own side. }
     FActiveCancelFlag: TGocciaCancellationFlag;
+    procedure RecordHeapSnapshots(const ACheck: TGocciaHeapSnapshotRoundTrip;
+      const AFileName: string);
+    procedure PrintHeapSnapshotReport;
+    function CreateHeapSnapshotDestination(const ASourceEngine: TGocciaEngine):
+      TGocciaEngine;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
@@ -239,10 +254,8 @@ type
   private
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
-    function RunGocciaScriptInterpreted(const AFileName: string;
-      APreloadedSource: TStringList = nil): TTestFileResult;
     function RunBytecodeTestModule(const AEngine: TGocciaEngine;
-      const AModule: TGocciaCompiledModule;
+      const AModule: TGocciaBytecodeModule;
       const AFileName: string): TGocciaValue;
     function RunGocciaScriptBytecode(const AFileName: string;
       APreloadedSource: TStringList = nil): TTestFileResult;
@@ -261,29 +274,6 @@ type
       const ACompact: Boolean);
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
-
-{ Ends the process immediately, running no unit finalization and flushing
-  nothing. The abort path needs a termination that cannot run code on a heap the
-  engine has already declared untrustworthy, and cannot tear down the RTL under
-  peer worker threads that are still running; Halt does both. Declared against
-  the C runtime rather than routed through the RTL for that reason. }
-{$IFDEF WINDOWS}
-{ TerminateProcess rather than ExitProcess: ExitProcess first terminates the
-  peer threads and THEN runs DLL process-detach handlers — a detach handler
-  needing a lock a just-terminated worker held deadlocks the abort. Terminate
-  skips detach handlers entirely, which is the whole contract here. }
-function GetCurrentProcess: THandle; stdcall;
-  external 'kernel32' name 'GetCurrentProcess';
-function TerminateProcess(AProcess: THandle; AExitCode: LongWord): LongBool;
-  stdcall; external 'kernel32' name 'TerminateProcess';
-
-procedure TerminateProcessNow(AStatus: LongInt);
-begin
-  TerminateProcess(GetCurrentProcess, LongWord(AStatus));
-end;
-{$ELSE}
-procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
-{$ENDIF}
 
 var
   { Set once, by whichever thread reports the first engine-integrity fault, and
@@ -571,6 +561,8 @@ begin
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
     'Inject a single global; value is parsed as JSON or kept as a string');
+  FHeapSnapshots := AddFlag('heap-snapshots',
+    'Round-trip objects observed by expect() at file idle; runs files serially');
   FNoVitestCompat := AddFlag('no-vitest-compat',
     'Do not resolve the bare "vitest" specifier to the bundled compatibility shim');
 end;
@@ -655,12 +647,6 @@ begin
 
   if CoverageOptions.Format.Present or CoverageOptions.OutputPath.Present then
     CoverageOptions.Enabled.Apply('');
-
-  // Coverage requires bytecode mode regardless of the --mode option: the
-  // interpreter only instruments the entry file and counts statements per
-  // AST node instead of per executed line.
-  if CoverageOptions.Enabled.Present then
-    EngineOptions.Mode.Apply('bytecode');
 end;
 
 function TTestRunnerApp.IsJsonOutput: Boolean;
@@ -745,13 +731,14 @@ procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Files, RawFiles, StdinNames, TempFiles, CoverageSource: TStringList;
   DiscoveredFiles: TStringList;
-  I: Integer;
+  I, JobCount: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   MainMemoryStats: TCLIJSONMemoryStats;
   IsParallelRun: Boolean;
   StdinSource: TStringList;
   UseStdin: Boolean;
+  ResultRoots: TGocciaActiveRootFrame;
 begin
   { stdin support — match GocciaRunner and GocciaBenchmarkRunner.
     Source is read from stdin and tagged as <stdin> when either:
@@ -781,6 +768,8 @@ begin
   GTestRunnerDescribeTimeoutMs := FDescribeTimeout.ValueOr(0);
 
   Files := TStringList.Create;
+  if FHeapSnapshots.Present then
+    FHeapSnapshotRefusals := TOrderedStringMap<Int64>.Create;
   StdinSource := nil;
   try
     if UseStdin then
@@ -845,11 +834,14 @@ begin
       end;
     end;
 
+    JobCount := GetJobCount(Files.Count);
+    if FHeapSnapshots.Present then
+      JobCount := 1;
     if (not FNoProgress.Present) and (not IsJsonOutput) then
     begin
-      if GetJobCount(Files.Count) > 1 then
+      if JobCount > 1 then
         WriteLn(SysUtils.Format('Running %d files with %d workers',
-          [Files.Count, GetJobCount(Files.Count)]))
+          [Files.Count, JobCount]))
       else
         WriteLn(SysUtils.Format('Running %d files', [Files.Count]));
     end;
@@ -857,7 +849,7 @@ begin
     ResetPendingInlineSnapshots;
     try
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
-      IsParallelRun := (Files.Count > 1) and (GetJobCount(Files.Count) > 1);
+      IsParallelRun := (Files.Count > 1) and (JobCount > 1);
       if Files.Count = 1 then
       begin
         if (not FNoProgress.Present) and (not IsJsonOutput) then
@@ -869,36 +861,46 @@ begin
       end
       else if IsParallelRun then
         AggregatedResult := RunScriptsFromFilesParallel(Files,
-          GetJobCount(Files.Count))
+          JobCount)
       else
         AggregatedResult := RunScriptsFromFiles(Files);
     except
       DiscardPendingInlineSnapshots;
       raise;
     end;
+    // The aggregated result is held only by this record until it is
+    // printed, while the snapshot write-back and the report allocate.
+    ResultRoots.Initialize;
     try
-      FlushPendingInlineSnapshots;
-    except
-      on E: Exception do
-      begin
-        { Host tier once more. Write-back re-reads the recorded snapshot values
-          and rewrites test sources from them, so an integrity fault here is a
-          fault over the results the run is about to report — filing it as one
-          recorded finalization failure would publish those results anyway
-          (ADR 0109). }
-        if IsEngineIntegrityFault(E) then
-          AbortRunOnIntegrityFault(INLINE_SNAPSHOT_FLUSH_SITE, E);
-        RecordSnapshotFinalizationFailure(AggregatedResult,
-          'Snapshot finalization failed: ' + E.Message);
+      ResultRoots.Add(AggregatedResult.TestResult);
+      try
+        FlushPendingInlineSnapshots;
+      except
+        on E: Exception do
+        begin
+          { Host tier once more. Write-back re-reads the recorded snapshot values
+            and rewrites test sources from them, so an integrity fault here is a
+            fault over the results the run is about to report — filing it as one
+            recorded finalization failure would publish those results anyway
+            (ADR 0109). }
+          if IsEngineIntegrityFault(E) then
+            AbortRunOnIntegrityFault(INLINE_SNAPSHOT_FLUSH_SITE, E);
+          RecordSnapshotFinalizationFailure(AggregatedResult,
+            'Snapshot finalization failed: ' + E.Message);
+        end;
       end;
+      MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+      if IsParallelRun then
+        AggregatedResult.MemoryStats := CombineCLIJSONMemoryStats(
+          MainMemoryStats, AggregatedResult.MemoryStats, True)
+      else
+        AggregatedResult.MemoryStats := MainMemoryStats;
+      PrintTestResults(AggregatedResult);
+      if FHeapSnapshots.Present then
+        PrintHeapSnapshotReport;
+    finally
+      ResultRoots.Clear;
     end;
-    MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
-    if IsParallelRun then
-      AggregatedResult.MemoryStats := CombineCLIJSONMemoryStats(
-        MainMemoryStats, AggregatedResult.MemoryStats, True)
-    else
-      AggregatedResult.MemoryStats := MainMemoryStats;
-    PrintTestResults(AggregatedResult);
 
     if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
         CoverageOptions.OutputPath.Present) and
@@ -940,10 +942,130 @@ begin
           CoverageOptions.OutputPath.ValueOr(''));
     end;
   finally
+    FreeAndNil(FHeapSnapshotRefusals);
     Files.Free;
     { StdinSource is normally consumed by RunScriptFromFile (which frees
       it). Free here only if an early exit left it dangling. }
     StdinSource.Free;
+  end;
+end;
+
+procedure TTestRunnerApp.RecordHeapSnapshots(
+  const ACheck: TGocciaHeapSnapshotRoundTrip; const AFileName: string);
+var
+  I: Integer;
+  Pair: TOrderedStringMap<Integer>.TKeyValuePair;
+  Count: Int64;
+begin
+  Inc(FHeapSnapshotObservations, ACheck.Observations);
+  Inc(FHeapSnapshotObjects, ACheck.Objects);
+  Inc(FHeapSnapshotPassed, ACheck.Passed);
+  Inc(FHeapSnapshotRefused, ACheck.Refused);
+  Inc(FHeapSnapshotFailed, ACheck.Failed);
+  for Pair in ACheck.RefusalReasons do
+    if FHeapSnapshotRefusals.TryGetValue(Pair.Key, Count) then
+      FHeapSnapshotRefusals[Pair.Key] := Count + Pair.Value
+    else
+    begin
+      CheckedNativeByteSize(Int64(FHeapSnapshotRefusals.Count) + 1,
+        SizeOf(TOrderedStringMap<Int64>.TEntry) * 4);
+      FHeapSnapshotRefusals.Add(Pair.Key, Pair.Value);
+    end;
+  for I := 0 to ACheck.FailureDetails.Count - 1 do
+    WriteLn(ErrOutput, 'Heap snapshot failure: ', AFileName, ': ',
+      ACheck.FailureDetails[I]);
+end;
+
+function TTestRunnerApp.CreateHeapSnapshotDestination(
+  const ASourceEngine: TGocciaEngine): TGocciaEngine;
+var
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaCLISourcePipelineResult;
+  Stream: TMemoryStream;
+  Writer: TGocciaBytecodeWriter;
+  Reader: TGocciaBytecodeReader;
+  Module: TGocciaBytecodeModule;
+  I: Integer;
+begin
+  Result := CreateEngine(ASourceEngine.SourcePath, ASourceEngine.SourceLines);
+  try
+    DisableRuntimeConsole(Result);
+    Result.SuppressWarnings := True;
+    Result.SourceType := ASourceEngine.SourceType;
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.Preprocessors := Result.Preprocessors;
+    Options.Compatibility := Result.Compatibility;
+    Options.LabelStatementsEnabled := Result.LabelStatementsEnabled;
+    Options.ForInLoopsEnabled := Result.ForInLoopsEnabled;
+    Options.ExperimentalJSModuleSourceEnabled :=
+      Result.ExperimentalJSModuleSourceEnabled;
+    Options.WarningUnsupportedFeatures := Result.WarningUnsupportedFeatures;
+    Options.SourceType := Result.SourceType;
+    Parsed := TGocciaCLISourcePipelineResult.Parse(ASourceEngine.SourceLines,
+      ASourceEngine.SourcePath, Options, True);
+    try
+      Result.CompileModule(Parsed.ProgramNode);
+    finally
+      Parsed.Free;
+    end;
+    // Compiler-generated private identifiers include counters and computed
+    // class keys include source-node identities, so an independent compile
+    // need not have the source module's byte identity. Retain the exact code
+    // images too, including the entry, imports and dynamically made functions.
+    // None of these images is executed in the destination engine.
+    Stream := TMemoryStream.Create;
+    try
+      for I := 0 to ASourceEngine.RetainedModuleCount - 1 do
+      begin
+        Module := ASourceEngine.RetainedModule(I);
+        if Module.TopLevel.GlobalEvalCode or Module.TopLevel.ShimCode then
+          Continue;
+        Stream.Clear;
+        Writer := TGocciaBytecodeWriter.Create(Stream);
+        try
+          Writer.WriteModule(Module);
+        finally
+          Writer.Free;
+        end;
+        Stream.Position := 0;
+        Reader := TGocciaBytecodeReader.Create(Stream);
+        try
+          Result.RetainModule(Reader.ReadModule);
+        finally
+          Reader.Free;
+        end;
+      end;
+    finally
+      Stream.Free;
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+procedure TTestRunnerApp.PrintHeapSnapshotReport;
+var
+  Pair: TOrderedStringMap<Int64>.TKeyValuePair;
+  Reasons: TUnicodeStringList;
+  Reason: string;
+begin
+  WriteLn(ErrOutput, Format('Heap snapshots: observations=%d objects=%d ' +
+    'passed=%d refused=%d failed=%d', [FHeapSnapshotObservations,
+    FHeapSnapshotObjects, FHeapSnapshotPassed, FHeapSnapshotRefused,
+    FHeapSnapshotFailed]));
+  CheckedNativeByteSize(Int64(FHeapSnapshotRefusals.Count) * 2,
+    SizeOf(UnicodeString));
+  Reasons := TUnicodeStringList.Create;
+  try
+    for Pair in FHeapSnapshotRefusals do
+      Reasons.Add(Pair.Key);
+    Reasons.Sort;
+    for Reason in Reasons do
+      WriteLn(ErrOutput, 'Heap snapshot refusal: ',
+        FHeapSnapshotRefusals[Reason], ' ', Reason);
+  finally
+    Reasons.Free;
   end;
 end;
 
@@ -1011,159 +1133,8 @@ begin
   Result := TGocciaObjectValue(ResultValue);
 end;
 
-function TTestRunnerApp.RunGocciaScriptInterpreted(const AFileName: string;
-  APreloadedSource: TStringList): TTestFileResult;
-var
-  Source: TStringList;
-  ScriptResult, FileResult: TGocciaObjectValue;
-  Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
-  EngineResult: TGocciaScriptResult;
-  GC: TGarbageCollector;
-  EngineResultRooted: Boolean;
-  ExpectedPrincipal: Int64;
-  PlainThrowDetail: string;
-begin
-  ScriptResult := CreateDefaultScriptResult;
-  GC := TGarbageCollector.Instance;
-  EngineResult.Result := nil;
-  EngineResultRooted := False;
-  ExpectedPrincipal := 0;
-  if Assigned(GC) then
-    GC.AddTempRoot(ScriptResult);
-
-  Source := nil;
-  try
-    if Assigned(APreloadedSource) then
-      Source := APreloadedSource
-    else
-    begin
-      try
-        Source := SourceRegistry.Load(AFileName);
-      except
-        on E: EStreamError do
-        begin
-          if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn('Error loading test file: ', E.Message);
-          MarkLoadError(ScriptResult, AFileName, E.Message);
-          Result := MakeEmptyTestResult(ScriptResult, E.Message);
-          Exit;
-        end;
-      end;
-    end;
-
-    try
-      Executor := TGocciaInterpreterExecutor.Create;
-      try
-        Engine := CreateEngine(AFileName, Source, Executor);
-        try
-          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
-          Engine.RegisterGlobal('__gocciaTestRunnerMode',
-            TGocciaStringLiteralValue.Create('interpreted'));
-          if FSilent.Present or GIsWorkerThread or IsJsonOutput then
-          begin
-            DisableRuntimeConsole(Engine);
-            Engine.SuppressWarnings := True;
-          end;
-          if IsJsonOutput then
-            SuppressTestReporterOutput(Engine);
-
-          StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS));
-          StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-          try
-            EngineResult := Engine.Execute;
-            EngineResult.Result := RunRegisteredTests(Engine);
-            if Assigned(GC) and Assigned(EngineResult.Result) then
-            begin
-              GC.AddTempRoot(EngineResult.Result);
-              EngineResultRooted := True;
-            end;
-          finally
-            ClearExecutionTimeout;
-            ClearInstructionLimit;
-          end;
-        finally
-          Engine.Free;
-        end;
-      finally
-        Executor.Free;
-      end;
-      Result.Timing := EngineResult;
-      Result.ErrorMessage := '';
-      FileResult := EngineResult.Result as TGocciaObjectValue;
-      MergeFileResult(ScriptResult, FileResult);
-      Result.TestResult := ScriptResult;
-    except
-      on E: Exception do
-      begin
-        { An integrity fault is not a per-file verdict, so this arm must not
-          turn it into one. Re-raise it to the runner's host tier —
-          RunScriptFromFile for a sequential run, TestWorkerProc for a parallel
-          one — which stops the whole run. See ADR 0109, "Host tier: the test
-          runner". }
-        if IsEngineIntegrityFault(E) then
-          raise;
-        if E is TGocciaError then
-        begin
-          if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal));
-          MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
-          Result := MakeEmptyTestResult(ScriptResult,
-            TGocciaError(E).GetDetailedMessage);
-          Result.HostDiagnostic :=
-            FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal);
-        end
-        else if E is TGocciaThrowValue then
-        begin
-          // Render the plain diagnostic once and reuse it for both result
-          // fields; only the console copy differs (it may be colored).
-          PlainThrowDetail := FormatThrowDetail(TGocciaThrowValue(E).Value,
-            AFileName, Source, False, ExpectedPrincipal,
-            TGocciaThrowValue(E).Suggestion);
-          if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName,
-              Source, IsColorTerminal, ExpectedPrincipal,
-              TGocciaThrowValue(E).Suggestion));
-          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
-          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
-        end
-        else if E is EGocciaBytecodeThrow then
-        begin
-          { A JS throw that escapes the bytecode VM is the same verdict as the
-            evaluator's TGocciaThrowValue and must render the same way; without
-            this arm it fell through to the bare "Fatal error:" line and lost
-            the location, code frame and suggestion. }
-          PlainThrowDetail := FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
-            AFileName, Source, False, ExpectedPrincipal,
-            EGocciaBytecodeThrow(E).Suggestion);
-          if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
-              AFileName, Source, IsColorTerminal,
-              ExpectedPrincipal,
-              EGocciaBytecodeThrow(E).Suggestion));
-          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
-          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
-        end
-        else
-        begin
-          if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn('Fatal error: ', E.Message);
-          MarkLoadError(ScriptResult, AFileName, E.Message);
-          Result := MakeEmptyTestResult(ScriptResult, E.Message);
-        end;
-      end;
-    end;
-  finally
-    if EngineResultRooted and Assigned(GC) then
-      GC.RemoveTempRoot(EngineResult.Result);
-    if Assigned(GC) then
-      GC.RemoveTempRoot(ScriptResult);
-    Source.Free;
-  end;
-end;
-
 function TTestRunnerApp.RunBytecodeTestModule(const AEngine: TGocciaEngine;
-  const AModule: TGocciaCompiledModule;
+  const AModule: TGocciaBytecodeModule;
   const AFileName: string): TGocciaValue;
 begin
   Result := AEngine.RunModuleForSourceType(AModule, AFileName);
@@ -1176,9 +1147,10 @@ var
   PipelineOptions: TGocciaSourcePipelineOptions;
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  Module: TGocciaCompiledModule;
-  Executor: TGocciaBytecodeExecutor;
+  Module: TGocciaBytecodeModule;
   Engine: TGocciaEngine;
+  HeapCheck: TGocciaHeapSnapshotRoundTrip;
+  TestingExtension: TGocciaTestingLibraryRuntimeExtension;
   ScriptResult: TGocciaObjectValue;
   ResultValue: TGocciaValue;
   GC: TGarbageCollector;
@@ -1186,10 +1158,11 @@ var
   ExpectedPrincipal: Int64;
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
-  PlainThrowDetail: string;
+  PlainThrowDetail, HeapFailure: string;
 begin
   ScriptResult := CreateDefaultScriptResult;
   ResultValue := nil;
+  HeapFailure := '';
   GC := TGarbageCollector.Instance;
   ResultValueRooted := False;
   ExpectedPrincipal := 0;
@@ -1218,95 +1191,121 @@ begin
     end;
 
     try
-      Executor := TGocciaBytecodeExecutor.Create;
+      Engine := CreateEngine(AFileName, Source);
+      HeapCheck := nil;
+      TestingExtension := nil;
       try
-        Engine := CreateEngine(AFileName, Source, Executor);
-        try
-          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
-          Engine.RegisterGlobal('__gocciaTestRunnerMode',
-            TGocciaStringLiteralValue.Create('bytecode'));
-          if FSilent.Present or GIsWorkerThread or IsJsonOutput then
-          begin
-            DisableRuntimeConsole(Engine);
-            Engine.SuppressWarnings := True;
-          end;
-          if IsJsonOutput then
-            SuppressTestReporterOutput(Engine);
+        if FHeapSnapshots.Present then
+        begin
+          HeapCheck := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+          TestingExtension := TGocciaTestingLibraryRuntimeExtension(
+            GetRuntime(Engine).FindRuntimeExtension(
+              TGocciaTestingLibraryRuntimeExtension));
+          TestingExtension.OnExpect := HeapCheck.Observe;
+        end;
+        ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
+        if FSilent.Present or GIsWorkerThread or IsJsonOutput then
+        begin
+          DisableRuntimeConsole(Engine);
+          Engine.SuppressWarnings := True;
+        end;
+        if IsJsonOutput then
+          SuppressTestReporterOutput(Engine);
 
-            LexStart := GetNanoseconds;
-            PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-            PipelineOptions.Preprocessors := Engine.Preprocessors;
-            PipelineOptions.Compatibility := Engine.Compatibility;
-            PipelineOptions.LabelStatementsEnabled :=
-              Engine.LabelStatementsEnabled;
-            PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
-            PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-              Engine.ExperimentalJSModuleSourceEnabled;
-            PipelineOptions.WarningUnsupportedFeatures :=
-              Engine.WarningUnsupportedFeatures;
-            PipelineOptions.SourceType := Engine.SourceType;
-            ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
-              PipelineOptions);
+          LexStart := GetNanoseconds;
+          PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
+          PipelineOptions.Preprocessors := Engine.Preprocessors;
+          PipelineOptions.Compatibility := Engine.Compatibility;
+          PipelineOptions.LabelStatementsEnabled :=
+            Engine.LabelStatementsEnabled;
+          PipelineOptions.ForInLoopsEnabled := Engine.ForInLoopsEnabled;
+          PipelineOptions.ExperimentalJSModuleSourceEnabled :=
+            Engine.ExperimentalJSModuleSourceEnabled;
+          PipelineOptions.WarningUnsupportedFeatures :=
+            Engine.WarningUnsupportedFeatures;
+          PipelineOptions.SourceType := Engine.SourceType;
+          ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(
+            PipelineOptions);
+          try
+            SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
+              PipelineOptions, FSilent.Present or IsJsonOutput);
+            LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
+            ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
+            SourcePipelineResult.RegisterCoverageSource(AFileName);
+
+            CompileStart := GetNanoseconds;
+            { The goal the parse settled for a detected entry (ADR 0140). }
+            Engine.SourceType := SourcePipelineResult.SourceType;
+            Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
+            CompileEnd := GetNanoseconds;
+            SourcePipelineResult.Free;
+            SourcePipelineResult := nil;
+
+            StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS));
+            StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
-              SourcePipelineResult := TGocciaCLISourcePipelineResult.Parse(Source, AFileName,
-                PipelineOptions, FSilent.Present or IsJsonOutput);
-              LexTimeNanoseconds := SourcePipelineResult.LexTimeNanoseconds;
-              ParseTimeNanoseconds := SourcePipelineResult.ParseTimeNanoseconds;
-              SourcePipelineResult.RegisterCoverageSource(AFileName);
-
-              CompileStart := GetNanoseconds;
-              Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
-              CompileEnd := GetNanoseconds;
-              SourcePipelineResult.Free;
-              SourcePipelineResult := nil;
-
-              StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS));
-              StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
-              try
-                { runTests is called once the file has run, as on the
-                  interpreted path. Called from the file's own top level, it
-                  held one frame of the call stack limit for every test. It
-                  still ends like the file's run did: what the tests leave
-                  pending runs, and a rejection they leave fails the file. }
-                RunBytecodeTestModule(Engine, Module, AFileName);
-                ResultValue := RunRegisteredTests(Engine, True);
-                if Assigned(GC) and Assigned(ResultValue) then
-                begin
-                  GC.AddTempRoot(ResultValue);
-                  ResultValueRooted := True;
-                end;
-              finally
-                ClearExecutionTimeout;
-                ClearInstructionLimit;
+              { runTests is called once the file has run. Called from
+                the file's own top level, it
+                held one frame of the call stack limit for every test. It
+                still ends like the file's run did: what the tests leave
+                pending runs, and a rejection they leave fails the file. }
+              RunBytecodeTestModule(Engine, Module, AFileName);
+              ResultValue := RunRegisteredTests(Engine, True);
+              if Assigned(GC) and Assigned(ResultValue) then
+              begin
+                GC.AddTempRoot(ResultValue);
+                ResultValueRooted := True;
               end;
             finally
-              ActiveOptionsScope.Free;
+              ClearExecutionTimeout;
+              ClearInstructionLimit;
             end;
-            ExecEnd := GetNanoseconds;
+          finally
+            ActiveOptionsScope.Free;
+          end;
+          ExecEnd := GetNanoseconds;
 
-            if ResultValue is TGocciaObjectValue then
-              MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
+          if ResultValue is TGocciaObjectValue then
+            MergeFileResult(ScriptResult, TGocciaObjectValue(ResultValue));
 
-            Result.TestResult := ScriptResult;
-            Result.Timing.Result := ResultValue;
-            Result.Timing.LexTimeNanoseconds := LexTimeNanoseconds;
-            Result.Timing.ParseTimeNanoseconds := ParseTimeNanoseconds;
-            Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
-            Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
-            Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
-            Result.Timing.FileName := AFileName;
-            Result.ErrorMessage := '';
-        finally
-          Engine.Free;
-        end;
+          if Assigned(HeapCheck) then
+          begin
+            TestingExtension.OnExpect := nil;
+            HeapCheck.Verify(CreateHeapSnapshotDestination);
+            RecordHeapSnapshots(HeapCheck, AFileName);
+            if HeapCheck.Failed > 0 then
+            begin
+              // This check runs after the tests. Preserve their counts and
+              // report one file-level error rather than a synthetic test.
+              HeapFailure := 'Heap snapshot round-trip failed';
+              ScriptResult.AssignProperty('suiteErrors',
+                TGocciaNumberLiteralValue.Create(ScriptResult.GetProperty(
+                  'suiteErrors').ToNumberLiteral.Value + 1));
+              TGocciaArrayValue(ScriptResult.GetProperty('failedTests')).Elements.Add(
+                TGocciaStringLiteralValue.Create(AFileName + ': ' + HeapFailure));
+            end;
+          end;
+
+          Result.TestResult := ScriptResult;
+          Result.Timing.Result := ResultValue;
+          Result.Timing.LexTimeNanoseconds := LexTimeNanoseconds;
+          Result.Timing.ParseTimeNanoseconds := ParseTimeNanoseconds;
+          Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
+          Result.Timing.ExecuteTimeNanoseconds := ExecEnd - CompileEnd;
+          Result.Timing.TotalTimeNanoseconds := ExecEnd - LexStart;
+          Result.Timing.FileName := AFileName;
+          Result.ErrorMessage := HeapFailure;
       finally
-        Executor.Free;
+        if Assigned(TestingExtension) then
+          TestingExtension.OnExpect := nil;
+        HeapCheck.Free;
+        Engine.Free;
       end;
     except
       on E: Exception do
       begin
-        { Same host-tier rule as the interpreted path: an integrity fault
-          unwinds past this arm rather than becoming a failed file. }
+        { Host-tier rule: an integrity fault unwinds past this arm rather
+          than becoming a failed file. }
         if IsEngineIntegrityFault(E) then
           raise;
         if E is TGocciaError then
@@ -1333,8 +1332,8 @@ begin
         end
         else if E is EGocciaBytecodeThrow then
         begin
-          { A JS throw that escapes the bytecode VM is the same verdict as the
-            evaluator's TGocciaThrowValue and must render the same way; without
+          { A JS throw that escapes the bytecode VM is the same verdict as a
+            native TGocciaThrowValue and must render the same way; without
             this arm it fell through to the bare "Fatal error:" line and lost
             the location, code frame and suggestion. }
           if (not GIsWorkerThread) and (not IsJsonOutput) then
@@ -1370,10 +1369,7 @@ end;
 function TTestRunnerApp.RunGocciaScript(const AFileName: string;
   APreloadedSource: TStringList): TTestFileResult;
 begin
-  case EngineOptions.ExecutionMode of
-    emInterpreted: Result := RunGocciaScriptInterpreted(AFileName, APreloadedSource);
-    emBytecode:    Result := RunGocciaScriptBytecode(AFileName, APreloadedSource);
-  end;
+  Result := RunGocciaScriptBytecode(AFileName, APreloadedSource);
 end;
 
 function TTestRunnerApp.RunScriptFromFile(const AFileName: string;
@@ -1587,12 +1583,6 @@ begin
   end;
   SetLength(Result.FileResults, ProcessedCount);
 
-  if Assigned(GC) then
-  begin
-    GC.RemoveTempRoot(AllTestResults);
-    GC.RemoveTempRoot(AllFailedTests);
-  end;
-
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
@@ -1601,6 +1591,14 @@ begin
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
+
+  // Released only once it is complete: the caller roots it again before it
+  // allocates.
+  if Assigned(GC) then
+  begin
+    GC.RemoveTempRoot(AllTestResults);
+    GC.RemoveTempRoot(AllFailedTests);
+  end;
 
   Result.JobCount := 1;
   Result.TestResult := AllTestResults;
@@ -1736,11 +1734,24 @@ begin
     TGarbageCollector.Instance.Collect;
 end;
 
+{ A worker the watchdog abandoned takes no further file, but it may still be
+  inside TestWorkerProc for the file it was on, which writes that file's
+  WorkerData slot when it returns. Take one more reference to the array and
+  never release it, so the block outlives that write: neither this
+  function's exit nor the program's finalization frees it. }
+procedure KeepWorkerDataAlive(const AWorkerData: TTestWorkerDataDynArray);
+var
+  Holder: Pointer;
+begin
+  Holder := nil;
+  TTestWorkerDataDynArray(Holder) := AWorkerData;
+end;
+
 function TTestRunnerApp.RunScriptsFromFilesParallel(
   const AFiles: TStringList; const AJobCount: Integer): TAggregatedTestResult;
 var
   Pool: TGocciaThreadPool;
-  WorkerData: array of TTestWorkerData;
+  WorkerData: TTestWorkerDataDynArray;
   { Synthesised results for orphaned slots.  We deliberately keep these in a
     main-thread-only array instead of writing them into WorkerData, because
     an abandoned worker that unsticks later in native code will resume
@@ -1821,7 +1832,7 @@ begin
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
     if (TGarbageCollector.Instance <> nil) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
-    // Per-worker-idle watchdog: the pool cancels if any single worker
+    // Per-worker-idle watchdog: the pool abandons any single worker that
     // sits on one file longer than this window.  2× the per-file timeout
     // gives the in-engine cooperative timeout slack to fire first; the
     // +10 s grace covers thread-runtime initialisation on the first
@@ -1853,19 +1864,20 @@ begin
     if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
 
-    { Cross-reference Pool.Results with WorkerData. Two silent-drop
-      failure modes have to be surfaced here:
+    { Cross-reference Pool.Results with WorkerData. Three kinds of slot
+      have no result of their own and have to be surfaced here:
 
-      1. Watchdog cancels mid-batch: the stuck worker does not return,
-         so other live workers keep draining the queue but mark each
-         dequeued file as 'Cancelled' in Pool.Results — without ever
-         invoking TestWorkerProc for it.  Pool.Results[I].Success is
-         False and ErrorMessage is 'Cancelled'.
+      1. Cancelled: after a cancel the workers mark each file they take as
+         'Cancelled' in Pool.Results without invoking TestWorkerProc for
+         it.
 
-      2. Stuck worker's in-progress file: the thread pool skips live
-         (unfinished) workers when collecting results, so the file the
-         stuck worker was running on never makes it into Pool.Results
-         at all — its slot stays at the default zero-initialised state
+      2. An abandoned worker's file: the watchdog gave up on the worker
+         while it was on this file, and Pool.Results carries the
+         watchdog's TIMEOUT message.  The worker may still be inside
+         TestWorkerProc for it, so its WorkerData slot is not touched.
+
+      3. Never taken: every worker was abandoned before one took this
+         file, so its Pool.Results slot is the empty default
          (Success=False, ErrorMessage='').
 
       Helper / import-only files (e.g. tests/language/modules/helpers/*)
@@ -1903,14 +1915,30 @@ begin
         Continue;
       end;
 
-      if Pool.Results[I].ErrorMessage <> '' then
+      if StartsStr('TIMEOUT', Pool.Results[I].ErrorMessage) then
+      begin
+        { The file an abandoned worker was on. That worker may still be in
+          TestWorkerProc for it and write WorkerData[I] when it returns, so
+          neither read nor write the slot: report the watchdog's TIMEOUT
+          from OrphanResults. }
+        IsOrphan[I] := True;
+        OrphanResults[I].ErrorMessage := Pool.Results[I].ErrorMessage;
+        OrphanResults[I].Failed := 1;
+        OrphanResults[I].TotalRunTests := 1;
+        SetLength(OrphanResults[I].FailedTestNames, 1);
+        OrphanResults[I].FailedTestNames[0] := AFiles[I] + ': ' +
+          OrphanResults[I].ErrorMessage;
+      end
+      else if Pool.Results[I].ErrorMessage <> '' then
       begin
         if WorkerData[I].ErrorMessage = '' then
         begin
-          { Watchdog-cancelled slot: the worker for this file never ran (a
-            peer stalled), so WorkerData[I] is still the zero-initialised
-            default and no concurrent writer touches it any more.  Safe to
-            keep the synthesis in WorkerData. }
+          { The worker finished this file and recorded a failure that
+            TestWorkerProc did not write into WorkerData[I] (an exception
+            escaped it, or the run was cancelled before the file ran).
+            Either way a worker that was not abandoned recorded it, so no
+            thread writes the slot any more and the synthesis may go into
+            WorkerData. }
           WorkerData[I].ErrorMessage := Pool.Results[I].ErrorMessage;
           WorkerData[I].Failed := 1;
           WorkerData[I].TotalRunTests := 1;
@@ -1924,14 +1952,13 @@ begin
               (WorkerData[I].Failed = 0) and
               (WorkerData[I].TotalRunTests = 0) then
       begin
-        { Stuck-worker slot: the worker is still alive in native code and
-          may eventually unstick and resume writing to WorkerData[I]
-          itself.  Park the synthesis in OrphanResults[I] so we never
-          touch the managed fields the orphan owns. }
+        { No result and no TIMEOUT: the watchdog abandoned every worker
+          before one took this file, and an abandoned worker takes no
+          further file, so it never ran. }
         IsOrphan[I] := True;
         OrphanResults[I].ErrorMessage :=
-          'Worker produced no result (likely stalled in native code and ' +
-          'was orphaned by the watchdog)';
+          'Never ran: the watchdog abandoned every worker before this ' +
+          'file was taken';
         OrphanResults[I].Failed := 1;
         OrphanResults[I].TotalRunTests := 1;
         SetLength(OrphanResults[I].FailedTestNames, 1);
@@ -1941,6 +1968,8 @@ begin
     end;
   finally
     FActiveCancelFlag := nil;
+    if Pool.AnyWorkerAbandoned then
+      KeepWorkerDataAlive(WorkerData);
     Pool.Free;
   end;
 
@@ -2059,22 +2088,17 @@ procedure TTestRunnerApp.WriteResultsJSON(const AResult: TAggregatedTestResult;
 var
   Lines: TStringList;
   TotalNanoseconds: Int64;
-  IsBytecodeMode: Boolean;
   FailedCount, I: Integer;
   ErrorInfo: TCLIJSONErrorInfo;
   Timing: TCLIJSONTiming;
 begin
-  IsBytecodeMode := EngineOptions.ExecutionMode = emBytecode;
   FailedCount := Round(AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value);
   { Suite-level errors never enter `failed` (Vitest keeps them out of the
     test counts), so `ok` and the exit code must consult them separately
     -- otherwise a file whose describe or beforeAll threw reports ok. }
   FailedCount := FailedCount +
     Round(AResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value);
-  if IsBytecodeMode then
-    TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
-  else
-    TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds;
+  TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds;
   Timing.LexTimeNanoseconds := AResult.TotalLexNanoseconds;
   Timing.ParseTimeNanoseconds := AResult.TotalParseNanoseconds;
   Timing.CompileTimeNanoseconds := AResult.TotalCompileNanoseconds;
@@ -2101,7 +2125,6 @@ begin
       ErrorInfo.Message := AResult.FinalizationError;
       Lines.Add('  "error": ' + BuildCLIErrorObjectJSON(ErrorInfo) + ',');
     end;
-    Lines.Add(Format('  "mode": "%s",', [IfThen(IsBytecodeMode, 'bytecode', 'interpreted')]));
     Lines.Add(Format('  "jobCount": %d,', [AResult.JobCount]));
     Lines.Add(Format('  "totalFiles": %d,', [Round(AResult.TestResult.GetProperty('totalTests').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "totalTests": %d,', [Round(AResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value)]));
@@ -2113,8 +2136,7 @@ begin
     Lines.Add(Format('  "durationNanoseconds": %d,', [Round(AResult.TestResult.GetProperty('duration').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "lexTimeNanoseconds": %d,', [AResult.TotalLexNanoseconds]));
     Lines.Add(Format('  "parseTimeNanoseconds": %d,', [AResult.TotalParseNanoseconds]));
-    if IsBytecodeMode then
-      Lines.Add(Format('  "compileTimeNanoseconds": %d,', [AResult.TotalCompileNanoseconds]));
+    Lines.Add(Format('  "compileTimeNanoseconds": %d,', [AResult.TotalCompileNanoseconds]));
     Lines.Add(Format('  "executeTimeNanoseconds": %d,', [AResult.TotalExecNanoseconds]));
     Lines.Add(Format('  "totalEngineNanoseconds": %d,', [TotalNanoseconds]));
     Lines.Add('  ' + BuildCLITimingJSON(Timing) + ',');
@@ -2249,7 +2271,6 @@ var
   DurationNanoseconds: Int64;
   RunCount: Double;
   PerTestNanoseconds: Int64;
-  IsBytecodeMode: Boolean;
   IsParallel: Boolean;
   CurrentOutputFile: string;
 begin
@@ -2266,7 +2287,6 @@ begin
   DurationNanoseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
   RunCount := StrToFloat(TotalRunTests);
 
-  IsBytecodeMode := EngineOptions.ExecutionMode = emBytecode;
   IsParallel := AResult.JobCount > 1;
 
   if (not FNoResults.Present) and (not IsJsonOutput) then
@@ -2284,43 +2304,23 @@ begin
       Writeln(Format('Test Results Test Duration: %s (%s/test)', [FormatDuration(DurationNanoseconds), FormatDuration(PerTestNanoseconds)]));
       if IsParallel then
       begin
-        if IsBytecodeMode then
-        begin
-          Writeln(Format('Test Results Engine Timing (cumulative): Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
-            [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
-             FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-             FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]));
-          Writeln(Format('Test Results Engine Timing (avg/worker): Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
-            [FormatDuration(AResult.TotalLexNanoseconds div AResult.JobCount),
-             FormatDuration(AResult.TotalParseNanoseconds div AResult.JobCount),
-             FormatDuration(AResult.TotalCompileNanoseconds div AResult.JobCount),
-             FormatDuration(AResult.TotalExecNanoseconds div AResult.JobCount),
-             FormatDuration((AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds) div AResult.JobCount)]));
-        end
-        else
-        begin
-          Writeln(Format('Test Results Engine Timing (cumulative): Lex: %s | Parse: %s | Execute: %s | Total: %s',
-            [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
-             FormatDuration(AResult.TotalExecNanoseconds),
-             FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
-          Writeln(Format('Test Results Engine Timing (avg/worker): Lex: %s | Parse: %s | Execute: %s | Total: %s',
-            [FormatDuration(AResult.TotalLexNanoseconds div AResult.JobCount),
-             FormatDuration(AResult.TotalParseNanoseconds div AResult.JobCount),
-             FormatDuration(AResult.TotalExecNanoseconds div AResult.JobCount),
-             FormatDuration((AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds) div AResult.JobCount)]));
-        end;
+        Writeln(Format('Test Results Engine Timing (cumulative): Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+          [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
+           FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+           FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]));
+        Writeln(Format('Test Results Engine Timing (avg/worker): Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+          [FormatDuration(AResult.TotalLexNanoseconds div AResult.JobCount),
+           FormatDuration(AResult.TotalParseNanoseconds div AResult.JobCount),
+           FormatDuration(AResult.TotalCompileNanoseconds div AResult.JobCount),
+           FormatDuration(AResult.TotalExecNanoseconds div AResult.JobCount),
+           FormatDuration((AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds) div AResult.JobCount)]));
       end
       else
       begin
-        if IsBytecodeMode then
-          Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
-            [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
-             FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-             FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]))
-        else
-          Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Execute: %s | Total: %s',
-            [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
-             FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalExecNanoseconds)]));
+        Writeln(Format('Test Results Engine Timing: Lex: %s | Parse: %s | Compile: %s | Execute: %s | Total: %s',
+          [FormatDuration(AResult.TotalLexNanoseconds), FormatDuration(AResult.TotalParseNanoseconds),
+           FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
+           FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]));
       end;
       Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
     end;

@@ -12,6 +12,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.TestSetup,
+  Goccia.ThreadPolls,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -35,8 +36,20 @@ type
     FChild: TChildManaged;
   public
     destructor Destroy; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Child: TChildManaged read FChild write FChild;
+  end;
+
+  { A node of any shape the mark-stack tests need: a chain link (one child),
+    a wide node (many), or a leaf. Counts its own sweep. }
+  TFanOutManaged = class(TGCManagedObject)
+  private
+    FChildren: array of TGCManagedObject;
+  protected
+    procedure TraceReferences; override;
+  public
+    destructor Destroy; override;
+    procedure AddChild(const AChild: TGCManagedObject);
   end;
 
   { A foreign thread releasing external bytes against the MAIN thread's
@@ -57,11 +70,26 @@ type
       const AChunkBytes: Int64; const AIterations: Integer);
   end;
 
+  { Starts, then stops, a collector of its own and records what this thread's
+    TGarbageCollector.Instance and its GThreadPolls.Collector mirror were at
+    each step. }
+  TOwnCollectorThread = class(TThread)
+  public
+    NoneAtStart: Boolean;
+    OwnAfterInitialize: TGarbageCollector;
+    MirrorAfterInitialize: Boolean;
+    OwnCountGrowth: Integer;
+    NoneAfterShutdown: Boolean;
+  protected
+    procedure Execute; override;
+  end;
+
   TTestGarbageCollector = class(TTestSuite)
   public
     procedure SetupTests; override;
 
     procedure TestCollectYoungTracesOldToYoungReferences;
+    procedure TestDestroyFreesEveryManagedObject;
     procedure TestReservationCollectsAndRetries;
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
@@ -74,13 +102,25 @@ type
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
     procedure TestCrossThreadReleaseKeepsAccountingExact;
     procedure TestRegisterObjectAdvancesEveryByteCounter;
+    procedure TestValueRefusedByTheLimitIsReclaimedOnce;
+    procedure TestEachThreadHasItsOwnCollector;
     procedure TestHeapTriggerKeepsGarbageNearTheCeiling;
     procedure TestHeapTriggerBacksOffAboveSurvivors;
     procedure TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
+    procedure TestHeapGrowthTriggersUnderAFarCeiling;
+    procedure TestHeapGrowthTriggerDoesNotRepeatOverRetainedHeap;
+    procedure TestNativeGrowthSamplesTheHeap;
     procedure TestNonCollectingChargeNeverCollectsOrLatches;
+    procedure TestTrackedTriggerBacksOffAboveSurvivors;
+    procedure TestTrackedTriggerReturnsAfterTrackedBytesAreReleased;
+    procedure TestDeepChainMarksWithoutNativeRecursion;
+    procedure TestMarkReferencesOutsideCollectionTracesWholeGraph;
+    procedure TestFullMarkStackRescansAndLosesNoMark;
+    procedure TestOverflowTracesObjectsTheRescanCannotFind;
   end;
 
 var
+  GFanOutDestructorCount: Integer;
   GParentDestructorCount: Integer;
   GChildDestructorCount: Integer;
   GCountedValueDestructorCount: Integer;
@@ -103,10 +143,29 @@ begin
   inherited;
 end;
 
-procedure TParentManaged.MarkReferences;
+destructor TFanOutManaged.Destroy;
 begin
-  if GCMarked then
-    Exit;
+  Inc(GFanOutDestructorCount);
+  inherited;
+end;
+
+procedure TFanOutManaged.AddChild(const AChild: TGCManagedObject);
+begin
+  SetLength(FChildren, Length(FChildren) + 1);
+  FChildren[High(FChildren)] := AChild;
+end;
+
+procedure TFanOutManaged.TraceReferences;
+var
+  I: Integer;
+begin
+  inherited;
+  for I := 0 to High(FChildren) do
+    FChildren[I].MarkReferences;
+end;
+
+procedure TParentManaged.TraceReferences;
+begin
   inherited;
   if Assigned(FChild) then
     FChild.MarkReferences;
@@ -130,10 +189,32 @@ begin
     FCollector.ReleaseExternalBytes(FChunkBytes);
 end;
 
+procedure TOwnCollectorThread.Execute;
+var
+  Before: Integer;
+begin
+  NoneAtStart := (TGarbageCollector.Instance = nil) and
+    (GThreadPolls.Collector = nil);
+  TGarbageCollector.Initialize;
+  try
+    OwnAfterInitialize := TGarbageCollector.Instance;
+    MirrorAfterInitialize := GThreadPolls.Collector = Pointer(OwnAfterInitialize);
+    Before := OwnAfterInitialize.ManagedObjectCount;
+    TGocciaNumberLiteralValue.Create(1.5);
+    OwnCountGrowth := OwnAfterInitialize.ManagedObjectCount - Before;
+  finally
+    TGarbageCollector.Shutdown;
+  end;
+  NoneAfterShutdown := (TGarbageCollector.Instance = nil) and
+    (GThreadPolls.Collector = nil);
+end;
+
 procedure TTestGarbageCollector.SetupTests;
 begin
   Test('CollectYoung traces references from old rooted objects',
     TestCollectYoungTracesOldToYoungReferences);
+  Test('Destroying a collector frees every object it still manages',
+    TestDestroyFreesEveryManagedObject);
   Test('External reservation collects and retries',
     TestReservationCollectsAndRetries);
   Test('External reservation collects past the pressure reserve',
@@ -158,6 +239,10 @@ begin
     TestCrossThreadReleaseKeepsAccountingExact);
   Test('Registering an object advances the live, total and peak byte counters',
     TestRegisterObjectAdvancesEveryByteCounter);
+  Test('A value refused by the memory limit is reclaimed exactly once',
+    TestValueRefusedByTheLimitIsReclaimedOnce);
+  Test('Each thread allocates into its own collector, from Initialize to Shutdown',
+    TestEachThreadHasItsOwnCollector);
   { Heap-triggered collection reads the FPC heap manager's status; other
     compilers report no heap total, so the trigger is inert there. }
   {$IFDEF FPC}
@@ -167,15 +252,215 @@ begin
     TestHeapTriggerBacksOffAboveSurvivors);
   Test('The heap trigger comes back down once heap it could not reclaim is freed',
     TestHeapTriggerReturnsAfterUnownedHeapIsFreed);
+  Test('Heap growth over what the last collection left triggers a collection under a far ceiling',
+    TestHeapGrowthTriggersUnderAFarCeiling);
+  Test('The growth trigger does not repeat over heap a collection cannot reclaim',
+    TestHeapGrowthTriggerDoesNotRepeatOverRetainedHeap);
+  Test('Reported native growth samples the heap between registrations',
+    TestNativeGrowthSamplesTheHeap);
   {$ENDIF}
   Test('A non-collecting charge neither collects nor latches pressure',
     TestNonCollectingChargeNeverCollectsOrLatches);
+  Test('The tracked trigger backs off above a live set inside the reserve',
+    TestTrackedTriggerBacksOffAboveSurvivors);
+  Test('Released tracked bytes bring the tracked trigger back to the line',
+    TestTrackedTriggerReturnsAfterTrackedBytesAreReleased);
+  Test('A chain a million objects deep is marked without native recursion',
+    TestDeepChainMarksWithoutNativeRecursion);
+  Test('MarkReferences outside a collection marks the whole graph',
+    TestMarkReferencesOutsideCollectionTracesWholeGraph);
+  Test('A mark stack that cannot grow rescans and loses no mark',
+    TestFullMarkStackRescansAndLosesNoMark);
+  Test('An overflowing object the rescan cannot find is traced where it overflows',
+    TestOverflowTracesObjectsTheRescanCannotFind);
+end;
+
+function NewRegisteredNode(const AGC: TGarbageCollector): TFanOutManaged;
+begin
+  Result := TFanOutManaged.Create;
+  AGC.RegisterObject(Result);
+end;
+
+{ Builds a chain of ALength registered nodes below AParent and returns the
+  last one. }
+function AppendChain(const AGC: TGarbageCollector;
+  const AParent: TFanOutManaged; const ALength: Integer): TFanOutManaged;
+var
+  I: Integer;
+  Next: TFanOutManaged;
+begin
+  Result := AParent;
+  for I := 1 to ALength do
+  begin
+    Next := NewRegisteredNode(AGC);
+    Result.AddChild(Next);
+    Result := Next;
+  end;
+end;
+
+{ A recursive marker takes one native frame per link, so a million links
+  overflow the 8 MiB main-thread stack many times over; the collector's mark
+  stack holds one entry at a time for a chain (ADR 0147). }
+procedure TTestGarbageCollector.TestDeepChainMarksWithoutNativeRecursion;
+const
+  DEPTH = 1000000;
+var
+  GC: TGarbageCollector;
+  Head: TFanOutManaged;
+  OverflowsBefore: Integer;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GFanOutDestructorCount := 0;
+  Head := NewRegisteredNode(GC);
+  GC.AddRootObject(Head);
+  try
+    AppendChain(GC, Head, DEPTH - 1);
+    OverflowsBefore := TGarbageCollector.MarkStackOverflows;
+
+    GC.Collect;
+
+    Expect<Integer>(GFanOutDestructorCount).ToBe(0);
+    Expect<Integer>(TGarbageCollector.MarkStackOverflows)
+      .ToBe(OverflowsBefore);
+  finally
+    GC.RemoveRootObject(Head);
+  end;
+  GC.Collect;
+  Expect<Integer>(GFanOutDestructorCount).ToBe(DEPTH);
+end;
+
+procedure TTestGarbageCollector.TestMarkReferencesOutsideCollectionTracesWholeGraph;
+const
+  DEPTH = 100000;
+var
+  GC: TGarbageCollector;
+  Head, Tail: TFanOutManaged;
+begin
+  GC := TGarbageCollector.Instance;
+  Head := NewRegisteredNode(GC);
+  GC.AddRootObject(Head);
+  try
+    Tail := AppendChain(GC, Head, DEPTH - 1);
+    TGCManagedObject.AdvanceMark;
+    Expect<Boolean>(Tail.GCMarked).ToBe(False);
+
+    Head.MarkReferences;
+
+    Expect<Boolean>(Head.GCMarked).ToBe(True);
+    Expect<Boolean>(Tail.GCMarked).ToBe(True);
+    { The trace gave back what it grew the stack to. }
+    Expect<Integer>(TGarbageCollector.MarkStackCapacity).ToBe(4096);
+  finally
+    GC.RemoveRootObject(Head);
+    GC.Collect;
+  end;
+end;
+
+{ Caps the stack at 4 entries, far below what a wide node pushes, so most
+  pushes overflow. Every node below an overflowed one has children of its
+  own, so only the rescan can mark them: an overflowed object is marked but
+  untraced, and a sweep after a dropped trace would free its subgraph. }
+procedure TTestGarbageCollector.TestFullMarkStackRescansAndLosesNoMark;
+const
+  WIDTH = 200;
+  BRANCH_DEPTH = 20;
+  CHAIN_DEPTH = 50000;
+  TOTAL = 1 + WIDTH * (1 + BRANCH_DEPTH) + CHAIN_DEPTH;
+var
+  Branch: TFanOutManaged;
+  GC: TGarbageCollector;
+  I: Integer;
+  OverflowsBefore: Integer;
+  Root: TFanOutManaged;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GFanOutDestructorCount := 0;
+  Root := NewRegisteredNode(GC);
+  GC.AddRootObject(Root);
+  try
+    for I := 1 to WIDTH do
+    begin
+      Branch := NewRegisteredNode(GC);
+      Root.AddChild(Branch);
+      AppendChain(GC, Branch, BRANCH_DEPTH);
+    end;
+    AppendChain(GC, Root, CHAIN_DEPTH);
+    OverflowsBefore := TGarbageCollector.MarkStackOverflows;
+    TGarbageCollector.LimitMarkStackForTesting(4);
+    try
+      GC.Collect;
+    finally
+      TGarbageCollector.LimitMarkStackForTesting(0);
+    end;
+
+    Expect<Boolean>(TGarbageCollector.MarkStackOverflows > OverflowsBefore)
+      .ToBe(True);
+    Expect<Integer>(GFanOutDestructorCount).ToBe(0);
+  finally
+    GC.RemoveRootObject(Root);
+  end;
+  GC.Collect;
+  Expect<Integer>(GFanOutDestructorCount).ToBe(TOTAL);
+end;
+
+{ The rescan walks this thread's collector's list, so an object that list
+  does not hold (one no collector manages here, like the unregistered middle
+  nodes below, or a shared intrinsic another thread's collector manages) is
+  traced at the push that overflows instead of being left for it. Each middle
+  node holds registered nodes that have children of their own, so a middle
+  node left untraced would leave them unmarked. }
+procedure TTestGarbageCollector.TestOverflowTracesObjectsTheRescanCannotFind;
+const
+  WIDTH = 16;
+  LEAVES = 4;
+var
+  GC: TGarbageCollector;
+  I, J: Integer;
+  Leaf: TFanOutManaged;
+  Middles: array[1..WIDTH] of TFanOutManaged;
+  Root: TFanOutManaged;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GFanOutDestructorCount := 0;
+  Root := NewRegisteredNode(GC);
+  GC.AddRootObject(Root);
+  try
+    for I := 1 to WIDTH do
+    begin
+      Middles[I] := TFanOutManaged.Create;
+      Root.AddChild(Middles[I]);
+      for J := 1 to LEAVES do
+      begin
+        Leaf := NewRegisteredNode(GC);
+        Middles[I].AddChild(Leaf);
+        AppendChain(GC, Leaf, 1);
+      end;
+    end;
+    TGarbageCollector.LimitMarkStackForTesting(1);
+    try
+      GC.Collect;
+    finally
+      TGarbageCollector.LimitMarkStackForTesting(0);
+    end;
+
+    Expect<Integer>(GFanOutDestructorCount).ToBe(0);
+  finally
+    GC.RemoveRootObject(Root);
+  end;
+  GC.Collect;
+  { Root, and each leaf with its child; the middle nodes are no collector's. }
+  Expect<Integer>(GFanOutDestructorCount).ToBe(1 + WIDTH * LEAVES * 2);
+  for I := 1 to WIDTH do
+    Middles[I].Free;
 end;
 
 const
-  { Registrations between two simulated safe points. The interpreter checks
-    after every expression and the VM every 1024 instructions, so a checkpoint
-    per few dozen allocations is the realistic shape. }
+  { Registrations between two simulated safe points. The VM checks every
+    1024 instructions, so a checkpoint per few dozen allocations is the
+    realistic shape. }
   CHECKPOINT_INTERVAL = 64;
 
 { Allocates ACount unreachable objects, passing a pressure checkpoint every
@@ -337,6 +622,142 @@ begin
   end;
 end;
 
+procedure TTestGarbageCollector.TestHeapGrowthTriggersUnderAFarCeiling;
+const
+  { Far enough that the ceiling's own trigger never comes into reach. }
+  FAR_CEILING = Int64(64) * 1024 * 1024 * 1024;
+  GARBAGE_OBJECTS = 1500000;
+  SLACK = 2 * 1024 * 1024;
+var
+  GC: TGarbageCollector;
+  Growth: Int64;
+  HeapAfterCollect: Int64;
+  HeapCollectionsBefore: Integer;
+  PeakHeap: Int64;
+  PreviousMaxBytes: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := FAR_CEILING;
+  try
+    GC.Collect;
+    HeapAfterCollect := CurrentHeapBytes;
+    HeapCollectionsBefore := GC.HeapTriggeredCollections;
+
+    { Far more garbage than the growth floor. Before the growth trigger
+      nothing collected here, and the heap grew by all of it. }
+    PeakHeap := ChurnGarbage(GC, GARBAGE_OBJECTS);
+
+    Growth := HeapAfterCollect * (HEAP_GROWTH_TRIGGER_FACTOR - 1);
+    if Growth < HEAP_GROWTH_TRIGGER_MIN_BYTES then
+      Growth := HEAP_GROWTH_TRIGGER_MIN_BYTES;
+    Expect<Boolean>(GC.HeapTriggeredCollections > HeapCollectionsBefore)
+      .ToBe(True);
+    Expect<Boolean>(PeakHeap <= HeapAfterCollect + Growth + SLACK).ToBe(True);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestHeapGrowthTriggerDoesNotRepeatOverRetainedHeap;
+const
+  FAR_CEILING = Int64(64) * 1024 * 1024 * 1024;
+  { Heap the collector does not own and cannot reclaim, large enough that
+    the factor, not the floor, sets the step. }
+  RETAINED_BYTES = 48 * 1024 * 1024;
+  GARBAGE_OBJECTS = 1500000;
+  { A trigger with no record of the last collection would fire at every
+    checkpoint once the retained heap passed it: 23,437 checkpoints here.
+    The factor needs the garbage to reach several times the retained heap. }
+  MAX_HEAP_COLLECTIONS = 4;
+var
+  GC: TGarbageCollector;
+  HeapCollections, HeapCollectionsBefore: Integer;
+  PreviousMaxBytes: Int64;
+  Retained: Pointer;
+begin
+  GC := TGarbageCollector.Instance;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := FAR_CEILING;
+  GetMem(Retained, RETAINED_BYTES);
+  try
+    FillChar(Retained^, RETAINED_BYTES, 0);
+    GC.Collect;
+    HeapCollectionsBefore := GC.HeapTriggeredCollections;
+    ChurnGarbage(GC, GARBAGE_OBJECTS);
+    HeapCollections := GC.HeapTriggeredCollections - HeapCollectionsBefore;
+    { The factor still fires: zero would mean the trigger stopped working
+      over a retained heap. }
+    Expect<Boolean>(HeapCollections > 0).ToBe(True);
+    Expect<Boolean>(HeapCollections <= MAX_HEAP_COLLECTIONS).ToBe(True);
+  finally
+    FreeMem(Retained);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestNativeGrowthSamplesTheHeap;
+const
+  CEILING_ABOVE_HEAP = 16 * 1024 * 1024;
+  BLOCK_BYTES = 1024 * 1024;
+  BLOCK_COUNT = 32;
+var
+  Blocks: array[0..BLOCK_COUNT - 1] of Pointer;
+  GC: TGarbageCollector;
+  I: Integer;
+  PreviousMaxBytes: Int64;
+  Latched: Boolean;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := CurrentHeapBytes + CEILING_ABOVE_HEAP;
+  for I := 0 to BLOCK_COUNT - 1 do
+    Blocks[I] := nil;
+  Latched := False;
+  try
+    { Element storage grows the heap without registering anything: twice
+      the headroom, reported as it is allocated, and no object created. The
+      registration count alone would not sample the heap at all. }
+    for I := 0 to BLOCK_COUNT - 1 do
+    begin
+      { The gate reports a request before the store allocates it. }
+      GC.NoteNativeGrowth(BLOCK_BYTES);
+      GetMem(Blocks[I], BLOCK_BYTES);
+      FillChar(Blocks[I]^, BLOCK_BYTES, 0);
+      if GC.ExternalPressurePending then
+      begin
+        Latched := True;
+        Break;
+      end;
+    end;
+    Expect<Boolean>(Latched).ToBe(True);
+    { It latches, never collects: the checkpoint does that. }
+    Expect<Boolean>(CurrentHeapBytes <= GC.MaxBytes + BLOCK_BYTES).ToBe(True);
+  finally
+    for I := 0 to BLOCK_COUNT - 1 do
+      if Assigned(Blocks[I]) then
+        FreeMem(Blocks[I]);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+
+  { One request larger than the headroom, reported before it is allocated:
+    the sample counts it as in use, or it would see the heap from before the
+    request, reset the count, and leave the allocation unsampled. }
+  GC.MaxBytes := CurrentHeapBytes + CEILING_ABOVE_HEAP;
+  try
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(False);
+    GC.NoteNativeGrowth(2 * CEILING_ABOVE_HEAP);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(True);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
 procedure TTestGarbageCollector.TestNonCollectingChargeNeverCollectsOrLatches;
 const
   HEADROOM_BYTES = 64 * 1024;
@@ -379,6 +800,165 @@ begin
   finally
     if ChargedBytes > 0 then
       GC.ReleaseExternalBytes(ChargedBytes);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestTrackedTriggerBacksOffAboveSurvivors;
+const
+  CEILING_HEADROOM = 4 * 1024 * 1024;
+  SMALL_CHARGE = 1024;
+  GARBAGE_OBJECTS = 500;
+var
+  BaselineBytes, Ceiling, Charged, Garbage, Line, Request, Reserve,
+    Survivors, Trigger: Int64;
+  CollectionsBefore, I: Integer;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+
+  procedure Charge(const ABytes: Int64);
+  begin
+    Expect<Boolean>(GC.TryReserveExternalBytes(ABytes)).ToBe(True);
+    Inc(Charged, ABytes);
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  Charged := 0;
+  try
+    BaselineBytes := GC.BytesAllocated;
+    Ceiling := BaselineBytes + CEILING_HEADROOM;
+    GC.MaxBytes := Ceiling;
+    Reserve := GC.MemoryPressureReserve;
+    Line := Ceiling - Reserve;
+    { The live set must be able to sit below the line for the reset arm. }
+    Expect<Boolean>(Line > BaselineBytes).ToBe(True);
+
+    { External bytes are released explicitly, never by a collection, so this
+      ballast is a live set no sweep can reclaim: a quarter of the reserve
+      past the line, the shape of a script whose working set fits but sits
+      close to its ceiling. }
+    Charge(Line + Reserve div 4 - BaselineBytes);
+    GC.Collect;
+    Survivors := GC.BytesAllocated;
+    Expect<Boolean>(Survivors >= Line).ToBe(True);
+
+    { That collection could not get below the line, and nothing has been
+      allocated since, so another one could free nothing. Without the
+      back-off every checkpoint collected here (once per 1,024 VM
+      instructions) and every charged reservation latched a collection. }
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Charge(SMALL_CHARGE);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(False);
+    CollectionsBefore := GC.TotalCollections;
+    GC.CollectForMemoryPressure(nil);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore);
+
+    { Collections still follow allocation: halfway from the survivors to the
+      ceiling, the trigger fires again, and a charge that reaches it latches
+      the checkpoint's collection. }
+    Trigger := Survivors + (Ceiling - Survivors) div 2;
+    Charge(Trigger - 1 - GC.BytesAllocated);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(False);
+    Charge(1);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(True);
+    GC.CollectForMemoryPressure(nil);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore + 1);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+
+    { The back-off only delays the checkpoint. A reservation that does not
+      fit still forces a collection before it is refused, so garbage made
+      while the trigger is backed off is found and the request fits. }
+    GChildDestructorCount := 0;
+    Garbage := GC.BytesAllocated;
+    for I := 1 to GARBAGE_OBJECTS do
+      GC.RegisterObject(TChildManaged.Create);
+    Garbage := GC.BytesAllocated - Garbage;
+    Request := Ceiling - GC.BytesAllocated + Garbage div 2;
+    Charge(Request);
+    Expect<Integer>(GChildDestructorCount).ToBe(GARBAGE_OBJECTS);
+    Expect<Boolean>(GC.BytesAllocated <= Ceiling).ToBe(True);
+    { And the ceiling holds: what no collection can make room for is refused. }
+    Expect<Boolean>(GC.TryReserveExternalBytes(
+      Ceiling - GC.BytesAllocated + 1)).ToBe(False);
+    Expect<Boolean>(GC.BytesAllocated <= Ceiling).ToBe(True);
+
+    { Once a collection gets the live set back under the line, the trigger
+      is the line again: reaching it latches at once. }
+    GC.ReleaseExternalBytes(Charged);
+    Charged := 0;
+    GC.Collect;
+    Expect<Boolean>(GC.BytesAllocated < Line).ToBe(True);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Charge(Line - GC.BytesAllocated);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(True);
+  finally
+    if Charged > 0 then
+      GC.ReleaseExternalBytes(Charged);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestTrackedTriggerReturnsAfterTrackedBytesAreReleased;
+const
+  CEILING_HEADROOM = 4 * 1024 * 1024;
+var
+  BaselineBytes, Ceiling, Charged, Line, Reserve, Survivors: Int64;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+
+  procedure Charge(const ABytes: Int64);
+  begin
+    Expect<Boolean>(GC.TryReserveExternalBytes(ABytes)).ToBe(True);
+    Inc(Charged, ABytes);
+  end;
+
+  procedure Release(const ABytes: Int64);
+  begin
+    GC.ReleaseExternalBytes(ABytes);
+    Dec(Charged, ABytes);
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  Charged := 0;
+  try
+    BaselineBytes := GC.BytesAllocated;
+    Ceiling := BaselineBytes + CEILING_HEADROOM;
+    GC.MaxBytes := Ceiling;
+    Reserve := GC.MemoryPressureReserve;
+    Line := Ceiling - Reserve;
+    Expect<Boolean>(Line - Reserve div 4 > BaselineBytes).ToBe(True);
+
+    { A collection that cannot get below the line backs the trigger off. }
+    Charge(Line + Reserve div 4 - BaselineBytes);
+    GC.Collect;
+    Survivors := GC.BytesAllocated;
+    Expect<Boolean>(Survivors >= Line).ToBe(True);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+
+    { The script then releases half its ballast without a collection, and
+      grows back before any checkpoint runs. The release stays on record:
+      the trigger is the line again, not halfway from the old survivors to
+      the ceiling. }
+    Release(Survivors - (Line - Reserve div 4));
+    Expect<Boolean>(GC.BytesAllocated < Line).ToBe(True);
+    Charge(Line - 1 - GC.BytesAllocated);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(False);
+    Charge(1);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
+  finally
+    if Charged > 0 then
+      GC.ReleaseExternalBytes(Charged);
     GC.MaxBytes := PreviousMaxBytes;
     GC.Collect;
   end;
@@ -640,6 +1220,73 @@ begin
     TChildManaged.InstanceSize);
 end;
 
+// In a production build a number box's constructor has no implicit
+// exception frame, so when the limit refuses it FPC does not destroy it: it
+// must stay registered for the collector to free, and the number's refusal
+// leaves exactly one box more charged than the object's. An object's
+// constructor has the frame (and so does the number's in a development
+// build), so FPC destroys it and it must already be unregistered. Both
+// refusals charge the same RangeError besides. The final collection must
+// free everything either way.
+procedure TTestGarbageCollector.TestValueRefusedByTheLimitIsReclaimedOnce;
+var
+  GC: TGarbageCollector;
+  Baseline: Integer;
+  LiveBefore, PreviousMaxBytes, BeforeRefusals, AfterNumber,
+    AfterObject, ExpectedKept: Int64;
+
+  function Refuses(const AIsNumber: Boolean): Boolean;
+  begin
+    Result := False;
+    try
+      if AIsNumber then
+        TGocciaNumberLiteralValue.Create(1.5)
+      else
+        TGocciaObjectValue.Create(nil);
+    except
+      Result := True;
+    end;
+  end;
+
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  Baseline := GC.ManagedObjectCount;
+  LiveBefore := GC.BytesAllocated;
+  PreviousMaxBytes := GC.MaxBytes;
+  // Any allocation now exceeds the limit (zero would mean no limit).
+  GC.MaxBytes := LiveBefore + 1;
+  try
+    // A first refusal also builds what every later RangeError reuses.
+    Refuses(False);
+    BeforeRefusals := GC.BytesAllocated;
+    Expect<Boolean>(Refuses(True)).ToBe(True);
+    AfterNumber := GC.BytesAllocated;
+    Expect<Boolean>(Refuses(False)).ToBe(True);
+    AfterObject := GC.BytesAllocated;
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+
+  // Decided by the build, not by the override. In a production build an
+  // override that disagrees with the frameless constructor fails here: the box
+  // it unregisters is missing from the charge, and FPC does not free it. A
+  // development build only checks that the ledger comes back clean: FPC
+  // destroys the box there whatever the override says. The bracket and the
+  // override are keyed to the one symbol for that reason.
+  {$IFDEF GOCCIA_FRAMELESS_CONSTRUCTORS}
+  ExpectedKept := TGocciaNumberLiteralValue.InstanceSize;
+  {$ELSE}
+  ExpectedKept := 0;
+  {$ENDIF}
+  Expect<Int64>((AfterNumber - BeforeRefusals) - (AfterObject - AfterNumber))
+    .ToBe(ExpectedKept);
+
+  GC.Collect;
+  Expect<Int64>(GC.BytesAllocated).ToBe(LiveBefore);
+  Expect<Boolean>(GC.ManagedObjectCount <= Baseline).ToBe(True);
+end;
+
 procedure TTestGarbageCollector.TestReservationCollectsAndRetries;
 var
   BaselineBytes: Int64;
@@ -863,6 +1510,43 @@ begin
   end;
 end;
 
+{ #1592: a collector that goes away destroys what it still manages, roots,
+  pins and temp roots included, instead of leaking it. A thread's runtime
+  shutdown and the main thread's end of run rely on this. }
+procedure TTestGarbageCollector.TestDestroyFreesEveryManagedObject;
+var
+  GC: TGarbageCollector;
+  Parent: TParentManaged;
+  Pinned, TempRooted: TChildManaged;
+begin
+  GParentDestructorCount := 0;
+  GChildDestructorCount := 0;
+  GC := TGarbageCollector.Create;
+  try
+    Parent := TParentManaged.Create;
+    GC.RegisterObject(Parent);
+    GC.AddRootObject(Parent);
+    Parent.Child := TChildManaged.Create;
+    GC.RegisterObject(Parent.Child);
+    Pinned := TChildManaged.Create;
+    GC.RegisterObject(Pinned);
+    GC.PinObject(Pinned);
+    TempRooted := TChildManaged.Create;
+    GC.RegisterObject(TempRooted);
+    GC.AddTempRoot(TempRooted);
+
+    GC.Collect;
+    Expect<Integer>(GC.ManagedObjectCount).ToBe(4);
+    Expect<Integer>(GParentDestructorCount).ToBe(0);
+    Expect<Integer>(GChildDestructorCount).ToBe(0);
+  finally
+    GC.Free;
+  end;
+
+  Expect<Integer>(GParentDestructorCount).ToBe(1);
+  Expect<Integer>(GChildDestructorCount).ToBe(3);
+end;
+
 procedure TTestGarbageCollector.TestCollectYoungTracesOldToYoungReferences;
 var
   GC: TGarbageCollector;
@@ -952,6 +1636,37 @@ begin
   { Sweep the remaining churn garbage; the ledger must balance to the byte. }
   GC.Collect;
   Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
+end;
+
+procedure TTestGarbageCollector.TestEachThreadHasItsOwnCollector;
+var
+  MainCollector: TGarbageCollector;
+  MainCount: Integer;
+  Worker: TOwnCollectorThread;
+begin
+  MainCollector := TGarbageCollector.Instance;
+  MainCount := MainCollector.ManagedObjectCount;
+  Worker := TOwnCollectorThread.Create(True);
+  try
+    Worker.Start;
+    Worker.WaitFor;
+    Expect<Boolean>(Worker.NoneAtStart).ToBe(True);
+    Expect<Boolean>(Assigned(Worker.OwnAfterInitialize)).ToBe(True);
+    Expect<Boolean>(Worker.OwnAfterInitialize = MainCollector).ToBe(False);
+    Expect<Boolean>(Worker.MirrorAfterInitialize).ToBe(True);
+    Expect<Integer>(Worker.OwnCountGrowth).ToBe(1);
+    Expect<Boolean>(Worker.NoneAfterShutdown).ToBe(True);
+  finally
+    Worker.Free;
+  end;
+
+  // The worker's allocation, Initialize and Shutdown left this thread's
+  // collector alone, and this thread still allocates into it.
+  Expect<Boolean>(TGarbageCollector.Instance = MainCollector).ToBe(True);
+  Expect<Boolean>(GThreadPolls.Collector = Pointer(MainCollector)).ToBe(True);
+  Expect<Integer>(MainCollector.ManagedObjectCount).ToBe(MainCount);
+  TGocciaNumberLiteralValue.Create(2.5);
+  Expect<Integer>(MainCollector.ManagedObjectCount).ToBe(MainCount + 1);
 end;
 
 begin

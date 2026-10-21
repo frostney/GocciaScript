@@ -79,6 +79,8 @@ resourcestring
   SSuggestAddColonAfterCase = 'Add '':'' after the case value';
   SSuggestAddColonAfterDefault = 'Add '':'' after default';
   SSuggestArrowFunctionSyntax = 'Arrow functions use ''=> '' after the parameter list';
+  SSuggestArrowSameLine = 'Put ''=>'' on the same line as the arrow function''s parameters';
+  SSuggestYieldDelegateSameLine = 'Put ''*'' on the same line as ''yield'' to delegate with yield*';
   SSuggestNamespaceImportAs = 'Namespace imports require ''as'' and a local name (e.g., import * as name from ...)';
   SSuggestAddFromAfterImport = 'Add ''from "module-path"'' after the import';
   SSuggestAddFromAfterImportList = 'Add ''from "module-path"'' after the import list';
@@ -170,6 +172,8 @@ resourcestring
   SSuggestBigIntInvalidIndex = 'bits must be a non-negative integer';
   SSuggestNotANumber = 'this method can only be called on a Number value or Number object';
   SSuggestDecoratorFunction = 'decorators must be expressions that evaluate to a function';
+  SSuggestAddInitializerDuringDecoration = 'call context.addInitializer while the decorator is running, not after it returns';
+  SSuggestAddInitializerFunction = 'pass a function to context.addInitializer';
   SSuggestDisposable = 'the value must have a [Symbol.dispose] method to be used with ''using''';
   SSuggestNotFunctionType = 'the value is not callable — only functions can be invoked';
   SSuggestNotConstructorType = 'only classes and constructor functions can be used with ''new''';
@@ -322,6 +326,7 @@ resourcestring
 
   // Runtime errors — TextDecoder/TextEncoder
   SSuggestTextDecoderThisType = 'TextDecoder methods must be called on a TextDecoder instance';
+  SSuggestTextDecoderDecodeInput = 'pass an ArrayBuffer, SharedArrayBuffer, typed array or DataView';
   SSuggestTextEncoderThisType = 'TextEncoder methods must be called on a TextEncoder instance';
 
   // Runtime errors — SharedArrayBuffer
@@ -382,6 +387,9 @@ resourcestring
   SSuggestMemoryLimitExceeded = 'call Goccia.gc() to free unreachable objects, or increase the limit with --max-memory';
   SSuggestStackMemoryLimitExceeded = 'the call stack reached the memory limit; bound the recursion, or increase the limit with --max-memory';
 
+  // Syntax errors — nesting limit
+  SSuggestNestingLimitExceeded = 'Move deeply nested parts, or part of a long operator or call chain, into separate variables or functions';
+
   // Runtime errors — structuredClone
   SSuggestStructuredClone = 'only plain objects, arrays, primitives, and built-in types can be cloned';
 
@@ -393,6 +401,10 @@ resourcestring
 
   // Runtime errors — TextEncoder
   SSuggestTextEncoderEncodeIntoArgs = 'encodeInto requires a string source and a Uint8Array destination';
+  SSuggestTextEncoderEncodeIntoImmutable = 'an immutable ArrayBuffer cannot be written; encode into a Uint8Array over a mutable buffer';
+
+  // Runtime errors — Web IDL buffer sources
+  SSuggestBufferSourceNotFixedLength = 'Copy the bytes into a fixed-length buffer first: buffer.slice() for a buffer, new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice() for a view';
 
   // Runtime errors — read-only property
   SSuggestReadOnlyProperty = 'the property is read-only and cannot be assigned to';

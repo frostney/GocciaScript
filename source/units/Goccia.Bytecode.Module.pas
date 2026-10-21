@@ -6,7 +6,8 @@ interface
 
 uses
   Goccia.Bytecode.Chunk,
-  Goccia.Executor;
+  Goccia.Bytecode.Profile,
+  Goccia.Modules.LinkPlan;
 
 type
   TGocciaModuleBinding = record
@@ -45,7 +46,7 @@ type
     ImportName: string;
   end;
 
-  TGocciaBytecodeModule = class(TGocciaCompiledModule)
+  TGocciaBytecodeModule = class
   private
     FFormatVersion: UInt16;
     FRuntimeTag: string;
@@ -56,10 +57,19 @@ type
     FExports: array of TGocciaModuleExport;
     FExportCount: Integer;
     FHasDebugInfo: Boolean;
+    FCompileProfile: TGocciaCompileProfile;
+    FHasCompileProfile: Boolean;
+    FWasLoadedFromBytecode: Boolean;
+    FExecutionKind: TGocciaBytecodeExecutionKind;
+    FGlobalBackedTopLevel: Boolean;
+    FLinkPlan: TGocciaModuleLinkPlan;
+    procedure SetCompileProfile(const AValue: TGocciaCompileProfile);
   public
     constructor Create(const ARuntimeTag, ASourcePath: string);
     destructor Destroy; override;
 
+    procedure RelocateSourcePath(const APath: string);
+    procedure MarkLoadedFromBytecode;
     procedure AddImport(const AModulePath: string;
       const ABindings: array of TGocciaModuleBinding;
       const ALine: Integer = 0; const AColumn: Integer = 0);
@@ -77,12 +87,23 @@ type
     property ImportCount: Integer read FImportCount;
     property ExportCount: Integer read FExportCount;
     property HasDebugInfo: Boolean read FHasDebugInfo write FHasDebugInfo;
+    property CompileProfile: TGocciaCompileProfile read FCompileProfile
+      write SetCompileProfile;
+    property HasCompileProfile: Boolean read FHasCompileProfile;
+    property WasLoadedFromBytecode: Boolean read FWasLoadedFromBytecode;
+    property ExecutionKind: TGocciaBytecodeExecutionKind read FExecutionKind
+      write FExecutionKind;
+    property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
+      write FGlobalBackedTopLevel;
+    { Owned by the artifact. Non-nil only for a loader-linked module. }
+    property LinkPlan: TGocciaModuleLinkPlan read FLinkPlan write FLinkPlan;
   end;
 
 implementation
 
 uses
-  Goccia.Bytecode;
+  Goccia.Bytecode,
+  Goccia.NativeLimits;
 
 constructor TGocciaBytecodeModule.Create(const ARuntimeTag, ASourcePath: string);
 begin
@@ -98,8 +119,41 @@ end;
 
 destructor TGocciaBytecodeModule.Destroy;
 begin
+  FLinkPlan.Free;
   FTopLevel.Free;
   inherited;
+end;
+
+procedure TGocciaBytecodeModule.SetCompileProfile(
+  const AValue: TGocciaCompileProfile);
+begin
+  AValue.Validate;
+  FCompileProfile := AValue;
+  FHasCompileProfile := True;
+end;
+
+procedure TGocciaBytecodeModule.MarkLoadedFromBytecode;
+begin
+  FWasLoadedFromBytecode := True;
+end;
+
+procedure RelocateTemplateSource(const ATemplate: TGocciaFunctionTemplate;
+  const APath: string);
+var
+  I: Integer;
+begin
+  if not Assigned(ATemplate) then
+    Exit;
+  if Assigned(ATemplate.DebugInfo) then
+    ATemplate.DebugInfo.SourceFile := APath;
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    RelocateTemplateSource(ATemplate.GetFunction(I), APath);
+end;
+
+procedure TGocciaBytecodeModule.RelocateSourcePath(const APath: string);
+begin
+  FSourcePath := APath;
+  RelocateTemplateSource(FTopLevel, APath);
 end;
 
 procedure TGocciaBytecodeModule.AddImport(const AModulePath: string;
@@ -109,8 +163,13 @@ var
   I: Integer;
 begin
   if FImportCount >= Length(FImports) then
+  begin
+    CheckedNativeByteSize(Int64(FImportCount) * 2 + 4,
+      SizeOf(TGocciaModuleImport));
     SetLength(FImports, FImportCount * 2 + 4);
+  end;
   FImports[FImportCount].ModulePath := AModulePath;
+  CheckedNativeByteSize(Length(ABindings), SizeOf(TGocciaModuleBinding));
   SetLength(FImports[FImportCount].Bindings, Length(ABindings));
   for I := 0 to High(ABindings) do
     FImports[FImportCount].Bindings[I] := ABindings[I];
@@ -124,7 +183,11 @@ procedure TGocciaBytecodeModule.AddExport(const AName: string;
   const AModuleRequest, AImportName: string);
 begin
   if FExportCount >= Length(FExports) then
+  begin
+    CheckedNativeByteSize(Int64(FExportCount) * 2 + 4,
+      SizeOf(TGocciaModuleExport));
     SetLength(FExports, FExportCount * 2 + 4);
+  end;
   FExports[FExportCount].Name := AName;
   FExports[FExportCount].LocalSlot := ALocalSlot;
   FExports[FExportCount].Kind := AKind;

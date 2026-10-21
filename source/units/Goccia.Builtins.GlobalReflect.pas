@@ -219,9 +219,14 @@ begin
       ExistingDescriptor := Obj.GetOwnPropertyDescriptor(PropertyName);
   end;
 
+  // Released before ToPropertyDescriptor, which reads nothing from it: the
+  // attribute getters it runs may delete or redefine the property, freeing a
+  // stored descriptor.
+  ReleaseDescriptor(ExistingDescriptor);
+
   // Step 3: Let desc be ? ToPropertyDescriptor(Attributes)
   DescriptorObject := TGocciaObjectValue(Attrs);
-  Descriptor := ToPropertyDescriptor(DescriptorObject, ExistingDescriptor);
+  Descriptor := ToPropertyDescriptor(DescriptorObject, nil);
 
   // Step 4: Return target.[[DefineOwnProperty]](key, desc) — returns boolean.
   // Validation failures become false; abrupt completions still propagate.
@@ -312,7 +317,7 @@ end;
 function TGocciaGlobalReflect.ReflectGetOwnPropertyDescriptor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Target, PropKey: TGocciaValue;
-  Obj, DescriptorObj: TGocciaObjectValue;
+  Obj: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   PropertyName: string;
 begin
@@ -337,58 +342,13 @@ begin
   end;
 
   // Step 4: Return FromPropertyDescriptor(desc)
-  if Descriptor = nil then
-  begin
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-    Exit;
+  // FromPropertyDescriptor runs no guest code, so a caller-owned descriptor
+  // stays valid until it is released here.
+  try
+    Result := FromPropertyDescriptor(Descriptor);
+  finally
+    ReleaseDescriptor(Descriptor);
   end;
-
-  DescriptorObj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if Descriptor is TGocciaPropertyDescriptorData then
-  begin
-    if Descriptor.HasValue then
-      DescriptorObj.AssignProperty(PROP_VALUE, TGocciaPropertyDescriptorData(Descriptor).Value);
-    if Descriptor.HasWritableField then
-    begin
-      if Descriptor.Writable then
-        DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.TrueValue)
-      else
-        DescriptorObj.AssignProperty(PROP_WRITABLE, TGocciaBooleanLiteralValue.FalseValue);
-    end;
-  end
-  else if Descriptor is TGocciaPropertyDescriptorAccessor then
-  begin
-    if Descriptor.HasGet then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
-        DescriptorObj.AssignProperty(PROP_GET, TGocciaPropertyDescriptorAccessor(Descriptor).Getter)
-      else
-        DescriptorObj.AssignProperty(PROP_GET, TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-    if Descriptor.HasSet then
-    begin
-      if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
-        DescriptorObj.AssignProperty(PROP_SET, TGocciaPropertyDescriptorAccessor(Descriptor).Setter)
-      else
-        DescriptorObj.AssignProperty(PROP_SET, TGocciaUndefinedLiteralValue.UndefinedValue);
-    end;
-  end;
-  if Descriptor.HasEnumerableField then
-  begin
-    if Descriptor.Enumerable then
-      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      DescriptorObj.AssignProperty(PROP_ENUMERABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-  if Descriptor.HasConfigurableField then
-  begin
-    if Descriptor.Configurable then
-      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.TrueValue)
-    else
-      DescriptorObj.AssignProperty(PROP_CONFIGURABLE, TGocciaBooleanLiteralValue.FalseValue);
-  end;
-
-  Result := DescriptorObj;
 end;
 
 // ES2026 §28.1.7 Reflect.getPrototypeOf(target)

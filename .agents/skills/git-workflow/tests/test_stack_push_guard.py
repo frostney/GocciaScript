@@ -65,6 +65,36 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(command=command), self.assertRaises(guard.GuardError):
                 guard.validate_native_command(command, self.admission)
 
+    def test_link_accepts_several_numbers_or_admitted_branches(self):
+        for targets in [["12", "13"], ["1639", "1644", "1645", "1649", "1656"], ["7", "48", "feature/naïve-key"],
+                        ["12", "feature/naïve-key", "13"]]:
+            with self.subTest(targets=targets):
+                guard.validate_native_command(["gh", "stack", "link", *targets, "--remote", "upstream"], self.admission)
+
+    def test_malformed_link_is_refused(self):
+        flagged = copy.deepcopy(self.admission)
+        flagged["refs"].append({"ref": "refs/heads/--open", "source": "c" * 40, "expected": "d" * 40})
+        numeric = copy.deepcopy(self.admission)
+        numeric["refs"] += [{"ref": "refs/heads/" + name, "source": "c" * 40, "expected": "d" * 40}
+                            for name in ("+13", "013")]
+        for targets, admission in [
+                (["12"], self.admission), (["12", "13", "12"], self.admission),
+                (["12", "feature/naïve-key", "unapproved"], self.admission),
+                (["feature/naïve-key", "12"], self.admission), (["0", "12"], self.admission),
+                (["012", "13"], self.admission), (["12", "²"], self.admission),
+                (["12", "https://github.com/github/gh-stack/pull/13"], self.admission),
+                (["12", "13", "--open"], self.admission), (["12", "13", "--base", "main"], self.admission),
+                (["12", "--open"], flagged), (["12", "1٣"], self.admission), (["12", "13x"], self.admission),
+                (["12", "+13"], numeric), (["12", "013"], numeric)]:
+            with self.subTest(targets=targets):
+                with self.assertRaises(guard.GuardError):
+                    guard.validate_native_command(["gh", "stack", "link", *targets, "--remote", "upstream"], admission)
+        for command in [["gh", "stack", "link", "12", "13"], ["gh", "stack", "link", "12", "13", "--remote", "other"],
+                        ["gh", "stack", "link", "12", "13", "--remote", "upstream", "--no-verify"],
+                        ["gh", "stack", "link", "--remote", "upstream", "12", "13"]]:
+            with self.subTest(command=command), self.assertRaises(guard.GuardError):
+                guard.validate_native_command(command, self.admission)
+
     def test_duplicate_json_and_incomplete_config_fail(self):
         with self.assertRaises(guard.GuardError):
             guard.load_json('{"remote":"origin","remote":"elsewhere"}')
@@ -204,33 +234,47 @@ class StandaloneTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((self.repo / ".git/kgr-push-guards").exists())
 
-    def run_with_native_version(self, version):
+    def run_with_native_cli(self, version_output, arguments=("submit", "--auto", "--remote", "origin"), version_exit=0):
         # Native argv routing is tested here with a tiny gh stand-in; live tests
         # separately exercise the installed official extension against GitHub.
         gh = self.root / "gh"
-        gh.write_text(f'#!/bin/sh\nif [ "$2" = "--version" ]; then printf "gh stack version {version}\\n"; exit 0; fi\nexec git push origin {shlex.quote(self.ref + ":" + self.ref)}\n')
+        gh.write_text(f'#!/bin/sh\nif [ "$2" = "--version" ]; then printf %s {shlex.quote(version_output)}; exit {version_exit}; fi\n'
+                      f'exec git push origin {shlex.quote(self.ref + ":" + self.ref)}\n')
         gh.chmod(0o755)
         return subprocess.run([sys.executable, str(self.helper), "run", "--admission", "-", "--", str(gh),
-                               "stack", "submit", "--auto", "--remote", "origin"],
+                               "stack", *arguments],
                               input=json.dumps(self.admission), capture_output=True, text=True)
 
     def test_run_cli_preserves_guard_and_child_exit_without_an_sdk(self):
-        for version in ["0.1.0", "0.1.1"]:
+        # Any gh-stack version is accepted; the behaviour was checked at 0.2.1.
+        for version in ["0.2.1", "0.3.0"]:
             with self.subTest(version=version):
                 self.git("push", "--quiet", "origin", "--delete", self.ref, check=False)
-                result = self.run_with_native_version(version)
+                result = self.run_with_native_cli(f"gh stack version {version}\n")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.git("ls-remote", "--heads", "origin", self.ref), f"{self.head}\t{self.ref}")
         receipts = list((self.repo / ".git/kgr-push-guards").glob("*/run.json"))
         self.assertEqual(len(receipts), 2)
         self.assertEqual([json.loads(r.read_text())["exitCode"] for r in receipts], [0, 0])
 
-    def test_unvalidated_native_version_runs_nothing(self):
-        for version in ["0.0.8", "0.1.2", "0.2.0"]:
-            with self.subTest(version=version):
-                result = self.run_with_native_version(version)
+    def test_run_cli_routes_a_multi_argument_link(self):
+        branch = self.ref.removeprefix("refs/heads/")
+        result = self.run_with_native_cli("gh stack version 0.2.1\n", ("link", "1639", "1644", branch, "--remote", "origin"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git("ls-remote", "--heads", "origin", self.ref), f"{self.head}\t{self.ref}")
+        receipt = json.loads(next((self.repo / ".git/kgr-push-guards").glob("*/run.json")).read_text())
+        self.assertEqual(receipt["command"][2:], ["link", "1639", "1644", branch, "--remote", "origin"])
+
+    def test_command_that_is_not_gh_stack_runs_nothing(self):
+        for output, code in [("gh version 2.83.0 (2026-10-01)\n", 0), ("gh stack version \n", 0),
+                             ("gh stack version 0.2.1\nanother line\n", 0), ("gh-stack 0.2.1\n", 0),
+                             ("", 0), ('unknown command "stack" for "gh"\n', 1)]:
+            with self.subTest(output=output, code=code):
+                self.git("push", "--quiet", "origin", "--delete", self.ref, check=False)
+                shutil.rmtree(self.repo / ".git/kgr-push-guards", ignore_errors=True)
+                result = self.run_with_native_cli(output, version_exit=code)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("has not been validated", result.stderr)
+                self.assertIn("command is not the gh-stack extension", result.stderr)
                 self.assertEqual(self.git("ls-remote", "--heads", "origin", self.ref), "")
                 self.assertFalse((self.repo / ".git/kgr-push-guards").exists())
 

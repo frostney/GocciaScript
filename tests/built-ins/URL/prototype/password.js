@@ -42,4 +42,10 @@ describe("URL.prototype.password", () => {
     url.password = "newpass";
     expect(url.href).toBe("https://user:newpass@example.com/path");
   });
+
+  test("setter percent-encodes non-ASCII as UTF-8", () => {
+    const url = new URL("https://u@example.com/");
+    url.password = "üĀ\u{1F600}";
+    expect(url.password).toBe("%C3%BC%C4%80%F0%9F%98%80");
+  });
 });
