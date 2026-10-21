@@ -421,10 +421,12 @@ size under heaptrc.
 `./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress`
 collects each distinct object passed to `expect()` and keeps it rooted until
 that file finishes. It writes each object at file idle, with accounting off,
-then restores each accepted object into its own fresh engine that compiled
-the same file without running it. The source's retained compiled modules are
-also copied through the bytecode format without execution, preserving generated
-private identifiers and code from imports and dynamically compiled functions.
+then restores each accepted object into its own fresh engine. The restore
+compiles the entry and imported module records itself, without running them,
+as [ADR 0150](adr/0150-heap-snapshots-restore-module-records-whole.md) requires.
+Only retained code without a cached module record (script entries and dynamically
+compiled functions) is copied through the bytecode format without execution,
+preserving its generated private identifiers and computed class keys.
 Objects are checked in their **final file state**, not their state at the
 assertion: writing inside `expect()` would violate the idle-frame requirement.
 

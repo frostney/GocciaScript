@@ -50,8 +50,9 @@ type
     destructor Destroy; override;
     procedure MarkRootReferences; override;
     procedure Observe(const AValue: TGocciaValue);
-    // Destination has the same runtime profile and compiled source. It must
-    // be idle, and must outlive this call. The test source is not replayed.
+    // Destination has the same runtime profile and source, with code images
+    // only for templates not restored through module records (ADR 0150).
+    // It must be idle and outlive this call. The test source is not replayed.
     procedure Verify(const ADestinationEngine: TGocciaEngine); overload;
     // Fresh destination per accepted root: repeated restores must not inherit
     // lazy built-ins materialized by an earlier restore. Owns factory results.
