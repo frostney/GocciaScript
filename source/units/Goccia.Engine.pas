@@ -130,6 +130,9 @@ type
       HasPendingWork, which says whether the idle wait has work: a timer the
       idle wait does not run is still state a snapshot would lose. }
     function HeapSnapshotRefusal: string; virtual;
+    { Materialize only the named native builtin, without guest execution or
+      host I/O. Unknown names must leave the extension unchanged. }
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); virtual;
     procedure DiscardPending; virtual;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; virtual;
@@ -436,6 +439,7 @@ type
     { ADR 0148: why a heap snapshot of the run would lose state held outside
       the heap, from every extension, or '' when none would. }
     function HeapSnapshotRefusal: string;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string);
     procedure RaiseUnhandledRejection;
     procedure ClearPendingWorkOfFailedRun(
       const AOuterRunningEngine: TGocciaEngine);
@@ -752,6 +756,11 @@ end;
 function TGocciaEngineExtension.HeapSnapshotRefusal: string;
 begin
   Result := '';
+end;
+
+procedure TGocciaEngineExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+begin
 end;
 
 procedure TGocciaEngineExtension.DiscardPending;
@@ -2481,6 +2490,26 @@ begin
       Exit;
   end;
   Result := '';
+end;
+
+procedure TGocciaEngine.MaterializeHeapSnapshotBuiltin(const AName: string);
+var
+  I: Integer;
+begin
+  // A sorted manifest can name the builtin before the global whose lazy
+  // property normally creates it. These factories contain only native setup.
+  if AName = 'Temporal' then
+    MaterializeTemporalGlobal
+  else if AName = 'Intl' then
+    MaterializeIntlGlobal
+  else if AName = CONSTRUCTOR_ATOMICS then
+    MaterializeAtomicsGlobal
+  else if AName = 'Reflect' then
+    MaterializeReflectGlobal
+  else if AName = CONSTRUCTOR_DISPOSABLE_STACK then
+    MaterializeDisposableStackGlobal;
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].MaterializeHeapSnapshotBuiltin(AName);
 end;
 
 procedure TGocciaEngine.WaitForRuntimeIdle;

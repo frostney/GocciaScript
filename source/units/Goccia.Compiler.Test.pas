@@ -150,6 +150,7 @@ type
     procedure TestDiscardedStoreSkipsResultMove;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
+    procedure TestObjectRestBytecodeRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
     procedure TestBinaryRoundTripUpvalueNames;
     procedure TestBinaryRoundTripFunctionDeclarationPosition;
@@ -311,6 +312,8 @@ begin
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
+  Test('Object rest reserves both collection operand registers',
+    TestObjectRestBytecodeRoundTrip);
   Test('Binary round-trip closed numeric self-call',
     TestBinaryRoundTripClosedNumericSelfCall);
   Test('Binary round-trip upvalue names', TestBinaryRoundTripUpvalueNames);
@@ -2236,6 +2239,55 @@ begin
   finally
     Original.Free;
     DeleteFile(TempFile);
+  end;
+end;
+
+procedure TTestCompiler.TestObjectRestBytecodeRoundTrip;
+const
+  SOURCES: array[0..2] of string = (
+    'const f = ({ a, ...rest }, b = rest) => b;',
+    'const f = ({ nested: { a, ...rest } }) => rest;',
+    'const f = (value) => { let rest; ({ a: value, ...rest } = value); ' +
+      'return rest; };');
+var
+  Original, Loaded: TGocciaBytecodeModule;
+  Stream: TMemoryStream;
+  Writer: TGocciaBytecodeWriter;
+  Reader: TGocciaBytecodeReader;
+  I: Integer;
+begin
+  for I := 0 to High(SOURCES) do
+  begin
+    Original := CompileSource(SOURCES[I]);
+    Stream := TMemoryStream.Create;
+    try
+      Expect<Boolean>(Assigned(FindFunctionWithOp(Original.TopLevel,
+        OP_COLLECTION_OP))).ToBe(True);
+      Writer := TGocciaBytecodeWriter.Create(Stream);
+      try
+        Writer.WriteModule(Original);
+      finally
+        Writer.Free;
+      end;
+      Stream.Position := 0;
+      Reader := TGocciaBytecodeReader.Create(Stream);
+      try
+        // Loading checks the OP_MOVE destination that supplies the exclusion
+        // list at the rest destination's next slot against the frame size.
+        Loaded := Reader.ReadModule;
+        try
+          Expect<Boolean>(Assigned(FindFunctionWithOp(Loaded.TopLevel,
+            OP_COLLECTION_OP))).ToBe(True);
+        finally
+          Loaded.Free;
+        end;
+      finally
+        Reader.Free;
+      end;
+    finally
+      Stream.Free;
+      Original.Free;
+    end;
   end;
 end;
 

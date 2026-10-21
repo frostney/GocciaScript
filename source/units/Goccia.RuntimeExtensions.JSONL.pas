@@ -28,6 +28,7 @@ type
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
   end;
 
@@ -55,6 +56,13 @@ begin
     FBuiltinJSONL := TGocciaJSONLBuiltin.Create('JSONL',
       Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinJSONL.BuiltinObject;
+end;
+
+procedure TGocciaJSONLRuntimeExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+begin
+  if AName = 'JSONL' then
+    MaterializeJSONL;
 end;
 
 procedure TGocciaJSONLRuntimeExtension.Detach;
