@@ -1438,7 +1438,7 @@ function DoRequest(const AMethod, AURL: string;
   const ATimeoutMilliseconds: Integer;
   const APolicy: THTTPRequestPolicy): THTTPResponse;
 var
-  Parsed: THTTPParsedURL;
+  Parsed, NextParsed: THTTPParsedURL;
   ResolvedAddress: string;
   MaxBodyBytes: Integer;
   Sock: TSocket;
@@ -1449,9 +1449,10 @@ var
   I, Redirects: Integer;
   CurrentURL, Location, HostHeader: string;
   HasUserAgent: Boolean;
+  SendCredentials: Boolean;
   IsHead: Boolean;
   Method: string;
-  HeaderName, HeaderValue: string;
+  HeaderName, HeaderNameLower, HeaderValue: string;
   DeadlineNs: Int64;
 
   function RemainingTimeoutMilliseconds: Integer;
@@ -1524,6 +1525,7 @@ begin
   else
     DeadlineNs := 0;
   CurrentURL := NormalizeHTTPRequestURL(AURL);
+  SendCredentials := True;
   Redirects := 0;
   Result.Redirected := False;
   Method := UpperCase(AMethod);
@@ -1586,7 +1588,12 @@ begin
         begin
           HeaderName := AHeaders[I].Name;
           HeaderValue := AHeaders[I].Value;
-          if LowerCase(HeaderName) = 'host' then Continue;
+          HeaderNameLower := LowerCase(HeaderName);
+          if HeaderNameLower = 'host' then Continue;
+          if not SendCredentials and
+             ((HeaderNameLower = 'authorization') or
+              (HeaderNameLower = 'cookie') or
+              (HeaderNameLower = 'proxy-authorization')) then Continue;
           RequestText := RequestText + HeaderName + ': ' +
             HeaderValue + CRLF;
         end;
@@ -1624,6 +1631,13 @@ begin
 
         // WHATWG Fetch: Location parsed against the response's URL.
         CurrentURL := ResolveHTTPRedirectURL(CurrentURL, Location);
+        NextParsed := ParseHTTPURL(CurrentURL);
+        { Fetch removes Authorization once a redirect changes origin. Keep
+          caller credentials off every later hop, even if it returns here. }
+        if not SameText(Parsed.Scheme, NextParsed.Scheme) or
+           not SameText(Parsed.Host, NextParsed.Host) or
+           (Parsed.Port <> NextParsed.Port) then
+          SendCredentials := False;
 
         // 303: change method to GET per RFC 7231
         if Raw.StatusCode = 303 then

@@ -846,6 +846,9 @@ jobs:
       - name: Check capability flags, limits, and permission defaults
         run: bun run scripts/test-cli-permissions.ts
 
+      - name: Check real fetch redirects and headers
+        run: bash scripts/fetch-e2e.sh
+
       - name: Check embedded resource CLI behaviour
         run: bun run scripts/test-cli-embedded-resources.ts
 

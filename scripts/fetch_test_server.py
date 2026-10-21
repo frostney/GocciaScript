@@ -5,6 +5,8 @@ Endpoints:
   GET  /json          — 200 {"url":"/json","method":"GET"} (application/json)
   GET  /echo-headers  — 200 {"headers":{...}} reflecting request headers
   GET  /redirect      — 302 → /json
+  GET  /redirect-headers — 302 → /echo-headers
+  GET  /redirect-host — 302 → localhost on the same port, /echo-headers
   GET  /redirect-external — 302 → http://10.255.255.1:1/json (private, off-allowlist)
   GET  /status/<code> — responds with <code> and empty body
   GET  /              — 200 "ok"
@@ -44,6 +46,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/json")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path == "/redirect-headers":
+            self.send_response(302)
+            self.send_header("Location", "/echo-headers")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path == "/redirect-host":
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                f"http://localhost:{self.server.server_address[1]}/echo-headers",
+            )
             self.send_header("Content-Length", "0")
             self.end_headers()
         elif self.path == "/redirect-external":

@@ -78,6 +78,11 @@ ChildScope := TGocciaScope.Create(ParentScope, skBlock);
 JavaScript end-to-end tests are the **primary** way of testing GocciaScript. When implementing a new feature or fixing a bug:
 
 - Add JavaScript tests under the `tests/` directory, following the existing directory structure.
+- For real-network fetch behavior that needs a live listener, use the existing
+  `scripts/fetch-e2e.sh` JavaScript runner and `scripts/fetch_test_server.py`
+  loopback fixture instead. PR CI and non-Windows main CI run this check; the
+  ordinary `tests/` suite has no server fixture. Add native HTTP client tests
+  for the shared transport boundary as well.
 - **One method per file** — each test file focuses on a single method or operation.
 - **Edge cases are co-located** — edge case tests belong in the same file as the happy-path tests.
 - Always verify changes by running the JavaScript suite:
