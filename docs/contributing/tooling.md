@@ -90,21 +90,29 @@ All four layers enforce the same rules, providing defence in depth. The typical 
 
 ### Stale FPC Build Artifacts
 
-After a branch switch, merge, PR sync, generated resource update, or unexplained
-compiler/resource failure, start with an explicit `--clean` build before
-diagnosing source code. FPC 3.2.2 can report stale compiled state as misleading
-internal compiler exceptions or resource-list errors.
+FPC 3.2.2 can report stale compiled state as misleading internal compiler
+errors or resource-list errors, for example after a branch switch, merge, PR
+sync, or generated resource update.
+
+`build.pas` retries this itself. When an FPC invocation fails and its output
+contains a stale-state symptom (`Internal error`, `Compilation raised exception
+internally`, `Error while compiling resources`, or a missing `.reslst`), it
+prints one line, `FPC reported a stale-state error for <target>; retrying once
+from a clean unit directory`, deletes the compiled units of that target's own
+unit directory (the same files `--clean` removes), and compiles that target
+once more. The retry happens at most once per compile, and an ordinary compile
+error (a real `Error:` in source without those symptoms) is never retried.
+
+If the retry also fails, `build.pas` reports the retry's output and exits
+non-zero. Only then diagnose the reported Pascal source line. A manual
+`--clean` is needed only for a failure the retry did not fix, or to clean
+every target at once:
 
 ```bash
 ./build.pas --clean loaderbare
 ./build.pas --clean testrunner
 ./build.pas --clean
 ```
-
-Treat messages such as `Compilation raised exception internally` and
-`Error while compiling resources` as "clean first, diagnose second". Only
-investigate the reported Pascal source line after the same target still fails
-from a clean build.
 
 ### Website Checks Are Inert Without Its Dependencies
 

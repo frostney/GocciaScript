@@ -14,7 +14,7 @@
 - **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked), plus the `--gc-stress` development variant
 - **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
-- **Explicit clean recovery** — `./build.pas --clean <target>` clears stale FPC artifacts before diagnosing misleading compiler/resource failures
+- **Automatic clean retry** — when FPC fails with a stale-state symptom, `build.pas` wipes that target's unit directory and retries it once; `./build.pas --clean <target>` is the explicit form when the retry also fails
 
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
 
@@ -94,7 +94,7 @@ the replacement: 0.14 renamed `GocciaScriptLoader` to `GocciaRunner` and merged
 
 Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean before selected targets.
 
-Use the explicit clean form after a branch switch, merge, PR sync, generated resource update, or unexplained FPC/resource compiler error. FPC 3.2.2 can report stale compiled state as misleading messages such as `Compilation raised exception internally` or `Error while compiling resources`; retry with `--clean` first, then diagnose the reported source line only if the same target still fails.
+FPC 3.2.2 can report stale compiled state as misleading messages such as `Internal error`, `Compilation raised exception internally` or `Error while compiling resources`. When a target's compile fails with one of those, `build.pas` prints `FPC reported a stale-state error for <target>; retrying once from a clean unit directory`, wipes only that target's unit directory and compiles it once more. An ordinary compile error is not retried. If the retry also fails, `build.pas` reports its output and exits non-zero; then run `--clean` explicitly and diagnose the reported source line only if the same target still fails.
 
 ### Compile and Run
 
