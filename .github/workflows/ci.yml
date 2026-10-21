@@ -423,6 +423,27 @@ jobs:
       - name: Run all JavaScript tests
         run: ./build/GocciaTestRunner -P tests --silent --no-progress --output=test-results.json
 
+      - name: Round-trip objects observed by the JavaScript suite
+        if: matrix.target == 'x86_64-linux'
+        timeout-minutes: 30
+        run: |
+          status=0
+          ./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress \
+            --output=heap-snapshot-test-results.json 2> heap-snapshot-roundtrip.log || status=$?
+          cat heap-snapshot-roundtrip.log
+          exit "$status"
+
+      - name: Upload heap snapshot round-trip counts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: heap-snapshot-roundtrip-${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            heap-snapshot-roundtrip.log
+            heap-snapshot-test-results.json
+
       - name: Check GocciaTestRunner CLI behaviour
         run: |
           grep -q '"totalFiles":' test-results.json
@@ -1444,6 +1465,9 @@ jobs:
 
       - name: Check CLI flags across all apps
         run: bun run scripts/test-cli.ts
+
+      - name: Check heap snapshot round-trip CLI
+        run: bun run scripts/test-cli-heap-snapshots.ts
 
       - name: Check lexer numeric separator rejection
         run: bun run scripts/test-cli-lexer.ts

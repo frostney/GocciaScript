@@ -48,21 +48,35 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
+  Goccia.ExecutionContext,
+  Goccia.FFI.Types,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.Exercise,
+  Goccia.HeapSnapshot.RoundTrip,
   Goccia.HeapSnapshot.TestSupport,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.NativeLimits,
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.CSV,
+  Goccia.RuntimeExtensions.JSON5,
+  Goccia.RuntimeExtensions.JSONL,
+  Goccia.RuntimeExtensions.TOML,
+  Goccia.RuntimeExtensions.TSV,
+  Goccia.RuntimeExtensions.YAML,
   Goccia.Scope.BindingMap,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.Timeout,
   Goccia.Values.Error,
+  Goccia.Values.FFILibrary,
+  Goccia.Values.FFIPointer,
+  Goccia.Values.FFIType,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives;
 
 const
@@ -154,6 +168,25 @@ type
   // reaches one is refused.
   TOpaqueValue = class(TGocciaObjectValue);
 
+  // A deliberately faulty codec: native state omitted by the ordinary
+  // descriptor oracle changes on restore. Only byte comparison catches it.
+  TDriftingSnapshotValue = class(TGocciaObjectValue)
+  public
+    Payload: Cardinal;
+  end;
+
+  TDriftingSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    function SchemaVersion: Word; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
   // A stream that reports more bytes than one allocation can hold on this
   // target, without holding any: the reader must refuse it from its size.
   TOversizedStream = class(TStream)
@@ -202,8 +235,11 @@ type
 
   THeapSnapshotHardeningTests = class(TTestSuite)
   private
+    FFactoryCalls: Integer;
     FPlain: TBytes;
     FVM: TBytes;
+    function CreateRoundTripDestination(const ASourceEngine: TGocciaEngine):
+      TGocciaEngine;
     function PlainSeed: TBytes;
     function VMSeed: TBytes;
     function Opaque(const AArgs: TGocciaArgumentsCollection;
@@ -242,6 +278,14 @@ type
     procedure TestGlobalEvalComputesNaN;
     procedure TestReservationPastOneAllocationRefuses;
     procedure TestInputPastOneAllocationRefuses;
+    procedure TestLateBuiltinOrderIsStable;
+    procedure TestObservedObjectsRoundTrip;
+    procedure TestRefusalReasonsKeepEquals;
+    procedure TestLateFFIPrototypesRoundTrip;
+    procedure TestLazyNativeNamespacesRestore;
+    procedure TestCanonicalDescriptionDetectsChanges;
+    procedure TestObservedRestoreRefusalFails;
+    procedure TestResnapshotDetectsPrivateStateDrift;
   public
     procedure SetupTests; override;
   end;
@@ -661,12 +705,24 @@ begin
     'it is charged', TestReservationPastOneAllocationRefuses);
   Test('An input past what one allocation can hold is refused from its ' +
     'size', TestInputPastOneAllocationRefuses);
-  // Found by these tests, outside the reader; it runs once its issue is
-  // fixed.
-  Skip('EvaluateGlobalEval called directly computes NaN',
-    TestGlobalEvalComputesNaN,
-    'GocciaScript #1817: EvaluateGlobalEval does not set the ' +
-    'floating-point mode');
+  Test('Late builtin manifests have stable order across materialization orders',
+    TestLateBuiltinOrderIsStable);
+  Test('Observed objects round-trip at idle, retain identity and count refusals',
+    TestObservedObjectsRoundTrip);
+  Test('Refusal reasons retain equals signs and distinct property names',
+    TestRefusalReasonsKeepEquals);
+  Test('late FFI prototypes restore without native state codecs',
+    TestLateFFIPrototypesRoundTrip);
+  Test('Lazy native namespaces restore in a fresh runtime without imports',
+    TestLazyNativeNamespacesRestore);
+  Test('The native description detects graph changes without calling getters',
+    TestCanonicalDescriptionDetectsChanges);
+  Test('A refusal after writing is a round-trip failure, not a skipped object',
+    TestObservedRestoreRefusalFails);
+  Test('Re-snapshot bytes detect private codec state lost at restore',
+    TestResnapshotDetectsPrivateStateDrift);
+  Test('EvaluateGlobalEval called directly computes NaN',
+    TestGlobalEvalComputesNaN);
 end;
 
 function THeapSnapshotHardeningTests.PlainSeed: TBytes;
@@ -1582,6 +1638,430 @@ begin
   end;
 end;
 
+function TDriftingSnapshotCodec.Tag: string;
+begin
+  Result := 'test.drifting';
+end;
+
+function TDriftingSnapshotCodec.SchemaVersion: Word;
+begin
+  Result := 1;
+end;
+
+procedure TDriftingSnapshotCodec.Write(const AWriter: TGocciaHeapSnapshotWriter;
+  const AObject: TGCManagedObject);
+begin
+  AWriter.WriteU32(TDriftingSnapshotValue(AObject).Payload);
+end;
+
+function TDriftingSnapshotCodec.Allocate(const AReader: TGocciaHeapSnapshotReader):
+  TGCManagedObject;
+begin
+  Result := TDriftingSnapshotValue.Create;
+end;
+
+procedure TDriftingSnapshotCodec.Fill(const AReader: TGocciaHeapSnapshotReader;
+  const AObject: TGCManagedObject);
+begin
+  TDriftingSnapshotValue(AObject).Payload := AReader.ReadU32 xor 1;
+end;
+
+procedure THeapSnapshotHardeningTests.TestLateBuiltinOrderIsStable;
+var
+  First, Second: TGocciaHeapSnapshotBuiltinTable;
+  A, Z: TGocciaObjectValue;
+  Left, Right: TMemoryStream;
+  Writer: TGocciaHeapSnapshotWriter;
+begin
+  First := TGocciaHeapSnapshotBuiltinTable.Create;
+  Second := TGocciaHeapSnapshotBuiltinTable.Create;
+  Left := TMemoryStream.Create;
+  Right := TMemoryStream.Create;
+  try
+    First.RecordFingerprints;
+    Second.RecordFingerprints;
+    A := TGocciaObjectValue.Create;
+    Z := TGocciaObjectValue.Create;
+    First.Add(A, 'a');
+    First.Add(Z, 'z');
+    Second.Add(Z, 'z');
+    Second.Add(A, 'a');
+    Writer := TGocciaHeapSnapshotWriter.Create(First);
+    try
+      Writer.Serialize([nil], Left);
+    finally
+      Writer.Free;
+    end;
+    Writer := TGocciaHeapSnapshotWriter.Create(Second);
+    try
+      Writer.Serialize([nil], Right);
+    finally
+      Writer.Free;
+    end;
+    Expect<Int64>(Left.Size).ToBe(Right.Size);
+    Expect<Boolean>(CompareMem(Left.Memory, Right.Memory, Left.Size)).ToBe(True);
+  finally
+    Right.Free;
+    Left.Free;
+    Second.Free;
+    First.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestResnapshotDetectsPrivateStateDrift;
+var
+  Lines: TStringList;
+  Engine, Destination: TGocciaEngine;
+  Check: TGocciaHeapSnapshotRoundTrip;
+  Value: TDriftingSnapshotValue;
+begin
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+  try
+    Value := TDriftingSnapshotValue.Create;
+    Value.Payload := 42;
+    Check.Observe(Value);
+    Destination := TGocciaEngine.Create(TEST_PATH, Lines);
+    try
+      Check.Verify(Destination);
+      Expect<Integer>(Check.Passed).ToBe(0);
+      Expect<Integer>(Check.Refused).ToBe(0);
+      Expect<Integer>(Check.Failed).ToBe(1);
+      Expect<Boolean>(Pos('re-snapshot bytes differ',
+        Check.FailureDetails.Text) > 0).ToBe(True);
+    finally
+      Destination.Free;
+    end;
+  finally
+    Check.Free;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+function THeapSnapshotHardeningTests.CreateRoundTripDestination(
+  const ASourceEngine: TGocciaEngine): TGocciaEngine;
+begin
+  Inc(FFactoryCalls);
+  Result := TGocciaEngine.Create(ASourceEngine.SourcePath,
+    ASourceEngine.SourceLines);
+end;
+
+procedure THeapSnapshotHardeningTests.TestLateFFIPrototypesRoundTrip;
+var
+  Lines: TStringList;
+  Engine: TGocciaEngine;
+  Context: TGocciaExecutionContextScope;
+  Check: TGocciaHeapSnapshotRoundTrip;
+  Descriptor, ArrayDescriptor: TGocciaFFITypeDescriptor;
+  Root, Value: TGocciaObjectValue;
+begin
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+  try
+    Context := Engine.ActivateRealmExecutionContext;
+    try
+      Root := TGocciaObjectValue.Create;
+      Check.Observe(Root);
+      // Creating these native values builds their shared prototypes after
+      // the session baseline. No library is loaded and no address is read.
+      Value := TGocciaFFILibraryValue.Create(nil);
+      Check.Observe(Value);
+      Root.AssignProperty('library', Value.Prototype);
+      Root.AssignProperty('nullptr', TGocciaFFIPointerValue.NullPointer);
+      Value := TGocciaFFIPointerValue.Create(Pointer(1));
+      Check.Observe(Value);
+      Root.AssignProperty('pointer', Value.Prototype);
+      Descriptor := TGocciaFFITypeDescriptor.CreateScalar(fftI32);
+      try
+        Value := TGocciaFFITypeDescriptorValue.Create(Descriptor);
+        Check.Observe(Value);
+        Root.AssignProperty('type', Value.Prototype);
+        ArrayDescriptor := TGocciaFFITypeDescriptor.CreateArray(Descriptor, 1);
+        try
+          Value := TGocciaFFIAggregateValue.Create(ArrayDescriptor);
+          Check.Observe(Value);
+          Root.AssignProperty('aggregate', Value.Prototype);
+        finally
+          ArrayDescriptor.ReleaseReference;
+        end;
+      finally
+        Descriptor.ReleaseReference;
+      end;
+      Value := TGocciaFFIVarArgsValue.Create([], []);
+      Check.Observe(Value);
+      Root.AssignProperty('varargs', Value.Prototype);
+    finally
+      Context.Free;
+    end;
+    Check.Verify(CreateRoundTripDestination);
+    Expect<string>(Check.FailureDetails.Text).ToBe('');
+    Expect<Integer>(Check.Passed).ToBe(1);
+    // Rebuilding ordinary prototypes must not grant codecs to native state.
+    Expect<Integer>(Check.Refused).ToBe(5);
+    Expect<Integer>(Check.Failed).ToBe(0);
+  finally
+    Check.Free;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestRefusalReasonsKeepEquals;
+const
+  KEYS: array[0..2] of string = ('a=b', 'a:b', 'a=b');
+var
+  Lines: TStringList;
+  Engine: TGocciaEngine;
+  Context: TGocciaExecutionContextScope;
+  Check: TGocciaHeapSnapshotRoundTrip;
+  Value: TGocciaObjectValue;
+  I: Integer;
+begin
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+  try
+    Context := Engine.ActivateRealmExecutionContext;
+    try
+      for I := 0 to High(KEYS) do
+      begin
+        Value := TGocciaObjectValue.Create;
+        Check.Observe(Value);
+        Value.DefineProperty(KEYS[I],
+          TGocciaLazyPropertyDescriptorData.Create(nil, [pfConfigurable]));
+      end;
+    finally
+      Context.Free;
+    end;
+    FFactoryCalls := 0;
+    Check.Verify(CreateRoundTripDestination);
+    Expect<string>(Check.FailureDetails.Text).ToBe('');
+    Expect<Integer>(Check.Passed).ToBe(0);
+    Expect<Integer>(Check.Refused).ToBe(3);
+    Expect<Integer>(Check.Failed).ToBe(0);
+    Expect<Integer>(Check.RefusalReasons.Count).ToBe(2);
+    Expect<Integer>(Check.RefusalReasons[
+      'an unmaterialized lazy property "a=b"']).ToBe(2);
+    Expect<Integer>(Check.RefusalReasons[
+      'an unmaterialized lazy property "a:b"']).ToBe(1);
+    Expect<Integer>(FFactoryCalls).ToBe(0);
+  finally
+    Check.Free;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestObservedObjectsRoundTrip;
+var
+  Lines: TStringList;
+  Engine: TGocciaEngine;
+  Check: TGocciaHeapSnapshotRoundTrip;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+begin
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+  try
+    Value := Engine.EvaluateGlobalEval('(() => { const shared = { x: 1 }; ' +
+      'const root = { a: shared, b: shared, list: [1, , undefined, -0], ' +
+      '[Symbol("key")]: shared, frozen: Object.freeze({ x: 2 }) }; ' +
+      'root.self = root; return root; })()', TEST_PATH, Stage);
+    Check.Observe(Value);
+    Check.Observe(Value);
+    // Matcher cleanup removes its temporary root after expect returns.
+    // The observation must have independent ownership across that removal.
+    TGarbageCollector.Instance.AddTempRoot(Value);
+    TGarbageCollector.Instance.RemoveTempRoot(Value);
+    Check.Observe(TGocciaNumberLiteralValue.Create(1));
+    // The checker holds references until idle: later mutations must survive.
+    TGocciaObjectValue(Value).AssignProperty('later',
+      TGocciaNumberLiteralValue.Create(42));
+    Check.Observe(Engine.EvaluateGlobalEval('Reflect.apply(Array, null, ' +
+      '[1, 2, 3])', TEST_PATH, Stage));
+    Check.Observe(Engine.EvaluateGlobalEval('new Map()', TEST_PATH, Stage));
+    TGarbageCollector.Instance.Collect;
+    FFactoryCalls := 0;
+    Check.Verify(CreateRoundTripDestination);
+    Expect<Integer>(Check.Objects).ToBe(3);
+    Expect<Integer>(Check.Passed).ToBe(2);
+    Expect<Integer>(Check.Refused).ToBe(1);
+    Expect<Integer>(Check.Failed).ToBe(0);
+    Expect<Integer>(Check.RefusalReasons.Count).ToBe(1);
+    Expect<Integer>(FFactoryCalls).ToBe(2);
+  finally
+    Check.Free;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestCanonicalDescriptionDetectsChanges;
+const
+  ORIGINALS: array[0..3] of string = (
+    '(() => { const shared = {}; return { a: shared, b: shared }; })()',
+    '[, undefined]',
+    'Object.defineProperty({}, "x", { value: 1, writable: false })',
+    '({ x: -0 })');
+  CHANGED_SOURCES: array[0..3] of string = (
+    '({ a: {}, b: {} })',
+    '[undefined, undefined]',
+    'Object.defineProperty({}, "x", { value: 1, writable: true })',
+    '({ x: 0 })');
+var
+  Lines: TStringList;
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Stage: TGocciaGlobalEvalStage;
+  I: Integer;
+  Original, Changed, Repeated: string;
+  Value: TGocciaValue;
+begin
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Session := TGocciaHeapSnapshotSession.Create(Engine);
+  try
+    for I := Low(ORIGINALS) to High(ORIGINALS) do
+    begin
+      Value := Engine.EvaluateGlobalEval(ORIGINALS[I], TEST_PATH, Stage);
+      Original := CanonicalDescription(Value, Session.Table);
+      Value := Engine.EvaluateGlobalEval(CHANGED_SOURCES[I], TEST_PATH, Stage);
+      Changed := CanonicalDescription(Value, Session.Table);
+      Value := Engine.EvaluateGlobalEval(ORIGINALS[I], TEST_PATH, Stage);
+      Repeated := CanonicalDescription(Value, Session.Table);
+      Expect<Boolean>(Original <> Changed).ToBe(True);
+      Expect<string>(Repeated).ToBe(Original);
+    end;
+    Value := Engine.EvaluateGlobalEval('Object.defineProperty({}, "x", ' +
+      '{ get() { throw new Error("description called a getter"); } })',
+      TEST_PATH, Stage);
+    Expect<Boolean>(CanonicalDescription(Value, Session.Table) <> '').ToBe(True);
+  finally
+    Session.Free;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestObservedRestoreRefusalFails;
+var
+  Lines: TStringList;
+  Engine, Destination: TGocciaEngine;
+  Check: TGocciaHeapSnapshotRoundTrip;
+  Capture: TCapture;
+begin
+  Lines := TStringList.Create;
+  Lines.Text := 'capture(() => 42);';
+  Capture := TCapture.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Engine.GlobalScope.DefineLexicalBinding('capture',
+    TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
+  Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+  try
+    Engine.Execute;
+    Check.Observe(Capture.Value);
+    // No matching compiled module: a snapshot was written successfully,
+    // so the refusal at restore must fail the diagnostic lane.
+    Destination := TGocciaEngine.Create(TEST_PATH, Lines);
+    try
+      Destination.GlobalScope.DefineLexicalBinding('capture',
+        TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
+      Check.Verify(Destination);
+      Expect<Integer>(Check.Passed).ToBe(0);
+      Expect<Integer>(Check.Refused).ToBe(0);
+      Expect<Integer>(Check.Failed).ToBe(1);
+      Expect<Boolean>(Check.FailureDetails.Count > 0).ToBe(True);
+    finally
+      Destination.Free;
+    end;
+  finally
+    Check.Free;
+    if Assigned(Capture.Value) then
+      TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
+    Engine.Free;
+    Capture.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotHardeningTests.TestLazyNativeNamespacesRestore;
+
+  procedure InstallNamespaces(const AEngine: TGocciaEngine);
+  var
+    Runtime: TGocciaRuntimeCore;
+  begin
+    Runtime := AttachRuntime(AEngine);
+    Runtime.Install(TGocciaCSVRuntimeExtension.Create);
+    Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
+    Runtime.Install(TGocciaJSONLRuntimeExtension.Create);
+    Runtime.Install(TGocciaTOMLRuntimeExtension.Create);
+    Runtime.Install(TGocciaTSVRuntimeExtension.Create);
+    Runtime.Install(TGocciaYAMLRuntimeExtension.Create);
+  end;
+
+var
+  Lines: TStringList;
+  Engine, Destination: TGocciaEngine;
+  Capture: TCapture;
+  Check: TGocciaHeapSnapshotRoundTrip;
+  Table: TGocciaHeapSnapshotBuiltinTable;
+  Resolver: TGocciaBuiltinPathResolver;
+begin
+  Lines := TStringList.Create;
+  Lines.Text := 'import { parse as csv } from "goccia:csv"; ' +
+    'import { parse as json5 } from "goccia:json5"; ' +
+    'import { parse as jsonl } from "goccia:jsonl"; ' +
+    'import { parse as toml } from "goccia:toml"; ' +
+    'import { parse as tsv } from "goccia:tsv"; ' +
+    'import { parse as yaml } from "goccia:yaml"; ' +
+    'capture([csv, json5, jsonl, toml, tsv, yaml]);';
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Capture := TCapture.Create;
+  InstallNamespaces(Engine);
+  Engine.GlobalScope.DefineLexicalBinding('capture',
+    TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
+  Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+  try
+    Engine.Execute;
+    Check.Observe(Capture.Value);
+    Destination := TGocciaEngine.Create(TEST_PATH, Lines);
+    try
+      InstallNamespaces(Destination);
+      Destination.GlobalScope.DefineLexicalBinding('capture',
+        TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
+      // The destination never compiles or runs these imports. Native values
+      // have no bytecode templates and the registered factories do no I/O.
+      Check.Verify(Destination);
+      Expect<string>(Check.FailureDetails.Text).ToBe('');
+      Expect<Integer>(Check.Passed).ToBe(1);
+      Expect<Integer>(Check.Refused).ToBe(0);
+      Expect<Integer>(Check.Failed).ToBe(0);
+      Table := TGocciaHeapSnapshotBuiltinTable.Create;
+      Resolver := TGocciaBuiltinPathResolver.Create(Table, Destination);
+      try
+        Expect<Boolean>(Assigned(Resolver.Resolve('%builtin' +
+          HEAP_SNAPSHOT_PATH_SEPARATOR + 'unknown'))).ToBe(False);
+      finally
+        Resolver.Free;
+        Table.Free;
+      end;
+    finally
+      Destination.Free;
+    end;
+  finally
+    Check.Free;
+    if Assigned(Capture.Value) then
+      TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
+    Engine.Free;
+    Capture.Free;
+    Lines.Free;
+  end;
+end;
+
 procedure THeapSnapshotHardeningTests.TestGlobalEvalComputesNaN;
 var
   Engine: TGocciaEngine;
@@ -1613,6 +2093,7 @@ begin
 end;
 
 begin
+  RegisterSnapshotCodec(TDriftingSnapshotValue, TDriftingSnapshotCodec.Create);
   if GetEnvironmentVariable(FULL_ENVIRONMENT) = 'full' then
   begin
     DeepLinks := FULL_LINKS;

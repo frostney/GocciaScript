@@ -64,7 +64,7 @@ type
     function CoverageLine: UInt32;
     function CoverageColumn: UInt16;
 
-    property SourceFile: string read FSourceFile;
+    property SourceFile: string read FSourceFile write FSourceFile;
     property LineMapCount: Integer read FLineMapCount;
     property LocalCount: Integer read FLocalCount;
     property DeclarationLine: UInt32 read FDeclarationLine

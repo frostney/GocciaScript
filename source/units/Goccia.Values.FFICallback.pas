@@ -72,6 +72,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.FFI.UTF8String,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -747,9 +748,16 @@ begin
   TGocciaFFICallbackValue(AContext).InvokeFromNative(AState);
 end;
 
+procedure MaterializeFFICallbackPrototype;
+begin
+  FFITaggedPrototype(GFFICallbackPrototypeSlot, FFI_CALLBACK_TAG);
+end;
+
 initialization
   SetFFICallbackDispatchHook(@DispatchCallbackHook);
   GFFICallbackPrototypeSlot := RegisterRealmSlot('%FFICallback.prototype%');
+  RegisterSnapshotSlotMaterializer('%FFICallback.prototype%',
+    MaterializeFFICallbackPrototype);
 
 finalization
   SetFFICallbackDispatchHook(nil);

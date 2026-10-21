@@ -4389,7 +4389,7 @@ var
   AssignPat: TGocciaAssignmentDestructuringPattern;
   IdentPat: TGocciaIdentifierDestructuringPattern;
   Prop: TGocciaDestructuringProperty;
-  DestSlot, IdxReg, ThisReg, BaseReg, SuperReg: UInt16;
+  DestSlot, IdxReg, AdjacentReg, ThisReg, BaseReg, SuperReg: UInt16;
   PropIdx: UInt16;
   JumpIdx, I: Integer;
   HasRest: Boolean;
@@ -4453,13 +4453,15 @@ begin
           end;
         end;
         DestSlot := ACtx.Scope.AllocateRegister;
-        if IdxReg <> DestSlot + 1 then
-          EmitInstruction(ACtx, EncodeABC(OP_MOVE, DestSlot + 1, IdxReg, 0));
+        AdjacentReg := ACtx.Scope.AllocateRegister;
+        if IdxReg <> AdjacentReg then
+          EmitInstruction(ACtx, EncodeABC(OP_MOVE, AdjacentReg, IdxReg, 0));
         EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, DestSlot,
           COLLECTION_OP_OBJECT_REST, ASrcReg));
         EmitDestructuring(ACtx,
           TGocciaRestDestructuringPattern(Prop.Pattern).Argument, DestSlot,
           AAssignmentMode);
+        ACtx.Scope.FreeRegister;
         ACtx.Scope.FreeRegister;
         ACtx.Scope.FreeRegister;
         Break;

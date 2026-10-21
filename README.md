@@ -312,6 +312,10 @@ Goccia VM, and `GocciaBundler` compiles source to the public `.gbc` artifact.
 ```
 
 See [Bytecode VM](docs/bytecode-vm.md) for the compiler and VM architecture.
+Module artifacts can also satisfy imports: use `GocciaRunner
+--prefer-bytecode app.mjs` for disk companions, or register cached buffers
+through the [embedding API](docs/bytecode-loading.md). Loading
+checks that the artifact's compile profile matches the engine.
 
 ### Reproduce An Execution
 
@@ -495,7 +499,7 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 | [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
-| [Heap Snapshots](docs/heap-snapshots.md) | Writing a paused run's heap and restoring it in a fresh engine, the pause checkpoint, and writing a codec |
+| [Heap Snapshots](docs/heap-snapshots.md) | Writing and restoring heaps, the pause checkpoint, codecs, and `--heap-snapshots` test diagnostics |
 | [Module Resolution](docs/module-resolution.md) | Resolution order, opt-in `node_modules` lookup, and the deviations from Node |
 | [Provider Imports](docs/provider-imports.md) | `github:` import-map entries, `goccia.lock.json`, the `.goccia` cache, and verify on load |
 | [Virtual Module Configuration](docs/virtual-modules.md) | CLI, config-file, and embedding reference for host-supplied modules |

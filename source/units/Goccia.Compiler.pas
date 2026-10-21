@@ -14,9 +14,11 @@ uses
   Goccia.AST.Statements,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
+  Goccia.Bytecode.Profile,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Context,
-  Goccia.Compiler.Scope;
+  Goccia.Compiler.Scope,
+  Goccia.Modules.LinkPlan;
 
 type
   TGocciaCompiler = class
@@ -2134,6 +2136,15 @@ begin
     if FHideSourceText then
       ClearFunctionSourceText(FCurrentTemplate);
 
+    { The module now owns its top-level template. Metadata extraction can
+      allocate and raise, so exception cleanup must not free it twice. }
+    FCurrentTemplate := nil;
+    FModule.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+    if FGlobalBackedTopLevel and FPreinitializedTopLevelFunctions then
+    begin
+      FModule.LinkPlan := TGocciaModuleLinkPlan.CreateFromProgram(AProgram);
+      FModule.ExecutionKind := bekLinkedModule;
+    end;
     Result := FModule;
     FModule := nil;
     FCurrentTemplate := nil;

@@ -14,6 +14,7 @@ uses
 
   Goccia.AST.Node,
   Goccia.AST.Statements,
+  Goccia.Bytecode.Module,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Diagnostics.SourceRegistry,
@@ -61,7 +62,14 @@ type
   TGocciaRuntimeModuleLoader = function(const AResolvedPath,
     ASpecifier: string; const AReadContent: TGocciaModuleContentReader;
     out AModule: TGocciaModule): Boolean of object;
+  TGocciaModuleBytecodeReader = function(const ABytes: TBytes):
+    TGocciaBytecodeModule of object;
+  TGocciaModuleBytecodeValidator = procedure(const AModule: TGocciaBytecodeModule) of object;
   TGocciaGlobalModuleProvider = function: TGocciaModule of object;
+  TGocciaPendingBytecodeModule = record
+    Module: TGocciaBytecodeModule;
+    LastModified: TDateTime;
+  end;
 
   { Why a host read was refused. It picks both the audit reason and the
     host-side suggestion, so rewording either cannot change the other. }
@@ -75,6 +83,14 @@ type
 
   TGocciaModuleLoader = class
   private
+    FPrecompiledModules: TOrderedStringMap<TGocciaBytecodeModule>;
+    FReadModuleBytecode: TGocciaModuleBytecodeReader;
+    FValidateModuleBytecode: TGocciaModuleBytecodeValidator;
+    FReleaseModuleBytecode: TGocciaModuleBytecodeValidator;
+    FPreferBytecode: Boolean;
+    FBytecodePaths: TOrderedStringMap<string>;
+    FBytecodeAddresses: TOrderedStringMap<string>;
+    FPendingBytecodeModules: TOrderedStringMap<TGocciaPendingBytecodeModule>;
     FPreprocessors: TGocciaPreprocessors;
     FCompatibility: TGocciaCompatibilityFlags;
     FLabelStatementsEnabled: Boolean;
@@ -156,6 +172,17 @@ type
       node_modules, or empty. }
     FLastPackageRoot: string;
 
+    { ATemporaryBytecode identifies a fresh disk acquisition: release it
+      after a declaration-only scan, or transfer it to linked execution.
+      Registered virtual artifacts remain borrowed from the engine. }
+    function ReadModuleProgram(const AResolvedPath: string;
+      var AIsHostOwned: Boolean; out ACompiledModule: TGocciaBytecodeModule;
+      out ATemporaryBytecode: Boolean;
+      out ALastModified: TDateTime;
+      out AOptions: TGocciaSourcePipelineOptions): TGocciaProgram;
+    function BytecodePath(const AResolvedPath: string): string;
+    function ResolveBytecodeCompanion(const APhysicalPath, ASourceCandidate,
+      ASpecifier, AImportingFilePath: string): string;
     function EnforcesHostReads: Boolean;
     function IsProjectGraphPath(const ACanonicalPath: string): Boolean;
     function IsProviderGraphPath(const APath, AImportingFilePath,
@@ -171,10 +198,11 @@ type
       AImportingFilePath: string): Boolean;
     function ResolveRequestAddress(const ASpecifier,
       AImportingFilePath: string; const AIsLiteral, AQuiet: Boolean;
-      out APackageRoot: string): string;
+      out APackageRoot: string; const AUseBytecode: Boolean = True): string;
     function ResolveTraversedDependency(const ARequestedPath,
       AAttributeType, AImportingFilePath: string;
-      const ADeclaration: TGocciaStatement): string;
+      const ADeclaration: TGocciaStatement;
+      out AResolvedPath: string): Boolean;
     procedure EnforceHostRead(const ASpecifier, APath, AImportingFilePath,
       APackageRoot: string; const AIsLiteral, AIsHostOwned: Boolean);
     function GuardsRequest(const ASpecifier,
@@ -203,9 +231,10 @@ type
       const AResolvedPath: string): TGocciaModuleContent;
     function LoadResolvedContent(const AResolvedPath: string;
       var AIsHostOwned: Boolean): TGocciaModuleContent;
-    function LoadResolvedContentBytes(const AResolvedPath: string): TBytes;
+    function LoadResolvedContentBytes(const AResolvedPath: string;
+      const AMaxBytes: Int64 = 0): TBytes;
     function TryGetResolvedLastModified(const AResolvedPath: string;
-      out ALastModified: TDateTime): Boolean;
+      out ALastModified: TDateTime; const AUseBytecode: Boolean = False): Boolean;
     function IsJavaScriptModuleResource(const AResolvedPath: string): Boolean;
     procedure RecordFailedModuleError(const ACacheKey: string;
       const AValue: TGocciaValue; const ALastModified: TDateTime);
@@ -228,6 +257,7 @@ type
       const ARequestedModules: TGocciaModuleList = nil);
     procedure ValidateDeferredModuleLinks(const AResolvedPath,
       AImportingFilePath: string; const ASeen: TOrderedStringMap<Boolean>);
+    function PreparedModuleBytes(const AAddress: string): TBytes;
     function GetASIEnabled: Boolean;
     function GetJSXEnabled: Boolean;
     function GetVarEnabled: Boolean;
@@ -252,6 +282,19 @@ type
       const AContentProvider: TGocciaModuleContentProvider = nil);
     destructor Destroy; override;
 
+    procedure ForgetBytecodeModule(const AModule: TGocciaBytecodeModule);
+    procedure RegisterPrecompiledModule(const AAddress: string;
+      const AModule: TGocciaBytecodeModule; const ABytes: TBytes;
+      const ABaseAddress: string = '');
+    procedure RecordBytecodeCompanion(const ALogicalAddress,
+      APhysicalPath: string);
+    property ReadModuleBytecode: TGocciaModuleBytecodeReader
+      read FReadModuleBytecode write FReadModuleBytecode;
+    property ValidateModuleBytecode: TGocciaModuleBytecodeValidator
+      read FValidateModuleBytecode write FValidateModuleBytecode;
+    property ReleaseModuleBytecode: TGocciaModuleBytecodeValidator
+      read FReleaseModuleBytecode write FReleaseModuleBytecode;
+    property PreferBytecode: Boolean read FPreferBytecode write FPreferBytecode;
     procedure BindRuntime(const AGlobalScope: TGocciaGlobalScope;
       const AOnError: TGocciaThrowErrorCallback);
     procedure BeginEvaluatingModulePath(const APath: string);
@@ -287,7 +330,7 @@ type
       const AProvenance: string = '');
     procedure CopyVirtualModulesFrom(const ASource: TGocciaModuleLoader);
     function ResolveModuleAddress(const AModulePath,
-      AImportingFilePath: string): string;
+      AImportingFilePath: string; const AUseBytecode: Boolean = True): string;
     function ResolveModuleURL(const AModulePath,
       AImportingFilePath: string): string;
     procedure RegisterModule(const AResolvedPath: string;
@@ -378,6 +421,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.BindingPatterns,
   Goccia.AST.Expressions,
+  Goccia.Bytecode.Binary,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Error.Suggestions,
@@ -608,6 +652,8 @@ begin
         if ProgramConsumed then
           FProgramNode := nil;
       end;
+      if Assigned(FModule) and FModule.CaptureEvaluationResult then
+        FModule.EvaluationResult := BodyResult;
       if FHasTopLevelAwait then
         Result := BodyResult
       else
@@ -658,6 +704,10 @@ begin
   FReloadTargets := TOrderedStringMap<TGocciaModule>.Create;
   FPendingReloads := TOrderedStringMap<TGocciaModule>.Create;
   FVirtualModules := TGocciaVirtualModuleRegistry.Create;
+  FPrecompiledModules := TOrderedStringMap<TGocciaBytecodeModule>.Create;
+  FBytecodePaths := TOrderedStringMap<string>.Create;
+  FBytecodeAddresses := TOrderedStringMap<string>.Create;
+  FPendingBytecodeModules := TOrderedStringMap<TGocciaPendingBytecodeModule>.Create;
   FWarnedVirtualCollisions := TOrderedStringMap<Boolean>.Create;
   FDiagnosticScope := TGocciaDiagnosticSourceScope.Create;
   FLoadingModules := TOrderedStringMap<Boolean>.Create;
@@ -691,6 +741,7 @@ begin
     FContentProvider := TGocciaUnavailableModuleContentProvider.Create;
     FOwnsContentProvider := True;
   end;
+  FVirtualModules.NormalizeFileAddress := FContentProvider.NormalizeEntryAddress;
 end;
 
 destructor TGocciaModuleLoader.Destroy;
@@ -746,6 +797,10 @@ begin
   FReloadTargets.Free;
   FPendingReloads.Free;
   FVirtualModules.Free;
+  FPrecompiledModules.Free;
+  FBytecodePaths.Free;
+  FBytecodeAddresses.Free;
+  FPendingBytecodeModules.Free;
   FWarnedVirtualCollisions.Free;
   FDiagnosticScope.Free;
   FLoadingModules.Free;
@@ -897,6 +952,7 @@ begin
 
   FContentProvider := AContentProvider;
   FOwnsContentProvider := AOwnsContentProvider;
+  FVirtualModules.NormalizeFileAddress := FContentProvider.NormalizeEntryAddress;
 end;
 
 procedure TGocciaModuleLoader.ConfigureCapabilities(
@@ -1095,7 +1151,7 @@ end;
   was resolved in, or empty. }
 function TGocciaModuleLoader.ResolveRequestAddress(const ASpecifier,
   AImportingFilePath: string; const AIsLiteral, AQuiet: Boolean;
-  out APackageRoot: string): string;
+  out APackageRoot: string; const AUseBytecode: Boolean): string;
 var
   SavedImporter, SavedSpecifier: string;
   SavedActive, SavedLiteral, SavedQuiet: Boolean;
@@ -1104,7 +1160,7 @@ begin
   APackageRoot := '';
   if not GuardsRequest(ASpecifier, AImportingFilePath) then
   begin
-    Result := ResolveModuleAddress(ASpecifier, AImportingFilePath);
+    Result := ResolveModuleAddress(ASpecifier, AImportingFilePath, AUseBytecode);
     APackageRoot := FLastPackageRoot;
     Exit;
   end;
@@ -1122,7 +1178,7 @@ begin
   FProbeQuiet := AQuiet;
   FResolver.ProbeGuard := HostProbeGuard;
   try
-    Result := ResolveModuleAddress(ASpecifier, AImportingFilePath);
+    Result := ResolveModuleAddress(ASpecifier, AImportingFilePath, AUseBytecode);
     APackageRoot := FLastPackageRoot;
   finally
     FResolver.ProbeGuard := SavedGuard;
@@ -1138,29 +1194,44 @@ end;
   linking, deferred async evaluation) are about to read and parse, and
   judges it first exactly as the eager path does: every probe through the
   guard, then the resolved path, with the declaration as the call site. The
-  result carries the import attribute, as ResolveModuleRequestWithAttribute
-  returns it. }
+  resolved path carries the import attribute. Source-phase edges validate
+  their own source and return False: their dependencies are not traversed. }
 function TGocciaModuleLoader.ResolveTraversedDependency(const ARequestedPath,
   AAttributeType, AImportingFilePath: string;
-  const ADeclaration: TGocciaStatement): string;
+  const ADeclaration: TGocciaStatement;
+  out AResolvedPath: string): Boolean;
 var
   PackageRoot: string;
   PreviousCallSite: TGocciaCallSite;
 begin
-  if (AAttributeType = '') and HasGlobalModuleRequest(ARequestedPath) then
-    Exit(ARequestedPath);
+  AResolvedPath := '';
+  Result := True;
   EnterGocciaCallSite(AImportingFilePath, ADeclaration.Line,
     ADeclaration.Column, PreviousCallSite);
   try
-    Result := ResolveRequestAddress(ARequestedPath, AImportingFilePath, True,
-      False, PackageRoot);
-    EnforceHostRead(ARequestedPath, Result, AImportingFilePath, PackageRoot,
+    if (ADeclaration is TGocciaImportDeclaration) and
+       (TGocciaImportDeclaration(ADeclaration).Phase = icpSource) then
+    begin
+      { A source object validates its own source, but its imports and awaits
+        are not dependencies of this module's evaluation. }
+      LoadModuleSourceValue(EncodeImportSpecifierAttribute(ARequestedPath,
+        AAttributeType), AImportingFilePath);
+      Exit(False);
+    end;
+    if (AAttributeType = '') and HasGlobalModuleRequest(ARequestedPath) then
+    begin
+      AResolvedPath := ARequestedPath;
+      Exit;
+    end;
+    AResolvedPath := ResolveRequestAddress(ARequestedPath, AImportingFilePath, True,
+      False, PackageRoot, AAttributeType = '');
+    EnforceHostRead(ARequestedPath, AResolvedPath, AImportingFilePath, PackageRoot,
       True, IsHostRequest(ARequestedPath, AImportingFilePath));
   finally
     LeaveGocciaCallSite(PreviousCallSite);
   end;
   if AAttributeType <> '' then
-    Result := EncodeImportSpecifierAttribute(Result, AAttributeType);
+    AResolvedPath := EncodeImportSpecifierAttribute(AResolvedPath, AAttributeType);
 end;
 
 { Judges the path a request resolved to, before any cache serves it. A
@@ -1228,14 +1299,15 @@ begin
   if (AAttributeType = '') and HasGlobalModuleRequest(AModulePath) then
     Exit(AModulePath);
 
-  Result := ResolveModuleAddress(AModulePath, AImportingFilePath);
+  Result := ResolveModuleAddress(AModulePath, AImportingFilePath,
+    AAttributeType = '');
 
   if AAttributeType <> '' then
     Result := EncodeImportSpecifierAttribute(Result, AAttributeType);
 end;
 
 function TGocciaModuleLoader.ResolveModuleAddress(const AModulePath,
-  AImportingFilePath: string): string;
+  AImportingFilePath: string; const AUseBytecode: Boolean): string;
 var
   AliasCandidate, FileSystemAddress: string;
 
@@ -1252,8 +1324,11 @@ var
       feature, not a collision — so warning about it would put a line of noise
       in front of every mocked test file. Every other virtual module keeps the
       warning. }
+    { Registered bytecode deliberately supersedes source as well. Probing for
+      a collision would add a host filesystem read to an in-memory import. }
     if FVirtualModules.TryGetDefinition(AVirtualAddress, Definition) and
-       (Definition.Provenance = VIRTUAL_MODULE_PROVENANCE_VITEST_MOCK) then
+       ((Definition.Provenance = VIRTUAL_MODULE_PROVENANCE_VITEST_MOCK) or
+        (Definition.Provenance = VIRTUAL_MODULE_PROVENANCE_BYTECODE)) then
       Exit;
     { Looking for a shadowed package is not a node_modules request of the
       guest's: it neither emits an import decision nor refuses. }
@@ -1283,6 +1358,8 @@ var
 
 begin
   FLastPackageRoot := '';
+  if Assigned(FResolver) then
+    FResolver.PreferBytecodeCompanions := FPreferBytecode and AUseBytecode;
   if FVirtualModules.Resolve(AModulePath, AImportingFilePath, Result) then
   begin
     WarnOnCollision(Result);
@@ -1300,10 +1377,250 @@ begin
     end;
     Result := FResolver.Resolve(AModulePath, AImportingFilePath);
     FLastPackageRoot := FResolver.LastPackageDirectory;
+    if not AUseBytecode then
+      Exit;
+    if FResolver.LastCompanionSourcePath <> '' then
+    begin
+      Result := ResolveBytecodeCompanion(Result,
+        FResolver.LastCompanionSourcePath, AModulePath, AImportingFilePath);
+    end
+    else if SameText(ExtractFileExt(Result), EXT_GBC) then
+      Result := ResolveBytecodeCompanion(Result, Result,
+        AModulePath, AImportingFilePath)
+    else
+      { A source candidate selected by the resolver must not inherit a
+        companion rejected by its current policy or provider pins. }
+      FBytecodePaths.Remove(Result);
     Exit;
   end;
   raise EGocciaModuleNotFound.CreateFmt(
     'No module resolver configured and cannot resolve "%s"', [AModulePath]);
+end;
+
+procedure TGocciaModuleLoader.RecordBytecodeCompanion(
+  const ALogicalAddress, APhysicalPath: string);
+var
+  LogicalAddress, PhysicalPath, ExpandedPath: string;
+begin
+  LogicalAddress := ALogicalAddress;
+  PhysicalPath := APhysicalPath;
+  ExpandedPath := ExpandFileName(APhysicalPath);
+  { Match entry registration's address rules, including provider-only paths
+    such as a sandbox's /main.gbc on Windows. }
+  if (ExpandedPath <> APhysicalPath) and
+     ((not FContentProvider.Exists(APhysicalPath)) or
+      FContentProvider.Exists(ExpandedPath)) then
+  begin
+    PhysicalPath := ExpandedPath;
+    LogicalAddress := ExpandFileName(ALogicalAddress);
+  end;
+  FBytecodeAddresses.AddOrSetValue(PhysicalPath, LogicalAddress);
+  FBytecodePaths.AddOrSetValue(LogicalAddress, PhysicalPath);
+end;
+
+function TGocciaModuleLoader.ResolveBytecodeCompanion(
+  const APhysicalPath, ASourceCandidate, ASpecifier,
+  AImportingFilePath: string): string;
+var
+  Pending: TGocciaPendingBytecodeModule;
+  Extension: string;
+begin
+  if FBytecodeAddresses.TryGetValue(APhysicalPath, Result) then
+  begin
+    FResolver.ValidateCompanionSourcePath(Result);
+    RecordBytecodeCompanion(Result, APhysicalPath);
+    Exit;
+  end;
+  Result := ASourceCandidate;
+  Pending := Default(TGocciaPendingBytecodeModule);
+  try
+    if not FResolver.LastCompanionSourceExists then
+    begin
+      { Extensionless resolution must not invent .js for an artifact compiled
+        from .mjs. Verify once before trusting that filename hint, retaining the
+        runtime directory and basename. The pending module is consumed on load. }
+      EnforceHostRead(ASpecifier, APhysicalPath, AImportingFilePath,
+        FLastPackageRoot, (not FProbeActive) or FProbeLiteral,
+        IsHostOwnedLoad(ASourceCandidate, AImportingFilePath));
+      if not Assigned(FReadModuleBytecode) then
+        raise EInvalidOperation.Create('The module loader has no bytecode reader');
+      Pending.Module := FReadModuleBytecode(LoadResolvedContentBytes(APhysicalPath,
+        MAX_BYTECODE_FILE_BYTES));
+      FContentProvider.TryGetLastModified(APhysicalPath, Pending.LastModified);
+      Extension := ExtractFileExt(Pending.Module.SourcePath);
+      if IsScriptExtension(Extension) then
+        Result := ChangeFileExt(APhysicalPath, Extension);
+    end;
+    FResolver.ValidateCompanionSourcePath(Result);
+    if Assigned(Pending.Module) then
+      FPendingBytecodeModules.AddOrSetValue(APhysicalPath, Pending);
+    RecordBytecodeCompanion(Result, APhysicalPath);
+  except
+    FPendingBytecodeModules.Remove(APhysicalPath);
+    if Assigned(Pending.Module) and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(Pending.Module);
+    raise;
+  end;
+end;
+
+function TGocciaModuleLoader.BytecodePath(const AResolvedPath: string): string;
+var
+  ContentType: TGocciaVirtualModuleContentType;
+begin
+  Result := '';
+  if FVirtualModules.GetContentType(AResolvedPath, ContentType) then
+  begin
+    if ContentType = vmctBytecode then
+      Result := AResolvedPath;
+    Exit;
+  end;
+  if SameText(ExtractFileExt(AResolvedPath), '.gbc') then
+    Exit(AResolvedPath);
+  if FBytecodePaths.TryGetValue(AResolvedPath, Result) then
+  begin
+    if FContentProvider.Exists(Result) then
+      Exit;
+    FBytecodePaths.Remove(AResolvedPath);
+  end;
+  Result := '';
+end;
+
+procedure TGocciaModuleLoader.RegisterPrecompiledModule(const AAddress: string;
+  const AModule: TGocciaBytecodeModule; const ABytes: TBytes;
+  const ABaseAddress: string);
+var
+  Address: string;
+  ConflictingModule: TGocciaModule;
+begin
+  if not Assigned(AModule) or not Assigned(AModule.LinkPlan) then
+    raise EArgumentException.Create('Imported bytecode requires a module link plan');
+  Address := FVirtualModules.CanonicalAddress(AAddress, ABaseAddress);
+  if HasModuleStateForAddress(Address) or HasGlobalModuleRequest(Address) then
+    raise EInvalidOperation.Create('Cannot replace a loaded or host module');
+  ConflictingModule := nil;
+  if StartsStr('goccia:', Address) and Assigned(FRuntimeModuleLoader) and
+     FRuntimeModuleLoader(Address, AAddress, ReadResolvedContent, ConflictingModule) then
+  begin
+    ConflictingModule.Free;
+    raise EInvalidOperation.Create('Bytecode module conflicts with a runtime module');
+  end;
+  { Registry copies the bytes. The owning engine retains the verified module. }
+  FVirtualModules.Add(AAddress, ABaseAddress, vmctBytecode, '', ABytes,
+    VIRTUAL_MODULE_PROVENANCE_BYTECODE);
+  AModule.RelocateSourcePath(Address);
+  FPrecompiledModules.AddOrSetValue(Address, AModule);
+end;
+
+function TGocciaModuleLoader.ReadModuleProgram(const AResolvedPath: string;
+  var AIsHostOwned: Boolean; out ACompiledModule: TGocciaBytecodeModule;
+  out ATemporaryBytecode: Boolean;
+  out ALastModified: TDateTime;
+  out AOptions: TGocciaSourcePipelineOptions): TGocciaProgram;
+var
+  Content: TGocciaModuleContent;
+  Definition: TGocciaVirtualModuleDefinition;
+  Parsed: TGocciaSourcePipelineModuleResult;
+  Warning: TGocciaSourcePipelineWarning;
+  CompiledPath: string;
+  Pending: TGocciaPendingBytecodeModule;
+  CurrentModified: TDateTime;
+  I: Integer;
+begin
+  ACompiledModule := nil;
+  ATemporaryBytecode := False;
+  ALastModified := 0;
+  AOptions := TGocciaSourcePipeline.DefaultOptions;
+  AOptions.Preprocessors := FPreprocessors;
+  AOptions.Compatibility := FCompatibility;
+  AOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
+  AOptions.ForInLoopsEnabled := FForInLoopsEnabled;
+  AOptions.ExperimentalJSModuleSourceEnabled := FExperimentalJSModuleSourceEnabled;
+  AOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
+  AOptions.SourceType := stModule;
+  CompiledPath := BytecodePath(AResolvedPath);
+  if CompiledPath <> '' then
+  begin
+    try
+      if not Assigned(FReadModuleBytecode) then
+        raise EInvalidOperation.Create('The module loader has no bytecode reader');
+      { Companion files have their own read policy, including explicit denies.
+        Selection falls back only when absent, never after verification fails. }
+      EnforceHostRead(ExtractFileName(CompiledPath), CompiledPath,
+        AResolvedPath, '', True, AIsHostOwned);
+      if not FPrecompiledModules.TryGetValue(AResolvedPath, ACompiledModule) then
+      begin
+        if FPendingBytecodeModules.TryGetValue(CompiledPath, Pending) then
+        begin
+          FPendingBytecodeModules.Remove(CompiledPath);
+          ACompiledModule := Pending.Module;
+          ATemporaryBytecode := True;
+          CurrentModified := 0;
+          FContentProvider.TryGetLastModified(CompiledPath, CurrentModified);
+          if CurrentModified <> Pending.LastModified then
+          begin
+            if Assigned(FReleaseModuleBytecode) then
+              FReleaseModuleBytecode(ACompiledModule);
+            ACompiledModule := nil;
+            ATemporaryBytecode := False;
+          end;
+        end;
+        if not Assigned(ACompiledModule) then
+        begin
+          ACompiledModule := FReadModuleBytecode(LoadResolvedContentBytes(CompiledPath,
+            MAX_BYTECODE_FILE_BYTES));
+          ATemporaryBytecode := True;
+        end;
+        ACompiledModule.RelocateSourcePath(AResolvedPath);
+        if FVirtualModules.Contains(AResolvedPath) then
+        begin
+          FPrecompiledModules.AddOrSetValue(AResolvedPath, ACompiledModule);
+          ATemporaryBytecode := False;
+        end;
+      end;
+      if Assigned(FValidateModuleBytecode) then
+        FValidateModuleBytecode(ACompiledModule);
+      if FVirtualModules.TryGetDefinition(AResolvedPath, Definition) then
+        Definition.Loaded := True
+      else
+        FContentProvider.TryGetLastModified(CompiledPath, ALastModified);
+      Result := ACompiledModule.LinkPlan.Materialize;
+    except
+      if ATemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+        FReleaseModuleBytecode(ACompiledModule);
+      if FPendingBytecodeModules.TryGetValue(CompiledPath, Pending) then
+      begin
+        FPendingBytecodeModules.Remove(CompiledPath);
+        if Assigned(FReleaseModuleBytecode) then
+          FReleaseModuleBytecode(Pending.Module);
+      end;
+      ACompiledModule := nil;
+      ATemporaryBytecode := False;
+      raise;
+    end;
+    Exit;
+  end;
+  Content := LoadResolvedContent(AResolvedPath, AIsHostOwned);
+  try
+    ALastModified := Content.LastModified;
+    Parsed := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
+      AResolvedPath, AOptions);
+    try
+      for I := 0 to Parsed.WarningCount - 1 do
+      begin
+        Warning := Parsed.Warnings[I];
+        WriteLn(Format('Warning: %s', [Warning.Message]));
+        if Warning.Suggestion <> '' then
+          WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
+        WriteLn(Format('  --> %s:%d:%d', [AResolvedPath, Warning.Line,
+          Warning.Column]));
+      end;
+      Result := Parsed.TakeProgramNode;
+    finally
+      Parsed.Free;
+    end;
+  finally
+    Content.Free;
+  end;
 end;
 
 function TGocciaModuleLoader.ReadResolvedContent(
@@ -1363,14 +1680,23 @@ begin
 end;
 
 function TGocciaModuleLoader.LoadResolvedContentBytes(
-  const AResolvedPath: string): TBytes;
+  const AResolvedPath: string; const AMaxBytes: Int64): TBytes;
+var
+  Definition: TGocciaVirtualModuleDefinition;
 begin
-  if FVirtualModules.Contains(AResolvedPath) then
+  if FVirtualModules.TryGetDefinition(AResolvedPath, Definition) then
+  begin
+    if (AMaxBytes > 0) and (Int64(Length(Definition.Bytes)) > AMaxBytes) then
+      raise EStreamError.Create('Module byte limit exceeded');
     Exit(FVirtualModules.LoadContentBytes(AResolvedPath));
+  end;
   if Assigned(FResolver) and
      FResolver.IsProviderPackagePath(AResolvedPath) then
   begin
     try
+      if AMaxBytes > 0 then
+        Exit(FContentProvider.LoadVerifiedContentBytesBounded(AResolvedPath,
+          AMaxBytes, FResolver.VerifyProviderContent));
       Exit(FContentProvider.LoadVerifiedContentBytes(AResolvedPath,
         FResolver.VerifyProviderContent));
     except
@@ -1378,18 +1704,25 @@ begin
         raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
     end;
   end;
-  Result := FContentProvider.LoadContentBytes(AResolvedPath);
+  if AMaxBytes > 0 then
+    Result := FContentProvider.LoadContentBytesBounded(AResolvedPath, AMaxBytes)
+  else
+    Result := FContentProvider.LoadContentBytes(AResolvedPath);
 end;
 
 function TGocciaModuleLoader.TryGetResolvedLastModified(
-  const AResolvedPath: string; out ALastModified: TDateTime): Boolean;
+  const AResolvedPath: string; out ALastModified: TDateTime;
+  const AUseBytecode: Boolean): Boolean;
 begin
   if FVirtualModules.Contains(AResolvedPath) then
   begin
     ALastModified := 0;
     Exit(False);
   end;
-  Result := FContentProvider.TryGetLastModified(AResolvedPath, ALastModified);
+  if AUseBytecode and (BytecodePath(AResolvedPath) <> '') then
+    Result := FContentProvider.TryGetLastModified(BytecodePath(AResolvedPath), ALastModified)
+  else
+    Result := FContentProvider.TryGetLastModified(AResolvedPath, ALastModified);
 end;
 
 function TGocciaModuleLoader.IsJavaScriptModuleResource(
@@ -1398,8 +1731,9 @@ var
   ContentType: TGocciaVirtualModuleContentType;
 begin
   if FVirtualModules.GetContentType(AResolvedPath, ContentType) then
-    Exit(ContentType = vmctJavaScript);
-  Result := IsScriptExtension(ExtractFileExt(AResolvedPath));
+    Exit(ContentType in [vmctJavaScript, vmctBytecode]);
+  Result := IsScriptExtension(ExtractFileExt(AResolvedPath)) or
+    SameText(ExtractFileExt(AResolvedPath), '.gbc');
 end;
 
 procedure TGocciaModuleLoader.InjectModule(const AAddress, AContent: string;
@@ -1440,13 +1774,46 @@ begin
       'Unsupported virtual module content type "%s".', [AContentType]);
   FVirtualModules.AddText(AAddress, ABaseAddress, ParsedContentType,
     AContent, AProvenance);
+  FPrecompiledModules.Remove(CanonicalAddress);
+end;
+
+procedure TGocciaModuleLoader.ForgetBytecodeModule(
+  const AModule: TGocciaBytecodeModule);
+var
+  Prepared: TOrderedStringMap<TGocciaBytecodeModule>.TKeyValuePair;
+  Pending: TOrderedStringMap<TGocciaPendingBytecodeModule>.TKeyValuePair;
+begin
+  { These maps borrow templates. Removing entries never frees code, and
+    OrderedStringMap removal preserves the remaining enumeration indices. }
+  for Prepared in FPrecompiledModules do
+    if Prepared.Value = AModule then
+      FPrecompiledModules.Remove(Prepared.Key);
+  for Pending in FPendingBytecodeModules do
+    if Pending.Value.Module = AModule then
+      FPendingBytecodeModules.Remove(Pending.Key);
+end;
+
+function TGocciaModuleLoader.PreparedModuleBytes(
+  const AAddress: string): TBytes;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  if not FPrecompiledModules.TryGetValue(AAddress, Module) then
+    raise EInvalidOperation.CreateFmt(
+      'Prepared bytecode module "%s" is no longer available.', [AAddress]);
+  Result := SaveModuleToBuffer(Module);
 end;
 
 procedure TGocciaModuleLoader.CopyVirtualModulesFrom(
   const ASource: TGocciaModuleLoader);
 begin
-  if Assigned(ASource) then
-    FVirtualModules.CopyFrom(ASource.VirtualModules);
+  if not Assigned(ASource) or (ASource = Self) then
+    Exit;
+  { Prepared entries borrow verified code during execution. A child realm
+    needs its own templates; encode only while copying, while the owner is
+    alive. Expired prepared entries fail before replacing the registry. }
+  FVirtualModules.CopyFrom(ASource.VirtualModules, ASource.PreparedModuleBytes);
+  FPrecompiledModules.Clear;
 end;
 
 function TGocciaModuleLoader.ResolveModuleURL(const AModulePath,
@@ -1550,7 +1917,7 @@ begin
     Exit;
 
   if FFailedModuleErrorModifiedTimes.TryGetValue(ACacheKey, FailedModified) and
-     TryGetResolvedLastModified(AResolvedPath, CurrentModified) and
+     TryGetResolvedLastModified(AResolvedPath, CurrentModified, ACacheKey = AResolvedPath) and
      (CurrentModified > FailedModified) then
   begin
     ClearFailedModuleError(ACacheKey);
@@ -2117,6 +2484,7 @@ var
   DeferredHandler: TGocciaNativeFunctionValue;
   EvalPromise: TGocciaPromiseValue;
   I: Integer;
+  BodyResult: TGocciaValue;
   LoadState: TGocciaModuleLoadState;
   LoadStateObject: TObject;
   PendingDependencyPromise: TGocciaPromiseValue;
@@ -2194,8 +2562,10 @@ begin
       try
         ProgramConsumed := False;
         try
-          FEvaluateModuleBody(LoadState.ProgramNode, LoadState.Context,
+          BodyResult := FEvaluateModuleBody(LoadState.ProgramNode, LoadState.Context,
             ProgramConsumed);
+          if AModule.CaptureEvaluationResult then
+            AModule.EvaluationResult := BodyResult;
         finally
           if ProgramConsumed then
             LoadState.ProgramNode := nil;
@@ -2240,7 +2610,9 @@ function TGocciaModuleLoader.InstantiateModule(const AModulePath,
 var
   AttributeType: string;
   CacheKey: string;
-  Content: TGocciaModuleContent;
+  CompiledModule: TGocciaBytecodeModule;
+  TemporaryBytecode: Boolean;
+  LastModified: TDateTime;
   Context: TGocciaEvaluationContext;
   ExportClassDecl: TGocciaExportClassDeclaration;
   ExportDecl: TGocciaExportDeclaration;
@@ -2250,7 +2622,6 @@ var
   ExportName: string;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   FailedValue: TGocciaValue;
-  I: Integer;
   ImportingFilePath: string;
   IsComputedRequest: Boolean;
   IsDeferredEvaluation: Boolean;
@@ -2259,8 +2630,6 @@ var
   LoadState: TGocciaModuleLoadState;
   LoadSucceeded: Boolean;
   Module: TGocciaModule;
-  ModuleParseResult: TGocciaSourcePipelineModuleResult;
-  ModuleWarning: TGocciaSourcePipelineWarning;
   ModuleScope: TGocciaScope;
   Names: TUnicodeStringList;
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -2682,7 +3051,8 @@ begin
 
   try
     ResolvedPath := ResolveRequestAddress(RequestedModulePath,
-      ImportingFilePath, not IsComputedRequest, False, PackageRoot);
+      ImportingFilePath, not IsComputedRequest, False, PackageRoot,
+      AttributeType = '');
   except
     on E: TGocciaRuntimeError do
       raise;
@@ -2810,144 +3180,122 @@ begin
     end;
   end;
 
-  Content := LoadResolvedContent(ResolvedPath, IsHostOwned);
+  ProgramNode := ReadModuleProgram(ResolvedPath, IsHostOwned,
+    CompiledModule, TemporaryBytecode, LastModified, PipelineOptions);
+  RequestedModules := nil;
+  LoadState := nil;
   try
-    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-    PipelineOptions.Preprocessors := FPreprocessors;
-    PipelineOptions.Compatibility := FCompatibility;
-    PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
-    PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
-    PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-      FExperimentalJSModuleSourceEnabled;
-    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
-    PipelineOptions.SourceType := stModule;
-    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
-      ResolvedPath, PipelineOptions);
+    RequestedModules := TGocciaModuleList.Create;
+    { A reload links the new version into the record already cached:
+      importers, namespace objects and code the previous version left
+      running hold that record, and the evaluation context, the load
+      state and every module this link binds to it must name the same
+      one. }
+    if FReloadTargets.TryGetValue(CacheKey, ReloadTarget) then
+    begin
+      FReloadTargets.Remove(CacheKey);
+      Module := ReloadTarget;
+      Module.BeginReload;
+    end
+    else
+    begin
+      ReloadTarget := nil;
+      Module := TGocciaModule.Create(ResolvedPath);
+      Module.IsHostOwned := IsHostOwned;
+    end;
+    Module.LastModified := LastModified;
+    FModules.Add(CacheKey, Module);
+    FLoadingModules.AddOrSetValue(CacheKey, True);
+    FLoadingModules.AddOrSetValue(ResolvedPath, True);
+    LoadSucceeded := False;
     try
-      for I := 0 to ModuleParseResult.WarningCount - 1 do
+      ModuleScope := FGlobalScope.CreateChild(skModule,
+        'Module:' + ResolvedPath);
+      Module.SetEnvironment(ModuleScope);
+      // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
+      // Environment Record's [[ThisValue]] is undefined.
+      ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      ModuleScope.StrictTypes := FStrictTypesEnabled;
+      ModuleScope.NonStrictMode := False;
+      ModuleScope.ArgumentsObjectEnabled :=
+        cfArgumentsObject in FCompatibility;
+      Context := Default(TGocciaEvaluationContext);
+      Context.CompiledModule := CompiledModule;
+      Context.Realm := CurrentRealm;
+      Context.Scope := ModuleScope;
+      Context.OnError := FOnError;
+      Context.LoadModule := LoadModule;
+      Context.LoadModuleSource := LoadModuleSourceValue;
+      Context.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
+      Context.ResolveModuleURL := ResolveModuleURL;
+      Context.CurrentFilePath := ResolvedPath;
+      Context.CurrentModule := Module;
+      Context.NonStrictMode := False;
+      Context.CompatibilityNonStrictMode := False;
+      Context.DisposalTracker := nil;
+
+      PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
+      if not Assigned(FInstantiateModuleFunctions) then
+        raise EInvalidOperation.Create(
+          'The module loader has no function instantiator; attach it ' +
+          'to an engine before loading modules');
+      { Function instantiation can publish closures before it raises; from
+        this boundary the engine retains code for the linked module. }
+      TemporaryBytecode := False;
+      FInstantiateModuleFunctions(ProgramNode, Context);
+      if GetVarEnabled then
+        HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
+      Context.ModuleEnvironmentInitialized := True;
+      RegisterStaticModuleExports(False);
+
+      LoadState := TGocciaModuleLoadState.Create;
+      LoadState.CacheKey := CacheKey;
+      LoadState.Context := Context;
+      LoadState.Module := Module;
+      LoadState.PipelineOptions := PipelineOptions;
+      LoadState.ProgramNode := ProgramNode;
+      LoadState.RequestedModules := RequestedModules;
+      LoadState.ResolvedPath := ResolvedPath;
+      LoadState.Status := mlsLinking;
+      FModuleLoadStates.Add(ResolvedPath, LoadState);
+
+      LinkRequestedModulesInSourceOrder;
+      RegisterStaticModuleExports(True);
+      LoadState.Status := mlsLinked;
+      Result := Module;
+      LoadSucceeded := True;
+      { Committed once the outermost link finishes, so a module of the
+        same graph that fails to link after this one rolls it back. }
+      if Assigned(ReloadTarget) then
+        FPendingReloads.AddOrSetValue(CacheKey, ReloadTarget);
+      ProgramNode := nil;
+      RequestedModules := nil;
+    finally
+      FLoadingModules.Remove(CacheKey);
+      FLoadingModules.Remove(ResolvedPath);
+      if not LoadSucceeded then
       begin
-        ModuleWarning := ModuleParseResult.Warnings[I];
-        WriteLn(Format('Warning: %s', [ModuleWarning.Message]));
-        if ModuleWarning.Suggestion <> '' then
-          WriteLn(Format('  Suggestion: %s', [ModuleWarning.Suggestion]));
-        WriteLn(Format('  --> %s:%d:%d', [ResolvedPath, ModuleWarning.Line,
-          ModuleWarning.Column]));
-      end;
-
-      ProgramNode := ModuleParseResult.TakeProgramNode;
-      RequestedModules := TGocciaModuleList.Create;
-      LoadState := nil;
-      try
-        { A reload links the new version into the record already cached:
-          importers, namespace objects and code the previous version left
-          running hold that record, and the evaluation context, the load
-          state and every module this link binds to it must name the same
-          one. }
-        if FReloadTargets.TryGetValue(CacheKey, ReloadTarget) then
+        if Assigned(LoadState) then
         begin
-          FReloadTargets.Remove(CacheKey);
-          Module := ReloadTarget;
-          Module.BeginReload;
-        end
-        else
-        begin
-          ReloadTarget := nil;
-          Module := TGocciaModule.Create(ResolvedPath);
-          Module.IsHostOwned := IsHostOwned;
-        end;
-        Module.LastModified := Content.LastModified;
-        FModules.Add(CacheKey, Module);
-        FLoadingModules.AddOrSetValue(CacheKey, True);
-        FLoadingModules.AddOrSetValue(ResolvedPath, True);
-        LoadSucceeded := False;
-        try
-          ModuleScope := FGlobalScope.CreateChild(skModule,
-            'Module:' + ResolvedPath);
-          Module.SetEnvironment(ModuleScope);
-          // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
-          // Environment Record's [[ThisValue]] is undefined.
-          ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-          ModuleScope.StrictTypes := FStrictTypesEnabled;
-          ModuleScope.NonStrictMode := False;
-          ModuleScope.ArgumentsObjectEnabled :=
-            cfArgumentsObject in FCompatibility;
-          Context := Default(TGocciaEvaluationContext);
-          Context.Realm := CurrentRealm;
-          Context.Scope := ModuleScope;
-          Context.OnError := FOnError;
-          Context.LoadModule := LoadModule;
-          Context.LoadModuleSource := LoadModuleSourceValue;
-          Context.LoadDeferredModule := LoadDeferredModuleNamespaceValue;
-          Context.ResolveModuleURL := ResolveModuleURL;
-          Context.CurrentFilePath := ResolvedPath;
-          Context.CurrentModule := Module;
-          Context.NonStrictMode := False;
-          Context.CompatibilityNonStrictMode := False;
-          Context.DisposalTracker := nil;
-
-          PredeclareModuleLexicalDeclarations(ProgramNode, ModuleScope);
-          if not Assigned(FInstantiateModuleFunctions) then
-            raise EInvalidOperation.Create(
-              'The module loader has no function instantiator; attach it ' +
-              'to an engine before loading modules');
-          FInstantiateModuleFunctions(ProgramNode, Context);
-          if GetVarEnabled then
-            HoistVarDeclarations(ProgramNode.Body, ModuleScope, Context);
-          Context.ModuleEnvironmentInitialized := True;
-          RegisterStaticModuleExports(False);
-
-          LoadState := TGocciaModuleLoadState.Create;
-          LoadState.CacheKey := CacheKey;
-          LoadState.Context := Context;
-          LoadState.Module := Module;
-          LoadState.PipelineOptions := PipelineOptions;
-          LoadState.ProgramNode := ProgramNode;
-          LoadState.RequestedModules := RequestedModules;
-          LoadState.ResolvedPath := ResolvedPath;
-          LoadState.Status := mlsLinking;
-          FModuleLoadStates.Add(ResolvedPath, LoadState);
-
-          LinkRequestedModulesInSourceOrder;
-          RegisterStaticModuleExports(True);
-          LoadState.Status := mlsLinked;
-          Result := Module;
-          LoadSucceeded := True;
-          { Committed once the outermost link finishes, so a module of the
-            same graph that fails to link after this one rolls it back. }
-          if Assigned(ReloadTarget) then
-            FPendingReloads.AddOrSetValue(CacheKey, ReloadTarget);
+          FModuleLoadStates.Remove(ResolvedPath);
+          LoadState.Free;
+          LoadState := nil;
           ProgramNode := nil;
           RequestedModules := nil;
-        finally
-          FLoadingModules.Remove(CacheKey);
-          FLoadingModules.Remove(ResolvedPath);
-          if not LoadSucceeded then
-          begin
-            if Assigned(LoadState) then
-            begin
-              FModuleLoadStates.Remove(ResolvedPath);
-              LoadState.Free;
-              LoadState := nil;
-              ProgramNode := nil;
-              RequestedModules := nil;
-            end;
-            FModules.Remove(CacheKey);
-            if Module = ReloadTarget then
-              { CheckForModuleReload caches the record again, as it was. }
-              Module.RollbackReload
-            else
-              Module.Free;
-          end;
         end;
-      finally
-        RequestedModules.Free;
-        ProgramNode.Free;
+        FModules.Remove(CacheKey);
+        if Module = ReloadTarget then
+          { CheckForModuleReload caches the record again, as it was. }
+          Module.RollbackReload
+        else
+          Module.Free;
       end;
-    finally
-      ModuleParseResult.Free;
     end;
   finally
-    Content.Free;
+    RequestedModules.Free;
+    ProgramNode.Free;
+    if TemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(CompiledModule);
   end;
 end;
 
@@ -3003,7 +3351,7 @@ begin
 
   try
     ResolvedPath := ResolveRequestAddress(RequestedModulePath,
-      AImportingFilePath, not IsComputedRequest, False, PackageRoot);
+      AImportingFilePath, not IsComputedRequest, False, PackageRoot, False);
   except
     on E: TGocciaRuntimeError do
       raise;
@@ -3092,11 +3440,12 @@ function TGocciaModuleLoader.DeferredGraphTouchesEvaluating(
   const ASeen: TOrderedStringMap<Boolean>): Boolean;
 var
   AttributeType: string;
-  Content: TGocciaModuleContent;
+  CompiledModule: TGocciaBytecodeModule;
+  TemporaryBytecode: Boolean;
+  LastModified: TDateTime;
   ExistingModule: TGocciaModule;
   ExistingPromise: TGocciaPromiseValue;
   IsHostOwned: Boolean;
-  ModuleParseResult: TGocciaSourcePipelineModuleResult;
   PhysicalPath: string;
   PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
@@ -3139,54 +3488,38 @@ begin
   IsHostOwned := IsHostOwnedLoad(PhysicalPath, AImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(PhysicalPath);
-  Content := LoadResolvedContent(PhysicalPath, IsHostOwned);
+  ProgramNode := ReadModuleProgram(PhysicalPath, IsHostOwned,
+    CompiledModule, TemporaryBytecode, LastModified, PipelineOptions);
   try
-    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-    PipelineOptions.Preprocessors := FPreprocessors;
-    PipelineOptions.Compatibility := FCompatibility;
-    PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
-    PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
-    PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-      FExperimentalJSModuleSourceEnabled;
-    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
-    PipelineOptions.SourceType := stModule;
-    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
-      PhysicalPath, PipelineOptions);
-    try
-      ProgramNode := ModuleParseResult.TakeProgramNode;
-      try
-        for I := 0 to ProgramNode.Body.Count - 1 do
-        begin
-          Stmt := ProgramNode.Body[I];
-          if Stmt is TGocciaImportDeclaration then
-          begin
-            RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath;
-            RequestedAttributeType :=
-              TGocciaImportDeclaration(Stmt).AttributeType;
-          end
-          else if Stmt is TGocciaReExportDeclaration then
-          begin
-            RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath;
-            RequestedAttributeType :=
-              TGocciaReExportDeclaration(Stmt).AttributeType;
-          end
-          else
-            Continue;
+    for I := 0 to ProgramNode.Body.Count - 1 do
+    begin
+      Stmt := ProgramNode.Body[I];
+      if Stmt is TGocciaImportDeclaration then
+      begin
+        RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath;
+        RequestedAttributeType :=
+          TGocciaImportDeclaration(Stmt).AttributeType;
+      end
+      else if Stmt is TGocciaReExportDeclaration then
+      begin
+        RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath;
+        RequestedAttributeType :=
+          TGocciaReExportDeclaration(Stmt).AttributeType;
+      end
+      else
+        Continue;
 
-          ResolvedPath := ResolveTraversedDependency(RequestedPath,
-            RequestedAttributeType, PhysicalPath, Stmt);
-          if DeferredGraphTouchesEvaluating(ResolvedPath, PhysicalPath,
-             ASeen) then
-            Exit(True);
-        end;
-      finally
-        ProgramNode.Free;
-      end;
-    finally
-      ModuleParseResult.Free;
+      if not ResolveTraversedDependency(RequestedPath,
+        RequestedAttributeType, PhysicalPath, Stmt, ResolvedPath) then
+        Continue;
+      if DeferredGraphTouchesEvaluating(ResolvedPath, PhysicalPath,
+         ASeen) then
+        Exit(True);
     end;
   finally
-    Content.Free;
+    ProgramNode.Free;
+    if TemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(CompiledModule);
   end;
 
   Result := False;
@@ -3198,10 +3531,11 @@ procedure TGocciaModuleLoader.EvaluateDeferredAsyncDependencies(
   const ARequestedModules: TGocciaModuleList);
 var
   AttributeType: string;
-  Content: TGocciaModuleContent;
+  CompiledModule: TGocciaBytecodeModule;
+  TemporaryBytecode: Boolean;
+  LastModified: TDateTime;
   IsHostOwned: Boolean;
   LoadedModule: TGocciaModule;
-  ModuleParseResult: TGocciaSourcePipelineModuleResult;
   PhysicalPath: string;
   PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
@@ -3226,70 +3560,54 @@ begin
   IsHostOwned := IsHostOwnedLoad(PhysicalPath, AImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(PhysicalPath);
-  Content := LoadResolvedContent(PhysicalPath, IsHostOwned);
+  ProgramNode := ReadModuleProgram(PhysicalPath, IsHostOwned,
+    CompiledModule, TemporaryBytecode, LastModified, PipelineOptions);
   try
-    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-    PipelineOptions.Preprocessors := FPreprocessors;
-    PipelineOptions.Compatibility := FCompatibility;
-    PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
-    PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
-    PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-      FExperimentalJSModuleSourceEnabled;
-    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
-    PipelineOptions.SourceType := stModule;
-    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
-      PhysicalPath, PipelineOptions);
-    try
-      ProgramNode := ModuleParseResult.TakeProgramNode;
-      try
-        if ProgramNode.HasTopLevelAwait then
-        begin
-          LoadedModule := LoadModule(AResolvedPath, AImportingFilePath);
-          if Assigned(ARequestedModules) and Assigned(LoadedModule) then
-            ARequestedModules.Add(LoadedModule)
-          else if Assigned(LoadedModule) and
-                  (LoadedModule.EvaluationPromise is TGocciaPromiseValue) and
-                  (TGocciaPromiseValue(LoadedModule.EvaluationPromise).State =
-                  gpsRejected) then
-          begin
-            TGocciaPromiseValue(LoadedModule.EvaluationPromise).MarkHandled;
-            raise TGocciaThrowValue.Create(
-              TGocciaPromiseValue(LoadedModule.EvaluationPromise).PromiseResult);
-          end;
-          Exit;
-        end;
-
-        for I := 0 to ProgramNode.Body.Count - 1 do
-        begin
-          Stmt := ProgramNode.Body[I];
-          if Stmt is TGocciaImportDeclaration then
-          begin
-            RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath;
-            RequestedAttributeType :=
-              TGocciaImportDeclaration(Stmt).AttributeType;
-          end
-          else if Stmt is TGocciaReExportDeclaration then
-          begin
-            RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath;
-            RequestedAttributeType :=
-              TGocciaReExportDeclaration(Stmt).AttributeType;
-          end
-          else
-            Continue;
-
-          ResolvedPath := ResolveTraversedDependency(RequestedPath,
-            RequestedAttributeType, PhysicalPath, Stmt);
-          EvaluateDeferredAsyncDependencies(ResolvedPath, PhysicalPath, ASeen,
-            ARequestedModules);
-        end;
-      finally
-        ProgramNode.Free;
+    if ProgramNode.HasTopLevelAwait then
+    begin
+      LoadedModule := LoadModule(AResolvedPath, AImportingFilePath);
+      if Assigned(ARequestedModules) and Assigned(LoadedModule) then
+        ARequestedModules.Add(LoadedModule)
+      else if Assigned(LoadedModule) and
+              (LoadedModule.EvaluationPromise is TGocciaPromiseValue) and
+              (TGocciaPromiseValue(LoadedModule.EvaluationPromise).State =
+              gpsRejected) then
+      begin
+        TGocciaPromiseValue(LoadedModule.EvaluationPromise).MarkHandled;
+        raise TGocciaThrowValue.Create(
+          TGocciaPromiseValue(LoadedModule.EvaluationPromise).PromiseResult);
       end;
-    finally
-      ModuleParseResult.Free;
+      Exit;
+    end;
+
+    for I := 0 to ProgramNode.Body.Count - 1 do
+    begin
+      Stmt := ProgramNode.Body[I];
+      if Stmt is TGocciaImportDeclaration then
+      begin
+        RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath;
+        RequestedAttributeType :=
+          TGocciaImportDeclaration(Stmt).AttributeType;
+      end
+      else if Stmt is TGocciaReExportDeclaration then
+      begin
+        RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath;
+        RequestedAttributeType :=
+          TGocciaReExportDeclaration(Stmt).AttributeType;
+      end
+      else
+        Continue;
+
+      if not ResolveTraversedDependency(RequestedPath,
+        RequestedAttributeType, PhysicalPath, Stmt, ResolvedPath) then
+        Continue;
+      EvaluateDeferredAsyncDependencies(ResolvedPath, PhysicalPath, ASeen,
+        ARequestedModules);
     end;
   finally
-    Content.Free;
+    ProgramNode.Free;
+    if TemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(CompiledModule);
   end;
 end;
 
@@ -3298,10 +3616,11 @@ procedure TGocciaModuleLoader.ValidateDeferredModuleLinks(
   const ASeen: TOrderedStringMap<Boolean>);
 var
   AttributeType: string;
-  Content: TGocciaModuleContent;
+  CompiledModule: TGocciaBytecodeModule;
+  TemporaryBytecode: Boolean;
+  LastModified: TDateTime;
   ImportDecl: TGocciaImportDeclaration;
   IsHostOwned: Boolean;
-  ModuleParseResult: TGocciaSourcePipelineModuleResult;
   PhysicalPath: string;
   PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
@@ -3327,52 +3646,36 @@ begin
   IsHostOwned := IsHostOwnedLoad(PhysicalPath, AImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(PhysicalPath);
-  Content := LoadResolvedContent(PhysicalPath, IsHostOwned);
+  ProgramNode := ReadModuleProgram(PhysicalPath, IsHostOwned,
+    CompiledModule, TemporaryBytecode, LastModified, PipelineOptions);
   try
-    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-    PipelineOptions.Preprocessors := FPreprocessors;
-    PipelineOptions.Compatibility := FCompatibility;
-    PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
-    PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
-    PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-      FExperimentalJSModuleSourceEnabled;
-    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
-    PipelineOptions.SourceType := stModule;
-    ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
-      PhysicalPath, PipelineOptions);
-    try
-      ProgramNode := ModuleParseResult.TakeProgramNode;
-      try
-        for I := 0 to ProgramNode.Body.Count - 1 do
-        begin
-          Stmt := ProgramNode.Body[I];
-          if Stmt is TGocciaImportDeclaration then
-          begin
-            RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath;
-            RequestedAttributeType :=
-              TGocciaImportDeclaration(Stmt).AttributeType;
-          end
-          else if Stmt is TGocciaReExportDeclaration then
-          begin
-            RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath;
-            RequestedAttributeType :=
-              TGocciaReExportDeclaration(Stmt).AttributeType;
-          end
-          else
-            Continue;
+    for I := 0 to ProgramNode.Body.Count - 1 do
+    begin
+      Stmt := ProgramNode.Body[I];
+      if Stmt is TGocciaImportDeclaration then
+      begin
+        RequestedPath := TGocciaImportDeclaration(Stmt).ModulePath;
+        RequestedAttributeType :=
+          TGocciaImportDeclaration(Stmt).AttributeType;
+      end
+      else if Stmt is TGocciaReExportDeclaration then
+      begin
+        RequestedPath := TGocciaReExportDeclaration(Stmt).ModulePath;
+        RequestedAttributeType :=
+          TGocciaReExportDeclaration(Stmt).AttributeType;
+      end
+      else
+        Continue;
 
-          ResolvedPath := ResolveTraversedDependency(RequestedPath,
-            RequestedAttributeType, PhysicalPath, Stmt);
-          ValidateDeferredModuleLinks(ResolvedPath, PhysicalPath, ASeen);
-        end;
-      finally
-        ProgramNode.Free;
-      end;
-    finally
-      ModuleParseResult.Free;
+      if not ResolveTraversedDependency(RequestedPath,
+        RequestedAttributeType, PhysicalPath, Stmt, ResolvedPath) then
+        Continue;
+      ValidateDeferredModuleLinks(ResolvedPath, PhysicalPath, ASeen);
     end;
   finally
-    Content.Free;
+    ProgramNode.Free;
+    if TemporaryBytecode and Assigned(FReleaseModuleBytecode) then
+      FReleaseModuleBytecode(CompiledModule);
   end;
 end;
 
@@ -3413,7 +3716,8 @@ begin
   begin
     try
       ResolvedPath := ResolveRequestAddress(RequestedModulePath,
-        AImportingFilePath, not IsComputedRequest, False, PackageRoot);
+        AImportingFilePath, not IsComputedRequest, False, PackageRoot,
+        AttributeType = '');
     except
       on E: TGocciaRuntimeError do
         raise;
@@ -3489,7 +3793,8 @@ var
   ReloadCacheKey: string;
   ReloadedModule: TGocciaModule;
 begin
-  if not TryGetResolvedLastModified(AModule.Path, CurrentModified) then
+  if not TryGetResolvedLastModified(AModule.Path, CurrentModified,
+    (ACacheKey = '') or (ACacheKey = AModule.Path)) then
     Exit;
 
   if CurrentModified > AModule.LastModified then

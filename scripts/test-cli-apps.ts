@@ -42,6 +42,7 @@ import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/as
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
 import { verifyAllocationProfiles } from "./test-cli-profiling";
+import { verifyAotModules } from "./test-cli-aot";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 // The runner reports canonical host paths. On Windows the temp directory's
@@ -7870,7 +7871,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
       ].join("\n"),
     );
     await $`${BUNDLER} ${argumentsSrc} --output=${argumentsOut} --compat-var --compat-function --compat-arguments-object`.quiet();
-    const argumentsRoundtrip = await $`${RUNNER} --print ${argumentsOut} 2>&1`.text();
+    const argumentsRoundtrip = await $`${RUNNER} --print ${argumentsOut} --compat-var --compat-function --compat-arguments-object 2>&1`.text();
     if (!containsLine(argumentsRoundtrip, "2"))
       throw new Error(`Arguments-object roundtrip should print 2, got: ${argumentsRoundtrip}`);
 
@@ -8056,6 +8057,8 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
 // ============================================================================
 // GocciaBenchmarkRunner
 // ============================================================================
+
+await section("Bundler: source and precompiled module graphs agree...", verifyAotModules);
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
 

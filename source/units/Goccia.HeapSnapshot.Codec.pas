@@ -571,6 +571,7 @@ function MaterializeSnapshotSlot(const ASlotName: string): Boolean;
 implementation
 
 uses
+  Generics.Defaults,
   Math,
 
   BigInteger,
@@ -2166,6 +2167,18 @@ begin
   end;
 end;
 
+// Late built-ins can be materialized in a different order on restore. Their
+// manifest describes named state, so wire order must depend on the name and
+// not on the engine's lazy materialization history.
+function CompareBuiltinPaths(
+  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: string): Integer;
+begin
+  CheckNativeWork;
+  if A < B then Result := -1
+  else if A > B then Result := 1
+  else Result := 0;
+end;
+
 procedure TGocciaHeapSnapshotWriter.Serialize(
   const ARoots: array of TGCManagedObject; const AStream: TStream);
 var
@@ -2176,7 +2189,9 @@ var
   PathIndexes, LatePathIndexes, LateFingerprintIndexes,
     ModuleHashIndexes: array of Integer;
   LateFingerprints: array of string;
+  LatePaths: TList<string>;
 begin
+  LatePaths := nil;
   RootsOut := TGocciaChargedMemoryStream.Create;
   Payload := TGocciaChargedMemoryStream.Create;
   ObjectsOut := TGocciaChargedMemoryStream.Create;
@@ -2239,19 +2254,25 @@ begin
     SetLength(LatePathIndexes, FBuiltins.Count - FBuiltins.FingerprintCount);
     SetLength(LateFingerprints, Length(LatePathIndexes));
     SetLength(LateFingerprintIndexes, Length(LatePathIndexes));
+    Reserve(CheckedNativeByteSize(Length(LatePathIndexes), SizeOf(string)));
+    LatePaths := TList<string>.Create;
+    LatePaths.Capacity := Length(LatePathIndexes);
     for I := 0 to High(LatePathIndexes) do
     begin
       Poll;
-      LatePathIndexes[I] := StringIndex(FBuiltins.PathAt(
-        FBuiltins.FingerprintCount + I));
-      // One recorded as it was built is sent as built: what the run changed
-      // since is in the differences.
-      if FBuiltins.IsRecorded(FBuiltins.FingerprintCount + I) then
-        LateFingerprints[I] := FBuiltins.RecordedFingerprint(
-          FBuiltins.FingerprintCount + I)
+      LatePaths.Add(FBuiltins.PathAt(FBuiltins.FingerprintCount + I));
+    end;
+    LatePaths.Sort(TComparer<string>.Construct(CompareBuiltinPaths));
+    for I := 0 to LatePaths.Count - 1 do
+    begin
+      Poll;
+      Index := FBuiltins.IndexOf(FBuiltins.FindPath(LatePaths[I]));
+      LatePathIndexes[I] := StringIndex(LatePaths[I]);
+      // Preserve the construction fingerprint; later changes are differences.
+      if FBuiltins.IsRecorded(Index) then
+        LateFingerprints[I] := FBuiltins.RecordedFingerprint(Index)
       else
-        LateFingerprints[I] := FBuiltins.ComputeFingerprint(
-          FBuiltins.FingerprintCount + I);
+        LateFingerprints[I] := FBuiltins.ComputeFingerprint(Index);
       LateFingerprintIndexes[I] := StringIndex(LateFingerprints[I]);
     end;
     for I := 0 to FCodecs.Count - 1 do
@@ -2293,6 +2314,7 @@ begin
   finally
     FOut := nil;
     FCurrentId := -1;
+    LatePaths.Free;
     RootsOut.Free;
     Payload.Free;
     ObjectsOut.Free;

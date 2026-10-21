@@ -34,11 +34,13 @@ type
   TGocciaTestingLibraryRuntimeExtension = class(TGocciaRuntimeExtension)
   private
     FBuiltinTestAssertions: TGocciaTestAssertions;
+    FOnExpect: TGocciaExpectObserver;
     FSnapshotHost: IGocciaSnapshotHost;
     FSnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     FSnapshotFormatter: IGocciaSnapshotFormatter;
     FInjectGlobals: Boolean;
     FTestModule: TGocciaRuntimeNamespaceModuleRegistration;
+    procedure SetOnExpect(const AObserver: TGocciaExpectObserver);
     procedure EnsureTestAssertions;
     function MaterializeTestModule: TGocciaValue;
   public
@@ -51,6 +53,8 @@ type
     constructor CreateModuleOnly;
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
+    // Stored even when the module-only assertions have not materialized yet.
+    property OnExpect: TGocciaExpectObserver read FOnExpect write SetOnExpect;
     { Hosts that own stdout — the JSON envelope modes of GocciaTestRunner —
       need to silence the reporter's per-test markers. Exposed the same way
       the console extension exposes its builtin. }
@@ -102,9 +106,20 @@ end;
 procedure TGocciaTestingLibraryRuntimeExtension.EnsureTestAssertions;
 begin
   if not Assigned(FBuiltinTestAssertions) then
+  begin
     FBuiltinTestAssertions := TGocciaTestAssertions.Create('TestAssertions',
       Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
       FSnapshotHost, FSnapshotUpdateMode, FSnapshotFormatter, FInjectGlobals);
+    FBuiltinTestAssertions.OnExpect := FOnExpect;
+  end;
+end;
+
+procedure TGocciaTestingLibraryRuntimeExtension.SetOnExpect(
+  const AObserver: TGocciaExpectObserver);
+begin
+  FOnExpect := AObserver;
+  if Assigned(FBuiltinTestAssertions) then
+    FBuiltinTestAssertions.OnExpect := AObserver;
 end;
 
 function TGocciaTestingLibraryRuntimeExtension.MaterializeTestModule: TGocciaValue;

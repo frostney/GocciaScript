@@ -47,17 +47,19 @@ function RestoreRefusalIn(const AEngine: TGocciaEngine;
   const ABytes: TBytes): string;
 function RoundTrip(const ASource, ACheck: string): string;
 // Runs ASource as a script in a fresh engine and writes what it passed to
-// capture() (as a module when AAsModule).
+// capture() (as a module when AAsModule). AWithEval installs the test host's
+// realm-bound eval without changing the engine's language options.
 function SnapshotModule(const ASource: string; out ARefusal: string;
-  const AAsModule: Boolean = False): TBytes;
+  const AAsModule: Boolean = False; const AWithEval: Boolean = False): TBytes;
 // Runs ASource as a script in a fresh engine, snapshots what it passed to
 // capture(), then runs ASource again in another engine (so that engine
 // has compiled the same module) and restores there.
-function RoundTripModule(const ASource, ACheck: string): string;
+function RoundTripModule(const ASource, ACheck: string;
+  const AWithEval: Boolean = False): string;
 // Restores ABytes, which ASource's run wrote, in an engine that ran
 // ASource too, and checks it as RoundTripModule does.
 function RoundTripModuleBytes(const ASource: string; const ABytes: TBytes;
-  const ACheck: string): string;
+  const ACheck: string; const AWithEval: Boolean = False): string;
 // The position of object AIndex's entry (its codec, then its payload's
 // length and the payload) in a snapshot.
 function ObjectEntryAt(const ABytes: TBytes; const AIndex: Integer): Integer;
@@ -73,8 +75,25 @@ uses
   Goccia.HeapSnapshot,
   Goccia.Scope.BindingMap,
   Goccia.SourcePipeline,
+  Goccia.Test262.Host,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue;
+
+function InstallSnapshotEval(const AEngine: TGocciaEngine): TGocciaTest262Host;
+var
+  Options: TGocciaTest262EngineOptions;
+begin
+  Options := Default(TGocciaTest262EngineOptions);
+  Options.Compatibility := AEngine.Compatibility;
+  Options.SourceType := AEngine.SourceType;
+  Result := TGocciaTest262Host.Create(Options);
+  try
+    Result.Install(AEngine);
+  except
+    Result.Free;
+    raise;
+  end;
+end;
 
 { TCapture }
 
@@ -233,9 +252,11 @@ begin
 end;
 
 function SnapshotModule(const ASource: string;
-  out ARefusal: string; const AAsModule: Boolean): TBytes;
+  out ARefusal: string; const AAsModule: Boolean;
+  const AWithEval: Boolean): TBytes;
 var
   Engine: TGocciaEngine;
+  EvalHost: TGocciaTest262Host;
   Session: TGocciaHeapSnapshotSession;
   Lines: TStringList;
   Capture: TCapture;
@@ -246,6 +267,7 @@ begin
   Lines := TStringList.Create;
   Capture := TCapture.Create;
   Engine := nil;
+  EvalHost := nil;
   Session := nil;
   Stream := TBytesStream.Create;
   try
@@ -253,6 +275,8 @@ begin
     Engine := TGocciaEngine.Create(TEST_PATH, Lines);
     if AAsModule then
       Engine.SourceType := stModule;
+    if AWithEval then
+      EvalHost := InstallSnapshotEval(Engine);
     Engine.GlobalScope.DefineLexicalBinding('capture',
       TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
     Session :=  TGocciaHeapSnapshotSession.Create(Engine);
@@ -270,6 +294,7 @@ begin
       TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
     Stream.Free;
     Session.Free;
+    EvalHost.Free;
     Engine.Free;
     Capture.Free;
     Lines.Free;
@@ -277,21 +302,23 @@ begin
 end;
 
 function RoundTripModule(const ASource,
-  ACheck: string): string;
+  ACheck: string; const AWithEval: Boolean): string;
 var
   Refusal: string;
   Bytes: TBytes;
 begin
-  Bytes := SnapshotModule(ASource, Refusal);
+  Bytes := SnapshotModule(ASource, Refusal, False, AWithEval);
   if Refusal <> '' then
     Exit('refused: ' + Refusal);
-  Result := RoundTripModuleBytes(ASource, Bytes, ACheck);
+  Result := RoundTripModuleBytes(ASource, Bytes, ACheck, AWithEval);
 end;
 
 function RoundTripModuleBytes(const ASource: string;
-  const ABytes: TBytes; const ACheck: string): string;
+  const ABytes: TBytes; const ACheck: string;
+  const AWithEval: Boolean): string;
 var
   Engine: TGocciaEngine;
+  EvalHost: TGocciaTest262Host;
   Restore: TGocciaHeapSnapshotRestore;
   Lines: TStringList;
   Capture: TCapture;
@@ -301,11 +328,14 @@ begin
   Lines := TStringList.Create;
   Capture := TCapture.Create;
   Engine := nil;
+  EvalHost := nil;
   Restore := nil;
   Stream := TBytesStream.Create(ABytes);
   try
     Lines.Text := ASource;
     Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    if AWithEval then
+      EvalHost := InstallSnapshotEval(Engine);
     Engine.GlobalScope.DefineLexicalBinding('capture',
       TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
     Engine.Execute;
@@ -324,6 +354,7 @@ begin
     if Assigned(Capture.Value) then
       TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
     Restore.Free;
+    EvalHost.Free;
     Engine.Free;
     Stream.Free;
     Capture.Free;

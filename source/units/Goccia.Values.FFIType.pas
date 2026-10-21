@@ -151,6 +151,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -1269,9 +1270,30 @@ begin
   AttachType(FDescriptor, FByteOffset);
 end;
 
+procedure MaterializeFFITypePrototype;
+begin
+  FFITaggedPrototype(GFFITypeDescriptorPrototypeSlot, FFI_TYPE_DESCRIPTOR_TAG);
+end;
+
+procedure MaterializeFFIAggregatePrototype;
+begin
+  FFITaggedPrototype(GFFIAggregatePrototypeSlot, FFI_AGGREGATE_TAG);
+end;
+
+procedure MaterializeFFIVarArgsPrototype;
+begin
+  FFITaggedPrototype(GFFIVarArgsPrototypeSlot, FFI_VARARGS_TAG);
+end;
+
 initialization
   GFFITypeDescriptorPrototypeSlot := RegisterRealmSlot('%FFIType.prototype%');
   GFFIAggregatePrototypeSlot := RegisterRealmSlot('%FFIAggregate.prototype%');
   GFFIVarArgsPrototypeSlot := RegisterRealmSlot('%FFIVarArgs.prototype%');
+  RegisterSnapshotSlotMaterializer('%FFIType.prototype%',
+    MaterializeFFITypePrototype);
+  RegisterSnapshotSlotMaterializer('%FFIAggregate.prototype%',
+    MaterializeFFIAggregatePrototype);
+  RegisterSnapshotSlotMaterializer('%FFIVarArgs.prototype%',
+    MaterializeFFIVarArgsPrototype);
 
 end.

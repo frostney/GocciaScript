@@ -161,3 +161,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0149 — A fetch request's URL and a redirect's Location go through the URL parser](0149-fetch-urls-go-through-the-url-parser.md)
 - [0151 — A deterministic sandbox run stamps its files with the deterministic clock](0151-deterministic-sandbox-runs-stamp-files-with-the-deterministic-clock.md)
 - [0152 — A heap restore commits built-in differences after every fallible step](0152-heap-snapshot-builtins-commit-last.md)
+- [0153 — Precompiled modules use the module linker](0153-precompiled-modules-use-the-module-linker.md)

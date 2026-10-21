@@ -28,6 +28,7 @@ type
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
   end;
 
@@ -54,6 +55,13 @@ begin
     FBuiltinTSV := TGocciaTSVBuiltin.Create('TSV',
       Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError, False);
   Result := FBuiltinTSV.BuiltinObject;
+end;
+
+procedure TGocciaTSVRuntimeExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+begin
+  if AName = 'TSV' then
+    MaterializeTSV;
 end;
 
 procedure TGocciaTSVRuntimeExtension.Detach;

@@ -148,7 +148,7 @@ current platform, which the folder-configured FFI JavaScript tests need.
 Useful test-runner forms:
 
 ```bash
-./build/GocciaTestRunner -P tests --jobs=4
+./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress
 ./build/GocciaTestRunner -P tests --no-progress --exit-on-first-failure --silent
 ./build/GocciaTestRunner -P tests --output=results.json --log=test-console.log
 ./build/GocciaTestRunner -P tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
@@ -323,7 +323,7 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
-`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source, and any other entry, stdin included, is module source when it has a top-level `import` or `export` declaration and script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). `"source-type": "script"` keeps such an entry script source. The REPL runs script source unless `--source-type=module` names otherwise, and a `.gbc` entry, which has no source to detect from, runs as script source unless `--source-type=module` names it.
+`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source, and any other entry, stdin included, is module source when it has a top-level `import` or `export` declaration and script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). `"source-type": "script"` keeps such an entry script source. The REPL runs script source unless `--source-type=module` names otherwise. A `.gbc` entry adopts its recorded compile-time goal unless an explicit source type is supplied; a conflicting explicit goal is rejected.
 
 ```json
 {
@@ -443,7 +443,7 @@ if ConfigPath <> '' then
 
 ### GocciaBundler (Bundler)
 
-GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as GocciaRunner (file, multiple files, directory, stdin):
+GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. Module-goal artifacts also satisfy imports with `GocciaRunner --prefer-bytecode`; see [Precompiled bytecode modules](bytecode-loading.md) for profile checks, companions and source fallback. It accepts the same input modes as GocciaRunner (file, multiple files, directory, stdin):
 
 ```bash
 # Compile a single file (output: example.gbc alongside the source)

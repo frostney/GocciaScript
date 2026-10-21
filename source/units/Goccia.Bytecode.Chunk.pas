@@ -332,10 +332,9 @@ type
     FGlobalEvalCode: Boolean;
     // Runtime-only: compiled from a bootstrap shim (TGocciaEngine.EvaluateShim).
     FShimCode: Boolean;
-    // Runtime-only: the module environment binding a top-level function
-    // declaration of a loader-linked module initializes when the module is
-    // linked. Such modules are compiled in process and never serialized, so
-    // this is not part of the bytecode format.
+    // The module environment binding a top-level function declaration
+    // initializes when a module is linked. Serialized with linked artifacts
+    // so import cycles instantiate these functions before any body runs.
     FModuleEnvironmentBinding: string;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;

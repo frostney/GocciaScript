@@ -25,7 +25,7 @@ type
     constructor CreatePrototypeHost;
     function GetAddress: Pointer;
     procedure EnsureOpen;
-    procedure InitializePrototype;
+    class procedure InitializePrototype;
   published
     function IsNullGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function AddressGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -54,6 +54,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -116,7 +117,7 @@ begin
   Result := FAddress;
 end;
 
-procedure TGocciaFFIPointerValue.InitializePrototype;
+class procedure TGocciaFFIPointerValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   MethodHost: TGocciaFFIPointerValue;
@@ -229,8 +230,22 @@ begin
     NativeUInt(TGocciaFFIPointerValue(AThisValue).GetAddress));
 end;
 
+procedure MaterializeFFIPointerPrototype;
+begin
+  TGocciaFFIPointerValue.InitializePrototype;
+end;
+
+procedure MaterializeFFINullPointer;
+begin
+  TGocciaFFIPointerValue.NullPointer;
+end;
+
 initialization
   GFFIPointerSharedSlot := RegisterRealmOwnedSlot('FFIPointer.shared');
   GFFINullPointerSlot := RegisterRealmSlot('FFIPointer.nullPointer');
+  RegisterSnapshotSlotMaterializer('FFIPointer.shared',
+    MaterializeFFIPointerPrototype);
+  RegisterSnapshotSlotMaterializer('FFIPointer.nullPointer',
+    MaterializeFFINullPointer);
 
 end.
