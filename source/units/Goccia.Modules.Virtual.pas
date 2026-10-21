@@ -20,13 +20,15 @@ const
     Declared here rather than in the shim so the loader can recognise the stamp
     without depending on the runtime extension. }
   VIRTUAL_MODULE_PROVENANCE_VITEST_MOCK = 'vitest:vi.mock';
+  VIRTUAL_MODULE_PROVENANCE_BYTECODE = 'precompiled';
 
 type
   TGocciaVirtualModuleContentType = (
     vmctJavaScript,
     vmctJSON,
     vmctText,
-    vmctBytes
+    vmctBytes,
+    vmctBytecode
   );
 
   TGocciaVirtualModuleDefinition = class
@@ -52,9 +54,15 @@ type
     property Text: string read FText;
   end;
 
+  TGocciaPreparedModuleBytes = function(const AAddress: string): TBytes of object;
+
+  TGocciaNormalizeModuleFileAddress = function(const APath: string): string of object;
+
   TGocciaVirtualModuleRegistry = class
   private
     FDefinitions: TOrderedStringMap<TGocciaVirtualModuleDefinition>;
+    FNormalizeFileAddress: TGocciaNormalizeModuleFileAddress;
+    function NormalizeFilePath(const APath: string): string;
     function CanonicalizeAddress(const AAddress,
       ABaseAddress: string): string;
     procedure FreeDefinitions;
@@ -71,7 +79,8 @@ type
       const AContent: string; const AProvenance: string = '');
     function CanonicalAddress(const AAddress,
       ABaseAddress: string): string;
-    procedure CopyFrom(const ASource: TGocciaVirtualModuleRegistry);
+    procedure CopyFrom(const ASource: TGocciaVirtualModuleRegistry;
+      const APreparedBytes: TGocciaPreparedModuleBytes = nil);
     function Contains(const AAddress: string): Boolean;
     function GetContentType(const AAddress: string;
       out AContentType: TGocciaVirtualModuleContentType): Boolean;
@@ -81,11 +90,15 @@ type
       AImportingAddress: string; out AResolvedAddress: string): Boolean;
     function TryGetDefinition(const AAddress: string;
       out ADefinition: TGocciaVirtualModuleDefinition): Boolean;
+
+    property NormalizeFileAddress: TGocciaNormalizeModuleFileAddress
+      read FNormalizeFileAddress write FNormalizeFileAddress;
   end;
 
 function ParseVirtualModuleContentType(const AType: string;
   out AContentType: TGocciaVirtualModuleContentType): Boolean;
 function IsRelativeSpecifier(const AValue: string): Boolean;
+function IsVirtualModuleURI(const AValue: string): Boolean;
 function VirtualModuleContentTypeName(
   const AContentType: TGocciaVirtualModuleContentType): string;
 
@@ -100,7 +113,7 @@ begin
     (Copy(AValue, 1, 3) = '../');
 end;
 
-function HasScheme(const AValue: string): Boolean;
+function IsVirtualModuleURI(const AValue: string): Boolean;
 var
   ColonPosition, SlashPosition: NativeInt;
 begin
@@ -140,7 +153,7 @@ begin
   Prefix := '';
   Remainder := AValue;
   SchemeEnd := Pos(':', AValue);
-  if HasScheme(AValue) then
+  if IsVirtualModuleURI(AValue) then
   begin
     Prefix := Copy(AValue, 1, SchemeEnd);
     Remainder := Copy(AValue, SchemeEnd + 1, MaxInt);
@@ -220,7 +233,7 @@ begin
   if SuffixStart > 0 then
     BaseAddress := Copy(BaseAddress, 1, SuffixStart - 1);
   DelimiterPosition := LastDelimiter('/', BaseAddress);
-  if (DelimiterPosition = 0) and HasScheme(BaseAddress) then
+  if (DelimiterPosition = 0) and IsVirtualModuleURI(BaseAddress) then
     DelimiterPosition := Pos(':', BaseAddress);
   BaseAddress := Copy(BaseAddress, 1, DelimiterPosition);
   Result := NormalizeVirtualAddress(BaseAddress + AModulePath);
@@ -251,6 +264,7 @@ begin
     vmctJSON: Result := 'json';
     vmctText: Result := 'text';
     vmctBytes: Result := 'bytes';
+    vmctBytecode: Result := 'bytecode';
   end;
 end;
 
@@ -296,6 +310,14 @@ begin
   FDefinitions.Clear;
 end;
 
+function TGocciaVirtualModuleRegistry.NormalizeFilePath(const APath: string): string;
+begin
+  if Assigned(FNormalizeFileAddress) then
+    Result := FNormalizeFileAddress(APath)
+  else
+    Result := ExpandFileName(APath);
+end;
+
 function TGocciaVirtualModuleRegistry.CanonicalizeAddress(
   const AAddress, ABaseAddress: string): string;
 var
@@ -303,18 +325,20 @@ var
 begin
   if IsRelativeSpecifier(AAddress) then
   begin
-    if HasScheme(ABaseAddress) then
+    if IsVirtualModuleURI(ABaseAddress) then
       Exit(ResolveRelativeVirtualAddress(AAddress, ABaseAddress));
     BaseDirectory := ABaseAddress;
     if (BaseDirectory = '') or not DirectoryExists(BaseDirectory) then
       BaseDirectory := ExtractFilePath(BaseDirectory);
     if BaseDirectory = '' then
       BaseDirectory := GetCurrentDir;
-    Exit(ExpandFileName(IncludeTrailingPathDelimiter(BaseDirectory) +
+    Exit(NormalizeFilePath(IncludeTrailingPathDelimiter(BaseDirectory) +
       AAddress));
   end;
-  if IsAbsolutePath(AAddress) then
-    Exit(ExpandFileName(AAddress));
+  if IsAbsolutePath(AAddress) or
+     (Assigned(FNormalizeFileAddress) and (AAddress <> '') and
+      (AAddress[1] = '/')) then
+    Exit(NormalizeFilePath(AAddress));
   Result := NormalizeVirtualAddress(AAddress);
 end;
 
@@ -366,15 +390,43 @@ begin
 end;
 
 procedure TGocciaVirtualModuleRegistry.CopyFrom(
-  const ASource: TGocciaVirtualModuleRegistry);
+  const ASource: TGocciaVirtualModuleRegistry;
+  const APreparedBytes: TGocciaPreparedModuleBytes);
 var
   Pair: TOrderedStringMap<TGocciaVirtualModuleDefinition>.TKeyValuePair;
+  Copied: TGocciaVirtualModuleRegistry;
+  OldDefinitions: TOrderedStringMap<TGocciaVirtualModuleDefinition>;
+  Bytes: TBytes;
 begin
-  FreeDefinitions;
-  if not Assigned(ASource) then
+  if ASource = Self then
     Exit;
-  for Pair in ASource.FDefinitions do
-    FDefinitions.Add(Pair.Key, Pair.Value.Clone);
+  Copied := TGocciaVirtualModuleRegistry.Create;
+  try
+    if Assigned(ASource) then
+      for Pair in ASource.FDefinitions do
+      begin
+        if (Pair.Value.ContentType = vmctBytecode) and
+           (Length(Pair.Value.Bytes) = 0) then
+        begin
+          if not Assigned(APreparedBytes) then
+            raise EInvalidOperation.CreateFmt(
+              'Prepared bytecode module "%s" has no available bytes.', [Pair.Key]);
+          Bytes := APreparedBytes(Pair.Key);
+          Copied.FDefinitions.Add(Pair.Key,
+            TGocciaVirtualModuleDefinition.Create(Pair.Key, vmctBytecode,
+              '', Bytes, Pair.Value.Provenance));
+        end
+        else
+          Copied.FDefinitions.Add(Pair.Key, Pair.Value.Clone);
+      end;
+    { Publish only a complete copy. A missing prepared template must not
+      leave the destination registry and its decoded cache out of sync. }
+    OldDefinitions := FDefinitions;
+    FDefinitions := Copied.FDefinitions;
+    Copied.FDefinitions := OldDefinitions;
+  finally
+    Copied.Free;
+  end;
 end;
 
 function TGocciaVirtualModuleRegistry.Contains(
@@ -412,7 +464,7 @@ begin
   if not FDefinitions.TryGetValue(AAddress, Definition) then
     raise EStreamError.Create('Virtual module not found: ' + AAddress);
   Definition.Loaded := True;
-  if Definition.ContentType = vmctBytes then
+  if Definition.ContentType in [vmctBytes, vmctBytecode] then
     Result := Copy(Definition.Bytes, 0, Length(Definition.Bytes))
   else
     Result := BytesOf(Definition.Text);
@@ -426,15 +478,21 @@ begin
   Candidate := AModulePath;
   if IsRelativeSpecifier(Candidate) then
   begin
-    if HasScheme(AImportingAddress) or
-       FDefinitions.ContainsKey(AImportingAddress) then
+    { Registration does not turn a filesystem path into a URI. Drive and
+      sandbox-rooted paths keep native separators and literal #/? characters. }
+    if IsVirtualModuleURI(AImportingAddress) or
+       (FDefinitions.ContainsKey(AImportingAddress) and
+        not IsAbsolutePath(AImportingAddress) and
+        ((AImportingAddress = '') or (AImportingAddress[1] <> '/'))) then
       Candidate := ResolveRelativeVirtualAddress(Candidate, AImportingAddress)
     else
-      Candidate := ExpandFileName(ExtractFilePath(AImportingAddress) +
+      Candidate := NormalizeFilePath(ExtractFilePath(AImportingAddress) +
         Candidate);
   end
-  else if IsAbsolutePath(Candidate) then
-    Candidate := ExpandFileName(Candidate)
+  else if IsAbsolutePath(Candidate) or
+          (Assigned(FNormalizeFileAddress) and (Candidate <> '') and
+           (Candidate[1] = '/')) then
+    Candidate := NormalizeFilePath(Candidate)
   else
     Candidate := NormalizeVirtualAddress(Candidate);
   AResolvedAddress := Candidate;

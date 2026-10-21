@@ -134,6 +134,7 @@ type
     FOutputPath: TStringOption;
     FSilent: TFlagOption;
     FPrint: TFlagOption;
+    FPreferBytecode: TFlagOption;
     FSourceMap: TStringOption;
     FHostEnvironmentModule: TStringOption;
     FGlobalFiles: TRepeatableOption;
@@ -455,6 +456,8 @@ begin
   FSilent := AddFlag('silent', 'Suppress console output from the script');
   FPrint := AddFlag('print',
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
+  FPreferBytecode := AddFlag('prefer-bytecode',
+    'Load imported modules from companion .gbc files when present');
   FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
     'Write a .map source map file (optional: explicit path)')));
   FSourceMap.WritesHostFile := True;
@@ -505,6 +508,8 @@ var
   HostEnvironmentModulePath: string;
   Runtime: TGocciaRuntimeCore;
 begin
+  AEngine.ModuleLoader.PreferBytecode :=
+    ResolveFlagOption(FPreferBytecode, AFileConfig);
   Runtime := AttachRuntime(AEngine);
 
   { The command line names a host module; a config names a guest one. }
@@ -902,8 +907,19 @@ end;
 function TRunnerApp.RunBytecodeModule(const AEngine: TGocciaEngine;
   const AModule: TGocciaBytecodeModule;
   const AFileName: string): TGocciaValue;
+var
+  RuntimeAddress, SourceExtension: string;
 begin
-  Result := AEngine.RunModuleForSourceType(AModule, AFileName);
+  RuntimeAddress := AFileName;
+  SourceExtension := ExtractFileExt(AModule.SourcePath);
+  if Assigned(AModule.LinkPlan) and IsScriptExtension(SourceExtension) then
+  begin
+    { A back-import of the original source filename must reach this entry's
+      module record, including when only its companion artifact is shipped. }
+    RuntimeAddress := ChangeFileExt(AFileName, SourceExtension);
+    AEngine.ModuleLoader.RecordBytecodeCompanion(RuntimeAddress, AFileName);
+  end;
+  Result := AEngine.RunModuleForSourceType(AModule, RuntimeAddress);
 end;
 
 { Converts the run's last value for what will read it (--print, or the JSON
@@ -1033,6 +1049,7 @@ begin
   try
     Engine := CreateEngine(AFileName, nil);
     try
+      Engine.ValidateBytecodeModule(Module);
       FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
       Engine.RetainModule(Module);
       RetainedModule := Module;
@@ -1646,6 +1663,8 @@ begin
     climb the host filesystem from its root and find a config unrelated to
     the run. The root config, already merged into the options, governs. }
   EmptyConfig := nil;
+  AEngine.ModuleLoader.PreferBytecode :=
+    ResolveFlagOption(FPreferBytecode, EmptyConfig);
   Verdict := FileConfigVerdict('');
   if Assigned(AParentEngine) then
     AEngine.ConfigureCapabilityAuditAsChildOf(AParentEngine)

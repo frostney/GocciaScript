@@ -1,0 +1,12 @@
+{
+  "name": "smol-toml",
+  "version": "1.8.0",
+  "repository": "https://github.com/squirrelchat/smol-toml",
+  "license": "BSD-3-Clause",
+  "tarball": "https://registry.npmjs.org/smol-toml/-/smol-toml-1.8.0.tgz",
+  "integrity": "sha512-kCZr2V3ch9i00x8zXRhjUNVcjG9ijES5dDudkXvUVCT5QlJNQWElSJdZqyPemffHoLNUYwOcou0Fy+ojN0uHSQ==",
+  "tarballSHA256": "1fc995be91cdb777fc13e20c2edfebaaf60ef4e4d2d5331caef2837b04d37892",
+  "bundleSHA256": "0657068014ebc8af40e37af86e67729e989d7d346e3001acec972fb0fb6eea3b",
+  "bundler": "Bun 1.4.2",
+  "command": "bun build ./package/dist/index.js --outfile=smol-toml.js --target=browser"
+}

@@ -22,6 +22,7 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Debug,
   Goccia.Bytecode.Module,
+  Goccia.Bytecode.Profile,
   Goccia.Compiler,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Expressions,
@@ -484,6 +485,7 @@ var
   SourceLines: TStringList;
   Options: TGocciaCompilerOptimizationOptions;
   ParserOptions: TGocciaParserOptions;
+  Profile: TGocciaCompileProfile;
 begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   SourceLines := CreateTextLines(ASource);
@@ -512,6 +514,15 @@ begin
     Options.EnableDeadBranchElimination := AEnableDeadBranchElimination;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(ProgramNode);
+    Profile := Default(TGocciaCompileProfile);
+    Profile.StrictTypes := AStrictTypes;
+    if ATraditionalForLoops then
+      Profile.CompatibilityMask := Profile.CompatibilityMask or BYTECODE_COMPAT_TRADITIONAL_FOR;
+    if AVarDeclarations then
+      Profile.CompatibilityMask := Profile.CompatibilityMask or BYTECODE_COMPAT_VAR;
+    if ANonStrictMode then
+      Profile.CompatibilityMask := Profile.CompatibilityMask or BYTECODE_COMPAT_NON_STRICT;
+    Result.CompileProfile := Profile;
   finally
     Compiler.Free;
     ProgramNode.Free;
@@ -2517,6 +2528,7 @@ var
     Raised: Boolean;
   begin
     Module := TGocciaBytecodeModule.Create('test', '<malformed>');
+    Module.CompileProfile := Default(TGocciaCompileProfile);
     Module.TopLevel := ATemplate;
     TempFile := GetTempFileName + '.gbc';
     try
