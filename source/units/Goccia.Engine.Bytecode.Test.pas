@@ -85,6 +85,9 @@ type
       const AThrow: Boolean);
     procedure TestBytecodeValidationPreservesDetection;
     procedure TestBytecodeRunsPreserveDetection;
+    procedure TestCopiedRegistryReplacesDecodedBytecode;
+    procedure TestPreparedRegistryCopyAfterEngineTeardown;
+    procedure TestBufferedRegistryCopyAfterEngineTeardown;
     procedure TestCallerOwnedLoaderDetachesBytecodeCallbacks;
     procedure TestCallerOwnedLoaderPreservesHostCallbacks;
   public
@@ -98,6 +101,12 @@ end;
 
 procedure TEngineBytecodeTests.SetupTests;
 begin
+  Test('Copying a registry replaces decoded registrations at the same address',
+    TestCopiedRegistryReplacesDecodedBytecode);
+  Test('Copying expired prepared entries fails without replacing the destination',
+    TestPreparedRegistryCopyAfterEngineTeardown);
+  Test('Copied byte buffers remain usable after their original engine is freed',
+    TestBufferedRegistryCopyAfterEngineTeardown);
   Test('A caller-owned loader rejects bytecode after its engine is freed',
     TestCallerOwnedLoaderDetachesBytecodeCallbacks);
   Test('Engine teardown preserves replacement host bytecode callbacks',
@@ -988,6 +997,108 @@ procedure TEngineBytecodeTests.ObserveHostBytecode(
   const AModule: TGocciaBytecodeModule);
 begin
   Inc(FHostBytecodeCalls);
+end;
+
+procedure TEngineBytecodeTests.TestCopiedRegistryReplacesDecodedBytecode;
+var
+  Source: TStringList;
+  Destination, Origin: TGocciaEngine;
+begin
+  Source := TStringList.Create;
+  Destination := nil;
+  Origin := nil;
+  try
+    Source.Text := 'import { value } from "virtual:library";' +
+      'globalThis.answer = value;';
+    Destination := TGocciaEngine.Create(RuntimeAddress('destination.mjs'), Source);
+    Origin := TGocciaEngine.Create(RuntimeAddress('origin.mjs'), Source);
+    Destination.RegisterBytecodeModule('virtual:library',
+      CompileBuffer('export const value = 1;', '/compile/library.mjs'));
+    Origin.RegisterBytecodeModule('virtual:library',
+      CompileBuffer('export const value = 2;', '/compile/library.mjs'));
+    Destination.ModuleLoader.CopyVirtualModulesFrom(Origin.ModuleLoader);
+    Destination.Execute;
+    Expect<string>(TGocciaObjectValue(Destination.Realm.GlobalObject)
+      .GetProperty('answer').ToStringLiteral.Value).ToBe('2');
+  finally
+    Origin.Free;
+    Destination.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TEngineBytecodeTests.TestPreparedRegistryCopyAfterEngineTeardown;
+var
+  Source: TStringList;
+  Loader: TGocciaModuleLoader;
+  Origin, Destination: TGocciaEngine;
+  Module: TGocciaBytecodeModule;
+  FailureReason: string;
+begin
+  Source := TStringList.Create;
+  Loader := TGocciaModuleLoader.Create(RuntimeAddress('prepared.mjs'));
+  Origin := nil;
+  Destination := nil;
+  try
+    Source.Text := 'import { value } from "virtual:prepared";' +
+      'globalThis.answer = value;';
+    Origin := TGocciaEngine.Create(RuntimeAddress('prepared.mjs'), Source, Loader);
+    Module := LoadModuleFromBuffer(
+      CompileBuffer('export const value = 42;', '/compile/prepared.mjs'));
+    Origin.RetainModule(Module);
+    Origin.RunModuleForSourceType(Module, 'virtual:prepared');
+    Destination := TGocciaEngine.Create(RuntimeAddress('destination.mjs'), Source);
+    Destination.ModuleLoader.CopyVirtualModulesFrom(Loader);
+    FreeAndNil(Origin);
+    FailureReason := '';
+    try
+      Destination.ModuleLoader.CopyVirtualModulesFrom(Loader);
+    except
+      on E: Exception do
+        FailureReason := E.Message;
+    end;
+    Expect<Boolean>(Pos('no longer available', FailureReason) > 0).ToBe(True);
+    { The failed replacement preserves the successful copy made while the
+      original owner was alive. Its independent bytes still execute. }
+    Destination.Execute;
+    Expect<string>(TGocciaObjectValue(Destination.Realm.GlobalObject)
+      .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+  finally
+    Destination.Free;
+    Origin.Free;
+    Loader.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TEngineBytecodeTests.TestBufferedRegistryCopyAfterEngineTeardown;
+var
+  Source: TStringList;
+  Loader: TGocciaModuleLoader;
+  Origin, Destination: TGocciaEngine;
+begin
+  Source := TStringList.Create;
+  Loader := TGocciaModuleLoader.Create(RuntimeAddress('origin.mjs'));
+  Origin := nil;
+  Destination := nil;
+  try
+    Source.Text := 'import { value } from "virtual:library";' +
+      'globalThis.answer = value;';
+    Origin := TGocciaEngine.Create(RuntimeAddress('origin.mjs'), Source, Loader);
+    Origin.RegisterBytecodeModule('virtual:library',
+      CompileBuffer('export const value = 42;', '/compile/library.mjs'));
+    FreeAndNil(Origin);
+    Destination := TGocciaEngine.Create(RuntimeAddress('destination.mjs'), Source);
+    Destination.ModuleLoader.CopyVirtualModulesFrom(Loader);
+    Destination.Execute;
+    Expect<string>(TGocciaObjectValue(Destination.Realm.GlobalObject)
+      .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+  finally
+    Destination.Free;
+    Origin.Free;
+    Loader.Free;
+    Source.Free;
+  end;
 end;
 
 procedure TEngineBytecodeTests.TestCallerOwnedLoaderDetachesBytecodeCallbacks;

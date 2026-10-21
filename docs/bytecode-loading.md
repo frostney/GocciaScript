@@ -46,6 +46,16 @@ without trusting its original compiler filename. A custom content provider with
 its own path namespace overrides `NormalizeEntryAddress`; the sandbox provider
 normalizes buffered entries without requiring their source files to exist.
 
+A caller-owned module loader may outlive its engine. Engine teardown detaches
+its bytecode callbacks and removes its borrowed decoded templates. Registered
+buffers remain owned by the loader and can be copied into another engine with
+`ModuleLoader.CopyVirtualModulesFrom`. Prepared entries registered through
+`RunModuleForSourceType` serialize lazily when copied, so copy those while their
+owning engine is alive; copying an expired prepared entry raises an error and
+leaves the destination registry unchanged. A successful registry copy discards
+the destination's decoded registration cache so subsequent imports use the
+copied bytes.
+
 `Engine.RunBytecodeBuffer(Bytes, Address)` runs a compiled entry with normal
 module linking and runtime-idle handling. It returns the entry's completion
 value. Registered modules and ordinary source modules can coexist in the same

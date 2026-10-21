@@ -1505,6 +1505,8 @@ begin
 end;
 
 destructor TGocciaEngine.Destroy;
+var
+  I: Integer;
 begin
   { Async-context snapshots hold this engine's objects, and `enterWith` can
     leave one installed with no scope to unwind it. Drop everything this engine
@@ -1549,6 +1551,10 @@ begin
   if (TGarbageCollector.Instance <> nil) and Assigned(FGlobalScope) then
     TGarbageCollector.Instance.RemoveRootObject(FGlobalScope);
 
+    if Assigned(FModuleLoader) and Assigned(FRetainedModules) then
+      for I := 0 to FRetainedModules.Count - 1 do
+        FModuleLoader.ForgetBytecodeModule(
+          TGocciaBytecodeModule(FRetainedModules[I]));
     FRetainedModules.Free;
     FLazyThunks.Free;
     FExtensions.Free;
@@ -4234,6 +4240,7 @@ end;
 
 procedure TGocciaEngine.ReleaseModuleBytecode(const AModule: TGocciaBytecodeModule);
 begin
+  FModuleLoader.ForgetBytecodeModule(AModule);
   FRetainedModules.Remove(AModule);
 end;
 

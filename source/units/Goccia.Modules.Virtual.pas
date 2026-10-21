@@ -54,6 +54,8 @@ type
     property Text: string read FText;
   end;
 
+  TGocciaPreparedModuleBytes = function(const AAddress: string): TBytes of object;
+
   TGocciaNormalizeModuleFileAddress = function(const APath: string): string of object;
 
   TGocciaVirtualModuleRegistry = class
@@ -77,7 +79,8 @@ type
       const AContent: string; const AProvenance: string = '');
     function CanonicalAddress(const AAddress,
       ABaseAddress: string): string;
-    procedure CopyFrom(const ASource: TGocciaVirtualModuleRegistry);
+    procedure CopyFrom(const ASource: TGocciaVirtualModuleRegistry;
+      const APreparedBytes: TGocciaPreparedModuleBytes = nil);
     function Contains(const AAddress: string): Boolean;
     function GetContentType(const AAddress: string;
       out AContentType: TGocciaVirtualModuleContentType): Boolean;
@@ -387,15 +390,43 @@ begin
 end;
 
 procedure TGocciaVirtualModuleRegistry.CopyFrom(
-  const ASource: TGocciaVirtualModuleRegistry);
+  const ASource: TGocciaVirtualModuleRegistry;
+  const APreparedBytes: TGocciaPreparedModuleBytes);
 var
   Pair: TOrderedStringMap<TGocciaVirtualModuleDefinition>.TKeyValuePair;
+  Copied: TGocciaVirtualModuleRegistry;
+  OldDefinitions: TOrderedStringMap<TGocciaVirtualModuleDefinition>;
+  Bytes: TBytes;
 begin
-  FreeDefinitions;
-  if not Assigned(ASource) then
+  if ASource = Self then
     Exit;
-  for Pair in ASource.FDefinitions do
-    FDefinitions.Add(Pair.Key, Pair.Value.Clone);
+  Copied := TGocciaVirtualModuleRegistry.Create;
+  try
+    if Assigned(ASource) then
+      for Pair in ASource.FDefinitions do
+      begin
+        if (Pair.Value.ContentType = vmctBytecode) and
+           (Length(Pair.Value.Bytes) = 0) then
+        begin
+          if not Assigned(APreparedBytes) then
+            raise EInvalidOperation.CreateFmt(
+              'Prepared bytecode module "%s" has no available bytes.', [Pair.Key]);
+          Bytes := APreparedBytes(Pair.Key);
+          Copied.FDefinitions.Add(Pair.Key,
+            TGocciaVirtualModuleDefinition.Create(Pair.Key, vmctBytecode,
+              '', Bytes, Pair.Value.Provenance));
+        end
+        else
+          Copied.FDefinitions.Add(Pair.Key, Pair.Value.Clone);
+      end;
+    { Publish only a complete copy. A missing prepared template must not
+      leave the destination registry and its decoded cache out of sync. }
+    OldDefinitions := FDefinitions;
+    FDefinitions := Copied.FDefinitions;
+    Copied.FDefinitions := OldDefinitions;
+  finally
+    Copied.Free;
+  end;
 end;
 
 function TGocciaVirtualModuleRegistry.Contains(

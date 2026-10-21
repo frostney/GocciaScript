@@ -257,6 +257,7 @@ type
       const ARequestedModules: TGocciaModuleList = nil);
     procedure ValidateDeferredModuleLinks(const AResolvedPath,
       AImportingFilePath: string; const ASeen: TOrderedStringMap<Boolean>);
+    function PreparedModuleBytes(const AAddress: string): TBytes;
     function GetASIEnabled: Boolean;
     function GetJSXEnabled: Boolean;
     function GetVarEnabled: Boolean;
@@ -281,6 +282,7 @@ type
       const AContentProvider: TGocciaModuleContentProvider = nil);
     destructor Destroy; override;
 
+    procedure ForgetBytecodeModule(const AModule: TGocciaBytecodeModule);
     procedure RegisterPrecompiledModule(const AAddress: string;
       const AModule: TGocciaBytecodeModule; const ABytes: TBytes;
       const ABaseAddress: string = '');
@@ -1775,28 +1777,43 @@ begin
   FPrecompiledModules.Remove(CanonicalAddress);
 end;
 
+procedure TGocciaModuleLoader.ForgetBytecodeModule(
+  const AModule: TGocciaBytecodeModule);
+var
+  Prepared: TOrderedStringMap<TGocciaBytecodeModule>.TKeyValuePair;
+  Pending: TOrderedStringMap<TGocciaPendingBytecodeModule>.TKeyValuePair;
+begin
+  { These maps borrow templates. Removing entries never frees code, and
+    OrderedStringMap removal preserves the remaining enumeration indices. }
+  for Prepared in FPrecompiledModules do
+    if Prepared.Value = AModule then
+      FPrecompiledModules.Remove(Prepared.Key);
+  for Pending in FPendingBytecodeModules do
+    if Pending.Value.Module = AModule then
+      FPendingBytecodeModules.Remove(Pending.Key);
+end;
+
+function TGocciaModuleLoader.PreparedModuleBytes(
+  const AAddress: string): TBytes;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  if not FPrecompiledModules.TryGetValue(AAddress, Module) then
+    raise EInvalidOperation.CreateFmt(
+      'Prepared bytecode module "%s" is no longer available.', [AAddress]);
+  Result := SaveModuleToBuffer(Module);
+end;
+
 procedure TGocciaModuleLoader.CopyVirtualModulesFrom(
   const ASource: TGocciaModuleLoader);
-var
-  Pair: TOrderedStringMap<TGocciaBytecodeModule>.TKeyValuePair;
-  Definition: TGocciaVirtualModuleDefinition;
-  Provenance: string;
 begin
-  if not Assigned(ASource) then
+  if not Assigned(ASource) or (ASource = Self) then
     Exit;
-  FVirtualModules.CopyFrom(ASource.VirtualModules);
-  { Prepared entries borrow verified code and need no encode/decode round trip
-    during execution. A child realm needs its own templates, so encode those
-    entries only when copying the registry to that realm. }
-  for Pair in ASource.FPrecompiledModules do
-    if FVirtualModules.TryGetDefinition(Pair.Key, Definition) and
-       (Definition.ContentType = vmctBytecode) and
-       (Length(Definition.Bytes) = 0) then
-    begin
-      Provenance := Definition.Provenance;
-      FVirtualModules.Add(Pair.Key, '', vmctBytecode, '',
-        SaveModuleToBuffer(Pair.Value), Provenance);
-    end;
+  { Prepared entries borrow verified code during execution. A child realm
+    needs its own templates; encode only while copying, while the owner is
+    alive. Expired prepared entries fail before replacing the registry. }
+  FVirtualModules.CopyFrom(ASource.VirtualModules, ASource.PreparedModuleBytes);
+  FPrecompiledModules.Clear;
 end;
 
 function TGocciaModuleLoader.ResolveModuleURL(const AModulePath,
