@@ -622,9 +622,11 @@ var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   Runtime: TGocciaRuntimeCore;
 begin
+  { Globals modules need a content provider, but testing extensions still
+    attach after globals so their imports see the injected values. }
+  Runtime := AttachRuntime(AEngine);
   ApplyGlobalsToEngine(AEngine);
   InitializeRuntime(AEngine);
-  Runtime := GetRuntime(AEngine);
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.ExperimentalAST, AFileConfig) then
     Runtime.Install(TGocciaASTRuntimeExtension.Create);
