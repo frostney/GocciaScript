@@ -88,6 +88,11 @@ All four layers enforce the same rules, providing defence in depth. The typical 
 
 ## Platform-Specific Pitfalls
 
+### Focused Builds and Tests
+
+Use the [Build System's focused workflow](../build-system.md#build-specific-components)
+for explicit targets, test selection, parallelism and scoped cleaning.
+
 ### Stale FPC Build Artifacts
 
 FPC 3.2.2 can report stale compiled state as misleading internal compiler
@@ -105,13 +110,12 @@ error (a real `Error:` in source without those symptoms) is never retried.
 
 If the retry also fails, `build.pas` reports the retry's output and exits
 non-zero. Only then diagnose the reported Pascal source line. A manual
-`--clean` is needed only for a failure the retry did not fix, or to clean
-every target at once:
+`--clean` is needed only for a failure the retry did not fix, or to explicitly rebuild selected targets from clean unit caches:
 
 ```bash
 ./build.pas --clean loaderbare
 ./build.pas --clean testrunner
-./build.pas --clean
+./build.pas --clean tests --test=TimingUtils
 ```
 
 ### Website Checks Are Inert Without Its Dependencies

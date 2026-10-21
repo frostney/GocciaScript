@@ -43,6 +43,9 @@ jobs:
           npx tsx scripts/check-vm-stack-stores.ts --self-test
           npx tsx scripts/check-vm-stack-stores.ts
 
+      - name: Check build-system behavior
+        run: python3 scripts/test-build-system.py
+
       - name: Build all
         run: ./build.pas --prod
 
