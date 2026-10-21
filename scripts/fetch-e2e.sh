@@ -25,10 +25,20 @@ trap cleanup EXIT
 
 python3 scripts/fetch_test_server.py "$PORT_FILE" &
 SERVER_PID=$!
-for _ in $(seq 1 50); do
+# Loaded CI hosts can take more than five seconds to start Python. Keep the
+# readiness check bounded, and distinguish startup failure from slow startup.
+for _ in $(seq 1 300); do
   [ -s "$PORT_FILE" ] && break
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "FAIL: fetch test server exited before writing its port" >&2
+    exit 1
+  fi
   sleep 0.1
 done
+if [ ! -s "$PORT_FILE" ]; then
+  echo "FAIL: fetch test server did not write its port within 30 seconds" >&2
+  exit 1
+fi
 PORT="$(cat "$PORT_FILE")"
 BASE="http://127.0.0.1:${PORT}"
 
