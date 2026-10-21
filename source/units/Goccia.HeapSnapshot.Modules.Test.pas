@@ -22,6 +22,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Capabilities,
+  Goccia.Bytecode.Binary,
   Goccia.Engine,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot,
@@ -78,6 +79,7 @@ type
     function RoundTripEntry(const AEntry: string; const ABytes: TBytes;
       const ACheck: string; const AAfterJobs: string = ''): string;
     procedure DefineGraph;
+    function CompileArtifact(const AName, AText: string): TBytes;
   public
     procedure SetupTests; override;
     procedure BeforeAll; override;
@@ -99,6 +101,8 @@ type
     procedure TestRestoreHonorsReadDenial;
     procedure TestRecordOnlyRefusalHasNoUnrelatedRoot;
     procedure TestRefusesStateOutsideTheRecords;
+    procedure TestRefusesPrecompiledModuleRecords;
+    procedure TestFailedArtifactReloadKeepsProvenance;
     procedure TestRefusesForgedLocalExports;
     procedure TestRefusesAMissingExportValue;
     procedure TestManyCompactBindingsRestore;
@@ -418,6 +422,10 @@ begin
     TestRecordOnlyRefusalHasNoUnrelatedRoot);
   Test('Loader state outside the records refuses the snapshot',
     TestRefusesStateOutsideTheRecords);
+  Test('A precompiled module record is not treated as a source record',
+    TestRefusesPrecompiledModuleRecords);
+  Test('A failed artifact reload restores source snapshot provenance',
+    TestFailedArtifactReloadKeepsProvenance);
   Test('A local export forged outside its module''s own bindings is refused',
     TestRefusesForgedLocalExports);
   Test('An export without a value is refused',
@@ -978,6 +986,123 @@ begin
     Run.Free;
     HostModule.Free;
     Stream.Free;
+  end;
+end;
+
+function THeapSnapshotModulesTests.CompileArtifact(const AName,
+  AText: string): TBytes;
+var
+  CompileRun: TModuleRun;
+  Lines: TStringList;
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaSourcePipelineResult;
+begin
+  Lines := TStringList.Create;
+  CompileRun := nil;
+  Parsed := nil;
+  try
+    Lines.Text := AText;
+    CompileRun := TModuleRun.Create(PathOf(AName));
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.SourceType := stModule;
+    Options.Compatibility := CompileRun.Engine.Compatibility;
+    Options.Preprocessors := TGocciaEngine.DefaultPreprocessors;
+    Parsed := TGocciaSourcePipeline.Parse(Lines, PathOf(AName), Options);
+    Result := SaveModuleToBuffer(
+      CompileRun.Engine.CompileImportableModule(Parsed.ProgramNode));
+  finally
+    Parsed.Free;
+    CompileRun.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotModulesTests.TestRefusesPrecompiledModuleRecords;
+var
+  Bytes: TBytes;
+  Refusal: string;
+  Run: TModuleRun;
+  Session: TGocciaHeapSnapshotSession;
+  Stream: TBytesStream;
+begin
+  Define('artifact.js', 'export const answer = 42;');
+  Define('artifactmain.js', 'import { answer } from "./artifact.js"; ' +
+    'capture({ answer, read: () => answer });');
+  Bytes := CompileArtifact('artifact.js', 'export const answer = 42;');
+  Run := TModuleRun.Create(PathOf('artifactmain.js'));
+  Session := nil;
+  Stream := TBytesStream.Create;
+  try
+    Run.Engine.RegisterBytecodeModule(PathOf('artifact.js'), Bytes);
+    Session := TGocciaHeapSnapshotSession.Create(Run.Engine);
+    Run.Engine.Execute;
+    Expect<string>(TGocciaObjectValue(Run.Captured.Value)
+      .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
+    Refusal := '';
+    try
+      Session.Snapshot([Run.Captured.Value], Stream);
+    except
+      on E: EGocciaHeapSnapshotRefused do
+        Refusal := E.Message;
+    end;
+    Expect<Boolean>(Pos('artifact.js', Refusal) > 0).ToBe(True);
+    Expect<Boolean>(Pos('host', Refusal) > 0).ToBe(True);
+    Expect<Int64>(Stream.Size).ToBe(0);
+  finally
+    Session.Free;
+    Run.Free;
+    Stream.Free;
+  end;
+end;
+
+procedure THeapSnapshotModulesTests.TestFailedArtifactReloadKeepsProvenance;
+var
+  Bytes: TBytes;
+  Run: TModuleRun;
+  Module: TGocciaModule;
+  Code: TObject;
+  Stream: TFileStream;
+  Failure: string;
+  Value: TGocciaValue;
+begin
+  Define('reloadsource.js', 'export const answer = 42;');
+  Define('reloadmain.js', 'import { answer } from "./reloadsource.js"; ' +
+    'capture({ read: () => answer });');
+  Run := TModuleRun.Create(PathOf('reloadmain.js'));
+  try
+    Run.Engine.Execute;
+    Module := Run.Engine.ModuleLoader.LoadModule(PathOf('reloadsource.js'),
+      PathOf('reloadmain.js'));
+    Expect<Integer>(Ord(Module.SnapshotKind)).ToBe(Ord(mskSource));
+    Code := Module.CompiledModule;
+    Bytes := CompileArtifact('reloadsource.js',
+      'import "./absent-reload-dependency.js"; export const answer = 84;');
+    Stream := TFileStream.Create(PathOf('reloadsource.gbc'), fmCreate);
+    try
+      Stream.WriteBuffer(Bytes[0], Length(Bytes));
+    finally
+      Stream.Free;
+    end;
+    Expect<Integer>(FileSetDate(PathOf('reloadsource.gbc'),
+      DateTimeToFileDate(Module.LastModified + 10 / 86400))).ToBe(0);
+    Run.Engine.ModuleLoader.PreferBytecode := True;
+    Failure := '';
+    try
+      Run.Engine.ModuleLoader.LoadModule(PathOf('reloadsource.js'),
+        PathOf('reloadmain.js'));
+    except
+      on E: Exception do
+        Failure := E.Message;
+    end;
+    Expect<Boolean>(Failure <> '').ToBe(True);
+    Expect<Boolean>(Pos('absent-reload-dependency', Failure) > 0).ToBe(True);
+    Expect<Integer>(Ord(Module.SnapshotKind)).ToBe(Ord(mskSource));
+    Expect<Boolean>(Module.CompiledModule = Code).ToBe(True);
+    TGarbageCollector.Instance.Collect;
+    Expect<Boolean>(Module.TryGetExportValue('answer', Value)).ToBe(True);
+    Expect<string>(Value.ToStringLiteral.Value).ToBe('42');
+  finally
+    Run.Free;
   end;
 end;
 

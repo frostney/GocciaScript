@@ -85,6 +85,7 @@ type
     procedure TestGeneratorResumesWhereItStopped;
     procedure TestGeneratorKeepsItsHandlers;
     procedure TestFunctionNeedsItsModuleCompiled;
+    procedure TestRetainedShimAndEvalProfiles;
     procedure TestRefusesPromisesUntilTheirCodec;
     procedure TestRestoredFrameKeepsItsCharge;
     procedure TestSameCodeCompiledTwiceIsNamed;
@@ -208,6 +209,8 @@ begin
     TestGeneratorKeepsItsHandlers);
   Test('A function restores only where its module is compiled',
     TestFunctionNeedsItsModuleCompiled);
+  Test('Retained shims and strict eval code have profiles for snapshot matching',
+    TestRetainedShimAndEvalProfiles);
   Test('A restored frame is charged before it is allocated, and kept',
     TestRestoredFrameKeepsItsCharge);
   Test('Code compiled twice is named by its bytecode either time',
@@ -364,6 +367,19 @@ begin
   // An engine that never compiled that module.
   Expect<Boolean>(Pos('module this engine has not compiled',
     RestoreRefusal(Bytes)) > 0).ToBe(True);
+end;
+
+procedure THeapSnapshotTests.TestRetainedShimAndEvalProfiles;
+begin
+  Expect<string>(RoundTripModule(
+    'const proto = ({}).__proto__; capture(() => 17);',
+    'restored()')).ToBe('17');
+  Expect<string>(RoundTripModule(
+    'eval(''"use strict"; 1;''); capture(() => 18);',
+    'restored()', True)).ToBe('18');
+  Expect<string>(RoundTripModule(
+    '(0, eval)(''"use strict"; 1;''); capture(() => 19);',
+    'restored()', True)).ToBe('19');
 end;
 
 procedure THeapSnapshotTests.TestRefusesPromisesUntilTheirCodec;

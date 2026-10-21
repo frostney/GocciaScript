@@ -162,3 +162,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0150 — A heap snapshot restores module records whole, compiling each source module without linking it, and writes data modules as values](0150-heap-snapshots-restore-module-records-whole.md)
 - [0151 — A deterministic sandbox run stamps its files with the deterministic clock](0151-deterministic-sandbox-runs-stamp-files-with-the-deterministic-clock.md)
 - [0152 — A heap restore commits built-in differences after every fallible step](0152-heap-snapshot-builtins-commit-last.md)
+- [0153 — Precompiled modules use the module linker](0153-precompiled-modules-use-the-module-linker.md)

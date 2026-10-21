@@ -539,10 +539,11 @@ begin
   Result := TGocciaNumberLiteralValue.Create(IntegralPart);
 end;
 
-// §21.3.2.28 Math.round ( x )
+// ES2026 §21.3.2.29 Math.round ( x )
 function TGocciaMath.MathRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   NumberArg: TGocciaNumberLiteralValue;
+  IntegralPart, FractionalPart: Double;
 begin
   // Step 1: Let n be ? ToNumber(x).
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
@@ -553,14 +554,25 @@ begin
     Result := NumberArg;
     Exit;
   end;
-  // Step 3: If n < +0𝔽 and n ≥ -0.5𝔽, return -0𝔽.
-  if (NumberArg.Value < 0) and (NumberArg.Value >= -0.5) then
-    Result := TGocciaNumberLiteralValue.NegativeZeroValue
-  else if (NumberArg.Value > 0) and (NumberArg.Value < 0.5) then
+  // Step 3: If n < 0.5𝔽 and n > +0𝔽, return +0𝔽.
+  if (NumberArg.Value > 0) and (NumberArg.Value < 0.5) then
     Result := TGocciaNumberLiteralValue.ZeroValue
-  // Step 4: Return floor(n + 0.5).
+  // Step 4: If n < -0𝔽 and n ≥ -0.5𝔽, return -0𝔽.
+  else if (NumberArg.Value < 0) and (NumberArg.Value >= -0.5) then
+    Result := TGocciaNumberLiteralValue.NegativeZeroValue
+  // Step 5: Return the closest integral Number, preferring +∞ on ties.
   else
-    Result := TGocciaNumberLiteralValue.Create(Floor(NumberArg.Value + 0.5));
+  begin
+    // Keep the result floating-point: FPC Floor returns a 32-bit Integer.
+    // Splitting the fraction also avoids rounding n + 0.5 prematurely.
+    IntegralPart := Int(NumberArg.Value);
+    FractionalPart := NumberArg.Value - IntegralPart;
+    if FractionalPart >= 0.5 then
+      IntegralPart := IntegralPart + 1
+    else if FractionalPart < -0.5 then
+      IntegralPart := IntegralPart - 1;
+    Result := TGocciaNumberLiteralValue.Create(IntegralPart);
+  end;
 end;
 
 // The slow path of CoerceNumberArguments, from the first argument whose

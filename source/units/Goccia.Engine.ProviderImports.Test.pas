@@ -122,6 +122,7 @@ type
     FTransport: TFixtureTransport;
     FEvents: TStringList;
     FCachedOnly: Boolean;
+    FPreferBytecode: Boolean;
     FInstallFFI: Boolean;
     FInstallLoaderProfile: Boolean;
     FSwapPath: string;
@@ -142,6 +143,7 @@ type
     procedure TestDenyWinsOverAllow;
     procedure TestRepositoryScopeCoversOnlyItsRepository;
     procedure TestPrefixEntryResolvesPinnedFiles;
+    procedure TestUnpinnedBytecodeCompanionsDoNotShadowPinnedSource;
     procedure TestPrefixCannotEscapeItsPackagePath;
     procedure TestRootEntryResolvesIndex;
     procedure TestPackageImportsOnlyItsOwnFiles;
@@ -259,6 +261,8 @@ begin
     TestRepositoryScopeCoversOnlyItsRepository);
   Test('A prefix entry resolves pinned files with extension probing',
     TestPrefixEntryResolvesPinnedFiles);
+  Test('Unpinned bytecode companions do not shadow pinned provider source',
+    TestUnpinnedBytecodeCompanionsDoNotShadowPinnedSource);
   Test('A prefix tail cannot climb out of the package path',
     TestPrefixCannotEscapeItsPackagePath);
   Test('An entry without a path resolves the package index',
@@ -317,6 +321,7 @@ begin
   FEvents.Clear;
   FTransport.Requests := 0;
   FCachedOnly := False;
+  FPreferBytecode := False;
   FInstallFFI := False;
   FInstallLoaderProfile := False;
   FSwapPath := '';
@@ -482,6 +487,7 @@ begin
       TGocciaNativeFunctionValue.Create(Swap, 'swap', 0));
     Engine.Resolver.ProviderTransport := FTransport;
     Engine.Resolver.ProviderCachedOnly := FCachedOnly;
+    Engine.ModuleLoader.PreferBytecode := FPreferBytecode;
     Engine.Resolver.LoadImportMap(ProjectPath('goccia.json'));
     try
       Engine.Execute;
@@ -601,6 +607,34 @@ begin
   Expect<Boolean>(Pos('Module not found', Outcome.ErrorMessage) > 0)
     .ToBe(True);
   DeleteFile(CachePath('bindings/planted.ts'));
+end;
+
+procedure TProviderImportTests.TestUnpinnedBytecodeCompanionsDoNotShadowPinnedSource;
+const
+  SOURCE = 'import { value } from "raylib"; globalThis.result = value;';
+var
+  Outcome: TRunOutcome;
+  Capabilities: TGocciaCapabilities;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcImport, 'github:frostney/raylib');
+  Outcome := Run(SOURCE, Capabilities);
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  FPreferBytecode := True;
+  try
+    { Neither sentinel is pinned. They must never reach the bytecode reader,
+      whether reached through a package-relative import or the entry alias. }
+    WriteFile(CachePath('bindings/lib/detail.gbc'), 'untrusted companion');
+    Outcome := Run(SOURCE, Capabilities);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('pkg:data');
+    WriteFile(CachePath('bindings/raylib.gbc'), 'untrusted companion');
+    Outcome := Run(SOURCE, Capabilities);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('pkg:data');
+  finally
+    DeleteFile(CachePath('bindings/lib/detail.gbc'));
+    DeleteFile(CachePath('bindings/raylib.gbc'));
+  end;
 end;
 
 procedure TProviderImportTests.TestPrefixCannotEscapeItsPackagePath;

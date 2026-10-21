@@ -53,8 +53,15 @@ type
     FProbeGuard: TModuleResolverProbeGuard;
     FLastPackageDirectory: string;
     FProbePackageDirectory: string;
+    FPreferBytecodeCompanions: Boolean;
+    FLastCompanionSourcePath: string;
+    FLastCompanionSourceExists: Boolean;
+    FLastCompanionPackageName: string;
   protected
     function ProbeHostFile(const APath: string): Boolean;
+    function TryResolveFileCandidate(const APath: string;
+      out AResolvedPath: string): Boolean;
+    procedure ResetCompanionResolution;
     { Whether the candidate ProbeHostFile is judging exists. The base answer is
       the host's; a resolver that knows better (a provider package, whose
       files are exactly the ones its lockfile pins) overrides it. }
@@ -94,6 +101,7 @@ type
     function HasAlias(const AModulePath: string): Boolean;
     procedure SetExtensions(const AExtensions: array of string);
     function Resolve(const AModulePath, AImportingFilePath: string): string; virtual;
+    procedure ValidateCompanionSourcePath(const ASourcePath: string);
 
     property Aliases: TStringStringMap read FAliases;
     property BaseDirectory: string read FBaseDirectory write FBaseDirectory;
@@ -108,6 +116,12 @@ type
     { The package directory whose files a bare-specifier resolution is
       probing right now, for ProbeGuard; empty otherwise. }
     property ProbePackageDirectory: string read FProbePackageDirectory;
+    property PreferBytecodeCompanions: Boolean read FPreferBytecodeCompanions
+      write FPreferBytecodeCompanions;
+    { The logical source candidate for a physical companion returned by Resolve.
+      Physical package containment checks still operate on the actual file. }
+    property LastCompanionSourcePath: string read FLastCompanionSourcePath;
+    property LastCompanionSourceExists: Boolean read FLastCompanionSourceExists;
   end;
 
   { Raised when a specifier cannot be resolved. Message is safe to hand to
@@ -356,6 +370,52 @@ begin
   Result := CandidateExists(APath);
 end;
 
+procedure TModuleResolver.ResetCompanionResolution;
+begin
+  FLastCompanionSourcePath := '';
+  FLastCompanionSourceExists := False;
+  FLastCompanionPackageName := '';
+end;
+
+procedure TModuleResolver.ValidateCompanionSourcePath(const ASourcePath: string);
+var
+  Manifest: TGocciaPackageManifest;
+begin
+  if FLastCompanionPackageName = '' then
+    Exit;
+  if not LoadPackageManifest(FLastPackageDirectory, Manifest) then
+    raise EModuleNotFound.CreateNotFound(FLastCompanionPackageName, ASourcePath);
+  if IsCommonJSModuleFile(Manifest, ASourcePath) then
+    raise EModuleIsCommonJS.CreateCommonJS(FLastCompanionPackageName,
+      PackageRelativePath(FLastPackageDirectory, ASourcePath),
+      ChangeFileExt(ASourcePath, EXT_GBC));
+end;
+
+function TModuleResolver.TryResolveFileCandidate(const APath: string;
+  out AResolvedPath: string): Boolean;
+var
+  Companion: string;
+  SourceExists: Boolean;
+begin
+  { Keep the source probe's read policy and provider pin filtering even when
+    the artifact wins: package classification may inspect the source later. }
+  SourceExists := ProbeHostFile(APath);
+  if FPreferBytecodeCompanions and IsScriptExtension(ExtractFileExt(APath)) then
+  begin
+    Companion := ChangeFileExt(APath, EXT_GBC);
+    if ProbeHostFile(Companion) then
+    begin
+      FLastCompanionSourcePath := APath;
+      FLastCompanionSourceExists := SourceExists;
+      AResolvedPath := Companion;
+      Exit(True);
+    end;
+  end;
+  Result := SourceExists;
+  if Result then
+    AResolvedPath := APath;
+end;
+
 function TModuleResolver.CandidateExists(const APath: string): Boolean;
 begin
   Result := HostFileExists(APath);
@@ -393,38 +453,27 @@ var
   I: Integer;
   TypeScriptCandidates: TFileExtensionArray;
 begin
-  if ProbeHostFile(ABasePath) then
-  begin
-    AResolvedPath := ABasePath;
+  if TryResolveFileCandidate(ABasePath, AResolvedPath) then
     Exit(True);
-  end;
 
   TypeScriptCandidates := TypeScriptSourceCandidates(ABasePath);
   for I := 0 to High(TypeScriptCandidates) do
   begin
-    if ProbeHostFile(TypeScriptCandidates[I]) then
-    begin
-      AResolvedPath := TypeScriptCandidates[I];
+    if TryResolveFileCandidate(TypeScriptCandidates[I], AResolvedPath) then
       Exit(True);
-    end;
   end;
 
   for I := 0 to High(FExtensions) do
   begin
-    if ProbeHostFile(ABasePath + FExtensions[I]) then
-    begin
-      AResolvedPath := ABasePath + FExtensions[I];
+    if TryResolveFileCandidate(ABasePath + FExtensions[I], AResolvedPath) then
       Exit(True);
-    end;
   end;
 
   for I := 0 to High(FExtensions) do
   begin
-    if ProbeHostFile(ABasePath + PathDelim + 'index' + FExtensions[I]) then
-    begin
-      AResolvedPath := ABasePath + PathDelim + 'index' + FExtensions[I];
+    if TryResolveFileCandidate(ABasePath + PathDelim + 'index' + FExtensions[I],
+       AResolvedPath) then
       Exit(True);
-    end;
   end;
 
   Result := False;
@@ -503,7 +552,12 @@ begin
   if not IsPathPhysicallyInsideDirectory(AResolvedPath, PackageDirectory) then
     raise EModuleNotFound.CreateNotFound(AModulePath, AResolvedPath);
 
-  if IsCommonJSModuleFile(Manifest, AResolvedPath) then
+  { A source-free extensionless candidate may have been compiled from .mjs.
+    The loader verifies its metadata before supplying the actual extension
+    to ValidateCompanionSourcePath. }
+  if FLastCompanionSourcePath <> '' then
+    FLastCompanionPackageName := PackageName
+  else if IsCommonJSModuleFile(Manifest, AResolvedPath) then
     raise EModuleIsCommonJS.CreateCommonJS(PackageName,
       PackageRelativePath(PackageDirectory, AResolvedPath), AResolvedPath);
 
@@ -516,6 +570,7 @@ var
   AliasApplied, BaseDirectory, CandidatePath: string;
 begin
   FLastPackageDirectory := '';
+  ResetCompanionResolution;
   AliasApplied := ApplyAliases(AModulePath, AImportingFilePath);
 
   if AliasApplied <> AModulePath then

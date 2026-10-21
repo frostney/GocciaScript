@@ -26,6 +26,7 @@ uses
   Goccia.AST.Node,
   Goccia.Realm,
   Goccia.Scope,
+  Goccia.SourcePipeline,
   Goccia.Values.Primitives;
 
 type
@@ -104,6 +105,7 @@ type
 
 function DefaultShimCount: Integer;
 function DefaultShim(const AIndex: Integer): TGocciaShimDefinition;
+function ShimSourcePipelineOptions: TGocciaSourcePipelineOptions;
 
 { The prototype members default shim AIndex installs, or none for a shim
   bound to a global name. A prototype-member shim has no global: the engine
@@ -166,7 +168,6 @@ uses
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
-  Goccia.SourcePipeline,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.DateData,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -1148,17 +1149,20 @@ begin
   SetLength(GShimPrograms, 0);
 end;
 
+function ShimSourcePipelineOptions: TGocciaSourcePipelineOptions;
+begin
+  Result := TGocciaSourcePipeline.DefaultOptions;
+  Result.Preprocessors := [];
+  Result.Compatibility := [cfFunction];
+  Result.SourceType := stModule;
+end;
+
 function ParseShimProgram(const AShim: TGocciaShimDefinition): TGocciaProgram;
 var
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
-  PipelineOptions: TGocciaSourcePipelineOptions;
 begin
-  PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-  PipelineOptions.Preprocessors := [];
-  PipelineOptions.Compatibility := [cfFunction];
-  PipelineOptions.SourceType := stModule;
   ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(
-    string(AShim.Source), AShim.FileName, PipelineOptions);
+    string(AShim.Source), AShim.FileName, ShimSourcePipelineOptions);
   try
     Result := ModuleParseResult.TakeProgramNode;
   finally

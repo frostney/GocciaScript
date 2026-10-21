@@ -258,7 +258,7 @@ const
   //               OP_APPLY_CLASS_DECORATOR and OP_FINISH_DECORATORS read it
   //               from R[A+1], which v94 code loads with undefined or a
   //               computed element key.
-  GOCCIA_FORMAT_VERSION = 95;
+  GOCCIA_FORMAT_VERSION = 96;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

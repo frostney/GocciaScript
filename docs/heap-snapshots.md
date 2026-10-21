@@ -270,6 +270,8 @@ forwarded export is followed through at most 1,024 records on restore, and
 until a record's forwardings are checked, resolving an import through it
 stops there, the collector's marking included. These refuse the snapshot:
 
+- a module loaded from precompiled bytecode: these records are not
+  source-backed records the restore can recompile from its headers;
 - a record a host or a runtime module loader built, and a binding of a host
   module, until host module codecs land;
 - loader state outside the records: a module still linking, being reloaded
