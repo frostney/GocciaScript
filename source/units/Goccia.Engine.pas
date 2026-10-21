@@ -1534,6 +1534,18 @@ begin
       FModuleLoader.Resolver.ProviderAudit := nil;
   end;
 
+  { Bytecode callbacks borrow this engine just like resolver callbacks.
+    Preserve any replacements the host installed before teardown. }
+  if Assigned(FModuleLoader) then
+  begin
+    if TMethod(FModuleLoader.ReadModuleBytecode).Data = Pointer(Self) then
+      FModuleLoader.ReadModuleBytecode := nil;
+    if TMethod(FModuleLoader.ReleaseModuleBytecode).Data = Pointer(Self) then
+      FModuleLoader.ReleaseModuleBytecode := nil;
+    if TMethod(FModuleLoader.ValidateModuleBytecode).Data = Pointer(Self) then
+      FModuleLoader.ValidateModuleBytecode := nil;
+  end;
+
   if (TGarbageCollector.Instance <> nil) and Assigned(FGlobalScope) then
     TGarbageCollector.Instance.RemoveRootObject(FGlobalScope);
 

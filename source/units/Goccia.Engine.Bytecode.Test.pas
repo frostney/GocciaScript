@@ -39,6 +39,9 @@ const
 type
   TEngineBytecodeTests = class(TTestSuite)
   private
+    FHostBytecodeCalls: Integer;
+    function ReadHostBytecode(const ABytes: TBytes): TGocciaBytecodeModule;
+    procedure ObserveHostBytecode(const AModule: TGocciaBytecodeModule);
     function CompileBuffer(const ASource, ACompileAddress: string;
       const ACompatibility: TGocciaCompatibilityFlags = [];
       const AStrictTypes: Boolean = False;
@@ -82,6 +85,8 @@ type
       const AThrow: Boolean);
     procedure TestBytecodeValidationPreservesDetection;
     procedure TestBytecodeRunsPreserveDetection;
+    procedure TestCallerOwnedLoaderDetachesBytecodeCallbacks;
+    procedure TestCallerOwnedLoaderPreservesHostCallbacks;
   public
     procedure SetupTests; override;
   end;
@@ -93,6 +98,10 @@ end;
 
 procedure TEngineBytecodeTests.SetupTests;
 begin
+  Test('A caller-owned loader rejects bytecode after its engine is freed',
+    TestCallerOwnedLoaderDetachesBytecodeCallbacks);
+  Test('Engine teardown preserves replacement host bytecode callbacks',
+    TestCallerOwnedLoaderPreservesHostCallbacks);
   Test('Bytecode validation leaves automatic source detection unchanged',
     TestBytecodeValidationPreservesDetection);
   Test('Bytecode runs and failures preserve later source detection',
@@ -965,6 +974,83 @@ begin
     Provider.Free;
     Resolver.Free;
     FS.Free;
+  end;
+end;
+
+function TEngineBytecodeTests.ReadHostBytecode(
+  const ABytes: TBytes): TGocciaBytecodeModule;
+begin
+  Inc(FHostBytecodeCalls);
+  Result := nil;
+end;
+
+procedure TEngineBytecodeTests.ObserveHostBytecode(
+  const AModule: TGocciaBytecodeModule);
+begin
+  Inc(FHostBytecodeCalls);
+end;
+
+procedure TEngineBytecodeTests.TestCallerOwnedLoaderDetachesBytecodeCallbacks;
+var
+  Source: TStringList;
+  Loader: TGocciaModuleLoader;
+  Engine: TGocciaEngine;
+  Bytes: TBytes;
+  FailureReason: string;
+begin
+  Bytes := CompileBuffer('export const value = 42;', '/compile/library.mjs');
+  Source := TStringList.Create;
+  Loader := TGocciaModuleLoader.Create(RuntimeAddress('orphan.js'));
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create(RuntimeAddress('orphan.js'), Source, Loader);
+    Engine.RegisterBytecodeModule('virtual:library', Bytes);
+    FreeAndNil(Engine);
+    Expect<Boolean>(Assigned(Loader.ReadModuleBytecode)).ToBe(False);
+    Expect<Boolean>(Assigned(Loader.ReleaseModuleBytecode)).ToBe(False);
+    Expect<Boolean>(Assigned(Loader.ValidateModuleBytecode)).ToBe(False);
+    FailureReason := '';
+    try
+      Loader.LoadModule('virtual:library', RuntimeAddress('orphan.js'));
+    except
+      on E: Exception do
+        FailureReason := E.Message;
+    end;
+    Expect<Boolean>(Pos('no bytecode reader', FailureReason) > 0).ToBe(True);
+  finally
+    Engine.Free;
+    Loader.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TEngineBytecodeTests.TestCallerOwnedLoaderPreservesHostCallbacks;
+var
+  Source: TStringList;
+  Loader: TGocciaModuleLoader;
+  Engine: TGocciaEngine;
+begin
+  Source := TStringList.Create;
+  Loader := TGocciaModuleLoader.Create(RuntimeAddress('host.js'));
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create(RuntimeAddress('host.js'), Source, Loader);
+    Loader.ReadModuleBytecode := ReadHostBytecode;
+    Loader.ReleaseModuleBytecode := ObserveHostBytecode;
+    Loader.ValidateModuleBytecode := ObserveHostBytecode;
+    FreeAndNil(Engine);
+    Expect<Boolean>(Assigned(Loader.ReadModuleBytecode)).ToBe(True);
+    Expect<Boolean>(Assigned(Loader.ReleaseModuleBytecode)).ToBe(True);
+    Expect<Boolean>(Assigned(Loader.ValidateModuleBytecode)).ToBe(True);
+    FHostBytecodeCalls := 0;
+    Loader.ReadModuleBytecode(nil);
+    Loader.ReleaseModuleBytecode(nil);
+    Loader.ValidateModuleBytecode(nil);
+    Expect<Integer>(FHostBytecodeCalls).ToBe(3);
+  finally
+    Engine.Free;
+    Loader.Free;
+    Source.Free;
   end;
 end;
 
