@@ -1,0 +1,44 @@
+# Keep the central configuration, including review coverage for stacked PRs.
+inheritance: true
+
+reviews:
+  # Vendored skills are synchronized from upstream. Review project-authored
+  # skills, but leave findings on the locked copies to their upstream owners.
+  path_filters:
+    - "!.agents/skills/address-feedback/**"
+    - "!.agents/skills/agent-writing/**"
+    - "!.agents/skills/code-review/**"
+    - "!.agents/skills/codebase-design/**"
+    - "!.agents/skills/create-issue/**"
+    - "!.agents/skills/create-pr/**"
+    - "!.agents/skills/create-release/**"
+    - "!.agents/skills/deliver/**"
+    - "!.agents/skills/delivery-wait/**"
+    - "!.agents/skills/documentation-writer/**"
+    - "!.agents/skills/domain-modeling/**"
+    - "!.agents/skills/find-skills/**"
+    - "!.agents/skills/git-workflow/**"
+    - "!.agents/skills/grill-with-docs/**"
+    - "!.agents/skills/grilling/**"
+    - "!.agents/skills/handoff/**"
+    - "!.agents/skills/implement/**"
+    - "!.agents/skills/improve-codebase-architecture/**"
+    - "!.agents/skills/milestone-rush/**"
+    - "!.agents/skills/native-nostalgia-stack/**"
+    - "!.agents/skills/project-structure/**"
+    - "!.agents/skills/resolve-reviews/**"
+    - "!.agents/skills/roadmap-review/**"
+    - "!.agents/skills/run-retro/**"
+    - "!.agents/skills/software-engineering-excellence/**"
+    - "!.agents/skills/test-against-spec/**"
+    - "!.agents/skills/update-pr/**"
+
+  auto_review:
+    # This repository opens many small and stacked PRs. Spend a review only
+    # when the author marks a coherent change ready for feedback.
+    enabled: false
+    labels:
+      - review-ready
+    auto_incremental_review: false
+    ignore_usernames:
+      - github-actions[bot]
