@@ -11,7 +11,8 @@
 - **The reader expects hostile input** — every count, index and length is checked against the input and the limits, the run's memory ceiling and execution limits apply, and every truncation and mutant of a real snapshot is refused or restored, never a fault
 - **The pause checkpoint** — an engine with a host-call owner calls `OnPauseCheckpoint` when its run waits on nothing but host calls, and a handler that pauses ends the run with `EGocciaRunPaused`
 - **Functions and generators** — closures, the cells they share and suspended generators are written, each function named by its module's bytecode and its place there; the restoring engine must have compiled the same module
-- **Still growing** — plain objects, object literals, arrays, symbols, VM state and built-in differences are written; the codec families that follow (modules, the object model and the rest) are listed in [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md)
+- **Modules** — every module record the loader caches is written with its environment, exports and namespace object; a restore compiles each source module from its path without running it, and caches the records as evaluated modules
+- **Still growing** — plain objects, object literals, arrays, symbols, VM state, modules and built-in differences are written; the codec families that follow (the object model and the rest) are listed in [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md)
 
 The design, its trust model and its phases are recorded in
 [ADR 0148](adr/0148-heap-snapshots-at-idle-points.md); the prototype it grew
@@ -131,7 +132,7 @@ anything for it:
 | `MaxStrings` | 16 Mi | the string table |
 | `MaxStringBytes` | 256 MiB | one string |
 | `MaxBuiltins` | 1 Mi | built-in names |
-| `MaxCodecs` | 4,096 | codecs named in the header, and modules named in the module section |
+| `MaxCodecs` | 4,096 | codecs named in the header, modules named in the module section, and module records |
 | `MaxRoots` | 1 Mi | roots |
 
 The reader also charges its input, its tables and what it restores to the
@@ -178,10 +179,10 @@ through `HeapSnapshotRefusal` (the timer extension does for any scheduled
 timer, a mocked clock or an unreported timer error); while any extension
 does, the run is not at a checkpoint, and `Snapshot` refuses too.
 
-Until the module and promise codecs land, a run paused at a checkpoint
-holds a suspended module body and pending promises that no codec writes yet,
-so a snapshot of a paused run is refused; the values API above already
-round-trips the graphs the codecs so far cover.
+Until the promise codecs land, a run paused at a checkpoint holds pending
+promises that no codec writes yet (an entry module awaiting a host call
+holds its evaluation promise), so a snapshot of a paused run is refused; the
+values API above already round-trips the graphs the codecs so far cover.
 
 ## Functions and generators
 
@@ -210,11 +211,74 @@ frame always does. A register may hold the marker of a binding still in its
 temporal dead zone, which stays there until the generator runs the
 declaration. A generator inside `yield*`, an async generator and an async
 function waiting on a promise refuse until the promise and iterator codecs
-land; so does a function whose code closes over a module's scope, until the
-module codecs land.
+land.
 
 The reader keeps the frame within its code, but cannot tell a forged
 register value from a real one: that is what authenticating snapshots is for.
+
+## Modules
+
+A snapshot holds every module record the engine's loader caches, whatever
+its roots reach: a module the run evaluated stays evaluated, so a later
+import of it runs no body ([ADR 0150](adr/0150-heap-snapshots-restore-module-records-whole.md)). Module
+records are not managed objects, so they have a table of their own,
+written and read by `TGocciaModuleSnapshotRecords`
+(`source/units/Goccia.Modules.Snapshot.pas`). Each record has a header and
+a payload:
+
+- **The header** names the record: its path, the keys the loader caches it
+  under, whether the host owns it, and for a source module the source path
+  and bytecode hash of the code the engine compiled it to. The reader reads
+  every header before it allocates any object.
+- **The payload** is the record's state: its environment, its export
+  bindings (local, forwarded from another record, or a value), its exports
+  table, its star and ambiguous export names, its namespace object, its
+  evaluation promise and the root of its asynchronous cycle. The reader
+  fills every record once every object is filled.
+
+A module's environment is a module scope: its top-level bindings by name,
+its var bindings and its import bindings, each naming the record and the
+export it reads. A local export must name one of its own module
+environment's bindings that is not an import binding. A namespace object is
+written as its record and restored as the one the record holds.
+
+A restore compiles each source module from the path its header names,
+through the loader and under its read policy (the engine's own source when
+the path is the engine's source path, compiled as `CompileModule` compiles
+it when the run's entry was compiled that way and run with
+`RunModuleForSourceType`), without linking or running it. A
+module whose bytecode is not the one the snapshot ran, one that no longer
+compiles, and one cached under a key the restoring engine's loader already
+holds are refused. Once the whole snapshot is restored, the records are
+cached in the loader as evaluated modules; a refused restore, or one the
+run's limits stop while it caches them, frees them and leaves the loader as
+it was. Restore into a fresh engine with the same files: one that has not
+loaded the modules or compiled them for an earlier restore (a refused
+restore keeps the bytecode it compiled, and a later restore that would use
+it is refused). A source module the restore compiled from its file takes the
+file's modification time, which a later import compares to decide whether
+to load the module again, so a copy of the same file does not evaluate it
+again; one compiled from the source the engine was created with keeps the
+run's.
+
+A data module (JSON, text) is written as its exported values, not read
+again: the run may have changed them. It keeps the run's modification time,
+so a later import of a newer file loads it again, as it would have in the
+run. The entry module, still evaluating
+while its run waits at a checkpoint, is restored as evaluated. A
+forwarded export is followed through at most 1,024 records on restore, and
+until a record's forwardings are checked, resolving an import through it
+stops there, the collector's marking included. These refuse the snapshot:
+
+- a module loaded from precompiled bytecode: these records are not
+  source-backed records the restore can recompile from its headers;
+- a record a host or a runtime module loader built, and a binding of a host
+  module, until host module codecs land;
+- loader state outside the records: a module still linking, being reloaded
+  or whose evaluation failed, a deferred namespace and a module source
+  object;
+- an `import.meta` object, which the realm caches outside the heap;
+- a pending evaluation promise, until the promise codecs land.
 
 ## Writing a codec
 
@@ -278,7 +342,8 @@ value refuses the snapshot until a codec covers it.
 ## Built-ins the run changed
 
 A built-in whose state differs from what the session recorded is written in
-its own section (format version 3, between the object table and the roots)
+its own section (format version 4, after the object table and before module
+payloads and roots)
 as its whole own state: its prototype, its extensibility and integrity, a
 function's or a class's synthesized `length` and `name`, an array's length
 and elements, and every own property, string- and symbol-keyed, in its
@@ -313,6 +378,8 @@ data, a Date's time value) has no difference yet, and refuses the snapshot.
 engines and checks them by script, and feeds the reader every truncation
 and 10,000 mutants of a real snapshot, and of one holding closures and a
 suspended generator, which it then resumes.
+`source/units/Goccia.HeapSnapshot.Modules.Test.pas` does the same for a run
+that imports modules from files, restoring each mutant in a fresh engine.
 `Goccia.HeapSnapshot.Builtins.Test` round-trips each kind of difference,
 checks the reader's refusals of impossible ones, restores every cut and
 11,000 mutants of snapshots with differences, and restores under rising

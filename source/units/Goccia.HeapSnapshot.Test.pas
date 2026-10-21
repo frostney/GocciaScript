@@ -367,11 +367,6 @@ begin
   // An engine that never compiled that module.
   Expect<Boolean>(Pos('module this engine has not compiled',
     RestoreRefusal(Bytes)) > 0).ToBe(True);
-  // A module body's functions close over its scope, which the module codecs
-  // write; until then they refuse.
-  SnapshotModule('const k = 1; capture({ f: () => k });', Refusal, True);
-  Expect<Boolean>(Pos('no snapshot codec for TGocciaScope', Refusal) > 0)
-    .ToBe(True);
 end;
 
 procedure THeapSnapshotTests.TestRetainedShimAndEvalProfiles;
