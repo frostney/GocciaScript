@@ -22,10 +22,6 @@ type
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
     function IsArrayHole(const AElement: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
-    procedure ThrowError(const AMessage: string; const AArgs: array of const); overload; {$IFDEF FPC}inline;{$ENDIF}
-    procedure ThrowError(const AMessage: string); overload; {$IFDEF FPC}inline;{$ENDIF}
-    procedure ThrowError(const AMessage: string; const AArgs: array of const;
-      const ASuggestion: string); overload; {$IFDEF FPC}inline;{$ENDIF}
   protected
     FElements: TGocciaElementList;
     FLength: Int64;
@@ -160,7 +156,6 @@ uses
   Goccia.Arithmetic,
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
-  Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
@@ -1362,21 +1357,6 @@ end;
 function TGocciaArrayValue.ToStringTag: string;
 begin
   Result := 'Array';
-end;
-
-procedure TGocciaArrayValue.ThrowError(const AMessage: string; const AArgs: array of const);
-begin
-  raise TGocciaError.Create(Format(AMessage, AArgs), 0, 0, '', nil);
-end;
-
-procedure TGocciaArrayValue.ThrowError(const AMessage: string);
-begin
-  ThrowError(AMessage, []);
-end;
-
-procedure TGocciaArrayValue.ThrowError(const AMessage: string; const AArgs: array of const; const ASuggestion: string);
-begin
-  raise TGocciaError.Create(Format(AMessage, AArgs), 0, 0, '', nil, ASuggestion);
 end;
 
 function TGocciaArrayValue.GetLengthProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -3179,7 +3159,7 @@ begin
   end;
 end;
 
-// ES2026 §23.1.3.38 Array.prototype.with(index, value)
+// ES2026 §23.1.3.39 Array.prototype.with(index, value)
 function TGocciaArrayValue.ArrayWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
@@ -3198,12 +3178,9 @@ begin
   try
     ViewRoots.Add(View.Obj);
 
-    if AArgs.Length < 2 then
-      ThrowError(SErrorArrayWithRequiresArgs, [], SSuggestArrayThisType);
-
     // Step 3: Let relativeIndex be ToIntegerOrInfinity(index)
     Index := ToInteger64FromArgs(AArgs);
-    // Step 5: Let value be args[1]
+    // Missing arguments are undefined, including the replacement value.
     NewValue := AArgs.GetElement(1);
 
     // Step 4: If relativeIndex >= 0, let actualIndex be relativeIndex; else len + relativeIndex
