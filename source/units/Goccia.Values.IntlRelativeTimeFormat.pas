@@ -696,74 +696,83 @@ end;
 
 constructor TGocciaIntlRelativeTimeFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
+  OptionsRoots: TGocciaActiveRootFrame;
   Canonical: string;
   V: TGocciaValue;
   Ignored, NumberingSystemOption, LocaleNumberingSystem: string;
   HasNumberingSystemOption: Boolean;
 begin
   inherited Create;
-  Canonical := CanonicalizeUnicodeLocaleId(ALocale);
-  if Canonical = '' then
-    FLocale := DefaultLocale
-  else
-    FLocale := Canonical;
-
-  // Defaults
-  FNumeric := 'always';
-  FStyle := 'long';
-  FNumberingSystem := 'latn';
-  NumberingSystemOption := '';
-  HasNumberingSystemOption := False;
-
-  if Assigned(AOptions) then
-  begin
-    V := AOptions.GetProperty('localeMatcher');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      Ignored := V.ToStringLiteral.Value;
-      ValidateRelativeTimeOption(Ignored, 'localeMatcher', ['lookup', 'best fit']);
-    end;
-    V := AOptions.GetProperty('numberingSystem');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      NumberingSystemOption := V.ToStringLiteral.Value;
-      if ContainsNulCharacter(NumberingSystemOption) or
-         not IsValidUnicodeLocaleType(NumberingSystemOption) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [NumberingSystemOption, 'numberingSystem']));
-      HasNumberingSystemOption := True;
-    end;
-    V := AOptions.GetProperty('style');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FStyle := V.ToStringLiteral.Value;
-      ValidateRelativeTimeOption(FStyle, 'style', ['long', 'short', 'narrow']);
-    end;
-    V := AOptions.GetProperty('numeric');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FNumeric := V.ToStringLiteral.Value;
-      ValidateRelativeTimeOption(FNumeric, 'numeric', ['always', 'auto']);
-    end;
-  end;
-
-  if HasNumberingSystemOption and IsSupportedNumberingSystem(NumberingSystemOption) then
-  begin
-    FNumberingSystem := NumberingSystemOption;
-    if not (TryGetLocaleNumberingSystemExtension(FLocale, LocaleNumberingSystem) and
-            (LocaleNumberingSystem = NumberingSystemOption)) then
-      FLocale := LocaleWithoutUnicodeExtension(FLocale);
-  end
-  else if TryGetLocaleNumberingSystemExtension(FLocale, LocaleNumberingSystem) then
-  begin
-    if IsSupportedNumberingSystem(LocaleNumberingSystem) then
-      FNumberingSystem := LocaleNumberingSystem
+  // Options that ToObject made from a primitive are a wrapper only this call
+  // holds while their getters and conversions run guest code.
+  OptionsRoots.Initialize;
+  try
+    OptionsRoots.Add(AOptions);
+    Canonical := CanonicalizeUnicodeLocaleId(ALocale);
+    if Canonical = '' then
+      FLocale := DefaultLocale
     else
-      FLocale := LocaleWithoutUnicodeExtension(FLocale);
-  end;
+      FLocale := Canonical;
 
-  InitializePrototype;
-  if (GetIntlRelativeTimeFormatShared <> nil) then
-    FPrototype := GetIntlRelativeTimeFormatShared.Prototype;
+    // Defaults
+    FNumeric := 'always';
+    FStyle := 'long';
+    FNumberingSystem := 'latn';
+    NumberingSystemOption := '';
+    HasNumberingSystemOption := False;
+
+    if Assigned(AOptions) then
+    begin
+      V := AOptions.GetProperty('localeMatcher');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        Ignored := V.ToStringLiteral.Value;
+        ValidateRelativeTimeOption(Ignored, 'localeMatcher', ['lookup', 'best fit']);
+      end;
+      V := AOptions.GetProperty('numberingSystem');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        NumberingSystemOption := V.ToStringLiteral.Value;
+        if ContainsNulCharacter(NumberingSystemOption) or
+           not IsValidUnicodeLocaleType(NumberingSystemOption) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [NumberingSystemOption, 'numberingSystem']));
+        HasNumberingSystemOption := True;
+      end;
+      V := AOptions.GetProperty('style');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        FStyle := V.ToStringLiteral.Value;
+        ValidateRelativeTimeOption(FStyle, 'style', ['long', 'short', 'narrow']);
+      end;
+      V := AOptions.GetProperty('numeric');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        FNumeric := V.ToStringLiteral.Value;
+        ValidateRelativeTimeOption(FNumeric, 'numeric', ['always', 'auto']);
+      end;
+    end;
+
+    if HasNumberingSystemOption and IsSupportedNumberingSystem(NumberingSystemOption) then
+    begin
+      FNumberingSystem := NumberingSystemOption;
+      if not (TryGetLocaleNumberingSystemExtension(FLocale, LocaleNumberingSystem) and
+              (LocaleNumberingSystem = NumberingSystemOption)) then
+        FLocale := LocaleWithoutUnicodeExtension(FLocale);
+    end
+    else if TryGetLocaleNumberingSystemExtension(FLocale, LocaleNumberingSystem) then
+    begin
+      if IsSupportedNumberingSystem(LocaleNumberingSystem) then
+        FNumberingSystem := LocaleNumberingSystem
+      else
+        FLocale := LocaleWithoutUnicodeExtension(FLocale);
+    end;
+
+    InitializePrototype;
+    if (GetIntlRelativeTimeFormatShared <> nil) then
+      FPrototype := GetIntlRelativeTimeFormatShared.Prototype;
+  finally
+    OptionsRoots.Clear;
+  end;
 end;
 
 function TGocciaIntlRelativeTimeFormatValue.ToStringTag: string;
@@ -824,14 +833,17 @@ var
   UnitValue: TIntlRelativeTimeUnit;
   NumericValue: TIntlRelativeTimeNumeric;
   StyleValue: TIntlRelativeTimeStyle;
-  IsPast: Boolean;
+  IsPast, IsNegativeZero: Boolean;
   Formatted: string;
 begin
   RTF := AsRelativeTimeFormat(AThisValue, 'Intl.RelativeTimeFormat.prototype.format');
   if AArgs.Length < 2 then
     ThrowTypeError('Intl.RelativeTimeFormat.prototype.format requires value and unit');
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
+  // The number (a fresh value valueOf returned) is read here, before the
+  // unit's conversion runs guest code that can collect it.
   NumValue := NumberArg.Value;
+  IsNegativeZero := NumberArg.IsNegativeZero;
   if IsNan(NumValue) or IsInfinite(NumValue) then
     ThrowRangeError('Invalid value for Intl.RelativeTimeFormat.prototype.format');
   UnitStr := AArgs.GetElement(1).ToStringLiteral.Value;
@@ -841,7 +853,7 @@ begin
   UnitValue := UnitStringToEnum(UnitStr);
   NumericValue := NumericStringToEnum(RTF.FNumeric);
   StyleValue := StyleStringToEnum(RTF.FStyle);
-  IsPast := (NumValue < 0) or NumberArg.IsNegativeZero;
+  IsPast := (NumValue < 0) or IsNegativeZero;
   FormatLocale := LocaleWithNumberingSystem(RTF.FLocale, RTF.FNumberingSystem);
 
   if (NumericValue = irtnAuto) and
@@ -877,14 +889,17 @@ var
   UnitValue: TIntlRelativeTimeUnit;
   NumericValue: TIntlRelativeTimeNumeric;
   StyleValue: TIntlRelativeTimeStyle;
-  IsPast: Boolean;
+  IsPast, IsNegativeZero: Boolean;
   Parts: TIntlFormatPartArray;
 begin
   RTF := AsRelativeTimeFormat(AThisValue, 'Intl.RelativeTimeFormat.prototype.formatToParts');
   if AArgs.Length < 2 then
     ThrowTypeError('Intl.RelativeTimeFormat.prototype.formatToParts requires value and unit');
   NumberArg := AArgs.GetElement(0).ToNumberLiteral;
+  // The number (a fresh value valueOf returned) is read here, before the
+  // unit's conversion runs guest code that can collect it.
   NumValue := NumberArg.Value;
+  IsNegativeZero := NumberArg.IsNegativeZero;
   if IsNan(NumValue) or IsInfinite(NumValue) then
     ThrowRangeError('Invalid value for Intl.RelativeTimeFormat.prototype.formatToParts');
   UnitStr := AArgs.GetElement(1).ToStringLiteral.Value;
@@ -894,7 +909,7 @@ begin
   UnitValue := UnitStringToEnum(UnitStr);
   NumericValue := NumericStringToEnum(RTF.FNumeric);
   StyleValue := StyleStringToEnum(RTF.FStyle);
-  IsPast := (NumValue < 0) or NumberArg.IsNegativeZero;
+  IsPast := (NumValue < 0) or IsNegativeZero;
   FormatLocale := LocaleWithNumberingSystem(RTF.FLocale, RTF.FNumberingSystem);
 
   if (NumericValue = irtnAuto) and

@@ -24,13 +24,17 @@ uses
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.TestSupport,
+  Goccia.InstructionLimit,
+  Goccia.Timeout,
   Goccia.Realm,
   Goccia.Scope.BindingMap,
   Goccia.SharedPrototype,
   Goccia.Shims,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
+  Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -48,6 +52,13 @@ type
     procedure Execute; override;
   end;
 
+  TSnapshotCeilingLazyFactory = class
+  public
+    Value: TGocciaObjectValue;
+    Margin: Int64;
+    function Materialize: TGocciaValue;
+  end;
+
   THeapSnapshotBuiltinsTests = class(TTestSuite)
   private
     procedure TestEverySlotNameResolvesOnItsOwn;
@@ -58,6 +69,18 @@ type
     procedure TestShimTakesInRunFunction;
     procedure TestShimLoadCallsAnotherEngine;
     procedure TestShimCodeIsNotItsFileName;
+    procedure TestObservationRefusalStaysWithSnapshot;
+    procedure TestEveryDifferenceRestores;
+    procedure TestLateBuiltinDifferences;
+    procedure TestHostileDifferencesRefuse;
+    procedure TestRefusedRestoreLeavesBuiltins;
+    procedure TestRefusalWhileApplyingLeavesBuiltins;
+    procedure TestInstructionStopLeavesBuiltins;
+    procedure TestTimeoutWhileRestoringLeavesBuiltins;
+    procedure TestRestoredArrayStorageRootsOwner;
+    procedure TestIndexKeyIsNeverForgotten;
+    procedure TestDifferenceTruncationsAndMutants;
+    procedure TestRestoredRunSnapshotsAgain;
     procedure TestShimLoadOnAMovedVM;
   public
     procedure SetupTests; override;
@@ -99,6 +122,15 @@ const
     'AbortController.shared',
     'AbortSignal.shared');
 
+function TSnapshotCeilingLazyFactory.Materialize: TGocciaValue;
+begin
+  // Construction has already succeeded. Only observation of the freshly
+  // materialized member has to fit the remaining memory budget.
+  TGarbageCollector.Instance.MaxBytes :=
+    TGarbageCollector.Instance.BytesAllocated + Margin;
+  Result := Value;
+end;
+
 { THeapSnapshotBuiltinsTests }
 
 procedure THeapSnapshotBuiltinsTests.SetupTests;
@@ -119,6 +151,29 @@ begin
     'engine', TestShimLoadCallsAnotherEngine);
   Test('Shim code is what the engine compiled as a shim, not a file name',
     TestShimCodeIsNotItsFileName);
+  Test('A snapshot observation refusal does not escape a lazy property read',
+    TestObservationRefusalStaysWithSnapshot);
+  Test('Every kind of change to a built-in restores as its difference',
+    TestEveryDifferenceRestores);
+  Test('Built-ins the run built, then changed, restore with the change',
+    TestLateBuiltinDifferences);
+  Test('A difference that cannot be is refused', TestHostileDifferencesRefuse);
+  Test('A refused restore leaves this engine''s built-ins as they were',
+    TestRefusedRestoreLeavesBuiltins);
+  Test('A restore refused at any memory ceiling changed no built-in',
+    TestRefusalWhileApplyingLeavesBuiltins);
+  Test('A restore stopped while preparing differences changed no built-in',
+    TestInstructionStopLeavesBuiltins);
+  Test('A restore with an expired deadline changes no built-in',
+    TestTimeoutWhileRestoringLeavesBuiltins);
+  Test('Restored array storage roots its owner while growing',
+    TestRestoredArrayStorageRootsOwner);
+  Test('A changed built-in that has an index key keeps the fact',
+    TestIndexKeyIsNeverForgotten);
+  Test('Truncations and mutants of differences refuse, or restore',
+    TestDifferenceTruncationsAndMutants);
+  Test('A restored run with differences snapshots and restores again',
+    TestRestoredRunSnapshotsAgain);
   Test('A shim load on a VM another thread entered first counts its frames',
     TestShimLoadOnAMovedVM);
 end;
@@ -575,11 +630,14 @@ begin
     Engine.Free;
     Lines.Free;
   end;
-  // A function's length and name are its own properties, though synthesized.
-  Snapshot('(() => { delete Math.max.name; return { a: 1 }; })()', Refusal);
-  Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
-  Snapshot('(() => { delete Math.max.length; return { a: 1 }; })()', Refusal);
-  Expect<Boolean>(Pos('Math', Refusal) > 0).ToBe(True);
+  // A function's length and name are its own properties, though synthesized:
+  // deleting one is a difference.
+  Expect<string>(RoundTrip('(() => { delete Math.max.name; ' +
+    'return { a: 1 }; })()', '[Object.hasOwn(Math.max, "name"), ' +
+    'Math.max.length].join()')).ToBe('false,2');
+  Expect<string>(RoundTrip('(() => { delete Math.max.length; ' +
+    'return { a: 1 }; })()', '[Object.hasOwn(Math.max, "length"), ' +
+    'Math.max.name].join()')).ToBe('false,max');
 end;
 
 // Snapshots AValue in ASession with the accounting check; the refusal, or ''.
@@ -682,6 +740,721 @@ begin
     Engine.Free;
     Lines.Free;
   end;
+end;
+
+function U32At(const ABytes: TBytes; const AAt: Integer): Cardinal;
+begin
+  Move(ABytes[AAt], Result, 4);
+  Result := LEtoN(Result);
+end;
+
+procedure PutU32(var ABytes: TBytes; const AAt: Integer;
+  const AValue: Cardinal);
+var
+  V: Cardinal;
+begin
+  V := NtoLE(AValue);
+  Move(V, ABytes[AAt], 4);
+end;
+
+// Where a snapshot's differences begin: right after its object table, which
+// must hold an object.
+function DifferencesAt(const ABytes: TBytes): Integer;
+var
+  First, Last: Integer;
+begin
+  First := ObjectEntryAt(ABytes, 0);
+  Last := ObjectEntryAt(ABytes, Integer(U32At(ABytes, First - 4)) - 1);
+  Result := Last + 2 + 4 + Integer(U32At(ABytes, Last + 2));
+end;
+
+// The string index of the snapshot's first codec's tag.
+function FirstCodecTagIndex(const ABytes: TBytes): Cardinal;
+var
+  At, I: Integer;
+  Count: Cardinal;
+begin
+  At := 4 + 2;
+  At := At + 4 + 2 * Integer(U32At(ABytes, At));
+  Count := U32At(ABytes, At);
+  Inc(At, 4);
+  for I := 1 to Integer(Count) do
+    At := At + 4 + 2 * Integer(U32At(ABytes, At));
+  Result := U32At(ABytes, At + 4);
+end;
+
+// The length of the value written at AAt.
+function ValueLength(const ABytes: TBytes; const AAt: Integer): Integer;
+begin
+  case ABytes[AAt] of
+    HSV_NUMBER:
+      Result := 9;
+    HSV_STRING, HSV_OBJECT, HSV_BUILTIN, HSV_REGISTERED_SYMBOL:
+      Result := 5;
+    HSV_BIGINT:
+      Result := 1 + 1 + 4 + 4 * Integer(U32At(ABytes, AAt + 2));
+  else
+    Result := 1;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestObservationRefusalStaysWithSnapshot;
+const
+  MARGINS: array[0..1] of Int64 = (0, 4096);
+var
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Factory: TSnapshotCeilingLazyFactory;
+  Lines: TStringList;
+  MathObject: TGocciaObjectValue;
+  Value: TGocciaValue;
+  Stage: TGocciaGlobalEvalStage;
+  GC: TGarbageCollector;
+  Previous: Int64;
+  Refusal: string;
+  I: Integer;
+begin
+  for I := Low(MARGINS) to High(MARGINS) do
+  begin
+    Lines := TStringList.Create;
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    GC := TGarbageCollector.Instance;
+    Previous := GC.MaxBytes;
+    Factory := TSnapshotCeilingLazyFactory.Create;
+    Session := nil;
+    try
+      Factory.Value := TGocciaObjectValue.Create;
+      GC.AddTempRoot(Factory.Value);
+      Factory.Value.AssignProperty('payload',
+        TGocciaStringLiteralValue.Create(StringOfChar('x', 65536)));
+      Factory.Margin := MARGINS[I];
+      MathObject := TGocciaObjectValue(Engine.GlobalScope.GetValue('Math'));
+      MathObject.DefineProperty('heapSnapshotProbe',
+        TGocciaLazyPropertyDescriptorData.Create(Factory.Materialize,
+          [pfConfigurable, pfWritable]));
+      Session := TGocciaHeapSnapshotSession.Create(Engine);
+      // No room to name the new object, or enough to name it but not to
+      // fingerprint its payload: neither may fail the run's property read.
+      try
+        Value := Engine.EvaluateGlobalEval('Math.heapSnapshotProbe',
+          TEST_PATH, Stage);
+      finally
+        GC.MaxBytes := Previous;
+      end;
+      Expect<Boolean>(Value = Factory.Value).ToBe(True);
+      Factory.Value.AssignProperty('changed',
+        TGocciaNumberLiteralValue.Create(42));
+      Refusal := SnapshotRefusal(Session, Value);
+      Expect<Boolean>(Pos('memory ceiling', Refusal) > 0).ToBe(True);
+      // Restoring the budget cannot reconstruct a partially recorded
+      // baseline after the run has changed the value.
+      Expect<string>(SnapshotRefusal(Session, Value)).ToBe(Refusal);
+      Expect<Boolean>(Engine.EvaluateGlobalEval('Math.heapSnapshotProbe',
+        TEST_PATH, Stage) = Value).ToBe(True);
+    finally
+      GC.MaxBytes := Previous;
+      Session.Free;
+      GC.RemoveTempRoot(Factory.Value);
+      Factory.Free;
+      Engine.Free;
+      Lines.Free;
+    end;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestEveryDifferenceRestores;
+begin
+  // Added, with its identity: the run's object is written, the built-in
+  // holds it after the restore.
+  Expect<string>(RoundTrip('(() => { const o = { v: 1 }; Math.extra = o; ' +
+    'return o; })()', '[Math.extra === restored, Math.extra.v].join()'))
+    .ToBe('true,1');
+  // Deleted, and redefined to another built-in.
+  Expect<string>(RoundTrip('(() => { delete Math.max; Math.abs = Math.min; ' +
+    'return {}; })()', '[typeof Math.max, Math.abs === Math.min].join()'))
+    .ToBe('undefined,true');
+  // Attributes.
+  Expect<string>(RoundTrip('(() => { Object.defineProperty(Math, "min", ' +
+    '{ enumerable: true }); return {}; })()',
+    'String(Object.keys(Math).includes("min"))')).ToBe('true');
+  // An accessor.
+  Expect<string>(RoundTrip('(() => { Object.defineProperty(Math, "acc", ' +
+    '{ get: Math.random, configurable: true }); return {}; })()',
+    'String(Object.getOwnPropertyDescriptor(Math, "acc").get === ' +
+    'Math.random)')).ToBe('true');
+  // Symbol-keyed: the run's symbol added, a built-in one deleted.
+  Expect<string>(RoundTrip('(() => { const s = Symbol("k"); Math[s] = 1; ' +
+    'delete Math[Symbol.toStringTag]; return s; })()',
+    '[Math[restored], Math[Symbol.toStringTag]].join()')).ToBe('1,');
+  // The final order of the keys, deleted and added again at the end.
+  Expect<string>(RoundTrip('(() => { delete Math.max; Math.max = Math.min; ' +
+    'const s = Symbol("o"); Math[s] = 1; delete Math[Symbol.toStringTag]; ' +
+    'Math[Symbol.toStringTag] = "M"; ' +
+    'return Reflect.ownKeys(Math).map(String).join(); })()',
+    'String(restored === Reflect.ownKeys(Math).map(String).join())'))
+    .ToBe('true');
+  // A prototype.
+  Expect<string>(RoundTrip('(() => { const p = { inherited: 2 }; ' +
+    'Object.setPrototypeOf(Math, p); return p; })()',
+    '[Object.getPrototypeOf(Math) === restored, Math.inherited].join()'))
+    .ToBe('true,2');
+  // Extensibility, sealing, freezing, of functions and classes too, whose
+  // synthesized length and name the freeze defines.
+  Expect<string>(RoundTrip('(() => { Object.freeze(Math.max); ' +
+    'Object.seal(Math.min); Object.freeze(Map); return {}; })()',
+    '[Object.isFrozen(Math.max), Object.isSealed(Math.min), ' +
+    'Object.isFrozen(Map), Math.max.name, Map.length].join()'))
+    .ToBe('true,true,true,max,0');
+  Expect<string>(RoundTrip('(() => { Object.seal(JSON); return {}; })()',
+    '[Object.isSealed(JSON), Object.isFrozen(JSON), ' +
+    'JSON.stringify([1])].join()')).ToBe('true,false,[1]');
+  Expect<string>(RoundTrip('(() => { Object.freeze(Math); return {}; })()',
+    '[Object.isFrozen(Math), Math.max(1, 2)].join()')).ToBe('true,2');
+  // A function's own length, redefined.
+  Expect<string>(RoundTrip('(() => { Object.defineProperty(Math.max, ' +
+    '"length", { value: 7 }); return {}; })()', 'String(Math.max.length)'))
+    .ToBe('7');
+  // A class's synthesized name and length, deleted, and the place a name
+  // defined again takes.
+  Expect<string>(RoundTrip('(() => { delete Map.name; delete Map.length; ' +
+    'return {}; })()', '[Object.hasOwn(Map, "name"), ' +
+    'Object.hasOwn(Map, "length")].join()')).ToBe('false,false');
+  Expect<string>(RoundTrip('(() => { delete Map.name; ' +
+    'Object.defineProperty(Map, "name", { value: "M", configurable: true }); ' +
+    'return Reflect.ownKeys(Map).map(String).join(); })()',
+    '[restored === Reflect.ownKeys(Map).map(String).join(), Map.name].join()'))
+    .ToBe('true,M');
+  // A built-in array.
+  Expect<string>(RoundTrip('(() => { Goccia.shims.push("mine"); ' +
+    'return {}; })()', 'String(Goccia.shims.includes("mine"))')).ToBe('true');
+  // The global object: identifiers read it.
+  Expect<string>(RoundTrip('(() => { globalThis.answer = 42; ' +
+    'delete globalThis.JSON; return {}; })()',
+    '[answer, typeof JSON].join()')).ToBe('42,undefined');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestLateBuiltinDifferences;
+begin
+  // Each was built during the run, recorded as built, and changed after.
+  Expect<string>(RoundTrip('(() => { Reflect.extra = 1; return {}; })()',
+    'String(Reflect.extra)')).ToBe('1');
+  Expect<string>(RoundTrip('(() => { Date.prototype.extra = 2; ' +
+    'return {}; })()', '[Date.prototype.extra, new Date(5).getTime()].join()'))
+    .ToBe('2,5');
+  Expect<string>(RoundTrip('(() => { delete Temporal.PlainDate; ' +
+    'return {}; })()', 'String(typeof Temporal.PlainDate)'))
+    .ToBe('undefined');
+  // A lazy member the run replaced after it was built.
+  Expect<string>(RoundTrip('(() => { Temporal.Now; Temporal.Now = 3; ' +
+    'return {}; })()', 'String(Temporal.Now)')).ToBe('3');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestHostileDifferencesRefuse;
+const
+  SYNTHESIZED_LEFT: array[0..1] of string = (
+    '(() => { delete Math.max.name; return {}; })()',
+    '(() => { delete Map.name; return {}; })()');
+var
+  Refusal: string;
+  Bytes, Mutant: TBytes;
+  At, Count, I: Integer;
+begin
+  Bytes := Snapshot('(() => { Math.extra = 1; return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // One difference: Math, its prototype Object.prototype (a built-in
+  // reference), its four flags, its parts.
+  At := DifferencesAt(Bytes);
+  Expect<Integer>(Integer(U32At(Bytes, At))).ToBe(1);
+  Inc(At, 4);
+  Expect<Integer>(Bytes[At + 4]).ToBe(HSV_BUILTIN);
+  Mutant := Copy(Bytes);
+  Mutant[At + 10] := 1;  // frozen, not sealed
+  Expect<string>(RestoreRefusal(Mutant))
+    .ToBe('restore: integrity flags that contradict each other');
+  Mutant := Copy(Bytes);
+  Mutant[At + 13] := HSB_FUNCTION;
+  Expect<Boolean>(Pos('parts that are not its kind', RestoreRefusal(Mutant)) > 0)
+    .ToBe(True);
+  // Object.prototype given itself for a prototype.
+  Mutant := Copy(Bytes);
+  PutU32(Mutant, At, U32At(Bytes, At + 5));
+  Expect<string>(RestoreRefusal(Mutant))
+    .ToBe('restore: a changed prototype of Object.prototype');
+
+  // Sealed while a synthesized length is still configurable: a function's,
+  // whose name the run deleted, and a class's.
+  for I := Low(SYNTHESIZED_LEFT) to High(SYNTHESIZED_LEFT) do
+  begin
+    Bytes := Snapshot(SYNTHESIZED_LEFT[I], Refusal);
+    Expect<string>(Refusal).ToBe('');
+    At := DifferencesAt(Bytes) + 4;
+    Expect<Integer>(Bytes[At + 4]).ToBe(HSV_BUILTIN);
+    Mutant := Copy(Bytes);
+    Mutant[At + 9] := 0;
+    Mutant[At + 10] := 1;
+    Mutant[At + 11] := 1;
+    Expect<string>(RestoreRefusal(Mutant))
+      .ToBe('restore: a sealed object with a configurable property');
+  end;
+
+  // A loop through a restored object: Math's prototype is o, o's is Math.
+  Bytes := Snapshot('(() => { const o = {}; Object.setPrototypeOf(Math, o); ' +
+    'return o; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RestoreAndCheck(Bytes,
+    'String(Object.getPrototypeOf(Math) === restored)')).ToBe('true');
+  At := DifferencesAt(Bytes) + 4;
+  Mutant := Copy(Bytes);
+  I := ObjectEntryAt(Mutant, 0) + 2 + 4 + 1;
+  Expect<Integer>(Mutant[I]).ToBe(HSV_BUILTIN);
+  PutU32(Mutant, I + 1, U32At(Bytes, At));
+  Expect<string>(RestoreRefusal(Mutant))
+    .ToBe('restore: a prototype chain that loops');
+
+  // A kept member of a key the built-in does not have.
+  Bytes := Snapshot('(() => { globalThis.answer = 42; return {}; })()',
+    Refusal);
+  Expect<string>(Refusal).ToBe('');
+  At := DifferencesAt(Bytes) + 4;
+  // The global object: its reference, prototype, flags, parts, members.
+  At := At + 4 + ValueLength(Bytes, At + 4) + 4 + 1;
+  Count := Integer(U32At(Bytes, At));
+  Inc(At, 4);
+  I := 0;
+  while (I < Count) and (Bytes[At + 4] <> HSD_KEEP) do
+  begin
+    At := At + 4 + 1 + 1;
+    if Bytes[At - 2] = HSD_ACCESSOR then
+      At := At + ValueLength(Bytes, At) +
+        ValueLength(Bytes, At + ValueLength(Bytes, At))
+    else
+      At := At + ValueLength(Bytes, At);
+    Inc(I);
+  end;
+  Expect<Boolean>(I < Count).ToBe(True);
+  Mutant := Copy(Bytes);
+  PutU32(Mutant, At, FirstCodecTagIndex(Bytes));
+  Expect<string>(RestoreRefusal(Mutant))
+    .ToBe('restore: a kept property the built-in does not have here');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestRefusedRestoreLeavesBuiltins;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Refusal: string;
+  Bytes: TBytes;
+begin
+  Bytes := Snapshot('(() => { Math.extra = 1; delete Math.max; ' +
+    'return { a: 1 }; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    // Refused at its last byte, after the differences were read.
+    Expect<Boolean>(RestoreRefusalIn(Engine,
+      Copy(Bytes, 0, Length(Bytes) - 1)) <> '').ToBe(True);
+    Expect<string>(Engine.EvaluateGlobalEval('[typeof Math.extra, ' +
+      'typeof Math.max].join()', TEST_PATH, Stage).ToStringLiteral.Value)
+      .ToBe('undefined,function');
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    Expect<string>(Engine.EvaluateGlobalEval('[typeof Math.extra, ' +
+      'typeof Math.max].join()', TEST_PATH, Stage).ToStringLiteral.Value)
+      .ToBe('number,undefined');
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+// Restores mutants of ABytes, changed from AStart on, in AEngine, which is
+// replaced after each restore that succeeds (it changed the engine's
+// built-ins) or, with AFreshEach, after every restore (resolving a name
+// builds lazy built-ins, which a later restore in the engine cannot tell
+// from changes). Returns how many restored.
+function RestoreMutants(var AEngine: TGocciaEngine; const ALines: TStringList;
+  const ABytes: TBytes; const AStart, ACount: Integer;
+  const AFreshEach: Boolean): Integer;
+var
+  Mutant: TBytes;
+  I: Integer;
+  Restored: Boolean;
+begin
+  Result := 0;
+  for I := 1 to ACount do
+  begin
+    Mutant := Copy(ABytes);
+    Mutant[AStart + Random(Length(ABytes) - AStart)] := Random(256);
+    if Random(2) = 0 then
+      Mutant[AStart + Random(Length(ABytes) - AStart)] := Random(256);
+    Restored := RestoreRefusalIn(AEngine, Mutant) = '';
+    if Restored then
+      Inc(Result);
+    if Restored or AFreshEach then
+    begin
+      FreeAndNil(AEngine);
+      AEngine := TGocciaEngine.Create(TEST_PATH, ALines);
+    end;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestRefusalWhileApplyingLeavesBuiltins;
+const
+  STATE = '[Array.prototype.length, Goccia.shims.length, typeof Math.extra]' +
+    '.join()';
+  STEP = 256 * 1024;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  GC: TGarbageCollector;
+  Refusal, Pristine: string;
+  Bytes: TBytes;
+  Previous, Floor: Int64;
+  I, Refused: Integer;
+  Restored: Boolean;
+begin
+  // Two built-in arrays the run filled: what applying them takes is built
+  // aside first, so a ceiling it does not fit refuses before either changes.
+  Bytes := Snapshot('(() => { const o = {}; Math.extra = o; ' +
+    'const fill = Array.from({ length: 200000 }, () => o); ' +
+    'Array.prototype.push(...fill); Goccia.shims.push(...fill); ' +
+    'return o; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  GC := TGarbageCollector.Instance;
+  Previous := GC.MaxBytes;
+  Refused := 0;
+  Restored := False;
+  try
+    Pristine := Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value;
+    GC.Collect;
+    Floor := GC.BytesAllocated;
+    for I := 0 to 160 do
+    begin
+      GC.MaxBytes := Floor + Int64(I) * STEP;
+      Refusal := RestoreRefusalIn(Engine, Bytes);
+      GC.MaxBytes := Previous;
+      if Refusal = '' then
+      begin
+        Restored := True;
+        Break;
+      end;
+      Inc(Refused);
+      Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+        Stage).ToStringLiteral.Value).ToBe(Pristine);
+    end;
+    Expect<Boolean>(Restored and (Refused > 0)).ToBe(True);
+    Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value).ToBe('200000,' + IntToStr(200000 +
+      StrToInt(Copy(Pristine, Pos(',', Pristine) + 1,
+      LastDelimiter(',', Pristine) - Pos(',', Pristine) - 1))) + ',object');
+  finally
+    GC.MaxBytes := Previous;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestInstructionStopLeavesBuiltins;
+const
+  STATE = '[Math.extra, Reflect.extra, JSON.extra].join()';
+  FINAL_BUDGETS = 16;
+var
+  Refusal: string;
+  Bytes: TBytes;
+  Low, High, Mid, Limit: Int64;
+
+  function RestoresWithin(const ALimit: Int64): Boolean;
+  var
+    Engine: TGocciaEngine;
+    Lines: TStringList;
+    Stage: TGocciaGlobalEvalStage;
+    Outcome: string;
+  begin
+    Lines := TStringList.Create;
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    try
+      StartInstructionLimit(ALimit);
+      try
+        try
+          Outcome := RestoreRefusalIn(Engine, Bytes);
+        except
+          on E: TGocciaInstructionLimitError do
+            Outcome := 'stopped';
+        end;
+      finally
+        ClearInstructionLimit;
+      end;
+      Result := Outcome = '';
+      if Result then
+        Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+          Stage).ToStringLiteral.Value).ToBe('1,2,3')
+      else
+      begin
+        Expect<string>(Outcome).ToBe('stopped');
+        Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+          Stage).ToStringLiteral.Value).ToBe(',,');
+      end;
+    finally
+      Engine.Free;
+      Lines.Free;
+    end;
+  end;
+
+begin
+  Bytes := Snapshot('(() => { Math.extra = 1; Reflect.extra = 2; ' +
+    'JSON.extra = 3; return {}; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // Find the first successful budget, then stop at each of its last polls.
+  // Preparation polls between built-ins, so committing one before the next
+  // is ready would leave a partial change at these instruction boundaries.
+  Low := 1;
+  High := 1;
+  while not RestoresWithin(High) do
+  begin
+    Low := High + 1;
+    High := High * 2;
+  end;
+  while Low < High do
+  begin
+    Mid := (Low + High) div 2;
+    if RestoresWithin(Mid) then
+      High := Mid
+    else
+      Low := Mid + 1;
+  end;
+  Expect<Boolean>(High > 1).ToBe(True);
+  Low := High - FINAL_BUDGETS;
+  if Low < 1 then
+    Low := 1;
+  Limit := Low;
+  while Limit < High do
+  begin
+    Expect<Boolean>(RestoresWithin(Limit)).ToBe(False);
+    Inc(Limit);
+  end;
+  Expect<Boolean>(RestoresWithin(High)).ToBe(True);
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestTimeoutWhileRestoringLeavesBuiltins;
+const
+  STATE = '[Array.prototype.length, typeof Math.extra].join()';
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Refusal, Pristine: string;
+  Bytes: TBytes;
+  TimedOut: Boolean;
+begin
+  Bytes := Snapshot('(() => { const o = {}; Math.extra = o; ' +
+    'Array.prototype.push(o); return o; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    Pristine := Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value;
+    TimedOut := False;
+    StartExecutionTimeout(1);
+    try
+      // Observe expiry before restoring, preserving the expired scope.
+      // The assertion must not depend on how fast this machine restores.
+      // Instruction-stop tests cover interruption during preparation.
+      try
+        while True do
+          Sleep(RemainingExecutionTimeoutMilliseconds);
+      except
+        on E: TGocciaTimeoutError do
+          ;
+      end;
+      try
+        Refusal := RestoreRefusalIn(Engine, Bytes);
+      except
+        on E: TGocciaTimeoutError do
+          TimedOut := True;
+      end;
+    finally
+      ClearExecutionTimeout;
+    end;
+    Expect<Boolean>(TimedOut).ToBe(True);
+    Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value).ToBe(Pristine);
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    Expect<string>(Engine.EvaluateGlobalEval(STATE, TEST_PATH,
+      Stage).ToStringLiteral.Value).ToBe('1,object');
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestRestoredArrayStorageRootsOwner;
+var
+  Value: TGocciaArrayValue;
+  Elements: TGocciaElementList;
+  GC: TGarbageCollector;
+begin
+  // The restore API must preserve the element store's growth contract even
+  // when a native caller alone holds the array. A quarantining collection
+  // makes a lost owner observable without accessing freed memory.
+  Value := TGocciaArrayValue.Create;
+  Elements := TGocciaArrayValue.CreateElementsForRestore(1);
+  Elements[0] := TGocciaObjectValue.Create;
+  Value.CommitArrayPartForRestore(Elements, 1, True);
+  GC := TGarbageCollector.Instance;
+  TGarbageCollector.ResetQuarantineViolations;
+  GC.QuarantineSwept := True;
+  GC.CollectBeforeEveryReservation := True;
+  try
+    ExtendElementsWithHoles(Value.Elements, 32, nil);
+    Value.MarkReferences;
+    Expect<Integer>(TGarbageCollector.QuarantineViolations).ToBe(0);
+    Expect<Boolean>(Value.GetElement(0) is TGocciaObjectValue).ToBe(True);
+  finally
+    GC.CollectBeforeEveryReservation := False;
+    GC.QuarantineSwept := False;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestIndexKeyIsNeverForgotten;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Refusal: string;
+  Bytes: TBytes;
+  At: Integer;
+begin
+  // A dense element of a built-in array is an index key too.
+  Bytes := Snapshot('(() => { Array.prototype[0] = 1; return {}; })()',
+    Refusal);
+  Expect<string>(Refusal).ToBe('');
+  At := DifferencesAt(Bytes) + 4;
+  Expect<Integer>(Bytes[At + 4]).ToBe(HSV_BUILTIN);
+  Bytes[At + 12] := 0;
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    Expect<Boolean>(TGocciaObjectValue(Engine.EvaluateGlobalEval(
+      'Array.prototype', TEST_PATH, Stage)).HasEverHadIndexedOwnProperty)
+      .ToBe(True);
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
+  Bytes := Snapshot('(() => { Object.prototype[5] = 1; return {}; })()',
+    Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // Object.prototype: its reference, its null prototype, then extensible,
+  // frozen, sealed and had-an-index-key. A snapshot that says it never had
+  // one, while giving it one, is not believed.
+  At := DifferencesAt(Bytes) + 4;
+  Expect<Integer>(Bytes[At + 4]).ToBe(HSV_NIL);
+  Expect<Integer>(Bytes[At + 8]).ToBe(1);
+  Bytes[At + 8] := 0;
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    Expect<Boolean>(TGocciaObjectValue(Engine.EvaluateGlobalEval(
+      'Object.prototype', TEST_PATH, Stage)).HasEverHadIndexedOwnProperty)
+      .ToBe(True);
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestDifferenceTruncationsAndMutants;
+var
+  Engine: TGocciaEngine;
+  Lines: TStringList;
+  Refusal: string;
+  Bytes: TBytes;
+  I, Start, Restored, Failures: Integer;
+begin
+  Bytes := Snapshot('(() => { const o = { v: [1, "s"] }; Math.extra = o; ' +
+    'delete Math.max; Math[Symbol("k")] = o; Object.seal(JSON); ' +
+    'Array.prototype[1] = o; globalThis.answer = 42; ' +
+    'const p = {}; Object.setPrototypeOf(Number, p); return [o, p]; })()',
+    Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  try
+    // Every cut from where the differences begin: none restores, so the
+    // engine stays as it was.
+    Start := DifferencesAt(Bytes);
+    Failures := 0;
+    for I := Start to Length(Bytes) - 1 do
+      if RestoreRefusalIn(Engine, Copy(Bytes, 0, I)) = '' then
+        Inc(Failures);
+    Expect<Integer>(Failures).ToBe(0);
+    Expect<string>(RestoreRefusalIn(Engine, Bytes)).ToBe('');
+    FreeAndNil(Engine);
+    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+    // Mutants of the differences and the roots: restored or refused, never
+    // a fault.
+    RandSeed := 1489;
+    Restored := RestoreMutants(Engine, Lines, Bytes, Start, 10000, False);
+    Expect<Boolean>((Restored > 0) and (Restored < 10000)).ToBe(True);
+    // Differences of built-ins the run built: each in a fresh engine.
+    Bytes := Snapshot('(() => { const o = { v: 1 }; Reflect.extra = o; ' +
+      'Temporal.PlainDate.prototype.extra = o; delete Temporal.Now; ' +
+      'return o; })()', Refusal);
+    Expect<string>(Refusal).ToBe('');
+    Restored := RestoreMutants(Engine, Lines, Bytes, DifferencesAt(Bytes),
+      1000, True);
+    Expect<Boolean>((Restored > 0) and (Restored < 1000)).ToBe(True);
+  finally
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestRestoredRunSnapshotsAgain;
+var
+  Engine: TGocciaEngine;
+  Session: TGocciaHeapSnapshotSession;
+  Restore: TGocciaHeapSnapshotRestore;
+  Lines: TStringList;
+  Refusal: string;
+  Bytes: TBytes;
+  Input: TBytesStream;
+  Output: TBytesStream;
+begin
+  Bytes := Snapshot('(() => { const o = { v: 1 }; Math.extra = o; ' +
+    'delete Math.max; Reflect.extra = 3; return o; })()', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // The session comes first, as for any run: the restore is a change.
+  Lines := TStringList.Create;
+  Input := TBytesStream.Create(Bytes);
+  Output := TBytesStream.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Session := TGocciaHeapSnapshotSession.Create(Engine);
+  Restore := nil;
+  try
+    Restore := TGocciaHeapSnapshotRestore.Create(Engine, Input,
+      TGocciaHeapSnapshotLimits.Defaults);
+    Session.Snapshot([Restore.Roots[0]], Output);
+    Bytes := Copy(Output.Bytes, 0, Output.Size);
+  finally
+    Restore.Free;
+    Session.Free;
+    Engine.Free;
+    Output.Free;
+    Input.Free;
+    Lines.Free;
+  end;
+  Expect<string>(RestoreAndCheck(Bytes, '[Math.extra === restored, ' +
+    'restored.v, typeof Math.max, Reflect.extra].join()'))
+    .ToBe('true,1,undefined,3');
 end;
 
 procedure TShimLoadOnThread.Execute;

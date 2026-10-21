@@ -57,6 +57,39 @@ function TransportSecurityRead(var AConnection: TTransportSecurityConnection;
 function TransportSecurityWrite(var AConnection: TTransportSecurityConnection;
   const ABuffer: Pointer; const ALength: Integer): Integer;
 
+{$IFNDEF LAKON}
+{ A send on the blocking socket that ends by ADeadlineNanoseconds (0 for none,
+  which leaves the socket's own send timeout), so a peer that stops reading, or
+  reads slowly, cannot hold a send past the deadline. Returns the bytes sent,
+  which may be fewer than ALength, or -1 once the deadline has passed or the
+  send failed. On Windows the socket's send timeout is set to the time left
+  before the call. Elsewhere the call waits for room with poll and sends without
+  blocking, because a blocking send's timeout restarts each time the peer makes
+  room (Darwin), so a slowly draining peer could keep one send running past it.
+  It sends with the flags SocketSend does, so it keeps the protection against
+  SIGPIPE that send carries (issue #1815). }
+function SocketSendBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+
+{ Sends until all ALength bytes have gone or the deadline passes or a send
+  fails, each send as SocketSendBefore does. Returns how many bytes went out,
+  from 0 to ALength: fewer than ALength only when it stopped early. }
+function SocketSendAllBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+
+{ Settles SChannel's encrypted input after a call that reads from it. SChannel
+  decrypts and reads in place and returns what it did not consume as a
+  SECBUFFER_EXTRA buffer of AExtraLength bytes: the last AExtraLength bytes of
+  the input (Microsoft, "Extra Buffers Returned by Schannel"). They move to the
+  front of AInput while it is still allocated, and AInput shrinks to them, so no
+  byte is read from memory that was freed; zero clears it. A message that was
+  incomplete (SEC_E_INCOMPLETE_MESSAGE) consumed nothing: AIncomplete leaves the
+  input as it is for the next receive to extend. Raises when AExtraLength is
+  negative or longer than AInput. }
+procedure ConsumeEncryptedInput(var AInput: TBytes; const AIncomplete: Boolean;
+  const AExtraLength: Integer);
+{$ENDIF}
+
 implementation
 
 {$IFDEF LAKON}
@@ -138,6 +171,21 @@ begin
       [ErrorOffset]);
 end;
 
+procedure ConsumeEncryptedInput(var AInput: TBytes; const AIncomplete: Boolean;
+  const AExtraLength: Integer);
+var
+  ConsumedLength: Integer;
+begin
+  if AIncomplete then
+    Exit;
+  if (AExtraLength < 0) or (AExtraLength > Length(AInput)) then
+    raise ETransportSecurityError.Create(TLS_READ_ERROR);
+  ConsumedLength := Length(AInput) - AExtraLength;
+  if (AExtraLength > 0) and (ConsumedLength > 0) then
+    Move(AInput[ConsumedLength], AInput[0], AExtraLength);
+  SetLength(AInput, AExtraLength);
+end;
+
 { A write to a peer that reset the connection must fail the write with EPIPE
   or ECONNRESET, not end the process with SIGPIPE. Linux takes MSG_NOSIGNAL
   per send. Darwin and the BSDs take SO_NOSIGPIPE on the socket instead
@@ -183,6 +231,140 @@ begin
 end;
 
 {$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
+{ Sets option AOption (SO_RCVTIMEO or SO_SNDTIMEO) of ASock to AMilliseconds,
+  which is above 0: a timeout of 0 means none. }
+procedure SetSocketTimeout(const ASock: TSocket; const AOption: Integer;
+  const AMilliseconds: Int64);
+var
+  {$IFDEF UNIX}
+  Timeout: TTimeVal;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Timeout: LongInt;
+  {$ENDIF}
+begin
+  {$IFDEF UNIX}
+  Timeout.tv_sec := AMilliseconds div 1000;
+  Timeout.tv_usec := (AMilliseconds mod 1000) * 1000;
+  fpSetSockOpt(ASock, SOL_SOCKET, AOption, @Timeout, SizeOf(Timeout));
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Timeout := LongInt(Min(AMilliseconds, Int64(High(LongInt))));
+  WinSock2.setsockopt(ASock, SOL_SOCKET, AOption, PAnsiChar(@Timeout),
+    SizeOf(Timeout));
+  {$ENDIF}
+end;
+{$IFEND}
+
+{$IFDEF UNIX}
+{ One send that never blocks: it takes what fits and returns, or returns -1
+  with EAGAIN. Linux takes that per send. Darwin and the BSDs ignore
+  MSG_DONTWAIT on a send, so the socket is made non-blocking around the call
+  (the connection is used by one thread; a send that SO_NOSIGPIPE covers
+  raises no signal). errno is the send's. }
+function SocketSendNoWait(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer): Integer;
+{$IFNDEF LINUX}
+var
+  Flags: LongInt;
+  SendError: LongInt;
+{$ENDIF}
+begin
+  {$IFDEF LINUX}
+  Result := fpSend(ASock, ABuffer, ALength, MSG_NOSIGNAL or $40);
+  {$ELSE}
+  Flags := fpFcntl(ASock, F_GETFL, 0);
+  if (Flags < 0) or (fpFcntl(ASock, F_SETFL, Flags or O_NONBLOCK) < 0) then
+    Exit(-1);
+  Result := fpSend(ASock, ABuffer, ALength, 0);
+  SendError := fpGetErrNo;
+  fpFcntl(ASock, F_SETFL, Flags);
+  fpSetErrNo(SendError);
+  {$ENDIF}
+end;
+
+function SocketSendBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+const
+  MAX_POLL_MILLISECONDS = 1 shl 30;
+var
+  Descriptor: TPollFd;
+  Milliseconds: Int64;
+  Outcome: LongInt;
+  Ready: Boolean;
+begin
+  if ADeadlineNanoseconds = 0 then
+    Exit(SocketSend(ASock, ABuffer, ALength));
+  repeat
+    Ready := False;
+    repeat
+      Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
+      if Milliseconds = 0 then
+        Exit(-1);
+      if Milliseconds > MAX_POLL_MILLISECONDS then
+        Milliseconds := MAX_POLL_MILLISECONDS;
+      Descriptor.fd := ASock;
+      Descriptor.events := POLLOUT;
+      Descriptor.revents := 0;
+      Outcome := fpPoll(@Descriptor, 1, Milliseconds);
+      if Outcome > 0 then
+        Ready := True
+      else if (Outcome < 0) and (fpGetErrNo <> ESysEINTR) then
+        Exit(-1);
+    until Ready;
+    Result := SocketSendNoWait(ASock, ABuffer, ALength);
+    { Another thread's send can take the room poll reported: wait again, for
+      the time that is left. }
+  until (Result >= 0) or
+        ((fpGetErrNo <> ESysEAGAIN) and (fpGetErrNo <> ESysEINTR));
+  if Result < 0 then
+    Result := -1;
+end;
+{$ENDIF}
+{$IFDEF MSWINDOWS}
+function SocketSendBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+var
+  Milliseconds: Int64;
+begin
+  if ADeadlineNanoseconds <> 0 then
+  begin
+    Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
+    if Milliseconds = 0 then
+      Exit(-1);
+    SetSocketTimeout(ASock, SO_SNDTIMEO, Milliseconds);
+  end;
+  Result := SocketSend(ASock, ABuffer, ALength);
+end;
+{$ENDIF}
+
+function SocketSendAllBefore(const ASock: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
+const
+  {$IFDEF MSWINDOWS}
+  { A Windows send that times out says nothing of how much of its buffer went
+    out, so no call is given more than a chunk and the count stays within one
+    chunk of the truth. }
+  MAX_SEND_LENGTH = 65536;
+  {$ELSE}
+  MAX_SEND_LENGTH = High(Integer);
+  {$ENDIF}
+var
+  Written: Integer;
+begin
+  Result := 0;
+  while Result < ALength do
+  begin
+    Written := SocketSendBefore(ASock,
+      Pointer(NativeUInt(ABuffer) + NativeUInt(Result)),
+      Min(ALength - Result, MAX_SEND_LENGTH), ADeadlineNanoseconds);
+    if Written <= 0 then
+      Exit;
+    Inc(Result, Written);
+  end;
+end;
+
+{$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
 { A receive on the blocking socket that ends by ADeadlineNanoseconds (0 for
   none): the socket's receive timeout is set to the time left before every
   call, so a peer that trickles bytes cannot stretch a TLS read made of many
@@ -191,49 +373,29 @@ function SocketReceiveBefore(const ASock: TSocket; const ABuffer: Pointer;
   const ALength: Integer; const ADeadlineNanoseconds: Int64): Integer;
 var
   Milliseconds: Int64;
-  {$IFDEF UNIX}
-  Timeout: TTimeVal;
-  {$ENDIF}
-  {$IFDEF MSWINDOWS}
-  Timeout: LongInt;
-  {$ENDIF}
 begin
   if ADeadlineNanoseconds <> 0 then
   begin
     Milliseconds := MillisecondsBefore(ADeadlineNanoseconds);
     if Milliseconds = 0 then
       Exit(-1);
-    {$IFDEF UNIX}
-    Timeout.tv_sec := Milliseconds div 1000;
-    Timeout.tv_usec := (Milliseconds mod 1000) * 1000;
-    fpSetSockOpt(ASock, SOL_SOCKET, SO_RCVTIMEO, @Timeout, SizeOf(Timeout));
-    {$ENDIF}
-    {$IFDEF MSWINDOWS}
-    Timeout := LongInt(Min(Milliseconds, Int64(High(LongInt))));
-    WinSock2.setsockopt(ASock, SOL_SOCKET, SO_RCVTIMEO,
-      PAnsiChar(@Timeout), SizeOf(Timeout));
-    {$ENDIF}
+    SetSocketTimeout(ASock, SO_RCVTIMEO, Milliseconds);
   end;
   Result := SocketReceive(ASock, ABuffer, ALength);
 end;
 {$IFEND}
 
-procedure SendSocketAll(const ASocket: TSocket; const ABuffer: Pointer;
-  const ALength: Integer);
-var
-  Sent: Integer;
-  Written: Integer;
+{$IFDEF MSWINDOWS}
+{ Sends all ALength bytes by ADeadlineNanoseconds (0 for none). False when the
+  deadline passed or a send failed first; how many bytes went out is then
+  unknown. }
+function SendSocketAll(const ASocket: TSocket; const ABuffer: Pointer;
+  const ALength: Integer; const ADeadlineNanoseconds: Int64): Boolean;
 begin
-  Sent := 0;
-  while Sent < ALength do
-  begin
-    Written := SocketSend(ASocket, Pointer(NativeUInt(ABuffer) + NativeUInt(Sent)),
-      ALength - Sent);
-    if Written <= 0 then
-      raise ETransportSecurityError.Create(TLS_WRITE_ERROR);
-    Inc(Sent, Written);
-  end;
+  Result := SocketSendAllBefore(ASocket, ABuffer, ALength,
+    ADeadlineNanoseconds) = ALength;
 end;
+{$ENDIF}
 
 {$IFDEF DARWIN}
 {$linkframework Security}
@@ -339,7 +501,12 @@ var
 begin
   Data := TSecureTransportData(AConnection);
   RequestedLength := ADataLength;
-  Written := SocketSend(Data.Socket, AData, ADataLength);
+  { SSLWrite counts what this callback accepts as written, so it takes all of
+    it unless the deadline or the connection stops it. A send that moves part
+    of the buffer, as a non-blocking one does under backpressure, would
+    otherwise leave the rest queued while the request looks sent. }
+  Written := SocketSendAllBefore(Data.Socket, AData, ADataLength,
+    Data.DeadlineNanoseconds);
   if Written > 0 then
   begin
     ADataLength := Written;
@@ -625,7 +792,7 @@ end;
   to be retried for ever. }
 procedure SetSocketNonBlocking(const ASocket: TSocket);
 var
-  Flags: cint;
+  Flags: LongInt;
 begin
   Flags := FpFcntl(ASocket, F_GETFL);
   if (Flags < 0) or (FpFcntl(ASocket, F_SETFL, Flags or O_NONBLOCK) < 0) then
@@ -1131,13 +1298,6 @@ begin
   Move(ASource^, ATarget[PreviousLength], ALength);
 end;
 
-procedure PreserveExtraBytes(var ATarget: TBytes; const ASource: Pointer;
-  const ALength: Integer);
-begin
-  SetLength(ATarget, 0);
-  AppendBytes(ATarget, ASource, ALength);
-end;
-
 function ReceiveIntoBuffer(const AData: TSChannelData;
   var ABuffer: TBytes): Integer;
 var
@@ -1149,10 +1309,17 @@ begin
     AppendBytes(ABuffer, @Temporary[0], Result);
 end;
 
-procedure SendSChannelToken(const ASocket: TSocket; const ABuffer: TSecBuffer);
+{ Sends the token SChannel produced, by ADeadlineNanoseconds. False when the
+  deadline passed or the send failed first; true when there was nothing to
+  send. }
+function SendSChannelToken(const ASocket: TSocket; const ABuffer: TSecBuffer;
+  const ADeadlineNanoseconds: Int64): Boolean;
 begin
   if (ABuffer.cbBuffer > 0) and Assigned(ABuffer.pvBuffer) then
-    SendSocketAll(ASocket, ABuffer.pvBuffer, ABuffer.cbBuffer);
+    Result := SendSocketAll(ASocket, ABuffer.pvBuffer, ABuffer.cbBuffer,
+      ADeadlineNanoseconds)
+  else
+    Result := True;
 end;
 
 function SChannelRequestFlags: LongWord;
@@ -1178,6 +1345,8 @@ var
   InputDescPointer: PSecBufferDesc;
   ExistingContext: PCtxtHandle;
   ReceiveCount: Integer;
+  TokenSent: Boolean;
+  ExtraLength: Integer;
 begin
   Data := TSChannelData.Create;
   FillChar(Data.Credential, SizeOf(Data.Credential), 0);
@@ -1236,15 +1405,23 @@ begin
         @ContextAttributes, @Expiry);
       Data.HasContext := True;
 
-      SendSChannelToken(Data.Socket, OutputBuffer);
+      TokenSent := SendSChannelToken(Data.Socket, OutputBuffer,
+        Data.DeadlineNanoseconds);
       if Assigned(OutputBuffer.pvBuffer) then
         FreeContextBuffer(OutputBuffer.pvBuffer);
+      if not TokenSent then
+        raise ETransportSecurityError.Create(TLS_WRITE_ERROR);
 
-      if (InputDescPointer <> nil) and (InputBuffers[1].BufferType = SECBUFFER_EXTRA) then
-        PreserveExtraBytes(Data.EncryptedInput, InputBuffers[1].pvBuffer,
-          InputBuffers[1].cbBuffer)
-      else
-        SetLength(Data.EncryptedInput, 0);
+      { A message split across receives consumed nothing: the input stays
+        and the next receive is appended to it. Otherwise SChannel consumed
+        all of it but the extra bytes, the start of the next message, which
+        it left in place at the end of the input. }
+      ExtraLength := 0;
+      if (InputDescPointer <> nil) and
+         (InputBuffers[1].BufferType = SECBUFFER_EXTRA) then
+        ExtraLength := Integer(InputBuffers[1].cbBuffer);
+      ConsumeEncryptedInput(Data.EncryptedInput,
+        Status = SEC_E_INCOMPLETE_MESSAGE, ExtraLength);
 
       if Status = SEC_E_INCOMPLETE_MESSAGE then
       begin
@@ -1308,6 +1485,7 @@ var
   Status: SECURITY_STATUS;
   ContextAttributes: LongWord;
   Expiry: SECURITY_INTEGER;
+  TokenSent: Boolean;
 begin
   Data := TSChannelData(AConnection.BackendData);
   if Assigned(Data) then
@@ -1341,10 +1519,15 @@ begin
           nil, SChannelRequestFlags, 0, SECURITY_NATIVE_DREP, @InputDesc, 0,
           @Data.Context, @OutputDesc, @ContextAttributes, @Expiry);
 
-        SendSChannelToken(Data.Socket, OutputBuffer);
+        { The close_notify is a courtesy: one the deadline or a broken
+          connection stops is dropped, and the close goes on to release the
+          context. }
+        TokenSent := SendSChannelToken(Data.Socket, OutputBuffer,
+          Data.DeadlineNanoseconds);
         if Assigned(OutputBuffer.pvBuffer) then
           FreeContextBuffer(OutputBuffer.pvBuffer);
-      until (Status = SEC_E_OK) or (Status = SEC_I_CONTEXT_EXPIRED) or
+      until not TokenSent or (Status = SEC_E_OK) or
+            (Status = SEC_I_CONTEXT_EXPIRED) or
             (Status <> SEC_I_CONTINUE_NEEDED);
 
       DeleteSecurityContext(@Data.Context);
@@ -1365,6 +1548,7 @@ var
   QualityOfProtection: LongWord;
   I: Integer;
   ReceiveCount: Integer;
+  ExtraLength: Integer;
 begin
   Data := TSChannelData(AConnection.BackendData);
 
@@ -1440,11 +1624,13 @@ begin
         AppendBytes(Data.DecryptedInput, Buffers[I].pvBuffer,
           Buffers[I].cbBuffer);
 
-    SetLength(Data.EncryptedInput, 0);
+    { DecryptMessage decrypted in place: the extra buffer points into
+      EncryptedInput, so the bytes move to its front while it is allocated. }
+    ExtraLength := 0;
     for I := 0 to High(Buffers) do
       if Buffers[I].BufferType = SECBUFFER_EXTRA then
-        PreserveExtraBytes(Data.EncryptedInput, Buffers[I].pvBuffer,
-          Buffers[I].cbBuffer);
+        ExtraLength := Integer(Buffers[I].cbBuffer);
+    ConsumeEncryptedInput(Data.EncryptedInput, False, ExtraLength);
 
     Available := Length(Data.DecryptedInput);
     if Available > 0 then
@@ -1504,7 +1690,9 @@ begin
 
     TotalLength := Buffers[0].cbBuffer + Buffers[1].cbBuffer +
       Buffers[2].cbBuffer;
-    SendSocketAll(Data.Socket, @Message[0], TotalLength);
+    if not SendSocketAll(Data.Socket, @Message[0], TotalLength,
+        Data.DeadlineNanoseconds) then
+      raise ETransportSecurityError.Create(TLS_WRITE_ERROR);
     Inc(PlainOffset, ChunkLength);
     Inc(Result, ChunkLength);
   end;

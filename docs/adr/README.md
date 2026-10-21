@@ -161,3 +161,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0149 — A fetch request's URL and a redirect's Location go through the URL parser](0149-fetch-urls-go-through-the-url-parser.md)
 - [0150 — A heap snapshot restores module records whole, compiling each source module without linking it, and writes data modules as values](0150-heap-snapshots-restore-module-records-whole.md)
 - [0151 — A deterministic sandbox run stamps its files with the deterministic clock](0151-deterministic-sandbox-runs-stamp-files-with-the-deterministic-clock.md)
+- [0152 — A heap restore commits built-in differences after every fallible step](0152-heap-snapshot-builtins-commit-last.md)

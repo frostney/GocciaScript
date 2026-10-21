@@ -65,10 +65,10 @@ type
     procedure Finish(const AReader: TGocciaHeapSnapshotReader;
       const ARecord: TObject); override;
     // Caches the restored records in the engine's loader, which owns them
-    // from then on. Call once the restore succeeded, after the reader is
-    // done. The run's limits can stop it, leaving the loader as it was and
-    // the records here.
-    procedure Commit;
+    // from then on. The reader calls this after symbol registration and
+    // before applying built-in differences. The run's limits can stop it,
+    // leaving the loader as it was and the records here.
+    procedure Commit; override;
   end;
 
 implementation

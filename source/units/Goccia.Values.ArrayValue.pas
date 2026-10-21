@@ -45,6 +45,16 @@ type
     // (a heap snapshot's fingerprint reads them after its last collection).
     function StoredLength: Int64;
     function LengthWritable: Boolean;
+    // A heap snapshot restore of a built-in array the run changed (ADR
+    // 0148). CreateElementsForRestore makes its dense elements aside, ACount
+    // holes grown through the element store's gate (it may raise), for the
+    // caller to fill and keep rooted; ArrayPartRefusal checks them, and
+    // CommitArrayPartForRestore installs them, with the length and whether
+    // it is writable, and cannot fail.
+    class function CreateElementsForRestore(
+      const ACount: Integer): TGocciaElementList;
+    procedure CommitArrayPartForRestore(const AElements: TGocciaElementList;
+      const ALength: Int64; const ALengthWritable: Boolean);
 
     // Index-based element access
     function GetLength: Integer;
@@ -126,6 +136,14 @@ type
   // script has since stored there.  nil before the realm's Array.prototype
   // exists.
   function GetIntrinsicArrayValuesForRealm(const ARealm: TGocciaRealm): TGocciaValue;
+  // Why an array's restored state cannot be, or '': ALength in range and no
+  // shorter than the dense elements, a frozen array's length read-only, and
+  // no key of AKeys (its own property keys) the length or an index the
+  // elements hold a value for or that lies past the length.
+  function ArrayPartRefusal(const ALength: Int64;
+    const ALengthWritable, AFrozen: Boolean;
+    const AElements: TGocciaElementList;
+    const AKeys: array of string): string;
 
 implementation
 
@@ -147,6 +165,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
+  Goccia.NativeLimits,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -5053,65 +5072,75 @@ var
   FillValue: TGocciaValue;
   StartIdx, EndIdx, I: Integer;
   Start64, End64, I64: Int64;
+  ViewRoots: TGocciaActiveRootFrame;
 begin
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
+  // The receiver object (a fresh wrapper for a primitive this) is held only
+  // here while start and end convert and every element is written, which can
+  // run guest code; it is also the result.
+  ViewRoots.Initialize;
+  try
+    ViewRoots.Add(View.Obj);
 
-  // Step 3: Let value (default undefined)
-  if AArgs.Length < 1 then
-    FillValue := TGocciaUndefinedLiteralValue.UndefinedValue
-  else
-    FillValue := AArgs.GetElement(0);
-
-  if View.NeedsSparsePath then
-  begin
-    Start64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 1), View.Len64);
-    if (AArgs.Length > 2) and
-       not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-      End64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 2), View.Len64)
+    // Step 3: Let value (default undefined)
+    if AArgs.Length < 1 then
+      FillValue := TGocciaUndefinedLiteralValue.UndefinedValue
     else
-      End64 := View.Len64;
+      FillValue := AArgs.GetElement(0);
 
-    if (View.Obj is TGocciaStringObjectValue) and (Start64 < End64) then
-      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(Start64)]),
-        SSuggestCannotDeleteNonConfigurable);
-
-    I64 := Start64;
-    while I64 < End64 do
+    if View.NeedsSparsePath then
     begin
-      View.Obj.AssignProperty(IntegerToString(I64), FillValue);
-      Inc(I64);
+      Start64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 1), View.Len64);
+      if (AArgs.Length > 2) and
+         not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+        End64 := NormalizeRelativeIndex64(ToInteger64FromArgs(AArgs, 2), View.Len64)
+      else
+        End64 := View.Len64;
+
+      if (View.Obj is TGocciaStringObjectValue) and (Start64 < End64) then
+        ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(Start64)]),
+          SSuggestCannotDeleteNonConfigurable);
+
+      I64 := Start64;
+      while I64 < End64 do
+      begin
+        View.Obj.AssignProperty(IntegerToString(I64), FillValue);
+        Inc(I64);
+      end;
+
+      Result := View.Obj;
+      Exit;
     end;
 
+    // Step 4: Let relativeStart be ToIntegerOrInfinity(start)
+    StartIdx := ToIntegerFromArgs(AArgs, 1);
+
+    // Step 6: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
+    if (AArgs.Length > 2) and
+       not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
+      EndIdx := ToIntegerFromArgs(AArgs, 2)
+    else
+      EndIdx := View.Len;
+
+    // Step 5: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
+    StartIdx := NormalizeRelativeIndex(StartIdx, View.Len);
+    // Step 7: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
+    EndIdx := NormalizeRelativeIndex(EndIdx, View.Len);
+
+    if (View.Obj is TGocciaStringObjectValue) and (StartIdx < EndIdx) then
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(StartIdx)]),
+        SSuggestCannotDeleteNonConfigurable);
+
+    // Step 8: Repeat, while k < final — Set(O, ToString(k), value)
+    for I := StartIdx to EndIdx - 1 do
+      View.Put(I, FillValue);
+
+    // Step 9: Return O
     Result := View.Obj;
-    Exit;
+  finally
+    ViewRoots.Clear;
   end;
-
-  // Step 4: Let relativeStart be ToIntegerOrInfinity(start)
-  StartIdx := ToIntegerFromArgs(AArgs, 1);
-
-  // Step 6: If end is undefined, let relativeEnd be len; else ToIntegerOrInfinity(end)
-  if (AArgs.Length > 2) and
-     not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
-    EndIdx := ToIntegerFromArgs(AArgs, 2)
-  else
-    EndIdx := View.Len;
-
-  // Step 5: If relativeStart < 0, let k be max(len + relativeStart, 0); else min(relativeStart, len)
-  StartIdx := NormalizeRelativeIndex(StartIdx, View.Len);
-  // Step 7: If relativeEnd < 0, let final be max(len + relativeEnd, 0); else min(relativeEnd, len)
-  EndIdx := NormalizeRelativeIndex(EndIdx, View.Len);
-
-  if (View.Obj is TGocciaStringObjectValue) and (StartIdx < EndIdx) then
-    ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(StartIdx)]),
-      SSuggestCannotDeleteNonConfigurable);
-
-  // Step 8: Repeat, while k < final — Set(O, ToString(k), value)
-  for I := StartIdx to EndIdx - 1 do
-    View.Put(I, FillValue);
-
-  // Step 9: Return O
-  Result := View.Obj;
 end;
 
 // ES2026 §23.1.3.1 Array.prototype.at(index)
@@ -5292,6 +5321,57 @@ begin
        ((Index >= Len) or ((Index < Count) and
         (A.FElements[Integer(Index)] <> TGocciaHoleValue.HoleValue))) then
       AReader.Refuse('an array index property the array cannot hold');
+  end;
+end;
+
+class function TGocciaArrayValue.CreateElementsForRestore(
+  const ACount: Integer): TGocciaElementList;
+begin
+  Result := TGocciaElementList.Create(False);
+  try
+    // Through the element store's gate, as any store grows.
+    ExtendElementsWithHoles(Result, ACount, nil);
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+procedure TGocciaArrayValue.CommitArrayPartForRestore(
+  const AElements: TGocciaElementList; const ALength: Int64;
+  const ALengthWritable: Boolean);
+begin
+  FElements.Free;
+  FElements := AElements;
+  FElements.Owner := Self;
+  FLength := ALength;
+  FLengthWritable := ALengthWritable;
+end;
+
+function ArrayPartRefusal(const ALength: Int64;
+  const ALengthWritable, AFrozen: Boolean;
+  const AElements: TGocciaElementList;
+  const AKeys: array of string): string;
+var
+  Index: Int64;
+  I: Integer;
+begin
+  Result := '';
+  if (ALength < 0) or (ALength > MAX_ARRAY_LENGTH) then
+    Exit('an array length out of range');
+  if AElements.Count > ALength then
+    Exit('an array with more elements than its length');
+  if AFrozen and ALengthWritable then
+    Exit('a frozen array with a writable length');
+  for I := 0 to High(AKeys) do
+  begin
+    CheckNativeWork;
+    if AKeys[I] = PROP_LENGTH then
+      Exit('an array whose length is an ordinary property');
+    if TryParseArrayElementIndex(AKeys[I], Index) and
+       ((Index >= ALength) or ((Index < AElements.Count) and
+        (AElements[Integer(Index)] <> TGocciaHoleValue.HoleValue))) then
+      Exit('an array index property the array cannot hold');
   end;
 end;
 

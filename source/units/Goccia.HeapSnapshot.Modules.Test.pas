@@ -86,6 +86,7 @@ type
     procedure TestEntryModuleScope;
     procedure TestCompiledEntryRoundTrips;
     procedure TestImportedModulesKeepTheirBindings;
+    procedure TestBindingsSharedWithBuiltinDifferences;
     procedure TestRestoreRunsNoModuleBody;
     procedure TestEveryRecordIsRestored;
     procedure TestDataModulesKeepTheRunsChanges;
@@ -392,6 +393,8 @@ begin
     TestCompiledEntryRoundTrips);
   Test('Imported modules keep live bindings, re-exports and namespaces',
     TestImportedModulesKeepTheirBindings);
+  Test('Module bindings and built-in differences share the restored graph',
+    TestBindingsSharedWithBuiltinDifferences);
   Test('A restore runs no module body, and a later import finds the module',
     TestRestoreRunsNoModuleBody);
   Test('Every module record is restored, whatever the roots reach',
@@ -565,6 +568,28 @@ begin
     'Object.keys(restored.ns).join("+"), restored.nsAgain() === restored.ns, ' +
     'Object.isFrozen(restored.ns), restored.ns[Symbol.toStringTag]].join()'))
     .ToBe('1,2,2,true,x,extra+increment,true,false,Module');
+end;
+
+procedure THeapSnapshotModulesTests.TestBindingsSharedWithBuiltinDifferences;
+var
+  Refusal: string;
+  Bytes: TBytes;
+begin
+  DefineGraph;
+  Define('combined.js', 'import { inc, count } from "./counter.js"; ' +
+    'import * as ns from "./counter.js"; tick(); inc(); ' +
+    'Math.snapshotModuleRead = () => count; ' +
+    'Math.snapshotModuleInc = inc; ' +
+    'Object.prototype.snapshotModuleNamespace = ns; ' +
+    'capture({ inc, read: () => count, ns });');
+  Bytes := SnapshotEntry('combined.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RoundTripEntry('combined.js', Bytes,
+    '[Math.snapshotModuleRead(), restored.inc(), ' +
+    'Math.snapshotModuleRead(), Math.snapshotModuleInc === restored.inc, ' +
+    '({}).snapshotModuleNamespace === restored.ns, ' +
+    'restored.ns.count, restored.read()].join()'))
+    .ToBe('1,2,2,true,true,2,2');
 end;
 
 procedure THeapSnapshotModulesTests.TestRestoreRunsNoModuleBody;
@@ -1197,7 +1222,7 @@ var
   Offset: Integer;
 
   // Whether the restore completes within ALimit polls; a stopped one must
-  // leave no record in the loader.
+  // leave no record in the loader or changed built-in behind.
   function RestoresWithin(const ALimit: Int64): Boolean;
   var
     Run: TModuleRun;
@@ -1229,6 +1254,14 @@ var
         // Nor the text of the sources it read, for diagnostics.
         Expect<Int64>(Run.Engine.ModuleLoader.DiagnosticScope.RetainedBytes)
           .ToBe(Retained);
+        Expect<string>(Run.Check('"snapshotModuleMarker" in Math'))
+          .ToBe('false');
+      end
+      else
+      begin
+        Expect<string>(Run.Check('String(Math.snapshotModuleMarker)'))
+          .ToBe('73');
+        Expect<Integer>(Run.Ticks).ToBe(0);
       end;
     finally
       Run.Free;
@@ -1237,6 +1270,10 @@ var
 
 begin
   DefineGraph;
+  Define('counter.js', 'tick(); let count = 0; ' +
+    'Math.snapshotModuleMarker = 73; ' +
+    'export const inc = () => { count += 1; return count; }; ' +
+    'export { count };');
   Bytes := SnapshotEntry('main.js', Refusal);
   Expect<string>(Refusal).ToBe('');
   // The fewest polls the restore completes within; the last of them are

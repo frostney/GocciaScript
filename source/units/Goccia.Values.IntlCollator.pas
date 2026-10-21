@@ -284,143 +284,152 @@ end;
 
 constructor TGocciaIntlCollatorValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
+  OptionsRoots: TGocciaActiveRootFrame;
   Canonical, RawLocale: string;
   V: TGocciaValue;
   Ignored, LocaleNumeric, LocaleCaseFirst, LocaleCollation, CollationOption: string;
   NumericOptionPresent, CaseFirstOptionPresent, CollationOptionPresent: Boolean;
 begin
   inherited Create;
-  RawLocale := ALocale;
-  Canonical := CanonicalizeUnicodeLocaleId(ALocale);
-  if Canonical = '' then
-    FLocale := DefaultLocale
-  else
-    FLocale := RemoveUnicodeLocaleExtensionAttributes(Canonical);
-
-  // Defaults
-  FSensitivity := 'variant';
-  FUsage := 'sort';
-  FIgnorePunctuation := DefaultIgnorePunctuationForLocale(FLocale);
-  FNumeric := False;
-  FCaseFirst := 'false';
-  FCollation := 'default';
-  NumericOptionPresent := False;
-  CaseFirstOptionPresent := False;
-  CollationOptionPresent := False;
-
-  if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric) or
-     TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'kn', LocaleNumeric) then
-  begin
-    if (LocaleNumeric = '') or (LocaleNumeric = 'true') then
-    begin
-      FNumeric := True
-    end
-    else if LocaleNumeric = 'false' then
-      FNumeric := False
+  // Options that ToObject made from a primitive are a wrapper only this call
+  // holds while their getters and conversions run guest code.
+  OptionsRoots.Initialize;
+  try
+    OptionsRoots.Add(AOptions);
+    RawLocale := ALocale;
+    Canonical := CanonicalizeUnicodeLocaleId(ALocale);
+    if Canonical = '' then
+      FLocale := DefaultLocale
     else
-      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kn');
-    if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', Ignored) and
-       ((LocaleNumeric = '') or (LocaleNumeric = 'true') or (LocaleNumeric = 'false')) then
-    begin
-      if LocaleNumeric = 'true' then
-        FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kn', '')
-      else
-        FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric);
-    end;
-  end;
+      FLocale := RemoveUnicodeLocaleExtensionAttributes(Canonical);
 
-  if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst) or
-     TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'kf', LocaleCaseFirst) then
-  begin
-    if IsValidCaseFirstValue(LocaleCaseFirst) then
-    begin
-      FCaseFirst := LocaleCaseFirst
-    end
-    else
-      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kf');
-    if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', Ignored) and
-       IsValidCaseFirstValue(LocaleCaseFirst) then
-      FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst);
-  end;
-
-  if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation) or
-     TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'co', LocaleCollation) then
-  begin
-    LocaleCollation := NormalizeCollationValue(LocaleCollation);
-    if IsSupportedCollationValue(FLocale, LocaleCollation) then
-    begin
-      FCollation := LocaleCollation;
-      if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', Ignored) and
-         (NormalizeCollationValue(Ignored) <> LocaleCollation) then
-        FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
-      if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', Ignored) then
-        FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation);
-    end
-    else
-      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
-  end;
-
-  if Assigned(AOptions) then
-  begin
-    ReadCollatorStringOption(AOptions, 'sensitivity', FSensitivity,
-      ['base', 'accent', 'case', 'variant']);
-    ReadCollatorStringOption(AOptions, 'usage', FUsage, ['sort', 'search']);
-    V := AOptions.GetProperty('ignorePunctuation');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      FIgnorePunctuation := V.ToBooleanLiteral.Value;
-    V := AOptions.GetProperty('numeric');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      NumericOptionPresent := True;
-      FNumeric := V.ToBooleanLiteral.Value;
-    end;
-    CaseFirstOptionPresent := TryReadStringOption(AOptions, 'caseFirst', Ignored);
-    if CaseFirstOptionPresent then
-    begin
-      if ContainsNulCharacter(Ignored) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [Ignored, 'caseFirst']));
-      if not IsValidCaseFirstValue(Ignored) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [Ignored, 'caseFirst']));
-      FCaseFirst := Ignored;
-    end;
-    CollationOptionPresent := TryReadStringOption(AOptions, 'collation', CollationOption);
-    CollationOption := NormalizeCollationValue(CollationOption);
-    if CollationOptionPresent and IsSupportedCollationValue(FLocale, CollationOption) then
-      FCollation := CollationOption;
-    ReadCollatorStringOption(AOptions, 'localeMatcher', Ignored, ['lookup', 'best fit']);
-  end;
-
-  if NumericOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric) then
-  begin
-    if ((LocaleNumeric = '') or (LocaleNumeric = 'true')) <> FNumeric then
-      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kn');
-  end;
-  if CaseFirstOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst) then
-  begin
-    if LocaleCaseFirst <> FCaseFirst then
-      FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kf');
-  end;
-  if FUsage = 'search' then
-  begin
+    // Defaults
+    FSensitivity := 'variant';
+    FUsage := 'sort';
+    FIgnorePunctuation := DefaultIgnorePunctuationForLocale(FLocale);
+    FNumeric := False;
+    FCaseFirst := 'false';
     FCollation := 'default';
-    FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
-  end
-  else if CollationOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation) then
-  begin
-    if NormalizeCollationValue(LocaleCollation) <> FCollation then
+    NumericOptionPresent := False;
+    CaseFirstOptionPresent := False;
+    CollationOptionPresent := False;
+
+    if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric) or
+       TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'kn', LocaleNumeric) then
+    begin
+      if (LocaleNumeric = '') or (LocaleNumeric = 'true') then
+      begin
+        FNumeric := True
+      end
+      else if LocaleNumeric = 'false' then
+        FNumeric := False
+      else
+        FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kn');
+      if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', Ignored) and
+         ((LocaleNumeric = '') or (LocaleNumeric = 'true') or (LocaleNumeric = 'false')) then
+      begin
+        if LocaleNumeric = 'true' then
+          FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kn', '')
+        else
+          FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric);
+      end;
+    end;
+
+    if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst) or
+       TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'kf', LocaleCaseFirst) then
+    begin
+      if IsValidCaseFirstValue(LocaleCaseFirst) then
+      begin
+        FCaseFirst := LocaleCaseFirst
+      end
+      else
+        FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kf');
+      if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', Ignored) and
+         IsValidCaseFirstValue(LocaleCaseFirst) then
+        FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst);
+    end;
+
+    if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation) or
+       TryGetUnicodeLocaleExtensionKeyword(RawLocale, 'co', LocaleCollation) then
+    begin
+      LocaleCollation := NormalizeCollationValue(LocaleCollation);
+      if IsSupportedCollationValue(FLocale, LocaleCollation) then
+      begin
+        FCollation := LocaleCollation;
+        if TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', Ignored) and
+           (NormalizeCollationValue(Ignored) <> LocaleCollation) then
+          FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
+        if not TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', Ignored) then
+          FLocale := AddUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation);
+      end
+      else
+        FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
+    end;
+
+    if Assigned(AOptions) then
+    begin
+      ReadCollatorStringOption(AOptions, 'sensitivity', FSensitivity,
+        ['base', 'accent', 'case', 'variant']);
+      ReadCollatorStringOption(AOptions, 'usage', FUsage, ['sort', 'search']);
+      V := AOptions.GetProperty('ignorePunctuation');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+        FIgnorePunctuation := V.ToBooleanLiteral.Value;
+      V := AOptions.GetProperty('numeric');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        NumericOptionPresent := True;
+        FNumeric := V.ToBooleanLiteral.Value;
+      end;
+      CaseFirstOptionPresent := TryReadStringOption(AOptions, 'caseFirst', Ignored);
+      if CaseFirstOptionPresent then
+      begin
+        if ContainsNulCharacter(Ignored) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [Ignored, 'caseFirst']));
+        if not IsValidCaseFirstValue(Ignored) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [Ignored, 'caseFirst']));
+        FCaseFirst := Ignored;
+      end;
+      CollationOptionPresent := TryReadStringOption(AOptions, 'collation', CollationOption);
+      CollationOption := NormalizeCollationValue(CollationOption);
+      if CollationOptionPresent and IsSupportedCollationValue(FLocale, CollationOption) then
+        FCollation := CollationOption;
+      ReadCollatorStringOption(AOptions, 'localeMatcher', Ignored, ['lookup', 'best fit']);
+    end;
+
+    if NumericOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kn', LocaleNumeric) then
+    begin
+      if ((LocaleNumeric = '') or (LocaleNumeric = 'true')) <> FNumeric then
+        FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kn');
+    end;
+    if CaseFirstOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'kf', LocaleCaseFirst) then
+    begin
+      if LocaleCaseFirst <> FCaseFirst then
+        FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'kf');
+    end;
+    if FUsage = 'search' then
+    begin
+      FCollation := 'default';
       FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
+    end
+    else if CollationOptionPresent and TryGetUnicodeLocaleExtensionKeyword(FLocale, 'co', LocaleCollation) then
+    begin
+      if NormalizeCollationValue(LocaleCollation) <> FCollation then
+        FLocale := RemoveUnicodeLocaleExtensionKeyword(FLocale, 'co');
+    end;
+
+    FLocale := KeepCollatorLocaleExtensionKeywords(FLocale);
+    FICULocale := LocaleWithoutUnicodeExtension(FLocale);
+    if FUsage = 'search' then
+      FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', 'search')
+    else if FCollation <> 'default' then
+      FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', FCollation);
+
+    InitializePrototype;
+    if (GetIntlCollatorShared <> nil) then
+      FPrototype := GetIntlCollatorShared.Prototype;
+  finally
+    OptionsRoots.Clear;
   end;
-
-  FLocale := KeepCollatorLocaleExtensionKeywords(FLocale);
-  FICULocale := LocaleWithoutUnicodeExtension(FLocale);
-  if FUsage = 'search' then
-    FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', 'search')
-  else if FCollation <> 'default' then
-    FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', FCollation);
-
-  InitializePrototype;
-  if (GetIntlCollatorShared <> nil) then
-    FPrototype := GetIntlCollatorShared.Prototype;
 end;
 
 function TGocciaIntlCollatorValue.ToStringTag: string;
