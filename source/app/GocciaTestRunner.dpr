@@ -34,8 +34,10 @@ uses
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.NativeLimits,
+  Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.RoundTrip,
   Goccia.JSON.Utils,
+  Goccia.Modules,
   Goccia.Modules.NodeResolution,
   Goccia.Modules.Resolver,
   Goccia.Runtime,
@@ -979,47 +981,68 @@ end;
 function TTestRunnerApp.CreateHeapSnapshotDestination(
   const ASourceEngine: TGocciaEngine): TGocciaEngine;
 var
-  Options: TGocciaSourcePipelineOptions;
-  Parsed: TGocciaCLISourcePipelineResult;
   Stream: TMemoryStream;
   Writer: TGocciaBytecodeWriter;
   Reader: TGocciaBytecodeReader;
   Module: TGocciaBytecodeModule;
-  I: Integer;
+  Keys: TGocciaModuleKeyList;
+  Records: TGocciaModuleList;
+  Templates: TGocciaSnapshotTemplateTable;
+  IsRecordModule: Boolean;
+  I, J: Integer;
+
+  function SameSnapshotCode(const ALeft, ARight: TGocciaBytecodeModule): Boolean;
+  var
+    LeftIndex, RightIndex: Integer;
+  begin
+    Result := False;
+    if ALeft.SourcePath <> ARight.SourcePath then
+      Exit;
+    Templates.AddModule(ALeft);
+    Templates.AddModule(ARight);
+    LeftIndex := Templates.IndexOfModule(ALeft);
+    RightIndex := Templates.IndexOfModule(ARight);
+    if (LeftIndex >= 0) and (RightIndex >= 0) then
+      Result := Templates.ModuleHash(LeftIndex) = Templates.ModuleHash(RightIndex);
+  end;
+
 begin
   Result := CreateEngine(ASourceEngine.SourcePath, ASourceEngine.SourceLines);
   try
     DisableRuntimeConsole(Result);
     Result.SuppressWarnings := True;
     Result.SourceType := ASourceEngine.SourceType;
-    Options := TGocciaSourcePipeline.DefaultOptions;
-    Options.Preprocessors := Result.Preprocessors;
-    Options.Compatibility := Result.Compatibility;
-    Options.LabelStatementsEnabled := Result.LabelStatementsEnabled;
-    Options.ForInLoopsEnabled := Result.ForInLoopsEnabled;
-    Options.ExperimentalJSModuleSourceEnabled :=
-      Result.ExperimentalJSModuleSourceEnabled;
-    Options.WarningUnsupportedFeatures := Result.WarningUnsupportedFeatures;
-    Options.SourceType := Result.SourceType;
-    Parsed := TGocciaCLISourcePipelineResult.Parse(ASourceEngine.SourceLines,
-      ASourceEngine.SourcePath, Options, True);
-    try
-      Result.CompileModule(Parsed.ProgramNode);
-    finally
-      Parsed.Free;
-    end;
-    // Compiler-generated private identifiers include counters and computed
-    // class keys include source-node identities, so an independent compile
-    // need not have the source module's byte identity. Retain the exact code
-    // images too, including the entry, imports and dynamically made functions.
-    // None of these images is executed in the destination engine.
+    Keys := TGocciaModuleKeyList.Create;
+    Records := TGocciaModuleList.Create;
+    Templates := TGocciaSnapshotTemplateTable.Create;
     Stream := TMemoryStream.Create;
     try
+      ASourceEngine.ModuleLoader.ListCachedModules(Keys, Records);
       for I := 0 to ASourceEngine.RetainedModuleCount - 1 do
       begin
         Module := ASourceEngine.RetainedModule(I);
         if Module.TopLevel.GlobalEvalCode or Module.TopLevel.ShimCode then
           Continue;
+        // ADR 0150 requires the restore itself to compile module records.
+        // It rejects preloaded bytecode so source/provenance checks run afresh.
+        // A same-content reload retains an older image with the same hash;
+        // copying that image would also trip the compiled-before guard.
+        IsRecordModule := False;
+        for J := 0 to Records.Count - 1 do
+          if (Records[J].CompiledModule = Module) or
+             ((Records[J].SnapshotKind in [mskSource, mskEntryCompiled]) and
+              (Records[J].CompiledModule is TGocciaBytecodeModule) and
+              SameSnapshotCode(TGocciaBytecodeModule(Records[J].CompiledModule),
+                Module)) then
+          begin
+            IsRecordModule := True;
+            Break;
+          end;
+        if IsRecordModule then
+          Continue;
+        // Script entries and dynamically made functions have no module record
+        // to compile on restore. Keep their exact code images: generated private
+        // identifiers and computed class keys need not survive recompilation.
         Stream.Clear;
         Writer := TGocciaBytecodeWriter.Create(Stream);
         try
@@ -1037,6 +1060,9 @@ begin
       end;
     finally
       Stream.Free;
+      Templates.Free;
+      Records.Free;
+      Keys.Free;
     end;
   except
     Result.Free;

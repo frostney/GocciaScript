@@ -113,6 +113,7 @@ type
     procedure TestSourceTextIsCharged;
     procedure TestUncheckedChainStopsResolution;
     procedure TestEveryTruncationRefuses;
+    procedure TestNonValueRootRestores;
     procedure TestMutantsRefuseOrRestore;
   end;
 
@@ -329,6 +330,7 @@ function THeapSnapshotModulesTests.RestoreInto(const ARun: TModuleRun;
 var
   Restore: TGocciaHeapSnapshotRestore;
   Stream: TBytesStream;
+  Value: TGocciaValue;
 begin
   Result := '';
   Restore := nil;
@@ -341,8 +343,13 @@ begin
       on E: EGocciaHeapSnapshotInvalid do
         Exit(E.Message);
     end;
+    // Mutations can make a scope or cell the root of a valid snapshot.
+    // Only JavaScript values can be exposed to the script that exercises it.
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    if (Length(Restore.Roots) > 0) and (Restore.Roots[0] is TGocciaValue) then
+      Value := TGocciaValue(Restore.Roots[0]);
     TGocciaObjectValue(ARun.Engine.Realm.GlobalObject).AssignProperty(
-      'restored', TGocciaValue(Restore.Roots[0]));
+      'restored', Value);
   finally
     Restore.Free;
     Stream.Free;
@@ -446,6 +453,8 @@ begin
     TestUncheckedChainStopsResolution);
   Test('Every truncation of a module snapshot is refused',
     TestEveryTruncationRefuses);
+  Test('A non-value snapshot root restores without a JavaScript cast',
+    TestNonValueRootRestores);
   Test('Mutants of a module snapshot restore or are refused, never fault',
     TestMutantsRefuseOrRestore);
 end;
@@ -1626,6 +1635,31 @@ begin
       TGarbageCollector.Instance.Collect;
   end;
   Expect<Integer>(Refused).ToBe(Length(Bytes));
+end;
+
+procedure THeapSnapshotModulesTests.TestNonValueRootRestores;
+var
+  Run: TModuleRun;
+  Session: TGocciaHeapSnapshotSession;
+  Stream: TBytesStream;
+  Bytes: TBytes;
+begin
+  Define('scope-root.js', 'export const answer = 42; capture({});');
+  Run := TModuleRun.Create(PathOf('scope-root.js'));
+  Stream := TBytesStream.Create;
+  Session := TGocciaHeapSnapshotSession.Create(Run.Engine);
+  try
+    Session.CheckAccounting := False;
+    Run.Engine.Execute;
+    Session.Snapshot([Run.Engine.GlobalScope], Stream);
+    Bytes := Copy(Stream.Bytes, 0, Stream.Size);
+  finally
+    Session.Free;
+    Stream.Free;
+    Run.Free;
+  end;
+  Expect<string>(RoundTripEntry('scope-root.js', Bytes,
+    'typeof restored')).ToBe('undefined');
 end;
 
 {$PUSH}{$Q-}{$R-}
