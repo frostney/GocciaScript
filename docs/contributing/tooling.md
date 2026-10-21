@@ -361,7 +361,8 @@ afl-fuzz -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
   -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@
 ```
 
-Four of the seeds hold closures and suspended generators. Functions are named
+Four of the seeds hold closures and suspended generators, and one holds
+built-ins the run changed (their differences). Functions are named
 by the bytecode of the module that compiled them, so the harness runs the
 seeds' program before it restores an input, and then uses what restored: it
 walks up to 600 distinct objects, reading properties, calling functions and
@@ -526,6 +527,21 @@ under memcheck with `--trace-children=yes`. Each report names the read, the
 allocation and the collection that freed the value. Sweeping `tests/` and
 parts of test262 this way found the windows that #1816's quarantine sweeps
 missed.
+
+A window opens only when guest code allocates while a builtin holds a fresh
+value, and test262's getters, `valueOf` methods and traps rarely allocate. A
+probe that does finds more: call every method and getter of each builtin with
+receivers (a number held in a register, a primitive through `.call`, a
+Proxy) and arguments whose coercions, getters, callbacks and traps make a
+fresh string first (`({ valueOf() { (s + "x").slice(0, -1); return 2; } })`),
+under the same `-Facmem` build and memcheck. Giving the
+primitives' prototypes an allocating getter or a Proxy in their chain
+reaches the wrappers builtins make with `ToObject`. Issue #1834's probes
+found the unrooted number receiver of every native call (and of a callable
+Proxy's `apply` trap), the receiver of a Proxy `get` trap, `fill`'s wrapper
+and coerced value, Intl options given as a primitive, and the key lists of
+`Object.assign`, `Object.getOwnPropertySymbols` and `Promise.allKeyed` this
+way.
 
 ## Depth and Fuzz Probe
 

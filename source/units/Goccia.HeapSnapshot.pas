@@ -27,9 +27,10 @@ unit Goccia.HeapSnapshot;
 
   TGocciaHeapSnapshotSession is created right after the engine, before the
   run: it builds the table, records the built-ins' fingerprints (a built-in
-  the run changes refuses the snapshot until built-in differences are
-  written) and the objects alive before the run (the accounting check
-  ignores them). }
+  the run changes is written as its difference: its whole own state, which
+  the restore gives the same built-in) and the objects alive before the run
+  (the accounting check ignores them). A lazy member built during the run
+  is named and recorded as it is built. }
 
 {$I Goccia.inc}
 
@@ -37,11 +38,14 @@ interface
 
 uses
   Classes,
+  Generics.Collections,
   SysUtils,
 
   Goccia.Engine,
   Goccia.GarbageCollector,
-  Goccia.HeapSnapshot.Codec;
+  Goccia.HeapSnapshot.Codec,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ObjectValue;
 
 type
   // Resolves names a restore-side table does not hold yet by walking them
@@ -73,9 +77,12 @@ type
     FLastObjectCount: Integer;
     FAccountingWriter: TGocciaHeapSnapshotWriter;
     FMarkOverflows: Integer;
+    FPendingRefusal: string;
     procedure MarkBuiltinInternals;
     procedure CheckAccountingMarked;
     function IsBuiltinInternal(const AObject: TGCManagedObject): Boolean;
+    procedure MemberBuilt(const AObject: TGocciaObjectValue;
+      const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
   public
     constructor Create(const AEngine: TGocciaEngine);
     destructor Destroy; override;
@@ -119,17 +126,18 @@ type
 procedure BuildBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
   const AEngine: TGocciaEngine; const ARecordFingerprints: Boolean = True);
 // Walks the table again for members the run materialized since it was
-// built, and adds the realm slots filled since and what they reach.
+// built, and adds the realm slots filled since and what they reach. Of a
+// built-in the run changed (AChanged, table indexes), only what the engine
+// gave it is walked: what the run put there is the run's, and written.
 procedure ExtendBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
-  const AEngine: TGocciaEngine);
+  const AEngine: TGocciaEngine; const AChanged: TList<Integer> = nil);
 
 implementation
 
 uses
-  Generics.Collections,
-
   Goccia.Builtins.Base,
   Goccia.ExecutionContext,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.NativeLimits,
   Goccia.Realm,
@@ -140,8 +148,6 @@ uses
   Goccia.Values.ClassValue,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue;
 
@@ -359,19 +365,63 @@ begin
       Seg(APath, '%captured'));
 end;
 
-// Breadth first over the table from AStart: the table is the queue.
+// What a built-in the run changed holds that the engine gave it: its
+// internals, and the members the engine built that the run left alone. The
+// rest (its prototype, what the run put there) is written with its
+// difference.
+procedure VisitChanged(const ATable: TGocciaHeapSnapshotBuiltinTable;
+  const AObject: TGCManagedObject; const APath: string);
+var
+  Obj: TGocciaObjectValue;
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  if not (AObject is TGocciaObjectValue) then
+    Exit;
+  Obj := TGocciaObjectValue(AObject);
+  if Obj is TGocciaClassValue then
+    AddValue(ATable, TGocciaClassValue(Obj).Prototype,
+      Seg(APath, '%classproto'));
+  for Pair in Obj.Properties do
+  begin
+    CheckNativeWork;
+    Descriptor := Pair.Value;
+    if (Descriptor is TGocciaLazyPropertyDescriptorData) or
+       not ATable.IsPristineMember(Obj, Pair.Key, Descriptor) then
+      Continue;
+    if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      AddMember(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+        APath, 'g.', Pair.Key);
+      AddMember(ATable, TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+        APath, 's.', Pair.Key);
+    end
+    else if Descriptor is TGocciaPropertyDescriptorData then
+      AddMember(ATable, TGocciaPropertyDescriptorData(Descriptor).Value,
+        APath, '.', Pair.Key);
+  end;
+  if Obj is TGocciaNativeFunctionValue then
+    AddValue(ATable, TGocciaNativeFunctionValue(Obj).CapturedRoot,
+      Seg(APath, '%captured'));
+end;
+
+// Breadth first over the table from AStart: the table is the queue. An
+// entry in AChanged is walked only as far as VisitChanged goes.
 procedure WalkFrom(const ATable: TGocciaHeapSnapshotBuiltinTable;
-  const AStart: Integer);
+  const AStart: Integer; const AChanged: THashSet<Integer> = nil);
 var
   I: Integer;
 begin
   I := AStart;
   while I < ATable.Count do
   begin
-    // A run can add to a built-in what it likes before the snapshot refuses
-    // it: the walk is as long as the run made it.
+    // A run can add to a built-in what it likes: the walk is as long as the
+    // run made it.
     CheckNativeWork;
-    Visit(ATable, ATable.ObjectAt(I), ATable.PathAt(I));
+    if Assigned(AChanged) and AChanged.Contains(I) then
+      VisitChanged(ATable, ATable.ObjectAt(I), ATable.PathAt(I))
+    else
+      Visit(ATable, ATable.ObjectAt(I), ATable.PathAt(I));
     Inc(I);
   end;
 end;
@@ -506,17 +556,29 @@ begin
 end;
 
 procedure ExtendBuiltinTable(const ATable: TGocciaHeapSnapshotBuiltinTable;
-  const AEngine: TGocciaEngine);
+  const AEngine: TGocciaEngine; const AChanged: TList<Integer>);
 var
-  Start: Integer;
+  Start, I: Integer;
+  Changed: THashSet<Integer>;
 begin
-  // Every entry again first: members materialized since are named by their
-  // path from the entry that holds them.
-  WalkFrom(ATable, 0);
-  Start := ATable.Count;
-  AddSlots(ATable, AEngine);
-  AddLiveBuiltinObjects(ATable, AEngine);
-  WalkFrom(ATable, Start);
+  Changed := nil;
+  try
+    if Assigned(AChanged) and (AChanged.Count > 0) then
+    begin
+      Changed := THashSet<Integer>.Create;
+      for I := 0 to AChanged.Count - 1 do
+        Changed.Add(AChanged[I]);
+    end;
+    // Every entry again first: members materialized since are named by
+    // their path from the entry that holds them.
+    WalkFrom(ATable, 0, Changed);
+    Start := ATable.Count;
+    AddSlots(ATable, AEngine);
+    AddLiveBuiltinObjects(ATable, AEngine);
+    WalkFrom(ATable, Start, Changed);
+  finally
+    Changed.Free;
+  end;
 end;
 
 { Path resolution }
@@ -795,20 +857,6 @@ begin
   end;
 end;
 
-procedure RefuseChangedBuiltins(const ATable: TGocciaHeapSnapshotBuiltinTable);
-var
-  Dirty: TStringList;
-begin
-  Dirty := ATable.DirtyPaths;
-  try
-    if Dirty.Count > 0 then
-      raise EGocciaHeapSnapshotRefused.Create('the run changed built-ins: ' +
-        Dirty.CommaText);
-  finally
-    Dirty.Free;
-  end;
-end;
-
 { TGocciaHeapSnapshotSession }
 
 constructor TGocciaHeapSnapshotSession.Create(const AEngine: TGocciaEngine);
@@ -822,6 +870,7 @@ begin
   // From here on, a lazy member a built-in builds is told apart from a
   // change the run makes to it.
   FTable.Install(AEngine.Realm);
+  FTable.OnMemberBuilt := MemberBuilt;
   FFirstOfRun := TGocciaObjectValue.Create;
   TGarbageCollector.Instance.AddTempRoot(FFirstOfRun);
 end;
@@ -878,6 +927,49 @@ begin
     (IsMarker or AObject.GCMarked);
 end;
 
+{ A lazy member of a named built-in was just built: what it holds is named
+  now, by its path from that built-in, and recorded as building it produced
+  it, so a change the run makes to it later is a difference like any other
+  (ADR 0148). A built-in filled on first use some other way (natively, as
+  the iterator prototypes are) is named before the snapshot, unrecorded:
+  changed, it refuses the restore. }
+procedure TGocciaHeapSnapshotSession.MemberBuilt(
+  const AObject: TGocciaObjectValue; const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Index, Start, I: Integer;
+  Path: string;
+begin
+  if FPendingRefusal <> '' then
+    Exit;
+  Index := FTable.IndexOf(AObject);
+  if Index < 0 then
+    Exit;
+  Path := FTable.PathAt(Index);
+  Start := FTable.Count;
+  try
+    if ADescriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      AddMember(FTable, TGocciaPropertyDescriptorAccessor(ADescriptor).Getter,
+        Path, 'g.', AName);
+      AddMember(FTable, TGocciaPropertyDescriptorAccessor(ADescriptor).Setter,
+        Path, 's.', AName);
+    end
+    else if ADescriptor is TGocciaPropertyDescriptorData then
+      AddMember(FTable, TGocciaPropertyDescriptorData(ADescriptor).Value, Path,
+        '.', AName);
+    WalkFrom(FTable, Start);
+    for I := Start to FTable.Count - 1 do
+      FTable.RecordFingerprint(I);
+  except
+    // Observation must not turn an ordinary property read into a snapshot
+    // refusal. Its partially recorded table cannot describe a later pause.
+    on E: EGocciaHeapSnapshotRefused do
+      if FPendingRefusal = '' then
+        FPendingRefusal := E.Message;
+  end;
+end;
+
 procedure TGocciaHeapSnapshotSession.AddToBaseline(
   const AObject: TGCManagedObject);
 begin
@@ -895,15 +987,19 @@ var
   Roots: TGocciaActiveRootFrame;
   I: Integer;
   Templates: TGocciaSnapshotTemplateTable;
+  Changed: TList<Integer>;
 begin
   // The run must be idle: no frame, job, waiter or other extension's work
   // the snapshot would drop (ADR 0148).
   Reason := FEngine.SnapshotIdleRefusal;
   if Reason <> '' then
     raise EGocciaHeapSnapshotRefused.Create(Reason);
+  if FPendingRefusal <> '' then
+    raise EGocciaHeapSnapshotRefused.Create(FPendingRefusal);
   Writer := nil;
   Buffer := nil;
   Templates := nil;
+  Changed := nil;
   // The roots may be held only by the caller's array: rooted before the
   // collection below, and until the snapshot is written.
   Roots.Initialize;
@@ -926,13 +1022,14 @@ begin
       if Assigned(Queue) and Queue.HasPending then
         raise EGocciaHeapSnapshotRefused.Create('the collection before ' +
           'the snapshot queued a job: the run is not idle any more');
-      // A changed built-in refuses before the table is walked again: what the
-      // run hung on one is not walked for nothing.
-      RefuseChangedBuiltins(FTable);
-      ExtendBuiltinTable(FTable, FEngine);
+      // The built-ins the run changed are written as their differences;
+      // the walk does not name what the run put on them.
+      Changed := FTable.ChangedIndexes;
+      ExtendBuiltinTable(FTable, FEngine, Changed);
       Writer := TGocciaHeapSnapshotWriter.Create(FTable);
       Templates := EngineTemplates(FEngine);
       Writer.Templates := Templates;
+      Writer.Differences := Changed;
       Buffer := TGocciaChargedMemoryStream.Create;
       Writer.Serialize(ARoots, Buffer);
       if FCheckAccounting then
@@ -963,6 +1060,7 @@ begin
     Buffer.Free;
     Writer.Free;
     Templates.Free;
+    Changed.Free;
     Roots.Clear;
   end;
 end;
@@ -1001,6 +1099,11 @@ begin
       // built-in a name crossed: the snapshot cannot be restored here.
       on E: TGocciaThrowValue do
         raise EGocciaHeapSnapshotInvalid.Create('restore: ' + ThrowMessage(E));
+      // A store's growth the memory ceiling refused (a large array's
+      // elements, a changed built-in's new properties): ended a run would be,
+      // a restore is refused.
+      on E: TGocciaMemoryLimitError do
+        raise EGocciaHeapSnapshotInvalid.Create('restore: ' + E.Message);
       // A charge of the tables' that did not fit, the built-in table's
       // included.
       on E: EGocciaHeapSnapshotRefused do

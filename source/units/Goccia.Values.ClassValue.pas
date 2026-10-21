@@ -208,6 +208,12 @@ type
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorStaticFieldInitializers;
+    // Whether the synthesized "name" and "length" were deleted (a heap
+    // snapshot's built-in fingerprints and differences, ADR 0148).
+    property NameDeleted: Boolean read FNameDeleted;
+    property LengthDeleted: Boolean read FLengthDeleted;
+    procedure SetIntrinsicDeletionsForRestore(const ANameDeleted,
+      ALengthDeleted: Boolean);
   end;
 
   // ES2026 §20.1.1.1 Object ( [ value ] ): a call, or a construction with no
@@ -2926,6 +2932,13 @@ begin
         ValPair.Value.MarkReferences;
 end;
 
+
+procedure TGocciaClassValue.SetIntrinsicDeletionsForRestore(const ANameDeleted,
+  ALengthDeleted: Boolean);
+begin
+  FNameDeleted := ANameDeleted;
+  FLengthDeleted := ALengthDeleted;
+end;
 
 initialization
   RegisterOrdinaryObjectClass(TGocciaInstanceValue);
