@@ -34,6 +34,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.NativeLimits,
+  Goccia.HeapSnapshot.Codec,
   Goccia.HeapSnapshot.RoundTrip,
   Goccia.JSON.Utils,
   Goccia.Modules,
@@ -986,8 +987,25 @@ var
   Module: TGocciaBytecodeModule;
   Keys: TGocciaModuleKeyList;
   Records: TGocciaModuleList;
+  Templates: TGocciaSnapshotTemplateTable;
   IsRecordModule: Boolean;
   I, J: Integer;
+
+  function SameSnapshotCode(const ALeft, ARight: TGocciaBytecodeModule): Boolean;
+  var
+    LeftIndex, RightIndex: Integer;
+  begin
+    Result := False;
+    if ALeft.SourcePath <> ARight.SourcePath then
+      Exit;
+    Templates.AddModule(ALeft);
+    Templates.AddModule(ARight);
+    LeftIndex := Templates.IndexOfModule(ALeft);
+    RightIndex := Templates.IndexOfModule(ARight);
+    if (LeftIndex >= 0) and (RightIndex >= 0) then
+      Result := Templates.ModuleHash(LeftIndex) = Templates.ModuleHash(RightIndex);
+  end;
+
 begin
   Result := CreateEngine(ASourceEngine.SourcePath, ASourceEngine.SourceLines);
   try
@@ -996,6 +1014,7 @@ begin
     Result.SourceType := ASourceEngine.SourceType;
     Keys := TGocciaModuleKeyList.Create;
     Records := TGocciaModuleList.Create;
+    Templates := TGocciaSnapshotTemplateTable.Create;
     Stream := TMemoryStream.Create;
     try
       ASourceEngine.ModuleLoader.ListCachedModules(Keys, Records);
@@ -1006,9 +1025,15 @@ begin
           Continue;
         // ADR 0150 requires the restore itself to compile module records.
         // It rejects preloaded bytecode so source/provenance checks run afresh.
+        // A same-content reload retains an older image with the same hash;
+        // copying that image would also trip the compiled-before guard.
         IsRecordModule := False;
         for J := 0 to Records.Count - 1 do
-          if Records[J].CompiledModule = Module then
+          if (Records[J].CompiledModule = Module) or
+             ((Records[J].SnapshotKind in [mskSource, mskEntryCompiled]) and
+              (Records[J].CompiledModule is TGocciaBytecodeModule) and
+              SameSnapshotCode(TGocciaBytecodeModule(Records[J].CompiledModule),
+                Module)) then
           begin
             IsRecordModule := True;
             Break;
@@ -1035,6 +1060,7 @@ begin
       end;
     finally
       Stream.Free;
+      Templates.Free;
       Records.Free;
       Keys.Free;
     end;
