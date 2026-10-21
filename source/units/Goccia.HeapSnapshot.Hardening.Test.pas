@@ -2027,6 +2027,9 @@ begin
 end;
 
 procedure THeapSnapshotHardeningTests.TestLazyNativeNamespacesRestore;
+const
+  NAMES: array[0..5] of string = ('CSV', 'JSON5', 'JSONL', 'TOML',
+    'TSV', 'YAML');
 
   procedure InstallNamespaces(const AEngine: TGocciaEngine);
   var
@@ -2044,34 +2047,46 @@ procedure THeapSnapshotHardeningTests.TestLazyNativeNamespacesRestore;
 var
   Lines: TStringList;
   Engine, Destination: TGocciaEngine;
-  Capture: TCapture;
+  Context: TGocciaExecutionContextScope;
+  Root: TGocciaObjectValue;
+  Value: TGCManagedObject;
+  Name: string;
   Check: TGocciaHeapSnapshotRoundTrip;
   Table: TGocciaHeapSnapshotBuiltinTable;
   Resolver: TGocciaBuiltinPathResolver;
 begin
   Lines := TStringList.Create;
-  Lines.Text := 'import { parse as csv } from "goccia:csv"; ' +
-    'import { parse as json5 } from "goccia:json5"; ' +
-    'import { parse as jsonl } from "goccia:jsonl"; ' +
-    'import { parse as toml } from "goccia:toml"; ' +
-    'import { parse as tsv } from "goccia:tsv"; ' +
-    'import { parse as yaml } from "goccia:yaml"; ' +
-    'capture([csv, json5, jsonl, toml, tsv, yaml]);';
   Engine := TGocciaEngine.Create(TEST_PATH, Lines);
-  Capture := TCapture.Create;
   InstallNamespaces(Engine);
-  Engine.GlobalScope.DefineLexicalBinding('capture',
-    TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
   Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
   try
-    Engine.Execute;
-    Check.Observe(Capture.Value);
+    Context := Engine.ActivateRealmExecutionContext;
+    try
+      Root := TGocciaObjectValue.Create;
+      Check.Observe(Root);
+      Table := TGocciaHeapSnapshotBuiltinTable.Create;
+      Resolver := TGocciaBuiltinPathResolver.Create(Table, Engine);
+      try
+        // Exercise late native materialization without importing a runtime
+        // module record, which ADR 0150 refuses until host codecs land.
+        for Name in NAMES do
+        begin
+          Value := Resolver.Resolve('%builtin' + HEAP_SNAPSHOT_PATH_SEPARATOR +
+            Name + HEAP_SNAPSHOT_PATH_SEPARATOR + '.parse');
+          Expect<Boolean>(Value is TGocciaNativeFunctionValue).ToBe(True);
+          Root.AssignProperty(Name, TGocciaValue(Value));
+        end;
+      finally
+        Resolver.Free;
+        Table.Free;
+      end;
+    finally
+      Context.Free;
+    end;
     Destination := TGocciaEngine.Create(TEST_PATH, Lines);
     try
       InstallNamespaces(Destination);
-      Destination.GlobalScope.DefineLexicalBinding('capture',
-        TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
-      // The destination never compiles or runs these imports. Native values
+      // The destination never imports the runtime modules. Native values
       // have no bytecode templates and the registered factories do no I/O.
       Check.Verify(Destination);
       Expect<string>(Check.FailureDetails.Text).ToBe('');
@@ -2092,10 +2107,7 @@ begin
     end;
   finally
     Check.Free;
-    if Assigned(Capture.Value) then
-      TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
     Engine.Free;
-    Capture.Free;
     Lines.Free;
   end;
 end;
