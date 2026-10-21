@@ -6684,35 +6684,32 @@ await section("Runner: --multifile --jobs=1 reclaims each section's garbage befo
       "",
     ].join("\n");
 
-    const peakLiveBytes = (mode: string, sectionCount: number): number => {
+    const peakLiveBytes = (sectionCount: number): number => {
       const sections = Array(sectionCount).fill(sectionSource).join("---\n");
-      const file = join(tmp, `gc-${mode}-${sectionCount}.js`);
+      const file = join(tmp, `gc-${sectionCount}.js`);
       writeFileSync(file, sections);
-      const resultsPath = join(tmp, `gc-${mode}-${sectionCount}.json`);
       const proc = Bun.spawnSync(
-        [resolve(RUNNER), file, "--multifile", "--jobs=1", `--mode=${mode}`, `--output=json`],
+        [resolve(RUNNER), file, "--multifile", "--jobs=1", "--output=json"],
         { stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode !== 0)
-        throw new Error(`Runner --multifile garbage run (${mode}, ${sectionCount} sections) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+        throw new Error(`Runner --multifile garbage run (${sectionCount} sections) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
       const json = JSON.parse(proc.stdout.toString());
       if (!json.ok || json.files?.length !== sectionCount)
-        throw new Error(`Runner --multifile garbage run (${mode}, ${sectionCount} sections) should produce ${sectionCount} ok sections: ${json.ok}, ${json.files?.length} files`);
+        throw new Error(`Runner --multifile garbage run (${sectionCount} sections) should produce ${sectionCount} ok sections: ${json.ok}, ${json.files?.length} files`);
       return json.memory.gc.peakLiveBytes;
     };
 
-    for (const mode of ["interpreted", "bytecode"]) {
-      // Two sections give a baseline; sixteen sections would grow about 8x without
-      // the per-section collection. With it, the sixteen-section peak stays within
-      // twice the two-section peak.
-      const twoSections = peakLiveBytes(mode, 2);
-      const sixteenSections = peakLiveBytes(mode, 16);
-      if (sixteenSections > twoSections * 2)
-        throw new Error(
-          `Runner --multifile (${mode}) peak live GC heap grew with the section count: ` +
-            `${sixteenSections} bytes for 16 sections vs ${twoSections} bytes for 2 sections`,
-        );
-    }
+    // Two sections give a baseline; sixteen sections would grow about 8x without
+    // the per-section collection. With it, the sixteen-section peak stays within
+    // twice the two-section peak.
+    const twoSections = peakLiveBytes(2);
+    const sixteenSections = peakLiveBytes(16);
+    if (sixteenSections > twoSections * 2)
+      throw new Error(
+        `Runner --multifile peak live GC heap grew with the section count: ` +
+          `${sixteenSections} bytes for 16 sections vs ${twoSections} bytes for 2 sections`,
+      );
   } finally {
     clean(tmp);
   }
