@@ -3,9 +3,12 @@ description: Cleanup jobs for many registrations collected at once drain in line
 features: [FinalizationRegistry, Goccia, queueMicrotask]
 ---*/
 
+// A GC-stress build collects every 8 instructions, and each collection walks
+// every registration, so a stress run registers fewer.
+const count = typeof Goccia !== "undefined" && Goccia.build.gcStress ? 2000 : 50000;
+
 describe.runIf(typeof Goccia !== "undefined")("FinalizationRegistry cleanup drain", () => {
-  test("50,000 registrations collected by one collection all reach the callback", () => {
-    const count = 50000;
+  test(`${count} registrations collected by one collection all reach the callback`, () => {
     const seen = [];
     let done;
     const result = new Promise((resolve) => {

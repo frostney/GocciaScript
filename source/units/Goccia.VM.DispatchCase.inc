@@ -1,6 +1,8 @@
-{ Shared opcode case for ExecuteClosureRegistersInternal. Included once.
-  Continue in this file is goto LDispatchNext so the dual prod/instrumented
-  loop heads can share one case without duplicating it. }
+{ The opcode case of ExecuteClosureRegistersInternal's dispatch loop.
+  Included once. Continue in this file fetches the next instruction without
+  the memory-pressure check at the end of the loop body. Break does not end
+  execution: the loop around the exception handlers enters dispatch again at
+  the same instruction, so end it with Exit or by raising. }
 
           case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
@@ -19,14 +21,20 @@
             bckTemplateObject:
               FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
                 Template, DecodeBx(Instruction)));
-            bckString:
+            // A private name loads as its TGocciaPrivateNameKeyValue, the
+            // only key value that names a private element.
+            bckString, bckPrivateName:
               begin
                 LeftValue := TGocciaValue(
                   Template.GetStringConstantCache(DecodeBx(Instruction)));
                 if not Assigned(LeftValue) then
                 begin
-                  LeftValue := TGocciaStringLiteralValue.Create(
-                    Constant.StringValue);
+                  if Constant.Kind = bckPrivateName then
+                    LeftValue := TGocciaPrivateNameKeyValue.Create(
+                      Constant.StringValue)
+                  else
+                    LeftValue := TGocciaStringLiteralValue.Create(
+                      Constant.StringValue);
                   Template.SetStringConstantCache(
                     DecodeBx(Instruction), LeftValue);
                 end;
@@ -229,7 +237,8 @@
         JumpOffset := DecodeAx(Instruction);
         Inc(Frame.IP, JumpOffset);
         if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
       end;
 
       OP_JUMP_IF_TRUE:
@@ -243,7 +252,8 @@
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-            CheckExecutionTimeout;
+            PollExecutionTimeout(
+              PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         end
         else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -262,7 +272,8 @@
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-            CheckExecutionTimeout;
+            PollExecutionTimeout(
+              PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         end
         else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -294,7 +305,8 @@
             JumpOffset := Int16(C);
             Inc(Frame.IP, JumpOffset);
             if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-              CheckExecutionTimeout;
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
           end
           else if FCoverageEnabled and
                   (TGocciaCoverageTracker.Instance <> nil) and
@@ -347,7 +359,8 @@
             JumpOffset := Int16(C);
             Inc(Frame.IP, JumpOffset);
             if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-              CheckExecutionTimeout;
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
           end
           else if FCoverageEnabled and
                   (TGocciaCoverageTracker.Instance <> nil) and
@@ -886,16 +899,26 @@
 
       OP_CLASS_ADD_METHOD_CONST:
       begin
-        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        Constant := Template.GetConstantUnchecked(B);
+        GlobalName := Constant.StringValue;
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
         begin
-          if IsBytecodePrivateKey(GlobalName) then
-            DeclareBytecodePrivateNameForClass(
-              FRegisters[A].ObjectValue, GlobalName);
           SetBytecodeHomeObject(RegisterToValue(FRegisters[C]),
             FRegisters[A].ObjectValue);
-          if GlobalName = PROP_CONSTRUCTOR then
+          if Constant.Kind = bckPrivateName then
+          begin
+            // A private method is a private element of the prototype, which
+            // StampBytecodePrivateBrands copies to each instance's brand.
+            DeclareBytecodePrivateNameForClass(
+              FRegisters[A].ObjectValue, GlobalName);
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype
+              .SetPrivateElement(GlobalName,
+                TGocciaPropertyDescriptorData.Create(
+                  RegisterToValue(FRegisters[C]),
+                  [pfConfigurable, pfWritable]));
+          end
+          else if GlobalName = PROP_CONSTRUCTOR then
           begin
             TGocciaVMClassValue(FRegisters[A].ObjectValue).SetVMConstructor(
               RegisterToValue(FRegisters[C]));
@@ -906,6 +929,8 @@
               GlobalName, TGocciaPropertyDescriptorData.Create(
                 RegisterToValue(FRegisters[C]), [pfConfigurable, pfWritable]));
         end
+        else if Constant.Kind = bckPrivateName then
+          SetPrivatePropertyValue(GetRegister(A), GlobalName, GetRegister(C))
         else if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
           SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RegisterToValue(FRegisters[C]))
         else
@@ -965,7 +990,7 @@
             TGocciaBytecodeFunctionValue(FRegisters[B].ObjectValue).FClosure,
             CallThisRegister, nil, 0, True,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-          goto LDispatchNext;
+          Continue;
         end
         else if (FRegisters[B].Kind = grkObject) and
                 Assigned(FRegisters[B].ObjectValue) and
@@ -981,17 +1006,17 @@
         end;
       end;
 
-      OP_GET_LOCAL_PROP_CONST:
+      OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST:
       begin
-        FRegisters[A] := GetLocalRegister(B);
-        if FRegisters[A].Kind = grkHole then
-          ThrowUninitializedLocal(Template, InstructionStartIP, B);
-        B := A;
-        goto LGetPropConstShared;
-      end;
-
-      OP_GET_PROP_CONST:
-      LGetPropConstShared:
+        // OP_GET_LOCAL_PROP_CONST loads the local into A, then reads the
+        // property of A as OP_GET_PROP_CONST reads the property of B.
+        if TGocciaOpCode(Op) = OP_GET_LOCAL_PROP_CONST then
+        begin
+          FRegisters[A] := GetLocalRegister(B);
+          if FRegisters[A].Kind = grkHole then
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
+          B := A;
+        end;
         if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
            VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) then
         begin
@@ -1027,8 +1052,9 @@
               SetRegisterFast(A, GlobalBindingValue)
             else
             begin
-              GlobalName := Template.GetConstantUnchecked(C).StringValue;
-              if not IsBytecodePrivateKey(GlobalName) then
+              Constant := Template.GetConstantUnchecked(C);
+              GlobalName := Constant.StringValue;
+              if Constant.Kind <> bckPrivateName then
               begin
                 // One own-map probe establishes own-data / own-non-data /
                 // absent; no fallback tier re-hashes the same name on this
@@ -1086,18 +1112,22 @@
                 end;
               end
               else
-                SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                  GlobalName));
+                SetRegister(A, GetPrivatePropertyValue(
+                  FRegisters[B].ObjectValue, GlobalName));
             end;
           end;
         end
-        else if (FRegisters[B].Kind = grkObject) and
-                Assigned(FRegisters[B].ObjectValue) then
-          SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-            Template.GetConstantUnchecked(C).StringValue))
         else
-          SetRegister(A, GetPropertyValue(GetRegister(B),
-            Template.GetConstantUnchecked(C).StringValue));
+        begin
+          Constant := Template.GetConstantUnchecked(C);
+          if Constant.Kind = bckPrivateName then
+            SetRegister(A, GetPrivatePropertyValue(GetRegister(B),
+              Constant.StringValue))
+          else
+            SetRegister(A, GetPropertyValue(GetRegister(B),
+              Constant.StringValue));
+        end;
+      end;
 
       OP_SET_PROP_CONST:
         if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
@@ -1116,9 +1146,11 @@
                TGocciaObjectValue(FRegisters[A].ObjectValue),
                PropertyWriteCache, RightValue)) then
           begin
-            GlobalName := Template.GetConstantUnchecked(B).StringValue;
-            if IsBytecodePrivateKey(GlobalName) then
-              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue)
+            Constant := Template.GetConstantUnchecked(B);
+            GlobalName := Constant.StringValue;
+            if Constant.Kind = bckPrivateName then
+              SetPrivatePropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                RightValue)
             else if VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue) then
             begin
               if Assigned(PropertyWriteCache) and
@@ -1182,6 +1214,10 @@
               SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue);
           end;
         end
+        else if Template.GetConstantUnchecked(B).Kind = bckPrivateName then
+          SetPrivatePropertyValue(GetRegister(A),
+            Template.GetConstantUnchecked(B).StringValue,
+            GetRegister(C))
         else
           SetPropertyValue(GetRegister(A),
             Template.GetConstantUnchecked(B).StringValue,
@@ -1189,10 +1225,14 @@
 
       OP_SET_PROP_CONST_LOOSE:
       begin
-        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        Constant := Template.GetConstantUnchecked(B);
+        GlobalName := Constant.StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         TargetValue := GetRegister(A);
-        SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
+        if Constant.Kind = bckPrivateName then
+          SetPrivatePropertyValue(TargetValue, GlobalName, RightValue)
+        else
+          SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
       // Defines a field: static fields on the class, `<fields>` instance
@@ -1201,12 +1241,13 @@
       // object; the initializer itself is the method (§15.7.10).
       OP_DEFINE_STATIC_PROP_CONST:
       begin
-        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        Constant := Template.GetConstantUnchecked(B);
+        GlobalName := Constant.StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if IsBytecodePrivateKey(GlobalName) then
+          if Constant.Kind = bckPrivateName then
           begin
             if (FRegisters[A].ObjectValue is TGocciaInstanceValue) then
             begin
@@ -1229,12 +1270,14 @@
                 SSuggestObjectNotExtensible);
             SetRawPrivateValue(FRegisters[A].ObjectValue, GlobalName,
               RightValue);
-            goto LDispatchNext;
+            Continue;
           end;
           DefineOwnDataProperty(
             TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
             RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
         end
+        else if Constant.Kind = bckPrivateName then
+          SetPrivatePropertyValue(GetRegister(A), GlobalName, RightValue)
         else
           SetPropertyValue(GetRegister(A), GlobalName, RightValue);
       end;
@@ -1252,7 +1295,9 @@
           else
           begin
             GlobalName := PropertyKeyName(PropKey);
-            if IsBytecodePrivateKey(GlobalName) then
+            // A private field past the 8-bit constant operand
+            // (EmitDefineStaticPropertyByName).
+            if IsPrivateNameKeyRegister(FRegisters[B]) then
             begin
               if TargetValue is TGocciaInstanceValue then
               begin
@@ -1271,13 +1316,17 @@
                   'Cannot add private elements to a non-extensible object',
                   SSuggestObjectNotExtensible);
               SetRawPrivateValue(TargetValue, GlobalName, RightValue);
-              goto LDispatchNext;
+              Continue;
             end;
 
             DefineOwnDataProperty(TGocciaObjectValue(TargetValue),
               GlobalName, RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
           end;
         end
+        else if IsPrivateNameKeyRegister(FRegisters[B]) then
+          SetPrivatePropertyValue(TargetValue,
+            TGocciaPrivateNameKeyValue(FRegisters[B].ObjectValue).Value,
+            RightValue)
         else
           SetPropertyValue(TargetValue,
             KeyToPropertyNameRegister(FRegisters[B]), RightValue);
@@ -1304,12 +1353,13 @@
 
       OP_DEFINE_STATIC_METHOD_CONST:
       begin
-        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        Constant := Template.GetConstantUnchecked(B);
+        GlobalName := Constant.StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if IsBytecodePrivateKey(GlobalName) and
+          if (Constant.Kind = bckPrivateName) and
              (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
           begin
             DeclareBytecodePrivateNameForClass(FRegisters[A].ObjectValue,
@@ -1321,7 +1371,7 @@
                 TGocciaVMClassValue(FRegisters[A].ObjectValue)
                   .PrivateBrandToken),
               RightValue);
-            goto LDispatchNext;
+            Continue;
           end;
           if FRegisters[A].ObjectValue is TGocciaVMClassValue then
             SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
@@ -2465,16 +2515,18 @@
       OP_CALL_SELF_NUM:
       begin
         if FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
           ProfileEntryTimestamp);
-        goto LDispatchNext;
+        Continue;
       end;
 
       OP_DIRECT_EVAL:
       begin
         if FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         ChildClosure := ExecuteDirectEvalSite(A, DecodeBx(Instruction),
           Template, Frame.IP, InstructionStartIP);
         // Eval code compiled at a strict call site runs as a frame of its
@@ -2485,14 +2537,15 @@
             ProfileEntryTimestamp);
           SetupNewFrame(ChildClosure, RegisterUndefined, nil, 0, True,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-          goto LDispatchNext;
+          Continue;
         end;
       end;
 
       OP_CALL:
       begin
         if FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         // A bytecode function is the usual callee and is neither a native nor
         // a bound function. Its class is sealed, so one exact class comparison
         // decides it: a bytecode callee skips the two `is` tests below, and
@@ -2518,14 +2571,14 @@
                 SetRegisterFast(A, TGocciaStringLiteralValue.Create(
                   DecodeURI(TGocciaStringLiteralValue(
                     FRegisters[A + 1].ObjectValue).Value)));
-                goto LDispatchNext;
+                Continue;
               end;
             nikDecodeURIComponent:
               begin
                 SetRegisterFast(A, TGocciaStringLiteralValue.Create(
                   DecodeURIComponent(TGocciaStringLiteralValue(
                     FRegisters[A + 1].ObjectValue).Value)));
-                goto LDispatchNext;
+                Continue;
               end;
           end;
         end;
@@ -2567,7 +2620,7 @@
                   CallThisRegister, PGocciaRegister(RegisterArgs),
                   Length(RegisterArgs), True,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                goto LDispatchNext;
+                Continue;
               end
               else if (FRegisters[B].Kind = grkObject) and
                       (FRegisters[B].ObjectValue is TGocciaArrayValue) then
@@ -2598,7 +2651,7 @@
                   CallThisRegister, PGocciaRegister(RegisterArgs),
                   Length(RegisterArgs), True,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                goto LDispatchNext;
+                Continue;
               end;
             end;
           end;
@@ -2637,7 +2690,7 @@
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, @FRegisters[A + 1], B, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              goto LDispatchNext;
+              Continue;
             end
             else if (FRegisters[B].Kind = grkObject) and
                     (FRegisters[B].ObjectValue is TGocciaArrayValue) then
@@ -2657,7 +2710,7 @@
                 CallThisRegister, PGocciaRegister(RegisterArgs),
                 Length(RegisterArgs), True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              goto LDispatchNext;
+              Continue;
             end;
           end;
         end;
@@ -2717,7 +2770,8 @@
       OP_CALL_METHOD:
       begin
         if FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         // See OP_CALL: an exact class comparison decides a bytecode callee.
         CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
           Assigned(FRegisters[A].ObjectValue) and
@@ -2737,7 +2791,7 @@
             UTF16CodeUnitPairToString(
               Cardinal(FRegisters[A + 1].IntValue and $FFFF),
               Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
-          goto LDispatchNext;
+          Continue;
         end;
         if (not CalleeIsBytecodeFunction) and ((C and 1) = 0) then
         begin
@@ -2783,7 +2837,7 @@
                 BytecodeFunction := nil;
               end;
               if B <= 2 then
-                goto LDispatchNext;
+                Continue;
             end;
 
             if FRegisters[A - 1].ObjectValue is TGocciaBytecodeFunctionValue then
@@ -2818,7 +2872,7 @@
                     SetupNewFrame(BytecodeFunction.FClosure,
                       CallThisRegister, @FRegisters[A + 2], B - 1, True,
                       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                  goto LDispatchNext;
+                  Continue;
                 end
                 // The dense hole-free gate is what makes the direct element
                 // reads below legal: no read can reach an accessor, so the
@@ -2868,7 +2922,7 @@
                       Length(RegisterArgs), True,
                       Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   end;
-                  goto LDispatchNext;
+                  Continue;
                 end;
               end;
             end;
@@ -2904,7 +2958,7 @@
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, @FRegisters[A + 1], B, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              goto LDispatchNext;
+              Continue;
             end
             else if (FRegisters[B].Kind = grkObject) and
                     (FRegisters[B].ObjectValue is TGocciaArrayValue) then
@@ -2924,7 +2978,7 @@
                 CallThisRegister, PGocciaRegister(RegisterArgs),
                 Length(RegisterArgs), True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              goto LDispatchNext;
+              Continue;
             end;
           end;
         end;
@@ -3504,7 +3558,7 @@
              VMTrySetOwnWritableDataProperty(
                TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
                GlobalBindingValue) then
-            goto LDispatchNext;
+            Continue;
           if (not FGlobalScope.TryAssignExistingBinding(GlobalName,
             GlobalBindingValue, True)) and
              (FGlobalScope.ThisValue is TGocciaObjectValue) then
@@ -3546,7 +3600,7 @@
                  GlobalBindingValue))) then
           begin
             FRegisters[A] := RegisterBoolean(True);
-            goto LDispatchNext;
+            Continue;
           end;
         end;
 
@@ -4064,33 +4118,38 @@
 
       OP_DEFINE_ACCESSOR_CONST:
       begin
-        GlobalName := Template.GetConstantUnchecked(C).StringValue;
+        Constant := Template.GetConstantUnchecked(C);
+        GlobalName := Constant.StringValue;
         if (B and ACCESSOR_FLAG_AUTO) <> 0 then
           DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]), GlobalName,
             nil, RegisterToValue(FRegisters[A + 1]), B)
         else if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
-          if IsBytecodePrivateKey(GlobalName) then
+          if Constant.Kind = bckPrivateName then
             DeclareBytecodePrivateNameForClass(
               RegisterToValue(FRegisters[A]), GlobalName, True);
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
             DefineStaticSetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
-              RegisterToValue(FRegisters[A + 1]))
+              RegisterToValue(FRegisters[A + 1]),
+              Constant.Kind = bckPrivateName)
           else
             DefineStaticGetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
-              RegisterToValue(FRegisters[A + 1]));
+              RegisterToValue(FRegisters[A + 1]),
+              Constant.Kind = bckPrivateName);
         end
         else
         begin
-          if IsBytecodePrivateKey(GlobalName) then
+          if Constant.Kind = bckPrivateName then
             DeclareBytecodePrivateNameForClass(
               RegisterToValue(FRegisters[A]), GlobalName);
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
             DefineSetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
-              RegisterToValue(FRegisters[A + 1]))
+              RegisterToValue(FRegisters[A + 1]),
+              Constant.Kind = bckPrivateName)
           else
             DefineGetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
-              RegisterToValue(FRegisters[A + 1]));
+              RegisterToValue(FRegisters[A + 1]),
+              Constant.Kind = bckPrivateName);
         end;
       end;
 
@@ -4372,7 +4431,7 @@
           ResultReg := PopClosedNumericFrame(Frame, Template, PrevCovLine,
             ProfileEntryTimestamp);
           SetRegisterRaw(ResultReg, ReturnValue);
-          goto LDispatchNext;
+          Continue;
         end;
         // Outermost frame: let the finally block handle teardown
         if FFrameStackCount <= InitialFrameStackCount then
@@ -4385,7 +4444,7 @@
           FFrameStack[FFrameStackCount - 1].HandlerCount);
         ResultReg := PopFrame(Frame, Template, PrevCovLine, ProfileEntryTimestamp);
         SetRegisterRaw(ResultReg, ReturnValue);
-        goto LDispatchNext;
+        Continue;
       end;
         else
           // OP_CALL_SELF is a reserved runtime-only opcode outside
@@ -4395,12 +4454,13 @@
           if Op = OP_CALL_SELF then
           begin
             if FThreadPolls^.TimeoutArmed then
-              CheckExecutionTimeout;
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
             PushFrame(A, Frame.IP, Template, PrevCovLine,
               ProfileEntryTimestamp);
             SetupNewFrame(FCurrentClosure, RegisterUndefined, @FRegisters[B],
               C, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-            goto LDispatchNext;
+            Continue;
           end
           else
             raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);

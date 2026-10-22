@@ -71,6 +71,11 @@ interface SuiteRunMetadata {
    * before the field existed, which were graded under contract 1.
    */
   gradingContract?: number;
+  /**
+   * Execution mode. Reports written before 0.15.0 recorded it; every run
+   * since is bytecode and leaves it out.
+   */
+  mode?: string;
 }
 
 interface ShardMetadata {
@@ -752,6 +757,14 @@ function readShardReport(path: string): SuiteReport {
     throw new Error(
       `Invalid shard report ${path}: summary totalRun ${report.summary.totalRun} ` +
         `does not match ${report.results.length} results`,
+    );
+  }
+  // The run signature no longer carries a mode, so an older stored report
+  // from another execution mode would otherwise merge with bytecode shards.
+  if (report.run.mode !== undefined && report.run.mode !== "bytecode") {
+    throw new Error(
+      `Invalid shard report ${path}: run mode ${JSON.stringify(report.run.mode)} ` +
+        `is not "bytecode"`,
     );
   }
   return report;

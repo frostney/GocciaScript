@@ -49,7 +49,13 @@ type
     // fresh RegExp object, while IntValue identifies a runtime-only compiled
     // program cache slot on the owning TGocciaFunctionTemplate.
     bckRegExpLiteral,
-    bckBigInt
+    bckBigInt,
+    // ES2026 §6.2.12 Private Names: the storage key of a private name the
+    // compiler resolved (StringValue). It is never a property key: an
+    // instruction that reads it, or a register OP_LOAD_CONST fills from it,
+    // names a private element, while a bckString with the same text names an
+    // ordinary property.
+    bckPrivateName
   );
 
   TGocciaBytecodeStringArray = array of string;
@@ -338,6 +344,7 @@ type
     FModuleEnvironmentBinding: string;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
+    FPrivateNameConstantIndex: TOrderedStringMap<UInt16>;
     // The float constants by bit pattern (every NaN under one key), so adding
     // one is a lookup rather than a scan of the pool: a function with many
     // distinct numbers, such as a module of many numeric consts, compiles in
@@ -415,6 +422,12 @@ type
     function AddConstantFloat(const AValue: Double): UInt16;
     function AddConstantString(const AValue: string): UInt16;
     function AddConstantBigInt(const AValue: string): UInt16;
+    // A bckPrivateName constant: kept apart from the string constants, so a
+    // string literal with the same text gets its own bckString entry.
+    function AddConstantPrivateName(const AStorageKey: string): UInt16;
+    // AddConstantPrivateName when AIsPrivateName, else AddConstantString.
+    function AddConstantName(const AName: string;
+      const AIsPrivateName: Boolean): UInt16;
     // ES2026 §13.2.8.3: add a bckTemplateObject constant that the VM will lazily
     // build and cache on first execution.  Each call site gets its own entry;
     // no deduplication is performed.
@@ -591,6 +604,7 @@ begin
   FConstantCount := 0;
   FFunctions := TObjectList<TGocciaFunctionTemplate>.Create(True);
   FStringConstantIndex := TOrderedStringMap<UInt16>.Create;
+  FPrivateNameConstantIndex := TOrderedStringMap<UInt16>.Create;
   FFloatConstantIndex := THashMap<UInt64, UInt16>.Create;
   FDirectEvalEnvironmentCount := 0;
   FExceptionHandlerCount := 0;
@@ -637,6 +651,7 @@ begin
   for I := 0 to High(FDirectEvalCodeCaches) do
     FDirectEvalCodeCaches[I].Free;
   FStringConstantIndex.Free;
+  FPrivateNameConstantIndex.Free;
   FFloatConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
@@ -787,7 +802,7 @@ begin
     if FConstants[I].Kind = bckNil then
       Exit(UInt16(I));
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -811,7 +826,7 @@ begin
     if FConstants[I].Kind = Target then
       Exit(UInt16(I));
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -829,7 +844,7 @@ begin
     if (FConstants[I].Kind = bckInteger) and (FConstants[I].IntValue = AValue) then
       Exit(UInt16(I));
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -853,7 +868,7 @@ begin
   if FFloatConstantIndex.TryGetValue(Key, Result) then
     Exit;
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -870,7 +885,7 @@ begin
   if FStringConstantIndex.TryGetValue(AValue, Result) then
     Exit;
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -881,10 +896,36 @@ begin
   Inc(FConstantCount);
 end;
 
+function TGocciaFunctionTemplate.AddConstantPrivateName(
+  const AStorageKey: string): UInt16;
+begin
+  if FPrivateNameConstantIndex.TryGetValue(AStorageKey, Result) then
+    Exit;
+
+  if FConstantCount >= High(UInt16) then
+    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+  if FConstantCount >= Length(FConstants) then
+    SetLength(FConstants, FConstantCount * 2 + 8);
+  FConstants[FConstantCount].Kind := bckPrivateName;
+  FConstants[FConstantCount].StringValue := AStorageKey;
+  Result := UInt16(FConstantCount);
+  FPrivateNameConstantIndex.Add(AStorageKey, Result);
+  Inc(FConstantCount);
+end;
+
+function TGocciaFunctionTemplate.AddConstantName(const AName: string;
+  const AIsPrivateName: Boolean): UInt16;
+begin
+  if AIsPrivateName then
+    Result := AddConstantPrivateName(AName)
+  else
+    Result := AddConstantString(AName);
+end;
+
 function TGocciaFunctionTemplate.AddConstantBigInt(
   const AValue: string): UInt16;
 begin
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -904,7 +945,7 @@ begin
   if Length(ACookedStrings) <> Length(ARawStrings) then
     raise Exception.Create(
       'Template payload length mismatch: cooked vs raw');
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -933,7 +974,7 @@ end;
 function TGocciaFunctionTemplate.AddConstantRegExpLiteral(
   const APattern, AFlags: string): UInt16;
 begin
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);

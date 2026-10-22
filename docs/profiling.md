@@ -7,7 +7,7 @@
 - **Language-level profiling** — Operates inside the VM dispatch loop, providing data external profilers cannot see
 - **Three modes** — `--profile=opcodes` (histogram + pair frequency + scalar hit rate), `--profile=functions` (per-function timing + allocations), `--profile=all` (both)
 - **Export formats** — JSON (`--profile-output=path.json`) and collapsed flame graph (`--profile-format=flamegraph`)
-- **Disabled-path cost** — Production dispatch omits the profiler; the instrumented loop (and its boolean guards) is used when opcode profiling is on. Measure enabled-mode overhead on the workload being profiled.
+- **Disabled-path cost** — Production dispatch omits the opcode profiler; the dispatch loop's instrumented fetch path (and its boolean guards) is used when opcode profiling is on. Measure enabled-mode overhead on the workload being profiled.
 - **Corpus profile review** — Main CI publishes aggregate and detailed test262
   profile reports for trend review; see [test262 profile report contract](test262.md#profile-report-contract)
 
@@ -15,7 +15,7 @@
 
 The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
 
-When profiling is off, production dispatch does not record opcodes; turning `--profile` on selects the instrumented loop that still carries the per-instruction profiler guard.
+Production dispatch does not record opcodes. `--profile=opcodes` and `--profile=all` select the dispatch loop's instrumented fetch path, which carries the per-instruction profiler guard; `--profile=functions` alone keeps the production path and records on calls, returns and allocations. Coverage, a stop-IP or an instruction limit selects the instrumented path on its own.
 
 ## CLI Usage
 

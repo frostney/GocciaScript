@@ -1057,6 +1057,63 @@ begin
   end;
 end;
 
+{ ES2026 §15.7.1 Static Semantics: Early Errors for ClassStaticBlockBody: a
+  duplicate entry in the LexicallyDeclaredNames of the statement list, or a
+  name that is both lexically declared and in its VarDeclaredNames (§8.2.6,
+  the TopLevelVarDeclaredNames: var declarations at any depth outside nested
+  functions, and the top-level function declarations), is a SyntaxError. The
+  statements are checked in order, so the error points at the statement
+  that declares the name a second time. }
+procedure ValidateClassStaticBlockDeclarations(
+  const ABody: TGocciaBlockStatement; const AFileName: string;
+  const ASourceLines: TStringList);
+var
+  LexicalNames, VarNames, StatementNames: TUnicodeStringList;
+  Node: TGocciaASTNode;
+  I, J: Integer;
+
+  procedure RaiseAlreadyDeclared(const AName: string);
+  begin
+    raise TGocciaSyntaxError.Create(
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), Node.Line,
+      Node.Column, AFileName, ASourceLines, SSuggestAlreadyDeclared);
+  end;
+
+begin
+  if not Assigned(ABody) or (ABody.Nodes.Count = 0) then
+    Exit;
+  LexicalNames := TUnicodeStringList.Create;
+  VarNames := TUnicodeStringList.Create;
+  StatementNames := TUnicodeStringList.Create;
+  try
+    for I := 0 to ABody.Nodes.Count - 1 do
+    begin
+      Node := ABody.Nodes[I];
+      StatementNames.Clear;
+      CollectLexicallyDeclaredNames(Node, StatementNames);
+      for J := 0 to StatementNames.Count - 1 do
+      begin
+        if (LexicalNames.IndexOf(StatementNames[J]) >= 0) or
+           (VarNames.IndexOf(StatementNames[J]) >= 0) then
+          RaiseAlreadyDeclared(StatementNames[J]);
+        LexicalNames.Add(StatementNames[J]);
+      end;
+      StatementNames.Clear;
+      CollectVarBindingNamesFromNode(Node, StatementNames);
+      for J := 0 to StatementNames.Count - 1 do
+      begin
+        if LexicalNames.IndexOf(StatementNames[J]) >= 0 then
+          RaiseAlreadyDeclared(StatementNames[J]);
+        VarNames.Add(StatementNames[J]);
+      end;
+    end;
+  finally
+    StatementNames.Free;
+    VarNames.Free;
+    LexicalNames.Free;
+  end;
+end;
+
 function TGocciaParser.ParseClassStaticBlockBody: TGocciaBlockStatement;
 var
   OuterDirectEvalUsage: TGocciaDirectEvalUsage;
@@ -1066,6 +1123,12 @@ begin
     Result := BlockStatement;
   finally
     LeaveDirectEvalScope(OuterDirectEvalUsage);
+  end;
+  try
+    ValidateClassStaticBlockDeclarations(Result, FFileName, FSourceLines);
+  except
+    Result.Free;
+    raise;
   end;
 end;
 
@@ -8326,7 +8389,7 @@ begin
       IsStatic := Match(gttStatic);
       PresetMemberName := False;
 
-      // ES2022 §15.7.14 ClassStaticBlockDefinition: static { ... }
+      // ES2026 §15.7 ClassStaticBlock : static { ClassStaticBlockBody }
       if IsStatic and Check(gttLeftBrace) then
       begin
         if Length(MemberDecorators) > 0 then

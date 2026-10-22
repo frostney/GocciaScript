@@ -301,6 +301,7 @@ Current default shims:
 | `os` | `string` | Operating system: `"darwin"`, `"linux"`, `"windows"`, `"freebsd"`, `"netbsd"`, `"openbsd"`, `"android"`, `"aix"`, `"solaris"`, or `"unknown"` |
 | `arch` | `string` | Processor architecture: `"x86_64"`, `"aarch64"`, `"x86"`, `"arm"`, `"powerpc64"`, `"powerpc"`, or `"unknown"` |
 | `date` | `string` | Build date in `YYYY-MM-DD` format (e.g., `"2026-04-20"`) |
+| `gcStress` | `boolean` | `true` only in a GC-stress build (`./build.pas --gc-stress`), which collects every 8 instructions. Tests use it to shrink or skip cases whose cost grows with the live heap times the instruction count ([GC-stress build](contributing/tooling.md#gc-stress-build)) |
 
 **`goccia:semver` module**
 
