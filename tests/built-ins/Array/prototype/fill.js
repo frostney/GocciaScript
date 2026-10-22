@@ -147,7 +147,7 @@ describe("Array.prototype.fill", () => {
       arr.named = true;
       arr.fill(9);
       expect(calls).toBe("");
-      expect(arr).toEqual([9, 9, 9]);
+      expect(Array.from(arr)).toEqual([9, 9, 9]);
     } finally {
       delete Array.prototype[0];
     }
@@ -163,7 +163,7 @@ describe("Array.prototype.fill", () => {
       const arr = [1, 2, 3];
       arr.named = true;
       arr.fill(7);
-      expect(arr).toEqual([7, 7, 7]);
+      expect(Array.from(arr)).toEqual([7, 7, 7]);
     } finally {
       delete Array.prototype[1];
     }
