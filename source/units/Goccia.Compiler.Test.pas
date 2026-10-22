@@ -148,6 +148,7 @@ type
     procedure TestCompoundAssignmentReadsInitializedLetDirectly;
     procedure TestNumericImmediateConditionReadsParameterDirectly;
     procedure TestDiscardedStoreSkipsResultMove;
+    procedure TestInitializerReachingItsBindingKeepsCopy;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestObjectRestBytecodeRoundTrip;
@@ -301,6 +302,8 @@ begin
     TestNumericImmediateConditionReadsParameterDirectly);
   Test('Discarded store skips the result move',
     TestDiscardedStoreSkipsResultMove);
+  Test('Initializer that reaches its binding keeps the copy',
+    TestInitializerReachingItsBindingKeepsCopy);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -2191,11 +2194,31 @@ begin
     Expect<Boolean>(Assigned(Func)).ToBe(True);
     if Assigned(Func) then
     begin
-      // The two declarations move their initializer into the binding; the
-      // two stores move nothing, and neither copies an operand.
-      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(2);
+      // The two declarations evaluate their initializer straight into the
+      // binding, which neither initializer can reach; the two stores move
+      // nothing, and neither copies an operand.
+      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(0);
       Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestInitializerReachingItsBindingKeepsCopy;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  // The initializer names its own binding, so it runs into a temporary and the
+  // binding keeps its TDZ hole until the initializer completes.
+  Module := CompileSource(
+    'const read = (p) => { const value = p.x + value; return value; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(1);
   finally
     Module.Free;
   end;
