@@ -538,6 +538,9 @@ type
     procedure StampBytecodePrivateBrands(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue;
       const APreserveExistingPrivateSlots: Boolean);
+    procedure StampBytecodePrivateBrandsGeneric(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+      const APreserveExistingPrivateSlots: Boolean);
     procedure SetupAutoAccessorValue(const AName: string; const AFlags: Integer;
       const AClassValue: TGocciaValue = nil);
     procedure DefineAutoAccessorHalf(const AClassValue: TGocciaValue;
@@ -2704,6 +2707,8 @@ type
     // Compiled keys of private static elements, which the class declares
     // under a per-evaluation runtime key instead of the compiled one.
     FRuntimeKeyedPrivateKeys: array of string;
+    // True when FPrivateStampPlan still lists the class's private names.
+    function PrivateStampPlanIsCurrent: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function CachedPrivateKeyIndex(const AKey: string): Integer;
     function PrivateKeyCacheEntry(
       const AIndex: Integer): PGocciaPrivateKeyCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
@@ -2728,6 +2733,10 @@ type
     procedure TraceReferences; override;
     procedure AddRuntimeKeyedPrivateKey(const ACompiledKey: string);
     function PrivateStampPlan: TGocciaPrivateStampPlan;
+    // True when the current plan is known to list no private name, read in
+    // place without copying the plan; False when it lists some or has to be
+    // rebuilt.
+    function HasEmptyPrivateStampPlan: Boolean;
     // The brand key for ACompiledKey, which this class declares.
     function PrivateBrandKeyFor(const ACompiledKey: string): string;
     // BytecodePrivateRuntimeKey of ACompiledKey, which this class declares,
@@ -11608,12 +11617,17 @@ begin
   end;
 end;
 
-function TGocciaVMClassValue.PrivateStampPlan: TGocciaPrivateStampPlan;
+function TGocciaVMClassValue.PrivateStampPlanIsCurrent: Boolean;
 begin
   // The plan follows the private-name set: every private element the VM puts
   // on the prototype declares its name first, which bumps the version.
-  if (not FPrivateStampPlanBuilt) or
-     (FPrivateStampPlan.Version <> PrivateNamesVersion) then
+  Result := FPrivateStampPlanBuilt and
+    (FPrivateStampPlan.Version = PrivateNamesVersion);
+end;
+
+function TGocciaVMClassValue.PrivateStampPlan: TGocciaPrivateStampPlan;
+begin
+  if not PrivateStampPlanIsCurrent then
   begin
     FPrivateStampPlan := BuildPrivateStampPlan(Self);
     FPrivateStampPlanBuilt := True;
@@ -11621,7 +11635,27 @@ begin
   Result := FPrivateStampPlan;
 end;
 
+function TGocciaVMClassValue.HasEmptyPrivateStampPlan: Boolean;
+begin
+  Result := PrivateStampPlanIsCurrent and
+    (Length(FPrivateStampPlan.Names) = 0);
+end;
+
+// Every construction stamps its class's private brands; most classes have
+// none. Kept free of managed locals so that they pay no copy of the plan and
+// no exception frame.
 procedure TGocciaVM.StampBytecodePrivateBrands(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const APreserveExistingPrivateSlots: Boolean);
+begin
+  if (AClassValue is TGocciaVMClassValue) and
+     TGocciaVMClassValue(AClassValue).HasEmptyPrivateStampPlan then
+    Exit;
+  StampBytecodePrivateBrandsGeneric(AClassValue, AInstance,
+    APreserveExistingPrivateSlots);
+end;
+
+procedure TGocciaVM.StampBytecodePrivateBrandsGeneric(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
   const APreserveExistingPrivateSlots: Boolean);
 var
