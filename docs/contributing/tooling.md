@@ -466,7 +466,7 @@ alone takes about 50 seconds.
 
 Each collection marks the whole live heap, so a test that builds N objects
 costs time proportional to N times the heap under stress. `Goccia.build.gcStress`
-is `true` in a stress build ([ADR 0154](../adr/0154-goccia-build-reports-a-gc-stress-build.md)).
+is `true` in a stress build ([ADR 0155](../adr/0155-goccia-build-reports-a-gc-stress-build.md)).
 A test with a large N reads it to shrink N, or to skip a case whose point is a
 size past an engine bound, so its other cases still run under stress:
 

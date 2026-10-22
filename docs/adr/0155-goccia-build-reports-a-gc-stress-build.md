@@ -1,4 +1,4 @@
-# 0154 - Goccia.build reports a GC-stress build
+# 0155 - Goccia.build reports a GC-stress build
 
 **Date:** 2026-10-22
 **Area:** `runtime`, `testing`, `gc`
