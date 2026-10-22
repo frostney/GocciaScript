@@ -103,6 +103,15 @@ type
     // it, and throws TypeError if it refuses.
     procedure AssignThroughExoticParent(const AParent: TGocciaObjectValue;
       const AName: string; const AValue: TGocciaValue);
+    // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor step 1 for a strict
+    // assignment to AName, which this object does not own: walks the
+    // prototype chain. True when the chain took the assignment, through an
+    // inherited setter or a parent that answers [[Set]] itself; throws
+    // TypeError for an inherited read-only property or an inherited accessor
+    // without a setter; False when the assignment is to create an own
+    // property.
+    function SetThroughPrototypeChain(const AName: string;
+      const AValue: TGocciaValue): Boolean;
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -1861,11 +1870,8 @@ end;
 procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
-  Setter: TGocciaValue;
-  Writable: Boolean;
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
-  Proto: TGocciaObjectValue;
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
@@ -1898,23 +1904,44 @@ begin
     end;
   end;
 
-  // ES2026 §10.1.9.2 step 1: walk the prototype chain for an inherited
-  // accessor or read-only property.
+  if SetThroughPrototypeChain(AName, AValue) then
+    Exit;
+
+  if not ACanCreate then
+    ThrowTypeError(Format(SErrorCannotAssignNonExistent, [AName]), SSuggestCannotDeleteNonConfigurable);
+
+  if not FExtensible then
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
+
+  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+// ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor step 1: walk the prototype
+// chain for an inherited accessor or read-only property.
+function TGocciaObjectValue.SetThroughPrototypeChain(const AName: string;
+  const AValue: TGocciaValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Setter: TGocciaValue;
+  Writable: Boolean;
+  Args: TGocciaArgumentsCollection;
+  Proto: TGocciaObjectValue;
+begin
   Proto := FPrototype;
   while Assigned(Proto) do
   begin
     if not UsesOrdinarySet(Proto) then
     begin
       AssignThroughExoticParent(Proto, AName, AValue);
-      Exit;
+      Exit(True);
     end;
     Descriptor := Proto.GetOwnPropertyDescriptorHolding(AName, AValue, Self);
     if Assigned(Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
-        Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-        Setter := Accessor.Setter;
+        Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
         ReleaseDescriptor(Descriptor);
         if Assigned(Setter) and Setter.IsCallable then
         begin
@@ -1925,7 +1952,7 @@ begin
           finally
             Args.Free;
           end;
-          Exit;
+          Exit(True);
         end;
         ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
@@ -1935,21 +1962,13 @@ begin
         ReleaseDescriptor(Descriptor);
         if not Writable then
           ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
-        Break;
+        Exit(False);
       end;
       ReleaseDescriptor(Descriptor);
     end;
     Proto := Proto.FPrototype;
   end;
-
-  if not ACanCreate then
-    ThrowTypeError(Format(SErrorCannotAssignNonExistent, [AName]), SSuggestCannotDeleteNonConfigurable);
-
-  if not FExtensible then
-    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
-
-  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
-    [pfEnumerable, pfConfigurable, pfWritable]));
+  Result := False;
 end;
 
 // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor(O, P, V, Receiver, ownDesc)

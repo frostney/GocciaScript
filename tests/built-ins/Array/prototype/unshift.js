@@ -60,4 +60,35 @@ describe("Array.prototype.unshift", () => {
     expect(result).toBe(4294967290);
     expect(huge.length).toBe(4294967290);
   });
+
+  test("unshift writes own elements without calling an inherited setter", () => {
+    let calls = "";
+    Object.defineProperty(Array.prototype, "1", {
+      set(value) { calls += value; },
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      expect(arr.unshift(0)).toBe(4);
+      expect(calls).toBe("");
+      expect(arr).toEqual([0, 1, 2, 3]);
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  test("unshift writes own elements past an inherited read-only index", () => {
+    Object.defineProperty(Array.prototype, "2", {
+      value: "ro",
+      writable: false,
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.unshift(0);
+      expect(arr).toEqual([0, 1, 2, 3]);
+    } finally {
+      delete Array.prototype[2];
+    }
+  });
 });

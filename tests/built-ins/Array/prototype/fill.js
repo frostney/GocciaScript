@@ -135,4 +135,67 @@ describe("Array.prototype.fill", () => {
     expect(Object.hasOwn(arr, 1)).toBe(false);
     expect(arr[2]).toBe(6);
   });
+
+  test("fill writes own elements of an array with a named property without calling an inherited setter", () => {
+    let calls = "";
+    Object.defineProperty(Array.prototype, "0", {
+      set(value) { calls += value; },
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.fill(9);
+      expect(calls).toBe("");
+      expect(Array.from(arr)).toEqual([9, 9, 9]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
+
+  test("fill writes own elements of an array with a named property past an inherited read-only index", () => {
+    Object.defineProperty(Array.prototype, "1", {
+      value: "ro",
+      writable: false,
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.fill(7);
+      expect(Array.from(arr)).toEqual([7, 7, 7]);
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  test("fill over a hole of an array with a named property still calls an inherited setter", () => {
+    let calls = "";
+    Object.defineProperty(Array.prototype, "1", {
+      set(value) { calls += value; },
+      configurable: true,
+    });
+    try {
+      const arr = [0, , 2];
+      arr.named = true;
+      arr.fill(4);
+      expect(calls).toBe("4");
+      expect(Object.hasOwn(arr, 1)).toBe(false);
+      expect(arr[0]).toBe(4);
+      expect(arr[2]).toBe(4);
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  test("fill on a frozen array with a modified prototype throws", () => {
+    Array.prototype[0] = "p";
+    try {
+      const arr = Object.freeze([1, 2]);
+      expect(() => arr.fill(0)).toThrow(TypeError);
+      expect(arr[0]).toBe(1);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
 });

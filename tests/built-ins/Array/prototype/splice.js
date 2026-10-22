@@ -140,4 +140,37 @@ describe.runIf(typeof Goccia !== "undefined")("splice across a collection", () =
     const removed = Array.prototype.splice.call(source, 0, 1);
     expect(removed).toEqual(["first"]);
   });
+
+  test("splice on an array with a named property writes own elements without calling an inherited setter", () => {
+    let calls = "";
+    Object.defineProperty(Array.prototype, "0", {
+      set(value) { calls += value; },
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.splice(0, 1, 9);
+      expect(calls).toBe("");
+      expect(Array.from(arr)).toEqual([9, 2, 3]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
+
+  test("splice on an array with a named property writes own elements past an inherited read-only index", () => {
+    Object.defineProperty(Array.prototype, "0", {
+      value: "ro",
+      writable: false,
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.splice(0, 1, 9);
+      expect(Array.from(arr)).toEqual([9, 2, 3]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
 });

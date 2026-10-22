@@ -9421,14 +9421,21 @@ begin
     end
     else if (AKeyReg.Kind = grkInt) and
             (Target.ClassType = TGocciaArrayValue) and
-            (AKeyReg.IntValue >= 0) and
-            (AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count) then
+            (AKeyReg.IntValue >= 0) then
     begin
-      // Storing a dense array element, or filling a hole when no prototype can
-      // intercept the store. When the array declines, the value boxed here is
-      // simply dropped and the generic core boxes its own.
-      if TGocciaArrayValue(Target).TryStoreElementFast(AKeyReg.IntValue,
-           RegisterToValue(AValueReg)) then
+      // Storing a dense array element, filling a hole, or appending one past
+      // the elements, the last two only when no prototype can intercept the
+      // store. When the array declines, the value boxed here is simply
+      // dropped and the generic core boxes its own.
+      if AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count then
+      begin
+        if TGocciaArrayValue(Target).TryStoreElementFast(AKeyReg.IntValue,
+             RegisterToValue(AValueReg)) then
+          Exit;
+      end
+      else if (AKeyReg.IntValue = TGocciaArrayValue(Target).Elements.Count) and
+              TGocciaArrayValue(Target).TryAppendDenseElementFast(
+                AKeyReg.IntValue, RegisterToValue(AValueReg)) then
         Exit;
     end;
   end;

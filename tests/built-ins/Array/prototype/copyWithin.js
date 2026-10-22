@@ -59,4 +59,37 @@ describe("Array.prototype.copyWithin", () => {
     Array.prototype.copyWithin.call(target, 0, 2, 4);
     expect(log).toEqual(["get 2", "set 0=b", "get 3", "set 1=c"]);
   });
+
+  test("copyWithin on an array with a named property writes own elements without calling an inherited setter", () => {
+    let calls = "";
+    Object.defineProperty(Array.prototype, "0", {
+      set(value) { calls += value; },
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.copyWithin(0, 1);
+      expect(calls).toBe("");
+      expect(Array.from(arr)).toEqual([2, 3, 3]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
+
+  test("copyWithin on an array with a named property writes own elements past an inherited read-only index", () => {
+    Object.defineProperty(Array.prototype, "0", {
+      value: "ro",
+      writable: false,
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.copyWithin(0, 1);
+      expect(Array.from(arr)).toEqual([2, 3, 3]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
 });
