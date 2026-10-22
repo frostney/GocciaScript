@@ -298,7 +298,9 @@ once every object is filled. `WriteObjectCore` and `ReadObjectCore` write
 and read an ordinary object's prototype, extensibility, integrity and own
 properties. An object that holds private elements (a class prototype's
 private methods, or what a derived constructor stamped on an object its
-base constructor returned) refuses the snapshot: they are not properties. A reader codec checks what it reads and calls `Refuse` rather
+base constructor returned) refuses the snapshot: they are not properties.
+The same holds for a built-in, which is written by name and by a difference
+of its properties. A reader codec checks what it reads and calls `Refuse` rather
 than guessing, and calls `Poll` once per item in any loop whose length comes
 from the input. `source/units/Goccia.Values.ArrayValue.pas` holds the array
 codec as an example.
