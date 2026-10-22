@@ -426,6 +426,14 @@ async function main(): Promise<number> {
     }
   }
 
+  // The tests suite is the one whose files read Goccia.build.gcStress, so
+  // check both builds report their own mode before any suite runs: a
+  // mismatch then fails fast instead of after the test262 runs.
+  if (options.suites.has("tests")) {
+    await verifyBuildFlag(options, "baseline");
+    await verifyBuildFlag(options, "stress");
+  }
+
   const results: SuiteResult[] = [];
   const timed = async <T>(work: () => Promise<T>): Promise<[T, number]> => {
     const start = performance.now();
@@ -442,8 +450,6 @@ async function main(): Promise<number> {
     results.push({ suite: "test262", baseline, stress, baselineSeconds, stressSeconds });
   }
   if (options.suites.has("tests")) {
-    await verifyBuildFlag(options, "baseline");
-    await verifyBuildFlag(options, "stress");
     const files = discoverTestFiles(TEST_PATHS);
     console.log(`tests: ${files.length} files under ${TEST_PATHS.join(", ")}`);
     const [baseline, baselineSeconds] = await timed(() => runTests(options, "baseline", files));
