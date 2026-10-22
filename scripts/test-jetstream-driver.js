@@ -204,6 +204,11 @@ console.log('jetstream-merge-reports: deterministic shard merge...');
   assert(incomplete.validationFailures.some((failure) => /small: missing target/.test(failure)),
     'retains validation failures in an incomplete merged report');
   throws(
+    () => mergeReports([], manifest),
+    /No JetStream shard reports found; missing workloads: tiny, small/,
+    'names every missing workload when no shard report arrived',
+  );
+  throws(
     () => mergeReports([
       { schemaVersion: 1, metadata, targets: [target('tiny', 10, 20)] },
       {
