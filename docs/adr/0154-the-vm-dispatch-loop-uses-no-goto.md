@@ -38,9 +38,10 @@ there is no define for another.
 ## Consequences
 
 - Native cost does not rise. With FPC 3.2.2 and the production build, callgrind
-  counts 0.1% to 0.8% fewer instructions for each of 13 AWFY workloads and 4
-  micro workloads than the `goto` version did (geomean 0.997x). An
-  `OP_GET_PROP_CONST` now tests the opcode once before its property read.
+  counts 0.1% to 0.9% fewer instructions for each of 13 AWFY workloads and 4
+  micro workloads than the `goto` version at 02e2dc1a did (AWFY geomean
+  0.997x). An `OP_GET_PROP_CONST` now tests the opcode once before its
+  property read.
 - A wasm32 build compiles the same dispatch loop as a native one.
 - `Continue` and `Break` in `Goccia.VM.DispatchCase.inc` act on the dispatch
   loop only outside an inner loop; inside a `for` or `while` in a case arm they
