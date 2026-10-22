@@ -27,6 +27,8 @@ type
     FLength: Int64;
     FLengthWritable: Boolean;
     function HasPristineIndexedPrototypeChain: Boolean;
+    procedure SetIndexNamed(const AName: string; const AIndex: Int64;
+      const AValue: TGocciaValue);
   public
     constructor Create(const AClass: TGocciaClassValue = nil;
       const AElementCapacity: Integer = 0);
@@ -67,6 +69,8 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
+    procedure AssignProperty(const AName: string; const AValue: TGocciaValue;
+      const ACanCreate: Boolean = True); override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function DeleteProperty(const AName: string): Boolean; override;
     function GetOwnPropertyKeys: TArray<string>; override;
@@ -1552,16 +1556,20 @@ begin
     Exit;
   end;
 
+  // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor step 2: a dense element is
+  // an own data property, writable unless the array is frozen, so the store
+  // writes it and never reaches the prototype.
+  if (AIndex < FElements.Count) and not IsArrayHole(FElements[AIndex]) then
+  begin
+    if FFrozen then
+      Exit(False);
+    FElements[AIndex] := AValue;
+    Exit(True);
+  end;
+
   if Assigned(FPrototype) then
   begin
     Result := FPrototype.AssignPropertyWithReceiver(IndexName, AValue, Self);
-    Exit;
-  end;
-
-  if FFrozen and (AIndex < FElements.Count) and
-     not IsArrayHole(FElements[AIndex]) then
-  begin
-    Result := False;
     Exit;
   end;
 
@@ -1571,8 +1579,7 @@ begin
     Exit;
   end;
 
-  if (not Extensible) and
-     not ((AIndex < FElements.Count) and not IsArrayHole(FElements[AIndex])) then
+  if not Extensible then
   begin
     Result := False;
     Exit;
@@ -1593,81 +1600,11 @@ begin
 end;
 
 procedure TGocciaArrayValue.SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
-var
-  Accessor: TGocciaPropertyDescriptorAccessor;
-  Args: TGocciaArgumentsCollection;
-  Descriptor: TGocciaPropertyDescriptor;
-  IndexName: string;
 begin
   if AIndex < 0 then
-  begin
-    SetProperty(IntegerToString(AIndex), AValue);
-    Exit;
-  end;
-
-  IndexName := IntegerToString(AIndex);
-  NoteIndexedOwnProperty(IndexName);
-  Descriptor := GetOwnPropertyDescriptor(IndexName);
-  if Descriptor is TGocciaPropertyDescriptorAccessor then
-  begin
-    Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-    if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
-    begin
-      Args := TGocciaArgumentsCollection.Create([AValue]);
-      try
-        InvokeCallable(Accessor.Setter, Args, Self);
-      finally
-        Args.Free;
-      end;
-      Exit;
-    end;
-    ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [IndexName, ToStringTag]),
-      SSuggestPropertyHasOnlyGetter);
-  end;
-  ReleaseDescriptor(Descriptor);
-
-  Descriptor := inherited GetOwnPropertyDescriptor(IndexName);
-  if Assigned(Descriptor) then
-  begin
-    inherited AssignProperty(IndexName, AValue);
-    if Int64(AIndex) + 1 > FLength then
-      FLength := Int64(AIndex) + 1;
-    Exit;
-  end;
-
-  if FFrozen and (AIndex < FElements.Count) and
-     not IsArrayHole(FElements[AIndex]) then
-    ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(AIndex)]),
-      SSuggestCannotDeleteNonConfigurable);
-
-  if (AIndex >= FLength) and not FLengthWritable then
-    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(AIndex)]),
-      SSuggestCannotDeleteNonConfigurable);
-
-  if (not Extensible) and
-     not (CanStoreDenseElementIndex(AIndex, FElements.Count) and
-          (AIndex < FElements.Count) and
-          not IsArrayHole(FElements[AIndex])) then
-    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible,
-      [IntToStr(AIndex)]), SSuggestObjectNotExtensible);
-
-  if CanStoreDenseElementIndex(AIndex, FElements.Count) then
-  begin
-    if AIndex = FElements.Count then
-      FElements.Add(AValue)
-    else
-    begin
-      ExtendElementsWithHoles(FElements, Int64(AIndex) + 1, AValue);
-      FElements[AIndex] := AValue;
-    end;
-  end
+    SetProperty(IntegerToString(AIndex), AValue)
   else
-    inherited DefineProperty(IntegerToString(AIndex),
-      TGocciaPropertyDescriptorData.Create(AValue,
-        [pfEnumerable, pfConfigurable, pfWritable]));
-
-  if Int64(AIndex) + 1 > FLength then
-    FLength := Int64(AIndex) + 1;
+    SetIndexNamed(IntegerToString(AIndex), AIndex, AValue);
 end;
 
 function TGocciaArrayValue.ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;
@@ -4174,94 +4111,105 @@ begin
   end;
 end;
 
-procedure TGocciaArrayValue.SetProperty(const AName: string; const AValue: TGocciaValue);
+// ES2026 §10.1.9.1 OrdinarySet for an array index AName, AIndex its value, as
+// a strict assignment: throws TypeError where [[Set]] returns false.
+procedure TGocciaArrayValue.SetIndexNamed(const AName: string;
+  const AIndex: Int64; const AValue: TGocciaValue);
 var
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   Descriptor: TGocciaPropertyDescriptor;
+  OwnsElement: Boolean;
+begin
+  NoteIndexedOwnProperty(AName);
+  Descriptor := GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+  begin
+    Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
+    if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
+    begin
+      Args := TGocciaArgumentsCollection.Create([AValue]);
+      try
+        InvokeCallable(Accessor.Setter, Args, Self);
+      finally
+        Args.Free;
+      end;
+      Exit;
+    end;
+    ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]),
+      SSuggestPropertyHasOnlyGetter);
+  end;
+  ReleaseDescriptor(Descriptor);
+
+  Descriptor := inherited GetOwnPropertyDescriptor(AName);
+  if Assigned(Descriptor) then
+  begin
+    inherited AssignProperty(AName, AValue);
+    if AIndex + 1 > FLength then
+      FLength := AIndex + 1;
+    Exit;
+  end;
+
+  OwnsElement := (AIndex < FElements.Count) and
+    not IsArrayHole(FElements[Integer(AIndex)]);
+
+  // ES2026 §10.1.9.2 step 1: an index the array does not own, a hole or one
+  // past the elements, is [[Set]] on the prototype chain. With the realm's
+  // Array.prototype and Object.prototype holding no index the chain cannot
+  // take it, and the walk is skipped.
+  if not OwnsElement and not HasPristineIndexedPrototypeChain and
+     SetThroughPrototypeChain(AName, AValue) then
+    Exit;
+
+  if FFrozen and OwnsElement then
+    ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),
+      SSuggestCannotDeleteNonConfigurable);
+
+  if (AIndex >= FLength) and not FLengthWritable then
+    ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
+      SSuggestCannotDeleteNonConfigurable);
+
+  if not Extensible and not OwnsElement then
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]),
+      SSuggestObjectNotExtensible);
+
+  if CanStoreDenseElementIndex(AIndex, FElements.Count) then
+  begin
+    // Append at exactly the element count is the same store the extension
+    // path would perform — one hole added and immediately overwritten — so
+    // take it directly, the way SetElement does. It keeps `arr.push(v)`,
+    // which reaches this method through AssignProperty with a stringified
+    // index, off the growth gate: nothing is being extended over. One
+    // qualification to "identical": in the 8-byte window just under the
+    // ceiling, the gate would refuse with the uncatchable MemoryLimitError at
+    // the store, while this defers refusal to the next managed allocation's
+    // catchable RangeError.
+    if AIndex = FElements.Count then
+      FElements.Add(AValue)
+    else
+    begin
+      // Expand array if necessary
+      ExtendElementsWithHoles(FElements, Int64(AIndex) + 1, AValue);
+
+      // Set the element
+      FElements[Integer(AIndex)] := AValue;
+    end;
+  end
+  else
+    inherited DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]));
+
+  if AIndex + 1 > FLength then
+    FLength := AIndex + 1;
+end;
+
+procedure TGocciaArrayValue.SetProperty(const AName: string; const AValue: TGocciaValue);
+var
   Index: Int64;
   Desc: TGocciaPropertyDescriptorData;
 begin
-  // Check if property name is a numeric index
   if TryParseArrayElementIndex(AName, Index) then
-  begin
-    NoteIndexedOwnProperty(AName);
-    Descriptor := GetOwnPropertyDescriptor(AName);
-    if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-      if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
-      begin
-        Args := TGocciaArgumentsCollection.Create([AValue]);
-        try
-          InvokeCallable(Accessor.Setter, Args, Self);
-        finally
-          Args.Free;
-        end;
-        Exit;
-      end;
-      ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]),
-        SSuggestPropertyHasOnlyGetter);
-    end;
-    ReleaseDescriptor(Descriptor);
-
-    Descriptor := inherited GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) then
-    begin
-      inherited AssignProperty(AName, AValue);
-      if Index + 1 > FLength then
-        FLength := Index + 1;
-      Exit;
-    end;
-
-    if FFrozen and CanStoreDenseElementIndex(Index, FElements.Count) and
-       (Index < FElements.Count) and
-       not IsArrayHole(FElements[Integer(Index)]) then
-      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),
-        SSuggestCannotDeleteNonConfigurable);
-
-    if (Index >= FLength) and not FLengthWritable then
-      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
-        SSuggestCannotDeleteNonConfigurable);
-
-    if (not Extensible) and
-       not (CanStoreDenseElementIndex(Index, FElements.Count) and
-            (Index < FElements.Count) and
-            not IsArrayHole(FElements[Integer(Index)])) then
-      ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]),
-        SSuggestObjectNotExtensible);
-
-    if CanStoreDenseElementIndex(Index, FElements.Count) then
-    begin
-      // Append at exactly the element count is the same store the extension
-      // path would perform — one hole added and immediately overwritten — so
-      // take it directly, the way SetElement and SetIndexProperty already do.
-      // It keeps `arr.push(v)`, which reaches this method through
-      // AssignProperty with a stringified index, off the growth gate: nothing
-      // is being extended over, and a single-slot append has never been gated
-      // on the two paths above. One qualification to "identical": in the
-      // 8-byte window just under the ceiling, the old path refused with the
-      // uncatchable MemoryLimitError at the store, while this defers refusal
-      // to the next managed allocation's catchable RangeError — the behavior
-      // the two sibling paths always had; this aligns the third with them.
-      if Index = FElements.Count then
-        FElements.Add(AValue)
-      else
-      begin
-        // Expand array if necessary
-        ExtendElementsWithHoles(FElements, Int64(Index) + 1, AValue);
-
-        // Set the element
-        FElements[Integer(Index)] := AValue;
-      end;
-    end
-    else
-      inherited DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
-        [pfEnumerable, pfConfigurable, pfWritable]));
-
-    if Index + 1 > FLength then
-      FLength := Index + 1;
-  end
+    SetIndexNamed(AName, Index, AValue)
   else if AName = PROP_LENGTH then
   begin
     if not FLengthWritable then
@@ -4283,6 +4231,19 @@ begin
   begin
     inherited AssignProperty(AName, AValue);
   end;
+end;
+
+// ES2026 §10.1.9 [[Set]]: an array index goes through the array's own
+// lookup, which sees its dense elements; the property map alone does not.
+procedure TGocciaArrayValue.AssignProperty(const AName: string;
+  const AValue: TGocciaValue; const ACanCreate: Boolean = True);
+var
+  Index: Int64;
+begin
+  if ACanCreate and TryParseArrayElementIndex(AName, Index) then
+    SetIndexNamed(AName, Index, AValue)
+  else
+    inherited AssignProperty(AName, AValue, ACanCreate);
 end;
 
 function TGocciaArrayValue.HasOwnProperty(const AName: string): Boolean;
