@@ -250,6 +250,7 @@ implementation
 
 uses
   {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}InitC,{$ENDIF}
+  ProcessEncoding,
   TextEncoding;
 
 {$IFDEF MSWINDOWS}
