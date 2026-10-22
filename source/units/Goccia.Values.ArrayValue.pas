@@ -60,11 +60,7 @@ type
     function SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
     function TryAppendDenseElementFast(const AIndex: Integer;
       const AValue: TGocciaValue): Boolean;
-    function TrySetDenseElementFast(const AIndex: Integer;
-      const AValue: TGocciaValue): Boolean;
     function TryStoreElementFast(const AIndex: Integer;
-      const AValue: TGocciaValue): Boolean;
-    function TryFillHoleFast(const AIndex: Integer;
       const AValue: TGocciaValue): Boolean;
     procedure SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
     function TypeName: string; override;
@@ -1168,7 +1164,7 @@ begin
   if AElementCapacity > 0 then
     FElements.Capacity := AElementCapacity;
   // InitializePrototype does nothing once the realm has its Array.prototype,
-  // which is every array but the first; it is not called for those.
+  // which is every array after the realm's first; it is not called for those.
   SharedPrototype := GetSharedArrayPrototype;
   if not Assigned(SharedPrototype) then
   begin
@@ -1441,11 +1437,16 @@ end;
   data property, as OrdinarySet would. }
 function TGocciaArrayValue.HasPristineIndexedPrototypeChain: Boolean;
 var
+  Realm: TGocciaRealm;
   ArrayPrototype, ObjectPrototype: TGocciaObjectValue;
 begin
-  ArrayPrototype := GetSharedArrayPrototype;
+  // CurrentRealm is a thread-variable lookup; read it once.
+  Realm := CurrentRealm;
+  if not Assigned(Realm) then
+    Exit(False);
+  ArrayPrototype := TGocciaObjectValue(Realm.GetSlot(GArrayPrototypeSlot));
   ObjectPrototype :=
-    TGocciaObjectValue.GetSharedObjectPrototypeForRealm(CurrentRealm);
+    TGocciaObjectValue.GetSharedObjectPrototypeForRealm(Realm);
   Result := Assigned(ArrayPrototype) and Assigned(ObjectPrototype) and
     (FPrototype = ArrayPrototype) and
     (ArrayPrototype.Prototype = ObjectPrototype) and
@@ -1477,55 +1478,26 @@ begin
   Result := True;
 end;
 
-function TGocciaArrayValue.TrySetDenseElementFast(
-  const AIndex: Integer; const AValue: TGocciaValue): Boolean;
+function TGocciaArrayValue.TryStoreElementFast(const AIndex: Integer;
+  const AValue: TGocciaValue): Boolean;
 begin
-  { An existing dense element of an array that holds no descriptor is an own
-    writable data property, so [[Set]] writes its slot: a descriptor for an
-    index, whether an accessor or a non-writable value, lives in the property
-    map and leaves a hole here. Any uncertainty falls back to the complete
-    [[Set]] implementation. This function must keep no managed locals. }
+  { [[Set]] of an index within the dense elements, for the VM's element store
+    and native stores such as Array.prototype.fill. With no descriptor in the
+    property map, an existing dense element is an own writable data property,
+    so [[Set]] writes its slot: a descriptor for an index, whether an accessor
+    or a non-writable value, lives in the property map and leaves a hole here.
+    A hole of an extensible array becomes an own data property when no object
+    on the prototype chain can intercept the store. Anything else declines and
+    the caller takes its generic path. This function must keep no managed
+    locals. }
   Result := False;
   if (AIndex < 0) or (AIndex >= FElements.Count) or
      (FProperties.Count <> 0) or FFrozen then
     Exit;
   if (Int64(AIndex) >= FLength) and not FLengthWritable then
     Exit;
-  if IsArrayHole(FElements[AIndex]) then
-    Exit;
-
-  FElements[AIndex] := AValue;
-  if Int64(AIndex) + 1 > FLength then
-    FLength := Int64(AIndex) + 1;
-  FHasEverHadIndexedOwnProperty := True;
-  Result := True;
-end;
-
-function TGocciaArrayValue.TryStoreElementFast(const AIndex: Integer;
-  const AValue: TGocciaValue): Boolean;
-begin
-  { [[Set]] of an index within the dense elements, for a native store such as
-    Array.prototype.fill: an existing element is overwritten as by
-    TrySetDenseElementFast, and a hole of an extensible array without index
-    descriptors becomes an own data property when the prototype chain cannot
-    intercept the store. Anything else declines. No managed locals. }
-  Result := TrySetDenseElementFast(AIndex, AValue) or
-    TryFillHoleFast(AIndex, AValue);
-end;
-
-// The hole half of TryStoreElementFast, for a caller that has already tried
-// TrySetDenseElementFast. No managed locals.
-function TGocciaArrayValue.TryFillHoleFast(const AIndex: Integer;
-  const AValue: TGocciaValue): Boolean;
-begin
-  Result := False;
-  if (AIndex < 0) or (AIndex >= FElements.Count) or
-     (FProperties.Count <> 0) or FFrozen or not FExtensible then
-    Exit;
-  if (Int64(AIndex) >= FLength) and not FLengthWritable then
-    Exit;
-  if not IsArrayHole(FElements[AIndex]) or
-     not HasPristineIndexedPrototypeChain then
+  if IsArrayHole(FElements[AIndex]) and
+     (not FExtensible or not HasPristineIndexedPrototypeChain) then
     Exit;
 
   FElements[AIndex] := AValue;
