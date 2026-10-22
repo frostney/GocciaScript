@@ -149,6 +149,8 @@ type
     procedure TestNumericImmediateConditionReadsParameterDirectly;
     procedure TestDiscardedStoreSkipsResultMove;
     procedure TestCompoundAssignmentWritesRegisterOnlyBindingDirectly;
+    procedure TestInitializerReachingItsBindingKeepsCopy;
+    procedure TestLexicalHolesSetOnlyWhereObservable;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestObjectRestBytecodeRoundTrip;
@@ -304,6 +306,10 @@ begin
     TestDiscardedStoreSkipsResultMove);
   Test('Compound assignment to a register-only binding writes it directly',
     TestCompoundAssignmentWritesRegisterOnlyBindingDirectly);
+  Test('Initializer that reaches its binding keeps the copy',
+    TestInitializerReachingItsBindingKeepsCopy);
+  Test('Lexical TDZ holes are set once, and only where observable',
+    TestLexicalHolesSetOnlyWhereObservable);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -2196,11 +2202,66 @@ begin
     Expect<Boolean>(Assigned(Func)).ToBe(True);
     if Assigned(Func) then
     begin
-      // The two declarations move their initializer into the binding; the
-      // two stores move nothing, and neither copies an operand.
-      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(2);
+      // The two declarations evaluate their initializer straight into the
+      // binding, which neither initializer can reach; the two stores move
+      // nothing, and neither copies an operand.
+      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(0);
       Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLexicalHolesSetOnlyWhereObservable;
+
+  function HolesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_ADD);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_LOAD_HOLE);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Nothing before either declaration completes can reach a or b, so the
+  // function body sets no hole for them.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { const a = p + 1; const b = a * 2; return b; };'))
+    .ToBe(0);
+  // The arrow created by the first initializer names b, so b keeps its hole.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { const r = () => b; const b = p + 1; return r; };'))
+    .ToBe(1);
+  // A block sets its binding's hole on entry, and the declaration does not
+  // set it again.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { if (p) { let c = p + 1; return c; } return 0; };'))
+    .ToBe(1);
+end;
+
+procedure TTestCompiler.TestInitializerReachingItsBindingKeepsCopy;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  // The initializer names its own binding, so it runs into a temporary and the
+  // binding keeps its TDZ hole until the initializer completes.
+  Module := CompileSource(
+    'const read = (p) => { const value = p.x + value; return value; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(1);
   finally
     Module.Free;
   end;

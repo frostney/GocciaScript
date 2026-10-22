@@ -714,7 +714,12 @@ begin
              (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
              (ACtx.Scope.GetLocal(LocalIdx).Slot <>
               ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
-            Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+          begin
+            if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry and
+               not ACtx.OptimizationOptions.PreserveCoverageShape then
+              Continue;
+            Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+          end
           else
             Slot := ACtx.Scope.DeclareLocal(Names[J], AStmt.IsConst);
           EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
@@ -730,7 +735,15 @@ begin
        (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
        (ACtx.Scope.GetLocal(LocalIdx).Slot <>
         ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
-      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+    begin
+      // The block set the hole on entry. Under coverage the declaration
+      // sets it again anyway: that instruction is what maps a declaration
+      // whose initializer starts on a later line to its own line.
+      if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry and
+         not ACtx.OptimizationOptions.PreserveCoverageShape then
+        Continue;
+      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    end
     else
       Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
@@ -905,6 +918,24 @@ function VarInitializerUsesWithBinding(const ACtx: TGocciaCompilationContext;
 begin
   Result := (ACtx.Scope.WithBindingCount > 0) and
     (Length(ACtx.Scope.NameProbes(AName)) > 0);
+end;
+
+// True when a lexical declaration's initializer may be evaluated straight
+// into the binding's register: nothing it runs can read or write the binding,
+// so no intermediate value it leaves there can stand in for the TDZ hole.
+// The binding must be uncaptured, or a closure created before the declaration
+// could reach it from a call in the initializer.
+function LexicalInitializerMayTargetSlot(const ACtx: TGocciaCompilationContext;
+  const AInfo: TGocciaVariableInfo; const ALocalIdx: Integer): Boolean;
+begin
+  Result := False;
+  if ACtx.OptimizationOptions.PreserveCoverageShape or (ALocalIdx < 0) then
+    Exit;
+  if ACtx.Scope.GetLocal(ALocalIdx).IsCaptured or
+     ACtx.Scope.MutableLocalsMayLeaveRegisters or
+     ShouldTryWithBinding(ACtx.Scope, AInfo.Name) then
+    Exit;
+  Result := InitializerAvoidsOwnBinding(AInfo.Initializer, AInfo.Name);
 end;
 
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
@@ -1174,7 +1205,8 @@ begin
     else if Assigned(Info.Initializer) and
        not (AStmt.IsVar and (not HasInitializer) and IsVarRedeclaration) then
     begin
-      if not AStmt.IsVar then
+      if not AStmt.IsVar and not LexicalInitializerMayTargetSlot(ACtx, Info,
+           DeclaredIdx) then
       begin
         InitSlot := ACtx.Scope.AllocateRegister;
         try
@@ -1615,7 +1647,11 @@ begin
         begin
           Slot := ACtx.Scope.DeclareLocal(Names[J], AVarDecl.IsConst);
           if AEmitInitializers then
+          begin
             EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+            ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(Names[J]))^
+              .HoleAtBlockEntry := True;
+          end;
         end;
       end;
     finally
@@ -1645,7 +1681,11 @@ begin
       begin
         Slot := ACtx.Scope.DeclareLocal(Names[I], AIsConst);
         if AEmitInitializers then
+        begin
           EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+          ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(Names[I]))^
+            .HoleAtBlockEntry := True;
+        end;
       end;
     end;
   finally
@@ -1668,7 +1708,11 @@ begin
   begin
     Slot := ACtx.Scope.DeclareLocal(AName, AIsConst);
     if AEmitInitializer then
+    begin
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+      ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(AName))^.HoleAtBlockEntry :=
+        True;
+    end;
   end;
 end;
 

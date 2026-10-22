@@ -4,8 +4,11 @@ unit Goccia.Compiler.OperandSafety;
 
 // Syntactic proofs behind reading a let binding or a parameter straight from
 // its register (see TryResolveSettledLocalName in Goccia.Compiler.Expressions),
-// and behind evaluating a parameter's initializer straight into the
-// parameter's register (see EmitParameterInitialization).
+// behind evaluating a parameter's or a lexical declaration's initializer
+// straight into the binding's register (see EmitParameterInitialization and
+// LexicalInitializerMayTargetSlot in Goccia.Compiler.Statements), and behind
+// leaving out the TDZ hole of a function body's leading lexical bindings (see
+// LeadingLexicalsWithUnobservableHole in Goccia.Compiler).
 //
 // The proofs are allowlists. A node is accepted only when its class is listed
 // here and every child that can hold code has been accepted too; a class that
@@ -54,6 +57,15 @@ function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 function ParameterInitializerAvoidsOwnBinding(
   const AParams: TGocciaParameterArray; const AIndex: Integer): Boolean;
 
+// The same proof for the initializer of a lexical declaration of AName: no
+// node of AInitializer can reach the binding, by the rules above. Code that
+// ran before the declaration can still reach it through a closure, so a
+// caller also rules that out: by requiring the binding to be uncaptured, or
+// by proving the same for every earlier initializer in a scope with no
+// hoisted function declaration.
+function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
+  const AName: string): Boolean;
+
 implementation
 
 uses
@@ -73,8 +85,8 @@ type
     RejectLocalWrites: Boolean;
     // Nodes left to visit; negative means unlimited.
     Budget: Integer;
-    // Empty for the loop and operand proofs. For the parameter initializer
-    // proof, the binding name no node may reach; an arrow or function
+    // Empty for the loop and operand proofs. For the initializer proofs, the
+    // binding name no node may reach; an arrow or function
     // expression is then accepted when its source text cannot name the
     // binding.
     AvoidName: string;
@@ -532,6 +544,19 @@ begin
       Exit(False);
   end;
   Result := True;
+end;
+
+function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
+  const AName: string): Boolean;
+var
+  Scan: TScan;
+begin
+  Scan.RejectLocalWrites := False;
+  Scan.Budget := -1;
+  Scan.AvoidName := AName;
+  if AName = '' then
+    Exit(False);
+  Result := ScanNode(Scan, AInitializer);
 end;
 
 end.
