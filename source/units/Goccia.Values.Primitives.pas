@@ -237,18 +237,18 @@ begin
 end;
 
 { What a value allocation checks when Goccia.ThreadPolls says something is
-  armed. APolls is the word the caller has just read, so that this does not
-  look the thread variable up a second time, and each check runs only when
-  its own flag is set: a check whose flag is clear would return at once, after
-  a lookup of its own. }
+  armed. APolls is the record the caller has just read, so that this does not
+  look the thread variable up a second time: each check runs only when its own
+  flag is set, through the state pointer beside the flag. }
 procedure RunAllocationPolls(const APolls: TGocciaThreadPolls);
 begin
   if APolls.ProfilingAllocations and (TGocciaProfiler.Instance <> nil) then
     TGocciaProfiler.Instance.RecordAllocation;
   if APolls.TimeoutArmed then
-    CheckExecutionTimeout;
+    PollExecutionTimeout(PGocciaTimeoutPollState(APolls.TimeoutState));
   if APolls.InstructionLimitActive then
-    CheckInstructionLimit;
+    CheckInstructionLimitState(
+      PGocciaInstructionLimitState(APolls.InstructionLimitState));
 end;
 
 procedure TGocciaValue.AfterConstruction;
