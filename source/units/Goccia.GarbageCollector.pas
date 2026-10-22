@@ -2389,24 +2389,49 @@ begin
   // but a re-entrant same-thread charge from a sweep destructor would not —
   // can push the committed total past the ceiling.
   //
-  // Neither locked section has a try..finally. TryChargeExternalBytesLocked
-  // is integer arithmetic and flag stores on this collector's own fields,
-  // with nothing in it that can raise (a development build keeps the Int64
-  // overflow checks, which would need a ledger past 2^63 bytes to fire), and
-  // every string and buffer reservation passes here: a frame would cost an
+  // In a production build neither locked section has a try..finally.
+  // TryChargeExternalBytesLocked is integer arithmetic and flag stores on
+  // this collector's own fields, and Shared.inc turns the stack, range and
+  // overflow checks off there, so nothing under the lock can raise; every
+  // string and buffer reservation passes here, and a frame would cost an
   // exception-frame push and pop, with their thread-variable lookups, and a
   // setjmp on each of them. Keep it so: whatever is added inside the lock
-  // must not raise either. See RegisterObject for the same reasoning.
+  // must not raise in a production build either.
+  //
+  // Every other build checks: each routine TryChargeExternalBytesLocked
+  // calls checks the stack in its prologue, which can raise near the end of
+  // the stack (building the RangeError for a deep recursion allocates
+  // strings there), and the counters are overflow-checked. There the frame
+  // stays, so that a raise cannot leave the lock held and block the next
+  // thread that takes it (a cross-thread ReleaseExternalBytes).
   CriticalSectionEnter(FAccountingLock);
-  Result := TryChargeExternalBytesLocked(ABytes);
-  CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
+  try
+  {$ENDIF}
+    Result := TryChargeExternalBytesLocked(ABytes);
+  {$IFNDEF PRODUCTION}
+  finally
+  {$ENDIF}
+    CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
+  end;
+  {$ENDIF}
   if Result then
     Exit;
   if not TryCollectForLimitedBytes(ABytes, AProtect) then
     Exit(False);
   CriticalSectionEnter(FAccountingLock);
-  Result := TryChargeExternalBytesLocked(ABytes);
-  CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
+  try
+  {$ENDIF}
+    Result := TryChargeExternalBytesLocked(ABytes);
+  {$IFNDEF PRODUCTION}
+  finally
+  {$ENDIF}
+    CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
+  end;
+  {$ENDIF}
 end;
 
 function TGarbageCollector.TryChargeExternalBytes(
@@ -2422,19 +2447,28 @@ begin
   // collect at every await. The periodic pressure check sees these bytes
   // like any others.
   //
-  // No try..finally around the lock: nothing in it can raise (see
-  // TryReserveExternalBytes).
+  // A try..finally around the lock only where checks are on (see
+  // TryReserveExternalBytes): there the additions are overflow-checked.
   CriticalSectionEnter(FAccountingLock);
-  Result := FitsWithinLimitLocked(ABytes);
-  if Result then
-  begin
-    Inc(FBytesAllocated, ABytes);
-    Inc(FExternalBytes, ABytes);
-    Inc(FTotalBytesAllocated, ABytes);
-    if FBytesAllocated > FPeakBytesAllocated then
-      FPeakBytesAllocated := FBytesAllocated;
+  {$IFNDEF PRODUCTION}
+  try
+  {$ENDIF}
+    Result := FitsWithinLimitLocked(ABytes);
+    if Result then
+    begin
+      Inc(FBytesAllocated, ABytes);
+      Inc(FExternalBytes, ABytes);
+      Inc(FTotalBytesAllocated, ABytes);
+      if FBytesAllocated > FPeakBytesAllocated then
+        FPeakBytesAllocated := FBytesAllocated;
+    end;
+  {$IFNDEF PRODUCTION}
+  finally
+  {$ENDIF}
+    CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   end;
-  CriticalSectionLeave(FAccountingLock);
+  {$ENDIF}
 end;
 
 procedure TGarbageCollector.ReleaseExternalBytes(const ABytes: Int64);
@@ -2447,27 +2481,38 @@ begin
   // releases here against collector A). The accounting lock serializes it with
   // the owner's counter updates so the two never tear
   // FBytesAllocated/FExternalBytes — see FAccountingLock. Like the
-  // reservation it undoes, it takes the lock without a try..finally: what
+  // reservation it undoes, it takes the lock with a try..finally only where
+  // checks are on (see TryReserveExternalBytes): in a production build what
   // runs under it is integer arithmetic on this collector's fields and cannot
-  // raise (see TryReserveExternalBytes), and must stay that way.
+  // raise, and must stay that way.
   CriticalSectionEnter(FAccountingLock);
-  if ABytes >= FExternalBytes then
-  begin
-    Dec(FBytesAllocated, FExternalBytes);
-    FExternalBytes := 0;
-  end
-  else
-  begin
-    Dec(FExternalBytes, ABytes);
-    Dec(FBytesAllocated, ABytes);
+  {$IFNDEF PRODUCTION}
+  try
+  {$ENDIF}
+    if ABytes >= FExternalBytes then
+    begin
+      Dec(FBytesAllocated, FExternalBytes);
+      FExternalBytes := 0;
+    end
+    else
+    begin
+      Dec(FExternalBytes, ABytes);
+      Dec(FBytesAllocated, ABytes);
+    end;
+    // Released bytes take the heap below the level the last forced
+    // collection observed, so that observation no longer bounds what a
+    // collection could reclaim and must not go on suppressing one.
+    if (FForcedCollectFloor >= 0) and
+       (FBytesAllocated < FForcedCollectFloor) then
+      FForcedCollectFloor := -1;
+    NoteBytesReleasedLocked;
+  {$IFNDEF PRODUCTION}
+  finally
+  {$ENDIF}
+    CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   end;
-  // Released bytes take the heap below the level the last forced collection
-  // observed, so that observation no longer bounds what a collection could
-  // reclaim and must not go on suppressing one.
-  if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
-    FForcedCollectFloor := -1;
-  NoteBytesReleasedLocked;
-  CriticalSectionLeave(FAccountingLock);
+  {$ENDIF}
 end;
 
 procedure TGarbageCollector.NoteBytesReleasedLocked;
