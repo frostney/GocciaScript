@@ -57,7 +57,8 @@ procedure CompileSequence(const ACtx: TGocciaCompilationContext;
 procedure CompileUnary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; const ADest: UInt16);
 procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 procedure CompilePropertyAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaPropertyAssignmentExpression; const ADest: UInt16;
   const ANeedsResult: Boolean = True);
@@ -65,7 +66,7 @@ procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrowFunctionExpression; const ADest: UInt16);
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt16;
-  const ATail: Boolean = False);
+  const ATail: Boolean = False; const ANeedsResult: Boolean = True);
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt16);
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
@@ -101,9 +102,11 @@ procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContex
   const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt16;
   const ANeedsResult: Boolean = True);
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 procedure CompilePropertyCompoundAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 procedure CompileComputedPropertyCompoundAssignment(
   const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaComputedPropertyCompoundAssignmentExpression;
@@ -2616,6 +2619,100 @@ begin
   Result := True;
 end;
 
+// True when a store to the local at ALocalIdx can write its register directly
+// instead of going through OP_SET_LOCAL: it is an initialized, mutable,
+// unexported, untyped binding of this function that no closure reaches, here
+// or later in a loop, and no direct eval can rebind. Such a binding has no
+// cell for OP_SET_LOCAL to update, and needs none of the TDZ probe, const
+// error or export update the compiler emits around a store.
+function LocalAcceptsDirectRegisterWrite(const ACtx: TGocciaCompilationContext;
+  const ALocalIdx: Integer): Boolean;
+var
+  Local: TGocciaCompilerLocal;
+begin
+  Result := False;
+  if (ALocalIdx < 0) or ACtx.OptimizationOptions.PreserveCoverageShape or
+     ACtx.Scope.MutableLocalsMayLeaveRegisters then
+    Exit;
+  Local := ACtx.Scope.GetLocal(ALocalIdx);
+  Result := Local.IsInitialized and not Local.IsConst and
+    not Local.IsCaptured and not Local.IsStrictlyTyped and
+    not Local.IsGlobalBacked and not Local.IsImportBinding and
+    not Local.IsNonStrictImmutable and (Local.ExportNameCount = 0) and
+    not ShouldTryWithBinding(ACtx.Scope, Local.Name);
+end;
+
+// For `x = v` whose result nobody reads: when v compiled to the single
+// instruction that ends at the current position, and that instruction
+// writes its destination only after reading every operand, it can write the
+// register of x directly instead of a temporary that OP_SET_LOCAL then
+// copies (LocalAcceptsDirectRegisterWrite). OP_GET_LOCAL_PROP_CONST stores
+// its base into the destination before the read, which can throw, so it
+// qualifies only when x is that base.
+function TryRetargetSingleInstructionValue(
+  const ACtx: TGocciaCompilationContext; const ALocalIdx,
+  AValueStart: Integer; const ATemp: UInt16): Boolean;
+var
+  Instruction: UInt32;
+  Slot: UInt16;
+begin
+  Result := False;
+  if (CurrentCodePosition(ACtx) <> AValueStart + 1) or
+     not LocalAcceptsDirectRegisterWrite(ACtx, ALocalIdx) then
+    Exit;
+  Slot := ACtx.Scope.GetLocal(ALocalIdx).Slot;
+  if (Slot > High(UInt8)) or (Slot = ATemp) then
+    Exit;
+  Instruction := ACtx.Template.GetInstruction(AValueStart);
+  if DecodeA(Instruction) <> ATemp then
+    Exit;
+  case TGocciaOpCode(DecodeOp(Instruction)) of
+    OP_GET_PROP_CONST, OP_ARRAY_GET,
+    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD,
+    OP_ADD_FLOAT, OP_SUB_FLOAT, OP_MUL_FLOAT,
+    OP_ADD_NUM_IMM, OP_SUB_NUM_IMM,
+    OP_LOAD_INT, OP_LOAD_CONST, OP_NOT,
+    OP_EQ, OP_NEQ, OP_LT, OP_GT, OP_LTE, OP_GTE:
+      ;
+    OP_GET_LOCAL_PROP_CONST:
+      if DecodeB(Instruction) <> Slot then
+        Exit;
+  else
+    Exit;
+  end;
+  ACtx.Template.PatchInstruction(AValueStart,
+    UInt64((Instruction and not UInt32($FF00)) or (UInt32(Slot) shl 8)));
+  Result := True;
+end;
+
+// The register an uncaptured `this` lives in, usable as an instruction operand
+// in place of a copy. Emits the derived-constructor initialization check that
+// evaluating `this` performs, at the point where the operand is evaluated.
+function TryResolveThisRegister(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out ARegister: UInt16): Boolean;
+var
+  LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  Result := False;
+  ARegister := 0;
+  // Under coverage `this` keeps its copy, as a settled local does: a line
+  // holding only `this` would otherwise emit no instruction and be reported
+  // as never executed.
+  if not (AExpr is TGocciaThisExpression) or
+     ACtx.OptimizationOptions.PreserveCoverageShape then
+    Exit;
+  LocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
+  if LocalIdx < 0 then
+    Exit;
+  Local := ACtx.Scope.GetLocal(LocalIdx);
+  if Local.IsCaptured then
+    Exit;
+  EmitDerivedThisInitializedCheck(ACtx);
+  ARegister := Local.Slot;
+  Result := True;
+end;
+
 function TryResolveSettledLocalRegister(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out ARegister: UInt16;
   const AEvaluatedLater1: TGocciaExpression = nil;
@@ -3112,8 +3209,10 @@ begin
 end;
 
 procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 var
+  ValueStart: Integer;
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Upvalue: TGocciaCompilerUpvalue;
@@ -3228,11 +3327,18 @@ begin
   if (UpvalIdx >= 0) and ExpressionContainsDirectEval(AExpr.Value) then
     TargetReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
 
+  ValueStart := CurrentCodePosition(ACtx);
   CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
     AExpr.InferName);
 
   if LocalIdx >= 0 then
   begin
+    if not ANeedsResult and
+       TryRetargetSingleInstructionValue(ACtx, LocalIdx, ValueStart, ADest) then
+    begin
+      ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
+      Exit;
+    end;
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if (not Local.IsGlobalBacked) and
        not (Local.IsInitialized and
@@ -3332,7 +3438,10 @@ begin
     Exit;
   end;
 
-  OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg, AExpr.Value);
+  if TryResolveThisRegister(ACtx, AExpr.ObjectExpr, ObjReg) then
+    OwnsObjReg := False
+  else
+    OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg, AExpr.Value);
   OwnsValReg := CompileOperand(ACtx, AExpr.Value, ValReg);
 
   EmitStorePropertyByName(ACtx, ObjReg, AExpr.PropertyName, ValReg);
@@ -5392,7 +5501,7 @@ end;
 
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt16;
-  const ATail: Boolean = False);
+  const ATail: Boolean = False; const ANeedsResult: Boolean = True);
 var
   ArgCount, I: Integer;
   BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg, FirstArgReg: UInt16;
@@ -5538,7 +5647,7 @@ begin
       PatchJumpTarget(ACtx, EndJump);
     end;
 
-    if ADest <> BaseReg then
+    if ANeedsResult and (ADest <> BaseReg) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
 
     ACtx.Scope.FreeRegister;
@@ -5598,7 +5707,7 @@ begin
       PatchJumpTarget(ACtx, EndJump);
     end;
 
-    if ADest <> BaseReg then
+    if ANeedsResult and (ADest <> BaseReg) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -5675,7 +5784,7 @@ begin
         PatchJumpTarget(ACtx, EndJump);
       end;
 
-      if ADest <> BaseReg then
+      if ANeedsResult and (ADest <> BaseReg) then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
 
       ACtx.Scope.FreeRegister;
@@ -5735,7 +5844,7 @@ begin
         PatchJumpTarget(ACtx, EndJump);
       end;
 
-      if ADest <> BaseReg then
+      if ANeedsResult and (ADest <> BaseReg) then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
 
       ACtx.Scope.FreeRegister;
@@ -5791,7 +5900,8 @@ begin
 
     if BaseReg <> ADest then
     begin
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+      if ANeedsResult then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
       ACtx.Scope.FreeRegister;
     end;
   end;
@@ -5880,20 +5990,8 @@ begin
 
   NullishJumpCount := 0;
   ObjectRegisterAllocated := True;
-  if AExpr.ObjectExpr is TGocciaThisExpression then
-  begin
-    LocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
-    if LocalIdx >= 0 then
-    begin
-      Local := ACtx.Scope.GetLocal(LocalIdx);
-      if not Local.IsCaptured then
-      begin
-        EmitDerivedThisInitializedCheck(ACtx);
-        ObjReg := Local.Slot;
-        ObjectRegisterAllocated := False;
-      end;
-    end;
-  end;
+  if TryResolveThisRegister(ACtx, AExpr.ObjectExpr, ObjReg) then
+    ObjectRegisterAllocated := False;
   if ObjectRegisterAllocated and
      TryResolveSettledLocalRegister(ACtx, AExpr.ObjectExpr, ObjReg,
        AExpr.PropertyExpression, nil, ADest) then
@@ -7167,7 +7265,8 @@ begin
 end;
 
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegVal, RegOld, RegResult, RegTemp, CondReg, ObjReg,
@@ -7435,16 +7534,27 @@ begin
       Exit;
     end;
     ValType := ExpressionType(ACtx.Scope, AExpr.Value);
-    RegTemp := ACtx.Scope.AllocateRegister;
     if IsKnownNumeric(LocalType) and
        IsKnownNumeric(ValType) and
        IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        TryFloatOp(ArithOp, FloatOp) then
+      Op := FloatOp;
+    // A binding that only ever lives in its register takes the result
+    // directly: OP_SET_LOCAL would store it to that register and nowhere
+    // else (see LocalAcceptsDirectRegisterWrite).
+    if LocalAcceptsDirectRegisterWrite(ACtx, LocalIdx) then
     begin
-      EmitInstruction(ACtx, EncodeABC(FloatOp, RegTemp, RegOld, RegVal))
-    end
-    else
-      EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
+      EmitInstruction(ACtx, EncodeABC(Op, Slot, RegOld, RegVal));
+      ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
+      if ANeedsResult and (ADest <> Slot) then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
+      ACtx.Scope.FreeRegister;
+      if OwnsRegOld then
+        ACtx.Scope.FreeRegister;
+      Exit;
+    end;
+    RegTemp := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
     ResultType := sltUntyped;
     if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
@@ -7455,7 +7565,7 @@ begin
       ACtx.Scope.GetLocal(LocalIdx).ExportNames,
       ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegTemp);
     ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
-    if ADest <> Slot then
+    if ANeedsResult and (ADest <> Slot) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegTemp, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -7490,7 +7600,7 @@ begin
     else
       EmitCurrentUpvalueAssignment(ACtx, Upvalue, UpvalIdx, RegResult,
         RegResult, InferLocalType(AExpr.Value));
-    if ADest <> RegResult then
+    if ANeedsResult and (ADest <> RegResult) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     if ReferenceReg >= 0 then
       ACtx.Scope.FreeRegister;
@@ -7510,12 +7620,14 @@ begin
 end;
 
 procedure CompilePropertyCompoundAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 var
   BaseReg, CurReg, KeyReg, ObjReg, SuperReg, ThisReg, ValReg: UInt16;
   Op: TGocciaOpCode;
   PropIdx: UInt16;
   JumpIdx: Integer;
+  OwnsObjReg: Boolean;
 begin
   if AExpr.ObjectExpr is TGocciaSuperExpression then
   begin
@@ -7583,22 +7695,27 @@ begin
   end;
 
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
-  ObjReg := ACtx.Scope.AllocateRegister;
+  // `this.x op= v` reads and stores through this's own register.
+  OwnsObjReg := not TryResolveThisRegister(ACtx, AExpr.ObjectExpr, ObjReg);
+  if OwnsObjReg then
+    ObjReg := ACtx.Scope.AllocateRegister;
   CurReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
 
-  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  if OwnsObjReg then
+    ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
   EmitLoadPropertyByName(ACtx, CurReg, ObjReg, AExpr.PropertyName);
   ACtx.CompileExpression(AExpr.Value, ValReg);
   EmitInstruction(ACtx, EncodeABC(Op, CurReg, CurReg, ValReg));
   EmitStorePropertyByName(ACtx, ObjReg, AExpr.PropertyName, CurReg);
 
-  if ADest <> CurReg then
+  if ANeedsResult and (ADest <> CurReg) then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  if OwnsObjReg then
+    ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileComputedPropertyCompoundAssignment(
@@ -8124,6 +8241,7 @@ var
   MemberExpr: TGocciaMemberExpression;
   PrivateExpr: TGocciaPrivateMemberExpression;
   ObjReg, IdxReg: UInt16;
+  OwnsObjReg: Boolean;
 begin
   if AExpr is TGocciaCallExpression then
   begin
@@ -8144,9 +8262,17 @@ begin
       Exit;
     end;
 
-    ObjReg := ACtx.Scope.AllocateRegister;
-    CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
-      ObjReg, AJumps, AJumpCount);
+    // `this` is read in place, as CompileMember does; it holds no optional
+    // chain of its own, so it adds no optional-chain jump.
+    if TryResolveThisRegister(ACtx, MemberExpr.ObjectExpr, ObjReg) then
+      OwnsObjReg := False
+    else
+    begin
+      OwnsObjReg := True;
+      ObjReg := ACtx.Scope.AllocateRegister;
+      CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
+        ObjReg, AJumps, AJumpCount);
+    end;
     if MemberExpr.Optional then
       AddOptionalChainJump(ACtx, AJumps, AJumpCount, ObjReg);
 
@@ -8159,7 +8285,8 @@ begin
     end
     else
       EmitLoadMemberProperty(ACtx, MemberExpr, ADest, ObjReg, 0);
-    ACtx.Scope.FreeRegister;
+    if OwnsObjReg then
+      ACtx.Scope.FreeRegister;
     Exit;
   end;
 
