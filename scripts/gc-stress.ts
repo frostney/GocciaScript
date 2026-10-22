@@ -8,9 +8,11 @@
  * builds are known failures and do not count, so the baseline comes from the
  * same commit and the same run rather than from a checked-in list.
  *
- * The subset is the test262 directories and `tests/` paths where values cross
- * native code while guest code runs: promises, iterators, async functions,
- * generators, eval code and arguments objects.
+ * The subset is the whole `tests/` tree and the test262 directories where
+ * values cross native code while guest code runs: promises, iterators, async
+ * functions, generators, eval code and arguments objects. A `tests/` case
+ * whose cost grows with its size times the live heap shrinks or skips its
+ * large size when `Goccia.build.gcStress` is true.
  *
  * Each `tests/` file runs in a process of its own: an engine-integrity fault
  * stops a GocciaTestRunner run (exit 70), and one faulting file must not hide
@@ -54,17 +56,8 @@ export const TEST262_CATEGORIES = [
   "language/statements/generators",
 ];
 
-// The tests/ paths the stress run covers. Closures are tested under
-// tests/language/functions.
-export const TEST_PATHS = [
-  "tests/built-ins/Iterator",
-  "tests/built-ins/Promise",
-  "tests/language/arguments",
-  "tests/language/async-await",
-  "tests/language/async-generators",
-  "tests/language/functions",
-  "tests/language/generators",
-];
+// The tests/ paths the stress run covers: the whole tree (#1679).
+export const TEST_PATHS = ["tests"];
 
 // Mirrors ScriptExtensions (source/units/Goccia.FileExtensions.pas) and
 // TEST_DISCOVERY_EXCLUDED_DIRECTORIES (source/app/GocciaTestRunner.dpr), so a

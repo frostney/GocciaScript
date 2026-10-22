@@ -10,15 +10,20 @@ features: [Goccia.gc]
 // every link survived. The depths are ones the recursive marker this replaced
 // crashed at in a production build.
 const range = (n) => Array.from({ length: n });
+// A GC-stress build collects every 8 instructions, so building a chain there
+// costs its length times the live heap. A stress run uses chains of 1,000
+// links, deep enough to spill the mark stack; the full depths run in every
+// other build.
+const depth = (n) => (Goccia.build.gcStress ? 1_000 : n);
 
 describe("Goccia.gc() over prototype and class chains", () => {
   test("a prototype chain", () => {
     const base = { base: true };
     let leaf = base;
-    for (const _ of range(100_000)) leaf = Object.create(leaf);
+    for (const _ of range(depth(100_000))) leaf = Object.create(leaf);
     Goccia.gc();
     let cur = leaf;
-    for (const _ of range(100_000)) cur = Object.getPrototypeOf(cur);
+    for (const _ of range(depth(100_000))) cur = Object.getPrototypeOf(cur);
     expect(cur).toBe(base);
   });
 
@@ -27,7 +32,7 @@ describe("Goccia.gc() over prototype and class chains", () => {
       base = "base";
     }
     let Leaf = Base;
-    for (const _ of range(30000)) {
+    for (const _ of range(depth(30000))) {
       const Parent = Leaf;
       Leaf = class extends Parent {};
     }

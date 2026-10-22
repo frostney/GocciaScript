@@ -123,13 +123,16 @@ describe("Proxies nested as targets", () => {
   // test workers cannot spare.
   const is64Bit = typeof Goccia !== "undefined" &&
     ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
+  // A GC-stress build collects every 8 instructions, so building 100,000
+  // Proxies costs time quadratic in the nest: hours, not seconds.
+  const deepNestRuns = is64Bit && !Goccia.build.gcStress;
 
   // Each Proxy forwarding to its target is one native call.
   test("a read through 1,000 nested Proxies reaches the innermost target", () => {
     expect(nest(1000).x).toBe("found");
   });
 
-  test.runIf(is64Bit)("a read through 100,000 nested Proxies throws RangeError", () => {
+  test.runIf(deepNestRuns)("a read through 100,000 nested Proxies throws RangeError", () => {
     expect(() => nest(100000).x).toThrow(RangeError);
   });
 
@@ -143,7 +146,7 @@ describe("Proxies nested as targets", () => {
     expect(Found.prototype.isPrototypeOf(proxy)).toBe(true);
   });
 
-  test.runIf(is64Bit)("instanceof, isPrototypeOf and Object.getPrototypeOf through 100,000 nested Proxies throw RangeError", () => {
+  test.runIf(deepNestRuns)("instanceof, isPrototypeOf and Object.getPrototypeOf through 100,000 nested Proxies throw RangeError", () => {
     class Unrelated {}
     const proxy = nest(100000);
     expect(() => proxy instanceof Unrelated).toThrow(RangeError);

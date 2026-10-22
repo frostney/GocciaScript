@@ -97,10 +97,14 @@ describe("chain length limit", () => {
   });
 
   test("lists do not count: sequences, arguments, elements and statements", () => {
-    expect(realm.evaluate(`let c = 0; (c${", c".repeat(DEEP)})`)).toBe(0);
-    expect(realm.evaluate(`[${"1, ".repeat(DEEP)}1].length`)).toBe(DEEP + 1);
-    expect(realm.evaluate(`const f = (...a) => a.length; f(${"1, ".repeat(DEEP)}1)`)).toBe(DEEP + 1);
-    expect(realm.evaluate(`let n = 0;${" n += 1;".repeat(DEEP)} n`)).toBe(DEEP);
+    // Running these lists takes an instruction per item. A GC-stress build
+    // collects every 8 instructions, so a stress run uses 5,000 items, still
+    // past the height limit.
+    const items = Goccia.build.gcStress ? 5000 : DEEP;
+    expect(realm.evaluate(`let c = 0; (c${", c".repeat(items)})`)).toBe(0);
+    expect(realm.evaluate(`[${"1, ".repeat(items)}1].length`)).toBe(items + 1);
+    expect(realm.evaluate(`const f = (...a) => a.length; f(${"1, ".repeat(items)}1)`)).toBe(items + 1);
+    expect(realm.evaluate(`let n = 0;${" n += 1;".repeat(items)} n`)).toBe(items);
   });
 
   test("the engine keeps working after the error", () => {

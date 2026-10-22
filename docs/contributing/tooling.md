@@ -464,13 +464,27 @@ before.
 Pass `--timeout=0`: under stress, `tests/language/functions/function-parameters.js`
 alone takes about 50 seconds.
 
+Each collection marks the whole live heap, so a test that builds N objects
+costs time proportional to N times the heap under stress. `Goccia.build.gcStress`
+is `true` in a stress build ([ADR 0154](../adr/0154-goccia-build-reports-a-gc-stress-build.md)).
+A test with a large N reads it to shrink N, or to skip a case whose point is a
+size past an engine bound, so its other cases still run under stress:
+
+```javascript
+// 100,000 nested Proxies: seconds normally, hours under stress.
+const deepNestRuns = typeof Goccia !== "undefined" && !Goccia.build.gcStress;
+test.runIf(deepNestRuns)("a read through 100,000 nested Proxies throws RangeError", () => {
+  // ...
+});
+```
+
 The scheduled [GC-stress workflow](../../.github/workflows/gc-stress.yml) runs
 every Sunday at 04:41 UTC and on demand. `scripts/gc-stress.ts` runs the
 GC-sensitive test262 directories (Promise, Iterator, the async-function and
-await directories, eval code, arguments objects and generators) and `tests/`
-paths under the stress build and under an ordinary development build of the
-same commit. It reports only tests that pass in the ordinary build and fail
-under stress. Each `tests/` file runs in its own process, because an
+await directories, eval code, arguments objects and generators) and the whole
+`tests/` tree under the stress build and under an ordinary development build
+of the same commit. It reports only tests that pass in the ordinary build and
+fail under stress. Each `tests/` file runs in its own process, because an
 engine-integrity fault stops a whole test-runner run. To reproduce the whole
 comparison locally, build both variants and point the script at a test262
 checkout:
