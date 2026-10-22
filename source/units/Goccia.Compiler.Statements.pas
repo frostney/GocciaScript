@@ -5384,14 +5384,28 @@ begin
   GContinueJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
 end;
 
+// How a function defined for a class element is named: '#p' for a private
+// one, the name as written otherwise.
+function ElementDisplayName(const AName: string;
+  const AIsPrivateName: Boolean): string;
+begin
+  if AIsPrivateName then
+    Result := DisplayClassElementName(AName)
+  else
+    Result := AName;
+end;
+
+// AIsPrivateName: AName is a private storage key, added as a bckPrivateName
+// constant.
 procedure EmitDefineStaticPropertyByName(const ACtx: TGocciaCompilationContext;
-  const ATargetReg, AValueReg: UInt16; const AName: string);
+  const ATargetReg, AValueReg: UInt16; const AName: string;
+  const AIsPrivateName: Boolean = False);
 var
   KeyIdx: UInt16;
   KeyReg, TargetReg: UInt16;
   ProtoNameIdx: UInt16;
 begin
-  KeyIdx := ACtx.Template.AddConstantString(AName);
+  KeyIdx := ACtx.Template.AddConstantName(AName, AIsPrivateName);
   if KeyIdx <= High(UInt8) then
   begin
     EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST,
@@ -5409,10 +5423,13 @@ begin
   end;
 end;
 
+// AIsPrivateName: AMethodName is a private storage key, added as a
+// bckPrivateName constant.
 procedure CompileMethodBody(const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt16; const AMethodName: string;
   const AMethod: TGocciaClassMethod; const AStoreOpcode: TGocciaOpCode;
-  const AGuardDerivedThis: Boolean = False);
+  const AGuardDerivedThis: Boolean = False;
+  const AIsPrivateName: Boolean = False);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -5430,7 +5447,7 @@ begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
   OldDerivedGuard := ACtx.DerivedConstructorThisGuard;
-  DisplayName := DisplayClassElementName(AMethodName);
+  DisplayName := ElementDisplayName(AMethodName, AIsPrivateName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create(DisplayName);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
@@ -5520,7 +5537,8 @@ begin
   MethodReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, MethodReg, FuncIdx));
 
-  MethodNameIdx := ACtx.Template.AddConstantString(AMethodName);
+  MethodNameIdx := ACtx.Template.AddConstantName(AMethodName,
+    AIsPrivateName);
   EmitInstruction(ACtx, EncodeABC(AStoreOpcode,
     AClassReg, UInt16(MethodNameIdx), MethodReg));
   ACtx.Scope.FreeRegister;
@@ -5529,7 +5547,7 @@ end;
 procedure CompileGetterBody(const ACtx: TGocciaCompilationContext;
   const ATargetReg: UInt16; const AName: string;
   const AGetter: TGocciaGetterExpression; const AOpcode: TGocciaOpCode;
-  const AFlags: UInt16);
+  const AFlags: UInt16; const AIsPrivateName: Boolean = False);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -5546,7 +5564,7 @@ var
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
-  DisplayName := DisplayClassElementName(AName);
+  DisplayName := ElementDisplayName(AName, AIsPrivateName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create('get ' + DisplayName);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
@@ -5588,7 +5606,7 @@ begin
   FnReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
 
-  NameIdx := ACtx.Template.AddConstantString(AName);
+  NameIdx := ACtx.Template.AddConstantName(AName, AIsPrivateName);
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
   Assert(AccessorReg = TargetReg + 1,
@@ -5604,7 +5622,7 @@ end;
 procedure CompileSetterBody(const ACtx: TGocciaCompilationContext;
   const ATargetReg: UInt16; const AName: string;
   const ASetter: TGocciaSetterExpression; const AOpcode: TGocciaOpCode;
-  const AFlags: UInt16);
+  const AFlags: UInt16; const AIsPrivateName: Boolean = False);
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -5621,7 +5639,7 @@ var
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
-  DisplayName := DisplayClassElementName(AName);
+  DisplayName := ElementDisplayName(AName, AIsPrivateName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create('set ' + DisplayName);
   ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
@@ -5688,7 +5706,7 @@ begin
   FnReg := ACtx.Scope.AllocateRegister;
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, FnReg, FuncIdx));
 
-  NameIdx := ACtx.Template.AddConstantString(AName);
+  NameIdx := ACtx.Template.AddConstantName(AName, AIsPrivateName);
   TargetReg := ACtx.Scope.AllocateRegister;
   AccessorReg := ACtx.Scope.AllocateRegister;
   Assert(AccessorReg = TargetReg + 1,
@@ -6174,16 +6192,18 @@ begin
       ccskMethod:
       begin
         if Entry.IsPrivate then
-          StorageName := '#slot:' + APrivatePrefix + Entry.Name
+          StorageName := PrivateStorageKey(APrivatePrefix, Entry.Name)
         else
           StorageName := Entry.Name;
         if Entry.IsStatic then
           CompileMethodBody(ACtx, ATargetReg, StorageName,
-            Entry.MethodNode, OP_DEFINE_STATIC_METHOD_CONST)
+            Entry.MethodNode, OP_DEFINE_STATIC_METHOD_CONST, False,
+            Entry.IsPrivate)
         else
           CompileMethodBody(ACtx, ATargetReg, StorageName,
             Entry.MethodNode, OP_CLASS_ADD_METHOD_CONST,
-            AHasSuper and (Entry.Name = PROP_CONSTRUCTOR));
+            AHasSuper and (Entry.Name = PROP_CONSTRUCTOR) and
+            not Entry.IsPrivate, Entry.IsPrivate);
         Continue;
       end;
       ccskGetter:
@@ -6193,10 +6213,10 @@ begin
         if Entry.IsStatic then
           AccessorFlags := ACCESSOR_FLAG_STATIC;
         if Entry.IsPrivate then
-          StorageName := '#slot:' + APrivatePrefix +
-            Copy(Entry.Name, 2, MaxInt);
+          StorageName := PrivateStorageKey(APrivatePrefix, Copy(Entry.Name, 2, MaxInt));
         CompileGetterBody(ACtx, ATargetReg, StorageName,
-          Entry.GetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+          Entry.GetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags,
+          Entry.IsPrivate);
         Continue;
       end;
       ccskSetter:
@@ -6206,10 +6226,10 @@ begin
         if Entry.IsStatic then
           AccessorFlags := AccessorFlags or ACCESSOR_FLAG_STATIC;
         if Entry.IsPrivate then
-          StorageName := '#slot:' + APrivatePrefix +
-            Copy(Entry.Name, 2, MaxInt);
+          StorageName := PrivateStorageKey(APrivatePrefix, Copy(Entry.Name, 2, MaxInt));
         CompileSetterBody(ACtx, ATargetReg, StorageName,
-          Entry.SetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+          Entry.SetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags,
+          Entry.IsPrivate);
         Continue;
       end;
     end;
@@ -6279,8 +6299,8 @@ begin
           if Elem.IsStatic then
             AccessorFlags := ACCESSOR_FLAG_STATIC;
           CompileGetterBody(ACtx, ATargetReg,
-            '#slot:' + APrivatePrefix + Elem.Name,
-            Elem.GetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+            PrivateStorageKey(APrivatePrefix, Elem.Name),
+            Elem.GetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags, True);
         end
         else if Elem.IsStatic then
           CompileGetterBody(ACtx, ATargetReg, Elem.Name,
@@ -6306,8 +6326,8 @@ begin
           if Elem.IsStatic then
             AccessorFlags := AccessorFlags or ACCESSOR_FLAG_STATIC;
           CompileSetterBody(ACtx, ATargetReg,
-            '#slot:' + APrivatePrefix + Elem.Name,
-            Elem.SetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+            PrivateStorageKey(APrivatePrefix, Elem.Name),
+            Elem.SetterNode, OP_DEFINE_ACCESSOR_CONST, AccessorFlags, True);
         end
         else if Elem.IsStatic then
           CompileSetterBody(ACtx, ATargetReg, Elem.Name,
@@ -6324,12 +6344,12 @@ begin
         begin
           if Elem.IsStatic then
             CompileMethodBody(ACtx, ATargetReg,
-              '#slot:' + APrivatePrefix + Elem.Name,
-              Elem.MethodNode, OP_DEFINE_STATIC_METHOD_CONST)
+              PrivateStorageKey(APrivatePrefix, Elem.Name),
+              Elem.MethodNode, OP_DEFINE_STATIC_METHOD_CONST, False, True)
           else
             CompileMethodBody(ACtx, ATargetReg,
-              '#slot:' + APrivatePrefix + Elem.Name,
-              Elem.MethodNode, OP_CLASS_ADD_METHOD_CONST);
+              PrivateStorageKey(APrivatePrefix, Elem.Name),
+              Elem.MethodNode, OP_CLASS_ADD_METHOD_CONST, False, True);
         end
         else if Elem.IsStatic then
           CompileMethodBody(ACtx, ATargetReg, Elem.Name,
@@ -6746,8 +6766,7 @@ begin
             AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
             ClassFieldInferredName(Elem));
         EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-          '#slot:' + ChildScope.ResolvePrivatePrefix +
-          AClassDef.FFieldOrder[I].Name);
+          PrivateStorageKey(ChildScope.ResolvePrivatePrefix, AClassDef.FFieldOrder[I].Name), True);
       end
       else if AClassDef.FFieldOrder[I].IsPrivate then
       begin
@@ -6755,8 +6774,7 @@ begin
           AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
           '#' + AClassDef.FFieldOrder[I].Name);
         EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-          '#slot:' + ChildScope.ResolvePrivatePrefix +
-          AClassDef.FFieldOrder[I].Name);
+          PrivateStorageKey(ChildScope.ResolvePrivatePrefix, AClassDef.FFieldOrder[I].Name), True);
       end
       else
       begin
@@ -6784,7 +6802,7 @@ begin
       ValReg := ChildScope.AllocateRegister;
       ACtx.CompileExpression(Entry.Value, ValReg);
       EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-        '#slot:' + ChildScope.ResolvePrivatePrefix + Entry.Key);
+        PrivateStorageKey(ChildScope.ResolvePrivatePrefix, Entry.Key), True);
       ChildScope.FreeRegister;
     end;
   end;
@@ -6917,8 +6935,8 @@ begin
     if (Elem.Kind <> cekAccessor) or not Elem.IsPrivate then
       Continue;
 
-    PrivateName := '#slot:' + ACtx.Scope.ResolvePrivatePrefix + Elem.Name;
-    NameIdx := ACtx.Template.AddConstantString(PrivateName);
+    PrivateName := PrivateStorageKey(ACtx.Scope.ResolvePrivatePrefix, Elem.Name);
+    NameIdx := ACtx.Template.AddConstantPrivateName(PrivateName);
 
     Flags := 2;
     if Elem.IsStatic then
@@ -7240,7 +7258,7 @@ begin
       CompileStaticFieldInitializerExpression(
         ACtx, ClassReg, StaticPropPair.Value, ValReg,
         '#' + StaticPropPair.Key);
-      KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix + StaticPropPair.Key);
+      KeyIdx := ACtx.Template.AddConstantPrivateName(PrivateStorageKey(PrivPrefix, StaticPropPair.Key));
       EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
         ClassReg, UInt16(KeyIdx), 0));
       EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
@@ -7283,8 +7301,7 @@ begin
         private auto-accessor is its own name. }
       if ClassDef.FElements[I].Kind = cekAccessor then
       begin
-        KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix +
-          ClassDef.FElements[I].AccessorStorageName);
+        KeyIdx := ACtx.Template.AddConstantPrivateName(PrivateStorageKey(PrivPrefix, ClassDef.FElements[I].AccessorStorageName));
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
           ClassReg, UInt16(KeyIdx), 0));
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
@@ -7292,8 +7309,8 @@ begin
       end
       else if ClassDef.FElements[I].IsPrivate then
       begin
-        KeyIdx := ACtx.Template.AddConstantString(
-          '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
+        KeyIdx := ACtx.Template.AddConstantPrivateName(
+          PrivateStorageKey(PrivPrefix, ClassDef.FElements[I].Name));
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
           ClassReg, UInt16(KeyIdx), 0));
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
@@ -7497,7 +7514,7 @@ begin
       CompileStaticFieldInitializerExpression(
         ACtx, ADest, StaticPropPair.Value, ValReg,
         '#' + StaticPropPair.Key);
-      KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix + StaticPropPair.Key);
+      KeyIdx := ACtx.Template.AddConstantPrivateName(PrivateStorageKey(PrivPrefix, StaticPropPair.Key));
       EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
         ADest, UInt16(KeyIdx), 0));
       EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
@@ -7540,8 +7557,7 @@ begin
         private auto-accessor is its own name. }
       if ClassDef.FElements[I].Kind = cekAccessor then
       begin
-        KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix +
-          ClassDef.FElements[I].AccessorStorageName);
+        KeyIdx := ACtx.Template.AddConstantPrivateName(PrivateStorageKey(PrivPrefix, ClassDef.FElements[I].AccessorStorageName));
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
           ADest, UInt16(KeyIdx), 0));
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
@@ -7549,8 +7565,8 @@ begin
       end
       else if ClassDef.FElements[I].IsPrivate then
       begin
-        KeyIdx := ACtx.Template.AddConstantString(
-          '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
+        KeyIdx := ACtx.Template.AddConstantPrivateName(
+          PrivateStorageKey(PrivPrefix, ClassDef.FElements[I].Name));
         EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
           ADest, UInt16(KeyIdx), 0));
         EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,

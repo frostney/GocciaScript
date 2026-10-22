@@ -207,6 +207,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
+  Goccia.PrivateNames,
   Goccia.Token,
   Goccia.Types.Enforcement,
   Goccia.Values.BigIntValue,
@@ -241,13 +242,17 @@ procedure CompileExpressionWithOptionalChainJumps(
   const ADest: UInt16; var AJumps: TGocciaCompilerJumpArray;
   var AJumpCount: Integer); forward;
 
+// The storage key of the private name #AName as the class body that
+// declares it sees it. It goes into the constant pool as a bckPrivateName
+// constant (AddConstantPrivateName), never as a string, so the VM treats it
+// as a private name and a string literal with the same text as a property key.
 function PrivateKey(const AScope: TGocciaCompilerScope;
   const AName: string): string;
 var
   Prefix: string;
 begin
   Prefix := AScope.ResolvePrivatePrefixForName(AName);
-  Result := '#slot:' + Prefix + AName;
+  Result := PrivateStorageKey(Prefix, AName);
 end;
 
 function InferredExpressionType(const AScope: TGocciaCompilerScope;
@@ -424,13 +429,15 @@ begin
       UInt8(Ord(Local.TypeHint)), 0));
 end;
 
+// AIsPrivateName: APropertyName is a private storage key (PrivateKey).
 procedure EmitLoadPropertyByName(const ACtx: TGocciaCompilationContext;
-  const ADest, AObjReg: UInt16; const APropertyName: string);
+  const ADest, AObjReg: UInt16; const APropertyName: string;
+  const AIsPrivateName: Boolean = False);
 var
   PropIdx: UInt16;
   KeyReg: UInt16;
 begin
-  PropIdx := ACtx.Template.AddConstantString(APropertyName);
+  PropIdx := ACtx.Template.AddConstantName(APropertyName, AIsPrivateName);
   if PropIdx <= High(UInt8) then
     EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ADest, AObjReg,
       UInt16(PropIdx)))
@@ -464,8 +471,10 @@ begin
   EndInstructionLocation(ACtx, Location);
 end;
 
+// AIsPrivateName: APropertyName is a private storage key (PrivateKey).
 procedure EmitStorePropertyByName(const ACtx: TGocciaCompilationContext;
-  const AObjReg: UInt16; const APropertyName: string; const AValueReg: UInt16);
+  const AObjReg: UInt16; const APropertyName: string; const AValueReg: UInt16;
+  const AIsPrivateName: Boolean = False);
 var
   PropIdx: UInt16;
   KeyReg: UInt16;
@@ -482,7 +491,7 @@ begin
     IndexOp := OP_SET_INDEX;
   end;
 
-  PropIdx := ACtx.Template.AddConstantString(APropertyName);
+  PropIdx := ACtx.Template.AddConstantName(APropertyName, AIsPrivateName);
   if PropIdx <= High(UInt8) then
     EmitInstruction(ACtx, EncodeABC(ConstOp, AObjReg,
       UInt16(PropIdx), AValueReg))
@@ -2723,7 +2732,7 @@ begin
     RegC := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Right, RegB);
     EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, RegC,
-      ACtx.Template.AddConstantString(PrivateKey(
+      ACtx.Template.AddConstantPrivateName(PrivateKey(
       ACtx.Scope, PrivateExpr.PrivateName))));
     EmitInstruction(ACtx, EncodeABC(OP_HAS_PROPERTY, ADest, RegB, RegC));
     ACtx.Scope.FreeRegister;
@@ -4173,7 +4182,8 @@ begin
       end;
     pdtStringProperty, pdtPrivateProperty:
       EmitStorePropertyByName(ACtx, UInt16(ATarget.ObjectReg),
-        ATarget.PropertyName, AValueReg);
+        ATarget.PropertyName, AValueReg,
+        ATarget.Kind = pdtPrivateProperty);
     pdtComputedProperty:
       EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx),
         UInt16(ATarget.ObjectReg), UInt16(ATarget.KeyReg), AValueReg));
@@ -4691,7 +4701,7 @@ begin
     EmitStorePropertyByName(ACtx, DestSlot,
       PrivateKey(ACtx.Scope,
         TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression.PrivateName),
-      ASrcReg);
+      ASrcReg, True);
     ACtx.Scope.FreeRegister;
   end;
 end;
@@ -5205,7 +5215,7 @@ begin
         ObjReg, AJumps, AJumpCount);
       if PrivateExpr.Optional then
         AddOptionalChainJump(ACtx, AJumps, AJumpCount, ObjReg);
-      PropIdx := ACtx.Template.AddConstantString(
+      PropIdx := ACtx.Template.AddConstantPrivateName(
         PrivateKey(ACtx.Scope, PrivateExpr.PrivateName));
       if PropIdx <= High(UInt8) then
         EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg,
@@ -5298,7 +5308,7 @@ begin
           ObjReg, LocalJumps, LocalJumpCount);
         if PrivateExpr.Optional then
           AddOptionalChainJump(ACtx, LocalJumps, LocalJumpCount, ObjReg);
-        PropIdx := ACtx.Template.AddConstantString(
+        PropIdx := ACtx.Template.AddConstantPrivateName(
           PrivateKey(ACtx.Scope, PrivateExpr.PrivateName));
         if PropIdx <= High(UInt8) then
           EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, BaseReg, ObjReg,
@@ -5540,7 +5550,7 @@ begin
     BaseReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(
       TGocciaPrivateMemberExpression(AExpr.Callee).ObjectExpr, ObjReg);
-    PropIdx := ACtx.Template.AddConstantString(
+    PropIdx := ACtx.Template.AddConstantPrivateName(
       PrivateKey(ACtx.Scope,
         TGocciaPrivateMemberExpression(AExpr.Callee).PrivateName));
     if PropIdx <= High(UInt8) then
@@ -7867,11 +7877,11 @@ begin
       RegResult := ACtx.Scope.AllocateRegister;
       ACtx.CompileExpression(PrivateExpr.ObjectExpr, ObjReg);
       EmitLoadPropertyByName(ACtx, RegResult, ObjReg,
-        PrivateKey(ACtx.Scope, PrivateExpr.PrivateName));
+        PrivateKey(ACtx.Scope, PrivateExpr.PrivateName), True);
       EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
         PostNumericOp, AKeepResult);
       EmitStorePropertyByName(ACtx, ObjReg,
-        PrivateKey(ACtx.Scope, PrivateExpr.PrivateName), RegResult);
+        PrivateKey(ACtx.Scope, PrivateExpr.PrivateName), RegResult, True);
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
       Exit;
@@ -8159,7 +8169,7 @@ begin
     if PrivateExpr.Optional then
       AddOptionalChainJump(ACtx, AJumps, AJumpCount, ObjReg);
     EmitLoadPropertyByName(ACtx, ADest, ObjReg,
-      PrivateKey(ACtx.Scope, PrivateExpr.PrivateName));
+      PrivateKey(ACtx.Scope, PrivateExpr.PrivateName), True);
     ACtx.Scope.FreeRegister;
     Exit;
   end;
@@ -8184,7 +8194,7 @@ begin
     AddOptionalChainJump(ACtx, NullishJumps, NullishJumpCount, ObjReg);
 
   EmitLoadPropertyByName(ACtx, ADest, ObjReg,
-    PrivateKey(ACtx.Scope, AExpr.PrivateName));
+    PrivateKey(ACtx.Scope, AExpr.PrivateName), True);
   if NullishJumpCount > 0 then
   begin
     EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
@@ -8208,7 +8218,7 @@ begin
   ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
   ACtx.CompileExpression(AExpr.Value, ValReg);
   EmitStorePropertyByName(ACtx, ObjReg,
-    PrivateKey(ACtx.Scope, AExpr.PrivateName), ValReg);
+    PrivateKey(ACtx.Scope, AExpr.PrivateName), ValReg, True);
   if ADest <> ValReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
   ACtx.Scope.FreeRegister;
@@ -8232,10 +8242,10 @@ begin
     CurReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
     PrivatePropKey := PrivateKey(ACtx.Scope, AExpr.PrivateName);
-    EmitLoadPropertyByName(ACtx, CurReg, ObjReg, PrivatePropKey);
+    EmitLoadPropertyByName(ACtx, CurReg, ObjReg, PrivatePropKey, True);
     JumpIdx := EmitJumpInstruction(ACtx, ShortCircuitJumpOp(AExpr.Operator), CurReg);
     ACtx.CompileExpression(AExpr.Value, CurReg);
-    EmitStorePropertyByName(ACtx, ObjReg, PrivatePropKey, CurReg);
+    EmitStorePropertyByName(ACtx, ObjReg, PrivatePropKey, CurReg, True);
     PatchJumpTarget(ACtx, JumpIdx);
     if ADest <> CurReg then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
@@ -8250,10 +8260,10 @@ begin
   ValReg := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
   PrivatePropKey := PrivateKey(ACtx.Scope, AExpr.PrivateName);
-  EmitLoadPropertyByName(ACtx, CurReg, ObjReg, PrivatePropKey);
+  EmitLoadPropertyByName(ACtx, CurReg, ObjReg, PrivatePropKey, True);
   ACtx.CompileExpression(AExpr.Value, ValReg);
   EmitInstruction(ACtx, EncodeABC(Op, CurReg, CurReg, ValReg));
-  EmitStorePropertyByName(ACtx, ObjReg, PrivatePropKey, CurReg);
+  EmitStorePropertyByName(ACtx, ObjReg, PrivatePropKey, CurReg, True);
   if ADest <> CurReg then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
   ACtx.Scope.FreeRegister;
