@@ -73,6 +73,12 @@ function NormalizeHTTPRequestURL(const AURL: string): string;
   network error). }
 function ResolveHTTPRedirectURL(const ABaseURL, ALocation: string): string;
 
+{ True when two absolute http(s) URLs have the same origin: the same scheme,
+  host and port. The comparison the client makes for a redirect hop, which
+  sends the caller's Authorization, Cookie and Proxy-Authorization only while
+  every hop so far stayed on the request's origin. Exposed for testing. }
+function IsSameHTTPOrigin(const AFromURL, AToURL: string): Boolean;
+
 implementation
 
 uses
@@ -95,6 +101,15 @@ const
   HTTP_CONNECTION_WORKER_STACK_SIZE = 1024 * 1024;
   MAX_HTTP_CONNECTION_WORKERS = 16;
   MAX_REDIRECTS = 20;
+  HTTP_STATUS_MOVED_PERMANENTLY = 301;
+  HTTP_STATUS_FOUND = 302;
+  HTTP_STATUS_SEE_OTHER = 303;
+  HTTP_STATUS_TEMPORARY_REDIRECT = 307;
+  HTTP_STATUS_PERMANENT_REDIRECT = 308;
+  REDIRECT_MODE_ERROR_MESSAGE =
+    'redirect refused: the request''s redirect mode is "error"';
+  REDIRECT_LIMIT_ERROR_MESSAGE =
+    'redirect limit exceeded: more than %d redirects';
   MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
   CRLF = #13#10;
   RECV_BUF_SIZE = 8192;
@@ -995,10 +1010,20 @@ begin
   Result := False;
 end;
 
+{ WHATWG Fetch: a redirect status is 301, 302, 303, 307 or 308. }
+function IsRedirectStatus(const AStatus: Integer): Boolean;
+begin
+  Result := (AStatus = HTTP_STATUS_MOVED_PERMANENTLY) or
+    (AStatus = HTTP_STATUS_FOUND) or (AStatus = HTTP_STATUS_SEE_OTHER) or
+    (AStatus = HTTP_STATUS_TEMPORARY_REDIRECT) or
+    (AStatus = HTTP_STATUS_PERMANENT_REDIRECT);
+end;
+
 function ReadResponse(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
   const AIsHead: Boolean; const ADeadlineNs: Int64;
-  const AMaxBodyBytes: Integer): TRawHTTPResponse;
+  const AMaxBodyBytes: Integer;
+  const ASkipRedirectBody: Boolean): TRawHTTPResponse;
 var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
@@ -1156,6 +1181,11 @@ begin
   // Don't read body for HEAD requests or 1xx/204/304 responses
   if AIsHead or (Result.StatusCode div 100 = 1) or
      (Result.StatusCode = 204) or (Result.StatusCode = 304) then
+    Exit;
+  { A redirect the caller will refuse whatever its body holds (redirect
+    mode "error") is refused from its status line and headers, without
+    waiting for a body. }
+  if ASkipRedirectBody and IsRedirectStatus(Result.StatusCode) then
     Exit;
 
   // Read body
@@ -1428,6 +1458,19 @@ begin
     raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
 end;
 
+{ HTML Standard, same origin: two tuple origins with the same scheme, host
+  and port. }
+function SameHTTPOrigin(const AFrom, ATo: THTTPParsedURL): Boolean;
+begin
+  Result := SameText(AFrom.Scheme, ATo.Scheme) and
+    SameText(AFrom.Host, ATo.Host) and (AFrom.Port = ATo.Port);
+end;
+
+function IsSameHTTPOrigin(const AFromURL, AToURL: string): Boolean;
+begin
+  Result := SameHTTPOrigin(ParseHTTPURL(AFromURL), ParseHTTPURL(AToURL));
+end;
+
 // ---------------------------------------------------------------------------
 // Core request logic
 // ---------------------------------------------------------------------------
@@ -1611,7 +1654,7 @@ begin
           raise;
         end;
         Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
-          MaxBodyBytes);
+          MaxBodyBytes, APolicy.RedirectMode = hrmError);
       finally
         CloseTransportSecurity(Transport);
       end;
@@ -1619,32 +1662,41 @@ begin
       SocketClose(Sock);
     end;
 
-    // Handle redirects
-    if (Raw.StatusCode >= 301) and (Raw.StatusCode <= 308) and
-       (Raw.StatusCode <> 304) and (Raw.StatusCode <> 305) then
+    { WHATWG Fetch, HTTP fetch: a redirect status is handled by the
+      request's redirect mode. "error" is a network error, "manual" answers
+      with the redirect response itself, and "follow" runs HTTP-redirect
+      fetch, which answers with the response when it has no Location. }
+    if IsRedirectStatus(Raw.StatusCode) and
+       (APolicy.RedirectMode <> hrmManual) then
     begin
-      Location := FindHeaderValue(Raw.Headers, 'location');
-      if (Location <> '') and (Redirects < AMaxRedirects) then
+      if APolicy.RedirectMode = hrmError then
+        raise EHTTPError.Create(REDIRECT_MODE_ERROR_MESSAGE);
+      { HTTP-redirect fetch: no Location header answers with the response;
+        a present one, even empty, is parsed against the response's URL. }
+      if HasHeader(Raw.Headers, 'location') then
       begin
-        Inc(Redirects);
-        Result.Redirected := True;
-
+        Location := FindHeaderValue(Raw.Headers, 'location');
         // WHATWG Fetch: Location parsed against the response's URL.
         CurrentURL := ResolveHTTPRedirectURL(CurrentURL, Location);
         NextParsed := ParseHTTPURL(CurrentURL);
+        { HTTP-redirect fetch: a request that has already been redirected
+          AMaxRedirects (20) times fails with a network error. }
+        if Redirects >= AMaxRedirects then
+          raise EHTTPError.CreateFmt(REDIRECT_LIMIT_ERROR_MESSAGE,
+            [AMaxRedirects]);
+        Inc(Redirects);
+        Result.Redirected := True;
+
         { Fetch removes Authorization once a redirect changes origin. Keep
           caller credentials off every later hop, even if it returns here. }
-        if not SameText(Parsed.Scheme, NextParsed.Scheme) or
-           not SameText(Parsed.Host, NextParsed.Host) or
-           (Parsed.Port <> NextParsed.Port) then
+        if not SameHTTPOrigin(Parsed, NextParsed) then
           SendCredentials := False;
 
-        // 303: change method to GET per RFC 7231
-        if Raw.StatusCode = 303 then
-        begin
+        { HTTP-redirect fetch: a 303 turns a request into GET unless it is
+          already GET or HEAD, so a HEAD request stays HEAD. }
+        if (Raw.StatusCode = HTTP_STATUS_SEE_OTHER) and (Method <> 'GET') and
+           not IsHead then
           Method := 'GET';
-          IsHead := False;
-        end;
 
         Continue;
       end;

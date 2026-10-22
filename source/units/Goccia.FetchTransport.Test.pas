@@ -139,6 +139,8 @@ type
     procedure TestRedirectURLMatchesDirect;
     procedure TestRedirectLocationResolvesAgainstResponseURL;
     procedure TestRequestURLIsParsed;
+    procedure TestRedirectModeReachesTransport;
+    procedure TestRedirectModesMatchDirect;
     procedure TestRequestURLIsParsedOnTheWire;
     procedure TestNonASCIIRequestURLIsEncodedOnTheWire;
     procedure TestRecordThenReplay;
@@ -391,6 +393,8 @@ begin
     'or direct', TestNonASCIIRequestURLIsEncodedOnTheWire);
   Test('a run recorded through the network replays without it',
     TestRecordThenReplay);
+  Test('redirect modes "manual" and "error" read the same, forwarded or ' +
+    'direct', TestRedirectModesMatchDirect);
   {$ELSE}
   Skip('a forwarded response reads as the built-in client''s does',
     TestForwardedMatchesDirect, LOOPBACK_ORIGIN_SKIP_REASON);
@@ -406,7 +410,11 @@ begin
     LOOPBACK_ORIGIN_SKIP_REASON);
   Skip('a run recorded through the network replays without it',
     TestRecordThenReplay, LOOPBACK_ORIGIN_SKIP_REASON);
+  Skip('redirect modes "manual" and "error" read the same, forwarded or ' +
+    'direct', TestRedirectModesMatchDirect, LOOPBACK_ORIGIN_SKIP_REASON);
   {$ENDIF}
+  Test('a transport receives the request''s redirect mode',
+    TestRedirectModeReachesTransport);
 end;
 
 procedure TFetchTransportTests.TestWithoutTransportUsesNetwork;
@@ -1941,6 +1949,101 @@ begin
   Expect<Integer>(Fake.RequestCount).ToBe(1);
   Expect<string>(Fake.Request(0).URL).ToBe('http://' + API_HOST + '/a/d?x=1');
 end;
+
+{ fetch()'s redirect option reaches the transport as the request's redirect
+  mode; without it the mode is "follow". }
+procedure TFetchTransportTests.TestRedirectModeReachesTransport;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := TextResponse(204, '');
+  RunWithTransport('fetch("' + API_URL + '");' +
+    'fetch("' + API_URL + '", { redirect: "follow" });' +
+    'fetch("' + API_URL + '", { redirect: "error" });' +
+    'fetch("' + API_URL + '", { redirect: "manual" });',
+    Transport, ApiCapabilities);
+  Expect<Integer>(Fake.RequestCount).ToBe(4);
+  Expect<Boolean>(Fake.Request(0).Redirect = hrmFollow).ToBe(True);
+  Expect<Boolean>(Fake.Request(1).Redirect = hrmFollow).ToBe(True);
+  Expect<Boolean>(Fake.Request(2).Redirect = hrmError).ToBe(True);
+  Expect<Boolean>(Fake.Request(3).Redirect = hrmManual).ToBe(True);
+end;
+
+{ WHATWG Fetch, HTTP fetch: under "manual" the redirect response is the
+  answer, and under "error" a redirect is a network error. The built-in
+  client and a transport forwarding through FetchOverNetwork read the same,
+  and neither requests the Location. }
+procedure TFetchTransportTests.TestRedirectModesMatchDirect;
+{$IFDEF UNIX}
+type
+  TModeCase = record
+    Mode: string;
+    Outcome: string;
+  end;
+const
+  CASES: array[0..1] of TModeCase = (
+    (Mode: 'manual'; Outcome: '302|Found|false|{base}/dir/page|false|/next'),
+    (Mode: 'error'; Outcome: 'TypeError: redirect refused: the request''s ' +
+      'redirect mode is "error"')
+  );
+var
+  Direct, Forwarded: TLoopbackOrigin;
+  Tape: TTape;
+  Script: string;
+  Capabilities: TGocciaCapabilities;
+  Transport: IGocciaFetchTransport;
+  I: Integer;
+
+  function ModeScript(const AOrigin: TLoopbackOrigin): string;
+  begin
+    Result := 'fetch("http://' + LOOPBACK_HOST + ':' +
+      IntToStr(AOrigin.Port) + '/dir/page", { redirect: "' + CASES[I].Mode +
+      '" }).then((r) => { globalThis.outcome = [r.status, r.statusText,' +
+      ' r.ok, r.url, r.redirected, r.headers.get("location")].join("|"); },' +
+      ' (e) => { globalThis.outcome = e.name + ": " + e.message; });';
+  end;
+
+  function Expected(const AOrigin: TLoopbackOrigin): string;
+  begin
+    Result := StringReplace(CASES[I].Outcome, '{base}', 'http://' +
+      LOOPBACK_HOST + ':' + IntToStr(AOrigin.Port), []);
+  end;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, LOOPBACK_HOST)
+    .Allow(gcNet, NET_PRIVATE_SCOPE);
+  for I := 0 to High(CASES) do
+  begin
+    Tape := TTape.Create;
+    Direct := TLoopbackOrigin.Create(1, False, '/next');
+    Forwarded := TLoopbackOrigin.Create(1, False, '/next');
+    try
+      Script := ModeScript(Direct);
+      Expect<string>(RunWithTransport(Script, nil, Capabilities))
+        .ToBe(Expected(Direct));
+      Transport := TRecordingTransport.Create(Tape);
+      Script := ModeScript(Forwarded);
+      Expect<string>(RunWithTransport(Script, Transport, Capabilities))
+        .ToBe(Expected(Forwarded));
+      Transport := nil;
+      Direct.WaitFor;
+      Forwarded.WaitFor;
+      Expect<string>(Direct.RequestLine(1)).ToBe('GET /dir/page HTTP/1.1');
+      Expect<string>(Forwarded.RequestLine(1)).ToBe('GET /dir/page HTTP/1.1');
+    finally
+      Direct.Free;
+      Forwarded.Free;
+      Tape.Free;
+    end;
+  end;
+end;
+{$ELSE}
+begin
+  // Registered as skipped on this platform.
+end;
+{$ENDIF}
 
 procedure TFetchTransportTests.TestRequestURLIsParsedOnTheWire;
 {$IFDEF UNIX}
