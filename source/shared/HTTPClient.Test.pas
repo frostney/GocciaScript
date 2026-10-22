@@ -1461,6 +1461,18 @@ begin
   finally
     Server.Free;
   end;
+  { Refused from its status line and headers: a body cut short (or one a
+    server never finishes) is never waited for. }
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 307 Temporary Redirect'#13#10'Location: /next'#13#10 +
+      'Content-Length: 1000'#13#10'Connection: close'#13#10#13#10'part']);
+  try
+    Expect<string>(FetchStart(Server, RedirectPolicy(hrmError), Response))
+      .ToBe(REFUSED);
+    Server.WaitFor;
+  finally
+    Server.Free;
+  end;
   // A response that is not a redirect is answered as usual.
   Server := TCannedResponseServer.Create([FINAL_OK]);
   try

@@ -79,8 +79,8 @@ type
       THTTPHostCheck. }
     HostCheck: THTTPHostCheck;
     { What the request does with a redirect response; see
-      THTTPRedirectMode. hrmFollow is the zero value, so a policy built
-      field by field still follows redirects. }
+      THTTPRedirectMode. DefaultHTTPPolicy sets hrmFollow; start from it
+      rather than from an uninitialized record. }
     RedirectMode: THTTPRedirectMode;
   end;
 

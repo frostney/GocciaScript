@@ -41,7 +41,8 @@ the request's URL, as in Node.js and Bun. It is not an opaque-redirect
 filtered response.
 
 **"error" refuses every redirect status, one without a `Location` too,**
-before any further request, with a network error (`TypeError`).
+from its status line and headers, before its body is read or any further
+request is made, with a network error (`TypeError`).
 
 **"follow" fails on the twenty-first redirect.** Twenty redirects are
 followed; the twenty-first redirect response, once its `Location` resolves to

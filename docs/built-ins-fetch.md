@@ -26,7 +26,7 @@ The `options` object supports:
 A redirect status is 301, 302, 303, 307 or 308; any other status, a 300 or 306 with a `Location` included, is the response. What a redirect does depends on the `redirect` option ([WHATWG Fetch, HTTP fetch](https://fetch.spec.whatwg.org/#http-fetch); [ADR 0156](adr/0156-fetch-honours-the-redirect-mode.md)):
 
 - `"follow"` follows up to 20 redirects. A twenty-first rejects with `TypeError: redirect limit exceeded: more than 20 redirects`. A redirect response without a `Location` is the response. The method stays as it was on every hop, a `HEAD` after a 303 included.
-- `"error"` rejects any redirect, one without a `Location` included, with `TypeError: redirect refused: the request's redirect mode is "error"`.
+- `"error"` rejects any redirect, one without a `Location` included, with `TypeError: redirect refused: the request's redirect mode is "error"`, as soon as its status line and headers arrive, without reading its body.
 - `"manual"` resolves with the redirect response itself: its status, `statusText`, headers (`Location` included) and body, `redirected` false, and `url` the request's URL. A browser answers with an opaque-redirect response (status 0, no headers) here; GocciaScript has no origin model to protect, so it answers as Node.js and Bun do.
 
 `Authorization`, `Cookie` and `Proxy-Authorization` headers the script sets are sent only while the redirects stay on the request's origin (scheme, host and port). The first redirect to another origin drops them for that hop and every later one, even one that returns to the original origin. An HTTPS-to-HTTP redirect changes the scheme, so the credentials never travel without TLS. Other headers are sent on every hop.

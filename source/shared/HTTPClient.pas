@@ -1010,10 +1010,20 @@ begin
   Result := False;
 end;
 
+{ WHATWG Fetch: a redirect status is 301, 302, 303, 307 or 308. }
+function IsRedirectStatus(const AStatus: Integer): Boolean;
+begin
+  Result := (AStatus = HTTP_STATUS_MOVED_PERMANENTLY) or
+    (AStatus = HTTP_STATUS_FOUND) or (AStatus = HTTP_STATUS_SEE_OTHER) or
+    (AStatus = HTTP_STATUS_TEMPORARY_REDIRECT) or
+    (AStatus = HTTP_STATUS_PERMANENT_REDIRECT);
+end;
+
 function ReadResponse(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
   const AIsHead: Boolean; const ADeadlineNs: Int64;
-  const AMaxBodyBytes: Integer): TRawHTTPResponse;
+  const AMaxBodyBytes: Integer;
+  const ASkipRedirectBody: Boolean): TRawHTTPResponse;
 var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
@@ -1171,6 +1181,11 @@ begin
   // Don't read body for HEAD requests or 1xx/204/304 responses
   if AIsHead or (Result.StatusCode div 100 = 1) or
      (Result.StatusCode = 204) or (Result.StatusCode = 304) then
+    Exit;
+  { A redirect the caller will refuse whatever its body holds (redirect
+    mode "error") is refused from its status line and headers, without
+    waiting for a body. }
+  if ASkipRedirectBody and IsRedirectStatus(Result.StatusCode) then
     Exit;
 
   // Read body
@@ -1443,15 +1458,6 @@ begin
     raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
 end;
 
-{ WHATWG Fetch: a redirect status is 301, 302, 303, 307 or 308. }
-function IsRedirectStatus(const AStatus: Integer): Boolean;
-begin
-  Result := (AStatus = HTTP_STATUS_MOVED_PERMANENTLY) or
-    (AStatus = HTTP_STATUS_FOUND) or (AStatus = HTTP_STATUS_SEE_OTHER) or
-    (AStatus = HTTP_STATUS_TEMPORARY_REDIRECT) or
-    (AStatus = HTTP_STATUS_PERMANENT_REDIRECT);
-end;
-
 { HTML Standard, same origin: two tuple origins with the same scheme, host
   and port. }
 function SameHTTPOrigin(const AFrom, ATo: THTTPParsedURL): Boolean;
@@ -1648,7 +1654,7 @@ begin
           raise;
         end;
         Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
-          MaxBodyBytes);
+          MaxBodyBytes, APolicy.RedirectMode = hrmError);
       finally
         CloseTransportSecurity(Transport);
       end;
