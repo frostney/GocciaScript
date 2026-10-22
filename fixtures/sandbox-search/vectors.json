@@ -323,6 +323,15 @@
       ]
     },
     {
+      "name": "the alternatives cap is per pattern",
+      "tree": "project",
+      "pattern": [
+        "{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}.md",
+        "x{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}"
+      ],
+      "expect": []
+    },
+    {
       "name": "several patterns are merged, sorted and deduplicated",
       "tree": "project",
       "pattern": [

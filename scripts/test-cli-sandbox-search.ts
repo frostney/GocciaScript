@@ -206,6 +206,23 @@ for (const treeName of Object.keys(vectors.trees)) {
   }
 }
 
+// -- a deep tree is walked without native recursion --------------------------
+
+{
+  const body = [
+    "const depth = 3000;",
+    "fs.mkdirSync(\"/\" + Array.from({ length: depth }, () => \"d\").join(\"/\"), { recursive: true });",
+    "console.log(JSON.stringify({ all: fs.globSync(\"**\").length, deepest: fs.globSync(\"**/d\").length }));",
+  ].join("\n");
+  try {
+    const out = JSON.parse(runInTree({ "/readme.md": "x\n" }, body, ["--max-fs-nodes=8192"]).trim());
+    deepStrictEqual(out, { all: 3001, deepest: 3000 });
+    console.log("deep tree: ok");
+  } catch (error) {
+    failures.push(`deep tree: ${(error as Error).message}`);
+  }
+}
+
 // -- a refused reservation leaves the memory ledger as it was ------------------
 
 {

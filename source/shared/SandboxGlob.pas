@@ -365,19 +365,26 @@ begin
     RaiseExpandedTooLong;
   Expansion := Default(TSandboxGlobExpansion);
   Expansion.Progress := AProgress;
+  Count := 0;
   for PatternIndex := 0 to High(APatterns) do
+  begin
+    { The alternatives cap is per pattern; the expanded length is shared by
+      the call. }
+    Expansion.Results := nil;
+    Expansion.Count := 0;
     ExpandBraces(StringReplace(APatterns[PatternIndex],
       ALTERNATE_PATH_SEPARATOR, PATH_SEPARATOR, [rfReplaceAll]), Expansion);
-  Count := 0;
-  SetLength(Result, Expansion.Count);
-  for Index := 0 to Expansion.Count - 1 do
-  begin
-    if Assigned(AProgress) then
-      AProgress;
-    if CompileAlternative(Expansion.Results[Index], Compiled) then
+    for Index := 0 to Expansion.Count - 1 do
     begin
-      Result[Count] := Compiled;
-      Inc(Count);
+      if Assigned(AProgress) then
+        AProgress;
+      if CompileAlternative(Expansion.Results[Index], Compiled) then
+      begin
+        if Count >= Length(Result) then
+          SetLength(Result, Count * 2 + 4);
+        Result[Count] := Compiled;
+        Inc(Count);
+      end;
     end;
   end;
   SetLength(Result, Count);
@@ -618,6 +625,11 @@ end;
 type
   TSandboxGlobWalkMode = (gwmGlob, gwmFiles);
 
+  TSandboxGlobPendingDirectory = record
+    Path: string;
+    Names: TStringArray;
+  end;
+
   TSandboxGlobWalker = class
   private
     FFileSystem: TSandboxVirtualFileSystem;
@@ -632,6 +644,8 @@ type
     FPathCount: Integer;
     FFiles: TSandboxSearchFileArray;
     FFileCount: Integer;
+    FPending: array of TSandboxGlobPendingDirectory;
+    FPendingCount: Integer;
     procedure AddPath(const APath: string);
     procedure AddFile(const APath: string; const ASize: Int64);
     function IsUnderCwd(const ANames: TStringArray): Boolean;
@@ -745,6 +759,8 @@ begin
   end;
 end;
 
+{ Lists one directory; subdirectories to enter go on the walker's own stack
+  rather than the native one, so a deep tree cannot exhaust it. }
 procedure TSandboxGlobWalker.Visit(const ADirectory: string;
   const ANames: TStringArray);
 var
@@ -756,12 +772,12 @@ var
 begin
   Entries := FFileSystem.SnapshotList(ADirectory);
   Depth := Length(ANames);
-  Names := Copy(ANames);
-  SetLength(Names, Depth + 1);
   for Index := 0 to High(Entries) do
   begin
     if Assigned(FProgress) then
       FProgress;
+    Names := Copy(ANames);
+    SetLength(Names, Depth + 1);
     Names[Depth] := Entries[Index].Name;
     IsDirectory := Entries[Index].Kind = nkDirectory;
     UnderCwd := IsUnderCwd(Names);
@@ -791,18 +807,33 @@ begin
         AddFile(Entries[Index].Path, Entries[Index].Size);
     end;
     if IsDirectory and (FAnyAbsolute or UnderCwd or OnCwdPath(Names)) then
-      Visit(Entries[Index].Path, Names);
+    begin
+      if FPendingCount >= Length(FPending) then
+        SetLength(FPending, FPendingCount * 2 + 16);
+      FPending[FPendingCount].Path := Entries[Index].Path;
+      FPending[FPendingCount].Names := Names;
+      Inc(FPendingCount);
+    end;
   end;
 end;
 
 procedure TSandboxGlobWalker.Run;
 var
+  Directory: TSandboxGlobPendingDirectory;
   Paths: TStringArray;
   Index, Count: Integer;
 begin
   FPathCount := 0;
   FFileCount := 0;
+  FPendingCount := 0;
   Visit(PATH_SEPARATOR, nil);
+  while FPendingCount > 0 do
+  begin
+    Dec(FPendingCount);
+    Directory := FPending[FPendingCount];
+    FPending[FPendingCount] := Default(TSandboxGlobPendingDirectory);
+    Visit(Directory.Path, Directory.Names);
+  end;
   SetLength(FPaths, FPathCount);
   SetLength(FFiles, FFileCount);
   if FMode = gwmGlob then
