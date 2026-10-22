@@ -2618,6 +2618,28 @@ begin
   Result := True;
 end;
 
+// True when a store to the local at ALocalIdx can write its register directly
+// instead of going through OP_SET_LOCAL: it is an initialized, mutable,
+// unexported, untyped binding of this function that no closure reaches, here
+// or later in a loop, and no direct eval can rebind. OP_SET_LOCAL then has no
+// cell to update, no TDZ or const check to make and no export to refresh.
+function LocalAcceptsDirectRegisterWrite(const ACtx: TGocciaCompilationContext;
+  const ALocalIdx: Integer): Boolean;
+var
+  Local: TGocciaCompilerLocal;
+begin
+  Result := False;
+  if (ALocalIdx < 0) or ACtx.OptimizationOptions.PreserveCoverageShape or
+     ACtx.Scope.MutableLocalsMayLeaveRegisters then
+    Exit;
+  Local := ACtx.Scope.GetLocal(ALocalIdx);
+  Result := Local.IsInitialized and not Local.IsConst and
+    not Local.IsCaptured and not Local.IsStrictlyTyped and
+    not Local.IsGlobalBacked and not Local.IsImportBinding and
+    not Local.IsNonStrictImmutable and (Local.ExportNameCount = 0) and
+    not ShouldTryWithBinding(ACtx.Scope, Local.Name);
+end;
+
 // The register an uncaptured `this` lives in, usable as an instruction operand
 // in place of a copy. Emits the derived-constructor initialization check that
 // evaluating `this` performs, at the point where the operand is evaluated.
@@ -7466,16 +7488,27 @@ begin
       Exit;
     end;
     ValType := ExpressionType(ACtx.Scope, AExpr.Value);
-    RegTemp := ACtx.Scope.AllocateRegister;
     if IsKnownNumeric(LocalType) and
        IsKnownNumeric(ValType) and
        IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        TryFloatOp(ArithOp, FloatOp) then
+      Op := FloatOp;
+    // A binding that only ever lives in its register takes the result
+    // directly: OP_SET_LOCAL would store it to that register and nowhere
+    // else (see LocalAcceptsDirectRegisterWrite).
+    if LocalAcceptsDirectRegisterWrite(ACtx, LocalIdx) then
     begin
-      EmitInstruction(ACtx, EncodeABC(FloatOp, RegTemp, RegOld, RegVal))
-    end
-    else
-      EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
+      EmitInstruction(ACtx, EncodeABC(Op, Slot, RegOld, RegVal));
+      ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
+      if ANeedsResult and (ADest <> Slot) then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
+      ACtx.Scope.FreeRegister;
+      if OwnsRegOld then
+        ACtx.Scope.FreeRegister;
+      Exit;
+    end;
+    RegTemp := ACtx.Scope.AllocateRegister;
+    EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
     ResultType := sltUntyped;
     if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
