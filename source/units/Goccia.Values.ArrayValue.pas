@@ -64,6 +64,8 @@ type
       const AValue: TGocciaValue): Boolean;
     function TryStoreElementFast(const AIndex: Integer;
       const AValue: TGocciaValue): Boolean;
+    function TryFillHoleFast(const AIndex: Integer;
+      const AValue: TGocciaValue): Boolean;
     procedure SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -1497,9 +1499,16 @@ begin
     TrySetDenseElementFast, and a hole of an extensible array without index
     descriptors becomes an own data property when the prototype chain cannot
     intercept the store. Anything else declines. No managed locals. }
-  Result := TrySetDenseElementFast(AIndex, AValue);
-  if Result then
-    Exit;
+  Result := TrySetDenseElementFast(AIndex, AValue) or
+    TryFillHoleFast(AIndex, AValue);
+end;
+
+// The hole half of TryStoreElementFast, for a caller that has already tried
+// TrySetDenseElementFast. No managed locals.
+function TGocciaArrayValue.TryFillHoleFast(const AIndex: Integer;
+  const AValue: TGocciaValue): Boolean;
+begin
+  Result := False;
   if (AIndex < 0) or (AIndex >= FElements.Count) or
      (FProperties.Count <> 0) or FFrozen or not FExtensible then
     Exit;

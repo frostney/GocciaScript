@@ -9386,7 +9386,7 @@ procedure TGocciaVM.ExecSetComputedProperty(const ATargetIndex: Integer;
   const AOptions: TGocciaComputedAccessOptions);
 var
   FastIndex: Integer;
-  Target: TGocciaValue;
+  Target, StoredValue: TGocciaValue;
 begin
   // Element writes that resolve without a property key. This procedure must
   // keep no managed locals: that is what makes these paths cheap. Everything
@@ -9410,11 +9410,15 @@ begin
             (AKeyReg.IntValue >= 0) and
             (AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count) then
     begin
-      // Overwriting a dense array element. The array declines when the slot is
-      // a hole or the store needs the complete [[Set]]; the value boxed here
-      // is then simply dropped and the generic core boxes its own.
+      // Storing a dense array element, or filling a hole when no prototype can
+      // intercept the store. The array declines when the store needs the
+      // complete [[Set]]; the value boxed here is then simply dropped and the
+      // generic core boxes its own.
+      StoredValue := RegisterToValue(AValueReg);
       if TGocciaArrayValue(Target).TrySetDenseElementFast(AKeyReg.IntValue,
-           RegisterToValue(AValueReg)) then
+           StoredValue) or
+         TGocciaArrayValue(Target).TryFillHoleFast(AKeyReg.IntValue,
+           StoredValue) then
         Exit;
     end;
   end;
