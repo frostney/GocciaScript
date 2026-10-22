@@ -24,6 +24,8 @@ const
   DEFAULT_SANDBOX_GREP_MAX_RESULTS = 1000;
   { No byte limit: the files' own sizes bound the read. }
   SANDBOX_GREP_NO_BYTE_LIMIT = -1;
+  { More context than any file has lines; larger requests are clamped. }
+  MAX_SANDBOX_GREP_CONTEXT = MaxInt div 4;
 
 type
   TGocciaSandboxGrepOptions = record
@@ -85,6 +87,11 @@ const
     decoded subject costs four more. }
   BYTES_PER_CODE_UNIT = SizeOf(Char);
   REGEXP_INPUT_BYTES_PER_CODE_UNIT = SizeOf(Cardinal);
+  { A file's raw byte, up to two decoder buffer bytes and two bytes of the
+    decoded copy. }
+  DECODE_BYTES_PER_BYTE = 1 + 2 * BYTES_PER_CODE_UNIT;
+  { A line's start and length. }
+  LINE_INDEX_BYTES = 2 * SizeOf(Integer);
 
 function EscapeLiteral(const AText: string): string;
 var
@@ -116,19 +123,31 @@ type
     Count: Integer;
   end;
 
-{ Lines split at LF; a CR before the LF and a final LF are not content. }
-procedure SplitLines(const AText: string; const AFirst: Integer;
+  TSandboxGrepFailureTable = array of Integer;
+
+{ The number of lines SplitLines finds, so its arrays are sized (and their
+  memory reserved) exactly. }
+function CountLines(const AText: string; const AFirst: Integer): Integer;
+var
+  Index: Integer;
+begin
+  Result := 0;
+  for Index := AFirst to Length(AText) do
+    if AText[Index] = LINE_FEED then
+      Inc(Result);
+  if (Length(AText) >= AFirst) and (AText[Length(AText)] <> LINE_FEED) then
+    Inc(Result);
+end;
+
+{ Lines split at LF; a CR before the LF, a CR ending the last line and a
+  final LF are not content. }
+procedure SplitLines(const AText: string; const AFirst, ACount: Integer;
   out ALines: TSandboxGrepLines);
 var
   Index, Start, LineLength: Integer;
 
   procedure Add(const AStart, ALength: Integer);
   begin
-    if ALines.Count >= Length(ALines.Starts) then
-    begin
-      SetLength(ALines.Starts, ALines.Count * 2 + 16);
-      SetLength(ALines.Lengths, ALines.Count * 2 + 16);
-    end;
     ALines.Starts[ALines.Count] := AStart;
     ALines.Lengths[ALines.Count] := ALength;
     Inc(ALines.Count);
@@ -136,6 +155,8 @@ var
 
 begin
   ALines := Default(TSandboxGrepLines);
+  SetLength(ALines.Starts, ACount);
+  SetLength(ALines.Lengths, ACount);
   Start := AFirst;
   for Index := AFirst to Length(AText) do
     if AText[Index] = LINE_FEED then
@@ -155,6 +176,50 @@ begin
   end;
 end;
 
+{ Knuth-Morris-Pratt failure links for a literal search that is linear in
+  the line, whatever the pattern. }
+function BuildFailureTable(const APattern: string): TSandboxGrepFailureTable;
+var
+  Index, Matched: Integer;
+begin
+  Result := nil;
+  SetLength(Result, Length(APattern) + 1);
+  Matched := 0;
+  for Index := 2 to Length(APattern) do
+  begin
+    while (Matched > 0) and (APattern[Index] <> APattern[Matched + 1]) do
+      Matched := Result[Matched];
+    if APattern[Index] = APattern[Matched + 1] then
+      Inc(Matched);
+    Result[Index] := Matched;
+  end;
+end;
+
+{ The 1-based column of the first occurrence of APattern in ALength code
+  units of AText from AStart, or 0. Polls the run's limits as it goes. }
+function FindLiteral(const AText: string; const AStart, ALength: Integer;
+  const APattern: string; const AFailure: TSandboxGrepFailureTable): Integer;
+const
+  POLL_MASK = $FFFF;
+var
+  Index, Matched: Integer;
+begin
+  Matched := 0;
+  for Index := 0 to ALength - 1 do
+  begin
+    if (Index and POLL_MASK) = POLL_MASK then
+      CheckNativeWork;
+    while (Matched > 0) and
+          (AText[AStart + Index] <> APattern[Matched + 1]) do
+      Matched := AFailure[Matched];
+    if AText[AStart + Index] = APattern[Matched + 1] then
+      Inc(Matched);
+    if Matched = Length(APattern) then
+      Exit(Index - Length(APattern) + 2);
+  end;
+  Result := 0;
+end;
+
 function SandboxGrep(const AFileSystem: TSandboxVirtualFileSystem;
   const AFiles: TSandboxSearchFileArray;
   const AOptions: TGocciaSandboxGrepOptions): TGocciaSandboxGrepResult;
@@ -163,9 +228,10 @@ var
   CompiledProgram: TRegExpProgram;
   MatchResult: TGocciaRegExpMatchResult;
   Literal: Boolean;
+  Failure: TSandboxGrepFailureTable;
   FileIndex, LineIndex, ContextIndex, Column, Count, ErrorOffset,
-    First, ContextStart, ContextEnd: Integer;
-  BytesRead, TextBytes, LineBytes, KeptBytes: Int64;
+    First, ContextStart, ContextEnd, LineCount: Integer;
+  BytesRead, TextBytes, LineBytes, KeptBytes, FailureBytes, IndexBytes: Int64;
   Bytes: TBytes;
   Lines: TSandboxGrepLines;
   Match: TGocciaSandboxGrepMatch;
@@ -197,9 +263,18 @@ begin
     end;
   end;
 
+  FailureBytes := 0;
+  if Literal then
+  begin
+    FailureBytes := CheckedNativeByteSize(Int64(Length(AOptions.Pattern)) + 1,
+      SizeOf(Integer));
+    ReserveNativeBytes(FailureBytes);
+  end;
   Count := 0;
   BytesRead := 0;
   try
+    if Literal then
+      Failure := BuildFailureTable(AOptions.Pattern);
     for FileIndex := 0 to High(AFiles) do
     begin
       CheckNativeWork;
@@ -211,10 +286,12 @@ begin
       end;
       Inc(BytesRead, AFiles[FileIndex].Size);
 
-      { The raw bytes, then their UTF-16 decoding, are held while the file
-        is searched. }
-      TextBytes := AFiles[FileIndex].Size * (1 + BYTES_PER_CODE_UNIT);
+      { Held while the file is searched: its raw bytes, the decoder's buffer
+        and the decoded text it copies out, then the line index. }
+      TextBytes := CheckedNativeByteSize(AFiles[FileIndex].Size,
+        DECODE_BYTES_PER_BYTE);
       ReserveNativeBytes(TextBytes);
+      IndexBytes := 0;
       try
         Bytes := AFileSystem.SnapshotReadAllBytes(AFiles[FileIndex].Path);
         if ContainsNul(Bytes) or not TryDecodeUTF8(Bytes, Text,
@@ -227,17 +304,21 @@ begin
         First := 1;
         if (Length(Text) > 0) and (Text[1] = BYTE_ORDER_MARK) then
           First := 2;
-        SplitLines(Text, First, Lines);
+        LineCount := CountLines(Text, First);
+        IndexBytes := CheckedNativeByteSize(LineCount, LINE_INDEX_BYTES);
+        ReserveNativeBytes(IndexBytes);
+        SplitLines(Text, First, LineCount, Lines);
         for LineIndex := 0 to Lines.Count - 1 do
         begin
-          if (LineIndex and $FF) = 0 then
-            CheckNativeWork;
-          Line := LineAt(LineIndex);
+          CheckNativeWork;
           if Literal then
-            Column := Pos(AOptions.Pattern, Line)
+            Column := FindLiteral(Text, Lines.Starts[LineIndex],
+              Lines.Lengths[LineIndex], AOptions.Pattern, Failure)
           else
           begin
-            LineBytes := Int64(Length(Line)) * REGEXP_INPUT_BYTES_PER_CODE_UNIT;
+            Line := LineAt(LineIndex);
+            LineBytes := Int64(Length(Line)) *
+              (REGEXP_INPUT_BYTES_PER_CODE_UNIT + BYTES_PER_CODE_UNIT);
             ReserveNativeBytes(LineBytes);
             try
               try
@@ -265,8 +346,8 @@ begin
           Match.Path := AFiles[FileIndex].Path;
           Match.Line := LineIndex + 1;
           Match.Column := Column;
-          Match.Text := Line;
-          KeptBytes := Int64(Length(Line)) * BYTES_PER_CODE_UNIT;
+          Match.Text := LineAt(LineIndex);
+          KeptBytes := Int64(Length(Match.Text)) * BYTES_PER_CODE_UNIT;
           if AOptions.Context > 0 then
           begin
             ContextStart := LineIndex - AOptions.Context;
@@ -300,15 +381,19 @@ begin
       finally
         Text := '';
         Lines := Default(TSandboxGrepLines);
+        ReleaseNativeBytes(IndexBytes);
         ReleaseNativeBytes(TextBytes);
       end;
       if Result.Truncated then
         Break;
     end;
   except
+    ReleaseNativeBytes(FailureBytes);
     ReleaseNativeBytes(Result.ReservedBytes);
     raise;
   end;
+  Failure := nil;
+  ReleaseNativeBytes(FailureBytes);
   SetLength(Result.Matches, Count);
 end;
 

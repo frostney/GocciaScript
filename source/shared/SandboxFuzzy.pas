@@ -21,9 +21,14 @@ type
 
   TSandboxFuzzyMatchArray = array of TSandboxFuzzyMatch;
 
-{ Scores APath against a non-empty AQuery; False when the query's
-  characters do not all appear in order. }
-function TrySandboxFuzzyMatch(const APath, AQuery: string;
+{ The query with ASCII letters folded to lower case, as
+  TrySandboxFuzzyMatch expects it: fold once, then match every path. }
+function FoldSandboxFuzzyQuery(const AQuery: string): string;
+
+{ Scores APath against a non-empty query that FoldSandboxFuzzyQuery folded;
+  False when the query's characters do not all appear in order. The work is
+  linear in the path. }
+function TrySandboxFuzzyMatch(const APath, AFoldedQuery: string;
   out AMatch: TSandboxFuzzyMatch): Boolean;
 
 { Highest score first, then the shorter path, then path order. }
@@ -116,33 +121,39 @@ begin
     Result := C;
 end;
 
-function TrySandboxFuzzyMatch(const APath, AQuery: string;
+function FoldSandboxFuzzyQuery(const AQuery: string): string;
+var
+  Index: Integer;
+begin
+  Result := AQuery;
+  for Index := 1 to Length(Result) do
+    Result[Index] := FoldCase(Result[Index]);
+end;
+
+function TrySandboxFuzzyMatch(const APath, AFoldedQuery: string;
   out AMatch: TSandboxFuzzyMatch): Boolean;
 var
-  Query: string;
   QueryIndex, Index, StartIndex, EndIndex, Score, Consecutive, FirstBonus,
     Bonus, Count: Integer;
   InGap: Boolean;
   Previous, Current: TSandboxFuzzyCharacterClass;
 begin
   AMatch := Default(TSandboxFuzzyMatch);
-  if AQuery = '' then
+  { A query longer than the path cannot be a subsequence of it. }
+  if (AFoldedQuery = '') or (Length(AFoldedQuery) > Length(APath)) then
     Exit(False);
-  Query := AQuery;
-  for Index := 1 to Length(Query) do
-    Query[Index] := FoldCase(Query[Index]);
 
   { Forwards: the first position where every query character was seen. }
   QueryIndex := 1;
   StartIndex := 0;
   EndIndex := 0;
   for Index := 1 to Length(APath) do
-    if FoldCase(APath[Index]) = Query[QueryIndex] then
+    if FoldCase(APath[Index]) = AFoldedQuery[QueryIndex] then
     begin
       if StartIndex = 0 then
         StartIndex := Index;
       Inc(QueryIndex);
-      if QueryIndex > Length(Query) then
+      if QueryIndex > Length(AFoldedQuery) then
       begin
         EndIndex := Index;
         Break;
@@ -152,9 +163,9 @@ begin
     Exit(False);
 
   { Backwards: the latest start that still holds the whole query. }
-  QueryIndex := Length(Query);
+  QueryIndex := Length(AFoldedQuery);
   for Index := EndIndex downto StartIndex do
-    if FoldCase(APath[Index]) = Query[QueryIndex] then
+    if FoldCase(APath[Index]) = AFoldedQuery[QueryIndex] then
     begin
       Dec(QueryIndex);
       if QueryIndex = 0 then
@@ -165,7 +176,7 @@ begin
     end;
 
   { Score the range, matching greedily forwards. }
-  SetLength(AMatch.Positions, Length(Query));
+  SetLength(AMatch.Positions, Length(AFoldedQuery));
   Count := 0;
   QueryIndex := 1;
   Score := 0;
@@ -179,8 +190,8 @@ begin
   for Index := StartIndex to EndIndex do
   begin
     Current := CharacterClassOf(APath[Index]);
-    if (QueryIndex <= Length(Query)) and
-       (FoldCase(APath[Index]) = Query[QueryIndex]) then
+    if (QueryIndex <= Length(AFoldedQuery)) and
+       (FoldCase(APath[Index]) = AFoldedQuery[QueryIndex]) then
     begin
       AMatch.Positions[Count] := Index - 1;
       Inc(Count);

@@ -182,6 +182,30 @@ for (const treeName of Object.keys(vectors.trees)) {
   }
 }
 
+// -- adversarial inputs stay cheap ---------------------------------------------
+
+{
+  const body = [
+    "fs.writeFileSync(\"/long.txt\", \"a\".repeat(400000) + \"\\n\");",
+    "const started = Date.now();",
+    "const literal = grep(\"a\".repeat(200000) + \"b\", { glob: \"long.txt\" }).matches.length;",
+    "const fuzzy = fuzzyFind(\"q\".repeat(1000000)).matches.length;",
+    "let glob = \"\";",
+    "try { fs.globSync(\"{a,b}\".repeat(10) + \"x\".repeat(20000)); } catch (error) { glob = error.name; }",
+    "let long = \"\";",
+    "try { fs.globSync(\"x\".repeat(1000000)); } catch (error) { long = error.name; }",
+    "console.log(JSON.stringify({ literal, fuzzy, glob, long }));",
+  ].join("\n");
+  try {
+    const startedAt = Date.now();
+    const out = JSON.parse(runInTree({ "/readme.md": "x\n" }, body, ["--timeout=30000"]).trim());
+    deepStrictEqual(out, { literal: 0, fuzzy: 0, glob: "TypeError", long: "TypeError" });
+    console.log(`adversarial inputs: ok (${Date.now() - startedAt} ms)`);
+  } catch (error) {
+    failures.push(`adversarial inputs: ${(error as Error).message}`);
+  }
+}
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} failure(s):`);
   for (const failure of failures) console.error(`  - ${failure}`);

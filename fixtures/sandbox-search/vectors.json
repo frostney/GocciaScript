@@ -30,7 +30,10 @@
       "/notes/bom.txt": "﻿needle at the start\nsecond line\n",
       "/notes/empty-lines.txt": "first\n\n\nlast without newline",
       "/notes/repeat.txt": "aa bb aa\nabab\nxyzzy\n",
-      "/notes/😀-smile.md": "smile\n"
+      "/notes/😀-smile.md": "smile\n",
+      "/notes/cr-end.txt": "alpha\r\nomega\r",
+      "/braces/{a,b": "",
+      "/braces/{a,c": ""
     }
   },
   "glob": [
@@ -67,6 +70,9 @@
         "assets",
         "assets/latin1.txt",
         "assets/logo.png",
+        "braces",
+        "braces/{a,b",
+        "braces/{a,c",
         "docs",
         "docs/api",
         "docs/api/index.md",
@@ -76,6 +82,7 @@
         "lib/weird[1].js",
         "notes",
         "notes/bom.txt",
+        "notes/cr-end.txt",
         "notes/empty-lines.txt",
         "notes/repeat.txt",
         "notes/ünïcode.md",
@@ -173,6 +180,15 @@
       "expect": []
     },
     {
+      "name": "a brace that is never closed is literal, and a later one still expands",
+      "tree": "project",
+      "pattern": "braces/{a,{b,c}",
+      "expect": [
+        "braces/{a,b",
+        "braces/{a,c"
+      ]
+    },
+    {
       "name": "braces over directories",
       "tree": "project",
       "pattern": "{docs,lib}/**",
@@ -231,6 +247,7 @@
       "pattern": "**/",
       "expect": [
         "assets",
+        "braces",
         "docs",
         "docs/api",
         "lib",
@@ -709,6 +726,15 @@
       "query": "ncd",
       "expect": {
         "matches": [
+          {
+            "path": "/notes/cr-end.txt",
+            "score": 62,
+            "positions": [
+              1,
+              7,
+              12
+            ]
+          },
           {
             "path": "/notes/ünïcode.md",
             "score": 42,
@@ -1320,6 +1346,32 @@
       }
     },
     {
+      "name": "a CR that ends the last line is not part of it",
+      "tree": "project",
+      "pattern": "a$",
+      "options": {
+        "regex": true,
+        "glob": "notes/cr-end.txt"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/cr-end.txt",
+            "line": 1,
+            "column": 5,
+            "text": "alpha"
+          },
+          {
+            "path": "/notes/cr-end.txt",
+            "line": 2,
+            "column": 5,
+            "text": "omega"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
       "name": "a minified line",
       "tree": "project",
       "pattern": "export\\{y\\}",
@@ -1355,6 +1407,15 @@
       "api": "glob",
       "args": [
         "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}"
+      ],
+      "error": "TypeError"
+    },
+    {
+      "name": "glob patterns longer than 65536 characters once expanded",
+      "tree": "project",
+      "api": "glob",
+      "args": [
+        "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
       ],
       "error": "TypeError"
     },

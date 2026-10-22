@@ -40,12 +40,12 @@ Matching is case-sensitive and works on UTF-16 code units, as Node's does.
 | `?` | One character (one UTF-16 code unit) within a segment |
 | `[abc]`, `[a-z]` | One character from the class; `[!…]` or `[^…]` negates it. A `]` right after the opening bracket (or its `!`/`^`) is a member, and a `[` with no closing `]` is literal |
 | `**` | As a whole segment, zero or more directories; inside a segment it is `*` |
-| `{a,b}` | Each alternative in turn; braces nest, and a brace with no comma (`{a}`) is literal |
+| `{a,b}` | Each alternative in turn; braces nest, and a brace with no comma (`{a}`) or no closing brace is literal |
 | `/` at the end | Directories only |
 | `/` at the start | An absolute pattern |
 | `./` at the start | Ignored |
 
-A backslash is a path separator, as everywhere in the sandbox filesystem, so there are no escapes: match a literal `*` with `[*]`. Empty segments (`a//b`) and `.` segments are ignored. A `..` segment is a `TypeError`.
+A backslash is a path separator, as everywhere in the sandbox filesystem, so there are no escapes: match a literal `*` with `[*]`. Empty segments (`a//b`) and `.` segments are ignored. A `..` segment is a `TypeError`. One call's patterns may expand to at most 1024 alternatives each and 65,536 UTF-16 code units in all; more is a `TypeError`.
 
 **Hidden entries.** A name that starts with `.` is matched only by a pattern segment that starts with a literal `.`: `*` and `?` never match the leading dot, and `**` does not enter a hidden directory. `**/.*` finds the hidden entries, and `.github/**` searches inside one.
 
@@ -80,13 +80,13 @@ const { matches, truncated } = grep("TODO", { glob: "src/**/*.ts", context: 1 })
 
 `pattern` must be a non-empty string. With `regex: true` it compiles as `new RegExp(pattern, ignoreCase ? "i" : "")` would, so an invalid source is a `SyntaxError`; literal text is matched as an escaped pattern with the same flags. Without `glob`, hidden files are searched too.
 
-Each file is decoded as UTF-8. A file that contains a NUL byte or is not valid UTF-8 is skipped. A byte order mark at the start is dropped, lines split at `\n`, and a `\r` before the `\n` is not part of the line. A final `\n` does not start another line. The pattern is matched against each line on its own, so `^` and `$` are the line's start and end.
+Each file is decoded as UTF-8. A file that contains a NUL byte or is not valid UTF-8 is skipped. A byte order mark at the start is dropped, lines split at `\n`, and a `\r` before the `\n` (or ending the last line) is not part of the line. A final `\n` does not start another line. The pattern is matched against each line on its own, so `^` and `$` are the line's start and end.
 
 A line with a match gives one result, at its first match: `path` (absolute), `line` (1-based), `column` (1-based, in UTF-16 code units, as a string index plus one) and `text` (the whole line). With `context` above zero every result also has `before` and `after`, arrays of up to that many neighbouring lines, shorter at the edges of a file.
 
 `truncated` is `true` when the search stopped at `maxResults` with another match left, or at `maxBytes` with another file left to read; it never returns fewer results silently. A binary or non-UTF-8 file counts towards `maxBytes`.
 
-The RegExp step limit, the run's timeout and its instruction limit bound the work; a pattern that exceeds the step limit throws as it would in `RegExp.prototype.exec`. The decoded text of a file is charged to the run's memory limit while it is searched.
+The RegExp step limit, the run's timeout and its instruction limit bound the work (literal text is found in time linear in each line); a pattern that exceeds the step limit throws as it would in `RegExp.prototype.exec`. The decoded text of a file is charged to the run's memory limit while it is searched.
 
 ## Fuzzy names: `fuzzyFind`
 
@@ -127,7 +127,7 @@ The rows are tried in order. The first matched character's bonus counts twice. I
 
 ## Errors
 
-A pattern, query or option of the wrong type is a `TypeError`, as is a `..` glob segment, an empty `grep` pattern or `fuzzyFind` query, and a `maxResults`, `maxBytes`, `limit` or `context` that is not a non-negative integer (`maxResults` and `limit` at least `1`). An invalid regular expression is a `SyntaxError`. `fs.glob` and `fs.promises.glob` check their arguments and patterns before any work and throw these synchronously, as `fs.globSync` does. A glob whose braces expand to more than 1024 alternatives is a `TypeError`.
+A pattern, query or option of the wrong type is a `TypeError`, as is a `..` glob segment, an empty `grep` pattern or `fuzzyFind` query, and a `maxResults`, `maxBytes`, `limit` or `context` that is not a non-negative integer (`maxResults` and `limit` at least `1`). An invalid regular expression is a `SyntaxError`. `fs.glob` and `fs.promises.glob` check their arguments and patterns before any work and throw these synchronously, as `fs.globSync` does. Patterns that expand past the limits above are a `TypeError`. A `maxResults`, `limit` or `context` larger than a search can hold counts as no limit.
 
 ## Shared test vectors
 

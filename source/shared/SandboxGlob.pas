@@ -19,10 +19,13 @@ const
   // The most alternatives brace expansion may produce for one pattern:
   // "{a,b}" repeated n times expands to 2^n patterns.
   MAX_SANDBOX_GLOB_ALTERNATIVES = 1024;
+  // The most UTF-16 code units the patterns of one call may hold once their
+  // braces are expanded, so compiling and matching them stays bounded.
+  MAX_SANDBOX_GLOB_EXPANDED_LENGTH = 65536;
 
 type
   { A pattern the syntax refuses: a '..' segment, or too many brace
-    alternatives. The script sees a TypeError. }
+    alternatives or code units once expanded. The script sees a TypeError. }
   ESandboxGlobError = class(Exception);
 
   TSandboxGlobTokenKind = (gtkLiteral, gtkStar, gtkAnyCharacter, gtkClass);
@@ -66,9 +69,10 @@ type
   TSandboxSearchFileArray = array of TSandboxSearchFile;
 
 { Compiles every pattern, brace alternatives expanded. A pattern with no
-  segments left (empty, or only '/' and '.') contributes nothing. }
-function CompileSandboxGlobs(const APatterns: array of string):
-  TSandboxGlobPatternArray;
+  segments left (empty, or only '/' and '.') contributes nothing. AProgress
+  runs once per expansion step. }
+function CompileSandboxGlobs(const APatterns: array of string;
+  const AProgress: TSandboxGlobProgress = nil): TSandboxGlobPatternArray;
 
 { fs.globSync: the entries below ACwd (a canonical sandbox path) that match a
   pattern and no exclude, relative to ACwd for a relative pattern and
@@ -101,8 +105,23 @@ const
 
 { Brace expansion }
 
-procedure ExpandBraces(const APattern: string; var AResults: TStringArray;
-  var ACount: Integer);
+type
+  TSandboxGlobExpansion = record
+    Results: TStringArray;
+    Count: Integer;
+    TotalLength: Int64;
+    Progress: TSandboxGlobProgress;
+  end;
+
+procedure RaiseExpandedTooLong;
+begin
+  raise ESandboxGlobError.CreateFmt(
+    'glob patterns expand to more than %d characters',
+    [MAX_SANDBOX_GLOB_EXPANDED_LENGTH]);
+end;
+
+procedure ExpandBraces(const APattern: string;
+  var AExpansion: TSandboxGlobExpansion);
 var
   Closing: array of Integer;
   HasComma: array of Boolean;
@@ -111,6 +130,8 @@ var
   StackCount, Index, OpenIndex, Part: Integer;
   Prefix, Suffix: string;
 begin
+  if Assigned(AExpansion.Progress) then
+    AExpansion.Progress;
   { Pair every brace in one pass: Closing[i] is the index of the brace that
     closes the one at i (0 when nothing does), HasComma[i] whether a comma
     sits directly inside it. }
@@ -139,15 +160,12 @@ begin
         end;
     end;
 
-  // The first brace that has no closing brace makes the rest literal; the
-  // first one with a comma expands; a brace with no comma is literal.
+  // The first closed brace with a comma directly inside expands; a brace
+  // that is never closed, or has no comma, is literal.
   for OpenIndex := 1 to Length(APattern) do
   begin
-    if APattern[OpenIndex] <> '{' then
-      Continue;
-    if Closing[OpenIndex] = 0 then
-      Break;
-    if not HasComma[OpenIndex] then
+    if (APattern[OpenIndex] <> '{') or (Closing[OpenIndex] = 0) or
+       not HasComma[OpenIndex] then
       Continue;
     Bounds := nil;
     SetLength(Bounds, 1);
@@ -172,26 +190,32 @@ begin
     Suffix := Copy(APattern, Closing[OpenIndex] + 1, MaxInt);
     for Part := 0 to Length(Bounds) - 2 do
       ExpandBraces(Prefix + Copy(APattern, Bounds[Part] + 1,
-        Bounds[Part + 1] - Bounds[Part] - 1) + Suffix, AResults, ACount);
+        Bounds[Part + 1] - Bounds[Part] - 1) + Suffix, AExpansion);
     Exit;
   end;
-  if ACount >= MAX_SANDBOX_GLOB_ALTERNATIVES then
+  if AExpansion.Count >= MAX_SANDBOX_GLOB_ALTERNATIVES then
     raise ESandboxGlobError.CreateFmt(
       'glob pattern expands to more than %d alternatives',
       [MAX_SANDBOX_GLOB_ALTERNATIVES]);
-  if ACount >= Length(AResults) then
-    SetLength(AResults, ACount * 2 + 4);
-  AResults[ACount] := APattern;
-  Inc(ACount);
+  Inc(AExpansion.TotalLength, Length(APattern));
+  if AExpansion.TotalLength > MAX_SANDBOX_GLOB_EXPANDED_LENGTH then
+    RaiseExpandedTooLong;
+  if AExpansion.Count >= Length(AExpansion.Results) then
+    SetLength(AExpansion.Results, AExpansion.Count * 2 + 4);
+  AExpansion.Results[AExpansion.Count] := APattern;
+  Inc(AExpansion.Count);
 end;
 
 { Compilation }
 
+{ Tokens grow geometrically; CompileSegment trims them to ATokenCount. }
 procedure AddToken(var ASegment: TSandboxGlobSegment;
-  const AToken: TSandboxGlobToken);
+  var ATokenCount: Integer; const AToken: TSandboxGlobToken);
 begin
-  SetLength(ASegment.Tokens, Length(ASegment.Tokens) + 1);
-  ASegment.Tokens[High(ASegment.Tokens)] := AToken;
+  if ATokenCount >= Length(ASegment.Tokens) then
+    SetLength(ASegment.Tokens, ATokenCount * 2 + 4);
+  ASegment.Tokens[ATokenCount] := AToken;
+  Inc(ATokenCount);
 end;
 
 function LiteralToken(const ACharacter: Char): TSandboxGlobToken;
@@ -203,7 +227,7 @@ end;
 
 function CompileSegment(const AText: string): TSandboxGlobSegment;
 var
-  Index, Cursor: Integer;
+  Index, Cursor, TokenCount, RangeCount: Integer;
   Token: TSandboxGlobToken;
   First, Closed: Boolean;
 begin
@@ -213,18 +237,19 @@ begin
     Result.Globstar := True;
     Exit;
   end;
+  TokenCount := 0;
   Index := 1;
   while Index <= Length(AText) do
   begin
     case AText[Index] of
       '*':
         begin
-          if (Length(Result.Tokens) = 0) or
-             (Result.Tokens[High(Result.Tokens)].Kind <> gtkStar) then
+          if (TokenCount = 0) or
+             (Result.Tokens[TokenCount - 1].Kind <> gtkStar) then
           begin
             Token := Default(TSandboxGlobToken);
             Token.Kind := gtkStar;
-            AddToken(Result, Token);
+            AddToken(Result, TokenCount, Token);
           end;
           Inc(Index);
         end;
@@ -232,13 +257,14 @@ begin
         begin
           Token := Default(TSandboxGlobToken);
           Token.Kind := gtkAnyCharacter;
-          AddToken(Result, Token);
+          AddToken(Result, TokenCount, Token);
           Inc(Index);
         end;
       '[':
         begin
           Token := Default(TSandboxGlobToken);
           Token.Kind := gtkClass;
+          RangeCount := 0;
           Cursor := Index + 1;
           if (Cursor <= Length(AText)) and
              ((AText[Cursor] = '!') or (AText[Cursor] = '^')) then
@@ -256,37 +282,41 @@ begin
               Break;
             end;
             First := False;
-            SetLength(Token.Ranges, Length(Token.Ranges) + 1);
-            Token.Ranges[High(Token.Ranges)].Low := AText[Cursor];
+            if RangeCount >= Length(Token.Ranges) then
+              SetLength(Token.Ranges, RangeCount * 2 + 4);
+            Token.Ranges[RangeCount].Low := AText[Cursor];
             if (Cursor + 2 <= Length(AText)) and (AText[Cursor + 1] = '-') and
                (AText[Cursor + 2] <> ']') then
             begin
-              Token.Ranges[High(Token.Ranges)].High := AText[Cursor + 2];
+              Token.Ranges[RangeCount].High := AText[Cursor + 2];
               Inc(Cursor, 3);
             end
             else
             begin
-              Token.Ranges[High(Token.Ranges)].High := AText[Cursor];
+              Token.Ranges[RangeCount].High := AText[Cursor];
               Inc(Cursor);
             end;
+            Inc(RangeCount);
           end;
           if Closed then
           begin
-            AddToken(Result, Token);
+            SetLength(Token.Ranges, RangeCount);
+            AddToken(Result, TokenCount, Token);
             Index := Cursor + 1;
           end
           else
           begin
             { A '[' with no closing ']' is literal. }
-            AddToken(Result, LiteralToken('['));
+            AddToken(Result, TokenCount, LiteralToken('['));
             Inc(Index);
           end;
         end;
     else
-      AddToken(Result, LiteralToken(AText[Index]));
+      AddToken(Result, TokenCount, LiteralToken(AText[Index]));
       Inc(Index);
     end;
   end;
+  SetLength(Result.Tokens, TokenCount);
   Result.DotLiteral := (Length(Result.Tokens) > 0) and
     (Result.Tokens[0].Kind = gtkLiteral) and
     (Result.Tokens[0].Literal = HIDDEN_PREFIX);
@@ -319,30 +349,36 @@ begin
   Result := Length(APattern.Segments) > 0;
 end;
 
-function CompileSandboxGlobs(const APatterns: array of string):
-  TSandboxGlobPatternArray;
+function CompileSandboxGlobs(const APatterns: array of string;
+  const AProgress: TSandboxGlobProgress): TSandboxGlobPatternArray;
 var
-  Alternatives: TStringArray;
-  AlternativeCount, PatternIndex, Index, Count: Integer;
+  Expansion: TSandboxGlobExpansion;
+  PatternIndex, Index, Count: Integer;
+  RawLength: Int64;
   Compiled: TSandboxGlobPattern;
 begin
   Result := nil;
-  Count := 0;
+  RawLength := 0;
   for PatternIndex := 0 to High(APatterns) do
-  begin
-    Alternatives := nil;
-    AlternativeCount := 0;
+    Inc(RawLength, Length(APatterns[PatternIndex]));
+  if RawLength > MAX_SANDBOX_GLOB_EXPANDED_LENGTH then
+    RaiseExpandedTooLong;
+  Expansion := Default(TSandboxGlobExpansion);
+  Expansion.Progress := AProgress;
+  for PatternIndex := 0 to High(APatterns) do
     ExpandBraces(StringReplace(APatterns[PatternIndex],
-      ALTERNATE_PATH_SEPARATOR, PATH_SEPARATOR, [rfReplaceAll]),
-      Alternatives, AlternativeCount);
-    for Index := 0 to AlternativeCount - 1 do
-      if CompileAlternative(Alternatives[Index], Compiled) then
-      begin
-        if Count >= Length(Result) then
-          SetLength(Result, Count * 2 + 4);
-        Result[Count] := Compiled;
-        Inc(Count);
-      end;
+      ALTERNATE_PATH_SEPARATOR, PATH_SEPARATOR, [rfReplaceAll]), Expansion);
+  Count := 0;
+  SetLength(Result, Expansion.Count);
+  for Index := 0 to Expansion.Count - 1 do
+  begin
+    if Assigned(AProgress) then
+      AProgress;
+    if CompileAlternative(Expansion.Results[Index], Compiled) then
+    begin
+      Result[Count] := Compiled;
+      Inc(Count);
+    end;
   end;
   SetLength(Result, Count);
 end;
@@ -380,9 +416,12 @@ end;
 { One segment against one name. A '*' matches any run, so the last '*' seen
   is the only backtracking point needed: linear in the name per star. }
 function SegmentMatches(const ASegment: TSandboxGlobSegment;
-  const AName: string): Boolean;
+  const AName: string; const AProgress: TSandboxGlobProgress): Boolean;
+const
+  PROGRESS_MASK = $FFF;
 var
   TokenIndex, NameIndex, StarToken, StarName, TokenCount: Integer;
+  Steps: Int64;
 begin
   if (Length(AName) > 0) and (AName[1] = HIDDEN_PREFIX) and
      not ASegment.DotLiteral then
@@ -392,8 +431,12 @@ begin
   NameIndex := 1;
   StarToken := -1;
   StarName := 0;
+  Steps := 0;
   while NameIndex <= Length(AName) do
   begin
+    Inc(Steps);
+    if ((Steps and PROGRESS_MASK) = 0) and Assigned(AProgress) then
+      AProgress;
     if (TokenIndex < TokenCount) and
        (ASegment.Tokens[TokenIndex].Kind = gtkStar) then
     begin
@@ -425,10 +468,11 @@ end;
 { The pattern's segments against the names, by dynamic programming so that
   several '**' cost the product of the two lengths, not an exponential. }
 function SegmentsMatch(const APattern: TSandboxGlobPattern;
-  const ANames: TStringArray; const AFirstName: Integer): Boolean;
+  const ANames: TStringArray; const AFirstName: Integer;
+  const AProgress: TSandboxGlobProgress): Boolean;
 var
   SegmentCount, NameCount, SegmentIndex, NameIndex: Integer;
-  Next, Current: array of Boolean;
+  Next, Current, Swap: array of Boolean;
   Segment: TSandboxGlobSegment;
 begin
   SegmentCount := Length(APattern.Segments);
@@ -454,34 +498,41 @@ begin
       Current[NameCount] := False;
       for NameIndex := NameCount - 1 downto 0 do
         Current[NameIndex] := Next[NameIndex + 1] and
-          SegmentMatches(Segment, ANames[AFirstName + NameIndex]);
+          SegmentMatches(Segment, ANames[AFirstName + NameIndex], AProgress);
     end;
-    Next := Copy(Current);
+    Swap := Next;
+    Next := Current;
+    Current := Swap;
   end;
   Result := Next[0];
 end;
 
 function PatternMatches(const APattern: TSandboxGlobPattern;
   const ANames: TStringArray; const ACwdDepth: Integer;
-  const AUnderCwd, AIsDirectory: Boolean): Boolean;
+  const AUnderCwd, AIsDirectory: Boolean;
+  const AProgress: TSandboxGlobProgress): Boolean;
 begin
+  if Assigned(AProgress) then
+    AProgress;
   if APattern.DirectoryOnly and not AIsDirectory then
     Exit(False);
   if APattern.Absolute then
-    Result := SegmentsMatch(APattern, ANames, 0)
+    Result := SegmentsMatch(APattern, ANames, 0, AProgress)
   else
-    Result := AUnderCwd and SegmentsMatch(APattern, ANames, ACwdDepth);
+    Result := AUnderCwd and SegmentsMatch(APattern, ANames, ACwdDepth,
+      AProgress);
 end;
 
 function AnyPatternMatches(const APatterns: TSandboxGlobPatternArray;
   const ANames: TStringArray; const ACwdDepth: Integer;
-  const AUnderCwd, AIsDirectory: Boolean): Boolean;
+  const AUnderCwd, AIsDirectory: Boolean;
+  const AProgress: TSandboxGlobProgress): Boolean;
 var
   Index: Integer;
 begin
   for Index := 0 to High(APatterns) do
     if PatternMatches(APatterns[Index], ANames, ACwdDepth, AUnderCwd,
-      AIsDirectory) then
+      AIsDirectory, AProgress) then
       Exit(True);
   Result := False;
 end;
@@ -716,24 +767,26 @@ begin
     UnderCwd := IsUnderCwd(Names);
     { An excluded directory takes everything below it along. }
     if AnyPatternMatches(FExcludes, Names, Length(FCwdNames), UnderCwd,
-      IsDirectory) then
+      IsDirectory, FProgress) then
       Continue;
     if FMode = gwmGlob then
     begin
       for PatternIndex := 0 to High(FPatterns) do
+      begin
         if PatternMatches(FPatterns[PatternIndex], Names, Length(FCwdNames),
-          UnderCwd, IsDirectory) then
+          UnderCwd, IsDirectory, FProgress) then
         begin
           if FPatterns[PatternIndex].Absolute then
             AddPath(Entries[Index].Path)
           else
             AddPath(RelativePath(Names));
         end;
+      end;
     end
     else if UnderCwd and not IsDirectory then
     begin
       Matched := not FHasPatterns or AnyPatternMatches(FPatterns, Names,
-        Length(FCwdNames), True, False);
+        Length(FCwdNames), True, False, FProgress);
       if Matched then
         AddFile(Entries[Index].Path, Entries[Index].Size);
     end;

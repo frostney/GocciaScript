@@ -76,7 +76,7 @@ tests against the same file.
 
 - `fs.globSync` does not support extended globs, POSIX classes, numeric
   brace ranges, `..` segments or an `exclude` function; brace expansion is
-  capped at 1024 alternatives so a short pattern cannot allocate without
-  bound.
+  capped at 1024 alternatives and one call's expanded patterns at 65,536
+  code units, so a short pattern cannot allocate or match without bound.
 - Changing a search rule means changing the vectors, which every
   implementation held to them then has to follow.

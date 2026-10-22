@@ -7,6 +7,7 @@ interface
 uses
   SysUtils,
 
+  SandboxGlob,
   SandboxVirtualFileSystem,
 
   Goccia.Arguments.Collection,
@@ -136,8 +137,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure SearchProgress;
-    function GlobPaths(const APatterns, AExcludes: TStringArray;
-      const ACwd, AMethod: string): TStringArray;
+    function GlobPaths(const APatterns, AExcludes: TSandboxGlobPatternArray;
+      const ACwd: string): TStringArray;
     function FsGlobSync(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function FsGlob(const AArgs: TGocciaArgumentsCollection;
@@ -163,7 +164,6 @@ uses
   Math,
 
   SandboxFuzzy,
-  SandboxGlob,
   SandboxShell,
   TextEncoding,
 
@@ -232,8 +232,8 @@ type
     FCompletion: TGocciaSandboxFsCompletion;
     FCallback: TGocciaValue;
     FPromise: TGocciaPromiseValue;
-    FGlobPatterns: TStringArray;
-    FGlobExcludes: TStringArray;
+    FGlobPatterns: TSandboxGlobPatternArray;
+    FGlobExcludes: TSandboxGlobPatternArray;
     procedure CompleteFailure(const AError: TGocciaValue);
     procedure CompleteSuccess(const AValue: TGocciaValue);
   public
@@ -291,8 +291,8 @@ type
   TGocciaSandboxGlobIteratorValue = class(TGocciaObjectValue)
   private
     FExtension: TGocciaSandboxRuntimeExtension;
-    FPatterns: TStringArray;
-    FExcludes: TStringArray;
+    FPatterns: TSandboxGlobPatternArray;
+    FExcludes: TSandboxGlobPatternArray;
     FCwd: string;
     FPaths: TStringArray;
     FStarted: Boolean;
@@ -301,7 +301,8 @@ type
       const ADone: Boolean): TGocciaValue;
   public
     constructor Create(const AExtension: TGocciaSandboxRuntimeExtension;
-      const APatterns, AExcludes: TStringArray; const ACwd: string);
+      const APatterns, AExcludes: TSandboxGlobPatternArray;
+      const ACwd: string);
     function Next(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function ReturnMethod(const AArgs: TGocciaArgumentsCollection;
@@ -505,7 +506,7 @@ begin
         Value := FExtension.CopyFileValue(FPath, FDestination);
       sfoGlob:
         Value := PathsToArray(FExtension.GlobPaths(FGlobPatterns,
-          FGlobExcludes, FPath, 'fs.glob'));
+          FGlobExcludes, FPath));
     else
       raise Exception.Create('Unsupported filesystem operation');
     end;
@@ -1367,24 +1368,35 @@ begin
 end;
 
 { The glob arguments every form shares, validated before any work. }
-procedure ParseGlobArguments(const APattern, AOptions: TGocciaValue;
-  const ADefaultCwd, AMethod: string; out APatterns, AExcludes: TStringArray;
-  out ACwd: string);
-var
-  Options: TGocciaObjectValue;
+{ Compiles patterns once, before any search work; a refused pattern is the
+  script's TypeError. }
+function CompileSearchGlobs(const APatterns: TStringArray;
+  const AProgress: TSandboxGlobProgress;
+  const AMethod: string): TSandboxGlobPatternArray;
 begin
-  APatterns := SearchPatternList(APattern, AMethod, 'pattern');
-  Options := SearchOptionsObject(AOptions, GLOB_OPTION_NAMES,
-    Length(GLOB_OPTION_NAMES), AMethod);
-  ACwd := SearchCwd(Options, ADefaultCwd, AMethod);
-  AExcludes := SearchExcludeList(Options, AMethod);
+  Result := nil;
   try
-    CompileSandboxGlobs(APatterns);
-    CompileSandboxGlobs(AExcludes);
+    Result := CompileSandboxGlobs(APatterns, AProgress);
   except
     on E: ESandboxGlobError do
       ThrowTypeError(AMethod + ': ' + E.Message);
   end;
+end;
+
+procedure ParseGlobArguments(const APattern, AOptions: TGocciaValue;
+  const ADefaultCwd, AMethod: string; const AProgress: TSandboxGlobProgress;
+  out APatterns, AExcludes: TSandboxGlobPatternArray; out ACwd: string);
+var
+  Options: TGocciaObjectValue;
+  Patterns, Excludes: TStringArray;
+begin
+  Patterns := SearchPatternList(APattern, AMethod, 'pattern');
+  Options := SearchOptionsObject(AOptions, GLOB_OPTION_NAMES,
+    Length(GLOB_OPTION_NAMES), AMethod);
+  ACwd := SearchCwd(Options, ADefaultCwd, AMethod);
+  Excludes := SearchExcludeList(Options, AMethod);
+  APatterns := CompileSearchGlobs(Patterns, AProgress, AMethod);
+  AExcludes := CompileSearchGlobs(Excludes, AProgress, AMethod);
 end;
 
 constructor TGocciaSandboxStatValue.Create(const APrototype: TGocciaObjectValue;
@@ -1568,7 +1580,7 @@ end;
 
 constructor TGocciaSandboxGlobIteratorValue.Create(
   const AExtension: TGocciaSandboxRuntimeExtension;
-  const APatterns, AExcludes: TStringArray; const ACwd: string);
+  const APatterns, AExcludes: TSandboxGlobPatternArray; const ACwd: string);
 begin
   inherited Create(TGocciaObjectValue.SharedObjectPrototype, 4);
   FExtension := AExtension;
@@ -1611,8 +1623,7 @@ begin
     if not FStarted then
     begin
       FStarted := True;
-      FPaths := FExtension.GlobPaths(FPatterns, FExcludes, FCwd,
-        'fs.promises.glob');
+      FPaths := FExtension.GlobPaths(FPatterns, FExcludes, FCwd);
       FIndex := 0;
     end;
     if FIndex > High(FPaths) then
@@ -1941,17 +1952,14 @@ begin
 end;
 
 function TGocciaSandboxRuntimeExtension.GlobPaths(const APatterns,
-  AExcludes: TStringArray; const ACwd, AMethod: string): TStringArray;
+  AExcludes: TSandboxGlobPatternArray; const ACwd: string): TStringArray;
 begin
   Result := nil;
   try
-    Result := GlobSandbox(FContext.Fs, CompileSandboxGlobs(APatterns),
-      CompileSandboxGlobs(AExcludes),
+    Result := GlobSandbox(FContext.Fs, APatterns, AExcludes,
       FContext.Fs.Normalize(ACwd, FContext.Shell.WorkingDirectory),
       SearchProgress);
   except
-    on E: ESandboxGlobError do
-      ThrowTypeError(AMethod + ': ' + E.Message);
     on E: ESandboxFsError do
       raise TGocciaThrowValue.Create(
         CreateSandboxFileSystemError(E, 'glob', ACwd));
@@ -1962,20 +1970,21 @@ function TGocciaSandboxRuntimeExtension.FsGlobSync(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Patterns, Excludes: TStringArray;
+  Patterns, Excludes: TSandboxGlobPatternArray;
   Cwd: string;
 begin
   ValidateArgumentCount(AArgs, 2, 'fs.globSync');
   ParseGlobArguments(AArgs.GetElement(0), AArgs.GetElement(1),
-    FContext.Shell.WorkingDirectory, 'fs.globSync', Patterns, Excludes, Cwd);
-  Result := PathsToArray(GlobPaths(Patterns, Excludes, Cwd, 'fs.globSync'));
+    FContext.Shell.WorkingDirectory, 'fs.globSync', SearchProgress, Patterns,
+    Excludes, Cwd);
+  Result := PathsToArray(GlobPaths(Patterns, Excludes, Cwd));
 end;
 
 function TGocciaSandboxRuntimeExtension.FsGlob(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Patterns, Excludes: TStringArray;
+  Patterns, Excludes: TSandboxGlobPatternArray;
   Cwd: string;
   Callback, Options: TGocciaValue;
   Queue: TGocciaMicrotaskQueue;
@@ -1993,7 +2002,8 @@ begin
     Callback := RequireFsCallback(AArgs, 1, 'fs.glob');
   end;
   ParseGlobArguments(AArgs.GetElement(0), Options,
-    FContext.Shell.WorkingDirectory, 'fs.glob', Patterns, Excludes, Cwd);
+    FContext.Shell.WorkingDirectory, 'fs.glob', SearchProgress, Patterns,
+    Excludes, Cwd);
   Queue := TGocciaMicrotaskQueue.Instance;
   if not Assigned(Queue) then
     raise Exception.Create('Filesystem callbacks require a microtask queue');
@@ -2009,13 +2019,13 @@ function TGocciaSandboxRuntimeExtension.FsPromisesGlob(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Patterns, Excludes: TStringArray;
+  Patterns, Excludes: TSandboxGlobPatternArray;
   Cwd: string;
 begin
   ValidateArgumentCount(AArgs, 2, 'fs.promises.glob');
   ParseGlobArguments(AArgs.GetElement(0), AArgs.GetElement(1),
-    FContext.Shell.WorkingDirectory, 'fs.promises.glob', Patterns, Excludes,
-    Cwd);
+    FContext.Shell.WorkingDirectory, 'fs.promises.glob', SearchProgress,
+    Patterns, Excludes, Cwd);
   Result := TGocciaSandboxGlobIteratorValue.Create(Self, Patterns, Excludes,
     Cwd);
 end;
@@ -2024,16 +2034,17 @@ function SearchFilesOrThrow(const AContext: TGocciaSandboxContext;
   const ASelection: TGocciaSandboxSearchSelection;
   const AProgress: TSandboxGlobProgress;
   const AMethod: string): TSandboxSearchFileArray;
+var
+  Globs, Excludes: TSandboxGlobPatternArray;
 begin
   Result := nil;
+  Globs := CompileSearchGlobs(ASelection.Globs, AProgress, AMethod);
+  Excludes := CompileSearchGlobs(ASelection.Excludes, AProgress, AMethod);
   try
     Result := SandboxSearchFiles(AContext.Fs,
       AContext.Fs.Normalize(ASelection.Cwd, AContext.Shell.WorkingDirectory),
-      ASelection.HasGlob, CompileSandboxGlobs(ASelection.Globs),
-      CompileSandboxGlobs(ASelection.Excludes), AProgress);
+      ASelection.HasGlob, Globs, Excludes, AProgress);
   except
-    on E: ESandboxGlobError do
-      ThrowTypeError(AMethod + ': ' + E.Message);
     on E: ESandboxFsError do
       raise TGocciaThrowValue.Create(
         CreateSandboxFileSystemError(E, 'search', ASelection.Cwd));
@@ -2077,11 +2088,14 @@ begin
     'grep');
   GrepOptions.Regex := SearchBooleanOption(Options, 'regex', 'grep');
   GrepOptions.IgnoreCase := SearchBooleanOption(Options, 'ignoreCase', 'grep');
-  GrepOptions.MaxResults := SearchIntegerOption(Options, 'maxResults', 'grep',
-    DEFAULT_SANDBOX_GREP_MAX_RESULTS, 1);
+  { Counts past what a search can hold mean "no limit": clamp them so the
+    native arithmetic stays in range. }
+  GrepOptions.MaxResults := Integer(Min(SearchIntegerOption(Options,
+    'maxResults', 'grep', DEFAULT_SANDBOX_GREP_MAX_RESULTS, 1), MaxInt));
   GrepOptions.MaxBytes := SearchIntegerOption(Options, 'maxBytes', 'grep',
     SANDBOX_GREP_NO_BYTE_LIMIT, 0);
-  GrepOptions.Context := SearchIntegerOption(Options, 'context', 'grep', 0, 0);
+  GrepOptions.Context := Integer(Min(SearchIntegerOption(Options, 'context',
+    'grep', 0, 0), MAX_SANDBOX_GREP_CONTEXT));
   Files := SearchFilesOrThrow(FContext, Selection, SearchProgress, 'grep');
   Found := SandboxGrep(FContext.Fs, Files, GrepOptions);
   InitializeTempRoot(ObjRoot);
@@ -2142,17 +2156,17 @@ begin
     Length(FUZZY_OPTION_NAMES), 'fuzzyFind');
   Selection := SearchSelection(Options, FContext.Shell.WorkingDirectory,
     'fuzzyFind');
-  Limit := SearchIntegerOption(Options, 'limit', 'fuzzyFind',
-    DEFAULT_FUZZY_LIMIT, 1);
+  Limit := Min(SearchIntegerOption(Options, 'limit', 'fuzzyFind',
+    DEFAULT_FUZZY_LIMIT, 1), MaxInt);
   Files := SearchFilesOrThrow(FContext, Selection, SearchProgress,
     'fuzzyFind');
+  Query := FoldSandboxFuzzyQuery(Query);
   Found := nil;
   SetLength(Found, Length(Files));
   Count := 0;
   for Index := 0 to High(Files) do
   begin
-    if (Index and $FF) = 0 then
-      CheckNativeWork;
+    CheckNativeWork;
     if TrySandboxFuzzyMatch(Files[Index].Path, Query, Match) then
     begin
       Found[Count] := Match;
