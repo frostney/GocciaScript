@@ -201,7 +201,7 @@ _Avoid_: Polyfill, compatibility flag.
 ### Execution
 
 **Deterministic execution**:
-An engine profile in which JavaScript-observable time, sandbox file timestamps included, is frozen at the Unix epoch, the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams.
+An engine profile in which JavaScript-observable time is frozen at the Unix epoch (and so are sandbox file timestamps in `GocciaRunner`'s sandbox mode, or when an embedder passes the profile's clock to its sandbox), the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams.
 _Avoid_: Deterministic profiling, frozen timeout clock, seeded sandbox filesystem.
 
 **Heap snapshot**:

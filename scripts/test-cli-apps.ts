@@ -10397,7 +10397,7 @@ await section("Runner sandbox mode: a sandbox write does not reach the host with
     if (!readFileSync(entry, "utf-8").includes("fs.writeFileSync"))
       throw new Error("SECURITY: Sandbox mode wrote to the host entry file");
     // Write-back runs only when an input was copied with --copy-rw, so a
-    // read-only run has nothing to report.
+    // run without one has nothing to report.
     if (proc.stderr.toString().includes("write-back:"))
       throw new Error(`Sandbox mode without --copy-rw should print no write-back report, got: ${proc.stderr.toString()}`);
   } finally {
