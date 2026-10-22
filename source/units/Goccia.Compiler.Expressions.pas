@@ -101,7 +101,8 @@ procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContex
   const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt16;
   const ANeedsResult: Boolean = True);
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 procedure CompilePropertyCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16;
   const ANeedsResult: Boolean = True);
@@ -7196,7 +7197,8 @@ begin
 end;
 
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 var
   LocalIdx, UpvalIdx: Integer;
   Slot, RegVal, RegOld, RegResult, RegTemp, CondReg, ObjReg,
@@ -7484,7 +7486,7 @@ begin
       ACtx.Scope.GetLocal(LocalIdx).ExportNames,
       ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegTemp);
     ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
-    if ADest <> Slot then
+    if ANeedsResult and (ADest <> Slot) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegTemp, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -7519,7 +7521,7 @@ begin
     else
       EmitCurrentUpvalueAssignment(ACtx, Upvalue, UpvalIdx, RegResult,
         RegResult, InferLocalType(AExpr.Value));
-    if ADest <> RegResult then
+    if ANeedsResult and (ADest <> RegResult) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     if ReferenceReg >= 0 then
       ACtx.Scope.FreeRegister;
