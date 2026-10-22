@@ -57,7 +57,8 @@ procedure CompileSequence(const ACtx: TGocciaCompilationContext;
 procedure CompileUnary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; const ADest: UInt16);
 procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 procedure CompilePropertyAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaPropertyAssignmentExpression; const ADest: UInt16;
   const ANeedsResult: Boolean = True);
@@ -2640,6 +2641,49 @@ begin
     not ShouldTryWithBinding(ACtx.Scope, Local.Name);
 end;
 
+// For `x = v` whose result nobody reads: when v compiled to the single
+// instruction that ends at the current position, and that instruction
+// writes its destination only after reading every operand, it can write the
+// register of x directly instead of a temporary that OP_SET_LOCAL then
+// copies (LocalAcceptsDirectRegisterWrite). OP_GET_LOCAL_PROP_CONST stores
+// its base into the destination before the read, which can throw, so it
+// qualifies only when x is that base.
+function TryRetargetSingleInstructionValue(
+  const ACtx: TGocciaCompilationContext; const ALocalIdx,
+  AValueStart: Integer; const ATemp: UInt16): Boolean;
+var
+  Instruction: UInt32;
+  Slot: UInt16;
+begin
+  Result := False;
+  if (CurrentCodePosition(ACtx) <> AValueStart + 1) or
+     not LocalAcceptsDirectRegisterWrite(ACtx, ALocalIdx) then
+    Exit;
+  Slot := ACtx.Scope.GetLocal(ALocalIdx).Slot;
+  if (Slot > High(UInt8)) or (Slot = ATemp) then
+    Exit;
+  Instruction := ACtx.Template.GetInstruction(AValueStart);
+  if DecodeA(Instruction) <> ATemp then
+    Exit;
+  case TGocciaOpCode(DecodeOp(Instruction)) of
+    OP_GET_PROP_CONST, OP_ARRAY_GET,
+    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD,
+    OP_ADD_FLOAT, OP_SUB_FLOAT, OP_MUL_FLOAT,
+    OP_ADD_NUM_IMM, OP_SUB_NUM_IMM,
+    OP_LOAD_INT, OP_LOAD_CONST, OP_NOT,
+    OP_EQ, OP_NEQ, OP_LT, OP_GT, OP_LTE, OP_GTE:
+      ;
+    OP_GET_LOCAL_PROP_CONST:
+      if DecodeB(Instruction) <> Slot then
+        Exit;
+  else
+    Exit;
+  end;
+  ACtx.Template.PatchInstruction(AValueStart,
+    UInt64((Instruction and not UInt32($FF00)) or (UInt32(Slot) shl 8)));
+  Result := True;
+end;
+
 // The register an uncaptured `this` lives in, usable as an instruction operand
 // in place of a copy. Emits the derived-constructor initialization check that
 // evaluating `this` performs, at the point where the operand is evaluated.
@@ -3160,8 +3204,10 @@ begin
 end;
 
 procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 var
+  ValueStart: Integer;
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Upvalue: TGocciaCompilerUpvalue;
@@ -3276,11 +3322,18 @@ begin
   if (UpvalIdx >= 0) and ExpressionContainsDirectEval(AExpr.Value) then
     TargetReg := PrepareUpvalueAssignmentReference(ACtx, UpvalIdx);
 
+  ValueStart := CurrentCodePosition(ACtx);
   CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
     AExpr.InferName);
 
   if LocalIdx >= 0 then
   begin
+    if not ANeedsResult and
+       TryRetargetSingleInstructionValue(ACtx, LocalIdx, ValueStart, ADest) then
+    begin
+      ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
+      Exit;
+    end;
     Local := ACtx.Scope.GetLocal(LocalIdx);
     if (not Local.IsGlobalBacked) and
        not (Local.IsInitialized and

@@ -381,6 +381,12 @@ begin
     else if AExpr.ClassType = TGocciaPropertyAssignmentExpression then
       CompilePropertyAssignment(ACtx,
         TGocciaPropertyAssignmentExpression(AExpr), Reg, False)
+    else if AExpr.ClassType = TGocciaAssignmentExpression then
+    begin
+      // As ACtx.CompileExpression would, keeping no copy of the result.
+      EmitLineMapping(ACtx, AExpr.Line, AExpr.Column);
+      CompileAssignment(ACtx, TGocciaAssignmentExpression(AExpr), Reg, False);
+    end
     else if AExpr.ClassType = TGocciaCompoundAssignmentExpression then
       CompileCompoundAssignment(ACtx,
         TGocciaCompoundAssignmentExpression(AExpr), Reg, False)
