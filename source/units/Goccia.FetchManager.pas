@@ -1410,8 +1410,15 @@ begin
   if not ReserveResponseBody(Length(ACompletion.Response.Body),
      BodyCharge) then
   begin
-    APromise.Reject(CreateErrorObject('RangeError',
-      SErrorMemoryLimitExceeded));
+    try
+      APromise.Reject(CreateErrorObject('RangeError',
+        SErrorMemoryLimitExceeded));
+    except
+      // Too little room left even for the error: reject with the error
+      // that refusal raised, which is the same memory-limit RangeError.
+      on E: TGocciaThrowValue do
+        APromise.Reject(E.Value);
+    end;
     Exit;
   end;
   Roots.Initialize;
