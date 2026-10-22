@@ -56,6 +56,7 @@ type
     procedure TestOnlyRedirectStatusesAreFollowed;
     procedure TestRedirectStatusesAreFollowed;
     procedure TestSeeOtherKeepsHead;
+    procedure TestEmptyLocationIsFollowed;
     {$ENDIF}
     procedure TestComparesOrigins;
     procedure TestClassifiesPrivateAddressRanges;
@@ -694,6 +695,8 @@ begin
   Test('301, 302, 303, 307 and 308 are followed',
     TestRedirectStatusesAreFollowed);
   Test('A 303 keeps a HEAD request HEAD', TestSeeOtherKeepsHead);
+  Test('An empty Location resolves to the response URL and is followed',
+    TestEmptyLocationIsFollowed);
   {$ENDIF}
   Test('Compares origins by scheme, host and port', TestComparesOrigins);
   Test('Classifies private address ranges',
@@ -1571,6 +1574,28 @@ begin
     finally
       Server.Free;
     end;
+  end;
+end;
+
+{ HTTP-redirect fetch: a Location header that is present but empty parses
+  to the response's URL, so the request is made again there; only a missing
+  Location answers with the redirect response. }
+procedure THTTPClientTests.TestEmptyLocationIsFollowed;
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 302 Found'#13#10'Location:'#13#10'Content-Length: 0'#13#10 +
+      'Connection: close'#13#10#13#10, FINAL_OK]);
+  try
+    Expect<string>(FetchStart(Server, DefaultHTTPPolicy, Response))
+      .ToBe('200|/start');
+    Server.WaitFor;
+    Expect<Boolean>(Response.Redirected).ToBe(True);
+    Expect<Boolean>(Pos('GET /start ', Server.RequestHead(2)) = 1).ToBe(True);
+  finally
+    Server.Free;
   end;
 end;
 

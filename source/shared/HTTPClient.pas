@@ -1671,9 +1671,11 @@ begin
     begin
       if APolicy.RedirectMode = hrmError then
         raise EHTTPError.Create(REDIRECT_MODE_ERROR_MESSAGE);
-      Location := FindHeaderValue(Raw.Headers, 'location');
-      if Location <> '' then
+      { HTTP-redirect fetch: no Location header answers with the response;
+        a present one, even empty, is parsed against the response's URL. }
+      if HasHeader(Raw.Headers, 'location') then
       begin
+        Location := FindHeaderValue(Raw.Headers, 'location');
         // WHATWG Fetch: Location parsed against the response's URL.
         CurrentURL := ResolveHTTPRedirectURL(CurrentURL, Location);
         NextParsed := ParseHTTPURL(CurrentURL);
