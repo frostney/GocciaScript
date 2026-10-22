@@ -2388,22 +2388,25 @@ begin
   // moved the counters in the window — a concurrent release only frees room,
   // but a re-entrant same-thread charge from a sweep destructor would not —
   // can push the committed total past the ceiling.
+  //
+  // Neither locked section has a try..finally. TryChargeExternalBytesLocked
+  // is integer arithmetic and flag stores on this collector's own fields,
+  // with nothing in it that can raise (a development build keeps the Int64
+  // overflow checks, which would need a ledger past 2^63 bytes to fire), and
+  // every string and buffer reservation passes here: a frame would cost an
+  // exception-frame push and pop, with their thread-variable lookups, and a
+  // setjmp on each of them. Keep it so: whatever is added inside the lock
+  // must not raise either. See RegisterObject for the same reasoning.
   CriticalSectionEnter(FAccountingLock);
-  try
-    Result := TryChargeExternalBytesLocked(ABytes);
-  finally
-    CriticalSectionLeave(FAccountingLock);
-  end;
+  Result := TryChargeExternalBytesLocked(ABytes);
+  CriticalSectionLeave(FAccountingLock);
   if Result then
     Exit;
   if not TryCollectForLimitedBytes(ABytes, AProtect) then
     Exit(False);
   CriticalSectionEnter(FAccountingLock);
-  try
-    Result := TryChargeExternalBytesLocked(ABytes);
-  finally
-    CriticalSectionLeave(FAccountingLock);
-  end;
+  Result := TryChargeExternalBytesLocked(ABytes);
+  CriticalSectionLeave(FAccountingLock);
 end;
 
 function TGarbageCollector.TryChargeExternalBytes(
@@ -2418,20 +2421,20 @@ begin
   // suspended frame at every await, so an async chain near the ceiling would
   // collect at every await. The periodic pressure check sees these bytes
   // like any others.
+  //
+  // No try..finally around the lock: nothing in it can raise (see
+  // TryReserveExternalBytes).
   CriticalSectionEnter(FAccountingLock);
-  try
-    Result := FitsWithinLimitLocked(ABytes);
-    if Result then
-    begin
-      Inc(FBytesAllocated, ABytes);
-      Inc(FExternalBytes, ABytes);
-      Inc(FTotalBytesAllocated, ABytes);
-      if FBytesAllocated > FPeakBytesAllocated then
-        FPeakBytesAllocated := FBytesAllocated;
-    end;
-  finally
-    CriticalSectionLeave(FAccountingLock);
+  Result := FitsWithinLimitLocked(ABytes);
+  if Result then
+  begin
+    Inc(FBytesAllocated, ABytes);
+    Inc(FExternalBytes, ABytes);
+    Inc(FTotalBytesAllocated, ABytes);
+    if FBytesAllocated > FPeakBytesAllocated then
+      FPeakBytesAllocated := FBytesAllocated;
   end;
+  CriticalSectionLeave(FAccountingLock);
 end;
 
 procedure TGarbageCollector.ReleaseExternalBytes(const ABytes: Int64);
@@ -2443,28 +2446,28 @@ begin
   // object charged on thread A can be destroyed on thread B, which then
   // releases here against collector A). The accounting lock serializes it with
   // the owner's counter updates so the two never tear
-  // FBytesAllocated/FExternalBytes — see FAccountingLock.
+  // FBytesAllocated/FExternalBytes — see FAccountingLock. Like the
+  // reservation it undoes, it takes the lock without a try..finally: what
+  // runs under it is integer arithmetic on this collector's fields and cannot
+  // raise (see TryReserveExternalBytes), and must stay that way.
   CriticalSectionEnter(FAccountingLock);
-  try
-    if ABytes >= FExternalBytes then
-    begin
-      Dec(FBytesAllocated, FExternalBytes);
-      FExternalBytes := 0;
-    end
-    else
-    begin
-      Dec(FExternalBytes, ABytes);
-      Dec(FBytesAllocated, ABytes);
-    end;
-    // Released bytes take the heap below the level the last forced collection
-    // observed, so that observation no longer bounds what a collection could
-    // reclaim and must not go on suppressing one.
-    if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
-      FForcedCollectFloor := -1;
-    NoteBytesReleasedLocked;
-  finally
-    CriticalSectionLeave(FAccountingLock);
+  if ABytes >= FExternalBytes then
+  begin
+    Dec(FBytesAllocated, FExternalBytes);
+    FExternalBytes := 0;
+  end
+  else
+  begin
+    Dec(FExternalBytes, ABytes);
+    Dec(FBytesAllocated, ABytes);
   end;
+  // Released bytes take the heap below the level the last forced collection
+  // observed, so that observation no longer bounds what a collection could
+  // reclaim and must not go on suppressing one.
+  if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
+    FForcedCollectFloor := -1;
+  NoteBytesReleasedLocked;
+  CriticalSectionLeave(FAccountingLock);
 end;
 
 procedure TGarbageCollector.NoteBytesReleasedLocked;
