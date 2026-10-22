@@ -76,6 +76,7 @@ implementation
 uses
   SysUtils,
 
+  ProcessEncoding,
   TimingUtils;
 
 constructor TGocciaConsole.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);

@@ -247,6 +247,21 @@ loop over source text. Likewise, append a scanned character to a string or
 builder directly, or copy a range of the source, instead of building a
 one-character string per character.
 
+### AnsiString RTL Calls on Windows
+
+GocciaScript strings are UTF-16, but FPC 3.2's RTL is not Unicode: `TFileStream`
+and `FindFirst` take and return AnsiString file names, `TStringList` holds
+AnsiStrings, and `WriteLn` converts text to the output's code page. Each of
+these converts through the system code page. That is the locale's code page on
+Linux and macOS, usually UTF-8, and the ANSI code page (1252 on most systems)
+on Windows, where a character outside it comes back as `?`. On Windows the
+`ProcessEncoding` unit makes UTF-8 the code page of those conversions and of
+the names the RTL returns, and of `Output`, `ErrOutput` and `StdErr` when they
+are redirected to a file or a pipe; a console keeps its own output code page. A
+unit that converts strings through the RTL before `FileUtils` or the console
+built-in is initialized lists it in its uses. Because the setting is
+process-wide, it also applies to an application that embeds the engine.
+
 ## Fuzzing and Memory Safety
 
 `GocciaFuzzHarness` drives a single input through lex, parse, bytecode
