@@ -34,7 +34,8 @@ type
     // block that declares it set the hole on entry, and until the declaration
     // runs nothing can store to it, or, for a leading binding of a function
     // body, nothing can observe the binding before its declaration completes
-    // (LeadingLexicalsWithUnobservableHole).
+    // (LeadingLexicalsWithUnobservableHole). Coverage ignores it, so that the
+    // declaration keeps an instruction on its own line.
     HoleAtBlockEntry: Boolean;
     // Above zero while the code being compiled is outside this local's scope
     // although the local is still declared: ResolveLocal skips it then. See

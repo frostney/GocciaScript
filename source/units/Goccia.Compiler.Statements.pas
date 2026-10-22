@@ -699,7 +699,8 @@ begin
              (ACtx.Scope.GetLocal(LocalIdx).Slot <>
               ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
           begin
-            if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry then
+            if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry and
+               not ACtx.OptimizationOptions.PreserveCoverageShape then
               Continue;
             Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
           end
@@ -719,7 +720,11 @@ begin
        (ACtx.Scope.GetLocal(LocalIdx).Slot <>
         ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
     begin
-      if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry then
+      // The block set the hole on entry. Under coverage the declaration
+      // sets it again anyway: that instruction is what maps a declaration
+      // whose initializer starts on a later line to its own line.
+      if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry and
+         not ACtx.OptimizationOptions.PreserveCoverageShape then
         Continue;
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
     end

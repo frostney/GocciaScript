@@ -5343,6 +5343,54 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
     }
 
+    console.log("Loader: line coverage of declarations whose initializer starts on a later line...");
+    // A lexical binding's TDZ hole is set when its block is entered, so the
+    // declaration itself needs none; under coverage it still sets it, because
+    // that instruction is the only one on a declaration line whose initializer
+    // starts below it, in a block, a switch clause, a loop body or a
+    // destructuring declaration.
+    const declarationSourcePath = join(tmp, "declaration-coverage.js");
+    writeFileSync(
+      declarationSourcePath,
+      [
+        "const id = (x) => x;",
+        "const run = (a) => {",
+        "  {",
+        "    let inner =",
+        "      id(a);",
+        "    a = inner;",
+        "  }",
+        "  switch (a) {",
+        "    case 1:",
+        "      const picked =",
+        "        id(a);",
+        "      a = picked;",
+        "  }",
+        "  for (const n of [1, 2]) {",
+        "    const step =",
+        "      id(n);",
+        "    a += step;",
+        "  }",
+        "  const { p } =",
+        "    { p: 1 };",
+        "  return a + p;",
+        "};",
+        "console.log(run(1));",
+        "",
+      ].join("\n"),
+    );
+    const declarationLcovPath = join(tmp, "declaration-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
+    const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
+    for (const line of [4, 10, 15, 19]) {
+      if (!declarationLcov.includes(`DA:${line},`) || declarationLcov.includes(`DA:${line},0\n`)) {
+        throw new Error(`LCOV should count declaration line ${line} as executed, got:\n${declarationLcov}`);
+      }
+    }
+    if (/^DA:\d+,0$/m.test(declarationLcov)) {
+      throw new Error(`LCOV should report no unexecuted line, got:\n${declarationLcov}`);
+    }
+
     console.log("Loader: line coverage of let and parameter operands spread over several lines...");
     // The same holds for a let binding and a parameter, which the compiler
     // reads in place where nothing can rebind them before they are used, and
