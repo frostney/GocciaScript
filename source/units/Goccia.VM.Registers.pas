@@ -91,24 +91,23 @@ begin
 end;
 
 function RegisterFromDouble(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+var
+  IntValue: Int64;
 begin
   // Build a register directly from a raw Double without ever allocating a heap
   // TGocciaNumberLiteralValue. Mirrors the number branch of VMValueToRegisterFast:
   // exact integers in LongInt range become grkInt (so downstream scalar opcodes and
   // the Zero/One singletons engage on later boxing), and -0.0 stays float to keep
   // its sign bit. NaN/Infinity/non-integers stay float.
-  if AValue = 0.0 then
+  // The range test is false for NaN and the infinities, so no call to IsNaN,
+  // IsInfinite or Frac is needed to recognize an exact integer.
+  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
   begin
-    if NumberBits.IsNegativeZero(AValue) then
-      Exit(RegisterFloat(AValue)); // -0.0: preserve the sign bit as a float
-    Exit(RegisterInt(0));
+    IntValue := Trunc(AValue);
+    if (IntValue = AValue) and
+       ((IntValue <> 0) or not NumberBits.IsNegativeZero(AValue)) then
+      Exit(RegisterInt(IntValue)); // -0.0 stays float to keep its sign bit
   end;
-  if AValue = 1.0 then
-    Exit(RegisterInt(1));
-  if (not IsNaN(AValue)) and (not IsInfinite(AValue)) and
-     (Frac(AValue) = 0.0) and
-     (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
-    Exit(RegisterInt(Trunc(AValue)));
   Result := RegisterFloat(AValue);
 end;
 
