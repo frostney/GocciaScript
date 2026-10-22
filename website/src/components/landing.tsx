@@ -510,7 +510,7 @@ console.log("total:", total);`;
       label: "Lexer",
       small: "tokens",
       overview:
-        "A hand-written scanner streams the source into typed tokens with line and column positions. Newlines are emitted as their own tokens — ASI is the parser's job, not the lexer's, so error spans always point at real characters.",
+        "A hand-written scanner turns the source into typed tokens, each with its source span. Line breaks are not tokens: the parser sees one between two tokens from their line numbers and applies ASI itself, so error spans always point at real characters.",
       docId: "architecture",
       docLabel: "Architecture",
     },
@@ -520,9 +520,9 @@ console.log("total:", total);`;
       small: "AST",
       overview: (
         <>
-          A recursive-descent parser with precedence climbing for binary
-          operators. Recommended defaults reject legacy or coercive constructs (
-          <code className={inlineCodeClass}>var</code>,{" "}
+          A recursive-descent parser with one function per binary-operator
+          precedence level. Recommended defaults reject legacy or coercive
+          constructs (<code className={inlineCodeClass}>var</code>,{" "}
           <code className={inlineCodeClass}>==</code>,{" "}
           <code className={inlineCodeClass}>with</code>) unless their explicit
           compatibility flags are enabled. Normal runtimes do not install{" "}
@@ -850,7 +850,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "How does the sandbox model work?",
     answer:
-      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. GocciaRunner's sandbox mode copies explicit inputs into a virtual filesystem, exposes fs/goccia as import-only modules, and reports sandbox writes as diffs; only inputs copied with --copy-rw are written back, and only after a successful run.",
+      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. GocciaRunner's sandbox mode copies explicit inputs into a virtual filesystem, exposes fs, goccia and goccia:search as import-only modules, and reports sandbox writes as diffs; only inputs copied with --copy-rw are written back, and only after a successful run.",
   },
   {
     question: "How compatible is it with ECMAScript?",
@@ -1061,8 +1061,8 @@ export function Landing({
                   >
                     GC-stress run
                   </a>{" "}
-                  collects garbage every 8 instructions across the GC-sensitive
-                  parts of the test suite and of test262.
+                  collects garbage every 8 instructions across the whole test
+                  suite and the GC-sensitive part of test262.
                 </Text>
               </VStack>
             </Card>
@@ -1232,10 +1232,11 @@ export function Landing({
                 <code className={inlineCodeClass}>describe</code>/
                 <code className={inlineCodeClass}>expect</code> API. In
                 GocciaRunner&apos;s sandbox mode, the sandbox surface adds
-                import-only <code className={inlineCodeClass}>fs</code> and{" "}
-                <code className={inlineCodeClass}>goccia</code> modules backed
-                by a virtual filesystem of copied inputs, sandbox shell
-                commands, nested execution, and explicit diffs.
+                import-only <code className={inlineCodeClass}>fs</code>,{" "}
+                <code className={inlineCodeClass}>goccia</code> and{" "}
+                <code className={inlineCodeClass}>goccia:search</code> modules
+                backed by a virtual filesystem of copied inputs, sandbox shell
+                commands, nested execution, file search, and explicit diffs.
               </p>
               <p className="text-ink-2 mb-4">
                 The sandbox <code className={inlineCodeClass}>fs</code> module
