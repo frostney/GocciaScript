@@ -364,8 +364,12 @@ begin
   end;
 end;
 
-// Compiles an expression whose value nobody reads. A store to a property or an
-// element then skips the move that would make the stored value the result.
+// Compiles an expression whose value nobody reads, as an expression statement
+// or a for-loop update. A store to a property, an element or a binding, a
+// compound assignment and a call then keep no copy of their result. Every form
+// is mapped to its own source position, as ACtx.CompileExpression would map
+// it, so a stack trace or a coverage line names the expression even where its
+// first instruction comes from no subexpression.
 procedure CompileDiscardedExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression);
 var
@@ -373,6 +377,7 @@ var
 begin
   Reg := ACtx.Scope.AllocateRegister;
   try
+    EmitLineMapping(ACtx, AExpr.Line, AExpr.Column);
     if AExpr is TGocciaIncrementExpression then
       CompileIncrement(ACtx, TGocciaIncrementExpression(AExpr), Reg, False)
     else if AExpr.ClassType = TGocciaComputedPropertyAssignmentExpression then
@@ -382,11 +387,7 @@ begin
       CompilePropertyAssignment(ACtx,
         TGocciaPropertyAssignmentExpression(AExpr), Reg, False)
     else if AExpr.ClassType = TGocciaAssignmentExpression then
-    begin
-      // As ACtx.CompileExpression would, keeping no copy of the result.
-      EmitLineMapping(ACtx, AExpr.Line, AExpr.Column);
-      CompileAssignment(ACtx, TGocciaAssignmentExpression(AExpr), Reg, False);
-    end
+      CompileAssignment(ACtx, TGocciaAssignmentExpression(AExpr), Reg, False)
     else if AExpr.ClassType = TGocciaCompoundAssignmentExpression then
       CompileCompoundAssignment(ACtx,
         TGocciaCompoundAssignmentExpression(AExpr), Reg, False)
@@ -394,12 +395,8 @@ begin
       CompilePropertyCompoundAssignment(ACtx,
         TGocciaPropertyCompoundAssignmentExpression(AExpr), Reg, False)
     else if AExpr.ClassType = TGocciaCallExpression then
-    begin
-      // As ACtx.CompileExpression would, but the call leaves its result
-      // where the call put it instead of copying it into Reg.
-      EmitLineMapping(ACtx, AExpr.Line, AExpr.Column);
-      CompileCall(ACtx, TGocciaCallExpression(AExpr), Reg, False, False);
-    end
+      // The call leaves its result where the call put it.
+      CompileCall(ACtx, TGocciaCallExpression(AExpr), Reg, False, False)
     else
       ACtx.CompileExpression(AExpr, Reg);
   finally

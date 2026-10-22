@@ -2622,8 +2622,9 @@ end;
 // True when a store to the local at ALocalIdx can write its register directly
 // instead of going through OP_SET_LOCAL: it is an initialized, mutable,
 // unexported, untyped binding of this function that no closure reaches, here
-// or later in a loop, and no direct eval can rebind. OP_SET_LOCAL then has no
-// cell to update, no TDZ or const check to make and no export to refresh.
+// or later in a loop, and no direct eval can rebind. Such a binding has no
+// cell for OP_SET_LOCAL to update, and needs none of the TDZ probe, const
+// error or export update the compiler emits around a store.
 function LocalAcceptsDirectRegisterWrite(const ACtx: TGocciaCompilationContext;
   const ALocalIdx: Integer): Boolean;
 var
@@ -2695,7 +2696,11 @@ var
 begin
   Result := False;
   ARegister := 0;
-  if not (AExpr is TGocciaThisExpression) then
+  // Under coverage `this` keeps its copy, as a settled local does: a line
+  // holding only `this` would otherwise emit no instruction and be reported
+  // as never executed.
+  if not (AExpr is TGocciaThisExpression) or
+     ACtx.OptimizationOptions.PreserveCoverageShape then
     Exit;
   LocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
   if LocalIdx < 0 then
@@ -5985,20 +5990,8 @@ begin
 
   NullishJumpCount := 0;
   ObjectRegisterAllocated := True;
-  if AExpr.ObjectExpr is TGocciaThisExpression then
-  begin
-    LocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
-    if LocalIdx >= 0 then
-    begin
-      Local := ACtx.Scope.GetLocal(LocalIdx);
-      if not Local.IsCaptured then
-      begin
-        EmitDerivedThisInitializedCheck(ACtx);
-        ObjReg := Local.Slot;
-        ObjectRegisterAllocated := False;
-      end;
-    end;
-  end;
+  if TryResolveThisRegister(ACtx, AExpr.ObjectExpr, ObjReg) then
+    ObjectRegisterAllocated := False;
   if ObjectRegisterAllocated and
      TryResolveSettledLocalRegister(ACtx, AExpr.ObjectExpr, ObjReg,
        AExpr.PropertyExpression, nil, ADest) then
@@ -8266,8 +8259,8 @@ begin
       Exit;
     end;
 
-    // `this` is read in place, as CompileMember does; it is never nullish,
-    // so it adds no optional-chain jump.
+    // `this` is read in place, as CompileMember does; it holds no optional
+    // chain of its own, so it adds no optional-chain jump.
     if TryResolveThisRegister(ACtx, MemberExpr.ObjectExpr, ObjReg) then
       OwnsObjReg := False
     else
