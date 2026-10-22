@@ -2702,6 +2702,8 @@ type
     // Compiled keys of private static elements, which the class declares
     // under a per-evaluation runtime key instead of the compiled one.
     FRuntimeKeyedPrivateKeys: array of string;
+    // True when FPrivateStampPlan still lists the class's private names.
+    function PrivateStampPlanIsCurrent: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function CachedPrivateKeyIndex(const AKey: string): Integer;
     function PrivateKeyCacheEntry(
       const AIndex: Integer): PGocciaPrivateKeyCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
@@ -11610,12 +11612,17 @@ begin
   end;
 end;
 
-function TGocciaVMClassValue.PrivateStampPlan: TGocciaPrivateStampPlan;
+function TGocciaVMClassValue.PrivateStampPlanIsCurrent: Boolean;
 begin
   // The plan follows the private-name set: every private element the VM puts
   // on the prototype declares its name first, which bumps the version.
-  if (not FPrivateStampPlanBuilt) or
-     (FPrivateStampPlan.Version <> PrivateNamesVersion) then
+  Result := FPrivateStampPlanBuilt and
+    (FPrivateStampPlan.Version = PrivateNamesVersion);
+end;
+
+function TGocciaVMClassValue.PrivateStampPlan: TGocciaPrivateStampPlan;
+begin
+  if not PrivateStampPlanIsCurrent then
   begin
     FPrivateStampPlan := BuildPrivateStampPlan(Self);
     FPrivateStampPlanBuilt := True;
@@ -11625,9 +11632,7 @@ end;
 
 function TGocciaVMClassValue.HasEmptyPrivateStampPlan: Boolean;
 begin
-  Result := FPrivateStampPlanBuilt and
-    (FPrivateStampPlan.Version = PrivateNamesVersion) and
-    not (Assigned(Prototype) and (Prototype.ClassType <> TGocciaObjectValue)) and
+  Result := PrivateStampPlanIsCurrent and
     (Length(FPrivateStampPlan.Names) = 0);
 end;
 
