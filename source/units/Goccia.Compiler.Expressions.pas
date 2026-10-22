@@ -205,6 +205,7 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
+  Goccia.Compiler.ConstantValue,
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.Statements,
   Goccia.Compiler.TypeRules,
@@ -5971,17 +5972,19 @@ begin
 end;
 
 // The kind of OP_JUMP_IF_NULLISH match that `x === AExpr` is, when AExpr is
-// the literal null or undefined.
-function TryNullishLiteralMatchKind(const AExpr: TGocciaExpression;
-  out AKind: UInt16): Boolean;
+// null or undefined at compile time: a literal, or a constant such as a const
+// binding of null. Evaluating such an operand has no effect to keep.
+function TryNullishLiteralMatchKind(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out AKind: UInt16): Boolean;
+var
+  Value: TGocciaCompileTimeValue;
 begin
   Result := False;
-  if not (AExpr is TGocciaLiteralExpression) then
+  if not TryEvaluateConstantExpression(ACtx, AExpr, Value) then
     Exit;
-  if TGocciaLiteralExpression(AExpr).Value is TGocciaNullLiteralValue then
+  if Value.Kind = ctvkNull then
     AKind := GOCCIA_NULLISH_MATCH_NULL
-  else if TGocciaLiteralExpression(AExpr).Value is
-          TGocciaUndefinedLiteralValue then
+  else if Value.Kind = ctvkUndefined then
     AKind := GOCCIA_NULLISH_MATCH_UNDEFINED
   else
     Exit;
@@ -6009,9 +6012,9 @@ begin
   Binary := TGocciaBinaryExpression(ACondition);
   if (Binary.Operator <> gttEqual) and (Binary.Operator <> gttNotEqual) then
     Exit;
-  if TryNullishLiteralMatchKind(Binary.Right, MatchKind) then
+  if TryNullishLiteralMatchKind(ACtx, Binary.Right, MatchKind) then
     Operand := Binary.Left
-  else if TryNullishLiteralMatchKind(Binary.Left, MatchKind) then
+  else if TryNullishLiteralMatchKind(ACtx, Binary.Left, MatchKind) then
     Operand := Binary.Right
   else
     Exit;
