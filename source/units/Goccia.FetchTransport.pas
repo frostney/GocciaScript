@@ -39,6 +39,14 @@ type
     { The request body. Always empty today: fetch() supports only GET and
       HEAD, which carry no body. }
     Body: TBytes;
+    { The request's redirect mode, fetch()'s `redirect` option (WHATWG
+      Fetch, RequestRedirect): hrmFollow follows redirects, at most 20 of
+      them, a 21st being a network error; hrmError answers any redirect
+      status (301, 302, 303, 307, 308) with a network error; hrmManual
+      answers with the redirect response itself, Location and all. A
+      transport that performs redirects itself must honour it, as
+      FetchOverNetwork does; the engine takes the answer as given. }
+    Redirect: THTTPRedirectMode;
     { Milliseconds left until the run's deadline or the request's
       AbortSignal.timeout(), whichever is sooner; zero when neither applies.
       The engine enforces both itself; this is what a transport that does

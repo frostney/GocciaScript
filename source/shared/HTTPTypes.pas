@@ -52,6 +52,11 @@ type
   THTTPHostCheck = function(const AHost: string; const APort: Integer;
     const AResolvedAddress: string; out AReason: string): Boolean of object;
 
+  { What a request does with a redirect response (WHATWG Fetch, a request's
+    redirect mode, the RequestRedirect enum): follow it (the default), fail
+    with a network error, or answer with the redirect response itself. }
+  THTTPRedirectMode = (hrmFollow, hrmError, hrmManual);
+
   { Per-request network policy.
 
     Separate from the allowlist because the allowlist answers "which names may
@@ -73,6 +78,10 @@ type
     { Optional destination policy consulted on every hop; see
       THTTPHostCheck. }
     HostCheck: THTTPHostCheck;
+    { What the request does with a redirect response; see
+      THTTPRedirectMode. hrmFollow is the zero value, so a policy built
+      field by field still follows redirects. }
+    RedirectMode: THTTPRedirectMode;
   end;
 
   THTTPParsedURL = record
@@ -118,6 +127,7 @@ begin
   Result.DenyPrivateRanges := False;
   Result.MaxResponseBytes := DEFAULT_MAX_RESPONSE_BODY_BYTES;
   Result.HostCheck := nil;
+  Result.RedirectMode := hrmFollow;
 end;
 
 constructor EHTTPDestinationDenied.CreateDenied(const AScope, AReason: string);

@@ -18,9 +18,24 @@ The `options` object supports:
 
 - `method`: `"GET"` or `"HEAD"` (case-insensitive);
 - `headers`: a plain object or `Headers` instance;
+- `redirect`: `"follow"` (the default), `"error"`, or `"manual"`; any other value throws `TypeError`;
 - `signal`: an `AbortSignal`, `null`, or `undefined`.
 
-Redirects (301/302/303/307/308) are followed automatically up to 20 hops. A redirect's `Location` is parsed by the URL Standard's parser with the redirecting response's URL as the base (relative, `./`, `../`, absolute-path, query-only and scheme-relative forms), and the URL sent, for the first request and every hop, has its dot segments removed (`https://h/a/./b/../c` is requested as `https://h/a/c`); a `Location` that does not parse is a network error. HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
+### Redirects
+
+A redirect status is 301, 302, 303, 307 or 308; any other status, a 300 or 306 with a `Location` included, is the response. What a redirect does depends on the `redirect` option ([WHATWG Fetch, HTTP fetch](https://fetch.spec.whatwg.org/#http-fetch); [ADR 0156](adr/0156-fetch-honours-the-redirect-mode.md)):
+
+- `"follow"` follows up to 20 redirects. A twenty-first rejects with `TypeError: redirect limit exceeded: more than 20 redirects`. A redirect response without a `Location` is the response.
+- `"error"` rejects any redirect, one without a `Location` included, with `TypeError: redirect refused: the request's redirect mode is "error"`.
+- `"manual"` resolves with the redirect response itself: its status, `statusText`, headers (`Location` included) and body, `redirected` false, and `url` the request's URL. A browser answers with an opaque-redirect response (status 0, no headers) here; GocciaScript has no origin model to protect, so it answers as Node.js and Bun do.
+
+`Authorization`, `Cookie` and `Proxy-Authorization` headers the script sets are sent only while the redirects stay on the request's origin (scheme, host and port). The first redirect to another origin drops them for that hop and every later one, even one that returns to the original origin. An HTTPS-to-HTTP redirect changes the scheme, so the credentials never travel without TLS. Other headers are sent on every hop.
+
+A redirect's `Location` is parsed by the URL Standard's parser with the redirecting response's URL as the base (relative, `./`, `../`, absolute-path, query-only and scheme-relative forms), and the URL sent, for the first request and every hop, has its dot segments removed (`https://h/a/./b/../c` is requested as `https://h/a/c`); a `Location` that does not parse is a network error.
+
+### Transport security
+
+HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
 
 ### Network capability
 

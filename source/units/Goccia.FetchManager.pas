@@ -66,11 +66,13 @@ type
       response ceiling, audit emitter). It is passed per request rather than
       stored here because engines on one thread may hold different policies;
       the caller reads it from host configuration, never from script space.
-      ARealm is the dispatching engine's realm. }
+      ARealm is the dispatching engine's realm. ARedirectMode is the
+      script's `redirect` option. }
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
       const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
-      const ASignal: TGocciaAbortSignalValue = nil); virtual; abstract;
+      const ASignal: TGocciaAbortSignalValue = nil;
+      const ARedirectMode: THTTPRedirectMode = hrmFollow); virtual; abstract;
     function PumpCompletions: Integer; virtual; abstract;
     { True while any engine on the thread has a request in flight. }
     function HasPending: Boolean; virtual; abstract;
@@ -97,7 +99,8 @@ procedure DiscardFetchCompletions(const ARealm: TGocciaRealm); overload;
 
 { Performs ARequest over the network exactly as fetch() does with no
   transport installed — the net capability checked on every redirect hop and
-  against every resolved address, the response ceiling, the timeout — and
+  against every resolved address, the request's redirect mode, the response
+  ceiling, the timeout — and
   answers AResponder with the result. Blocking: a transport that forwards to
   the network (to record what it answers, say) calls it from a thread of its
   own. The hop decisions it makes are not audited. Its answer passes the
@@ -289,6 +292,7 @@ type
     FURL: string;
     FMethod: string;
     FHeaders: THTTPHeaders;
+    FRedirectMode: THTTPRedirectMode;
 
     FTimeoutMilliseconds: Integer;
     { The worker's own copy of the dispatching engine's policy. }
@@ -299,6 +303,7 @@ type
     constructor Create(const AState: TGocciaFetchState;
       const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
       const AURL, AMethod: string; const AHeaders: THTTPHeaders;
+      const ARedirectMode: THTTPRedirectMode;
       const ATimeoutMilliseconds: Integer;
       const APolicy: TGocciaFetchPolicy);
     destructor Destroy; override;
@@ -361,7 +366,8 @@ type
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
       const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
-      const ASignal: TGocciaAbortSignalValue = nil); override;
+      const ASignal: TGocciaAbortSignalValue = nil;
+      const ARedirectMode: THTTPRedirectMode = hrmFollow); override;
     function PumpCompletions: Integer; override;
     function HasPending: Boolean; override;
     function HasPendingFor(const ARealm: TGocciaRealm): Boolean; override;
@@ -528,6 +534,7 @@ end;
 constructor TGocciaFetchWorker.Create(const AState: TGocciaFetchState;
   const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
   const AURL, AMethod: string; const AHeaders: THTTPHeaders;
+  const ARedirectMode: THTTPRedirectMode;
   const ATimeoutMilliseconds: Integer; const APolicy: TGocciaFetchPolicy);
 begin
   inherited Create(True, FETCH_WORKER_STACK_SIZE);
@@ -536,6 +543,7 @@ begin
   FURL := AURL;
   FMethod := AMethod;
   FHeaders := AHeaders;
+  FRedirectMode := ARedirectMode;
   FTimeoutMilliseconds := ATimeoutMilliseconds;
   FPolicy := APolicy;
   FState := AState;
@@ -609,7 +617,8 @@ end;
 { The built-in network request behind fetch(): fills ACompletion with the
   response or the error, and with the hop decisions it made. }
 procedure PerformNetworkRequest(const AURL, AMethod: string;
-  const AHeaders: THTTPHeaders; const ATimeoutMilliseconds: Integer;
+  const AHeaders: THTTPHeaders; const ARedirectMode: THTTPRedirectMode;
+  const ATimeoutMilliseconds: Integer;
   const ACapabilities: TGocciaCapabilities; const AMaxResponseBytes: Integer;
   const ACompletion: TGocciaFetchCompletion);
 var
@@ -621,6 +630,7 @@ begin
     RequestPolicy := DefaultHTTPPolicy;
     RequestPolicy.MaxResponseBytes := AMaxResponseBytes;
     RequestPolicy.HostCheck := Checker.CheckDestination;
+    RequestPolicy.RedirectMode := ARedirectMode;
     try
       if AMethod = FETCH_METHOD_HEAD then
         ACompletion.Response := HTTPHead(AURL, AHeaders, nil,
@@ -653,8 +663,9 @@ var
 begin
   Completion := TGocciaFetchCompletion.Create(FRequestID);
   try
-    PerformNetworkRequest(FURL, FMethod, FHeaders, FTimeoutMilliseconds,
-      FPolicy.Capabilities, FPolicy.MaxResponseBytes, Completion);
+    PerformNetworkRequest(FURL, FMethod, FHeaders, FRedirectMode,
+      FTimeoutMilliseconds, FPolicy.Capabilities, FPolicy.MaxResponseBytes,
+      Completion);
     if FState.PostCompletion(Completion) then
       Completion := nil;
   finally
@@ -990,7 +1001,8 @@ end;
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
   const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
   const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
-  const ASignal: TGocciaAbortSignalValue);
+  const ASignal: TGocciaAbortSignalValue;
+  const ARedirectMode: THTTPRedirectMode);
 var
   Pending: TGocciaPendingFetch;
   Worker: TGocciaFetchWorker;
@@ -1094,6 +1106,7 @@ begin
       Request.URL := RequestURL;
       Request.Headers := Copy(AHeaders);
       Request.Body := nil;
+      Request.Redirect := ARedirectMode;
       Request.TimeoutMilliseconds := RequestTimeoutMilliseconds;
       Request.MaxResponseBytes := MaxResponseBytes;
       Request.Capabilities := APolicy.Capabilities;
@@ -1104,7 +1117,7 @@ begin
     else
     begin
       Worker := TGocciaFetchWorker.Create(FState, FLimiter,
-        Pending.RequestID, RequestURL, AMethod, AHeaders,
+        Pending.RequestID, RequestURL, AMethod, AHeaders, ARedirectMode,
         RequestTimeoutMilliseconds, APolicy);
       LimitAcquired := False;
     end;
@@ -1713,7 +1726,7 @@ begin
   Completion := TGocciaFetchCompletion.Create(0);
   try
     PerformNetworkRequest(ARequest.URL, ARequest.Method, ARequest.Headers,
-      ARequest.TimeoutMilliseconds, ARequest.Capabilities,
+      ARequest.Redirect, ARequest.TimeoutMilliseconds, ARequest.Capabilities,
       ARequest.MaxResponseBytes, Completion);
     if Completion.Success then
       AResponder.Respond(Completion.Response)

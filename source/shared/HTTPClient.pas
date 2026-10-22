@@ -73,6 +73,13 @@ function NormalizeHTTPRequestURL(const AURL: string): string;
   network error). }
 function ResolveHTTPRedirectURL(const ABaseURL, ALocation: string): string;
 
+{ True when two absolute http(s) URLs have the same origin: the same scheme,
+  host and port. A redirect between URLs that are not keeps the caller's
+  Authorization, Cookie and Proxy-Authorization off that hop and every later
+  one; an HTTPS-to-HTTP redirect changes the scheme, so the credentials never
+  travel without TLS. }
+function IsSameHTTPOrigin(const AFromURL, AToURL: string): Boolean;
+
 implementation
 
 uses
@@ -95,6 +102,15 @@ const
   HTTP_CONNECTION_WORKER_STACK_SIZE = 1024 * 1024;
   MAX_HTTP_CONNECTION_WORKERS = 16;
   MAX_REDIRECTS = 20;
+  HTTP_STATUS_MOVED_PERMANENTLY = 301;
+  HTTP_STATUS_FOUND = 302;
+  HTTP_STATUS_SEE_OTHER = 303;
+  HTTP_STATUS_TEMPORARY_REDIRECT = 307;
+  HTTP_STATUS_PERMANENT_REDIRECT = 308;
+  REDIRECT_MODE_ERROR_MESSAGE =
+    'redirect refused: the request''s redirect mode is "error"';
+  REDIRECT_LIMIT_ERROR_MESSAGE =
+    'redirect limit exceeded: more than %d redirects';
   MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
   CRLF = #13#10;
   RECV_BUF_SIZE = 8192;
@@ -1428,6 +1444,28 @@ begin
     raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
 end;
 
+{ WHATWG Fetch: a redirect status is 301, 302, 303, 307 or 308. }
+function IsRedirectStatus(const AStatus: Integer): Boolean;
+begin
+  Result := (AStatus = HTTP_STATUS_MOVED_PERMANENTLY) or
+    (AStatus = HTTP_STATUS_FOUND) or (AStatus = HTTP_STATUS_SEE_OTHER) or
+    (AStatus = HTTP_STATUS_TEMPORARY_REDIRECT) or
+    (AStatus = HTTP_STATUS_PERMANENT_REDIRECT);
+end;
+
+{ HTML Standard, same origin: two tuple origins with the same scheme, host
+  and port. }
+function SameHTTPOrigin(const AFrom, ATo: THTTPParsedURL): Boolean;
+begin
+  Result := SameText(AFrom.Scheme, ATo.Scheme) and
+    SameText(AFrom.Host, ATo.Host) and (AFrom.Port = ATo.Port);
+end;
+
+function IsSameHTTPOrigin(const AFromURL, AToURL: string): Boolean;
+begin
+  Result := SameHTTPOrigin(ParseHTTPURL(AFromURL), ParseHTTPURL(AToURL));
+end;
+
 // ---------------------------------------------------------------------------
 // Core request logic
 // ---------------------------------------------------------------------------
@@ -1619,24 +1657,32 @@ begin
       SocketClose(Sock);
     end;
 
-    // Handle redirects
-    if (Raw.StatusCode >= 301) and (Raw.StatusCode <= 308) and
-       (Raw.StatusCode <> 304) and (Raw.StatusCode <> 305) then
+    { WHATWG Fetch, HTTP fetch: a redirect status is handled by the
+      request's redirect mode. "error" is a network error, "manual" answers
+      with the redirect response itself, and "follow" runs HTTP-redirect
+      fetch, which answers with the response when it has no Location. }
+    if IsRedirectStatus(Raw.StatusCode) and
+       (APolicy.RedirectMode <> hrmManual) then
     begin
+      if APolicy.RedirectMode = hrmError then
+        raise EHTTPError.Create(REDIRECT_MODE_ERROR_MESSAGE);
       Location := FindHeaderValue(Raw.Headers, 'location');
-      if (Location <> '') and (Redirects < AMaxRedirects) then
+      if Location <> '' then
       begin
-        Inc(Redirects);
-        Result.Redirected := True;
-
         // WHATWG Fetch: Location parsed against the response's URL.
         CurrentURL := ResolveHTTPRedirectURL(CurrentURL, Location);
         NextParsed := ParseHTTPURL(CurrentURL);
+        { HTTP-redirect fetch: a request that has already been redirected
+          AMaxRedirects (20) times fails with a network error. }
+        if Redirects >= AMaxRedirects then
+          raise EHTTPError.CreateFmt(REDIRECT_LIMIT_ERROR_MESSAGE,
+            [AMaxRedirects]);
+        Inc(Redirects);
+        Result.Redirected := True;
+
         { Fetch removes Authorization once a redirect changes origin. Keep
           caller credentials off every later hop, even if it returns here. }
-        if not SameText(Parsed.Scheme, NextParsed.Scheme) or
-           not SameText(Parsed.Host, NextParsed.Host) or
-           (Parsed.Port <> NextParsed.Port) then
+        if not SameHTTPOrigin(Parsed, NextParsed) then
           SendCredentials := False;
 
         // 303: change method to GET per RFC 7231
