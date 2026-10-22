@@ -1609,6 +1609,43 @@ await section("test262 runner: deterministic shards merge into one complete repo
         `test262 merge should reject duplicate shards: ${duplicateProc.stderr.toString()}`,
       );
     }
+
+    // A stored report from another execution mode must not merge with
+    // bytecode shards; one that records "bytecode" still merges.
+    const shardWithMode = (path: string, mode: string): string => {
+      const report = JSON.parse(readFileSync(path, "utf8"));
+      report.run.mode = mode;
+      const modePath = join(tmp, `${mode}-${report.shard.index}.json`);
+      writeFileSync(modePath, JSON.stringify(report));
+      return modePath;
+    };
+    const mergeWithFirst = (firstShard: string) =>
+      Bun.spawnSync(
+        [
+          "bun",
+          "scripts/run_test262_suite.ts",
+          "--merge-shards",
+          "--output", join(tmp, "mode-merged.json"),
+          firstShard,
+          ...shardReports.slice(1),
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+      );
+    const interpretedProc = mergeWithFirst(shardWithMode(shardReports[0], "interpreted"));
+    if (interpretedProc.exitCode !== 1 ||
+        !interpretedProc.stderr.toString().includes('run mode "interpreted" is not "bytecode"')) {
+      throw new Error(
+        `test262 merge should reject an interpreted shard report, got ${interpretedProc.exitCode}: ` +
+          interpretedProc.stderr.toString(),
+      );
+    }
+    const bytecodeProc = mergeWithFirst(shardWithMode(shardReports[0], "bytecode"));
+    if (bytecodeProc.exitCode !== 0) {
+      throw new Error(
+        `test262 merge should accept a shard report recording bytecode, got ${bytecodeProc.exitCode}: ` +
+          bytecodeProc.stderr.toString(),
+      );
+    }
   } finally {
     clean(tmp);
   }
