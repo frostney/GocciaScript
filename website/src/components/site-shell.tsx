@@ -10,8 +10,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { GithubIcon, MoonIcon, StarIcon, SunIcon } from "@/components/icons";
-import { formatStars, GITHUB_REPO_URL } from "@/lib/github";
+import { GithubIcon, MoonIcon, SunIcon } from "@/components/icons";
+import { GITHUB_REPO_URL } from "@/lib/github";
 
 type Theme = "cream" | "espresso";
 
@@ -29,16 +29,33 @@ function isActive(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
-export function SiteShell({
-  children,
-  stars,
-}: {
-  children: React.ReactNode;
-  stars?: number | null;
-}) {
+export function SiteShell({ children }: { children: React.ReactNode }) {
+  const [conformancePercent, setConformancePercent] = useState<string | null>(
+    null,
+  );
   const [theme, setTheme] = useState<Theme>("cream");
   const userOverrideRef = useRef(false);
   const pathname = usePathname() ?? "/";
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadHeadline() {
+      try {
+        const response = await fetch("/api/test262/headline", {
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!controller.signal.aborted && typeof data.percent === "string") {
+          setConformancePercent(data.percent);
+        }
+      } catch {
+        // The live figure is optional; leave navigation unchanged on failure.
+      }
+    }
+    void loadHeadline();
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const fromDom = document.documentElement.dataset.theme;
@@ -84,7 +101,11 @@ export function SiteShell({
             key={tab.href}
             as={Link}
             href={tab.href}
-            label={tab.label}
+            label={
+              tab.href === "/compatibility" && conformancePercent
+                ? `Compatibility · test262 ${conformancePercent}`
+                : tab.label
+            }
             isSelected={isActive(pathname, tab.href)}
           />
         ))}
@@ -155,24 +176,23 @@ export function SiteShell({
                     }}
                   />
                   <div className="astryx-desktop-actions">
+                    {conformancePercent && (
+                      <Link
+                        className="nav-conformance"
+                        href="/compatibility"
+                        aria-label={`test262 ${conformancePercent}: live pass rate on main. Open the compatibility dashboard`}
+                      >
+                        test262 {conformancePercent}
+                      </Link>
+                    )}
                     <a
-                      className="nav-cta nav-cta-github"
+                      className="nav-cta"
                       href={GITHUB_REPO_URL}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
                       <GithubIcon size={14} />
                       <span>GitHub</span>
-                      {typeof stars === "number" && (
-                        <span
-                          className="nav-stars"
-                          role="img"
-                          aria-label={`${stars} GitHub stars`}
-                        >
-                          <StarIcon size={14} />
-                          <span>{formatStars(stars)}</span>
-                        </span>
-                      )}
                     </a>
                   </div>
                 </div>

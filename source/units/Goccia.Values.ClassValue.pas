@@ -12,6 +12,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.CapabilityAudit,
   Goccia.Constants,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -81,7 +82,16 @@ type
     function GetStaticPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetPrivatePropertyGetter(const AName: string): TGocciaValue;
     function GetPrivatePropertySetter(const AName: string): TGocciaValue;
-    procedure MaterializeIntrinsicProperty(const AName: string);
+    // APending and APendingValue are what the caller is about to store: they
+    // are rooted while the intrinsic's value is allocated.
+    procedure MaterializeIntrinsicProperty(const AName: string;
+      const APending: TGocciaPropertyDescriptor = nil;
+      const APendingValue: TGocciaValue = nil);
+    // The body of Instantiate. ARoots is the frame Instantiate raised around
+    // it; every value this body reads again after guest code runs goes in it.
+    function InstantiateRooted(const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue;
+      var ARoots: TGocciaActiveRootFrame): TGocciaValue;
   public
     class procedure SetDefaultPrototype(const AProto: TGocciaObjectValue); static;
     class procedure PatchDefaultPrototype(const AClassValue: TGocciaClassValue); static;
@@ -184,7 +194,7 @@ type
     property StaticPropertySetter[const AName: string]: TGocciaFunctionBase read GetStaticPropertySetter;
     property PrivatePropertyGetter[const AName: string]: TGocciaValue read GetPrivatePropertyGetter;
     property PrivatePropertySetter[const AName: string]: TGocciaValue read GetPrivatePropertySetter;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     procedure AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
     procedure AddFieldInitializerWithKey(const AName: string; const AComputedKey: TGocciaValue; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
@@ -198,6 +208,12 @@ type
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorStaticFieldInitializers;
+    // Whether the synthesized "name" and "length" were deleted (a heap
+    // snapshot's built-in fingerprints and differences, ADR 0148).
+    property NameDeleted: Boolean read FNameDeleted;
+    property LengthDeleted: Boolean read FLengthDeleted;
+    procedure SetIntrinsicDeletionsForRestore(const ANameDeleted,
+      ALengthDeleted: Boolean);
   end;
 
   // ES2026 §20.1.1.1 Object ( [ value ] ): a call, or a construction with no
@@ -374,12 +390,16 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
+    procedure AssignPropertySlow(const AName: string; const AValue: TGocciaValue;
+      const ACanCreate: Boolean);
+    procedure AddOwnDataPropertyGrowing(const AName: string;
+      const AValue: TGocciaValue);
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function TryGetRawPrivateProperty(const AKey: string; out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateProperty(const AKey: string; const AValue: TGocciaValue);
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); virtual;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     property ClassValue: TGocciaClassValue read FClass write FClass;
   end;
@@ -482,7 +502,6 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
   Goccia.Timeout,
@@ -956,12 +975,11 @@ begin
   inherited;
 end;
 
-procedure TGocciaClassValue.MarkReferences;
+procedure TGocciaClassValue.TraceReferences;
 var
   ValPair: TGocciaValueMap.TKeyValuePair;
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FSuperClass) then
@@ -1061,6 +1079,7 @@ begin
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter) then
     ExistingSetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Setter;
+  ReleaseDescriptor(ExistingDescriptor);
 
   inherited DefineProperty(AName,
     TGocciaPropertyDescriptorAccessor.Create(
@@ -1081,6 +1100,7 @@ begin
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
      Assigned(TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter) then
     ExistingGetter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+  ReleaseDescriptor(ExistingDescriptor);
 
   inherited DefineProperty(AName,
     TGocciaPropertyDescriptorAccessor.Create(
@@ -1168,6 +1188,7 @@ begin
     if Getter is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(Getter);
   end;
+  ReleaseDescriptor(Descriptor);
 end;
 
 function TGocciaClassValue.GetStaticPropertySetter(const AName: string): TGocciaFunctionBase;
@@ -1183,6 +1204,7 @@ begin
     if Setter is TGocciaFunctionBase then
       Result := TGocciaFunctionBase(Setter);
   end;
+  ReleaseDescriptor(Descriptor);
 end;
 
 procedure TGocciaClassValue.AddFieldInitializer(const AName: string; const AInitializer: TGocciaValue; const AIsPrivate, AIsStatic: Boolean);
@@ -1611,8 +1633,30 @@ begin
 end;
 
 // ES2026 §10.2.2 [[Construct]](argumentsList, newTarget)
+//
+// One frame holds what construction reads again after guest code runs
+// (issue #1679): the prototype read from newTarget, which a getter or Proxy
+// trap can hand back fresh, and the instance in each form it takes. A delayed
+// prototype lookup runs that guest code after the native instance exists and
+// before anything else refers to it, and the native initialization and the
+// native superclass construction run with the instance held only by this call.
 function TGocciaClassValue.Instantiate(const AArguments: TGocciaArgumentsCollection;
   const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  try
+    Result := InstantiateRooted(AArguments, ANewTarget, Roots);
+  finally
+    Roots.Clear;
+  end;
+end;
+
+function TGocciaClassValue.InstantiateRooted(
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue;
+  var ARoots: TGocciaActiveRootFrame): TGocciaValue;
 var
   Instance: TGocciaObjectValue;
   WalkClass: TGocciaClassValue;
@@ -1702,27 +1746,27 @@ begin
   end
   else
     InstancePrototype := FClassPrototype;
+  ARoots.Add(InstancePrototype);
 
   if Assigned(NativeClass) then
   begin
     NativeInstance := NativeClass.CreateNativeInstance(AArguments);
+    ARoots.Add(NativeInstance);
     if DelayNativePrototypeLookup and
        (NativeInstance is TGocciaInstanceValue) then
     begin
-      TGarbageCollector.Instance.AddTempRoot(NativeInstance);
-      try
-        TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
-      finally
-        TGarbageCollector.Instance.RemoveTempRoot(NativeInstance);
-      end;
+      TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
       NativeInstanceInitialized := True;
     end;
   end;
 
   if Assigned(NativeClass) and Assigned(ANewTarget) and
      DelayNativePrototypeLookup then
+  begin
     InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,
       ANewTarget, NativeIntrinsicPrototype);
+    ARoots.Add(InstancePrototype);
+  end;
 
   // ES2026 §10.2.2 step 6: Set proto on the instance before constructor runs
   if Assigned(NativeInstance) then
@@ -1736,18 +1780,12 @@ begin
   begin
     Instance := TGocciaInstanceValue.Create(Self,
       EstimatedInstancePropertyCapacity);
+    ARoots.Add(Instance);
     Instance.Prototype := InstancePrototype;
   end;
 
   if NativeInstanceInitialized and (NativeInstance is TGocciaInstanceValue) then
-  begin
-    TGarbageCollector.Instance.AddTempRoot(Instance);
-    try
-      TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
-    finally
-      TGarbageCollector.Instance.RemoveTempRoot(Instance);
-    end;
-  end;
+    TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
 
   { §13.3.7.1 SuperCall step 3: super() reaching something that is not a
     constructor is a TypeError, and Object.setPrototypeOf is the only way to
@@ -1765,6 +1803,7 @@ begin
     if Assigned(NativeInstance) then
     begin
       Instance := NativeInstance;
+      ARoots.Add(Instance);
       if Assigned(NativeClass) or not DelayNativePrototypeLookup then
         Instance.Prototype := InstancePrototype;
       if NativeInstance is TGocciaInstanceValue then
@@ -1818,6 +1857,7 @@ begin
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
+      ReleaseDescriptor(Descriptor);
       Result := inherited GetPropertyWithContext(AName, AThisContext);
       Exit;
     end;
@@ -1840,6 +1880,7 @@ begin
     Descriptor := inherited GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
+      ReleaseDescriptor(Descriptor);
       Result := inherited GetPropertyWithContext(AName, AThisContext);
       Exit;
     end;
@@ -1862,17 +1903,38 @@ end;
 // Object.seal define every own key after preventing extensions) and which
 // fills in a partial descriptor from the defaults instead of the current
 // attributes. A deleted property stays absent.
-procedure TGocciaClassValue.MaterializeIntrinsicProperty(const AName: string);
+procedure TGocciaClassValue.MaterializeIntrinsicProperty(const AName: string;
+  const APending: TGocciaPropertyDescriptor;
+  const APendingValue: TGocciaValue);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (AName <> PROP_NAME) and (AName <> PROP_LENGTH) then
     Exit;
   if FProperties.ContainsKey(AName) then
     Exit;
-  Descriptor := GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) then
-    FProperties.Add(AName, Descriptor);
+  // Synthesizing the descriptor allocates its value (a name string reserves
+  // its payload and can collect) while the caller's pending descriptor or
+  // value is held by nothing but the caller.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    if Assigned(APending) then
+      APending.PushRoots(Roots);
+    Roots.Add(APendingValue);
+    Descriptor := GetOwnPropertyDescriptor(AName);
+    if not Assigned(Descriptor) then
+      Exit;
+    // Adding can grow the map, and its gate roots only the map's owner and
+    // the descriptor added, not the caller's pending one.
+    if Descriptor.CallerOwned then
+      FProperties.Add(AName, Descriptor.TakeOwnership)
+    else
+      FProperties.Add(AName, ClonePropertyDescriptor(Descriptor));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure TGocciaClassValue.DefineProperty(const AName: string;
@@ -1885,12 +1947,13 @@ begin
       ADescriptor.Free;
       Exit;
     end;
-    ADescriptor.Free;
+    // The base contract: a definition that throws leaves the descriptor to
+    // its caller, which frees it. Freeing it here as well freed it twice.
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
       SSuggestCannotDeleteNonConfigurable);
   end;
 
-  MaterializeIntrinsicProperty(AName);
+  MaterializeIntrinsicProperty(AName, ADescriptor);
   inherited DefineProperty(AName, ADescriptor);
 end;
 
@@ -1908,7 +1971,7 @@ begin
     Exit(False);
   end;
 
-  MaterializeIntrinsicProperty(AName);
+  MaterializeIntrinsicProperty(AName, ADescriptor);
   Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
@@ -1922,7 +1985,7 @@ begin
   // messages use, as Object.defineProperty already left it.
   if (AName = PROP_NAME) or (AName = PROP_LENGTH) then
   begin
-    MaterializeIntrinsicProperty(AName);
+    MaterializeIntrinsicProperty(AName, nil, AValue);
     inherited SetProperty(AName, AValue);
     Exit;
   end;
@@ -1934,7 +1997,8 @@ end;
 function TGocciaClassValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
 begin
   if AName = PROP_PROTOTYPE then
-    Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
+    Result := TGocciaPropertyDescriptorData.Create(FClassPrototype,
+      []).AsCallerOwned
   else if AName = PROP_NAME then
   begin
     // Check if .name was explicitly set (e.g. static name = 'Custom')
@@ -1944,10 +2008,11 @@ begin
       // Synthesize from FName: { writable: false, enumerable: false, configurable: true }
       if (FName = '') or (FName = '<anonymous>') then
         Result := TGocciaPropertyDescriptorData.Create(
-          TGocciaStringLiteralValue.Create(''), [pfConfigurable])
+          TGocciaStringLiteralValue.Create(''), [pfConfigurable]).AsCallerOwned
       else
         Result := TGocciaPropertyDescriptorData.Create(
-          TGocciaStringLiteralValue.Create(FName), [pfConfigurable]);
+          TGocciaStringLiteralValue.Create(FName),
+          [pfConfigurable]).AsCallerOwned;
     end;
   end
   else if AName = PROP_LENGTH then
@@ -1958,7 +2023,8 @@ begin
     Result := inherited GetOwnPropertyDescriptor(AName);
     if not Assigned(Result) and not FLengthDeleted then
       Result := TGocciaPropertyDescriptorData.Create(
-        TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable]);
+        TGocciaNumberLiteralValue.Create(GetClassLength),
+        [pfConfigurable]).AsCallerOwned;
   end
   else
     Result := inherited GetOwnPropertyDescriptor(AName);
@@ -2048,9 +2114,12 @@ end;
 function TGocciaClassValue.DeleteProperty(const AName: string): Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  HasDescriptor: Boolean;
 begin
   Descriptor := inherited GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) then
+  HasDescriptor := Assigned(Descriptor);
+  ReleaseDescriptor(Descriptor);
+  if HasDescriptor then
   begin
     Result := inherited DeleteProperty(AName);
     if Result then
@@ -2647,9 +2716,89 @@ begin
   Result := GetPropertyFromPrototype(AName, AThisContext);
 end;
 
+// The two stores that need nothing but the maps: a writable own data
+// property, and a new own property behind a prototype chain that holds none
+// of the name. Kept free of managed locals so that they pay no exception
+// frame; everything else is AssignPropertySlow, which walks again from the
+// start.
+//
+// The fast path allocates nothing before its last step and calls nothing that
+// can run guest code, collect or hand back a descriptor it must free: it reads
+// a prototype only when that prototype keeps the ordinary [[Set]] and
+// [[GetOwnProperty]], and then only asks its map whether the name is there,
+// without materializing a lazy entry. Its one store that can raise, a new
+// property that grows the map, is AddOwnDataPropertyGrowing's.
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Proto: TGocciaObjectValue;
+begin
+  if FProperties.TryGetValue(AName, Descriptor) then
+  begin
+    if (Descriptor.ClassType = TGocciaPropertyDescriptorData) and
+       TGocciaPropertyDescriptorData(Descriptor).Writable then
+      TGocciaPropertyDescriptorData(Descriptor).Value := AValue
+    else
+      AssignPropertySlow(AName, AValue, ACanCreate);
+    Exit;
+  end;
+
+  Proto := FPrototype;
+  while Assigned(Proto) do
+  begin
+    if not UsesOrdinarySet(Proto) or not InheritsGetOwnProperty(Proto) or
+       Proto.Properties.ContainsKey(AName) then
+    begin
+      AssignPropertySlow(AName, AValue, ACanCreate);
+      Exit;
+    end;
+    Proto := Proto.Prototype;
+  end;
+
+  if not ACanCreate or not FExtensible or
+     (ClassType <> TGocciaInstanceValue) then
+  begin
+    AssignPropertySlow(AName, AValue, ACanCreate);
+    Exit;
+  end;
+
+  // OrdinarySet creates an own data property, which OrdinaryDefineOwnProperty
+  // accepts as given; an instance of exactly this class has the ordinary
+  // DefineProperty, so the descriptor goes straight into the map. When the
+  // map has room the Add allocates nothing and cannot raise, so the new
+  // descriptor is always stored; a store that grows the map goes through
+  // AddOwnDataPropertyGrowing, which frees it if the growth is refused.
+  NoteIndexedOwnProperty(AName);
+  if FProperties.HasRoomForAdd then
+    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
+      [pfEnumerable, pfConfigurable, pfWritable]))
+  else
+    AddOwnDataPropertyGrowing(AName, AValue);
+end;
+
+// The growing half of AssignProperty's new-property store. Its own procedure,
+// so that only a store that grows the map pays for the exception frame.
+procedure TGocciaInstanceValue.AddOwnDataPropertyGrowing(const AName: string;
+  const AValue: TGocciaValue);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]);
+  try
+    // A refused or failed growth leaves the map without the entry.
+    FProperties.Add(AName, Descriptor);
+  except
+    Descriptor.Free;
+    raise;
+  end;
+end;
+
+procedure TGocciaInstanceValue.AssignPropertySlow(const AName: string;
+  const AValue: TGocciaValue; const ACanCreate: Boolean);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Setter: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
 begin
@@ -2687,18 +2836,19 @@ begin
          Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) and
          TGocciaPropertyDescriptorAccessor(Descriptor).Setter.IsCallable then
       begin
+        // Released before the call: the setter may delete or redefine the
+        // property, which frees a stored descriptor.
+        Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+        ReleaseDescriptor(Descriptor);
         Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
         try
           Args.Add(AValue);
           // A setter is any callable, a callable Proxy included; only a
           // function object takes the direct path.
-          if TGocciaPropertyDescriptorAccessor(Descriptor).Setter is TGocciaFunctionBase then
-            TGocciaFunctionBase(
-              TGocciaPropertyDescriptorAccessor(Descriptor).Setter).Call(
-              Args, Self)
+          if Setter is TGocciaFunctionBase then
+            TGocciaFunctionBase(Setter).Call(Args, Self)
           else
-            InvokeCallable(TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-              Args, Self);
+            InvokeCallable(Setter, Args, Self);
         finally
           Args.Free;
         end;
@@ -2706,11 +2856,16 @@ begin
       end
       else if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
+        ReleaseDescriptor(Descriptor);
         ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
       else if (Descriptor is TGocciaPropertyDescriptorData) and
               (not TGocciaPropertyDescriptorData(Descriptor).Writable) then
+      begin
+        ReleaseDescriptor(Descriptor);
         ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
+      end;
+      ReleaseDescriptor(Descriptor);
     end;
     Proto := Proto.Prototype;
   end;
@@ -2762,11 +2917,10 @@ begin
   inherited;
 end;
 
-procedure TGocciaInstanceValue.MarkReferences;
+procedure TGocciaInstanceValue.TraceReferences;
 var
   ValPair: TGocciaValueMap.TKeyValuePair;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FClass) then
@@ -2778,6 +2932,13 @@ begin
         ValPair.Value.MarkReferences;
 end;
 
+
+procedure TGocciaClassValue.SetIntrinsicDeletionsForRestore(const ANameDeleted,
+  ALengthDeleted: Boolean);
+begin
+  FNameDeleted := ANameDeleted;
+  FLengthDeleted := ALengthDeleted;
+end;
 
 initialization
   RegisterOrdinaryObjectClass(TGocciaInstanceValue);

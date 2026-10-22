@@ -49,6 +49,7 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -86,13 +87,24 @@ begin
 end;
 
 function RejectedTypeErrorPromise(const AMessage: string): TGocciaPromiseValue;
+var
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := TGocciaPromiseValue.Create;
+  // The error's strings reserve their payloads, which can collect, and only
+  // this local holds the promise.
+  Roots.Initialize;
   try
-    Result.Reject(CreateErrorObject(TYPE_ERROR_NAME, AMessage));
-  except
-    Result.Free;
-    raise;
+    Roots.Add(Result);
+    try
+      Result.Reject(CreateErrorObject(TYPE_ERROR_NAME, AMessage));
+    except
+      Roots.Clear;
+      Result.Free;
+      raise;
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 

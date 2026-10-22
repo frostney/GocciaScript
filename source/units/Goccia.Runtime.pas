@@ -44,6 +44,12 @@ type
     function TryInjectModules(const AFormat: string;
       const AContent: string; const ABaseAddress: string): Boolean; virtual;
     procedure WaitForIdle; virtual;
+    { See TGocciaEngineExtension.HasPendingWork. }
+    function HasPendingWork: Boolean; virtual;
+    { See TGocciaEngineExtension.HeapSnapshotRefusal. }
+    function HeapSnapshotRefusal: string; virtual;
+    { See TGocciaEngineExtension.MaterializeHeapSnapshotBuiltin. }
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); virtual;
     procedure DiscardPending; virtual;
   end;
 
@@ -89,6 +95,9 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure WaitForIdle; override;
+    function HasPendingWork: Boolean; override;
+    function HeapSnapshotRefusal: string; override;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); override;
     procedure DiscardPending; override;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; override;
@@ -249,6 +258,21 @@ begin
 end;
 
 procedure TGocciaRuntimeExtension.WaitForIdle;
+begin
+end;
+
+function TGocciaRuntimeExtension.HasPendingWork: Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaRuntimeExtension.HeapSnapshotRefusal: string;
+begin
+  Result := '';
+end;
+
+procedure TGocciaRuntimeExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
 begin
 end;
 
@@ -525,6 +549,38 @@ begin
     FExtensions[I].WaitForIdle;
 end;
 
+function TGocciaRuntimeCore.HasPendingWork: Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].HasPendingWork then
+      Exit(True);
+  Result := False;
+end;
+
+function TGocciaRuntimeCore.HeapSnapshotRefusal: string;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+  begin
+    Result := FExtensions[I].HeapSnapshotRefusal;
+    if Result <> '' then
+      Exit;
+  end;
+  Result := '';
+end;
+
+procedure TGocciaRuntimeCore.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].MaterializeHeapSnapshotBuiltin(AName);
+end;
+
 procedure TGocciaRuntimeCore.DiscardPending;
 var
   I: Integer;
@@ -646,10 +702,11 @@ function TGocciaRuntime.Execute: TGocciaScriptResult;
 begin
   { An engine the runtime created backs a script's top-level bindings with
     the global object, as the CLI hosts configure theirs; module source keeps
-    them in its module scope. An engine the host passed in keeps its own
-    setting. }
+    them in its module scope. A detected entry is configured as a Script, and
+    Execute keeps one that turns out a Module off the global object. An
+    engine the host passed in keeps its own setting. }
   if FCreatedEngine then
-    FEngine.GlobalBackedTopLevel := FEngine.SourceType = stScript;
+    FEngine.GlobalBackedTopLevel := FEngine.SourceType <> stModule;
   Result := FEngine.Execute;
 end;
 

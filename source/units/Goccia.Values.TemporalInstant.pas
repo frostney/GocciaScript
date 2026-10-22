@@ -53,6 +53,8 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Temporal.DurationMath,
   Goccia.Temporal.Options,
@@ -1227,36 +1229,45 @@ var
   RMode: TTemporalRoundingMode;
   RIncrement: Integer;
   StartNs, EndNs, DiffNs, IncrementNs: TBigInteger;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.until');
-  Other := CoerceTemporalInstant(AArgs.GetElement(0), 'Instant.prototype.until');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoerceTemporalInstant(AArgs.GetElement(0), 'Instant.prototype.until');
+    OtherRoots.Add(Other);
 
-  OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
-  if LargestUnit = tuAuto then
-    LargestUnit := DefaultInstantLargestUnit(SmallestUnit);
-  if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
+    OptionsObj := GetDiffOptions(AArgs, 1);
+    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+    RIncrement := GetRoundingIncrement(OptionsObj, 1);
+    RMode := GetRoundingMode(OptionsObj, rmTrunc);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+    if LargestUnit = tuAuto then
+      LargestUnit := DefaultInstantLargestUnit(SmallestUnit);
+    if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'largestUnit']), SSuggestTemporalValidUnits);
 
-  if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
-  if Ord(LargestUnit) > Ord(SmallestUnit) then
-    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(RIncrement, SmallestUnit);
+    if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.until', 'smallestUnit']), SSuggestTemporalValidUnits);
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+    ValidateRoundingIncrement(RIncrement, SmallestUnit);
 
-  StartNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
-  EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
-  DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
-  if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
-  begin
-    IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
-      .Multiply(TBigInteger.FromInt64(RIncrement));
-    DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
+    StartNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
+    EndNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
+    DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
+    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+    begin
+      IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+        .Multiply(TBigInteger.FromInt64(RIncrement));
+      DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
+    end;
+    Result := InstantDiffToUnits(DiffNs, LargestUnit);
+  finally
+    OtherRoots.Clear;
   end;
-  Result := InstantDiffToUnits(DiffNs, LargestUnit);
 end;
 
 function TGocciaTemporalInstantValue.InstantSince(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1267,36 +1278,45 @@ var
   RMode: TTemporalRoundingMode;
   RIncrement: Integer;
   StartNs, EndNs, DiffNs, IncrementNs: TBigInteger;
+  OtherRoots: TGocciaActiveRootFrame;
 begin
   Inst := AsInstant(AThisValue, 'Instant.prototype.since');
-  Other := CoerceTemporalInstant(AArgs.GetElement(0), 'Instant.prototype.since');
+  // A property bag coerces to a fresh value that only this local holds
+  // while the options getters (guest code) run.
+  OtherRoots.Initialize;
+  try
+    Other := CoerceTemporalInstant(AArgs.GetElement(0), 'Instant.prototype.since');
+    OtherRoots.Add(Other);
 
-  OptionsObj := GetDiffOptions(AArgs, 1);
-  LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
-  RIncrement := GetRoundingIncrement(OptionsObj, 1);
-  RMode := GetRoundingMode(OptionsObj, rmTrunc);
-  SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
-  if LargestUnit = tuAuto then
-    LargestUnit := DefaultInstantLargestUnit(SmallestUnit);
-  if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
+    OptionsObj := GetDiffOptions(AArgs, 1);
+    LargestUnit := GetLargestUnit(OptionsObj, tuAuto);
+    RIncrement := GetRoundingIncrement(OptionsObj, 1);
+    RMode := GetRoundingMode(OptionsObj, rmTrunc);
+    SmallestUnit := GetSmallestUnit(OptionsObj, tuNanosecond);
+    if LargestUnit = tuAuto then
+      LargestUnit := DefaultInstantLargestUnit(SmallestUnit);
+    if not (LargestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'largestUnit']), SSuggestTemporalValidUnits);
 
-  if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
-    ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
-  if Ord(LargestUnit) > Ord(SmallestUnit) then
-    ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
-  ValidateRoundingIncrement(RIncrement, SmallestUnit);
+    if not (SmallestUnit in [tuHour, tuMinute, tuSecond, tuMillisecond, tuMicrosecond, tuNanosecond]) then
+      ThrowRangeError(Format(SErrorTemporalInvalidUnitFor, ['Instant.prototype.since', 'smallestUnit']), SSuggestTemporalValidUnits);
+    if Ord(LargestUnit) > Ord(SmallestUnit) then
+      ThrowRangeError(SErrorDurationRoundLargestSmallerThanSmallest, SSuggestTemporalRoundArg);
+    ValidateRoundingIncrement(RIncrement, SmallestUnit);
 
-  StartNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
-  EndNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
-  DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
-  if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
-  begin
-    IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
-      .Multiply(TBigInteger.FromInt64(RIncrement));
-    DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
+    StartNs := EpochNanosecondsFromParts(Other.FEpochMilliseconds, Other.FSubMillisecondNanoseconds);
+    EndNs := EpochNanosecondsFromParts(Inst.FEpochMilliseconds, Inst.FSubMillisecondNanoseconds);
+    DiffNs := TimeDurationFromEpochNanosecondsDifference(EndNs, StartNs);
+    if (SmallestUnit <> tuNanosecond) or (RIncrement <> 1) then
+    begin
+      IncrementNs := TBigInteger.FromInt64(UnitToNanoseconds(SmallestUnit))
+        .Multiply(TBigInteger.FromInt64(RIncrement));
+      DiffNs := RoundTimeDurationToIncrement(DiffNs, IncrementNs, RMode);
+    end;
+    Result := InstantDiffToUnits(DiffNs, LargestUnit);
+  finally
+    OtherRoots.Clear;
   end;
-  Result := InstantDiffToUnits(DiffNs, LargestUnit);
 end;
 
 function TGocciaTemporalInstantValue.InstantRound(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1553,5 +1573,6 @@ end;
 
 initialization
   GTemporalInstantSharedSlot := RegisterRealmOwnedSlot('Temporal.Instant.shared');
+  RegisterSnapshotSlotGlobalPath('Temporal.Instant.shared', 'Temporal.Instant');
 
 end.

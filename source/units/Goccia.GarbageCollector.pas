@@ -14,6 +14,9 @@ uses
 type
   TGarbageCollector = class;
 
+  // A pass over marks (TGarbageCollector.InspectMarked).
+  TGCMarkPass = procedure of object;
+
   // A live object that contributes roots the collector cannot otherwise see.
   // Registration is driven by AfterConstruction/BeforeDestruction so it happens
   // once per instance regardless of which constructor ran, including subclass
@@ -59,20 +62,53 @@ type
     FGCIndex: Integer;
     function GetGCMarked: Boolean;
     procedure SetGCMarked(const AValue: Boolean);
+  protected
+    // Marks what this object holds, by calling MarkReferences on each value it
+    // references (ADR 0147). Never call it directly: MarkReferences calls it
+    // once the object is marked, in place or after taking the object off the
+    // mark stack. So an override calls inherited and then MarkReferences on
+    // each child, and never tests GCMarked on itself: the object is already
+    // marked, and that guard would skip the whole body. It runs once per
+    // collection, and again for every marked object when a mark stack that
+    // could not grow forces a rescan, so it must be idempotent.
+    procedure TraceReferences; virtual;
   public
     procedure BeforeDestruction; override;
     class procedure AdvanceMark; static; {$IFDEF FPC}inline;{$ENDIF}
-    procedure MarkReferences; virtual;
+    // Marks this object and everything reachable from it. Inside a trace
+    // (from a TraceReferences override), it marks the object and traces it in
+    // place while fewer than 64 traces are nested, or pushes it on the mark
+    // stack, so native stack use does not grow with the depth of the object
+    // graph; everything is marked by the time the outermost call returns.
+    // Outside a trace (a root, a root source, a weak hook) it starts one.
+    // Marking shares process-wide state with every collector, so it runs only
+    // in a collection, on the collecting thread, or on a thread while no
+    // other thread collects (a test, a single-threaded host).
+    procedure MarkReferences;
     function TraceWeakReferences: Boolean; virtual;
     procedure SweepWeakReferences; virtual;
     // Called by the GC sweep instead of Free. Default calls Free.
     // Override to return the object to a pool instead of deallocating.
     procedure Recycle; virtual;
+    // False for a class whose constructors are compiled without an implicit
+    // exception frame: FPC then does not destroy the instance when
+    // AfterConstruction raises, so the collector must keep it registered, or
+    // free it itself when it could not register it.
+    class function ConstructorDestroysOnException: Boolean; virtual;
     property GCMarked: Boolean read GetGCMarked write SetGCMarked;
     property GCIndex: Integer read FGCIndex write FGCIndex;
   end;
 
-  TGCManagedObjectList = TObjectList<TGCManagedObject>;
+  TGCManagedObjectList = class(TObjectList<TGCManagedObject>)
+  public
+    // Every value allocation registers here. The collector's list owns
+    // nothing and has no OnNotify handler, so an append within capacity skips
+    // the generic Add's capacity bookkeeping and virtual Notify dispatch.
+    // False, with nothing appended, when the list is full: an append that
+    // must grow the list is the caller's, because the growth can raise.
+    function TryAppend(const AObject: TGCManagedObject;
+      out AIndex: Integer): Boolean; inline;
+  end;
   // Backing store for the active-root stack only. A bare array rather than
   // TGCManagedObjectList because that stack is pushed and popped once per
   // rooted temporary: TObjectList pays a virtual Notify dispatch per
@@ -154,6 +190,13 @@ type
     FGCThreshold: Integer;
     FEnabled: Boolean;
     FCollecting: Boolean;
+    FCollectBeforeEveryReservation: Boolean;
+    // The swept objects a test asked to keep (QuarantineSwept), and whether
+    // the destructors running now are ReleaseQuarantine's.
+    FQuarantineSwept: Boolean;
+    FQuarantine: TGCManagedObjectArray;
+    FQuarantineCount: Integer;
+    FReleasingQuarantine: Boolean;
     FTotalCollected: Int64;
     FTotalCollections: Integer;
 
@@ -210,19 +253,36 @@ type
     // scope bindings and allocator rounding are not charged — so a ceiling
     // compared only against it lets garbage grow to several times the
     // ceiling before a pressure collection runs. Every
-    // HEAP_SAMPLE_INTERVAL registrations SampleHeap reads the heap manager's
-    // in-use total; at or above HeapTriggerBytes it latches the same pending
+    // HEAP_SAMPLE_INTERVAL registrations, and after HEAP_SAMPLE_GROWTH_BYTES
+    // of reported native growth (NoteNativeGrowth), SampleHeap reads the heap
+    // manager's in-use total; at or above HeapTriggerBytes it latches the same pending
     // flag an external reservation uses, so the existing checkpoint (the VM
     // dispatch countdown) collects.
     // No collection site is added, and refusal still compares BytesAllocated.
     FHeapPressurePending: Boolean;
     FHeapSampleCountdown: Integer;
+    // Native storage growth reported through NoteNativeGrowth since the last
+    // heap sample (ADR 0145). A registration can come with far more heap
+    // than an object's few hundred bytes — `new Array(100000)` registers
+    // about two objects for 800 KB of element storage — so the sample also
+    // runs once this much growth has been reported.
+    FNativeGrowthSinceSample: Int64;
     // Heap-manager in-use bytes right after the most recent collection: what
     // survived plus everything the collector does not own. HeapTriggerBytes
     // backs off from it so a heap that cannot get under the ceiling collects
-    // once per growth step instead of at every checkpoint.
+    // once per growth step instead of at every checkpoint, and fires once the
+    // heap has grown by a factor over it (ADR 0145).
     FHeapAfterLastCollect: Int64;
     FHeapTriggeredCollections: Integer;
+    // BytesAllocated right after the most recent full collection: what the
+    // collector could not reclaim. TrackedTriggerBytes backs off from it, as
+    // HeapTriggerBytes does from FHeapAfterLastCollect, so a live set that
+    // sits inside the pressure reserve collects once per allocation budget
+    // instead of at every checkpoint and every charged reservation
+    // (ADR 0141). Set at the end of Collect and lowered, under the
+    // accounting lock, by every release that takes BytesAllocated below it,
+    // so what was released stays released until the next collection.
+    FBytesAfterLastCollect: Int64;
     // Bytes still live after the most recent forced collection that failed to
     // make room, or -1 when no such observation is on record. Absent an
     // intervening collection or counter drop, no collection gets below the
@@ -243,9 +303,27 @@ type
     {$ENDIF}
 
     function GetManagedObjectCount: Integer;
+    function GetManagedObject(const AIndex: Integer): TGCManagedObject;
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
     function HeapTriggerBytes: Int64;
-    procedure SampleHeap;
+    // The BytesAllocated level at which the pressure checks collect, given
+    // the live total ABytesAllocated: one pressure reserve below the ceiling,
+    // backed off above what the last full collection left live. Never above
+    // MaxBytes: a plain value allocation that would pass the ceiling is
+    // refused with the RangeError without collecting first, so only a
+    // checkpoint collection clears the garbage in front of it. Backed off, a
+    // collection is due once garbage fills half the remaining headroom, and
+    // it runs at the next checkpoint, so when a burst starts that half or
+    // more can hold garbage: the burst headroom a live set inside the reserve
+    // gives up (ADR 0141). ABytesAfterLastCollect is FBytesAfterLastCollect, read by
+    // the caller with the live total.
+    function TrackedTriggerBytes(const ABytesAllocated,
+      ABytesAfterLastCollect: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}
+    // APendingBytes is native storage the caller is about to allocate: the
+    // growth gate reports a request before the store allocates it, so a
+    // single large request would otherwise be sampled before it is in use
+    // and reset the count that would have sampled it afterwards.
+    procedure SampleHeap(const APendingBytes: Int64 = 0);
     // AFull is False for CollectYoung, which keeps every object older than
     // its watermark: what it leaves in use is not a measure of what a
     // collection cannot reclaim, so it moves neither the back-off baseline
@@ -258,11 +336,19 @@ type
     // the reader rule at FAccountingLock. Never call it while holding the
     // accounting lock; read FBytesAllocated directly there.
     function GetBytesAllocated: Int64; {$IFDEF FPC}inline;{$ENDIF}
+    // Untorn read of the live total and the tracked trigger's baseline for
+    // callers that hold no lock, under the same rule as GetBytesAllocated:
+    // a cross-thread ReleaseExternalBytes writes both.
+    procedure ReadPressureTotals(out ABytesAllocated,
+      ABytesAfterLastCollect: Int64); {$IFDEF FPC}inline;{$ENDIF}
+    // Lowers FBytesAfterLastCollect to a total a release just reached.
+    // Caller holds the accounting lock.
+    procedure NoteBytesReleasedLocked; {$IFDEF FPC}inline;{$ENDIF}
     // Pressure predicate over an already-read live total, so the charge path
     // can decide from the value it just committed instead of re-reading it
     // through the locked accessor with the lock held.
-    function NeedsMemoryPressureCollection(
-      const ABytesAllocated: Int64): Boolean; overload;
+    function NeedsMemoryPressureCollection(const ABytesAllocated,
+      ABytesAfterLastCollect: Int64): Boolean; overload;
     procedure ClearActiveRootEntries(const AObject: TGCManagedObject);
     procedure GrowActiveRootStack;
     // Reads the live total and the forced-collect floor, so the caller must
@@ -276,11 +362,18 @@ type
     // caller can commit a charge past the ceiling on a stale earlier test.
     // Caller must hold FAccountingLock ("Locked" suffix).
     function TryChargeExternalBytesLocked(const ABytes: Int64): Boolean;
+    procedure SetQuarantineSwept(const AValue: Boolean);
+    // Frees AObject, or keeps it in quarantine while QuarantineSwept is on.
+    procedure RecycleSwept(const AObject: TGCManagedObject);
+    procedure ReleaseQuarantine;
+    procedure ForgetQuarantined(const AObject: TGCManagedObject);
   protected
     procedure MarkRoots; virtual;
     procedure TraceWeakReferences;
     procedure SweepWeakReferences;
     procedure SweepObjects;
+    function AppendManagedObjectGrowing(const AObject: TGCManagedObject): Integer;
+    procedure ReleaseAllManagedObjects;
   public
     class function Instance: TGarbageCollector; {$IFDEF FPC}inline;{$ENDIF}
     class procedure Initialize;
@@ -292,6 +385,16 @@ type
     procedure RegisterObject(const AObject: TGCManagedObject);
     procedure UnregisterObject(const AObject: TGCManagedObject);
     procedure RegisterRootSource(const ASource: TGCRootSource);
+    // Reports ABytes of native storage a value is growing by (array element
+    // storage, property storage), which no registration accounts for. The
+    // growth gate reports a request before the store allocates it, so the
+    // sample counts ABytes as already in use. Once
+    // the reported growth reaches the sampling step the heap is sampled, so
+    // the heap trigger sees storage-heavy allocation as it happens rather
+    // than every HEAP_SAMPLE_INTERVAL registrations (ADR 0145). It never
+    // collects and charges nothing: at most it latches the pending flag the
+    // next checkpoint tests, so it is safe from any allocation path.
+    procedure NoteNativeGrowth(const ABytes: Int64);
     procedure UnregisterRootSource(const ASource: TGCRootSource);
     procedure RegisterWeakContainer(const AObject: TGCManagedObject);
     procedure UnregisterWeakContainer(const AObject: TGCManagedObject);
@@ -321,6 +424,14 @@ type
     // (e.g. between script executions or before benchmark measurement).
     procedure Collect; virtual;
 
+    // A host's reachability question outside a collection (a heap snapshot's
+    // accounting check): starts a fresh mark, runs AMark, which marks
+    // (MarkReferences, or GCMarked := True to stop the marking there), then
+    // AInspect, which reads the marks. The collection lock is held
+    // throughout, so no collection on any thread starts a new mark in
+    // between; the next collection starts its own. Neither may collect.
+    procedure InspectMarked(const AMark, AInspect: TGCMarkPass);
+
     // Automatic collection: calls Collect only when Enabled is True and
     // allocations since the last collection exceed the Threshold.
     procedure CollectIfNeeded; overload;
@@ -329,6 +440,9 @@ type
     // active root stack so a stack-held object survives the collection.
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
+    // True when BytesAllocated has reached the tracked trigger: the reserve
+    // below the ceiling, or, after a full collection that left the live set
+    // inside that reserve, halfway from what survived to the ceiling.
     function NeedsMemoryPressureCollection: Boolean; overload;
     // The band below MaxBytes within which the pressure checks collect:
     // MaxBytes / 8, clamped to 16 KiB..16 MiB. Meaningful only when MaxBytes
@@ -336,7 +450,7 @@ type
     function MemoryPressureReserve: Int64; {$IFDEF FPC}inline;{$ENDIF}
 
     // Collects when pressure has been latched by an external reservation or
-    // when the live set has crossed the reserve below the ceiling. AForce
+    // when the live set has reached the tracked trigger. AForce
     // skips that heuristic and always collects; it exists for the last-resort
     // site in TryReserveExternalBytes, which must not refuse a reservation
     // before a collection has actually been attempted, and for the VM's
@@ -389,10 +503,41 @@ type
     {$ENDIF}
 
     property Enabled: Boolean read FEnabled write FEnabled;
+    // A stress switch for tests: every TryReserveExternalBytes, and every
+    // gated growth (RequireNativeBytes), first runs the full collection a
+    // request over the ceiling runs as its last resort, so native code that
+    // holds an unrooted value across a reservation fails at once instead of
+    // only near the ceiling (#1816: Goccia.GCStress.Test; the heap snapshot
+    // reader's hardening tests set it too). Off by default.
+    property CollectBeforeEveryReservation: Boolean
+      read FCollectBeforeEveryReservation
+      write FCollectBeforeEveryReservation;
+    // A detector for tests, paired with the switch above: while it is on, a
+    // sweep keeps what it would free, intact, instead of freeing it, and a
+    // later collection that reaches a kept object (a value that was swept
+    // while native code still held it, then stored) counts a violation
+    // instead of reading freed memory, as does freeing a kept object
+    // natively. So a missing root fails a test deterministically, with the
+    // class that was lost, in any build. Turning it off frees what it kept.
+    property QuarantineSwept: Boolean read FQuarantineSwept
+      write SetQuarantineSwept;
+    // Violations since the last ResetQuarantineViolations, across collectors
+    // (marking is process-wide), and the class of the first one.
+    class function QuarantineViolations: Integer; static;
+    class function FirstQuarantineViolation: string; static;
+    // The ordinal of the collection that swept that object (TotalCollections
+    // after it), to stop at when looking for what was holding it.
+    class function FirstQuarantineViolationSweptIn: Integer; static;
+    class procedure ResetQuarantineViolations; static;
     property Threshold: Integer read FGCThreshold write FGCThreshold;
     property TotalCollected: Int64 read FTotalCollected;
     property TotalCollections: Integer read FTotalCollections;
     property ManagedObjectCount: Integer read GetManagedObjectCount;
+    // Read access to the registered objects, for the heap snapshot's
+    // accounting check (ADR 0148). A slot can be nil between an
+    // unregistration and the next sweep.
+    property ManagedObjects[const AIndex: Integer]: TGCManagedObject
+      read GetManagedObject;
 
     // Current depth of the active-root stack. Captured by
     // TGocciaActiveRootFrame.Initialize as the floor its Clear may not
@@ -422,10 +567,25 @@ type
     // measurement phase and pass to CollectYoung for efficient
     // between-round collections.
     property Watermark: Integer read GetWatermark;
+
+    // The mark stack (ADR 0147). It is process-wide, like the mark epoch, and
+    // used only under the collect lock. MarkStackCapacity is its current
+    // length in entries; MarkStackOverflows counts the pushes it could not
+    // take because it could not grow, each of which the trace later recovers
+    // by rescanning the marked objects.
+    class function MarkStackCapacity: Integer;
+    class function MarkStackOverflows: Integer;
+    // Test hook: caps the mark stack at AEntries and sends every marked
+    // object through it rather than tracing any in place, so a test can drive
+    // the path a failed growth takes. 0 restores both.
+    class procedure LimitMarkStackForTesting(const AEntries: Integer);
   end;
 
 const
   DEFAULT_GC_THRESHOLD = 10000;
+  // The mark a quarantined object carries (TGarbageCollector.QuarantineSwept).
+  // AdvanceMark never makes it the current mark.
+  GC_QUARANTINE_MARK = High(Cardinal);
 
   DEFAULT_MAX_BYTES   = 512 * 1024 * 1024;         { 512 MB fallback }
   MAX_BYTES_CAP_64BIT = Int64(8192) * 1024 * 1024;  { 8 GB cap for 64-bit }
@@ -438,6 +598,19 @@ const
   // between samples to well under a megabyte while keeping the read off the
   // per-allocation path.
   HEAP_SAMPLE_INTERVAL = 1024;
+  // Native storage growth (NoteNativeGrowth) between two heap samples, unless
+  // the pressure reserve is smaller. The same drift bound as above, for
+  // allocations whose heap cost is not proportional to their registrations.
+  HEAP_SAMPLE_GROWTH_BYTES = 1024 * 1024;
+  // The heap trigger also fires once the heap in use has reached
+  // HEAP_GROWTH_TRIGGER_FACTOR times what the last full collection left, and
+  // has grown by at least HEAP_GROWTH_TRIGGER_MIN_BYTES (ADR 0145). The floor
+  // keeps a small heap from collecting at every few megabytes of churn; the
+  // factor keeps collection work proportional to allocation for a large or
+  // growing live set. Measured on AWFY Havlak, which never collected before:
+  // a factor of 2 with a 32 MiB floor cost 36% more time, this choice 16%.
+  HEAP_GROWTH_TRIGGER_FACTOR = 4;
+  HEAP_GROWTH_TRIGGER_MIN_BYTES = 64 * 1024 * 1024;
 
 // The calling thread's heap-manager in-use bytes. The FPC heap manager keeps
 // its status per thread, matching the thread-local collector. Other compilers
@@ -453,18 +626,27 @@ procedure RemoveTempRootIfNeeded(var ARoot: TGocciaTempRoot);
 implementation
 
 uses
-  SyncObjs
-  {$IF DEFINED(GC_DEBUG) OR DEFINED(GC_TIMING)}
-  ,
-  SysUtils
+  SyncObjs,
+  SysUtils,
+
+  Goccia.ThreadPolls
   {$IFDEF GC_TIMING}, TimingUtils{$ENDIF}
-  {$ENDIF}
   {$IFDEF GOCCIA_GC_STRESS}, heaptrc{$ENDIF};
 
 const
   // Slots pre-allocated for the active-root stack, and the unit it doubles
   // from. Deep enough that ordinary nesting never reallocates.
   ACTIVE_ROOT_STACK_INITIAL_CAPACITY = 256;
+  // Entries the mark stack is allocated with when the unit initializes and
+  // shrinks back to after every trace that grew it (32 KiB on 64-bit). It is
+  // never freed below this, so a trace always has this much stack even when
+  // the heap manager can give it nothing more.
+  MARK_STACK_RETAINED_CAPACITY = 4096;
+  // How many objects MarkReferences traces nested on the native stack before
+  // it spills to the mark stack. Each level is a MarkReferences frame and a
+  // TraceReferences override's, a few hundred bytes together, so the limit
+  // keeps a trace within tens of KiB of native stack.
+  MARK_RECURSION_LIMIT = 64;
 
 function CurrentHeapBytes: Int64;
 begin
@@ -497,6 +679,12 @@ end;
 
 var
   GCCurrentMark: Cardinal;
+  // QuarantineSwept's findings. Marking runs only under the collect lock, and
+  // a native free of a kept object only on its owner thread, so these are
+  // written under that lock or by tests that run one thread.
+  GCQuarantineViolations: Integer = 0;
+  GCQuarantineFirstViolation: string = '';
+  GCQuarantineFirstViolationSweptIn: Integer = 0;
   // Global collection coordination only. Collect and CollectYoung serialize
   // across ALL collectors because the mark epoch (GCCurrentMark) is
   // process-global and some intrinsic objects are shared: two concurrent
@@ -507,15 +695,216 @@ var
   // per-collector FAccountingLock (see its declaration for the lock order).
   GCCollectLock: TGocciaCriticalSection;
 
+  // The mark stack (ADR 0147): the objects marked during a trace whose
+  // TraceReferences has not run yet. Marking pushes here instead of recursing
+  // into the child, so tracing a 30,000-class chain or a million-node list
+  // takes no more native stack than tracing one object. Process-wide like
+  // GCCurrentMark, and touched only under GCCollectLock: a trace marks in the
+  // global epoch, so two threads tracing at once would corrupt each other's
+  // marks whatever stack they used.
+  //
+  // An object is marked when it is pushed, so it is pushed at most once per
+  // collection and the stack never holds more entries than the collection
+  // marks objects: one pointer per live object at worst (a wide array whose
+  // elements are all unmarked), the same order as FManagedObjects, and like
+  // that list it is not charged to BytesAllocated. It is a depth-first
+  // frontier, so a deep chain keeps it at a handful of entries.
+  GCMarkStack: TGCManagedObjectArray;
+  GCMarkStackCount: Integer;
+  // How many entries a push may fill before it must grow the stack: its
+  // length, or less while a test caps it.
+  GCMarkStackLimit: Integer;
+  // 0, or the most entries LimitMarkStackForTesting lets the stack grow to.
+  GCMarkStackTestLimit: Integer;
+  // True while a trace runs: MarkReferences then marks the object and traces
+  // it in place or pushes it. False everywhere else, where MarkReferences
+  // starts a trace.
+  GCMarkTracing: Boolean;
+  // How many TraceReferences calls MarkReferences has nested on the native
+  // stack. Below GCMarkRecursionLimit an object is traced where it is marked;
+  // at the limit it goes on the mark stack, so a trace never nests deeper than
+  // the limit whatever the depth of the graph.
+  GCMarkDepth: Integer;
+  GCMarkRecursionLimit: Integer;
+  // True while Collect or CollectYoung holds GCCollectLock for its mark
+  // phase, so a trace started from a root does not take the lock again.
+  GCMarkPhaseLocked: Boolean;
+  // A push found the stack full and could not grow it: the object is marked
+  // but its TraceReferences has not run. The trace rescans before it ends.
+  GCMarkOverflowed: Boolean;
+  GCMarkOverflowCount: Integer;
+
 threadvar
   GCThreadInstance: TGarbageCollector;
+
+{ Mark stack }
+
+// Grows the mark stack. False when it cannot: the heap manager has nothing
+// for it, or a test caps it. Its own routine so that only a growing push pays
+// for the exception frame.
+function GrowMarkStack: Boolean;
+var
+  NewCapacity: Integer;
+begin
+  Result := False;
+  if Length(GCMarkStack) > High(Integer) div 2 then
+    Exit;
+  NewCapacity := Length(GCMarkStack) * 2;
+  if NewCapacity < MARK_STACK_RETAINED_CAPACITY then
+    NewCapacity := MARK_STACK_RETAINED_CAPACITY;
+  if (GCMarkStackTestLimit > 0) and (NewCapacity > GCMarkStackTestLimit) then
+    NewCapacity := GCMarkStackTestLimit;
+  if NewCapacity <= GCMarkStackLimit then
+    Exit;
+  if NewCapacity > Length(GCMarkStack) then
+  try
+    SetLength(GCMarkStack, NewCapacity);
+  except
+    on EOutOfMemory do
+      Exit;
+  end;
+  GCMarkStackLimit := NewCapacity;
+  Result := True;
+end;
+
+// Whether the calling thread's collector manages AObject, and the overflow
+// rescan, which walks that collector's list, will therefore find it.
+function IsManagedByCurrentCollector(const AObject: TGCManagedObject): Boolean;
+var
+  Collector: TGarbageCollector;
+  Index: Integer;
+begin
+  Collector := GCThreadInstance;
+  Index := AObject.FGCIndex;
+  Result := Assigned(Collector) and (Index >= 0) and
+    (Index < Collector.FManagedObjects.Count) and
+    (Collector.FManagedObjects[Index] = AObject);
+end;
+
+// A push the stack has no room for. AObject is already marked, so it must
+// either reach the stack or be traced some other way: dropping it would leave
+// what only it references unmarked, and the sweep would free live objects.
+// When the stack cannot grow, an object this thread's collector manages is
+// left for the rescan; any other object (a shared intrinsic another thread's
+// collector manages, or one no collector does) is traced here, recursively,
+// because the rescan could not find it. That recursion is the one place native
+// stack use still follows the graph: it nests once per such object along a
+// chain of them, and only while the heap manager is refusing memory.
+procedure PushMarkedSlow(const AObject: TGCManagedObject);
+begin
+  if GrowMarkStack then
+  begin
+    GCMarkStack[GCMarkStackCount] := AObject;
+    Inc(GCMarkStackCount);
+    Exit;
+  end;
+  Inc(GCMarkOverflowCount);
+  if IsManagedByCurrentCollector(AObject) then
+    GCMarkOverflowed := True
+  else
+    AObject.TraceReferences;
+end;
+
+procedure DrainMarkStack;
+var
+  Obj: TGCManagedObject;
+begin
+  while GCMarkStackCount > 0 do
+  begin
+    Dec(GCMarkStackCount);
+    Obj := GCMarkStack[GCMarkStackCount];
+    Obj.TraceReferences;
+  end;
+end;
+
+// Recovers from an overflow: some marked objects of this thread's collector
+// were never traced. Tracing every marked object again pushes exactly the
+// children those left unmarked; for an object already traced it pushes
+// nothing. Each pass marks at least the objects that overflowed in the last
+// one, so the passes end. The stack drains after every object, so a pass
+// overflows again only when one object's subgraph outgrows the whole stack.
+procedure RescanMarkedObjects;
+var
+  Collector: TGarbageCollector;
+  I: Integer;
+  Obj: TGCManagedObject;
+begin
+  Collector := GCThreadInstance;
+  while GCMarkOverflowed do
+  begin
+    GCMarkOverflowed := False;
+    I := 0;
+    while I < Collector.FManagedObjects.Count do
+    begin
+      Obj := Collector.FManagedObjects[I];
+      if Assigned(Obj) and (Obj.FGCMark = GCCurrentMark) then
+      begin
+        Obj.TraceReferences;
+        DrainMarkStack;
+      end;
+      Inc(I);
+    end;
+  end;
+end;
+
+// Gives back what a trace grew the stack to, keeping the retained capacity.
+procedure ReleaseMarkStack;
+begin
+  GCMarkStackCount := 0;
+  if Length(GCMarkStack) > MARK_STACK_RETAINED_CAPACITY then
+  try
+    SetLength(GCMarkStack, MARK_STACK_RETAINED_CAPACITY);
+  except
+    on EOutOfMemory do
+      ; // Keeping the larger block costs nothing a later trace would not use.
+  end;
+  GCMarkStackLimit := Length(GCMarkStack);
+  if (GCMarkStackTestLimit > 0) and (GCMarkStackLimit > GCMarkStackTestLimit) then
+    GCMarkStackLimit := GCMarkStackTestLimit;
+end;
+
+// Traces everything reachable from AObject, which MarkReferences has just
+// marked. Caller holds GCCollectLock.
+procedure TraceFromLocked(const AObject: TGCManagedObject);
+begin
+  GCMarkTracing := True;
+  try
+    AObject.TraceReferences;
+    DrainMarkStack;
+    if GCMarkOverflowed then
+      RescanMarkedObjects;
+  finally
+    GCMarkTracing := False;
+    GCMarkOverflowed := False;
+    GCMarkStackCount := 0;
+    GCMarkDepth := 0;
+  end;
+end;
+
+procedure TraceFrom(const AObject: TGCManagedObject);
+begin
+  if GCMarkPhaseLocked then
+  begin
+    TraceFromLocked(AObject);
+    Exit;
+  end;
+  // Marking outside a collection (a test, or a host checking reachability):
+  // take the lock the stack is guarded by, and give back what it grew to.
+  CriticalSectionEnter(GCCollectLock);
+  try
+    TraceFromLocked(AObject);
+    ReleaseMarkStack;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
+end;
 
 { TGCManagedObject }
 
 class procedure TGCManagedObject.AdvanceMark;
 begin
   Inc(GCCurrentMark);
-  if GCCurrentMark = 0 then
+  if (GCCurrentMark = 0) or (GCCurrentMark = GC_QUARANTINE_MARK) then
     GCCurrentMark := 1;
 end;
 
@@ -530,9 +919,52 @@ begin
     FGCMark := GCCurrentMark;
 end;
 
+procedure NoteQuarantinedReached(const AObject: TGCManagedObject);
+begin
+  if GCQuarantineViolations = 0 then
+  begin
+    GCQuarantineFirstViolation := AObject.ClassName;
+    // RecycleSwept left the collection that swept it here.
+    GCQuarantineFirstViolationSweptIn := AObject.GCIndex;
+  end;
+  Inc(GCQuarantineViolations);
+end;
+
 procedure TGCManagedObject.MarkReferences;
 begin
+  if FGCMark = GCCurrentMark then
+    Exit;
+  // Only with TGarbageCollector.QuarantineSwept on: something live holds an
+  // object a sweep took. Counted, and not traced, so its children (which
+  // may be quarantined too) are not counted twice.
+  if FGCMark = GC_QUARANTINE_MARK then
+  begin
+    NoteQuarantinedReached(Self);
+    Exit;
+  end;
   FGCMark := GCCurrentMark;
+  if not GCMarkTracing then
+    TraceFrom(Self)
+  else if GCMarkDepth < GCMarkRecursionLimit then
+  begin
+    // Most objects are leaves or sit a few links from one, so tracing them
+    // here costs one call where the stack would cost a push, a pop and the
+    // same call. GCMarkDepth bounds how far this nests.
+    Inc(GCMarkDepth);
+    TraceReferences;
+    Dec(GCMarkDepth);
+  end
+  else if GCMarkStackCount < GCMarkStackLimit then
+  begin
+    GCMarkStack[GCMarkStackCount] := Self;
+    Inc(GCMarkStackCount);
+  end
+  else
+    PushMarkedSlow(Self);
+end;
+
+procedure TGCManagedObject.TraceReferences;
+begin
 end;
 
 function TGCManagedObject.TraceWeakReferences: Boolean;
@@ -549,13 +981,23 @@ begin
   Free;
 end;
 
+class function TGCManagedObject.ConstructorDestroysOnException: Boolean;
+begin
+  Result := True;
+end;
+
 procedure TGCManagedObject.BeforeDestruction;
 var
   GC: TGarbageCollector;
 begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
-    GC.UnregisterObject(Self);
+  begin
+    if FGCMark = GC_QUARANTINE_MARK then
+      GC.ForgetQuarantined(Self)
+    else
+      GC.UnregisterObject(Self);
+  end;
   inherited;
 end;
 
@@ -659,8 +1101,33 @@ begin
   FCount := 0;
 end;
 
+{ TGCManagedObjectList }
+
+function TGCManagedObjectList.TryAppend(const AObject: TGCManagedObject;
+  out AIndex: Integer): Boolean;
+begin
+  {$IFDEF FPC}
+  // FLength and FItems are FPC rtl-generics internals; other compilers take
+  // the growing path for every append.
+  AIndex := FLength;
+  Result := AIndex < Length(FItems);
+  if Result then
+  begin
+    FItems[AIndex] := AObject;
+    FLength := AIndex + 1;
+  end;
+  {$ELSE}
+  AIndex := -1;
+  Result := False;
+  {$ENDIF}
+end;
+
 { TGarbageCollector }
 
+// Instance reads its own thread variable, not the GThreadPolls.Collector
+// mirror: with Instance reading the mirror, FPC 3.2.2 at -O4 dropped the VMT
+// load from a virtual call on the result (Instance.Collect in
+// Goccia.Threading.Init called through the object itself; issue #1699).
 class function TGarbageCollector.Instance: TGarbageCollector;
 begin
   Result := GCThreadInstance;
@@ -671,6 +1138,7 @@ begin
   if not Assigned(GCThreadInstance) then
   begin
     GCThreadInstance := TGarbageCollector.Create;
+    GThreadPolls.Collector := GCThreadInstance;
     if GCCurrentMark = 0 then
       GCCurrentMark := 1;
   end;
@@ -678,8 +1146,12 @@ end;
 
 class procedure TGarbageCollector.Shutdown;
 begin
+  // The mirror stays set while the collector frees what it manages, so a
+  // value a destructor allocates still registers and is freed by a later
+  // pass; Destroy clears it once nothing can register any more.
   GCThreadInstance.Free;
   GCThreadInstance := nil;
+  GThreadPolls.Collector := nil;
 end;
 
 constructor TGarbageCollector.Create;
@@ -714,8 +1186,10 @@ begin
   FMemoryPressureCountdown := nil;
   FHeapPressurePending := False;
   FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+  FNativeGrowthSinceSample := 0;
   FHeapAfterLastCollect := 0;
   FHeapTriggeredCollections := 0;
+  FBytesAfterLastCollect := 0;
   FForcedCollectFloor := -1;
   {$IFDEF GC_TIMING}
   FTotalMarkTimeNs := 0;
@@ -733,6 +1207,9 @@ begin
   {$IFDEF GC_TIMING}
   PrintTimingSummary;
   {$ENDIF}
+  ReleaseAllManagedObjects;
+  if GThreadPolls.Collector = Self then
+    GThreadPolls.Collector := nil;
   // Root sources are not owned and can outlive the collector (a pooled argument
   // collection freed during engine tear-down, for instance). Drop their
   // back-pointer so their destructors do not unregister into freed memory.
@@ -755,16 +1232,37 @@ begin
   inherited;
 end;
 
+// The list is full, so the append grows it, which can fail. A failure leaves
+// AObject unregistered, inside its AfterConstruction. FPC destroys an instance
+// whose constructor has the implicit exception frame; one whose constructor
+// has none (ConstructorDestroysOnException) nobody else can reach, so it is
+// freed here. It holds no managed field and nothing refers to it yet, and
+// neither AfterConstruction nor the constructor touches it after this raise.
+// Its own procedure, so that only a growing append pays for the frame.
+function TGarbageCollector.AppendManagedObjectGrowing(
+  const AObject: TGCManagedObject): Integer;
+begin
+  try
+    Result := FManagedObjects.Add(AObject);
+  except
+    if not AObject.ConstructorDestroysOnException then
+      AObject.FreeInstance;
+    raise;
+  end;
+end;
+
 procedure TGarbageCollector.RegisterObject(
   const AObject: TGCManagedObject);
 var
+  Index: Integer;
   Size: Int64;
 begin
   // The list and the allocation counter are owner-thread-confined; the byte
   // totals race a cross-thread ReleaseExternalBytes and take the accounting
   // lock — see FAccountingLock for the full confinement and ordering rules.
-  AObject.GCIndex := FManagedObjects.Count;
-  FManagedObjects.Add(AObject);
+  if not FManagedObjects.TryAppend(AObject, Index) then
+    Index := AppendManagedObjectGrowing(AObject);
+  AObject.GCIndex := Index;
   Inc(FAllocationsSinceLastGC);
   Dec(FHeapSampleCountdown);
   if FHeapSampleCountdown <= 0 then
@@ -830,6 +1328,7 @@ begin
       // reclaim and must not go on suppressing one.
       if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
         FForcedCollectFloor := -1;
+      NoteBytesReleasedLocked;
     finally
       CriticalSectionLeave(FAccountingLock);
     end;
@@ -969,8 +1468,28 @@ begin
 end;
 
 procedure TGarbageCollector.ClearKeptObjects;
+const
+  // Above this many slots, a fresh set is cheaper than clearing this one.
+  KEPT_OBJECTS_REUSE_CAPACITY = 1024;
+var
+  Previous: TGCObjectSet;
 begin
-  FKeptObjects.Clear;
+  // This runs after every job. Clearing walks every slot of the set, used or
+  // not, and the set keeps the capacity a job once grew it to: after one job
+  // keeps n objects (n FinalizationRegistry registrations, say), each later
+  // job would pay O(n) here, and draining n cleanup jobs would be O(n^2).
+  if FKeptObjects.Count = 0 then
+    Exit;
+  if FKeptObjects.Capacity > KEPT_OBJECTS_REUSE_CAPACITY then
+  begin
+    // Create the replacement before freeing the old set, so a failed
+    // allocation never leaves the field pointing at freed memory.
+    Previous := FKeptObjects;
+    FKeptObjects := TGCObjectSet.Create;
+    Previous.Free;
+  end
+  else
+    FKeptObjects.Clear;
 end;
 
 procedure TGarbageCollector.AddRootObject(
@@ -1122,7 +1641,7 @@ begin
       begin
         Inc(FreedBytes, Obj.InstanceSize);
         Obj.GCIndex := -1;
-        Obj.Recycle;
+        RecycleSwept(Obj);
         Inc(Collected);
       end;
     end;
@@ -1144,6 +1663,61 @@ begin
   FTotalCollected := FTotalCollected + Collected;
 end;
 
+{ Destroys every object this collector still manages: a collection in which
+  nothing is reachable. Runs from Destroy, so a thread's (or the process's)
+  last collector frees the values that outlived every engine on it instead of
+  leaking them (#1592). The destructors run in list order, as in any sweep,
+  so the rule a sweep already relies on holds here too: a value's destructor
+  frees what it owns natively and never calls into another managed object,
+  which may already be gone. Roots are dropped first; pins, temp roots and
+  root objects protect nothing once the collector itself is going away. A
+  destructor that allocates registers a new object, which the next pass
+  frees. }
+procedure TGarbageCollector.ReleaseAllManagedObjects;
+const
+  MAX_RELEASE_PASSES = 16;
+var
+  Pass: Integer;
+begin
+  SetQuarantineSwept(False);
+  FPinnedObjects.Clear;
+  FTempRoots.Clear;
+  FQueuedRoots.Clear;
+  FKeptObjects.Clear;
+  FRootObjects.Clear;
+  FActiveRootCount := 0;
+  CriticalSectionEnter(GCCollectLock);
+  try
+    FCollecting := True;
+    try
+      Pass := 0;
+      while (FManagedObjects.Count > 0) and (Pass < MAX_RELEASE_PASSES) do
+      begin
+        { A fresh epoch: no object carries its mark, so the sweep frees all. }
+        TGCManagedObject.AdvanceMark;
+        SweepObjects;
+        Inc(Pass);
+      end;
+    finally
+      FCollecting := False;
+    end;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
+end;
+
+procedure TGarbageCollector.InspectMarked(const AMark, AInspect: TGCMarkPass);
+begin
+  CriticalSectionEnter(GCCollectLock);
+  try
+    TGCManagedObject.AdvanceMark;
+    AMark();
+    AInspect();
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
+end;
+
 procedure TGarbageCollector.Collect;
 var
   BeforeCount: Integer;
@@ -1162,15 +1736,22 @@ begin
       {$IFDEF GC_TIMING}
       StartNs := GetNanoseconds;
       {$ENDIF}
-      MarkRoots;
-      // The weak-reference passes are no-ops on every non-weak object, so
-      // skip both full-heap walks entirely while no weak container is tracked.
-      // A populated-then-emptied container stays tracked while live, so the
-      // passes still run for it (see docs/garbage-collector.md).
-      if FWeakContainers.Count > 0 then
-      begin
-        TraceWeakReferences;
-        SweepWeakReferences;
+      GCMarkPhaseLocked := True;
+      try
+        MarkRoots;
+        // The weak-reference passes are no-ops on every non-weak object, so
+        // skip both full-heap walks entirely while no weak container is
+        // tracked. A populated-then-emptied container stays tracked while
+        // live, so the passes still run for it (see
+        // docs/garbage-collector.md).
+        if FWeakContainers.Count > 0 then
+        begin
+          TraceWeakReferences;
+          SweepWeakReferences;
+        end;
+      finally
+        GCMarkPhaseLocked := False;
+        ReleaseMarkStack;
       end;
       {$IFDEF GC_TIMING}
       AfterMarkNs := GetNanoseconds;
@@ -1185,9 +1766,12 @@ begin
       // part of the accounting family a cross-thread release reads and
       // conditionally invalidates, so the write goes under the accounting
       // lock (either order with a concurrent conditional -1 lands on -1).
+      // The same section records what survived, for the tracked trigger's
+      // back-off; FBytesAllocated is read there, so it is read under the lock.
       CriticalSectionEnter(FAccountingLock);
       try
         FForcedCollectFloor := -1;
+        FBytesAfterLastCollect := FBytesAllocated;
       finally
         CriticalSectionLeave(FAccountingLock);
       end;
@@ -1268,6 +1852,20 @@ begin
   {$ENDIF}
 end;
 
+procedure TGarbageCollector.ReadPressureTotals(out ABytesAllocated,
+  ABytesAfterLastCollect: Int64);
+begin
+  {$IF SizeOf(Pointer) >= 8}
+  ABytesAllocated := FBytesAllocated;
+  ABytesAfterLastCollect := FBytesAfterLastCollect;
+  {$ELSE}
+  CriticalSectionEnter(FAccountingLock);
+  ABytesAllocated := FBytesAllocated;
+  ABytesAfterLastCollect := FBytesAfterLastCollect;
+  CriticalSectionLeave(FAccountingLock);
+  {$ENDIF}
+end;
+
 procedure TGarbageCollector.RequestPressureCollection;
 begin
   FExternalPressurePending := True;
@@ -1286,20 +1884,48 @@ begin
     Result := FMaxBytes div 2;
 end;
 
-function TGarbageCollector.NeedsMemoryPressureCollection: Boolean;
+function TGarbageCollector.TrackedTriggerBytes(const ABytesAllocated,
+  ABytesAfterLastCollect: Int64): Int64;
+var
+  Baseline: Int64;
 begin
-  // Guards before the counter read: on 32-bit GetBytesAllocated takes the
+  Result := FMaxBytes - MemoryPressureReserve;
+  // Releases since that collection (a destructor, a shrinking resize) have
+  // already lowered the record to the lowest total they reached. A sweep in
+  // progress lowers the total before Collect resets the record, so the
+  // smaller of the two still bounds what is live.
+  Baseline := ABytesAfterLastCollect;
+  if ABytesAllocated < Baseline then
+    Baseline := ABytesAllocated;
+  if Baseline < Result then
+    Exit;
+  // The last full collection could not get below the line: everything up to
+  // Baseline survived it. Collecting again before the script allocates more
+  // would mark the same live set to free little or nothing, so the trigger
+  // moves halfway from that level to the ceiling. Collections then follow
+  // allocated bytes, one per half of the remaining headroom, and a
+  // collection that gets back under the line brings the trigger back down
+  // with it.
+  if Baseline >= FMaxBytes then
+    Exit(FMaxBytes);
+  Result := Baseline + (FMaxBytes - Baseline) div 2;
+end;
+
+function TGarbageCollector.NeedsMemoryPressureCollection: Boolean;
+var
+  LiveBytes, SurvivorBytes: Int64;
+begin
+  // Guards before the counter read: on 32-bit ReadPressureTotals takes the
   // accounting lock, and the periodic VM pressure polls must stay
   // free when no limit is set or a collection is already underway.
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
     Exit(False);
-  Result := NeedsMemoryPressureCollection(GetBytesAllocated);
+  ReadPressureTotals(LiveBytes, SurvivorBytes);
+  Result := NeedsMemoryPressureCollection(LiveBytes, SurvivorBytes);
 end;
 
 function TGarbageCollector.NeedsMemoryPressureCollection(
-  const ABytesAllocated: Int64): Boolean;
-var
-  Reserve: Int64;
+  const ABytesAllocated, ABytesAfterLastCollect: Int64): Boolean;
 begin
   Result := False;
   // Explicit pressure checks remain active when routine threshold GC is
@@ -1307,13 +1933,17 @@ begin
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
     Exit;
 
-  Reserve := MemoryPressureReserve;
-  Result := ABytesAllocated >= (FMaxBytes - Reserve);
+  // The trigger never sits below the line, so a total under it needs no
+  // back-off arithmetic: every charged reservation passes through here.
+  if ABytesAllocated < FMaxBytes - MemoryPressureReserve then
+    Exit;
+  Result := ABytesAllocated >= TrackedTriggerBytes(ABytesAllocated,
+    ABytesAfterLastCollect);
 end;
 
 function TGarbageCollector.HeapTriggerBytes: Int64;
 var
-  Reserve: Int64;
+  Growth, Reserve: Int64;
 begin
   Reserve := MemoryPressureReserve;
   Result := FMaxBytes - Reserve;
@@ -1330,13 +1960,38 @@ begin
       Reserve := FHeapAfterLastCollect div 2;
     Result := FHeapAfterLastCollect + Reserve;
   end;
+  // Growth trigger (ADR 0145): the heap has reached HEAP_GROWTH_TRIGGER_FACTOR
+  // times what the last full collection left, and has grown by at least
+  // HEAP_GROWTH_TRIGGER_MIN_BYTES. Under a large ceiling the line above is
+  // far off, and a script that keeps little alive would otherwise grow
+  // towards it before its first collection. It only ever lowers the trigger,
+  // and it sits at least the floor above that record, so a heap that cannot
+  // shrink does not collect more often.
+  Growth := FHeapAfterLastCollect * (HEAP_GROWTH_TRIGGER_FACTOR - 1);
+  if Growth < HEAP_GROWTH_TRIGGER_MIN_BYTES then
+    Growth := HEAP_GROWTH_TRIGGER_MIN_BYTES;
+  if FHeapAfterLastCollect + Growth < Result then
+    Result := FHeapAfterLastCollect + Growth;
 end;
 
-procedure TGarbageCollector.SampleHeap;
+procedure TGarbageCollector.NoteNativeGrowth(const ABytes: Int64);
+var
+  Step: Int64;
+begin
+  Inc(FNativeGrowthSinceSample, ABytes);
+  Step := MemoryPressureReserve;
+  if Step > HEAP_SAMPLE_GROWTH_BYTES then
+    Step := HEAP_SAMPLE_GROWTH_BYTES;
+  if FNativeGrowthSinceSample >= Step then
+    SampleHeap(ABytes);
+end;
+
+procedure TGarbageCollector.SampleHeap(const APendingBytes: Int64);
 var
   HeapBytes: Int64;
 begin
   FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+  FNativeGrowthSinceSample := 0;
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring or
      FHeapPressurePending then
     Exit;
@@ -1346,7 +2001,7 @@ begin
   // baseline no longer holds, so the back-off must not keep the trigger up.
   if HeapBytes < FHeapAfterLastCollect then
     FHeapAfterLastCollect := HeapBytes;
-  if HeapBytes >= HeapTriggerBytes then
+  if HeapBytes + APendingBytes >= HeapTriggerBytes then
   begin
     // Rides the external-pressure latch so the collection checkpoint keeps
     // testing a single flag; FHeapPressurePending only
@@ -1367,6 +2022,7 @@ begin
   if AFull then
   begin
     FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+    FNativeGrowthSinceSample := 0;
     FHeapAfterLastCollect := CurrentHeapBytes;
   end;
 end;
@@ -1413,11 +2069,17 @@ begin
 
       TGCManagedObject.AdvanceMark;
 
-      MarkRoots;
-      if FWeakContainers.Count > 0 then
-      begin
-        TraceWeakReferences;
-        SweepWeakReferences;
+      GCMarkPhaseLocked := True;
+      try
+        MarkRoots;
+        if FWeakContainers.Count > 0 then
+        begin
+          TraceWeakReferences;
+          SweepWeakReferences;
+        end;
+      finally
+        GCMarkPhaseLocked := False;
+        ReleaseMarkStack;
       end;
 
       Collected := 0;
@@ -1444,7 +2106,7 @@ begin
           begin
             Inc(FreedBytes, Obj.InstanceSize);
             Obj.GCIndex := -1;
-            Obj.Recycle;
+            RecycleSwept(Obj);
             Inc(Collected);
           end;
         end;
@@ -1612,8 +2274,100 @@ begin
     FPeakBytesAllocated := FBytesAllocated;
   if (FExternalBytesAllocatedSinceGC >=
       EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL) or
-     NeedsMemoryPressureCollection(FBytesAllocated) then
+     NeedsMemoryPressureCollection(FBytesAllocated,
+       FBytesAfterLastCollect) then
     RequestPressureCollection;
+end;
+
+procedure TGarbageCollector.SetQuarantineSwept(const AValue: Boolean);
+begin
+  FQuarantineSwept := AValue;
+  if not AValue then
+    ReleaseQuarantine;
+end;
+
+procedure TGarbageCollector.RecycleSwept(const AObject: TGCManagedObject);
+begin
+  if not FQuarantineSwept then
+  begin
+    AObject.Recycle;
+    Exit;
+  end;
+  AObject.FGCMark := GC_QUARANTINE_MARK;
+  // A swept object has no list slot; its index records which collection
+  // swept it, for the violation report (FirstQuarantineViolationSweptIn).
+  AObject.GCIndex := FTotalCollections + 1;
+  if FQuarantineCount = Length(FQuarantine) then
+    SetLength(FQuarantine, FQuarantineCount * 2 + 256);
+  FQuarantine[FQuarantineCount] := AObject;
+  Inc(FQuarantineCount);
+end;
+
+procedure TGarbageCollector.ReleaseQuarantine;
+var
+  Obj: TGCManagedObject;
+begin
+  if FReleasingQuarantine then
+    Exit;
+  FReleasingQuarantine := True;
+  try
+    // A destructor here can free another kept object natively, which takes
+    // it off the list (ForgetQuarantined), so each entry is read once.
+    while FQuarantineCount > 0 do
+    begin
+      Dec(FQuarantineCount);
+      Obj := FQuarantine[FQuarantineCount];
+      FQuarantine[FQuarantineCount] := nil;
+      if Assigned(Obj) then
+      begin
+        // No longer kept: its destructor unregisters it like any value.
+        Obj.FGCMark := 0;
+        Obj.GCIndex := -1;
+        Obj.Recycle;
+      end;
+    end;
+  finally
+    FReleasingQuarantine := False;
+  end;
+  SetLength(FQuarantine, 0);
+end;
+
+procedure TGarbageCollector.ForgetQuarantined(const AObject: TGCManagedObject);
+var
+  I: Integer;
+begin
+  // Outside ReleaseQuarantine a native free of a swept object would be a
+  // double free with the switch off.
+  if not FReleasingQuarantine then
+    NoteQuarantinedReached(AObject);
+  for I := FQuarantineCount - 1 downto 0 do
+    if FQuarantine[I] = AObject then
+    begin
+      FQuarantine[I] := nil;
+      Exit;
+    end;
+end;
+
+class function TGarbageCollector.QuarantineViolations: Integer;
+begin
+  Result := GCQuarantineViolations;
+end;
+
+class function TGarbageCollector.FirstQuarantineViolation: string;
+begin
+  Result := GCQuarantineFirstViolation;
+end;
+
+class function TGarbageCollector.FirstQuarantineViolationSweptIn: Integer;
+begin
+  Result := GCQuarantineFirstViolationSweptIn;
+end;
+
+class procedure TGarbageCollector.ResetQuarantineViolations;
+begin
+  GCQuarantineViolations := 0;
+  GCQuarantineFirstViolation := '';
+  GCQuarantineFirstViolationSweptIn := 0;
 end;
 
 function TGarbageCollector.TryReserveExternalBytes(
@@ -1621,6 +2375,8 @@ function TGarbageCollector.TryReserveExternalBytes(
 begin
   if ABytes <= 0 then
     Exit(True);
+  if FCollectBeforeEveryReservation then
+    CollectForMemoryPressure(AProtect, True);
   // External-byte accounting is a read-modify-write on FBytesAllocated and
   // FExternalBytes that a cross-thread error destructor can drive concurrently
   // through ReleaseExternalBytes on this same (reserving) collector, so both
@@ -1705,9 +2461,21 @@ begin
     // reclaim and must not go on suppressing one.
     if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
       FForcedCollectFloor := -1;
+    NoteBytesReleasedLocked;
   finally
     CriticalSectionLeave(FAccountingLock);
   end;
+end;
+
+procedure TGarbageCollector.NoteBytesReleasedLocked;
+begin
+  // Bytes released outside a collection were live at the last one, so the
+  // survivors it recorded no longer bound what is live. Lowering the record
+  // here, not only for one trigger check, keeps the release in force when
+  // usage grows back before any checkpoint runs: the tracked trigger then
+  // returns to the line as soon as the total is under it again.
+  if FBytesAllocated < FBytesAfterLastCollect then
+    FBytesAfterLastCollect := FBytesAllocated;
 end;
 
 function TGarbageCollector.ExchangeMemoryPressureCountdown(
@@ -1744,6 +2512,38 @@ begin
 end;
 {$ENDIF}
 
+class function TGarbageCollector.MarkStackCapacity: Integer;
+begin
+  Result := Length(GCMarkStack);
+end;
+
+class function TGarbageCollector.MarkStackOverflows: Integer;
+begin
+  Result := GCMarkOverflowCount;
+end;
+
+class procedure TGarbageCollector.LimitMarkStackForTesting(
+  const AEntries: Integer);
+begin
+  CriticalSectionEnter(GCCollectLock);
+  try
+    if AEntries > 0 then
+    begin
+      GCMarkStackTestLimit := AEntries;
+      // Every push must reach the stack for the cap to be what is tested.
+      GCMarkRecursionLimit := 0;
+    end
+    else
+    begin
+      GCMarkStackTestLimit := 0;
+      GCMarkRecursionLimit := MARK_RECURSION_LIMIT;
+    end;
+    ReleaseMarkStack;
+  finally
+    CriticalSectionLeave(GCCollectLock);
+  end;
+end;
+
 function TGarbageCollector.GetWatermark: Integer;
 begin
   Result := FManagedObjects.Count;
@@ -1754,9 +2554,19 @@ begin
   Result := FManagedObjects.Count;
 end;
 
+function TGarbageCollector.GetManagedObject(
+  const AIndex: Integer): TGCManagedObject;
+begin
+  Result := FManagedObjects[AIndex];
+end;
+
 initialization
   CriticalSectionInit(GCCollectLock);
   GCCurrentMark := 1;
+  SetLength(GCMarkStack, MARK_STACK_RETAINED_CAPACITY);
+  GCMarkStackCount := 0;
+  GCMarkRecursionLimit := MARK_RECURSION_LIMIT;
+  GCMarkStackLimit := MARK_STACK_RETAINED_CAPACITY;
   {$IFDEF GOCCIA_GC_STRESS}
   // A GC-stress build links heaptrc (-gh, from ./build.pas --gc-stress). Keep
   // every released block out of reuse: heaptrc fills a freed block with $F0, so
@@ -1767,12 +2577,12 @@ initialization
 
 finalization
   CriticalSectionDone(GCCollectLock);
+  SetLength(GCMarkStack, 0);
   {$IFDEF GOCCIA_GC_STRESS}
   // Skip heaptrc's exit report. heaptrc is finalized after this unit and
-  // checks useheaptrace first. With the known leaks (#1592) the report runs to
-  // hundreds of megabytes and about 15 seconds per process, and leaks are the
-  // memory-safety job's concern, not this build's: heaptrc still halts on a
-  // double free or a corrupted block at the moment it happens.
+  // checks useheaptrace first. Leaks are the memory-safety job's concern, not
+  // this build's: heaptrc still halts on a double free or a corrupted block at
+  // the moment it happens.
   useheaptrace := False;
   {$ENDIF}
 

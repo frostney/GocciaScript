@@ -101,4 +101,28 @@ describe("Uint8Array.prototype.setFromHex", () => {
     expect(() => target.setFromHex("aa")).toThrow(TypeError);
     expect(target[0]).toBe(1);
   });
+
+  test("writes into a length-tracking view after its buffer grew", () => {
+    const rab = new ArrayBuffer(2, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    rab.resize(8);
+    expect(view.setFromHex("0102030405060708")).toEqual({ read: 16, written: 8 });
+    expect(Array.from(view)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(Array.from(new Uint8Array(rab))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  test("writes only the length a view has after its buffer shrank", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab);
+    rab.resize(4);
+    expect(view.setFromHex("0102030405060708")).toEqual({ read: 8, written: 4 });
+    expect(Array.from(view)).toEqual([1, 2, 3, 4]);
+  });
+
+  test("throws TypeError for a view past the end of its shrunk buffer", () => {
+    const rab = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new Uint8Array(rab, 0, 8);
+    rab.resize(4);
+    expect(() => view.setFromHex("0102")).toThrow(TypeError);
+  });
 });

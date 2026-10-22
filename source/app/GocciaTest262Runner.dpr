@@ -981,6 +981,7 @@ begin
     begin
       if Descriptor is TGocciaPropertyDescriptorData then
         Result := TGocciaPropertyDescriptorData(Descriptor).Value;
+      ReleaseDescriptor(Descriptor);
       Exit;
     end;
     Current := Current.Prototype;
@@ -2023,6 +2024,13 @@ begin
       end;
     end;
   finally
+    { As TGocciaApplication.RunApplication does: a worker the watchdog
+      abandoned may still read the application, so end the process before
+      freeing it. }
+    EndProcessIfWorkerAbandoned(ExitCode);
     App.Free;
+    { As TGocciaApplication.RunApplication does: the main thread's collector
+      destroys what it still manages (#1592), unless a worker was abandoned. }
+    ShutdownMainThreadRuntime;
   end;
 end.

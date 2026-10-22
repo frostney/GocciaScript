@@ -234,7 +234,7 @@ type
     function Reject(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure RejectException(const AException: Exception);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function CurrentMicrotaskScope: TGocciaMicrotaskScopeId;
@@ -322,9 +322,8 @@ begin
   end;
 end;
 
-procedure TThenableResolvingFunctions.MarkReferences;
+procedure TThenableResolvingFunctions.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FPromise) then
     FPromise.MarkReferences;

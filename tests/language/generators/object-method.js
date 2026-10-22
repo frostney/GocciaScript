@@ -226,6 +226,18 @@ test("object generator method supports yield delegation", () => {
   expect([...obj.numbers()]).toEqual([1, 2, 3]);
 });
 
+test("object generator yield delegation allows a line break after the star", () => {
+  // ES2026 §15.5: only the line between `yield` and `*` is restricted
+  const obj = {
+    *numbers() {
+      yield *
+        [1, 2, 3];
+    },
+  };
+
+  expect([...obj.numbers()]).toEqual([1, 2, 3]);
+});
+
 test("object generator yield delegation uses the sync iterator", () => {
   const source = {
     [Symbol.asyncIterator]() {

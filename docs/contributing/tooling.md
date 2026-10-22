@@ -6,7 +6,7 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific), endian-dependent byte indexing
+- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
 
 ## Auto-Formatting
@@ -73,7 +73,7 @@ These are declared in `.vscode/extensions.json` so VSCode/Cursor will prompt to 
 
 The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not open a terminal or interrupt your workflow. The file is re-read by the editor after formatting, so changes appear immediately.
 
-> **Note:** This requires `instantfpc` (ships with FreePascal) to be on your `PATH`. If you installed FreePascal via the methods in [Getting Started](../../README.md#getting-started), this is already the case.
+> **Note:** This requires `instantfpc` (ships with FreePascal) to be on your `PATH`. If you installed FreePascal via the methods in [Build from source](../../README.md#build-from-source), this is already the case.
 
 #### How the Layers Work Together
 
@@ -184,6 +184,15 @@ Result := D * 1000000.0;
 Result := TGocciaNumberLiteralValue.Create(SomeInt64Value);
 ```
 
+Parameter passing is safe only when the parameter is declared `Double`. When the
+callee is overloaded over several floating-point types, an integer argument can
+resolve to the `Single` overload: FPC 3.2.4's `Math` unit overloads `Ldexp` for
+`Single` and `Double` (and `Extended` on targets that have it), and
+`Ldexp(Int64Var, N)` picks `Single`, which rounds the value to 24 significant
+bits (FPC 3.2.2 declares one `Ldexp`, for its `Float` type, and is unaffected).
+Assign the integer to a `Double` variable first and pass that, as
+`TBigInteger.ToDouble` does.
+
 This affects any code that converts `Int64` fields to `Double` for floating-point arithmetic. Note that `Int64 / Int64` is safe — FPC's `/` operator already returns `Extended` for integer operands, so no explicit promotion is needed for division.
 
 ### Endian-Dependent Byte Indexing
@@ -205,6 +214,38 @@ Result := NumberBits.IsNegativeZero(V);
 ```
 
 This works because `DoubleToBits` copies the whole `Double` into a `UInt64`, so the sign is bit 63 of the integer regardless of byte ordering. Use `DoubleToBits` / `BitsToDouble` for any other bit-level test.
+
+### `Int64` Loop Counters and Lengths on 32-bit Targets
+
+`i386-win32` is a 32-bit target, and only full CI builds it (see
+[Workflow — Full CI](workflow.md#full-ci)). FPC rejects a `for` loop whose
+counter is wider than the target's word, so an `Int64` counter compiles on
+every 64-bit target and fails on `i386` with `Error: Ordinal expression
+expected`. Keep `for` counters `Integer` (or `SizeInt`) and do any 64-bit
+arithmetic on the bounds outside the loop header.
+
+Sizes need the same care: `SetLength`, `Move` and array indexes take
+`SizeInt`, which is 32 bits there, and FPC works out an array's or string's
+byte size in `SizeInt` too, so an `Int64` length, or a count times its
+element size, past `High(SizeInt)` can wrap to a small allocation in a build
+without range checks. Size a native allocation whose count comes from input
+through `CheckedNativeByteSize` (`Goccia.NativeLimits`), which refuses
+anything past `MAX_NATIVE_ALLOCATION_BYTES`, the most one allocation may ask
+for on the target; the heap snapshot reader refuses such a count, and an
+input that large, before it reserves anything.
+
+### `WideChar in [set]` Allocates
+
+Under `{$mode delphiunicode}` a set test on a `WideChar` (`Ch in ['0'..'9']`)
+converts the character through the widestring manager (`fpc_uchar_to_char`),
+which allocates and frees a temporary string on every test. A scanner that does
+this per source character makes several heap allocations per character, which
+is slow natively and very slow under heaptrc and Valgrind (the JSX transformer
+did 226,196 allocations for a 36,028-character source). Use `CharInSet(Ch,
+['0'..'9'])`, or compare code points (`(Ch >= '0') and (Ch <= '9')`), in any
+loop over source text. Likewise, append a scanned character to a string or
+builder directly, or copy a range of the source, instead of building a
+one-character string per character.
 
 ## Fuzzing and Memory Safety
 
@@ -249,18 +290,28 @@ TEST262_PATH=../test262 bun run scripts/build-fuzz-corpus.ts
 
 ### Fuzzing locally
 
+AFL++ needs a coverage-instrumented harness, and FPC has no AFL compiler, so
+the instrumentation comes from the assembler. On x86-64 Linux with AFL++
+installed (`afl++` on Debian and Ubuntu):
+
 ```bash
-afl-fuzz -n -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarness @@
+mkdir -p build/compiled/targets/fuzzharness-afl
+fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+  -FUbuild/compiled/targets/fuzzharness-afl \
+  -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+afl-fuzz -i build/fuzz/corpus -o build/fuzz/out -- ./build/GocciaFuzzHarnessAfl @@
 ```
 
-The `-n` is **not** optional. FPC emits no AFL instrumentation, so AFL++ runs
-in non-instrumented ("dumb") mode: pure random mutation with no coverage
-feedback. Practically this means the seed corpus carries the coverage, which is
-why it is derived from the real suites rather than generated. Instrumented
-builds were evaluated and deferred — `afl-gcc`-style instrumentation needs
-either an FPC assembler-pass rewrite or a GCC-compatible IR, and FPC 3.2.2
-exposes neither. The tractable path is `afl-clang-lto` over bitcode from an
-LLVM-backend FPC build.
+`-Aas` makes FPC write GNU assembly and `-FD` makes it run
+[`scripts/afl/as`](../../scripts/afl/as) as its assembler. That script reshapes
+FPC's section directives and jump labels into the form AFL++'s `afl-as`
+recognises, and `afl-as` adds a coverage trampoline at every function entry,
+branch target and conditional branch, plus the fork server. Set `AFL_PATH`
+when `afl-as` is not in `/usr/lib/afl`. FPC's runtime library stays
+uninstrumented. AFL keeps every mutant that reaches new coverage, so the queue
+grows past the seeds; `afl-showmap` on two different inputs shows different
+maps. Both builds come from the same source with the same checks, so either
+replays a finding.
 
 ### Reproducing a finding
 
@@ -296,6 +347,55 @@ input must not be able to reach the host filesystem — without this,
 Inputs containing `import` are therefore classified `module-denied`, and the
 harness does not exercise the module loader.
 
+### The heap snapshot reader
+
+The reader of [heap snapshots](../heap-snapshots.md) takes hostile input
+too ([ADR 0148](../adr/0148-heap-snapshots-at-idle-points.md)), and the
+harness fuzzes it in a mode of its own. A snapshot names the engine build
+that wrote it and a reader refuses another build's, so the seeds come from
+the harness itself:
+
+```bash
+./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
+afl-fuzz -i build/fuzz/heap-snapshot-corpus -o build/fuzz/heap-snapshot-out \
+  -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@
+```
+
+Four of the seeds hold closures and suspended generators, and one holds
+built-ins the run changed (their differences). Functions are named
+by the bytecode of the module that compiled them, so the harness runs the
+seeds' program before it restores an input, and then uses what restored: it
+walks up to 600 distinct objects, reading properties, calling functions and
+resuming, returning or throwing into generators (the input's size picks
+which). A refusal (`snapshot-refused`) is a normal outcome, as are the run limits and
+a script error (`script-throw`); anything else is a finding. The scheduled
+workflow runs this as its `fuzz-heap-snapshot` job. It replays the seeds, a
+sample of what AFL kept and an input the reader refuses under a heaptrc build
+of the harness, and each must end with no unfreed block: like the application
+runners, the harness shuts its runtime down before it exits, which destroys
+what the collector still manages.
+
+Its `heap-snapshot-hardening` job runs
+`Goccia.HeapSnapshot.Hardening.Test` with
+`GOCCIA_HEAP_SNAPSHOT_HARDENING=full`, which sweeps every payload value and
+every reference target and makes its chains 1,000,000 links long (pull
+requests run a rotating share and 200,000;
+[Heap Snapshots — Testing](../heap-snapshots.md#testing)), and every
+`Goccia.HeapSnapshot*.Test` program under heaptrc. Freed blocks are not kept
+there (`keepreleased` grows past a runner's memory within a minute), so
+heaptrc catches double frees and writes past a block. The job does not judge
+heaptrc's exit leak report, which counts what the test programs leave to
+process exit; the hardening program's leak test checks the heap between
+passes instead.
+
+`TGarbageCollector.CollectBeforeEveryReservation` is a test switch: every
+external reservation (`TryReserveExternalBytes`) runs the last-resort
+collection first, as one over the memory ceiling would, so a value the
+reader holds only in a local is freed at once. The hardening program sets it
+only while the reader runs; engine creation and some lazy built-in
+initialisers are not safe under it yet
+([#1816](https://github.com/frostney/GocciaScript/issues/1816)).
+
 ### Memory safety
 
 The scheduled [fuzz workflow](../../.github/workflows/fuzz.yml) runs the full
@@ -304,7 +404,7 @@ JavaScript suite under two tools that answer different questions:
 | Tool | Catches | Invocation |
 |------|---------|-----------|
 | **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr` |
-| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 ./build/GocciaTestRunner -P tests` |
+| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 --suppressions=scripts/valgrind/fpc-rtl.supp ./build/GocciaTestRunner -P --jobs=1 --timeout=55m tests` |
 
 `DIR` is a unit-output directory of your own (CI uses
 `build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own
@@ -315,9 +415,28 @@ will not create one; against a missing directory it fails with
 `Can't create object file: … (error code: 2)` (on external-assembler targets
 such as macOS the message is `Can't create assembler file: …` instead).
 
-Both run on Linux only. Valgrind slows the suite by roughly an order of
-magnitude, which is why neither runs per-PR. Findings upload as artifacts with
-a 30-day retention.
+`scripts/valgrind/fpc-rtl.supp` suppresses memcheck's report on the Free
+Pascal runtime's `IndexByte` and `IndexWord`, whose aligned 16-byte loads can
+read past the end of a buffer and ignore what they find there. The file's
+header explains the over-read and what the suppression gives up, including the
+undefined values it hides inside those two routines.
+
+Valgrind runs one thread of a process at a time. Under `--jobs` the pool's
+workers wait for each other, and its watchdog abandons workers that are only
+waiting, so run memcheck with `--jobs=1`. One process for the whole suite took
+58.6 minutes on a fast workstation, so CI splits the suite into one shard per
+CPU, balanced by each file's native time
+(`bun scripts/valgrind/shard-suite.ts`), and runs one single-worker Valgrind
+process per shard side by side. Memcheck slowed the files that take longest
+natively by 68 to 109 times (measured with one worker on 2026-10-19), so the
+step gives each file the default 30-second budget times 110: `--timeout=55m`.
+
+heaptrc costs about 0.6 µs per allocation and free, so a file that allocates
+per character or per digit is slow under it; see
+[`WideChar in [set]` Allocates](#widechar-in-set-allocates).
+
+Both run on Linux only, and neither runs per-PR. Findings upload as artifacts
+with a 30-day retention.
 
 ### GC-stress build
 
@@ -329,7 +448,7 @@ ordinary build collects only under memory pressure, so it usually is not.
 | Defined by `-dGOCCIA_GC_STRESS` | Effect |
 |---|---|
 | `Goccia.VM.pas` | The memory-pressure checkpoint in the dispatch loop runs every 8 instructions instead of every 1,025 and forces a full collection each time. |
-| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: the known leaks (#1592) make it hundreds of megabytes per process. |
+| `Goccia.GarbageCollector.pas` | heaptrc keeps every freed block out of reuse (`keepreleased`). heaptrc fills a freed block with `$F0`, so a stale reference faults on its next use. heaptrc still halts on a double free, but the exit leak report is skipped: leaks are the memory-safety job's concern. |
 
 `--gc-stress` adds `-gh` and the define to the development flags. It compiles
 into `build/compiled/gc-stress/` and writes binaries to `build/gc-stress/`, so
@@ -366,6 +485,63 @@ The report goes to `build/gc-stress-report/report.md`. A stress-only failure
 fails the job. On a scheduled or `main` run, it also opens one tracking issue
 or comments on the open one (`.github/scripts/report-gc-stress.sh`). Runs on
 other branches only print what they would file.
+
+### GC stress at every reservation
+
+The GC-stress build collects at instruction boundaries. Native code also
+collects at a reservation: making a string, a buffer or an error, or growing
+element or property storage past the gate, collects first when the request
+would cross the `--max-memory` ceiling. Two switches on the collector make
+that certain in a test, in any build:
+
+| Switch | Effect |
+|---|---|
+| `CollectBeforeEveryReservation` | Every `TryReserveExternalBytes` and every gated growth (`RequireNativeBytes`) runs the full collection a request over the ceiling runs. |
+| `QuarantineSwept` | A sweep keeps what it would free, intact. A later collection that reaches a kept object counts a violation instead of reading freed memory: `QuarantineViolations`, with the first one's class (`FirstQuarantineViolation`) and the collection that swept it (`FirstQuarantineViolationSweptIn`, a `TotalCollections` value). Turning it off frees what it kept. |
+
+`Goccia.GCStress.Test` sets both and runs engine creation, every lazy global
+and its members, and the native construction paths issue #1816 found
+unrooted. It takes a few seconds, so it runs per PR in the Pascal unit-test
+loop, and the scheduled memory-safety job (`fuzz.yml`) runs it again under
+heaptrc and under Valgrind memcheck. A swept value that is stored again
+reports a violation; one that native code only reads afterwards (a key list,
+an operand) does not, so the memcheck run sets `GOCCIA_GC_STRESS_FREE=1`,
+which frees what each sweep takes, and memcheck reports the read. That build
+loads `cmem` first (`fpc -Facmem`): FPC's own heap keeps a freed block as
+valid memory, so memcheck sees a read of it only when the C allocator owns
+it.
+`GOCCIA_GC_STRESS_ONLY=<text>` runs only the cases whose name contains the
+text.
+
+To sweep a wider workload, set both switches in `TGarbageCollector.Create`
+in a local build of `GocciaTestRunner` or `GocciaTest262Runner` and run each
+file in its own process with one worker. A violation names the class that was
+swept while something still held it; running the file again and stopping in
+the collection that swept it (when `TotalCollections` is one less) shows the
+native frame that was holding it.
+
+The quarantine misses a value native code only reads after the sweep. For
+those, set only `CollectBeforeEveryReservation`, build the runner with
+`-Facmem`, and run each file (or each test262 directory with one worker)
+under memcheck with `--trace-children=yes`. Each report names the read, the
+allocation and the collection that freed the value. Sweeping `tests/` and
+parts of test262 this way found the windows that #1816's quarantine sweeps
+missed.
+
+A window opens only when guest code allocates while a builtin holds a fresh
+value, and test262's getters, `valueOf` methods and traps rarely allocate. A
+probe that does finds more: call every method and getter of each builtin with
+receivers (a number held in a register, a primitive through `.call`, a
+Proxy) and arguments whose coercions, getters, callbacks and traps make a
+fresh string first (`({ valueOf() { (s + "x").slice(0, -1); return 2; } })`),
+under the same `-Facmem` build and memcheck. Giving the
+primitives' prototypes an allocating getter or a Proxy in their chain
+reaches the wrappers builtins make with `ToObject`. Issue #1834's probes
+found the unrooted number receiver of every native call (and of a callable
+Proxy's `apply` trap), the receiver of a Proxy `get` trap, `fill`'s wrapper
+and coerced value, Intl options given as a primitive, and the key lists of
+`Object.assign`, `Object.getOwnPropertySymbols` and `Promise.allKeyed` this
+way.
 
 ## Depth and Fuzz Probe
 

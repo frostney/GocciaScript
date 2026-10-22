@@ -24,7 +24,7 @@ type
     function DirectNextValue(const AValue: TGocciaValue;
       out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaStringIteratorValue = class(TGocciaIteratorValue)
@@ -37,7 +37,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaMapIteratorKind = (mkEntries, mkKeys, mkValues);
@@ -58,7 +58,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaSetIteratorKind = (skValues, skEntries);
@@ -76,7 +76,7 @@ type
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     procedure Close; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaURLSearchParamsIteratorKind = (spikKeys, spikValues, spikEntries);
@@ -92,7 +92,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TGocciaHeadersIteratorKind = (hikEntries, hikKeys, hikValues);
@@ -108,7 +108,7 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 function EnsureArrayIteratorPrototype: TGocciaObjectValue;
@@ -142,6 +142,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -199,6 +200,7 @@ begin
     if NextDescriptor is TGocciaPropertyDescriptorData then
       CurrentRealm.SetSlot(GArrayIteratorNextSlot,
         TGocciaPropertyDescriptorData(NextDescriptor).Value);
+    ReleaseDescriptor(NextDescriptor);
   end;
 end;
 
@@ -208,6 +210,7 @@ var
   ArrayPrototype, IteratorPrototype: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
   Intrinsic: TGocciaValue;
+  IsIntrinsic: Boolean;
 begin
   Result := False;
   if not (AArray is TGocciaArrayValue) then
@@ -227,9 +230,11 @@ begin
   Intrinsic := GetIntrinsicArrayValuesForRealm(Realm);
   Descriptor := ArrayPrototype.GetOwnSymbolPropertyDescriptor(
     TGocciaSymbolValue.WellKnownIterator);
-  if not Assigned(Intrinsic) or
-     not (Descriptor is TGocciaPropertyDescriptorData) or
-     (TGocciaPropertyDescriptorData(Descriptor).Value <> Intrinsic) then
+  IsIntrinsic := Assigned(Intrinsic) and
+    (Descriptor is TGocciaPropertyDescriptorData) and
+    (TGocciaPropertyDescriptorData(Descriptor).Value = Intrinsic);
+  ReleaseDescriptor(Descriptor);
+  if not IsIntrinsic then
     Exit;
 
   // GetIteratorFromMethod step: Get(iterator, "next") on a fresh array
@@ -245,6 +250,7 @@ begin
   Result := Assigned(Intrinsic) and
     (Descriptor is TGocciaPropertyDescriptorData) and
     (TGocciaPropertyDescriptorData(Descriptor).Value = Intrinsic);
+  ReleaseDescriptor(Descriptor);
 end;
 
 constructor TGocciaArrayIteratorValue.Create(const ASource: TGocciaValue; const AKind: TGocciaArrayIteratorKind);
@@ -401,9 +407,8 @@ begin
   Result := 'Array Iterator';
 end;
 
-procedure TGocciaArrayIteratorValue.MarkReferences;
+procedure TGocciaArrayIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -500,9 +505,8 @@ begin
   Result := 'String Iterator';
 end;
 
-procedure TGocciaStringIteratorValue.MarkReferences;
+procedure TGocciaStringIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -629,9 +633,8 @@ begin
   Result := 'Map Iterator';
 end;
 
-procedure TGocciaMapIteratorValue.MarkReferences;
+procedure TGocciaMapIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -753,9 +756,8 @@ begin
   Result := 'Set Iterator';
 end;
 
-procedure TGocciaSetIteratorValue.MarkReferences;
+procedure TGocciaSetIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -879,9 +881,8 @@ begin
   Result := 'URLSearchParams Iterator';
 end;
 
-procedure TGocciaURLSearchParamsIteratorValue.MarkReferences;
+procedure TGocciaURLSearchParamsIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
@@ -1005,12 +1006,37 @@ begin
   Result := 'Headers Iterator';
 end;
 
-procedure TGocciaHeadersIteratorValue.MarkReferences;
+procedure TGocciaHeadersIteratorValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FSource) then
     FSource.MarkReferences;
+end;
+
+{ Heap snapshot slot materializers (ADR 0148): the concrete iterator
+  prototypes are built on first use. }
+
+procedure MaterializeArrayIteratorPrototype;
+begin
+  EnsureArrayIteratorPrototype;
+end;
+
+procedure MaterializeStringIteratorPrototype;
+begin
+  TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
+    GStringIteratorPrototypeSlot, 'String Iterator');
+end;
+
+procedure MaterializeMapIteratorPrototype;
+begin
+  TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
+    GMapIteratorPrototypeSlot, 'Map Iterator');
+end;
+
+procedure MaterializeSetIteratorPrototype;
+begin
+  TGocciaArrayIteratorValue.EnsureConcreteIteratorPrototype(
+    GSetIteratorPrototypeSlot, 'Set Iterator');
 end;
 
 initialization
@@ -1019,5 +1045,15 @@ initialization
   GStringIteratorPrototypeSlot := RegisterRealmSlot('StringIterator.prototype');
   GMapIteratorPrototypeSlot := RegisterRealmSlot('MapIterator.prototype');
   GSetIteratorPrototypeSlot := RegisterRealmSlot('SetIterator.prototype');
+  RegisterSnapshotSlotMaterializer('ArrayIterator.prototype',
+    MaterializeArrayIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('%ArrayIteratorPrototype%.next',
+    MaterializeArrayIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('StringIterator.prototype',
+    MaterializeStringIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('MapIterator.prototype',
+    MaterializeMapIteratorPrototype);
+  RegisterSnapshotSlotMaterializer('SetIterator.prototype',
+    MaterializeSetIteratorPrototype);
 
 end.

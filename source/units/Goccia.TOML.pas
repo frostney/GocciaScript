@@ -919,8 +919,14 @@ end;
 procedure TGocciaTOMLParser.AttachChild(const ATable: TGocciaTOMLNode;
   const AKey: string; const ANode: TGocciaTOMLNode);
 begin
+  { Takes ANode over, freeing it when it cannot be attached. }
+  try
+    ATable.TableValue.AssignProperty(AKey, ANode.Value);
+  except
+    ANode.Free;
+    raise;
+  end;
   ATable.Children.Add(AKey, ANode);
-  ATable.TableValue.AssignProperty(AKey, ANode.Value);
 end;
 
 procedure TGocciaTOMLParser.RequireNotSealed(const ANode: TGocciaTOMLNode;
@@ -983,27 +989,34 @@ var
   I: Integer;
   PathLabel: string;
 begin
-  if Length(APath) = 0 then
-    RaiseParseError('TOML assignments require at least one key.');
+  { Takes AInlineTableNode over: a parse error before it is attached frees
+    it. }
+  try
+    if Length(APath) = 0 then
+      RaiseParseError('TOML assignments require at least one key.');
 
-  Context := ATargetTable;
-  for I := 0 to Length(APath) - 2 do
-    Context := EnsureDottedKeyTable(Context, APath[I], AAllowSealed);
+    Context := ATargetTable;
+    for I := 0 to Length(APath) - 2 do
+      Context := EnsureDottedKeyTable(Context, APath[I], AAllowSealed);
 
-  if not AAllowSealed then
-    RequireNotSealed(Context, APath[Length(APath) - 1]);
+    if not AAllowSealed then
+      RequireNotSealed(Context, APath[Length(APath) - 1]);
 
-  Existing := GetChild(Context, APath[Length(APath) - 1]);
-  if Assigned(Existing) then
-  begin
-    PathLabel := JoinPath(APath);
-    RaiseParseError(Format('Cannot define "%s" more than once.', [PathLabel]));
+    Existing := GetChild(Context, APath[Length(APath) - 1]);
+    if Assigned(Existing) then
+    begin
+      PathLabel := JoinPath(APath);
+      RaiseParseError(Format('Cannot define "%s" more than once.', [PathLabel]));
+    end;
+
+    if Assigned(AInlineTableNode) then
+      NewNode := AInlineTableNode
+    else
+      RaiseParseError('Internal TOML error: missing parsed value node.');
+  except
+    AInlineTableNode.Free;
+    raise;
   end;
-
-  if Assigned(AInlineTableNode) then
-    NewNode := AInlineTableNode
-  else
-    RaiseParseError('Internal TOML error: missing parsed value node.');
   AttachChild(Context, APath[Length(APath) - 1], NewNode);
 end;
 

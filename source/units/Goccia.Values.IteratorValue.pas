@@ -110,6 +110,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -375,7 +376,7 @@ begin
     ThrowTypeError('Iterator accessor setter requires an object receiver');
   if AThisValue = AHome then
     ThrowTypeError('Cannot assign Iterator intrinsic accessor on its home object');
-  if not Assigned(TGocciaObjectValue(AThisValue).GetOwnPropertyDescriptor(APropertyKey)) then
+  if not TGocciaObjectValue(AThisValue).HasOwnPropertyDescriptor(APropertyKey) then
     TGocciaObjectValue(AThisValue).CreateDataPropertyOrThrow(APropertyKey, AValue)
   else
     TGocciaObjectValue(AThisValue).AssignProperty(APropertyKey, AValue);
@@ -390,7 +391,7 @@ begin
     ThrowTypeError('Iterator accessor setter requires an object receiver');
   if AThisValue = AHome then
     ThrowTypeError('Cannot assign Iterator intrinsic accessor on its home object');
-  if not Assigned(TGocciaObjectValue(AThisValue).GetOwnSymbolPropertyDescriptor(ASymbol)) then
+  if not TGocciaObjectValue(AThisValue).HasOwnSymbolPropertyDescriptor(ASymbol) then
     TGocciaObjectValue(AThisValue).CreateDataPropertyOrThrow(ASymbol, AValue)
   else
     TGocciaObjectValue(AThisValue).AssignSymbolProperty(ASymbol, AValue);
@@ -745,6 +746,7 @@ class function TGocciaIteratorValue.EnsureConcreteIteratorPrototype(
   const AToStringTag: string): TGocciaObjectValue;
 var
   IteratorPrototype: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (CurrentRealm = nil) then
     Exit(nil);
@@ -755,17 +757,25 @@ begin
 
   EnsurePrototypeInitialized;
   IteratorPrototype := GetSharedIteratorPrototype;
-  Result := TGocciaObjectValue.Create(IteratorPrototype);
-  Result.DefineProperty('next',
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        GetIteratorMethodHost.IteratorNext, 'next', 0),
-      [pfConfigurable, pfWritable]));
-  Result.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownToStringTag,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(AToStringTag), [pfConfigurable]));
-  CurrentRealm.SetSlot(ASlotId, Result);
+  // The new prototype is held only by this local until the slot takes it,
+  // and the tag string reserves its payload, which can collect (#1816).
+  Roots.Initialize;
+  try
+    Result := TGocciaObjectValue.Create(IteratorPrototype);
+    Roots.Add(Result);
+    Result.DefineProperty('next',
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          GetIteratorMethodHost.IteratorNext, 'next', 0),
+        [pfConfigurable, pfWritable]));
+    Result.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(AToStringTag), [pfConfigurable]));
+    CurrentRealm.SetSlot(ASlotId, Result);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure TGocciaIteratorValue.InitializePrototype;
@@ -1886,7 +1896,6 @@ const
   ZIP_MODE_STRICT = 'strict';
 var
   IterablesArg, OptionsArg, ModeVal, PaddingOption, PropValue: TGocciaValue;
-  Descriptor: TGocciaPropertyDescriptor;
   InnerIterator: TGocciaIteratorValue;
   AllKeys, Keys: TArray<TGocciaValue>;
   Iterators: array of TGocciaIteratorValue;
@@ -1967,9 +1976,8 @@ begin
     try
       for I := 0 to High(AllKeys) do
       begin
-        Descriptor := TGocciaObjectValue(IterablesArg).OwnPropertyDescriptorForKey(
-          AllKeys[I]);
-        if not Assigned(Descriptor) or not Descriptor.Enumerable then
+        if not TGocciaObjectValue(IterablesArg).OwnPropertyIsEnumerableForKey(
+          AllKeys[I]) then
           Continue;
         PropValue := GetPropertyByKey(TGocciaObjectValue(IterablesArg),
           AllKeys[I]);
@@ -2171,5 +2179,11 @@ initialization
     'WrapForValidIterator.prototype');
   GIteratorConstructorSlot := RegisterRealmSlot('Iterator');
   GIteratorMethodHostSlot := RegisterRealmSlot('Iterator.prototype.methodHost');
+  // Built on first use; a heap snapshot's restore builds them by name
+  // (ADR 0148).
+  RegisterSnapshotSlotMaterializer('IteratorHelper.prototype',
+    EnsureIteratorHelperPrototypeInitialized);
+  RegisterSnapshotSlotMaterializer('WrapForValidIterator.prototype',
+    EnsureWrapForValidIteratorPrototypeInitialized);
 
 end.

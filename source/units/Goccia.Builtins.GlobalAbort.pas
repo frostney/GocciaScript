@@ -30,6 +30,8 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function AbortSignalTimeout(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
@@ -43,6 +45,7 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Values.AbortValue,
   Goccia.Values.ClassValue,
@@ -132,16 +135,25 @@ function TGocciaGlobalAbort.AbortSignalAbort(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   Signal: TGocciaAbortSignalValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  Signal := TGocciaAbortSignalValue.Create;
-  if AArgs.Length > 0 then
-    Signal.SignalAbort(AArgs.GetElement(0))
-  else
-    Signal.SignalAbort;
-  // The signal is aborted before it can be observed, so settle its one-shot
-  // "abort" event now: a listener added later must never fire.
-  Signal.FlushAbortEvent;
-  Result := Signal;
+  // The new signal is held only by this local while its abort reason (a
+  // DOMException) is made, which can collect.
+  Roots.Initialize;
+  try
+    Signal := TGocciaAbortSignalValue.Create;
+    Roots.Add(Signal);
+    if AArgs.Length > 0 then
+      Signal.SignalAbort(AArgs.GetElement(0))
+    else
+      Signal.SignalAbort;
+    // The signal is aborted before it can be observed, so settle its one-shot
+    // "abort" event now: a listener added later must never fire.
+    Signal.FlushAbortEvent;
+    Result := Signal;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 // WHATWG DOM §3.2 AbortSignal.timeout(milliseconds).
@@ -151,6 +163,7 @@ function TGocciaGlobalAbort.AbortSignalTimeout(
 var
   Milliseconds: Double;
   Signal: TGocciaAbortSignalValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if AArgs.Length = 0 then
     ThrowTypeError('AbortSignal.timeout requires a timeout');
@@ -162,9 +175,28 @@ begin
       'AbortSignal.timeout must be an unsigned long long integer');
   Milliseconds := Trunc(Milliseconds);
 
-  Signal := TGocciaAbortSignalValue.Create;
-  Signal.SetTimeout(Milliseconds);
-  Result := Signal;
+  // The new signal is held only by this local while its timeout is armed.
+  Roots.Initialize;
+  try
+    Signal := TGocciaAbortSignalValue.Create;
+    Roots.Add(Signal);
+    Signal.SetTimeout(Milliseconds);
+    Result := Signal;
+  finally
+    Roots.Clear;
+  end;
+end;
+
+procedure TGocciaGlobalAbort.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FAbortControllerConstructor) then
+    FAbortControllerConstructor.MarkReferences;
+  if Assigned(FAbortControllerPrototype) then
+    FAbortControllerPrototype.MarkReferences;
 end;
 
 end.

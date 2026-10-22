@@ -8,6 +8,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  SandboxVirtualFileSystem,
   TextEncoding,
   TimingUtils,
   TextSemantics,
@@ -38,6 +39,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.MicrotaskQueue,
   Goccia.HostEnvironment,
   Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
@@ -98,8 +100,16 @@ type
     function StderrText: string;
   end;
 
+  { The run's last value is converted while its engine is alive: the value
+    itself is not usable once the engine is freed. }
   TScriptExecutionReport = record
-    ResultValue: TGocciaValue;
+    { The last value as --print shows it; HasResultText is False when there
+      is none or --print is off. }
+    ResultText: string;
+    HasResultText: Boolean;
+    { The last value as the JSON report's "result" shows it; set only for
+      --output=json. }
+    ResultJSON: string;
     Timing: TCLIJSONTiming;
     MemoryStats: TCLIJSONMemoryStats;
   end;
@@ -124,6 +134,7 @@ type
     FOutputPath: TStringOption;
     FSilent: TFlagOption;
     FPrint: TFlagOption;
+    FPreferBytecode: TFlagOption;
     FSourceMap: TStringOption;
     FHostEnvironmentModule: TStringOption;
     FGlobalFiles: TRepeatableOption;
@@ -160,6 +171,7 @@ type
     function HostCapabilityAllowFlags: TGocciaCapabilityScopes;
     function HostOnlyCommandLineOptions(
       const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
+    function SandboxDeterministic: Boolean;
     procedure ConfigureSandboxEngine(const AEngine: TGocciaEngine;
       const AContext: TGocciaSandboxContext; const AEntryPath: string;
       const AParentEngine: TGocciaEngine;
@@ -186,6 +198,8 @@ type
     function RunBytecodeModule(const AEngine: TGocciaEngine;
       const AModule: TGocciaBytecodeModule;
       const AFileName: string): TGocciaValue;
+    procedure CaptureResultValue(const AValue: TGocciaValue;
+      var AReport: TScriptExecutionReport);
     function ExecuteBytecodeFromSource(const ASource: TStringList; const AFileName: string;
       const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
     function ExecuteBytecodeFromFile(const AFileName: string;
@@ -442,6 +456,8 @@ begin
   FSilent := AddFlag('silent', 'Suppress console output from the script');
   FPrint := AddFlag('print',
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
+  FPreferBytecode := AddFlag('prefer-bytecode',
+    'Load imported modules from companion .gbc files when present');
   FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
     'Write a .map source map file (optional: explicit path)')));
   FSourceMap.WritesHostFile := True;
@@ -492,6 +508,8 @@ var
   HostEnvironmentModulePath: string;
   Runtime: TGocciaRuntimeCore;
 begin
+  AEngine.ModuleLoader.PreferBytecode :=
+    ResolveFlagOption(FPreferBytecode, AFileConfig);
   Runtime := AttachRuntime(AEngine);
 
   { The command line names a host module; a config names a guest one. }
@@ -750,11 +768,20 @@ begin
     Result := '';
 end;
 
+procedure InitializeExecutionReport(out AReport: TScriptExecutionReport);
+begin
+  AReport.ResultText := '';
+  AReport.HasResultText := False;
+  AReport.ResultJSON := 'null';
+  FillChar(AReport.Timing, SizeOf(AReport.Timing), 0);
+  AReport.MemoryStats := DefaultCLIJSONMemoryStats;
+end;
+
 procedure PrintJSONSuccess(const AReport: TScriptExecutionReport;
   const ACapture: TScriptLoaderConsoleCapture; const AFileName: string;
   const ACompact: Boolean);
 begin
-  WriteLn(BuildCLIScriptSuccessJSON(AFileName, AReport.ResultValue,
+  WriteLn(BuildCLIScriptSuccessJSON(AFileName, AReport.ResultJSON,
     CapturedOutputText(ACapture), CapturedStdoutText(ACapture),
     CapturedStderrText(ACapture), AReport.Timing, AReport.MemoryStats, 1, 1,
     ACompact));
@@ -880,8 +907,59 @@ end;
 function TRunnerApp.RunBytecodeModule(const AEngine: TGocciaEngine;
   const AModule: TGocciaBytecodeModule;
   const AFileName: string): TGocciaValue;
+var
+  RuntimeAddress, SourceExtension: string;
 begin
-  Result := AEngine.RunModuleForSourceType(AModule, AFileName);
+  RuntimeAddress := AFileName;
+  SourceExtension := ExtractFileExt(AModule.SourcePath);
+  if Assigned(AModule.LinkPlan) and IsScriptExtension(SourceExtension) then
+  begin
+    { A back-import of the original source filename must reach this entry's
+      module record, including when only its companion artifact is shipped. }
+    RuntimeAddress := ChangeFileExt(AFileName, SourceExtension);
+    AEngine.ModuleLoader.RecordBytecodeCompanion(RuntimeAddress, AFileName);
+  end;
+  Result := AEngine.RunModuleForSourceType(AModule, RuntimeAddress);
+end;
+
+{ Converts the run's last value for what will read it (--print, or the JSON
+  report), and only then, while its engine is still alive: the conversion can call the
+  value's own toString, valueOf or toJSON and the realm's built-ins, which
+  must not run against a freed engine. The caller runs this inside the run's
+  timeout and instruction limit, so a conversion that does not end is cut
+  off like the run, and an error it throws is the run's. The run's microtask
+  work has already been drained, so the conversion gets a microtask scope of
+  its own, as the sandbox host's does: a job it queues, or a promise it
+  leaves rejected, is discarded with that scope rather than left on the
+  thread's queue for the next file's run after this engine is freed. }
+procedure TRunnerApp.CaptureResultValue(const AValue: TGocciaValue;
+  var AReport: TScriptExecutionReport);
+var
+  Root: TGocciaTempRoot;
+  MicrotaskQueue: TGocciaMicrotaskQueue;
+  ScopeToken: Integer;
+begin
+  InitializeTempRoot(Root);
+  AddTempRootIfNeeded(Root, AValue);
+  MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
+  ScopeToken := 0;
+  if Assigned(MicrotaskQueue) then
+    ScopeToken := MicrotaskQueue.EnterScope;
+  try
+    if IsJsonOutput then
+      AReport.ResultJSON := SerializeScriptResult(AValue)
+    { A parallel worker's human-readable report is not printed
+      (PrintHumanReadableResult), so neither is its value. }
+    else if FPrint.Present and not GIsWorkerThread and Assigned(AValue) then
+    begin
+      AReport.ResultText := AValue.ToStringLiteral.Value;
+      AReport.HasResultText := True;
+    end;
+  finally
+    if Assigned(MicrotaskQueue) then
+      MicrotaskQueue.LeaveScope(ScopeToken);
+    RemoveTempRootIfNeeded(Root);
+  end;
 end;
 
 function TRunnerApp.ExecuteBytecodeFromSource(const ASource: TStringList;
@@ -894,6 +972,7 @@ var
   PipelineOptions: TGocciaSourcePipelineOptions;
   StartTime, CompileStart, CompileEnd, ExecEnd: Int64;
 begin
+  InitializeExecutionReport(Result);
   StartTime := GetNanoseconds;
   Engine := CreateEngine(AFileName, ASource);
   try
@@ -925,6 +1004,8 @@ begin
         SourcePipelineResult.RegisterCoverageSource(AFileName);
 
         CompileStart := GetNanoseconds;
+        { The goal the parse settled for a detected entry (ADR 0140). }
+        Engine.SourceType := SourcePipelineResult.SourceType;
         Module := Engine.CompileModule(SourcePipelineResult.ProgramNode);
         CompileEnd := GetNanoseconds;
         Result.Timing.CompileTimeNanoseconds := CompileEnd - CompileStart;
@@ -936,7 +1017,8 @@ begin
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         ApplyModuleGlobalsToEngine(Engine);
-        Result.ResultValue := RunBytecodeModule(Engine, Module, AFileName);
+        CaptureResultValue(RunBytecodeModule(Engine, Module, AFileName),
+          Result);
       finally
         ClearExecutionTimeout;
         ClearInstructionLimit;
@@ -960,12 +1042,14 @@ var
   Engine: TGocciaEngine;
   StartTime, LoadEnd, ExecEnd: Int64;
 begin
+  InitializeExecutionReport(Result);
   StartTime := GetNanoseconds;
   Module := Goccia.Bytecode.Binary.LoadModuleFromFile(AFileName);
   LoadEnd := GetNanoseconds;
   try
     Engine := CreateEngine(AFileName, nil);
     try
+      Engine.ValidateBytecodeModule(Module);
       FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
       Engine.RetainModule(Module);
       RetainedModule := Module;
@@ -976,8 +1060,8 @@ begin
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         ApplyModuleGlobalsToEngine(Engine);
-        Result.ResultValue := RunBytecodeModule(Engine,
-          RetainedModule, AFileName);
+        CaptureResultValue(RunBytecodeModule(Engine, RetainedModule,
+          AFileName), Result);
       finally
         ClearExecutionTimeout;
         ClearInstructionLimit;
@@ -1037,11 +1121,8 @@ begin
 
   { Mirrors `node -p` / `bun --print` / `deno eval -p`: silent by default,
     prints the bare value (incl. `undefined`) only when --print is set. }
-  if not FPrint.Present then
-    Exit;
-  if not Assigned(AReport.ResultValue) then
-    Exit;
-  WriteLn(AReport.ResultValue.ToStringLiteral.Value);
+  if AReport.HasResultText then
+    WriteLn(AReport.ResultText);
 end;
 
 procedure TRunnerApp.RunSource(const ASource: TStringList;
@@ -1055,7 +1136,6 @@ var
 begin
   FLastDiagnosticPrincipal := 0;
   FillChar(Report, SizeOf(Report), 0);
-  Report.ResultValue := nil;
   Report.MemoryStats := DefaultCLIJSONMemoryStats;
 
   Capture := nil;
@@ -1130,7 +1210,6 @@ var
   ErrorInfo: TCLIJSONErrorInfo;
 begin
   FillChar(Report, SizeOf(Report), 0);
-  Report.ResultValue := nil;
   Report.MemoryStats := DefaultCLIJSONMemoryStats;
 
   Result.FileName := AFileName;
@@ -1167,7 +1246,7 @@ begin
       Result.MemoryStats := Report.MemoryStats;
       Result.Ok := True;
       Result.JSON := BuildCLIScriptFileSuccessJSON(AFileName,
-        Report.ResultValue, Result.OutputText, Result.StdoutText,
+        Report.ResultJSON, Result.OutputText, Result.StdoutText,
         Result.StderrText, Report.Timing, Report.MemoryStats,
         IsCompactJsonOutput);
     except
@@ -1560,6 +1639,16 @@ end;
 
 { TRunnerApp - Sandbox mode }
 
+{ --deterministic in sandbox mode. Only the root config, already merged into
+  the options, governs a sandbox run. }
+function TRunnerApp.SandboxDeterministic: Boolean;
+var
+  EmptyConfig: TConfigEntryArray;
+begin
+  EmptyConfig := nil;
+  Result := ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig);
+end;
+
 procedure TRunnerApp.ConfigureSandboxEngine(const AEngine: TGocciaEngine;
   const AContext: TGocciaSandboxContext; const AEntryPath: string;
   const AParentEngine: TGocciaEngine;
@@ -1574,6 +1663,8 @@ begin
     climb the host filesystem from its root and find a config unrelated to
     the run. The root config, already merged into the options, governs. }
   EmptyConfig := nil;
+  AEngine.ModuleLoader.PreferBytecode :=
+    ResolveFlagOption(FPreferBytecode, EmptyConfig);
   Verdict := FileConfigVerdict('');
   if Assigned(AParentEngine) then
     AEngine.ConfigureCapabilityAuditAsChildOf(AParentEngine)
@@ -1584,7 +1675,7 @@ begin
   end;
   if Assigned(AParentHostEnvironment) then
     AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
-  else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
+  else if SandboxDeterministic then
     AEngine.HostEnvironment.UseDeterministicProfile;
 
   Runtime := AttachRuntime(AEngine);
@@ -1755,6 +1846,7 @@ end;
 procedure TRunnerApp.RunSandbox(const ARequest: TGocciaSandboxModeRequest);
 var
   Host: TGocciaSandboxHost;
+  FsClock: TSandboxFsClock;
   RunResult: TGocciaSandboxRunResult;
   Report: TStringList;
   EntryPath: string;
@@ -1771,9 +1863,20 @@ begin
   for I := 0 to High(ARequest.Notes) do
     WriteLn(ErrOutput, ARequest.Notes[I]);
 
-  Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes);
-  FSandboxHost := Host;
+  { Under --deterministic the filesystem's timestamps read the clock the
+    engines' deterministic profile reads, so a file's times are the epoch,
+    as Date.now() is, and two runs see and diff the same metadata. The
+    clock is set before the inputs are copied in, so they carry it too. }
+  if SandboxDeterministic then
+    FsClock := TGocciaSandboxFsHostClock.Create(
+      TGocciaHostEnvironment.DeterministicClock)
+  else
+    FsClock := nil;
+  Host := nil;
   try
+    Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes,
+      ARequest.MaxFsNodes, FsClock);
+    FSandboxHost := Host;
     Host.TimeoutMilliseconds := EngineOptions.Timeout.Milliseconds(0);
     Host.MaxInstructions := EngineOptions.MaxInstructions.ValueOr(0);
     Host.ImportMapPath := EngineOptions.ImportMap.ValueOr('');
@@ -1781,6 +1884,9 @@ begin
     { Filtered to net by HonoredCapabilities. }
     Host.RootCapabilities := ResolveEngineCapabilities('');
     Host.OnConfigureEngine := ConfigureSandboxEngine;
+    { Only --print reads the root run's value; converting it is otherwise
+      work charged to the run for nothing. }
+    Host.PrintRootResult := FPrint.Present;
 
     { A config-named read-write input carries the pin taken when the config
       was checked, so write-back reaches it only along that route. }
@@ -1798,8 +1904,8 @@ begin
     else if (not RunResult.Ok) and (RunResult.ErrorMessage <> '') then
       WriteLn(ErrOutput, RunResult.ErrorMessage);
     { Mirrors host mode: the bare value, `undefined` included. }
-    if FPrint.Present and Assigned(RunResult.ResultValue) then
-      WriteLn(RunResult.ResultValue.ToStringLiteral.Value);
+    if RunResult.HasResultText then
+      WriteLn(RunResult.ResultText);
     if not RunResult.Ok then
       ExitCode := RunResult.ExitCode;
 
@@ -1832,6 +1938,7 @@ begin
   finally
     FSandboxHost := nil;
     Host.Free;
+    FsClock.Free;
   end;
 end;
 

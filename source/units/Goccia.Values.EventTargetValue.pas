@@ -86,7 +86,7 @@ type
     function DispatchEventValue(const AEvent: TGocciaEventValue): Boolean;
 
     function ToStringTag: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class function SharedPrototypeObject: TGocciaObjectValue;
   end;
@@ -561,13 +561,11 @@ begin
   Result := CONSTRUCTOR_EVENT_TARGET;
 end;
 
-procedure TGocciaEventTargetValue.MarkReferences;
+procedure TGocciaEventTargetValue.TraceReferences;
 var
   I: Integer;
   Callback: TGocciaValue;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FListeners) then
     for I := 0 to FListeners.Count - 1 do

@@ -104,6 +104,8 @@ type
     procedure TestEngineLoadsInMemoryModuleWithCustomProvider;
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestFailedCycleKeepsLiveBindings;
+    procedure TestEntryNamedByProviderPathIsOneRecordInACycle;
+    procedure TestReloadedModuleRetargetsCachedImport;
     procedure TestReloadedDataModuleFailureNamesSpecifier;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
@@ -214,6 +216,10 @@ begin
     TestEngineRetriesModuleAfterFailedLoad);
   Test('Failed module cycles keep surviving live bindings valid',
     TestFailedCycleKeepsLiveBindings);
+  Test('An entry the provider names by an unexpanded path is one record in a cycle',
+    TestEntryNamedByProviderPathIsOneRecordInACycle);
+  Test('Reloads retarget cached import bindings',
+    TestReloadedModuleRetargetsCachedImport);
   Test('Reloaded data module failures name the specifier, not the host path',
     TestReloadedDataModuleFailureNamesSpecifier);
   Test('Engine reports JSONL module parse line numbers',
@@ -603,6 +609,152 @@ end;
 procedure TModuleContentProviderTests.TestFailedCycleKeepsLiveBindings;
 begin
   AssertFailedCycleKeepsLiveBindings;
+end;
+
+{ A provider can name its files by paths ExpandFileName would rewrite (the
+  sandbox's `/`-rooted paths on Windows; `memory:/` names here). An import of
+  the entry's file resolves to that name, so the entry is registered under it
+  and the cycle evaluates the entry once (ADR 0140, #1626). Registered only
+  under the expanded path, the import loaded a second copy, which read `y`
+  in its temporal dead zone. }
+procedure TModuleContentProviderTests.TestEntryNamedByProviderPathIsOneRecordInACycle;
+const
+  ENTRY_PATH = 'memory:/cycle-entry.js';
+  PEER_PATH = 'memory:/cycle-peer.js';
+  ENTRY_SOURCE =
+    'import { y } from "' + PEER_PATH + '";' + LineEnding +
+    'export const h = () => "h";' + LineEnding +
+    'y + ":" + h();';
+var
+  Engine: TGocciaEngine;
+  ModuleLoader: TGocciaModuleLoader;
+  Provider: TMemoryModuleContentProvider;
+  Resolver: TInMemoryModuleResolver;
+  Source: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.AddModule(ENTRY_PATH, ENTRY_SOURCE);
+    Provider.AddModule(PEER_PATH,
+      'import { h } from "' + ENTRY_PATH + '";' + LineEnding +
+      'export const y = "y";' + LineEnding +
+      'export const z = () => h();');
+    Source.Text := ENTRY_SOURCE;
+    Expect<Boolean>(ExpandFileName(ENTRY_PATH) <> ENTRY_PATH).ToBe(True);
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      try
+        Expect<string>(Engine.Execute.Result.ToStringLiteral.Value).ToBe('y:h');
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestReloadedModuleRetargetsCachedImport;
+const
+  BRIDGE_PATH = 'memory:/bridge.js';
+  ENTRY_PATH = 'memory:/app.mjs';
+  IMPORTER_PATH = 'memory:/importer.js';
+  OUTER_PATH = 'memory:/outer.js';
+  SOURCE_A_PATH = 'memory:/source-a.js';
+  SOURCE_B_PATH = 'memory:/source-b.js';
+var
+  Args: TGocciaArgumentsCollection;
+  BridgeModule: TGocciaModule;
+  Engine: TGocciaEngine;
+  ExportValue: TGocciaValue;
+  ImporterModule: TGocciaModule;
+  ModuleLoader: TGocciaModuleLoader;
+  OuterNamespace: TGocciaModuleNamespaceObject;
+  Provider: TMemoryModuleContentProvider;
+  ReadValue: TGocciaFunctionBase;
+  Resolver: TInMemoryModuleResolver;
+  ResultValue: TGocciaValue;
+  Source: TStringList;
+begin
+  Provider := TMemoryModuleContentProvider.Create;
+  Resolver := TInMemoryModuleResolver.Create;
+  Source := TStringList.Create;
+  try
+    Provider.AddModule(SOURCE_A_PATH, 'export const first = 1;');
+    Provider.AddModule(SOURCE_B_PATH, 'export const second = 2;');
+    Provider.SetModule(BRIDGE_PATH,
+      'export { first as value } from "' + SOURCE_A_PATH + '";',
+      EncodeDate(2026, 1, 1));
+    Provider.AddModule(OUTER_PATH,
+      'export { value } from "' + BRIDGE_PATH + '";');
+    Provider.AddModule(IMPORTER_PATH,
+      'import { value } from "' + OUTER_PATH + '";' + sLineBreak +
+      'export const readValue = () => value;');
+    Source.Text := '1;';
+
+    ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver, Provider);
+    try
+      Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader);
+      try
+        ImporterModule := ModuleLoader.LoadModule(IMPORTER_PATH, ENTRY_PATH);
+        Expect<Boolean>(ImporterModule.TryGetExportValue('readValue',
+          ExportValue)).ToBe(True);
+        Expect<Boolean>(ExportValue is TGocciaFunctionBase).ToBe(True);
+        ReadValue := TGocciaFunctionBase(ExportValue);
+        OuterNamespace := TGocciaModuleNamespaceObject(
+          ModuleLoader.LoadModule(OUTER_PATH, IMPORTER_PATH)
+            .GetNamespaceObject);
+        Expect<Boolean>(OuterNamespace.CanResolveExport('value')).ToBe(True);
+
+        Args := TGocciaArgumentsCollection.Create;
+        try
+          ResultValue := ReadValue.Call(Args,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+          if not Assigned(ResultValue) then
+            Fail('Initial imported binding read returned no value.');
+          Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(1);
+
+          Provider.SetModule(BRIDGE_PATH,
+            'export { second as value } from "' + SOURCE_B_PATH + '";',
+            EncodeDate(2026, 1, 2));
+          ModuleLoader.LoadModule(BRIDGE_PATH, IMPORTER_PATH);
+
+          ResultValue := ReadValue.Call(Args,
+            TGocciaUndefinedLiteralValue.UndefinedValue);
+          if not Assigned(ResultValue) then
+            Fail('Reloaded imported binding read returned no value.');
+          Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(2);
+
+          Provider.SetModule(BRIDGE_PATH,
+            'export const replacement = 3;',
+            EncodeDate(2026, 1, 3));
+          BridgeModule := ModuleLoader.LoadModule(BRIDGE_PATH, IMPORTER_PATH);
+          Expect<Boolean>(OuterNamespace.CanResolveExport('value')).ToBe(False);
+          Expect<Boolean>(BridgeModule.TryGetExportValue('replacement',
+            ExportValue)).ToBe(True);
+          Expect<Double>(ExportValue.ToNumberLiteral.Value).ToBe(3);
+        finally
+          Args.Free;
+        end;
+      finally
+        Engine.Free;
+      end;
+    finally
+      ModuleLoader.Free;
+    end;
+  finally
+    Source.Free;
+    Resolver.Free;
+    Provider.Free;
+  end;
 end;
 
 { The message a failed import carries to script, however the engine raised

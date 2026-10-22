@@ -26,6 +26,7 @@ When choosing where to add coverage, prefer the most public entry point — and 
 | Valid code runs and produces the correct result — semantics, conformance, edge cases | JavaScript tests under `tests/` (run by `GocciaTestRunner`) | Exercises the full lexer → parser → compiler → VM pipeline through the public surface |
 | Malformed source is **rejected** — a `SyntaxError`/early error, and its message, caret, suggestion, exit code, and JSON `error` envelope | `scripts/test-cli-parser.ts` (parser) or `scripts/test-cli-lexer.ts` (lexer), run by the CI `cli` job | A JS test **cannot** assert rejection: `eval` is not installed and the `Function` constructor is off by default, so a parse or lex error simply fails to load the whole test file. These scripts run `GocciaRunner` as a subprocess and assert on its exit code and error output |
 | CLI tool contract — output formats (`--output=json`, `--format`), `--coverage`, `--source-map`, `--timeout`, global injection, config loading, `--allow-*`/`--deny-*` permissions and `--max-*` limits | the matching `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-apps.ts`, `test-cli-config.ts`, `test-cli-permissions.ts`, `test-cli-embedded-resources.ts`), run by the CI `cli` job | Command-level behaviour over the real binaries |
+| Real-network fetch behavior requiring a live listener | JavaScript requests in `scripts/fetch-e2e.sh` with `scripts/fetch_test_server.py`, run by the PR and non-Windows main CI `cli` jobs | The ordinary `tests/` runner has no server fixture; this still exercises the public `fetch` API through `GocciaRunner` |
 | Low-level runtime/value internals not reachable from JavaScript | Pascal `*.Test.pas` | Internal-only behaviour |
 
 A JavaScript test that merely *parses and runs* a construct — e.g. `(a / b)` evaluating to `1`, or `(/x/).test(...)` returning `true` — is a positive **execution/conformance** test. It confirms the construct works, but it does **not** prove that a *different*, malformed construct is rejected, and it is not the lexer/parser gate. When a change is about what the parser or lexer accepts or rejects (disambiguation, early errors, token classification), put the rejection cases in `scripts/test-cli-parser.ts` / `test-cli-lexer.ts`.
@@ -306,7 +307,7 @@ so the full JavaScript suite can run the folder-configured FFI tests locally.
 ./build/GocciaTestRunner -P tests
 ```
 
-The whole suite must pass. Test subtrees that require opt-in parser or runtime behavior declare it with a local `goccia.json` (for example, `tests/language/asi/goccia.json` enables ASI). Subtrees that reach outside their own directory declare the grant in a `permissions` block, with scopes relative to that config file: `tests/built-ins/FFI` (`allow-ffi` for the repo's `fixtures/ffi`), `tests/built-ins/fetch` (`allow-net` for the loopback test server and `example.com`), `tests/built-ins/ShadowRealm`, `tests/language/modules/**`, and `tests/language/source-type` (`allow-read` for shared fixtures and helpers), and `tests/language/modules/node-modules` (also `allow-import` for its committed `node_modules`). Declaring the grant beside the tests that need it, rather than passing `--allow-*` to the whole run, keeps every other folder under the default profile; see [Permissions](permissions.md#config-files).
+The whole suite must pass. Test subtrees that require opt-in parser or runtime behavior declare it with a local `goccia.json` (for example, `tests/language/asi/goccia.json` enables ASI). Subtrees that reach outside their own directory declare the grant in a `permissions` block, with scopes relative to that config file: `tests/built-ins/FFI` (`allow-ffi` for the repo's `fixtures/ffi`), `tests/built-ins/fetch` (`allow-net` for the loopback test server and `example.com`), `tests/built-ins/ShadowRealm`, `tests/language/modules/**`, `tests/language/source-type`, and `tests/language/source-type-detection/**` (`allow-read` for shared fixtures and helpers), and `tests/language/modules/node-modules` (also `allow-import` for its committed `node_modules`). Declaring the grant beside the tests that need it, rather than passing `--allow-*` to the whole run, keeps every other folder under the default profile; see [Permissions](permissions.md#config-files).
 
 Those permission blocks, and the `unsafe-*` keys some folders set, only take effect once the configs are accepted; without that, the runner refuses the whole run and lists each untrusted config. [Testing requirements](../CONTRIBUTING.md#3-testing-requirements) covers `-P` and `--trust`.
 
@@ -330,6 +331,7 @@ Those permission blocks, and the `unsafe-*` keys some folders set, only take eff
 | `--no-results` | Suppress test results summary |
 | `--exit-on-first-failure` | Stop on the first test failure **or suite error** (a throwing `describe`, a failed `beforeAll`/`afterAll`). Under `--jobs` the worker queue is cancelled too; files that never ran are omitted from the report rather than counted as failures. It stops the queue, not the run — see [Stopping behaviour](#--exit-on-first-failure-stopping-behaviour) |
 | `--silent` | Suppress all console output from test scripts |
+| `--heap-snapshots` | Check [heap snapshot round trips](heap-snapshots.md#round-tripping-the-javascript-suite) for objects observed by `expect()` |
 | `--jobs=N` / `-j N` | Number of parallel worker threads (default: CPU count) |
 | `--update-snapshots` / `-u` | Create, update, and prune snapshots |
 | `--update` | Vitest-compatible alias for `--update-snapshots` |
@@ -406,6 +408,13 @@ Conventions](contributing/cli-conventions.md#exit-codes). A refused allocation
 under `--max-memory` is deliberately **not** one of these: it is a verdict on
 one file delivered by an intact heap, so it stays a per-file failure and the run
 carries on.
+
+Under `--jobs` a watchdog abandons a worker that makes no progress for twice the
+per-file timeout plus 10 s (stuck in native code that never checks the
+timeout). The file it was on fails with a `TIMEOUT (worker stalled …)` message,
+the other workers drain the queue, and the abandoned worker, if it ever runs
+on, takes no further file and records no result. When every worker is
+abandoned, the files none of them took fail as never run.
 
 ### Snapshot Testing
 
@@ -595,7 +604,7 @@ The `GocciaTestRunner` program:
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests, reconciles snapshots through the
    installed host, and collects results.
-6. When the run has more than one file, `GC.Collect` runs after each file: on the main thread in a sequential run (`--jobs=1`) and on the worker that ran the file in a parallel one. This reclaims the file's garbage before the next file starts. It does not reclaim the file's parsed AST, which is never freed, so memory still grows by roughly the size of each file's AST. A one-file run does not collect after its file.
+6. When the run has more than one file, `GC.Collect` runs after each file: on the main thread in a sequential run (`--jobs=1`) and on the worker that ran the file in a parallel one. This reclaims the file's garbage before the next file starts. The file's parsed AST is freed once the file is compiled, with its source text ([ADR 0143](adr/0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)). A one-file run does not collect after its file. When the run ends, each worker's runtime shuts down as the worker exits, and the main thread's once the run has reported, so the collectors destroy every value still alive and a heaptrc build reports no unfreed block.
 7. Aggregates pass/fail/skip counts across all files.
 8. Prints a summary with total statistics.
 
@@ -682,7 +691,7 @@ The primary assertion API uses a standalone generic `Expect<T>` function that re
 | `Expect<Boolean>(actual).ToBe(True)` | Assert value is `True` |
 | `Expect<Boolean>(actual).ToBe(False)` | Assert value is `False` |
 
-On failure, `ToBe` produces descriptive messages like `Expected "hello" to be "world"` or `Expected 3.14 to be 2.71`.
+On failure, `ToBe` produces descriptive messages like `Expected "hello" to be "world"` or `Expected 3.14 to be 2.71`. Strings of every kind (`string`, `AnsiString`, `WideString`, `ShortString`) appear in full, and `TestingPascalLibrary.Test.pas` checks these messages. The RTL's `Exception` stores its message as an `AnsiString` in the system code page, so on Windows a character outside that code page shows as `?`.
 
 `TTestSuite` also provides a `Fail(Message)` method to force a test failure with a custom message.
 

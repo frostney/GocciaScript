@@ -12,7 +12,10 @@ uses
   Goccia.Values.Primitives;
 
 type
-  TGocciaImportMetaResolveHelper = class(TGCManagedObject)
+  { Hosts import.meta.resolve. A managed value that the resolve function
+    keeps as its CapturedRoot: a bare TGCManagedObject is never registered
+    with the collector, so nothing ever freed it (#1592). }
+  TGocciaImportMetaResolveHelper = class(TGocciaObjectValue)
   private
     FModuleFilePath: string;
     FResolveModuleURL: TResolveModuleURLCallback;
@@ -27,6 +30,9 @@ function GetOrCreateImportMeta(const AFilePath: string;
   const AResolver: TResolveModuleURLCallback = nil): TGocciaObjectValue;
 function FilePathToUrl(const AFilePath: string): string;
 procedure ClearImportMetaCache;
+{ Whether ARealm (a TGocciaRealm) has made an import.meta object: state
+  outside the heap no heap snapshot codec covers yet (ADR 0148). }
+function HasImportMetaObjects(const ARealm: TObject): Boolean;
 
 implementation
 
@@ -179,7 +185,7 @@ constructor TGocciaImportMetaResolveHelper.Create(
   const AModuleFilePath: string;
   const AResolveModuleURL: TResolveModuleURLCallback);
 begin
-  inherited Create;
+  inherited Create(nil);
   FModuleFilePath := AModuleFilePath;
   FResolveModuleURL := AResolveModuleURL;
 end;
@@ -227,6 +233,7 @@ var
   ResolveFunction: TGocciaValue;
   CanonicalPath, ResolveBasePath: string;
   Resolver: TResolveModuleURLCallback;
+  Roots: TGocciaActiveRootFrame;
 begin
   Resolver := AResolver;
   if Assigned(Resolver) then
@@ -241,35 +248,57 @@ begin
     Exit;
 
   // ES2026 §13.3.12.1 step 4a: OrdinaryObjectCreate(null)
-  MetaObject := TGocciaObjectValue.Create(nil);
+  // The object is held only by this local until the cache takes it, and the
+  // url string reserves its payload, which can collect.
+  Roots.Initialize;
+  try
+    MetaObject := TGocciaObjectValue.Create(nil);
+    Roots.Add(MetaObject);
 
-  // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: url
-  if Assigned(Resolver) then
-    MetaObject.AssignProperty(PROP_URL,
-      TGocciaStringLiteralValue.Create(CanonicalPath))
-  else
-    MetaObject.AssignProperty(PROP_URL,
-      TGocciaStringLiteralValue.Create(FilePathToUrl(CanonicalPath)));
+    // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: url
+    if Assigned(Resolver) then
+      MetaObject.AssignProperty(PROP_URL,
+        TGocciaStringLiteralValue.Create(CanonicalPath))
+    else
+      MetaObject.AssignProperty(PROP_URL,
+        TGocciaStringLiteralValue.Create(FilePathToUrl(CanonicalPath)));
 
-  // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: resolve
-  ResolveBasePath := AFilePath;
-  if Assigned(Resolver) and
-     not IsFileURL(CanonicalPath) then
-    ResolveBasePath := CanonicalPath;
-  ResolveHelper := TGocciaImportMetaResolveHelper.Create(ResolveBasePath,
-    Resolver);
-  ResolveFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    ResolveHelper.Resolve, PROP_RESOLVE, 1);
-  MetaObject.AssignProperty(PROP_RESOLVE, ResolveFunction);
+    // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: resolve
+    ResolveBasePath := AFilePath;
+    if Assigned(Resolver) and
+       not IsFileURL(CanonicalPath) then
+      ResolveBasePath := CanonicalPath;
+    ResolveHelper := TGocciaImportMetaResolveHelper.Create(ResolveBasePath,
+      Resolver);
+    Roots.Add(ResolveHelper);
+    ResolveFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      ResolveHelper.Resolve, PROP_RESOLVE, 1);
+    Roots.Add(ResolveFunction);
+    TGocciaNativeFunctionValue(ResolveFunction).CapturedRoot := ResolveHelper;
+    MetaObject.AssignProperty(PROP_RESOLVE, ResolveFunction);
 
-  // ES2026 §13.3.12.1 step 4e: cache on module record
-  Cache.Add(CanonicalPath, MetaObject, ResolveHelper, ResolveFunction);
+    // ES2026 §13.3.12.1 step 4e: cache on module record
+    Cache.Add(CanonicalPath, MetaObject, ResolveHelper, ResolveFunction);
+  finally
+    Roots.Clear;
+  end;
   Result := MetaObject;
 end;
 
 procedure ClearImportMetaCache;
 begin
   FreeAndNil(FallbackImportMetaCache);
+end;
+
+function HasImportMetaObjects(const ARealm: TObject): Boolean;
+var
+  Cache: TObject;
+begin
+  Cache := nil;
+  if ARealm is TGocciaRealm then
+    Cache := TGocciaRealm(ARealm).GetOwnedSlot(GImportMetaCacheSlot);
+  Result := (Cache is TGocciaImportMetaCache) and
+    (TGocciaImportMetaCache(Cache).FObjects.Count > 0);
 end;
 
 initialization

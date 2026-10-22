@@ -296,7 +296,10 @@ keeps that true:
   Only the line map changes; the instructions are the same. An entry at the
   same PC as the entry before it replaces that entry, which a lookup could
   never reach (`TGocciaDebugInfo.AddLineMapping`); the first entry always
-  stays. Where each position points is in
+  stays. A lookup binary-searches the map while its PCs never decrease, as
+  the compiler emits them, and scans it otherwise, so locating each of a
+  module's import declarations while it links costs the log of its length.
+  Where each position points is in
   [Errors — Stack Traces](errors.md#stack-traces).
 - **Frame source is provenance-bound, not `stack`-selected.** A code frame is
   rendered only from provenance the engine records on a genuine error *when it
@@ -386,6 +389,57 @@ The dispatch loop supports an optional instruction counter (`Goccia.InstructionL
 - Version constant: `GOCCIA_FORMAT_VERSION`
 - Endianness: little-endian
 - File extension: `.gbc`
+
+### Format 96
+
+Format 96 adds importable module artifacts and compilation-profile checks.
+Earlier artifacts must be rebuilt. All integer fields are little-endian;
+Booleans have one byte and only `0` and `1` are valid.
+
+After the existing magic, version, runtime tag, source path and debug-info
+flag, the header contains:
+
+| Field | Encoding |
+|-------|----------|
+| Compatibility switches | `UInt32` mask with explicit assignments in `Goccia.Bytecode.Profile` |
+| Preprocessors | `UInt32` mask |
+| Strict types | Boolean |
+| Unsupported-feature warning recovery | Boolean |
+| Settled source goal | `UInt8`: script or module |
+| Execution layout | `UInt8`: standalone or linked module |
+| Global-backed top level | Boolean |
+| Declaration-plan presence | Boolean, followed by the plan when present |
+
+The existing entry import/export tables and function templates follow.
+Linked modules carry a declaration plan: top-level-await flag, binding
+names and kinds, and ordered import/local-export/re-export records with
+module paths, attributes, phases, namespace names and name mappings. The
+reader validates this plan before the loader materializes declaration nodes.
+It does not reconstruct executable AST bodies.
+
+Templates now preserve `StrictCode`, `SourceText`,
+`DerivedThisInitializedSlot` and `ModuleEnvironmentBinding` as well as
+`StrictThis`. BigInt constant payloads are canonical signed decimal strings:
+`0`, or a nonzero decimal digit followed by decimal digits, optionally
+preceded by `-`. The reader rejects noncanonical payloads and constant pools
+whose encoded slots would collapse during reconstruction. This fixes valid
+smol-toml output that previously lost a BigInt slot and failed verification;
+the compiler's constant references and the verifier were correct.
+
+The profile records effective compatibility flags, including separately
+configured label, for-in and experimental module-source switches. It
+also records warning recovery, which can replace unsupported syntax with
+recovered expressions and therefore changes compilation. Loading
+for execution checks exact profile equality. A detected entry adopts the
+artifact's source goal, while an explicit goal mismatch is rejected.
+Execution layout is checked separately from language settings.
+
+The codec accepts `TBytes` or a borrowed pointer and length. File loading
+reads a bounded buffer through the same codec. See
+[Precompiled bytecode modules](bytecode-loading.md) for
+ownership, registration and source fallback, and
+[ADR 0153](adr/0153-precompiled-modules-use-the-module-linker.md) for the
+linker design.
 
 Binary loading is a validation boundary. The reader rejects oversized files,
 declared strings or tables that exceed the remaining stream, excessive nested
@@ -519,6 +573,8 @@ Language features are compiled into compact bytecode instruction sequences rathe
 - **Increment/decrement (`++`/`--`)** — The compiler emits fused numeric update opcodes for increment/decrement sites. Prefix or discarded-result sites use `OP_INC_NUMERIC`/`OP_DEC_NUMERIC`; postfix sites with distinct result and storage registers use `OP_POST_INC_NUMERIC`/`OP_POST_DEC_NUMERIC` so the old numeric value is produced while the binding/property value is updated. A postfix update whose result belongs in the updated local's own register, as in `(a = a++) => a` or `var x = x++`, produces it in a temporary and moves it into the local after the store. All variants preserve BigInt, convert other inputs through `ToNumeric`, and keep the read/convert/write side effects required by ES2026 §13.4.4.1. They operate on a local's own register without a preceding `OP_GET_LOCAL`, so they perform its TDZ check themselves: a register still holding the hole throws `ReferenceError`. That check sits on the non-numeric path, so an update of a number costs nothing extra. An update of a `const` reads and converts its operand in the same way, on a temporary register, and throws the assignment `TypeError` where the store would be.
 - **Traditional `for` lexical bindings** — `let`/`const` loop initializers keep the full per-iteration environment path whenever closures, direct eval, suspension, destructuring, pattern matching, `with`, `using`, or nested declaration boundaries can observe binding identity. Plain generated/counting loops share the loop lexical scope and avoid the otherwise redundant copy-in/copy-out sequence. Each copy of a binding into the next iteration's environment (ES2026 §14.7.4.4 CreatePerIterationEnvironment) reads the binding's last value: where a closure may have captured the binding, which may have written its cell and left the register stale, the copy uses `OP_GET_LOCAL`, and otherwise it stays a plain `OP_MOVE`. That covers closures created in the initializer, the test, the body and the update, and the counted-loop fast path.
 
+- **Decorators** — A decorated class definition, or one with an `accessor`, compiles to `OP_BEGIN_DECORATORS`, one `OP_APPLY_ELEMENT_DECORATOR_CONST` or `OP_APPLY_CLASS_DECORATOR` per decorator, and `OP_FINISH_DECORATORS`. `OP_BEGIN_DECORATORS` creates the class's decoration session (its metadata object, its extra initializer lists and the class its class decorators have returned so far) in a register the compiler allocates for the definition, and the later opcodes read it from the register after their decorator's (`R[A+1]`). The VM keeps no decoration state of its own, so a decorator that defines and decorates another class, directly, in a static block or in a generator it steps, gives that class its own session, and a generator or async function that suspends in a decorator expression keeps its session in its saved registers. A class definition that throws leaves its session to the collector.
+
 This keeps the emitted bytecode compact and makes opcode additions deliberate instead of reactive.
 
 ### Compatibility Scope Helpers
@@ -589,5 +645,6 @@ During code review, the following findings were investigated and determined to b
 - Do not add new bytecode/runtime concepts under old generic naming.
 - Prefer `TGoccia*` bytecode and VM types in new code.
 - Keep the VM and the built-ins on shared runtime objects, not conversion layers.
+- Evaluate a call that can run guest code into a local before storing its result into a register, local cell or argument slot. Guest code can move those stacks, and Pascal leaves open whether `FRegisters[A] := F(...)` takes the slot's address before calling `F`; FPC 3.2.4-rc2 and trunk can take it first, which writes the result into the freed block. `scripts/check-vm-stack-stores.ts` rejects such a store.
 - Allocate an exception handler's register before compiling the region it protects. A throw skips the `OP_CLOSE_UPVALUE` instructions of the scopes it leaves, so when it reaches a handler the VM detaches the closure cell of every local slot above that handler's register.
-- Keep `goto` out of the VM. The dispatch loop is one `while` loop with a production and an instrumented fetch path, and `Continue` in its opcode case moves to the next instruction. FPC's wasm32 code generator turns a function that uses `goto` into a state machine over its whole body, under which Richards executed about three times the instructions there; natively the loop executes no more instructions in total than the `goto` version did (see [ADR 0144](adr/0144-the-vm-dispatch-loop-uses-no-goto.md)).
+- Keep `goto` out of the VM. The dispatch loop is one `while` loop with a production and an instrumented fetch path, and `Continue` in its opcode case moves to the next instruction. FPC's wasm32 code generator turns a function that uses `goto` into a state machine over its whole body, under which Richards executed about three times the instructions there; natively the loop executes no more instructions in total than the `goto` version did (see [ADR 0154](adr/0154-the-vm-dispatch-loop-uses-no-goto.md)).

@@ -8,6 +8,7 @@ uses
   Generics.Collections,
 
   CriticalSections,
+  HashMap,
   OrderedStringMap,
 
   Goccia.Bytecode.Debug,
@@ -329,13 +330,19 @@ type
     // the global one. Eval code is compiled when the eval runs and is never
     // serialized, so this is not part of the bytecode format.
     FGlobalEvalCode: Boolean;
-    // Runtime-only: the module environment binding a top-level function
-    // declaration of a loader-linked module initializes when the module is
-    // linked. Such modules are compiled in process and never serialized, so
-    // this is not part of the bytecode format.
+    // Runtime-only: compiled from a bootstrap shim (TGocciaEngine.EvaluateShim).
+    FShimCode: Boolean;
+    // The module environment binding a top-level function declaration
+    // initializes when a module is linked. Serialized with linked artifacts
+    // so import cycles instantiate these functions before any body runs.
     FModuleEnvironmentBinding: string;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
+    // The float constants by bit pattern (every NaN under one key), so adding
+    // one is a lookup rather than a scan of the pool: a function with many
+    // distinct numbers, such as a module of many numeric consts, compiles in
+    // time linear in them.
+    FFloatConstantIndex: THashMap<UInt64, UInt16>;
     // Runtime-only cache for immutable string constants. ECMAScript strings
     // have no observable identity, so reusing one pinned wrapper avoids
     // repeatedly charging the same ref-counted Pascal backing store.
@@ -511,6 +518,10 @@ type
       instantiation already made. }
     property GlobalEvalCode: Boolean read FGlobalEvalCode
       write FGlobalEvalCode;
+    { Code of a bootstrap shim (Goccia.Shims), set by the engine on every
+      template of a shim it compiles: a shim load that runs code without it
+      ran a run's code (TGocciaVM.BeginShimLoad). }
+    property ShimCode: Boolean read FShimCode write FShimCode;
     { Set on a function declaration at the top level of a module compiled
       for linking (TGocciaCompiler.PreinitializedTopLevelFunctions): the
       name of the module environment binding that the function object
@@ -580,6 +591,7 @@ begin
   FConstantCount := 0;
   FFunctions := TObjectList<TGocciaFunctionTemplate>.Create(True);
   FStringConstantIndex := TOrderedStringMap<UInt16>.Create;
+  FFloatConstantIndex := THashMap<UInt64, UInt16>.Create;
   FDirectEvalEnvironmentCount := 0;
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
@@ -625,6 +637,7 @@ begin
   for I := 0 to High(FDirectEvalCodeCaches) do
     FDirectEvalCodeCaches[I].Free;
   FStringConstantIndex.Free;
+  FFloatConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
   inherited;
@@ -829,17 +842,16 @@ end;
 function TGocciaFunctionTemplate.AddConstantFloat(
   const AValue: Double): UInt16;
 var
-  I: Integer;
-  ValueIsNaN: Boolean;
+  Key: UInt64;
 begin
-  ValueIsNaN := FloatBitsAreNaN(AValue);
-  for I := 0 to FConstantCount - 1 do
-    if (FConstants[I].Kind = bckFloat) and
-       (FloatBitsAreNaN(FConstants[I].FloatValue) = ValueIsNaN) then
-    begin
-      if ValueIsNaN or (FConstants[I].FloatValue = AValue) then
-        Exit(UInt16(I));
-    end;
+  // By bit pattern, so +0 and -0 stay apart (an equality test would merge
+  // them); every NaN reads the same, so they share one entry.
+  if FloatBitsAreNaN(AValue) then
+    Key := CANONICAL_FLOAT64_NAN_BITS
+  else
+    Key := DoubleToBits(AValue);
+  if FFloatConstantIndex.TryGetValue(Key, Result) then
+    Exit;
 
   if FConstantCount > High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
@@ -848,6 +860,7 @@ begin
   FConstants[FConstantCount].Kind := bckFloat;
   FConstants[FConstantCount].FloatValue := AValue;
   Result := UInt16(FConstantCount);
+  FFloatConstantIndex.Add(Key, Result);
   Inc(FConstantCount);
 end;
 

@@ -69,7 +69,7 @@ type
     FGateCalls: Integer;
     FForcedCollections: Integer;
   protected
-    procedure ConsultStorageBudget(const ABytes: Int64); override;
+    procedure ConsultStorageBudget(const ABytes, ANewBytes: Int64); override;
   public
     { Number of times the growth gate has been consulted. Read by the tests so
       a run that never reached the gate fails instead of passing vacuously. }
@@ -558,7 +558,8 @@ begin
   GC.MaxBytes := APreviousMaxBytes;
 end;
 
-procedure TCollectingPropertyMap.ConsultStorageBudget(const ABytes: Int64);
+procedure TCollectingPropertyMap.ConsultStorageBudget(const ABytes,
+  ANewBytes: Int64);
 var
   CollectionsBefore: Integer;
   GC: TGarbageCollector;
@@ -569,7 +570,7 @@ begin
   begin
     ArmTightCeiling(ABytes, PreviousMaxBytes, CollectionsBefore);
     try
-      inherited ConsultStorageBudget(ABytes);
+      inherited ConsultStorageBudget(ABytes, ANewBytes);
     finally
       Inc(FForcedCollections,
         ReleaseTightCeiling(PreviousMaxBytes, CollectionsBefore));
@@ -582,7 +583,7 @@ begin
     if Assigned(GC) then
       GC.Collect;
   end;
-  inherited ConsultStorageBudget(ABytes);
+  inherited ConsultStorageBudget(ABytes, ANewBytes);
 end;
 
 procedure TCollectingElementList.ConsultStorageBudget(const ABytes: Int64);

@@ -4356,6 +4356,30 @@ begin
   end;
 end;
 
+// ES2026 §8.6.2 BindingInitialization of a global-backed top-level `let` or
+// `const` pattern: InitializeReferencedBinding of each name happens as its
+// element completes (§8.6.3 IteratorBindingInitialization, §14.3.3.3
+// KeyedBindingInitialization), so the initializer of a later element reads
+// the global binding of an earlier one, while a later name stays in its
+// temporal dead zone.
+procedure EmitGlobalLexicalPatternDefine(const ACtx: TGocciaCompilationContext;
+  const AName: string);
+var
+  LocalIdx: Integer;
+  OpCode: TGocciaOpCode;
+begin
+  LocalIdx := ACtx.Scope.ResolveLocal(AName);
+  if LocalIdx < 0 then
+    Exit;
+  ACtx.Scope.MarkGlobalBacked(LocalIdx);
+  if ACtx.GlobalLexicalPatternIsConst then
+    OpCode := OP_DEFINE_GLOBAL_CONST_LONG
+  else
+    OpCode := OP_DEFINE_GLOBAL_LET_LONG;
+  EmitInstruction(ACtx, EncodeABx(OpCode, ACtx.Scope.GetLocal(LocalIdx).Slot,
+    ACtx.Template.AddConstantString(ACtx.Scope.GetLocal(LocalIdx).Name)));
+end;
+
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt16;
   const AAssignmentMode: Boolean);
@@ -4365,7 +4389,7 @@ var
   AssignPat: TGocciaAssignmentDestructuringPattern;
   IdentPat: TGocciaIdentifierDestructuringPattern;
   Prop: TGocciaDestructuringProperty;
-  DestSlot, IdxReg, ThisReg, BaseReg, SuperReg: UInt16;
+  DestSlot, IdxReg, AdjacentReg, ThisReg, BaseReg, SuperReg: UInt16;
   PropIdx: UInt16;
   JumpIdx, I: Integer;
   HasRest: Boolean;
@@ -4380,6 +4404,10 @@ begin
     IdentPat := TGocciaIdentifierDestructuringPattern(APattern);
     EmitBindingAssignmentFromRegister(ACtx, IdentPat.Name, ASrcReg,
       AAssignmentMode);
+    if (not AAssignmentMode) and
+       (ACtx.GlobalLexicalPatternScope = ACtx.Scope) and
+       (ACtx.Scope.Depth = 0) then
+      EmitGlobalLexicalPatternDefine(ACtx, IdentPat.Name);
   end
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
@@ -4425,13 +4453,15 @@ begin
           end;
         end;
         DestSlot := ACtx.Scope.AllocateRegister;
-        if IdxReg <> DestSlot + 1 then
-          EmitInstruction(ACtx, EncodeABC(OP_MOVE, DestSlot + 1, IdxReg, 0));
+        AdjacentReg := ACtx.Scope.AllocateRegister;
+        if IdxReg <> AdjacentReg then
+          EmitInstruction(ACtx, EncodeABC(OP_MOVE, AdjacentReg, IdxReg, 0));
         EmitInstruction(ACtx, EncodeABC(OP_COLLECTION_OP, DestSlot,
           COLLECTION_OP_OBJECT_REST, ASrcReg));
         EmitDestructuring(ACtx,
           TGocciaRestDestructuringPattern(Prop.Pattern).Argument, DestSlot,
           AAssignmentMode);
+        ACtx.Scope.FreeRegister;
         ACtx.Scope.FreeRegister;
         ACtx.Scope.FreeRegister;
         Break;
@@ -8041,11 +8071,25 @@ begin
   else if AExpr is TGocciaCallExpression then
   begin
     CallExpr := TGocciaCallExpression(AExpr);
-    if CallExpr.Optional or ExpressionContainsOptionalChain(CallExpr.Callee) then
-      Exit(True);
-    for I := 0 to CallExpr.Arguments.Count - 1 do
-      if ExpressionContainsOptionalChain(CallExpr.Arguments[I]) then
+    case CallExpr.OptionalChainPresence of
+      ocpPresent:
         Exit(True);
+      ocpAbsent:
+        Exit(False);
+    end;
+    Result := CallExpr.Optional or
+      ExpressionContainsOptionalChain(CallExpr.Callee);
+    I := 0;
+    while not Result and (I < CallExpr.Arguments.Count) do
+    begin
+      Result := ExpressionContainsOptionalChain(CallExpr.Arguments[I]);
+      Inc(I);
+    end;
+    if Result then
+      CallExpr.OptionalChainPresence := ocpPresent
+    else
+      CallExpr.OptionalChainPresence := ocpAbsent;
+    Exit;
   end
   else if AExpr is TGocciaSequenceExpression then
   begin

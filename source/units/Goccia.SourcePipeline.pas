@@ -27,7 +27,12 @@ type
     cfLabel, cfForIn, cfExperimentalJSModuleSource);
   TGocciaCompatibilityFlags = set of TGocciaCompatibility;
 
-  TGocciaSourceType = (stScript, stModule);
+  { The goal symbol an entry's source is parsed and run with (ES2026 §16.1
+    Script, §16.2 Module). stDetect leaves it to the source (ADR 0140): a
+    top-level import or export declaration makes it a Module, and anything
+    else a Script. A parse settles it; see
+    TGocciaSourcePipelineResult.SourceType. }
+  TGocciaSourceType = (stScript, stModule, stDetect);
 
   TGocciaSourcePipelineOptions = record
     Preprocessors: TGocciaPreprocessors;
@@ -80,6 +85,7 @@ type
     FParseTimeNanoseconds: Int64;
     FComments: TGocciaCommentSpanArray;
     FTokens: TGocciaSourceTokenArray;
+    FSourceType: TGocciaSourceType;
     FWarnings: array of TGocciaSourcePipelineWarning;
     FWarningCount: Integer;
 
@@ -106,6 +112,9 @@ type
     property Tokens: TGocciaSourceTokenArray read FTokens;
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
+    { The goal the source was parsed with: the options' SourceType, or for
+      stDetect the goal the parse settled on. Never stDetect. }
+    property SourceType: TGocciaSourceType read FSourceType;
     property WarningCount: Integer read FWarningCount;
     property Warnings[const AIndex: Integer]: TGocciaSourcePipelineWarning
       read GetWarning;
@@ -171,6 +180,7 @@ implementation
 uses
   SysUtils,
 
+  OrderedStringMap,
   TextSemantics,
   TimingUtils,
 
@@ -294,15 +304,32 @@ begin
     #10 + ABodySource + #10 + '})';
 end;
 
-procedure AddNameOnce(const ANames: TUnicodeStringList;
+type
+  { The names a module's top level declares, each once, in the order the
+    module first declares it, so an early error names the same binding the
+    source order would. A hash map rather than a list: each check is one
+    lookup, so the module's early errors cost time linear in its
+    declarations instead of quadratic. }
+  TModuleDeclaredNames = TOrderedStringMap<Boolean>;
+
+  { Where an import declaration binds a name, for the early error that
+    reports a later conflict at that declaration. }
+  TModuleImportBindingSite = record
+    Line: Integer;
+    Column: Integer;
+  end;
+
+  TModuleImportBindingSites = TOrderedStringMap<TModuleImportBindingSite>;
+
+procedure AddNameOnce(const ANames: TModuleDeclaredNames;
   const AName: string);
 begin
-  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
-    ANames.Add(AName);
+  if AName <> '' then
+    ANames.Add(AName, True);
 end;
 
 procedure CollectTopLevelModuleDeclarationNames(const AStmt: TGocciaStatement;
-  const AVarNames, ALexicalNames: TUnicodeStringList);
+  const AVarNames, ALexicalNames: TModuleDeclaredNames);
 var
   I, J: Integer;
   Names: TUnicodeStringList;
@@ -359,33 +386,81 @@ begin
         TGocciaExportDefaultDeclaration(AStmt).LocalName);
 end;
 
+procedure RaiseModuleRedeclaration(const AName, AFileName: string;
+  const ASourceLines: TStringList; const ALine: Integer = 0;
+  const AColumn: Integer = 0);
+begin
+  raise TGocciaSyntaxError.Create(
+    Format('Identifier "%s" has already been declared', [AName]),
+    ALine, AColumn, AFileName, ASourceLines);
+end;
+
+{ ES2026 §16.2.1.1 Static Semantics: Early Errors, Module: the
+  LexicallyDeclaredNames of a module, which include the BoundNames of its
+  import declarations (§8.2.4), have no duplicate, and none of them is also
+  a VarDeclaredName. }
 procedure ValidateModuleEarlyErrors(const AProgram: TGocciaProgram;
   const AFileName: string; const ASourceLines: TStringList);
 var
   I: Integer;
-  LexicalNames: TUnicodeStringList;
+  ImportDecl: TGocciaImportDeclaration;
+  ImportedNames: TModuleImportBindingSites;
+  ImportedPair: TModuleImportBindingSites.TKeyValuePair;
+  ImportPair: TStringStringMap.TKeyValuePair;
+  LexicalNames: TModuleDeclaredNames;
   Stmt: TGocciaStatement;
-  VarName: string;
-  VarNames: TUnicodeStringList;
+  VarPair: TModuleDeclaredNames.TKeyValuePair;
+  VarNames: TModuleDeclaredNames;
+
+  procedure AddImportedName(const AName: string);
+  var
+    Site: TModuleImportBindingSite;
+  begin
+    if AName = '' then
+      Exit;
+    if ImportedNames.ContainsKey(AName) then
+      RaiseModuleRedeclaration(AName, AFileName, ASourceLines,
+        ImportDecl.Line, ImportDecl.Column);
+    Site.Line := ImportDecl.Line;
+    Site.Column := ImportDecl.Column;
+    ImportedNames.Add(AName, Site);
+  end;
+
 begin
   if not Assigned(AProgram) then
     Exit;
 
-  VarNames := TUnicodeStringList.Create;
-  LexicalNames := TUnicodeStringList.Create;
+  VarNames := TModuleDeclaredNames.Create;
+  LexicalNames := TModuleDeclaredNames.Create;
+  ImportedNames := TModuleImportBindingSites.Create;
   try
     for I := 0 to AProgram.Body.Count - 1 do
     begin
       Stmt := AProgram.Body[I];
-      CollectTopLevelModuleDeclarationNames(Stmt, VarNames, LexicalNames);
+      if Stmt is TGocciaImportDeclaration then
+      begin
+        ImportDecl := TGocciaImportDeclaration(Stmt);
+        if ImportDecl.DuplicateBinding <> '' then
+          RaiseModuleRedeclaration(ImportDecl.DuplicateBinding, AFileName,
+            ASourceLines, ImportDecl.Line, ImportDecl.Column);
+        AddImportedName(ImportDecl.NamespaceName);
+        for ImportPair in ImportDecl.Imports do
+          AddImportedName(ImportPair.Key);
+      end
+      else
+        CollectTopLevelModuleDeclarationNames(Stmt, VarNames, LexicalNames);
     end;
 
-    for VarName in VarNames do
-      if LexicalNames.IndexOf(VarName) >= 0 then
-        raise TGocciaSyntaxError.Create(
-          Format('Identifier "%s" has already been declared', [VarName]),
-          0, 0, AFileName, ASourceLines);
+    for VarPair in VarNames do
+      if LexicalNames.ContainsKey(VarPair.Key) then
+        RaiseModuleRedeclaration(VarPair.Key, AFileName, ASourceLines);
+    for ImportedPair in ImportedNames do
+      if LexicalNames.ContainsKey(ImportedPair.Key) or
+         VarNames.ContainsKey(ImportedPair.Key) then
+        RaiseModuleRedeclaration(ImportedPair.Key, AFileName, ASourceLines,
+          ImportedPair.Value.Line, ImportedPair.Value.Column);
   finally
+    ImportedNames.Free;
     LexicalNames.Free;
     VarNames.Free;
   end;
@@ -528,20 +603,28 @@ begin
   Result := TGocciaSourcePipelineOptionsScope.Create(AOptions);
 end;
 
-class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
+{ One parse of ASource with the goal AOptions names. For stDetect the parser
+  settles the goal (ADR 0140), and the result records it. AParseAsModule
+  reports a detected Module whose parse is not usable as one:
+  --compat-non-strict-mode parsed it as sloppy Script code, and a Module is
+  strict throughout. }
+function ParseSourceWithGoal(const ASource: TStringList;
   const AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions;
-  const ADeclaredPrivateNames: TStrings): TGocciaSourcePipelineResult;
+  const ADeclaredPrivateNames: TStrings;
+  out AParseAsModule: Boolean): TGocciaSourcePipelineResult;
 var
   SourceText, OriginalSourceText: string;
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
+  ParserOptions: TGocciaParserOptions;
   ParserWarning: TGocciaParserWarning;
   PreprocessorSourceMap: TGocciaSourceMap;
   PreprocessorOriginMap: TGocciaOriginMap;
   StartTime, ParseStart, ParseEnd, ParsePhaseTime: Int64;
   OrigLine, OrigCol, I: Integer;
 begin
+  AParseAsModule := False;
   Result := TGocciaSourcePipelineResult.Create;
   try
     StartTime := GetNanoseconds;
@@ -582,7 +665,9 @@ begin
       try
         Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
           Lexer.SourceLines);
-        ConfigureParser(Parser, AOptions);
+        BuildParserOptionsForSourcePipeline(AOptions, ParserOptions);
+        ParserOptions.DetectModuleGoal := AOptions.SourceType = stDetect;
+        Parser.ApplyOptions(ParserOptions);
         try
           ParseStart := GetNanoseconds;
           if Assigned(ADeclaredPrivateNames) then
@@ -590,7 +675,17 @@ begin
               Parser.ParseWithPrivateNames(ADeclaredPrivateNames)
           else
             Result.FProgramNode := Parser.Parse;
-          if AOptions.SourceType = stModule then
+          Result.FSourceType := AOptions.SourceType;
+          if AOptions.SourceType = stDetect then
+          begin
+            if Parser.ModuleSyntaxDetected then
+              Result.FSourceType := stModule
+            else
+              Result.FSourceType := stScript;
+            AParseAsModule := (Result.FSourceType = stModule) and
+              ParserOptions.NonStrictModeEnabled;
+          end;
+          if (Result.FSourceType = stModule) and not AParseAsModule then
             ValidateModuleEarlyErrors(Result.FProgramNode, AFileName,
               Lexer.SourceLines);
           ParseEnd := GetNanoseconds;
@@ -645,6 +740,33 @@ begin
     Result.Free;
     raise;
   end;
+end;
+
+class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
+  const AFileName: string;
+  const AOptions: TGocciaSourcePipelineOptions;
+  const ADeclaredPrivateNames: TStrings): TGocciaSourcePipelineResult;
+var
+  ModuleOptions: TGocciaSourcePipelineOptions;
+  ParseAsModule: Boolean;
+  DetectLexTime, DetectParseTime: Int64;
+begin
+  Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
+    ADeclaredPrivateNames, ParseAsModule);
+  if not ParseAsModule then
+    Exit;
+  { Only a detected Module under --compat-non-strict-mode parses twice: the
+    first parse was sloppy, and sloppy code is not a strict Module's. The
+    reported lex and parse times cover both passes. }
+  DetectLexTime := Result.FLexTimeNanoseconds;
+  DetectParseTime := Result.FParseTimeNanoseconds;
+  Result.Free;
+  ModuleOptions := AOptions;
+  ModuleOptions.SourceType := stModule;
+  Result := ParseSourceWithGoal(ASource, AFileName, ModuleOptions,
+    ADeclaredPrivateNames, ParseAsModule);
+  Inc(Result.FLexTimeNanoseconds, DetectLexTime);
+  Inc(Result.FParseTimeNanoseconds, DetectParseTime);
 end;
 
 class function TGocciaSourcePipeline.ParseModuleSource(const ASource: string;

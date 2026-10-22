@@ -26,7 +26,7 @@ type
     constructor Create(const AValue: TGocciaRegister);
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Value: TGocciaRegister read FValue write FValue;
   end;
 
@@ -64,10 +64,8 @@ begin
     inherited;
 end;
 
-procedure TGocciaBytecodeCell.MarkReferences;
+procedure TGocciaBytecodeCell.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   MarkRegisterReferences(FValue);
 end;

@@ -1051,7 +1051,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     );
     const deleteOutPath = join(tmp, "delete-nonstrict.gbc");
     await $`${BUNDLER} ${deleteSrc} --output=${deleteOutPath} --compat-non-strict-mode`.quiet();
-    const bundledDeleteOut = await $`${RUNNER} --print ${deleteOutPath} 2>&1`.text();
+    const bundledDeleteOut = await $`${RUNNER} --print ${deleteOutPath} --compat-non-strict-mode 2>&1`.text();
     if (!containsLine(bundledDeleteOut, "12")) throw new Error(`Bundled non-strict delete expected 12, got: ${bundledDeleteOut}`);
 
     const assignmentSrc = join(tmp, "assignment-nonstrict.js");
@@ -1077,7 +1077,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     );
     const assignmentOutPath = join(tmp, "assignment-nonstrict.gbc");
     await $`${BUNDLER} ${assignmentSrc} --output=${assignmentOutPath} --compat-non-strict-mode`.quiet();
-    const bundledAssignmentOut = await $`${RUNNER} --print ${assignmentOutPath} 2>&1`.text();
+    const bundledAssignmentOut = await $`${RUNNER} --print ${assignmentOutPath} --compat-non-strict-mode 2>&1`.text();
     if (!containsLine(bundledAssignmentOut, "9")) throw new Error(`Bundled non-strict assignment expected 9, got: ${bundledAssignmentOut}`);
 
     const moduleWithSrc = join(tmp, "module-with.js");
@@ -1264,6 +1264,133 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
     const bundledScriptOut = join(tmp, "strict-module-script.gbc");
     await $`${BUNDLER} ${strictModule} --source-type=script --compat-non-strict-mode --output=${bundledScriptOut}`.quiet();
     if (!existsSync(bundledScriptOut)) throw new Error("Bundler --source-type=script should override .mjs inference and write bytecode");
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Entry source-type detection (#1626, ADR 0140) ---------------------------
+
+// With no explicit source type, an entry that has a top-level import or
+// export declaration runs as a Module and any other entry as a Script. Node.js
+// prints "y" for cyc.js and "yh" for fcyc.js.
+console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, Bundler, LoaderBare, sandbox)...");
+{
+  const tmp = mkdtemp("goccia-detect-module-");
+  try {
+    const files: Record<string, string> = {
+      "cyc.js": 'import { y } from "./d.js";\nexport const h = () => "h";\nconsole.log(y);\n',
+      "d.js": 'import { h } from "./cyc.js";\nexport const y = "y";\nexport const z = () => h();\n',
+      "fcyc.js": 'import { y2 } from "./fd.js";\nexport function h2() { return "h"; }\nconsole.log(y2);\n',
+      "fd.js": 'import { h2 } from "./fcyc.js";\nexport const y2 = "y" + h2();\n',
+      "script.js": 'var scriptVar = 1;\nconsole.log(typeof globalThis.scriptVar, this === globalThis);\n',
+      "dynamic.js":
+        'var dynamicVar = 1;\nconst m = await import("./lib.js");\nconsole.log(m.v, typeof globalThis.dynamicVar, this === globalThis);\n',
+      "lib.js": 'export const v = "lib";\n',
+      // A detected Module's top-level lexical declarations stay in the module
+      // scope, so one may share a global's name. CompileModule clears
+      // GlobalBackedTopLevel for it, which the host set for a Script entry.
+      "shadow-global.js": "export {};\nconst NaN = 1;\nconsole.log(NaN);\n",
+      "meta.js": "console.log(typeof import.meta.url);\n",
+      "with-module.js": "with ({}) {}\nexport {};\n",
+      "with-script.js": "with ({}) {}\n",
+      "cycle.test.js":
+        'import { readEntry } from "./cycle-peer.js";\nexport const entry = "entry";\ntest("peer reads the entry", () => { expect(readEntry()).toBe("entry"); });\n',
+      "cycle-peer.js": 'import { entry } from "./cycle.test.js";\nexport const readEntry = () => entry;\n',
+      "bench-cycle.js":
+        'import { bench } from "goccia:microbench";\nimport { y } from "./bench-peer.js";\nexport const h = () => "h";\nconst read = y;\nbench("reads the peer", () => read + h());\n',
+      "bench-peer.js": 'import { h } from "./bench-cycle.js";\nexport const y = "y";\n',
+    };
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+
+    const run = (binary: string, args: string[]) => {
+      const proc = Bun.spawnSync([resolve(binary), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+      return {
+        exitCode: proc.exitCode,
+        stdout: normalizeLineEndings(proc.stdout.toString()),
+        output: normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString()),
+      };
+    };
+    const expectLine = (label: string, result: ReturnType<typeof run>, line: string) => {
+      if (result.exitCode !== 0 || !containsLine(result.stdout, line))
+        throw new Error(`${label}: expected exit 0 and the line "${line}", got exit ${result.exitCode}: ${result.output}`);
+    };
+    const expectFailure = (label: string, result: ReturnType<typeof run>, text: string) => {
+      if (result.exitCode === 0 || !result.output.includes(text))
+        throw new Error(`${label}: expected a failure mentioning ${JSON.stringify(text)}, got exit ${result.exitCode}: ${result.output}`);
+    };
+
+    expectLine("detected module entry in a cycle", run(RUNNER, ["cyc.js"]), "y");
+    expectLine("detected module entry's function in a cycle",
+      run(RUNNER, ["fcyc.js", "--compat-function"]), "yh");
+    expectLine("detected module may bind a global's name at top level",
+      run(RUNNER, ["shadow-global.js"]), "1");
+    expectLine("entry without module syntax stays a Script",
+      run(RUNNER, ["script.js", "--compat-var"]), "number true");
+    expectLine("entry with only dynamic import() stays a Script",
+      run(RUNNER, ["dynamic.js", "--compat-var"]), "lib number true");
+    expectFailure("import.meta alone stays a Script error",
+      run(RUNNER, ["meta.js"]), "import.meta is only allowed in module code");
+    // An explicit Script keeps today's behaviour: d.js's import of the entry
+    // loads a second copy of it, which reads y in its temporal dead zone.
+    expectFailure("explicit --source-type=script keeps the Script entry",
+      run(RUNNER, ["cyc.js", "--source-type=script"]), "Cannot access 'y' before initialization");
+    expectFailure("a detected Module is strict under --compat-non-strict-mode",
+      run(RUNNER, ["with-module.js", "--compat-non-strict-mode"]),
+      "'with' statements are not allowed in strict mode");
+
+    const testRun = run(TESTRUNNER, ["cycle.test.js", "--no-progress"]);
+    if (testRun.exitCode !== 0 || !testRun.output.includes("Passed: 1"))
+      throw new Error(`TestRunner detected module test file in a cycle: ${testRun.output}`);
+
+    const benchRun = run(BENCHRUNNER, ["bench-cycle.js", "--no-progress"]);
+    if (benchRun.exitCode !== 0 || !benchRun.output.includes("reads the peer"))
+      throw new Error(`BenchmarkRunner detected module entry in a cycle: ${benchRun.output}`);
+
+    const sandboxRun = run(RUNNER, ["--copy", `${tmp}=/`, "--entry=/cyc.js"]);
+    expectLine("sandbox detected module entry in a cycle", sandboxRun, "y");
+
+    // Stdin has no file name, so its goal is detected too, as Node.js does.
+    const stdinRun = Bun.spawnSync([resolve(RUNNER), "--print", "-"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode("export {};\nthis === undefined;\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (stdinRun.exitCode !== 0 || !containsLine(stdinRun.stdout.toString(), "true"))
+      throw new Error(`stdin with an export should run as a Module: ${stdinRun.stdout}${stdinRun.stderr}`);
+
+    // A REPL line is not an entry file: it stays a Script, so the lines keep
+    // sharing one global environment.
+    const repl = Bun.spawnSync([resolve(REPL)], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode("export const replValue = 1; this === globalThis;\nreplValue + 1;\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const replLines = normalizeLineEndings(repl.stdout.toString())
+      .split("\n")
+      .map((line) => line.replace(/^(> )+/, ""));
+    if (repl.exitCode !== 0 || !replLines.includes("true") || !replLines.includes("2"))
+      throw new Error(`REPL should run module syntax as a Script: ${repl.stdout}${repl.stderr}`);
+
+    for (const [source, expected] of [
+      ["export {};\nthis === undefined;\n", "true"],
+      ["this === undefined;\n", "false"],
+    ]) {
+      const file = join(tmp, `bare-${expected}.js`);
+      writeFileSync(file, source);
+      const bare = run(BARE, ["--print", file]);
+      if (bare.exitCode !== 0 || bare.stdout.trim() !== expected)
+        throw new Error(`LoaderBare detection for ${JSON.stringify(source)} expected ${expected}, got: ${bare.output}`);
+    }
+
+    expectFailure("Bundler: a detected Module is strict",
+      run(BUNDLER, ["with-module.js", "--compat-non-strict-mode", "--output=with-module.gbc"]),
+      "'with' statements are not allowed in strict mode");
+    const bundledScript = run(BUNDLER, ["with-script.js", "--compat-non-strict-mode", "--output=with-script.gbc"]);
+    if (bundledScript.exitCode !== 0 || !existsSync(join(tmp, "with-script.gbc")))
+      throw new Error(`Bundler should bundle a detected Script with a with statement: ${bundledScript.output}`);
   } finally {
     clean(tmp);
   }
@@ -1469,6 +1596,12 @@ if (process.platform === "linux") {
   // heap manager's in-use total (ADR 0129). Both scripts keep little alive and
   // churn garbage far past the ceiling: a flat loop of short-lived objects and
   // arrays, and Promise jobs drained in batches. Linux only.
+  //
+  // The third drops 300 arrays made by `new Array(100000)`: about two
+  // registrations for 800 KB of element storage each, which is gated but not
+  // charged. With the heap sampled only every 1,024 registrations it reached
+  // 340 MiB resident with no collection (#1747); the gated growth now samples
+  // the heap as it is reported (ADR 0145).
   const ceiling = 64 * 1024 * 1024;
   // Bun's resourceUsage.maxRSS is getrusage's ru_maxrss, which Linux reports
   // in KiB; Bun 1.3 passes that through and Bun 1.4 converts it to bytes. The
@@ -1495,8 +1628,14 @@ if (process.platform === "linux") {
       "console.log('n', idx.length * 25);",
       "",
     ].join("\n"),
+    holes: [
+      "let last = null;",
+      "for (const _ of Array.from({ length: 300 })) { last = new Array(100000); }",
+      "console.log('n', last.length);",
+      "",
+    ].join("\n"),
   };
-  const expected = { flat: "n 250000", promise: "n 250000" };
+  const expected = { flat: "n 250000", promise: "n 250000", holes: "n 100000" };
   const dir = mkdtemp("goccia-rss-");
   try {
     for (const [name, src] of Object.entries(scripts)) {
@@ -1522,6 +1661,58 @@ if (process.platform === "linux") {
   }
 } else {
   console.log("  skipped: peak RSS is asserted on Linux only");
+}
+
+console.log("--max-memory (a small live set collects as the heap grows under a far ceiling)...");
+{
+  // #1749: both ceiling triggers sit one pressure reserve below the ceiling,
+  // so under a large ceiling a script that keeps 1,000 small objects alive
+  // grew towards it before its first collection: no collection and 1.6 GiB
+  // resident at 2 GiB. The heap trigger now also fires once the heap has
+  // grown to four times what the last collection left, and by at least
+  // 64 MiB (ADR 0145). This shorter run is checked for collections
+  // everywhere and for peak resident memory on Linux, where Bun reports it:
+  // before the growth trigger it made no collection and peaked near
+  // 490 MiB, with it 6 collections and about 82 MiB.
+  const src = [
+    "const outer = Array.from({ length: 600 }, (_, k) => k);",
+    "const inner = Array.from({ length: 1000 }, (_, k) => k);",
+    "let batch = [];",
+    "for (const i of outer) {",
+    "  batch = [];",
+    "  for (const j of inner) batch.push({ s: 'x' + (i * 1000 + j) });",
+    "}",
+    "console.log('kept', batch.length);",
+    "",
+  ].join("\n");
+  const MAX_PEAK_BYTES = 150 * 1024 * 1024;
+  const dir = mkdtemp("goccia-growth-");
+  try {
+    const path = join(dir, "growth.js");
+    writeFileSync(path, src);
+    const proc = Bun.spawnSync([RUNNER, path, "--max-memory=2GiB", "--output=json"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 120_000,
+    });
+    const out = proc.stdout.toString();
+    if (proc.exitCode !== 0 || !out.includes("kept 1000"))
+      throw new Error(`Growth run at --max-memory=2GiB should complete, got exit ${proc.exitCode}: ${out}${proc.stderr.toString()}`);
+    const collections = JSON.parse(out).memory?.gc?.collections;
+    if (typeof collections !== "number" || collections < 1)
+      throw new Error(`A small live set under a far ceiling should collect as the heap grows, got ${collections} collections`);
+    if (process.platform === "linux") {
+      const maxRSS = proc.resourceUsage?.maxRSS;
+      if (typeof maxRSS !== "number" || maxRSS <= 0)
+        throw new Error("Growth run: Bun reported no peak RSS for the child");
+      // ru_maxrss in KiB under Bun 1.3, bytes under Bun 1.4; see above.
+      const peak = maxRSS < 8_000_000 ? maxRSS * 1024 : maxRSS;
+      if (peak >= MAX_PEAK_BYTES)
+        throw new Error(`Growth run peaked at ${peak} bytes resident, at or above ${MAX_PEAK_BYTES}`);
+    }
+  } finally {
+    clean(dir);
+  }
 }
 
 console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");
@@ -3538,6 +3729,127 @@ console.log("--max-memory (loop pressure reclaims)...");
   if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Loop pressure should report collections, got ${json.memory?.gc?.collections}`);
 }
 
+console.log("--max-memory (a pressure collection marks deep live chains without native recursion)...");
+{
+  // The collector marked recursively, one native frame per object, so a
+  // pressure collection taken while a deep chain was alive ran out of native
+  // stack: a segmentation fault in a production build, here at the first
+  // collection after the chains are built. It marks from an explicit mark
+  // stack now (ADR 0147). The churn allocates far past the ceiling, so the
+  // VM's checkpoints collect with both chains live; no Goccia.gc() call.
+  const src = [
+    "let head = { end: true };",
+    "for (const _ of Array.from({ length: 300000 })) head = { child: head };",
+    "class Base { base = 'base'; }",
+    "let Leaf = Base;",
+    "for (const _ of Array.from({ length: 30000 })) { const Parent = Leaf; Leaf = class extends Parent {}; }",
+    "let n = 0;",
+    "for (const _ of Array.from({ length: 1000 })) n += Array.from({ length: 500 }, (_, i) => ({ i })).length;",
+    "let cur = head;",
+    "let links = 0;",
+    "for (const _ of Array.from({ length: 300000 })) { cur = cur.child; links++; }",
+    "[links, cur.end, new Leaf().base, n];",
+    "",
+  ].join("\n");
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=128MiB"], { timeout: 120_000 });
+  if (exitCode !== 0)
+    throw new Error(`Deep chains under pressure should exit 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (JSON.stringify(json.files?.[0]?.result) !== '[300000,true,"base",500000]')
+    throw new Error(`Deep chains under pressure should survive every collection, got ${JSON.stringify(json.files?.[0]?.result)}`);
+  if ((json.memory?.gc?.collections ?? 0) <= 0)
+    throw new Error(`Deep chains under pressure should collect, got ${json.memory?.gc?.collections}`);
+}
+
+console.log("--max-memory (a live set inside the pressure reserve does not collect at every checkpoint)...");
+{
+  // #1673: the tracked-bytes trigger fires once BytesAllocated reaches the
+  // pressure reserve below the ceiling (maxBytes / 8 = 8 MiB here). It used
+  // to stay armed after a collection that could not get below it, so a
+  // script whose working set fits but sits in that reserve ran a full
+  // collection every 1,024 instructions and after every ArrayBuffer it made.
+  // The trigger now backs off halfway from what survived to the ceiling, so
+  // collections follow allocated bytes instead (ADR 0141).
+  //
+  // Counted, not timed. The ballast parks the live set 3 MiB under the
+  // ceiling; the loops then allocate 20,000 small objects, one array
+  // iterator per 1,000, and 500 small buffers. Before the back-off
+  // this run took 779 collections, about one per 1,024 instructions in the
+  // object loop and one per buffer; with it, 2.
+  const src = [
+    "const ballast = new ArrayBuffer(Goccia.gc.maxBytes - Goccia.gc.bytesAllocated - 3 * 1048576);",
+    "const slack = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
+    "const outer = Array.from({ length: 20 }, (_, i) => i);",
+    "const inner = Array.from({ length: 1000 }, (_, i) => i);",
+    "let last;",
+    "for (const i of outer) for (const j of inner) last = { a: i, b: j };",
+    "const buffers = Array.from({ length: 500 }, (_, i) => i);",
+    "for (const i of buffers) last = new ArrayBuffer(64);",
+    "const slackAfter = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
+    "[slack < Goccia.gc.maxBytes / 8, slackAfter > 0, ballast.byteLength > 0];",
+    "",
+  ].join("\n");
+  const MAX_COLLECTIONS = 40;
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=64MiB"], { timeout: 120_000 });
+  if (exitCode !== 0)
+    throw new Error(`In-band allocation run should exit 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (JSON.stringify(json.files?.[0]?.result) !== "[true,true,true]")
+    throw new Error(
+      `In-band allocation run should park inside the pressure reserve and stay under the ceiling, got ${JSON.stringify(json.files?.[0]?.result)}`,
+    );
+  const collections = json.memory?.gc?.collections;
+  if (typeof collections !== "number" || collections > MAX_COLLECTIONS)
+    throw new Error(
+      `A live set inside the pressure reserve should collect at most ${MAX_COLLECTIONS} times for this allocation, got ${collections}`,
+    );
+}
+
+console.log("--max-memory (a live set inside the pressure reserve gives up burst headroom)...");
+{
+  // ADR 0141's trade-off, pinned. A plain value allocation over the ceiling
+  // is refused without collecting first, and the backed-off trigger lets
+  // garbage fill half the remaining headroom before a collection is due, and
+  // more until the next checkpoint runs it. So a single native burst that
+  // fits in the headroom on its
+  // own is refused once garbage sits in front of it, and fits again after
+  // an explicit collection. Sizes are measured in the run, so the shape
+  // holds whatever an object costs on the platform: the live set is parked
+  // 1.5 bursts under the ceiling, 0.6 of a burst of garbage stays below the
+  // backed-off trigger, and the burst then needs 1.6.
+  const src = [
+    "const keys = Array.from({ length: 400 }, (_, i) => \"k\" + i);",
+    "const big = Object.fromEntries(keys.map((k, i) => [k, i]));",
+    "const steps = Array.from({ length: 200000 }, (_, i) => i);",
+    "Goccia.gc();",
+    "const before = Goccia.gc.bytesAllocated;",
+    "let held = Object.entries(big);",
+    "const burst = Goccia.gc.bytesAllocated - before;",
+    "held = undefined;",
+    "Goccia.gc();",
+    "const ballast = new ArrayBuffer(Goccia.gc.maxBytes - Goccia.gc.bytesAllocated - Math.floor(burst * 1.5));",
+    "Goccia.gc();",
+    "const base = Goccia.gc.bytesAllocated;",
+    "let last;",
+    "for (const i of steps) {",
+    "  if (Goccia.gc.bytesAllocated - base >= burst * 0.6) break;",
+    "  last = { a: i };",
+    "}",
+    "let refused = false;",
+    "try { held = Object.entries(big); } catch (e) { refused = e instanceof RangeError; }",
+    "held = undefined;",
+    "Goccia.gc();",
+    "held = Object.entries(big);",
+    "[refused, held.length === 400, ballast.byteLength > 0];",
+    "",
+  ].join("\n");
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=64MiB"], { timeout: 120_000 });
+  if (exitCode !== 0)
+    throw new Error(`Burst-headroom run should exit 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (JSON.stringify(json.files?.[0]?.result) !== "[true,true,true]")
+    throw new Error(
+      `A burst behind garbage the back-off left should be refused, then fit after Goccia.gc(), got ${JSON.stringify(json.files?.[0]?.result)}`,
+    );
+}
+
 console.log("--max-memory (maxBytes readonly)...");
 {
   const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${RUNNER} --compat-asi 2>&1`.nothrow();
@@ -5060,15 +5372,24 @@ console.log("Entry module evaluated once...");
     await expectRun("--source-type=module entry",
       ["self.js", "--source-type=module"], ["self ran"]);
 
+    // No explicit source type: a .js entry with an import declaration is a
+    // Module (ADR 0140), so it gets the same single record as above.
+    await expectRun("detected module entry importing itself",
+      ["self.js"], ["self ran"]);
+    await expectRun("detected module entry record identity",
+      ["id.js"], ["same record: true"]);
+    await expectRun("detected module entry in a cycle",
+      ["cycle-a.js"], ["b ran", "a ran"]);
+
     // Script source: the entry is a Script Record (§16.1.4), not a Module
     // Record, so its own path names a separate module record. That module
     // evaluates once, before the script body, and its bindings are its own.
     await expectRun("script entry importing itself",
-      ["self.js"], ["self ran", "self ran"]);
+      ["self.js", "--source-type=script"], ["self ran", "self ran"]);
     await expectRun("script entry record identity",
-      ["id.js"], ["same record: true", "same record: false"]);
+      ["id.js", "--source-type=script"], ["same record: true", "same record: false"]);
     await expectRun("script entry in a cycle",
-      ["cycle-a.js"], ["a ran", "b ran", "a ran"]);
+      ["cycle-a.js", "--source-type=script"], ["a ran", "b ran", "a ran"]);
 
 
     // A bundled module-source entry is the .gbc file: an import of that file

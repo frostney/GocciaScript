@@ -24,6 +24,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TGocciaExpectObserver = procedure(const AValue: TGocciaValue) of object;
+
   TGocciaTestAssertions = class;
   TGocciaRegisteredEntry = class;
   TGocciaTestSuite = class;
@@ -95,7 +97,7 @@ type
       const ATable: TGocciaValue; const ATarget: TGocciaParameterizedRegistrationTarget);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   // Expectation object that provides matchers
@@ -110,7 +112,7 @@ type
   public
     constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False;
       const AIsRejectionReason: Boolean = False);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     // Core matchers
     function ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -164,6 +166,7 @@ type
   // Main test assertions built-in
   TGocciaTestAssertions = class(TGocciaBuiltin)
   private
+    FOnExpect: TGocciaExpectObserver;
     FTestStats: record
       TotalTests: Integer;
       PassedTests: Integer;
@@ -346,6 +349,9 @@ type
 
     // Test execution
     function RunTests(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+
+    // Optional host observation, after argument validation and before matchers.
+    property OnExpect: TGocciaExpectObserver read FOnExpect write FOnExpect;
 
     // Exposed for native Pascal unit tests. A plain getter rather
     // than a dotted field-path accessor (read FTestStats.X) so the
@@ -1307,10 +1313,8 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure TGocciaParameterizedRegistrationFunction.MarkReferences;
+procedure TGocciaParameterizedRegistrationFunction.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
 
   inherited;
   if Assigned(FTable) then
@@ -1326,7 +1330,7 @@ end;
   getters on the expected side before it is done reading the actual. Without
   this the value is collected mid-assertion. FTestAssertions is a builtin, not a
   collected value, so it is deliberately not marked. }
-procedure TGocciaExpectationValue.MarkReferences;
+procedure TGocciaExpectationValue.TraceReferences;
 begin
   inherited;
   if Assigned(FActualValue) then
@@ -4802,6 +4806,8 @@ end;
 function TGocciaTestAssertions.Expect(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'expect', ThrowError);
+  if Assigned(FOnExpect) then
+    FOnExpect(AArgs.GetElement(0));
 
   Result := TGocciaExpectationValue.Create(AArgs.GetElement(0), Self);
 end;

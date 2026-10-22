@@ -67,6 +67,24 @@ type
 
   TGocciaWorkItemArray = array of TGocciaWorkItem;
 
+  { Points in a worker's loop where the test seam below can stop it. }
+  TGocciaWorkerCheckpoint = (
+    { The worker has taken a file and published it as its current file. }
+    wcDequeued,
+    { The worker callback for the current file has returned. }
+    wcFileReturned,
+    { The worker has recorded the file's result and is between files. }
+    wcFileRecorded);
+
+  { Test seam, nil outside tests. The checkpoint hook runs on a worker at
+    each TGocciaWorkerCheckpoint; AWorker is that worker. The stall hook is
+    asked by the watchdog about every running worker on every poll, and a
+    worker it answers True for is abandoned at once, whatever the time, so
+    a test can abandon a worker at a chosen point and then let it run on. }
+  TGocciaWorkerCheckpointHook = procedure(const AWorker: TObject;
+    const ACheckpoint: TGocciaWorkerCheckpoint; const AFileIndex: Integer);
+  TGocciaWatchdogStallHook = function(const AWorker: TObject): Boolean;
+
   { Shared work queue — workers pull the next item under a lock. }
   TGocciaWorkQueue = class
   private
@@ -105,6 +123,15 @@ type
   TGocciaFileWorker = class(TThread)
   private
     FQueue: TGocciaWorkQueue;
+    { Guards FResults, FResultCount, FCurrentFileIndex and FAbandoned
+      between this worker and the pool's watchdog: the watchdog abandons a
+      worker and copies its finished results in one step under it, and the
+      worker takes a file, and records a result, only under it and only
+      while it is not abandoned. }
+    FStateLock: TGocciaCriticalSection;
+    { Set by the watchdog. From then on the run has reported this worker's
+      files, so the worker records no result and takes no further file. }
+    FAbandoned: Boolean;
     FResults: TGocciaWorkerResultArray;
     FResultCount: Integer;
     FWorkerProc: TGocciaWorkerProc;
@@ -126,11 +153,14 @@ type
     // by one poll cycle, which is acceptable for a best-effort watchdog.
     FLastActivityNs: Int64;
     // Index of the file the worker is currently processing, or -1 when
-    // idle (between dequeue calls).  Naturally-aligned Integer loads are
-    // atomic on aarch64/x86_64 — a torn read is impossible.  The watchdog
-    // reads this on a stalled worker so it can name the file the worker
-    // got stuck on, instead of just reporting "some worker".
+    // idle (between dequeue calls).  The watchdog reads it under
+    // FStateLock when it abandons the worker, so it can name the file the
+    // worker got stuck on instead of just reporting "some worker".
     FCurrentFileIndex: Integer;
+    procedure TouchActivity;
+    function TakeNextItem(out AItem: TGocciaWorkItem): Boolean;
+    function StillOwned: Boolean;
+    function RecordResult(const AResult: TGocciaWorkerResult): Boolean;
   protected
     procedure Execute; override;
   public
@@ -138,12 +168,22 @@ type
       AWorkerProc: TGocciaWorkerProc; ACancelFlag: TGocciaCancellationFlag;
       ACancelOnError: Boolean; AEnableCoverage: Boolean; AMaxBytes: Int64;
       AResetRuntimeBetweenItems: Boolean; AData: Pointer);
+    destructor Destroy; override;
+    { Main thread, watchdog only. Abandons the worker unless it has made
+      progress since the watchdog read AObservedActivityNs, and returns,
+      from the same critical section, its results array (the first
+      ACompletedCount entries are the files it finished) and the file it is
+      on (-1 between files). It allocates nothing, so it cannot fail half
+      way, and the worker never touches the array again. }
+    function TryAbandon(const AObservedActivityNs: Int64;
+      out ACompleted: TGocciaWorkerResultArray;
+      out ACompletedCount, ACurrentFileIndex: Integer): Boolean;
+    { Read only after the worker has finished (WaitFor). }
     property Results: TGocciaWorkerResultArray read FResults;
     property ResultCount: Integer read FResultCount;
     property CoverageTracker: TObject read FCoverageTracker;
     property MemoryStats: TCLIJSONMemoryStats read FMemoryStats;
     property LastActivityNs: Int64 read FLastActivityNs;
-    property CurrentFileIndex: Integer read FCurrentFileIndex;
   end;
 
   { Thread pool that dispatches files to workers via a shared queue.
@@ -171,6 +211,7 @@ type
       a replacement — so the destructor frees exactly the flags the pool
       still owns and never one a zombie is reading. }
     FCancelFlagLeaked: Boolean;
+    FAnyAbandoned: Boolean;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
     FResetRuntimeBetweenItems: Boolean;
@@ -181,12 +222,19 @@ type
     constructor Create(AWorkerCount: Integer);
     destructor Destroy; override;
 
-    { Execute AFiles across worker threads. Blocks until all complete.
+    { Execute AFiles across worker threads. Blocks until every worker has
+      finished or been abandoned by the watchdog (AnyWorkerAbandoned); an
+      abandoned worker may still be inside AWorkerProc when RunAll returns,
+      so after an abandonment AData and whatever else the callback reaches
+      must stay allocated until the process exits.
       AWorkerProc is called on each worker thread for each file.
       AData is an opaque pointer passed through to each worker call.
       AWatchdogMs is the maximum time (in milliseconds) that any single
       worker may go without making progress — i.e. the longest it can
-      sit on one file before the pool cancels remaining work.  0 means
+      sit on one file before the pool abandons that worker.  The file it
+      was on gets a TIMEOUT result, the other workers drain the queue,
+      and the abandoned worker takes no further file and records nothing;
+      a file no worker took keeps an empty, unsuccessful result.  0 means
       no watchdog (wait forever).  Because the bound is per-worker and
       per-file rather than total, it stays constant no matter how many
       files are queued. }
@@ -204,6 +252,12 @@ type
     property Results: TGocciaWorkerResultArray read FResults;
     property MemoryStats: TCLIJSONMemoryStats read FMemoryStats;
     property WorkerCount: Integer read FWorkerCount;
+    { True when the last RunAll abandoned a worker. Such a worker takes no
+      further file and records nothing, but it may still be inside the
+      worker callback for the file it was on, so whatever that callback
+      writes to (AData, host state) must stay allocated for the rest of
+      the process. }
+    property AnyWorkerAbandoned: Boolean read FAnyAbandoned;
     { This run's stop signal, exposed so a worker callback can cancel the queue
       without holding a reference to the pool itself. That distinction is a
       lifetime one, not a convenience: the pool is freed while an abandoned
@@ -232,6 +286,12 @@ type
     property MaxBytes: Int64 read FMaxBytes write FMaxBytes;
   end;
 
+  { Installs the test seam's hooks; pass nil for both outside tests. Set
+    them only while no pool is running. }
+  procedure SetThreadPoolHooksForTesting(
+    const ACheckpoint: TGocciaWorkerCheckpointHook;
+    const AStalled: TGocciaWatchdogStallHook);
+
   { Initialise the thread-local runtime for the calling thread.
     Must be called at the start of each worker thread.
     Set AEnableCoverage to initialise a per-thread coverage tracker.
@@ -239,9 +299,37 @@ type
   procedure InitThreadRuntime(AEnableCoverage: Boolean = False;
     AMaxBytes: Int64 = 0);
 
-  { Shut down the thread-local runtime for the calling thread.
-    Must be called before the worker thread exits. }
+  { Shut down the thread-local runtime for the calling thread: drain the
+    threadvar cleanups, then free the microtask queue, the call stack and the
+    collector, which destroys every value it still manages. A worker thread
+    calls it before it exits; TGocciaApplication.RunApplication calls it on
+    the main thread once the application has finished. No engine may still
+    be alive on the thread. }
   procedure ShutdownThreadRuntime;
+
+  { ShutdownThreadRuntime for the main thread once the application has
+    finished, unless a thread pool abandoned a stalled worker. An abandoned
+    worker is still running and still reads the process-wide values the main
+    thread's collector manages (the primitive singletons, the well-known
+    symbols, the shared prototypes), so freeing them would pull them from
+    under it; the process then exits with them still allocated instead. }
+  procedure ShutdownMainThreadRuntime;
+
+  { Ends the process at once with AStatus, running no unit finalization and
+    flushing nothing. For a process whose heap the engine no longer vouches
+    for, or whose worker threads are still running: Halt would run code on
+    that heap and tear the RTL down under those threads. Declared against the
+    C runtime (TerminateProcess on Windows) rather than routed through the
+    RTL for that reason. }
+  procedure TerminateProcessNow(AStatus: LongInt);
+
+  { When a thread pool has abandoned a worker, flushes Output and ErrOutput
+    and ends the process with AExitCode through TerminateProcessNow;
+    otherwise returns. A host calls it once its report is written and
+    before it frees anything: the abandoned worker may still be inside its
+    callback, which reads the host's objects and the process-wide runtime,
+    so neither the host's teardown nor unit finalization may run under it. }
+  procedure EndProcessIfWorkerAbandoned(const AExitCode: LongInt);
 
 implementation
 
@@ -282,6 +370,82 @@ begin
     TGocciaCoverageTracker.Initialize;
     TGocciaCoverageTracker.Instance.Enabled := True;
   end;
+end;
+
+var
+  { Set by the main thread when a pool abandons a worker; never cleared,
+    because an abandoned worker is never joined. }
+  GWorkerAbandoned: Boolean = False;
+  GCheckpointHook: TGocciaWorkerCheckpointHook = nil;
+  GStallHook: TGocciaWatchdogStallHook = nil;
+
+procedure SetThreadPoolHooksForTesting(
+  const ACheckpoint: TGocciaWorkerCheckpointHook;
+  const AStalled: TGocciaWatchdogStallHook);
+begin
+  GCheckpointHook := ACheckpoint;
+  GStallHook := AStalled;
+end;
+
+procedure WorkerCheckpoint(const AWorker: TObject;
+  const ACheckpoint: TGocciaWorkerCheckpoint; const AFileIndex: Integer);
+begin
+  if Assigned(GCheckpointHook) then
+    GCheckpointHook(AWorker, ACheckpoint, AFileIndex);
+end;
+
+{$IFDEF WINDOWS}
+{ TerminateProcess rather than ExitProcess: ExitProcess first terminates the
+  peer threads and THEN runs DLL process-detach handlers — a detach handler
+  needing a lock a just-terminated worker held deadlocks the exit. Terminate
+  skips detach handlers entirely, which is the whole contract here. }
+function GetCurrentProcess: THandle; stdcall;
+  external 'kernel32' name 'GetCurrentProcess';
+function TerminateProcess(AProcess: THandle; AExitCode: LongWord): LongBool;
+  stdcall; external 'kernel32' name 'TerminateProcess';
+
+procedure TerminateProcessNow(AStatus: LongInt);
+begin
+  TerminateProcess(GetCurrentProcess, LongWord(AStatus));
+end;
+{$ELSE}
+procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
+{$ENDIF}
+
+procedure EndProcessIfWorkerAbandoned(const AExitCode: LongInt);
+begin
+  if not GWorkerAbandoned then
+    Exit;
+  // Flushing is best effort (a closed or full stream raises); nothing may
+  // keep the process from ending here.
+  try
+    try
+      Flush(Output);
+    except
+    end;
+    try
+      Flush(ErrOutput);
+    except
+    end;
+  finally
+    TerminateProcessNow(AExitCode);
+  end;
+end;
+
+{ A diagnostic the watchdog writes must not fail the run: a closed or full
+  stderr would otherwise raise in the middle of an abandonment. }
+procedure WarnBestEffort(const AText: string);
+begin
+  try
+    WriteLn(ErrOutput, AText);
+  except
+  end;
+end;
+
+procedure ShutdownMainThreadRuntime;
+begin
+  if not GWorkerAbandoned then
+    ShutdownThreadRuntime;
 end;
 
 procedure ShutdownThreadRuntime;
@@ -410,77 +574,166 @@ begin
   FResultCount := 0;
   FLastActivityNs := GetNanoseconds;
   FCurrentFileIndex := -1;
-  // Pre-allocate generously; actual count tracked by FResultCount.
+  FAbandoned := False;
+  CriticalSectionInit(FStateLock);
+  // Grown on demand; the actual count is tracked by FResultCount.
   SetLength(FResults, 0);
+end;
+
+destructor TGocciaFileWorker.Destroy;
+begin
+  // Only a worker that was not abandoned is ever freed, after WaitFor.
+  CriticalSectionDone(FStateLock);
+  inherited;
+end;
+
+// Every write of FLastActivityNs is under FStateLock, so the watchdog's
+// check that the worker made no progress and its abandonment are one step.
+procedure TGocciaFileWorker.TouchActivity;
+begin
+  CriticalSectionEnter(FStateLock);
+  try
+    FLastActivityNs := GetNanoseconds;
+  finally
+    CriticalSectionLeave(FStateLock);
+  end;
+end;
+
+function TGocciaFileWorker.TakeNextItem(out AItem: TGocciaWorkItem): Boolean;
+begin
+  CriticalSectionEnter(FStateLock);
+  try
+    Result := (not FAbandoned) and FQueue.TryDequeue(AItem);
+    if Result then
+    begin
+      // Publish activity and the current file index on every dequeue so
+      // the watchdog sees forward progress (and can name the stalled
+      // file) even when individual files run fast.
+      FCurrentFileIndex := AItem.Index;
+      FLastActivityNs := GetNanoseconds;
+    end;
+  finally
+    CriticalSectionLeave(FStateLock);
+  end;
+end;
+
+function TGocciaFileWorker.StillOwned: Boolean;
+begin
+  CriticalSectionEnter(FStateLock);
+  try
+    Result := not FAbandoned;
+  finally
+    CriticalSectionLeave(FStateLock);
+  end;
+end;
+
+function TGocciaFileWorker.RecordResult(
+  const AResult: TGocciaWorkerResult): Boolean;
+begin
+  CriticalSectionEnter(FStateLock);
+  try
+    Result := not FAbandoned;
+    if not Result then
+      Exit;
+    if FResultCount >= Length(FResults) then
+      SetLength(FResults, Max(8, Length(FResults) * 2));
+    FResults[FResultCount] := AResult;
+    Inc(FResultCount);
+    // Publish activity on every completion so the watchdog has a fresh
+    // reading even while the worker drains the remainder of a long
+    // queue, and mark the worker idle so an abandonment between files
+    // names no file.
+    FCurrentFileIndex := -1;
+    FLastActivityNs := GetNanoseconds;
+  finally
+    CriticalSectionLeave(FStateLock);
+  end;
+end;
+
+function TGocciaFileWorker.TryAbandon(const AObservedActivityNs: Int64;
+  out ACompleted: TGocciaWorkerResultArray;
+  out ACompletedCount, ACurrentFileIndex: Integer): Boolean;
+begin
+  ACompleted := nil;
+  ACompletedCount := 0;
+  ACurrentFileIndex := -1;
+  CriticalSectionEnter(FStateLock);
+  try
+    Result := FLastActivityNs = AObservedActivityNs;
+    if not Result then
+      Exit;
+    // A reference, not a copy: nothing here can fail once the worker is
+    // abandoned.
+    ACompleted := FResults;
+    ACompletedCount := FResultCount;
+    ACurrentFileIndex := FCurrentFileIndex;
+    FAbandoned := True;
+  finally
+    CriticalSectionLeave(FStateLock);
+  end;
 end;
 
 procedure TGocciaFileWorker.Execute;
 var
   Item: TGocciaWorkItem;
+  ItemResult: TGocciaWorkerResult;
   ConsoleOut, ErrorMsg: string;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
-  Idx: Integer;
 begin
-  FLastActivityNs := GetNanoseconds;
+  TouchActivity;
   InitThreadRuntime(FEnableCoverage, FMaxBytes);
   BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
   try
-    while FQueue.TryDequeue(Item) do
+    // A worker the watchdog abandoned takes no further file and records
+    // no further result: by then the run has reported its files, and the
+    // host may already have released what a later file would write to.
+    while TakeNextItem(Item) do
     begin
-      // Publish activity and the current file index on every dequeue so
-      // the watchdog sees forward progress (and can name the stalled
-      // file) even when individual files run fast.
-      FCurrentFileIndex := Item.Index;
-      FLastActivityNs := GetNanoseconds;
+      WorkerCheckpoint(Self, wcDequeued, Item.Index);
+      ItemResult.Index := Item.Index;
+      ItemResult.FileName := Item.FileName;
+      ItemResult.ConsoleOutput := '';
 
       if FCancelFlag.IsCancelled then
       begin
-        Idx := FResultCount;
-        Inc(FResultCount);
-        if Idx >= Length(FResults) then
-          SetLength(FResults, Max(8, Length(FResults) * 2));
-        FResults[Idx].Index := Item.Index;
-        FResults[Idx].FileName := Item.FileName;
-        FResults[Idx].Success := False;
-        FResults[Idx].ErrorMessage := GOCCIA_POOL_CANCELLED_MESSAGE;
-        FResults[Idx].ConsoleOutput := '';
-        FResults[Idx].Data := nil;
+        ItemResult.Success := False;
+        ItemResult.ErrorMessage := GOCCIA_POOL_CANCELLED_MESSAGE;
+        ItemResult.Data := nil;
+        if not RecordResult(ItemResult) then
+          Break;
         Continue;
       end;
 
+      // Abandoned after taking the file: the run reported it as timed
+      // out, so it is not started now.
+      if not StillOwned then
+        Break;
+
       ConsoleOut := '';
       ErrorMsg := '';
-      Idx := FResultCount;
-      Inc(FResultCount);
-      if Idx >= Length(FResults) then
-        SetLength(FResults, Max(8, Length(FResults) * 2));
-      FResults[Idx].Index := Item.Index;
-      FResults[Idx].FileName := Item.FileName;
-      FResults[Idx].Data := FData;
+      ItemResult.Data := FData;
       try
         FWorkerProc(Item.FileName, Item.Index,
           ConsoleOut, ErrorMsg, FData);
-        FResults[Idx].Success := ErrorMsg = '';
-        FResults[Idx].ErrorMessage := ErrorMsg;
-        FResults[Idx].ConsoleOutput := ConsoleOut;
+        WorkerCheckpoint(Self, wcFileReturned, Item.Index);
+        ItemResult.Success := ErrorMsg = '';
+        ItemResult.ErrorMessage := ErrorMsg;
+        ItemResult.ConsoleOutput := ConsoleOut;
       except
         on E: Exception do
         begin
-          FResults[Idx].Success := False;
-          FResults[Idx].ErrorMessage := E.ClassName + ': ' + E.Message;
-          FResults[Idx].ConsoleOutput := ConsoleOut;
+          ItemResult.Success := False;
+          ItemResult.ErrorMessage := E.ClassName + ': ' + E.Message;
+          ItemResult.ConsoleOutput := ConsoleOut;
         end;
       end;
 
-      // Publish activity on every completion so the watchdog has a
-      // fresh reading even while the worker drains the remainder of a
-      // long queue.  Mark the worker idle (no current file) so a
-      // between-files snapshot does not falsely accuse a fast worker.
-      FCurrentFileIndex := -1;
-      FLastActivityNs := GetNanoseconds;
+      if not RecordResult(ItemResult) then
+        Break;
+      WorkerCheckpoint(Self, wcFileRecorded, Item.Index);
 
       { Cancel remaining files across all workers on first error. }
-      if FCancelOnError and (not FResults[Idx].Success) then
+      if FCancelOnError and (not ItemResult.Success) then
         FCancelFlag.Cancel;
 
       if FResetRuntimeBetweenItems then
@@ -495,7 +748,7 @@ begin
   finally
     // Refresh the timestamp as we exit the work loop so the watchdog
     // does not interpret a slow thread-runtime shutdown as a hang.
-    FLastActivityNs := GetNanoseconds;
+    TouchActivity;
     FMemoryStats := CombineCLIJSONMemoryStats(FMemoryStats,
       FinishCLIJSONMemoryMeasurement(MemoryMeasurement), True);
     { Detach the coverage tracker before shutting down the runtime so
@@ -545,11 +798,15 @@ var
   AllItems: TGocciaWorkItemArray;
   Queue: TGocciaWorkQueue;
   FileCount, I, J, StalledIdx: Integer;
-  StalledCount, SnapshotCount, SnapshotLast: Integer;
-  NowNs: Int64;
-  AllDone, AnyAbandoned: Boolean;
+  StalledCount: Integer;
+  NowNs, ObservedNs: Int64;
+  AllDone: Boolean;
   StalledFiles: TGocciaWorkerResultArray;
-  SnapshotResults: TGocciaWorkerResultArray;
+  { The finished results of abandoned workers, copied when each was
+    abandoned. Owned by this thread: an abandoned worker never writes them. }
+  AbandonedResults: TGocciaWorkerResultArray;
+  Completed: TGocciaWorkerResultArray;
+  CompletedCount: Integer;
 begin
   if FCancelFlagLeaked then
   begin
@@ -566,7 +823,7 @@ begin
   else
     FCancelFlag.Reset;
   FMemoryStats := DefaultCLIJSONMemoryStats;
-  AnyAbandoned := False;
+  FAnyAbandoned := False;
   FileCount := AFiles.Count;
   if FileCount = 0 then
   begin
@@ -606,6 +863,7 @@ begin
   finally
     StalledCount := 0;
     SetLength(StalledFiles, 0);
+    SetLength(AbandonedResults, 0);
 
     if AWatchdogMs > 0 then
     begin
@@ -624,10 +882,24 @@ begin
         for I := 0 to FWorkerCount - 1 do
           if Assigned(FWorkers[I]) and (not FAbandoned[I])
               and (not FWorkers[I].Finished) then
-            if ((NowNs - FWorkers[I].LastActivityNs) div 1000000)
-                >= AWatchdogMs then
+          begin
+            ObservedNs := FWorkers[I].LastActivityNs;
+            if ((((NowNs - ObservedNs) div 1000000) >= AWatchdogMs) or
+                (Assigned(GStallHook) and GStallHook(FWorkers[I]))) and
+                FWorkers[I].TryAbandon(ObservedNs, Completed,
+                  CompletedCount, J) then
             begin
-              J := FWorkers[I].CurrentFileIndex;
+              // Publish the abandonment before anything that can fail
+              // (allocation, output): from here on the worker, its queue
+              // and this run's cancellation flag belong to no one, and
+              // every path out of RunAll, and the host's teardown, must
+              // know it.
+              FAbandoned[I] := True;
+              FAnyAbandoned := True;
+              FCancelFlagLeaked := True;
+              GWorkerAbandoned := True;
+              AbandonedResults := Concat(AbandonedResults,
+                Copy(Completed, 0, CompletedCount));
               SetLength(StalledFiles, StalledCount + 1);
               StalledFiles[StalledCount].Data := nil;
               StalledFiles[StalledCount].Success := False;
@@ -639,9 +911,9 @@ begin
                 StalledFiles[StalledCount].ErrorMessage := Format(
                   'TIMEOUT (worker stalled in native code, no progress for %dms)',
                   [AWatchdogMs]);
-                WriteLn(ErrOutput, 'Warning: worker #', I,
-                  ' stalled in native code on file: ', AFiles[J],
-                  ' (no progress for ', AWatchdogMs,
+                WarnBestEffort('Warning: worker #' + IntToStr(I) +
+                  ' stalled in native code on file: ' + AFiles[J] +
+                  ' (no progress for ' + IntToStr(AWatchdogMs) +
                   'ms). Abandoning worker; remaining files continue.');
               end
               else
@@ -654,14 +926,13 @@ begin
                 StalledFiles[StalledCount].ErrorMessage := Format(
                   'TIMEOUT (worker stalled, no current file index, no progress for %dms)',
                   [AWatchdogMs]);
-                WriteLn(ErrOutput, 'Warning: worker #', I,
-                  ' stalled with no current file index (no progress for ',
-                  AWatchdogMs, 'ms). Abandoning worker.');
+                WarnBestEffort('Warning: worker #' + IntToStr(I) +
+                  ' stalled with no current file index (no progress for ' +
+                  IntToStr(AWatchdogMs) + 'ms). Abandoning worker.');
               end;
               Inc(StalledCount);
-              FAbandoned[I] := True;
-              AnyAbandoned := True;
             end;
+          end;
 
         // Second pass: are all workers done (finished or abandoned)?
         AllDone := True;
@@ -685,21 +956,19 @@ begin
       if Assigned(FWorkers[I]) and not FAbandoned[I] then
         FWorkers[I].WaitFor;
 
-    if AnyAbandoned then
-      WriteLn(ErrOutput, 'Warning: ', StalledCount,
-        ' worker(s) abandoned. Leaking their queue/state; ',
+    if FAnyAbandoned then
+      WarnBestEffort('Warning: ' + IntToStr(StalledCount) +
+        ' worker(s) abandoned. Leaking their queue/state; ' +
         'they will be reclaimed on process exit.');
 
     // Only free the queue when no abandoned workers remain — they
     // still hold a reference to it via FQueue.  Each run builds its own
     // queue, so a leaked one belongs to that run's zombie and can never
     // reach a later run.  The cancellation flag is different: it is a
-    // pool field that every run would otherwise share, so marking it
-    // leaked here only settles ownership for THIS run — the next RunAll
-    // replaces it with a fresh instance rather than reusing it.
-    if AnyAbandoned then
-      FCancelFlagLeaked := True
-    else
+    // pool field that every run would otherwise share, so the
+    // abandonment marked it leaked for THIS run (FCancelFlagLeaked) and
+    // the next RunAll replaces it with a fresh instance.
+    if not FAnyAbandoned then
       Queue.Free;
   end;
 
@@ -720,35 +989,11 @@ begin
   begin
     if not Assigned(FWorkers[I]) then Continue;
 
+    // An abandoned worker's finished results were copied when it was
+    // abandoned (AbandonedResults below); the thread is still alive, so it
+    // is neither freed nor merged for coverage.
     if FAbandoned[I] then
-    begin
-      // Snapshot the abandoned worker's results array by reference so
-      // any subsequent SetLength on the worker side doesn't pull the
-      // memory out from under us.  Skip the in-progress slot
-      // (ResultCount-1) only when CurrentFileIndex >= 0, i.e. the
-      // worker is mid-file and Success/ErrorMessage on that slot are
-      // not yet written.  When CurrentFileIndex = -1 the worker is
-      // between files (or in ShutdownThreadRuntime) and the last slot
-      // is a fully-populated completed result — including it preserves
-      // the final result instead of dropping it.
-      SnapshotResults := FWorkers[I].Results;
-      SnapshotCount := FWorkers[I].ResultCount;
-      if SnapshotCount > Length(SnapshotResults) then
-        SnapshotCount := Length(SnapshotResults);
-      if FWorkers[I].CurrentFileIndex < 0 then
-        SnapshotLast := SnapshotCount - 1
-      else
-        SnapshotLast := SnapshotCount - 2;
-      for J := 0 to SnapshotLast do
-      begin
-        StalledIdx := SnapshotResults[J].Index;
-        if (StalledIdx >= 0) and (StalledIdx < FileCount) then
-          FResults[StalledIdx] := SnapshotResults[J];
-      end;
-      // Don't Free or merge coverage from abandoned workers — the
-      // thread is still alive in native code.
       Continue;
-    end;
 
     // Check for unhandled exceptions in the worker thread
     if Assigned(FWorkers[I].FatalException) then
@@ -768,6 +1013,13 @@ begin
       FWorkers[I].Free;
       FWorkers[I] := nil;
     end;
+  end;
+
+  for I := 0 to High(AbandonedResults) do
+  begin
+    StalledIdx := AbandonedResults[I].Index;
+    if (StalledIdx >= 0) and (StalledIdx < FileCount) then
+      FResults[StalledIdx] := AbandonedResults[I];
   end;
 
   // Apply stalled-file overrides last so the watchdog's TIMEOUT

@@ -71,7 +71,7 @@ type
     destructor Destroy; override;
     function CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
 
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     // New Define/Assign pattern
     procedure PredeclareLexicalBinding(const AName: string; const ADeclarationType: TGocciaDeclarationType; const ALine: Integer = 0; const AColumn: Integer = 0);
@@ -92,6 +92,9 @@ type
     procedure DefineVariableBinding(const AName: string; const AValue: TGocciaValue;
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
+    // Whether AName is one of this scope's import bindings (a module
+    // environment's), which reads through the module it names.
+    function IsOwnImportBinding(const AName: string): Boolean;
     function HasLexicalDeclaration(const AName: string): Boolean;
     function HasRestrictedGlobalProperty(const AName: string): Boolean;
     function CanDeclareGlobalVar(const AName: string): Boolean;
@@ -165,6 +168,10 @@ type
     function Contains(const AName: string): Boolean; virtual;
     function GetOwnBindingNames: TGocciaStringArray; virtual;
     function GetOwnVarBindingNames: TGocciaStringArray; virtual;
+    // An own lexical binding record as it is stored, for naming built-ins in
+    // a heap snapshot (ADR 0148).
+    function TryGetOwnLexicalBindingRaw(const AName: string;
+      out ABinding: TLexicalBinding): Boolean;
 
     // Walk the parent chain to find the nearest function/module/global scope (for var hoisting)
     function FindFunctionOrModuleScope: TGocciaScope;
@@ -222,6 +229,7 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Keywords.Reserved,
   Goccia.Types.Enforcement,
   Goccia.Values.ObjectPropertyDescriptor;
@@ -381,6 +389,7 @@ var
   ExistingBinding: TLexicalBinding;
   GlobalObject: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
+  IsConfigurable: Boolean;
   Error: TGocciaSyntaxError;
 begin
   if (FScopeKind = skGlobal) and ContainsOwnVarBinding(AName) then
@@ -408,7 +417,9 @@ begin
     begin
       GlobalObject := TGocciaObjectValue(FThisValue);
       Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
-      if (not Assigned(Descriptor)) or Descriptor.Configurable then
+      IsConfigurable := (not Assigned(Descriptor)) or Descriptor.Configurable;
+      ReleaseDescriptor(Descriptor);
+      if IsConfigurable then
         FLexicalBindings.Remove(AName)
       else
       begin
@@ -632,6 +643,11 @@ begin
     (Assigned(FGlobalVarNames) and FGlobalVarNames.ContainsKey(AName));
 end;
 
+function TGocciaScope.IsOwnImportBinding(const AName: string): Boolean;
+begin
+  Result := Assigned(FImportBindings) and FImportBindings.ContainsKey(AName);
+end;
+
 // ES2026 §9.1.1.4.15 HasLexicalDeclaration(N) — global-scope approximation.
 function TGocciaScope.HasLexicalDeclaration(const AName: string): Boolean;
 begin
@@ -652,6 +668,7 @@ begin
   GlobalObject := TGocciaObjectValue(FThisValue);
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
   Result := Assigned(Descriptor) and not Descriptor.Configurable;
+  ReleaseDescriptor(Descriptor);
 end;
 
 // ES2026 §9.1.1.4.17 CanDeclareGlobalVar(N)
@@ -679,10 +696,9 @@ begin
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
   if not Assigned(Descriptor) then
     Exit(GlobalObject.Extensible);
-  if Descriptor.Configurable then
-    Exit(True);
-  Result := IsDataDescriptor(Descriptor) and Descriptor.Writable and
-    Descriptor.Enumerable;
+  Result := Descriptor.Configurable or (IsDataDescriptor(Descriptor) and
+    Descriptor.Writable and Descriptor.Enumerable);
+  ReleaseDescriptor(Descriptor);
 end;
 
 // ES2026 §9.1.1.4.18 CreateGlobalVarBinding(N, D)
@@ -717,6 +733,7 @@ procedure TGocciaScope.CreateGlobalFunctionBinding(const AName: string;
   const AValue: TGocciaValue; const ACanDelete: Boolean);
 var
   Descriptor: TGocciaPropertyDescriptor;
+  IsNonConfigurable: Boolean;
   Flags: TPropertyFlags;
   GlobalObject: TGocciaObjectValue;
 begin
@@ -730,7 +747,9 @@ begin
     RegisterGlobalVarDeclaration(AName);
   GlobalObject := TGocciaObjectValue(FThisValue);
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) and not Descriptor.Configurable then
+  IsNonConfigurable := Assigned(Descriptor) and not Descriptor.Configurable;
+  ReleaseDescriptor(Descriptor);
+  if IsNonConfigurable then
   begin
     GlobalObject.AssignProperty(AName, AValue);
     Exit;
@@ -1038,6 +1057,7 @@ begin
   Descriptor := GlobalObject.GetOwnPropertyDescriptor(AName);
   Result := Assigned(Descriptor) and IsDataDescriptor(Descriptor) and
     Descriptor.Writable;
+  ReleaseDescriptor(Descriptor);
 end;
 
 function TGocciaScope.TryGetGlobalBuiltInObjectBinding(const AName: string;
@@ -1325,6 +1345,12 @@ begin
   Result := BindingNamesToArray(FLexicalBindings);
 end;
 
+function TGocciaScope.TryGetOwnLexicalBindingRaw(const AName: string;
+  out ABinding: TLexicalBinding): Boolean;
+begin
+  Result := FLexicalBindings.TryGetValue(AName, ABinding);
+end;
+
 function TGocciaScope.GetOwnVarBindingNames: TGocciaStringArray;
 begin
   if Assigned(FVarBindings) then
@@ -1335,12 +1361,11 @@ end;
 
 { TGocciaScope - GC support }
 
-procedure TGocciaScope.MarkReferences;
+procedure TGocciaScope.TraceReferences;
 var
   ImportBindingPair: TGocciaModuleImportBindingMap.TKeyValuePair;
   Pair: TGocciaScopeBindingMap.TKeyValuePair;
 begin
-  if GCMarked then Exit;
   inherited;
 
   if Assigned(FParent) then
@@ -1375,5 +1400,215 @@ function TGocciaGlobalScope.GetThisValue: TGocciaValue;
 begin
   Result := FThisValue;
 end;
+
+{ Heap snapshot codec (ADR 0148): a module's environment. The bytecode VM
+  keeps a function's own bindings in registers and cells; the scopes a run
+  makes are module environments, whose bindings it reads by name: the
+  module's top-level declarations and its import bindings. The global scope
+  is a built-in, named rather than written; a module scope's parent is it or
+  nothing. The callbacks a scope inherits from its parent come from the
+  restoring engine's global scope. }
+
+type
+  TModuleScopeSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    function SchemaVersion: Word; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+const
+  // A binding's entry: its name (4 bytes), value (1 at least), kind, type
+  // hint and two flags.
+  MIN_SNAPSHOT_BINDING_BYTES = 9;
+  // What a restored binding or import binding holds, charged before it is
+  // made.
+  SNAPSHOT_BINDING_ENTRY_BYTES = 128;
+
+procedure WriteSnapshotBindings(const AWriter: TGocciaHeapSnapshotWriter;
+  const ABindings: TGocciaScopeBindingMap);
+var
+  Pair: TGocciaScopeBindingMap.TKeyValuePair;
+begin
+  if not Assigned(ABindings) then
+  begin
+    AWriter.WriteU32(0);
+    Exit;
+  end;
+  AWriter.WriteU32(ABindings.Count);
+  for Pair in ABindings do
+  begin
+    AWriter.Poll;
+    // Only the global scope holds built-ins and bindings its global object
+    // backs.
+    if Pair.Value.BuiltIn or Pair.Value.GlobalObjectBacked then
+      AWriter.Refuse('a module scope binding of the global scope''s kind');
+    AWriter.WriteStr(Pair.Key);
+    AWriter.WriteValue(Pair.Value.Value);
+    AWriter.WriteU8(Ord(Pair.Value.DeclarationType));
+    AWriter.WriteU8(Ord(Pair.Value.TypeHint));
+    AWriter.WriteBool(Pair.Value.Initialized);
+    AWriter.WriteBool(Pair.Value.CanDelete);
+  end;
+end;
+
+procedure ReadSnapshotBindings(const AReader: TGocciaHeapSnapshotReader;
+  const ABindings: TGocciaScopeBindingMap);
+var
+  Count, I: Integer;
+  Name: string;
+  Binding: TLexicalBinding;
+  Kind: Byte;
+begin
+  Count := AReader.ReadItemCount(MIN_SNAPSHOT_BINDING_BYTES);
+  AReader.ReserveItems(Count, SNAPSHOT_BINDING_ENTRY_BYTES);
+  for I := 0 to Count - 1 do
+  begin
+    AReader.Poll;
+    Name := AReader.ReadStr;
+    if ABindings.ContainsKey(Name) then
+      AReader.Refuse('a binding listed twice');
+    Binding := Default(TLexicalBinding);
+    Binding.Value := AReader.ReadValue;
+    Kind := AReader.ReadU8;
+    if Kind > Ord(High(TGocciaDeclarationType)) then
+      AReader.Refuse('an unknown declaration kind');
+    Binding.DeclarationType := TGocciaDeclarationType(Kind);
+    Kind := AReader.ReadU8;
+    if Kind > Ord(High(TGocciaLocalType)) then
+      AReader.Refuse('an unknown type hint');
+    Binding.TypeHint := TGocciaLocalType(Kind);
+    Binding.Initialized := AReader.ReadBool;
+    Binding.CanDelete := AReader.ReadBool;
+    // A binding a read reaches holds a value; only one in its temporal dead
+    // zone may hold none.
+    if Binding.IsAccessible and not Assigned(Binding.Value) then
+      AReader.Refuse('a binding that holds no value');
+    ABindings.Add(Name, Binding);
+  end;
+end;
+
+{ TModuleScopeSnapshotCodec }
+
+function TModuleScopeSnapshotCodec.Tag: string;
+begin
+  Result := 'scope.module';
+end;
+
+function TModuleScopeSnapshotCodec.SchemaVersion: Word;
+begin
+  Result := 1;
+end;
+
+procedure TModuleScopeSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  Scope: TGocciaScope;
+  Pair: TGocciaModuleImportBindingMap.TKeyValuePair;
+begin
+  Scope := TGocciaScope(AObject);
+  if Scope.FScopeKind <> skModule then
+    AWriter.Refuse('a scope that is no module''s environment');
+  if Assigned(Scope.FParent) and not (Scope.FParent is TGocciaGlobalScope) then
+    AWriter.Refuse('a module scope nested in another scope');
+  if Assigned(Scope.FGlobalVarNames) and (Scope.FGlobalVarNames.Count > 0) then
+    AWriter.Refuse('a module scope with global var names');
+  AWriter.WriteRef(Scope.FParent);
+  AWriter.WriteStr(Scope.FCustomLabel);
+  AWriter.WriteValue(Scope.FThisValue);
+  AWriter.WriteBool(Scope.FStrictTypes);
+  AWriter.WriteBool(Scope.FNonStrictMode);
+  AWriter.WriteBool(Scope.FArgumentsObjectEnabled);
+  WriteSnapshotBindings(AWriter, Scope.FLexicalBindings);
+  WriteSnapshotBindings(AWriter, Scope.FVarBindings);
+  if not Assigned(Scope.FImportBindings) then
+    AWriter.WriteU32(0)
+  else
+  begin
+    AWriter.WriteU32(Scope.FImportBindings.Count);
+    for Pair in Scope.FImportBindings do
+    begin
+      AWriter.Poll;
+      AWriter.WriteStr(Pair.Key);
+      WriteSnapshotModuleReference(AWriter, Pair.Value.RequestedModule);
+      AWriter.WriteStr(Pair.Value.RequestedExportName);
+    end;
+  end;
+end;
+
+function TModuleScopeSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+begin
+  Result := TGocciaScope.Create(nil, skModule);
+end;
+
+procedure TModuleScopeSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  Scope: TGocciaScope;
+  Parent: TGCManagedObject;
+  Count, I: Integer;
+  Name, ExportName: string;
+  Module: TGocciaModule;
+  Binding: TLexicalBinding;
+begin
+  Scope := TGocciaScope(AObject);
+  Parent := AReader.ReadRef;
+  if Assigned(Parent) and not (Parent is TGocciaGlobalScope) then
+    AReader.Refuse('a module scope whose parent is not the global scope');
+  if Assigned(Parent) then
+  begin
+    Scope.FParent := TGocciaGlobalScope(Parent);
+    Scope.FOnError := Scope.FParent.FOnError;
+    Scope.FLoadModule := Scope.FParent.FLoadModule;
+    Scope.FLoadModuleSource := Scope.FParent.FLoadModuleSource;
+    Scope.FLoadDeferredModule := Scope.FParent.FLoadDeferredModule;
+    Scope.FResolveModuleURL := Scope.FParent.FResolveModuleURL;
+  end;
+  Scope.FCustomLabel := AReader.ReadStr;
+  Scope.FThisValue := AReader.ReadValue;
+  if not Assigned(Scope.FThisValue) then
+    AReader.Refuse('a module scope without a this value');
+  Scope.FStrictTypes := AReader.ReadBool;
+  Scope.FNonStrictMode := AReader.ReadBool;
+  Scope.FArgumentsObjectEnabled := AReader.ReadBool;
+  ReadSnapshotBindings(AReader, Scope.FLexicalBindings);
+  // Allocated only when the scope holds var bindings, as declaring one does.
+  if not Assigned(Scope.FVarBindings) then
+    Scope.FVarBindings := TGocciaScopeBindingMap.Create;
+  ReadSnapshotBindings(AReader, Scope.FVarBindings);
+  if Scope.FVarBindings.Count = 0 then
+    FreeAndNil(Scope.FVarBindings);
+  Count := AReader.ReadItemCount(12);
+  AReader.ReserveItems(Count, SNAPSHOT_BINDING_ENTRY_BYTES);
+  if (Count > 0) and not Assigned(Scope.FImportBindings) then
+    Scope.FImportBindings := TGocciaModuleImportBindingMap.Create;
+  for I := 0 to Count - 1 do
+  begin
+    AReader.Poll;
+    Name := AReader.ReadStr;
+    Module := ReadSnapshotModuleReference(AReader);
+    ExportName := AReader.ReadStr;
+    if not Assigned(Module) then
+      AReader.Refuse('an import binding of no module');
+    if Scope.FImportBindings.ContainsKey(Name) then
+      AReader.Refuse('an import binding listed twice');
+    // An import binding reads through its module; the lexical entry it
+    // shadows is the immutable, initialized one CreateImportBinding makes.
+    if not Scope.FLexicalBindings.TryGetValue(Name, Binding) or
+       (Binding.DeclarationType <> dtConst) or not Binding.Initialized then
+      AReader.Refuse('an import binding without its lexical entry');
+    Scope.FImportBindings.Add(Name,
+      TGocciaModuleImportBinding.Create(Module, ExportName));
+  end;
+end;
+
+initialization
+  RegisterSnapshotCodec(TGocciaScope, TModuleScopeSnapshotCodec.Create);
 
 end.

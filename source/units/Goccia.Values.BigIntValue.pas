@@ -18,8 +18,14 @@ type
     FOneValue: TGocciaBigIntValue;
   private
     FValue: TBigInteger;
+    FChargedBytes: Int64;
   public
     constructor Create(const AValue: TBigInteger);
+    destructor Destroy; override;
+    // Takes over ABytes the caller already charged to the run's memory
+    // ceiling for this value's limbs; released when the value dies. A heap
+    // snapshot's reader hands its limb reservation over this way.
+    procedure AdoptCharge(const ABytes: Int64);
 
     class function BigIntZero: TGocciaBigIntValue;
     class function BigIntOne: TGocciaBigIntValue;
@@ -165,6 +171,23 @@ constructor TGocciaBigIntValue.Create(const AValue: TBigInteger);
 begin
   inherited Create;
   FValue := AValue;
+end;
+
+destructor TGocciaBigIntValue.Destroy;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and (FChargedBytes > 0) then
+    GC.ReleaseExternalBytes(FChargedBytes);
+  FChargedBytes := 0;
+  inherited;
+end;
+
+procedure TGocciaBigIntValue.AdoptCharge(const ABytes: Int64);
+begin
+  if ABytes > 0 then
+    Inc(FChargedBytes, ABytes);
 end;
 
 class function TGocciaBigIntValue.BigIntZero: TGocciaBigIntValue;

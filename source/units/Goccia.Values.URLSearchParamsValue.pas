@@ -86,7 +86,7 @@ type
 
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
 
@@ -100,7 +100,9 @@ implementation
 uses
   SysUtils,
 
+  OrderedStringMap,
   StringBuffer,
+  TextSemantics,
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -121,6 +123,15 @@ uses
 
 var
   GURLSearchParamsSharedSlot: TGocciaRealmOwnedSlotId;
+
+// Web IDL USVString conversion of an argument: ToString, then every lone
+// surrogate becomes U+FFFD. Names and values are converted where they enter,
+// so a name that came in through a method matches the same name read back
+// from a parsed query.
+function ToUSVString(const AValue: TGocciaValue): string; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := ToWellFormedUTF16(AValue.ToStringLiteral.Value);
+end;
 
 function GetURLSearchParamsShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -278,17 +289,33 @@ var
   Key: string;
   Param: TGocciaURLSearchParam;
   Val: TGocciaValue;
+  Positions: TOrderedStringMap<Integer>;
+  Position: Integer;
 begin
   FList.Clear;
-  for Key in AObj.GetOwnPropertyKeys do
-  begin
-    Val := AObj.GetProperty(Key);
-    Param.Name := Key;
-    if Assigned(Val) then
-      Param.Value := Val.ToStringLiteral.Value
-    else
-      Param.Value := '';
-    FList.Add(Param);
+  Positions := TOrderedStringMap<Integer>.Create;
+  try
+    for Key in AObj.GetOwnPropertyKeys do
+    begin
+      Val := AObj.GetProperty(Key);
+      Param.Name := ToWellFormedUTF16(Key);
+      if Assigned(Val) then
+        Param.Value := ToUSVString(Val)
+      else
+        Param.Value := '';
+      // Web IDL record<USVString, USVString> conversion: keys that become the
+      // same USVString (two different lone surrogates are both U+FFFD) are
+      // one entry, which keeps its place and takes the later value.
+      if Positions.TryGetValue(Param.Name, Position) then
+        FList[Position] := Param
+      else
+      begin
+        Positions.Add(Param.Name, FList.Count);
+        FList.Add(Param);
+      end;
+    end;
+  finally
+    Positions.Free;
   end;
 end;
 
@@ -313,9 +340,9 @@ begin
     Param.Name := '';
     Param.Value := '';
     if Assigned(Inner.Elements[0]) then
-      Param.Name := Inner.Elements[0].ToStringLiteral.Value;
+      Param.Name := ToUSVString(Inner.Elements[0]);
     if Assigned(Inner.Elements[1]) then
-      Param.Value := Inner.Elements[1].ToStringLiteral.Value;
+      Param.Value := ToUSVString(Inner.Elements[1]);
     FList.Add(Param);
   end;
 end;
@@ -344,8 +371,8 @@ begin
     ThrowTypeError(SErrorURLSearchParamsAppendNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length < 2 then Exit;
-  Param.Name := AArgs.GetElement(0).ToStringLiteral.Value;
-  Param.Value := AArgs.GetElement(1).ToStringLiteral.Value;
+  Param.Name := ToUSVString(AArgs.GetElement(0));
+  Param.Value := ToUSVString(AArgs.GetElement(1));
   Self_.FList.Add(Param);
   Self_.UpdateURL;
 end;
@@ -365,10 +392,10 @@ begin
     ThrowTypeError(SErrorURLSearchParamsDeleteNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length = 0 then Exit;
-  Name := AArgs.GetElement(0).ToStringLiteral.Value;
+  Name := ToUSVString(AArgs.GetElement(0));
   HasValue := AArgs.Length >= 2;
   if HasValue then
-    Value := AArgs.GetElement(1).ToStringLiteral.Value
+    Value := ToUSVString(AArgs.GetElement(1))
   else
     Value := '';
 
@@ -407,7 +434,7 @@ begin
     Result := TGocciaNullLiteralValue.NullValue;
     Exit;
   end;
-  Name := AArgs.GetElement(0).ToStringLiteral.Value;
+  Name := ToUSVString(AArgs.GetElement(0));
   for I := 0 to Self_.FList.Count - 1 do
     if Self_.FList[I].Name = Name then
     begin
@@ -439,7 +466,7 @@ begin
     AddTempRootIfNeeded(ArrRoot, Arr);
     if AArgs.Length > 0 then
     begin
-      Name := AArgs.GetElement(0).ToStringLiteral.Value;
+      Name := ToUSVString(AArgs.GetElement(0));
       for I := 0 to Self_.FList.Count - 1 do
         if Self_.FList[I].Name = Name then
           Arr.Elements.Add(TGocciaStringLiteralValue.Create(Self_.FList[I].Value));
@@ -468,10 +495,10 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
     Exit;
   end;
-  Name := AArgs.GetElement(0).ToStringLiteral.Value;
+  Name := ToUSVString(AArgs.GetElement(0));
   HasValue := AArgs.Length >= 2;
   if HasValue then
-    Value := AArgs.GetElement(1).ToStringLiteral.Value
+    Value := ToUSVString(AArgs.GetElement(1))
   else
     Value := '';
 
@@ -503,8 +530,8 @@ begin
     ThrowTypeError(SErrorURLSearchParamsSetNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
   if AArgs.Length < 2 then Exit;
-  Name := AArgs.GetElement(0).ToStringLiteral.Value;
-  Value := AArgs.GetElement(1).ToStringLiteral.Value;
+  Name := ToUSVString(AArgs.GetElement(0));
+  Value := ToUSVString(AArgs.GetElement(1));
 
   Found := False;
   I := 0;
@@ -641,11 +668,13 @@ begin
   while I < Self_.FList.Count do
   begin
     Pair := Self_.FList[I];
-    CallArgs := TGocciaArgumentsCollection.Create([
-      TGocciaStringLiteralValue.Create(Pair.Value),
-      TGocciaStringLiteralValue.Create(Pair.Name),
-      AThisValue]);
+    // Added one at a time: the collection roots what it holds, and the name
+    // string's reservation can collect the value string made before it.
+    CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
     try
+      CallArgs.Add(TGocciaStringLiteralValue.Create(Pair.Value));
+      CallArgs.Add(TGocciaStringLiteralValue.Create(Pair.Name));
+      CallArgs.Add(AThisValue);
       InvokeCallable(Callback, CallArgs, ThisArg);
     finally
       CallArgs.Free;
@@ -724,9 +753,8 @@ begin
   end;
 end;
 
-procedure TGocciaURLSearchParamsValue.MarkReferences;
+procedure TGocciaURLSearchParamsValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   // Mark the owning URL so it stays live as long as this URLSearchParams is
   // reachable, preventing use-after-free when the user holds only a direct

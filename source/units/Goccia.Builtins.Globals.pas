@@ -64,6 +64,7 @@ type
     function DOMExceptionConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function PermissionDeniedConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
   protected
+    procedure MarkBuiltinReferences; override;
   published
     function ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function EvalErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -536,7 +537,6 @@ end;
 function TGocciaGlobals.ErrorStackSetter(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  Descriptor: TGocciaPropertyDescriptor;
   Receiver: TGocciaObjectValue;
   Value: TGocciaValue;
 begin
@@ -554,8 +554,7 @@ begin
   if Receiver = FErrorProto then
     ThrowTypeError('Cannot set Error.prototype.stack');
 
-  Descriptor := Receiver.GetOwnPropertyDescriptor(PROP_STACK);
-  if Assigned(Descriptor) then
+  if Receiver.HasOwnPropertyDescriptor(PROP_STACK) then
   begin
     if not Receiver.AssignPropertyWithReceiver(PROP_STACK, Value, Receiver) then
       ThrowTypeError('Cannot set stack property');
@@ -1062,6 +1061,7 @@ function TryCloneOwnProperty(const ASource: TGocciaObjectValue; const AKey: stri
   out AClonedValue: TGocciaValue): Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  IsData, IsEnumerable: Boolean;
   RawValue: TGocciaValue;
   RawRoot: TGocciaTempRoot;
 begin
@@ -1071,12 +1071,18 @@ begin
   Descriptor := ASource.GetOwnPropertyDescriptor(AKey);
   if not Assigned(Descriptor) then
     Exit;
-  if not (pfEnumerable in Descriptor.Flags) then
-    Exit;
-
-  if Descriptor is TGocciaPropertyDescriptorData then
+  IsEnumerable := pfEnumerable in Descriptor.Flags;
+  IsData := Descriptor is TGocciaPropertyDescriptorData;
+  if IsData then
     RawValue := TGocciaPropertyDescriptorData(Descriptor).Value
   else
+    RawValue := nil;
+  // Released before the getter runs: it may delete or redefine the key,
+  // which frees a stored descriptor.
+  ReleaseDescriptor(Descriptor);
+  if not IsEnumerable then
+    Exit;
+  if not IsData then
     RawValue := ASource.GetPropertyWithContext(AKey, ASource);
 
   if RawValue = nil then
@@ -1154,7 +1160,7 @@ function CloneError(const AError: TGocciaObjectValue;
 var
   Descriptor: TGocciaPropertyDescriptor;
   ErrorName: string;
-  NameValue: TGocciaValue;
+  MessageValue, NameValue: TGocciaValue;
   Prototype: TGocciaObjectValue;
 begin
   NameValue := AError.GetProperty(PROP_NAME);
@@ -1172,14 +1178,19 @@ begin
   RegisterClone(AError, Result, AMemory);
 
   Descriptor := AError.GetOwnPropertyDescriptor(PROP_MESSAGE);
-  if (Descriptor is TGocciaPropertyDescriptorData) and
-    Assigned(TGocciaPropertyDescriptorData(Descriptor).Value) then
+  if Descriptor is TGocciaPropertyDescriptorData then
+    MessageValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    MessageValue := nil;
+  // Released before the conversion: a guest toString may delete or redefine
+  // the message, which frees a stored descriptor.
+  ReleaseDescriptor(Descriptor);
+  if Assigned(MessageValue) then
     { Non-enumerable, matching both an ordinary error's own message and what
       node and bun put on the clone. }
     Result.DefineProperty(PROP_MESSAGE,
       TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(
-          TGocciaPropertyDescriptorData(Descriptor).Value.ToStringLiteral.Value),
+        TGocciaStringLiteralValue.Create(MessageValue.ToStringLiteral.Value),
         [pfConfigurable, pfWritable]));
 
   { The source's stack text, not a fresh capture: node and bun both hand back a
@@ -1331,7 +1342,8 @@ function CloneSharedArrayBuffer(const ABuf: TGocciaSharedArrayBufferValue;
 var
   Len: Integer;
 begin
-  Len := Length(ABuf.Data);
+  // A growable buffer's block is longer than its contents.
+  Len := ABuf.ByteLength;
   Result := TGocciaSharedArrayBufferValue.Create(Len);
   RegisterClone(ABuf, Result, AMemory);
 
@@ -1455,6 +1467,7 @@ begin
       TGocciaPropertyDescriptorData(Descriptor).Value).Value
   else
     Result := ADefault;
+  ReleaseDescriptor(Descriptor);
 end;
 
 { DOMException is a serializable platform object (WebIDL §3.14.1): its
@@ -1467,6 +1480,9 @@ begin
   Result := CreateDOMExceptionObject(
     OwnStringData(AException, PROP_NAME, ERROR_NAME),
     OwnStringData(AException, PROP_MESSAGE, ''));
+  // Recorded at once: the clone memory is a root, and the stack string below
+  // reserves its payload, which can collect.
+  RegisterClone(AException, Result, AMemory);
   // As for an Error, the clone keeps the original's stack, not one captured
   // at the structuredClone call. A DOMException carries it as an own `stack`
   // data property, which CreateDOMExceptionObject defined from the new
@@ -1477,7 +1493,6 @@ begin
       TGocciaPropertyDescriptorData.Create(
         TGocciaStringLiteralValue.Create(Result.ErrorStack),
         [pfConfigurable, pfWritable]));
-  RegisterClone(AException, Result, AMemory);
 end;
 
 { How a DataCloneError names an object that cannot be cloned: its class string
@@ -1492,15 +1507,19 @@ begin
   begin
     Tag := Current.GetOwnSymbolPropertyDescriptor(
       TGocciaSymbolValue.WellKnownToStringTag);
-    if Tag is TGocciaPropertyDescriptorData then
-    begin
-      if TGocciaPropertyDescriptorData(Tag).Value is TGocciaStringLiteralValue then
-        Exit('[object ' + TGocciaStringLiteralValue(
-          TGocciaPropertyDescriptorData(Tag).Value).Value + ']');
-      Break;
+    try
+      if Tag is TGocciaPropertyDescriptorData then
+      begin
+        if TGocciaPropertyDescriptorData(Tag).Value is TGocciaStringLiteralValue then
+          Exit('[object ' + TGocciaStringLiteralValue(
+            TGocciaPropertyDescriptorData(Tag).Value).Value + ']');
+        Break;
+      end;
+      if Assigned(Tag) then
+        Break;
+    finally
+      ReleaseDescriptor(Tag);
     end;
-    if Assigned(Tag) then
-      Break;
     Current := Current.Prototype;
   end;
   Result := '[object Object]';
@@ -1691,6 +1710,36 @@ begin
   // Step 2: Let reservedURIComponentSet be the empty String
   // Step 3: Return ? Decode(componentString, reservedURIComponentSet)
   Result := TGocciaStringLiteralValue.Create(DecodeURIComponent(ComponentString));
+end;
+
+procedure TGocciaGlobals.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FErrorProto) then
+    FErrorProto.MarkReferences;
+  if Assigned(FEvalErrorProto) then
+    FEvalErrorProto.MarkReferences;
+  if Assigned(FTypeErrorProto) then
+    FTypeErrorProto.MarkReferences;
+  if Assigned(FReferenceErrorProto) then
+    FReferenceErrorProto.MarkReferences;
+  if Assigned(FRangeErrorProto) then
+    FRangeErrorProto.MarkReferences;
+  if Assigned(FSyntaxErrorProto) then
+    FSyntaxErrorProto.MarkReferences;
+  if Assigned(FURIErrorProto) then
+    FURIErrorProto.MarkReferences;
+  if Assigned(FAggregateErrorProto) then
+    FAggregateErrorProto.MarkReferences;
+  if Assigned(FSuppressedErrorProto) then
+    FSuppressedErrorProto.MarkReferences;
+  if Assigned(FDOMExceptionProto) then
+    FDOMExceptionProto.MarkReferences;
+  if Assigned(FPermissionDeniedProto) then
+    FPermissionDeniedProto.MarkReferences;
 end;
 
 initialization

@@ -20,7 +20,7 @@ The `options` object supports:
 - `headers`: a plain object or `Headers` instance;
 - `signal`: an `AbortSignal`, `null`, or `undefined`.
 
-Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
+Redirects (301/302/303/307/308) are followed automatically up to 20 hops. A redirect's `Location` is parsed by the URL Standard's parser with the redirecting response's URL as the base (relative, `./`, `../`, absolute-path, query-only and scheme-relative forms), and the URL sent, for the first request and every hop, has its dot segments removed (`https://h/a/./b/../c` is requested as `https://h/a/c`); a `Location` that does not parse is a network error. HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
 
 ### Network capability
 
@@ -65,9 +65,12 @@ A response over the ceiling rejects with `TypeError`.
 
 The capability set and the ceiling belong to one engine: embedders fix the set
 at engine construction and set `FetchMaxResponseBytes` on the engine. Each
-request carries them to the worker that performs it, so engines that share a
-thread — a sandbox `runScript` child inside its parent — neither see nor
-change each other's policy.
+request carries them to the worker or embedder transport that performs it, so
+engines that share a thread — a sandbox `runScript` child inside its parent —
+neither see nor change each other's policy. An embedder can also give an engine
+its own transport, which answers that engine's requests instead of the network
+after these checks; see [Embedding — Fetch
+Transport](embedding.md#fetch-transport).
 
 ### Threat model notes
 
@@ -97,11 +100,15 @@ refused rather than parsed.
 
 ### Runtime behavior and limits
 
-Requests run on fetch-specific background workers and settle promises on the owning runtime thread. `await fetch(...)` synchronously waits by pumping fetch completions; the Promise microtask queue is not a general I/O event loop.
+Requests run on fetch-specific background workers, or go to the engine's transport when an embedder installed one, and settle promises on the owning runtime thread. `await fetch(...)` synchronously waits by pumping fetch completions; the Promise microtask queue is not a general I/O event loop.
 
 Host names resolve through the platform resolver (`getaddrinfo`), so the hosts file, nsswitch, stub resolvers, and IPv6 nameservers apply as they do for any other program on the machine. Connections are IPv4 only: the first IPv4 address is used, and a name with no IPv4 address rejects with `TypeError: Failed to resolve host: <name>`, followed by the resolver's reason when it gives one.
 
-Each host thread caps active fetch workers at 16; runtimes on the same thread share that cap. Additional calls reject their returned promise with `TypeError` until a worker finishes. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout. An engine waits for, and on failure discards, only the requests it started itself, so a nested engine ending leaves its parent's in-flight requests running. The run's own deadline is not a fetch error: when `--timeout` elapses while requests are pending, the run ends with the uncatchable [`TimeoutError`](json-output.md#timeouterror-in-json), and under `--test-timeout` the test that was waiting is marked as timed out, instead of a fetch promise rejecting with a network error. A request is given the deadline in force when it started, so one that outlives it — a fetch a test left behind — rejects later with `TypeError: HTTP request timed out`. That message applies to plain HTTP reads and to connecting; a stalled TLS read is ended by the run's deadline only.
+Each host thread caps requests in flight at 16, and runtimes on the same thread share that cap. Additional calls reject their returned promise with `TypeError` until a slot frees: a worker frees its slot when it finishes, and a request an embedder's transport handles frees it when the request settles, aborts or is discarded. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout. An engine waits for, and on failure discards, only the requests it started itself, so a nested engine ending leaves its parent's in-flight requests running. The run's own deadline is not a fetch error: when `--timeout` elapses while requests are pending, the run ends with the uncatchable [`TimeoutError`](json-output.md#timeouterror-in-json), and under `--test-timeout` the test that was waiting is marked as timed out, instead of a fetch promise rejecting with a network error. A request is given the deadline in force when it started, so one that outlives it — a fetch a test left behind — rejects later with `TypeError: HTTP request timed out`. That message applies to connecting and to reads over plain HTTP and HTTPS alike: a TLS handshake or read ends at the request's deadline however the server paces its bytes, whether it goes silent or trickles a record one byte at a time, and the worker ends with the request.
+
+A response body that ends early is a network error, as the Fetch Standard requires for an incomplete message: when the connection closes before the `Content-Length` bytes, or before a `chunked` body's last chunk, the fetch rejects with `TypeError: HTTP response body ended before its declared length`, and a `chunked` body that does not follow the chunked coding (a chunk-size line that is not hexadecimal, or chunk data not followed by CRLF) rejects with `TypeError: Invalid HTTP response: malformed chunked body`; the trailer section after the last chunk is read through its closing empty line and its fields are dropped. A `Content-Length` that is not decimal digits rejects with `TypeError: Invalid HTTP response: malformed Content-Length`. A body with neither header ends when the connection closes, and a connection that fails rather than closes rejects.
+
+A peer that resets the connection never ends the process with `SIGPIPE`: a reset that lands on the request or the response rejects the one fetch with a `TypeError`, and one that lands only on the `close_notify` alert that closing a TLS connection writes, after the response is complete, leaves the fetch's result alone. Sockets send with `MSG_NOSIGNAL` on Linux and carry `SO_NOSIGPIPE` on macOS and FreeBSD; OpenSSL's socket BIO writes without either, so on Linux each OpenSSL call that can write runs with `SIGPIPE` blocked on the calling thread and takes back a `SIGPIPE` it raised. The process-wide disposition of `SIGPIPE`, which an embedder may have set, is never changed.
 
 The focused subset has no `Request` object, streaming request or response body, or CORS processing.
 

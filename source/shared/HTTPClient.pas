@@ -54,10 +54,30 @@ function HTTPURLAuditHost(const AURL: string): string;
 function WaitForHTTPConnectionWorkers(
   const ATimeoutMilliseconds: Integer): Boolean;
 
+{ The request URL the client sends (WHATWG Fetch, https://fetch.spec.whatwg.org/:
+  a request's URL is what the URL Standard's parser returns): an absolute
+  http(s) URL parsed and serialized without its fragment, so the scheme and
+  host are lowercase and dot segments are removed (https://h/a/./b/../c is
+  https://h/a/c). Anything the URL Standard's parser refuses, a URL with a
+  control character and a scheme other than http and https come back as given,
+  for the client's own checks to refuse or accept as before. Host parsing is
+  the engine's (Goccia.URL.Parser). Every request and every redirect hop goes
+  through it, and so does a request handed to an embedder's transport. }
+function NormalizeHTTPRequestURL(const AURL: string): string;
+
+{ A redirect's target (WHATWG Fetch, HTTP-redirect fetch): the Location value
+  parsed by the URL Standard's parser with the redirecting response's URL as
+  the base, so a relative, ./, ../, absolute-path, query-only and
+  scheme-relative Location are resolved against that URL, then serialized
+  without its fragment. Raises EHTTPError when the value does not parse (a
+  network error). }
+function ResolveHTTPRedirectURL(const ABaseURL, ALocation: string): string;
+
 implementation
 
 uses
   SyncObjs,
+  Goccia.URL.Parser,
 
   {$IFDEF UNIX}
   Sockets, BaseUnix,
@@ -266,6 +286,32 @@ end;
 // ---------------------------------------------------------------------------
 
 {$IFDEF UNIX}
+{ Darwin and the BSDs raise SIGPIPE for a write to a reset connection unless
+  the socket says not to, and SecureTransport and OpenSSL write to the
+  socket themselves. Linux has no such option; it sends with MSG_NOSIGNAL
+  and runs OpenSSL with SIGPIPE blocked on the thread (TransportSecurity). }
+{$IF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
+const
+  {$IFDEF DARWIN}
+  SO_NOSIGPIPE = $1022;
+  {$ELSE}
+  SO_NOSIGPIPE = $800;
+  {$ENDIF}
+{$IFEND}
+
+procedure DisableSocketSigPipe(const ASocket: TSocket);
+{$IF DEFINED(DARWIN) OR DEFINED(FREEBSD)}
+var
+  Enabled: Integer;
+begin
+  Enabled := 1;
+  fpSetSockOpt(ASocket, SOL_SOCKET, SO_NOSIGPIPE, @Enabled, SizeOf(Enabled));
+end;
+{$ELSE}
+begin
+end;
+{$IFEND}
+
 procedure ConfigureSocketTimeout(const ASocket: TSocket;
   const ATimeoutMilliseconds: Integer);
 var
@@ -306,6 +352,7 @@ begin
   Result := fpSocket(AF_INET, SOCK_STREAM, 0);
   if Result < 0 then
     raise EHTTPError.Create('Failed to create socket');
+  DisableSocketSigPipe(Result);
 
   FillChar(SockAddr, SizeOf(SockAddr), 0);
   SockAddr.sin_family := AF_INET;
@@ -444,7 +491,14 @@ function SocketSend(const ASock: TSocket; const ABuf: Pointer;
   const ALen: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
+  { MSG_NOSIGNAL (Linux) makes a send to a peer that reset the connection
+    fail with EPIPE instead of ending the process with SIGPIPE; Darwin and
+    the BSDs get SO_NOSIGPIPE on the socket in ConnectSocketBlocking. }
+  {$IFDEF LINUX}
+  Result := fpSend(ASock, ABuf, ALen, MSG_NOSIGNAL);
+  {$ELSE}
   Result := fpSend(ASock, ABuf, ALen, 0);
+  {$ENDIF}
   {$ENDIF}
   {$IFDEF MSWINDOWS}
   Result := WinSock2.send(ASock, ABuf^, ALen, 0);
@@ -858,6 +912,89 @@ begin
     end;
 end;
 
+const
+  TRUNCATED_BODY_ERROR = 'HTTP response body ended before its declared length';
+  MALFORMED_CHUNK_ERROR = 'Invalid HTTP response: malformed chunked body';
+
+const
+  { What a size larger than any Integer body limit parses to. }
+  OVERSIZED_LENGTH = Int64(High(Integer)) + 1;
+
+{ A chunk-size line's size: one or more hexadecimal digits and nothing else.
+  A size larger than any Integer parses to OVERSIZED_LENGTH, which every body
+  limit refuses. }
+function TryParseChunkSize(const AText: string; out ASize: Int64): Boolean;
+var
+  Digit, I: Integer;
+begin
+  ASize := 0;
+  Result := AText <> '';
+  for I := 1 to Length(AText) do
+  begin
+    case AText[I] of
+      '0'..'9': Digit := Ord(AText[I]) - Ord('0');
+      'a'..'f': Digit := Ord(AText[I]) - Ord('a') + 10;
+      'A'..'F': Digit := Ord(AText[I]) - Ord('A') + 10;
+    else
+      Exit(False);
+    end;
+    if ASize < OVERSIZED_LENGTH then
+      ASize := ASize * 16 + Digit;
+    if ASize > OVERSIZED_LENGTH then
+      ASize := OVERSIZED_LENGTH;
+  end;
+end;
+
+{ A Content-Length value: decimal digits and nothing else. A value larger
+  than any Integer parses to OVERSIZED_LENGTH, which every body limit
+  refuses. }
+function TryParseContentLength(const AText: string;
+  out ALength: Int64): Boolean;
+var
+  I: Integer;
+begin
+  ALength := 0;
+  Result := AText <> '';
+  for I := 1 to Length(AText) do
+  begin
+    if not (AText[I] in ['0'..'9']) then
+      Exit(False);
+    if ALength < OVERSIZED_LENGTH then
+      ALength := ALength * 10 + Ord(AText[I]) - Ord('0');
+    if ALength > OVERSIZED_LENGTH then
+      ALength := OVERSIZED_LENGTH;
+  end;
+end;
+
+{ A trailer field line (RFC 9112 section 7.1.2, a field line as in section
+  5): a non-empty token, a colon, and a value without CR, LF or NUL. }
+function IsFieldLine(const ALine: string): Boolean;
+var
+  ColonAt, I: Integer;
+begin
+  ColonAt := Pos(':', ALine);
+  if ColonAt <= 1 then
+    Exit(False);
+  for I := 1 to ColonAt - 1 do
+    if not (ALine[I] in ['!', '#'..'''', '*', '+', '-', '.', '0'..'9',
+      'A'..'Z', '^'..'z', '|', '~']) then
+      Exit(False);
+  for I := ColonAt + 1 to Length(ALine) do
+    if (ALine[I] = #0) or (ALine[I] = #10) or (ALine[I] = #13) then
+      Exit(False);
+  Result := True;
+end;
+
+function HasHeader(const AHeaders: THTTPHeaders; const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AHeaders) do
+    if AHeaders[I].Name = AName then
+      Exit(True);
+  Result := False;
+end;
+
 function ReadResponse(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
   const AIsHead: Boolean; const ADeadlineNs: Int64;
@@ -866,6 +1003,8 @@ var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
   N, HeaderEnd, I, J, ContentLen, ChunkSize: Integer;
+  DeclaredLength, FieldLength: Int64;
+  TrailerBytes: Integer;
   Line, HeaderBlock: string;
   Lines: array of string;
   ColonPos: Integer;
@@ -873,7 +1012,7 @@ var
   BodyBytes: TBytes;
   BodyLen: Integer;
   ChunkBuf: TBytes;
-  Done: Boolean;
+  ChunkBufLimit: Integer;
   Remaining: Integer;
 
   function RemainingTimeoutMilliseconds: Integer;
@@ -901,15 +1040,28 @@ var
       be taken for: a missing header terminator, or a complete body. }
     repeat
       ConfigureSocketTimeout(ASock, RemainingTimeoutMilliseconds);
-      Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
+      try
+        Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
+      except
+        { A TLS backend that cannot tell a timeout from a broken
+          connection raises its read error when the socket timeout ends
+          the read. Past the deadline that is the request timing out. }
+        if (ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs) then
+          raise EHTTPError.Create('HTTP request timed out');
+        raise;
+      end;
       Failure := srfOther;
-      if (Result < 0) and not ATransport.Active then
+      if Result < 0 then
         Failure := LastSocketReadFailure;
     until Failure <> srfInterrupted;
     if (Result <= 0) and
        ((Failure = srfTimedOut) or
         ((ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs))) then
       raise EHTTPError.Create('HTTP request timed out');
+    { A failed read (a reset connection) is not the peer closing it, which
+      is what ends a body without a declared length. }
+    if Result < 0 then
+      raise EHTTPError.Create('HTTP connection failed while reading the response');
   end;
 begin
   Result.StatusCode := 0;
@@ -1011,21 +1163,27 @@ begin
 
   if Pos('chunked', TransferEncoding) > 0 then
   begin
-    // Chunked transfer encoding
+    { Chunked transfer coding (RFC 9112 section 7.1). A connection that
+      ends before the last chunk is an incomplete message, which fetch
+      reports as a network error rather than as a shorter body, and only
+      bytes that arrived are ever copied into the body. }
     ChunkBuf := Copy(BodyBytes, 0, Length(BodyBytes));
     SetLength(Result.Body, 0);
-    Done := False;
+    { Room for a whole chunk plus one receive; kept within an Integer for a
+      body limit near High(Integer). }
+    if AMaxBodyBytes > High(Integer) - RECV_BUF_SIZE then
+      ChunkBufLimit := High(Integer)
+    else
+      ChunkBufLimit := AMaxBodyBytes + RECV_BUF_SIZE;
 
-    while not Done do
-    begin
+    repeat
       while FindCRLF(ChunkBuf) < 0 do
       begin
         N := Receive(Buf, RECV_BUF_SIZE);
-        if N <= 0 then begin Done := True; Break; end;
-        AppendBytes(ChunkBuf, @Buf[0], N,
-          AMaxBodyBytes + RECV_BUF_SIZE);
+        if N <= 0 then
+          raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
+        AppendBytes(ChunkBuf, @Buf[0], N, ChunkBufLimit);
       end;
-      if Done then Break;
 
       I := FindCRLF(ChunkBuf);
       Line := IsomorphicDecode(ChunkBuf, 0, I);
@@ -1035,30 +1193,78 @@ begin
       if J > 0 then
         Line := Copy(Line, 1, J - 1);
 
-      ChunkSize := StrToIntDef('$' + Trim(Line), 0);
-      if ChunkSize = 0 then Break;
-      if (ChunkSize < 0) or
-         (Length(Result.Body) > AMaxBodyBytes - ChunkSize) then
+      if not TryParseChunkSize(Trim(Line), DeclaredLength) then
+        raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
+      if DeclaredLength > AMaxBodyBytes - Length(Result.Body) then
         raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
           [AMaxBodyBytes]);
+      ChunkSize := Integer(DeclaredLength);
+      if ChunkSize = 0 then
+      begin
+        { The last chunk is followed by the trailer section: field lines,
+          then an empty line. The fields are checked and dropped, and the
+          section is held to the header size limit. }
+        TrailerBytes := 0;
+        repeat
+          while FindCRLF(ChunkBuf) < 0 do
+          begin
+            if Length(ChunkBuf) > MAX_RESPONSE_HEADER_BYTES - TrailerBytes then
+              raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
+            N := Receive(Buf, RECV_BUF_SIZE);
+            if N <= 0 then
+              raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
+            AppendBytes(ChunkBuf, @Buf[0], N, ChunkBufLimit);
+          end;
+          I := FindCRLF(ChunkBuf);
+          Inc(TrailerBytes, I + 2);
+          if TrailerBytes > MAX_RESPONSE_HEADER_BYTES then
+            raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
+          if (I > 0) and not IsFieldLine(IsomorphicDecode(ChunkBuf, 0, I)) then
+            raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
+          RemoveLeadingBytes(ChunkBuf, I + 2);
+        until I = 0;
+        Break;
+      end;
 
-      while Length(ChunkBuf) < ChunkSize + 2 do
+      while Length(ChunkBuf) < Int64(ChunkSize) + 2 do
       begin
         N := Receive(Buf, RECV_BUF_SIZE);
-        if N <= 0 then begin Done := True; Break; end;
-        AppendBytes(ChunkBuf, @Buf[0], N,
-          AMaxBodyBytes + RECV_BUF_SIZE);
+        if N <= 0 then
+          raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
+        AppendBytes(ChunkBuf, @Buf[0], N, ChunkBufLimit);
       end;
+      if (ChunkBuf[ChunkSize] <> 13) or (ChunkBuf[ChunkSize + 1] <> 10) then
+        raise EHTTPError.Create(MALFORMED_CHUNK_ERROR);
 
       BodyLen := Length(Result.Body);
       SetLength(Result.Body, BodyLen + ChunkSize);
       Move(ChunkBuf[0], Result.Body[BodyLen], ChunkSize);
       RemoveLeadingBytes(ChunkBuf, ChunkSize + 2);
-    end;
+    until False;
   end
   else
   begin
-    ContentLen := StrToIntDef(FindHeaderValue(Result.Headers, 'content-length'), -1);
+    ContentLen := -1;
+    if HasHeader(Result.Headers, 'content-length') then
+    begin
+      { Every Content-Length field must hold the same value (RFC 9112
+        section 6.3; Fetch's "extract a length"). }
+      DeclaredLength := -1;
+      for I := 0 to High(Result.Headers) do
+        if Result.Headers[I].Name = 'content-length' then
+        begin
+          if not TryParseContentLength(Result.Headers[I].Value,
+             FieldLength) or
+             ((DeclaredLength >= 0) and (FieldLength <> DeclaredLength)) then
+            raise EHTTPError.Create(
+              'Invalid HTTP response: malformed Content-Length');
+          DeclaredLength := FieldLength;
+        end;
+      if DeclaredLength > AMaxBodyBytes then
+        raise EHTTPError.CreateFmt('HTTP response body exceeds %d byte limit',
+          [AMaxBodyBytes]);
+      ContentLen := Integer(DeclaredLength);
+    end;
 
     if ContentLen >= 0 then
     begin
@@ -1083,11 +1289,13 @@ begin
         end;
       end;
 
-      // Read remaining
+      // Read remaining; a connection that ends first is an incomplete
+      // message (RFC 9112 section 8), not a body padded with zeros.
       while BodyLen < ContentLen do
       begin
         N := Receive(Buf, RECV_BUF_SIZE);
-        if N <= 0 then Break;
+        if N <= 0 then
+          raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
         Remaining := ContentLen - BodyLen;
         if N > Remaining then N := Remaining;
         Move(Buf[0], Result.Body[BodyLen], N);
@@ -1230,7 +1438,7 @@ function DoRequest(const AMethod, AURL: string;
   const ATimeoutMilliseconds: Integer;
   const APolicy: THTTPRequestPolicy): THTTPResponse;
 var
-  Parsed: THTTPParsedURL;
+  Parsed, NextParsed: THTTPParsedURL;
   ResolvedAddress: string;
   MaxBodyBytes: Integer;
   Sock: TSocket;
@@ -1241,9 +1449,10 @@ var
   I, Redirects: Integer;
   CurrentURL, Location, HostHeader: string;
   HasUserAgent: Boolean;
+  SendCredentials: Boolean;
   IsHead: Boolean;
   Method: string;
-  HeaderName, HeaderValue: string;
+  HeaderName, HeaderNameLower, HeaderValue: string;
   DeadlineNs: Int64;
 
   function RemainingTimeoutMilliseconds: Integer;
@@ -1304,19 +1513,6 @@ var
         [AParsed.Host, Result]);
   end;
 
-  procedure ValidateRequestText(const AValue, AKind: string;
-    const AAllowTab: Boolean);
-  var
-    K, Code: Integer;
-  begin
-    for K := 1 to Length(AValue) do
-    begin
-      Code := Ord(AValue[K]);
-      if (Code = 127) or (Code = 0) or (Code = 13) or (Code = 10) or
-         ((Code < 32) and not (AAllowTab and (Code = 9))) then
-        raise EHTTPError.CreateFmt('Invalid HTTP %s', [AKind]);
-    end;
-  end;
 begin
   if ATimeoutMilliseconds < 0 then
     raise EHTTPError.Create('Invalid HTTP timeout');
@@ -1328,7 +1524,8 @@ begin
       Int64(ATimeoutMilliseconds) * 1000000
   else
     DeadlineNs := 0;
-  CurrentURL := AURL;
+  CurrentURL := NormalizeHTTPRequestURL(AURL);
+  SendCredentials := True;
   Redirects := 0;
   Result.Redirected := False;
   Method := UpperCase(AMethod);
@@ -1340,7 +1537,7 @@ begin
     { Runs on every pass of this loop, so a redirect hop is resolved,
       validated, and pinned exactly like the initial request. }
     ResolvedAddress := ResolveAndValidateDestination(Parsed);
-    ValidateRequestText(Parsed.Path, 'request target', False);
+    ValidateHTTPRequestText(Parsed.Path, 'request target', False);
     FillChar(Transport, SizeOf(Transport), 0);
     { Connect to the address that was just validated, not to the name. Both
       platform connect paths take a numeric fast path for a literal, so this
@@ -1355,7 +1552,14 @@ begin
         handing the literal here would break certificate validation and
         silently downgrade the connection's guarantees. }
       if Parsed.Scheme = 'https' then
-        StartTransportSecurity(Transport, Sock, Parsed.Host);
+        try
+          StartTransportSecurity(Transport, Sock, Parsed.Host, DeadlineNs);
+        except
+          { A handshake the deadline ended is the request timing out. }
+          if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
+            raise EHTTPError.Create('HTTP request timed out');
+          raise;
+        end;
 
       try
         // Build Host header value
@@ -1379,16 +1583,17 @@ begin
           RequestText := RequestText + 'User-Agent: GocciaScript/1.0' + CRLF;
 
         // Add custom headers (skip Host since we already set it)
+        ValidateHTTPRequestHeaders(AHeaders);
         for I := 0 to High(AHeaders) do
         begin
           HeaderName := AHeaders[I].Name;
           HeaderValue := AHeaders[I].Value;
-          ValidateRequestText(HeaderName, 'header name', False);
-          ValidateRequestText(HeaderValue, 'header value', True);
-          if (HeaderName = '') or (Pos(':', HeaderName) > 0) or
-             (Pos(' ', HeaderName) > 0) or (Pos(#9, HeaderName) > 0) then
-            raise EHTTPError.Create('Invalid HTTP header name');
-          if LowerCase(HeaderName) = 'host' then Continue;
+          HeaderNameLower := LowerCase(HeaderName);
+          if HeaderNameLower = 'host' then Continue;
+          if not SendCredentials and
+             ((HeaderNameLower = 'authorization') or
+              (HeaderNameLower = 'cookie') or
+              (HeaderNameLower = 'proxy-authorization')) then Continue;
           RequestText := RequestText + HeaderName + ': ' +
             HeaderValue + CRLF;
         end;
@@ -1396,7 +1601,15 @@ begin
         RequestText := RequestText + CRLF;
         Request := EncodeUTF8WithReplacement(RequestText);
 
-        SendAll(Sock, Transport, Request);
+        try
+          SendAll(Sock, Transport, Request);
+        except
+          { A send the deadline ended is the request timing out: the TLS
+            backends end a send by it, as they end a read. }
+          if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
+            raise EHTTPError.Create('HTTP request timed out');
+          raise;
+        end;
         Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
           MaxBodyBytes);
       finally
@@ -1416,15 +1629,15 @@ begin
         Inc(Redirects);
         Result.Redirected := True;
 
-        // Handle relative URLs
-        if Copy(Location, 1, 2) = '//' then
-          CurrentURL := Parsed.Scheme + ':' + Location
-        else if (Length(Location) > 0) and (Location[1] = '/') then
-          CurrentURL := Parsed.Scheme + '://' + HostHeader + Location
-        else if Pos('://', Location) = 0 then
-          CurrentURL := Parsed.Scheme + '://' + HostHeader + '/' + Location
-        else
-          CurrentURL := Location;
+        // WHATWG Fetch: Location parsed against the response's URL.
+        CurrentURL := ResolveHTTPRedirectURL(CurrentURL, Location);
+        NextParsed := ParseHTTPURL(CurrentURL);
+        { Fetch removes Authorization once a redirect changes origin. Keep
+          caller credentials off every later hop, even if it returns here. }
+        if not SameText(Parsed.Scheme, NextParsed.Scheme) or
+           not SameText(Parsed.Host, NextParsed.Host) or
+           (Parsed.Port <> NextParsed.Port) then
+          SendCredentials := False;
 
         // 303: change method to GET per RFC 7231
         if Raw.StatusCode = 303 then
@@ -1445,6 +1658,75 @@ begin
     Result.FinalURL := CurrentURL;
     Break;
   end;
+end;
+
+{ A header value read off the wire is a byte sequence held one byte per
+  character, not a string of code points, so the URL parser (which encodes
+  code points as UTF-8) would encode each byte again: the bytes past 0x7F are
+  percent-encoded here, as they are, before the parser sees the value. }
+function PercentEncodeHeaderBytes(const AText: string): string;
+const
+  HEX_DIGITS = '0123456789ABCDEF';
+var
+  I: Integer;
+  B: Byte;
+begin
+  Result := '';
+  for I := 1 to Length(AText) do
+  begin
+    B := Byte(Ord(AText[I]) and $FF);
+    if Ord(AText[I]) > 127 then
+      Result := Result + '%' + HEX_DIGITS[(B shr 4) + 1] +
+        HEX_DIGITS[(B and $0F) + 1]
+    else
+      Result := Result + AText[I];
+  end;
+end;
+
+function NormalizeHTTPRequestURL(const AURL: string): string;
+var
+  Parsed: TGocciaURLRecord;
+  I, AuthorityStart: Integer;
+begin
+  Result := AURL;
+  for I := 1 to Length(AURL) do
+    if (Ord(AURL[I]) < 32) or (Ord(AURL[I]) = 127) then
+      Exit;
+  { A non-ASCII host is the client's own to accept or refuse: the URL parser
+    has no IDNA, so it would keep the host as written. }
+  AuthorityStart := Pos('://', AURL);
+  if AuthorityStart = 0 then
+    Exit;
+  I := AuthorityStart + 3;
+  while (I <= Length(AURL)) and (AURL[I] <> '/') and (AURL[I] <> '?') and
+        (AURL[I] <> '#') do
+  begin
+    if Ord(AURL[I]) > 127 then
+      Exit;
+    Inc(I);
+  end;
+  { The parser percent-encodes the path's and the query's non-ASCII code
+    points as UTF-8. }
+  Parsed := ParseURL(AURL);
+  if Parsed.IsValid and ((Parsed.Scheme = 'http') or
+     (Parsed.Scheme = 'https')) then
+    Result := SerializeURL(Parsed, True);
+end;
+
+function ResolveHTTPRedirectURL(const ABaseURL, ALocation: string): string;
+var
+  Base, Target: TGocciaURLRecord;
+  Location: string;
+begin
+  Location := PercentEncodeHeaderBytes(ALocation);
+  Base := ParseURL(ABaseURL);
+  if Base.IsValid then
+    Target := ParseURLWithBase(Location, Base)
+  else
+    Target := ParseURL(Location);
+  if not Target.IsValid then
+    raise EHTTPError.Create('Invalid URL: malformed redirect location');
+  Result := SerializeURL(Target, True);
 end;
 
 // ---------------------------------------------------------------------------

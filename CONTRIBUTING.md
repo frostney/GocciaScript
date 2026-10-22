@@ -32,6 +32,16 @@ When your change affects behavior visible to users or contributors, update the r
 - **Spikes are snapshots** — Files under `docs/spikes/` are point-in-time investigation records. Do not update them after the initial creation; if findings change, add a new ADR and link to it.
 - **Decision records are immutable** — Each ADR under `docs/adr/` records what was decided at that point in time. Do not retroactively update ADRs to match the current implementation. If the implementation changes, add a new ADR with the new decision. Links from ADRs to other docs may be updated if targets are renamed.
 
+### How we describe GocciaScript
+
+These rules apply to the README's first screen, the website and `llms.txt`:
+
+- **Lead with what it is for, then the evidence.** First what it does (runs code that agents and people write, under host-set capabilities and limits), then what a reader can check: the live test262 result, the tests and differential suites, the nightly fuzzing and memory checks, the weekly GC stress, the prebuilt binaries, and that it runs in production behind [Shotcup](https://shotcup.dev). Stars and the implementation language are never the only signals on a page.
+- **State each trade-off as a choice and what it buys.** FreePascal gives native binaries with GocciaScript's own compiler, VM and collector and nothing underneath; the recommended profile keeps agent code explicit, and each core form it disables has a flag.
+- **Say only what CI enforces.** Check the workflow before you write a claim, and word it to match: test262 runs on every pull request and fails it only on a regression against main, not on the failures main already has; fuzzing and the memory checks run nightly, not per change.
+- **Status is one neutral line with what it means.** Pre-1.0: the host API and command-line flags may change between releases, so pin a version.
+- **Figures stay live.** A conformance figure comes from the published reports (the dashboard, a rendered value or the badge), as the rule above requires.
+
 `docs/` files are about the GocciaScript project (engine, language, runtime). Contributing guides are about FreePascal contribution standards. Match the voice and structure of the target document.
 
 ## Readiness and Completion
@@ -68,6 +78,11 @@ ChildScope := TGocciaScope.Create(ParentScope, skBlock);
 JavaScript end-to-end tests are the **primary** way of testing GocciaScript. When implementing a new feature or fixing a bug:
 
 - Add JavaScript tests under the `tests/` directory, following the existing directory structure.
+- For real-network fetch behavior that needs a live listener, use the existing
+  `scripts/fetch-e2e.sh` JavaScript runner and `scripts/fetch_test_server.py`
+  loopback fixture instead. PR CI and non-Windows main CI run this check; the
+  ordinary `tests/` suite has no server fixture. Add native HTTP client tests
+  for the shared transport boundary as well.
 - **One method per file** — each test file focuses on a single method or operation.
 - **Edge cases are co-located** — edge case tests belong in the same file as the happy-path tests.
 - Always verify changes by running the JavaScript suite:

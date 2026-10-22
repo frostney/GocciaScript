@@ -25,6 +25,8 @@ type
   published
     function ArrayBufferConstructorFn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ArrayBufferIsView(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   end;
@@ -153,6 +155,18 @@ begin
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
+end;
+
+procedure TGocciaGlobalArrayBuffer.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FArrayBufferConstructor) then
+    FArrayBufferConstructor.MarkReferences;
+  if Assigned(FArrayBufferIntrinsicProto) then
+    FArrayBufferIntrinsicProto.MarkReferences;
 end;
 
 end.

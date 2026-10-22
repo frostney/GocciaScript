@@ -13,6 +13,7 @@ uses
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.FetchTransport,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives;
@@ -23,6 +24,10 @@ type
     runtime is attached. }
   TGocciaFetchMaxResponseBytesProvider = function: Integer of object;
 
+  { Returns the dispatching engine's fetch transport, or nil for the built-in
+    network client; read at request time for the same reason. }
+  TGocciaFetchTransportProvider = function: IGocciaFetchTransport of object;
+
   { One engine's fetch global. Everything that decides what this engine's
     requests may reach — its capability set and response ceiling — lives here,
     per engine, and travels with each request it starts. }
@@ -32,6 +37,7 @@ type
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
     FSourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
     FMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
+    FTransportProvider: TGocciaFetchTransportProvider;
     FRealm: TGocciaRealm;
     FAcquiredFetchManager: Boolean;
     function FetchCallback(const AArgs: TGocciaArgumentsCollection;
@@ -48,7 +54,8 @@ type
       const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
       const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
       const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
-      const ARealm: TGocciaRealm);
+      const ARealm: TGocciaRealm;
+      const ATransportProvider: TGocciaFetchTransportProvider = nil);
     destructor Destroy; override;
 
     property Capabilities: TGocciaCapabilities read FCapabilities;
@@ -70,6 +77,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Execution.CallSite,
   Goccia.FetchManager,
+  Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.Timeout,
@@ -94,7 +102,8 @@ constructor TGocciaGlobalFetch.Create(const AName: string;
   const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
   const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
   const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
-  const ARealm: TGocciaRealm);
+  const ARealm: TGocciaRealm;
+  const ATransportProvider: TGocciaFetchTransportProvider);
 begin
   inherited Create(AName, AScope, AThrowError);
 
@@ -102,6 +111,7 @@ begin
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
   FSourcedAuditEmitter := ASourcedAuditEmitter;
   FMaxResponseBytesProvider := AMaxResponseBytesProvider;
+  FTransportProvider := ATransportProvider;
   FRealm := ARealm;
   TGocciaFetchManager.AcquireInstance;
   FAcquiredFetchManager := True;
@@ -218,6 +228,8 @@ var
   Policy: TGocciaFetchPolicy;
   Manager: TGocciaFetchManager;
   CallSite: TGocciaCallSite;
+  Roots: TGocciaActiveRootFrame;
+  OptionRoots: TGocciaActiveRootFrame;
 begin
   // Extract URL
   if AArgs.Length = 0 then
@@ -237,106 +249,130 @@ begin
   Signal := nil;
   SetLength(RequestHeaders, 0);
 
-  if AArgs.Length >= 2 then
-  begin
-    OptionsArg := AArgs.GetElement(1);
-    if (OptionsArg is TGocciaObjectValue) and
-       not (OptionsArg is TGocciaUndefinedLiteralValue) and
-       not (OptionsArg is TGocciaNullLiteralValue) then
+  // A getter can return fresh headers or a fresh signal; they are held
+  // only here while the header values convert and until the manager
+  // takes the signal.
+  OptionRoots.Initialize;
+  try
+    if AArgs.Length >= 2 then
     begin
-      Obj := TGocciaObjectValue(OptionsArg);
-
-      // Read method
-      MethodVal := Obj.GetProperty(PROP_METHOD);
-      if Assigned(MethodVal) and not (MethodVal is TGocciaUndefinedLiteralValue) then
-        Method := UpperCase(MethodVal.ToStringLiteral.Value);
-
-      // Read headers
-      HeadersVal := Obj.GetProperty(PROP_HEADERS);
-      if Assigned(HeadersVal) and not (HeadersVal is TGocciaUndefinedLiteralValue) then
+      OptionsArg := AArgs.GetElement(1);
+      if (OptionsArg is TGocciaObjectValue) and
+         not (OptionsArg is TGocciaUndefinedLiteralValue) and
+         not (OptionsArg is TGocciaNullLiteralValue) then
       begin
-        if HeadersVal is TGocciaHeadersValue then
+        Obj := TGocciaObjectValue(OptionsArg);
+
+        // Read method
+        MethodVal := Obj.GetProperty(PROP_METHOD);
+        if Assigned(MethodVal) and not (MethodVal is TGocciaUndefinedLiteralValue) then
+          Method := UpperCase(MethodVal.ToStringLiteral.Value);
+
+        // Read headers
+        HeadersVal := Obj.GetProperty(PROP_HEADERS);
+        OptionRoots.Add(HeadersVal);
+        if Assigned(HeadersVal) and not (HeadersVal is TGocciaUndefinedLiteralValue) then
         begin
-          SetLength(RequestHeaders, TGocciaHeadersValue(HeadersVal).Entries.Count);
-          for I := 0 to TGocciaHeadersValue(HeadersVal).Entries.Count - 1 do
+          if HeadersVal is TGocciaHeadersValue then
           begin
-            RequestHeaders[I].Name := TGocciaHeadersValue(HeadersVal).Entries[I].Name;
-            RequestHeaders[I].Value := TGocciaHeadersValue(HeadersVal).Entries[I].Value;
-          end;
-        end
-        else if HeadersVal is TGocciaObjectValue then
-        begin
-          PropNames := TGocciaObjectValue(HeadersVal).GetAllPropertyNames;
-          SetLength(RequestHeaders, Length(PropNames));
-          for I := 0 to High(PropNames) do
+            SetLength(RequestHeaders, TGocciaHeadersValue(HeadersVal).Entries.Count);
+            for I := 0 to TGocciaHeadersValue(HeadersVal).Entries.Count - 1 do
+            begin
+              RequestHeaders[I].Name := TGocciaHeadersValue(HeadersVal).Entries[I].Name;
+              RequestHeaders[I].Value := TGocciaHeadersValue(HeadersVal).Entries[I].Value;
+            end;
+          end
+          else if HeadersVal is TGocciaObjectValue then
           begin
-            RequestHeaders[I].Name := LowerCase(PropNames[I]);
-            RequestHeaders[I].Value :=
-              TGocciaObjectValue(HeadersVal).GetProperty(PropNames[I]).ToStringLiteral.Value;
+            PropNames := TGocciaObjectValue(HeadersVal).GetAllPropertyNames;
+            SetLength(RequestHeaders, Length(PropNames));
+            for I := 0 to High(PropNames) do
+            begin
+              RequestHeaders[I].Name := LowerCase(PropNames[I]);
+              RequestHeaders[I].Value :=
+                TGocciaObjectValue(HeadersVal).GetProperty(PropNames[I]).ToStringLiteral.Value;
+            end;
           end;
         end;
-      end;
 
-      // Read cancellation signal
-      SignalVal := Obj.GetProperty(PROP_SIGNAL);
-      if Assigned(SignalVal) and
-         not (SignalVal is TGocciaUndefinedLiteralValue) and
-         not (SignalVal is TGocciaNullLiteralValue) then
+        // Read cancellation signal
+        SignalVal := Obj.GetProperty(PROP_SIGNAL);
+        OptionRoots.Add(SignalVal);
+        if Assigned(SignalVal) and
+           not (SignalVal is TGocciaUndefinedLiteralValue) and
+           not (SignalVal is TGocciaNullLiteralValue) then
+        begin
+          if not (SignalVal is TGocciaAbortSignalValue) then
+            ThrowTypeError('fetch signal must be an AbortSignal');
+          Signal := TGocciaAbortSignalValue(SignalVal);
+        end;
+      end;
+    end;
+
+    // Validate method — only GET and HEAD allowed
+    if (Method <> 'GET') and (Method <> 'HEAD') then
+      ThrowTypeError(Format(SErrorFetchUnsupportedMethod, [Method]),
+        SSuggestFetchUsage);
+
+    // Perform the request. The promise is held only here until it is
+    // returned: the manager roots it only while the request is pending, and a
+    // failed start (a transport that raised) leaves it to be rejected below,
+    // after allocations that are collection safe points.
+    Promise := TGocciaPromiseValue.Create;
+    Roots.Initialize;
+    try
+      Roots.Add(Promise);
+      if Assigned(FCapabilityAuditEmitter) then
+        FCapabilityAuditEmitter(gckNetDispatch, gcdAllow, URLStr,
+          'fetch dispatch is allowed');
+      Policy.Capabilities := FCapabilities;
+      Policy.AuditEmitter := FSourcedAuditEmitter;
+      { The worker's decisions are delivered later, from whatever code is
+        running then; attribute them to this fetch() call. }
+      Policy.AuditSource := Default(TGocciaCapabilityAuditSource);
+      if CurrentGocciaCallSite(CallSite) then
       begin
-        if not (SignalVal is TGocciaAbortSignalValue) then
-          ThrowTypeError('fetch signal must be an AbortSignal');
-        Signal := TGocciaAbortSignalValue(SignalVal);
+        Policy.AuditSource.FilePath := CallSite.FilePath;
+        Policy.AuditSource.Line := CallSite.Line;
+        Policy.AuditSource.Column := CallSite.Column;
       end;
+      if Assigned(FMaxResponseBytesProvider) then
+        Policy.MaxResponseBytes := FMaxResponseBytesProvider()
+      else
+        Policy.MaxResponseBytes := 0;
+      if Assigned(FTransportProvider) then
+        Policy.Transport := FTransportProvider()
+      else
+        Policy.Transport := nil;
+      try
+        Manager := TGocciaFetchManager.Instance;
+        if not Assigned(Manager) then
+          raise Exception.Create(FETCH_BACKEND_UNAVAILABLE_ERROR);
+        Manager.StartFetch(URLStr, Method, RequestHeaders, Policy, FRealm,
+          Promise, Signal);
+      except
+        on E: TGocciaTimeoutError do
+          raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaMemoryLimitError do
+          raise;
+        on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
+          Promise.Reject(CreateErrorObject('TypeError',
+            'fetch failed: ' + E.Message));
+        end;
+      end;
+    finally
+      Roots.Clear;
     end;
-  end;
 
-  // Validate method — only GET and HEAD allowed
-  if (Method <> 'GET') and (Method <> 'HEAD') then
-    ThrowTypeError(Format(SErrorFetchUnsupportedMethod, [Method]),
-      SSuggestFetchUsage);
-
-  // Perform the request
-  Promise := TGocciaPromiseValue.Create;
-  if Assigned(FCapabilityAuditEmitter) then
-    FCapabilityAuditEmitter(gckNetDispatch, gcdAllow, URLStr,
-      'fetch dispatch is allowed');
-  Policy.Capabilities := FCapabilities;
-  Policy.AuditEmitter := FSourcedAuditEmitter;
-  { The worker's decisions are delivered later, from whatever code is
-    running then; attribute them to this fetch() call. }
-  Policy.AuditSource := Default(TGocciaCapabilityAuditSource);
-  if CurrentGocciaCallSite(CallSite) then
-  begin
-    Policy.AuditSource.FilePath := CallSite.FilePath;
-    Policy.AuditSource.Line := CallSite.Line;
-    Policy.AuditSource.Column := CallSite.Column;
+    Result := Promise;
+  finally
+    OptionRoots.Clear;
   end;
-  if Assigned(FMaxResponseBytesProvider) then
-    Policy.MaxResponseBytes := FMaxResponseBytesProvider()
-  else
-    Policy.MaxResponseBytes := 0;
-  try
-    Manager := TGocciaFetchManager.Instance;
-    if not Assigned(Manager) then
-      raise Exception.Create(FETCH_BACKEND_UNAVAILABLE_ERROR);
-    Manager.StartFetch(URLStr, Method, RequestHeaders, Policy, FRealm,
-      Promise, Signal);
-  except
-    on E: TGocciaTimeoutError do
-      raise;
-    on E: TGocciaInstructionLimitError do
-      raise;
-    on E: TGocciaMemoryLimitError do
-      raise;
-    on E: Exception do
-    begin
-      if IsEngineIntegrityFault(E) then
-        raise;
-      Promise.Reject(CreateErrorObject('TypeError', 'fetch failed: ' + E.Message));
-    end;
-  end;
-
-  Result := Promise;
 end;
 
 end.

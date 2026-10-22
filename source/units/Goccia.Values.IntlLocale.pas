@@ -78,6 +78,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.Intl.Helpers,
   Goccia.ObjectModel.Types,
@@ -778,6 +779,7 @@ end;
 
 procedure TGocciaIntlLocaleValue.ParseTag(const ATag: string; const AOptions: TGocciaObjectValue);
 var
+  OptionsRoots: TGocciaActiveRootFrame;
   Canonical: string;
   V: TGocciaValue;
   Parsed, BaseParsed: TBcp47Tag;
@@ -844,152 +846,160 @@ var
   end;
 
 begin
-  NumericExtensionPresent := False;
-  NumericOptionPresent := False;
-  if ContainsNulCharacter(ATag) then
-    ThrowRangeError('Invalid language tag: ' + ATag);
-  Canonical := CanonicalizeUnicodeLocaleId(ATag);
-  if Canonical = '' then
-    ThrowRangeError('Invalid language tag: ' + ATag);
-  FTag := Canonical;
-  FBaseName := Canonical;
+  // Options that ToObject made from a primitive are a wrapper only this call
+  // holds while their getters and conversions run guest code.
+  OptionsRoots.Initialize;
+  try
+    OptionsRoots.Add(AOptions);
+    NumericExtensionPresent := False;
+    NumericOptionPresent := False;
+    if ContainsNulCharacter(ATag) then
+      ThrowRangeError('Invalid language tag: ' + ATag);
+    Canonical := CanonicalizeUnicodeLocaleId(ATag);
+    if Canonical = '' then
+      ThrowRangeError('Invalid language tag: ' + ATag);
+    FTag := Canonical;
+    FBaseName := Canonical;
 
-  // Extract subtags from the canonical tag via BCP47 parser
-  Parsed := ParseBcp47Tag(Canonical);
-  if Parsed.IsValid then
-    LoadFieldsFromParsed(Canonical, Parsed)
-  else
-  begin
-    // Fallback: extract language from the first subtag
-    if Pos('-', Canonical) > 0 then
-      FLanguage := Copy(Canonical, 1, Pos('-', Canonical) - 1)
+    // Extract subtags from the canonical tag via BCP47 parser
+    Parsed := ParseBcp47Tag(Canonical);
+    if Parsed.IsValid then
+      LoadFieldsFromParsed(Canonical, Parsed)
     else
-      FLanguage := Canonical;
-  end;
-
-  // Apply options overrides
-  if Assigned(AOptions) then
-  begin
-    if ReadStringOption('language', OptionValue) then
     begin
-      if not IsUnicodeLanguageOption(OptionValue) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'language']));
-      FLanguage := LowerCase(OptionValue);
+      // Fallback: extract language from the first subtag
+      if Pos('-', Canonical) > 0 then
+        FLanguage := Copy(Canonical, 1, Pos('-', Canonical) - 1)
+      else
+        FLanguage := Canonical;
     end;
 
-    if ReadStringOption('script', OptionValue) then
+    // Apply options overrides
+    if Assigned(AOptions) then
     begin
-      if not IsUnicodeScriptOption(OptionValue) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'script']));
-      FScript := OptionValue;
-    end;
-
-    if ReadStringOption('region', OptionValue) then
-    begin
-      if not IsUnicodeRegionOption(OptionValue) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'region']));
-      FRegion := OptionValue;
-    end;
-
-    if ReadStringOption('variants', OptionValue) then
-    begin
-      if not IsValidVariantsOption(OptionValue) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'variants']));
-      FVariants := LowerCase(OptionValue);
-    end;
-
-    if ReadStringOption('calendar', OptionValue) then
-    begin
-      if not IsUnicodeLocaleTypeSequence(OptionValue) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'calendar']));
-      FCalendar := NormalizeCalendarType(CanonicalizeLocaleTypeValue('ca', OptionValue));
-    end;
-
-    if ReadStringOption('collation', OptionValue) then
-    begin
-      if not IsUnicodeLocaleTypeSequence(OptionValue) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'collation']));
-      FCollation := NormalizeCollationType(CanonicalizeLocaleTypeValue('co', OptionValue));
-      FCollationPresent := True;
-    end;
-
-    if ReadStringOption('firstDayOfWeek', OptionValue) then
-    begin
-      if OptionValue = '' then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'firstDayOfWeek']));
-      OptionValue := CanonicalizeFirstDayOfWeekValue(OptionValue);
-      if (OptionValue = '') or (DayIdentifierToNumber(OptionValue) = 0) or
-         not IsUnicodeLocaleTypeSequence(OptionValue) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'firstDayOfWeek']));
-      FFirstDayOfWeek := OptionValue;
-      FFirstDayOfWeekPresent := True;
-    end;
-
-    if ReadStringOption('hourCycle', OptionValue) then
-    begin
-      if (OptionValue <> 'h11') and (OptionValue <> 'h12') and
-         (OptionValue <> 'h23') and (OptionValue <> 'h24') then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'hourCycle']));
-      FHourCycle := OptionValue;
-    end;
-
-    if ReadStringOption('caseFirst', OptionValue) then
-    begin
-      if (OptionValue <> 'upper') and (OptionValue <> 'lower') and
-         (OptionValue <> 'false') then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'caseFirst']));
-      FCaseFirst := OptionValue;
-      FCaseFirstPresent := True;
-    end;
-
-    V := AOptions.GetProperty('numeric');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      NumericOptionPresent := True;
-      FNumeric := V.ToBooleanLiteral.Value;
-    end;
-
-    if ReadStringOption('numberingSystem', OptionValue) then
-    begin
-      if not IsUnicodeNumberingSystemOption(OptionValue) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'numberingSystem']));
-      FNumberingSystem := LowerCase(OptionValue);
-    end;
-  end;
-
-  if Parsed.IsValid then
-  begin
-    Parsed.Language := FLanguage;
-    Parsed.Script := FScript;
-    Parsed.Region := FRegion;
-    SetParsedVariants(Parsed, FVariants);
-    SetUnicodeExtensionKeyword(Parsed, 'ca', FCalendar);
-    SetUnicodeExtensionKeyword(Parsed, 'co', FCollation, FCollationPresent);
-    SetUnicodeExtensionKeyword(Parsed, 'hc', FHourCycle);
-    SetUnicodeExtensionKeyword(Parsed, 'nu', FNumberingSystem);
-    SetUnicodeExtensionKeyword(Parsed, 'fw', FFirstDayOfWeek, FFirstDayOfWeekPresent);
-    SetUnicodeExtensionKeyword(Parsed, 'kf', FCaseFirst, FCaseFirstPresent);
-    if FNumeric then
-      SetUnicodeExtensionKeyword(Parsed, 'kn', '', True)
-    else if NumericExtensionPresent or NumericOptionPresent then
-      SetUnicodeExtensionKeyword(Parsed, 'kn', 'false');
-    RemoveEmptyExtensions(Parsed);
-
-    Canonical := CanonicalizeBcp47Tag(Parsed);
-    if Canonical <> '' then
-    begin
-      FTag := Canonical;
-      Canonical := CanonicalizeUnicodeLocaleId(FTag);
-      if Canonical <> '' then
-        FTag := Canonical;
-
-      Parsed := ParseBcp47Tag(FTag);
-      if Parsed.IsValid then
+      if ReadStringOption('language', OptionValue) then
       begin
-        FTag := CanonicalizeBcp47Tag(Parsed);
-        LoadFieldsFromParsed(FTag, Parsed);
+        if not IsUnicodeLanguageOption(OptionValue) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'language']));
+        FLanguage := LowerCase(OptionValue);
+      end;
+
+      if ReadStringOption('script', OptionValue) then
+      begin
+        if not IsUnicodeScriptOption(OptionValue) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'script']));
+        FScript := OptionValue;
+      end;
+
+      if ReadStringOption('region', OptionValue) then
+      begin
+        if not IsUnicodeRegionOption(OptionValue) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'region']));
+        FRegion := OptionValue;
+      end;
+
+      if ReadStringOption('variants', OptionValue) then
+      begin
+        if not IsValidVariantsOption(OptionValue) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'variants']));
+        FVariants := LowerCase(OptionValue);
+      end;
+
+      if ReadStringOption('calendar', OptionValue) then
+      begin
+        if not IsUnicodeLocaleTypeSequence(OptionValue) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'calendar']));
+        FCalendar := NormalizeCalendarType(CanonicalizeLocaleTypeValue('ca', OptionValue));
+      end;
+
+      if ReadStringOption('collation', OptionValue) then
+      begin
+        if not IsUnicodeLocaleTypeSequence(OptionValue) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'collation']));
+        FCollation := NormalizeCollationType(CanonicalizeLocaleTypeValue('co', OptionValue));
+        FCollationPresent := True;
+      end;
+
+      if ReadStringOption('firstDayOfWeek', OptionValue) then
+      begin
+        if OptionValue = '' then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'firstDayOfWeek']));
+        OptionValue := CanonicalizeFirstDayOfWeekValue(OptionValue);
+        if (OptionValue = '') or (DayIdentifierToNumber(OptionValue) = 0) or
+           not IsUnicodeLocaleTypeSequence(OptionValue) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'firstDayOfWeek']));
+        FFirstDayOfWeek := OptionValue;
+        FFirstDayOfWeekPresent := True;
+      end;
+
+      if ReadStringOption('hourCycle', OptionValue) then
+      begin
+        if (OptionValue <> 'h11') and (OptionValue <> 'h12') and
+           (OptionValue <> 'h23') and (OptionValue <> 'h24') then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'hourCycle']));
+        FHourCycle := OptionValue;
+      end;
+
+      if ReadStringOption('caseFirst', OptionValue) then
+      begin
+        if (OptionValue <> 'upper') and (OptionValue <> 'lower') and
+           (OptionValue <> 'false') then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'caseFirst']));
+        FCaseFirst := OptionValue;
+        FCaseFirstPresent := True;
+      end;
+
+      V := AOptions.GetProperty('numeric');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        NumericOptionPresent := True;
+        FNumeric := V.ToBooleanLiteral.Value;
+      end;
+
+      if ReadStringOption('numberingSystem', OptionValue) then
+      begin
+        if not IsUnicodeNumberingSystemOption(OptionValue) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption, [OptionValue, 'numberingSystem']));
+        FNumberingSystem := LowerCase(OptionValue);
       end;
     end;
+
+    if Parsed.IsValid then
+    begin
+      Parsed.Language := FLanguage;
+      Parsed.Script := FScript;
+      Parsed.Region := FRegion;
+      SetParsedVariants(Parsed, FVariants);
+      SetUnicodeExtensionKeyword(Parsed, 'ca', FCalendar);
+      SetUnicodeExtensionKeyword(Parsed, 'co', FCollation, FCollationPresent);
+      SetUnicodeExtensionKeyword(Parsed, 'hc', FHourCycle);
+      SetUnicodeExtensionKeyword(Parsed, 'nu', FNumberingSystem);
+      SetUnicodeExtensionKeyword(Parsed, 'fw', FFirstDayOfWeek, FFirstDayOfWeekPresent);
+      SetUnicodeExtensionKeyword(Parsed, 'kf', FCaseFirst, FCaseFirstPresent);
+      if FNumeric then
+        SetUnicodeExtensionKeyword(Parsed, 'kn', '', True)
+      else if NumericExtensionPresent or NumericOptionPresent then
+        SetUnicodeExtensionKeyword(Parsed, 'kn', 'false');
+      RemoveEmptyExtensions(Parsed);
+
+      Canonical := CanonicalizeBcp47Tag(Parsed);
+      if Canonical <> '' then
+      begin
+        FTag := Canonical;
+        Canonical := CanonicalizeUnicodeLocaleId(FTag);
+        if Canonical <> '' then
+          FTag := Canonical;
+
+        Parsed := ParseBcp47Tag(FTag);
+        if Parsed.IsValid then
+        begin
+          FTag := CanonicalizeBcp47Tag(Parsed);
+          LoadFieldsFromParsed(FTag, Parsed);
+        end;
+      end;
+    end;
+  finally
+    OptionsRoots.Clear;
   end;
 end;
 
@@ -1452,5 +1462,6 @@ end;
 
 initialization
   GIntlLocaleSharedSlot := RegisterRealmOwnedSlot('Intl.Locale.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.Locale.shared', 'Intl.Locale');
 
 end.

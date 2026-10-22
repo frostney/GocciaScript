@@ -66,7 +66,11 @@ type
     function GetFunctionLength: Integer; virtual;
     function GetFunctionName: string; virtual;
     function GetSourceText: string; virtual;
-    procedure MaterializeIntrinsicProperty(const AName: string);
+    // APending and APendingValue are what the caller is about to store: they
+    // are rooted while the intrinsic's value is allocated.
+    procedure MaterializeIntrinsicProperty(const AName: string;
+      const APending: TGocciaPropertyDescriptor = nil;
+      const APendingValue: TGocciaValue = nil);
   public
     constructor Create;
     class procedure SetSharedPrototypeParent(const AParent: TGocciaObjectValue);
@@ -111,6 +115,19 @@ type
     property StrictThis: Boolean read FStrictThis write FStrictThis;
     property StrictCode: Boolean read FStrictCode write FStrictCode;
     property CreationRealm: TGocciaRealm read FCreationRealm;
+    // Whether the original "length" and "name" are still own properties, and
+    // what they hold while they are synthesized (a heap snapshot's built-in
+    // fingerprints, ADR 0148). Neither creates a value.
+    property HasOwnLengthProperty: Boolean read FHasOwnLengthProperty;
+    property HasOwnNameProperty: Boolean read FHasOwnNameProperty;
+    function IntrinsicLength: Integer;
+    function IntrinsicName: string;
+    // Whether the function runs code the engine compiled from a bootstrap
+    // shim (Goccia.Shims), not a script's.
+    function IsShimCode: Boolean; virtual;
+    // A heap snapshot restore of a built-in function the run changed.
+    procedure SetIntrinsicPropertiesForRestore(const AHasOwnLength,
+      AHasOwnName: Boolean);
   end;
 
   // Helper class for bound functions
@@ -139,7 +156,7 @@ type
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property OriginalFunction: TGocciaValue read FOriginalFunction;
     property BoundThis: TGocciaValue read FBoundThis;
     property BoundArgCount: Integer read FBoundArgCount;
@@ -385,6 +402,7 @@ function GetThrowTypeErrorIntrinsic: TGocciaFunctionBase;
 var
   Shared: TGocciaFunctionSharedPrototype;
   Thrower: TGocciaNativeFunctionValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (CurrentRealm = nil) then
     Exit(nil);
@@ -402,14 +420,22 @@ begin
       Exit;
   end;
 
-  Thrower := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    Shared.RestrictedFunctionPropertyThrow, '', 0);
-  Thrower.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
-    TGocciaNumberLiteralValue.ZeroValue, []));
-  Thrower.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-    TGocciaStringLiteralValue.Create(''), []));
-  Thrower.Freeze;
-  CurrentRealm.SetSlot(GThrowTypeErrorSlot, Thrower);
+  // The thrower is reachable from nothing until the slot takes it, and each
+  // property it gets can reserve and so collect: root it from its creation.
+  Roots.Initialize;
+  try
+    Thrower := TGocciaNativeFunctionValue.CreateWithoutPrototype(
+      Shared.RestrictedFunctionPropertyThrow, '', 0);
+    Roots.Add(Thrower);
+    Thrower.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.ZeroValue, []));
+    Thrower.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(''), []));
+    Thrower.Freeze;
+    CurrentRealm.SetSlot(GThrowTypeErrorSlot, Thrower);
+  finally
+    Roots.Clear;
+  end;
   Result := Thrower;
 end;
 
@@ -792,6 +818,28 @@ begin
   Result := 0;
 end;
 
+function TGocciaFunctionBase.IntrinsicLength: Integer;
+begin
+  Result := GetFunctionLength;
+end;
+
+function TGocciaFunctionBase.IntrinsicName: string;
+begin
+  Result := GetFunctionName;
+end;
+
+function TGocciaFunctionBase.IsShimCode: Boolean;
+begin
+  Result := False;
+end;
+
+procedure TGocciaFunctionBase.SetIntrinsicPropertiesForRestore(
+  const AHasOwnLength, AHasOwnName: Boolean);
+begin
+  FHasOwnLengthProperty := AHasOwnLength;
+  FHasOwnNameProperty := AHasOwnName;
+end;
+
 function TGocciaFunctionBase.GetFunctionName: string;
 begin
   Result := '';
@@ -820,10 +868,12 @@ begin
 
   if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
     Result := TGocciaPropertyDescriptorData.Create(
-      TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable])
+      TGocciaNumberLiteralValue.Create(GetFunctionLength),
+      [pfConfigurable]).AsCallerOwned
   else if (AName = PROP_NAME) and FHasOwnNameProperty then
     Result := TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable])
+      TGocciaStringLiteralValue.Create(GetFunctionName),
+      [pfConfigurable]).AsCallerOwned
   else
     Result := nil;
 end;
@@ -896,16 +946,34 @@ begin
 end;
 
 procedure TGocciaFunctionBase.MaterializeIntrinsicProperty(
-  const AName: string);
+  const AName: string; const APending: TGocciaPropertyDescriptor;
+  const APendingValue: TGocciaValue);
+var
+  Roots: TGocciaActiveRootFrame;
 begin
+  if not (((AName = PROP_LENGTH) and FHasOwnLengthProperty) or
+          ((AName = PROP_NAME) and FHasOwnNameProperty)) then
+    Exit;
   if FProperties.ContainsKey(AName) then
     Exit;
-  if (AName = PROP_LENGTH) and FHasOwnLengthProperty then
-    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
-      TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable]))
-  else if (AName = PROP_NAME) and FHasOwnNameProperty then
-    FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
-      TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable]));
+  // The intrinsic's value is allocated (a name string reserves its payload
+  // and can collect) while the caller's pending descriptor or value is held
+  // by nothing but the caller.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    if Assigned(APending) then
+      APending.PushRoots(Roots);
+    Roots.Add(APendingValue);
+    if AName = PROP_LENGTH then
+      FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+        TGocciaNumberLiteralValue.Create(GetFunctionLength), [pfConfigurable]))
+    else
+      FProperties.Add(AName, TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(GetFunctionName), [pfConfigurable]));
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaFunctionBase.DeleteProperty(const AName: string): Boolean;
@@ -938,14 +1006,14 @@ end;
 procedure TGocciaFunctionBase.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 begin
-  MaterializeIntrinsicProperty(AName);
+  MaterializeIntrinsicProperty(AName, ADescriptor);
   inherited DefineProperty(AName, ADescriptor);
 end;
 
 function TGocciaFunctionBase.TryDefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
-  MaterializeIntrinsicProperty(AName);
+  MaterializeIntrinsicProperty(AName, ADescriptor);
   Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
@@ -1619,6 +1687,8 @@ end;
 procedure TGocciaBoundFunctionValue.InitializeBoundFunctionProperties;
 var
   Roots: TGocciaActiveRootFrame;
+  TargetPrototype: TGocciaValue;
+  ProxySteps: Integer;
 begin
   // ES2026 §20.2.3.2 steps 5-8: the length and name reads run after step 3
   // (BoundFunctionCreate) has captured the bound this and arguments, and both
@@ -1626,23 +1696,40 @@ begin
   // constructor, so it is not yet registered with the collector and nothing
   // marks the values its fields hold — a boxed register value bound by the VM
   // fast path is reachable from nowhere else. Rooting Self marks the target,
-  // the bound this and every bound argument through MarkReferences.
+  // the bound this and every bound argument through MarkReferences. The
+  // prototype read below runs a Proxy's getPrototypeOf trap, which is guest
+  // code too, so it sits inside the same frame, and the result is stored on
+  // Self (which marks it) before anything else can collect.
   Roots.Initialize;
   try
     Roots.Add(Self);
+    // ES2026 §10.4.1.3 BoundFunctionCreate step 1: Let proto be
+    // ? targetFunction.[[GetPrototypeOf]](), called once. A Proxy target runs
+    // its getPrototypeOf trap (an abrupt completion propagates; the trap's
+    // result is checked there); any other target reads its prototype.
+    if FOriginalFunction is TGocciaObjectValue then
+    begin
+      ProxySteps := 0;
+      TargetPrototype := GetPrototypeOfObject(
+        TGocciaObjectValue(FOriginalFunction), ProxySteps);
+      // Step 4: Set obj.[[Prototype]] to proto (an object or null).
+      if TargetPrototype is TGocciaObjectValue then
+        Self.Prototype := TGocciaObjectValue(TargetPrototype)
+      else
+        Self.Prototype := nil;
+    end;
     FBoundLength := SnapshotBoundFunctionLength(FOriginalFunction,
       FBoundArgCount);
     FBoundName := SnapshotBoundFunctionName(FOriginalFunction);
+    // Still rooted: the name string reserves its payload, which can collect,
+    // and only Self (unregistered) holds the length number by then.
+    FProperties.Add(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
+      TGocciaNumberLiteralValue.Create(FBoundLength), [pfConfigurable]));
+    FProperties.Add(PROP_NAME, TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(FBoundName), [pfConfigurable]));
   finally
     Roots.Clear;
   end;
-  if FOriginalFunction is TGocciaObjectValue then
-    Self.Prototype := TGocciaObjectValue(FOriginalFunction).Prototype;
-
-  FProperties.Add(PROP_LENGTH, TGocciaPropertyDescriptorData.Create(
-    TGocciaNumberLiteralValue.Create(FBoundLength), [pfConfigurable]));
-  FProperties.Add(PROP_NAME, TGocciaPropertyDescriptorData.Create(
-    TGocciaStringLiteralValue.Create(FBoundName), [pfConfigurable]));
 end;
 
 destructor TGocciaBoundFunctionValue.Destroy;
@@ -1823,11 +1910,10 @@ begin
   Result := FBoundName;
 end;
 
-procedure TGocciaBoundFunctionValue.MarkReferences;
+procedure TGocciaBoundFunctionValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited; // Marks self + object properties/prototype
 
   // Mark the original function and bound this

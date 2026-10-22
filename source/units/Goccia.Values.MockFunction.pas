@@ -55,7 +55,7 @@ type
 
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     // Methods exposed as native function properties on the mock
     function DoMockImplementation(const AArgs: TGocciaArgumentsCollection;
@@ -118,7 +118,7 @@ type
     constructor Create(const AValue: TGocciaValue; const AReject: Boolean);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 const
@@ -167,9 +167,8 @@ begin
   end;
 end;
 
-procedure TGocciaMockPromiseFactoryValue.MarkReferences;
+procedure TGocciaMockPromiseFactoryValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FValue) then
     FValue.MarkReferences;
@@ -219,6 +218,7 @@ constructor TGocciaMockFunctionValue.CreateSpy(const ATarget: TGocciaObjectValue
   const AMethodName: string);
 var
   OriginalValue: TGocciaValue;
+  OwnDescriptor: TGocciaPropertyDescriptor;
 begin
   OriginalValue := ATarget.GetProperty(AMethodName);
 
@@ -229,8 +229,12 @@ begin
   FSpyOriginalValue := OriginalValue;
 
   // Capture whether this is an own property and its descriptor for proper restore
-  FSpyOriginalDescriptor := ClonePropertyDescriptor(
-    ATarget.GetOwnPropertyDescriptor(AMethodName));
+  OwnDescriptor := ATarget.GetOwnPropertyDescriptor(AMethodName);
+  try
+    FSpyOriginalDescriptor := ClonePropertyDescriptor(OwnDescriptor);
+  finally
+    ReleaseDescriptor(OwnDescriptor);
+  end;
   FSpyWasOwnProperty := Assigned(FSpyOriginalDescriptor);
 
   // Spy passes through to original by default
@@ -492,11 +496,10 @@ begin
   FResults.Add(CreateResultEntry(RESULT_TYPE_RETURN, Result));
 end;
 
-procedure TGocciaMockFunctionValue.MarkReferences;
+procedure TGocciaMockFunctionValue.TraceReferences;
 var
   I: Integer;
 begin
-  if GCMarked then Exit;
   inherited;
 
   for I := 0 to FCalls.Count - 1 do

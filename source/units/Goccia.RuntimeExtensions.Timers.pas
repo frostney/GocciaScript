@@ -28,11 +28,15 @@ type
   private
     FTimersModule: TGocciaRuntimeNamespaceModuleRegistration;
     FHostToken: TObject;
+    { The last WaitForIdle stopped at the drain's bound, timers still due. }
+    FDrainBounded: Boolean;
     function MaterializeTimers: TGocciaValue;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
     procedure WaitForIdle; override;
+    function HasPendingWork: Boolean; override;
+    function HeapSnapshotRefusal: string; override;
     procedure DiscardPending; override;
   end;
 
@@ -98,7 +102,34 @@ end;
 procedure TGocciaTimersRuntimeExtension.WaitForIdle;
 begin
   inherited;
-  DrainRealTimersForHost;
+  FDrainBounded := not DrainRealTimersForHost;
+end;
+
+{ A timeout the drain would run, scheduled after this extension's pass by a job
+  or another extension's work. Once the bound has stopped a drain, a timer
+  that keeps rescheduling itself is not work the run waits for again. }
+function TGocciaTimersRuntimeExtension.HasPendingWork: Boolean;
+begin
+  Result := (not FDrainBounded) and HasRealTimeoutsForHost;
+end;
+
+{ The timer queue keeps ids, deadlines, the fake clock and parked errors
+  natively, so any of them refuses a heap snapshot until a codec covers the
+  queue (ADR 0148), whether or not the idle wait would run it. }
+function TGocciaTimersRuntimeExtension.HeapSnapshotRefusal: string;
+var
+  Queue: TGocciaTimerQueue;
+begin
+  Result := '';
+  Queue := TGocciaTimerQueue.Instance;
+  if not Assigned(Queue) then
+    Exit;
+  if Queue.CountTimers > 0 then
+    Result := 'scheduled timers'
+  else if Queue.Faking or Queue.MockedDateOnly then
+    Result := 'a mocked timer clock'
+  else if Queue.HasUncaughtError then
+    Result := 'a timer error not yet reported';
 end;
 
 procedure TGocciaTimersRuntimeExtension.DiscardPending;

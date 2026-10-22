@@ -6,7 +6,7 @@
 
 - **`TGocciaValue` hierarchy** — All runtime values inherit from `TGocciaValue`; primitives, objects, arrays, functions, classes, iterators, and typed arrays each have dedicated subclasses
 - **Virtual property access** — `GetProperty`/`SetProperty` are virtual methods on the base class, eliminating type checks at call sites
-- **GC integration** — Every value auto-registers via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references
+- **GC integration** — Every value auto-registers via `AfterConstruction`; subclasses override `TraceReferences` to mark owned references
 - **Shared prototype singletons** — String, Number, Array, Set, Map, WeakSet, WeakMap, WeakRef, FinalizationRegistry, Symbol, Function, and TypedArray types share a single prototype instance per engine; the prototype lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration) and is unpinned when the engine is freed
 
 The value system is the foundation of GocciaScript's runtime. Every piece of data — numbers, strings, objects, functions — is represented as a `TGocciaValue` or one of its subclasses.
@@ -117,7 +117,7 @@ classDiagram
 
 ## GC Integration
 
-Every `TGocciaValue` participates in the unified mark-and-sweep garbage collector. Values auto-register via `AfterConstruction`; subclasses override `MarkReferences` to mark owned references. See [Garbage Collector](garbage-collector.md) for the full GC architecture, contributor rules, and design rationale.
+Every `TGocciaValue` participates in the unified mark-and-sweep garbage collector. Values auto-register via `AfterConstruction`; subclasses override `TraceReferences` to mark owned references. See [Garbage Collector](garbage-collector.md) for the full GC architecture, contributor rules, and design rationale.
 
 ## Type Discrimination via Virtual Dispatch
 
@@ -387,6 +387,8 @@ TGocciaPropertyDescriptorAccessor = class
 end;
 ```
 
+**Who frees a descriptor.** `GetOwnPropertyDescriptor`, `GetOwnSymbolPropertyDescriptor` and `OwnPropertyDescriptorForKey` ([[GetOwnProperty]]) return either the descriptor the object stores, which the object owns, or one built for a property the object does not store: an array element or `length`, a function's `length` and `name`, a class's `prototype`, a String object's index, a typed-array element, a module namespace export, a Proxy trap's result. A built descriptor is `CallerOwned`. The caller releases whatever it got with `ReleaseDescriptor`, which frees only a caller-owned one, and reads what it needs before it defines or deletes on the same object or runs guest code (a getter, a setter, a proxy trap), since any of those may free a stored descriptor. A caller that keeps a descriptor clones it or calls `TakeOwnership`. `HasOwnPropertyDescriptor` and `OwnPropertyIsEnumerable` answer the common questions without handing a descriptor out ([ADR 0143](adr/0143-parse-arenas-caller-owned-descriptors-collector-teardown.md)).
+
 ### Property Deletion
 
 `DeleteProperty` returns `True` for configurable or non-existent properties, `False` for non-configurable properties. Delete call sites convert `False` to `TypeError` by default, matching ECMAScript strict mode semantics. With script source `--compat-non-strict-mode`, expression-level `delete` keeps the `False` result instead, and identifier delete can remove configurable global object properties through the global scope's `DeleteBinding` path.
@@ -399,6 +401,10 @@ The `ToPropertyDescriptor` helper (`Goccia.Values.ObjectPropertyDescriptor.pas`)
 - Validates that `get`/`set` values are callable or `undefined` (throws `TypeError`)
 - Rejects mixed data+accessor descriptors — a descriptor with both (`value` or `writable`) and (`get` or `set`) throws `TypeError`
 - Constructs the appropriate descriptor type based on which fields are present
+
+### FromPropertyDescriptor
+
+The reverse direction, `FromPropertyDescriptor` in the same unit, implements ES2026 §6.2.6.4: it turns a descriptor into the JavaScript object that `Object.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors` and `Reflect.getOwnPropertyDescriptor` return and that a Proxy `defineProperty` trap receives (`undefined` for no descriptor). Each field is made with `CreateDataPropertyOrThrow`, so it is an own data property and a setter inherited from `Object.prototype` never runs. No guest code runs while it reads the descriptor, so a caller may pass a descriptor still stored on the object it describes.
 
 ### Property Definition Merging
 
@@ -481,8 +487,8 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **No enumeration surface** — WeakMap/WeakSet intentionally do not expose `size`, `clear`, `forEach`, iterators, `keys`, `values`, or `entries`.
 - **Shared prototype singleton** — Each weak collection has a per-engine shared prototype stored in a realm-owned slot. Prototype methods operate through `ThisValue`, matching the built-in method-host pattern.
 - **WeakRef kept objects** — WeakRef construction and `deref()` add the target to the GC kept-objects set. The set is cleared at host job checkpoints so repeated `deref()` calls in the same job are stable without making the target strongly reachable forever.
-- **FinalizationRegistry cleanup** — FinalizationRegistry marks cleanup callbacks and held values, but never marks registered targets or unregister tokens. Sweeping dead cells queues cleanup jobs through the microtask queue's finalization lane. Cleanup jobs run after normal microtasks and root their held values until execution.
-- **GC behavior** — WeakMap/WeakSet do not mark weak keys/values during normal `MarkReferences`. WeakMap's weak tracing hook marks a value only when its key is already live from outside the map, and sweeping removes entries whose keys remain unmarked. WeakSet sweeping removes unmarked members. WeakRef clears an unmarked target. FinalizationRegistry removes unmarked-target cells and schedules cleanup.
+- **FinalizationRegistry cleanup** — FinalizationRegistry marks cleanup callbacks and held values, but never marks registered targets or unregister tokens. Sweeping visits the cells newest first; it empties each dead cell's target, moves the cell to the registry's pending cells and queues one cleanup job for it through the microtask queue's finalization lane. A pending cell is still a cell of the registry (ES2026 §9.9.3), so `unregister` removes it too. Each cleanup job takes the oldest pending cell left, if any, and calls the callback with its held value, so the callbacks for one collection run from the newest registration to the oldest. Taking a cell advances a head index instead of shifting the list, so draining n cleanup jobs costs O(n). The registry marks the held values of pending cells, and a queued job roots the registry through the job function's captured root until it runs.
+- **GC behavior** — WeakMap/WeakSet do not mark weak keys/values during normal `TraceReferences`. WeakMap's weak tracing hook marks a value only when its key is already live from outside the map, and sweeping removes entries whose keys remain unmarked. WeakSet sweeping removes unmarked members. WeakRef clears an unmarked target. FinalizationRegistry removes unmarked-target cells and schedules cleanup.
 
 ## Promises
 
@@ -494,7 +500,7 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **Thenable adoption** — If a Promise is resolved with another Promise, `SubscribeTo` defers settlement via a microtask (per the spec's PromiseResolveThenableJob) rather than resolving synchronously. For already-settled inner Promises, the settlement is enqueued as a microtask; for pending inner Promises, a reaction is added to the inner's reaction list.
 - **Self-rejection** — Resolving a Promise with itself throws a `TypeError` per ECMAScript spec.
 - **Shared prototype singleton** — All Promise instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods (`then`, `catch`, `finally`) are registered once during `InitializePrototype` on a `TGocciaSharedPrototype` held in a realm-owned slot.
-- **GC integration** — `MarkReferences` marks the `PromiseResult`, all pending reaction callbacks, and reaction result Promises.
+- **GC integration** — `TraceReferences` marks the `PromiseResult`, all pending reaction callbacks, and reaction result Promises.
 
 ## Functions
 
@@ -636,14 +642,14 @@ Self-references in initializers are supported via a child scope that binds each 
 - **Accessor reads** — The five accessors are found only through the prototype chain, so a `null` or replaced prototype, an own property, or a getter defined by a subclass or a program is observed. `GetPropertyWithContext` walks the chain with `ResolvePropertyWithoutCall` (`Goccia.Values.NativeFunction.pas`); when the buffer is the receiver and the walk, through plain objects only, reaches a getter carrying the `TGocciaNativeIntrinsicKind` that `InitializePrototype` stamps with `MarkIntrinsicGetter`, the result is computed from the slots instead of calling the getter; a data property found that way is returned, and a name the walk does not find is `undefined`. Anything else, including another class's built-in getter, takes the full lookup and the call.
 - **`slice(begin?, end?)`** — Returns a new ArrayBuffer containing a byte range copy. Supports negative indices (resolved relative to `byteLength`), out-of-range clamping, and defaults (`begin` = 0, `end` = `byteLength`).
 - **Detached and immutable buffers** — After `transfer`, the source is detached: `byteLength` is 0 and methods such as `slice` throw `TypeError`. `resize` on an immutable buffer throws `TypeError`.
-- **`GCMarked` integration** — `MarkReferences` calls `inherited` (no `TGocciaValue` references to mark — only holds `TBytes`).
+- **`GCMarked` integration** — `TraceReferences` calls `inherited` (no `TGocciaValue` references to mark — only holds `TBytes`).
 - **structuredClone** — Byte contents are copied into a new buffer.
 
 ## SharedArrayBuffer
 
 `TGocciaSharedArrayBufferValue` extends `TGocciaInstanceValue` (`Goccia.Values.SharedArrayBufferValue.pas`). A distinct type from ArrayBuffer — `SharedArrayBuffer` instances are not instances of `ArrayBuffer` and vice versa.
 
-- **Internal storage** — Same `TBytes`-backed design as ArrayBuffer. A buffer constructed with `{ maxByteLength }` is growable.
+- **Internal storage** — One zero-initialized `TBytes` block for the buffer's whole life. Every agent that holds the buffer reads and writes that block. A buffer constructed with `{ maxByteLength }` is growable. Its block is allocated at `maxByteLength` bytes, the way ECMA-262's AllocateSharedArrayBuffer allocates it, and the separate `FByteLength` records how many of those bytes the buffer exposes. `grow` raises `FByteLength` with a compare-and-exchange, so concurrent grows are ordered and none is lost. It never allocates or moves bytes. The public `Data` property is the whole block: callers measure the buffer with `ByteLength`, never with `Length(Data)`.
 - **Shared prototype singleton** — All SharedArrayBuffer instances within an engine share a single per-engine prototype, held by its own `TGocciaSharedPrototype` in a realm-owned slot, separate from ArrayBuffer's. `Symbol.toStringTag` is `"SharedArrayBuffer"`.
 - **Prototype members** — `slice` and `grow`; accessors `byteLength`, `maxByteLength` and `growable`.
 - **Accessor reads** — As for ArrayBuffer: found only through the prototype chain, with the same slot shortcut for the built-in getters when the buffer is the receiver.
@@ -654,11 +660,11 @@ Self-references in initializers are supported via a child scope that binds each 
 
 `TGocciaDataViewValue` extends `TGocciaInstanceValue` (`Goccia.Values.DataViewValue.pas`). It provides endian-aware typed reads and writes over `ArrayBuffer` or `SharedArrayBuffer` storage.
 
-- **Internal storage** — `FBufferValue: TGocciaValue` stores the underlying buffer, `FBufferData: TBytes` mirrors the current backing byte array, `FByteOffset: Integer` stores the view offset, and `FByteLength: Integer` stores either a fixed byte length or the auto-length sentinel for resizable ArrayBuffer views.
+- **Internal storage** — `FBufferValue: TGocciaValue` stores the underlying buffer, `FBufferData: TBytes` mirrors the current backing byte array, `FByteOffset: Integer` stores the view offset, and `FByteLength: Integer` stores either a fixed byte length or the auto-length sentinel for a view created without a byte length over a resizable ArrayBuffer or a growable SharedArrayBuffer.
 - **Shared prototype singleton** — All DataView instances within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a realm slot. Prototype methods are registered once during `InitializePrototype`.
 - **Element access** — DataView and TypedArray raw byte encoding use `Goccia.BinaryData`, which centralizes endian-aware integer, BigInt, Float16, Float32, and Float64 serialization.
-- **Detached and out-of-bounds checks** — Accessors and prototype methods reject detached ArrayBuffers and views that no longer fit after a resizable ArrayBuffer shrink. Auto-length views over resizable ArrayBuffers compute byte length from the current backing buffer.
-- **GC integration** — `MarkReferences` marks `FBufferValue`, preserving the viewed ArrayBuffer or SharedArrayBuffer.
+- **Detached and out-of-bounds checks** — Accessors and prototype methods reject detached ArrayBuffers and views that no longer fit after a resizable ArrayBuffer shrink. Auto-length views compute their byte length from the buffer's current byte length (ArrayBufferByteLength), never from the backing array's length.
+- **GC integration** — `TraceReferences` marks `FBufferValue`, preserving the viewed ArrayBuffer or SharedArrayBuffer.
 
 ## TypedArray
 
@@ -670,11 +676,11 @@ Self-references in initializers are supported via a child scope that binds each 
 - **Reads with a receiver** — `GetPropertyWithContext` answers a canonical numeric string from the elements too, whatever the receiver, so `Reflect.get(ta, "0", receiver)`, a Proxy without a `get` trap and an array, class instance or other exotic object whose prototype is a typed array all read the element (ES2026 §10.4.5.5). Any other name is the ordinary lookup with that receiver; the slot shortcut of `TryGetNamedPropertyWithoutCall` applies only when the typed array is the receiver, because the built-in getters read the receiver's slots.
 - **Element access** — `ReadElement(index): Double` and `WriteElement(index, value)` delegate raw byte encoding to `Goccia.BinaryData`, using the same endian-aware helpers as DataView. Integer types wrap, `Uint8ClampedArray` clamps, and float types preserve IEEE 754 encodings.
 - **`WriteNumberLiteral(index, num)`** — Handles `TGocciaNumberLiteralValue` special values (`NaN`, `Infinity`, `-Infinity`) correctly: NaN → 0 for integer types, NaN for float types; Infinity → 255 for `Uint8ClampedArray`, 0 for other integer types; raw IEEE 754 bytes for float types through `Goccia.BinaryData`. All write sites (property assignment, `fill`, `set`, `map`, `with`, constructors, `from`, `of`) use this helper.
-- **Buffer sharing** — Multiple TypedArrays can share the same ArrayBuffer or SharedArrayBuffer with different byte offsets and element types. Changes through one view are visible in others. `FBufferData` is a FPC dynamic array reference that shares the underlying byte array with the buffer object, so element writes are visible across all views without copying.
+- **Buffer sharing** — Multiple TypedArrays can share the same ArrayBuffer or SharedArrayBuffer with different byte offsets and element types. Changes through one view are visible in others. `FBufferData` is a FPC dynamic array reference that shares the underlying byte array with the buffer object, so element writes are visible across all views without copying. Bounds come from `BufferByteLength` (ArrayBufferByteLength), never from the block's length, because a growable SharedArrayBuffer's block is longer than its contents. `FBufferData` is a cache: `ArrayBuffer.prototype.resize` and detaching give an ArrayBuffer a new byte array (a SharedArrayBuffer never gets one), and `SyncBufferData` refreshes the cache before the unit's own reads. Code outside the unit reads the public `BufferData` property, which syncs on every read, so `BufferData` and `Length` describe the same block while no script code runs between the two reads; a per-byte loop reads `BufferData` once before the loop rather than once per byte.
 - **SharedArrayBuffer support** — TypedArrays can be constructed from both `TGocciaArrayBufferValue` and `TGocciaSharedArrayBufferValue`. The `.buffer` property returns the original buffer object (preserving its type). `subarray` creates a new view sharing the same buffer; `slice` always creates a new `TGocciaArrayBufferValue` copy.
 - **Prototype methods** — `at`, `fill`, `copyWithin`, `slice`, `subarray`, `set`, `reverse`, `sort`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `every`, `some`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `join`, `toString`, `toReversed`, `toSorted`, `with`, `values`, `keys`, `entries`, `[Symbol.iterator]`.
 - **Static methods** — `TypedArray.from(source [, mapFn])`, `TypedArray.of(...items)`.
-- **GC integration** — `MarkReferences` marks `FBufferValue` (the underlying buffer, whether ArrayBuffer or SharedArrayBuffer).
+- **GC integration** — `TraceReferences` marks `FBufferValue` (the underlying buffer, whether ArrayBuffer or SharedArrayBuffer).
 - **Class values** — `TGocciaTypedArrayClassValue` (one per kind) handles `new TypedArray(...)` construction. `TGocciaTypedArrayStaticFrom` provides `from` and `of` static methods.
 
 **Search semantics:** `indexOf` and `lastIndexOf` use strict equality (`NaN !== NaN` — always returns -1 for NaN). `includes` uses SameValueZero (`NaN === NaN` — finds NaN in float arrays via `Math.IsNaN`). All three handle Infinity/-Infinity by comparing actual IEEE 754 doubles for float arrays (where Infinity is stored as-is) and returning -1/false for integer arrays (where Infinity truncates to 0, losing identity).

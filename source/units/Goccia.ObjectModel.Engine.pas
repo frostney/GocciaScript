@@ -45,6 +45,7 @@ implementation
 
 uses
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -69,15 +70,19 @@ begin
 
     // Clone the descriptor to avoid shared ownership between source and target.
     // Use non-enumerable flags per ES §17 for built-in static methods.
-    if Descriptor is TGocciaPropertyDescriptorData then
-      TGocciaObjectValue(AConstructor).DefineProperty(Key,
-        TGocciaPropertyDescriptorData.Create(
-          TGocciaPropertyDescriptorData(Descriptor).Value,
-          TGocciaPropertyDescriptorData(Descriptor).Flags))
-    else
-      raise EGocciaObjectModelError.CreateFmt(
-        'Static source for %s contains unsupported accessor property "%s"',
-        [AConstructor.Name, Key]);
+    try
+      if Descriptor is TGocciaPropertyDescriptorData then
+        TGocciaObjectValue(AConstructor).DefineProperty(Key,
+          TGocciaPropertyDescriptorData.Create(
+            TGocciaPropertyDescriptorData(Descriptor).Value,
+            TGocciaPropertyDescriptorData(Descriptor).Flags))
+      else
+        raise EGocciaObjectModelError.CreateFmt(
+          'Static source for %s contains unsupported accessor property "%s"',
+          [AConstructor.Name, Key]);
+    finally
+      ReleaseDescriptor(Descriptor);
+    end;
   end;
 
   for Symbol in ASource.GetOwnSymbols do
@@ -86,21 +91,25 @@ begin
     if not Assigned(Descriptor) then
       Continue;
 
-    if Descriptor is TGocciaPropertyDescriptorData then
-      AConstructor.DefineSymbolProperty(Symbol,
-        TGocciaPropertyDescriptorData.Create(
-          TGocciaPropertyDescriptorData(Descriptor).Value,
-          Descriptor.Flags))
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-      AConstructor.DefineSymbolProperty(Symbol,
-        TGocciaPropertyDescriptorAccessor.Create(
-          TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
-          TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
-          Descriptor.Flags))
-    else
-      raise EGocciaObjectModelError.CreateFmt(
-        'Static source for %s has unsupported symbol descriptor',
-        [AConstructor.Name]);
+    try
+      if Descriptor is TGocciaPropertyDescriptorData then
+        AConstructor.DefineSymbolProperty(Symbol,
+          TGocciaPropertyDescriptorData.Create(
+            TGocciaPropertyDescriptorData(Descriptor).Value,
+            Descriptor.Flags))
+      else if Descriptor is TGocciaPropertyDescriptorAccessor then
+        AConstructor.DefineSymbolProperty(Symbol,
+          TGocciaPropertyDescriptorAccessor.Create(
+            TGocciaPropertyDescriptorAccessor(Descriptor).Getter,
+            TGocciaPropertyDescriptorAccessor(Descriptor).Setter,
+            Descriptor.Flags))
+      else
+        raise EGocciaObjectModelError.CreateFmt(
+          'Static source for %s has unsupported symbol descriptor',
+          [AConstructor.Name]);
+    finally
+      ReleaseDescriptor(Descriptor);
+    end;
   end;
 end;
 
@@ -108,38 +117,48 @@ procedure RegisterTypeDefinition(const AScope: TGocciaScope;
   const ATypeDefinition: TGocciaTypeDefinition;
   const ASpeciesGetter: TGocciaNativeFunctionCallback;
   out AConstructor: TGocciaClassValue);
+var
+  Roots: TGocciaActiveRootFrame;
 begin
-  AConstructor := ATypeDefinition.ClassValueClass.Create(
-    ATypeDefinition.ConstructorName, nil);
+  // The constructor is reachable from nothing until the scope binds it at the
+  // end, and building its prototype and statics allocates (and can collect).
+  Roots.Initialize;
+  try
+    AConstructor := ATypeDefinition.ClassValueClass.Create(
+      ATypeDefinition.ConstructorName, nil);
+    Roots.Add(AConstructor);
 
-  if Assigned(ATypeDefinition.ExposePrototype) then
-    ATypeDefinition.ExposePrototype(AConstructor)
-  else if Assigned(ATypeDefinition.PrototypeProvider) then
-  begin
-    AConstructor.ReplacePrototype(ATypeDefinition.PrototypeProvider());
-    AConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
-  end
-  else
-    raise EGocciaObjectModelError.CreateFmt(
-      'Type definition for %s has neither ExposePrototype nor PrototypeProvider',
-      [ATypeDefinition.ConstructorName]);
+    if Assigned(ATypeDefinition.ExposePrototype) then
+      ATypeDefinition.ExposePrototype(AConstructor)
+    else if Assigned(ATypeDefinition.PrototypeProvider) then
+    begin
+      AConstructor.ReplacePrototype(ATypeDefinition.PrototypeProvider());
+      AConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(AConstructor, [pfConfigurable, pfWritable]));
+    end
+    else
+      raise EGocciaObjectModelError.CreateFmt(
+        'Type definition for %s has neither ExposePrototype nor PrototypeProvider',
+        [ATypeDefinition.ConstructorName]);
 
-  if Assigned(ATypeDefinition.PrototypeParent) then
-    AConstructor.Prototype.Prototype := ATypeDefinition.PrototypeParent;
+    if Assigned(ATypeDefinition.PrototypeParent) then
+      AConstructor.Prototype.Prototype := ATypeDefinition.PrototypeParent;
 
-  if Assigned(ATypeDefinition.StaticSource) then
-    CopyStaticMembersToConstructor(ATypeDefinition.StaticSource, AConstructor);
+    if Assigned(ATypeDefinition.StaticSource) then
+      CopyStaticMembersToConstructor(ATypeDefinition.StaticSource, AConstructor);
 
-  if ATypeDefinition.AddSpeciesGetter then
-    AConstructor.DefineSymbolProperty(
-      TGocciaSymbolValue.WellKnownSpecies,
-      TGocciaPropertyDescriptorAccessor.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          ASpeciesGetter, 'get [Symbol.species]', 0),
-        nil, [pfConfigurable]));
+    if ATypeDefinition.AddSpeciesGetter then
+      AConstructor.DefineSymbolProperty(
+        TGocciaSymbolValue.WellKnownSpecies,
+        TGocciaPropertyDescriptorAccessor.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            ASpeciesGetter, 'get [Symbol.species]', 0),
+          nil, [pfConfigurable]));
 
-  AScope.DefineLexicalBinding(ATypeDefinition.ConstructorName, AConstructor, dtConst, True);
+    AScope.DefineLexicalBinding(ATypeDefinition.ConstructorName, AConstructor, dtConst, True);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 end.

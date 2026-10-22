@@ -5,22 +5,26 @@ spawning any worker.
 
 ## Policy gate
 
-A valid file is authoritative for repository-owned capability classes, routing
-rules, context envelopes, token checkpoints, monitoring requirements, and
-escalation policy. It must use host-neutral capabilities rather than requiring a
-particular provider or model. Higher-authority repository instructions still
-win.
+A valid file is authoritative for repository-owned routing rules, context
+envelopes, token checkpoints, monitoring requirements, and escalation policy.
+It may narrow the [capability tiers](#capability-tiers) but never widen them.
+Unlike the `escalate` usage-limit intervention below, the tier escalation rule
+under Capability tiers is not repository-owned: no repository rule may resume a
+lane that stopped, or raise its tier in place. The file must use host-neutral
+capabilities rather than requiring a particular provider or model.
+Higher-authority repository instructions still win.
 
-- If absent, use a conservative provider-neutral fallback: bounded capable
-  workers, compact isolated context, host-default usage limits, explicit
-  escalation for material decisions, and only supported non-LLM waits. Report
-  the fallback.
-- If malformed, contradictory, incompatible with higher-authority instructions,
-  or dependent on unsupported host capabilities, stop before spawning and
-  request resolution. Do not silently weaken it.
+- If absent, use a conservative provider-neutral fallback: the capability
+  tiers without repository narrowing, compact isolated context, host-default
+  usage limits, explicit escalation for material decisions, and only supported
+  non-LLM waits. Report the fallback.
+- If malformed, contradictory, widening a capability tier, overriding the tier
+  escalation rule, incompatible with higher-authority instructions, or
+  dependent on unsupported host capabilities, stop before spawning and request
+  resolution. Do not silently weaken it.
 - Repository-owned soft usage limits trigger the declared `continue`, `split`,
   `replace`, or `escalate` intervention after a durable checkpoint. Never
-  silently downgrade capability or stop solely because a threshold was crossed.
+  silently lower a lane's tier or stop solely because a threshold was crossed.
 
 ## Lane-admission preflights
 
@@ -47,7 +51,7 @@ than silently overriding it or asking the same question again.
 Default independent workers to the host equivalent of no inherited conversation
 history. A packet contains only applicable decision IDs and selected contracts,
 issue or PR identity, branch and exact head, owned scope, dependencies,
-requirements, applicable gates, capability class, context envelope, and
+requirements, applicable gates, capability tier, context envelope, and
 the required structured transition output. Include a small recent-turn slice
 only when immediately relevant. Full-history inheritance requires a recorded,
 scoped exception. Publication and merge in a packet follow the delegation rule
@@ -60,6 +64,32 @@ Record the resources the worker actually loaded and any missing capability in
 its result. An isolated worker must not assume parent conversation or loaded
 skills are inherited. Keep model-specific settings at the host boundary and
 apply them only to the actual worker when supported by evidence.
+
+## Capability tiers
+
+Route each lane by the capability its work needs. A lane runs on the lowest
+tier that covers everything in its packet, and the coordinator records that
+tier when it writes the packet. Use `open` when unsure.
+
+- `mechanical`: carry out given steps and check each against a given result.
+  Covers commit, pull, push, merging a branch whose conflicts are only in
+  append-only files such as logs and decision lists, waiting for CI, merging a
+  green PR, and filing an issue from given text.
+- `bounded`: change code, tests or copy inside a settled design, verify the
+  change, and take review findings. The review gate runs on the final head,
+  and runs again after its findings are fixed.
+- `open`: design, security, choosing between options, coordinating other
+  lanes, delivery across several layers, and finding a root cause, including
+  the cause of a failure that looks like a flake.
+
+A lane that meets work above its tier stops and returns what it found. The
+coordinator starts a new lane at the needed tier with that finding. It never
+resumes the old lane or raises its tier in place.
+
+The tiers name no model, provider or effort level, so a model release needs no
+edit here. Each host maps them to models in its own agent configuration.
+`ORCHESTRATION.md` may narrow them, for example by making security code always
+`open`; a rule that widens a tier fails the policy gate.
 
 ## Delivery integration recommendation
 

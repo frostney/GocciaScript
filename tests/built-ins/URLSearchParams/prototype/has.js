@@ -57,4 +57,10 @@ describe("URLSearchParams.prototype.has", () => {
     params.delete("a");
     expect(params.has("a")).toBe(false);
   });
+
+  test("a name with a lone surrogate matches the name the constructor parsed", () => {
+    const params = new URLSearchParams("\ud800=x");
+    expect(params.has("\ud800")).toBe(true);
+    expect(params.has("\ud800", "x")).toBe(true);
+  });
 });

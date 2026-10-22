@@ -44,7 +44,7 @@ type
     procedure InitializeNativeFromArguments(
       const AArguments: TGocciaArgumentsCollection); override;
     procedure InitializePrototype;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class function GetSharedPrototype: TGocciaObjectValue;
     class function GetSharedPrototypeForRealm(
@@ -614,9 +614,8 @@ begin
   inherited Destroy;
 end;
 
-procedure TGocciaStringObjectValue.MarkReferences;
+procedure TGocciaStringObjectValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FPrimitive) then
     FPrimitive.MarkReferences;
@@ -831,7 +830,7 @@ begin
 
   Result := CreateStringIndexDescriptor(FPrimitive, AName);
   if Assigned(Result) then
-    Exit;
+    Exit(Result.AsCallerOwned);
 
   if AName = PROP_LENGTH then
   begin
@@ -839,7 +838,7 @@ begin
     Result := TGocciaPropertyDescriptorData.Create(
       TGocciaNumberLiteralValue.Create(
         UTF16CodeUnitLength(FPrimitive.ToStringLiteral.Value)),
-      []);
+      []).AsCallerOwned;
     Exit;
   end;
 end;
@@ -1645,12 +1644,13 @@ begin
       FoundPos := UTF16IndexOf(StringValue, SearchValue, 0);
     if FoundPos >= 0 then
     begin
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(SearchValue),
-        TGocciaNumberLiteralValue.Create(FoundPos),
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // Added one at a time: the collection roots what it holds, and each
+      // string's reservation can collect the arguments made before it.
+      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
       try
+        CallArgs.Add(TGocciaStringLiteralValue.Create(SearchValue));
+        CallArgs.Add(TGocciaNumberLiteralValue.Create(FoundPos));
+        CallArgs.Add(TGocciaStringLiteralValue.Create(StringValue));
         CallResult := InvokeCallable(ReplaceArg, CallArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
         ReplaceValue := CallResult.ToStringLiteral.Value;
       finally
@@ -1766,12 +1766,13 @@ begin
     if SearchValue = '' then
     begin
       Offset := 0;
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(''),
-        nil,
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // Added one at a time: the collection roots what it holds, and the
+      // string's reservation can collect the arguments made before it.
+      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(3);
       try
+        CallArgs.Add(TGocciaStringLiteralValue.Create(''));
+        CallArgs.Add(nil);
+        CallArgs.Add(TGocciaStringLiteralValue.Create(StringValue));
         while Offset <= StringLength do
         begin
           CallArgs.SetElement(1, TGocciaNumberLiteralValue.Create(Offset));
@@ -2079,9 +2080,13 @@ begin
     begin
       if not MatchMethod.IsCallable then
         ThrowTypeError(SErrorSymbolMatchNotCallable, SSuggestWellKnownSymbolCallable);
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // S is the this value itself when it already is a string.
+      if AThisValue is TGocciaStringLiteralValue then
+        CallArgs := TGocciaArgumentsCollection.Create([AThisValue])
+      else
+        CallArgs := TGocciaArgumentsCollection.Create([
+          TGocciaStringLiteralValue.Create(StringValue)
+        ]);
       try
         Result := InvokeCallable(MatchMethod, CallArgs, RegexValue);
       finally
@@ -2192,9 +2197,13 @@ begin
     begin
       if not MatchAllMethod.IsCallable then
         ThrowTypeError(SErrorSymbolMatchAllNotCallable, SSuggestWellKnownSymbolCallable);
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // S is the this value itself when it already is a string.
+      if AThisValue is TGocciaStringLiteralValue then
+        CallArgs := TGocciaArgumentsCollection.Create([AThisValue])
+      else
+        CallArgs := TGocciaArgumentsCollection.Create([
+          TGocciaStringLiteralValue.Create(StringValue)
+        ]);
       try
         Result := InvokeCallable(MatchAllMethod, CallArgs, RegexValue);
       finally
@@ -2268,9 +2277,13 @@ begin
     begin
       if not SearchMethod.IsCallable then
         ThrowTypeError(SErrorSymbolSearchNotCallable, SSuggestWellKnownSymbolCallable);
-      CallArgs := TGocciaArgumentsCollection.Create([
-        TGocciaStringLiteralValue.Create(StringValue)
-      ]);
+      // S is the this value itself when it already is a string.
+      if AThisValue is TGocciaStringLiteralValue then
+        CallArgs := TGocciaArgumentsCollection.Create([AThisValue])
+      else
+        CallArgs := TGocciaArgumentsCollection.Create([
+          TGocciaStringLiteralValue.Create(StringValue)
+        ]);
       try
         Result := InvokeCallable(SearchMethod, CallArgs, RegexValue);
       finally

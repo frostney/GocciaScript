@@ -1,4 +1,4 @@
-# 0144 - The VM dispatch loop uses no goto
+# 0154 - The VM dispatch loop uses no goto
 
 **Date:** 2026-10-16
 **Area:** `bytecode VM`, `build`

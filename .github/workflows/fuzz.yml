@@ -1,8 +1,8 @@
 name: Fuzz and memory safety
 
-# Coverage-blind crash fuzzing plus memory-safety tooling over the JavaScript
+# Coverage-guided crash fuzzing plus memory-safety tooling over the JavaScript
 # suite. Scheduled rather than per-PR: a useful fuzz run takes far longer than
-# a PR should wait, and Valgrind slows the suite by roughly an order of
+# a PR should wait, and Valgrind slows the suite by about two orders of
 # magnitude. PR-time coverage stays with the ordinary suite in pr.yml.
 #
 # Cadence: nightly (03:00 UTC). Manual trigger available via workflow_dispatch,
@@ -28,19 +28,16 @@ env:
   FUZZ_SECONDS: ${{ github.event.inputs.fuzz-seconds || '900' }}
 
 jobs:
-  # ── Coverage-blind fuzzing ───────────────────────────────────────────
+  # ── Coverage-guided fuzzing ──────────────────────────────────────────
   #
-  # FPC emits no AFL instrumentation, so afl-fuzz runs in non-instrumented
-  # (-n) mode. That trades coverage feedback for pure random mutation: it
-  # still finds parser and lexer faults, but it will not discover deep
-  # execution paths on its own. The seed corpus is what carries coverage
-  # here, which is why it is derived from the real test suites.
-  #
-  # Instrumented builds were evaluated and rejected for now: afl-gcc-style
-  # instrumentation requires either an FPC assembler pass rewrite or building
-  # via -Cg + a GCC-compatible IR, neither of which FPC 3.2.2 exposes. The
-  # tractable future path is afl-clang-lto over LLVM bitcode from an LLVM FPC
-  # backend build; recorded as a follow-up rather than attempted here.
+  # FPC has no AFL compiler, so afl-fuzz gets its coverage from the
+  # assembler: the instrumented harness is built with -Aas, and
+  # scripts/afl/as hands FPC's GNU assembly to AFL++'s afl-as, which adds a
+  # coverage trampoline at every function entry, branch target and
+  # conditional branch (and the fork server). AFL keeps each mutant that
+  # reaches new coverage, so the queue grows past the seeds. The plain
+  # harness still sweeps the seeds and replays findings; the two builds come
+  # from the same source with the same checks (-Ct -Cr -Sa).
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -58,6 +55,41 @@ jobs:
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
+
+      - name: Build the AFL-instrumented harness
+        # Its own unit-output directory, per the per-program rule (see the
+        # memory-safety job); fpc does not create it. -B rebuilds every
+        # unit of this repository through scripts/afl/as; FPC's own runtime
+        # library stays uninstrumented.
+        run: |
+          mkdir -p build/compiled/targets/fuzzharness-afl
+          fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+            -FUbuild/compiled/targets/fuzzharness-afl \
+            -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+
+      - name: Verify the instrumented harness reports coverage
+        # Guards against an instrumented build whose coverage map is empty
+        # or does not follow the input, which would leave afl-fuzz unable to
+        # tell a new path from an old one. The same input can differ by a
+        # few edges between runs, so the first probe runs twice to measure
+        # that noise, and the second must reach at least 100 edges, and ten
+        # times the noise, that neither run of the first reached.
+        run: |
+          printf 'let a = 1;' > build/probe-a.js
+          printf 'class A { #x = 2; m() { return [1, 2].map((v) => v * this.#x); } }\nnew A().m();' \
+            > build/probe-b.js
+          for run in a1 a2 b; do
+            afl-showmap -q -t 5000 -o "build/probe-$run.map" \
+              -- ./build/GocciaFuzzHarnessAfl "build/probe-${run%[12]}.js"
+          done
+          edges() { cut -d: -f1 "$@" | sort -u; }
+          noise=$(comm -3 <(edges build/probe-a1.map) <(edges build/probe-a2.map) | wc -l)
+          signal=$(comm -13 <(edges build/probe-a1.map build/probe-a2.map) <(edges build/probe-b.map) | wc -l)
+          echo "Probe edges: $(wc -l < build/probe-a1.map) and $(wc -l < build/probe-b.map); the second reaches ${signal} new; noise ${noise}"
+          if [ ! -s build/probe-a1.map ] || [ "$signal" -lt 100 ] || [ "$signal" -le $((10 * noise)) ]; then
+            echo "::error::The instrumented harness reports no coverage, or coverage that does not follow its input"
+            exit 1
+          fi
 
       - name: Build seed corpus
         run: bun run scripts/build-fuzz-corpus.ts --verbose
@@ -93,8 +125,8 @@ jobs:
           # AFL refuses to run when the host uses a core-dump handler pipe.
           echo core | sudo tee /proc/sys/kernel/core_pattern > /dev/null
           mkdir -p build/fuzz/out
-          # -n: non-instrumented. AFL_SKIP_CPUFREQ/AFL_NO_AFFINITY are the
-          # standard CI accommodations for shared runners.
+          # AFL_SKIP_CPUFREQ/AFL_NO_AFFINITY are the standard CI
+          # accommodations for shared runners.
           # -t 5000: the harness's own budget is 1000ms and a harness timeout
           # is a NORMAL exit-0 outcome, so AFL's exec threshold must sit safely
           # above it — otherwise process overhead around a legitimate slow input
@@ -109,10 +141,10 @@ jobs:
           status=0
           started=${SECONDS}
           AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
-          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -n -t 5000 \
+          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -t 5000 \
             -i build/fuzz/corpus \
             -o build/fuzz/out \
-            -- ./build/GocciaFuzzHarness @@ || status=$?
+            -- ./build/GocciaFuzzHarnessAfl @@ || status=$?
           elapsed=$(( SECONDS - started ))
           echo "afl-fuzz exit status: ${status} after ${elapsed}s"
           # 0 = afl-fuzz returned on its own; 124 = deadline reached and the
@@ -167,6 +199,268 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  # ── Heap snapshot reader ─────────────────────────────────────────────
+  #
+  # The reader treats a snapshot as hostile input (ADR 0148), so it is fuzzed
+  # the same way: mutated real snapshots, every refusal a normal outcome and
+  # anything else a finding. A snapshot names the engine build that wrote it
+  # and a reader refuses another build's, so the harness writes its own
+  # seeds rather than taking them from the repository.
+  fuzz-heap-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC, AFL++ and Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install fpc afl++ valgrind -qq > /dev/null
+
+      - name: Build fuzz harness
+        run: ./build.pas fuzzharness
+
+      - name: Build the AFL-instrumented harness
+        # Its own unit-output directory, per the per-program rule (see the
+        # memory-safety job); fpc does not create it. -B rebuilds every
+        # unit of this repository through scripts/afl/as; FPC's own runtime
+        # library stays uninstrumented.
+        run: |
+          mkdir -p build/compiled/targets/fuzzharness-afl
+          fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
+            -FUbuild/compiled/targets/fuzzharness-afl \
+            -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+
+      - name: Verify the instrumented harness reports coverage
+        # Guards against an instrumented build whose coverage map is empty
+        # or does not follow the input, which would leave afl-fuzz unable to
+        # tell a new path from an old one. The same input can differ by a
+        # few edges between runs, so the first probe runs twice to measure
+        # that noise, and the second must reach at least 100 edges, and ten
+        # times the noise, that neither run of the first reached.
+        run: |
+          printf 'let a = 1;' > build/probe-a.js
+          printf 'class A { #x = 2; m() { return [1, 2].map((v) => v * this.#x); } }\nnew A().m();' \
+            > build/probe-b.js
+          for run in a1 a2 b; do
+            afl-showmap -q -t 5000 -o "build/probe-$run.map" \
+              -- ./build/GocciaFuzzHarnessAfl "build/probe-${run%[12]}.js"
+          done
+          edges() { cut -d: -f1 "$@" | sort -u; }
+          noise=$(comm -3 <(edges build/probe-a1.map) <(edges build/probe-a2.map) | wc -l)
+          signal=$(comm -13 <(edges build/probe-a1.map build/probe-a2.map) <(edges build/probe-b.map) | wc -l)
+          echo "Probe edges: $(wc -l < build/probe-a1.map) and $(wc -l < build/probe-b.map); the second reaches ${signal} new; noise ${noise}"
+          if [ ! -s build/probe-a1.map ] || [ "$signal" -lt 100 ] || [ "$signal" -le $((10 * noise)) ]; then
+            echo "::error::The instrumented harness reports no coverage, or coverage that does not follow its input"
+            exit 1
+          fi
+
+      - name: Build the harness with heaptrc
+        # Its own unit-output directory, per the per-program rule (see the
+        # memory-safety job); fpc does not create it.
+        run: |
+          mkdir -p build/compiled/targets/fuzzharness-heaptrc
+          fpc @config.cfg -gh -gl -FUbuild/compiled/targets/fuzzharness-heaptrc \
+            -obuild/GocciaFuzzHarnessHeaptrc source/app/GocciaFuzzHarness.dpr
+
+      - name: Write the seed snapshots
+        run: ./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
+
+      - name: Sweep the seeds
+        # Every seed is a snapshot this build wrote: each must restore. One
+        # that does not is kept for the reproducer artifact, since the seeds
+        # are specific to this build.
+        run: |
+          mkdir -p build/fuzz/heap-snapshot-replay-failures
+          status=0
+          for seed in build/fuzz/heap-snapshot-corpus/*.ghsn; do
+            out=$(./build/GocciaFuzzHarness --verbose --heap-snapshot "$seed" 2>&1 || true)
+            if ! grep -q '\] completed$' <<< "$out"; then
+              echo "::error::Seed did not restore: $seed"
+              cp "$seed" build/fuzz/heap-snapshot-replay-failures/seed-"$(basename "$seed")"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Fuzz
+        # Same accommodations and exit-status rules as the script fuzz job.
+        run: |
+          echo core | sudo tee /proc/sys/kernel/core_pattern > /dev/null
+          mkdir -p build/fuzz/heap-snapshot-out
+          status=0
+          started=${SECONDS}
+          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
+          timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -t 5000 \
+            -i build/fuzz/heap-snapshot-corpus \
+            -o build/fuzz/heap-snapshot-out \
+            -- ./build/GocciaFuzzHarnessAfl --heap-snapshot @@ || status=$?
+          elapsed=$(( SECONDS - started ))
+          echo "afl-fuzz exit status: ${status} after ${elapsed}s"
+          case "${status}" in
+            0 | 124) ;;
+            137)
+              if [ "${elapsed}" -lt "${FUZZ_SECONDS}" ]; then
+                echo "::error::afl-fuzz was SIGKILLed after ${elapsed}s, before the ${FUZZ_SECONDS}s deadline (OOM killer?)"
+                exit "${status}"
+              fi
+              ;;
+            *)
+              echo "::error::afl-fuzz did not run to a deadline (exit ${status})"
+              exit "${status}"
+              ;;
+          esac
+
+      - name: Replay under heaptrc and Valgrind
+        # ADR 0148 asks for mutated real snapshots under heaptrc and a memory
+        # checker. The seeds and a sample of what AFL kept are restored again:
+        # under heaptrc each, and an input the reader refuses, must leave no
+        # unfreed block (the harness shuts its runtime down before it exits,
+        # as the application runners do), and under Valgrind memcheck none
+        # may report an error.
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p build/fuzz/heap-snapshot-replay
+          cp build/fuzz/heap-snapshot-corpus/*.ghsn build/fuzz/heap-snapshot-replay/
+          # Read whole, then sliced: no pipeline closed early under pipefail.
+          mapfile -t queue < <(find build/fuzz/heap-snapshot-out -path '*/queue/id:*' -type f 2>/dev/null | sort)
+          for f in "${queue[@]:0:200}"; do
+            cp "$f" "build/fuzz/heap-snapshot-replay/q-$(basename "$f" | tr ',:' '__')"
+          done
+          printf 'x' > build/fuzz/not-a-snapshot
+          # Every input a replay fails on is kept for the reproducer artifact.
+          mkdir -p build/fuzz/heap-snapshot-replay-failures
+          # The harness exits 0 on every outcome the reader models (a refusal
+          # included) and nonzero on a fault. A replay that exits nonzero, or
+          # whose heaptrc report does not say 0 unfreed blocks (none at all
+          # counts as a failure too), fails and keeps its input.
+          blocks() { grep -oE '^[0-9]+ unfreed memory blocks' <<< "$1" | cut -d' ' -f1 || true; }
+          status=0
+          for f in build/fuzz/not-a-snapshot build/fuzz/heap-snapshot-replay/*; do
+            code=0
+            out=$(./build/GocciaFuzzHarnessHeaptrc --heap-snapshot "$f" 2>&1) || code=$?
+            got=$(blocks "$out")
+            if [ "$code" -ne 0 ] || [ "$got" != "0" ]; then
+              echo "::error::heaptrc: $f exits ${code} and leaves ${got:-an unknown number of} unfreed blocks, expected 0"
+              cp "$f" build/fuzz/heap-snapshot-replay-failures/heaptrc-"$(basename "$f")"
+              status=1
+            fi
+          done
+          replay=(build/fuzz/heap-snapshot-replay/*)
+          for f in "${replay[@]:0:60}"; do
+            if ! valgrind --tool=memcheck --error-exitcode=42 \
+                --suppressions=scripts/valgrind/fpc-rtl.supp -q \
+                ./build/GocciaFuzzHarness --heap-snapshot "$f" > /dev/null 2> build/fuzz/valgrind.log; then
+              echo "::error::Valgrind: $f"
+              cat build/fuzz/valgrind.log
+              cp "$f" build/fuzz/heap-snapshot-replay-failures/valgrind-"$(basename "$f")"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Report crashes
+        if: ${{ !cancelled() }}
+        run: |
+          crashes=$(find build/fuzz/heap-snapshot-out -path '*/crashes/id:*' 2>/dev/null | wc -l)
+          hangs=$(find build/fuzz/heap-snapshot-out -path '*/hangs/id:*' 2>/dev/null | wc -l)
+          echo "AFL crashes: $crashes, hangs: $hangs"
+          if [ "$crashes" -gt 0 ] || [ "$hangs" -gt 0 ]; then
+            echo "::error::afl-fuzz recorded $crashes crashing snapshot(s) and $hangs hanging snapshot(s)"
+            exit 1
+          fi
+
+      - name: Upload reproducers
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: heap-snapshot-fuzz-reproducers
+          path: |
+            build/fuzz/heap-snapshot-out/**/crashes/**
+            build/fuzz/heap-snapshot-out/**/hangs/**
+            build/fuzz/heap-snapshot-replay-failures/**
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ── Heap snapshot hardening at full size ─────────────────────────────
+  #
+  # Goccia.HeapSnapshot.Hardening.Test takes real snapshots apart along the
+  # format. On pull requests it samples, to stay under a minute: a rotating
+  # one in four of the payload values and reference targets, and chains of
+  # 200,000 links. Here it sweeps all of them with chains of 1,000,000 links
+  # (about 140 s and 9.4 GB resident on a workstation, though no one test
+  # needs more than 3.6 GB), and every heap snapshot test program runs under
+  # heaptrc at its pull-request size.
+  heap-snapshot-hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC
+        run: |
+          sudo apt-get update
+          sudo apt-get install fpc -qq > /dev/null
+
+      - name: Build the hardening tests
+        # ./build.pas writes the version include every program reads; each
+        # program then gets its own unit-output directory (see the
+        # memory-safety job), and fpc does not create one.
+        run: |
+          ./build.pas fuzzharness
+          mkdir -p build/compiled/targets/heap-snapshot-hardening
+          fpc @config.cfg -O4 -dPRODUCTION -Xs -CX -XX -B \
+            -FUbuild/compiled/targets/heap-snapshot-hardening \
+            -obuild/Goccia.HeapSnapshot.Hardening.Test \
+            source/units/Goccia.HeapSnapshot.Hardening.Test.pas
+
+      - name: Run them at full size
+        env:
+          GOCCIA_HEAP_SNAPSHOT_HARDENING: full
+        run: ./build/Goccia.HeapSnapshot.Hardening.Test
+
+      - name: Build the heap snapshot tests with heaptrc
+        run: |
+          mkdir -p build/heaptrc
+          for src in source/units/Goccia.HeapSnapshot*.Test.pas; do
+            name="$(basename "${src%.pas}")"
+            mkdir -p "build/compiled/targets/heaptrc-${name}"
+            fpc @config.cfg -gh -gl -FU"build/compiled/targets/heaptrc-${name}" \
+              -o"build/heaptrc/${name}" "$src"
+          done
+
+      - name: Run them under heaptrc
+        # heaptrc halts a program on a double free or a block written past
+        # its end. Freed blocks are not kept out of reuse (keepreleased grows
+        # past a runner's memory within a minute), and the exit leak report
+        # counts what a test program leaves to process exit, so only the exit
+        # status is judged; the hardening program checks the heap between
+        # passes of the same mutants itself.
+        run: |
+          status=0
+          for test_bin in build/heaptrc/*.Test; do
+            echo "=== ${test_bin}"
+            if ! "$test_bin" 2> "${test_bin}.heaptrc.log"; then
+              echo "::error::${test_bin} failed under heaptrc"
+              tail -40 "${test_bin}.heaptrc.log"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Upload heaptrc logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: heap-snapshot-hardening-heaptrc
+          path: build/heaptrc/*.log
+          if-no-files-found: ignore
+          retention-days: 30
+
   # ── Memory safety over the real suite ────────────────────────────────
   #
   # heaptrc and Valgrind answer different questions: heaptrc reports FPC-level
@@ -180,6 +474,8 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Install FPC and Valgrind
         run: |
@@ -212,18 +508,101 @@ jobs:
           fi
 
       - name: Run suite under Valgrind memcheck
-        # A full suite run under memcheck is slow; --error-exitcode makes any
-        # invalid access fail the job rather than scroll past.
+        # --error-exitcode makes any invalid access fail the job rather than
+        # scroll past. The suppression file covers the runtime library's
+        # aligned over-reads; its header says what that gives up.
+        #
+        # Valgrind runs one guest thread at a time, so --jobs inside one
+        # process buys nothing and starves the pool's workers until its
+        # watchdog abandons them. Each Valgrind process therefore runs one
+        # worker (--jobs=1, the sequential path, no watchdog), and the suite
+        # is split across one such process per CPU, balanced by each file's
+        # native time. One process for the whole suite took 58.6 minutes on
+        # a fast workstation (2026-10-19), too close to this job's limit on
+        # a runner.
+        #
+        # --timeout: memcheck slowed the files that take longest natively by
+        # 68-109x (measured with one worker on 2026-10-19; startup aside),
+        # so a file gets the default 30 s per-file budget times 110: what a
+        # native run accepts, memcheck accepts. A hang still ends at the
+        # job's timeout-minutes.
         run: |
-          valgrind \
-            --tool=memcheck \
-            --error-exitcode=42 \
-            --errors-for-leak-kinds=none \
-            --leak-check=no \
-            --track-origins=yes \
-            --log-file=build/valgrind.log \
-            ./build/GocciaTestRunner -P tests
-          tail -40 build/valgrind.log
+          fpc_version=$(fpc -iV)
+          if [ "$fpc_version" != "3.2.2" ]; then
+            echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's IndexByte and IndexWord; this job runs FPC $fpc_version"
+          fi
+          shards=$(nproc)
+          # The runner's own file discovery and native per-file times.
+          ./build/GocciaTestRunner -P tests --no-progress --silent \
+            --output=build/memcheck-plan.json > /dev/null
+          bun scripts/valgrind/shard-suite.ts build/memcheck-plan.json \
+            "$shards" build/memcheck-shard
+          pids=()
+          for shard in $(seq 0 $((shards - 1))); do
+            # Fewer files than CPUs leaves a shard empty; a runner with no
+            # path would not run the suite.
+            [ -s "build/memcheck-shard-$shard.txt" ] || continue
+            mapfile -t files < "build/memcheck-shard-$shard.txt"
+            valgrind \
+              --tool=memcheck \
+              --error-exitcode=42 \
+              --suppressions=scripts/valgrind/fpc-rtl.supp \
+              --errors-for-leak-kinds=none \
+              --leak-check=no \
+              --track-origins=yes \
+              --log-file="build/valgrind-$shard.log" \
+              ./build/GocciaTestRunner -P --jobs=1 --timeout=55m --no-progress \
+              "${files[@]}" > "build/memcheck-$shard.log" 2>&1 &
+            pids[$shard]=$!
+          done
+          status=0
+          for shard in "${!pids[@]}"; do
+            if wait "${pids[$shard]}"; then
+              echo "shard $shard: passed"
+            else
+              code=$?
+              echo "::error::memcheck shard $shard exited $code"
+              status=1
+            fi
+            grep -E 'Test Results (Run Tests|Passed|Failed|Failed Tests):' "build/memcheck-$shard.log" || true
+            tail -5 "build/valgrind-$shard.log"
+          done
+          exit $status
+
+      - name: GC stress under heaptrc and Valgrind
+        # Goccia.GCStress.Test collects before every reservation over engine
+        # creation, the lazy initialisers and the native construction paths,
+        # keeping what each sweep takes in quarantine (issue #1816; see
+        # docs/contributing/tooling.md, "GC stress at every reservation"). It
+        # also runs per PR with the other unit tests. Here heaptrc checks that
+        # every block it allocated is freed by the end. Under memcheck it runs
+        # with GOCCIA_GC_STRESS_FREE=1, so each sweep frees what it takes
+        # rather than keeping it: a native path that only reads a value after
+        # it was swept (a key list, an operand) is an invalid read there,
+        # which the quarantine cannot see. The memcheck build loads cmem first
+        # (-Facmem), so a freed object goes back to the C allocator, which
+        # memcheck tracks; FPC's own heap would keep it as valid memory and
+        # hide the read. Under memcheck it takes about two and a half minutes.
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p build/compiled/targets/gcstress-heaptrc \
+            build/compiled/targets/gcstress-memcheck
+          fpc @config.cfg -gh -gl -FUbuild/compiled/targets/gcstress-heaptrc \
+            -obuild/GCStressHeaptrc source/units/Goccia.GCStress.Test.pas
+          ./build/GCStressHeaptrc 2> build/gc-stress-heaptrc.log
+          tail -5 build/gc-stress-heaptrc.log
+          if ! grep -qE '^0 unfreed memory blocks' build/gc-stress-heaptrc.log; then
+            echo "::error::heaptrc reported unfreed blocks after the GC stress test"
+            exit 1
+          fi
+          fpc @config.cfg -Facmem -O- -gw -gl -FUbuild/compiled/targets/gcstress-memcheck \
+            -obuild/GCStressMemcheck source/units/Goccia.GCStress.Test.pas
+          GOCCIA_GC_STRESS_FREE=1 valgrind --tool=memcheck --error-exitcode=42 \
+            --suppressions=scripts/valgrind/fpc-rtl.supp \
+            --errors-for-leak-kinds=none --leak-check=no \
+            --log-file=build/valgrind-gc-stress.log \
+            ./build/GCStressMemcheck > build/gc-stress-memcheck.log 2>&1
+          tail -5 build/valgrind-gc-stress.log
 
       - name: Upload memory-safety logs
         if: always()

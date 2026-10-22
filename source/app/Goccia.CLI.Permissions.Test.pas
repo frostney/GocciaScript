@@ -173,7 +173,7 @@ end;
 function TPermissionsTests.WriteConfig(const ARelativePath,
   AText: string): string;
 begin
-  Result := FRoot + PathDelim + ARelativePath;
+  Result := ExpandFileName(FRoot + PathDelim + ARelativePath);
   ForceDirectories(ExtractFileDir(Result));
   WriteUTF8FileText(Result, AText);
 end;
@@ -719,7 +719,8 @@ begin
     '"allow-read": ["./x", "x", "./x/"]}}');
   Expect<string>(NormalizedPermissionBlock(ReadRequest(Path))).ToBe(
     '{"permissions":{"allow-net":["a.test"],"allow-read":["' +
-    FRoot + PathDelim + 'dedupe' + PathDelim + 'x"]},"version":1}');
+    StringReplace(FRoot + PathDelim + 'dedupe' + PathDelim + 'x', '\', '\\',
+      [rfReplaceAll]) + '"]},"version":1}');
 end;
 
 procedure TPermissionsTests.TestUnscopedCollapsesToTrue;

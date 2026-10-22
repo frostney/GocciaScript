@@ -8,6 +8,7 @@ uses
   Classes,
   Contnrs,
   Generics.Collections,
+  SysUtils,
 
   OrderedStringMap,
   UnicodeStringList,
@@ -45,6 +46,7 @@ uses
   Goccia.Diagnostics.SourceRegistry,
   Goccia.EvaluationContext,
   Goccia.ExecutionContext,
+  Goccia.FetchTransport,
   Goccia.HostEnvironment,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
@@ -52,6 +54,7 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Modules.Resolver,
+  Goccia.Modules.Virtual,
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Packages.Address,
@@ -99,6 +102,7 @@ const
 
   stScript = Goccia.SourcePipeline.stScript;
   stModule = Goccia.SourcePipeline.stModule;
+  stDetect = Goccia.SourcePipeline.stDetect;
 
 type
 
@@ -114,7 +118,21 @@ type
 
   TGocciaEngineExtension = class
   public
+    { Runs this extension's pending host work — a fetch in flight, a due
+      timer — until it has none left, settling the promises it owns. }
     procedure WaitForIdle; virtual;
+    { True while this extension still has host work WaitForIdle would wait
+      for. Guest code that runs after WaitForIdle returns, in a later
+      extension's pass or in a microtask, can start more. }
+    function HasPendingWork: Boolean; virtual;
+    { Why a heap snapshot of the run would lose state this extension holds
+      outside the heap, or '' when it would not (ADR 0148). Separate from
+      HasPendingWork, which says whether the idle wait has work: a timer the
+      idle wait does not run is still state a snapshot would lose. }
+    function HeapSnapshotRefusal: string; virtual;
+    { Materialize only the named native builtin, without guest execution or
+      host I/O. Unknown names must leave the extension unchanged. }
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string); virtual;
     procedure DiscardPending; virtual;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; virtual;
@@ -156,12 +174,27 @@ type
     for the first and a TypeError for the second. }
   TGocciaGlobalEvalStage = (gesCompile, gesRun);
 
+  TGocciaEngine = class;
+
+  { Ends a run that paused at a pause checkpoint (ADR 0148): raised out of
+    Execute once the OnPauseCheckpoint handler asked to pause. No script can
+    catch it: no frame is running at a checkpoint. }
+  EGocciaRunPaused = class(Exception);
+
+  { Called at a pause checkpoint (ADR 0148). The handler may take a heap
+    snapshot; setting APause ends the run with EGocciaRunPaused, and leaving
+    it False goes on waiting for the host calls as usual. }
+  TGocciaPauseCheckpointEvent = procedure(const AEngine: TGocciaEngine;
+    var APause: Boolean) of object;
+
   TGocciaEngine = class
   public
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
     const DefaultCompatibility: TGocciaCompatibilityFlags = [];
     const DefaultWarningUnsupportedFeatures = False;
-    const DefaultSourceType: TGocciaSourceType = stScript;
+    { ADR 0140: an entry whose file name does not name its goal is a Module
+      when it has a top-level import or export declaration. }
+    const DefaultSourceType: TGocciaSourceType = stDetect;
   private
     { The realm's global environment. The engine owns it. }
     FGlobalScope: TGocciaGlobalScope;
@@ -194,6 +227,10 @@ type
     FCompileTimeNanoseconds: Int64;
     FExecuteTimeNanoseconds: Int64;
     FShimLoader: TGocciaShimLoader;
+    { ADR 0148: the extension that owns the run's host calls, and the
+      handler called when the run waits only on those. }
+    FHostCallOwner: TGocciaEngineExtension;
+    FOnPauseCheckpoint: TGocciaPauseCheckpointEvent;
     FSourceLines: TStringList;
     FExtensions: TGocciaEngineExtensionList;
     // Qualified: Generics.Collections' TObjectList<T> shadows the
@@ -209,6 +246,7 @@ type
     FCapabilities: TGocciaCapabilities;
     FProjectRoot: string;
     FFetchMaxResponseBytes: Integer;
+    FFetchTransport: IGocciaFetchTransport;
     FIsCapabilityChild: Boolean;
     FEffectiveCapabilitiesAudited: Boolean;
     FCapabilityProvenance: string;
@@ -324,6 +362,9 @@ type
       (last expression value, or undefined). }
     procedure InstantiateModuleFunctions(const AProgram: TGocciaProgram;
       var AContext: TGocciaEvaluationContext);
+    function CompileModuleProgram(const AProgram: TGocciaProgram;
+      const AFilePath: string; const ANonStrictMode,
+      AArgumentsObjectEnabled: Boolean): TGocciaBytecodeModule;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue;
@@ -331,8 +372,8 @@ type
       const AModule: TGocciaBytecodeModule; const AScope: TGocciaScope;
       const ARealm: TGocciaRealm);
     { The shim loader's evaluator (TGocciaShimEvaluator). }
-    procedure EvaluateShim(const AProgram: TGocciaProgram;
-      const AScope: TGocciaScope; const AFileName: string);
+    function EvaluateShim(const AProgram: TGocciaProgram;
+      const AScope: TGocciaScope; const AFileName: string): Boolean;
     { The VM's compiler for direct eval at a strict call site. }
     function CompileDirectEvalCode(const AProgram: TGocciaProgram;
       const ASourcePath: string; const ASite: TGocciaDirectEvalEnvironment;
@@ -343,8 +384,13 @@ type
     procedure PrintSourcePipelineWarnings(
       const APipelineResult: TGocciaSourcePipelineResult);
     { The parse options of this engine's language profile. }
+    procedure ValidateImportedBytecode(const AModule: TGocciaBytecodeModule);
+    function DecodeModuleBytecode(const ABytes: TBytes): TGocciaBytecodeModule;
+    procedure ReleaseModuleBytecode(const AModule: TGocciaBytecodeModule);
+    function RunRegisteredBytecodeEntry(const AAddress: string): TGocciaValue;
     function SourcePipelineOptions(
       const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
+    function ExtensionsHavePendingWork: Boolean;
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
@@ -380,16 +426,52 @@ type
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
     procedure WaitForRuntimeIdle;
+    { ADR 0148: true while the run is at a pause checkpoint. No bytecode
+      frame runs (the caller is the idle wait), the microtask queue is empty,
+      no Atomics.waitAsync waiter of this engine is pending, no extension but
+      HostCallOwner has pending work, none holds state outside the heap
+      (HeapSnapshotRefusal), and HostCallOwner has pending work: the run
+      waits only on host calls the embedder answers. }
+    function IsAtPauseCheckpoint: Boolean;
+    { ADR 0148: why the run is not idle enough for a heap snapshot, or ''
+      when it is: a bytecode frame running, a job queued, an Atomics.waitAsync
+      waiter of this engine pending, an extension other than HostCallOwner
+      with pending work, or state outside the heap (HeapSnapshotRefusal).
+      IsAtPauseCheckpoint is this plus pending host calls on the owner. }
+    function SnapshotIdleRefusal: string;
+    { ADR 0148: why a heap snapshot of the run would lose state held outside
+      the heap, from every extension, or '' when none would. }
+    function HeapSnapshotRefusal: string;
+    procedure MaterializeHeapSnapshotBuiltin(const AName: string);
     procedure RaiseUnhandledRejection;
     procedure ClearPendingWorkOfFailedRun(
       const AOuterRunningEngine: TGocciaEngine);
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    function CompileImportableModule(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    function ValidateBytecodeModule(const AModule: TGocciaBytecodeModule): TGocciaSourceType;
+    procedure RegisterBytecodeModule(const AAddress: string;
+      const ABytes: TBytes; const ABaseAddress: string = '');
+    function RunBytecodeBuffer(const ABytes: TBytes;
+      const AAddress: string): TGocciaValue;
     procedure RetainModule(const AModule: TGocciaBytecodeModule);
     { How many compiled modules the engine keeps for its lifetime: the
       programs it compiled, and the code of the Function constructor and of
       eval (ADR 0134, decision 1). }
     function RetainedModuleCount: Integer;
+    // The compiled modules this engine keeps, in the order it compiled them:
+    // the functions a heap snapshot names run their code (ADR 0148).
+    function RetainedModule(const AIndex: Integer): TGocciaBytecodeModule;
+    { Compiles the source module at ASourcePath as linking it would, without
+      linking or running it, and keeps it: a heap snapshot restore needs the
+      code of the modules it restores (ADR 0148). The engine's own source
+      when ASourcePath is its source path, else the loader reads the module
+      under its read policy, and ASource (AHasSource) is what loading it
+      would record. AAsCompiledEntry: the engine's own source, compiled as
+      CompileModule compiles it. }
+    function CompileModuleForSnapshot(const ASourcePath: string;
+      const AIsHostOwned, AAsCompiledEntry: Boolean; out AHasSource: Boolean;
+      out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
     function RunModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
     function RunModuleInScope(const AModule: TGocciaBytecodeModule;
@@ -487,7 +569,8 @@ type
       declarations on the global object, lexical declarations in its
       declarative record, so later programs on the engine see them. False by
       default, which keeps them in the program's own frame. The CLI hosts set
-      it to SourceType = stScript. }
+      it to SourceType <> stModule; CompileModule and Execute clear it for a
+      run whose goal settles on Module (ADR 0140). }
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     { How this engine loads its bootstrap shims; GetDateIntrinsic takes it. }
@@ -513,6 +596,12 @@ type
       A setting, not a capability (ADR 0122). }
     property FetchMaxResponseBytes: Integer read FFetchMaxResponseBytes
       write FFetchMaxResponseBytes;
+    { The embedder's transport for this engine's fetch() requests, or nil
+      (the default) for the built-in network client. Read when each request
+      starts, so it can be set or replaced between runs; not inherited by
+      any other engine (ADR 0146). }
+    property FetchTransport: IGocciaFetchTransport read FFetchTransport
+      write FFetchTransport;
     property SourcePath: string read FSourcePath;
     { Read-only view of the entry source. Runtime extensions attach after
       Initialize has stored the source but before Execute parses it, which is
@@ -534,6 +623,12 @@ type
       write SetExperimentalJSModuleSourceEnabled;
     property WarningUnsupportedFeatures: Boolean
       read FWarningUnsupportedFeatures write SetWarningUnsupportedFeatures;
+    { The entry's goal. stDetect (the default unless the file name is .mjs or
+      .mts) leaves it to the source (ADR 0140): Execute settles it for each
+      run. A host that parses the entry itself assigns the goal its parse
+      settled (TGocciaSourcePipelineResult.SourceType) before CompileModule.
+      Bytecode execution settles stDetect from the artifact's profile
+      without changing this setting. }
     property SourceType: TGocciaSourceType read FSourceType write FSourceType;
     property StrictTypes: Boolean read FStrictTypes write SetStrictTypes;
     property Shims: TStringList read FShims;
@@ -554,9 +649,21 @@ type
     property BuiltinReflect: TGocciaGlobalReflect read FBuiltinReflect;
     property GocciaGlobal: TGocciaObjectValue read FGocciaGlobal;
     property Realm: TGocciaRealm read FRealm;
+    { The bytecode VM this engine runs on; a heap snapshot releases its idle
+      scratch (ADR 0148). }
+    property VM: TGocciaVM read FVM;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property UnhandledRejections: TGocciaUnhandledRejectionMode
       read FUnhandledRejections write FUnhandledRejections;
+    { ADR 0148: the extension that owns the run's host calls; one of this
+      engine's extensions, or nil for none. }
+    property HostCallOwner: TGocciaEngineExtension read FHostCallOwner
+      write FHostCallOwner;
+    { ADR 0148: called where the idle wait would call HostCallOwner's
+      WaitForIdle, before it blocks, whenever the run is at a pause
+      checkpoint. }
+    property OnPauseCheckpoint: TGocciaPauseCheckpointEvent
+      read FOnPauseCheckpoint write FOnPauseCheckpoint;
     { Observes what UnhandledRejections decides about. Once a run has nothing
       left to do, and before the mode is applied, the hook is called for each
       promise the current microtask scope holds as rejected with no handler,
@@ -587,12 +694,14 @@ implementation
 
 uses
   Math,
-  SysUtils,
 
   TextSemantics,
   TimingUtils,
 
   Goccia.AsyncContext,
+  Goccia.Bytecode.Binary,
+  Goccia.Bytecode.Profile,
+  Goccia.Bytecode.Profile.Options,
   Goccia.CallStack,
   Goccia.Compiler,
   Goccia.Compiler.ConstantValue,
@@ -600,6 +709,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
@@ -607,6 +717,7 @@ uses
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
+  Goccia.InstructionLimit,
   Goccia.Keywords.Contextual,
   Goccia.MicrotaskQueue,
   Goccia.Platform,
@@ -614,6 +725,7 @@ uses
   Goccia.Scope.Declarations,
   Goccia.Scope.Redeclaration,
   Goccia.Spec,
+  Goccia.Timeout,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
@@ -646,6 +758,21 @@ threadvar
 { TGocciaEngineExtension }
 
 procedure TGocciaEngineExtension.WaitForIdle;
+begin
+end;
+
+function TGocciaEngineExtension.HasPendingWork: Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaEngineExtension.HeapSnapshotRefusal: string;
+begin
+  Result := '';
+end;
+
+procedure TGocciaEngineExtension.MaterializeHeapSnapshotBuiltin(
+  const AName: string);
 begin
 end;
 
@@ -819,15 +946,22 @@ var
   ExportNames: TArray<string>;
   ExportValue: TGocciaValue;
   Module: TGocciaModule;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  // Host enrollment is durable on the root module/address. Every static,
-  // dynamic or deferred import from it inherits host ownership regardless of
-  // when the import resolves.
-  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
-  ExportNames := Module.GetExportNames;
-  for ExportName in ExportNames do
-    if Module.TryGetExportValue(ExportName, ExportValue) then
-      RegisterGlobal(ExportName, ExportValue);
+  // The module is compiled and run here, possibly outside any run.
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    // Host enrollment is durable on the root module/address. Every static,
+    // dynamic or deferred import from it inherits host ownership regardless
+    // of when the import resolves.
+    Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
+    ExportNames := Module.GetExportNames;
+    for ExportName in ExportNames do
+      if Module.TryGetExportValue(ExportName, ExportValue) then
+        RegisterGlobal(ExportName, ExportValue);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
 end;
 
 procedure TGocciaEngine.InjectModule(const AName, AContent: string;
@@ -965,14 +1099,22 @@ procedure TGocciaEngine.InjectModulesFromModule(const APath: string);
 var
   DefaultValue: TGocciaValue;
   Module: TGocciaModule;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  // The manifest module is host-provided config. Durable ownership also covers
-  // imports its exported code may initiate after manifest evaluation returns.
-  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
-  if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
-    raise EArgumentException.Create(
-      'Virtual modules manifest module must have a default export.');
-  InjectModulesFromValue(DefaultValue, Module.Path, Module.Path);
+  // The manifest module is compiled and run here, possibly outside any run.
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    // The manifest module is host-provided config. Durable ownership also
+    // covers imports its exported code may initiate after manifest evaluation
+    // returns.
+    Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
+    if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
+      raise EArgumentException.Create(
+        'Virtual modules manifest module must have a default export.');
+    InjectModulesFromValue(DefaultValue, Module.Path, Module.Path);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
 end;
 
 procedure TGocciaEngine.ClearTransientCaches;
@@ -1236,7 +1378,9 @@ begin
 
   FInjectedGlobals := TStringList.Create;
   // Owns the lazy materializers (shims, runtime namespaces) whose factory
-  // closures back lazy global properties; freed in the destructor.
+  // closures back lazy global properties, and the plain objects whose methods
+  // back native functions (the TypedArray statics, Uint8Array encoding);
+  // freed in the destructor.
   FLazyThunks := Contnrs.TObjectList.Create(True);
   RegisterDefaultShimNames(FShims);
   PinSingletons;
@@ -1255,10 +1399,14 @@ begin
   FVM.CompileDirectEval := CompileDirectEvalCode;
   FModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
   FModuleLoader.InstantiateModuleFunctions := InstantiateModuleFunctions;
+  FModuleLoader.ReadModuleBytecode := DecodeModuleBytecode;
+  FModuleLoader.ReleaseModuleBytecode := ReleaseModuleBytecode;
+  FModuleLoader.ValidateModuleBytecode := ValidateImportedBytecode;
   // A shim runs on the VM, so the VM is set up first.
   FShimLoader.Realm := FRealm;
   FShimLoader.GlobalScope := FGlobalScope;
   FShimLoader.Evaluate := EvaluateShim;
+  RememberShimLoader(FShimLoader);
   ExecuteShims;
 
   if Assigned(FFunctionConstructor) then
@@ -1379,6 +1527,8 @@ begin
 end;
 
 destructor TGocciaEngine.Destroy;
+var
+  I: Integer;
 begin
   { Async-context snapshots hold this engine's objects, and `enterWith` can
     leave one installed with no scope to unwind it. Drop everything this engine
@@ -1408,9 +1558,25 @@ begin
       FModuleLoader.Resolver.ProviderAudit := nil;
   end;
 
+  { Bytecode callbacks borrow this engine just like resolver callbacks.
+    Preserve any replacements the host installed before teardown. }
+  if Assigned(FModuleLoader) then
+  begin
+    if TMethod(FModuleLoader.ReadModuleBytecode).Data = Pointer(Self) then
+      FModuleLoader.ReadModuleBytecode := nil;
+    if TMethod(FModuleLoader.ReleaseModuleBytecode).Data = Pointer(Self) then
+      FModuleLoader.ReleaseModuleBytecode := nil;
+    if TMethod(FModuleLoader.ValidateModuleBytecode).Data = Pointer(Self) then
+      FModuleLoader.ValidateModuleBytecode := nil;
+  end;
+
   if (TGarbageCollector.Instance <> nil) and Assigned(FGlobalScope) then
     TGarbageCollector.Instance.RemoveRootObject(FGlobalScope);
 
+    if Assigned(FModuleLoader) and Assigned(FRetainedModules) then
+      for I := 0 to FRetainedModules.Count - 1 do
+        FModuleLoader.ForgetBytecodeModule(
+          TGocciaBytecodeModule(FRetainedModules[I]));
     FRetainedModules.Free;
     FLazyThunks.Free;
     FExtensions.Free;
@@ -1690,260 +1856,275 @@ var
   BooleanConstructor: TGocciaBooleanClassValue;
   TypeDef: TGocciaTypeDefinition;
   TypedArrayStatic: TGocciaTypedArrayStaticFrom;
+  Roots: TGocciaActiveRootFrame;
 begin
-  TGocciaObjectValue.InitializeSharedPrototype;
-  TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaObjectClassValue;
-  TypeDef.ExposePrototype := nil;
-  TypeDef.PrototypeProvider := @ObjectPrototypeProvider;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
-  TypeDef.PrototypeParent := nil;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
-  FObjectConstructor := ObjectConstructor;
-  if (GetErrorProto <> nil) and (GetErrorProto.Prototype = nil) then
-    GetErrorProto.Prototype := ObjectConstructor.Prototype;
+  // The constructors made here directly are reachable from nothing until the
+  // global scope binds them (%TypedArray% until a typed array constructor
+  // inherits from it), and every allocation in between can collect.
+  Roots.Initialize;
+  try
+    TGocciaObjectValue.InitializeSharedPrototype;
+    TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaObjectClassValue;
+    TypeDef.ExposePrototype := nil;
+    TypeDef.PrototypeProvider := @ObjectPrototypeProvider;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
+    TypeDef.PrototypeParent := nil;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, ObjectConstructor);
+    FObjectConstructor := ObjectConstructor;
+    if (GetErrorProto <> nil) and (GetErrorProto.Prototype = nil) then
+      GetErrorProto.Prototype := ObjectConstructor.Prototype;
 
-  TypeDef.ConstructorName := CONSTRUCTOR_ARRAY;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaArrayClassValue;
-  TypeDef.ExposePrototype := @ExposeArrayPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalArray);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  ArrayConstructor := TGocciaArrayClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_ARRAY;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaArrayClassValue;
+    TypeDef.ExposePrototype := @ExposeArrayPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalArray);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := True;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    ArrayConstructor := TGocciaArrayClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_MAP;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaMapClassValue;
-  TypeDef.ExposePrototype := @ExposeMapPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinMap);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  MapConstructor := TGocciaMapClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_MAP;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaMapClassValue;
+    TypeDef.ExposePrototype := @ExposeMapPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinMap);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := True;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    MapConstructor := TGocciaMapClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_SET;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaSetClassValue;
-  TypeDef.ExposePrototype := @ExposeSetPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := True;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  SetConstructor := TGocciaSetClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_SET;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaSetClassValue;
+    TypeDef.ExposePrototype := @ExposeSetPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := True;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    SetConstructor := TGocciaSetClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_MAP;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaWeakMapClassValue;
-  TypeDef.ExposePrototype := @ExposeWeakMapPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  WeakMapConstructor := TGocciaWeakMapClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_WEAK_MAP;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaWeakMapClassValue;
+    TypeDef.ExposePrototype := @ExposeWeakMapPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    WeakMapConstructor := TGocciaWeakMapClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_SET;
-  TypeDef.Kind := gtdkCollectionLikeNativeType;
-  TypeDef.ClassValueClass := TGocciaWeakSetClassValue;
-  TypeDef.ExposePrototype := @ExposeWeakSetPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  WeakSetConstructor := TGocciaWeakSetClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_WEAK_SET;
+    TypeDef.Kind := gtdkCollectionLikeNativeType;
+    TypeDef.ClassValueClass := TGocciaWeakSetClassValue;
+    TypeDef.ExposePrototype := @ExposeWeakSetPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    WeakSetConstructor := TGocciaWeakSetClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_WEAK_REF;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaWeakRefClassValue;
-  TypeDef.ExposePrototype := @ExposeWeakRefPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  WeakRefConstructor := TGocciaWeakRefClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_WEAK_REF;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaWeakRefClassValue;
+    TypeDef.ExposePrototype := @ExposeWeakRefPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    WeakRefConstructor := TGocciaWeakRefClassValue(GenericConstructor);
 
-  TypeDef.ConstructorName := CONSTRUCTOR_FINALIZATION_REGISTRY;
-  TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaFinalizationRegistryClassValue;
-  TypeDef.ExposePrototype := @ExposeFinalizationRegistryPrototype;
-  TypeDef.PrototypeProvider := nil;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  FinalizationRegistryConstructor :=
-    TGocciaFinalizationRegistryClassValue(GenericConstructor);
+    TypeDef.ConstructorName := CONSTRUCTOR_FINALIZATION_REGISTRY;
+    TypeDef.Kind := gtdkNativeInstanceType;
+    TypeDef.ClassValueClass := TGocciaFinalizationRegistryClassValue;
+    TypeDef.ExposePrototype := @ExposeFinalizationRegistryPrototype;
+    TypeDef.PrototypeProvider := nil;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    FinalizationRegistryConstructor :=
+      TGocciaFinalizationRegistryClassValue(GenericConstructor);
 
-  ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
-  TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
-  ArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  ArrayBufferConstructor.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownSpecies,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        SpeciesGetter, 'get [Symbol.species]', 0),
-      nil, [pfConfigurable]));
-  if Assigned(FBuiltinArrayBuffer) then
-    for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
-      ArrayBufferConstructor.DefineProperty(Key,
-        TGocciaPropertyDescriptorData.Create(
-          FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key),
-          [pfConfigurable, pfWritable]));
-  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst, True);
+    ArrayBufferConstructor := TGocciaArrayBufferClassValue.Create(CONSTRUCTOR_ARRAY_BUFFER, nil);
+    Roots.Add(ArrayBufferConstructor);
+    TGocciaArrayBufferValue.ExposePrototype(ArrayBufferConstructor);
+    ArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    ArrayBufferConstructor.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
+    if Assigned(FBuiltinArrayBuffer) then
+      for Key in FBuiltinArrayBuffer.BuiltinObject.GetAllPropertyNames do
+        ArrayBufferConstructor.DefineProperty(Key,
+          TGocciaPropertyDescriptorData.Create(
+            FBuiltinArrayBuffer.BuiltinObject.GetProperty(Key),
+            [pfConfigurable, pfWritable]));
+    FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_ARRAY_BUFFER, ArrayBufferConstructor, dtConst, True);
 
-  SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
-  TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
-  SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  SharedArrayBufferConstructor.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownSpecies,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        SpeciesGetter, 'get [Symbol.species]', 0),
-      nil, [pfConfigurable]));
-  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
+    SharedArrayBufferConstructor := TGocciaSharedArrayBufferClassValue.Create(CONSTRUCTOR_SHARED_ARRAY_BUFFER, nil);
+    Roots.Add(SharedArrayBufferConstructor);
+    TGocciaSharedArrayBufferValue.ExposePrototype(SharedArrayBufferConstructor);
+    SharedArrayBufferConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    SharedArrayBufferConstructor.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
+    FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_SHARED_ARRAY_BUFFER, SharedArrayBufferConstructor, dtConst, True);
 
-  DataViewConstructor := TGocciaDataViewClassValue.Create(CONSTRUCTOR_DATA_VIEW, nil);
-  TGocciaDataViewValue.ExposePrototype(DataViewConstructor);
-  DataViewConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
-  FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_DATA_VIEW, DataViewConstructor, dtConst, True);
+    DataViewConstructor := TGocciaDataViewClassValue.Create(CONSTRUCTOR_DATA_VIEW, nil);
+    Roots.Add(DataViewConstructor);
+    TGocciaDataViewValue.ExposePrototype(DataViewConstructor);
+    DataViewConstructor.Prototype.Prototype := ObjectConstructor.Prototype;
+    FGlobalScope.DefineLexicalBinding(CONSTRUCTOR_DATA_VIEW, DataViewConstructor, dtConst, True);
 
-  // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
-  FTypedArrayIntrinsic := TGocciaTypedArrayIntrinsicClassValue.Create('TypedArray', nil);
-  // §17: built-in name/length are {writable: false, enumerable: false, configurable: true}
-  FTypedArrayIntrinsic.DefineProperty(PROP_NAME,
-    TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
-  FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
-    TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
-  TypedArrayStatic := TGocciaTypedArrayStaticFrom.Create;
-  FTypedArrayIntrinsic.DefineProperty(PROP_FROM,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        TypedArrayStatic.TypedArrayFrom, PROP_FROM, 1),
-      [pfConfigurable, pfWritable]));
-  FTypedArrayIntrinsic.DefineProperty(PROP_OF,
-    TGocciaPropertyDescriptorData.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        TypedArrayStatic.TypedArrayOf, PROP_OF, 0),
-      [pfConfigurable, pfWritable]));
-  FTypedArrayIntrinsic.DefineSymbolProperty(
-    TGocciaSymbolValue.WellKnownSpecies,
-    TGocciaPropertyDescriptorAccessor.Create(
-      TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        SpeciesGetter, 'get [Symbol.species]', 0),
-      nil, [pfConfigurable]));
-
-  RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_CLAMPED_ARRAY, takUint8Clamped, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_INT16_ARRAY, takInt16, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_UINT16_ARRAY, takUint16, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_INT32_ARRAY, takInt32, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_UINT32_ARRAY, takUint32, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT16_ARRAY, takFloat16, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT32_ARRAY, takFloat32, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_BIGINT64_ARRAY, takBigInt64, ObjectConstructor);
-  RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
-
-  // Wire %TypedArray%.prototype to the shared prototype (which has all methods)
-  if TGocciaTypedArrayValue.GetSharedPrototypeObject <> nil then
-  begin
-    FTypedArrayIntrinsic.ReplacePrototype(TGocciaTypedArrayValue.GetSharedPrototypeObject);
-    // §23.2.3: %TypedArray%.prototype.constructor = %TypedArray%
-    TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_CONSTRUCTOR,
-      TGocciaPropertyDescriptorData.Create(FTypedArrayIntrinsic, [pfConfigurable, pfWritable]));
-    // §23.2.3.33: %TypedArray%.prototype.toString is the same function object
-    // as Array.prototype.toString.
-    TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_TO_STRING,
+    // Create %TypedArray% intrinsic (not globally exposed per spec §23.2.1)
+    FTypedArrayIntrinsic := TGocciaTypedArrayIntrinsicClassValue.Create('TypedArray', nil);
+    Roots.Add(FTypedArrayIntrinsic);
+    // §17: built-in name/length are {writable: false, enumerable: false, configurable: true}
+    FTypedArrayIntrinsic.DefineProperty(PROP_NAME,
+      TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create('TypedArray'), [pfConfigurable]));
+    FTypedArrayIntrinsic.DefineProperty(PROP_LENGTH,
+      TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(0), [pfConfigurable]));
+    TypedArrayStatic := TGocciaTypedArrayStaticFrom.Create;
+    FLazyThunks.Add(TypedArrayStatic);
+    FTypedArrayIntrinsic.DefineProperty(PROP_FROM,
       TGocciaPropertyDescriptorData.Create(
-        ArrayConstructor.Prototype.GetProperty(PROP_TO_STRING),
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          TypedArrayStatic.TypedArrayFrom, PROP_FROM, 1),
         [pfConfigurable, pfWritable]));
+    FTypedArrayIntrinsic.DefineProperty(PROP_OF,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          TypedArrayStatic.TypedArrayOf, PROP_OF, 0),
+        [pfConfigurable, pfWritable]));
+    FTypedArrayIntrinsic.DefineSymbolProperty(
+      TGocciaSymbolValue.WellKnownSpecies,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(
+          SpeciesGetter, 'get [Symbol.species]', 0),
+        nil, [pfConfigurable]));
+
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT8_ARRAY, takInt8, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_ARRAY, takUint8, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT8_CLAMPED_ARRAY, takUint8Clamped, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT16_ARRAY, takInt16, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT16_ARRAY, takUint16, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_INT32_ARRAY, takInt32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_UINT32_ARRAY, takUint32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT16_ARRAY, takFloat16, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT32_ARRAY, takFloat32, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_FLOAT64_ARRAY, takFloat64, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_BIGINT64_ARRAY, takBigInt64, ObjectConstructor);
+    RegisterTypedArrayConstructor(CONSTRUCTOR_BIGUINT64_ARRAY, takBigUint64, ObjectConstructor);
+
+    // Wire %TypedArray%.prototype to the shared prototype (which has all methods)
+    if TGocciaTypedArrayValue.GetSharedPrototypeObject <> nil then
+    begin
+      FTypedArrayIntrinsic.ReplacePrototype(TGocciaTypedArrayValue.GetSharedPrototypeObject);
+      // §23.2.3: %TypedArray%.prototype.constructor = %TypedArray%
+      TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_CONSTRUCTOR,
+        TGocciaPropertyDescriptorData.Create(FTypedArrayIntrinsic, [pfConfigurable, pfWritable]));
+      // §23.2.3.33: %TypedArray%.prototype.toString is the same function object
+      // as Array.prototype.toString.
+      TGocciaTypedArrayValue.GetSharedPrototypeObject.DefineProperty(PROP_TO_STRING,
+        TGocciaPropertyDescriptorData.Create(
+          ArrayConstructor.Prototype.GetProperty(PROP_TO_STRING),
+          [pfConfigurable, pfWritable]));
+    end;
+
+    TypeDef.ConstructorName := CONSTRUCTOR_STRING;
+    TypeDef.Kind := gtdkPrimitiveWrapper;
+    TypeDef.ClassValueClass := TGocciaStringClassValue;
+    TypeDef.ExposePrototype := nil;
+    TypeDef.PrototypeProvider := @StringPrototypeProvider;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalString);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    StringConstructor := TGocciaStringClassValue(GenericConstructor);
+
+    FBuiltinRegExp := TGocciaGlobalRegExp.Create(CONSTRUCTOR_REGEXP,
+      FGlobalScope, ThrowError, ObjectConstructor.Prototype);
+
+    TypeDef.ConstructorName := CONSTRUCTOR_NUMBER;
+    TypeDef.Kind := gtdkPrimitiveWrapper;
+    TypeDef.ClassValueClass := TGocciaNumberClassValue;
+    TypeDef.ExposePrototype := nil;
+    TypeDef.PrototypeProvider := @NumberPrototypeProvider;
+    TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalNumber);
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    NumberConstructor := TGocciaNumberClassValue(GenericConstructor);
+
+    TypeDef.ConstructorName := CONSTRUCTOR_BOOLEAN;
+    TypeDef.Kind := gtdkPrimitiveWrapper;
+    TypeDef.ClassValueClass := TGocciaBooleanClassValue;
+    TypeDef.ExposePrototype := nil;
+    TypeDef.PrototypeProvider := @BooleanPrototypeProvider;
+    TypeDef.StaticSource := nil;
+    TypeDef.PrototypeParent := ObjectConstructor.Prototype;
+    TypeDef.AddSpeciesGetter := False;
+    RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
+    BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
+
+    FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
+    Roots.Add(FFunctionConstructor);
+    FunctionConstructor := FFunctionConstructor;
+    // Wire Function.prototype to be the shared function prototype (which has
+    // call/apply/bind/toString) so that Object.getPrototypeOf(fn) === Function.prototype.
+    // Chain: Function.prototype (= FSharedPrototype) → ObjectConstructor.Prototype
+    TGocciaFunctionBase.GetSharedPrototype.Prototype := ObjectConstructor.Prototype;
+    FunctionConstructor.ReplacePrototype(TGocciaFunctionBase.GetSharedPrototype);
+    FunctionConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
+      TGocciaPropertyDescriptorData.Create(FunctionConstructor, [pfConfigurable, pfWritable]));
+    // Set Function.prototype as the default [[Prototype]] for all class constructors
+    // (§15.7.3 step 7.a: classes without extends have [[Prototype]] = Function.prototype)
+    TGocciaClassValue.SetDefaultPrototype(FunctionConstructor.Prototype);
+    // Retroactively set [[Prototype]] on constructors created before FunctionConstructor
+    TGocciaClassValue.PatchDefaultPrototype(ObjectConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(GenericConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(ArrayConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(MapConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(SetConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(WeakMapConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(WeakSetConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(WeakRefConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(FinalizationRegistryConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(DataViewConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);
+    TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
+    TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
+    FGlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst, True);
+
+    // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
+    if TGocciaSymbolValue.SharedPrototype <> nil then
+      TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype).Prototype := ObjectConstructor.Prototype;
+
+    RegisterGocciaScriptGlobal;
+    RegisterGlobalThis;
+    RegisterLazyBuiltinGlobalProperties;
+  finally
+    Roots.Clear;
   end;
-
-  TypeDef.ConstructorName := CONSTRUCTOR_STRING;
-  TypeDef.Kind := gtdkPrimitiveWrapper;
-  TypeDef.ClassValueClass := TGocciaStringClassValue;
-  TypeDef.ExposePrototype := nil;
-  TypeDef.PrototypeProvider := @StringPrototypeProvider;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalString);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  StringConstructor := TGocciaStringClassValue(GenericConstructor);
-
-  FBuiltinRegExp := TGocciaGlobalRegExp.Create(CONSTRUCTOR_REGEXP,
-    FGlobalScope, ThrowError, ObjectConstructor.Prototype);
-
-  TypeDef.ConstructorName := CONSTRUCTOR_NUMBER;
-  TypeDef.Kind := gtdkPrimitiveWrapper;
-  TypeDef.ClassValueClass := TGocciaNumberClassValue;
-  TypeDef.ExposePrototype := nil;
-  TypeDef.PrototypeProvider := @NumberPrototypeProvider;
-  TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalNumber);
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  NumberConstructor := TGocciaNumberClassValue(GenericConstructor);
-
-  TypeDef.ConstructorName := CONSTRUCTOR_BOOLEAN;
-  TypeDef.Kind := gtdkPrimitiveWrapper;
-  TypeDef.ClassValueClass := TGocciaBooleanClassValue;
-  TypeDef.ExposePrototype := nil;
-  TypeDef.PrototypeProvider := @BooleanPrototypeProvider;
-  TypeDef.StaticSource := nil;
-  TypeDef.PrototypeParent := ObjectConstructor.Prototype;
-  TypeDef.AddSpeciesGetter := False;
-  RegisterTypeDefinition(FGlobalScope, TypeDef, SpeciesGetter, GenericConstructor);
-  BooleanConstructor := TGocciaBooleanClassValue(GenericConstructor);
-
-  FFunctionConstructor := TGocciaFunctionConstructorClassValue.Create('Function', nil);
-  FunctionConstructor := FFunctionConstructor;
-  // Wire Function.prototype to be the shared function prototype (which has
-  // call/apply/bind/toString) so that Object.getPrototypeOf(fn) === Function.prototype.
-  // Chain: Function.prototype (= FSharedPrototype) → ObjectConstructor.Prototype
-  TGocciaFunctionBase.GetSharedPrototype.Prototype := ObjectConstructor.Prototype;
-  FunctionConstructor.ReplacePrototype(TGocciaFunctionBase.GetSharedPrototype);
-  FunctionConstructor.Prototype.DefineProperty(PROP_CONSTRUCTOR,
-    TGocciaPropertyDescriptorData.Create(FunctionConstructor, [pfConfigurable, pfWritable]));
-  // Set Function.prototype as the default [[Prototype]] for all class constructors
-  // (§15.7.3 step 7.a: classes without extends have [[Prototype]] = Function.prototype)
-  TGocciaClassValue.SetDefaultPrototype(FunctionConstructor.Prototype);
-  // Retroactively set [[Prototype]] on constructors created before FunctionConstructor
-  TGocciaClassValue.PatchDefaultPrototype(ObjectConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(GenericConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(ArrayConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(MapConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(SetConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(WeakMapConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(WeakSetConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(WeakRefConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(FinalizationRegistryConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(ArrayBufferConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(SharedArrayBufferConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(DataViewConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(FTypedArrayIntrinsic);
-  TGocciaClassValue.PatchDefaultPrototype(StringConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(NumberConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(BooleanConstructor);
-  TGocciaClassValue.PatchDefaultPrototype(FunctionConstructor);
-  FGlobalScope.DefineLexicalBinding('Function', FunctionConstructor, dtConst, True);
-
-  // ES2026 §20.4.3: Symbol.prototype's [[Prototype]] is %Object.prototype%
-  if TGocciaSymbolValue.SharedPrototype <> nil then
-    TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype).Prototype := ObjectConstructor.Prototype;
-
-  RegisterGocciaScriptGlobal;
-  RegisterGlobalThis;
-  RegisterLazyBuiltinGlobalProperties;
 end;
 
 procedure TGocciaEngine.RegisterTypedArrayConstructor(const AName: string; const AKind: TGocciaTypedArrayKind; const AObjectConstructor: TGocciaClassValue);
@@ -1951,61 +2132,73 @@ var
   TAConstructor: TGocciaTypedArrayClassValue;
   BPE: TGocciaNumberLiteralValue;
   Encoding: TGocciaUint8ArrayEncoding;
+  Roots: TGocciaActiveRootFrame;
 begin
-  TAConstructor := TGocciaTypedArrayClassValue.Create(AName, FTypedArrayIntrinsic, AKind);
-  TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
-  TGocciaTypedArrayValue.SetKindPrototype(AKind, TAConstructor.Prototype);
-  TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
-  BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
-  TAConstructor.DefineProperty(PROP_BYTES_PER_ELEMENT,
-    TGocciaPropertyDescriptorData.Create(BPE, []));
-  TAConstructor.Prototype.DefineProperty(PROP_BYTES_PER_ELEMENT,
-    TGocciaPropertyDescriptorData.Create(BPE, []));
+  // The constructor and the shared BYTES_PER_ELEMENT number are reachable
+  // from nothing until they are stored or bound, and the steps between them
+  // allocate.
+  Roots.Initialize;
+  try
+    TAConstructor := TGocciaTypedArrayClassValue.Create(AName, FTypedArrayIntrinsic, AKind);
+    Roots.Add(TAConstructor);
+    TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
+    TGocciaTypedArrayValue.SetKindPrototype(AKind, TAConstructor.Prototype);
+    TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
+    BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
+    Roots.Add(BPE);
+    TAConstructor.DefineProperty(PROP_BYTES_PER_ELEMENT,
+      TGocciaPropertyDescriptorData.Create(BPE, []));
+    TAConstructor.Prototype.DefineProperty(PROP_BYTES_PER_ELEMENT,
+      TGocciaPropertyDescriptorData.Create(BPE, []));
 
-  // Uint8Array-only: Base64/Hex encoding methods (TC39 Uint8Array Base64)
-  if AKind = takUint8 then
-  begin
-    Encoding := TGocciaUint8ArrayEncoding.Create;
+    // Uint8Array-only: Base64/Hex encoding methods (TC39 Uint8Array Base64)
+    if AKind = takUint8 then
+    begin
+      Encoding := TGocciaUint8ArrayEncoding.Create;
+      FLazyThunks.Add(Encoding);
 
-    // Static methods on Uint8Array constructor
-    TAConstructor.DefineProperty(PROP_FROM_BASE64,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.FromBase64, PROP_FROM_BASE64, 1),
-        [pfConfigurable, pfWritable]));
-    TAConstructor.DefineProperty(PROP_FROM_HEX,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.FromHex, PROP_FROM_HEX, 1),
-        [pfConfigurable, pfWritable]));
+      // Static methods on Uint8Array constructor
+      TAConstructor.DefineProperty(PROP_FROM_BASE64,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.FromBase64, PROP_FROM_BASE64, 1),
+          [pfConfigurable, pfWritable]));
+      TAConstructor.DefineProperty(PROP_FROM_HEX,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.FromHex, PROP_FROM_HEX, 1),
+          [pfConfigurable, pfWritable]));
 
-    // Prototype methods on Uint8Array.prototype
-    TAConstructor.Prototype.DefineProperty(PROP_TO_BASE64,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.ToBase64, PROP_TO_BASE64, 0),
-        [pfConfigurable, pfWritable]));
-    TAConstructor.Prototype.DefineProperty(PROP_TO_HEX,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.ToHex, PROP_TO_HEX, 0),
-        [pfConfigurable, pfWritable]));
-    TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_BASE64,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.SetFromBase64, PROP_SET_FROM_BASE64, 1),
-        [pfConfigurable, pfWritable]));
-    TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_HEX,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaNativeFunctionValue.CreateWithoutPrototype(
-          Encoding.SetFromHex, PROP_SET_FROM_HEX, 1),
-        [pfConfigurable, pfWritable]));
+      // Prototype methods on Uint8Array.prototype
+      TAConstructor.Prototype.DefineProperty(PROP_TO_BASE64,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.ToBase64, PROP_TO_BASE64, 0),
+          [pfConfigurable, pfWritable]));
+      TAConstructor.Prototype.DefineProperty(PROP_TO_HEX,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.ToHex, PROP_TO_HEX, 0),
+          [pfConfigurable, pfWritable]));
+      TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_BASE64,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.SetFromBase64, PROP_SET_FROM_BASE64, 1),
+          [pfConfigurable, pfWritable]));
+      TAConstructor.Prototype.DefineProperty(PROP_SET_FROM_HEX,
+        TGocciaPropertyDescriptorData.Create(
+          TGocciaNativeFunctionValue.CreateWithoutPrototype(
+            Encoding.SetFromHex, PROP_SET_FROM_HEX, 1),
+          [pfConfigurable, pfWritable]));
 
-    // Uint8Array instances use constructor's prototype (encoding methods + shared chain)
-    TGocciaTypedArrayValue.SetUint8Prototype(TAConstructor.Prototype);
+      // Uint8Array instances use constructor's prototype (encoding methods + shared chain)
+      TGocciaTypedArrayValue.SetUint8Prototype(TAConstructor.Prototype);
+    end;
+
+    FGlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst, True);
+  finally
+    Roots.Clear;
   end;
-
-  FGlobalScope.DefineLexicalBinding(AName, TAConstructor, dtConst, True);
 end;
 
 procedure TGocciaEngine.RegisterGlobalThis;
@@ -2252,34 +2445,161 @@ begin
     FCapabilityAuditSink := nil;
 end;
 
+function TGocciaEngine.ExtensionsHavePendingWork: Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].HasPendingWork then
+      Exit(True);
+  Result := False;
+end;
+
+{ Runs the engine to idle: no host work in flight, no job queued. A job can
+  start host work after that extension's pass: in
+  `await Promise.resolve(); await fetch(url)` at the top of a module, the
+  fetch runs in the job that resumes the module. One round left that request
+  in flight and the run ended without it, so rounds repeat until one leaves
+  no extension with work. }
+function TGocciaEngine.SnapshotIdleRefusal: string;
+var
+  I: Integer;
+  Queue: TGocciaMicrotaskQueue;
+  Reason: string;
+begin
+  if Assigned(FVM) and not FVM.IsIdle then
+    Exit('a bytecode frame is running');
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if Assigned(Queue) and Queue.HasPending then
+    Exit('a job is queued');
+  // This engine's waiters, settled or not; another engine's on the thread
+  // are its own.
+  if HasAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
+    Exit('an Atomics.waitAsync waiter is pending');
+  for I := 0 to FExtensions.Count - 1 do
+    if (FExtensions[I] <> FHostCallOwner) and FExtensions[I].HasPendingWork then
+      Exit('an extension other than the host-call owner has pending work');
+  // State outside the heap no codec covers (ADR 0148).
+  Reason := HeapSnapshotRefusal;
+  if Reason <> '' then
+    Exit('state outside the heap no codec covers: ' + Reason);
+  Result := '';
+end;
+
+function TGocciaEngine.IsAtPauseCheckpoint: Boolean;
+begin
+  Result := Assigned(FHostCallOwner) and (SnapshotIdleRefusal = '') and
+    FHostCallOwner.HasPendingWork;
+end;
+
+function TGocciaEngine.HeapSnapshotRefusal: string;
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+  begin
+    Result := FExtensions[I].HeapSnapshotRefusal;
+    if Result <> '' then
+      Exit;
+  end;
+  Result := '';
+end;
+
+procedure TGocciaEngine.MaterializeHeapSnapshotBuiltin(const AName: string);
+var
+  I: Integer;
+begin
+  // A sorted manifest can name the builtin before the global whose lazy
+  // property normally creates it. These factories contain only native setup.
+  if AName = 'Temporal' then
+    MaterializeTemporalGlobal
+  else if AName = 'Intl' then
+    MaterializeIntlGlobal
+  else if AName = CONSTRUCTOR_ATOMICS then
+    MaterializeAtomicsGlobal
+  else if AName = 'Reflect' then
+    MaterializeReflectGlobal
+  else if AName = CONSTRUCTOR_DISPOSABLE_STACK then
+    MaterializeDisposableStackGlobal;
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].MaterializeHeapSnapshotBuiltin(AName);
+end;
+
 procedure TGocciaEngine.WaitForRuntimeIdle;
 var
   I: Integer;
   Queue: TGocciaMicrotaskQueue;
   GC: TGarbageCollector;
+  Repeating, Pause: Boolean;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
+  Repeating := False;
+  { The jobs this runs are script, and an embedder can call it outside a run:
+    establish the floating-point mode as the run entries do. }
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    for I := 0 to FExtensions.Count - 1 do
-      FExtensions[I].WaitForIdle;
-    GC := TGarbageCollector.Instance;
-    if Assigned(GC) then
-      GC.ClearKeptObjects;
-    Queue := TGocciaMicrotaskQueue.Instance;
     repeat
-      if PumpAtomicsWaitAsyncCompletions = 0 then
+      { A further round waits again: the deadline and a host's stop end it. }
+      if Repeating then
       begin
-        if Assigned(Queue) and Queue.HasPending then
-          Queue.DrainQueue
-        else
-          Break;
-      end
-      else if Assigned(Queue) and Queue.HasPending then
-        Queue.DrainQueue;
-    until False;
+        CheckExecutionTimeoutNow;
+        CheckInstructionLimit;
+      end;
+      Repeating := True;
+      for I := 0 to FExtensions.Count - 1 do
+      begin
+        if (FExtensions[I] = FHostCallOwner) and
+           Assigned(FOnPauseCheckpoint) and IsAtPauseCheckpoint then
+        begin
+          { No job runs at a checkpoint, so the objects WeakRef and
+            FinalizationRegistry kept alive for the current job are let go
+            here (ES2026 §9.10 ClearKeptObjects), as the pass below would.
+            Kept, they are state a snapshot would not hold. }
+          GC := TGarbageCollector.Instance;
+          if Assigned(GC) then
+            GC.ClearKeptObjects;
+          Pause := False;
+          FOnPauseCheckpoint(Self, Pause);
+          if Pause then
+            raise EGocciaRunPaused.Create('the run paused at a checkpoint');
+        end;
+        FExtensions[I].WaitForIdle;
+      end;
+      GC := TGarbageCollector.Instance;
+      if Assigned(GC) then
+        GC.ClearKeptObjects;
+      Queue := TGocciaMicrotaskQueue.Instance;
+      repeat
+        if PumpAtomicsWaitAsyncCompletions = 0 then
+        begin
+          if Assigned(Queue) and Queue.HasPending then
+            Queue.DrainQueue
+          else if ExtensionsHavePendingWork then
+            { A job started host work after its extension's pass: the next
+              round waits on it before this loop sleeps for an Atomics
+              timeout. The fetch wait settles a waiter that falls due
+              meanwhile. }
+            Break
+          else if HasSelfSettlingAtomicsWaitAsyncWaiters(FBuiltinAtomics) then
+          begin
+            { An Atomics.waitAsync timeout still to expire. The deadline and
+              a host's stop end the wait, as in every other engine wait. }
+            CheckExecutionTimeoutNow;
+            CheckInstructionLimit;
+            Sleep(1);
+          end
+          else
+            Break;
+        end
+        else if Assigned(Queue) and Queue.HasPending then
+          Queue.DrainQueue;
+      until False;
+    until not ExtensionsHavePendingWork;
   finally
     GC := TGarbageCollector.Instance;
     if Assigned(GC) then
       GC.ClearKeptObjects;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 
@@ -2380,6 +2700,10 @@ begin
       TGocciaCoverageTracker.Instance.Enabled;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
+    if FSourceType = stModule then
+      Result.CompileProfile := BuildBytecodeCompileProfile(SourcePipelineOptions(stModule), FStrictTypes)
+    else
+      Result.CompileProfile := BuildBytecodeCompileProfile(SourcePipelineOptions(stScript), FStrictTypes);
   finally
     Compiler.Free;
   end;
@@ -2397,10 +2721,31 @@ procedure TGocciaEngine.InstantiateModuleFunctions(
   const AProgram: TGocciaProgram; var AContext: TGocciaEvaluationContext);
 var
   BytecodeModule: TGocciaBytecodeModule;
+begin
+  if AContext.CompiledModule is TGocciaBytecodeModule then
+  begin
+    ValidateImportedBytecode(TGocciaBytecodeModule(AContext.CompiledModule));
+    InstantiateCompiledModuleFunctions(TGocciaBytecodeModule(AContext.CompiledModule),
+      AContext.Scope, AContext.Realm);
+    Exit;
+  end;
+  BytecodeModule := CompileModuleProgram(AProgram, AContext.CurrentFilePath,
+    AContext.NonStrictMode, AContext.Scope.EffectiveArgumentsObjectEnabled);
+  AContext.CompiledModule := BytecodeModule;
+  InstantiateCompiledModuleFunctions(BytecodeModule, AContext.Scope,
+    AContext.Realm);
+end;
+
+{ A module-form program compiled for linking, and kept for the engine's
+  life. }
+function TGocciaEngine.CompileModuleProgram(const AProgram: TGocciaProgram;
+  const AFilePath: string; const ANonStrictMode,
+  AArgumentsObjectEnabled: Boolean): TGocciaBytecodeModule;
+var
   Compiler: TGocciaCompiler;
   Options: TGocciaCompilerOptimizationOptions;
 begin
-  Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
+  Compiler := TGocciaCompiler.Create(AFilePath);
   try
     // The module's top-level bindings live in its Module Environment
     // Record, so the module body and its functions read them there by name:
@@ -2410,22 +2755,74 @@ begin
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
     Compiler.PreinitializedTopLevelFunctions := True;
     Compiler.StrictTypes := FStrictTypes;
-    Compiler.NonStrictMode := AContext.NonStrictMode;
-    Compiler.ArgumentsObjectEnabled :=
-      AContext.Scope.EffectiveArgumentsObjectEnabled;
+    Compiler.NonStrictMode := ANonStrictMode;
+    Compiler.ArgumentsObjectEnabled := AArgumentsObjectEnabled;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
     Compiler.OptimizationOptions := Options;
-    BytecodeModule := Compiler.Compile(AProgram);
+    Result := Compiler.Compile(AProgram);
+    Result.CompileProfile := BuildBytecodeCompileProfile(
+      SourcePipelineOptions(stModule), FStrictTypes);
   finally
     Compiler.Free;
   end;
-  FRetainedModules.Add(BytecodeModule);
-  AContext.CompiledModule := BytecodeModule;
-  InstantiateCompiledModuleFunctions(BytecodeModule, AContext.Scope,
-    AContext.Realm);
+  FRetainedModules.Add(Result);
+end;
+
+{ ADR 0148: a restore compiles each source module a snapshot names as linking
+  it compiled it, a module's code being strict and its arguments object the
+  loader's setting, or the engine's for its own source. The snapshot names
+  the bytecode by its hash, so a module compiled differently is refused. }
+function TGocciaEngine.CompileModuleForSnapshot(const ASourcePath: string;
+  const AIsHostOwned, AAsCompiledEntry: Boolean; out AHasSource: Boolean;
+  out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
+var
+  ParseResult: TGocciaSourcePipelineResult;
+  ProgramNode: TGocciaProgram;
+  SavedSourceType: TGocciaSourceType;
+begin
+  AHasSource := False;
+  ASource := Default(TGocciaModuleSnapshotSource);
+  if AAsCompiledEntry then
+  begin
+    if ASourcePath <> FSourcePath then
+      raise Exception.Create('an entry module this engine was not made with');
+    ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
+      SourcePipelineOptions(stModule));
+    // The record names a Module, regardless of the host's next parse goal.
+    SavedSourceType := FSourceType;
+    FSourceType := stModule;
+    try
+      Result := CompileModule(ParseResult.ProgramNode);
+    finally
+      FSourceType := SavedSourceType;
+      ParseResult.Free;
+    end;
+    Exit;
+  end;
+  if ASourcePath = FSourcePath then
+  begin
+    ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
+      SourcePipelineOptions(stModule));
+    try
+      Result := CompileModuleProgram(ParseResult.ProgramNode, FSourcePath,
+        False, cfArgumentsObject in FCompatibility);
+    finally
+      ParseResult.Free;
+    end;
+    Exit;
+  end;
+  ProgramNode := FModuleLoader.ParseModuleForSnapshot(ASourcePath,
+    AIsHostOwned, ASource);
+  try
+    Result := CompileModuleProgram(ProgramNode, ASourcePath, False,
+      FModuleLoader.ArgumentsObjectEnabled);
+  finally
+    ProgramNode.Free;
+  end;
+  AHasSource := True;
 end;
 
 { Create each top-level function declaration of AModule, compiled for
@@ -2483,11 +2880,36 @@ end;
   compiling and running it must not change it. The shim can be materialized
   while the VM is running user code (a lazy global read), so the VM state the
   module run changes is restored afterwards, as EvaluateModuleBody does. }
-procedure TGocciaEngine.EvaluateShim(const AProgram: TGocciaProgram;
-  const AScope: TGocciaScope; const AFileName: string);
+// Every template of a shim's code is ShimCode (TGocciaVM.BeginShimLoad).
+procedure MarkShimCode(const ATemplate: TGocciaFunctionTemplate);
 var
+  Pending: TList<TGocciaFunctionTemplate>;
+  Template: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Pending := TList<TGocciaFunctionTemplate>.Create;
+  try
+    Pending.Add(ATemplate);
+    while Pending.Count > 0 do
+    begin
+      Template := Pending[Pending.Count - 1];
+      Pending.Delete(Pending.Count - 1);
+      Template.ShimCode := True;
+      for I := 0 to Template.FunctionCount - 1 do
+        Pending.Add(Template.GetFunction(I));
+    end;
+  finally
+    Pending.Free;
+  end;
+end;
+
+function TGocciaEngine.EvaluateShim(const AProgram: TGocciaProgram;
+  const AScope: TGocciaScope; const AFileName: string): Boolean;
+var
+  ShimLoadToken: Int64;
   BytecodeModule: TGocciaBytecodeModule;
   Compiler: TGocciaCompiler;
+  PipelineOptions: TGocciaSourcePipelineOptions;
   GC: TGarbageCollector;
   SavedGlobalBackedTopLevel: Boolean;
   SavedGlobalScope: TGocciaScope;
@@ -2503,10 +2925,16 @@ begin
     Compiler.ArgumentsObjectEnabled := AScope.EffectiveArgumentsObjectEnabled;
     Compiler.HideSourceText := True;
     BytecodeModule := Compiler.Compile(AProgram);
+    PipelineOptions := ShimSourcePipelineOptions;
+    if Compiler.ArgumentsObjectEnabled then
+      Include(PipelineOptions.Compatibility, cfArgumentsObject);
+    BytecodeModule.CompileProfile := BuildBytecodeCompileProfile(
+      PipelineOptions, Compiler.StrictTypes);
   finally
     Compiler.Free;
   end;
   FRetainedModules.Add(BytecodeModule);
+  MarkShimCode(BytecodeModule.TopLevel);
 
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
@@ -2515,6 +2943,7 @@ begin
   SavedRealm := FVM.Realm;
   SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
   SavedRuntimeModule := FVM.CurrentRuntimeModule;
+  ShimLoadToken := FVM.BeginShimLoad;
   try
     PredeclareModuleLexicalDeclarations(AProgram, AScope);
     InstantiateCompiledModuleFunctions(BytecodeModule, AScope, FRealm);
@@ -2525,6 +2954,7 @@ begin
       FVM.Realm := FRealm;
     FVM.ExecuteImportedModule(BytecodeModule);
   finally
+    Result := FVM.EndShimLoad(ShimLoadToken);
     FVM.GlobalScope := SavedGlobalScope;
     FVM.Realm := SavedRealm;
     FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
@@ -2561,6 +2991,8 @@ begin
     BytecodeModule := TGocciaBytecodeModule(
       InstantiationContext.CompiledModule);
   end;
+  if BytecodeModule.WasLoadedFromBytecode then
+    ValidateImportedBytecode(BytecodeModule);
   SavedGlobalScope := FVM.GlobalScope;
   SavedRealm := FVM.Realm;
   SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
@@ -2635,6 +3067,8 @@ begin
     Compiler.OptimizationOptions := Options;
     Module := Compiler.CompileDirectEval(AProgram, ASite, AStrictEval,
       ADeclaredVarNames);
+    Module.CompileProfile := BuildBytecodeCompileProfile(
+      SourcePipelineOptions(stScript), FStrictTypes);
   finally
     Compiler.Free;
   end;
@@ -2828,6 +3262,15 @@ var
   SavedEntryRequestsLeft: Integer;
   WasEnabled: Boolean;
 begin
+  if not Assigned(AModule) then
+    raise EArgumentNilException.Create('Bytecode module is nil');
+  { Every public raw execution path meets here. Loaded artifacts must keep
+    their recorded profile even when callers bypass the file/buffer helpers. }
+  if AModule.WasLoadedFromBytecode then
+    ValidateBytecodeModule(AModule);
+  if Assigned(AModule.LinkPlan) then
+    raise EInvalidOperation.Create(
+      'Linked bytecode requires RunModuleForSourceType or RunBytecodeBuffer');
   GC := TGarbageCollector.Instance;
   WasEnabled := GC.Enabled;
   GC.Enabled := False;
@@ -2839,7 +3282,10 @@ begin
   FVM.ProfilingFunctions := (TGocciaProfiler.Instance <> nil)
     and TGocciaProfiler.Instance.Enabled
     and (pmFunctions in TGocciaProfiler.Instance.Mode);
-  FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+  if AModule.WasLoadedFromBytecode then
+    FVM.GlobalBackedTopLevel := AModule.GlobalBackedTopLevel
+  else
+    FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;
   { A run can nest (the Function constructor runs its body here), so the
     outer run's linked modules are set aside, not overwritten. }
   SavedLinkedModules := FLinkedModules;
@@ -2878,13 +3324,24 @@ end;
 function TGocciaEngine.CompileModule(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
+  SavedGlobalBackedTopLevel: Boolean;
   FloatingPointState: TGocciaFloatingPointState;
 begin
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    // Module source is always strict.
-    Result := CompileProgram(AProgram,
-      (FSourceType <> stModule) and (cfNonStrictMode in FCompatibility));
+    { A host configures GlobalBackedTopLevel before the parse settles a
+      detected goal (ADR 0140), so a Module's top level is kept off the global
+      object here. }
+    SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
+    if FSourceType = stModule then
+      FGlobalBackedTopLevel := False;
+    try
+      // Module source is always strict.
+      Result := CompileProgram(AProgram,
+        (FSourceType <> stModule) and (cfNonStrictMode in FCompatibility));
+    finally
+      FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    end;
     FRetainedModules.Add(Result);
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
@@ -2906,12 +3363,18 @@ var
   CompilerOptions: TGocciaCompilerOptimizationOptions;
   SavedGlobalScope: TGocciaScope;
   SavedGlobalBackedTopLevel: Boolean;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
   AStage := gesCompile;
   VarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
   SourceLines := CreateECMAScriptSourceLines(ASourceText);
+  // An embedder can call this entry outside any run, so it establishes the
+  // floating-point mode (NaN and infinity arithmetic without traps, ES2026
+  // §6.1.6.1) for the compile and the run, as Execute does, and restores the
+  // caller's.
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
     Options := SourcePipelineOptions(stScript);
     OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
@@ -2954,6 +3417,8 @@ begin
             Compiler.OptimizationOptions := CompilerOptions;
             Module := Compiler.CompileGlobalEval(ParseResult.ProgramNode,
               StrictEval, DeclaredVarNames);
+            Module.CompileProfile := BuildBytecodeCompileProfile(
+              Options, FStrictTypes);
           finally
             Compiler.Free;
           end;
@@ -2991,6 +3456,7 @@ begin
       OptionsScope.Free;
     end;
   finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
     SourceLines.Free;
     DeclaredVarNames.Free;
     FunctionNames.Free;
@@ -3020,6 +3486,12 @@ end;
 function TGocciaEngine.RetainedModuleCount: Integer;
 begin
   Result := FRetainedModules.Count;
+end;
+
+function TGocciaEngine.RetainedModule(
+  const AIndex: Integer): TGocciaBytecodeModule;
+begin
+  Result := TGocciaBytecodeModule(FRetainedModules[AIndex]);
 end;
 
 procedure RegisterEntryModuleExports(const AModule: TGocciaModule;
@@ -3491,6 +3963,8 @@ end;
 function TGocciaEngine.RunModule(
   const AModule: TGocciaBytecodeModule): TGocciaValue;
 var
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
+  RunSourceType: TGocciaSourceType;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
   PreviousRunningEngine: TGocciaEngine;
@@ -3502,7 +3976,13 @@ begin
   PreviousRunningEngine := GRunningEngine;
   GRunningEngine := Self;
   Completed := False;
+  OptionsScope := nil;
   try
+    RunSourceType := FSourceType;
+    if Assigned(AModule) and AModule.WasLoadedFromBytecode then
+      RunSourceType := ValidateBytecodeModule(AModule);
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(
+      SourcePipelineOptions(RunSourceType));
     Result := RunBytecodeModule(AModule, nil);
     GC := TGarbageCollector.Instance;
     if Assigned(Result) and Assigned(GC) then
@@ -3519,6 +3999,7 @@ begin
     if not Completed then
       ClearPendingWorkOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
+    OptionsScope.Free;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
@@ -3527,6 +4008,8 @@ function TGocciaEngine.RunModuleInScope(
   const AModule: TGocciaBytecodeModule;
   const AScope: TGocciaScope): TGocciaValue;
 var
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
+  RunSourceType: TGocciaSourceType;
   GC: TGarbageCollector;
   SavedGlobalScope: TGocciaScope;
   FloatingPointState: TGocciaFloatingPointState;
@@ -3539,7 +4022,13 @@ begin
   PreviousRunningEngine := GRunningEngine;
   GRunningEngine := Self;
   Completed := False;
+  OptionsScope := nil;
   try
+    RunSourceType := FSourceType;
+    if Assigned(AModule) and AModule.WasLoadedFromBytecode then
+      RunSourceType := ValidateBytecodeModule(AModule);
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(
+      SourcePipelineOptions(RunSourceType));
     SavedGlobalScope := FVM.GlobalScope;
     FVM.GlobalScope := AScope;
     try
@@ -3562,8 +4051,26 @@ begin
     if not Completed then
       ClearPendingWorkOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
+    OptionsScope.Free;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
+end;
+
+{ The provider owns its entry namespace independently of source-file
+  existence. In particular, a source-free sandbox entry stays `/`-rooted on
+  Windows instead of acquiring a host drive prefix. }
+function EntryModulePath(const ALoader: TGocciaModuleLoader;
+  const ASourcePath: string): string;
+var
+  Provider: TGocciaModuleContentProvider;
+begin
+  if IsVirtualModuleURI(ASourcePath) then
+    Exit(ALoader.VirtualModules.CanonicalAddress(ASourcePath, ''));
+  Provider := ALoader.ContentProvider;
+  if Assigned(Provider) then
+    Result := Provider.NormalizeEntryAddress(ASourcePath)
+  else
+    Result := ExpandFileName(ASourcePath);
 end;
 
 function TGocciaEngine.RunModuleForSourceType(
@@ -3574,15 +4081,26 @@ var
   EntryModule: TGocciaModule;
   ModuleScope: TGocciaScope;
   PrevScope: TGocciaDiagnosticSourceScope;
+  SavedGlobalBackedTopLevel: Boolean;
   SavedRuntimeModule: TGocciaModule;
+  RunSourceType: TGocciaSourceType;
 begin
+  RunSourceType := ValidateBytecodeModule(AModule);
+  if Assigned(AModule.LinkPlan) then
+  begin
+    FModuleLoader.RegisterPrecompiledModule(EntryModulePath(FModuleLoader, AFileName),
+      AModule, nil);
+    Exit(RunRegisteredBytecodeEntry(EntryModulePath(FModuleLoader, AFileName)));
+  end;
+  if AModule.WasLoadedFromBytecode then
+    AModule.RelocateSourcePath(EntryModulePath(FModuleLoader, AFileName));
   // Entry for an already compiled module (Execute parses and compiles the
   // engine's source itself). Bind code-frame capture to this engine's own
   // scope for the run, as Execute does.
   PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
     FModuleLoader.DiagnosticScope);
   try
-    if FSourceType = stModule then
+    if RunSourceType = stModule then
     begin
       ModuleScope := FGlobalScope.CreateChild(skModule,
         'Module:' + AFileName);
@@ -3599,13 +4117,19 @@ begin
         VM's current runtime module it gets the program's exports
         (InitializeEntryLocalExports and InitializeEntryLinkedExports, then
         OP_EXPORT). }
-      EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
+      EntryModule := TGocciaModule.Create(
+        EntryModulePath(FModuleLoader, AFileName));
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then
         EntryModule.LastModified := EntryLastModified;
+      EntryModule.SnapshotKind := mskEntryCompiled;
+      EntryModule.CompiledModule := AModule;
       FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
       SavedRuntimeModule := FVM.CurrentRuntimeModule;
       FVM.CurrentRuntimeModule := EntryModule;
+      { As CompileModule: the Module's top level is not global-backed. }
+      SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
+      FGlobalBackedTopLevel := False;
       FModuleLoader.BeginEvaluatingModulePath(EntryModule.Path);
       try
         try
@@ -3622,10 +4146,19 @@ begin
       finally
         FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
         FVM.CurrentRuntimeModule := SavedRuntimeModule;
+        FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
       end;
     end
     else
-      Result := RunModule(AModule);
+    begin
+      SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
+      FGlobalBackedTopLevel := AModule.GlobalBackedTopLevel;
+      try
+        Result := RunModule(AModule);
+      finally
+        FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+      end;
+    end;
   finally
     TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
   end;
@@ -3720,8 +4253,206 @@ begin
   UnregisterGlobalModuleProvider(AName);
 end;
 
+{ The entry's evaluation promise once the run is idle. Rejected, the entry
+  threw. Still pending, its top-level await waits on a promise that nothing
+  left in the run can settle: that fails the run as it does where the entry's
+  awaits run synchronously (Goccia.Values.Await.AwaitValue), never reporting
+  a run that stopped partway as a success. A rejection no handler took is
+  usually why — a reaction that threw instead of settling what the entry
+  awaits — so it is reported first, and under the throw policy it is the
+  run's error. }
+procedure RaiseUnlessEntryPromiseFulfilled(const AEngine: TGocciaEngine;
+  const APromise: TGocciaPromiseValue);
+begin
+  case APromise.State of
+    gpsRejected:
+      raise TGocciaThrowValue.Create(APromise.PromiseResult);
+    gpsPending:
+      begin
+        AEngine.RaiseUnhandledRejection;
+        ThrowTypeError(SErrorAwaitPromiseUnsettled,
+          SSuggestAwaitMicrotaskDrain);
+      end;
+  end;
+end;
+
+function TGocciaEngine.ValidateBytecodeModule(
+  const AModule: TGocciaBytecodeModule): TGocciaSourceType;
+var
+  Goal: TGocciaSourceType;
+  Expected: TGocciaCompileProfile;
+begin
+  if not Assigned(AModule) then
+    raise EArgumentNilException.Create('Bytecode module is nil');
+  Goal := FSourceType;
+  if Goal = stDetect then
+    if AModule.CompileProfile.SourceType = bstModule then
+      Goal := stModule
+    else
+      Goal := stScript;
+  Expected := BuildBytecodeCompileProfile(SourcePipelineOptions(Goal), FStrictTypes);
+  if not AModule.HasCompileProfile or not AModule.CompileProfile.Matches(Expected) then
+    raise EArgumentException.Create('Bytecode compile profile does not match the engine');
+  Result := Goal;
+end;
+
+procedure TGocciaEngine.ValidateImportedBytecode(const AModule: TGocciaBytecodeModule);
+var
+  Expected: TGocciaCompileProfile;
+begin
+  Expected := BuildBytecodeCompileProfile(SourcePipelineOptions(stModule), FStrictTypes);
+  if not AModule.HasCompileProfile or not AModule.CompileProfile.Matches(Expected) then
+    raise EArgumentException.Create('Bytecode compile profile does not match the engine');
+  if (AModule.ExecutionKind <> bekLinkedModule) or not Assigned(AModule.LinkPlan) then
+    raise EArgumentException.Create('Imported bytecode requires a linked module artifact');
+end;
+
+function TGocciaEngine.DecodeModuleBytecode(const ABytes: TBytes): TGocciaBytecodeModule;
+begin
+  Result := LoadModuleFromBuffer(ABytes);
+  try
+    ValidateImportedBytecode(Result);
+    FRetainedModules.Add(Result);
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TGocciaEngine.CompileImportableModule(
+  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+var
+  Compiler: TGocciaCompiler;
+  FloatingPointState: TGocciaFloatingPointState;
+begin
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    Compiler := TGocciaCompiler.Create(FSourcePath);
+    try
+      Compiler.GlobalBackedTopLevel := True;
+      Compiler.PreinitializedTopLevelFunctions := True;
+      Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
+      Compiler.NonStrictMode := False;
+      Compiler.StrictTypes := FStrictTypes;
+      Compiler.ArgumentsObjectEnabled := cfArgumentsObject in FCompatibility;
+      Result := Compiler.Compile(AProgram);
+      Result.CompileProfile := BuildBytecodeCompileProfile(SourcePipelineOptions(stModule), FStrictTypes);
+      FRetainedModules.Add(Result);
+    finally
+      Compiler.Free;
+    end;
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
+end;
+
+procedure TGocciaEngine.ReleaseModuleBytecode(const AModule: TGocciaBytecodeModule);
+begin
+  FModuleLoader.ForgetBytecodeModule(AModule);
+  FRetainedModules.Remove(AModule);
+end;
+
+procedure TGocciaEngine.RegisterBytecodeModule(const AAddress: string;
+  const ABytes: TBytes; const ABaseAddress: string);
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := DecodeModuleBytecode(ABytes);
+  try
+    FModuleLoader.RegisterPrecompiledModule(AAddress, Module, ABytes, ABaseAddress);
+  except
+    FRetainedModules.Remove(Module);
+    raise;
+  end;
+end;
+
+function TGocciaEngine.RunBytecodeBuffer(const ABytes: TBytes;
+  const AAddress: string): TGocciaValue;
+var
+  Module: TGocciaBytecodeModule;
+  Address: string;
+begin
+  Address := FModuleLoader.VirtualModules.CanonicalAddress(AAddress, '');
+  Module := LoadModuleFromBuffer(ABytes);
+  try
+    ValidateBytecodeModule(Module);
+  except
+    Module.Free;
+    raise;
+  end;
+  FRetainedModules.Add(Module);
+  if Assigned(Module.LinkPlan) then
+  begin
+    try
+      FModuleLoader.RegisterPrecompiledModule(Address, Module, ABytes);
+    except
+      FRetainedModules.Remove(Module);
+      raise;
+    end;
+    Result := RunRegisteredBytecodeEntry(Address);
+  end
+  else
+    Result := RunModuleForSourceType(Module, Address);
+end;
+
+function TGocciaEngine.RunRegisteredBytecodeEntry(const AAddress: string): TGocciaValue;
+var
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
+  Module: TGocciaModule;
+  FloatingPointState: TGocciaFloatingPointState;
+  PreviousRunningEngine: TGocciaEngine;
+  PreviousDiagnosticScope: TGocciaDiagnosticSourceScope;
+  Completed, NestedRun, OwnsMicrotaskScope: Boolean;
+  Queue: TGocciaMicrotaskQueue;
+  MicrotaskScopeToken: Integer;
+begin
+  PreviousDiagnosticScope := TGocciaDiagnosticSourceRegistry.Activate(FModuleLoader.DiagnosticScope);
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  PreviousRunningEngine := GRunningEngine;
+  GRunningEngine := Self;
+  Completed := False;
+  OptionsScope := nil;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  NestedRun := Assigned(PreviousRunningEngine) and (PreviousRunningEngine <> Self);
+  OwnsMicrotaskScope := False;
+  MicrotaskScopeToken := 0;
+  try
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(
+      SourcePipelineOptions(stModule));
+    if NestedRun and Assigned(Queue) then
+    begin
+      MicrotaskScopeToken := Queue.EnterScope;
+      OwnsMicrotaskScope := True;
+    end;
+    Module := FModuleLoader.LinkModuleRequest(AAddress, FSourcePath, [], 0, 0);
+    Module.CaptureEvaluationResult := True;
+    FModuleLoader.EvaluateModule(Module);
+    WaitForRuntimeIdle;
+    if Module.EvaluationPromise is TGocciaPromiseValue then
+      RaiseUnlessEntryPromiseFulfilled(Self, TGocciaPromiseValue(Module.EvaluationPromise));
+    RaiseUnhandledRejection;
+    Result := Module.EvaluationResult;
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Completed := True;
+  finally
+    if not Completed then
+      ClearPendingWorkOfFailedRun(PreviousRunningEngine);
+    if OwnsMicrotaskScope then
+      Queue.LeaveScope(MicrotaskScopeToken)
+    else if (not NestedRun) and Assigned(Queue) then
+      Queue.ClearQueue;
+    DiscardRuntimePending;
+    GRunningEngine := PreviousRunningEngine;
+    OptionsScope.Free;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+    TGocciaDiagnosticSourceRegistry.Deactivate(PreviousDiagnosticScope);
+  end;
+end;
+
 function TGocciaEngine.Execute: TGocciaScriptResult;
 var
+  RunSourceType: TGocciaSourceType;
   PipelineOptions: TGocciaSourcePipelineOptions;
   ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
   PipelineResult: TGocciaSourcePipelineResult;
@@ -3734,7 +4465,6 @@ var
   EntryModule: TGocciaModule;
   EntryModuleEvaluationStarted: Boolean;
   EntryRequestedModules: TGocciaModuleList;
-  EntryPromise: TGocciaPromiseValue;
   EntryLastModified: TDateTime;
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
@@ -3767,6 +4497,11 @@ begin
     PipelineOptions := SourcePipelineOptions(FSourceType);
     PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
       PipelineOptions);
+    { The goal this run has: FSourceType, or the one the parse settled for
+      stDetect (ADR 0140). FSourceType keeps the setting, so a long-lived
+      engine settles each Execute's source on its own. }
+    RunSourceType := PipelineResult.SourceType;
+    PipelineOptions.SourceType := RunSourceType;
     FLastTiming.LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
     FLastTiming.ParseTimeNanoseconds := PipelineResult.ParseTimeNanoseconds;
     PrintSourcePipelineWarnings(PipelineResult);
@@ -3803,7 +4538,7 @@ begin
         MicrotaskScopeToken := MicrotaskQueue.EnterScope;
         OwnsMicrotaskScope := True;
       end;
-      if FSourceType = stModule then
+      if RunSourceType = stModule then
       begin
         // ES2026 §16.2.1.6.4: a Module Environment Record's
         // [[ThisValue]] is undefined.  Run the entry program in a
@@ -3830,7 +4565,8 @@ begin
         if Assigned(FModuleLoader) then
         begin
           EntryRequestedModules := TGocciaModuleList.Create;
-          EntryModule := TGocciaModule.Create(ExpandFileName(FSourcePath));
+          EntryModule := TGocciaModule.Create(
+            EntryModulePath(FModuleLoader, FSourcePath));
           { Stamp the entry with its file's modification time, as the
             loader stamps every module it loads. Unstamped, a later
             import of the entry's own path took it for a changed file
@@ -3848,6 +4584,8 @@ begin
               ModuleScope);
             InstantiateModuleFunctions(PipelineResult.ProgramNode,
               ModuleContext);
+            EntryModule.SnapshotKind := mskSource;
+            EntryModule.CompiledModule := ModuleContext.CompiledModule;
             if FModuleLoader.VarEnabled then
               HoistVarDeclarations(PipelineResult.ProgramNode.Body,
                 ModuleScope, ModuleContext);
@@ -3919,18 +4657,12 @@ begin
                   (RunModuleForSourceType). }
                 if EntryHasTopLevelAwait and
                    (ModuleResult is TGocciaPromiseValue) then
-                begin
-                  EntryPromise := TGocciaPromiseValue(ModuleResult);
-                  if EntryPromise.State = gpsRejected then
-                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-                end;
+                  RaiseUnlessEntryPromiseFulfilled(Self,
+                    TGocciaPromiseValue(ModuleResult));
                 if Assigned(EntryModule) and
                    (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
-                begin
-                  EntryPromise := TGocciaPromiseValue(EntryModule.EvaluationPromise);
-                  if EntryPromise.State = gpsRejected then
-                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-                end;
+                  RaiseUnlessEntryPromiseFulfilled(Self,
+                    TGocciaPromiseValue(EntryModule.EvaluationPromise));
                 RaiseUnhandledRejection;
                 FLastTiming.Result := ModuleResult;
               finally
@@ -4070,9 +4802,10 @@ var
 begin
   Engine := TGocciaEngine.Create(AFileName, ASource);
   try
-    { Script source keeps its top-level bindings on the global object;
-      a module file name (.mjs) gives module source, which does not. }
-    Engine.GlobalBackedTopLevel := Engine.SourceType = stScript;
+    { Script source keeps its top-level bindings on the global object; a
+      Module (an .mjs name, or a detected one, ADR 0140) does not, which
+      Execute arranges for itself. }
+    Engine.GlobalBackedTopLevel := Engine.SourceType <> stModule;
     Result := Engine.Execute;
   finally
     Engine.Free;

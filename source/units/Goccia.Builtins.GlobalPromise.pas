@@ -26,6 +26,8 @@ type
     function PromiseKeyed(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const AAllSettled: Boolean): TGocciaValue;
     function PromiseConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+  protected
+    procedure MarkBuiltinReferences; override;
   public
     constructor Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
   published
@@ -97,7 +99,7 @@ type
   public
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Resolve: TGocciaValue read FResolve;
     property Reject: TGocciaValue read FReject;
   end;
@@ -113,7 +115,7 @@ type
   public
     constructor Create(const AResultPromise, AResolve, AReject: TGocciaValue;
       const ACount: Integer);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Results: TGocciaArrayValue read FResults;
     property Remaining: Integer read FRemaining write FRemaining;
     property ResultPromise: TGocciaValue read FResultPromise;
@@ -130,7 +132,7 @@ type
   public
     constructor Create(const AState: TPromiseAllState; const AIndex: Integer);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TPromiseAllRejectHandler = class(TGocciaObjectValue)
@@ -139,7 +141,7 @@ type
   public
     constructor Create(const AState: TPromiseAllState);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TPromiseAlreadyCalledCell = class(TGocciaObjectValue)
@@ -158,7 +160,7 @@ type
     constructor Create(const AState: TPromiseAllState; const AIndex: Integer;
       const AAlreadyCalled: TPromiseAlreadyCalledCell);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TPromiseAllSettledRejectHandler = class(TGocciaObjectValue)
@@ -170,7 +172,7 @@ type
     constructor Create(const AState: TPromiseAllState; const AIndex: Integer;
       const AAlreadyCalled: TPromiseAlreadyCalledCell);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TPromiseRaceHandler = class(TGocciaObjectValue)
@@ -180,7 +182,7 @@ type
   public
     constructor Create(const AResultPromise: TGocciaPromiseValue; const AIsResolve: Boolean);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TPromiseAnyState = class(TGocciaObjectValue)
@@ -194,7 +196,7 @@ type
   public
     constructor Create(const AResultPromise, AResolve, AReject: TGocciaValue;
       const ACount: Integer);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Errors: TGocciaArrayValue read FErrors;
     property Remaining: Integer read FRemaining write FRemaining;
     property ResultPromise: TGocciaValue read FResultPromise;
@@ -209,7 +211,7 @@ type
   public
     constructor Create(const AState: TPromiseAnyState);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TPromiseAnyRejectHandler = class(TGocciaObjectValue)
@@ -220,7 +222,7 @@ type
   public
     constructor Create(const AState: TPromiseAnyState; const AIndex: Integer);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TPromiseKeyedState = class(TGocciaObjectValue)
@@ -233,7 +235,7 @@ type
   public
     constructor Create(const AResultObject: TGocciaObjectValue;
       const AResolve, AReject: TGocciaValue; const ACount: Integer);
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property ResultObject: TGocciaObjectValue read FResultObject;
     property Remaining: Integer read FRemaining write FRemaining;
     property Resolve: TGocciaValue read FResolve;
@@ -254,7 +256,7 @@ type
       const ASymbol: TGocciaSymbolValue; const AIsSymbol, AAllSettled: Boolean;
       const AAlreadyCalled: TPromiseAlreadyCalledCell);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
   TPromiseKeyedRejectHandler = class(TGocciaObjectValue)
@@ -269,7 +271,7 @@ type
       const ASymbol: TGocciaSymbolValue; const AIsSymbol: Boolean;
       const AAlreadyCalled: TPromiseAlreadyCalledCell);
     function Invoke(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
   end;
 
 { Helper: wrap value as Promise if not already one }
@@ -290,9 +292,8 @@ begin
   FReject := AArgs.GetElement(1);
 end;
 
-procedure TPromiseCapabilityExecutor.MarkReferences;
+procedure TPromiseCapabilityExecutor.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FResolve) then
     FResolve.MarkReferences;
@@ -587,9 +588,8 @@ begin
     FResults.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
-procedure TPromiseAllState.MarkReferences;
+procedure TPromiseAllState.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FResults) then FResults.MarkReferences;
   if Assigned(FResultPromise) then FResultPromise.MarkReferences;
@@ -625,9 +625,8 @@ begin
   end;
 end;
 
-procedure TPromiseAllHandler.MarkReferences;
+procedure TPromiseAllHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
 end;
@@ -650,9 +649,8 @@ begin
   CallPromiseCapability(FState.Reject, AArgs.GetElement(0));
 end;
 
-procedure TPromiseAllRejectHandler.MarkReferences;
+procedure TPromiseAllRejectHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
 end;
@@ -729,9 +727,8 @@ begin
   end;
 end;
 
-procedure TPromiseAllSettledFulfillHandler.MarkReferences;
+procedure TPromiseAllSettledFulfillHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
   if Assigned(FAlreadyCalled) then FAlreadyCalled.MarkReferences;
@@ -780,9 +777,8 @@ begin
   end;
 end;
 
-procedure TPromiseAllSettledRejectHandler.MarkReferences;
+procedure TPromiseAllSettledRejectHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
   if Assigned(FAlreadyCalled) then FAlreadyCalled.MarkReferences;
@@ -807,9 +803,8 @@ begin
     FResultPromise.Reject(AArgs.GetElement(0));
 end;
 
-procedure TPromiseRaceHandler.MarkReferences;
+procedure TPromiseRaceHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FResultPromise) then FResultPromise.MarkReferences;
 end;
@@ -832,9 +827,8 @@ begin
     FErrors.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
 end;
 
-procedure TPromiseAnyState.MarkReferences;
+procedure TPromiseAnyState.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FErrors) then FErrors.MarkReferences;
   if Assigned(FResultPromise) then FResultPromise.MarkReferences;
@@ -860,9 +854,8 @@ begin
   CallPromiseCapability(FState.Resolve, AArgs.GetElement(0));
 end;
 
-procedure TPromiseAnyFulfillHandler.MarkReferences;
+procedure TPromiseAnyFulfillHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
 end;
@@ -900,9 +893,8 @@ begin
   end;
 end;
 
-procedure TPromiseAnyRejectHandler.MarkReferences;
+procedure TPromiseAnyRejectHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
 end;
@@ -920,9 +912,8 @@ begin
   FSettled := False;
 end;
 
-procedure TPromiseKeyedState.MarkReferences;
+procedure TPromiseKeyedState.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FResultObject) then FResultObject.MarkReferences;
   if Assigned(FResolve) then FResolve.MarkReferences;
@@ -988,9 +979,8 @@ begin
   end;
 end;
 
-procedure TPromiseKeyedFulfillHandler.MarkReferences;
+procedure TPromiseKeyedFulfillHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
   if Assigned(FSymbol) then FSymbol.MarkReferences;
@@ -1043,9 +1033,8 @@ begin
   end;
 end;
 
-procedure TPromiseKeyedRejectHandler.MarkReferences;
+procedure TPromiseKeyedRejectHandler.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
   if Assigned(FState) then FState.MarkReferences;
   if Assigned(FSymbol) then FSymbol.MarkReferences;
@@ -1408,13 +1397,13 @@ begin
   end;
 end;
 
-function GetPromiseKeyedDescriptor(const AObject: TGocciaObjectValue;
-  const AKey: TPromiseKeyRecord): TGocciaPropertyDescriptor;
+function PromiseKeyedPropertyIsEnumerable(const AObject: TGocciaObjectValue;
+  const AKey: TPromiseKeyRecord): Boolean;
 begin
   if AKey.IsSymbol then
-    Result := AObject.GetOwnSymbolPropertyDescriptor(AKey.Symbol)
+    Result := AObject.OwnSymbolPropertyIsEnumerable(AKey.Symbol)
   else
-    Result := AObject.GetOwnPropertyDescriptor(AKey.Name);
+    Result := AObject.OwnPropertyIsEnumerable(AKey.Name);
 end;
 
 function GetPromiseKeyedValue(const AObject: TGocciaObjectValue;
@@ -1448,7 +1437,6 @@ var
   ResultObject: TGocciaObjectValue;
   State: TPromiseKeyedState;
   Keys: TPromiseKeyRecordArray;
-  Descriptor: TGocciaPropertyDescriptor;
   PromiseResolve, PromiseLike: TGocciaValue;
   AlreadyCalled: TPromiseAlreadyCalledCell;
   FulfillHandler: TPromiseKeyedFulfillHandler;
@@ -1456,10 +1444,11 @@ var
   FulfillFn: TGocciaNativeFunctionValue;
   RejectFn: TGocciaValue;
   PromiseResolveRoot, ResultRoot, StateRoot: TGocciaTempRoot;
-  IterationRoots, CapabilityRoots: TGocciaActiveRootFrame;
+  IterationRoots, CapabilityRoots, KeyRoots: TGocciaActiveRootFrame;
   I: Integer;
 begin
   CapabilityRoots.Initialize;
+  KeyRoots.Initialize;
   Capability := NewPromiseCapability(AThisValue, FPromiseConstructor);
   RootCapability(CapabilityRoots, Capability);
   InitializeTempRoot(PromiseResolveRoot);
@@ -1485,10 +1474,14 @@ begin
       AddTempRootIfNeeded(StateRoot, State);
 
       Keys := GetPromiseKeyedOwnKeys(InputObject);
+      // A symbol key the ownKeys trap made, or one a getter deletes from the
+      // input, is held only by this list while later keys are read.
+      for I := 0 to High(Keys) do
+        if Keys[I].IsSymbol then
+          KeyRoots.Add(Keys[I].Symbol);
       for I := 0 to High(Keys) do
       begin
-        Descriptor := GetPromiseKeyedDescriptor(InputObject, Keys[I]);
-        if not Assigned(Descriptor) or not Descriptor.Enumerable then
+        if not PromiseKeyedPropertyIsEnumerable(InputObject, Keys[I]) then
           Continue;
 
         CreatePromiseKeyedPlaceholder(ResultObject, Keys[I]);
@@ -1541,6 +1534,7 @@ begin
     end;
   finally
     IterationRoots.Clear;
+    KeyRoots.Clear;
     RemoveTempRootIfNeeded(PromiseResolveRoot);
     RemoveTempRootIfNeeded(StateRoot);
     RemoveTempRootIfNeeded(ResultRoot);
@@ -2145,6 +2139,18 @@ begin
   finally
     Roots.Clear;
   end;
+end;
+
+procedure TGocciaGlobalPromise.MarkBuiltinReferences;
+begin
+  inherited;
+  // Held from the constructor on, before the global scope binds any of them
+  // (each later allocation in the constructor can collect), and after a
+  // script deletes the global binding.
+  if Assigned(FPromiseConstructor) then
+    FPromiseConstructor.MarkReferences;
+  if Assigned(FPromiseIntrinsicProto) then
+    FPromiseIntrinsicProto.MarkReferences;
 end;
 
 end.

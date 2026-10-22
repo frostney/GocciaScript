@@ -6,9 +6,14 @@ interface
 
 uses
   Classes,
+  SysUtils,
 
   Goccia.Bytecode.Chunk,
-  Goccia.Bytecode.Module;
+  Goccia.Bytecode.Module,
+  Goccia.Modules.LinkPlan;
+
+const
+  MAX_BYTECODE_FILE_BYTES = 64 * 1024 * 1024;
 
 type
   TGocciaBytecodeWriter = class
@@ -23,6 +28,7 @@ type
     procedure WriteString(const AValue: string);
     procedure WriteBoolean(const AValue: Boolean);
     procedure WriteFunctionTemplate(const AProto: TGocciaFunctionTemplate);
+    procedure WriteLinkPlan(const APlan: TGocciaModuleLinkPlan);
   public
     constructor Create(const AStream: TStream);
     procedure WriteModule(const AModule: TGocciaBytecodeModule);
@@ -41,8 +47,12 @@ type
     function ReadInt64: Int64;
     function ReadDouble: Double;
     function ReadString: string;
+    function ReadBigIntDecimal: string;
     function ReadBoolean: Boolean;
     function ReadFunctionTemplate: TGocciaFunctionTemplate;
+    function ReadLinkPlan: TGocciaModuleLinkPlan;
+    function ReadCount(const AElementSize, AMinimumWireSize: Integer;
+      const AContext: string): Integer;
   public
     constructor Create(const AStream: TStream);
     function ReadModule: TGocciaBytecodeModule;
@@ -51,21 +61,55 @@ type
 procedure SaveModuleToFile(const AModule: TGocciaBytecodeModule;
   const AFileName: string);
 function LoadModuleFromFile(const AFileName: string): TGocciaBytecodeModule;
+function SaveModuleToBuffer(const AModule: TGocciaBytecodeModule): TBytes;
+{ The buffer is borrowed only for this call. Loaded templates own their data. }
+function LoadModuleFromBuffer(const ABytes: TBytes): TGocciaBytecodeModule; overload;
+function LoadModuleFromBuffer(const AData: Pointer;
+  const AByteCount: SizeInt): TGocciaBytecodeModule; overload;
 
 implementation
 
 uses
-  SysUtils,
-
   HostOutputFiles,
   NumberBits,
+  OrderedStringMap,
 
+  Goccia.AST.Statements,
   Goccia.Bytecode,
-  Goccia.Bytecode.Debug;
+  Goccia.Bytecode.Debug,
+  Goccia.Bytecode.Profile,
+  Goccia.Modules,
+  Goccia.NativeLimits;
 
 const
-  MAX_BYTECODE_FILE_BYTES = 64 * 1024 * 1024;
   MAX_BYTECODE_FUNCTION_DEPTH = 256;
+
+type
+  { A bounded, read-only view. TCustomMemoryStream never owns this pointer. }
+  TGocciaBytecodeBufferStream = class(TCustomMemoryStream)
+  public
+    constructor Create(const AData: Pointer; const AByteCount: SizeInt);
+    function Write(const ABuffer; ACount: LongInt): LongInt; override;
+  end;
+
+constructor TGocciaBytecodeBufferStream.Create(const AData: Pointer;
+  const AByteCount: SizeInt);
+begin
+  inherited Create;
+  if (AByteCount < 0) or (AByteCount > MAX_BYTECODE_FILE_BYTES) then
+    raise Exception.Create('Invalid Goccia bytecode buffer size');
+  CheckedNativeByteSize(AByteCount, 1);
+  if (AByteCount > 0) and not Assigned(AData) then
+    raise Exception.Create('Bytecode buffer is required');
+  SetPointer(AData, AByteCount);
+end;
+
+function TGocciaBytecodeBufferStream.Write(const ABuffer;
+  ACount: LongInt): LongInt;
+begin
+  Result := 0;
+  raise EStreamError.Create('Bytecode buffer is read-only');
+end;
 
 procedure RejectInvalidBytecode(const ATemplate: TGocciaFunctionTemplate;
   const APC: Integer; const AReason: string);
@@ -84,6 +128,8 @@ var
   JumpTarget: Int64;
   Op: UInt8;
   EvalEnv: TGocciaDirectEvalEnvironment;
+  Child: TGocciaFunctionTemplate;
+  Descriptor: TGocciaUpvalueDescriptor;
 
   procedure RequireConstant(const AIndex: Integer);
   begin
@@ -168,6 +214,16 @@ begin
   if not Assigned(ATemplate) then
     raise Exception.Create('Invalid bytecode: missing function template');
 
+  if (ATemplate.DerivedThisInitializedSlot < -1) or
+     (ATemplate.DerivedThisInitializedSlot >= ATemplate.MaxRegisters) then
+    RejectInvalidBytecode(ATemplate, 0, 'invalid derived-this register');
+  if (ATemplate.DirectEvalSyntheticArgumentsSlot < -1) or
+     (ATemplate.DirectEvalSyntheticArgumentsSlot >= ATemplate.MaxRegisters) then
+    RejectInvalidBytecode(ATemplate, 0, 'invalid direct-eval arguments register');
+  if (ATemplate.ParameterPreambleSize > ATemplate.CodeCount) or
+     (ATemplate.TypeCheckPreambleSize > ATemplate.CodeCount) then
+    RejectInvalidBytecode(ATemplate, 0, 'invalid function preamble size');
+
   PC := 0;
   while PC < ATemplate.CodeCount do
   begin
@@ -213,7 +269,8 @@ begin
     if (TGocciaOpCode(Op) = OP_APPLY_ELEMENT_DECORATOR_CONST) and
        (B <> 0) then
       RequireRegister(B);
-    if TGocciaOpCode(Op) in [OP_BEGIN_DECORATORS,
+    if TGocciaOpCode(Op) in [OP_BEGIN_DECORATORS, OP_APPLY_CLASS_DECORATOR,
+       OP_FINISH_DECORATORS, OP_APPLY_ELEMENT_DECORATOR_CONST,
        OP_DEFINE_ACCESSOR_CONST, OP_DEFINE_ACCESSOR_DYNAMIC] then
       RequireRegister(Int64(A) + 1);
     if (TGocciaOpCode(Op) in [OP_SUPER_GET_CONST, OP_SUPER_GET,
@@ -432,7 +489,21 @@ begin
   end;
 
   for I := 0 to ATemplate.FunctionCount - 1 do
-    VerifyFunctionTemplate(ATemplate.GetFunction(I), ADepth + 1);
+  begin
+    Child := ATemplate.GetFunction(I);
+    for J := 0 to Child.UpvalueCount - 1 do
+    begin
+      Descriptor := Child.GetUpvalueDescriptor(J);
+      if Descriptor.IsLocal then
+      begin
+        if Descriptor.Index >= ATemplate.MaxRegisters then
+          RejectInvalidBytecode(Child, 0, 'upvalue captures an invalid parent register');
+      end
+      else if Descriptor.Index >= ATemplate.UpvalueCount then
+        RejectInvalidBytecode(Child, 0, 'upvalue captures an invalid parent upvalue');
+    end;
+    VerifyFunctionTemplate(Child, ADepth + 1);
+  end;
 end;
 
 constructor TGocciaBytecodeWriter.Create(const AStream: TStream);
@@ -532,6 +603,13 @@ begin
   WriteBoolean(AProto.IsAsync);
   WriteBoolean(AProto.HasOwnPrototype);
   WriteBoolean(AProto.StrictThis);
+  WriteBoolean(AProto.StrictCode);
+  WriteString(AProto.SourceText);
+  if AProto.DerivedThisInitializedSlot < 0 then
+    WriteUInt16(High(UInt16))
+  else
+    WriteUInt16(UInt16(AProto.DerivedThisInitializedSlot));
+  WriteString(AProto.ModuleEnvironmentBinding);
 
   WriteUInt32(UInt32(AProto.CodeCount));
   for I := 0 to AProto.CodeCount - 1 do
@@ -558,7 +636,7 @@ begin
         WriteInt64(Constant.IntValue);
       bckFloat:
         WriteDouble(Constant.FloatValue);
-      bckString:
+      bckString, bckBigInt:
         WriteString(Constant.StringValue);
       bckRegExpLiteral:
       begin
@@ -682,6 +760,86 @@ begin
   WriteBoolean(AProto.RejectArgumentsInDirectEval);
 end;
 
+procedure TGocciaBytecodeWriter.WriteLinkPlan(const APlan: TGocciaModuleLinkPlan);
+var
+  I, J: Integer;
+begin
+  WriteBoolean(APlan.HasTopLevelAwait);
+  WriteUInt32(UInt32(Length(APlan.Bindings)));
+  for I := 0 to High(APlan.Bindings) do
+  begin
+    WriteString(APlan.Bindings[I].Name);
+    WriteUInt8(Ord(APlan.Bindings[I].Kind));
+  end;
+  WriteUInt32(UInt32(Length(APlan.Declarations)));
+  for I := 0 to High(APlan.Declarations) do
+  begin
+    WriteUInt8(Ord(APlan.Declarations[I].Kind));
+    WriteString(APlan.Declarations[I].ModulePath);
+    WriteString(APlan.Declarations[I].AttributeType);
+    WriteUInt8(Ord(APlan.Declarations[I].Phase));
+    WriteString(APlan.Declarations[I].NamespaceName);
+    WriteBoolean(APlan.Declarations[I].IsStarExport);
+    WriteUInt32(UInt32(Length(APlan.Declarations[I].Pairs)));
+    for J := 0 to High(APlan.Declarations[I].Pairs) do
+    begin
+      WriteString(APlan.Declarations[I].Pairs[J].Name);
+      WriteString(APlan.Declarations[I].Pairs[J].Value);
+    end;
+  end;
+end;
+
+{ Module shape is part of the executable contract: the linker must never run
+  register-backed entry bytecode as a module with preinitialized bindings. }
+procedure VerifyModuleMetadata(const AModule: TGocciaBytecodeModule);
+var
+  I: Integer;
+  BindingName: string;
+  Names, Functions: TOrderedStringMap<Boolean>;
+begin
+  if not AModule.HasCompileProfile then
+    raise Exception.Create('Bytecode compilation profile is required');
+  AModule.CompileProfile.Validate;
+  if not Assigned(AModule.TopLevel) then
+    raise Exception.Create('Invalid bytecode: missing top-level template');
+  if AModule.TopLevel.ModuleEnvironmentBinding <> '' then
+    raise Exception.Create('Invalid top-level module function binding');
+  if AModule.ExecutionKind = bekStandalone then
+  begin
+    if Assigned(AModule.LinkPlan) then
+      raise Exception.Create('Standalone bytecode cannot carry a module link plan');
+    Exit;
+  end;
+  if (AModule.ExecutionKind <> bekLinkedModule) or
+     (AModule.CompileProfile.SourceType <> bstModule) or
+     not AModule.GlobalBackedTopLevel or not Assigned(AModule.LinkPlan) then
+    raise Exception.Create('Invalid linked bytecode module shape');
+  AModule.LinkPlan.Validate;
+  if not AModule.TopLevel.StrictCode or
+     (AModule.LinkPlan.HasTopLevelAwait <> AModule.TopLevel.IsAsync) then
+    raise Exception.Create('Invalid linked module execution flags');
+  Names := TOrderedStringMap<Boolean>.Create;
+  Functions := TOrderedStringMap<Boolean>.Create;
+  try
+    for I := 0 to High(AModule.LinkPlan.Bindings) do
+      if (AModule.LinkPlan.Bindings[I].Kind <> lbConst) or
+         (AModule.LinkPlan.Bindings[I].Name = GOCCIA_DEFAULT_EXPORT_BINDING) then
+        Names.Add(AModule.LinkPlan.Bindings[I].Name, True);
+    for I := 0 to AModule.TopLevel.FunctionCount - 1 do
+    begin
+      BindingName := AModule.TopLevel.GetFunction(I).ModuleEnvironmentBinding;
+      if BindingName = '' then
+        Continue;
+      if not Names.ContainsKey(BindingName) or Functions.ContainsKey(BindingName) then
+        raise Exception.Create('Invalid bytecode module function binding');
+      Functions.Add(BindingName, True);
+    end;
+  finally
+    Functions.Free;
+    Names.Free;
+  end;
+end;
+
 procedure TGocciaBytecodeWriter.WriteModule(
   const AModule: TGocciaBytecodeModule);
 var
@@ -689,11 +847,22 @@ var
   Import_: TGocciaModuleImport;
   Export_: TGocciaModuleExport;
 begin
+  VerifyModuleMetadata(AModule);
   FStream.WriteBuffer(GOCCIA_BINARY_MAGIC, 4);
   WriteUInt16(AModule.FormatVersion);
   WriteString(AModule.RuntimeTag);
   WriteString(AModule.SourcePath);
   WriteBoolean(AModule.HasDebugInfo);
+  WriteUInt32(AModule.CompileProfile.CompatibilityMask);
+  WriteUInt32(AModule.CompileProfile.PreprocessorMask);
+  WriteBoolean(AModule.CompileProfile.StrictTypes);
+  WriteBoolean(AModule.CompileProfile.WarningUnsupportedFeatures);
+  WriteUInt8(Ord(AModule.CompileProfile.SourceType));
+  WriteUInt8(Ord(AModule.ExecutionKind));
+  WriteBoolean(AModule.GlobalBackedTopLevel);
+  WriteBoolean(Assigned(AModule.LinkPlan));
+  if Assigned(AModule.LinkPlan) then
+    WriteLinkPlan(AModule.LinkPlan);
 
   WriteUInt16(UInt16(AModule.ImportCount));
   for I := 0 to AModule.ImportCount - 1 do
@@ -727,7 +896,8 @@ begin
   inherited Create;
   if not Assigned(AStream) then
     raise Exception.Create('Bytecode stream is required');
-  if AStream.Size > MAX_BYTECODE_FILE_BYTES then
+  if (AStream.Size < 0) or (AStream.Size > MAX_BYTECODE_FILE_BYTES) or
+     (AStream.Size > MAX_NATIVE_ALLOCATION_BYTES) then
     raise Exception.CreateFmt(
       'Goccia bytecode file exceeds the %d byte limit',
       [MAX_BYTECODE_FILE_BYTES]);
@@ -801,22 +971,48 @@ begin
     Exit('');
   if Len > UInt32(High(Integer)) then
     raise Exception.Create('Invalid Goccia bytecode string length');
-  RequireRemaining(Int64(Len) * SizeOf(UInt16), 'string data');
+  RequireRemaining(CheckedNativeByteSize(Len, SizeOf(Char)), 'string data');
   SetLength(Result, Len);
   for I := 1 to Len do
     Result[I] := Char(ReadUInt16);
 end;
 
-function TGocciaBytecodeReader.ReadBoolean: Boolean;
+{ The compiler stores canonical decimal text. Validate its spelling in linear
+  time; constructing a BigInteger here would do quadratic arithmetic before
+  execution and would defeat lazy constant loading. }
+function TGocciaBytecodeReader.ReadBigIntDecimal: string;
+var
+  I, FirstDigit: Integer;
 begin
-  Result := ReadUInt8 <> 0;
+  Result := ReadString;
+  if Result = '0' then
+    Exit;
+  FirstDigit := 1;
+  if (Length(Result) > 0) and (Result[1] = '-') then
+    FirstDigit := 2;
+  if (FirstDigit > Length(Result)) or
+     (Result[FirstDigit] < '1') or (Result[FirstDigit] > '9') then
+    raise Exception.Create('Invalid bytecode BigInt decimal payload');
+  for I := FirstDigit + 1 to Length(Result) do
+    if (Result[I] < '0') or (Result[I] > '9') then
+      raise Exception.Create('Invalid bytecode BigInt decimal payload');
+end;
+
+function TGocciaBytecodeReader.ReadBoolean: Boolean;
+var
+  Value: UInt8;
+begin
+  Value := ReadUInt8;
+  if Value > 1 then
+    raise Exception.Create('Invalid bytecode boolean');
+  Result := Value = 1;
 end;
 
 function TGocciaBytecodeReader.ReadFunctionTemplate: TGocciaFunctionTemplate;
 var
   Name: string;
   ParamCount, UpvalueCount, MaxRegs, LocalTypeCount, LocalStrictCount: UInt16;
-  CodeCount: UInt32;
+  CodeCount: Integer;
   ConstCount, FuncCount, HandlerCount, StrCount, EvalEnvCount,
     EvalBindingCount: UInt16;
   I, J: Integer;
@@ -837,11 +1033,13 @@ var
   HasDebug: Boolean;
   DebugInfo: TGocciaDebugInfo;
   SourceFile, RegExpPattern, RegExpFlags: string;
-  LineMapCount, LocalCount: UInt32;
+  LineMapCount, LocalCount: Integer;
   LocalName: string;
   LocalSlot: UInt16;
   LocalStartPC, LocalEndPC: UInt32;
-  DeclarationLine: UInt32;
+  DeclarationLine, MappingPC, MappingLine: UInt32;
+  HandlerTryStart, HandlerTryEnd, HandlerCatchTarget, HandlerFinallyTarget: UInt32;
+  HandlerCatchRegister: UInt16;
   DeclarationColumn: UInt16;
   CookedStrings, RawStrings: TGocciaBytecodeStringArray;
   CookedValid: TGocciaBytecodeTemplateCookedValid;
@@ -852,6 +1050,8 @@ begin
     Dec(FFunctionDepth);
     raise Exception.Create('Goccia bytecode function nesting limit exceeded');
   end;
+  Result := nil;
+  try
   try
   Name := ReadString;
   MaxRegs := ReadUInt16;
@@ -870,13 +1070,23 @@ begin
   Result.IsAsync := ReadBoolean;
   Result.HasOwnPrototype := ReadBoolean;
   Result.StrictThis := ReadBoolean;
+  Result.StrictCode := ReadBoolean;
+  Result.SourceText := ReadString;
+  I := ReadUInt16;
+  if I = High(UInt16) then
+    Result.DerivedThisInitializedSlot := -1
+  else
+    Result.DerivedThisInitializedSlot := I;
+  Result.ModuleEnvironmentBinding := ReadString;
 
-  CodeCount := ReadUInt32;
-  RequireRemaining(Int64(CodeCount) * SizeOf(UInt32), 'instruction data');
-  for I := 0 to Integer(CodeCount) - 1 do
+  CodeCount := ReadCount(SizeOf(UInt32), SizeOf(UInt32), 'instruction data');
+  CheckedNativeByteSize(Int64(CodeCount) * 2 + 16, SizeOf(UInt32));
+  for I := 0 to CodeCount - 1 do
     Result.EmitInstruction(ReadUInt32);
 
   ConstCount := ReadUInt16;
+  RequireRemaining(ConstCount, 'constants');
+  CheckedNativeByteSize(Int64(ConstCount) * 2 + 16, SizeOf(TGocciaBytecodeConstant));
   for I := 0 to ConstCount - 1 do
   begin
     ConstKind := ReadUInt8;
@@ -890,6 +1100,7 @@ begin
       bckInteger: Result.AddConstantInteger(ReadInt64);
       bckFloat:   Result.AddConstantFloat(ReadDouble);
       bckString:  Result.AddConstantString(ReadString);
+      bckBigInt:  Result.AddConstantBigInt(ReadBigIntDecimal);
       bckRegExpLiteral:
       begin
         RegExpPattern := ReadString;
@@ -899,22 +1110,38 @@ begin
       bckTemplateObject:
       begin
         StrCount := ReadUInt16;
+        RequireRemaining(Int64(StrCount) * 4, 'cooked template strings');
+        CheckedNativeByteSize(StrCount, SizeOf(string));
         SetLength(CookedStrings, StrCount);
         for J := 0 to StrCount - 1 do
           CookedStrings[J] := ReadString;
         StrCount := ReadUInt16;
+        if StrCount <> Length(CookedStrings) then
+          raise Exception.Create('Invalid template string counts');
+        RequireRemaining(Int64(StrCount) * 4, 'raw template strings');
+        CheckedNativeByteSize(StrCount, SizeOf(string));
         SetLength(RawStrings, StrCount);
         for J := 0 to StrCount - 1 do
           RawStrings[J] := ReadString;
         // TC39 Template Literal Revision: per-segment cooked validity flags
+        RequireRemaining(Length(CookedStrings), 'template validity flags');
+        CheckedNativeByteSize(Length(CookedStrings), SizeOf(Boolean));
         SetLength(CookedValid, Length(CookedStrings));
         for J := 0 to Length(CookedStrings) - 1 do
           CookedValid[J] := ReadBoolean;
         Result.AddConstantTemplateObject(CookedStrings, RawStrings, CookedValid);
       end;
     end;
+    { Interned constants must occupy their declared wire slots. Reject a
+      duplicate instead of shifting every later operand's meaning. BigInt,
+      RegExp and template-object constants deliberately do not intern. }
+    if Result.ConstantCount <> I + 1 then
+      raise Exception.CreateFmt('Invalid bytecode duplicate constant at index %d',
+        [I]);
   end;
 
+  RequireRemaining(Int64(UpvalueCount) * 7, 'upvalue descriptors');
+  CheckedNativeByteSize(Int64(UpvalueCount) * 2 + 16, SizeOf(TGocciaUpvalueDescriptor));
   for I := 0 to UpvalueCount - 1 do
   begin
     UpvalueIsLocal := ReadBoolean;
@@ -924,6 +1151,7 @@ begin
   end;
 
   EvalEnvCount := ReadUInt16;
+  CheckedNativeByteSize(Int64(EvalEnvCount) * 2 + 16, SizeOf(TGocciaDirectEvalEnvironment));
   for I := 0 to EvalEnvCount - 1 do
   begin
     EvalPC := ReadUInt32;
@@ -943,6 +1171,8 @@ begin
     if EvalPrivateClassRegister = High(UInt16) then
       EvalPrivateClassRegister := -1;
     EvalBindingCount := ReadUInt16;
+    RequireRemaining(Int64(EvalBindingCount) * 8, 'eval private names');
+    CheckedNativeByteSize(EvalBindingCount, SizeOf(TGocciaDirectEvalPrivateName));
     SetLength(EvalPrivateNames, EvalBindingCount);
     for J := 0 to EvalBindingCount - 1 do
     begin
@@ -950,6 +1180,8 @@ begin
       EvalPrivateNames[J].Prefix := ReadString;
     end;
     EvalBindingCount := ReadUInt16;
+    RequireRemaining(Int64(EvalBindingCount) * 13, 'eval bindings');
+    CheckedNativeByteSize(EvalBindingCount, SizeOf(TGocciaDirectEvalBindingInfo));
     SetLength(EvalBindings, EvalBindingCount);
     for J := 0 to EvalBindingCount - 1 do
     begin
@@ -974,11 +1206,22 @@ begin
   end;
 
   HandlerCount := ReadUInt16;
+  RequireRemaining(Int64(HandlerCount) * 18, 'exception handlers');
+  CheckedNativeByteSize(Int64(HandlerCount) * 2 + 16, SizeOf(TGocciaExceptionHandler));
   for I := 0 to HandlerCount - 1 do
-    Result.AddExceptionHandler(ReadUInt32, ReadUInt32, ReadUInt32,
-      ReadUInt32, ReadUInt16);
+  begin
+    HandlerTryStart := ReadUInt32;
+    HandlerTryEnd := ReadUInt32;
+    HandlerCatchTarget := ReadUInt32;
+    HandlerFinallyTarget := ReadUInt32;
+    HandlerCatchRegister := ReadUInt16;
+    Result.AddExceptionHandler(HandlerTryStart, HandlerTryEnd, HandlerCatchTarget,
+      HandlerFinallyTarget, HandlerCatchRegister);
+  end;
 
   FuncCount := ReadUInt16;
+  RequireRemaining(FuncCount, 'nested templates');
+  CheckedNativeByteSize(Int64(FuncCount) * 2 + 16, SizeOf(Pointer));
   for I := 0 to FuncCount - 1 do
     Result.AddFunction(ReadFunctionTemplate);
 
@@ -992,16 +1235,22 @@ begin
     DebugInfo := TGocciaDebugInfo.Create(SourceFile, DeclarationLine,
       DeclarationColumn);
 
-    LineMapCount := ReadUInt32;
-    RequireRemaining(Int64(LineMapCount) * 10, 'debug line mappings');
-    for I := 0 to Integer(LineMapCount) - 1 do
-      DebugInfo.AddLineMapping(ReadUInt32, ReadUInt32, ReadUInt16);
+    Result.DebugInfo := DebugInfo;
+    LineMapCount := ReadCount(SizeOf(TGocciaLineMapEntry), 10, 'debug line mappings');
+    CheckedNativeByteSize(Int64(LineMapCount) * 2 + 16, SizeOf(TGocciaLineMapEntry));
+    for I := 0 to LineMapCount - 1 do
+    begin
+      MappingPC := ReadUInt32;
+      MappingLine := ReadUInt32;
+      DeclarationColumn := ReadUInt16;
+      DebugInfo.AddLineMapping(MappingPC, MappingLine, DeclarationColumn);
+    end;
 
-    LocalCount := ReadUInt32;
-    RequireRemaining(Int64(LocalCount) * 14, 'debug local mappings');
+    LocalCount := ReadCount(SizeOf(TGocciaLocalInfo), 14, 'debug local mappings');
+    CheckedNativeByteSize(Int64(LocalCount) * 2 + 16, SizeOf(TGocciaLocalInfo));
     // Read each field into its own variable: Pascal does not fix the order
     // in which a call's arguments are evaluated.
-    for I := 0 to Integer(LocalCount) - 1 do
+    for I := 0 to LocalCount - 1 do
     begin
       LocalName := ReadString;
       LocalSlot := ReadUInt16;
@@ -1014,6 +1263,8 @@ begin
   end;
 
   LocalTypeCount := ReadUInt16;
+  RequireRemaining(LocalTypeCount, 'local types');
+  CheckedNativeByteSize(LocalTypeCount, SizeOf(TGocciaLocalType));
   for I := 0 to LocalTypeCount - 1 do
   begin
     ConstKind := ReadUInt8;
@@ -1023,6 +1274,8 @@ begin
   end;
 
   LocalStrictCount := ReadUInt16;
+  RequireRemaining(LocalStrictCount, 'local strictness');
+  CheckedNativeByteSize(LocalStrictCount, SizeOf(Boolean));
   for I := 0 to LocalStrictCount - 1 do
     Result.SetLocalStrictFlag(UInt16(I), ReadBoolean);
 
@@ -1034,8 +1287,74 @@ begin
   else
     Result.DirectEvalSyntheticArgumentsSlot := I;
   Result.RejectArgumentsInDirectEval := ReadBoolean;
+  except
+    Result.Free;
+    raise;
+  end;
   finally
     Dec(FFunctionDepth);
+  end;
+end;
+
+function TGocciaBytecodeReader.ReadCount(const AElementSize,
+  AMinimumWireSize: Integer; const AContext: string): Integer;
+var
+  Count: UInt32;
+begin
+  Count := ReadUInt32;
+  if Count > UInt32(High(Integer)) then
+    raise Exception.CreateFmt('Invalid Goccia bytecode %s count', [AContext]);
+  RequireRemaining(Int64(Count) * AMinimumWireSize, AContext);
+  CheckedNativeByteSize(Count, AElementSize);
+  Result := Integer(Count);
+end;
+
+function TGocciaBytecodeReader.ReadLinkPlan: TGocciaModuleLinkPlan;
+var
+  I, J, Count, PairCount: Integer;
+  Tag: UInt8;
+begin
+  Result := TGocciaModuleLinkPlan.Create;
+  try
+    Result.HasTopLevelAwait := ReadBoolean;
+    Count := ReadCount(SizeOf(TGocciaLinkBinding), 5, 'module bindings');
+    SetLength(Result.Bindings, Count);
+    for I := 0 to Count - 1 do
+    begin
+      Result.Bindings[I].Name := ReadString;
+      Tag := ReadUInt8;
+      if Tag > Ord(High(TGocciaLinkBindingKind)) then
+        raise Exception.Create('Invalid bytecode module binding kind');
+      Result.Bindings[I].Kind := TGocciaLinkBindingKind(Tag);
+    end;
+    Count := ReadCount(SizeOf(TGocciaLinkDeclaration), 19, 'module declarations');
+    SetLength(Result.Declarations, Count);
+    for I := 0 to Count - 1 do
+    begin
+      Tag := ReadUInt8;
+      if Tag > Ord(High(TGocciaLinkDeclarationKind)) then
+        raise Exception.Create('Invalid bytecode module declaration kind');
+      Result.Declarations[I].Kind := TGocciaLinkDeclarationKind(Tag);
+      Result.Declarations[I].ModulePath := ReadString;
+      Result.Declarations[I].AttributeType := ReadString;
+      Tag := ReadUInt8;
+      if Tag > Ord(High(TGocciaImportCallPhase)) then
+        raise Exception.Create('Invalid bytecode module import phase');
+      Result.Declarations[I].Phase := TGocciaImportCallPhase(Tag);
+      Result.Declarations[I].NamespaceName := ReadString;
+      Result.Declarations[I].IsStarExport := ReadBoolean;
+      PairCount := ReadCount(SizeOf(TGocciaLinkPair), 8, 'module binding pairs');
+      SetLength(Result.Declarations[I].Pairs, PairCount);
+      for J := 0 to PairCount - 1 do
+      begin
+        Result.Declarations[I].Pairs[J].Name := ReadString;
+        Result.Declarations[I].Pairs[J].Value := ReadString;
+      end;
+    end;
+    Result.Validate;
+  except
+    Result.Free;
+    raise;
   end;
 end;
 
@@ -1043,6 +1362,8 @@ function TGocciaBytecodeReader.ReadModule: TGocciaBytecodeModule;
 var
   Magic: array[0..3] of Byte;
   Version: UInt16;
+  Profile: TGocciaCompileProfile;
+  Tag: UInt8;
   RuntimeTag, SourcePath: string;
   HasDebug: Boolean;
   ImportCount, ExportCount: UInt16;
@@ -1068,13 +1389,35 @@ begin
   HasDebug := ReadBoolean;
 
   Result := TGocciaBytecodeModule.Create(RuntimeTag, SourcePath);
+  try
   Result.HasDebugInfo := HasDebug;
+  Profile.CompatibilityMask := ReadUInt32;
+  Profile.PreprocessorMask := ReadUInt32;
+  Profile.StrictTypes := ReadBoolean;
+  Profile.WarningUnsupportedFeatures := ReadBoolean;
+  Tag := ReadUInt8;
+  if Tag > Ord(High(TGocciaBytecodeSourceType)) then
+    raise Exception.Create('Invalid bytecode source type');
+  Profile.SourceType := TGocciaBytecodeSourceType(Tag);
+  Profile.Validate;
+  Result.CompileProfile := Profile;
+  Tag := ReadUInt8;
+  if Tag > Ord(High(TGocciaBytecodeExecutionKind)) then
+    raise Exception.Create('Invalid bytecode execution kind');
+  Result.ExecutionKind := TGocciaBytecodeExecutionKind(Tag);
+  Result.GlobalBackedTopLevel := ReadBoolean;
+  if ReadBoolean then
+    Result.LinkPlan := ReadLinkPlan;
 
   ImportCount := ReadUInt16;
+  RequireRemaining(Int64(ImportCount) * 6, 'module imports');
+  CheckedNativeByteSize(Int64(ImportCount) * 2 + 4, SizeOf(TGocciaModuleImport));
   for I := 0 to ImportCount - 1 do
   begin
     ModulePath := ReadString;
     BindingCount := ReadUInt16;
+    RequireRemaining(Int64(BindingCount) * 6, 'import bindings');
+    CheckedNativeByteSize(BindingCount, SizeOf(TGocciaModuleBinding));
     SetLength(Bindings, BindingCount);
     for J := 0 to BindingCount - 1 do
     begin
@@ -1085,6 +1428,8 @@ begin
   end;
 
   ExportCount := ReadUInt16;
+  RequireRemaining(Int64(ExportCount) * 15, 'module exports');
+  CheckedNativeByteSize(Int64(ExportCount) * 2 + 4, SizeOf(TGocciaModuleExport));
   for I := 0 to ExportCount - 1 do
   begin
     { Read in stream order: Pascal does not fix the order in which a call's
@@ -1103,8 +1448,14 @@ begin
 
   Result.TopLevel := ReadFunctionTemplate;
   VerifyFunctionTemplate(Result.TopLevel, 1);
+  VerifyModuleMetadata(Result);
   if FStream.Position <> FStream.Size then
     raise Exception.Create('Invalid trailing data in Goccia bytecode file');
+  Result.MarkLoadedFromBytecode;
+  except
+    Result.Free;
+    raise;
+  end;
 end;
 
 procedure SaveModuleToFile(const AModule: TGocciaBytecodeModule;
@@ -1126,12 +1477,38 @@ begin
   end;
 end;
 
-function LoadModuleFromFile(const AFileName: string): TGocciaBytecodeModule;
+function SaveModuleToBuffer(const AModule: TGocciaBytecodeModule): TBytes;
 var
-  Stream: TFileStream;
+  Stream: TMemoryStream;
+  Writer: TGocciaBytecodeWriter;
+  ByteCount: SizeInt;
+begin
+  Stream := TMemoryStream.Create;
+  try
+    Writer := TGocciaBytecodeWriter.Create(Stream);
+    try
+      Writer.WriteModule(AModule);
+    finally
+      Writer.Free;
+    end;
+    if Stream.Size > MAX_BYTECODE_FILE_BYTES then
+      raise Exception.Create('Goccia bytecode exceeds the buffer size limit');
+    ByteCount := SizeInt(CheckedNativeByteSize(Stream.Size, 1));
+    SetLength(Result, ByteCount);
+    if ByteCount > 0 then
+      Move(Stream.Memory^, Result[0], ByteCount);
+  finally
+    Stream.Free;
+  end;
+end;
+
+function LoadModuleFromBuffer(const AData: Pointer;
+  const AByteCount: SizeInt): TGocciaBytecodeModule;
+var
+  Stream: TGocciaBytecodeBufferStream;
   Reader: TGocciaBytecodeReader;
 begin
-  Stream := TFileStream.Create(AFileName, fmOpenRead);
+  Stream := TGocciaBytecodeBufferStream.Create(AData, AByteCount);
   try
     Reader := TGocciaBytecodeReader.Create(Stream);
     try
@@ -1142,6 +1519,34 @@ begin
   finally
     Stream.Free;
   end;
+end;
+
+function LoadModuleFromBuffer(const ABytes: TBytes): TGocciaBytecodeModule;
+begin
+  if Length(ABytes) = 0 then
+    Result := LoadModuleFromBuffer(nil, 0)
+  else
+    Result := LoadModuleFromBuffer(@ABytes[0], Length(ABytes));
+end;
+
+function LoadModuleFromFile(const AFileName: string): TGocciaBytecodeModule;
+var
+  Stream: TFileStream;
+  Bytes: TBytes;
+  ByteCount: SizeInt;
+begin
+  Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
+  try
+    if (Stream.Size < 0) or (Stream.Size > MAX_BYTECODE_FILE_BYTES) then
+      raise Exception.Create('Goccia bytecode exceeds the buffer size limit');
+    ByteCount := SizeInt(CheckedNativeByteSize(Stream.Size, 1));
+    SetLength(Bytes, ByteCount);
+    if ByteCount > 0 then
+      Stream.ReadBuffer(Bytes[0], ByteCount);
+  finally
+    Stream.Free;
+  end;
+  Result := LoadModuleFromBuffer(Bytes);
 end;
 
 end.

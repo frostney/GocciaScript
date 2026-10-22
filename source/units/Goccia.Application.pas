@@ -33,6 +33,7 @@ uses
   Goccia.Error.Detail,
   Goccia.Modules.Resolver,
   Goccia.Terminal.Colors,
+  Goccia.Threading,
   Goccia.Values.Error,
   Goccia.VM.Exception;
 
@@ -84,11 +85,29 @@ class function TGocciaApplication.RunApplication(
 var
   App: TGocciaApplication;
 begin
+  Result := 1;
   App := AClass.Create(AName);
   try
     Result := App.Run;
   finally
+    { A worker a thread pool abandoned may still be running its file, and
+      that reads this application's objects and the process-wide runtime:
+      end the process before App.Free and unit finalization can free them
+      under it, on every path out of Run. The report is already written. }
+    if Result <> 0 then
+      EndProcessIfWorkerAbandoned(Result)
+    else
+      EndProcessIfWorkerAbandoned(ExitCode);
     App.Free;
+    { Every engine is gone by now. Shutting the main thread's runtime down
+      destroys what its collector still manages, as each worker's does when
+      it exits, so a run ends with nothing left allocated (#1592). That
+      includes the process-wide singletons (primitives, well-known symbols,
+      the array hole), whose cached pointers are not reset: this is the
+      process's last runtime, and no engine may start after it (ADR 0143).
+      A worker a thread pool abandoned still runs and reads those values, so
+      then the runtime is left to the process exit. }
+    ShutdownMainThreadRuntime;
   end;
 end;
 

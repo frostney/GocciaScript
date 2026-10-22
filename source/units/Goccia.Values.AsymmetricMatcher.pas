@@ -28,7 +28,7 @@ type
     function IsEquivalentTo(const AOther: TGocciaAsymmetricMatcherValue;
       const AEquality: TGocciaValueEqualityCallback): Boolean; virtual;
     function MatcherName: string; virtual; abstract;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property Inverse: Boolean read FInverse;
     property Sample: TGocciaValue read FSample;
   end;
@@ -119,7 +119,7 @@ type
       const AEquality: TGocciaValueEqualityCallback): Boolean; override;
     function AsymmetricDisplay: string; override;
     function MatcherName: string; override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
     property ValidationResult: TGocciaValue read FValidationResult;
   end;
 
@@ -246,10 +246,8 @@ begin
   FSample := AValue;
 end;
 
-procedure TGocciaAsymmetricMatcherValue.MarkReferences;
+procedure TGocciaAsymmetricMatcherValue.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FSample) then
     FSample.MarkReferences;
@@ -746,10 +744,8 @@ begin
     Result := 'SchemaMatching';
 end;
 
-procedure TGocciaSchemaMatchingMatcherValue.MarkReferences;
+procedure TGocciaSchemaMatchingMatcherValue.TraceReferences;
 begin
-  if GCMarked then
-    Exit;
   inherited;
   if Assigned(FStandard) then
     FStandard.MarkReferences;

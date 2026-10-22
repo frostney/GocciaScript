@@ -23,7 +23,7 @@ This file is the authoritative command reference for local builds and CLI usage.
 
 ## Prerequisites
 
-See [Prerequisites](../README.md#prerequisites) in the README for FPC installation instructions.
+See [Build from source](../README.md#build-from-source) in the README for FPC installation instructions.
 
 - **instantfpc** — Comes bundled with FreePascal. Used to run `build.pas` as a script.
 
@@ -104,7 +104,7 @@ printf "const x = 2 + 2; x;" | ./build/GocciaRunner
 printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
 ```
 
-`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`. The timing banner's `Total` (and `timing.total_ns` in JSON) is end to end: from before the engine is created to the end of the run, so it includes engine boot as well as the lex, parse, compile, and execute phases listed beside it.
+`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`. In `GocciaRunner`, host and sandbox mode alike, the value is converted while the run's engine is still alive and counts as part of the run: a `toString`, `valueOf`, `Symbol.toPrimitive` or `toJSON` it calls runs under `--timeout` and `--max-instructions`, and an error it throws fails the run like the script's own (a Symbol, which has no string form, fails `--print` with a `TypeError`). The timing banner's `Total` (and `timing.total_ns` in JSON) is end to end: from before the engine is created to the end of the run, so it includes engine boot as well as the lex, parse, compile, and execute phases listed beside it.
 
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
 
@@ -148,7 +148,7 @@ current platform, which the folder-configured FFI JavaScript tests need.
 Useful test-runner forms:
 
 ```bash
-./build/GocciaTestRunner -P tests --jobs=4
+./build/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress
 ./build/GocciaTestRunner -P tests --no-progress --exit-on-first-failure --silent
 ./build/GocciaTestRunner -P tests --output=results.json --log=test-console.log
 ./build/GocciaTestRunner -P tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
@@ -323,7 +323,7 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
-`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source; other script extensions default to script source.
+`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source, and any other entry, stdin included, is module source when it has a top-level `import` or `export` declaration and script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). `"source-type": "script"` keeps such an entry script source. The REPL runs script source unless `--source-type=module` names otherwise. A `.gbc` entry adopts its recorded compile-time goal unless an explicit source type is supplied; a conflicting explicit goal is rejected.
 
 ```json
 {
@@ -355,7 +355,7 @@ Relative paths are resolved against the current working directory. A missing fil
 }
 ```
 
-Config keys mirror CLI option names (e.g. `--source-type` -> `"source-type"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags must be exactly `true` or `false`, and array-valued options like `alias` use JSON arrays. Capability grants and denies go in a `permissions` object, never at the top level; limits take the same units as on the command line. See [Permissions](permissions.md#config-files) for the `permissions` block, how its relative scopes resolve, and the removed keys that now fail with status 2. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
+Config keys mirror CLI option names (e.g. `--source-type` -> `"source-type"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags must be exactly `true` or `false`, and array-valued options like `alias` use JSON arrays. Capability grants and denies go in a `permissions` object, never at the top level; limits take the same units as on the command line. See [Permissions](permissions.md#config-files) for the `permissions` block, how its relative scopes resolve, and the removed keys that now fail with status 2. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream, and in sandbox mode stamps every virtual-filesystem timestamp at the epoch too; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
 ```json
@@ -443,7 +443,7 @@ if ConfigPath <> '' then
 
 ### GocciaBundler (Bundler)
 
-GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as GocciaRunner (file, multiple files, directory, stdin):
+GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. Module-goal artifacts also satisfy imports with `GocciaRunner --prefer-bytecode`; see [Precompiled bytecode modules](bytecode-loading.md) for profile checks, companions and source fallback. It accepts the same input modes as GocciaRunner (file, multiple files, directory, stdin):
 
 ```bash
 # Compile a single file (output: example.gbc alongside the source)
@@ -547,13 +547,15 @@ to standard error.
 
 Standard output carries only what the guest prints — `--print` prints the last
 value, `undefined` included, as in host mode — followed by a printed diff.
-There is no timing banner. The `write-back:` report goes to standard error.
+Without `--print` the last value is not read at all, and its getters do not
+run. There is no timing banner. The `write-back:` report goes to standard error.
 
 Diff output is explicit. JSON is the default format; it always includes a
 separate `metadataChanges` array whose per-path `changes` object contains only
 changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields, so
-timestamp-only changes never appear as content modifications. The unified
-format never includes metadata. `--diff-file=<path>` writes the diff to a host
+timestamp-only changes never appear as content modifications; under
+`--deterministic` it is empty ([Deterministic Profile](host-environment.md#deterministic-profile)).
+The unified format never includes metadata. `--diff-file=<path>` writes the diff to a host
 file instead of printing it, choosing JSON for `.json` and unified for `.diff`.
 An explicit `--diff=<format>` wins over the extension, and any other extension
 (`.patch` included) without one is an error.
@@ -654,7 +656,7 @@ It:
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
 5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
 6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
-7. For the `tests` target, auto-discovers all `*.Test.pas` files in `source/units/` and `source/shared/`, compiling each program with its own `build/compiled/tests/<test-program>/` unit-output directory.
+7. For the `tests` target, auto-discovers all `*.Test.pas` files under `source/units/`, `source/shared/` and `source/app/` (including `source/app/compliance/`), compiling each program with its own `build/compiled/tests/<test-program>/` unit-output directory.
 
 The GitHub Actions cross-compilation workflow (`.github/workflows/toolchain.yml`) uses two reduced cached FPC toolchains rather than a full target-side FCL install: a macOS-hosted one for the Darwin targets and a Linux-hosted one for the Linux and Windows targets. Both start from the same patched FPC 3.2.2 source and build their target units with `.github/scripts/build-fpc-cross-units.sh`. Each prebuilds the RTL, `rtl-objpas`, `rtl-generics`, and `fcl-process`, and also caches the official `fcl-base` sources so cross builds can resolve units such as `Base64` on demand from the shipped FPC packages.
 

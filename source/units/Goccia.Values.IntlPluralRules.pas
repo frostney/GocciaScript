@@ -48,6 +48,7 @@ uses
 
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -165,138 +166,147 @@ end;
 
 constructor TGocciaIntlPluralRulesValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
 var
+  OptionsRoots: TGocciaActiveRootFrame;
   Canonical: string;
   V: TGocciaValue;
   RoundingIncrement: Integer;
   HasMinFrac, HasMaxFrac, HasMinSig, HasMaxSig: Boolean;
 begin
   inherited Create;
-  Canonical := CanonicalizeUnicodeLocaleId(ALocale);
-  if Canonical = '' then
-    FLocale := DefaultLocale
-  else
-    FLocale := Canonical;
-
-  // Defaults
-  FType := 'cardinal';
-  FNotation := 'standard';
-  FCompactDisplay := '';
-  FMinimumIntegerDigits := 1;
-  FMinimumFractionDigits := -1;
-  FMaximumFractionDigits := -1;
-  FMinimumSignificantDigits := -1;
-  FMaximumSignificantDigits := -1;
-  HasMinFrac := False;
-  HasMaxFrac := False;
-  HasMinSig := False;
-  HasMaxSig := False;
-
-  if Assigned(AOptions) then
-  begin
-    V := nil;
-    ReadPluralRulesStringOption(AOptions, 'localeMatcher', 'best fit',
-      ['lookup', 'best fit']);
-    FType := ReadPluralRulesStringOption(AOptions, 'type', FType,
-      ['cardinal', 'ordinal']);
-    FNotation := ReadPluralRulesStringOption(AOptions, 'notation', FNotation,
-      ['standard', 'scientific', 'engineering', 'compact']);
-    if FNotation = 'compact' then
-      FCompactDisplay := ReadPluralRulesStringOption(AOptions,
-        'compactDisplay', 'short', ['short', 'long'])
+  // Options that ToObject made from a primitive are a wrapper only this call
+  // holds while their getters and conversions run guest code.
+  OptionsRoots.Initialize;
+  try
+    OptionsRoots.Add(AOptions);
+    Canonical := CanonicalizeUnicodeLocaleId(ALocale);
+    if Canonical = '' then
+      FLocale := DefaultLocale
     else
-      ReadPluralRulesStringOption(AOptions, 'compactDisplay', 'short',
-        ['short', 'long']);
-    V := AOptions.GetProperty('minimumIntegerDigits');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-      FMinimumIntegerDigits := ToIntegerWithTruncationValue(V);
-    V := AOptions.GetProperty('minimumFractionDigits');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FMinimumFractionDigits := ToIntegerWithTruncationValue(V);
-      HasMinFrac := True;
-    end;
-    V := AOptions.GetProperty('maximumFractionDigits');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FMaximumFractionDigits := ToIntegerWithTruncationValue(V);
-      HasMaxFrac := True;
-    end;
-    V := AOptions.GetProperty('minimumSignificantDigits');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FMinimumSignificantDigits := ToIntegerWithTruncationValue(V);
-      HasMinSig := True;
-    end;
-    V := AOptions.GetProperty('maximumSignificantDigits');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
-    begin
-      FMaximumSignificantDigits := ToIntegerWithTruncationValue(V);
-      HasMaxSig := True;
-    end;
-  end;
+      FLocale := Canonical;
 
-  // ECMA-402 §15.1.6 SetNumberFormatDigitOptions: every explicitly provided
-  // value is range-validated (presence tracked separately so negative inputs
-  // are rejected rather than mistaken for the unset sentinel), and provided
-  // minimum/maximum pairs must be ordered.
-  if (FMinimumIntegerDigits < 1) or (FMinimumIntegerDigits > 21) then
-    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumIntegerDigits', 1, 21]));
-  if HasMinFrac and ((FMinimumFractionDigits < 0) or (FMinimumFractionDigits > 100)) then
-    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumFractionDigits', 0, 100]));
-  if HasMaxFrac and ((FMaximumFractionDigits < 0) or (FMaximumFractionDigits > 100)) then
-    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', 0, 100]));
-  if HasMinSig and
-     ((FMinimumSignificantDigits < 1) or (FMinimumSignificantDigits > 21)) then
-    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumSignificantDigits', 1, 21]));
-    if HasMaxSig and
-       ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
-    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
-  if HasMinFrac and HasMaxFrac and
-     (FMinimumFractionDigits > FMaximumFractionDigits) then
-    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', FMinimumFractionDigits, 100]));
-  if HasMinSig and HasMaxSig and
-     (FMinimumSignificantDigits > FMaximumSignificantDigits) then
-    ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', FMinimumSignificantDigits, 21]));
-
-  if HasMinSig or HasMaxSig then
-  begin
-    if not HasMinSig then
-      FMinimumSignificantDigits := 1;
-    if not HasMaxSig then
-      FMaximumSignificantDigits := 21;
+    // Defaults
+    FType := 'cardinal';
+    FNotation := 'standard';
+    FCompactDisplay := '';
+    FMinimumIntegerDigits := 1;
     FMinimumFractionDigits := -1;
     FMaximumFractionDigits := -1;
-  end
-  else
-  begin
-    if not HasMinFrac then
-      FMinimumFractionDigits := 0;
-    if not HasMaxFrac then
-      FMaximumFractionDigits := Max(3, FMinimumFractionDigits);
-  end;
+    FMinimumSignificantDigits := -1;
+    FMaximumSignificantDigits := -1;
+    HasMinFrac := False;
+    HasMaxFrac := False;
+    HasMinSig := False;
+    HasMaxSig := False;
 
-  if Assigned(AOptions) then
-  begin
-    V := AOptions.GetProperty('roundingIncrement');
-    if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+    if Assigned(AOptions) then
     begin
-      RoundingIncrement := ToIntegerWithTruncationValue(V);
-      if not IsPluralRulesRoundingIncrement(RoundingIncrement) then
-        ThrowRangeError(Format(SErrorIntlInvalidOption,
-          [IntToStr(RoundingIncrement), 'roundingIncrement']));
+      V := nil;
+      ReadPluralRulesStringOption(AOptions, 'localeMatcher', 'best fit',
+        ['lookup', 'best fit']);
+      FType := ReadPluralRulesStringOption(AOptions, 'type', FType,
+        ['cardinal', 'ordinal']);
+      FNotation := ReadPluralRulesStringOption(AOptions, 'notation', FNotation,
+        ['standard', 'scientific', 'engineering', 'compact']);
+      if FNotation = 'compact' then
+        FCompactDisplay := ReadPluralRulesStringOption(AOptions,
+          'compactDisplay', 'short', ['short', 'long'])
+      else
+        ReadPluralRulesStringOption(AOptions, 'compactDisplay', 'short',
+          ['short', 'long']);
+      V := AOptions.GetProperty('minimumIntegerDigits');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+        FMinimumIntegerDigits := ToIntegerWithTruncationValue(V);
+      V := AOptions.GetProperty('minimumFractionDigits');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        FMinimumFractionDigits := ToIntegerWithTruncationValue(V);
+        HasMinFrac := True;
+      end;
+      V := AOptions.GetProperty('maximumFractionDigits');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        FMaximumFractionDigits := ToIntegerWithTruncationValue(V);
+        HasMaxFrac := True;
+      end;
+      V := AOptions.GetProperty('minimumSignificantDigits');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        FMinimumSignificantDigits := ToIntegerWithTruncationValue(V);
+        HasMinSig := True;
+      end;
+      V := AOptions.GetProperty('maximumSignificantDigits');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        FMaximumSignificantDigits := ToIntegerWithTruncationValue(V);
+        HasMaxSig := True;
+      end;
     end;
-    ReadPluralRulesStringOption(AOptions, 'roundingMode', 'halfExpand',
-      ['ceil', 'floor', 'expand', 'trunc', 'halfCeil', 'halfFloor',
-       'halfExpand', 'halfTrunc', 'halfEven']);
-    ReadPluralRulesStringOption(AOptions, 'roundingPriority', 'auto',
-      ['auto', 'morePrecision', 'lessPrecision']);
-    ReadPluralRulesStringOption(AOptions, 'trailingZeroDisplay', 'auto',
-      ['auto', 'stripIfInteger']);
-  end;
 
-  InitializePrototype;
-  if (GetIntlPluralRulesShared <> nil) then
-    FPrototype := GetIntlPluralRulesShared.Prototype;
+    // ECMA-402 §15.1.6 SetNumberFormatDigitOptions: every explicitly provided
+    // value is range-validated (presence tracked separately so negative inputs
+    // are rejected rather than mistaken for the unset sentinel), and provided
+    // minimum/maximum pairs must be ordered.
+    if (FMinimumIntegerDigits < 1) or (FMinimumIntegerDigits > 21) then
+      ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumIntegerDigits', 1, 21]));
+    if HasMinFrac and ((FMinimumFractionDigits < 0) or (FMinimumFractionDigits > 100)) then
+      ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumFractionDigits', 0, 100]));
+    if HasMaxFrac and ((FMaximumFractionDigits < 0) or (FMaximumFractionDigits > 100)) then
+      ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', 0, 100]));
+    if HasMinSig and
+       ((FMinimumSignificantDigits < 1) or (FMinimumSignificantDigits > 21)) then
+      ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['minimumSignificantDigits', 1, 21]));
+      if HasMaxSig and
+         ((FMaximumSignificantDigits < 1) or (FMaximumSignificantDigits > 21)) then
+      ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', 1, 21]));
+    if HasMinFrac and HasMaxFrac and
+       (FMinimumFractionDigits > FMaximumFractionDigits) then
+      ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumFractionDigits', FMinimumFractionDigits, 100]));
+    if HasMinSig and HasMaxSig and
+       (FMinimumSignificantDigits > FMaximumSignificantDigits) then
+      ThrowRangeError(Format(SErrorIntlDigitsOutOfRange, ['maximumSignificantDigits', FMinimumSignificantDigits, 21]));
+
+    if HasMinSig or HasMaxSig then
+    begin
+      if not HasMinSig then
+        FMinimumSignificantDigits := 1;
+      if not HasMaxSig then
+        FMaximumSignificantDigits := 21;
+      FMinimumFractionDigits := -1;
+      FMaximumFractionDigits := -1;
+    end
+    else
+    begin
+      if not HasMinFrac then
+        FMinimumFractionDigits := 0;
+      if not HasMaxFrac then
+        FMaximumFractionDigits := Max(3, FMinimumFractionDigits);
+    end;
+
+    if Assigned(AOptions) then
+    begin
+      V := AOptions.GetProperty('roundingIncrement');
+      if Assigned(V) and not (V is TGocciaUndefinedLiteralValue) then
+      begin
+        RoundingIncrement := ToIntegerWithTruncationValue(V);
+        if not IsPluralRulesRoundingIncrement(RoundingIncrement) then
+          ThrowRangeError(Format(SErrorIntlInvalidOption,
+            [IntToStr(RoundingIncrement), 'roundingIncrement']));
+      end;
+      ReadPluralRulesStringOption(AOptions, 'roundingMode', 'halfExpand',
+        ['ceil', 'floor', 'expand', 'trunc', 'halfCeil', 'halfFloor',
+         'halfExpand', 'halfTrunc', 'halfEven']);
+      ReadPluralRulesStringOption(AOptions, 'roundingPriority', 'auto',
+        ['auto', 'morePrecision', 'lessPrecision']);
+      ReadPluralRulesStringOption(AOptions, 'trailingZeroDisplay', 'auto',
+        ['auto', 'stripIfInteger']);
+    end;
+
+    InitializePrototype;
+    if (GetIntlPluralRulesShared <> nil) then
+      FPrototype := GetIntlPluralRulesShared.Prototype;
+  finally
+    OptionsRoots.Clear;
+  end;
 end;
 
 function TGocciaIntlPluralRulesValue.ToStringTag: string;
@@ -471,5 +481,6 @@ end;
 
 initialization
   GIntlPluralRulesSharedSlot := RegisterRealmOwnedSlot('Intl.PluralRules.shared');
+  RegisterSnapshotSlotGlobalPath('Intl.PluralRules.shared', 'Intl.PluralRules');
 
 end.

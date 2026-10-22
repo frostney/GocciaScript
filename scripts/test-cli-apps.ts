@@ -42,6 +42,7 @@ import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/as
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
 import { verifyAllocationProfiles } from "./test-cli-profiling";
+import { verifyAotModules } from "./test-cli-aot";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 // The runner reports canonical host paths. On Windows the temp directory's
@@ -471,6 +472,30 @@ await section("Loader: compact-json omits build, memory, stdout, stderr...", asy
   if (typeof file.timing?.total_ns !== "number") throw new Error("compact-json per-file timing should be present");
 });
 
+await section("Loader: output keeps an empty last console line...", async () => {
+  // One element per console line, empty lines included, at the top level and
+  // in files[] alike.
+  const cases: { source: string; expected: string[] }[] = [
+    { source: 'console.log("a"); console.log("");\n', expected: ["a", ""] },
+    { source: 'console.log("a"); console.log(""); console.log("");\n', expected: ["a", "", ""] },
+    { source: 'console.log("a"); console.log(""); console.log("b");\n', expected: ["a", "", "b"] },
+    { source: 'console.log("");\n', expected: [""] },
+    { source: 'console.log("a\\n");\n', expected: ["a", ""] },
+    { source: "const quiet = 1;\n", expected: [] },
+  ];
+  for (const format of ["json", "compact-json"]) {
+    for (const { source, expected } of cases) {
+      const { exitCode, json, stderr } = runLoaderJson(source, [`--output=${format}`]);
+      const label = `${format} ${JSON.stringify(source.trim())}`;
+      if (exitCode !== 0) throw new Error(`${label} exited ${exitCode}: ${stderr}`);
+      if (JSON.stringify(json.output) !== JSON.stringify(expected))
+        throw new Error(`${label} output should be ${JSON.stringify(expected)}, got ${JSON.stringify(json.output)}`);
+      if (JSON.stringify(json.files?.[0]?.output) !== JSON.stringify(expected))
+        throw new Error(`${label} files[0].output should be ${JSON.stringify(expected)}, got ${JSON.stringify(json.files?.[0]?.output)}`);
+    }
+  }
+});
+
 await section("Loader: compact-json error path omits build, memory, stdout, stderr...", async () => {
   const { exitCode, json } = runLoaderJson("throw new Error('boom');\n", ["--output=compact-json"]);
   if (exitCode === 0) throw new Error("compact-json error path should set non-zero exit code");
@@ -594,6 +619,76 @@ await section("Loader: --print emits 'undefined' when result is undefined...", a
   const out = proc.stdout.toString();
   if (!containsLine(out, "undefined"))
     throw new Error(`Loader --print should emit "undefined" (matches node -p), got: ${out}`);
+});
+
+await section("Loader: --print and --output=json convert the last value before its engine is freed...", async () => {
+  // The conversion can run the value's own methods and the realm's
+  // built-ins, so it happens while the run's engine is alive. Converting
+  // after the engine was freed ended in "Range check error" for these, and
+  // in an access violation for a toJSON value.
+  const printOf = (source: string) => {
+    const proc = Bun.spawnSync([RUNNER, "--print"], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      exitCode: proc.exitCode,
+      lines: normalizeLineEndings(proc.stdout.toString()).split("\n").filter((l) => !l.startsWith("Running script") && !l.trimStart().startsWith("Lex:") && l !== ""),
+      stderr: proc.stderr.toString(),
+    };
+  };
+  const cases: Array<[string, string, string[]]> = [
+    ["own toString", '({ toString() { return "custom"; } });\n', ["custom"]],
+    ["toString that logs", 'const x = { toString: () => { console.log("side"); return "y"; } };\nx;\n', ["side", "y"]],
+    ["Symbol.toPrimitive", '({ [Symbol.toPrimitive]: () => "prim" });\n', ["prim"]],
+    ["arrow function", "(() => 1);\n", ["() => 1"]],
+  ];
+  for (const [label, source, expected] of cases) {
+    const run = printOf(source);
+    if (run.exitCode !== 0 || JSON.stringify(run.lines) !== JSON.stringify(expected))
+      throw new Error(`--print of ${label} should print ${JSON.stringify(expected)}, got (exit ${run.exitCode}) ${JSON.stringify(run.lines)}\n${run.stderr}`);
+  }
+  const date = printOf("new Date(0);\n");
+  if (date.exitCode !== 0 || date.lines.length !== 1 || !/^\w{3} \w{3} \d{2} 19(69|70) \d{2}:\d{2}:\d{2} GMT[+-]\d{4}/.test(date.lines[0]))
+    throw new Error(`--print of a Date should print its string, got (exit ${date.exitCode}) ${JSON.stringify(date.lines)}\n${date.stderr}`);
+
+  const toJson = await runLoaderJsonAsync("({ toJSON() { return 7; } });\n");
+  if (toJson.exitCode !== 0 || toJson.json.files?.[0]?.result !== 7)
+    throw new Error(`--output=json of a toJSON value should report 7, got (exit ${toJson.exitCode}) ${JSON.stringify(toJson.json.files?.[0]?.result)}\n${toJson.stderr}`);
+  const dateJson = await runLoaderJsonAsync("new Date(0);\n");
+  if (dateJson.exitCode !== 0 || dateJson.json.files?.[0]?.result !== "1970-01-01T00:00:00.000Z")
+    throw new Error(`--output=json of a Date should report its ISO string, got (exit ${dateJson.exitCode}) ${JSON.stringify(dateJson.json.files?.[0]?.result)}\n${dateJson.stderr}`);
+
+  // The error report is built after the engine was freed, so it reads only
+  // string data properties of the thrown value: a `message` getter, a Proxy
+  // trap or a deferred namespace must not run (it crashed this report).
+  const getterJson = await runLoaderJsonAsync(
+    'const e = new Error("x");\n' +
+      'Object.defineProperty(e, "message", { get() { return "m"; } });\n' +
+      "[1].forEach(() => { throw e; });\n",
+  );
+  if (getterJson.json?.ok !== false || getterJson.json?.error?.type !== "Error" || getterJson.json?.error?.message !== "")
+    throw new Error(`--output=json of a throw with a message getter should report an Error with no message, got (exit ${getterJson.exitCode}) ${JSON.stringify(getterJson.json?.error)}\n${getterJson.stderr}`);
+  const proxyJson = await runLoaderJsonAsync(
+    "const p = new Proxy(new Error('x'), { get() { throw new Error('trap'); }, getOwnPropertyDescriptor() { throw new Error('trap'); } });\n" +
+      "[1].forEach(() => { throw p; });\n",
+  );
+  if (proxyJson.json?.ok !== false || proxyJson.json?.error?.message === "trap")
+    throw new Error(`--output=json of a thrown Proxy should not run its traps, got (exit ${proxyJson.exitCode}) ${JSON.stringify(proxyJson.json?.error)}\n${proxyJson.stderr}`);
+
+  // Parallel workers print no value, so they do not convert one either: a
+  // toString that throws does not fail a --jobs run.
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "a.js"), '({ toString() { throw new Error("boom"); } });\n');
+    writeFileSync(join(tmp, "b.js"), "1;\n");
+    const proc = Bun.spawnSync([RUNNER, tmp, "--jobs=2", "--print"], { stdout: "pipe", stderr: "pipe" });
+    if (proc.exitCode !== 0)
+      throw new Error(`--jobs=2 --print should not convert values it does not print, got exit ${proc.exitCode}:\n${proc.stdout.toString()}${proc.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
 });
 
 await section("Loader: --print honored from goccia.json...", async () => {
@@ -1114,6 +1209,164 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     }
     if (engineFaultJson.results?.[0]?.status !== "FAIL")
       throw new Error(`engine execution fault should be FAIL, got ${engineFaultJson.results?.[0]?.status}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 runner: a growable SharedArrayBuffer keeps one block while other agents write and grow it...", async () => {
+  // #1767: ES2026 §25.2.5.3 SharedArrayBuffer.prototype.grow makes more of
+  // the same Shared Data Block visible, and racing grows are totally ordered.
+  // A grow that moved the bytes to a new block left another agent's
+  // Atomics.add writing into the old one, and those increments were lost.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "built-ins");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    // Waits, a bounded number of times, until state[index] holds value.
+    const waitFor = [
+      "const waitFor = (state, index, value) => {",
+      "  for (const _ of Array.from({ length: 60000 })) {",
+      "    if (Atomics.load(state, index) === value) return;",
+      "    $262.agent.sleep(1);",
+      "  }",
+      "  throw new Error(\"timed out waiting for state \" + index + \" = \" + value);",
+      "};",
+    ].join("\n");
+    // The main agent grows the buffer while a second agent, whose view was
+    // built before the first grow, keeps adding through it.
+    writeFileSync(join(tests, "sab-grow-keeps-writes.js"), [
+      "/*---",
+      "features: [SharedArrayBuffer, Atomics, resizable-arraybuffer]",
+      "---*/",
+      waitFor,
+      "const ITERATIONS = 20000;",
+      "const STEP = 8;",
+      "const MAX = 65536;",
+      "const sab = new SharedArrayBuffer(16, { maxByteLength: MAX });",
+      "// [0] the counter, [1] a value written before any grow,",
+      "// [2] the agent's phase, [3] the main agent's phase.",
+      "const state = new Int32Array(sab, 0, 4);",
+      "Atomics.store(state, 1, 12345);",
+      "$262.agent.start(`",
+      "  $262.agent.receiveBroadcast((sab) => {",
+      "    " + waitFor.split("\n").join("\n    "),
+      "    const state = new Int32Array(sab, 0, 4);",
+      "    const iterations = Array.from({ length: ${ITERATIONS} });",
+      "    Atomics.store(state, 2, 1);",
+      "    waitFor(state, 3, 1);",
+      "    for (const _ of iterations) Atomics.add(state, 0, 1);",
+      "    Atomics.store(state, 2, 2);",
+      "    $262.agent.report(\"done\");",
+      "    $262.agent.leaving();",
+      "  });",
+      "`);",
+      "$262.agent.broadcast(sab);",
+      "// Built before the agent starts adding, so the grows overlap its adds.",
+      "const ticks = Array.from({ length: 200000 });",
+      "waitFor(state, 2, 1);",
+      "let size = 16 + STEP;",
+      "sab.grow(size);",
+      "Atomics.store(state, 3, 1);",
+      "let mainAdds = 0;",
+      "for (const _ of ticks) {",
+      "  if (Atomics.load(state, 2) === 2) break;",
+      "  Atomics.add(state, 0, 1);",
+      "  mainAdds++;",
+      "  if (size + STEP <= MAX) { size += STEP; sab.grow(size); }",
+      "}",
+      "let report = null;",
+      "for (const _ of Array.from({ length: 60000 })) {",
+      "  report = $262.agent.getReport();",
+      "  if (report !== null) break;",
+      "  $262.agent.sleep(1);",
+      "}",
+      "if (report !== \"done\") throw new Error(\"agent did not finish: \" + report);",
+      "const total = Atomics.load(state, 0);",
+      "if (total !== ITERATIONS + mainAdds) throw new Error(\"lost increments: \" + total + \" of \" + (ITERATIONS + mainAdds));",
+      "if (Atomics.load(state, 1) !== 12345) throw new Error(\"a value written before the grows was lost\");",
+      "if (sab.byteLength !== size) throw new Error(\"byteLength \" + sab.byteLength + \", expected \" + size);",
+      "if (!new Uint8Array(sab, 16).every((b) => b === 0)) throw new Error(\"grown bytes are not zero\");",
+      "",
+    ].join("\n"));
+    // Two agents race to grow one buffer through the same lengths: a grow
+    // that returns leaves the buffer at least that long, and the length
+    // never decreases.
+    writeFileSync(join(tests, "sab-racing-grows.js"), [
+      "/*---",
+      "features: [SharedArrayBuffer, Atomics, resizable-arraybuffer]",
+      "---*/",
+      "const MAX = 32768;",
+      "const sab = new SharedArrayBuffer(8, { maxByteLength: MAX });",
+      "for (const _ of [0, 1]) {",
+      "  $262.agent.start(`",
+      "    $262.agent.receiveBroadcast((sab) => {",
+      "      const state = new Int32Array(sab, 0, 2);",
+      "      const steps = Array.from({ length: ${MAX / 8} }, (_, i) => i + 1);",
+      "      Atomics.add(state, 0, 1);",
+      "      for (const _ of Array.from({ length: 60000 })) {",
+      "        if (Atomics.load(state, 0) === 2) break;",
+      "        $262.agent.sleep(1);",
+      "      }",
+      "      let last = 0;",
+      "      let problem = \"\";",
+      "      for (const step of steps) {",
+      "        const target = step * 8;",
+      "        try {",
+      "          sab.grow(target);",
+      "          if (sab.byteLength < target) problem = \"grow(\" + target + \") left byteLength \" + sab.byteLength;",
+      "        } catch (e) {",
+      "          // A grow may fail only because another grow already passed target.",
+      "          // grow belongs to the main agent's realm, so its RangeError does too.",
+      "          if (e.name !== \"RangeError\" || sab.byteLength <= target) problem = String(e);",
+      "        }",
+      "        const length = sab.byteLength;",
+      "        if (length < last) problem = \"byteLength went from \" + last + \" to \" + length;",
+      "        last = length;",
+      "        if (problem !== \"\") break;",
+      "      }",
+      "      $262.agent.report(problem === \"\" ? \"done\" : problem);",
+      "      $262.agent.leaving();",
+      "    });",
+      "  `);",
+      "}",
+      "$262.agent.broadcast(sab);",
+      "const reports = [];",
+      "for (const _ of Array.from({ length: 60000 })) {",
+      "  const report = $262.agent.getReport();",
+      "  if (report !== null) reports.push(report);",
+      "  if (reports.length === 2) break;",
+      "  $262.agent.sleep(1);",
+      "}",
+      "if (reports.length !== 2 || reports.some((r) => r !== \"done\")) throw new Error(\"agents reported \" + JSON.stringify(reports));",
+      "if (sab.byteLength !== MAX) throw new Error(\"byteLength \" + sab.byteLength + \", expected \" + MAX);",
+      "",
+    ].join("\n"));
+    const out = join(tmp, "sab-grow-agents.json");
+    const proc = Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "built-ins",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const results = report.results ?? [];
+    if (proc.exitCode !== 0 || results.length !== 2 ||
+        results.some((result: { status: string }) => result.status !== "PASS")) {
+      throw new Error(
+        `growing a SharedArrayBuffer under other agents should keep their writes and grows, got exit ${proc.exitCode}: ` +
+        `${JSON.stringify(results)}\n${proc.stderr.toString()}`,
+      );
+    }
   } finally {
     clean(tmp);
   }
@@ -3959,6 +4212,119 @@ await section("Loader: --host-environment module controls time, zone, and random
   }
 });
 
+// CI runs in UTC, where a legacy date read as UTC and one read as local time
+// agree. Pinning the zone through a provider puts one zone on each side of UTC.
+await section("Loader: Date.parse reads legacy dates without an offset as local time...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const date = new Date(2024, 5, 15, 11, 30, 45);",
+      "[",
+      '  Date.parse("6/15/24"),',
+      '  Date.parse("2024/06/15"),',
+      '  Date.parse("Jun 15 2024"),',
+      '  Date.parse("Sat Jun 15 2024 11:30:45"),',
+      '  Date.parse("Sat, 15 Jun 2024 11:30:45"),',
+      '  Date.parse("Sat Jun 15 2024 11:30:45 GMT+0200"),',
+      '  Date.parse("2024-06-15"),',
+      '  Date.parse("2024-06-15T00:00"),',
+      "  Date.parse(date.toString()) === date.getTime(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "1718434800000|1718434800000|1718434800000|1718476245000|1718476245000|1718443845000|1718409600000|1718434800000|true",
+      ],
+      [
+        "Asia/Tokyo",
+        "1718377200000|1718377200000|1718377200000|1718418645000|1718418645000|1718443845000|1718409600000|1718377200000|true",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date.parse in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+// CI runs in UTC, where local fields and the UTC instant agree. Off UTC the
+// local fields of the first and last valid instants lie past the time value
+// range, which applies to TimeClip(UTC(date)), after the offset comes off.
+await section("Loader: Date applies the time value range after converting local time...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const local = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(),",
+      "  d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds()).getTime();",
+      "const nearEnd = new Date(8.64e15 - 3600000);",
+      "const nearStart = new Date(-8.64e15 + 3600000);",
+      "[",
+      "  new Date(1970, 0, -99999999, 0, -420, 0, 0).getTime(),",
+      "  new Date(1970, 0, 100000001, 0, 480, 0, -1).getTime(),",
+      "  local(new Date(8.64e15)),",
+      "  local(new Date(-8.64e15)),",
+      "  nearEnd.setHours(nearEnd.getHours() + 1),",
+      "  nearStart.setHours(nearStart.getHours() - 1),",
+      "  Date.parse(new Date(8.64e15).toString()),",
+      '  Date.parse("+275760-09-13T01:00:00"),',
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "-8639999996822000|NaN|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|NaN",
+      ],
+      [
+        "Asia/Tokyo",
+        "NaN|8639999996399999|8640000000000000|-8640000000000000|8640000000000000|-8640000000000000|8640000000000000|8639999971200000",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date range in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --host-environment errors withhold provider source...", async () => {
   const tmp = makeTmp();
   try {
@@ -4002,9 +4368,154 @@ await section("Loader: --host-environment errors withhold provider source...", a
   }
 });
 
+// CI runs in UTC, whose offset has no seconds. Before standard time most zones
+// used local mean time (America/Los_Angeles -07:52:58, Asia/Tokyo +09:18:59);
+// toString and toTimeString write only the hours and minutes of it.
+await section("Loader: Date toString writes the hours and minutes of a local mean time offset...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "const date = new Date(1800, 0, 1);",
+      "[",
+      "  date.toString(),",
+      "  date.toTimeString(),",
+      "  date.getSeconds(),",
+      '  new Date("0020-01-01T00:00:00Z").toString(),',
+      "  new Date(2024, 5, 15, 11, 30, 45).toString(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone),
+    // without the optional zone name V8 appends.
+    const cases: [string, string][] = [
+      [
+        "America/Los_Angeles",
+        "Wed Jan 01 1800 00:00:00 GMT-0752|00:00:00 GMT-0752|0|Tue Dec 31 0019 16:07:02 GMT-0752|Sat Jun 15 2024 11:30:45 GMT-0700",
+      ],
+      [
+        "Asia/Tokyo",
+        "Wed Jan 01 1800 00:00:00 GMT+0918|00:00:00 GMT+0918|0|Wed Jan 01 0020 09:18:59 GMT+0918|Sat Jun 15 2024 11:30:45 GMT+0900",
+      ],
+      [
+        // Local mean time -00:01:15: a negative offset under an hour keeps its sign.
+        "Europe/London",
+        "Wed Jan 01 1800 00:00:00 GMT-0001|00:00:00 GMT-0001|0|Tue Dec 31 0019 23:58:45 GMT-0001|Sat Jun 15 2024 11:30:45 GMT+0100",
+      ],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date toString in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --global option...", async () => {
   const { json } = runLoaderJson("x + y;\n", ["--global", "x=10", "--global", "y=20"]);
   if (json.files?.[0]?.result !== 30) throw new Error(`--global x+y should be 30, got ${json.files?.[0]?.result}`);
+});
+
+await section("Loader: Date local time keeps a zone's daylight saving time after 2037...", async () => {
+  const tmp = makeTmp();
+  try {
+    const source = [
+      "[",
+      "  new Date(2049, 4, 1).getTime(),",
+      "  new Date(2038, 6, 1, 12).getTimezoneOffset(),",
+      "  new Date(2038, 0, 15, 12).getTimezoneOffset(),",
+      "  new Date(2040, 2, 11, 2, 30).getHours(),",
+      '].join("|");',
+      "",
+    ].join("\n");
+    // Expected values are V8's (Node.js with TZ set to the same zone).
+    const cases: [string, string][] = [
+      ["America/Los_Angeles", "2503465200000|420|480|3"],
+      ["Australia/Sydney", "2503404000000|-600|-660|2"],
+      ["Europe/Dublin", "2503436400000|-60|0|2"],
+    ];
+    for (const [zone, expected] of cases) {
+      const providerPath = join(tmp, `${zone.replace("/", "-")}.js`);
+      writeFileSync(
+        providerPath,
+        [
+          "export const epochNanoseconds = () => 0n;",
+          "export const monotonicNanoseconds = () => 0n;",
+          `export const timeZoneIdentifier = () => "${zone}";`,
+          "export const random = () => 0.5;",
+          "",
+        ].join("\n"),
+      );
+      const result = runLoaderJson(source, [`--host-environment=${providerPath}`]);
+      const actual = result.json.files?.[0]?.result;
+      if (result.exitCode !== 0 || actual !== expected)
+        throw new Error(
+          `Date local time in ${zone} expected ${expected}, got ${actual}${result.stderr}`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: a TZif file with only a footer rule follows it at every instant...", async () => {
+  const tmp = makeTmp();
+  try {
+    // A minimal version 2 TZif file with no transitions and one local time
+    // type, so the footer rule governs every instant. GOCCIA_TZDIR is read
+    // before system zoneinfo and Windows ICU, so every platform reads it.
+    const block = (): number[] => {
+      const bytes = [...Buffer.from("TZif2"), ...new Array(15).fill(0)];
+      const int32 = (value: number) =>
+        bytes.push((value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255);
+      // isutcnt, isstdcnt, leapcnt, timecnt, typecnt, charcnt
+      for (const count of [0, 0, 0, 0, 1, 4]) int32(count);
+      int32(-28800);
+      bytes.push(0, 0, ...Buffer.from("PST"), 0);
+      return bytes;
+    };
+    mkdirSync(join(tmp, "America"));
+    writeFileSync(
+      join(tmp, "America", "Los_Angeles"),
+      Uint8Array.from([...block(), ...block(), ...Buffer.from("\nPST8PDT,M3.2.0,M11.1.0\n")]),
+    );
+    const source = [
+      'const at = (instant) => Temporal.Instant.from(instant).toZonedDateTimeISO("America/Los_Angeles");',
+      'const max = new Temporal.ZonedDateTime(8640000000000000000000n, "America/Los_Angeles");',
+      "[",
+      // The rule's offset even where full data has local mean time (-07:52:58).
+      '  at("1850-07-01T12:00:00Z").offset,',
+      '  at("2030-01-15T12:00:00Z").offset,',
+      '  at("2030-07-01T12:00:00Z").offset,',
+      "  max.offset,",
+      '  max.getTimeZoneTransition("previous").toInstant().toString(),',
+      '  String(max.getTimeZoneTransition("next")),',
+      '].join("|");',
+      "",
+    ].join("\n");
+    const expected = "-07:00|-08:00|-07:00|-07:00|+275760-03-09T10:00:00Z|null";
+    const result = runLoaderJson(source, [], { env: { ...process.env, GOCCIA_TZDIR: tmp } });
+    const actual = result.json.files?.[0]?.result;
+    if (result.exitCode !== 0 || actual !== expected)
+      throw new Error(`Slim TZif rule expected ${expected}, got ${actual}${result.stderr}`);
+  } finally {
+    clean(tmp);
+  }
 });
 
 await section("Loader: ShadowRealm.importValue inherits the host module aliases...", async () => {
@@ -4532,6 +5043,50 @@ await section("Loader: --globals from JS module...", async () => {
     writeFileSync(moduleJsPath, 'export const name = "module-value";\n');
     const { json } = runLoaderJson("name;\n", [`--globals=${moduleJsPath}`]);
     if (json.files?.[0]?.result !== "module-value") throw new Error(`--globals JS module should set name, got ${json.files?.[0]?.result}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("TestRunner: CLI and config globals modules load before tests...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "dependency.js"), "export const value = 42;\n");
+    writeFileSync(join(tmp, "globals.js"), [
+      'import { value } from "./dependency.js";',
+      'if (typeof test !== "undefined") throw new Error("testing globals attached too early");',
+      "globalThis.globalsModuleSideEffect = value;",
+      "export const injected = { value };",
+      'export const priority = "module";',
+      "",
+    ].join("\n"));
+    writeFileSync(join(tmp, "base.json"), '{"priority":"structured","fromStructured":true}\n');
+    for (const route of ["config", "cli"]) {
+      writeFileSync(join(tmp, "goccia.json"), JSON.stringify(
+        route === "config" ? { globals: ["./base.json", "./globals.js"] } : {},
+      ));
+      writeFileSync(join(tmp, "suite.test.js"), [
+        "const atImport = injected.value;",
+        'test("globals are ready before the suite loads", () => {',
+        "  expect(atImport).toBe(42);",
+        "  expect(fromStructured).toBe(true);",
+        '  expect(priority).toBe("inline");',
+        `  expect(typeof globalsModuleSideEffect).toBe("${route === "cli" ? "number" : "undefined"}");`,
+        "});",
+        "",
+      ].join("\n"));
+      const result = Bun.spawnSync([
+        resolve(TESTRUNNER), "-P", "suite.test.js", "--no-progress", "--output=json",
+        ...(route === "cli" ? ["--globals=./base.json", "--globals=./globals.js"] : []),
+        "--global=priority=inline",
+      ], { cwd: tmp, stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+      const output = result.stdout.toString();
+      if (result.exitCode !== 0)
+        throw new Error(`${route} globals module failed: ${output}\n${result.stderr}`);
+      const report = JSON.parse(output);
+      if (report.ok !== true || report.passed !== 1 || report.failed !== 0)
+        throw new Error(`${route} globals module did not run its test: ${output}`);
+    }
   } finally {
     clean(tmp);
   }
@@ -7360,7 +7915,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
       ].join("\n"),
     );
     await $`${BUNDLER} ${argumentsSrc} --output=${argumentsOut} --compat-var --compat-function --compat-arguments-object`.quiet();
-    const argumentsRoundtrip = await $`${RUNNER} --print ${argumentsOut} 2>&1`.text();
+    const argumentsRoundtrip = await $`${RUNNER} --print ${argumentsOut} --compat-var --compat-function --compat-arguments-object 2>&1`.text();
     if (!containsLine(argumentsRoundtrip, "2"))
       throw new Error(`Arguments-object roundtrip should print 2, got: ${argumentsRoundtrip}`);
 
@@ -7546,6 +8101,8 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
 // ============================================================================
 // GocciaBenchmarkRunner
 // ============================================================================
+
+await section("Bundler: source and precompiled module graphs agree...", verifyAotModules);
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
 
@@ -8921,6 +9478,79 @@ await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs..
   }
 });
 
+await section("Runner sandbox mode: fs writes the bytes a view holds after its buffer was resized...", async () => {
+  // A length-tracking Uint8Array over a grown buffer writes the bytes the
+  // buffer holds now, zeros past its old end, not bytes past the end of the
+  // buffer's previous data block; a shrunk one its new length; a view past the
+  // end of its shrunk buffer and a view of a detached buffer write nothing.
+  // Each line matches Node.
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'const show = (label, path) => console.log(label + ":" + fs.readFileSync(path).join(","));',
+          'const showGrown = (label, path) => {',
+          '  const bytes = fs.readFileSync(path);',
+          '  console.log(label + ":" + bytes.length + ":" + bytes.slice(0, 4).join(",") + ":" + bytes.slice(4).every((b) => b === 0));',
+          '};',
+          'const grown = () => {',
+          '  const rab = new ArrayBuffer(4, { maxByteLength: 4096 });',
+          '  const view = new Uint8Array(rab);',
+          '  view.fill(7);',
+          '  rab.resize(4096);',
+          '  return view;',
+          '};',
+          'fs.writeFileSync("/grown.bin", grown());',
+          'showGrown("grown", "/grown.bin");',
+          'fs.writeFileSync("/append.bin", "");',
+          'fs.appendFileSync("/append.bin", grown());',
+          'showGrown("append", "/append.bin");',
+          'await fs.promises.writeFile("/promise.bin", grown());',
+          'showGrown("promise", "/promise.bin");',
+          'const shrinking = new ArrayBuffer(8, { maxByteLength: 8 });',
+          'const tracking = new Uint8Array(shrinking);',
+          'const fixed = new Uint8Array(shrinking, 0, 8);',
+          'tracking.fill(9);',
+          'shrinking.resize(2);',
+          'fs.writeFileSync("/shrunk.bin", tracking);',
+          'show("shrunk", "/shrunk.bin");',
+          'fs.writeFileSync("/out-of-bounds.bin", fixed);',
+          'show("out-of-bounds", "/out-of-bounds.bin");',
+          'const detachable = new ArrayBuffer(8, { maxByteLength: 8 });',
+          'const detached = new Uint8Array(detachable);',
+          'detachable.transfer();',
+          'fs.writeFileSync("/detached.bin", detached);',
+          'show("detached", "/detached.bin");',
+        ].join("\n"),
+      },
+    ]);
+
+    const expected = [
+      "grown:4096:7,7,7,7:true",
+      "append:4096:7,7,7,7:true",
+      "promise:4096:7,7,7,7:true",
+      "shrunk:9,9",
+      "out-of-bounds:",
+      "detached:",
+    ];
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode resized-view write run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = stdout.split("\n");
+    if (JSON.stringify(actual) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode fs should write the bytes a resized view holds, got: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metadata...", async () => {
   const tmp = makeNativeTmp();
   try {
@@ -9048,6 +9678,117 @@ await section("Runner sandbox mode: JSON diffs always carry metadata, unified di
   }
 });
 
+await section("Runner sandbox mode: --deterministic stamps every file at the epoch, as Date.now() reads it...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'import { runScript } from "goccia";',
+          "const times = (path) => {",
+          "  const stat = fs.statSync(path);",
+          '  return [stat.atimeMs, stat.mtimeMs, stat.ctimeMs, stat.birthtimeMs, stat.mtime.getTime()].join(",");',
+          "};",
+          'console.log("input:" + times("/in.txt"));',
+          'fs.writeFileSync("/written.txt", "w");',
+          'console.log("written:" + times("/written.txt"));',
+          'fs.writeFileSync("/in.txt", "changed");',
+          'console.log("rewritten:" + times("/in.txt"));',
+          'const child = runScript("/child.js", { sandbox: true, copy: ["/child.js"] });',
+          'console.log("child:" + child.result);',
+          'console.log("now:" + Date.now());',
+        ].join("\n"),
+      },
+      {
+        path: "/child.js",
+        text: [
+          'import fs from "fs";',
+          'fs.writeFileSync("/c.txt", "c");',
+          'fs.statSync("/c.txt").mtimeMs;',
+        ].join("\n"),
+      },
+      { path: "/in.txt", text: "input" },
+      {
+        path: "/reload.js",
+        text: [
+          'import fs from "fs";',
+          'fs.writeFileSync("/m.js", "export const v = 1;");',
+          'const first = (await import("/m.js")).v;',
+          'fs.writeFileSync("/m.js", "export const v = 2;");',
+          'const second = (await import("/m.js")).v;',
+          'fs.writeFileSync("/bad.js", "throw new Error(\'bad\');");',
+          'let failed = "ok";',
+          "try { await import(\"/bad.js\"); } catch (error) { failed = error.message; }",
+          'fs.writeFileSync("/bad.js", "export const fixed = true;");',
+          'let retried = "ok";',
+          "try { retried = String((await import(\"/bad.js\")).fixed); } catch (error) { retried = error.message; }",
+          'console.log([first, second, failed, retried].join("|"));',
+        ].join("\n"),
+      },
+    ]);
+
+    const runSandbox = (extra: string[], diff: string) => {
+      const proc = Bun.spawnSync(
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--diff-file=${diff}`, ...extra],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`Sandbox mode timestamp run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      return {
+        stdout: normalizeLineEndings(proc.stdout.toString()).trim(),
+        diff: readFileSync(diff, "utf-8"),
+      };
+    };
+
+    // Inputs copied in, files the run writes, and an isolated child's files
+    // all carry the deterministic profile's epoch, so two runs agree.
+    const first = runSandbox(["--deterministic"], join(tmp, "first.json"));
+    const second = runSandbox(["--deterministic"], join(tmp, "second.json"));
+    const expected = [
+      "input:0,0,0,0,0",
+      "written:0,0,0,0,0",
+      "rewritten:0,0,0,0,0",
+      "child:0",
+      "now:0",
+    ].join("\n");
+    if (first.stdout !== expected)
+      throw new Error(`--deterministic sandbox timestamps should all be 0, got: ${first.stdout}`);
+    if (second.stdout !== first.stdout || second.diff !== first.diff)
+      throw new Error(`Two --deterministic sandbox runs should print and diff the same, got:\n${first.stdout}\n${first.diff}\n---\n${second.stdout}\n${second.diff}`);
+
+    // Every timestamp is the epoch before and after the run, so the metadata
+    // dimension is empty, while content changes are still reported.
+    const parsed = JSON.parse(first.diff);
+    if (!parsed.changes.some((c: any) => c.kind === "modify" && c.path === "/in.txt"))
+      throw new Error(`--deterministic diff should report /in.txt modified, got ${first.diff}`);
+    if (!parsed.changes.some((c: any) => c.kind === "create" && c.path === "/written.txt"))
+      throw new Error(`--deterministic diff should report /written.txt created, got ${first.diff}`);
+    if (!Array.isArray(parsed.metadataChanges) || parsed.metadataChanges.length !== 0)
+      throw new Error(`--deterministic diff should carry an empty metadataChanges, got ${first.diff}`);
+
+    // The loader reloads a module, or retries a failed import, only when its
+    // file is newer than what it cached; under a frozen clock none ever is.
+    const reload = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/reload.js", "--source-type=module", "--deterministic"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const reloadOut = normalizeLineEndings(reload.stdout.toString()).trim();
+    if (reload.exitCode !== 0 || reloadOut !== "1|1|bad|bad")
+      throw new Error(`--deterministic sandbox should neither reload a rewritten module nor retry a failed import, got exit ${reload.exitCode}: ${reloadOut}${reload.stderr.toString()}`);
+
+    // Without the flag the filesystem keeps the wall clock.
+    const live = runSandbox([], join(tmp, "live.json"));
+    const inputLine = live.stdout.split("\n").find((line) => line.startsWith("input:"));
+    const inputMtime = Number(inputLine?.slice("input:".length).split(",")[1]);
+    if (!(inputMtime > 1_000_000_000_000))
+      throw new Error(`Sandbox timestamps without --deterministic should be the wall clock, got: ${live.stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: fs errors are Node-shaped...", async () => {
   const tmp = makeNativeTmp();
   try {
@@ -9093,6 +9834,249 @@ await section("Runner sandbox mode: fs errors are Node-shaped...", async () => {
     const actual = stdout.split("\n");
     if (JSON.stringify(actual) !== JSON.stringify(expected))
       throw new Error(`Sandbox mode fs errors should be Node-shaped, got: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: fs writes a view's bytes, not one byte per element...", async () => {
+  // Node writes a TypedArray or DataView as the bytes it views: byteLength
+  // bytes from byteOffset. Each line prints the bytes written back. A plain
+  // ArrayBuffer and an out-of-bounds DataView throw a TypeError, as in Node,
+  // but write nothing (Node opens, so creates, the file first).
+  const tmp = makeNativeTmp();
+  try {
+    const kinds = [
+      ["Int8Array", 1], ["Uint8Array", 1], ["Uint8ClampedArray", 1],
+      ["Int16Array", 2], ["Uint16Array", 2], ["Float16Array", 2],
+      ["Int32Array", 4], ["Uint32Array", 4], ["Float32Array", 4],
+      ["Float64Array", 8], ["BigInt64Array", 8], ["BigUint64Array", 8],
+    ] as const;
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'const show = (label, path) => console.log(label + ":" + fs.readFileSync(path).join(","));',
+          'const pattern = new ArrayBuffer(64);',
+          'const all = new Uint8Array(pattern);',
+          'for (const i of all.keys()) all[i] = i;',
+          `for (const Kind of [${kinds.map(([name]) => name).join(", ")}]) {`,
+          '  fs.writeFileSync("/kind.bin", new Kind(pattern, 8, 2));',
+          '  show(Kind.name, "/kind.bin");',
+          '}',
+          'fs.writeFileSync("/zeros.bin", new Uint16Array(3));',
+          'show("zeros", "/zeros.bin");',
+          'fs.writeFileSync("/dataview.bin", new DataView(pattern, 2, 5));',
+          'show("dataview", "/dataview.bin");',
+          'fs.writeFileSync("/dataview-tail.bin", new DataView(pattern, 60));',
+          'show("dataview-tail", "/dataview-tail.bin");',
+          'fs.writeFileSync("/append.bin", new Uint16Array(pattern, 0, 1));',
+          'fs.appendFileSync("/append.bin", new Uint32Array(pattern, 4, 1));',
+          'show("append", "/append.bin");',
+          'await fs.promises.writeFile("/promise.bin", new Int16Array(pattern, 10, 2));',
+          'await fs.promises.appendFile("/promise.bin", new DataView(pattern, 20, 3));',
+          'show("promise", "/promise.bin");',
+          'const growable = new ArrayBuffer(2, { maxByteLength: 8 });',
+          'const tracking = new Uint16Array(growable);',
+          'const trackingView = new DataView(growable, 2);',
+          'tracking[0] = 0x0101;',
+          'growable.resize(8);',
+          'fs.writeFileSync("/grown.bin", tracking);',
+          'show("grown", "/grown.bin");',
+          'fs.writeFileSync("/grown-dataview.bin", trackingView);',
+          'show("grown-dataview", "/grown-dataview.bin");',
+          'const shrinking = new ArrayBuffer(16, { maxByteLength: 16 });',
+          'const fixed = new Uint32Array(shrinking, 4, 2);',
+          'const fixedView = new DataView(shrinking, 4, 8);',
+          'shrinking.resize(8);',
+          'fs.writeFileSync("/out-of-bounds.bin", fixed);',
+          'show("out-of-bounds", "/out-of-bounds.bin");',
+          'try { fs.writeFileSync("/out-of-bounds-dataview.bin", fixedView); console.log("out-of-bounds-dataview:written"); }',
+          'catch (error) { console.log("out-of-bounds-dataview:" + error.name + ":" + fs.existsSync("/out-of-bounds-dataview.bin")); }',
+          'const detachable = new ArrayBuffer(8);',
+          'const detached = new Float64Array(detachable);',
+          'const detachedView = new DataView(detachable);',
+          'detachable.transfer();',
+          'fs.writeFileSync("/detached.bin", detached);',
+          'show("detached", "/detached.bin");',
+          'try { fs.writeFileSync("/detached-dataview.bin", detachedView); console.log("detached-dataview:written"); }',
+          'catch (error) { console.log("detached-dataview:" + error.name + ":" + fs.existsSync("/detached-dataview.bin")); }',
+          'try { fs.writeFileSync("/buffer.bin", pattern); console.log("buffer:written"); }',
+          'catch (error) { console.log("buffer:" + error.name + ":" + fs.existsSync("/buffer.bin")); }',
+        ].join("\n"),
+      },
+    ]);
+
+    const range = (start: number, count: number) =>
+      Array.from({ length: count }, (_, index) => start + index).join(",");
+    const expected = [
+      ...kinds.map(([name, size]) => `${name}:${range(8, 2 * size)}`),
+      "zeros:0,0,0,0,0,0",
+      `dataview:${range(2, 5)}`,
+      `dataview-tail:${range(60, 4)}`,
+      `append:${range(0, 2)},${range(4, 4)}`,
+      `promise:${range(10, 4)},${range(20, 3)}`,
+      "grown:1,1,0,0,0,0,0,0",
+      "grown-dataview:0,0,0,0,0,0",
+      "out-of-bounds:",
+      "out-of-bounds-dataview:TypeError:false",
+      "detached:",
+      "detached-dataview:TypeError:false",
+      "buffer:TypeError:false",
+    ];
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode view write run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = stdout.split("\n");
+    if (JSON.stringify(actual) !== JSON.stringify(expected))
+      throw new Error(`Sandbox mode should write each view's bytes, expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: binary reads, writes, diffs and write-back keep every byte...", async () => {
+  // readFileSync hands the file's own bytes to its Uint8Array, writeFileSync
+  // copies a view's range at once, and the diff and write-back compare files
+  // in place a word at a time; sizes either side of a word reach the tail.
+  const tmp = makeNativeTmp();
+  try {
+    const bytesOf = (size: number, seed: number) =>
+      Buffer.from(Array.from({ length: size }, (_, index) => (index * 131 + seed * 17 + 7) & 0xff));
+    const sizes = [0, 1, 7, 8, 9, 16, 4099];
+    const files: Record<string, Buffer> = {
+      "last.bin": bytesOf(9, 1),
+      "word.bin": bytesOf(16, 2),
+      "same.bin": bytesOf(4099, 3),
+      "empty.bin": bytesOf(0, 4),
+      "short.bin": bytesOf(9, 5),
+    };
+    for (const size of sizes) files[`source-${size}.bin`] = bytesOf(size, size);
+    const tree = writeSandboxTree(
+      tmp,
+      Object.entries(files).map(([name, bytes]) => ({ path: `/${name}`, base64: bytes.toString("base64") })),
+    );
+    const script = join(tmp, "main.js");
+    writeFileSync(script, [
+      'import fs from "fs";',
+      `for (const size of [${sizes.join(", ")}]) {`,
+      '  const bytes = fs.readFileSync(`/data/source-${size}.bin`);',
+      '  fs.writeFileSync(`/data/copy-${size}.bin`, bytes);',
+      '}',
+      'const last = fs.readFileSync("/data/last.bin");',
+      'last[last.length - 1] ^= 1;',
+      'fs.writeFileSync("/data/last.bin", last);',
+      'const word = fs.readFileSync("/data/word.bin");',
+      'word[3] ^= 0x80;',
+      'fs.writeFileSync("/data/word.bin", word);',
+      'fs.writeFileSync("/data/same.bin", fs.readFileSync("/data/same.bin"));',
+      'fs.writeFileSync("/data/empty.bin", fs.readFileSync("/data/empty.bin"));',
+      'const short = fs.readFileSync("/data/short.bin");',
+      'fs.writeFileSync("/data/short.bin", short.subarray(0, short.length - 1));',
+      'console.log("done");',
+    ].join("\n"));
+
+    const diff = join(tmp, "diff.json");
+    const proc = Bun.spawnSync(
+      [RUNNER, script, "--copy-rw", `${tree}=/data`, "--source-type=module", `--diff-file=${diff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const stderr = normalizeLineEndings(proc.stderr.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode binary round trip should exit 0, got ${proc.exitCode}: ${stderr}`);
+    for (const size of sizes) {
+      const copied = readFileSync(join(tree, `copy-${size}.bin`));
+      if (!copied.equals(files[`source-${size}.bin`]))
+        throw new Error(`Sandbox mode should copy every byte of a ${size}-byte file, got ${copied.toString("hex")}`);
+    }
+    const expectedLast = Buffer.from(files["last.bin"]);
+    expectedLast[8] ^= 1;
+    const expectedWord = Buffer.from(files["word.bin"]);
+    expectedWord[3] ^= 0x80;
+    const expectedHost: [string, Buffer][] = [
+      ["last.bin", expectedLast],
+      ["word.bin", expectedWord],
+      ["same.bin", files["same.bin"]],
+      ["empty.bin", files["empty.bin"]],
+      ["short.bin", files["short.bin"].subarray(0, 8)],
+    ];
+    for (const [name, bytes] of expectedHost)
+      if (!readFileSync(join(tree, name)).equals(bytes))
+        throw new Error(`Sandbox mode write-back left ${name} as ${readFileSync(join(tree, name)).toString("hex")}`);
+
+    const written = stderr.split("\n")
+      .filter((line) => line.startsWith("write-back: ") && !line.includes("file(s) written"))
+      .map((line) => line.replace(/\\/g, "/").replace(/^.*\//, ""))
+      .sort();
+    const expectedWritten = [...sizes.map((size) => `copy-${size}.bin`), "last.bin", "short.bin", "word.bin"].sort();
+    if (JSON.stringify(written) !== JSON.stringify(expectedWritten))
+      throw new Error(`Sandbox mode should write back only changed files, expected ${JSON.stringify(expectedWritten)}, got ${JSON.stringify(written)}`);
+
+    const changes = JSON.parse(readFileSync(diff, "utf-8")).changes
+      .map((change: any) => `${change.kind} ${change.path} ${change.oldBytes} ${change.newBytes}`)
+      .sort();
+    const expectedChanges = [
+      ...sizes.map((size) => `create /data/copy-${size}.bin 0 ${size}`),
+      "modify /data/last.bin 9 9",
+      "modify /data/short.bin 9 8",
+      "modify /data/word.bin 16 16",
+    ].sort();
+    if (JSON.stringify(changes) !== JSON.stringify(expectedChanges))
+      throw new Error(`Sandbox mode JSON diff should list each changed file once, expected ${JSON.stringify(expectedChanges)}, got ${JSON.stringify(changes)}`);
+
+    const unifiedDiff = join(tmp, "diff.diff");
+    const unifiedProc = Bun.spawnSync(
+      [RUNNER, script, "--copy", `${tree}=/data`, "--source-type=module", `--diff-file=${unifiedDiff}`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (unifiedProc.exitCode !== 0)
+      throw new Error(`Sandbox mode unified diff run should exit 0, got ${unifiedProc.exitCode}: ${unifiedProc.stderr.toString()}`);
+    const headers = normalizeLineEndings(readFileSync(unifiedDiff, "latin1"))
+      .split("\n")
+      .filter((line) => line.startsWith("+++ /data/"))
+      .map((line) => line.slice(4))
+      .sort();
+    // The first run wrote its changes back, so this run's baseline already
+    // holds the copies: rewriting them, same.bin and empty.bin with the same
+    // bytes changes nothing, while last.bin, word.bin and short.bin change
+    // again.
+    const expectedHeaders = ["/data/last.bin", "/data/short.bin", "/data/word.bin"];
+    if (JSON.stringify(headers) !== JSON.stringify(expectedHeaders))
+      throw new Error(`Sandbox mode unified diff should list each changed file once, expected ${JSON.stringify(expectedHeaders)}, got ${JSON.stringify(headers)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: readFileSync is refused at the memory limit with a RangeError...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      { path: "/big.bin", base64: Buffer.alloc(4 * 1024 * 1024, 7).toString("base64") },
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'try { fs.readFileSync("/big.bin"); console.log("read"); }',
+          'catch (error) { console.log(error.name); }',
+          'console.log(fs.readFileSync("/main.js", "utf8").length > 0);',
+        ].join("\n"),
+      },
+    ]);
+    for (const [limit, expected] of [["2MiB", "RangeError\ntrue"], ["64MiB", "read\ntrue"]]) {
+      const proc = Bun.spawnSync(
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--max-memory=${limit}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0 || stdout !== expected)
+        throw new Error(`Sandbox mode readFileSync under --max-memory=${limit} should print ${JSON.stringify(expected)} and exit 0, got ${proc.exitCode}: ${stdout} ${proc.stderr.toString()}`);
+    }
   } finally {
     clean(tmp);
   }
@@ -10479,6 +11463,75 @@ await section("Runner sandbox mode: --print prints the last value like host mode
     const undef = runSandboxCli(["empty.js", "--sandbox", "--print"], { cwd: tmp });
     if (undef.exitCode !== 0 || undef.stdout !== "undefined\n")
       throw new Error(`Sandbox mode --print should print undefined, got (exit ${undef.exitCode}):\n${undef.stdout}${undef.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --print converts any last value as host mode does...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // The root value used to be copied out of the run without a realm, so
+    // an object lost its prototype and printed an empty "Error:", and a
+    // BigInt or Symbol became undefined.
+    const cases: Array<[string, string, string]> = [
+      ["object", "({ a: 1 });", "[object Object]\n"],
+      ["nested object", '({ a: [1, { b: 2 }], c: "x" });', "[object Object]\n"],
+      ["typed array", "new Uint8Array(3);", "0,0,0\n"],
+      ["Map", "new Map([[1, 2]]);", "[object Map]\n"],
+      ["arrow function", "(() => 1);", "() => 1\n"],
+      ["BigInt", "10n;", "10\n"],
+      ["array", "[1, 2, 3];", "1,2,3\n"],
+      ["own toString", '({ toString() { return "custom"; } });', "custom\n"],
+      ["toString that logs", 'const x = { toString: () => { console.log("side"); return "y"; } };\nx;', "side\ny\n"],
+    ];
+    for (const [label, source, expected] of cases) {
+      writeFileSync(join(tmp, "value.js"), source);
+      const run = runSandboxCli(["value.js", "--sandbox", "--print"], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout !== expected || run.stderr !== "")
+        throw new Error(`Sandbox --print of ${label} should print ${JSON.stringify(expected)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    // A Symbol has no string conversion, in host mode either: the run fails
+    // with the TypeError.
+    writeFileSync(join(tmp, "symbol.js"), 'Symbol("s");');
+    const symbol = runSandboxCli(["symbol.js", "--sandbox", "--print"], { cwd: tmp });
+    if (symbol.exitCode !== 1 || symbol.stdout !== "" || !symbol.stderr.includes("TypeError: Cannot convert a Symbol value to a string"))
+      throw new Error(`Sandbox --print of a Symbol should fail with the TypeError, got (exit ${symbol.exitCode}):\n${symbol.stdout}${symbol.stderr}`);
+    // The conversion is part of the run, under its limits.
+    writeFileSync(join(tmp, "forever.js"), [
+      "const forever = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 0 }) }) };",
+      'const x = { toString: () => { for (const _ of forever) {} return "never"; } };',
+      "x;",
+    ].join("\n"));
+    const forever = runSandboxCli(["forever.js", "--sandbox", "--print", "--max-instructions=100000"], { cwd: tmp });
+    if (forever.exitCode !== 1 || forever.stdout !== "" || !forever.stderr.includes("instruction limit"))
+      throw new Error(`A conversion that never ends should hit the run's instruction limit, got (exit ${forever.exitCode}):\n${forever.stdout}${forever.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: without --print the last value is not copied out of the run...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // Copying a typed array walks it one index key at a time and is charged
+    // to the run, so a value host mode leaves alone used to exhaust the
+    // run's own memory budget after the program had finished.
+    writeFileSync(join(tmp, "bytes.js"), "new Uint8Array(262144);");
+    const bytes = runSandboxCli(["bytes.js", "--sandbox", "--max-memory=16MiB"], { cwd: tmp });
+    if (bytes.exitCode !== 0 || bytes.stdout !== "" || bytes.stderr !== "")
+      throw new Error(`A typed-array last value should cost nothing without --print, got (exit ${bytes.exitCode}):\n${bytes.stdout}${bytes.stderr}`);
+    // As in host mode, nothing reads the value, so none of its getters run.
+    writeFileSync(join(tmp, "getter.js"), 'const o = { get x() { console.log("getter ran"); return 1; } };\no;');
+    const getter = runSandboxCli(["getter.js", "--sandbox"], { cwd: tmp });
+    if (getter.exitCode !== 0 || getter.stdout !== "")
+      throw new Error(`The last value's getters should not run without --print, got (exit ${getter.exitCode}):\n${getter.stdout}${getter.stderr}`);
+    // A nested runScript still hands its child's value to the caller.
+    writeFileSync(join(tmp, "child.js"), "[1, { a: 2 }];");
+    writeFileSync(join(tmp, "parent.js"), 'import { runScript } from "goccia";\nconsole.log(JSON.stringify(runScript("/child.js").result));');
+    const nested = runSandboxCli(["--copy", "child.js", "--copy", "parent.js", "--entry", "/parent.js"], { cwd: tmp });
+    if (nested.exitCode !== 0 || nested.stdout !== '[1,{"a":2}]\n')
+      throw new Error(`runScript should return the child's last value, got (exit ${nested.exitCode}):\n${nested.stdout}${nested.stderr}`);
   } finally {
     clean(tmp);
   }
@@ -13244,6 +14297,221 @@ await section("Runner sandbox mode: a parent's fetch that completes during a nes
   }
 });
 
+await section("Runner: a fetch awaited after a top-level await that settles at once still completes (#1559)...", async () => {
+  // The entry's first await settles at once, so the rest of its body runs as
+  // a job inside the run's final idle wait. A fetch started there used to be
+  // left in flight when that wait returned: the run printed `a` and exited 0.
+  // Every path that runs the entry as an async module — sandbox mode, and
+  // host mode while the interpreter existed — dropped it.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      // Never already answered when the run first looks for pending work.
+      await Bun.sleep(50);
+      return new Response("hello", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const fetchTail = [
+    "console.log('a');",
+    `const response = await fetch('${url}');`,
+    "console.log('b ' + response.status + ' ' + (await response.text()));",
+    "console.log('c');",
+  ];
+  const completes = ["a", "b 200 hello", "c"];
+  const variants: { name: string; main: string; expected: string[]; hostToo: boolean }[] = [
+    { name: "await Promise.resolve()", main: ["await Promise.resolve();", ...fetchTail].join("\n"), expected: completes, hostToo: true },
+    { name: "await import('./j.js')", main: ["const j = (await import('./j.js')).default;", "console.log('j ' + j);", ...fetchTail].join("\n"), expected: ["j 42", ...completes], hostToo: true },
+    { name: "await import('fs')", main: ["const fs = (await import('fs')).default;", "console.log('fs ' + typeof fs.readFileSync);", ...fetchTail].join("\n"), expected: ["fs function", ...completes], hostToo: false },
+    {
+      name: "await main()",
+      main: ["const main = async () => {", "  await Promise.resolve();", ...fetchTail.map((line) => "  " + line), "};", "await main();"].join("\n"),
+      expected: completes,
+      hostToo: true,
+    },
+    {
+      name: "fetch().then() after await Promise.resolve()",
+      main: [
+        "await Promise.resolve();",
+        "console.log('a');",
+        `fetch('${url}').then((response) => console.log('b ' + response.status));`,
+        "console.log('c');",
+      ].join("\n"),
+      expected: ["a", "c", "b 200"],
+      hostToo: true,
+    },
+  ];
+  // Async spawns, so this process's event loop stays free to answer.
+  const spawnRunner = async (args: string[]) => {
+    const proc = Bun.spawn([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, 20_000);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      return { exitCode, stdout: normalizeLineEndings(stdout), combined: stdout + stderr, timedOut };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const runBoth = async (main: string, hostToo: boolean) => {
+    const tmp = makeNativeTmp();
+    try {
+      const tree = writeSandboxTree(tmp, { "/main.js": main, "/j.js": "export default 42;\n" });
+      const common = ["--source-type=module", "--allow-net=127.0.0.1"];
+      const runs = [{ path: "sandbox", run: await spawnRunner(["--copy", `${tree}=/`, "--entry=/main.js", ...common]) }];
+      if (hostToo)
+        runs.push({ path: "host", run: await spawnRunner([join(tree, "main.js"), ...common]) });
+      return runs;
+    } finally {
+      clean(tmp);
+    }
+  };
+  // The program's own output, without the host runner's timing report.
+  const programLines = (stdout: string) =>
+    stdout.split("\n").filter((line) => line !== "" && !line.startsWith("Running script") && !line.startsWith("  "));
+  // Every case runs, so one run names every path that drops the fetch.
+  const failures: string[] = [];
+  try {
+    for (const variant of variants) {
+      for (const { path, run } of await runBoth(variant.main, variant.hostToo)) {
+        const label = `${path}, ${variant.name}`;
+        const lines = programLines(run.stdout);
+        if (run.timedOut || run.exitCode !== 0)
+          failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+        else if (JSON.stringify(lines) !== JSON.stringify(variant.expected))
+          failures.push(`${label}: should print ${JSON.stringify(variant.expected)}, got ${JSON.stringify(lines)}`);
+      }
+    }
+    // A rejected fetch the entry awaits is still the entry's uncaught error.
+    const rejected = ["await Promise.resolve();", "console.log('a');", "await fetch('http://127.0.0.1:1/');", "console.log('unreachable');"].join("\n");
+    for (const { path, run } of await runBoth(rejected, true)) {
+      const label = `${path}, rejected fetch`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("TypeError: Failed to connect to 127.0.0.1:1") || lines[0] !== "a" || lines.includes("unreachable"))
+        failures.push(`${label}: should print a, then fail with the fetch's TypeError, got:\n${run.combined}`);
+    }
+    // An entry still waiting once nothing is left to settle it failed; it
+    // never reports a run that stopped partway as a success.
+    const unsettled = ["await Promise.resolve();", "console.log('a');", "await new Promise(() => {});", "console.log('unreachable');"].join("\n");
+    for (const { path, run } of await runBoth(unsettled, true)) {
+      const label = `${path}, unsettled top-level await`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("TypeError: await: Promise did not settle") || lines[0] !== "a" || lines.includes("unreachable"))
+        failures.push(`${label}: should print a, then fail with the unsettled-await TypeError, got:\n${run.combined}`);
+    }
+    // The entry waits on a promise a throwing reaction never settles: the
+    // rejection nothing handled is the run's error, not the unsettled await.
+    // Host mode awaits synchronously and fails at the await instead, so only
+    // the sandbox path runs this case.
+    const thrown = [
+      "await Promise.resolve();",
+      "console.log('a');",
+      `await new Promise(() => fetch('${url}').then(() => { throw new Error('boom'); }));`,
+      "console.log('unreachable');",
+    ].join("\n");
+    for (const { path, run } of await runBoth(thrown, false)) {
+      const label = `${path}, reaction that throws`;
+      const lines = programLines(run.stdout);
+      if (run.timedOut || run.exitCode === 0 || run.exitCode === null)
+        failures.push(`${label}: should exit non-zero (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (!run.combined.includes("Error: boom") || run.combined.includes("did not settle") || lines[0] !== "a")
+        failures.push(`${label}: should print a, then fail with the reaction's Error: boom, got:\n${run.combined}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
+});
+
+await section("Runner: the idle wait for an Atomics.waitAsync timeout neither delays nor is delayed by a fetch, and does not hold a nested run...", async () => {
+  // The scripts time each step from inside and print whether it was prompt.
+  // A waiter's timeout is what a slow fetch would have waited out, and the
+  // slow endpoint is what a slow waiter would have waited for.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (new URL(request.url).pathname === "/slow")
+        await Bun.sleep(1500);
+      return new Response("ok", { status: 200 });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/`;
+  const prompt = (label: string, start: string) =>
+    `console.log('${label} ' + (Date.now() - ${start} < 2000 ? 'prompt' : 'late'));`;
+  // A job starts a fetch while a timed waiter is pending: the fetch's response
+  // is waited for first, not after the waiter's timeout, and the waiter still
+  // times out on time.
+  const fetchFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const waitStart = Date.now();",
+    "const waited = Atomics.waitAsync(view, 0, 0, 3000).value;",
+    "const fetchStart = Date.now();",
+    `await fetch('${url}');`,
+    prompt("fetch", "fetchStart"),
+    "const outcome = await waited;",
+    "console.log('waiter ' + outcome + ' ' + (Date.now() - waitStart < 4500 ? 'on time' : 'late'));",
+  ].join("\n");
+  // A waiter that falls due while a slow fetch is in flight settles then, not
+  // after the response, so it wins the race.
+  const waiterFirst = [
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "await Promise.resolve();",
+    "const raceStart = Date.now();",
+    "const winner = await Promise.race([",
+    "  Atomics.waitAsync(view, 0, 0, 100).value.then(() => 'waiter'),",
+    `  fetch('${url}slow').then(() => 'fetch'),`,
+    "]);",
+    "console.log('winner ' + winner + ' ' + (Date.now() - raceStart < 1000 ? 'prompt' : 'late'));",
+  ].join("\n");
+  // A nested run has no waiter of its own and ends without waiting out its
+  // caller's.
+  const nested = [
+    "import { runScript } from 'goccia';",
+    "const view = new Int32Array(new SharedArrayBuffer(4));",
+    "const waited = Atomics.waitAsync(view, 0, 0, 5000).value;",
+    "const childStart = Date.now();",
+    "const child = runScript('/child.js');",
+    prompt("child", "childStart"),
+    "console.log('child ok ' + child.ok);",
+    "console.log('waiter ' + (await waited));",
+  ].join("\n");
+  const failures: string[] = [];
+  try {
+    for (const [name, files, expected] of [
+      ["fetch during a waiter", { "/main.js": fetchFirst }, ["fetch prompt", "waiter timed-out on time"]],
+      ["waiter during a slow fetch", { "/main.js": waiterFirst }, ["winner waiter prompt"]],
+      ["nested run during a waiter", { "/main.js": nested, "/child.js": "console.log('child ran');\n" }, ["child prompt", "child ok true", "waiter timed-out"]],
+    ] as const) {
+      const run = await runNestedFetchSandbox({ ...files }, []);
+      const label = `sandbox, ${name}`;
+      const lines = run.stdout.split("\n").filter((line) => line !== "");
+      if (run.timedOut || run.exitCode !== 0)
+        failures.push(`${label}: should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      else if (JSON.stringify(lines) !== JSON.stringify(expected))
+        failures.push(`${label}: should print ${JSON.stringify(expected)}, got ${JSON.stringify(lines)}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+  if (failures.length > 0)
+    throw new Error(`${failures.length} case(s) failed:\n${failures.join("\n")}`);
+});
+
 await section("Runner: a deadline that elapses while a fetch is pending ends the run, not the fetch...", async () => {
   // A request's socket gives up when the run's deadline does. That used to
   // reach the script as a catchable `TypeError: Invalid HTTP response: no
@@ -13388,6 +14656,78 @@ await section("Runner: a deadline that elapses while a fetch is pending ends the
       throw new Error(`TestRunner should time the waiting test out and run the next one, got ${JSON.stringify({ passed: report.passed, failed: report.failed, failures: report.failedTests })}`);
   } finally {
     server.stop(true);
+    clean(tmp);
+  }
+});
+
+await section("Runner and TestRunner: a timeout that interrupts a blocking Atomics.wait ends the file like any other timeout...", async () => {
+  // The interrupted wait freed its waiter but left it in the process-wide
+  // waiter list (#1769). The runner then faulted when it shut its thread
+  // down, and the test runner's worker cleanup turned the timeout into an
+  // integrity fault that skipped every remaining file.
+  const tmp = makeTmp();
+  try {
+    const blocking = [
+      "const view = new Int32Array(new SharedArrayBuffer(4));",
+      "Atomics.wait(view, 0, 0, 25000);",
+      'console.log("ran past the " + "deadline");',
+      "",
+    ].join("\n");
+    const script = join(tmp, "wait.js");
+    writeFileSync(script, blocking);
+    const run = Bun.spawnSync([resolve(RUNNER), script, "--timeout=300"], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const runOutput = run.stdout.toString() + run.stderr.toString();
+    if (run.exitCode !== 1 || !runOutput.includes("file timed out after 300ms") || /Access violation|ran past the deadline/.test(runOutput))
+      throw new Error(`Runner should end the blocked wait with the timeout, got exit ${run.exitCode}: ${runOutput}`);
+
+    const json = Bun.spawnSync([resolve(RUNNER), script, "--timeout=300", "--output=json"], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const envelope = JSON.parse(json.stdout.toString());
+    if (json.exitCode !== 1 || envelope.ok !== false || envelope.error?.type !== "TimeoutError")
+      throw new Error(`Runner should report a TimeoutError in the JSON envelope, got exit ${json.exitCode}: ${json.stdout.toString()}${json.stderr.toString()}`);
+
+    const dir = join(tmp, "suite");
+    mkdirSync(dir);
+    writeFileSync(
+      join(dir, "a-wait.test.js"),
+      [
+        'describe("atomics wait", () => {',
+        '  test("blocks past the file timeout", () => {',
+        "    const view = new Int32Array(new SharedArrayBuffer(4));",
+        "    Atomics.wait(view, 0, 0, 25000);",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(dir, "b-next.test.js"),
+      'describe("next file", () => { test("runs", () => { expect(1 + 1).toBe(2); }); });\n',
+    );
+    for (const jobs of ["1", "2"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", dir, `--jobs=${jobs}`, "--timeout=300ms", "--no-progress", "--output=json"],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      const label = `TestRunner (--jobs=${jobs})`;
+      if (proc.exitCode !== 1 || output.includes("Integrity fault"))
+        throw new Error(`${label} should fail only the waiting file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
+      const files = JSON.parse(proc.stdout.toString())
+        .files.map((file: any) => ({
+          file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+          ok: file.ok,
+          passed: file.passed,
+          timedOut: String(file.errorMessage ?? "").includes("file timed out after 300ms"),
+        }))
+        .sort((a: any, b: any) => a.file.localeCompare(b.file));
+      const expected = [
+        { file: "a-wait.test.js", ok: false, passed: 0, timedOut: true },
+        { file: "b-next.test.js", ok: true, passed: 1, timedOut: false },
+      ];
+      if (JSON.stringify(files) !== JSON.stringify(expected))
+        throw new Error(`${label} should time the waiting file out and run the next one, got ${JSON.stringify(files)}`);
+    }
+  } finally {
     clean(tmp);
   }
 });

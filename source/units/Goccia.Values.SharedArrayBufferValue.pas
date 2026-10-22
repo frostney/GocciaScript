@@ -16,18 +16,27 @@ uses
   Goccia.Values.Primitives;
 
 type
+  { A SharedArrayBuffer keeps one data block from construction to collection,
+    as every agent that holds it must read and write the same memory. A
+    growable buffer's block is allocated at [[ArrayBufferMaxByteLength]] bytes
+    (ES2026 §25.2.2.1 AllocateSharedArrayBuffer steps 6-7); grow only raises
+    FByteLength, the bytes the buffer exposes, and never moves the block.
+    Script code never reaches past FByteLength, but native code given an FFI
+    pointer can, so grow zeroes the bytes it exposes before it exposes them. }
   TGocciaSharedArrayBufferValue = class(TGocciaInstanceValue)
   private
     const NO_MAX_BYTE_LENGTH = -1;
   private
     FData: TBytes;
+    // [[ArrayBufferByteLengthData]]: read by every agent through
+    // AtomicLoadInt32, raised only by grow's compare-and-exchange.
+    FByteLength: Integer;
     FMaxByteLength: Integer;
     FHasPendingAllocation: Boolean;
     FPendingByteLength: Double;
     FPendingMaxByteLength: Double;
     FChargedBytes: Int64;
-    procedure SetData(const AData: TBytes);
-    procedure SetDataLength(const ALength: Integer);
+    procedure AllocateBlock(const AByteLength, AMaxByteLength: Integer);
 
     function GetByteLength: Integer;
     function GetObservableMaxByteLength: Integer;
@@ -45,13 +54,17 @@ type
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
-    procedure MarkReferences; override;
+    procedure TraceReferences; override;
 
     class procedure ExposePrototype(const AConstructor: TGocciaValue);
     class function GetSharedPrototypeForRealm(
       const ARealm: TGocciaRealm): TGocciaObjectValue; static;
 
-    property Data: TBytes read FData write SetData;
+    { The whole data block, which never changes once the buffer is
+      constructed. For a growable buffer it is MaxByteLength bytes long, and
+      only its first ByteLength bytes are the buffer's contents: measure with
+      ByteLength, never with Length(Data). }
+    property Data: TBytes read FData;
     property MaxByteLength: Integer read FMaxByteLength;
   published
     property ByteLength: Integer read GetByteLength;
@@ -67,6 +80,8 @@ implementation
 uses
   Math,
 
+  CriticalSections,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
@@ -81,6 +96,9 @@ uses
 
 var
   GSharedArrayBufferSharedSlot: TGocciaRealmOwnedSlotId;
+  // Serializes grows, so the bytes one grow zeroes are never bytes another
+  // grow has already exposed.
+  GSharedArrayBufferGrowLock: TGocciaCriticalSection;
 
 function GetSharedArrayBufferShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -184,9 +202,12 @@ begin
   Result := SpeciesValue;
 end;
 
+// ES2026 §25.1.3.2 ArrayBufferByteLength(arrayBuffer, order) for a
+// SharedArrayBuffer: a growable buffer's length is read from
+// [[ArrayBufferByteLengthData]], which another agent's grow may raise.
 function TGocciaSharedArrayBufferValue.GetByteLength: Integer;
 begin
-  Result := Length(FData);
+  Result := AtomicLoadInt32(FByteLength);
 end;
 
 // ES2026 §25.2.5.5 get SharedArrayBuffer.prototype.maxByteLength, steps 4-5:
@@ -197,34 +218,28 @@ begin
   if FMaxByteLength >= 0 then
     Result := FMaxByteLength
   else
-    Result := Length(FData);
+    Result := GetByteLength;
 end;
 
-procedure TGocciaSharedArrayBufferValue.SetData(const AData: TBytes);
+{ Allocates the buffer's data block: AByteLength bytes for a fixed-length
+  buffer, AMaxByteLength bytes for a growable one (AMaxByteLength >= 0). The
+  whole block is charged against the memory limit, because it is all
+  allocated. Runs only while the buffer is constructed, before any view or
+  agent can hold the block; afterwards FData never changes. }
+procedure TGocciaSharedArrayBufferValue.AllocateBlock(
+  const AByteLength, AMaxByteLength: Integer);
 var
-  GC: TGarbageCollector;
-  Delta: Int64;
-begin
-  Delta := Length(AData) - FChargedBytes;
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and (Delta > 0) then
-  begin
-    if not GC.TryReserveExternalBytes(Delta, Self) then
-      ThrowRangeError(SErrorMemoryLimitExceeded,
-        SSuggestMemoryLimitExceeded);
-  end;
-  if Assigned(GC) and (Delta < 0) then
-    GC.ReleaseExternalBytes(-Delta);
-  FData := AData;
-  FChargedBytes := Length(AData);
-end;
-
-procedure TGocciaSharedArrayBufferValue.SetDataLength(const ALength: Integer);
-var
+  AllocLength: Integer;
   Delta: Int64;
   GC: TGarbageCollector;
 begin
-  Delta := ALength - FChargedBytes;
+  // ES2026 §25.2.2.1 AllocateSharedArrayBuffer steps 6-7: a growable buffer's
+  // block holds maxByteLength bytes.
+  if AMaxByteLength >= 0 then
+    AllocLength := AMaxByteLength
+  else
+    AllocLength := AByteLength;
+  Delta := AllocLength - FChargedBytes;
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and (Delta > 0) then
   begin
@@ -233,7 +248,10 @@ begin
         SSuggestMemoryLimitExceeded);
   end;
   try
-    SetLength(FData, ALength);
+    // A new, zero-filled block: the constructor's placeholder block is
+    // empty, so nothing is copied.
+    FData := nil;
+    SetLength(FData, AllocLength);
   except
     if Assigned(GC) and (Delta > 0) then
       GC.ReleaseExternalBytes(Delta);
@@ -241,7 +259,9 @@ begin
   end;
   if Assigned(GC) and (Delta < 0) then
     GC.ReleaseExternalBytes(-Delta);
-  FChargedBytes := ALength;
+  FChargedBytes := AllocLength;
+  FByteLength := AByteLength;
+  FMaxByteLength := AMaxByteLength;
 end;
 
 constructor TGocciaSharedArrayBufferValue.Create(const AByteLength: Integer);
@@ -254,7 +274,7 @@ begin
   FPendingByteLength := 0;
   FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
   FChargedBytes := 0;
-  SetDataLength(AByteLength);
+  AllocateBlock(AByteLength, NO_MAX_BYTE_LENGTH);
   InitializePrototype;
   Shared := GetSharedArrayBufferShared;
   if Assigned(Shared) then
@@ -269,16 +289,14 @@ begin
   FHasPendingAllocation := False;
   FPendingByteLength := 0;
   FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
-  if AMaxByteLength >= 0 then
-  begin
-    if AByteLength > AMaxByteLength then
-      ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
-    FMaxByteLength := AMaxByteLength;
-  end
-  else
-    FMaxByteLength := NO_MAX_BYTE_LENGTH;
+  FMaxByteLength := NO_MAX_BYTE_LENGTH;
   FChargedBytes := 0;
-  SetDataLength(AByteLength);
+  if (AMaxByteLength >= 0) and (AByteLength > AMaxByteLength) then
+    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
+  if AMaxByteLength >= 0 then
+    AllocateBlock(AByteLength, AMaxByteLength)
+  else
+    AllocateBlock(AByteLength, NO_MAX_BYTE_LENGTH);
   InitializePrototype;
   Shared := GetSharedArrayBufferShared;
   if Assigned(Shared) then
@@ -295,7 +313,7 @@ begin
   FPendingByteLength := 0;
   FPendingMaxByteLength := NO_MAX_BYTE_LENGTH;
   FChargedBytes := 0;
-  SetDataLength(0);
+  AllocateBlock(0, NO_MAX_BYTE_LENGTH);
   InitializePrototype;
   Shared := GetSharedArrayBufferShared;
   if not Assigned(AClass) and Assigned(Shared) then
@@ -417,17 +435,14 @@ begin
 
   Len := Trunc(FPendingByteLength);
   if FPendingMaxByteLength >= 0 then
-    FMaxByteLength := Trunc(FPendingMaxByteLength)
+    AllocateBlock(Len, Trunc(FPendingMaxByteLength))
   else
-    FMaxByteLength := NO_MAX_BYTE_LENGTH;
-
-  SetDataLength(Len);
+    AllocateBlock(Len, NO_MAX_BYTE_LENGTH);
   FHasPendingAllocation := False;
 end;
 
-procedure TGocciaSharedArrayBufferValue.MarkReferences;
+procedure TGocciaSharedArrayBufferValue.TraceReferences;
 begin
-  if GCMarked then Exit;
   inherited;
 end;
 
@@ -515,34 +530,66 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
+// ES2026 §25.2.5.3 SharedArrayBuffer.prototype.grow(newLength)
 function TGocciaSharedArrayBufferValue.SharedArrayBufferGrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaSharedArrayBufferValue;
   NewByteLength: Integer;
-  OldByteLength: Integer;
+  CurrentByteLength: Integer;
+  ReadByteLength: Integer;
 begin
+  // Steps 1-3: RequireInternalSlot(O, [[ArrayBufferMaxByteLength]]) and
+  // IsSharedArrayBuffer(O): only a growable SharedArrayBuffer, before the
+  // argument is converted.
   if not (AThisValue is TGocciaSharedArrayBufferValue) then
     ThrowTypeError(Format(SErrorRequiresSharedArrayBuffer,
       ['SharedArrayBuffer.prototype.grow']),
       SSuggestSharedArrayBufferThisType);
-
   Buf := TGocciaSharedArrayBufferValue(AThisValue);
+  if Buf.FMaxByteLength < 0 then
+    ThrowTypeError('Cannot grow a fixed-length SharedArrayBuffer',
+      SSuggestArrayLengthRange);
+
+  // Step 4: ? ToIndex(newLength)
   if AArgs.Length = 0 then
     NewByteLength := 0
   else
     NewByteLength := ToSharedArrayBufferIndex(AArgs.GetElement(0));
 
-  if Buf.FMaxByteLength < 0 then
-    ThrowTypeError('Cannot grow a fixed-length SharedArrayBuffer',
-      SSuggestArrayLengthRange);
-
-  OldByteLength := Length(Buf.FData);
-  if NewByteLength < OldByteLength then
-    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
-  if NewByteLength > Buf.FMaxByteLength then
-    ThrowRangeError(SErrorInvalidSharedArrayBufferLength, SSuggestArrayLengthRange);
-
-  Buf.SetDataLength(NewByteLength);
+  // Steps 10-12: a compare-and-exchange loop on
+  // [[ArrayBufferByteLengthData]], so racing grows are totally ordered and
+  // none is lost. The block already holds maxByteLength bytes (AllocateBlock),
+  // so a grow allocates nothing and moves nothing (the step 12.g NOTE): the
+  // bytes every agent wrote before it stay where they are. Grows also hold
+  // GSharedArrayBufferGrowLock, so the bytes a grow zeroes are not yet
+  // visible to any agent; script code never writes past the length, and
+  // zeroing clears whatever native code wrote there.
+  CriticalSectionEnter(GSharedArrayBufferGrowLock);
+  try
+    // Step 10: read the current length, seq-cst.
+    CurrentByteLength := Buf.GetByteLength;
+    repeat
+      // Step 12.c: growing to the current length does nothing.
+      if NewByteLength = CurrentByteLength then
+        Break;
+      // Step 12.d: a SharedArrayBuffer never shrinks, nor passes its maximum.
+      if (NewByteLength < CurrentByteLength) or
+         (NewByteLength > Buf.FMaxByteLength) then
+        ThrowRangeError(SErrorInvalidSharedArrayBufferLength,
+          SSuggestArrayLengthRange);
+      FillChar(Buf.FData[CurrentByteLength],
+        NewByteLength - CurrentByteLength, 0);
+      // Steps 12.h-j: publish the new length unless the length changed
+      // first; then retry against the length that was read.
+      ReadByteLength := AtomicCompareExchangeInt32(Buf.FByteLength,
+        NewByteLength, CurrentByteLength);
+      if ReadByteLength = CurrentByteLength then
+        Break;
+      CurrentByteLength := ReadByteLength;
+    until False;
+  finally
+    CriticalSectionLeave(GSharedArrayBufferGrowLock);
+  end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -562,7 +609,7 @@ begin
       SSuggestSharedArrayBufferThisType);
 
   Buf := TGocciaSharedArrayBufferValue(AThisValue);
-  Len := Length(Buf.FData);
+  Len := Buf.GetByteLength;
 
   if AArgs.Length = 0 then
     First := 0
@@ -596,7 +643,7 @@ begin
     NewBuf := TGocciaSharedArrayBufferValue(ConstructedValue);
     if NewBuf = Buf then
       ThrowTypeError(SErrorSharedArrayBufferSpeciesReturnedThis, SSuggestSpeciesConstructor);
-    if Length(NewBuf.FData) < NewLen then
+    if NewBuf.GetByteLength < NewLen then
       ThrowTypeError('SharedArrayBuffer species constructor returned a buffer that is too small',
         SSuggestSharedArrayBufferThisType);
   end;
@@ -615,5 +662,9 @@ end;
 
 initialization
   GSharedArrayBufferSharedSlot := RegisterRealmOwnedSlot('SharedArrayBuffer.shared');
+  CriticalSectionInit(GSharedArrayBufferGrowLock);
+
+finalization
+  CriticalSectionDone(GSharedArrayBufferGrowLock);
 
 end.
