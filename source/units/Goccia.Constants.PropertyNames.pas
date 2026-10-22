@@ -204,6 +204,7 @@ const
   PROP_OK                  = 'ok';
   PROP_HEADERS             = 'headers';
   PROP_BODY_USED           = 'bodyUsed';
+  PROP_REDIRECT            = 'redirect';
   PROP_REDIRECTED          = 'redirected';
   PROP_TEXT                = 'text';
   PROP_JSON                = 'json';

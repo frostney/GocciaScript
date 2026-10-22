@@ -40,6 +40,11 @@ type
   TGocciaElementList = class(TGocciaValueList)
   private
     FOwner: TGCManagedObject;
+    // The default indexer, shadowed. An element list owns nothing and has no
+    // OnNotify handler, so a store skips the generic list's two virtual
+    // Notify dispatches; both keep its range check.
+    function GetElement(AIndex: SizeInt): TGocciaValue; inline;
+    procedure SetElement(AIndex: SizeInt; const AValue: TGocciaValue); inline;
   protected
     // Growth gate: makes the growth point safe to collect at, and only then
     // consults the budget. Two things are live across that window and
@@ -63,6 +68,8 @@ type
     // MarkReferences, which is exactly what the collection would consult.
     // nil for a standalone list with no owning value, which roots nothing.
     property Owner: TGCManagedObject read FOwner write FOwner;
+    property Items[Index: SizeInt]: TGocciaValue read GetElement
+      write SetElement; default;
   end;
 
 // Dense hole-fill: extend AElements with holes until it holds ACount
@@ -83,12 +90,40 @@ type
 procedure ExtendElementsWithHoles(const AElements: TGocciaElementList;
   const ACount: Int64; const APendingValue: TGocciaValue);
 
+// Raised by TGocciaElementList's indexer, as the generic list's would. In the
+// interface so the indexer inlines into other units.
+procedure RaiseElementIndexOutOfRange;
+
 implementation
 
 uses
+  SysUtils,
+
+  Generics.Strings,
+
   Goccia.Constants.TypeNames,
   Goccia.MemoryLimit,
   Goccia.Timeout;
+
+procedure RaiseElementIndexOutOfRange;
+begin
+  raise EArgumentOutOfRangeException.CreateRes(@SArgumentOutOfRange);
+end;
+
+function TGocciaElementList.GetElement(AIndex: SizeInt): TGocciaValue;
+begin
+  if (AIndex < 0) or (AIndex >= FLength) then
+    RaiseElementIndexOutOfRange;
+  Result := FItems[AIndex];
+end;
+
+procedure TGocciaElementList.SetElement(AIndex: SizeInt;
+  const AValue: TGocciaValue);
+begin
+  if (AIndex < 0) or (AIndex >= FLength) then
+    RaiseElementIndexOutOfRange;
+  FItems[AIndex] := AValue;
+end;
 
 procedure TGocciaElementList.RequireStorageBytes(const ABytes: Int64;
   const APendingValue: TGocciaValue);

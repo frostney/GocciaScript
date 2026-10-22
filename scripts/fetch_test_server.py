@@ -8,6 +8,7 @@ Endpoints:
   GET  /redirect-headers — 302 → /echo-headers
   GET  /redirect-host — 302 → localhost on the same port, /echo-headers
   GET  /redirect-external — 302 → http://10.255.255.1:1/json (private, off-allowlist)
+  GET  /redirect-chain/<n> — 307 → /redirect-chain/<n-1>; /redirect-chain/0 → /json
   GET  /status/<code> — responds with <code> and empty body
   GET  /              — 200 "ok"
   HEAD *              — 200 with Content-Length but no body
@@ -68,6 +69,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # itself is policy-checked rather than just the first request.
             self.send_response(302)
             self.send_header("Location", "http://10.255.255.1:1/json")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path.startswith("/redirect-chain/"):
+            # A chain of <n> redirects ending at /json, so a test can count
+            # the redirects fetch follows before it gives up.
+            try:
+                remaining = int(self.path.rsplit("/", 1)[-1])
+            except ValueError:
+                remaining = -1
+            if remaining < 0:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(307)
+            if remaining == 0:
+                self.send_header("Location", "/json")
+            else:
+                self.send_header("Location", f"/redirect-chain/{remaining - 1}")
             self.send_header("Content-Length", "0")
             self.end_headers()
         elif self.path.startswith("/status/"):

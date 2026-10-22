@@ -49,7 +49,16 @@ type
     procedure TestSameOriginRedirectKeepsCredentials;
     procedure TestCrossOriginRedirectDropsCredentials;
     procedure TestReturnToOriginDoesNotRestoreCredentials;
+    procedure TestManualRedirectModeAnswersWithTheRedirect;
+    procedure TestErrorRedirectModeRefusesAnyRedirect;
+    procedure TestTwentyRedirectsAreFollowed;
+    procedure TestTwentyFirstRedirectIsANetworkError;
+    procedure TestOnlyRedirectStatusesAreFollowed;
+    procedure TestRedirectStatusesAreFollowed;
+    procedure TestSeeOtherKeepsHead;
+    procedure TestEmptyLocationIsFollowed;
     {$ENDIF}
+    procedure TestComparesOrigins;
     procedure TestClassifiesPrivateAddressRanges;
     procedure TestClassifiesPublicAddressesAsRoutable;
     procedure TestRejectsObfuscatedLoopbackForms;
@@ -674,7 +683,22 @@ begin
     TestCrossOriginRedirectDropsCredentials);
   Test('A later redirect back does not restore credentials',
     TestReturnToOriginDoesNotRestoreCredentials);
+  Test('Redirect mode "manual" answers with the redirect response',
+    TestManualRedirectModeAnswersWithTheRedirect);
+  Test('Redirect mode "error" refuses any redirect status',
+    TestErrorRedirectModeRefusesAnyRedirect);
+  Test('Twenty redirects are followed', TestTwentyRedirectsAreFollowed);
+  Test('A twenty-first redirect is a network error',
+    TestTwentyFirstRedirectIsANetworkError);
+  Test('Only 301, 302, 303, 307 and 308 are followed',
+    TestOnlyRedirectStatusesAreFollowed);
+  Test('301, 302, 303, 307 and 308 are followed',
+    TestRedirectStatusesAreFollowed);
+  Test('A 303 keeps a HEAD request HEAD', TestSeeOtherKeepsHead);
+  Test('An empty Location resolves to the response URL and is followed',
+    TestEmptyLocationIsFollowed);
   {$ENDIF}
+  Test('Compares origins by scheme, host and port', TestComparesOrigins);
   Test('Classifies private address ranges',
     TestClassifiesPrivateAddressRanges);
   Test('Classifies public addresses as routable',
@@ -1322,6 +1346,308 @@ begin
 end;
 {$ENDIF}
 
+{$IFDEF UNIX}
+const
+  REDIRECT_TO_NEXT = 'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 5'#13#10'Connection: close'#13#10#13#10'moved';
+  FINAL_OK = 'HTTP/1.1 200 OK'#13#10'Content-Length: 4'#13#10 +
+    'Connection: close'#13#10#13#10'done';
+
+function FindHeader(const AHeaders: THTTPHeaders; const AName: string): string;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AHeaders) do
+    if SameText(AHeaders[I].Name, AName) then
+      Exit(AHeaders[I].Value);
+  Result := '';
+end;
+
+function RedirectPolicy(const AMode: THTTPRedirectMode): THTTPRequestPolicy;
+begin
+  Result := DefaultHTTPPolicy;
+  Result.RedirectMode := AMode;
+end;
+
+{ Fetches /start from AServer under APolicy: the response's status, then
+  '|' and the final URL's path, or 'error: ' and the client's message. }
+function FetchStart(const AServer: TCannedResponseServer;
+  const APolicy: THTTPRequestPolicy; out AResponse: THTTPResponse): string;
+var
+  Headers: THTTPHeaders;
+  Base: string;
+begin
+  SetLength(Headers, 0);
+  AResponse := Default(THTTPResponse);
+  Base := Format('http://127.0.0.1:%d', [AServer.Port]);
+  try
+    AResponse := HTTPGet(Base + '/start', Headers, nil, 5000, APolicy);
+    Result := IntToStr(AResponse.StatusCode) + '|' +
+      Copy(AResponse.FinalURL, Length(Base) + 1, MaxInt);
+  except
+    on E: EHTTPError do
+      Result := 'error: ' + E.Message;
+  end;
+end;
+
+{ A chain of AHops redirects, each to the next path, then a 200. }
+function RedirectChain(const AHops: Integer;
+  const AFinal: Boolean): TStringArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, AHops + Ord(AFinal));
+  for I := 0 to AHops - 1 do
+    Result[I] := 'HTTP/1.1 307 Temporary Redirect'#13#10 +
+      'Location: /hop' + IntToStr(I + 1) + #13#10 +
+      'Content-Length: 0'#13#10'Connection: close'#13#10#13#10;
+  if AFinal then
+    Result[AHops] := FINAL_OK;
+end;
+
+function CannedServer(const AResponses: TStringArray): TCannedResponseServer;
+var
+  Raw: array of RawByteString;
+  I: Integer;
+begin
+  SetLength(Raw, Length(AResponses));
+  for I := 0 to High(AResponses) do
+    Raw[I] := RawByteString(AResponses[I]);
+  Result := TCannedResponseServer.Create(Raw);
+end;
+
+{ WHATWG Fetch, HTTP fetch: under "manual" a redirect status is the answer.
+  Its status, Location and body reach the caller, nothing follows it, and
+  the response was not redirected. }
+procedure THTTPClientTests.TestManualRedirectModeAnswersWithTheRedirect;
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  Server := TCannedResponseServer.Create([REDIRECT_TO_NEXT]);
+  try
+    Expect<string>(FetchStart(Server, RedirectPolicy(hrmManual), Response))
+      .ToBe('302|/start');
+    Server.WaitFor;
+    Expect<Boolean>(Response.Redirected).ToBe(False);
+    Expect<string>(FindHeader(Response.Headers, 'location')).ToBe('/next');
+    Expect<Integer>(Length(Response.Body)).ToBe(5);
+  finally
+    Server.Free;
+  end;
+end;
+
+{ Under "error" any redirect status is a network error, one without a
+  Location included, before a second request is made. }
+procedure THTTPClientTests.TestErrorRedirectModeRefusesAnyRedirect;
+const
+  REFUSED = 'error: redirect refused: the request''s redirect mode is "error"';
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  Server := TCannedResponseServer.Create([REDIRECT_TO_NEXT]);
+  try
+    Expect<string>(FetchStart(Server, RedirectPolicy(hrmError), Response))
+      .ToBe(REFUSED);
+    Server.WaitFor;
+  finally
+    Server.Free;
+  end;
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 301 Moved Permanently'#13#10'Content-Length: 0'#13#10 +
+      'Connection: close'#13#10#13#10]);
+  try
+    Expect<string>(FetchStart(Server, RedirectPolicy(hrmError), Response))
+      .ToBe(REFUSED);
+    Server.WaitFor;
+  finally
+    Server.Free;
+  end;
+  { Refused from its status line and headers: a body cut short (or one a
+    server never finishes) is never waited for. }
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 307 Temporary Redirect'#13#10'Location: /next'#13#10 +
+      'Content-Length: 1000'#13#10'Connection: close'#13#10#13#10'part']);
+  try
+    Expect<string>(FetchStart(Server, RedirectPolicy(hrmError), Response))
+      .ToBe(REFUSED);
+    Server.WaitFor;
+  finally
+    Server.Free;
+  end;
+  // A response that is not a redirect is answered as usual.
+  Server := TCannedResponseServer.Create([FINAL_OK]);
+  try
+    Expect<string>(FetchStart(Server, RedirectPolicy(hrmError), Response))
+      .ToBe('200|/start');
+    Server.WaitFor;
+  finally
+    Server.Free;
+  end;
+end;
+
+{ HTTP-redirect fetch fails only once the redirect count is 20: twenty
+  redirects reach the final response. }
+procedure THTTPClientTests.TestTwentyRedirectsAreFollowed;
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  Server := CannedServer(RedirectChain(20, True));
+  try
+    Expect<string>(FetchStart(Server, DefaultHTTPPolicy, Response))
+      .ToBe('200|/hop20');
+    Server.WaitFor;
+    Expect<Boolean>(Response.Redirected).ToBe(True);
+  finally
+    Server.Free;
+  end;
+end;
+
+{ The twenty-first redirect is a network error, not a 3xx answer. }
+procedure THTTPClientTests.TestTwentyFirstRedirectIsANetworkError;
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  Server := CannedServer(RedirectChain(21, False));
+  try
+    Expect<string>(FetchStart(Server, DefaultHTTPPolicy, Response))
+      .ToBe('error: redirect limit exceeded: more than 20 redirects');
+    Server.WaitFor;
+    { The twenty-first request was the twentieth redirect's target, and the
+      error is the limit's, not the timeout a twenty-second request to the
+      canned server would end in. }
+    Expect<Boolean>(Pos('GET /hop20 ', Server.RequestHead(21)) = 1)
+      .ToBe(True);
+  finally
+    Server.Free;
+  end;
+end;
+
+{ WHATWG Fetch: a redirect status is 301, 302, 303, 307 or 308. Any other
+  status with a Location, 300 and 306 included, is the answer. }
+procedure THTTPClientTests.TestOnlyRedirectStatusesAreFollowed;
+const
+  STATUSES: array[0..2] of Integer = (300, 304, 306);
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+  I: Integer;
+begin
+  for I := 0 to High(STATUSES) do
+  begin
+    Server := TCannedResponseServer.Create([
+      RawByteString('HTTP/1.1 ' + IntToStr(STATUSES[I]) + ' Other'#13#10 +
+        'Location: /next'#13#10'Content-Length: 0'#13#10 +
+        'Connection: close'#13#10#13#10)]);
+    try
+      Expect<string>(FetchStart(Server, DefaultHTTPPolicy, Response))
+        .ToBe(IntToStr(STATUSES[I]) + '|/start');
+      Server.WaitFor;
+    finally
+      Server.Free;
+    end;
+  end;
+end;
+
+procedure THTTPClientTests.TestRedirectStatusesAreFollowed;
+const
+  STATUSES: array[0..4] of Integer = (301, 302, 303, 307, 308);
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+  I: Integer;
+begin
+  for I := 0 to High(STATUSES) do
+  begin
+    Server := TCannedResponseServer.Create([
+      RawByteString('HTTP/1.1 ' + IntToStr(STATUSES[I]) + ' Moved'#13#10 +
+        'Location: /next'#13#10'Content-Length: 0'#13#10 +
+        'Connection: close'#13#10#13#10), FINAL_OK]);
+    try
+      Expect<string>(FetchStart(Server, DefaultHTTPPolicy, Response))
+        .ToBe('200|/next');
+      Server.WaitFor;
+      Expect<Boolean>(Response.Redirected).ToBe(True);
+    finally
+      Server.Free;
+    end;
+  end;
+end;
+
+{ HTTP-redirect fetch: a Location header that is present but empty parses
+  to the response's URL, so the request is made again there; only a missing
+  Location answers with the redirect response. }
+procedure THTTPClientTests.TestEmptyLocationIsFollowed;
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 302 Found'#13#10'Location:'#13#10'Content-Length: 0'#13#10 +
+      'Connection: close'#13#10#13#10, FINAL_OK]);
+  try
+    Expect<string>(FetchStart(Server, DefaultHTTPPolicy, Response))
+      .ToBe('200|/start');
+    Server.WaitFor;
+    Expect<Boolean>(Response.Redirected).ToBe(True);
+    Expect<Boolean>(Pos('GET /start ', Server.RequestHead(2)) = 1).ToBe(True);
+  finally
+    Server.Free;
+  end;
+end;
+
+{ WHATWG Fetch, HTTP-redirect fetch: a 303 changes the method to GET only
+  when it is neither GET nor HEAD. }
+procedure THTTPClientTests.TestSeeOtherKeepsHead;
+var
+  Headers: THTTPHeaders;
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  SetLength(Headers, 0);
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 303 See Other'#13#10'Location: /next'#13#10 +
+      'Content-Length: 0'#13#10'Connection: close'#13#10#13#10,
+    'HTTP/1.1 200 OK'#13#10'Content-Length: 4'#13#10 +
+      'Connection: close'#13#10#13#10]);
+  try
+    Response := HTTPHead(Format('http://127.0.0.1:%d/start', [Server.Port]),
+      Headers, nil, 5000);
+    Server.WaitFor;
+    Expect<Integer>(Response.StatusCode).ToBe(200);
+    Expect<Boolean>(Pos('HEAD /next ', Server.RequestHead(2)) = 1).ToBe(True);
+  finally
+    Server.Free;
+  end;
+end;
+{$ENDIF}
+
+{ HTML Standard, same origin: scheme, host and port. An HTTPS-to-HTTP
+  redirect changes the scheme, so it is another origin even on the same
+  host and port. }
+procedure THTTPClientTests.TestComparesOrigins;
+begin
+  Expect<Boolean>(IsSameHTTPOrigin('https://h.example/a',
+    'https://H.EXAMPLE:443/b?c')).ToBe(True);
+  Expect<Boolean>(IsSameHTTPOrigin('http://h.example/a',
+    'http://h.example:80/')).ToBe(True);
+  Expect<Boolean>(IsSameHTTPOrigin('https://h.example/a',
+    'http://h.example/a')).ToBe(False);
+  Expect<Boolean>(IsSameHTTPOrigin('https://h.example:8443/a',
+    'http://h.example:8443/a')).ToBe(False);
+  Expect<Boolean>(IsSameHTTPOrigin('http://h.example/a',
+    'https://h.example/a')).ToBe(False);
+  Expect<Boolean>(IsSameHTTPOrigin('https://h.example/a',
+    'https://h.example:8443/a')).ToBe(False);
+  Expect<Boolean>(IsSameHTTPOrigin('https://h.example/a',
+    'https://other.example/a')).ToBe(False);
+  Expect<Boolean>(IsSameHTTPOrigin('https://h.example/a',
+    'https://sub.h.example/a')).ToBe(False);
+end;
+
 { The ranges the net capability refuses unless `private` or an explicit
   address names them (ADR 0122).
   169.254.169.254 is called out explicitly because the cloud
@@ -1439,6 +1765,7 @@ begin
   Policy := DefaultHTTPPolicy;
   Expect<Boolean>(Policy.DenyPrivateRanges).ToBe(False);
   Expect<Integer>(Policy.MaxResponseBytes).ToBe(8 * 1024 * 1024);
+  Expect<Boolean>(Policy.RedirectMode = hrmFollow).ToBe(True);
 end;
 
 begin

@@ -916,6 +916,7 @@ resourcestring
   // Fetch API
   SErrorFetchRequiresURL = 'fetch requires a URL argument';
   SErrorFetchUnsupportedMethod = 'fetch does not support method ''%s''; only GET and HEAD are allowed';
+  SErrorFetchInvalidRedirect = 'fetch redirect option ''%s'' is not a valid redirect mode';
   SErrorHeadersNotHeaders = 'Headers method called on non-Headers object';
   SErrorHeadersForEachNotCallable = 'Headers.prototype.forEach: callback is not a function';
   SErrorResponseNotResponse = 'Response method called on non-Response object';
