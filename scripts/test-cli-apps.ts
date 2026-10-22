@@ -5048,6 +5048,50 @@ await section("Loader: --globals from JS module...", async () => {
   }
 });
 
+await section("TestRunner: CLI and config globals modules load before tests...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "dependency.js"), "export const value = 42;\n");
+    writeFileSync(join(tmp, "globals.js"), [
+      'import { value } from "./dependency.js";',
+      'if (typeof test !== "undefined") throw new Error("testing globals attached too early");',
+      "globalThis.globalsModuleSideEffect = value;",
+      "export const injected = { value };",
+      'export const priority = "module";',
+      "",
+    ].join("\n"));
+    writeFileSync(join(tmp, "base.json"), '{"priority":"structured","fromStructured":true}\n');
+    for (const route of ["config", "cli"]) {
+      writeFileSync(join(tmp, "goccia.json"), JSON.stringify(
+        route === "config" ? { globals: ["./base.json", "./globals.js"] } : {},
+      ));
+      writeFileSync(join(tmp, "suite.test.js"), [
+        "const atImport = injected.value;",
+        'test("globals are ready before the suite loads", () => {',
+        "  expect(atImport).toBe(42);",
+        "  expect(fromStructured).toBe(true);",
+        '  expect(priority).toBe("inline");',
+        `  expect(typeof globalsModuleSideEffect).toBe("${route === "cli" ? "number" : "undefined"}");`,
+        "});",
+        "",
+      ].join("\n"));
+      const result = Bun.spawnSync([
+        resolve(TESTRUNNER), "-P", "suite.test.js", "--no-progress", "--output=json",
+        ...(route === "cli" ? ["--globals=./base.json", "--globals=./globals.js"] : []),
+        "--global=priority=inline",
+      ], { cwd: tmp, stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+      const output = result.stdout.toString();
+      if (result.exitCode !== 0)
+        throw new Error(`${route} globals module failed: ${output}\n${result.stderr}`);
+      const report = JSON.parse(output);
+      if (report.ok !== true || report.passed !== 1 || report.failed !== 0)
+        throw new Error(`${route} globals module did not run its test: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: jobs a --globals JS module leaves pending run with the script...", async () => {
   const tmp = makeTmp();
   try {
