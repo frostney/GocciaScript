@@ -149,6 +149,7 @@ type
     procedure TestNumericImmediateConditionReadsParameterDirectly;
     procedure TestDiscardedStoreSkipsResultMove;
     procedure TestInitializerReachingItsBindingKeepsCopy;
+    procedure TestLexicalHolesSetOnlyWhereObservable;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestObjectRestBytecodeRoundTrip;
@@ -304,6 +305,8 @@ begin
     TestDiscardedStoreSkipsResultMove);
   Test('Initializer that reaches its binding keeps the copy',
     TestInitializerReachingItsBindingKeepsCopy);
+  Test('Lexical TDZ holes are set once, and only where observable',
+    TestLexicalHolesSetOnlyWhereObservable);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -2203,6 +2206,41 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+procedure TTestCompiler.TestLexicalHolesSetOnlyWhereObservable;
+
+  function HolesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_ADD);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_LOAD_HOLE);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Nothing before either declaration completes can reach a or b, so the
+  // function body sets no hole for them.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { const a = p + 1; const b = a * 2; return b; };'))
+    .ToBe(0);
+  // The arrow created by the first initializer names b, so b keeps its hole.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { const r = () => b; const b = p + 1; return r; };'))
+    .ToBe(1);
+  // A block sets its binding's hole on entry, and the declaration does not
+  // set it again.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { if (p) { let c = p + 1; return c; } return 0; };'))
+    .ToBe(1);
 end;
 
 procedure TTestCompiler.TestInitializerReachingItsBindingKeepsCopy;
