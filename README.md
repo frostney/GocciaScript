@@ -159,7 +159,10 @@ virtual filesystem:
 - synchronous forms such as `readFileSync`, `writeFileSync`, `mkdirSync`,
   `readdirSync`, `statSync`, `rmSync`, `renameSync`, and `copyFileSync`;
 - Node-shaped callback forms for the same operation families;
-- `fs.promises` forms, `Stats` objects, and Node-shaped filesystem errors.
+- `fs.promises` forms, `Stats` objects, and Node-shaped filesystem errors;
+- `fs.globSync`, `fs.glob` and `fs.promises.glob` for names, with content
+  and fuzzy-name search in `goccia:search`
+  ([Sandbox Search Built-ins](docs/built-ins-sandbox-search.md)).
 
 The documented method set never reaches the ambient host filesystem. See
 [Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)
@@ -488,6 +491,7 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 | [FFI Built-ins](docs/built-ins-ffi.md) | Native libraries, aggregate types, callbacks, lifetimes, and safety limits |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
 | [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
+| [Sandbox Search Built-ins](docs/built-ins-sandbox-search.md) | `fs.globSync`, and `grep` and `fuzzyFind` from `goccia:search`, with their shared test vectors |
 | [Async Context](docs/built-ins-async-context.md) | `node:async_hooks`: `AsyncLocalStorage`, `AsyncResource`, and what propagates |
 | [Errors](docs/errors.md) | Error types, parser/runtime display, `Error.cause`, `try`/`catch`/`finally` |
 | [JSON Output](docs/json-output.md) | The `--output=json` and `--output=compact-json` envelopes, including errors and timeouts |
