@@ -944,6 +944,12 @@ Boolean flags no longer take a value: `--compat-asi=false` is an error (exit
 2) rather than a silent enable. In a config file a flag must be exactly `true`
 or `false`; any other value is an invalid value (exit 1).
 
+GocciaScript 0.15.0 removed `--mode` and the `"mode"` config key, again
+without an alias, because bytecode became the only execution mode. Drop the
+option or key: `--mode` with or without a value, and a `"mode"` key, fail with
+status 2, and the message names 0.15.0 instead of 0.14.0. [Build System — Execution
+Mode](build-system.md#execution-mode) shows both messages.
+
 ## Related documents
 
 - [ADR 0122](adr/0122-unified-capability-model.md) — the decision this page implements
