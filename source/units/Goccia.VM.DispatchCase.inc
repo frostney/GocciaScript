@@ -104,7 +104,10 @@
 
       // ES2026 §7.1.19 ToPropertyKey(argument)
       OP_TO_PROPERTY_KEY:
-        SetRegister(A, ToPropertyKey(RegisterToValue(FRegisters[B])));
+        if (C = TO_PROPERTY_KEY_KEEP_INT) and (FRegisters[B].Kind = grkInt) then
+          SetRegisterRaw(A, FRegisters[B])
+        else
+          SetRegister(A, ToPropertyKey(RegisterToValue(FRegisters[B])));
 
       OP_ENUM_KEYS:
         SetRegister(A, ForInEntriesArray(GetRegister(B)));
