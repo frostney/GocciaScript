@@ -9252,10 +9252,13 @@ var
   Element: TGocciaValue;
 begin
   // Element reads that resolve without a property key. This procedure must
-  // keep no managed locals: that is what makes these paths cheap.
+  // keep no managed locals: that is what makes these paths cheap. The classes
+  // are compared exactly rather than with `is`, which walks the class chain
+  // of every receiver that is not a typed array; a subclass instance simply
+  // takes the generic core.
   if AObjReg.Kind = grkObject then
   begin
-    if AObjReg.ObjectValue is TGocciaTypedArrayValue then
+    if AObjReg.ObjectValue.ClassType = TGocciaTypedArrayValue then
     begin
       // Typed-array unboxed element read: the element goes straight into the
       // destination register as a scalar. Non-index keys, BigInt kinds, and
@@ -9269,7 +9272,7 @@ begin
       end;
     end
     else if (AKeyReg.Kind = grkInt) and
-            (AObjReg.ObjectValue is TGocciaArrayValue) then
+            (AObjReg.ObjectValue.ClassType = TGocciaArrayValue) then
     begin
       // Dense array element at an integer index. A hole, an out-of-range
       // index, or an accessor-shadowed slot takes the generic core.
@@ -9401,11 +9404,12 @@ var
 begin
   // Element writes that resolve without a property key. This procedure must
   // keep no managed locals: that is what makes these paths cheap. Everything
-  // else, including the nullish target check, runs in the generic core.
+  // else, including the nullish target check, runs in the generic core, as
+  // does an instance of a subclass of either class compared exactly below.
   if FRegisters[ATargetIndex].Kind = grkObject then
   begin
     Target := FRegisters[ATargetIndex].ObjectValue;
-    if Target is TGocciaTypedArrayValue then
+    if Target.ClassType = TGocciaTypedArrayValue then
     begin
       // Typed-array unboxed element write: a numeric-scalar value going to a
       // valid integer index stores directly.
@@ -9416,14 +9420,14 @@ begin
         Exit;
     end
     else if (AKeyReg.Kind = grkInt) and
-            (Target is TGocciaArrayValue) and
+            (Target.ClassType = TGocciaArrayValue) and
             (AKeyReg.IntValue >= 0) and
             (AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count) then
     begin
-      // Overwriting a dense array element. The array declines when the slot is
-      // a hole or the store needs the complete [[Set]]; the value boxed here
-      // is then simply dropped and the generic core boxes its own.
-      if TGocciaArrayValue(Target).TrySetDenseElementFast(AKeyReg.IntValue,
+      // Storing a dense array element, or filling a hole when no prototype can
+      // intercept the store. When the array declines, the value boxed here is
+      // simply dropped and the generic core boxes its own.
+      if TGocciaArrayValue(Target).TryStoreElementFast(AKeyReg.IntValue,
            RegisterToValue(AValueReg)) then
         Exit;
     end;

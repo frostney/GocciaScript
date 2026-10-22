@@ -7668,7 +7668,8 @@ begin
     ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
     EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ObjReg,
       VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER, KeyReg));
-    EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg,
+      TO_PROPERTY_KEY_KEEP_INT));
     EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
     JumpIdx := EmitJumpInstruction(ACtx, ShortCircuitJumpOp(AExpr.Operator), CurReg);
     ACtx.CompileExpression(AExpr.Value, CurReg);
@@ -7695,7 +7696,8 @@ begin
   ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
   EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ObjReg,
     VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER, KeyReg));
-  EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg,
+    TO_PROPERTY_KEY_KEEP_INT));
   EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
   ACtx.CompileExpression(AExpr.Value, ValReg);
   EmitInstruction(ACtx, EncodeABC(Op, CurReg, CurReg, ValReg));
@@ -7806,7 +7808,8 @@ begin
   ACtx.CompileExpression(AMember.PropertyExpression, KeyReg);
   EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ObjReg,
     VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER, KeyReg));
-  EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_TO_PROPERTY_KEY, KeyReg, KeyReg,
+    TO_PROPERTY_KEY_KEEP_INT));
   EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, CurReg, ObjReg, KeyReg));
   EmitIncrementStep(ACtx, AExpr, ADest, CurReg, AOp, ANumericOp,
     APostNumericOp, AKeepResult);

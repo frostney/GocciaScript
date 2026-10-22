@@ -290,6 +290,12 @@ const
   // carries the key register, still holding the UNCOERCED key: this validate is
   // emitted before OP_TO_PROPERTY_KEY precisely so step 3.a precedes step 3.c.
   VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER = 2;
+  // C operand of OP_TO_PROPERTY_KEY. With TO_PROPERTY_KEY_KEEP_INT the key is
+  // consumed only by element get/set opcodes, which accept an Int key and give it
+  // the same meaning as its ToString form, so an Int key is left as it is. A VM
+  // that ignores the flag still converts the key, so it stays correct either way.
+  TO_PROPERTY_KEY_STRICT = 0;
+  TO_PROPERTY_KEY_KEEP_INT = 1;
   // A operand of OP_CHECK_BINDING_INITIALIZED.
   CHECK_BINDING_UPVALUE = 0;
   CHECK_BINDING_GLOBAL = 1;

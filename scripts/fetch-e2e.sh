@@ -197,6 +197,44 @@ const data = await r.json()
 console.log(r.status, r.redirected, data.method)
 " "200 true GET"
 
+# Redirect modes (WHATWG Fetch, HTTP fetch): "manual" answers with the
+# redirect response itself and "error" refuses any redirect.
+check "redirect: manual answers with the redirect response" 0 "
+const r = await fetch('${BASE}/redirect', { redirect: 'manual' })
+console.log(r.status, r.ok, r.redirected, r.headers.get('location'),
+  r.url === '${BASE}/redirect')
+" "302 false false /json true"
+
+check "redirect: error rejects a redirect with TypeError" 0 "
+try {
+  await fetch('${BASE}/redirect', { redirect: 'error' })
+  console.log('followed')
+} catch (e) {
+  console.log(e.name, e.message)
+}
+" "TypeError redirect refused"
+
+check "redirect: error answers a response that is not a redirect" 0 "
+const r = await fetch('${BASE}/text', { redirect: 'error' })
+console.log(r.status, await r.text())
+" "200 hello world"
+
+# HTTP-redirect fetch: twenty redirects are followed; a twenty-first is a
+# network error. /redirect-chain/19 is twenty redirects, the last to /json.
+check "twenty redirects are followed" 0 "
+const r = await fetch('${BASE}/redirect-chain/19')
+console.log(r.status, r.redirected, (await r.json()).url)
+" "200 true /json"
+
+check "a twenty-first redirect is a TypeError" 0 "
+try {
+  await fetch('${BASE}/redirect-chain/20')
+  console.log('followed')
+} catch (e) {
+  console.log(e.name, e.message)
+}
+" "TypeError redirect limit exceeded: more than 20 redirects"
+
 # A redirect within one origin keeps caller credentials. A redirect to the
 # same listener under another host name drops them but keeps ordinary headers.
 check "same-origin redirect keeps credentials" 0 "

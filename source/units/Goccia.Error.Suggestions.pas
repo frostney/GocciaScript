@@ -411,6 +411,7 @@ resourcestring
 
   // Fetch API
   SSuggestFetchUsage = 'use fetch(url) or fetch(url, { method: "GET" })';
+  SSuggestFetchRedirect = 'redirect is "follow" (the default), "error" or "manual"';
   SSuggestFetchAllowedHosts = 'grant it with --allow-net=<host>, or "allow-net" in the "permissions" block of goccia.json';
   SSuggestFetchDeniedScope = 'refused by the net deny %s (--deny-net=%s, or "deny-net" in the "permissions" block of goccia.json); a deny always wins over an allow';
   SSuggestFetchDeniedAll = 'a net deny refuses every host (--deny-net, or "deny-net": true in the "permissions" block of goccia.json); a deny always wins over an allow';
