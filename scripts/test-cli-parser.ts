@@ -493,6 +493,47 @@ console.log("Annex B labelled-function early errors...");
     assertSyntaxError(source, desc, [...args]);
 }
 
+// -- Class static block declaration early errors (#1329) -----------------------
+
+console.log("Class static block declaration early errors...");
+{
+  // ES2026 §15.7.1: a static block's LexicallyDeclaredNames must be unique and
+  // must not occur in its VarDeclaredNames, which take var declarations at any
+  // depth and the block's top-level function declarations.
+  const args = ["--compat-var", "--compat-function"];
+  const rejected = [
+    ["class C { static { let a; let a; } }\n", "duplicate let in a static block"],
+    ["class C { static { const a = 1; class a {} } }\n", "const and class with one name in a static block"],
+    ["class C { static { let a; var a; } }\n", "let and var with one name in a static block"],
+    ["class C { static { var a; let a; } }\n", "var before let with one name in a static block"],
+    ["class C { static { let a; { var a; } } }\n", "let and a nested-block var in a static block"],
+    ["class C { static { let a; for (var a of []) {} } }\n", "let and a for-of var head in a static block"],
+    ["class C { static { let a; try { var a; } catch {} } }\n", "let and a var in a try block in a static block"],
+    ["class C { static { let f; function f() {} } }\n", "let and a function declaration in a static block"],
+  ] as const;
+  for (const [source, desc] of rejected)
+    assertSyntaxError(source, desc, args, { messageIncludes: "has already been declared" });
+  // The error points at the second declaration of the name.
+  assertSyntaxError(
+    "class C {\n  static {\n    let a;\n    var a;\n  }\n}\n",
+    "var after let reported at the var",
+    args,
+    { messageIncludes: "has already been declared", line: 4 },
+  );
+
+  const accepted = [
+    ["class C { static { var a; var a; function f() {} function f() {} var f; } }\n", "repeated var and function names"],
+    ["class C { static { var a; { let a; } } }\n", "a var and a nested-block let"],
+    ["class C { static { let a; } static { var a; } }\n", "let and var in separate static blocks"],
+    ["class C { static { let a; (() => { var a; }); } }\n", "let and a var inside a nested function"],
+  ] as const;
+  for (const [source, desc] of accepted) {
+    const res = runLoaderJson(source, args);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+  }
+}
+
 // -- Strict-mode legacy octal literal rejection ---------------------------------
 
 console.log("Strict-mode legacy octal literal rejection...");
