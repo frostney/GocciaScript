@@ -2616,6 +2616,30 @@ begin
   Result := True;
 end;
 
+// The register an uncaptured `this` lives in, usable as an instruction operand
+// in place of a copy. Emits the derived-constructor initialization check that
+// evaluating `this` performs, at the point where the operand is evaluated.
+function TryResolveThisRegister(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out ARegister: UInt16): Boolean;
+var
+  LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+begin
+  Result := False;
+  ARegister := 0;
+  if not (AExpr is TGocciaThisExpression) then
+    Exit;
+  LocalIdx := ACtx.Scope.ResolveLocal(KEYWORD_THIS);
+  if LocalIdx < 0 then
+    Exit;
+  Local := ACtx.Scope.GetLocal(LocalIdx);
+  if Local.IsCaptured then
+    Exit;
+  EmitDerivedThisInitializedCheck(ACtx);
+  ARegister := Local.Slot;
+  Result := True;
+end;
+
 function TryResolveSettledLocalRegister(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out ARegister: UInt16;
   const AEvaluatedLater1: TGocciaExpression = nil;
@@ -3332,7 +3356,10 @@ begin
     Exit;
   end;
 
-  OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg, AExpr.Value);
+  if TryResolveThisRegister(ACtx, AExpr.ObjectExpr, ObjReg) then
+    OwnsObjReg := False
+  else
+    OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg, AExpr.Value);
   OwnsValReg := CompileOperand(ACtx, AExpr.Value, ValReg);
 
   EmitStorePropertyByName(ACtx, ObjReg, AExpr.PropertyName, ValReg);
@@ -8121,6 +8148,7 @@ var
   MemberExpr: TGocciaMemberExpression;
   PrivateExpr: TGocciaPrivateMemberExpression;
   ObjReg, IdxReg: UInt16;
+  OwnsObjReg: Boolean;
 begin
   if AExpr is TGocciaCallExpression then
   begin
@@ -8141,9 +8169,17 @@ begin
       Exit;
     end;
 
-    ObjReg := ACtx.Scope.AllocateRegister;
-    CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
-      ObjReg, AJumps, AJumpCount);
+    // `this` is read in place, as CompileMember does; it is never nullish,
+    // so it adds no optional-chain jump.
+    if TryResolveThisRegister(ACtx, MemberExpr.ObjectExpr, ObjReg) then
+      OwnsObjReg := False
+    else
+    begin
+      OwnsObjReg := True;
+      ObjReg := ACtx.Scope.AllocateRegister;
+      CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
+        ObjReg, AJumps, AJumpCount);
+    end;
     if MemberExpr.Optional then
       AddOptionalChainJump(ACtx, AJumps, AJumpCount, ObjReg);
 
@@ -8156,7 +8192,8 @@ begin
     end
     else
       EmitLoadMemberProperty(ACtx, MemberExpr, ADest, ObjReg, 0);
-    ACtx.Scope.FreeRegister;
+    if OwnsObjReg then
+      ACtx.Scope.FreeRegister;
     Exit;
   end;
 
