@@ -21,14 +21,20 @@
             bckTemplateObject:
               FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
                 Template, DecodeBx(Instruction)));
-            bckString:
+            // A private name loads as its TGocciaPrivateNameKeyValue, the
+            // only key value that names a private element.
+            bckString, bckPrivateName:
               begin
                 LeftValue := TGocciaValue(
                   Template.GetStringConstantCache(DecodeBx(Instruction)));
                 if not Assigned(LeftValue) then
                 begin
-                  LeftValue := TGocciaStringLiteralValue.Create(
-                    Constant.StringValue);
+                  if Constant.Kind = bckPrivateName then
+                    LeftValue := TGocciaPrivateNameKeyValue.Create(
+                      Constant.StringValue)
+                  else
+                    LeftValue := TGocciaStringLiteralValue.Create(
+                      Constant.StringValue);
                   Template.SetStringConstantCache(
                     DecodeBx(Instruction), LeftValue);
                 end;
@@ -893,16 +899,26 @@
 
       OP_CLASS_ADD_METHOD_CONST:
       begin
-        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        Constant := Template.GetConstantUnchecked(B);
+        GlobalName := Constant.StringValue;
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
         begin
-          if IsBytecodePrivateKey(GlobalName) then
-            DeclareBytecodePrivateNameForClass(
-              FRegisters[A].ObjectValue, GlobalName);
           SetBytecodeHomeObject(RegisterToValue(FRegisters[C]),
             FRegisters[A].ObjectValue);
-          if GlobalName = PROP_CONSTRUCTOR then
+          if Constant.Kind = bckPrivateName then
+          begin
+            // A private method is a private element of the prototype, which
+            // StampBytecodePrivateBrands copies to each instance's brand.
+            DeclareBytecodePrivateNameForClass(
+              FRegisters[A].ObjectValue, GlobalName);
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype
+              .SetPrivateElement(GlobalName,
+                TGocciaPropertyDescriptorData.Create(
+                  RegisterToValue(FRegisters[C]),
+                  [pfConfigurable, pfWritable]));
+          end
+          else if GlobalName = PROP_CONSTRUCTOR then
           begin
             TGocciaVMClassValue(FRegisters[A].ObjectValue).SetVMConstructor(
               RegisterToValue(FRegisters[C]));
@@ -913,6 +929,8 @@
               GlobalName, TGocciaPropertyDescriptorData.Create(
                 RegisterToValue(FRegisters[C]), [pfConfigurable, pfWritable]));
         end
+        else if Constant.Kind = bckPrivateName then
+          SetPrivatePropertyValue(GetRegister(A), GlobalName, GetRegister(C))
         else if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
           SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RegisterToValue(FRegisters[C]))
         else
@@ -1034,8 +1052,9 @@
               SetRegisterFast(A, GlobalBindingValue)
             else
             begin
-              GlobalName := Template.GetConstantUnchecked(C).StringValue;
-              if not IsBytecodePrivateKey(GlobalName) then
+              Constant := Template.GetConstantUnchecked(C);
+              GlobalName := Constant.StringValue;
+              if Constant.Kind <> bckPrivateName then
               begin
                 // One own-map probe establishes own-data / own-non-data /
                 // absent; no fallback tier re-hashes the same name on this
@@ -1093,18 +1112,21 @@
                 end;
               end
               else
-                SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                  GlobalName));
+                SetRegister(A, GetPrivatePropertyValue(
+                  FRegisters[B].ObjectValue, GlobalName));
             end;
           end;
         end
-        else if (FRegisters[B].Kind = grkObject) and
-                Assigned(FRegisters[B].ObjectValue) then
-          SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-            Template.GetConstantUnchecked(C).StringValue))
         else
-          SetRegister(A, GetPropertyValue(GetRegister(B),
-            Template.GetConstantUnchecked(C).StringValue));
+        begin
+          Constant := Template.GetConstantUnchecked(C);
+          if Constant.Kind = bckPrivateName then
+            SetRegister(A, GetPrivatePropertyValue(GetRegister(B),
+              Constant.StringValue))
+          else
+            SetRegister(A, GetPropertyValue(GetRegister(B),
+              Constant.StringValue));
+        end;
       end;
 
       OP_SET_PROP_CONST:
@@ -1124,9 +1146,11 @@
                TGocciaObjectValue(FRegisters[A].ObjectValue),
                PropertyWriteCache, RightValue)) then
           begin
-            GlobalName := Template.GetConstantUnchecked(B).StringValue;
-            if IsBytecodePrivateKey(GlobalName) then
-              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue)
+            Constant := Template.GetConstantUnchecked(B);
+            GlobalName := Constant.StringValue;
+            if Constant.Kind = bckPrivateName then
+              SetPrivatePropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                RightValue)
             else if VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue) then
             begin
               if Assigned(PropertyWriteCache) and
@@ -1190,6 +1214,10 @@
               SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue);
           end;
         end
+        else if Template.GetConstantUnchecked(B).Kind = bckPrivateName then
+          SetPrivatePropertyValue(GetRegister(A),
+            Template.GetConstantUnchecked(B).StringValue,
+            GetRegister(C))
         else
           SetPropertyValue(GetRegister(A),
             Template.GetConstantUnchecked(B).StringValue,
@@ -1197,10 +1225,14 @@
 
       OP_SET_PROP_CONST_LOOSE:
       begin
-        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        Constant := Template.GetConstantUnchecked(B);
+        GlobalName := Constant.StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         TargetValue := GetRegister(A);
-        SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
+        if Constant.Kind = bckPrivateName then
+          SetPrivatePropertyValue(TargetValue, GlobalName, RightValue)
+        else
+          SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
       // Defines a field: static fields on the class, `<fields>` instance
@@ -1209,12 +1241,13 @@
       // object; the initializer itself is the method (§15.7.10).
       OP_DEFINE_STATIC_PROP_CONST:
       begin
-        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        Constant := Template.GetConstantUnchecked(B);
+        GlobalName := Constant.StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if IsBytecodePrivateKey(GlobalName) then
+          if Constant.Kind = bckPrivateName then
           begin
             if (FRegisters[A].ObjectValue is TGocciaInstanceValue) then
             begin
@@ -1243,6 +1276,8 @@
             TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
             RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
         end
+        else if Constant.Kind = bckPrivateName then
+          SetPrivatePropertyValue(GetRegister(A), GlobalName, RightValue)
         else
           SetPropertyValue(GetRegister(A), GlobalName, RightValue);
       end;
@@ -1260,7 +1295,9 @@
           else
           begin
             GlobalName := PropertyKeyName(PropKey);
-            if IsBytecodePrivateKey(GlobalName) then
+            // A private field past the 8-bit constant operand
+            // (EmitDefineStaticPropertyByName).
+            if IsPrivateNameKeyRegister(FRegisters[B]) then
             begin
               if TargetValue is TGocciaInstanceValue then
               begin
@@ -1286,6 +1323,10 @@
               GlobalName, RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
           end;
         end
+        else if IsPrivateNameKeyRegister(FRegisters[B]) then
+          SetPrivatePropertyValue(TargetValue,
+            TGocciaPrivateNameKeyValue(FRegisters[B].ObjectValue).Value,
+            RightValue)
         else
           SetPropertyValue(TargetValue,
             KeyToPropertyNameRegister(FRegisters[B]), RightValue);
@@ -1312,12 +1353,13 @@
 
       OP_DEFINE_STATIC_METHOD_CONST:
       begin
-        GlobalName := Template.GetConstantUnchecked(B).StringValue;
+        Constant := Template.GetConstantUnchecked(B);
+        GlobalName := Constant.StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if IsBytecodePrivateKey(GlobalName) and
+          if (Constant.Kind = bckPrivateName) and
              (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
           begin
             DeclareBytecodePrivateNameForClass(FRegisters[A].ObjectValue,
@@ -4076,33 +4118,38 @@
 
       OP_DEFINE_ACCESSOR_CONST:
       begin
-        GlobalName := Template.GetConstantUnchecked(C).StringValue;
+        Constant := Template.GetConstantUnchecked(C);
+        GlobalName := Constant.StringValue;
         if (B and ACCESSOR_FLAG_AUTO) <> 0 then
           DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]), GlobalName,
             nil, RegisterToValue(FRegisters[A + 1]), B)
         else if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
-          if IsBytecodePrivateKey(GlobalName) then
+          if Constant.Kind = bckPrivateName then
             DeclareBytecodePrivateNameForClass(
               RegisterToValue(FRegisters[A]), GlobalName, True);
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
             DefineStaticSetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
-              RegisterToValue(FRegisters[A + 1]))
+              RegisterToValue(FRegisters[A + 1]),
+              Constant.Kind = bckPrivateName)
           else
             DefineStaticGetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
-              RegisterToValue(FRegisters[A + 1]));
+              RegisterToValue(FRegisters[A + 1]),
+              Constant.Kind = bckPrivateName);
         end
         else
         begin
-          if IsBytecodePrivateKey(GlobalName) then
+          if Constant.Kind = bckPrivateName then
             DeclareBytecodePrivateNameForClass(
               RegisterToValue(FRegisters[A]), GlobalName);
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
             DefineSetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
-              RegisterToValue(FRegisters[A + 1]))
+              RegisterToValue(FRegisters[A + 1]),
+              Constant.Kind = bckPrivateName)
           else
             DefineGetterProperty(RegisterToValue(FRegisters[A]), GlobalName,
-              RegisterToValue(FRegisters[A + 1]));
+              RegisterToValue(FRegisters[A + 1]),
+              Constant.Kind = bckPrivateName);
         end;
       end;
 

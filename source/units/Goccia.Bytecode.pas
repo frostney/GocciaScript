@@ -258,7 +258,12 @@ const
   //               OP_APPLY_CLASS_DECORATOR and OP_FINISH_DECORATORS read it
   //               from R[A+1], which v94 code loads with undefined or a
   //               computed element key.
-  GOCCIA_FORMAT_VERSION = 96;
+  //   v96 -> v97: a private name is a bckPrivateName constant instead of a
+  //               bckString whose text starts with '#slot:', and the VM
+  //               keeps private elements out of an object's properties. v96
+  //               code would read its private names as ordinary property
+  //               keys.
+  GOCCIA_FORMAT_VERSION = 97;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
