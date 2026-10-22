@@ -81,23 +81,30 @@ end;
 
 procedure TThreadPollsTests.TestStatePointersReachTheChecks;
 var
+  Polls: PGocciaThreadPolls;
   RaisedExpected: Boolean;
   I: Integer;
 begin
+  // Read through a pointer to the record, as the VM does. FPC 3.2.2 at -O2
+  // and above on i386 passes the wrong register to the out-of-line slow path
+  // when an inlined check takes its state straight from the thread variable
+  // (#1699 is the same defect on x86_64).
+  Polls := @GThreadPolls;
+
   // The instruction-limit pointer is the same state the bytecode loop
   // captures, set whenever the flag is.
   StartInstructionLimit(2);
-  Expect<Boolean>(GThreadPolls.InstructionLimitActive).ToBe(True);
-  Expect<Boolean>(GThreadPolls.InstructionLimitState =
+  Expect<Boolean>(Polls^.InstructionLimitActive).ToBe(True);
+  Expect<Boolean>(Polls^.InstructionLimitState =
     Pointer(CaptureInstructionLimitState)).ToBe(True);
   IncrementInstructionCounter;
   CheckInstructionLimitState(
-    PGocciaInstructionLimitState(GThreadPolls.InstructionLimitState));
+    PGocciaInstructionLimitState(Polls^.InstructionLimitState));
   IncrementInstructionCounter;
   RaisedExpected := False;
   try
     CheckInstructionLimitState(
-      PGocciaInstructionLimitState(GThreadPolls.InstructionLimitState));
+      PGocciaInstructionLimitState(Polls^.InstructionLimitState));
   except
     on TGocciaInstructionLimitError do
       RaisedExpected := True;
@@ -107,9 +114,9 @@ begin
 
   // A deadline far away: polls through the timeout pointer pass.
   StartExecutionTimeout(60000);
-  Expect<Boolean>(GThreadPolls.TimeoutArmed).ToBe(True);
-  Expect<Boolean>(GThreadPolls.TimeoutState <> nil).ToBe(True);
-  PollExecutionTimeout(PGocciaTimeoutPollState(GThreadPolls.TimeoutState));
+  Expect<Boolean>(Polls^.TimeoutArmed).ToBe(True);
+  Expect<Boolean>(Polls^.TimeoutState <> nil).ToBe(True);
+  PollExecutionTimeout(PGocciaTimeoutPollState(Polls^.TimeoutState));
 
   // A short deadline is read on every poll, so the first poll after it
   // passes raises, with the scope and the duration of that deadline.
@@ -117,7 +124,7 @@ begin
   Sleep(20);
   RaisedExpected := False;
   try
-    PollExecutionTimeout(PGocciaTimeoutPollState(GThreadPolls.TimeoutState));
+    PollExecutionTimeout(PGocciaTimeoutPollState(Polls^.TimeoutState));
   except
     on E: TGocciaTimeoutError do
       RaisedExpected := (E.Scope = tsTest) and (E.DurationMs = 1);
@@ -126,7 +133,7 @@ begin
 
   // Once that scope ends, the outer deadline is the one polled again.
   PopTimeoutScope;
-  PollExecutionTimeout(PGocciaTimeoutPollState(GThreadPolls.TimeoutState));
+  PollExecutionTimeout(PGocciaTimeoutPollState(Polls^.TimeoutState));
 
   // A longer deadline is read once in 1024 polls, counted from the start, the
   // same through the pointer as through CheckExecutionTimeout.
@@ -137,7 +144,7 @@ begin
     for I := 1 to 1023 do
       if Odd(I) then
         PollExecutionTimeout(
-          PGocciaTimeoutPollState(GThreadPolls.TimeoutState))
+          PGocciaTimeoutPollState(Polls^.TimeoutState))
       else
         CheckExecutionTimeout;
   except
@@ -146,7 +153,7 @@ begin
   end;
   Expect<Boolean>(RaisedExpected).ToBe(False);
   try
-    PollExecutionTimeout(PGocciaTimeoutPollState(GThreadPolls.TimeoutState));
+    PollExecutionTimeout(PGocciaTimeoutPollState(Polls^.TimeoutState));
   except
     on E: TGocciaTimeoutError do
       RaisedExpected := (E.Scope = tsFile) and (E.DurationMs = 20);
