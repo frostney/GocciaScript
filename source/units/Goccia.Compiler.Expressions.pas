@@ -5511,9 +5511,16 @@ begin
   Result := True;
 end;
 
-procedure CompileCall(const ACtx: TGocciaCompilationContext;
+// CompileCall, also reporting in AResultReg where the call left its result:
+// ADest, or, with ANeedsResult False only, a temporary the call allocated,
+// which is free again on return and valid only until the next instruction is
+// emitted. Paths that build the result in ADest itself (a closed numeric
+// self-call, an optional-chain or `with` call, a plain call whose base is
+// ADest) report ADest.
+procedure CompileCallCore(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt16;
-  const ATail: Boolean = False; const ANeedsResult: Boolean = True);
+  const ATail: Boolean; const ANeedsResult: Boolean;
+  out AResultReg: UInt16);
 var
   ArgCount, I: Integer;
   BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg, FirstArgReg: UInt16;
@@ -5528,7 +5535,19 @@ var
   IgnoredJumps: TGocciaCompilerJumpArray;
   IgnoredJumpCount: Integer;
   MethodTailFlag: UInt16;
+
+  // The call left its result in AReg: move it into ADest when the caller
+  // needs it there, or report AReg when nobody needs the result in ADest.
+  procedure SettleResult(const AReg: UInt16);
+  begin
+    if not ANeedsResult then
+      AResultReg := AReg
+    else if ADest <> AReg then
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, AReg, 0));
+  end;
+
 begin
+  AResultReg := ADest;
   ArgCount := AExpr.Arguments.Count;
   if ArgCount > High(UInt16) then
     raise Exception.Create('Compiler error: too many arguments (>65535)');
@@ -5659,8 +5678,7 @@ begin
       PatchJumpTarget(ACtx, EndJump);
     end;
 
-    if ANeedsResult and (ADest <> BaseReg) then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+    SettleResult(BaseReg);
 
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -5719,8 +5737,7 @@ begin
       PatchJumpTarget(ACtx, EndJump);
     end;
 
-    if ANeedsResult and (ADest <> BaseReg) then
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+    SettleResult(BaseReg);
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
   end
@@ -5796,8 +5813,7 @@ begin
         PatchJumpTarget(ACtx, EndJump);
       end;
 
-      if ANeedsResult and (ADest <> BaseReg) then
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+      SettleResult(BaseReg);
 
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
@@ -5856,8 +5872,7 @@ begin
         PatchJumpTarget(ACtx, EndJump);
       end;
 
-      if ANeedsResult and (ADest <> BaseReg) then
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+      SettleResult(BaseReg);
 
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
@@ -5912,11 +5927,19 @@ begin
 
     if BaseReg <> ADest then
     begin
-      if ANeedsResult then
-        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+      SettleResult(BaseReg);
       ACtx.Scope.FreeRegister;
     end;
   end;
+end;
+
+procedure CompileCall(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const ADest: UInt16;
+  const ATail: Boolean = False; const ANeedsResult: Boolean = True);
+var
+  ResultReg: UInt16;
+begin
+  CompileCallCore(ACtx, AExpr, ADest, ATail, ANeedsResult, ResultReg);
 end;
 
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
@@ -6162,7 +6185,7 @@ var
   Binary: TGocciaBinaryExpression;
   SkipJumps: TGocciaCompilerJumpArray;
   JumpIndex: Integer;
-  CondReg: UInt16;
+  CondReg, TempReg: UInt16;
   OwnsCondReg: Boolean;
 begin
   if ACondition is TGocciaBinaryExpression then
@@ -6213,7 +6236,19 @@ begin
     Exit;
   end;
 
-  OwnsCondReg := CompileOperand(ACtx, ACondition, CondReg);
+  if ACondition.ClassType = TGocciaCallExpression then
+  begin
+    // A call's result is tested where the call left it, with no copy into
+    // the condition register. TempReg is only the destination a plain call
+    // may compute in place; a method call leaves it unwritten.
+    OwnsCondReg := True;
+    TempReg := ACtx.Scope.AllocateRegister;
+    EmitLineMapping(ACtx, ACondition.Line, ACondition.Column);
+    CompileCallCore(ACtx, TGocciaCallExpression(ACondition), TempReg, False,
+      False, CondReg);
+  end
+  else
+    OwnsCondReg := CompileOperand(ACtx, ACondition, CondReg);
   if AJumpWhen then
     AppendJump(AJumps, EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg))
   else
