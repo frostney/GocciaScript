@@ -103,7 +103,8 @@ procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContex
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
 procedure CompilePropertyCompoundAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 procedure CompileComputedPropertyCompoundAssignment(
   const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaComputedPropertyCompoundAssignmentExpression;
@@ -7538,12 +7539,14 @@ begin
 end;
 
 procedure CompilePropertyCompoundAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaPropertyCompoundAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 var
   BaseReg, CurReg, KeyReg, ObjReg, SuperReg, ThisReg, ValReg: UInt16;
   Op: TGocciaOpCode;
   PropIdx: UInt16;
   JumpIdx: Integer;
+  OwnsObjReg: Boolean;
 begin
   if AExpr.ObjectExpr is TGocciaSuperExpression then
   begin
@@ -7611,22 +7614,27 @@ begin
   end;
 
   Op := CompoundOpToRuntimeOp(AExpr.Operator);
-  ObjReg := ACtx.Scope.AllocateRegister;
+  // `this.x op= v` reads and stores through this's own register.
+  OwnsObjReg := not TryResolveThisRegister(ACtx, AExpr.ObjectExpr, ObjReg);
+  if OwnsObjReg then
+    ObjReg := ACtx.Scope.AllocateRegister;
   CurReg := ACtx.Scope.AllocateRegister;
   ValReg := ACtx.Scope.AllocateRegister;
 
-  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
+  if OwnsObjReg then
+    ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
   EmitLoadPropertyByName(ACtx, CurReg, ObjReg, AExpr.PropertyName);
   ACtx.CompileExpression(AExpr.Value, ValReg);
   EmitInstruction(ACtx, EncodeABC(Op, CurReg, CurReg, ValReg));
   EmitStorePropertyByName(ACtx, ObjReg, AExpr.PropertyName, CurReg);
 
-  if ADest <> CurReg then
+  if ANeedsResult and (ADest <> CurReg) then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, CurReg, 0));
 
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  if OwnsObjReg then
+    ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileComputedPropertyCompoundAssignment(

@@ -381,6 +381,9 @@ begin
     else if AExpr.ClassType = TGocciaPropertyAssignmentExpression then
       CompilePropertyAssignment(ACtx,
         TGocciaPropertyAssignmentExpression(AExpr), Reg, False)
+    else if AExpr.ClassType = TGocciaPropertyCompoundAssignmentExpression then
+      CompilePropertyCompoundAssignment(ACtx,
+        TGocciaPropertyCompoundAssignmentExpression(AExpr), Reg, False)
     else if AExpr.ClassType = TGocciaCallExpression then
     begin
       // As ACtx.CompileExpression would, but the call leaves its result
