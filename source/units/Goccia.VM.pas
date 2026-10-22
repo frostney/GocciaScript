@@ -1921,18 +1921,23 @@ begin
 end;
 
 function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+var
+  IntValue: Int64;
 begin
+  // The result of every arithmetic opcode lands here. The range test is false
+  // for NaN and the infinities, so a finite value is classified with compares
+  // and one truncation instead of calls to IsNaN, IsInfinite and Frac.
+  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
+  begin
+    IntValue := Trunc(AValue);
+    if IntValue <> AValue then
+      Exit(RegisterFloat(AValue));
+    if (IntValue = 0) and NumberBits.IsNegativeZero(AValue) then
+      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
+    Exit(RegisterInt(IntValue));
+  end;
   if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
     Exit(RegisterObject(VMNumberValue(AValue)));
-  if AValue = 0.0 then
-  begin
-    if NumberBits.IsNegativeZero(AValue) then
-      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
-    Exit(RegisterInt(0));
-  end;
-  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) and
-     (Frac(AValue) = 0.0) then
-    Exit(RegisterInt(Trunc(AValue)));
   Result := RegisterFloat(AValue);
 end;
 
