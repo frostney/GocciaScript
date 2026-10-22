@@ -65,7 +65,7 @@ procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrowFunctionExpression; const ADest: UInt16);
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt16;
-  const ATail: Boolean = False);
+  const ATail: Boolean = False; const ANeedsResult: Boolean = True);
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt16);
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
@@ -5419,7 +5419,7 @@ end;
 
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt16;
-  const ATail: Boolean = False);
+  const ATail: Boolean = False; const ANeedsResult: Boolean = True);
 var
   ArgCount, I: Integer;
   BaseReg, ObjReg, ArgsReg, SuperReg, KeyReg, FirstArgReg: UInt16;
@@ -5565,7 +5565,7 @@ begin
       PatchJumpTarget(ACtx, EndJump);
     end;
 
-    if ADest <> BaseReg then
+    if ANeedsResult and (ADest <> BaseReg) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
 
     ACtx.Scope.FreeRegister;
@@ -5625,7 +5625,7 @@ begin
       PatchJumpTarget(ACtx, EndJump);
     end;
 
-    if ADest <> BaseReg then
+    if ANeedsResult and (ADest <> BaseReg) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
@@ -5702,7 +5702,7 @@ begin
         PatchJumpTarget(ACtx, EndJump);
       end;
 
-      if ADest <> BaseReg then
+      if ANeedsResult and (ADest <> BaseReg) then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
 
       ACtx.Scope.FreeRegister;
@@ -5762,7 +5762,7 @@ begin
         PatchJumpTarget(ACtx, EndJump);
       end;
 
-      if ADest <> BaseReg then
+      if ANeedsResult and (ADest <> BaseReg) then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
 
       ACtx.Scope.FreeRegister;
@@ -5818,7 +5818,8 @@ begin
 
     if BaseReg <> ADest then
     begin
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
+      if ANeedsResult then
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, BaseReg, 0));
       ACtx.Scope.FreeRegister;
     end;
   end;
