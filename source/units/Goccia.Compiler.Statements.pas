@@ -6809,7 +6809,13 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
-// ES2022 §15.7.14 ClassStaticBlockDefinition
+{ ES2026 §15.7.11 ClassStaticBlockDefinitionEvaluation: the body is a
+  synthetic method, and §15.7.12 EvaluateClassStaticBlockBody runs
+  FunctionDeclarationInstantiation on it before its statements. Its
+  VarDeclaredNames (§8.2.6, TopLevelVarDeclaredNames of the statement list)
+  therefore live in the block's own var environment, declared before any
+  nested block's lexical bindings, and its top-level function declarations
+  are hoisted, exactly as in a function body. }
 procedure CompileStaticBlock(const ACtx: TGocciaCompilationContext;
   const AClassReg: UInt16; const ABody: TGocciaBlockStatement);
 var
@@ -6817,7 +6823,6 @@ var
   OldScope: TGocciaCompilerScope;
   ChildTemplate: TGocciaFunctionTemplate;
   ChildScope: TGocciaCompilerScope;
-  ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FnReg: UInt16;
   I: Integer;
@@ -6835,17 +6840,7 @@ begin
 
   ACtx.SwapState(ChildTemplate, ChildScope);
 
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
-    not ChildTemplate.StrictCode;
-  ChildCtx.DerivedConstructorThisGuard := False;
-
-  CompileBlockStatement(ChildCtx, ABody);
-
-  EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_UNDEFINED, 0, 0));
-  EmitInstruction(ChildCtx, EncodeABC(OP_RETURN, 0, 0, 0));
+  ACtx.CompileFunctionBody(ABody);
 
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
