@@ -28,8 +28,8 @@ deterministic, with a fixed clock and seeded randomness.
   and the full test suite runs under FreePascal's heap checker and under
   Valgrind memcheck. Every week a
   [GC-stress run](https://github.com/frostney/GocciaScript/actions/workflows/gc-stress.yml)
-  collects garbage every 8 instructions across the GC-sensitive parts of the
-  test suite and of test262.
+  collects garbage every 8 instructions across the whole test suite and the
+  GC-sensitive part of test262.
 - **In production.** GocciaScript is the engine behind
   [Shotcup](https://shotcup.dev)'s hosted sandboxes, where every run gets a
   fresh engine with hard limits.
@@ -247,7 +247,7 @@ Linux (x64 and arm64) and Windows (x64 and x86):
 curl -fsSL https://www.gocciascript.dev/install | sh
 
 # a pinned version
-curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.14.0 sh
+curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.15.0 sh
 
 # macOS with Homebrew
 brew install frostney/tap/gocciascript
@@ -451,7 +451,10 @@ contract through the IDE; see [Delphi Validation](docs/contributing/delphi.md)
 and [Build System](docs/build-system.md#prerequisites).
 
 Native hosts can embed GocciaScript to run portable JavaScript with
-application-specific globals, modules, capabilities, and limits. See
+application-specific globals, modules, capabilities, and limits. A host can
+answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
+mark sandbox paths read-only, and snapshot a paused run's heap to restore it in
+a fresh engine ([Heap Snapshots](docs/heap-snapshots.md)). See
 [Embedding the Engine](docs/embedding.md).
 
 ## Architecture
@@ -464,7 +467,7 @@ flowchart LR
     AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result["Result"]
 ```
 
-The VM, the built-ins and the runtime share one set of value types, one scope chain, and one mark-and-sweep GC. The VM is Goccia-owned rather than a generic VM layer: it keeps tagged `TGocciaRegister` values (unboxed scalars) and falls back to `TGocciaValue` for heap objects. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; main has removed it, and the next release ships without it.
+The VM, the built-ins and the runtime share one set of value types, one scope chain, and one mark-and-sweep GC. The VM is Goccia-owned rather than a generic VM layer: it keeps tagged `TGocciaRegister` values (unboxed scalars) and falls back to `TGocciaValue` for heap objects. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; GocciaScript 0.15.0 removed it ([ADR 0138](docs/adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)).
 
 See [Architecture](docs/architecture.md) for the pipeline and layers, [Bytecode VM](docs/bytecode-vm.md) for bytecode execution, [Core patterns](docs/core-patterns.md) for implementation patterns, and [GocciaScript Context](CONTEXT.md) for canonical terminology.
 
