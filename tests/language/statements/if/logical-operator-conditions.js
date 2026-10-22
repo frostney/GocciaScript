@@ -31,7 +31,7 @@ describe("&&, || and ! as branch conditions", () => {
 
         log.length = 0;
         expect((left() || right()) && !left() ? "then" : "else")
-          .toBe((a || b) && !a ? "then" : "else");
+          .toBe(Boolean((a || b) && !a) ? "then" : "else");
       }
     }
   });
@@ -46,7 +46,7 @@ describe("&&, || and ! as branch conditions", () => {
           taken = false;
           if (a && (b || !c)) { taken = true; }
           expect(taken).toBe(a && (b || !c));
-          expect(!(a || b) || c ? 1 : 2).toBe(!(a || b) || c ? 1 : 2);
+          expect(!(a || b) || c ? 1 : 2).toBe(Boolean(!(a || b) || c) ? 1 : 2);
         }
       }
     }
