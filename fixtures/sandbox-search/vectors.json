@@ -1,0 +1,1462 @@
+{
+  "$comment": "Shared test vectors for sandbox filesystem search: fs.globSync, and grep and fuzzyFind from goccia:search. Each case names a tree; a file is a UTF-8 string or { base64 } bytes, and directories are the files' parents. glob results are relative to the cwd (absolute for an absolute pattern); fuzzyFind and grep return absolute paths. See docs/built-ins-sandbox-search.md.",
+  "version": 1,
+  "trees": {
+    "project": {
+      "/README.md": "# Demo\n\nTODO: write the guide.\nSee docs/guide.md.\n",
+      "/package.json": "{\n  \"name\": \"demo\",\n  \"type\": \"module\"\n}\n",
+      "/.env": "TOKEN=placeholder\n",
+      "/.github/workflows/ci.yml": "name: ci\non: [push]\n",
+      "/docs/guide.md": "# Guide\n\nImport the controller:\n\n    import { controller } from \"../src/user/controller.ts\";\n",
+      "/docs/api/index.md": "# API\n\nexport surface\n",
+      "/src/index.ts": "import { App } from \"./app.tsx\";\nimport { controller } from \"./user/controller.ts\";\n\nexport const main = () => App(controller);\n",
+      "/src/app.tsx": "export function App(props) {\n  // todo: render\n  return props;\n}\n",
+      "/src/user/controller.ts": "import { model } from \"./model.ts\";\n\nexport const controller = {\n  find(id) { return model.get(id); },\n  // TODO: paginate\n  list() { return model.all(); },\n};\n",
+      "/src/user/model.ts": "const rows = new Map();\nexport const model = {\n  get: (id) => rows.get(id),\n  all: () => [...rows.values()],\n};\n",
+      "/src/user/controller.test.ts": "import { controller } from \"./controller.ts\";\n\ntest(\"finds\", () => {\n  expect(controller.find(1)).toBeUndefined();\n});\n",
+      "/src/util/strings.ts": "export const pad = (s, n) => s.padStart(n);\r\nexport const trim = (s) => s.trim();\r\n",
+      "/src/util/.cache/stale.ts": "export const stale = true;\n",
+      "/src/components/Button.tsx": "export const Button = () => \"button\";\n",
+      "/src/components/ButtonGroup.tsx": "import { Button } from \"./Button.tsx\";\nexport const ButtonGroup = () => [Button(), Button()];\n",
+      "/lib/weird[1].js": "a.b(c) and a+b(c)\n",
+      "/lib/bundle.min.js": "var x=1;export{x};var y=2;export{y}",
+      "/assets/logo.png": {
+        "base64": "wolQTkcNChoKAABleHBvcnQgVE9ETwA="
+      },
+      "/assets/latin1.txt": {
+        "base64": "Y2Fm6SBUT0RPCg=="
+      },
+      "/notes/ünïcode.md": "ünïcode needle here\n😀 needle after an emoji\n﻿not a BOM in the middle\n",
+      "/notes/bom.txt": "﻿needle at the start\nsecond line\n",
+      "/notes/empty-lines.txt": "first\n\n\nlast without newline",
+      "/notes/repeat.txt": "aa bb aa\nabab\nxyzzy\n",
+      "/notes/😀-smile.md": "smile\n",
+      "/notes/cr-end.txt": "alpha\r\nomega\r",
+      "/braces/{a,b": "",
+      "/braces/{a,c": ""
+    }
+  },
+  "glob": [
+    {
+      "name": "every TypeScript file below the cwd",
+      "tree": "project",
+      "pattern": "**/*.ts",
+      "expect": [
+        "src/index.ts",
+        "src/user/controller.test.ts",
+        "src/user/controller.ts",
+        "src/user/model.ts",
+        "src/util/strings.ts"
+      ]
+    },
+    {
+      "name": "one level, files and directories, no dot entries",
+      "tree": "project",
+      "pattern": "src/*",
+      "expect": [
+        "src/app.tsx",
+        "src/components",
+        "src/index.ts",
+        "src/user",
+        "src/util"
+      ]
+    },
+    {
+      "name": "globstar alone lists every entry that is not hidden, the cwd itself excluded",
+      "tree": "project",
+      "pattern": "**",
+      "expect": [
+        "README.md",
+        "assets",
+        "assets/latin1.txt",
+        "assets/logo.png",
+        "braces",
+        "braces/{a,b",
+        "braces/{a,c",
+        "docs",
+        "docs/api",
+        "docs/api/index.md",
+        "docs/guide.md",
+        "lib",
+        "lib/bundle.min.js",
+        "lib/weird[1].js",
+        "notes",
+        "notes/bom.txt",
+        "notes/cr-end.txt",
+        "notes/empty-lines.txt",
+        "notes/repeat.txt",
+        "notes/ünïcode.md",
+        "notes/😀-smile.md",
+        "package.json",
+        "src",
+        "src/app.tsx",
+        "src/components",
+        "src/components/Button.tsx",
+        "src/components/ButtonGroup.tsx",
+        "src/index.ts",
+        "src/user",
+        "src/user/controller.test.ts",
+        "src/user/controller.ts",
+        "src/user/model.ts",
+        "src/util",
+        "src/util/strings.ts"
+      ]
+    },
+    {
+      "name": "a dot entry needs a pattern segment that starts with a literal dot",
+      "tree": "project",
+      "pattern": "**/.*",
+      "expect": [
+        ".env",
+        ".github",
+        "src/util/.cache"
+      ]
+    },
+    {
+      "name": "a globstar does not descend into a hidden directory",
+      "tree": "project",
+      "pattern": "src/util/**",
+      "expect": [
+        "src/util",
+        "src/util/strings.ts"
+      ]
+    },
+    {
+      "name": "an explicit hidden directory is searched",
+      "tree": "project",
+      "pattern": "src/util/.*/*",
+      "expect": [
+        "src/util/.cache/stale.ts"
+      ]
+    },
+    {
+      "name": "a hidden directory named in full",
+      "tree": "project",
+      "pattern": ".github/**",
+      "expect": [
+        ".github",
+        ".github/workflows",
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "name": "brace alternatives",
+      "tree": "project",
+      "pattern": "src/**/*.{ts,tsx}",
+      "expect": [
+        "src/app.tsx",
+        "src/components/Button.tsx",
+        "src/components/ButtonGroup.tsx",
+        "src/index.ts",
+        "src/user/controller.test.ts",
+        "src/user/controller.ts",
+        "src/user/model.ts",
+        "src/util/strings.ts"
+      ]
+    },
+    {
+      "name": "nested braces",
+      "tree": "project",
+      "pattern": "src/{user/{model,controller},util/strings}.ts",
+      "expect": [
+        "src/user/controller.ts",
+        "src/user/model.ts",
+        "src/util/strings.ts"
+      ]
+    },
+    {
+      "name": "an empty brace alternative",
+      "tree": "project",
+      "pattern": "{,docs/}*.md",
+      "expect": [
+        "README.md",
+        "docs/guide.md"
+      ]
+    },
+    {
+      "name": "a brace with no comma is literal",
+      "tree": "project",
+      "pattern": "src/{index}.ts",
+      "expect": []
+    },
+    {
+      "name": "a brace that is never closed is literal, and a later one still expands",
+      "tree": "project",
+      "pattern": "braces/{a,{b,c}",
+      "expect": [
+        "braces/{a,b",
+        "braces/{a,c"
+      ]
+    },
+    {
+      "name": "braces over directories",
+      "tree": "project",
+      "pattern": "{docs,lib}/**",
+      "expect": [
+        "docs",
+        "docs/api",
+        "docs/api/index.md",
+        "docs/guide.md",
+        "lib",
+        "lib/bundle.min.js",
+        "lib/weird[1].js"
+      ]
+    },
+    {
+      "name": "question mark matches one character, a dot included",
+      "tree": "project",
+      "pattern": "src/user/controller?ts",
+      "expect": [
+        "src/user/controller.ts"
+      ]
+    },
+    {
+      "name": "a character class with a range",
+      "tree": "project",
+      "pattern": "src/components/[A-Z]*.tsx",
+      "expect": [
+        "src/components/Button.tsx",
+        "src/components/ButtonGroup.tsx"
+      ]
+    },
+    {
+      "name": "a negated character class",
+      "tree": "project",
+      "pattern": "src/components/[!B]*",
+      "expect": []
+    },
+    {
+      "name": "a negated class with a caret",
+      "tree": "project",
+      "pattern": "src/user/[^c]*",
+      "expect": [
+        "src/user/model.ts"
+      ]
+    },
+    {
+      "name": "a class matching a literal bracket",
+      "tree": "project",
+      "pattern": "lib/weird[[]1].js",
+      "expect": [
+        "lib/weird[1].js"
+      ]
+    },
+    {
+      "name": "a trailing slash matches directories only",
+      "tree": "project",
+      "pattern": "**/",
+      "expect": [
+        "assets",
+        "braces",
+        "docs",
+        "docs/api",
+        "lib",
+        "notes",
+        "src",
+        "src/components",
+        "src/user",
+        "src/util"
+      ]
+    },
+    {
+      "name": "a named directory with a trailing slash",
+      "tree": "project",
+      "pattern": "docs/api/",
+      "expect": [
+        "docs/api"
+      ]
+    },
+    {
+      "name": "a file with a trailing slash matches nothing",
+      "tree": "project",
+      "pattern": "src/user/controller.ts/",
+      "expect": []
+    },
+    {
+      "name": "matching is case-sensitive",
+      "tree": "project",
+      "pattern": "**/*.MD",
+      "expect": []
+    },
+    {
+      "name": "no match is an empty array",
+      "tree": "project",
+      "pattern": "**/*.rs",
+      "expect": []
+    },
+    {
+      "name": "a leading ./ is ignored",
+      "tree": "project",
+      "pattern": "./src/*.ts",
+      "expect": [
+        "src/index.ts"
+      ]
+    },
+    {
+      "name": "non-ASCII names",
+      "tree": "project",
+      "pattern": "**/ü*.md",
+      "expect": [
+        "notes/ünïcode.md"
+      ]
+    },
+    {
+      "name": "a question mark matches one UTF-16 code unit, as in Node",
+      "tree": "project",
+      "pattern": "notes/??-smile.md",
+      "expect": [
+        "notes/😀-smile.md"
+      ]
+    },
+    {
+      "name": "a character outside the BMP is two code units",
+      "tree": "project",
+      "pattern": "notes/?-smile.md",
+      "expect": []
+    },
+    {
+      "name": "dots inside names are literal",
+      "tree": "project",
+      "pattern": "**/*.min.js",
+      "expect": [
+        "lib/bundle.min.js"
+      ]
+    },
+    {
+      "name": "the alternatives cap is per pattern",
+      "tree": "project",
+      "pattern": [
+        "{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}.md",
+        "x{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}"
+      ],
+      "expect": []
+    },
+    {
+      "name": "several patterns are merged, sorted and deduplicated",
+      "tree": "project",
+      "pattern": [
+        "**/*.md",
+        "docs/**/*.md",
+        "*.json"
+      ],
+      "expect": [
+        "README.md",
+        "docs/api/index.md",
+        "docs/guide.md",
+        "notes/ünïcode.md",
+        "notes/😀-smile.md",
+        "package.json"
+      ]
+    },
+    {
+      "name": "an absolute pattern returns absolute paths",
+      "tree": "project",
+      "pattern": "/src/user/*.ts",
+      "expect": [
+        "/src/user/controller.test.ts",
+        "/src/user/controller.ts",
+        "/src/user/model.ts"
+      ]
+    },
+    {
+      "name": "the cwd option makes results relative to it",
+      "tree": "project",
+      "pattern": "**/*.ts",
+      "options": {
+        "cwd": "/src"
+      },
+      "expect": [
+        "index.ts",
+        "user/controller.test.ts",
+        "user/controller.ts",
+        "user/model.ts",
+        "util/strings.ts"
+      ]
+    },
+    {
+      "name": "an absolute pattern ignores the cwd",
+      "tree": "project",
+      "pattern": "/docs/*.md",
+      "options": {
+        "cwd": "/src"
+      },
+      "expect": [
+        "/docs/guide.md"
+      ]
+    },
+    {
+      "name": "a cwd that does not exist gives no results",
+      "tree": "project",
+      "pattern": "**",
+      "options": {
+        "cwd": "/missing"
+      },
+      "expect": []
+    },
+    {
+      "name": "exclude removes a directory and everything below it",
+      "tree": "project",
+      "pattern": "src/**/*.ts",
+      "options": {
+        "exclude": [
+          "src/user"
+        ]
+      },
+      "expect": [
+        "src/index.ts",
+        "src/util/strings.ts"
+      ]
+    },
+    {
+      "name": "exclude patterns follow the same rules",
+      "tree": "project",
+      "pattern": "**/*.ts",
+      "options": {
+        "exclude": [
+          "**/*.test.ts"
+        ]
+      },
+      "expect": [
+        "src/index.ts",
+        "src/user/controller.ts",
+        "src/user/model.ts",
+        "src/util/strings.ts"
+      ]
+    },
+    {
+      "name": "an exclude pattern matches from the cwd, not anywhere",
+      "tree": "project",
+      "pattern": "**/*.ts",
+      "options": {
+        "exclude": [
+          "*.ts"
+        ]
+      },
+      "expect": [
+        "src/index.ts",
+        "src/user/controller.test.ts",
+        "src/user/controller.ts",
+        "src/user/model.ts",
+        "src/util/strings.ts"
+      ]
+    },
+    {
+      "name": "exclude is relative to the cwd",
+      "tree": "project",
+      "pattern": "**",
+      "options": {
+        "cwd": "/src",
+        "exclude": [
+          "user/**",
+          "components"
+        ]
+      },
+      "expect": [
+        "app.tsx",
+        "index.ts",
+        "util",
+        "util/strings.ts"
+      ]
+    },
+    {
+      "name": "a backslash is a path separator",
+      "tree": "project",
+      "pattern": "src\\user\\*.ts",
+      "expect": [
+        "src/user/controller.test.ts",
+        "src/user/controller.ts",
+        "src/user/model.ts"
+      ]
+    }
+  ],
+  "fuzzyFind": [
+    {
+      "name": "an abbreviation across directory names",
+      "tree": "project",
+      "query": "usrctrl",
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/user/controller.ts",
+            "score": 139,
+            "positions": [
+              5,
+              6,
+              8,
+              10,
+              13,
+              14,
+              16
+            ]
+          },
+          {
+            "path": "/src/user/controller.test.ts",
+            "score": 139,
+            "positions": [
+              5,
+              6,
+              8,
+              10,
+              13,
+              14,
+              16
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a word that is a file name prefix",
+      "tree": "project",
+      "query": "button",
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/components/Button.tsx",
+            "score": 159,
+            "positions": [
+              16,
+              17,
+              18,
+              19,
+              20,
+              21
+            ]
+          },
+          {
+            "path": "/src/components/ButtonGroup.tsx",
+            "score": 159,
+            "positions": [
+              16,
+              17,
+              18,
+              19,
+              20,
+              21
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "matching ignores ASCII case",
+      "tree": "project",
+      "query": "BtnGrp",
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/components/ButtonGroup.tsx",
+            "score": 114,
+            "positions": [
+              16,
+              18,
+              21,
+              22,
+              23,
+              26
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a file name",
+      "tree": "project",
+      "query": "readme",
+      "expect": {
+        "matches": [
+          {
+            "path": "/README.md",
+            "score": 159,
+            "positions": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "the limit truncates",
+      "tree": "project",
+      "query": "ts",
+      "options": {
+        "limit": 3
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/app.tsx",
+            "score": 56,
+            "positions": [
+              9,
+              10
+            ]
+          },
+          {
+            "path": "/src/index.ts",
+            "score": 56,
+            "positions": [
+              11,
+              12
+            ]
+          },
+          {
+            "path": "/src/user/model.ts",
+            "score": 56,
+            "positions": [
+              16,
+              17
+            ]
+          }
+        ],
+        "truncated": true
+      }
+    },
+    {
+      "name": "hidden files are candidates without a glob",
+      "tree": "project",
+      "query": "env",
+      "expect": {
+        "matches": [
+          {
+            "path": "/.env",
+            "score": 80,
+            "positions": [
+              2,
+              3,
+              4
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "the cwd narrows the candidates",
+      "tree": "project",
+      "query": "md",
+      "options": {
+        "cwd": "/docs"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/docs/guide.md",
+            "score": 56,
+            "positions": [
+              12,
+              13
+            ]
+          },
+          {
+            "path": "/docs/api/index.md",
+            "score": 56,
+            "positions": [
+              16,
+              17
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a glob narrows the candidates",
+      "tree": "project",
+      "query": "ctrl",
+      "options": {
+        "glob": "**/*.test.ts"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/user/controller.test.ts",
+            "score": 79,
+            "positions": [
+              10,
+              13,
+              14,
+              16
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "exclude narrows the candidates",
+      "tree": "project",
+      "query": "contr",
+      "options": {
+        "exclude": [
+          "**/*.test.ts"
+        ]
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/user/controller.ts",
+            "score": 134,
+            "positions": [
+              10,
+              11,
+              12,
+              13,
+              14
+            ]
+          },
+          {
+            "path": "/src/components/ButtonGroup.tsx",
+            "score": 87,
+            "positions": [
+              5,
+              6,
+              10,
+              13,
+              23
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "positions count UTF-16 code units",
+      "tree": "project",
+      "query": "ncd",
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/cr-end.txt",
+            "score": 62,
+            "positions": [
+              1,
+              7,
+              12
+            ]
+          },
+          {
+            "path": "/notes/ünïcode.md",
+            "score": 42,
+            "positions": [
+              8,
+              10,
+              12
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "positions after a character outside the BMP",
+      "tree": "project",
+      "query": "smile",
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/😀-smile.md",
+            "score": 128,
+            "positions": [
+              10,
+              11,
+              12,
+              13,
+              14
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a query nothing matches",
+      "tree": "project",
+      "query": "zzzz",
+      "expect": {
+        "matches": [],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a query with a separator",
+      "tree": "project",
+      "query": "user/m",
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/user/model.ts",
+            "score": 159,
+            "positions": [
+              5,
+              6,
+              7,
+              8,
+              9,
+              10
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    }
+  ],
+  "grep": [
+    {
+      "name": "a literal over every text file",
+      "tree": "project",
+      "pattern": "export const",
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/components/Button.tsx",
+            "line": 1,
+            "column": 1,
+            "text": "export const Button = () => \"button\";"
+          },
+          {
+            "path": "/src/components/ButtonGroup.tsx",
+            "line": 2,
+            "column": 1,
+            "text": "export const ButtonGroup = () => [Button(), Button()];"
+          },
+          {
+            "path": "/src/index.ts",
+            "line": 4,
+            "column": 1,
+            "text": "export const main = () => App(controller);"
+          },
+          {
+            "path": "/src/user/controller.ts",
+            "line": 3,
+            "column": 1,
+            "text": "export const controller = {"
+          },
+          {
+            "path": "/src/user/model.ts",
+            "line": 2,
+            "column": 1,
+            "text": "export const model = {"
+          },
+          {
+            "path": "/src/util/.cache/stale.ts",
+            "line": 1,
+            "column": 1,
+            "text": "export const stale = true;"
+          },
+          {
+            "path": "/src/util/strings.ts",
+            "line": 1,
+            "column": 1,
+            "text": "export const pad = (s, n) => s.padStart(n);"
+          },
+          {
+            "path": "/src/util/strings.ts",
+            "line": 2,
+            "column": 1,
+            "text": "export const trim = (s) => s.trim();"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a literal is not a regular expression",
+      "tree": "project",
+      "pattern": "a.b(c)",
+      "expect": {
+        "matches": [
+          {
+            "path": "/lib/weird[1].js",
+            "line": 1,
+            "column": 1,
+            "text": "a.b(c) and a+b(c)"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a regular expression",
+      "tree": "project",
+      "pattern": "^import .* from",
+      "options": {
+        "regex": true
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/components/ButtonGroup.tsx",
+            "line": 1,
+            "column": 1,
+            "text": "import { Button } from \"./Button.tsx\";"
+          },
+          {
+            "path": "/src/index.ts",
+            "line": 1,
+            "column": 1,
+            "text": "import { App } from \"./app.tsx\";"
+          },
+          {
+            "path": "/src/index.ts",
+            "line": 2,
+            "column": 1,
+            "text": "import { controller } from \"./user/controller.ts\";"
+          },
+          {
+            "path": "/src/user/controller.test.ts",
+            "line": 1,
+            "column": 1,
+            "text": "import { controller } from \"./controller.ts\";"
+          },
+          {
+            "path": "/src/user/controller.ts",
+            "line": 1,
+            "column": 1,
+            "text": "import { model } from \"./model.ts\";"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a literal ignoring case",
+      "tree": "project",
+      "pattern": "todo",
+      "options": {
+        "ignoreCase": true
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/README.md",
+            "line": 3,
+            "column": 1,
+            "text": "TODO: write the guide."
+          },
+          {
+            "path": "/src/app.tsx",
+            "line": 2,
+            "column": 6,
+            "text": "  // todo: render"
+          },
+          {
+            "path": "/src/user/controller.ts",
+            "line": 5,
+            "column": 6,
+            "text": "  // TODO: paginate"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a regular expression ignoring case",
+      "tree": "project",
+      "pattern": "t[o]do:",
+      "options": {
+        "regex": true,
+        "ignoreCase": true
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/README.md",
+            "line": 3,
+            "column": 1,
+            "text": "TODO: write the guide."
+          },
+          {
+            "path": "/src/app.tsx",
+            "line": 2,
+            "column": 6,
+            "text": "  // todo: render"
+          },
+          {
+            "path": "/src/user/controller.ts",
+            "line": 5,
+            "column": 6,
+            "text": "  // TODO: paginate"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "lookahead and back references use the engine's RegExp",
+      "tree": "project",
+      "pattern": "(\\w)\\1 bb|ab(?=ab)",
+      "options": {
+        "regex": true
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/repeat.txt",
+            "line": 1,
+            "column": 1,
+            "text": "aa bb aa"
+          },
+          {
+            "path": "/notes/repeat.txt",
+            "line": 2,
+            "column": 1,
+            "text": "abab"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "one result per line, at the first match",
+      "tree": "project",
+      "pattern": "aa",
+      "options": {
+        "glob": "notes/*"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/repeat.txt",
+            "line": 1,
+            "column": 1,
+            "text": "aa bb aa"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "context lines before and after",
+      "tree": "project",
+      "pattern": "TODO",
+      "options": {
+        "context": 1
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/README.md",
+            "line": 3,
+            "column": 1,
+            "text": "TODO: write the guide.",
+            "before": [
+              ""
+            ],
+            "after": [
+              "See docs/guide.md."
+            ]
+          },
+          {
+            "path": "/src/user/controller.ts",
+            "line": 5,
+            "column": 6,
+            "text": "  // TODO: paginate",
+            "before": [
+              "  find(id) { return model.get(id); },"
+            ],
+            "after": [
+              "  list() { return model.all(); },"
+            ]
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "context at the edges of a file",
+      "tree": "project",
+      "pattern": "first|last",
+      "options": {
+        "regex": true,
+        "context": 2,
+        "glob": "notes/*"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/empty-lines.txt",
+            "line": 1,
+            "column": 1,
+            "text": "first",
+            "before": [],
+            "after": [
+              "",
+              ""
+            ]
+          },
+          {
+            "path": "/notes/empty-lines.txt",
+            "line": 4,
+            "column": 1,
+            "text": "last without newline",
+            "before": [
+              "",
+              ""
+            ],
+            "after": []
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "an empty line matches ^$",
+      "tree": "project",
+      "pattern": "^$",
+      "options": {
+        "regex": true,
+        "glob": "notes/*"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/empty-lines.txt",
+            "line": 2,
+            "column": 1,
+            "text": ""
+          },
+          {
+            "path": "/notes/empty-lines.txt",
+            "line": 3,
+            "column": 1,
+            "text": ""
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "maxResults truncates",
+      "tree": "project",
+      "pattern": "export",
+      "options": {
+        "maxResults": 2
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/docs/api/index.md",
+            "line": 3,
+            "column": 1,
+            "text": "export surface"
+          },
+          {
+            "path": "/lib/bundle.min.js",
+            "line": 1,
+            "column": 9,
+            "text": "var x=1;export{x};var y=2;export{y}"
+          }
+        ],
+        "truncated": true
+      }
+    },
+    {
+      "name": "maxBytes stops before the file that would pass it",
+      "tree": "project",
+      "pattern": "e",
+      "options": {
+        "maxBytes": 64
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/.env",
+            "line": 1,
+            "column": 11,
+            "text": "TOKEN=placeholder"
+          },
+          {
+            "path": "/.github/workflows/ci.yml",
+            "line": 1,
+            "column": 4,
+            "text": "name: ci"
+          }
+        ],
+        "truncated": true
+      }
+    },
+    {
+      "name": "the cwd narrows the files",
+      "tree": "project",
+      "pattern": "controller",
+      "options": {
+        "cwd": "/src/user"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/src/user/controller.test.ts",
+            "line": 1,
+            "column": 10,
+            "text": "import { controller } from \"./controller.ts\";"
+          },
+          {
+            "path": "/src/user/controller.test.ts",
+            "line": 4,
+            "column": 10,
+            "text": "  expect(controller.find(1)).toBeUndefined();"
+          },
+          {
+            "path": "/src/user/controller.ts",
+            "line": 3,
+            "column": 14,
+            "text": "export const controller = {"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a glob narrows the files",
+      "tree": "project",
+      "pattern": "controller",
+      "options": {
+        "glob": "**/*.md"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/docs/guide.md",
+            "line": 3,
+            "column": 12,
+            "text": "Import the controller:"
+          },
+          {
+            "path": "/docs/guide.md",
+            "line": 5,
+            "column": 14,
+            "text": "    import { controller } from \"../src/user/controller.ts\";"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "exclude narrows the files",
+      "tree": "project",
+      "pattern": "controller",
+      "options": {
+        "exclude": [
+          "src/user/**"
+        ]
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/docs/guide.md",
+            "line": 3,
+            "column": 12,
+            "text": "Import the controller:"
+          },
+          {
+            "path": "/docs/guide.md",
+            "line": 5,
+            "column": 14,
+            "text": "    import { controller } from \"../src/user/controller.ts\";"
+          },
+          {
+            "path": "/src/index.ts",
+            "line": 2,
+            "column": 10,
+            "text": "import { controller } from \"./user/controller.ts\";"
+          },
+          {
+            "path": "/src/index.ts",
+            "line": 4,
+            "column": 31,
+            "text": "export const main = () => App(controller);"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "binary and non-UTF-8 files are skipped",
+      "tree": "project",
+      "pattern": "TODO",
+      "options": {
+        "cwd": "/assets"
+      },
+      "expect": {
+        "matches": [],
+        "truncated": false
+      }
+    },
+    {
+      "name": "columns count UTF-16 code units and CR is not part of the line",
+      "tree": "project",
+      "pattern": "needle|trim|placeholder",
+      "options": {
+        "regex": true
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/.env",
+            "line": 1,
+            "column": 7,
+            "text": "TOKEN=placeholder"
+          },
+          {
+            "path": "/notes/bom.txt",
+            "line": 1,
+            "column": 1,
+            "text": "needle at the start"
+          },
+          {
+            "path": "/notes/ünïcode.md",
+            "line": 1,
+            "column": 9,
+            "text": "ünïcode needle here"
+          },
+          {
+            "path": "/notes/ünïcode.md",
+            "line": 2,
+            "column": 4,
+            "text": "😀 needle after an emoji"
+          },
+          {
+            "path": "/src/util/strings.ts",
+            "line": 2,
+            "column": 14,
+            "text": "export const trim = (s) => s.trim();"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a byte order mark at the start of a file is not part of the first line",
+      "tree": "project",
+      "pattern": "^needle",
+      "options": {
+        "regex": true
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/bom.txt",
+            "line": 1,
+            "column": 1,
+            "text": "needle at the start"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a CR that ends the last line is not part of it",
+      "tree": "project",
+      "pattern": "a$",
+      "options": {
+        "regex": true,
+        "glob": "notes/cr-end.txt"
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/notes/cr-end.txt",
+            "line": 1,
+            "column": 5,
+            "text": "alpha"
+          },
+          {
+            "path": "/notes/cr-end.txt",
+            "line": 2,
+            "column": 5,
+            "text": "omega"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a minified line",
+      "tree": "project",
+      "pattern": "export\\{y\\}",
+      "options": {
+        "regex": true
+      },
+      "expect": {
+        "matches": [
+          {
+            "path": "/lib/bundle.min.js",
+            "line": 1,
+            "column": 27,
+            "text": "var x=1;export{x};var y=2;export{y}"
+          }
+        ],
+        "truncated": false
+      }
+    }
+  ],
+  "errors": [
+    {
+      "name": "a glob with a .. segment",
+      "tree": "project",
+      "api": "glob",
+      "args": [
+        "src/../lib/*"
+      ],
+      "error": "TypeError"
+    },
+    {
+      "name": "a glob that expands to more than 1024 alternatives",
+      "tree": "project",
+      "api": "glob",
+      "args": [
+        "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}"
+      ],
+      "error": "TypeError"
+    },
+    {
+      "name": "glob patterns longer than 65536 characters once expanded",
+      "tree": "project",
+      "api": "glob",
+      "args": [
+        "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "error": "TypeError"
+    },
+    {
+      "name": "an empty fuzzy query",
+      "tree": "project",
+      "api": "fuzzyFind",
+      "args": [
+        ""
+      ],
+      "error": "TypeError"
+    },
+    {
+      "name": "an empty grep pattern",
+      "tree": "project",
+      "api": "grep",
+      "args": [
+        ""
+      ],
+      "error": "TypeError"
+    },
+    {
+      "name": "an invalid regular expression",
+      "tree": "project",
+      "api": "grep",
+      "args": [
+        "(unclosed",
+        {
+          "regex": true
+        }
+      ],
+      "error": "SyntaxError"
+    }
+  ]
+}
