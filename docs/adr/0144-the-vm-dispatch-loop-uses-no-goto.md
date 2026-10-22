@@ -19,10 +19,10 @@ uses `goto` into a state machine over the whole function body: every label
 becomes a state, and the function re-dispatches on the state at each jump.
 With a patched trunk compiler that dispatches the states through one
 `br_table`, the `goto` version of Richards still executed 3.07 times the
-instructions of a structured one under wasmtime. A wasm32 build therefore needed a second,
-structured loop behind a define, which the wasm32 port prototype carried as
-`GOCCIA_VM_STRUCTURED_DISPATCH`, and the targets would have run different
-dispatch code.
+instructions of a structured one under wasmtime. A wasm32 build therefore
+needed a second, structured loop behind a define, which the wasm32 port
+prototype carried as `GOCCIA_VM_STRUCTURED_DISPATCH`, and the targets would
+have run different dispatch code.
 
 ## Decision
 
@@ -44,6 +44,8 @@ there is no define for another.
 - A wasm32 build compiles the same dispatch loop as a native one.
 - `Continue` and `Break` in `Goccia.VM.DispatchCase.inc` act on the dispatch
   loop only outside an inner loop; inside a `for` or `while` in a case arm they
-  act on that inner loop.
+  act on that inner loop. A `Break` out of the dispatch loop does not end
+  execution: the enclosing loop around the exception handlers enters it again
+  at the same instruction. An opcode ends execution with `Exit` or by raising.
 - `goto` stays out of the VM (see the contributor notes in
   [Bytecode VM](../bytecode-vm.md#contributor-notes)).

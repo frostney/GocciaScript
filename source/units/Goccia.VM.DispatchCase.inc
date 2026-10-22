@@ -1,6 +1,8 @@
 { The opcode case of ExecuteClosureRegistersInternal's dispatch loop.
   Included once. Continue in this file fetches the next instruction without
-  the memory-pressure check at the end of the loop body. }
+  the memory-pressure check at the end of the loop body. Break does not end
+  execution: the loop around the exception handlers enters dispatch again at
+  the same instruction, so end it with Exit or by raising. }
 
           case TGocciaOpCode(Op) of
       OP_LOAD_CONST:
