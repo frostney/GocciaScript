@@ -5970,6 +5970,75 @@ begin
   AJumps[High(AJumps)] := AJumpIndex;
 end;
 
+// The kind of OP_JUMP_IF_NULLISH match that `x === AExpr` is, when AExpr is
+// the literal null or undefined.
+function TryNullishLiteralMatchKind(const AExpr: TGocciaExpression;
+  out AKind: UInt16): Boolean;
+begin
+  Result := False;
+  if not (AExpr is TGocciaLiteralExpression) then
+    Exit;
+  if TGocciaLiteralExpression(AExpr).Value is TGocciaNullLiteralValue then
+    AKind := GOCCIA_NULLISH_MATCH_NULL
+  else if TGocciaLiteralExpression(AExpr).Value is
+          TGocciaUndefinedLiteralValue then
+    AKind := GOCCIA_NULLISH_MATCH_UNDEFINED
+  else
+    Exit;
+  Result := True;
+end;
+
+// `x === null`, `x !== null`, `x === undefined` and `x !== undefined`, either
+// way round, as one jump on x. Strict equality with null or undefined holds
+// exactly for the register of that kind: the VM keeps both unboxed, as the
+// optional-chain and nullish-coalescing jumps already rely on. Loose equality
+// is not taken here: it also holds for an object with [[IsHTMLDDA]].
+function TryEmitNullishComparisonJump(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression; const AJumpWhen: Boolean;
+  out AJumpIndex: Integer): Boolean;
+var
+  Binary: TGocciaBinaryExpression;
+  Operand: TGocciaExpression;
+  MatchKind: UInt16;
+  OperandReg: UInt16;
+  OwnsOperandReg, JumpOnMatch: Boolean;
+begin
+  Result := False;
+  if not (ACondition is TGocciaBinaryExpression) then
+    Exit;
+  Binary := TGocciaBinaryExpression(ACondition);
+  if (Binary.Operator <> gttEqual) and (Binary.Operator <> gttNotEqual) then
+    Exit;
+  if TryNullishLiteralMatchKind(Binary.Right, MatchKind) then
+    Operand := Binary.Left
+  else if TryNullishLiteralMatchKind(Binary.Left, MatchKind) then
+    Operand := Binary.Right
+  else
+    Exit;
+
+  EmitLineMapping(ACtx, ACondition.Line, ACondition.Column);
+  if TryResolveSettledLocalRegister(ACtx, Operand, OperandReg) then
+    OwnsOperandReg := False
+  else
+  begin
+    OwnsOperandReg := True;
+    OperandReg := ACtx.Scope.AllocateRegister;
+    ACtx.CompileExpression(Operand, OperandReg);
+  end;
+  // Jump when the comparison's outcome is AJumpWhen: for === that is a match
+  // when jumping on true, for !== a match when jumping on false.
+  JumpOnMatch := (Binary.Operator = gttEqual) = AJumpWhen;
+  if JumpOnMatch then
+    AJumpIndex := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, OperandReg,
+      MatchKind)
+  else
+    AJumpIndex := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH,
+      OperandReg, MatchKind);
+  if OwnsOperandReg then
+    ACtx.Scope.FreeRegister;
+  Result := True;
+end;
+
 // `a && b`, `a || b` and `!a` become chains of jumps on their operands, which
 // is how they short-circuit anyway: ToBoolean has no side effects, so testing
 // an operand where it is computed is the same as testing the value the whole
@@ -6009,6 +6078,12 @@ begin
       end;
       Exit;
     end;
+  end;
+
+  if TryEmitNullishComparisonJump(ACtx, ACondition, AJumpWhen, JumpIndex) then
+  begin
+    AppendJump(AJumps, JumpIndex);
+    Exit;
   end;
 
   if (ACondition is TGocciaUnaryExpression) and
