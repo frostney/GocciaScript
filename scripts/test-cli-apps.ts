@@ -1610,6 +1610,41 @@ await section("test262 runner: deterministic shards merge into one complete repo
       );
     }
 
+    const missingProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "missing.json"),
+        shardReports[0],
+        shardReports[1],
+        shardReports[3],
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (missingProc.exitCode !== 1 ||
+        !missingProc.stderr.toString().includes("Expected 4 shard reports, got 3; missing shards: 2")) {
+      throw new Error(
+        `test262 merge should name the missing shard: ${missingProc.stderr.toString()}`,
+      );
+    }
+
+    const noneProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "none.json"),
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (noneProc.exitCode !== 1 ||
+        !noneProc.stderr.toString().includes("found no shard reports: every shard is missing")) {
+      throw new Error(
+        `test262 merge should fail when every shard is missing: ${noneProc.stderr.toString()}`,
+      );
+    }
+
     // A stored report from another execution mode must not merge with
     // bytecode shards; one that records "bytecode" still merges.
     const shardWithMode = (path: string, mode: string): string => {
@@ -5343,6 +5378,54 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
     }
 
+    console.log("Loader: line coverage of declarations whose initializer starts on a later line...");
+    // A lexical binding's TDZ hole is set when its block is entered, so the
+    // declaration itself needs none; under coverage it still sets it, because
+    // that instruction is the only one on a declaration line whose initializer
+    // starts below it, in a block, a switch clause, a loop body or a
+    // destructuring declaration.
+    const laterLineDeclarationSourcePath = join(tmp, "declaration-coverage.js");
+    writeFileSync(
+      laterLineDeclarationSourcePath,
+      [
+        "const id = (x) => x;",
+        "const run = (a) => {",
+        "  {",
+        "    let inner =",
+        "      id(a);",
+        "    a = inner;",
+        "  }",
+        "  switch (a) {",
+        "    case 1:",
+        "      const picked =",
+        "        id(a);",
+        "      a = picked;",
+        "  }",
+        "  for (const n of [1, 2]) {",
+        "    const step =",
+        "      id(n);",
+        "    a += step;",
+        "  }",
+        "  const { p } =",
+        "    { p: 1 };",
+        "  return a + p;",
+        "};",
+        "console.log(run(1));",
+        "",
+      ].join("\n"),
+    );
+    const laterLineDeclarationLcovPath = join(tmp, "declaration-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${laterLineDeclarationLcovPath} ${laterLineDeclarationSourcePath}`.quiet();
+    const laterLineDeclarationLcov = readFileSync(laterLineDeclarationLcovPath, "utf-8");
+    for (const line of [4, 10, 15, 19]) {
+      if (!laterLineDeclarationLcov.includes(`DA:${line},`) || laterLineDeclarationLcov.includes(`DA:${line},0\n`)) {
+        throw new Error(`LCOV should count declaration line ${line} as executed, got:\n${laterLineDeclarationLcov}`);
+      }
+    }
+    if (/^DA:\d+,0$/m.test(laterLineDeclarationLcov)) {
+      throw new Error(`LCOV should report no unexecuted line, got:\n${laterLineDeclarationLcov}`);
+    }
+
     console.log("Loader: line coverage of let and parameter operands spread over several lines...");
     // The same holds for a let binding and a parameter, which the compiler
     // reads in place where nothing can rebind them before they are used, and
@@ -5401,6 +5484,8 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       {
         name: "constant-branch",
         lines: [4, 5, 6, 7, 8, 9, 10, 11],
+        // Line 9's `if` keeps its own two arms next to the `&&`'s two.
+        recordsOnLine: { 9: 4 } as Record<number, number>,
         decided: { args: [] as string[], decl: "const" },
         undecided: { args: [] as string[], decl: "let" },
         source: (decl: string) => [
@@ -5424,6 +5509,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       {
         name: "strict-type-branch",
         lines: [3, 4],
+        recordsOnLine: {} as Record<number, number>,
         decided: { args: ["--strict-types"], decl: "const" },
         undecided: { args: [] as string[], decl: "const" },
         source: (decl: string) => [
@@ -5438,7 +5524,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         ],
       },
     ];
-    for (const { name, lines, decided, undecided, source } of constantBranchCases) {
+    for (const { name, lines, recordsOnLine, decided, undecided, source } of constantBranchCases) {
       const reports: Record<string, string> = {};
       for (const [kind, { args, decl }] of Object.entries({ decided, undecided })) {
         const sourcePath = join(tmp, `${name}-${kind}.js`);
@@ -5451,6 +5537,12 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         if (!new RegExp(`^BRDA:${line},\\d+,\\d+,1$`, "m").test(reports.decided) ||
             !new RegExp(`^BRDA:${line},\\d+,\\d+,-$`, "m").test(reports.decided)) {
           throw new Error(`${name}: LCOV should keep a taken and an untaken branch on line ${line}, got:\n${reports.decided}`);
+        }
+      }
+      for (const [line, count] of Object.entries(recordsOnLine)) {
+        const found = branchRecords(reports.undecided).filter((r) => r.startsWith(`${line}:`)).length;
+        if (found !== count) {
+          throw new Error(`${name}: LCOV should keep ${count} branch records on line ${line}, found ${found}:\n${reports.undecided}`);
         }
       }
       if (branchRecords(reports.decided).join("\n") !== branchRecords(reports.undecided).join("\n")) {

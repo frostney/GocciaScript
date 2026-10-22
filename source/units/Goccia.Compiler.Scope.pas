@@ -30,6 +30,13 @@ type
     // TDZ hole. Whether the read may also take the register as an operand is
     // decided where the operand is compiled; see TryResolveSettledLocalName.
     IsInitialized: Boolean;
+    // True when the binding's declaration need not set its TDZ hole: the
+    // block that declares it set the hole on entry, and until the declaration
+    // runs nothing can store to it, or, for a leading binding of a function
+    // body, nothing can observe the binding before its declaration completes
+    // (LeadingLexicalsWithUnobservableHole). Coverage ignores it, so that the
+    // declaration keeps an instruction on its own line.
+    HoleAtBlockEntry: Boolean;
     // Above zero while the code being compiled is outside this local's scope
     // although the local is still declared: ResolveLocal skips it then. See
     // TGocciaCompilerScope.SuspendBindingsDeeperThan.
@@ -545,6 +552,7 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsInitialized := False;
+  FLocals[FLocalCount].HoleAtBlockEntry := False;
   FLocals[FLocalCount].SuspendCount := 0;
   FLocals[FLocalCount].IsConst := AIsConst;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
@@ -611,6 +619,7 @@ begin
   FLocals[FLocalCount].Depth := 0;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsInitialized := False;
+  FLocals[FLocalCount].HoleAtBlockEntry := False;
   FLocals[FLocalCount].SuspendCount := 0;
   FLocals[FLocalCount].IsConst := False;
   FLocals[FLocalCount].IsNonStrictImmutable := False;

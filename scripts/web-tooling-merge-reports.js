@@ -36,8 +36,10 @@ function parseArgs(argv) {
 }
 
 function mergeReports(reports, manifest) {
-  if (reports.length === 0) throw new Error('No Web Tooling shard reports provided');
   const expected = targetSpecs(manifest.ciReport || {}, manifest);
+  if (reports.length === 0) {
+    throw new Error(`No Web Tooling shard reports found; missing workloads: ${expected.join(', ')}`);
+  }
   const repetitions = manifest.ciReport?.repetitions || 1;
   const targets = [];
   const names = new Set();
@@ -88,7 +90,6 @@ function mergeReports(reports, manifest) {
 
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  if (options.reports.length === 0) throw new Error('Provide at least one shard report path');
   const manifest = JSON.parse(fs.readFileSync(options.manifestPath, 'utf8'));
   const reports = options.reports.map((fileName) =>
     JSON.parse(fs.readFileSync(fileName, 'utf8')));

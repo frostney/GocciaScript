@@ -365,8 +365,12 @@ begin
   end;
 end;
 
-// Compiles an expression whose value nobody reads. A store to a property or an
-// element then skips the move that would make the stored value the result.
+// Compiles an expression whose value nobody reads, as an expression statement
+// or a for-loop update. A store to a property, an element or a binding, a
+// compound assignment and a call then keep no copy of their result. Every form
+// is mapped to its own source position, as ACtx.CompileExpression would map
+// it, so a stack trace or a coverage line names the expression even where its
+// first instruction comes from no subexpression.
 procedure CompileDiscardedExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression);
 var
@@ -374,6 +378,7 @@ var
 begin
   Reg := ACtx.Scope.AllocateRegister;
   try
+    EmitLineMapping(ACtx, AExpr.Line, AExpr.Column);
     if AExpr is TGocciaIncrementExpression then
       CompileIncrement(ACtx, TGocciaIncrementExpression(AExpr), Reg, False)
     else if AExpr.ClassType = TGocciaComputedPropertyAssignmentExpression then
@@ -382,6 +387,17 @@ begin
     else if AExpr.ClassType = TGocciaPropertyAssignmentExpression then
       CompilePropertyAssignment(ACtx,
         TGocciaPropertyAssignmentExpression(AExpr), Reg, False)
+    else if AExpr.ClassType = TGocciaAssignmentExpression then
+      CompileAssignment(ACtx, TGocciaAssignmentExpression(AExpr), Reg, False)
+    else if AExpr.ClassType = TGocciaCompoundAssignmentExpression then
+      CompileCompoundAssignment(ACtx,
+        TGocciaCompoundAssignmentExpression(AExpr), Reg, False)
+    else if AExpr.ClassType = TGocciaPropertyCompoundAssignmentExpression then
+      CompilePropertyCompoundAssignment(ACtx,
+        TGocciaPropertyCompoundAssignmentExpression(AExpr), Reg, False)
+    else if AExpr.ClassType = TGocciaCallExpression then
+      // The call leaves its result where the call put it.
+      CompileCall(ACtx, TGocciaCallExpression(AExpr), Reg, False, False)
     else
       ACtx.CompileExpression(AExpr, Reg);
   finally
@@ -698,7 +714,12 @@ begin
              (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
              (ACtx.Scope.GetLocal(LocalIdx).Slot <>
               ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
-            Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+          begin
+            if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry and
+               not ACtx.OptimizationOptions.PreserveCoverageShape then
+              Continue;
+            Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+          end
           else
             Slot := ACtx.Scope.DeclareLocal(Names[J], AStmt.IsConst);
           EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
@@ -714,7 +735,15 @@ begin
        (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
        (ACtx.Scope.GetLocal(LocalIdx).Slot <>
         ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
-      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+    begin
+      // The block set the hole on entry. Under coverage the declaration
+      // sets it again anyway: that instruction is what maps a declaration
+      // whose initializer starts on a later line to its own line.
+      if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry and
+         not ACtx.OptimizationOptions.PreserveCoverageShape then
+        Continue;
+      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    end
     else
       Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
@@ -889,6 +918,24 @@ function VarInitializerUsesWithBinding(const ACtx: TGocciaCompilationContext;
 begin
   Result := (ACtx.Scope.WithBindingCount > 0) and
     (Length(ACtx.Scope.NameProbes(AName)) > 0);
+end;
+
+// True when a lexical declaration's initializer may be evaluated straight
+// into the binding's register: nothing it runs can read or write the binding,
+// so no intermediate value it leaves there can stand in for the TDZ hole.
+// The binding must be uncaptured, or a closure created before the declaration
+// could reach it from a call in the initializer.
+function LexicalInitializerMayTargetSlot(const ACtx: TGocciaCompilationContext;
+  const AInfo: TGocciaVariableInfo; const ALocalIdx: Integer): Boolean;
+begin
+  Result := False;
+  if ACtx.OptimizationOptions.PreserveCoverageShape or (ALocalIdx < 0) then
+    Exit;
+  if ACtx.Scope.GetLocal(ALocalIdx).IsCaptured or
+     ACtx.Scope.MutableLocalsMayLeaveRegisters or
+     ShouldTryWithBinding(ACtx.Scope, AInfo.Name) then
+    Exit;
+  Result := InitializerAvoidsOwnBinding(AInfo.Initializer, AInfo.Name);
 end;
 
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
@@ -1158,7 +1205,8 @@ begin
     else if Assigned(Info.Initializer) and
        not (AStmt.IsVar and (not HasInitializer) and IsVarRedeclaration) then
     begin
-      if not AStmt.IsVar then
+      if not AStmt.IsVar and not LexicalInitializerMayTargetSlot(ACtx, Info,
+           DeclaredIdx) then
       begin
         InitSlot := ACtx.Scope.AllocateRegister;
         try
@@ -1599,7 +1647,11 @@ begin
         begin
           Slot := ACtx.Scope.DeclareLocal(Names[J], AVarDecl.IsConst);
           if AEmitInitializers then
+          begin
             EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+            ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(Names[J]))^
+              .HoleAtBlockEntry := True;
+          end;
         end;
       end;
     finally
@@ -1629,7 +1681,11 @@ begin
       begin
         Slot := ACtx.Scope.DeclareLocal(Names[I], AIsConst);
         if AEmitInitializers then
+        begin
           EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+          ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(Names[I]))^
+            .HoleAtBlockEntry := True;
+        end;
       end;
     end;
   finally
@@ -1652,7 +1708,11 @@ begin
   begin
     Slot := ACtx.Scope.DeclareLocal(AName, AIsConst);
     if AEmitInitializer then
+    begin
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+      ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(AName))^.HoleAtBlockEntry :=
+        True;
+    end;
   end;
 end;
 
@@ -2342,19 +2402,10 @@ begin
 end;
 
 function EmitJumpIfConditionFalse(const ACtx: TGocciaCompilationContext;
-  const ACondition: TGocciaExpression): Integer;
-var
-  CondReg: UInt16;
+  const ACondition: TGocciaExpression): TGocciaCompilerJumpArray;
 begin
-  if TryEmitJumpIfNotLessThan(ACtx, ACondition, Result) then
-    Exit;
-  CondReg := ACtx.Scope.AllocateRegister;
-  try
-    ACtx.CompileExpression(ACondition, CondReg);
-    Result := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-  finally
-    ACtx.Scope.FreeRegister;
-  end;
+  SetLength(Result, 0);
+  EmitConditionJumps(ACtx, ACondition, False, Result);
 end;
 
 // ES2026 §B.3.3 FunctionDeclarations in IfStatement Statement Clauses: a
@@ -2388,7 +2439,8 @@ function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
 var
   CondReg, PatternSubjectReg: UInt16;
-  ElseJump, EndJump: Integer;
+  EndJump: Integer;
+  ElseJumps: TGocciaCompilerJumpArray;
   HasPatternBindings: Boolean;
   PatternFailJumps: TGocciaJumpArray;
   ClosedLocals: TArray<UInt16>;
@@ -2429,13 +2481,14 @@ begin
   try
     HasPatternBindings := CompileConditionWithPatternBindings(ACtx,
       AStmt.Condition, CondReg, PatternSubjectReg, PatternFailJumps);
+    SetLength(ElseJumps, 0);
     if HasPatternBindings then
-      ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg)
-    else if not TryEmitJumpIfNotLessThan(ACtx, AStmt.Condition, ElseJump) then
     begin
-      ACtx.CompileExpression(AStmt.Condition, CondReg);
-      ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-    end;
+      SetLength(ElseJumps, 1);
+      ElseJumps[0] := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+    end
+    else
+      EmitConditionJumps(ACtx, AStmt.Condition, False, ElseJumps);
     ConsequentAbrupt := CompileIfClause(ACtx, AStmt.Consequent);
 
     if HasPatternBindings then
@@ -2448,7 +2501,7 @@ begin
     if Assigned(AStmt.Alternate) then
     begin
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      PatchJumpTarget(ACtx, ElseJump);
+      PatchJumpArray(ACtx, ElseJumps);
       PatchPatternFailureTarget;
       AlternateAbrupt := CompileIfClause(ACtx, AStmt.Alternate);
       PatchJumpTarget(ACtx, EndJump);
@@ -2456,7 +2509,7 @@ begin
     end
     else
     begin
-      PatchJumpTarget(ACtx, ElseJump);
+      PatchJumpArray(ACtx, ElseJumps);
       PatchPatternFailureTarget;
       Result := False;
     end;
@@ -4169,7 +4222,8 @@ end;
 procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForStatement);
 var
-  LoopStart, ExitJump, I: Integer;
+  LoopStart, I: Integer;
+  ExitJumps: TGocciaCompilerJumpArray;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   BodyClosedLocals: TArray<UInt16>;
@@ -4316,7 +4370,7 @@ begin
         end;
 
         LoopStart := CurrentCodePosition(ACtx);
-        ExitJump := -1;
+        SetLength(ExitJumps, 0);
 
         // ES2026 §14.7.4.4 step 2: create the per-iteration environment
         // before evaluating the test and body.
@@ -4335,7 +4389,7 @@ begin
         end;
 
         if Assigned(AStmt.Condition) then
-          ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
+          ExitJumps := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
         ACtx.CompileStatement(AStmt.Body);
 
@@ -4404,8 +4458,7 @@ begin
         EmitInstruction(ACtx,
           EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
-        if ExitJump >= 0 then
-          PatchJumpTarget(ACtx, ExitJump);
+        PatchJumpArray(ACtx, ExitJumps);
 
         PatchJumpList(ACtx, LoopControl.BreakJumps);
         for I := 0 to PerIterNames.Count - 1 do
@@ -4415,10 +4468,10 @@ begin
       else
       begin
         LoopStart := CurrentCodePosition(ACtx);
-        ExitJump := -1;
+        SetLength(ExitJumps, 0);
 
         if Assigned(AStmt.Condition) then
-          ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
+          ExitJumps := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
         ACtx.Scope.BeginScope;
         SetLoopContinueScopeDepth(ACtx);
@@ -4440,8 +4493,7 @@ begin
         EmitInstruction(ACtx,
           EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
-        if ExitJump >= 0 then
-          PatchJumpTarget(ACtx, ExitJump);
+        PatchJumpArray(ACtx, ExitJumps);
 
         PatchJumpList(ACtx, LoopControl.BreakJumps);
       end;
@@ -4506,14 +4558,15 @@ end;
 procedure CompileWhileStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaWhileStatement);
 var
-  LoopStart, ExitJump: Integer;
+  LoopStart: Integer;
+  ExitJumps: TGocciaCompilerJumpArray;
   LoopControl: TLoopControlState;
 begin
   BeginLoopControl(ACtx, LoopControl);
   try
     SetLabeledContinueCleanupBase(AStmt);
     LoopStart := CurrentCodePosition(ACtx);
-    ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
+    ExitJumps := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
     ACtx.CompileStatement(AStmt.Body);
 
@@ -4523,7 +4576,7 @@ begin
     EmitInstruction(ACtx,
       EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
-    PatchJumpTarget(ACtx, ExitJump);
+    PatchJumpArray(ACtx, ExitJumps);
 
     PatchJumpList(ACtx, LoopControl.BreakJumps);
   finally

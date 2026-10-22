@@ -78,6 +78,22 @@ accepted sizes:
 
 A response over the ceiling rejects with `TypeError`.
 
+### Response bodies and the memory limit
+
+A response body is fully buffered, and its bytes count against the engine's
+memory limit (`--max-memory`) like any other allocation the script makes. The
+bytes are reserved when the fetch settles, so a body that does not fit the
+room left rejects the fetch with the catchable
+`RangeError: Allocation failed: GC heap size exceeds the configured memory limit`,
+whatever `--max-fetch-bytes` allows. Responses a script keeps hold of keep
+their bodies reserved, so bodies that each fit can together pass the limit.
+`text()`, `json()` and `arrayBuffer()` give the body's bytes back once they
+have read it (`arrayBuffer()` hands them to the buffer it returns, without a
+copy), and a response that is collected unread gives them back too. A
+`new Response(body)` reserves its encoded body the same way and throws the
+`RangeError` when it does not fit. See [Garbage Collector — what `BytesAllocated`
+tracks](garbage-collector.md#what-bytesallocated-tracks).
+
 The capability set and the ceiling belong to one engine: embedders fix the set
 at engine construction and set `FetchMaxResponseBytes` on the engine. Each
 request carries them to the worker or embedder transport that performs it, so
