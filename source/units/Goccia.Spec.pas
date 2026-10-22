@@ -221,14 +221,8 @@ const
   // ---------------------------------------------------------------------------
   // TC39 Stage 4 — finished, not yet in a ratified ECMA-262 edition
   // ---------------------------------------------------------------------------
-  STAGE4_PROPOSALS: array[0..0] of TGocciaFeatureEntry = (
-    (Name: 'Temporal';  Link: 'https://tc39.es/proposal-temporal/')
-  );
-
-  // ---------------------------------------------------------------------------
-  // TC39 Stage 3
-  // ---------------------------------------------------------------------------
-  STAGE3_PROPOSALS: array[0..0] of TGocciaFeatureEntry = (
+  STAGE4_PROPOSALS: array[0..1] of TGocciaFeatureEntry = (
+    (Name: 'Temporal';           Link: 'https://tc39.es/proposal-temporal/'),
     (Name: 'Iterator Includes';  Link: 'https://github.com/tc39/proposal-iterator-includes')
   );
 
@@ -340,7 +334,6 @@ begin
     Obj := TGocciaObjectValue.Create;
     Roots.Add(Obj);
     DefineReadOnlyProperty(Obj, 'stage-4', CreateFeatureArray(STAGE4_PROPOSALS));
-    DefineReadOnlyProperty(Obj, 'stage-3', CreateFeatureArray(STAGE3_PROPOSALS));
     DefineReadOnlyProperty(Obj, 'stage-2.7', CreateFeatureArray(STAGE27_PROPOSALS));
     DefineReadOnlyProperty(Obj, 'stage-2', CreateFeatureArray(STAGE2_PROPOSALS));
     DefineReadOnlyProperty(Obj, 'stage-1', CreateFeatureArray(STAGE1_PROPOSALS));
