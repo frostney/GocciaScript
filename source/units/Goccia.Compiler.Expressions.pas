@@ -76,6 +76,10 @@ procedure CompileConditional(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaConditionalExpression; const ADest: UInt16);
 function TryEmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
   const ACondition: TGocciaExpression; out AJumpIndex: Integer): Boolean;
+// True when a reference to AName inside a `with` statement has to probe the
+// object environment first.
+function ShouldTryWithBinding(const AScope: TGocciaCompilerScope;
+  const AName: string): Boolean;
 // Emits the test of a condition whose value is used only for its truthiness:
 // control jumps when ToBoolean(ACondition) is AJumpWhen and falls through
 // otherwise. The jumps are appended to AJumps for the caller to patch.
