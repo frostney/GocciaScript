@@ -138,72 +138,25 @@ begin
     Result := nil;
 end;
 
+// ValidateEvalScriptBody has already rejected a top-level using declaration,
+// so CollectLexicallyDeclaredNames finds none here.
 procedure CollectTopLevelEvalLexicalNames(const ANodes: TObjectList<TGocciaStatement>;
   const ANames: TUnicodeStringList);
 var
-  VarDecl: TGocciaVariableDeclaration;
-  DestructDecl: TGocciaDestructuringDeclaration;
   Names: TUnicodeStringList;
-  I, J, K: Integer;
+  I, J: Integer;
 begin
-  for I := 0 to ANodes.Count - 1 do
-  begin
-    if ANodes[I] is TGocciaVariableDeclaration then
+  Names := TUnicodeStringList.Create;
+  try
+    for I := 0 to ANodes.Count - 1 do
     begin
-      VarDecl := TGocciaVariableDeclaration(ANodes[I]);
-      if VarDecl.IsVar then
-        Continue;
-      for J := 0 to High(VarDecl.Variables) do
-      begin
-        Names := TUnicodeStringList.Create;
-        try
-          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
-          for K := 0 to Names.Count - 1 do
-            AddUniqueEvalName(ANames, Names[K]);
-        finally
-          Names.Free;
-        end;
-      end;
-    end
-    else if ANodes[I] is TGocciaExportVariableDeclaration then
-    begin
-      VarDecl := TGocciaExportVariableDeclaration(ANodes[I]).Declaration;
-      if VarDecl.IsVar then
-        Continue;
-      for J := 0 to High(VarDecl.Variables) do
-      begin
-        Names := TUnicodeStringList.Create;
-        try
-          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
-          for K := 0 to Names.Count - 1 do
-            AddUniqueEvalName(ANames, Names[K]);
-        finally
-          Names.Free;
-        end;
-      end;
-    end
-    else if ANodes[I] is TGocciaDestructuringDeclaration then
-    begin
-      DestructDecl := TGocciaDestructuringDeclaration(ANodes[I]);
-      if DestructDecl.IsVar then
-        Continue;
-      Names := TUnicodeStringList.Create;
-      try
-        CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
-        for J := 0 to Names.Count - 1 do
-          AddUniqueEvalName(ANames, Names[J]);
-      finally
-        Names.Free;
-      end;
-    end
-    else if ANodes[I] is TGocciaClassDeclaration then
-      AddUniqueEvalName(ANames,
-        TGocciaClassDeclaration(ANodes[I]).ClassDefinition.Name)
-    else if ANodes[I] is TGocciaEnumDeclaration then
-      AddUniqueEvalName(ANames, TGocciaEnumDeclaration(ANodes[I]).Name)
-    else if ANodes[I] is TGocciaExportEnumDeclaration then
-      AddUniqueEvalName(ANames,
-        TGocciaExportEnumDeclaration(ANodes[I]).Declaration.Name);
+      Names.Clear;
+      CollectLexicallyDeclaredNames(ANodes[I], Names);
+      for J := 0 to Names.Count - 1 do
+        AddUniqueEvalName(ANames, Names[J]);
+    end;
+  finally
+    Names.Free;
   end;
 end;
 
