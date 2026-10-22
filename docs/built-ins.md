@@ -719,9 +719,10 @@ filesystem. This covers the listed `fs` surface, not the entire Node.js host or 
 | `fs.rmSync(path, options?)` | Delete a file or directory; `{ recursive: true }` removes non-empty directories |
 | `fs.renameSync(from, to)` | Move or rename a sandbox path |
 | `fs.copyFileSync(from, to)` | Copy a file |
-| `fs.readFile`, `fs.writeFile`, `fs.appendFile`, `fs.mkdir`, `fs.readdir`, `fs.stat`, `fs.rm`, `fs.rename`, `fs.copyFile` | Node-shaped callback forms, available on the default namespace and as named exports |
+| `fs.globSync(pattern, options?)` | Paths matching a glob, sorted; see [Sandbox Search Built-ins](built-ins-sandbox-search.md) |
+| `fs.readFile`, `fs.writeFile`, `fs.appendFile`, `fs.mkdir`, `fs.readdir`, `fs.stat`, `fs.rm`, `fs.rename`, `fs.copyFile`, `fs.glob` | Node-shaped callback forms, available on the default namespace and as named exports |
 | `fs.exists(path, callback)` | Deprecated Node-shaped boolean-only callback form; it never passes an error argument |
-| `fs.promises` | Promise-returning versions of the same operations except `exists` |
+| `fs.promises` | Promise-returning versions of the same operations except `exists`; `fs.promises.glob` returns an async iterator, as Node's does |
 
 `readFileSync` returns a `Uint8Array` by default so binary copied files can round-trip without text coercion.
 
@@ -765,6 +766,8 @@ methods throw them, callback methods pass them as their only argument, and
 promise methods reject with the same shape. See
 [Sandbox filesystem errors](errors.md#sandbox-filesystem-errors) for the full
 mapping and message format.
+
+Sandbox mode also registers `goccia:search`, whose `grep` and `fuzzyFind` search file contents and rank paths by a fuzzy query. [Sandbox Search Built-ins](built-ins-sandbox-search.md) specifies them with `fs.globSync`.
 
 The `"goccia"` module exposes sandbox orchestration helpers.
 
