@@ -48,12 +48,15 @@ followed; the twenty-first redirect response, once its `Location` resolves to
 an http(s) URL, is a network error (`TypeError: redirect limit exceeded: more
 than 20 redirects`). A redirect without a `Location` is still the answer.
 
-**Only 301, 302, 303, 307 and 308 are redirect statuses.**
+**Only 301, 302, 303, 307 and 308 are redirect statuses,** and a 303 turns
+a request into GET only when it is neither GET nor HEAD (HTTP-redirect fetch),
+so a HEAD request stays HEAD; it used to become GET.
 
 ## Consequences
 
 - Scripts and embedders that relied on the 21st redirect response, or on
-  306 being followed, now see a network error or the 306 response.
+  306 being followed, now see a network error or the 306 response, and a
+  HEAD request redirected by a 303 gets a HEAD response.
 - Package and module loads that use the built-in client keep the default
   "follow" mode and gain the same limit.
 - The credential rule is unchanged: `Authorization`, `Cookie` and

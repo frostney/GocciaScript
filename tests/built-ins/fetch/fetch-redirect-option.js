@@ -45,9 +45,11 @@ describe("fetch redirect option", () => {
     expect(message).toContain("'deny'");
   });
 
-  test("an invalid value is refused before any request starts", () => {
-    expect(() =>
-      fetch("http://not-allowed.invalid/", { redirect: "deny" }),
-    ).toThrow();
+  test("an invalid value throws synchronously, before any request starts", () => {
+    let promise;
+    expect(() => {
+      promise = fetch(unreachable, { redirect: "deny" });
+    }).toThrow(TypeError);
+    expect(promise).toBeUndefined();
   });
 });

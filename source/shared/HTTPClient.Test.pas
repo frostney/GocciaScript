@@ -54,6 +54,8 @@ type
     procedure TestTwentyRedirectsAreFollowed;
     procedure TestTwentyFirstRedirectIsANetworkError;
     procedure TestOnlyRedirectStatusesAreFollowed;
+    procedure TestRedirectStatusesAreFollowed;
+    procedure TestSeeOtherKeepsHead;
     {$ENDIF}
     procedure TestComparesOrigins;
     procedure TestClassifiesPrivateAddressRanges;
@@ -689,6 +691,9 @@ begin
     TestTwentyFirstRedirectIsANetworkError);
   Test('Only 301, 302, 303, 307 and 308 are followed',
     TestOnlyRedirectStatusesAreFollowed);
+  Test('301, 302, 303, 307 and 308 are followed',
+    TestRedirectStatusesAreFollowed);
+  Test('A 303 keeps a HEAD request HEAD', TestSeeOtherKeepsHead);
   {$ENDIF}
   Test('Compares origins by scheme, host and port', TestComparesOrigins);
   Test('Classifies private address ranges',
@@ -1341,7 +1346,7 @@ end;
 {$IFDEF UNIX}
 const
   REDIRECT_TO_NEXT = 'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
-    'Content-Length: 4'#13#10'Connection: close'#13#10#13#10'moved';
+    'Content-Length: 5'#13#10'Connection: close'#13#10#13#10'moved';
   FINAL_OK = 'HTTP/1.1 200 OK'#13#10'Content-Length: 4'#13#10 +
     'Connection: close'#13#10#13#10'done';
 
@@ -1423,7 +1428,7 @@ begin
     Server.WaitFor;
     Expect<Boolean>(Response.Redirected).ToBe(False);
     Expect<string>(FindHeader(Response.Headers, 'location')).ToBe('/next');
-    Expect<Integer>(Length(Response.Body)).ToBe(4);
+    Expect<Integer>(Length(Response.Body)).ToBe(5);
   finally
     Server.Free;
   end;
@@ -1496,7 +1501,9 @@ begin
     Expect<string>(FetchStart(Server, DefaultHTTPPolicy, Response))
       .ToBe('error: redirect limit exceeded: more than 20 redirects');
     Server.WaitFor;
-    // The twenty-first redirect's target was never requested.
+    { The twenty-first request was the twentieth redirect's target, and the
+      error is the limit's, not the timeout a twenty-second request to the
+      canned server would end in. }
     Expect<Boolean>(Pos('GET /hop20 ', Server.RequestHead(21)) = 1)
       .ToBe(True);
   finally
@@ -1527,6 +1534,56 @@ begin
     finally
       Server.Free;
     end;
+  end;
+end;
+
+procedure THTTPClientTests.TestRedirectStatusesAreFollowed;
+const
+  STATUSES: array[0..4] of Integer = (301, 302, 303, 307, 308);
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+  I: Integer;
+begin
+  for I := 0 to High(STATUSES) do
+  begin
+    Server := TCannedResponseServer.Create([
+      RawByteString('HTTP/1.1 ' + IntToStr(STATUSES[I]) + ' Moved'#13#10 +
+        'Location: /next'#13#10'Content-Length: 0'#13#10 +
+        'Connection: close'#13#10#13#10), FINAL_OK]);
+    try
+      Expect<string>(FetchStart(Server, DefaultHTTPPolicy, Response))
+        .ToBe('200|/next');
+      Server.WaitFor;
+      Expect<Boolean>(Response.Redirected).ToBe(True);
+    finally
+      Server.Free;
+    end;
+  end;
+end;
+
+{ WHATWG Fetch, HTTP-redirect fetch: a 303 changes the method to GET only
+  when it is neither GET nor HEAD. }
+procedure THTTPClientTests.TestSeeOtherKeepsHead;
+var
+  Headers: THTTPHeaders;
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  SetLength(Headers, 0);
+  Server := TCannedResponseServer.Create([
+    'HTTP/1.1 303 See Other'#13#10'Location: /next'#13#10 +
+      'Content-Length: 0'#13#10'Connection: close'#13#10#13#10,
+    'HTTP/1.1 200 OK'#13#10'Content-Length: 4'#13#10 +
+      'Connection: close'#13#10#13#10]);
+  try
+    Response := HTTPHead(Format('http://127.0.0.1:%d/start', [Server.Port]),
+      Headers, nil, 5000);
+    Server.WaitFor;
+    Expect<Integer>(Response.StatusCode).ToBe(200);
+    Expect<Boolean>(Pos('HEAD /next ', Server.RequestHead(2)) = 1).ToBe(True);
+  finally
+    Server.Free;
   end;
 end;
 {$ENDIF}

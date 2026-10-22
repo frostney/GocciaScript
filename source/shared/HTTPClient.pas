@@ -74,10 +74,9 @@ function NormalizeHTTPRequestURL(const AURL: string): string;
 function ResolveHTTPRedirectURL(const ABaseURL, ALocation: string): string;
 
 { True when two absolute http(s) URLs have the same origin: the same scheme,
-  host and port. A redirect between URLs that are not keeps the caller's
-  Authorization, Cookie and Proxy-Authorization off that hop and every later
-  one; an HTTPS-to-HTTP redirect changes the scheme, so the credentials never
-  travel without TLS. }
+  host and port. The comparison the client makes for a redirect hop, which
+  sends the caller's Authorization, Cookie and Proxy-Authorization only while
+  every hop so far stayed on the request's origin. Exposed for testing. }
 function IsSameHTTPOrigin(const AFromURL, AToURL: string): Boolean;
 
 implementation
@@ -1685,12 +1684,11 @@ begin
         if not SameHTTPOrigin(Parsed, NextParsed) then
           SendCredentials := False;
 
-        // 303: change method to GET per RFC 7231
-        if Raw.StatusCode = 303 then
-        begin
+        { HTTP-redirect fetch: a 303 turns a request into GET unless it is
+          already GET or HEAD, so a HEAD request stays HEAD. }
+        if (Raw.StatusCode = HTTP_STATUS_SEE_OTHER) and (Method <> 'GET') and
+           not IsHead then
           Method := 'GET';
-          IsHead := False;
-        end;
 
         Continue;
       end;
