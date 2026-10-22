@@ -192,9 +192,13 @@ var
   GArrayValuesSlot: TGocciaRealmSlotId;
 
 function GetSharedArrayPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Realm: TGocciaRealm;
 begin
-  if (CurrentRealm <> nil) then
-    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GArrayPrototypeSlot))
+  // CurrentRealm is a thread-variable lookup; read it once.
+  Realm := CurrentRealm;
+  if Assigned(Realm) then
+    Result := TGocciaObjectValue(Realm.GetSlot(GArrayPrototypeSlot))
   else
     Result := nil;
 end;
@@ -1163,8 +1167,14 @@ begin
   FLengthWritable := True;
   if AElementCapacity > 0 then
     FElements.Capacity := AElementCapacity;
-  InitializePrototype;
+  // InitializePrototype does nothing once the realm has its Array.prototype,
+  // which is every array but the first; it is not called for those.
   SharedPrototype := GetSharedArrayPrototype;
+  if not Assigned(SharedPrototype) then
+  begin
+    InitializePrototype;
+    SharedPrototype := GetSharedArrayPrototype;
+  end;
   if not Assigned(AClass) and Assigned(SharedPrototype) then
     FPrototype := SharedPrototype;
 end;
