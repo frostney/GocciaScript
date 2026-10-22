@@ -58,7 +58,7 @@ type
   TSandboxWriteBackAction = (
     { Written to HostPath. }
     swaWrite,
-    { The file came from, or lies in, an input copied read-only. }
+    { The file came from, or lies in, an input copied without write-back. }
     swaSkipReadOnly,
     { Nothing was copied to this sandbox path, so it has no host path. }
     swaSkipNoOrigin,
@@ -859,7 +859,8 @@ begin
       swaSkipReadOnly:
       begin
         AReport.Add(WRITE_BACK_REPORT_PREFIX + APlan[I].SandboxPath +
-          ' was copied read-only, skipped (use --copy-rw to write it back)');
+          ' was copied without write-back, skipped (use --copy-rw to ' +
+          'write it back)');
         Inc(Skipped);
       end;
       swaSkipOutside:
