@@ -1061,7 +1061,9 @@ end;
   duplicate entry in the LexicallyDeclaredNames of the statement list, or a
   name that is both lexically declared and in its VarDeclaredNames (§8.2.6,
   the TopLevelVarDeclaredNames: var declarations at any depth outside nested
-  functions, and the top-level function declarations), is a SyntaxError. }
+  functions, and the top-level function declarations), is a SyntaxError. The
+  statements are checked in order, so the error points at the statement
+  that declares the name a second time. }
 procedure ValidateClassStaticBlockDeclarations(
   const ABody: TGocciaBlockStatement; const AFileName: string;
   const ASourceLines: TStringList);
@@ -1069,6 +1071,14 @@ var
   LexicalNames, VarNames, StatementNames: TUnicodeStringList;
   Node: TGocciaASTNode;
   I, J: Integer;
+
+  procedure RaiseAlreadyDeclared(const AName: string);
+  begin
+    raise TGocciaSyntaxError.Create(
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), Node.Line,
+      Node.Column, AFileName, ASourceLines, SSuggestAlreadyDeclared);
+  end;
+
 begin
   if not Assigned(ABody) or (ABody.Nodes.Count = 0) then
     Exit;
@@ -1076,45 +1086,25 @@ begin
   VarNames := TUnicodeStringList.Create;
   StatementNames := TUnicodeStringList.Create;
   try
-    CollectVarBindingNamesFromNodes(ABody.Nodes, VarNames);
     for I := 0 to ABody.Nodes.Count - 1 do
     begin
       Node := ABody.Nodes[I];
       StatementNames.Clear;
-      if Node is TGocciaVariableDeclaration then
-      begin
-        if not TGocciaVariableDeclaration(Node).IsVar then
-          CollectVariableDeclarationBindingNames(
-            TGocciaVariableDeclaration(Node), StatementNames);
-      end
-      else if Node is TGocciaDestructuringDeclaration then
-      begin
-        if not TGocciaDestructuringDeclaration(Node).IsVar then
-          CollectPatternBindingNames(
-            TGocciaDestructuringDeclaration(Node).Pattern, StatementNames);
-      end
-      else if Node is TGocciaUsingDeclaration then
-      begin
-        for J := 0 to High(TGocciaUsingDeclaration(Node).Variables) do
-          CollectVariableInfoBindingNames(
-            TGocciaUsingDeclaration(Node).Variables[J], StatementNames);
-      end
-      else if Node is TGocciaClassDeclaration then
-        StatementNames.Add(
-          TGocciaClassDeclaration(Node).ClassDefinition.Name)
-      else if Node is TGocciaEnumDeclaration then
-        StatementNames.Add(TGocciaEnumDeclaration(Node).Name);
+      CollectLexicallyDeclaredNames(Node, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if StatementNames[J] = '' then
-          Continue;
         if (LexicalNames.IndexOf(StatementNames[J]) >= 0) or
            (VarNames.IndexOf(StatementNames[J]) >= 0) then
-          raise TGocciaSyntaxError.Create(
-            Format(SErrorIdentifierAlreadyDeclared, [StatementNames[J]]),
-            Node.Line, Node.Column, AFileName, ASourceLines,
-            SSuggestAlreadyDeclared);
+          RaiseAlreadyDeclared(StatementNames[J]);
         LexicalNames.Add(StatementNames[J]);
+      end;
+      StatementNames.Clear;
+      CollectVarBindingNamesFromNode(Node, StatementNames);
+      for J := 0 to StatementNames.Count - 1 do
+      begin
+        if LexicalNames.IndexOf(StatementNames[J]) >= 0 then
+          RaiseAlreadyDeclared(StatementNames[J]);
+        VarNames.Add(StatementNames[J]);
       end;
     end;
   finally
@@ -8399,7 +8389,7 @@ begin
       IsStatic := Match(gttStatic);
       PresetMemberName := False;
 
-      // ES2022 §15.7.14 ClassStaticBlockDefinition: static { ... }
+      // ES2026 §15.7 ClassStaticBlock : static { ClassStaticBlockBody }
       if IsStatic and Check(gttLeftBrace) then
       begin
         if Length(MemberDecorators) > 0 then

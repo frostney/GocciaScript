@@ -513,6 +513,13 @@ console.log("Class static block declaration early errors...");
   ] as const;
   for (const [source, desc] of rejected)
     assertSyntaxError(source, desc, args, { messageIncludes: "has already been declared" });
+  // The error points at the second declaration of the name.
+  assertSyntaxError(
+    "class C {\n  static {\n    let a;\n    var a;\n  }\n}\n",
+    "var after let reported at the var",
+    args,
+    { messageIncludes: "has already been declared", line: 4 },
+  );
 
   const accepted = [
     ["class C { static { var a; var a; function f() {} function f() {} var f; } }\n", "repeated var and function names"],
