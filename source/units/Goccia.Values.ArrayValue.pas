@@ -26,6 +26,7 @@ type
     FElements: TGocciaElementList;
     FLength: Int64;
     FLengthWritable: Boolean;
+    function HasPristineIndexedPrototypeChain: Boolean;
   public
     constructor Create(const AClass: TGocciaClassValue = nil;
       const AElementCapacity: Integer = 0);
@@ -60,6 +61,8 @@ type
     function TryAppendDenseElementFast(const AIndex: Integer;
       const AValue: TGocciaValue): Boolean;
     function TrySetDenseElementFast(const AIndex: Integer;
+      const AValue: TGocciaValue): Boolean;
+    function TryStoreElementFast(const AIndex: Integer;
       const AValue: TGocciaValue): Boolean;
     procedure SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
     function TypeName: string; override;
@@ -226,6 +229,7 @@ type
     procedure Init(const AThisValue: TGocciaValue);
     function Get(const AIndex: Integer): TGocciaValue;
     procedure Put(const AIndex: Integer; const AValue: TGocciaValue);
+    procedure PutGeneric(const AIndex: Integer; const AValue: TGocciaValue);
     function HasIndex(const AIndex: Integer): Boolean;
     // Int64 variants used by the sparse-iteration path for generic
     // array-likes whose length exceeds 2^32 - 1 (ES2026 array methods are
@@ -401,6 +405,17 @@ end;
 
 procedure TArrayLikeView.Put(const AIndex: Integer; const AValue: TGocciaValue);
 begin
+  // Kept free of managed locals: a store the array can make directly costs no
+  // property key and no exception frame.
+  if Assigned(Arr) and Arr.TryStoreElementFast(AIndex, AValue) then
+    Exit;
+  PutGeneric(AIndex, AValue);
+end;
+
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure TArrayLikeView.PutGeneric(const AIndex: Integer;
+  const AValue: TGocciaValue);
+begin
   if Assigned(Arr) then
   begin
     if not Arr.SetElement(AIndex, AValue) then
@@ -410,6 +425,11 @@ begin
   else
     Obj.AssignProperty(IntegerToString(AIndex), AValue);
 end;
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
 
 function TArrayLikeView.HasIndex(const AIndex: Integer): Boolean;
 begin
@@ -1402,10 +1422,28 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-function TGocciaArrayValue.TryAppendDenseElementFast(
-  const AIndex: Integer; const AValue: TGocciaValue): Boolean;
+{ True when no object on the array's prototype chain can take part in an
+  indexed [[Set]]: the chain is the realm's Array.prototype then
+  Object.prototype then null, and neither has ever had an indexed own
+  property. A store to an index the array does not own then creates an own
+  data property, as OrdinarySet would. }
+function TGocciaArrayValue.HasPristineIndexedPrototypeChain: Boolean;
 var
   ArrayPrototype, ObjectPrototype: TGocciaObjectValue;
+begin
+  ArrayPrototype := GetSharedArrayPrototype;
+  ObjectPrototype :=
+    TGocciaObjectValue.GetSharedObjectPrototypeForRealm(CurrentRealm);
+  Result := Assigned(ArrayPrototype) and Assigned(ObjectPrototype) and
+    (FPrototype = ArrayPrototype) and
+    (ArrayPrototype.Prototype = ObjectPrototype) and
+    not Assigned(ObjectPrototype.Prototype) and
+    not ArrayPrototype.HasEverHadIndexedOwnProperty and
+    not ObjectPrototype.HasEverHadIndexedOwnProperty;
+end;
+
+function TGocciaArrayValue.TryAppendDenseElementFast(
+  const AIndex: Integer; const AValue: TGocciaValue): Boolean;
 begin
   { The direct append is valid only for a pristine ordinary prototype chain.
     Any uncertainty falls back to the complete [[Set]] implementation. }
@@ -1417,16 +1455,7 @@ begin
   if (Int64(AIndex) >= FLength) and not FLengthWritable then
     Exit;
 
-  ArrayPrototype := GetSharedArrayPrototype;
-  ObjectPrototype :=
-    TGocciaObjectValue.GetSharedObjectPrototypeForRealm(CurrentRealm);
-  if (not Assigned(ArrayPrototype)) or
-     (not Assigned(ObjectPrototype)) or
-     (FPrototype <> ArrayPrototype) or
-     (ArrayPrototype.Prototype <> ObjectPrototype) or
-     Assigned(ObjectPrototype.Prototype) or
-     ArrayPrototype.HasEverHadIndexedOwnProperty or
-     ObjectPrototype.HasEverHadIndexedOwnProperty then
+  if not HasPristineIndexedPrototypeChain then
     Exit;
 
   FElements.Add(AValue);
@@ -1451,6 +1480,33 @@ begin
   if (Int64(AIndex) >= FLength) and not FLengthWritable then
     Exit;
   if IsArrayHole(FElements[AIndex]) then
+    Exit;
+
+  FElements[AIndex] := AValue;
+  if Int64(AIndex) + 1 > FLength then
+    FLength := Int64(AIndex) + 1;
+  FHasEverHadIndexedOwnProperty := True;
+  Result := True;
+end;
+
+function TGocciaArrayValue.TryStoreElementFast(const AIndex: Integer;
+  const AValue: TGocciaValue): Boolean;
+begin
+  { [[Set]] of an index within the dense elements, for a native store such as
+    Array.prototype.fill: an existing element is overwritten as by
+    TrySetDenseElementFast, and a hole of an extensible array without index
+    descriptors becomes an own data property when the prototype chain cannot
+    intercept the store. Anything else declines. No managed locals. }
+  Result := TrySetDenseElementFast(AIndex, AValue);
+  if Result then
+    Exit;
+  if (AIndex < 0) or (AIndex >= FElements.Count) or
+     (FProperties.Count <> 0) or FFrozen or not FExtensible then
+    Exit;
+  if (Int64(AIndex) >= FLength) and not FLengthWritable then
+    Exit;
+  if not IsArrayHole(FElements[AIndex]) or
+     not HasPristineIndexedPrototypeChain then
     Exit;
 
   FElements[AIndex] := AValue;
