@@ -65,7 +65,7 @@ type
 
     procedure InitFromHTTP(const AStatus: Integer; const AStatusText, AUrl: string;
       const AHeaders: TGocciaHeadersValue; const ABody: TBytes;
-      const ARedirected: Boolean);
+      const ARedirected: Boolean; const AChargedBodyBytes: Int64);
 
     function ToStringTag: string; override;
     procedure TraceReferences; override;
@@ -90,7 +90,6 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.JSON,
-  Goccia.MemoryLimit,
   Goccia.Realm,
   Goccia.UncatchableFault,
   Goccia.Utils,
@@ -154,8 +153,7 @@ begin
   if Assigned(GC) and (Delta > 0) then
   begin
     if not GC.TryReserveExternalBytes(Delta, Self) then
-      // A held body is run-owned memory: a guest must not catch and retry this ceiling.
-      raise TGocciaMemoryLimitError.Create(Delta, GC.MaxBytes);
+      ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
   end;
   if Assigned(GC) and (Delta < 0) then
     GC.ReleaseExternalBytes(-Delta);
@@ -166,13 +164,17 @@ end;
 
 procedure TGocciaResponseValue.InitFromHTTP(const AStatus: Integer;
   const AStatusText, AUrl: string; const AHeaders: TGocciaHeadersValue;
-  const ABody: TBytes; const ARedirected: Boolean);
+  const ABody: TBytes; const ARedirected: Boolean;
+  const AChargedBodyBytes: Int64);
 begin
   FStatus := AStatus;
   FStatusText := AStatusText;
   FUrl := AUrl;
   FHeaders := AHeaders;
-  SetBody(ABody);
+  // Fetch reserved these bytes before creating any response values. The
+  // reservation belongs to this response from here until consumption or GC.
+  FBody := ABody;
+  FChargedBodyBytes := AChargedBodyBytes;
   FRedirected := ARedirected;
   FBodyUsed := False;
 end;
@@ -355,6 +357,7 @@ begin
   // or copied, and every one of those allocates, which can collect.
   Roots.Initialize;
   try
+    Roots.Add(R);
     P := TGocciaPromiseValue.Create;
     Roots.Add(P);
     if R.FBodyUsed then
@@ -364,10 +367,13 @@ begin
       Exit;
     end;
     R.FBodyUsed := True;
-
-    BodyText := DecodeUTF8WithReplacement(R.FBody);
-    P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
-    Result := P;
+    try
+      BodyText := DecodeUTF8WithReplacement(R.FBody);
+      P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
+      Result := P;
+    finally
+      R.SetBody(nil);
+    end;
   finally
     Roots.Clear;
   end;
@@ -391,6 +397,7 @@ begin
   // or copied, and every one of those allocates, which can collect.
   Roots.Initialize;
   try
+    Roots.Add(R);
     P := TGocciaPromiseValue.Create;
     Roots.Add(P);
     if R.FBodyUsed then
@@ -400,35 +407,38 @@ begin
       Exit;
     end;
     R.FBodyUsed := True;
-
-    BodyText := DecodeUTF8WithReplacement(R.FBody);
-
-    Parser := TGocciaJSONParser.Create;
     try
+      BodyText := DecodeUTF8WithReplacement(R.FBody);
+
+      Parser := TGocciaJSONParser.Create;
       try
-        Parsed := Parser.Parse(BodyText);
-        Roots.Add(Parsed);
-        P.Resolve(Parsed);
-      except
-        on E: Exception do
-        begin
-          { Two live paths reach this arm, and rejecting with a SyntaxError would
-            let `res.json().catch(...)` absorb either. The parser materializes
-            objects, arrays and strings for a body the guest controls the size
-            of, so a refused allocation and the use-after-free an unrooted
-            temporary produces both arrive here. And Resolve is inside the try:
-            ES2026 §27.2.1.3.2 step 9 reads `then` off the parsed value, which a
-            guest `Object.prototype.then` getter can answer with arbitrary code —
-            including a capability-guarded call whose audit sink fails. }
-          if IsUncatchableFault(E) then
-            raise;
-          P.Reject(CreateErrorObject('SyntaxError', E.Message));
+        try
+          Parsed := Parser.Parse(BodyText);
+          Roots.Add(Parsed);
+          P.Resolve(Parsed);
+        except
+          on E: Exception do
+          begin
+            { Two live paths reach this arm, and rejecting with a SyntaxError would
+              let `res.json().catch(...)` absorb either. The parser materializes
+              objects, arrays and strings for a body the guest controls the size
+              of, so a refused allocation and the use-after-free an unrooted
+              temporary produces both arrive here. And Resolve is inside the try:
+              ES2026 §27.2.1.3.2 step 9 reads `then` off the parsed value, which a
+              guest `Object.prototype.then` getter can answer with arbitrary code —
+              including a capability-guarded call whose audit sink fails. }
+            if IsUncatchableFault(E) then
+              raise;
+            P.Reject(CreateErrorObject('SyntaxError', E.Message));
+          end;
         end;
+      finally
+        Parser.Free;
       end;
+      Result := P;
     finally
-      Parser.Free;
+      R.SetBody(nil);
     end;
-    Result := P;
   finally
     Roots.Clear;
   end;
@@ -450,6 +460,7 @@ begin
   // or copied, and every one of those allocates, which can collect.
   Roots.Initialize;
   try
+    Roots.Add(R);
     P := TGocciaPromiseValue.Create;
     Roots.Add(P);
     if R.FBodyUsed then
@@ -459,13 +470,16 @@ begin
       Exit;
     end;
     R.FBodyUsed := True;
+    try
+      AB := TGocciaArrayBufferValue.Create(Length(R.FBody));
+      if Length(R.FBody) > 0 then
+        Move(R.FBody[0], AB.Data[0], Length(R.FBody));
 
-    AB := TGocciaArrayBufferValue.Create(Length(R.FBody));
-    if Length(R.FBody) > 0 then
-      Move(R.FBody[0], AB.Data[0], Length(R.FBody));
-
-    P.Resolve(AB);
-    Result := P;
+      P.Resolve(AB);
+      Result := P;
+    finally
+      R.SetBody(nil);
+    end;
   finally
     Roots.Clear;
   end;

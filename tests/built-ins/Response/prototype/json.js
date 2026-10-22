@@ -20,6 +20,16 @@ describe("Response.prototype.json", () => {
     expect(r.bodyUsed).toBe(true);
   });
 
+  test.runIf(typeof Goccia !== "undefined")("releases its native body after consumption", async () => {
+    const body = `{"value":1}${" ".repeat(64 * 1024)}`;
+    const response = new Response(body);
+    const held = Goccia.gc.bytesAllocated;
+    expect(await response.json()).toEqual({ value: 1 });
+    Goccia.gc();
+    expect(response.bodyUsed).toBe(true);
+    expect(held - Goccia.gc.bytesAllocated).toBeGreaterThan(body.length / 2);
+  });
+
   test("rejects with TypeError on second consumption", async () => {
     const r = new Response();
     try { await r.json(); } catch {}

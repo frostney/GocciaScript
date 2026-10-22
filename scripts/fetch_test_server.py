@@ -9,6 +9,7 @@ Endpoints:
   GET  /redirect-host — 302 → localhost on the same port, /echo-headers
   GET  /redirect-external — 302 → http://10.255.255.1:1/json (private, off-allowlist)
   GET  /status/<code> — responds with <code> and empty body
+  GET  /two-megabytes — responds with a fixed 2 MiB body
   GET  /              — 200 "ok"
   HEAD *              — 200 with Content-Length but no body
 
@@ -91,6 +92,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = b"hello world"
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/two-megabytes":
+            body = b"x" * (2 * 1024 * 1024)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

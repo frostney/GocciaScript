@@ -23,6 +23,19 @@ describe("Response.prototype.text", () => {
     expect(r.bodyUsed).toBe(true);
   });
 
+  test.runIf(typeof Goccia !== "undefined")("releases its native body after consumption", async () => {
+    const body = "x".repeat(64 * 1024);
+    const response = new Response(body);
+    const held = Goccia.gc.bytesAllocated;
+    const consume = async () => {
+      await response.text();
+    };
+    await consume();
+    Goccia.gc();
+    expect(response.bodyUsed).toBe(true);
+    expect(held - Goccia.gc.bytesAllocated).toBeGreaterThan(body.length / 2);
+  });
+
   test("rejects with TypeError on second consumption", async () => {
     const r = new Response();
     await r.text();

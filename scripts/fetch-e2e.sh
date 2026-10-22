@@ -333,6 +333,22 @@ check_with "response over the cap is refused" \
 await fetch('${BASE}/text')
 " "TypeError"
 
+check_with "retained response bodies reach a catchable memory limit" \
+  "--max-memory=32MiB --timeout=15000 --compat-traditional-for-loop" 0 "
+const held = []
+let caught = false
+for (let i = 0; i < 20; i++) {
+  try {
+    held.push(await fetch('${BASE}/two-megabytes'))
+  } catch (e) {
+    caught = e instanceof RangeError &&
+      e.message.includes('GC heap size exceeds the configured memory limit')
+    break
+  }
+}
+console.log(caught, held.length < 20)
+" "true true"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 

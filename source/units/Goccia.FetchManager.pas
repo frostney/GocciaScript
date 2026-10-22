@@ -123,6 +123,7 @@ uses
 
   HTTPClient,
 
+  Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.URL.Parser,
   Goccia.Values.ErrorHelper,
@@ -1353,6 +1354,10 @@ var
   RespHeaders: TGocciaHeadersValue;
   RespValue: TGocciaResponseValue;
   PreviousRealm: TGocciaRealm;
+  GC: TGarbageCollector;
+  ReservedBodyBytes: Int64;
+  BodyFits: Boolean;
+  ResponseRoots: TGocciaActiveRootFrame;
 begin
   PendingIndex := FindPendingIndex(ACompletion.RequestID);
   if PendingIndex < 0 then
@@ -1385,22 +1390,50 @@ begin
 
       if ACompletion.Success then
       begin
-        RespHeaders := TGocciaHeadersValue.Create;
-        RespHeaders.Immutable := True;
-        for I := 0 to High(ACompletion.Response.Headers) do
-          RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
-            ACompletion.Response.Headers[I].Value);
+        // Reserve on the runtime thread before creating response values: a
+        // collection here cannot sweep an unrooted header or response.
+        GC := TGarbageCollector.Instance;
+        ReservedBodyBytes := 0;
+        BodyFits := True;
+        if Assigned(GC) and (Length(ACompletion.Response.Body) > 0) then
+        begin
+          BodyFits := GC.TryReserveExternalBytes(
+            Length(ACompletion.Response.Body));
+          if BodyFits then
+            ReservedBodyBytes := Length(ACompletion.Response.Body);
+        end;
+        if not BodyFits then
+          Pending.Promise.Reject(CreateErrorObject('RangeError',
+            SErrorMemoryLimitExceeded))
+        else
+        begin
+          ResponseRoots.Initialize;
+          try
+            RespHeaders := TGocciaHeadersValue.Create;
+            ResponseRoots.Add(RespHeaders);
+            RespHeaders.Immutable := True;
+            for I := 0 to High(ACompletion.Response.Headers) do
+              RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
+                ACompletion.Response.Headers[I].Value);
 
-        RespValue := TGocciaResponseValue.Create;
-        RespValue.InitFromHTTP(
-          ACompletion.Response.StatusCode,
-          ACompletion.Response.StatusText,
-          ResponseURLForScript(ACompletion.Response.FinalURL),
-          RespHeaders,
-          ACompletion.Response.Body,
-          ACompletion.Response.Redirected);
-
-        Pending.Promise.Resolve(RespValue);
+            RespValue := TGocciaResponseValue.Create;
+            ResponseRoots.Add(RespValue);
+            RespValue.InitFromHTTP(
+              ACompletion.Response.StatusCode,
+              ACompletion.Response.StatusText,
+              ResponseURLForScript(ACompletion.Response.FinalURL),
+              RespHeaders,
+              ACompletion.Response.Body,
+              ACompletion.Response.Redirected,
+              ReservedBodyBytes);
+            ReservedBodyBytes := 0;
+            Pending.Promise.Resolve(RespValue);
+          finally
+            if Assigned(GC) and (ReservedBodyBytes > 0) then
+              GC.ReleaseExternalBytes(ReservedBodyBytes);
+            ResponseRoots.Clear;
+          end;
+        end;
       end
       else if ACompletion.DeniedScope <> '' then
         Pending.Promise.Reject(CreatePermissionDeniedError(
