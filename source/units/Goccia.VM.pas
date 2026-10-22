@@ -13847,7 +13847,7 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-// ES2026 §7.3.32 PrivateGet(O, P): AKey is the storage key of a private name
+// ES2026 §7.3.30 PrivateGet(O, P): AKey is the storage key of a private name
 // the compiler resolved (a bckPrivateName constant), never a property key.
 function TGocciaVM.GetPrivatePropertyValue(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
@@ -14179,7 +14179,7 @@ begin
     SSuggestCheckNullBeforeAccess);
 end;
 
-// ES2026 §7.3.33 PrivateSet(O, P, value): AKey is the storage key of a
+// ES2026 §7.3.31 PrivateSet(O, P, value): AKey is the storage key of a
 // private name the compiler resolved (a bckPrivateName constant).
 procedure TGocciaVM.SetPrivatePropertyValue(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
