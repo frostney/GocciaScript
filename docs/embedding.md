@@ -395,9 +395,7 @@ console.log(version);  // "1.0.0"
 
 ## Console Output Capture
 
-On Windows, linking the engine makes UTF-8 the code page of the host process's RTL string conversions, of the file names the RTL returns, and of `Output`, `ErrOutput` and `StdErr` (the `ProcessEncoding` unit, initialized before the units that convert strings). Without it, FPC 3.2's AnsiString-based RTL loses every character outside the ANSI code page in file names and printed text. A host that relies on the ANSI code page for its own AnsiString conversions should convert explicitly.
-
-By default, `console.log` and friends write directly to stdout. The `OutputCallback` property lets you intercept all console output programmatically:
+By default, `console.log` and friends write directly to stdout, as UTF-8 on every platform (on Windows, linking the engine makes UTF-8 the host process's RTL code page; see [Tooling — AnsiString RTL Calls on Windows](contributing/tooling.md#ansistring-rtl-calls-on-windows)). The `OutputCallback` property lets you intercept all console output programmatically:
 
 ```pascal
 uses
