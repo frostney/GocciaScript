@@ -123,6 +123,7 @@ uses
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Expressions,
+  Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
@@ -3628,6 +3629,7 @@ var
   UseFusedLessThanExit: Boolean;
   ExitOpcode, ExitJumpOp, StepOpcode: TGocciaOpCode;
   SlotLocalIdx: Integer;
+  SharesCounter: Boolean;
 begin
   Result := False;
 
@@ -3752,13 +3754,26 @@ begin
     end;
 
     OuterSlot := StartReg;
+    // The per-iteration binding of ES2026 §14.7.4.4 is observable only
+    // through a closure (or direct eval) created in the body, and the body
+    // does not assign the variable. Without either, every iteration's binding
+    // holds what the counter holds, so the body reads the counter itself.
+    SharesCounter := StatementCreatesNoClosure(AStmt.Body) and
+      not ACtx.OptimizationOptions.PreserveCoverageShape;
+    if SharesCounter then
+      ACtx.Scope.MarkLocalInitialized(ACtx.Scope.ResolveLocal(LoopName));
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
     SetLabeledContinueCleanupBase(AStmt);
-    Slot := ACtx.Scope.DeclareLocal(LoopName, False);
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
-    SlotLocalIdx := ACtx.Scope.ResolveLocal(LoopName);
-    ACtx.Scope.MarkLocalInitialized(SlotLocalIdx);
+    SlotLocalIdx := -1;
+    Slot := OuterSlot;
+    if not SharesCounter then
+    begin
+      Slot := ACtx.Scope.DeclareLocal(LoopName, False);
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
+      SlotLocalIdx := ACtx.Scope.ResolveLocal(LoopName);
+      ACtx.Scope.MarkLocalInitialized(SlotLocalIdx);
+    end;
 
     ACtx.CompileStatement(AStmt.Body);
 
@@ -3769,10 +3784,14 @@ begin
     // next iteration. A closure that captured the binding writes its cell and
     // leaves the register stale, so read the cell then; OP_MOVE keeps a loop
     // without such a closure as it was.
-    if ACtx.Scope.LocalAt(SlotLocalIdx)^.IsCaptured then
-      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, OuterSlot, Slot))
-    else
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
+    // A body that shares the counter has read and left the counter itself.
+    if not SharesCounter then
+    begin
+      if ACtx.Scope.LocalAt(SlotLocalIdx)^.IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, OuterSlot, Slot))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
+    end;
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));

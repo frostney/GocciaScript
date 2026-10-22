@@ -495,7 +495,7 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--allow-ffi` or `"allow-ffi"` in a config file's `permissions` block |
-| `TGocciaSandboxRuntimeExtension` | the import-only `"fs"` and `"goccia"` [sandbox modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas) over a `TGocciaSandboxContext`'s virtual filesystem | GocciaRunner's sandbox mode installs it; see [Sandbox filesystem](#sandbox-filesystem) |
+| `TGocciaSandboxRuntimeExtension` | the import-only `"fs"`, `"goccia"` and `goccia:search` [sandbox modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas) ([search](built-ins-sandbox-search.md), with shared test vectors for out-of-sandbox search) over a `TGocciaSandboxContext`'s virtual filesystem | GocciaRunner's sandbox mode installs it; see [Sandbox filesystem](#sandbox-filesystem) |
 
 When embedding, grant `ffi` in the engine's capability set and call `InstallFFIIfGranted(Runtime)`; the extension refuses to attach without the grant, and `FFI.open` checks each library path against the `ffi` scopes.
 
