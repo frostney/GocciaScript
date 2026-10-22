@@ -1123,10 +1123,6 @@
           if Constant.Kind = bckPrivateName then
             SetRegister(A, GetPrivatePropertyValue(GetRegister(B),
               Constant.StringValue))
-          else if (FRegisters[B].Kind = grkObject) and
-                  Assigned(FRegisters[B].ObjectValue) then
-            SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-              Constant.StringValue))
           else
             SetRegister(A, GetPropertyValue(GetRegister(B),
               Constant.StringValue));
