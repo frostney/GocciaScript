@@ -160,7 +160,7 @@ Implements the [ECMAScript Number](https://developer.mozilla.org/en-US/docs/Web/
 
 ### BigInt (`Goccia.Builtins.GlobalBigInt.pas`)
 
-Implements [ECMAScript BigInt](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) (ES2020). See [MDN BigInt reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) for the full API.
+Implements [ECMAScript BigInt](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt). See [MDN BigInt reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) for the full API.
 
 **Related:** `BigInt64Array` and `BigUint64Array` are implemented — see [Binary Data Built-ins](built-ins-binary-data.md).
 
@@ -406,7 +406,7 @@ ErrorName: message
 
 ### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Concat.pas`, `Iterator.Generic.pas`)
 
-Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), the Stage 4 Joint Iteration proposal (`Iterator.zip`), and the Stage 3 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) proposal.
+Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), the Stage 4 Joint Iteration proposal (`Iterator.zip`), and the Stage 4 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) proposal.
 
 All built-in iterators (Array, String, Map, Set) share a common `Iterator.prototype` with helper methods per the ECMAScript Iterator Helpers proposal:
 
@@ -560,7 +560,7 @@ Maps are iterable: `[...myMap]` spreads the map into an array of `[key, value]` 
 
 ### WeakMap (`Goccia.Values.WeakMapValue.pas`)
 
-Implements the [ECMAScript WeakMap](https://tc39.es/ecma262/#sec-weakmap-objects) including ES2026 `WeakMap.prototype.getOrInsert` and `WeakMap.prototype.getOrInsertComputed`.
+Implements the [ECMAScript WeakMap](https://tc39.es/ecma262/#sec-weakmap-objects) including `WeakMap.prototype.getOrInsert` and `WeakMap.prototype.getOrInsertComputed`.
 
 A weak key-value collection where keys are objects or non-registered symbols. WeakMap entries do not keep keys alive. Values are traced only while their key is reachable from outside the WeakMap.
 

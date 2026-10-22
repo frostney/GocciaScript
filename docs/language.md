@@ -166,7 +166,7 @@ class Counter {
 
 ### Explicit Resource Management
 
-`using` and `await using` declarations (ES2026 §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported, in a block or directly in a function body.
+`using` and `await using` declarations (ECMA-262 draft, ES2027, §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported, in a block or directly in a function body.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
 - `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
