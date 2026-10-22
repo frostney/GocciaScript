@@ -3784,12 +3784,14 @@ begin
     // next iteration. A closure that captured the binding writes its cell and
     // leaves the register stale, so read the cell then; OP_MOVE keeps a loop
     // without such a closure as it was.
-    if SharesCounter then
-      // The body read and left the counter itself.
-    else if ACtx.Scope.LocalAt(SlotLocalIdx)^.IsCaptured then
-      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, OuterSlot, Slot))
-    else
-      EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
+    // A body that shares the counter has read and left the counter itself.
+    if not SharesCounter then
+    begin
+      if ACtx.Scope.LocalAt(SlotLocalIdx)^.IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, OuterSlot, Slot))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
+    end;
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
