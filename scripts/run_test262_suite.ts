@@ -730,7 +730,7 @@ function parseMergeArgs(argv: string[]): MergeArgs {
   }
   if (!out.output) throw new Error("--merge-shards requires --output");
   if (out.reports.length === 0) {
-    throw new Error("--merge-shards requires at least one shard report");
+    throw new Error("--merge-shards found no shard reports: every shard is missing");
   }
   if ((out.profileSummaryOutput || out.profileMarkdownOutput) && !out.profileDir) {
     throw new Error("profile report output options require --profile-dir");
@@ -780,7 +780,13 @@ function mergeShardReports(paths: string[]): SuiteReport {
   const first = reports[0];
   const shardCount = first.shard!.count;
   if (paths.length !== shardCount) {
-    throw new Error(`Expected ${shardCount} shard reports, got ${paths.length}`);
+    const present = new Set(reports.map((report) => report.shard!.index));
+    const missing = Array.from({ length: shardCount }, (_, index) => index)
+      .filter((index) => !present.has(index));
+    throw new Error(
+      `Expected ${shardCount} shard reports, got ${paths.length}` +
+        (missing.length > 0 ? `; missing shards: ${missing.join(", ")}` : ""),
+    );
   }
 
   const runSignature = JSON.stringify({
