@@ -2402,19 +2402,10 @@ begin
 end;
 
 function EmitJumpIfConditionFalse(const ACtx: TGocciaCompilationContext;
-  const ACondition: TGocciaExpression): Integer;
-var
-  CondReg: UInt16;
+  const ACondition: TGocciaExpression): TGocciaCompilerJumpArray;
 begin
-  if TryEmitJumpIfNotLessThan(ACtx, ACondition, Result) then
-    Exit;
-  CondReg := ACtx.Scope.AllocateRegister;
-  try
-    ACtx.CompileExpression(ACondition, CondReg);
-    Result := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-  finally
-    ACtx.Scope.FreeRegister;
-  end;
+  SetLength(Result, 0);
+  EmitConditionJumps(ACtx, ACondition, False, Result);
 end;
 
 // ES2026 §B.3.3 FunctionDeclarations in IfStatement Statement Clauses: a
@@ -2448,7 +2439,8 @@ function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
 var
   CondReg, PatternSubjectReg: UInt16;
-  ElseJump, EndJump: Integer;
+  EndJump: Integer;
+  ElseJumps: TGocciaCompilerJumpArray;
   HasPatternBindings: Boolean;
   PatternFailJumps: TGocciaJumpArray;
   ClosedLocals: TArray<UInt16>;
@@ -2489,13 +2481,14 @@ begin
   try
     HasPatternBindings := CompileConditionWithPatternBindings(ACtx,
       AStmt.Condition, CondReg, PatternSubjectReg, PatternFailJumps);
+    SetLength(ElseJumps, 0);
     if HasPatternBindings then
-      ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg)
-    else if not TryEmitJumpIfNotLessThan(ACtx, AStmt.Condition, ElseJump) then
     begin
-      ACtx.CompileExpression(AStmt.Condition, CondReg);
-      ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-    end;
+      SetLength(ElseJumps, 1);
+      ElseJumps[0] := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+    end
+    else
+      EmitConditionJumps(ACtx, AStmt.Condition, False, ElseJumps);
     ConsequentAbrupt := CompileIfClause(ACtx, AStmt.Consequent);
 
     if HasPatternBindings then
@@ -2508,7 +2501,7 @@ begin
     if Assigned(AStmt.Alternate) then
     begin
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      PatchJumpTarget(ACtx, ElseJump);
+      PatchJumpArray(ACtx, ElseJumps);
       PatchPatternFailureTarget;
       AlternateAbrupt := CompileIfClause(ACtx, AStmt.Alternate);
       PatchJumpTarget(ACtx, EndJump);
@@ -2516,7 +2509,7 @@ begin
     end
     else
     begin
-      PatchJumpTarget(ACtx, ElseJump);
+      PatchJumpArray(ACtx, ElseJumps);
       PatchPatternFailureTarget;
       Result := False;
     end;
@@ -4229,7 +4222,8 @@ end;
 procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForStatement);
 var
-  LoopStart, ExitJump, I: Integer;
+  LoopStart, I: Integer;
+  ExitJumps: TGocciaCompilerJumpArray;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   BodyClosedLocals: TArray<UInt16>;
@@ -4376,7 +4370,7 @@ begin
         end;
 
         LoopStart := CurrentCodePosition(ACtx);
-        ExitJump := -1;
+        SetLength(ExitJumps, 0);
 
         // ES2026 §14.7.4.4 step 2: create the per-iteration environment
         // before evaluating the test and body.
@@ -4395,7 +4389,7 @@ begin
         end;
 
         if Assigned(AStmt.Condition) then
-          ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
+          ExitJumps := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
         ACtx.CompileStatement(AStmt.Body);
 
@@ -4464,8 +4458,7 @@ begin
         EmitInstruction(ACtx,
           EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
-        if ExitJump >= 0 then
-          PatchJumpTarget(ACtx, ExitJump);
+        PatchJumpArray(ACtx, ExitJumps);
 
         PatchJumpList(ACtx, LoopControl.BreakJumps);
         for I := 0 to PerIterNames.Count - 1 do
@@ -4475,10 +4468,10 @@ begin
       else
       begin
         LoopStart := CurrentCodePosition(ACtx);
-        ExitJump := -1;
+        SetLength(ExitJumps, 0);
 
         if Assigned(AStmt.Condition) then
-          ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
+          ExitJumps := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
         ACtx.Scope.BeginScope;
         SetLoopContinueScopeDepth(ACtx);
@@ -4500,8 +4493,7 @@ begin
         EmitInstruction(ACtx,
           EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
-        if ExitJump >= 0 then
-          PatchJumpTarget(ACtx, ExitJump);
+        PatchJumpArray(ACtx, ExitJumps);
 
         PatchJumpList(ACtx, LoopControl.BreakJumps);
       end;
@@ -4566,14 +4558,15 @@ end;
 procedure CompileWhileStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaWhileStatement);
 var
-  LoopStart, ExitJump: Integer;
+  LoopStart: Integer;
+  ExitJumps: TGocciaCompilerJumpArray;
   LoopControl: TLoopControlState;
 begin
   BeginLoopControl(ACtx, LoopControl);
   try
     SetLabeledContinueCleanupBase(AStmt);
     LoopStart := CurrentCodePosition(ACtx);
-    ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
+    ExitJumps := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
     ACtx.CompileStatement(AStmt.Body);
 
@@ -4583,7 +4576,7 @@ begin
     EmitInstruction(ACtx,
       EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
 
-    PatchJumpTarget(ACtx, ExitJump);
+    PatchJumpArray(ACtx, ExitJumps);
 
     PatchJumpList(ACtx, LoopControl.BreakJumps);
   finally

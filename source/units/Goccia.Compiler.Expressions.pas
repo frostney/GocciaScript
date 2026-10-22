@@ -19,6 +19,9 @@ const
   // initialized `this`.
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
 
+type
+  TGocciaCompilerJumpArray = array of Integer;
+
 // Compares a direct eval site record with the compiler's scope chain at its
 // call, AScope with the call's ANonStrictMode: every binding the compiler
 // resolves there, including one still in its temporal dead zone, has an entry
@@ -77,6 +80,15 @@ function TryEmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
 // object environment first.
 function ShouldTryWithBinding(const AScope: TGocciaCompilerScope;
   const AName: string): Boolean;
+// Emits the test of a condition whose value is used only for its truthiness:
+// control jumps when ToBoolean(ACondition) is AJumpWhen and falls through
+// otherwise. The jumps are appended to AJumps for the caller to patch.
+procedure EmitConditionJumps(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression; const AJumpWhen: Boolean;
+  var AJumps: TGocciaCompilerJumpArray);
+// Points every jump in AJumps at the current position.
+procedure PatchJumpArray(const ACtx: TGocciaCompilationContext;
+  const AJumps: TGocciaCompilerJumpArray);
 procedure CompileArray(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrayExpression; const ADest: UInt16);
 procedure CompileObject(const ACtx: TGocciaCompilationContext;
@@ -203,6 +215,7 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
+  Goccia.Compiler.ConstantValue,
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.Statements,
   Goccia.Compiler.TypeRules,
@@ -221,7 +234,6 @@ uses
   Goccia.Values.Primitives;
 
 type
-  TGocciaCompilerJumpArray = array of Integer;
   TPreparedDestructuringTargetKind = (
     pdtNone,
     pdtIdentifierWithBinding,
@@ -6057,10 +6069,168 @@ begin
   Result := True;
 end;
 
+procedure AppendJump(var AJumps: TGocciaCompilerJumpArray;
+  const AJumpIndex: Integer);
+begin
+  SetLength(AJumps, Length(AJumps) + 1);
+  AJumps[High(AJumps)] := AJumpIndex;
+end;
+
+procedure PatchJumpArray(const ACtx: TGocciaCompilationContext;
+  const AJumps: TGocciaCompilerJumpArray);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AJumps) do
+    PatchJumpTarget(ACtx, AJumps[I]);
+end;
+
+// The kind of OP_JUMP_IF_NULLISH match that `x === AExpr` is, when AExpr is
+// null or undefined at compile time: a literal, or a constant such as a const
+// binding of null. Evaluating such an operand has no effect to keep.
+function TryNullishLiteralMatchKind(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out AKind: UInt16): Boolean;
+var
+  Value: TGocciaCompileTimeValue;
+begin
+  Result := False;
+  if not TryEvaluateConstantExpression(ACtx, AExpr, Value) then
+    Exit;
+  if Value.Kind = ctvkNull then
+    AKind := GOCCIA_NULLISH_MATCH_NULL
+  else if Value.Kind = ctvkUndefined then
+    AKind := GOCCIA_NULLISH_MATCH_UNDEFINED
+  else
+    Exit;
+  Result := True;
+end;
+
+// ES2026 §7.2.14 IsStrictlyEqual(x, y)
+// `x === null`, `x !== null`, `x === undefined` and `x !== undefined`, either
+// way round, as one jump on x. Strict equality with null or undefined holds
+// exactly for the register of that kind: the VM keeps both unboxed, as the
+// optional-chain and nullish-coalescing jumps already rely on. Loose equality
+// is not taken here: it also holds for an object with [[IsHTMLDDA]].
+function TryEmitNullishComparisonJump(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression; const AJumpWhen: Boolean;
+  out AJumpIndex: Integer): Boolean;
+var
+  Binary: TGocciaBinaryExpression;
+  Operand: TGocciaExpression;
+  MatchKind: UInt16;
+  OperandReg: UInt16;
+  OwnsOperandReg, JumpOnMatch: Boolean;
+begin
+  Result := False;
+  if not (ACondition is TGocciaBinaryExpression) then
+    Exit;
+  Binary := TGocciaBinaryExpression(ACondition);
+  if (Binary.Operator <> gttEqual) and (Binary.Operator <> gttNotEqual) then
+    Exit;
+  if TryNullishLiteralMatchKind(ACtx, Binary.Right, MatchKind) then
+    Operand := Binary.Left
+  else if TryNullishLiteralMatchKind(ACtx, Binary.Left, MatchKind) then
+    Operand := Binary.Right
+  else
+    Exit;
+
+  EmitLineMapping(ACtx, ACondition.Line, ACondition.Column);
+  OwnsOperandReg := CompileOperand(ACtx, Operand, OperandReg);
+  // Jump when the comparison's outcome is AJumpWhen: for === that is a match
+  // when jumping on true, for !== a match when jumping on false.
+  JumpOnMatch := (Binary.Operator = gttEqual) = AJumpWhen;
+  if JumpOnMatch then
+    AJumpIndex := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, OperandReg,
+      MatchKind)
+  else
+    AJumpIndex := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH,
+      OperandReg, MatchKind);
+  if OwnsOperandReg then
+    ACtx.Scope.FreeRegister;
+  Result := True;
+end;
+
+// ES2026 §13.13.1 Binary Logical Operators: Evaluation, §13.5.7.1 Logical NOT
+// Operator: Evaluation
+// `a && b`, `a || b` and `!a` become chains of jumps on their operands, which
+// is how they short-circuit anyway: ToBoolean has no side effects, so testing
+// an operand where it is computed is the same as testing the value the whole
+// expression would have produced. An operand that is a settled local is
+// tested in its own register instead of a copy. Under coverage `&&` and `||`
+// keep their value: the statement's own branch records count the test of
+// that value, and splitting it would drop them.
+procedure EmitConditionJumps(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression; const AJumpWhen: Boolean;
+  var AJumps: TGocciaCompilerJumpArray);
+var
+  Binary: TGocciaBinaryExpression;
+  SkipJumps: TGocciaCompilerJumpArray;
+  JumpIndex: Integer;
+  CondReg: UInt16;
+  OwnsCondReg: Boolean;
+begin
+  if ACondition is TGocciaBinaryExpression then
+  begin
+    Binary := TGocciaBinaryExpression(ACondition);
+    if ((Binary.Operator = gttAnd) or (Binary.Operator = gttOr)) and
+       not ACtx.OptimizationOptions.PreserveCoverageShape then
+    begin
+      if (Binary.Operator = gttAnd) <> AJumpWhen then
+      begin
+        // a && b jumping when false, or a || b jumping when true: either
+        // operand alone decides.
+        EmitConditionJumps(ACtx, Binary.Left, AJumpWhen, AJumps);
+        EmitConditionJumps(ACtx, Binary.Right, AJumpWhen, AJumps);
+      end
+      else
+      begin
+        // a && b jumping when true, or a || b jumping when false: the left
+        // operand can only settle the outcome by skipping the right one.
+        SetLength(SkipJumps, 0);
+        EmitConditionJumps(ACtx, Binary.Left, not AJumpWhen, SkipJumps);
+        EmitConditionJumps(ACtx, Binary.Right, AJumpWhen, AJumps);
+        PatchJumpArray(ACtx, SkipJumps);
+      end;
+      Exit;
+    end;
+  end;
+
+  if TryEmitNullishComparisonJump(ACtx, ACondition, AJumpWhen, JumpIndex) then
+  begin
+    AppendJump(AJumps, JumpIndex);
+    Exit;
+  end;
+
+  if (ACondition is TGocciaUnaryExpression) and
+     (TGocciaUnaryExpression(ACondition).Operator = gttNot) then
+  begin
+    EmitLineMapping(ACtx, ACondition.Line, ACondition.Column);
+    EmitConditionJumps(ACtx, TGocciaUnaryExpression(ACondition).Operand,
+      not AJumpWhen, AJumps);
+    Exit;
+  end;
+
+  if not AJumpWhen and
+     TryEmitJumpIfNotLessThan(ACtx, ACondition, JumpIndex) then
+  begin
+    AppendJump(AJumps, JumpIndex);
+    Exit;
+  end;
+
+  OwnsCondReg := CompileOperand(ACtx, ACondition, CondReg);
+  if AJumpWhen then
+    AppendJump(AJumps, EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg))
+  else
+    AppendJump(AJumps, EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg));
+  if OwnsCondReg then
+    ACtx.Scope.FreeRegister;
+end;
+
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaConditionalExpression; const ADest: UInt16);
 var
   ElseJump, EndJump: Integer;
+  ElseJumps: TGocciaCompilerJumpArray;
   ConditionReg: UInt16;
   ConditionBinary: TGocciaBinaryExpression;
   Immediate: Int16;
@@ -6089,23 +6259,11 @@ begin
     end;
   end;
 
-  if TryEmitJumpIfNotLessThan(ACtx, AExpr.Condition, ElseJump) then
-  begin
-    ACtx.CompileExpression(AExpr.Consequent, ADest);
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-    PatchJumpTarget(ACtx, ElseJump);
-    ACtx.CompileExpression(AExpr.Alternate, ADest);
-    PatchJumpTarget(ACtx, EndJump);
-    Exit;
-  end;
-
-  ConditionReg := ACtx.Scope.AllocateRegister;
-  ACtx.CompileExpression(AExpr.Condition, ConditionReg);
-  ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ConditionReg);
-  ACtx.Scope.FreeRegister;
+  SetLength(ElseJumps, 0);
+  EmitConditionJumps(ACtx, AExpr.Condition, False, ElseJumps);
   ACtx.CompileExpression(AExpr.Consequent, ADest);
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-  PatchJumpTarget(ACtx, ElseJump);
+  PatchJumpArray(ACtx, ElseJumps);
   ACtx.CompileExpression(AExpr.Alternate, ADest);
   PatchJumpTarget(ACtx, EndJump);
 end;
