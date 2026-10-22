@@ -956,6 +956,18 @@ type
     procedure TraceReferences; override;
   end;
 
+{ The polls a call or an iteration makes when Goccia.ThreadPolls says
+  something is armed: each runs only when its own flag is set, through the
+  state pointer beside the flag, so neither looks up a thread variable. }
+procedure RunArmedPolls(const APolls: PGocciaThreadPolls);
+begin
+  if APolls^.TimeoutArmed then
+    PollExecutionTimeout(PGocciaTimeoutPollState(APolls^.TimeoutState));
+  if APolls^.InstructionLimitActive then
+    CheckInstructionLimitState(
+      PGocciaInstructionLimitState(APolls^.InstructionLimitState));
+end;
+
 function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
   TGocciaFunctionObjectIntrinsicKind; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -4671,6 +4683,7 @@ var
   HadContinuation: Boolean;
   ReturnRegister: TGocciaRegister;
   Suspension: TGocciaBytecodeSuspension;
+  Polls: PGocciaThreadPolls;
 begin
   FLastResumeResultIsIteratorResult := False;
   if FState = bgsCompleted then
@@ -4718,11 +4731,9 @@ begin
     try
       // ExecuteClosureRegisters' polls, then the entry told to report a
       // suspension through Suspension instead of raising.
-      if GThreadPolls.Any <> 0 then
-      begin
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
-      end;
+      Polls := @GThreadPolls;
+      if Polls^.Any <> 0 then
+        RunArmedPolls(Polls);
       Suspension.Kind := bskNone;
       ReturnRegister := FVM.ExecuteClosureRegistersInternal(FClosure,
         FThisValue, PGocciaRegister(FArguments), Length(FArguments), True,
@@ -7145,6 +7156,7 @@ var
   NativeInstanceConstructedByNativeSuper: Boolean;
   Chain: TGocciaImplicitConstructorChain;
   PreviousPendingNewTarget: TGocciaValue;
+  Polls: PGocciaThreadPolls;
   procedure EnsureBoxedArgs;
   begin
     if not Assigned(BoxedArgs) then
@@ -7319,11 +7331,9 @@ var
     end;
   end;
 begin
-  if GThreadPolls.Any <> 0 then
-  begin
-    CheckExecutionTimeout;
-    CheckInstructionLimit;
-  end;
+  Polls := @GThreadPolls;
+  if Polls^.Any <> 0 then
+    RunArmedPolls(Polls);
   BoxedArgs := nil;
   try
     NativeInstance := nil;
@@ -9829,6 +9839,7 @@ end;
 function TGocciaVM.IterableToArray(const AIterable: TGocciaValue;
   const ATryAsync: Boolean; const ALimit: Integer): TGocciaArrayValue;
 var
+  Polls: PGocciaThreadPolls;
   IteratorValue: TGocciaValue;
   DoneFlag: Boolean;
   NextMethod: TGocciaValue;
@@ -9890,12 +9901,10 @@ begin
         Exit;
       end;
       try
+        Polls := @GThreadPolls;
         repeat
-          if GThreadPolls.Any <> 0 then
-          begin
-            CheckExecutionTimeout;
-            CheckInstructionLimit;
-          end;
+          if Polls^.Any <> 0 then
+            RunArmedPolls(Polls);
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             Result.Elements.Add(NextResult);
@@ -9942,12 +9951,10 @@ begin
         ThrowTypeError(SErrorIteratorNextMustBeCallable,
           SSuggestIteratorProtocol);
       try
+        Polls := @GThreadPolls;
         repeat
-          if GThreadPolls.Any <> 0 then
-          begin
-            CheckExecutionTimeout;
-            CheckInstructionLimit;
-          end;
+          if Polls^.Any <> 0 then
+            RunArmedPolls(Polls);
           CallArgs := AcquireArguments;
           try
             NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -10009,6 +10016,7 @@ end;
 procedure TGocciaVM.SpreadIterableIntoArray(const ATarget: TGocciaArrayValue;
   const ASource: TGocciaValue);
 var
+  Polls: PGocciaThreadPolls;
   SourceArray, Spread: TGocciaArrayValue;
   Target, SourceElements: TGocciaElementList;
   Needed, I: Integer;
@@ -10027,13 +10035,11 @@ begin
     if Needed > Target.Capacity then
       Target.Capacity := Max(Needed, Target.Capacity * 2);
     I := 0;
+    Polls := @GThreadPolls;
     while I < SourceElements.Count do
     begin
-      if GThreadPolls.Any <> 0 then
-      begin
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
-      end;
+      if Polls^.Any <> 0 then
+        RunArmedPolls(Polls);
       Target.Add(ArrayIteratorValueAt(SourceArray, I));
       Inc(I);
     end;
@@ -10053,6 +10059,7 @@ end;
 function TGocciaVM.TryIterableToArray(const AIterable: TGocciaValue;
   out AArray: TGocciaArrayValue): Boolean;
 var
+  Polls: PGocciaThreadPolls;
   IteratorValue, IteratorMethod, IteratorObject, NextMethod, NextResult,
     DoneValue, Value: TGocciaValue;
   IteratorSource: TGocciaObjectValue;
@@ -10121,12 +10128,10 @@ begin
     if IteratorValue is TGocciaIteratorValue then
     begin
       try
+        Polls := @GThreadPolls;
         repeat
-          if GThreadPolls.Any <> 0 then
-          begin
-            CheckExecutionTimeout;
-            CheckInstructionLimit;
-          end;
+          if Polls^.Any <> 0 then
+            RunArmedPolls(Polls);
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             AArray.Elements.Add(NextResult);
@@ -10145,12 +10150,10 @@ begin
     // is TGocciaObjectValue` arm), so the loop just reuses it instead
     // of re-running GetProperty(PROP_NEXT) per iteration.
     try
+      Polls := @GThreadPolls;
       repeat
-        if GThreadPolls.Any <> 0 then
-        begin
-          CheckExecutionTimeout;
-          CheckInstructionLimit;
-        end;
+        if Polls^.Any <> 0 then
+          RunArmedPolls(Polls);
         CallArgs := AcquireArguments;
         try
           NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -15305,12 +15308,12 @@ end;
 function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
   const APushExecutionContext: Boolean): TGocciaRegister;
+var
+  Polls: PGocciaThreadPolls;
 begin
-  if GThreadPolls.Any <> 0 then
-  begin
-    CheckExecutionTimeout;
-    CheckInstructionLimit;
-  end;
+  Polls := @GThreadPolls;
+  if Polls^.Any <> 0 then
+    RunArmedPolls(Polls);
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
     PGocciaRegister(AArguments), Length(AArguments), APushExecutionContext);
 end;
@@ -16913,6 +16916,7 @@ function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
   const APushExecutionContext: Boolean;
   const ASuspension: PGocciaBytecodeSuspension): TGocciaValue;
 var
+  Polls: PGocciaThreadPolls;
   StackArguments: array[0..MAX_STACK_STAGED_ARGUMENT_COUNT - 1] of
     TGocciaRegister;
   I, ArgumentCount: Integer;
@@ -16923,11 +16927,9 @@ begin
       APushExecutionContext));
   for I := 0 to ArgumentCount - 1 do
     StackArguments[I] := VMValueToRegisterFast(AArguments.GetElement(I));
-  if GThreadPolls.Any <> 0 then
-  begin
-    CheckExecutionTimeout;
-    CheckInstructionLimit;
-  end;
+  Polls := @GThreadPolls;
+  if Polls^.Any <> 0 then
+    RunArmedPolls(Polls);
   Result := RegisterToValue(ExecuteClosureRegistersInternal(AClosure,
     VMValueToRegisterFast(AThisValue), @StackArguments[0], ArgumentCount,
     APushExecutionContext, -1, nil, ASuspension));

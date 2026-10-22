@@ -229,7 +229,8 @@
         JumpOffset := DecodeAx(Instruction);
         Inc(Frame.IP, JumpOffset);
         if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
       end;
 
       OP_JUMP_IF_TRUE:
@@ -243,7 +244,8 @@
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-            CheckExecutionTimeout;
+            PollExecutionTimeout(
+              PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         end
         else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -262,7 +264,8 @@
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
           if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-            CheckExecutionTimeout;
+            PollExecutionTimeout(
+              PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         end
         else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
           TGocciaCoverageTracker.Instance.RecordBranchHit(
@@ -294,7 +297,8 @@
             JumpOffset := Int16(C);
             Inc(Frame.IP, JumpOffset);
             if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-              CheckExecutionTimeout;
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
           end
           else if FCoverageEnabled and
                   (TGocciaCoverageTracker.Instance <> nil) and
@@ -347,7 +351,8 @@
             JumpOffset := Int16(C);
             Inc(Frame.IP, JumpOffset);
             if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-              CheckExecutionTimeout;
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
           end
           else if FCoverageEnabled and
                   (TGocciaCoverageTracker.Instance <> nil) and
@@ -2465,7 +2470,8 @@
       OP_CALL_SELF_NUM:
       begin
         if FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
           ProfileEntryTimestamp);
         goto LDispatchNext;
@@ -2474,7 +2480,8 @@
       OP_DIRECT_EVAL:
       begin
         if FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         ChildClosure := ExecuteDirectEvalSite(A, DecodeBx(Instruction),
           Template, Frame.IP, InstructionStartIP);
         // Eval code compiled at a strict call site runs as a frame of its
@@ -2492,7 +2499,8 @@
       OP_CALL:
       begin
         if FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         // A bytecode function is the usual callee and is neither a native nor
         // a bound function. Its class is sealed, so one exact class comparison
         // decides it: a bytecode callee skips the two `is` tests below, and
@@ -2717,7 +2725,8 @@
       OP_CALL_METHOD:
       begin
         if FThreadPolls^.TimeoutArmed then
-          CheckExecutionTimeout;
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
         // See OP_CALL: an exact class comparison decides a bytecode callee.
         CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
           Assigned(FRegisters[A].ObjectValue) and
@@ -4395,7 +4404,8 @@
           if Op = OP_CALL_SELF then
           begin
             if FThreadPolls^.TimeoutArmed then
-              CheckExecutionTimeout;
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
             PushFrame(A, Frame.IP, Template, PrevCovLine,
               ProfileEntryTimestamp);
             SetupNewFrame(FCurrentClosure, RegisterUndefined, @FRegisters[B],
