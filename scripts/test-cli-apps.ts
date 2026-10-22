@@ -5349,9 +5349,9 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     // that instruction is the only one on a declaration line whose initializer
     // starts below it, in a block, a switch clause, a loop body or a
     // destructuring declaration.
-    const declarationSourcePath = join(tmp, "declaration-coverage.js");
+    const laterLineDeclarationSourcePath = join(tmp, "declaration-coverage.js");
     writeFileSync(
-      declarationSourcePath,
+      laterLineDeclarationSourcePath,
       [
         "const id = (x) => x;",
         "const run = (a) => {",
@@ -5379,16 +5379,16 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         "",
       ].join("\n"),
     );
-    const declarationLcovPath = join(tmp, "declaration-coverage.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
-    const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
+    const laterLineDeclarationLcovPath = join(tmp, "declaration-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${laterLineDeclarationLcovPath} ${laterLineDeclarationSourcePath}`.quiet();
+    const laterLineDeclarationLcov = readFileSync(laterLineDeclarationLcovPath, "utf-8");
     for (const line of [4, 10, 15, 19]) {
-      if (!declarationLcov.includes(`DA:${line},`) || declarationLcov.includes(`DA:${line},0\n`)) {
-        throw new Error(`LCOV should count declaration line ${line} as executed, got:\n${declarationLcov}`);
+      if (!laterLineDeclarationLcov.includes(`DA:${line},`) || laterLineDeclarationLcov.includes(`DA:${line},0\n`)) {
+        throw new Error(`LCOV should count declaration line ${line} as executed, got:\n${laterLineDeclarationLcov}`);
       }
     }
-    if (/^DA:\d+,0$/m.test(declarationLcov)) {
-      throw new Error(`LCOV should report no unexecuted line, got:\n${declarationLcov}`);
+    if (/^DA:\d+,0$/m.test(laterLineDeclarationLcov)) {
+      throw new Error(`LCOV should report no unexecuted line, got:\n${laterLineDeclarationLcov}`);
     }
 
     console.log("Loader: line coverage of let and parameter operands spread over several lines...");
