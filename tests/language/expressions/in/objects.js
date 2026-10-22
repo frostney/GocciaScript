@@ -132,3 +132,29 @@ test("private accessor presence checks the receiver brand without invoking gette
   expect(Class.hasAccessor(new Class())).toBe(true);
   expect(count).toBe(0);
 });
+
+// #1326: these names once matched the engine's private storage keys.
+test("in finds own properties named like private storage keys", () => {
+  const obj = { "#slot:a": 1, "#brand:b": 2, "#initialized:c": 3 };
+  expect("#slot:a" in obj).toBe(true);
+  expect("#brand:b" in obj).toBe(true);
+  expect("#initialized:c" in obj).toBe(true);
+  expect("#slot:missing" in obj).toBe(false);
+  const key = "#slot:a";
+  expect(key in obj).toBe(true);
+});
+
+test("a string named like a private storage key does not test a private field", () => {
+  class Branded {
+    #mark = 1;
+    static hasMark(value) {
+      return #mark in value;
+    }
+    static hasString(value) {
+      return "#slot:0$mark" in value;
+    }
+  }
+  const branded = new Branded();
+  expect(Branded.hasMark(branded)).toBe(true);
+  expect(Branded.hasString(branded)).toBe(false);
+});

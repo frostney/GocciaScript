@@ -165,3 +165,22 @@ describe("Object.getOwnPropertyNames", () => {
     expect(() => Object.getOwnPropertyNames(undefined)).toThrow(TypeError);
   });
 });
+
+// #1326: these names once matched the engine's private storage keys.
+test("Object.getOwnPropertyNames lists names that look like private storage keys", () => {
+  const obj = { "#slot:a": 1 };
+  Object.defineProperty(obj, "#brand:b", { value: 2, enumerable: false });
+  expect(Object.getOwnPropertyNames(obj)).toEqual(["#slot:a", "#brand:b"]);
+});
+
+test("Object.getOwnPropertyNames does not list private methods or accessors", () => {
+  class Methods {
+    #method() {}
+    get #accessor() {
+      return 1;
+    }
+    visible() {}
+  }
+  expect(Object.getOwnPropertyNames(Methods.prototype)).toEqual(["constructor", "visible"]);
+  expect(Object.getOwnPropertyNames(new Methods())).toEqual([]);
+});

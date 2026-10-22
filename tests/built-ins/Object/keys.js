@@ -117,3 +117,13 @@ test("Object.keys property descriptor on Object", () => {
   expect(desc.enumerable).toBe(false);
   expect(desc.configurable).toBe(true);
 });
+
+// #1326: these names once matched the engine's private storage keys.
+test("Object.keys lists names that look like private storage keys", () => {
+  const obj = { "#slot:a": 1, "#brand:b": 2, "#initialized:c": 3, ordinary: 4 };
+  expect(Object.keys(obj)).toEqual(["#slot:a", "#brand:b", "#initialized:c", "ordinary"]);
+  const dynamic = {};
+  dynamic["#slot:x"] = 1;
+  dynamic["#brand:y"] = 2;
+  expect(Object.keys(dynamic)).toEqual(["#slot:x", "#brand:y"]);
+});

@@ -228,3 +228,13 @@ test("dedups same-named keys across a deep prototype chain at scale", () => {
   // Shared keys resolve to the leaf level's value.
   expect(leaf.k0).toBe(LEVELS - 1);
 });
+
+// #1326: these names once matched the engine's private storage keys.
+test("enumerates names that look like private storage keys", () => {
+  const obj = { "#slot:f": 1, "#brand:g": 2, h: 3 };
+  const keys = [];
+  for (const key in obj) {
+    keys.push(key);
+  }
+  expect(keys).toEqual(["#slot:f", "#brand:g", "h"]);
+});

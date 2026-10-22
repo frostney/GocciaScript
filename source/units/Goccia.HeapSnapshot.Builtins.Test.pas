@@ -65,6 +65,7 @@ type
     procedure TestSlotsNothingFillsAreKnown;
     procedure TestShimLoadedNativelyRestores;
     procedure TestDateRefusesUntilItsCodec;
+    procedure TestPrivateElementsOnBuiltinRefuse;
     procedure TestBuiltinInternalsAreNotMissed;
     procedure TestShimTakesInRunFunction;
     procedure TestShimLoadCallsAnotherEngine;
@@ -141,6 +142,8 @@ begin
     TestSlotsNothingFillsAreKnown);
   Test('A shim loaded natively, not through its global, restores',
     TestShimLoadedNativelyRestores);
+  Test('A built-in a derived constructor stamped with private elements ' +
+    'refuses the snapshot', TestPrivateElementsOnBuiltinRefuse);
   Test('A Date refuses the snapshot until a codec covers its time value',
     TestDateRefusesUntilItsCodec);
   Test('Built-ins written in JavaScript are not missed objects; the run''s are',
@@ -501,6 +504,27 @@ begin
   Expect<string>(RestoreAndCheck(Bytes, '[restored.t, ' +
     'restored.proto === Date.prototype, new Date(9).getTime()].join()'))
     .ToBe('7,true,9');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestPrivateElementsOnBuiltinRefuse;
+const
+  // A base constructor that returns Math lets the derived class stamp its
+  // private field and brand on that built-in. The class itself is not kept.
+  STAMP_MATH = '(() => { class Base { constructor() { return Math; } } ' +
+    'class Stamp extends Base { #x = 1; } new Stamp(); ' +
+    'return { m: Math }; })()';
+var
+  Refusal: string;
+begin
+  // A built-in is written by name and by a difference of its properties;
+  // neither carries private elements, so the snapshot refuses instead of
+  // dropping them.
+  Snapshot(STAMP_MATH, Refusal);
+  Expect<Boolean>(Pos('Math holds private elements', Refusal) > 0)
+    .ToBe(True);
+  // The same reference without the stamp writes.
+  Snapshot('({ m: Math })', Refusal);
+  Expect<string>(Refusal).ToBe('');
 end;
 
 // The refusal of a snapshot of a fresh object in a run whose top-level

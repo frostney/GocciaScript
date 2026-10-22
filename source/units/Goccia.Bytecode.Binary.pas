@@ -636,7 +636,7 @@ begin
         WriteInt64(Constant.IntValue);
       bckFloat:
         WriteDouble(Constant.FloatValue);
-      bckString, bckBigInt:
+      bckString, bckBigInt, bckPrivateName:
         WriteString(Constant.StringValue);
       bckRegExpLiteral:
       begin
@@ -1101,6 +1101,7 @@ begin
       bckFloat:   Result.AddConstantFloat(ReadDouble);
       bckString:  Result.AddConstantString(ReadString);
       bckBigInt:  Result.AddConstantBigInt(ReadBigIntDecimal);
+      bckPrivateName: Result.AddConstantPrivateName(ReadString);
       bckRegExpLiteral:
       begin
         RegExpPattern := ReadString;
