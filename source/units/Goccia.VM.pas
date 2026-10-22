@@ -16191,13 +16191,6 @@ function TGocciaVM.ExecuteClosureRegistersInternal(
   const APushExecutionContext: Boolean; const AStopAtIP: Integer;
   const AStopGenerator: TObject;
   const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
-label
-  LGetPropConstShared,
-  LProdLoopHead,
-  LInstrumentedLoopHead,
-  LDispatchCase,
-  LDispatchNext,
-  LInnerLoopsDone;
 var
   Frame: TGocciaVMCallFrame;
   SavedRegisterBase: Integer;
@@ -16684,118 +16677,111 @@ begin
       try
         UseProdDispatch := not FCoverageEnabled and not FProfilingOpcodes and
           (AStopAtIP < 0) and not FThreadPolls^.InstructionLimitActive;
-        if UseProdDispatch then
-          goto LProdLoopHead
-        else
-          goto LInstrumentedLoopHead;
-
-LProdLoopHead:
-        if Frame.IP >= Template.CodeCount then
-          goto LInnerLoopsDone;
-        InstructionStartIP := Frame.IP;
-        Instruction := Template.GetInstructionUnchecked(Frame.IP);
-        Inc(Frame.IP);
-
-        // Every instruction passes through here; only an OP_WIDE prefix pays
-        // for the high operand bytes.
-        Op := DecodeOp(Instruction);
-        if Op <> Ord(OP_WIDE) then
+        // One loop, two instruction-fetch paths, no goto: FPC lowers a
+        // function that uses goto on wasm32 into a state machine over its
+        // whole body, and natively this loop executes no more instructions
+        // in total (ADR 0154).
+        // Continue in the opcode case fetches the next instruction without
+        // the memory-pressure check at the end of the body.
+        while Frame.IP < Template.CodeCount do
         begin
-          A := DecodeA(Instruction);
-          B := DecodeB(Instruction);
-          C := DecodeC(Instruction);
-        end
-        else
-        begin
-          WideA := UInt16(DecodeA(Instruction)) shl 8;
-          WideB := UInt16(DecodeB(Instruction)) shl 8;
-          WideC := UInt16(DecodeC(Instruction)) shl 8;
-          if Frame.IP >= Template.CodeCount then
-            raise Exception.Create('Truncated OP_WIDE bytecode prefix');
-          Instruction := Template.GetInstructionUnchecked(Frame.IP);
-          Inc(Frame.IP);
-          Op := DecodeOp(Instruction);
-          A := WideA or DecodeA(Instruction);
-          B := WideB or DecodeB(Instruction);
-          C := WideC or DecodeC(Instruction);
-        end;
-        goto LDispatchCase;
-
-LInstrumentedLoopHead:
-        if Frame.IP >= Template.CodeCount then
-          goto LInnerLoopsDone;
-        if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
-           Assigned(AStopGenerator) then
-        begin
-          TGocciaBytecodeGeneratorObjectValue(AStopGenerator).
-            CaptureInitialContinuation(Frame, SavedHandlerCount, PrevCovLine,
-              Frame.IP);
-          Result := RegisterUndefined;
-          Exit;
-        end;
-
-        PollInstructionLimit(InstructionLimitState);
-        InstructionStartIP := Frame.IP;
-        Instruction := Template.GetInstructionUnchecked(Frame.IP);
-        Inc(Frame.IP);
-
-        WideA := 0;
-        WideB := 0;
-        WideC := 0;
-        if DecodeOp(Instruction) = Ord(OP_WIDE) then
-        begin
-          WideA := UInt16(DecodeA(Instruction)) shl 8;
-          WideB := UInt16(DecodeB(Instruction)) shl 8;
-          WideC := UInt16(DecodeC(Instruction)) shl 8;
-          if Frame.IP >= Template.CodeCount then
-            raise Exception.Create('Truncated OP_WIDE bytecode prefix');
-          Instruction := Template.GetInstructionUnchecked(Frame.IP);
-          Inc(Frame.IP);
-        end;
-
-        if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
-           Assigned(Template.DebugInfo) then
-        begin
-          CovLine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
-          if (CovLine <> 0) and (CovLine <> PrevCovLine) then
+          if UseProdDispatch then
           begin
-            TGocciaCoverageTracker.Instance.RecordLineHit(
-              Template.DebugInfo.SourceFile, CovLine);
-            PrevCovLine := CovLine;
+            InstructionStartIP := Frame.IP;
+            Instruction := Template.GetInstructionUnchecked(Frame.IP);
+            Inc(Frame.IP);
+
+            // Every instruction passes through here; only an OP_WIDE prefix
+            // pays for the high operand bytes.
+            Op := DecodeOp(Instruction);
+            if Op <> Ord(OP_WIDE) then
+            begin
+              A := DecodeA(Instruction);
+              B := DecodeB(Instruction);
+              C := DecodeC(Instruction);
+            end
+            else
+            begin
+              WideA := UInt16(DecodeA(Instruction)) shl 8;
+              WideB := UInt16(DecodeB(Instruction)) shl 8;
+              WideC := UInt16(DecodeC(Instruction)) shl 8;
+              if Frame.IP >= Template.CodeCount then
+                raise Exception.Create('Truncated OP_WIDE bytecode prefix');
+              Instruction := Template.GetInstructionUnchecked(Frame.IP);
+              Inc(Frame.IP);
+              Op := DecodeOp(Instruction);
+              A := WideA or DecodeA(Instruction);
+              B := WideB or DecodeB(Instruction);
+              C := WideC or DecodeC(Instruction);
+            end;
+          end
+          else
+          begin
+            if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
+               Assigned(AStopGenerator) then
+            begin
+              TGocciaBytecodeGeneratorObjectValue(AStopGenerator).
+                CaptureInitialContinuation(Frame, SavedHandlerCount,
+                  PrevCovLine, Frame.IP);
+              Result := RegisterUndefined;
+              Exit;
+            end;
+
+            PollInstructionLimit(InstructionLimitState);
+            InstructionStartIP := Frame.IP;
+            Instruction := Template.GetInstructionUnchecked(Frame.IP);
+            Inc(Frame.IP);
+
+            WideA := 0;
+            WideB := 0;
+            WideC := 0;
+            if DecodeOp(Instruction) = Ord(OP_WIDE) then
+            begin
+              WideA := UInt16(DecodeA(Instruction)) shl 8;
+              WideB := UInt16(DecodeB(Instruction)) shl 8;
+              WideC := UInt16(DecodeC(Instruction)) shl 8;
+              if Frame.IP >= Template.CodeCount then
+                raise Exception.Create('Truncated OP_WIDE bytecode prefix');
+              Instruction := Template.GetInstructionUnchecked(Frame.IP);
+              Inc(Frame.IP);
+            end;
+
+            if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
+               Assigned(Template.DebugInfo) then
+            begin
+              CovLine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
+              if (CovLine <> 0) and (CovLine <> PrevCovLine) then
+              begin
+                TGocciaCoverageTracker.Instance.RecordLineHit(
+                  Template.DebugInfo.SourceFile, CovLine);
+                PrevCovLine := CovLine;
+              end;
+            end;
+
+            Op := DecodeOp(Instruction);
+            if FProfilingOpcodes then
+              TGocciaProfiler.Instance.RecordOpcode(Op);
+            A := WideA or DecodeA(Instruction);
+            B := WideB or DecodeB(Instruction);
+            C := WideC or DecodeC(Instruction);
           end;
-        end;
 
-        Op := DecodeOp(Instruction);
-        if FProfilingOpcodes then
-          TGocciaProfiler.Instance.RecordOpcode(Op);
-        A := WideA or DecodeA(Instruction);
-        B := WideB or DecodeB(Instruction);
-        C := WideC or DecodeC(Instruction);
-
-LDispatchCase:
 {$I Goccia.VM.DispatchCase.inc}
-        if FMemoryPressureCheckCountdown = 0 then
-        begin
-          if Assigned(GC) then
-            GC.CollectForMemoryPressure(nil,
-              MEMORY_PRESSURE_CHECK_FORCES_COLLECTION);
-          FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
-          if FStackChargePending then
-            SettleStackGrowth
-          else if FStackChargedBytes + FStackUnchargedBytes > 0 then
-            ShrinkIdleStacks;
-        end
-        else
-          Dec(FMemoryPressureCheckCountdown);
-        goto LDispatchNext;
 
-LDispatchNext:
-        if UseProdDispatch then
-          goto LProdLoopHead
-        else
-          goto LInstrumentedLoopHead;
-
-LInnerLoopsDone:
+          if FMemoryPressureCheckCountdown = 0 then
+          begin
+            if Assigned(GC) then
+              GC.CollectForMemoryPressure(nil,
+                MEMORY_PRESSURE_CHECK_FORCES_COLLECTION);
+            FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
+            if FStackChargePending then
+              SettleStackGrowth
+            else if FStackChargedBytes + FStackUnchargedBytes > 0 then
+              ShrinkIdleStacks;
+          end
+          else
+            Dec(FMemoryPressureCheckCountdown);
+        end;
       except
         on E: EGocciaBytecodeThrow do
           if not TryUnwindToHandler(E.ThrownValue,
