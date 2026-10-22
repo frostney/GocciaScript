@@ -126,6 +126,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.URL.Parser,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.ResponseValue,
@@ -1365,17 +1366,84 @@ begin
     ACharged := ABytes;
 end;
 
+{ Resolves APromise with the response ACompletion carries. Its body's bytes
+  are reserved first, before any value is made, so the collection a
+  reservation may run sees no value that only this frame holds (the promise
+  is a temp root); a body that does not fit rejects with the memory-limit
+  RangeError, as an allocation over the limit throws it. Making the headers
+  and the response can still reach the limit when the body only just fits:
+  that script-visible error rejects the promise too, rather than leaving it
+  pending and the error to whatever pumped the completion. The response owns
+  the reservation once it has the body. }
+procedure SettleResponse(const APromise: TGocciaPromiseValue;
+  const ACompletion: TGocciaFetchCompletion);
+var
+  RespHeaders: TGocciaHeadersValue;
+  RespValue: TGocciaResponseValue;
+  ResponseURL: string;
+  BodyCharge: Int64;
+  Roots: TGocciaActiveRootFrame;
+  I: Integer;
+
+  procedure ReleaseCharge;
+  begin
+    if (BodyCharge > 0) and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.ReleaseExternalBytes(BodyCharge);
+    BodyCharge := 0;
+  end;
+
+begin
+  ResponseURL := ResponseURLForScript(ACompletion.Response.FinalURL);
+  if not ReserveResponseBody(Length(ACompletion.Response.Body),
+     BodyCharge) then
+  begin
+    APromise.Reject(CreateErrorObject('RangeError',
+      SErrorMemoryLimitExceeded));
+    Exit;
+  end;
+  Roots.Initialize;
+  try
+    try
+      RespHeaders := TGocciaHeadersValue.Create;
+      Roots.Add(RespHeaders);
+      RespHeaders.Immutable := True;
+      for I := 0 to High(ACompletion.Response.Headers) do
+        RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
+          ACompletion.Response.Headers[I].Value);
+      RespValue := TGocciaResponseValue.Create;
+      Roots.Add(RespValue);
+    except
+      on E: TGocciaThrowValue do
+      begin
+        ReleaseCharge;
+        APromise.Reject(E.Value);
+        Exit;
+      end;
+      else
+      begin
+        ReleaseCharge;
+        raise;
+      end;
+    end;
+    RespValue.InitFromHTTP(ACompletion.Response.StatusCode,
+      ACompletion.Response.StatusText, ResponseURL, RespHeaders,
+      ACompletion.Response.Body, ACompletion.Response.Redirected,
+      BodyCharge);
+    // The response owns the body now; the completion keeps no alias.
+    ACompletion.Response.Body := nil;
+    APromise.Resolve(RespValue);
+  finally
+    Roots.Clear;
+  end;
+end;
+
 procedure TGocciaFetchManagerImpl.SettleCompletion(
   const ACompletion: TGocciaFetchCompletion);
 var
   Pending: TGocciaPendingFetch;
   PendingIndex, I: Integer;
-  RespHeaders: TGocciaHeadersValue;
-  RespValue: TGocciaResponseValue;
   PreviousRealm: TGocciaRealm;
-  BodyCharge: Int64;
 begin
-  BodyCharge := 0;
   PendingIndex := FindPendingIndex(ACompletion.RequestID);
   if PendingIndex < 0 then
   begin
@@ -1405,45 +1473,8 @@ begin
     try
       ReplayHopDecisions(Pending, ACompletion);
 
-      if ACompletion.Success and
-         not ReserveResponseBody(Length(ACompletion.Response.Body),
-           BodyCharge) then
-        { The body does not fit the engine's memory limit: the fetch
-          rejects as an allocation over the limit throws. }
-        Pending.Promise.Reject(CreateErrorObject('RangeError',
-          SErrorMemoryLimitExceeded))
-      else if ACompletion.Success then
-      begin
-        { The body's bytes are reserved before any value is made, so the
-          collection a reservation may run sees no value that only this
-          frame holds (the promise is a temp root). The response owns the
-          reservation once it has the body. }
-        try
-          RespHeaders := TGocciaHeadersValue.Create;
-          RespHeaders.Immutable := True;
-          for I := 0 to High(ACompletion.Response.Headers) do
-            RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
-              ACompletion.Response.Headers[I].Value);
-
-          RespValue := TGocciaResponseValue.Create;
-        except
-          if (BodyCharge > 0) and Assigned(TGarbageCollector.Instance) then
-            TGarbageCollector.Instance.ReleaseExternalBytes(BodyCharge);
-          raise;
-        end;
-        RespValue.InitFromHTTP(
-          ACompletion.Response.StatusCode,
-          ACompletion.Response.StatusText,
-          ResponseURLForScript(ACompletion.Response.FinalURL),
-          RespHeaders,
-          ACompletion.Response.Body,
-          ACompletion.Response.Redirected,
-          BodyCharge);
-        // The response owns the body now; the completion keeps no alias.
-        ACompletion.Response.Body := nil;
-
-        Pending.Promise.Resolve(RespValue);
-      end
+      if ACompletion.Success then
+        SettleResponse(Pending.Promise, ACompletion)
       else if ACompletion.DeniedScope <> '' then
         Pending.Promise.Reject(CreatePermissionDeniedError(
           CapabilityName(gcNet), ACompletion.DeniedScope))

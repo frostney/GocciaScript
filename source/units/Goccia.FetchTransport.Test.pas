@@ -122,6 +122,7 @@ type
     procedure TestHeldBodiesCountTogether;
     procedure TestConsumedBodyIsChargedOnce;
     procedure TestCollectedResponseGivesItsBytesBack;
+    procedure TestBodyNearTheLimitSettlesThePromise;
     procedure TestAbortCancelsRequest;
     procedure TestTimeoutSignalCancelsRequest;
     procedure TestRunDeadlineEndsWait;
@@ -355,6 +356,8 @@ begin
     TestConsumedBodyIsChargedOnce);
   Test('a collected response gives its body''s bytes back',
     TestCollectedResponseGivesItsBytesBack);
+  Test('a body that only just fits still settles the fetch either way',
+    TestBodyNearTheLimitSettlesThePromise);
   Test('an abort cancels the request and a later answer is ignored',
     TestAbortCancelsRequest);
   Test('AbortSignal.timeout ends the wait for an answer',
@@ -785,6 +788,46 @@ begin
     'status().then((a) => status().then((b) => status().then((c) => {' +
     ' globalThis.outcome = [a, b, c].join(","); })));', Transport))
     .ToBe('200,200,200');
+end;
+
+{ Bodies whose size leaves less room than the headers and the response
+  value need: making those values reaches the limit after the body was
+  reserved. The fetch must still settle, resolved or rejected with the
+  memory-limit RangeError, never left pending with the error thrown out of
+  the run. }
+procedure TFetchTransportTests.TestBodyNearTheLimitSettlesThePromise;
+const
+  SWEEP_BYTES = 8 * 1024;
+  STEP_BYTES = 64;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+  Bytes: Integer;
+  Outcome: string;
+  Settled: Boolean;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Settled := True;
+  Bytes := MEMORY_HEADROOM - SWEEP_BYTES;
+  while Settled and (Bytes <= MEMORY_HEADROOM) do
+  begin
+    Fake.Response := BodyResponse(Bytes);
+    try
+      Outcome := RunUnderMemoryLimit('fetch("' + API_URL + '").then(' +
+        '(r) => { globalThis.outcome = "resolved"; },' +
+        ' (e) => { globalThis.outcome = e.name + ": " + e.message; });',
+        Transport);
+    except
+      on E: Exception do
+        Outcome := 'raised ' + E.ClassName;
+    end;
+    Settled := (Outcome = 'resolved') or (Outcome = MEMORY_LIMIT_OUTCOME);
+    Inc(Bytes, STEP_BYTES);
+  end;
+  Expect<string>(IntToStr(Bytes - STEP_BYTES) + ' ' + Outcome)
+    .ToBe(IntToStr(MEMORY_HEADROOM) + ' ' + Outcome);
+  Expect<Boolean>(Settled).ToBe(True);
 end;
 
 procedure TFetchTransportTests.TestAbortCancelsRequest;

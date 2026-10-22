@@ -101,6 +101,7 @@ uses
   Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -365,8 +366,15 @@ begin
     BodyText := DecodeUTF8WithReplacement(R.FBody);
     // The decoded text is all that is still needed of the body.
     R.ReleaseBody;
-    P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
     Result := P;
+    try
+      P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
+    except
+      // Text over the memory limit rejects the read, as a body that does
+      // not fit rejects the fetch.
+      on E: TGocciaThrowValue do
+        P.Reject(E.Value);
+    end;
   finally
     Roots.Clear;
   end;
@@ -467,10 +475,19 @@ begin
       bytes as its own, so the body is never charged twice. }
     Body := R.FBody;
     R.ReleaseBody;
-    AB := TGocciaArrayBufferValue.CreateFromBytes(Body);
-
-    P.Resolve(AB);
     Result := P;
+    try
+      AB := TGocciaArrayBufferValue.CreateFromBytes(Body);
+      Roots.Add(AB);
+    except
+      // A buffer over the memory limit rejects the read.
+      on E: TGocciaThrowValue do
+      begin
+        P.Reject(E.Value);
+        Exit;
+      end;
+    end;
+    P.Resolve(AB);
   finally
     Roots.Clear;
   end;
