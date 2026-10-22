@@ -5401,6 +5401,8 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       {
         name: "constant-branch",
         lines: [4, 5, 6, 7, 8, 9, 10, 11],
+        // Line 9's `if` keeps its own two arms next to the `&&`'s two.
+        recordsOnLine: { 9: 4 } as Record<number, number>,
         decided: { args: [] as string[], decl: "const" },
         undecided: { args: [] as string[], decl: "let" },
         source: (decl: string) => [
@@ -5424,6 +5426,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       {
         name: "strict-type-branch",
         lines: [3, 4],
+        recordsOnLine: {} as Record<number, number>,
         decided: { args: ["--strict-types"], decl: "const" },
         undecided: { args: [] as string[], decl: "const" },
         source: (decl: string) => [
@@ -5438,7 +5441,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         ],
       },
     ];
-    for (const { name, lines, decided, undecided, source } of constantBranchCases) {
+    for (const { name, lines, recordsOnLine, decided, undecided, source } of constantBranchCases) {
       const reports: Record<string, string> = {};
       for (const [kind, { args, decl }] of Object.entries({ decided, undecided })) {
         const sourcePath = join(tmp, `${name}-${kind}.js`);
@@ -5451,6 +5454,12 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         if (!new RegExp(`^BRDA:${line},\\d+,\\d+,1$`, "m").test(reports.decided) ||
             !new RegExp(`^BRDA:${line},\\d+,\\d+,-$`, "m").test(reports.decided)) {
           throw new Error(`${name}: LCOV should keep a taken and an untaken branch on line ${line}, got:\n${reports.decided}`);
+        }
+      }
+      for (const [line, count] of Object.entries(recordsOnLine)) {
+        const found = branchRecords(reports.undecided).filter((r) => r.startsWith(`${line}:`)).length;
+        if (found !== count) {
+          throw new Error(`${name}: LCOV should keep ${count} branch records on line ${line}, found ${found}:\n${reports.undecided}`);
         }
       }
       if (branchRecords(reports.decided).join("\n") !== branchRecords(reports.undecided).join("\n")) {

@@ -81,6 +81,9 @@ function TryEmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
 procedure EmitConditionJumps(const ACtx: TGocciaCompilationContext;
   const ACondition: TGocciaExpression; const AJumpWhen: Boolean;
   var AJumps: TGocciaCompilerJumpArray);
+// Points every jump in AJumps at the current position.
+procedure PatchJumpArray(const ACtx: TGocciaCompilationContext;
+  const AJumps: TGocciaCompilerJumpArray);
 procedure CompileArray(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrayExpression; const ADest: UInt16);
 procedure CompileObject(const ACtx: TGocciaCompilationContext;
@@ -5971,6 +5974,15 @@ begin
   AJumps[High(AJumps)] := AJumpIndex;
 end;
 
+procedure PatchJumpArray(const ACtx: TGocciaCompilationContext;
+  const AJumps: TGocciaCompilerJumpArray);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AJumps) do
+    PatchJumpTarget(ACtx, AJumps[I]);
+end;
+
 // The kind of OP_JUMP_IF_NULLISH match that `x === AExpr` is, when AExpr is
 // null or undefined at compile time: a literal, or a constant such as a const
 // binding of null. Evaluating such an operand has no effect to keep.
@@ -5991,6 +6003,7 @@ begin
   Result := True;
 end;
 
+// ES2026 §7.2.14 IsStrictlyEqual(x, y)
 // `x === null`, `x !== null`, `x === undefined` and `x !== undefined`, either
 // way round, as one jump on x. Strict equality with null or undefined holds
 // exactly for the register of that kind: the VM keeps both unboxed, as the
@@ -6020,14 +6033,7 @@ begin
     Exit;
 
   EmitLineMapping(ACtx, ACondition.Line, ACondition.Column);
-  if TryResolveSettledLocalRegister(ACtx, Operand, OperandReg) then
-    OwnsOperandReg := False
-  else
-  begin
-    OwnsOperandReg := True;
-    OperandReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(Operand, OperandReg);
-  end;
+  OwnsOperandReg := CompileOperand(ACtx, Operand, OperandReg);
   // Jump when the comparison's outcome is AJumpWhen: for === that is a match
   // when jumping on true, for !== a match when jumping on false.
   JumpOnMatch := (Binary.Operator = gttEqual) = AJumpWhen;
@@ -6042,25 +6048,30 @@ begin
   Result := True;
 end;
 
+// ES2026 §13.13.1 Binary Logical Operators: Evaluation, §13.5.7.1 Logical NOT
+// Operator: Evaluation
 // `a && b`, `a || b` and `!a` become chains of jumps on their operands, which
 // is how they short-circuit anyway: ToBoolean has no side effects, so testing
 // an operand where it is computed is the same as testing the value the whole
 // expression would have produced. An operand that is a settled local is
-// tested in its own register instead of a copy.
+// tested in its own register instead of a copy. Under coverage `&&` and `||`
+// keep their value: the statement's own branch records count the test of
+// that value, and splitting it would drop them.
 procedure EmitConditionJumps(const ACtx: TGocciaCompilationContext;
   const ACondition: TGocciaExpression; const AJumpWhen: Boolean;
   var AJumps: TGocciaCompilerJumpArray);
 var
   Binary: TGocciaBinaryExpression;
   SkipJumps: TGocciaCompilerJumpArray;
-  JumpIndex, I: Integer;
+  JumpIndex: Integer;
   CondReg: UInt16;
   OwnsCondReg: Boolean;
 begin
   if ACondition is TGocciaBinaryExpression then
   begin
     Binary := TGocciaBinaryExpression(ACondition);
-    if (Binary.Operator = gttAnd) or (Binary.Operator = gttOr) then
+    if ((Binary.Operator = gttAnd) or (Binary.Operator = gttOr)) and
+       not ACtx.OptimizationOptions.PreserveCoverageShape then
     begin
       if (Binary.Operator = gttAnd) <> AJumpWhen then
       begin
@@ -6076,8 +6087,7 @@ begin
         SetLength(SkipJumps, 0);
         EmitConditionJumps(ACtx, Binary.Left, not AJumpWhen, SkipJumps);
         EmitConditionJumps(ACtx, Binary.Right, AJumpWhen, AJumps);
-        for I := 0 to High(SkipJumps) do
-          PatchJumpTarget(ACtx, SkipJumps[I]);
+        PatchJumpArray(ACtx, SkipJumps);
       end;
       Exit;
     end;
@@ -6105,14 +6115,7 @@ begin
     Exit;
   end;
 
-  if TryResolveSettledLocalRegister(ACtx, ACondition, CondReg) then
-    OwnsCondReg := False
-  else
-  begin
-    OwnsCondReg := True;
-    CondReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(ACondition, CondReg);
-  end;
+  OwnsCondReg := CompileOperand(ACtx, ACondition, CondReg);
   if AJumpWhen then
     AppendJump(AJumps, EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg))
   else
@@ -6124,7 +6127,7 @@ end;
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaConditionalExpression; const ADest: UInt16);
 var
-  ElseJump, EndJump, I: Integer;
+  ElseJump, EndJump: Integer;
   ElseJumps: TGocciaCompilerJumpArray;
   ConditionReg: UInt16;
   ConditionBinary: TGocciaBinaryExpression;
@@ -6154,22 +6157,11 @@ begin
     end;
   end;
 
-  if TryEmitJumpIfNotLessThan(ACtx, AExpr.Condition, ElseJump) then
-  begin
-    ACtx.CompileExpression(AExpr.Consequent, ADest);
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-    PatchJumpTarget(ACtx, ElseJump);
-    ACtx.CompileExpression(AExpr.Alternate, ADest);
-    PatchJumpTarget(ACtx, EndJump);
-    Exit;
-  end;
-
   SetLength(ElseJumps, 0);
   EmitConditionJumps(ACtx, AExpr.Condition, False, ElseJumps);
   ACtx.CompileExpression(AExpr.Consequent, ADest);
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-  for I := 0 to High(ElseJumps) do
-    PatchJumpTarget(ACtx, ElseJumps[I]);
+  PatchJumpArray(ACtx, ElseJumps);
   ACtx.CompileExpression(AExpr.Alternate, ADest);
   PatchJumpTarget(ACtx, EndJump);
 end;

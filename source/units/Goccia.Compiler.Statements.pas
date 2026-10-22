@@ -2347,15 +2347,6 @@ begin
   EmitConditionJumps(ACtx, ACondition, False, Result);
 end;
 
-procedure PatchJumpArray(const ACtx: TGocciaCompilationContext;
-  const AJumps: TGocciaCompilerJumpArray);
-var
-  I: Integer;
-begin
-  for I := 0 to High(AJumps) do
-    PatchJumpTarget(ACtx, AJumps[I]);
-end;
-
 // ES2026 §B.3.3 FunctionDeclarations in IfStatement Statement Clauses: a
 // function declaration that is the whole body of an if or else clause, which
 // the parser accepts only in non-strict code, behaves as the only statement of
