@@ -25,6 +25,10 @@ function PrivateStorageSourceName(const AStorageName: string): string;
 // key, the name itself otherwise.
 function DisplayClassElementName(const AStorageName: string): string;
 
+// The storage key of the private name #AName in the class body whose key
+// prefix is APrefix: PRIVATE_STORAGE_SLOT_PREFIX + APrefix + AName.
+function PrivateStorageKey(const APrefix, AName: string): string;
+
 implementation
 
 function PrivateNameStart(const AStorageName: string): Integer;
@@ -48,6 +52,11 @@ begin
   if NameStart = 0 then
     Exit(AStorageName);
   Result := Copy(AStorageName, NameStart, MaxInt);
+end;
+
+function PrivateStorageKey(const APrefix, AName: string): string;
+begin
+  Result := PRIVATE_STORAGE_SLOT_PREFIX + APrefix + AName;
 end;
 
 function DisplayClassElementName(const AStorageName: string): string;

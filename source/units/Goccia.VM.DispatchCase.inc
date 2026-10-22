@@ -19,27 +19,20 @@
             bckTemplateObject:
               FRegisters[A] := ValueToRegister(BuildTemplateObjectConstant(
                 Template, DecodeBx(Instruction)));
-            bckString:
+            // A private name loads as its TGocciaPrivateNameKeyValue, the
+            // only key value that names a private element.
+            bckString, bckPrivateName:
               begin
                 LeftValue := TGocciaValue(
                   Template.GetStringConstantCache(DecodeBx(Instruction)));
                 if not Assigned(LeftValue) then
                 begin
-                  LeftValue := TGocciaStringLiteralValue.Create(
-                    Constant.StringValue);
-                  Template.SetStringConstantCache(
-                    DecodeBx(Instruction), LeftValue);
-                end;
-                FRegisters[A] := RegisterObject(LeftValue);
-              end;
-            bckPrivateName:
-              begin
-                LeftValue := TGocciaValue(
-                  Template.GetStringConstantCache(DecodeBx(Instruction)));
-                if not Assigned(LeftValue) then
-                begin
-                  LeftValue := TGocciaPrivateNameKeyValue.Create(
-                    Constant.StringValue);
+                  if Constant.Kind = bckPrivateName then
+                    LeftValue := TGocciaPrivateNameKeyValue.Create(
+                      Constant.StringValue)
+                  else
+                    LeftValue := TGocciaStringLiteralValue.Create(
+                      Constant.StringValue);
                   Template.SetStringConstantCache(
                     DecodeBx(Instruction), LeftValue);
                 end;
@@ -1300,9 +1293,7 @@
             GlobalName := PropertyKeyName(PropKey);
             // A private field past the 8-bit constant operand
             // (EmitDefineStaticPropertyByName).
-            if (FRegisters[B].Kind = grkObject) and
-               (FRegisters[B].ObjectValue.ClassType =
-                TGocciaPrivateNameKeyValue) then
+            if IsPrivateNameKeyRegister(FRegisters[B]) then
             begin
               if TargetValue is TGocciaInstanceValue then
               begin
@@ -1328,9 +1319,7 @@
               GlobalName, RightValue, [pfEnumerable, pfConfigurable, pfWritable]);
           end;
         end
-        else if (FRegisters[B].Kind = grkObject) and
-                (FRegisters[B].ObjectValue.ClassType =
-                 TGocciaPrivateNameKeyValue) then
+        else if IsPrivateNameKeyRegister(FRegisters[B]) then
           SetPrivatePropertyValue(TargetValue,
             TGocciaPrivateNameKeyValue(FRegisters[B].ObjectValue).Value,
             RightValue)

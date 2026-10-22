@@ -90,4 +90,58 @@ describe("properties named like private storage keys", () => {
     expect(Object.keys(target)).toEqual(["#slot:own"]);
     expect(Reflect.ownKeys(target)).toEqual(["#slot:own"]);
   });
+
+  test("a private element on a proxy receiver never reaches its traps", () => {
+    const seen = [];
+    const handler = {};
+    for (const trap of ["get", "set", "has", "defineProperty", "getOwnPropertyDescriptor", "ownKeys"]) {
+      handler[trap] = (...args) => {
+        seen.push(trap);
+        return Reflect[trap](...args);
+      };
+    }
+    class Base {
+      constructor(target) {
+        return target;
+      }
+    }
+    class Stamped extends Base {
+      #field = 1;
+      #method() {
+        return this.#field;
+      }
+      static read(value) {
+        return [value.#method(), #field in value];
+      }
+    }
+    const proxy = new Proxy({}, handler);
+    new Stamped(proxy);
+    expect(Stamped.read(proxy)).toEqual([1, true]);
+    expect(() => Stamped.read(new Proxy({}, handler))).toThrow(TypeError);
+    expect(seen).toEqual([]);
+  });
+
+  test("a static block keeps a static private field apart from a same-named static property", () => {
+    let seen;
+    class Holder {
+      static "#slot:0$count" = "public";
+      static #count = "private";
+      static {
+        seen = [this["#slot:0$count"], this.#count];
+      }
+    }
+    expect(seen).toEqual(["public", "private"]);
+    expect(Object.keys(Holder)).toEqual(["#slot:0$count"]);
+  });
+
+  test("a private auto-accessor is not read through a same-named property", () => {
+    class Holder {
+      accessor #value = "private";
+      "#slot:0$value" = "public";
+      read() {
+        return [this.#value, this["#slot:0$value"]];
+      }
+    }
+    expect(new Holder().read()).toEqual(["private", "public"]);
+  });
 });

@@ -252,7 +252,7 @@ var
   Prefix: string;
 begin
   Prefix := AScope.ResolvePrivatePrefixForName(AName);
-  Result := PRIVATE_STORAGE_SLOT_PREFIX + Prefix + AName;
+  Result := PrivateStorageKey(Prefix, AName);
 end;
 
 function InferredExpressionType(const AScope: TGocciaCompilerScope;
@@ -437,10 +437,7 @@ var
   PropIdx: UInt16;
   KeyReg: UInt16;
 begin
-  if AIsPrivateName then
-    PropIdx := ACtx.Template.AddConstantPrivateName(APropertyName)
-  else
-    PropIdx := ACtx.Template.AddConstantString(APropertyName);
+  PropIdx := ACtx.Template.AddConstantName(APropertyName, AIsPrivateName);
   if PropIdx <= High(UInt8) then
     EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, ADest, AObjReg,
       UInt16(PropIdx)))
@@ -494,10 +491,7 @@ begin
     IndexOp := OP_SET_INDEX;
   end;
 
-  if AIsPrivateName then
-    PropIdx := ACtx.Template.AddConstantPrivateName(APropertyName)
-  else
-    PropIdx := ACtx.Template.AddConstantString(APropertyName);
+  PropIdx := ACtx.Template.AddConstantName(APropertyName, AIsPrivateName);
   if PropIdx <= High(UInt8) then
     EmitInstruction(ACtx, EncodeABC(ConstOp, AObjReg,
       UInt16(PropIdx), AValueReg))

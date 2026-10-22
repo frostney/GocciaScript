@@ -127,16 +127,3 @@ test("Object.keys lists names that look like private storage keys", () => {
   dynamic["#brand:y"] = 2;
   expect(Object.keys(dynamic)).toEqual(["#slot:x", "#brand:y"]);
 });
-
-test("Object.keys lists a class instance's public fields named like private storage keys", () => {
-  class Holder {
-    #hidden = 1;
-    "#slot:0$hidden" = 2;
-    peek() {
-      return this.#hidden;
-    }
-  }
-  const holder = new Holder();
-  expect(Object.keys(holder)).toEqual(["#slot:0$hidden"]);
-  expect(holder.peek()).toBe(1);
-});

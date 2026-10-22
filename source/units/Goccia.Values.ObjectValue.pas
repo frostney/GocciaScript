@@ -54,9 +54,10 @@ type
       const ACurrent, ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
   protected
     FProperties: TGocciaPropertyMap;
-    // The private elements (ES2026 §6.2.12, [[PrivateElements]]) the VM stores
-    // on this object, by private storage key; nil until it holds one. Kept out
-    // of FProperties so that no property key, whatever its text, names one.
+    // The object's [[PrivateElements]] (ES2026 §7.3.1 MakeBasicObject; each a
+    // §6.2.10 PrivateElement) the VM keeps here, by private storage key; nil
+    // until it holds one. Kept out of FProperties so that no property key,
+    // whatever its text, names one.
     FPrivateElements: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
     FSymbolInsertionOrder: TList<TGocciaSymbolValue>;

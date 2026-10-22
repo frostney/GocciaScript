@@ -425,6 +425,9 @@ type
     // A bckPrivateName constant: kept apart from the string constants, so a
     // string literal with the same text gets its own bckString entry.
     function AddConstantPrivateName(const AStorageKey: string): UInt16;
+    // AddConstantPrivateName when AIsPrivateName, else AddConstantString.
+    function AddConstantName(const AName: string;
+      const AIsPrivateName: Boolean): UInt16;
     // ES2026 §13.2.8.3: add a bckTemplateObject constant that the VM will lazily
     // build and cache on first execution.  Each call site gets its own entry;
     // no deduplication is performed.
@@ -908,6 +911,15 @@ begin
   Result := UInt16(FConstantCount);
   FPrivateNameConstantIndex.Add(AStorageKey, Result);
   Inc(FConstantCount);
+end;
+
+function TGocciaFunctionTemplate.AddConstantName(const AName: string;
+  const AIsPrivateName: Boolean): UInt16;
+begin
+  if AIsPrivateName then
+    Result := AddConstantPrivateName(AName)
+  else
+    Result := AddConstantString(AName);
 end;
 
 function TGocciaFunctionTemplate.AddConstantBigInt(

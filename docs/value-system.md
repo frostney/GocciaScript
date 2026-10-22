@@ -582,7 +582,7 @@ Represent class constructors. Store:
 - Static methods
 - Static symbol-keyed properties (the `FSymbolDescriptors` map inherited from `TGocciaObjectValue`) — supports `static get [Symbol.species]()` and similar computed symbol accessors. Use `DefineSymbolProperty` to register and `GetSymbolPropertyWithReceiver` to look up (preserves receiver for getter `this` context across superclass chain)
 - Public getters and setters (on prototype via accessor descriptors)
-- Private getters and setters (in `FPrivateGetters`/`FPrivateSetters`, separate from public ones)
+- Static private getters and setters (in `FPrivateGetters`/`FPrivateSetters`, separate from public ones)
 - Private instance and static fields/methods
 - Instance field declaration order (`FFieldOrder`, one entry per public or private instance field, alongside the `FInstancePropertyDefs` / `FPrivateInstancePropertyDefs` maps)
 - Superclass reference for inheritance
@@ -592,7 +592,7 @@ Represent class constructors. Store:
 Created by `new ClassName()`. Extend `TGocciaObjectValue` with:
 
 - **Virtual property dispatch** — `GetProperty` and `AssignProperty` override the base class methods to intercept property access and assignment. This enables getter/setter invocation: reads check the prototype for accessor descriptors and invoke getters with the instance as `this`; writes call the setter of an own or inherited accessor, and fail when that accessor has none, before falling back to direct property creation.
-- **Private property storage** using **composite keys** (`ClassName:FieldName`) — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
+- **Private property storage** keyed by each class's own brand token — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
 - **Class reference** for `instanceof` checks
 
 ### Instantiation Flow
@@ -740,12 +740,12 @@ Class getters and setters are stored as accessor descriptors on the class protot
 
 ### Private Field Storage
 
-Private fields use **composite keys** (`ClassName:FieldName`) in the instance's private property dictionary. This solves the inheritance shadowing problem where a base class and a derived class both declare a private field with the same name — in JavaScript, `Base.#x` and `Derived.#x` are completely separate slots.
+A private name is stored under a key that includes the brand token of the class that declares it (`#slot:<token>:x`). This solves the inheritance shadowing problem where a base class and a derived class both declare a private field with the same name — in JavaScript, `Base.#x` and `Derived.#x` are completely separate slots.
 
-- **Storage** — Private fields are stored on `TGocciaInstanceValue.FPrivateProperties` using keys like `"Base:x"` and `"Derived:x"`. Private methods and instance accessors, and the private elements of an object that is not a class instance (a constructor's return value), are kept in `TGocciaObjectValue.PrivateElements`, never among the object's properties.
+- **Storage** — A class instance keeps its private fields and brands in `TGocciaInstanceValue.FPrivateProperties`, and a class keeps its static private elements in its own tables. Private methods and instance accessors, and the private elements of an object that is not a class instance (a constructor's return value), are kept in `TGocciaObjectValue.PrivateElements`, never among the object's properties.
 - **Private names are not property keys** — The compiler puts a private name's storage key in the constant pool as a `bckPrivateName` constant, and the VM takes the private path only for an instruction that names one (or for the `TGocciaPrivateNameKeyValue` that `OP_LOAD_CONST` loads from it), never because of a key's text. A property named `"#slot:0$x"` is an ordinary property: it enumerates, serializes and answers `in` like any other, and no property key reaches a private element.
 - **Access resolution** — When a method accesses `this.#x`, the VM resolves the class body that declares the name, starting from the running closure's `PrivateClass` and walking outward through enclosing class bodies (`TGocciaVM.LexicalBytecodePrivateClass`), and builds the key from that class (`TGocciaVM.ResolveBytecodePrivateRuntimeKey`).
-- **Private getters/setters** — Stored separately from public ones on `TGocciaClassValue` in `FPrivateGetters`/`FPrivateSetters`, because they don't participate in the prototype's property descriptor chain.
+- **Private getters/setters** — Static ones are stored on `TGocciaClassValue` in `FPrivateGetters`/`FPrivateSetters`; instance ones are accessor descriptors among the prototype's `PrivateElements`.
 - **Declaration order** — Instance property initializers run in source declaration order, recorded in the class value's `FFieldOrder`.
 
 ### Garbage Collector
