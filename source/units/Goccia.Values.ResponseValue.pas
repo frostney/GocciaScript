@@ -26,8 +26,11 @@ type
     FUrl: string;
     FHeaders: TGocciaHeadersValue;
     FBody: TBytes;
+    FChargedBodyBytes: Int64;
     FBodyUsed: Boolean;
     FRedirected: Boolean;
+
+    procedure SetBody(const ABody: TBytes);
 
     // Prototype getters
     function ResponseStatusGetter(const AArgs: TGocciaArgumentsCollection;
@@ -58,6 +61,7 @@ type
     procedure InitializePrototype;
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
+    destructor Destroy; override;
 
     procedure InitFromHTTP(const AStatus: Integer; const AStatusText, AUrl: string;
       const AHeaders: TGocciaHeadersValue; const ABody: TBytes;
@@ -86,6 +90,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.JSON,
+  Goccia.MemoryLimit,
   Goccia.Realm,
   Goccia.UncatchableFault,
   Goccia.Utils,
@@ -119,12 +124,44 @@ begin
   FUrl := '';
   FHeaders := TGocciaHeadersValue.Create;
   SetLength(FBody, 0);
+  FChargedBodyBytes := 0;
   FBodyUsed := False;
   FRedirected := False;
   InitializePrototype;
   Shared := GetResponseShared;
   if not Assigned(AClass) and Assigned(Shared) then
     FPrototype := Shared.Prototype;
+end;
+
+destructor TGocciaResponseValue.Destroy;
+var
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and (FChargedBodyBytes > 0) then
+    GC.ReleaseExternalBytes(FChargedBodyBytes);
+  FChargedBodyBytes := 0;
+  inherited;
+end;
+
+procedure TGocciaResponseValue.SetBody(const ABody: TBytes);
+var
+  GC: TGarbageCollector;
+  Delta: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  Delta := Length(ABody) - FChargedBodyBytes;
+  if Assigned(GC) and (Delta > 0) then
+  begin
+    if not GC.TryReserveExternalBytes(Delta, Self) then
+      // A held body is run-owned memory: a guest must not catch and retry this ceiling.
+      raise TGocciaMemoryLimitError.Create(Delta, GC.MaxBytes);
+  end;
+  if Assigned(GC) and (Delta < 0) then
+    GC.ReleaseExternalBytes(-Delta);
+  FBody := ABody;
+  if Assigned(GC) then
+    FChargedBodyBytes := Length(ABody);
 end;
 
 procedure TGocciaResponseValue.InitFromHTTP(const AStatus: Integer;
@@ -135,7 +172,7 @@ begin
   FStatusText := AStatusText;
   FUrl := AUrl;
   FHeaders := AHeaders;
-  FBody := ABody;
+  SetBody(ABody);
   FRedirected := ARedirected;
   FBodyUsed := False;
 end;
@@ -445,6 +482,7 @@ var
   BodyArg, InitArg, PropVal: TGocciaValue;
   InitObj, HeadersObj: TGocciaObjectValue;
   PropNames: TArray<string>;
+  PendingBody: TBytes;
   I, StatusVal: Integer;
 begin
   if AArguments.Length = 0 then Exit;
@@ -454,13 +492,21 @@ begin
   if not ((BodyArg is TGocciaUndefinedLiteralValue) or
           (BodyArg is TGocciaNullLiteralValue)) then
   begin
-    FBody := EncodeUTF8WithReplacement(BodyArg.ToStringLiteral.Value);
+    PendingBody := EncodeUTF8WithReplacement(BodyArg.ToStringLiteral.Value);
   end;
 
   // Argument 1: init dictionary { status, statusText, headers }
-  if AArguments.Length < 2 then Exit;
+  if AArguments.Length < 2 then
+  begin
+    SetBody(PendingBody);
+    Exit;
+  end;
   InitArg := AArguments.GetElement(1);
-  if not (InitArg is TGocciaObjectValue) then Exit;
+  if not (InitArg is TGocciaObjectValue) then
+  begin
+    SetBody(PendingBody);
+    Exit;
+  end;
   InitObj := TGocciaObjectValue(InitArg);
 
   // status — must be 200-599 per WHATWG Fetch spec
@@ -507,6 +553,7 @@ begin
       end;
     end;
   end;
+  SetBody(PendingBody);
 end;
 
 function TGocciaResponseValue.ToStringTag: string;

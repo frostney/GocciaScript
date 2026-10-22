@@ -45,6 +45,27 @@ describe("Response constructor", () => {
     expect(text).toBe("hello");
   });
 
+  test.runIf(typeof Goccia !== "undefined")("charges its native body to the memory limit", () => {
+    const body = "x".repeat(32 * 1024);
+    const before = Goccia.gc.bytesAllocated;
+    const response = new Response(body);
+    expect(response.status).toBe(200);
+    expect(Goccia.gc.bytesAllocated - before).toBeGreaterThanOrEqual(body.length);
+  });
+
+  test.runIf(typeof Goccia !== "undefined")("releases the native body charge when collected", () => {
+    const body = "x".repeat(64 * 1024);
+    Goccia.gc();
+    const before = Goccia.gc.bytesAllocated;
+    let response = new Response(body);
+    expect(response.status).toBe(200);
+    const held = Goccia.gc.bytesAllocated;
+    expect(held - before).toBeGreaterThanOrEqual(body.length);
+    response = null;
+    Goccia.gc();
+    expect(Goccia.gc.bytesAllocated).toBeLessThan(before + body.length / 2);
+  });
+
   test("accepts null body", async () => {
     const r = new Response(null);
     const text = await r.text();
