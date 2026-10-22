@@ -14,7 +14,7 @@ const range = (n) => Array.from({ length: n });
 // costs its length times the live heap. A stress run uses chains of 1,000
 // links, deep enough to spill the mark stack; the full depths run in every
 // other build.
-const depth = (n) => (Goccia.build.gcStress ? 1_000 : n);
+const depth = (n) => ((typeof Goccia !== "undefined" && Goccia.build.gcStress) ? 1_000 : n);
 
 describe("Goccia.gc() over nested objects and arrays", () => {
   test("a chain of nested objects", () => {

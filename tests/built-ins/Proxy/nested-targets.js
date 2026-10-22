@@ -125,7 +125,7 @@ const is64Bit = typeof Goccia !== "undefined" &&
 // The block runs on GocciaScript only (is64Bit), where every operation is past
 // the engine's bound. A GC-stress build collects every 8 instructions, so
 // building 20,000 Proxies there costs time quadratic in the nest.
-describe.runIf(is64Bit && !Goccia.build.gcStress)("Proxies nested 20,000 deep", () => {
+describe.runIf(is64Bit && !(typeof Goccia !== "undefined" && Goccia.build.gcStress))("Proxies nested 20,000 deep", () => {
   test("every forwarded internal method and a native trap throw RangeError, and the engine keeps working", () => {
     // The ownKeys trap on every level is a native function, so ownKeys and
     // keys recurse through trap calls; the other operations forward.

@@ -281,6 +281,29 @@ async function runTestFile(
   return { status: "CRASH", message: `exit ${exitCode}${signal}: ${tailOf(output)}` };
 }
 
+// Goccia.build.gcStress decides which large cases a stress-aware test skips,
+// so each build has to report its own mode: a binary that always reported
+// false would leave the stress run as slow as the ordinary one, and one that
+// always reported true would shrink the ordinary run's coverage. A one-test
+// file per build asserts the expected value before any comparison runs.
+async function verifyBuildFlag(options: Options, build: "baseline" | "stress"): Promise<void> {
+  const directory = build === "stress" ? options.stressDir : options.baselineDir;
+  const runner = requireBinary(directory, "GocciaTestRunner");
+  const expected = build === "stress";
+  const file = resolve(options.outDir, `build-flag-${build}.js`);
+  writeFileSync(
+    file,
+    `test("Goccia.build.gcStress reports the ${build} build", () => {\n` +
+      `  expect(Goccia.build.gcStress).toBe(${expected});\n});\n`,
+  );
+  const outcome = await runTestFile(runner, file, options.fileTimeoutSeconds);
+  if (outcome.status !== "PASS") {
+    throw new InfrastructureError(
+      `${runner} does not report Goccia.build.gcStress === ${expected}: ${outcome.status} ${outcome.message}`,
+    );
+  }
+}
+
 async function runTests(
   options: Options,
   build: "baseline" | "stress",
@@ -419,6 +442,8 @@ async function main(): Promise<number> {
     results.push({ suite: "test262", baseline, stress, baselineSeconds, stressSeconds });
   }
   if (options.suites.has("tests")) {
+    await verifyBuildFlag(options, "baseline");
+    await verifyBuildFlag(options, "stress");
     const files = discoverTestFiles(TEST_PATHS);
     console.log(`tests: ${files.length} files under ${TEST_PATHS.join(", ")}`);
     const [baseline, baselineSeconds] = await timed(() => runTests(options, "baseline", files));

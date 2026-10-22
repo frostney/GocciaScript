@@ -100,7 +100,7 @@ describe("chain length limit", () => {
     // Running these lists takes an instruction per item. A GC-stress build
     // collects every 8 instructions, so a stress run uses 5,000 items, still
     // past the height limit.
-    const items = Goccia.build.gcStress ? 5000 : DEEP;
+    const items = (typeof Goccia !== "undefined" && Goccia.build.gcStress) ? 5000 : DEEP;
     expect(realm.evaluate(`let c = 0; (c${", c".repeat(items)})`)).toBe(0);
     expect(realm.evaluate(`[${"1, ".repeat(items)}1].length`)).toBe(items + 1);
     expect(realm.evaluate(`const f = (...a) => a.length; f(${"1, ".repeat(items)}1)`)).toBe(items + 1);

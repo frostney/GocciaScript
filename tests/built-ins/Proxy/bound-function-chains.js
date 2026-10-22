@@ -133,7 +133,7 @@ describe.runIf(typeof Goccia !== "undefined")("chains past the engine's bound", 
 const is64Bit = typeof Goccia !== "undefined" &&
   ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
 
-describe.runIf(is64Bit && !Goccia.build.gcStress)("chains 20,000 deep", () => {
+describe.runIf(is64Bit && !(typeof Goccia !== "undefined" && Goccia.build.gcStress))("chains 20,000 deep", () => {
   test("alternating Proxies and bound functions throw RangeError, and the engine keeps working", () => {
     expect(() => alternate(20000, () => 1)()).toThrow(RangeError);
     expect(() => new (alternate(20000, class {}))()).toThrow(RangeError);

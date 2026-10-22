@@ -125,7 +125,7 @@ describe("Proxies nested as targets", () => {
     ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
   // A GC-stress build collects every 8 instructions, so building 100,000
   // Proxies costs time quadratic in the nest: hours, not seconds.
-  const deepNestRuns = is64Bit && !Goccia.build.gcStress;
+  const deepNestRuns = is64Bit && !(typeof Goccia !== "undefined" && Goccia.build.gcStress);
 
   // Each Proxy forwarding to its target is one native call.
   test("a read through 1,000 nested Proxies reaches the innermost target", () => {

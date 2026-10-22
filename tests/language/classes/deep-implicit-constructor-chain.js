@@ -155,7 +155,7 @@ describe("a 30,000-class chain of default constructors", () => {
   // 20-class chain above still runs under stress.
   const deepChainRuns = typeof Goccia !== "undefined" &&
     ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch) &&
-    !Goccia.build.gcStress;
+    !(typeof Goccia !== "undefined" && Goccia.build.gcStress);
 
   test.runIf(deepChainRuns)("constructs its most derived class", () => {
     const Leaf = chain(30000, class {}, (B) => class extends B {});
