@@ -1284,19 +1284,17 @@ end;
 
 { Stores ACount canary values into ATarget at a stride that leaves a hole
   behind every write, and answers how many it stored. Each value is created and
-  handed straight to SetElement, so between the two it exists only in a Pascal
+  handed straight to the store, so between the two it exists only in a Pascal
   local — the native-unrooted shape, and the one no VM frame covers.
 
   A strided index rather than a sequential one because an append at exactly the
   element count takes the list's Add fast path and never reaches the gate.
 
-  Every other store goes through SetProperty with a stringified index — the
-  generic property-store route into an array — so the SetProperty
-  extension arm's pending-value threading is pinned by the same canaries as
-  SetElement's, not merely argued equivalent to it. (AssignProperty is the
-  wrong vehicle here: for a not-yet-existing index it funnels into
-  DefineProperty's dense-create arm, which the descriptor canary already
-  pins.) }
+  The stores alternate between SetIndexProperty, the VM's element store, and
+  SetProperty with a stringified index, the generic property-store route into
+  an array. Both reach SetIndexNamed's extension arm, whose pending-value
+  threading the canaries pin; the descriptor canary pins DefineProperty's
+  dense-create arm, which CreateDataProperty uses. }
 function TMemoryLimitTests.HoleExtendCanaries(
   const ATarget: TGatedElementsArrayValue; const ACount: Integer): Integer;
 var
@@ -1308,7 +1306,7 @@ begin
   begin
     Index := ATarget.Elements.Count + ELEMENT_CANARY_STRIDE - 1;
     if I mod 2 = 0 then
-      ATarget.SetElement(Index, TCanaryValue.Create)
+      ATarget.SetIndexProperty(Index, TCanaryValue.Create)
     else
       ATarget.SetProperty(IntToStr(Index), TCanaryValue.Create);
     Inc(Result);

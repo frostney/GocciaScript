@@ -45,6 +45,7 @@ uses
   Goccia.SourcePipeline,
   Goccia.SourceSpan,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -794,7 +795,8 @@ begin
     ChildIndex := Node.FirstChild;
     while ChildIndex >= 0 do
     begin
-      Children.SetElement(Position, MaterializeNode(AFlattener, ChildIndex));
+      ArrayCreateDataProperty(Children, Position,
+        MaterializeNode(AFlattener, ChildIndex));
       Inc(Position);
       ChildIndex := AFlattener.NodeAt(ChildIndex).NextSibling;
     end;
@@ -949,7 +951,7 @@ begin
     for I := 0 to High(CommentSpans) do
     begin
       CommentObject := TGocciaObjectValue.Create;
-      Comments.SetElement(I, CommentObject);
+      ArrayCreateDataProperty(Comments, I, CommentObject);
       StartOffset := MappedOffset(PipelineResult.OriginMap,
         CommentSpans[I].StartOffset, obStart);
       EndOffset := MappedOffset(PipelineResult.OriginMap,

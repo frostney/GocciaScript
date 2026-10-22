@@ -59,7 +59,6 @@ type
     function GetLength: Integer;
     function HasDenseElementLength: Boolean;
     function GetElement(const AIndex: Integer): TGocciaValue;
-    function SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
     function TryAppendDenseElementFast(const AIndex: Integer;
       const AValue: TGocciaValue): Boolean;
     function TryStoreElementFast(const AIndex: Integer;
@@ -419,17 +418,12 @@ begin
 end;
 
 {$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+// Set(O, ! ToString(index), V, true): an array's AssignProperty is its index
+// [[Set]] (SetIndexNamed).
 procedure TArrayLikeView.PutGeneric(const AIndex: Integer;
   const AValue: TGocciaValue);
 begin
-  if Assigned(Arr) then
-  begin
-    if not Arr.SetElement(AIndex, AValue) then
-      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntegerToString(AIndex)]),
-        SSuggestCannotDeleteNonConfigurable);
-  end
-  else
-    Obj.AssignProperty(IntegerToString(AIndex), AValue);
+  Obj.AssignProperty(IntegerToString(AIndex), AValue);
 end;
 {$IFDEF PRODUCTION}
   {$IFDEF FPC}
@@ -1508,94 +1502,6 @@ begin
   if Int64(AIndex) + 1 > FLength then
     FLength := Int64(AIndex) + 1;
   FHasEverHadIndexedOwnProperty := True;
-  Result := True;
-end;
-
-function TGocciaArrayValue.SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
-var
-  Accessor: TGocciaPropertyDescriptorAccessor;
-  Args: TGocciaArgumentsCollection;
-  Descriptor: TGocciaPropertyDescriptor;
-  IndexName: string;
-begin
-  if AIndex < 0 then
-  begin
-    Result := False;
-    Exit;
-  end;
-
-  IndexName := IntegerToString(AIndex);
-  NoteIndexedOwnProperty(IndexName);
-  Descriptor := GetOwnPropertyDescriptor(IndexName);
-  if Descriptor is TGocciaPropertyDescriptorAccessor then
-  begin
-    Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-    if Assigned(Accessor.Setter) and Accessor.Setter.IsCallable then
-    begin
-      Args := TGocciaArgumentsCollection.Create([AValue]);
-      try
-        InvokeCallable(Accessor.Setter, Args, Self);
-      finally
-        Args.Free;
-      end;
-      Result := True;
-      Exit;
-    end;
-    ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [IndexName, ToStringTag]),
-      SSuggestPropertyHasOnlyGetter);
-  end;
-  ReleaseDescriptor(Descriptor);
-
-  Descriptor := inherited GetOwnPropertyDescriptor(IndexName);
-  if Assigned(Descriptor) then
-  begin
-    inherited AssignProperty(IndexName, AValue);
-    if AIndex + 1 > FLength then
-      FLength := AIndex + 1;
-    Result := True;
-    Exit;
-  end;
-
-  // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor step 2: a dense element is
-  // an own data property, writable unless the array is frozen, so the store
-  // writes it and never reaches the prototype.
-  if (AIndex < FElements.Count) and not IsArrayHole(FElements[AIndex]) then
-  begin
-    if FFrozen then
-      Exit(False);
-    FElements[AIndex] := AValue;
-    Exit(True);
-  end;
-
-  if Assigned(FPrototype) then
-  begin
-    Result := FPrototype.AssignPropertyWithReceiver(IndexName, AValue, Self);
-    Exit;
-  end;
-
-  if (AIndex >= FLength) and not FLengthWritable then
-  begin
-    Result := False;
-    Exit;
-  end;
-
-  if not Extensible then
-  begin
-    Result := False;
-    Exit;
-  end;
-
-  if AIndex = FElements.Count then
-    FElements.Add(AValue)
-  else
-  begin
-    // AValue is stored after the gate and is held only by this frame until
-    // then, so it goes to the gate as the pending value.
-    ExtendElementsWithHoles(FElements, Int64(AIndex) + 1, AValue);
-    FElements[AIndex] := AValue;
-  end;
-  if AIndex + 1 > FLength then
-    FLength := AIndex + 1;
   Result := True;
 end;
 
@@ -4177,9 +4083,9 @@ begin
   begin
     // Append at exactly the element count is the same store the extension
     // path would perform — one hole added and immediately overwritten — so
-    // take it directly, the way SetElement does. It keeps `arr.push(v)`,
-    // which reaches this method through AssignProperty with a stringified
-    // index, off the growth gate: nothing is being extended over. One
+    // take it directly. It keeps `arr.push(v)`, which reaches this method
+    // through AssignProperty with a stringified index, off the growth gate:
+    // nothing is being extended over. One
     // qualification to "identical": in the 8-byte window just under the
     // ceiling, the gate would refuse with the uncatchable MemoryLimitError at
     // the store, while this defers refusal to the next managed allocation's

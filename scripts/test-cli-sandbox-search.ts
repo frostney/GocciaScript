@@ -249,6 +249,36 @@ for (const treeName of Object.keys(vectors.trees)) {
   }
 }
 
+// -- result arrays ignore an index setter on Array.prototype -----------------
+
+// The search and readdir results are new arrays, so their elements are made
+// with CreateDataPropertyOrThrow (ES2026 §7.3.6), which never consults the
+// prototype chain.
+{
+  const run = (polluted: boolean) => runInTree(vectors.trees.project, [
+    "let calls = 0;",
+    polluted ? 'Object.defineProperty(Array.prototype, "0", { set() { calls++; }, configurable: true });' : "",
+    polluted ? 'Object.defineProperty(Array.prototype, "1", { value: "inherited", writable: false, configurable: true });' : "",
+    "const glob = fs.globSync(\"**/*.ts\");",
+    "const readdir = fs.readdirSync(\"/src\");",
+    "const grepped = grep(\"export\", { context: 1 }).matches;",
+    "const fuzzy = fuzzyFind(\"ctrl\").matches;",
+    'delete Array.prototype[0]; delete Array.prototype[1];',
+    "const own = (a) => Array.from({ length: a.length }, (_, i) => Object.hasOwn(a, i)).every(Boolean);",
+    "console.log(JSON.stringify({ calls, glob, readdir, grepped, fuzzy,",
+    "  own: [glob, readdir, grepped, grepped[0].before, grepped[0].after, fuzzy, fuzzy[0] ? fuzzy[0].positions : []].map(own) }));",
+  ].join("\n")).trim();
+  try {
+    const clean = JSON.parse(run(false));
+    const polluted = JSON.parse(run(true));
+    if (clean.fuzzy.length === 0 || clean.glob.length < 2) throw new Error(`unexpected baseline ${JSON.stringify(clean)}`);
+    deepStrictEqual(polluted, clean);
+    console.log("result arrays under a polluted Array.prototype: ok");
+  } catch (error) {
+    failures.push(`polluted Array.prototype: ${(error as Error).message}`);
+  }
+}
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} failure(s):`);
   for (const failure of failures) console.error(`  - ${failure}`);
