@@ -802,7 +802,7 @@ begin
     if FConstants[I].Kind = bckNil then
       Exit(UInt16(I));
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -826,7 +826,7 @@ begin
     if FConstants[I].Kind = Target then
       Exit(UInt16(I));
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -844,7 +844,7 @@ begin
     if (FConstants[I].Kind = bckInteger) and (FConstants[I].IntValue = AValue) then
       Exit(UInt16(I));
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -868,7 +868,7 @@ begin
   if FFloatConstantIndex.TryGetValue(Key, Result) then
     Exit;
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -885,7 +885,7 @@ begin
   if FStringConstantIndex.TryGetValue(AValue, Result) then
     Exit;
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -902,7 +902,7 @@ begin
   if FPrivateNameConstantIndex.TryGetValue(AStorageKey, Result) then
     Exit;
 
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -925,7 +925,7 @@ end;
 function TGocciaFunctionTemplate.AddConstantBigInt(
   const AValue: string): UInt16;
 begin
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -945,7 +945,7 @@ begin
   if Length(ACookedStrings) <> Length(ARawStrings) then
     raise Exception.Create(
       'Template payload length mismatch: cooked vs raw');
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
@@ -974,7 +974,7 @@ end;
 function TGocciaFunctionTemplate.AddConstantRegExpLiteral(
   const APattern, AFlags: string): UInt16;
 begin
-  if FConstantCount > High(UInt16) then
+  if FConstantCount >= High(UInt16) then
     raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);

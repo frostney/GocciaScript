@@ -44,6 +44,7 @@ type
     procedure TestRefusesGlobalEvalCode;
     procedure TestRoundTripsBigIntConstantSlots;
     procedure TestRoundTripsPrivateNameConstants;
+    procedure TestConstantPoolStopsAtWhatTheFormatCounts;
     procedure TestRejectsMalformedBigIntPayloads;
     procedure TestRejectsDuplicateInternedConstants;
     procedure TestRoundTripsBigIntConstants;
@@ -81,6 +82,8 @@ begin
     TestRoundTripsBigIntConstantSlots);
   Test('A private name and a string with the same text stay two constants',
     TestRoundTripsPrivateNameConstants);
+  Test('A constant pool holds at most the 65535 constants the format counts',
+    TestConstantPoolStopsAtWhatTheFormatCounts);
   Test('Rejects malformed BigInt payloads before execution',
     TestRejectsMalformedBigIntPayloads);
   Test('BigInt bytes survive a save/load/save cycle', TestRoundTripsBigIntConstants);
@@ -871,6 +874,61 @@ begin
       .ToBe(Ord(bckPrivateName));
     Expect<string>(LoadedTemplate.GetConstant(1).StringValue)
       .ToBe(STORAGE_KEY);
+  finally
+    Loaded.Free;
+  end;
+end;
+
+procedure TBytecodeBinaryTests.TestConstantPoolStopsAtWhatTheFormatCounts;
+
+  // Whether adding one more constant of kind AKind fails with the constant
+  // pool's overflow error.
+  function Overflows(const ATemplate: TGocciaFunctionTemplate;
+    const AKind: Integer): Boolean;
+  begin
+    Result := False;
+    try
+      case AKind of
+        0: ATemplate.AddConstantString('one more');
+        1: ATemplate.AddConstantPrivateName('#slot:0$more');
+        2: ATemplate.AddConstantInteger(123456789);
+        3: ATemplate.AddConstantBigInt('42');
+      end;
+    except
+      on E: Exception do
+        Result := Pos('Constant pool overflow', E.Message) > 0;
+    end;
+  end;
+
+var
+  Template, LoadedTemplate: TGocciaFunctionTemplate;
+  Loaded: TGocciaBytecodeModule;
+  Reason: string;
+  I: Integer;
+begin
+  // The writer counts constants in a UInt16, so 65535 is the most a template
+  // can hold; one more would be written as a count of zero.
+  Template := TGocciaFunctionTemplate.Create('full-pool');
+  Template.MaxRegisters := 1;
+  for I := 0 to High(UInt16) - 1 do
+    Template.AddConstantString(IntToStr(I));
+  Expect<Integer>(Template.ConstantCount).ToBe(High(UInt16));
+  Expect<Boolean>(Overflows(Template, 0)).ToBe(True);
+  Expect<Boolean>(Overflows(Template, 1)).ToBe(True);
+  Expect<Boolean>(Overflows(Template, 2)).ToBe(True);
+  Expect<Boolean>(Overflows(Template, 3)).ToBe(True);
+  Expect<Integer>(Template.ConstantCount).ToBe(High(UInt16));
+  Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+  Loaded := LoadTemplateThroughBinary(Template, Reason);
+  try
+    Expect<string>(Reason).ToBe('');
+    Expect<Boolean>(Assigned(Loaded)).ToBe(True);
+    if not Assigned(Loaded) then
+      Exit;
+    LoadedTemplate := Loaded.TopLevel;
+    Expect<Integer>(LoadedTemplate.ConstantCount).ToBe(High(UInt16));
+    Expect<string>(LoadedTemplate.GetConstant(High(UInt16) - 1).StringValue)
+      .ToBe(IntToStr(High(UInt16) - 1));
   finally
     Loaded.Free;
   end;

@@ -2353,6 +2353,22 @@ begin
       end;
     end;
 
+    // A built-in is written as a name and, when the run changed it, as a
+    // difference of its properties, neither of which carries private
+    // elements: a derived constructor can stamp them on a built-in its base
+    // constructor returned. Refuse such a run rather than drop them.
+    for I := 0 to FBuiltins.Count - 1 do
+    begin
+      if I and 1023 = 0 then
+        Poll;
+      if (FBuiltins.ObjectAt(I) is TGocciaObjectValue) and
+         Assigned(TGocciaObjectValue(FBuiltins.ObjectAt(I)).PrivateElements) and
+         (TGocciaObjectValue(FBuiltins.ObjectAt(I)).PrivateElements.Count > 0) then
+        Refuse('the built-in ' + StringReplace(FBuiltins.PathAt(I),
+          HEAP_SNAPSHOT_PATH_SEPARATOR, '.', [rfReplaceAll]) +
+          ' holds private elements');
+    end;
+
     // The roots first: writing them numbers the objects they reach.
     FOut := RootsOut;
     WriteU32(Length(ARoots));
