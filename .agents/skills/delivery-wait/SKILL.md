@@ -23,7 +23,8 @@ longer. These rules keep a wait armed for as long as the transition needs:
 
 - If the host can run a command in the background and resume the session when
   it exits, run the wait that way. Then end the turn, or continue only work
-  independent of the awaited state. Otherwise, run it as a blocking command.
+  independent of the awaited state. If that capability is absent, use the
+  fallback below; never hold the turn open with a blocking wait.
 - Set each invocation's `--deadline` inside the host's limit for one command,
   and keep the time the caller gives up on the transition separately. A
   `timed-out` result before that time means: run the wait again with the same
@@ -40,6 +41,39 @@ longer. These rules keep a wait armed for as long as the transition needs:
 The `address-feedback` CodeRabbit adapter's `run` follows the same rules. It
 keeps no state file: run it again with the same arguments, and it re-reads the
 head's state from GitHub.
+
+## Long commands and delegated lanes
+
+Apply the same turn discipline to long builds, tests and other commands, in
+coordinators and workers alike. Start commands expected to outlast a short
+check through the host's tracked background execution. Keep the task or session
+ID, output location, exact revision, completion condition and resume action in
+the handoff. A launch acknowledgment is pending work, never passing evidence.
+Short commands and bounded diagnostic checks can stay in the foreground.
+
+Confirm that the command survives the owning lane's turn and that completion
+can resume that lane or its coordinator. Some hosts stop a foreground worker's
+commands when it returns; have a surviving owner start the command instead.
+Respect background-command and monitor deadlines. A monitor must emit only
+meaningful changes or terminal results; streaming unchanged status wakes the
+model just as polling does. Keep one owner and one active wait per transition.
+
+When only a command, worker or external transition remains, record the pending
+state and end the turn. Continue independent work while it runs, then inspect
+the returned exit status and result before resuming dependent work. Do not use
+foreground `gh pr checks --watch`, sleep loops, repeated `gh pr view`, or
+repeated output/status reads to keep a lane alive. A worker with pending work
+returns its handle and next transition to its coordinator, not a completion
+claim; do not create another worker just to poll it.
+
+If the host cannot notify or resume the owner, make one bounded status check,
+record the missing capability and an explicit next check time or event, and
+return pending. Use the caller's cadence when given; otherwise check no sooner
+than five minutes later, with a transition deadline. Each resumed turn checks
+once and parks again if unchanged. This is a fallback only: do not replace a
+working notification path with scheduled polling. If commands cannot survive a
+turn at all, return the required execution capability to the caller rather than
+launching an untracked process or claiming the check ran.
 
 ## Inputs
 
@@ -76,11 +110,21 @@ requires its own identity flags:
   - `--all-workflows` does not cover commit statuses or check runs from other
     apps, such as CodeRabbit or Vercel. Add a `--check` for each one the caller
     needs; the wait then also requires those contexts to succeed.
+  - A named check passes when it ends in success, skipped or neutral. The wait
+    reports `changed` as soon as one named check ends any other way, even
+    while the rest still run. Check runs that share a name count once per
+    source: their app and, for GitHub Actions, their workflow and triggering
+    event. A workflow that runs on both `push` and `pull_request` therefore
+    needs both runs to pass. From one source only the newest check suite
+    counts, so a re-run, a run cancelled by a newer one or a re-check after an
+    edit replaces the older run, whichever started first. A commit status
+    counts by its latest state.
   - `--check` alone judges only the named contexts, whatever else is still
     running for the head. Use it only when the complete expected set is known,
     such as the repository's required status checks. Checks visible at wait
     time are not that set: workflows add jobs in stages.
-- `pr-merged`: `--pr <number>` and `--head <sha>`.
+- `pr-merged`: `--pr <number>` and `--head <sha>`. It reports `changed` when
+  the pull request is closed without merging.
 - `workflow-terminal`: `--run-id <id>` and `--head <sha>`. Use it for a
   dispatched or other run whose checks do not appear on the pull request.
 - `tag-target`: `--tag <name>` and `--head <sha>`.
@@ -91,6 +135,13 @@ requires its own identity flags:
 
 There is no `--checkpoint` flag. The state path is `--state`, and the command
 derives a default path from the kind and identity when it is omitted.
+
+Both `inspect` and `wait` accept `--rest-page-size <1..100>` (default: 100).
+Use a smaller value when GitHub fails to serve large REST pages. It applies
+to workflow runs, jobs, and the REST fallback for checks and statuses. All
+pages are still read and the complete workflow census is still required.
+The option does not change GraphQL queries or the saved wait identity, so
+an existing wait can resume with a different REST page size.
 
 ## Results
 
