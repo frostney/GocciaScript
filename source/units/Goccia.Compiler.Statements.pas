@@ -697,7 +697,11 @@ begin
              (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
              (ACtx.Scope.GetLocal(LocalIdx).Slot <>
               ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
-            Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+          begin
+            if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry then
+              Continue;
+            Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+          end
           else
             Slot := ACtx.Scope.DeclareLocal(Names[J], AStmt.IsConst);
           EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
@@ -713,7 +717,11 @@ begin
        (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) and
        (ACtx.Scope.GetLocal(LocalIdx).Slot <>
         ACtx.Scope.DirectEvalSyntheticArgumentsSlot) then
-      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot
+    begin
+      if ACtx.Scope.LocalAt(LocalIdx)^.HoleAtBlockEntry then
+        Continue;
+      Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    end
     else
       Slot := ACtx.Scope.DeclareLocal(Info.Name, AStmt.IsConst);
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
@@ -1598,7 +1606,11 @@ begin
         begin
           Slot := ACtx.Scope.DeclareLocal(Names[J], AVarDecl.IsConst);
           if AEmitInitializers then
+          begin
             EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+            ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(Names[J]))^
+              .HoleAtBlockEntry := True;
+          end;
         end;
       end;
     finally
@@ -1628,7 +1640,11 @@ begin
       begin
         Slot := ACtx.Scope.DeclareLocal(Names[I], AIsConst);
         if AEmitInitializers then
+        begin
           EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+          ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(Names[I]))^
+            .HoleAtBlockEntry := True;
+        end;
       end;
     end;
   finally
@@ -1651,7 +1667,11 @@ begin
   begin
     Slot := ACtx.Scope.DeclareLocal(AName, AIsConst);
     if AEmitInitializer then
+    begin
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+      ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(AName))^.HoleAtBlockEntry :=
+        True;
+    end;
   end;
 end;
 

@@ -1053,8 +1053,11 @@ begin
       begin
         PredeclaredLocal := FCurrentScope.LocalAt(PredeclaredLexicalIndex);
         if not PredeclaredLocal^.IsVar then
+        begin
           EmitInstruction(BuildContext, EncodeABC(OP_LOAD_HOLE,
             PredeclaredLocal^.Slot, 0, 0));
+          PredeclaredLocal^.HoleAtBlockEntry := True;
+        end;
       end;
 
       if HasFunctionDecl then
@@ -2039,8 +2042,11 @@ begin
     begin
       PredeclaredLocal := FCurrentScope.LocalAt(PredeclaredLexicalIndex);
       if not PredeclaredLocal^.IsVar then
+      begin
         EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
           PredeclaredLocal^.Slot, 0, 0));
+        PredeclaredLocal^.HoleAtBlockEntry := True;
+      end;
     end;
     if not FPreinitializedTopLevelFunctions and not FGlobalBackedTopLevel and
        not FEvalCode then
