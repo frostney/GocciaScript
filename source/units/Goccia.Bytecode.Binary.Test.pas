@@ -43,6 +43,7 @@ type
     procedure TestRejectsMalformedDirectEvalSite;
     procedure TestRefusesGlobalEvalCode;
     procedure TestRoundTripsBigIntConstantSlots;
+    procedure TestRoundTripsPrivateNameConstants;
     procedure TestRejectsMalformedBigIntPayloads;
     procedure TestRejectsDuplicateInternedConstants;
     procedure TestRoundTripsBigIntConstants;
@@ -78,6 +79,8 @@ begin
     TestRefusesGlobalEvalCode);
   Test('BigInt payloads and following constant slots survive serialization',
     TestRoundTripsBigIntConstantSlots);
+  Test('A private name and a string with the same text stay two constants',
+    TestRoundTripsPrivateNameConstants);
   Test('Rejects malformed BigInt payloads before execution',
     TestRejectsMalformedBigIntPayloads);
   Test('BigInt bytes survive a save/load/save cycle', TestRoundTripsBigIntConstants);
@@ -833,6 +836,41 @@ begin
       .ToBe('-' + BIG_DECIMAL);
     Expect<string>(LoadedTemplate.GetConstant(4).StringValue)
       .ToBe('after BigInt');
+  finally
+    Loaded.Free;
+  end;
+end;
+
+procedure TBytecodeBinaryTests.TestRoundTripsPrivateNameConstants;
+const
+  STORAGE_KEY = '#slot:0$value';
+var
+  Template, LoadedTemplate: TGocciaFunctionTemplate;
+  Loaded: TGocciaBytecodeModule;
+  Reason: string;
+begin
+  Template := TGocciaFunctionTemplate.Create('private-name');
+  Template.MaxRegisters := 1;
+  Expect<Integer>(Template.AddConstantString(STORAGE_KEY)).ToBe(0);
+  Expect<Integer>(Template.AddConstantPrivateName(STORAGE_KEY)).ToBe(1);
+  Expect<Integer>(Template.AddConstantPrivateName(STORAGE_KEY)).ToBe(1);
+  Expect<Integer>(Template.AddConstantString(STORAGE_KEY)).ToBe(0);
+  Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, 1));
+  Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+  Loaded := LoadTemplateThroughBinary(Template, Reason);
+  try
+    Expect<string>(Reason).ToBe('');
+    Expect<Boolean>(Assigned(Loaded)).ToBe(True);
+    if not Assigned(Loaded) then
+      Exit;
+    LoadedTemplate := Loaded.TopLevel;
+    Expect<Integer>(LoadedTemplate.ConstantCount).ToBe(2);
+    Expect<Integer>(Ord(LoadedTemplate.GetConstant(0).Kind))
+      .ToBe(Ord(bckString));
+    Expect<Integer>(Ord(LoadedTemplate.GetConstant(1).Kind))
+      .ToBe(Ord(bckPrivateName));
+    Expect<string>(LoadedTemplate.GetConstant(1).StringValue)
+      .ToBe(STORAGE_KEY);
   finally
     Loaded.Free;
   end;

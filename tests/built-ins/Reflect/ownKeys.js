@@ -185,3 +185,21 @@ describe("Reflect.ownKeys on a function or class whose length or name is defined
     expect(Reflect.ownKeys(arrow)).toEqual(["length", "name", "extra"]);
   });
 });
+
+// #1326: these names once matched the engine's private storage keys.
+describe("Reflect.ownKeys and private storage key names", () => {
+  test("includes names that look like private storage keys", () => {
+    const obj = { "#slot:a": 1, "#brand:b": 2, "#initialized:c": 3 };
+    expect(Reflect.ownKeys(obj)).toEqual(["#slot:a", "#brand:b", "#initialized:c"]);
+  });
+
+  test("leaves out private elements", () => {
+    class Members {
+      #field = 1;
+      #method() {}
+      static #staticField = 2;
+    }
+    expect(Reflect.ownKeys(new Members())).toEqual([]);
+    expect(Reflect.ownKeys(Members.prototype)).toEqual(["constructor"]);
+  });
+});

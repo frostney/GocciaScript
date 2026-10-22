@@ -48,3 +48,11 @@ test("nested spread operations", () => {
 
   expect(level3).toEqual({ a: 1, b: 2, c: 3, d: 4 });
 });
+
+// #1326: these names once matched the engine's private storage keys.
+test("object spread copies names that look like private storage keys", () => {
+  const source = { "#slot:a": 1, "#brand:b": 2 };
+  const copy = { ...source };
+  expect(Object.keys(copy)).toEqual(["#slot:a", "#brand:b"]);
+  expect(copy["#slot:a"]).toBe(1);
+});

@@ -4,6 +4,12 @@ unit Goccia.PrivateNames;
 
 interface
 
+const
+  // The prefix of the private storage key the compiler gives a private name
+  // (see below). The key goes into the constant pool as a bckPrivateName
+  // constant, so the prefix marks nothing a property key could spell.
+  PRIVATE_STORAGE_SLOT_PREFIX = '#slot:';
+
 { Bytecode stores a private name under a storage key: the compiler emits
   '#slot:<class prefix>$name' (the prefix is a counter, '0$') and the VM
   rebinds it to '#slot:<brand token>:name' (the token is hexadecimal). Neither
@@ -20,9 +26,6 @@ function PrivateStorageSourceName(const AStorageName: string): string;
 function DisplayClassElementName(const AStorageName: string): string;
 
 implementation
-
-const
-  PRIVATE_STORAGE_SLOT_PREFIX = '#slot:';
 
 function PrivateNameStart(const AStorageName: string): Integer;
 var

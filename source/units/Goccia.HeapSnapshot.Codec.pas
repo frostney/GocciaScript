@@ -2173,6 +2173,10 @@ begin
   // a built-in WeakMap, which is named, not written.
   if HasDateValue(AObject) then
     Refuse('no snapshot codec for a Date''s time value');
+  // Private elements are kept apart from the properties written below.
+  if Assigned(AObject.PrivateElements) and
+     (AObject.PrivateElements.Count > 0) then
+    Refuse('no snapshot codec for an object''s private elements');
   WriteValue(AObject.Prototype);
   WriteBool(AObject.Extensible);
   WriteBool(AObject.Frozen);

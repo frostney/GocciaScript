@@ -54,6 +54,10 @@ type
       const ACurrent, ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
   protected
     FProperties: TGocciaPropertyMap;
+    // The private elements (ES2026 §6.2.12, [[PrivateElements]]) the VM stores
+    // on this object, by private storage key; nil until it holds one. Kept out
+    // of FProperties so that no property key, whatever its text, names one.
+    FPrivateElements: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
     FSymbolInsertionOrder: TList<TGocciaSymbolValue>;
     FPrototype: TGocciaObjectValue;
@@ -230,7 +234,17 @@ type
     procedure CommitOwnPropertiesForRestore(
       const AProperties: TGocciaRestoredOwnProperties);
 
+    // The private element stored under the private storage key AKey.
+    function TryGetPrivateElement(const AKey: string;
+      out ADescriptor: TGocciaPropertyDescriptor): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    // Stores ADescriptor under AKey, freeing the descriptor it replaces. The
+    // object owns ADescriptor from here.
+    procedure SetPrivateElement(const AKey: string;
+      const ADescriptor: TGocciaPropertyDescriptor);
+
     property Properties: TGocciaPropertyMap read FProperties;
+    // Nil while the object holds no private element.
+    property PrivateElements: TGocciaPropertyMap read FPrivateElements;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
     property Sealed: Boolean read FSealed;
@@ -414,11 +428,6 @@ uses
 var
   GObjectPrototypeSlot: TGocciaRealmSlotId;
   GObjectMethodHostSlot: TGocciaRealmSlotId;
-
-const
-  BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
-  BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
-  BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
 
 { Prototype walks.
 
@@ -668,17 +677,6 @@ begin
   end;
   AValue := DelegateGetProperty(AParent, AName, AReceiver);
   Result := True;
-end;
-
-function IsInternalPrivateStorageKey(const AName: string): Boolean;
-begin
-  Result :=
-    (Copy(AName, 1, Length(BYTECODE_PRIVATE_SLOT_PREFIX)) =
-      BYTECODE_PRIVATE_SLOT_PREFIX) or
-    (Copy(AName, 1, Length(BYTECODE_PRIVATE_BRAND_PREFIX)) =
-      BYTECODE_PRIVATE_BRAND_PREFIX) or
-    (Copy(AName, 1, Length(BYTECODE_PRIVATE_INITIALIZED_PREFIX)) =
-      BYTECODE_PRIVATE_INITIALIZED_PREFIX);
 end;
 
 function IsHiddenRegExpDataProperty(const AObject: TGocciaObjectValue;
@@ -1540,6 +1538,11 @@ begin
       Pair.Value.Free;
   FProperties.Free;
 
+  if Assigned(FPrivateElements) then
+    for Pair in FPrivateElements do
+      Pair.Value.Free;
+  FPrivateElements.Free;
+
   if Assigned(FSymbolDescriptors) then
   begin
     for SymPair in FSymbolDescriptors do
@@ -1550,6 +1553,30 @@ begin
   FSymbolInsertionOrder.Free;
   FRegExpData.Free;
   inherited;
+end;
+
+function TGocciaObjectValue.TryGetPrivateElement(const AKey: string;
+  out ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  ADescriptor := nil;
+  Result := Assigned(FPrivateElements) and
+    FPrivateElements.TryGetValue(AKey, ADescriptor);
+end;
+
+procedure TGocciaObjectValue.SetPrivateElement(const AKey: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Existing: TGocciaPropertyDescriptor;
+begin
+  if not Assigned(FPrivateElements) then
+    FPrivateElements := TGocciaPropertyMap.Create;
+  if FPrivateElements.TryGetValue(AKey, Existing) then
+  begin
+    if Existing = ADescriptor then
+      Exit;
+    Existing.Free;
+  end;
+  FPrivateElements.AddOrSetValue(AKey, ADescriptor);
 end;
 
 procedure TGocciaObjectValue.ClearOwnPropertiesForRestore;
@@ -1719,6 +1746,10 @@ begin
 
   for Pair in FProperties do
     Pair.Value.MarkValues;
+
+  if Assigned(FPrivateElements) then
+    for Pair in FPrivateElements do
+      Pair.Value.MarkValues;
 
   if Assigned(FSymbolDescriptors) then
     for SymPair in FSymbolDescriptors do
@@ -2324,8 +2355,7 @@ begin
   Count := 0;
   for Key in FProperties.Keys do
   begin
-    if IsInternalPrivateStorageKey(Key) or
-       IsHiddenRegExpDataProperty(Self, Key) then
+    if IsHiddenRegExpDataProperty(Self, Key) then
       Continue;
     Keys[Count] := Key;
     Inc(Count);
@@ -2514,8 +2544,7 @@ begin
   Count := 0;
 
   for Pair in FProperties do
-    if Pair.Value.Enumerable and
-       not IsInternalPrivateStorageKey(Pair.Key) then
+    if Pair.Value.Enumerable then
     begin
       Names[Count] := Pair.Key;
       Inc(Count);
@@ -2585,8 +2614,7 @@ begin
   Count := 0;
   for Key in FProperties.Keys do
   begin
-    if IsInternalPrivateStorageKey(Key) or
-       IsHiddenRegExpDataProperty(Self, Key) then
+    if IsHiddenRegExpDataProperty(Self, Key) then
       Continue;
     Names[Count] := Key;
     Inc(Count);
