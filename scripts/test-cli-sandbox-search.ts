@@ -206,6 +206,32 @@ for (const treeName of Object.keys(vectors.trees)) {
   }
 }
 
+// -- a refused reservation leaves the memory ledger as it was ------------------
+
+{
+  const body = [
+    "const sizes = [100000, 200000, 400000, 800000, 1600000];",
+    "for (const n of sizes) fs.writeFileSync(\"/lines-\" + n + \".txt\", \"\\n\".repeat(n));",
+    "const held = [];",
+    "const fill = () => { let count = 0; try { for (const _ of Array.from({ length: 1000 })) { held.push(new Uint8Array(1 << 20)); count++; } } catch (error) {} return count; };",
+    "const first = fill();",
+    "let refused = 0;",
+    "for (const _ of [1, 2, 3, 4, 5]) for (const n of sizes) { try { grep(\"x\", { glob: \"lines-\" + n + \".txt\" }); } catch (error) { refused++; } }",
+    "const second = fill();",
+    "console.log(JSON.stringify({ filled: first > 0, refused: refused > 0, second }));",
+  ].join("\n");
+  try {
+    const out = JSON.parse(runInTree({ "/readme.md": "x\n" }, body, ["--max-memory=64MiB", "--max-fs-bytes=8MiB"]).trim());
+    // A charge released without being made would let every refused round
+    // free room (about 25 MiB a round here); garbage collected on the way
+    // accounts for a few MiB at most.
+    if (!out.filled || !out.refused || out.second > 6) throw new Error(JSON.stringify(out));
+    console.log("memory ledger after refusals: ok");
+  } catch (error) {
+    failures.push(`memory ledger: ${(error as Error).message}`);
+  }
+}
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} failure(s):`);
   for (const failure of failures) console.error(`  - ${failure}`);

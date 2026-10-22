@@ -294,6 +294,7 @@ begin
       IndexBytes := 0;
       try
         Bytes := AFileSystem.SnapshotReadAllBytes(AFiles[FileIndex].Path);
+        CheckNativeWork;
         if ContainsNul(Bytes) or not TryDecodeUTF8(Bytes, Text,
           ErrorOffset) then
         begin
@@ -301,12 +302,16 @@ begin
           Continue;
         end;
         Bytes := nil;
+        CheckNativeWork;
         First := 1;
         if (Length(Text) > 0) and (Text[1] = BYTE_ORDER_MARK) then
           First := 2;
         LineCount := CountLines(Text, First);
-        IndexBytes := CheckedNativeByteSize(LineCount, LINE_INDEX_BYTES);
-        ReserveNativeBytes(IndexBytes);
+        { Recorded only once charged: the finally releases IndexBytes. }
+        LineBytes := CheckedNativeByteSize(LineCount, LINE_INDEX_BYTES);
+        ReserveNativeBytes(LineBytes);
+        IndexBytes := LineBytes;
+        CheckNativeWork;
         SplitLines(Text, First, LineCount, Lines);
         for LineIndex := 0 to Lines.Count - 1 do
         begin
