@@ -6,6 +6,7 @@ interface
 
 function GetBuildOS: string;
 function GetBuildArch: string;
+function IsGCStressBuild: Boolean;
 
 implementation
 
@@ -56,6 +57,18 @@ end;
 function GetBuildArch: string;
 begin
   Result := BUILD_ARCH;
+end;
+
+{ True in a GC-stress build (./build.pas --gc-stress), which collects every
+  few instructions. Tests read it as Goccia.build.gcStress to skip cases whose
+  cost grows with the live heap times the instruction count. }
+function IsGCStressBuild: Boolean;
+begin
+  {$IFDEF GOCCIA_GC_STRESS}
+  Result := True;
+  {$ELSE}
+  Result := False;
+  {$ENDIF}
 end;
 
 end.

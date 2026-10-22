@@ -60,7 +60,7 @@ const SKIP_UNIT_PATTERNS = [
   /^Goccia\.Values\.Your/,          // template placeholder
   /^Goccia\.Builtins\.Global(?:Your|FFI)/, // template placeholder
   /^Goccia\.inc$/,                   // include file
-  /^Goccia\.build$/,                 // JSON config
+  /^Goccia\.build(?:\.\w+)*$/,       // JavaScript API (Goccia.build, Goccia.build.gcStress, etc.)
   /^Goccia\.semver$/,                // JSON config
   /^Goccia\.gc(?:\.\w+)*$/,          // JavaScript API (Goccia.gc, Goccia.gc.maxBytes, etc.)
 ];

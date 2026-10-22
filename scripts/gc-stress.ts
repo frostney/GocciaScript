@@ -8,9 +8,11 @@
  * builds are known failures and do not count, so the baseline comes from the
  * same commit and the same run rather than from a checked-in list.
  *
- * The subset is the test262 directories and `tests/` paths where values cross
- * native code while guest code runs: promises, iterators, async functions,
- * generators, eval code and arguments objects.
+ * The subset is the whole `tests/` tree and the test262 directories where
+ * values cross native code while guest code runs: promises, iterators, async
+ * functions, generators, eval code and arguments objects. A `tests/` case
+ * whose cost grows with its size times the live heap shrinks or skips its
+ * large size when `Goccia.build.gcStress` is true.
  *
  * Each `tests/` file runs in a process of its own: an engine-integrity fault
  * stops a GocciaTestRunner run (exit 70), and one faulting file must not hide
@@ -54,17 +56,8 @@ export const TEST262_CATEGORIES = [
   "language/statements/generators",
 ];
 
-// The tests/ paths the stress run covers. Closures are tested under
-// tests/language/functions.
-export const TEST_PATHS = [
-  "tests/built-ins/Iterator",
-  "tests/built-ins/Promise",
-  "tests/language/arguments",
-  "tests/language/async-await",
-  "tests/language/async-generators",
-  "tests/language/functions",
-  "tests/language/generators",
-];
+// The tests/ paths the stress run covers: the whole tree (#1679).
+export const TEST_PATHS = ["tests"];
 
 // Mirrors ScriptExtensions (source/units/Goccia.FileExtensions.pas) and
 // TEST_DISCOVERY_EXCLUDED_DIRECTORIES (source/app/GocciaTestRunner.dpr), so a
@@ -288,6 +281,29 @@ async function runTestFile(
   return { status: "CRASH", message: `exit ${exitCode}${signal}: ${tailOf(output)}` };
 }
 
+// Goccia.build.gcStress decides which large cases a stress-aware test skips,
+// so each build has to report its own mode: a binary that always reported
+// false would leave the stress run as slow as the ordinary one, and one that
+// always reported true would shrink the ordinary run's coverage. A one-test
+// file per build asserts the expected value before any comparison runs.
+async function verifyBuildFlag(options: Options, build: "baseline" | "stress"): Promise<void> {
+  const directory = build === "stress" ? options.stressDir : options.baselineDir;
+  const runner = requireBinary(directory, "GocciaTestRunner");
+  const expected = build === "stress";
+  const file = resolve(options.outDir, `build-flag-${build}.js`);
+  writeFileSync(
+    file,
+    `test("Goccia.build.gcStress reports the ${build} build", () => {\n` +
+      `  expect(Goccia.build.gcStress).toBe(${expected});\n});\n`,
+  );
+  const outcome = await runTestFile(runner, file, options.fileTimeoutSeconds);
+  if (outcome.status !== "PASS") {
+    throw new InfrastructureError(
+      `${runner} does not report Goccia.build.gcStress === ${expected}: ${outcome.status} ${outcome.message}`,
+    );
+  }
+}
+
 async function runTests(
   options: Options,
   build: "baseline" | "stress",
@@ -408,6 +424,14 @@ async function main(): Promise<number> {
         throw new InfrastructureError(`test262 category not found: ${join(options.suiteDir, "test", category)}`);
       }
     }
+  }
+
+  // The tests suite is the one whose files read Goccia.build.gcStress, so
+  // check both builds report their own mode before any suite runs: a
+  // mismatch then fails fast instead of after the test262 runs.
+  if (options.suites.has("tests")) {
+    await verifyBuildFlag(options, "baseline");
+    await verifyBuildFlag(options, "stress");
   }
 
   const results: SuiteResult[] = [];

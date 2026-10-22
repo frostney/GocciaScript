@@ -45,15 +45,21 @@ describe("a chain of bound functions", () => {
     expect(outer("d")).toBe("inner,a,b,c,d");
   });
 
-  test("a chain 5,000 deep is called, constructed and reports constructability", () => {
+  // Deeper than the engine's bound of 2,000 forwards through a Proxy nest; a
+  // call or construction through bound functions alone still completes. A
+  // GC-stress build collects every 8 instructions, so building the chain costs
+  // time quadratic in its depth there; a stress run uses 2,500.
+  const boundDepth = typeof Goccia !== "undefined" && Goccia.build.gcStress ? 2500 : 5000;
+
+  test(`a chain ${boundDepth} deep is called, constructed and reports constructability`, () => {
     class Made {}
-    const callable = bindChain(5000, (...args) => args.length, 1);
-    expect(callable(2)).toBe(5001);
-    const constructable = bindChain(5000, Made);
+    const callable = bindChain(boundDepth, (...args) => args.length, 1);
+    expect(callable(2)).toBe(boundDepth + 1);
+    const constructable = bindChain(boundDepth, Made);
     expect(new constructable() instanceof Made).toBe(true);
     expect(Reflect.construct(constructable, []) instanceof Made).toBe(true);
     expect(typeof Reflect.construct(class {}, [], constructable)).toBe("object");
-    expect(() => Reflect.construct(class {}, [], bindChain(5000, () => 1))).toThrow(TypeError);
+    expect(() => Reflect.construct(class {}, [], bindChain(boundDepth, () => 1))).toThrow(TypeError);
   });
 
   test("new.target is the innermost target when the bound function is new.target", () => {
@@ -121,11 +127,13 @@ describe.runIf(typeof Goccia !== "undefined")("chains past the engine's bound", 
 });
 
 // Deep enough to exhaust the native stack without the bound; GocciaScript only,
-// on 64-bit builds, like the 20,000-deep Proxy nests in nested-targets.js.
+// on 64-bit builds, like the 20,000-deep Proxy nests in nested-targets.js. A
+// GC-stress build collects every 8 instructions, so building these chains
+// there costs time quadratic in their depth.
 const is64Bit = typeof Goccia !== "undefined" &&
   ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
 
-describe.runIf(is64Bit)("chains 20,000 deep", () => {
+describe.runIf(is64Bit && !(typeof Goccia !== "undefined" && Goccia.build.gcStress))("chains 20,000 deep", () => {
   test("alternating Proxies and bound functions throw RangeError, and the engine keeps working", () => {
     expect(() => alternate(20000, () => 1)()).toThrow(RangeError);
     expect(() => new (alternate(20000, class {}))()).toThrow(RangeError);

@@ -2323,6 +2323,8 @@ begin
     TGocciaStringLiteralValue.Create(GetBuildArch), [pfEnumerable]));
   BuildObj.DefineProperty('date', TGocciaPropertyDescriptorData.Create(
     TGocciaStringLiteralValue.Create(GetBuildDate), [pfEnumerable]));
+  BuildObj.DefineProperty('gcStress', TGocciaPropertyDescriptorData.Create(
+    TGocciaBooleanLiteralValue.FromBoolean(IsGCStressBuild), [pfEnumerable]));
 
   ShimsArray := TGocciaArrayValue.Create;
   AddTempRootIfNeeded(ShimsRoot, ShimsArray);
