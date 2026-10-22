@@ -862,7 +862,6 @@ resourcestring
   SErrorCallbackMustBeFunction = 'Callback must be a function';
   SErrorCallbackMustNotBeUndefined = 'Callback must not be undefined';
   SErrorArrayFlatExpectsNumber = 'Array.flat expects depth argument to be a number';
-  SErrorArrayWithRequiresArgs = 'Array.with requires index and value arguments';
   SErrorArrayCopyWithinRequiresTarget = 'Array.copyWithin requires a target argument';
   SErrorCustomSortMustBeFunction = 'Custom sort function must be a function';
 
