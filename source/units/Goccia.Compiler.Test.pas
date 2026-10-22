@@ -148,6 +148,7 @@ type
     procedure TestCompoundAssignmentReadsInitializedLetDirectly;
     procedure TestNumericImmediateConditionReadsParameterDirectly;
     procedure TestDiscardedStoreSkipsResultMove;
+    procedure TestCompoundAssignmentWritesRegisterOnlyBindingDirectly;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestObjectRestBytecodeRoundTrip;
@@ -301,6 +302,8 @@ begin
     TestNumericImmediateConditionReadsParameterDirectly);
   Test('Discarded store skips the result move',
     TestDiscardedStoreSkipsResultMove);
+  Test('Compound assignment to a register-only binding writes it directly',
+    TestCompoundAssignmentWritesRegisterOnlyBindingDirectly);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -2134,7 +2137,9 @@ procedure TTestCompiler.TestCompoundAssignmentReadsInitializedLetDirectly;
     Result := -1;
     Module := CompileSource(ASource);
     try
-      Func := FindFunctionWithOp(Module.TopLevel, OP_SET_LOCAL);
+      // Every case reads p.y; the store itself may be OP_SET_LOCAL or, for a
+      // binding that only lives in its register, the operator's destination.
+      Func := FindFunctionWithOp(Module.TopLevel, OP_GET_LOCAL_PROP_CONST);
       if Assigned(Func) then
         Result := CountOp(Func, OP_GET_LOCAL);
     finally
@@ -2199,6 +2204,34 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+procedure TTestCompiler.TestCompoundAssignmentWritesRegisterOnlyBindingDirectly;
+
+  function SetLocalsIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_GET_LOCAL_PROP_CONST);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_SET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Integer>(SetLocalsIn(
+    'const f = (p) => { let x = p.x; x += p.y; return x; };')).ToBe(0);
+  // A closure reaches the binding through its cell, which OP_SET_LOCAL keeps
+  // in step with the register.
+  Expect<Integer>(SetLocalsIn(
+    'const f = (p) => { let x = p.x; const g = () => x; x += p.y; ' +
+    'return g; };')).ToBe(1);
 end;
 
 procedure TTestCompiler.TestOptionalLocalPropertyReadSkipsFusedOpcode;
