@@ -118,6 +118,10 @@ type
     procedure TestInvalidStatusRejects;
     procedure TestInvalidHeaderRejects;
     procedure TestOversizedBodyRejects;
+    procedure TestBodyOverMemoryLimitRejects;
+    procedure TestHeldBodiesCountTogether;
+    procedure TestConsumedBodyIsChargedOnce;
+    procedure TestCollectedResponseGivesItsBytesBack;
     procedure TestAbortCancelsRequest;
     procedure TestTimeoutSignalCancelsRequest;
     procedure TestRunDeadlineEndsWait;
@@ -343,6 +347,14 @@ begin
     TestInvalidHeaderRejects);
   Test('a body over the response ceiling rejects with TypeError',
     TestOversizedBodyRejects);
+  Test('a body over the memory limit rejects with the memory-limit ' +
+    'RangeError', TestBodyOverMemoryLimitRejects);
+  Test('bodies held at once count together against the memory limit',
+    TestHeldBodiesCountTogether);
+  Test('a consumed body is charged once, by what it became',
+    TestConsumedBodyIsChargedOnce);
+  Test('a collected response gives its body''s bytes back',
+    TestCollectedResponseGivesItsBytesBack);
   Test('an abort cancels the request and a later answer is ignored',
     TestAbortCancelsRequest);
   Test('AbortSignal.timeout ends the wait for an answer',
@@ -627,6 +639,152 @@ begin
     ApiCapabilities, CEILING))
     .ToBe('TypeError: HTTP response body exceeds 4 byte limit');
   Expect<Integer>(Fake.Request(0).MaxResponseBytes).ToBe(CEILING);
+end;
+
+const
+  MEBIBYTE = 1024 * 1024;
+  MEMORY_HEADROOM = 4 * MEBIBYTE;
+  MEMORY_LIMIT_OUTCOME = 'RangeError: Allocation failed: GC heap size ' +
+    'exceeds the configured memory limit';
+
+function BodyResponse(const ABytes: Integer): THTTPResponse;
+begin
+  Result := Default(THTTPResponse);
+  Result.StatusCode := 200;
+  Result.StatusText := 'OK';
+  SetLength(Result.Body, ABytes);
+  if ABytes > 0 then
+    FillChar(Result.Body[0], ABytes, Ord('a'));
+end;
+
+{ Runs AScript like RunWithTransport, with the collector's ceiling
+  MEMORY_HEADROOM above what it holds once the engine exists, and a response
+  ceiling well above every body. }
+function RunUnderMemoryLimit(const AScript: string;
+  const ATransport: IGocciaFetchTransport): string;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  Source := TStringList.Create;
+  try
+    Source.Text := 'globalThis.outcome = "pending";' + sLineBreak + AScript;
+    Engine := CreateFetchEngine(Source, ApiCapabilities);
+    try
+      Engine.FetchTransport := ATransport;
+      Engine.FetchMaxResponseBytes := 16 * MEBIBYTE;
+      GC.Collect;
+      PreviousMaxBytes := GC.MaxBytes;
+      GC.MaxBytes := GC.BytesAllocated + MEMORY_HEADROOM;
+      try
+        Engine.Execute;
+      finally
+        GC.MaxBytes := PreviousMaxBytes;
+      end;
+      Result := GlobalText(Engine, 'outcome');
+    finally
+      Engine.Free;
+    end;
+  finally
+    Source.Free;
+  end;
+  GC.Collect;
+end;
+
+{ A fetched body is reserved against the engine's memory limit when the
+  fetch settles, as a native built-in reserves the bytes it holds; one that
+  does not fit rejects with the catchable RangeError an allocation over the
+  limit throws, whatever the response ceiling allows. }
+procedure TFetchTransportTests.TestBodyOverMemoryLimitRejects;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := BodyResponse(6 * MEBIBYTE);
+  Expect<string>(RunUnderMemoryLimit(FetchScript(API_URL), Transport))
+    .ToBe(MEMORY_LIMIT_OUTCOME);
+  Fake.Response := BodyResponse(MEBIBYTE);
+  Expect<string>(RunUnderMemoryLimit('fetch("' + API_URL + '").then(' +
+    '(r) => r.arrayBuffer()).then((b) => { globalThis.outcome = ' +
+    'String(b.byteLength); });', Transport))
+    .ToBe(IntToStr(MEBIBYTE));
+end;
+
+{ Responses a script keeps hold of keep their bodies reserved, so bodies
+  that each fit can together pass the limit: the one that does not fit
+  rejects. }
+procedure TFetchTransportTests.TestHeldBodiesCountTogether;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := BodyResponse(3 * MEBIBYTE div 2);
+  Expect<string>(RunUnderMemoryLimit(
+    'const held = [];' + sLineBreak +
+    'const step = () => fetch("' + API_URL + '").then(' +
+    '(r) => { held.push(r); return "ok"; }, (e) => e.name);' + sLineBreak +
+    'step().then((a) => step().then((b) => step().then((c) => {' +
+    ' globalThis.outcome = [a, b, c, held.length].join(","); })));',
+    Transport)).ToBe('ok,ok,RangeError,2');
+end;
+
+{ text(), json() and arrayBuffer() hand the body's reservation to what they
+  make from it. arrayBuffer() adopts the bytes, so a body over half the room
+  left still fits; text() gives the body back before it makes the string,
+  which holds two bytes per character, so a body of 1.5 MiB (3 MiB of text)
+  fits in 4 MiB of room, where body and text together would not. }
+procedure TFetchTransportTests.TestConsumedBodyIsChargedOnce;
+type
+  TReadCase = record
+    Read: string;
+    Bytes: Integer;
+  end;
+const
+  READS: array[0..1] of TReadCase = (
+    (Read: 'text'; Bytes: 3 * MEBIBYTE div 2),
+    (Read: 'arrayBuffer'; Bytes: 5 * MEBIBYTE div 2)
+  );
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+  I: Integer;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  for I := 0 to High(READS) do
+  begin
+    Fake.Response := BodyResponse(READS[I].Bytes);
+    Expect<string>(RunUnderMemoryLimit('fetch("' + API_URL + '").then(' +
+      '(r) => r.' + READS[I].Read + '().then((v) => {' +
+      ' globalThis.outcome = [r.bodyUsed, v.length ?? v.byteLength]' +
+      '.join(","); }, (e) => { globalThis.outcome = "read " + e.name; }));',
+      Transport)).ToBe('true,' + IntToStr(READS[I].Bytes));
+  end;
+end;
+
+{ A response nothing reaches any more is freed by the collection a
+  reservation runs before it refuses, and gives its body's bytes back. }
+procedure TFetchTransportTests.TestCollectedResponseGivesItsBytesBack;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := BodyResponse(3 * MEBIBYTE);
+  Expect<string>(RunUnderMemoryLimit(
+    'const status = () => fetch("' + API_URL + '").then(' +
+    '(r) => String(r.status), (e) => e.name);' + sLineBreak +
+    'status().then((a) => status().then((b) => status().then((c) => {' +
+    ' globalThis.outcome = [a, b, c].join(","); })));', Transport))
+    .ToBe('200,200,200');
 end;
 
 procedure TFetchTransportTests.TestAbortCancelsRequest;

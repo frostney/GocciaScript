@@ -90,7 +90,7 @@ check_with() {
   fi
 
   if [ -n "$expected_output" ]; then
-    if echo "$actual" | grep -qF "$expected_output"; then
+    if grep -qF -- "$expected_output" <<< "$actual"; then
       PASS=$((PASS + 1))
     else
       echo "FAIL: $desc"
@@ -123,7 +123,7 @@ check() {
   fi
 
   if [ -n "$expected_output" ]; then
-    if echo "$actual" | grep -qF "$expected_output"; then
+    if grep -qF -- "$expected_output" <<< "$actual"; then
       echo "PASS: $desc"
       PASS=$((PASS + 1))
     else
@@ -332,6 +332,65 @@ check_with "response over the cap is refused" \
   "--max-fetch-bytes=4" 1 "
 await fetch('${BASE}/text')
 " "TypeError"
+
+# --- Response bodies count against the memory limit ---
+#
+# A body is reserved against --max-memory when its fetch settles and given
+# back when it is consumed or collected, so a body that does not fit rejects
+# with the catchable memory-limit RangeError, whatever --max-fetch-bytes
+# allows.
+
+check_with "a body over the memory limit rejects with RangeError" \
+  "--max-memory=8MiB --max-fetch-bytes=16MiB" 0 "
+try {
+  await fetch('${BASE}/bytes/12582912')
+  console.log('delivered')
+} catch (e) {
+  console.log(e.name, e.message)
+}
+" "RangeError Allocation failed: GC heap size exceeds the configured memory limit"
+
+check_with "bodies held at once count together" \
+  "--max-memory=8MiB --max-fetch-bytes=16MiB" 0 "
+const held = []
+const results = []
+for (const _ of [1, 2, 3]) {
+  try {
+    held.push(await fetch('${BASE}/bytes/3145728'))
+    results.push('ok')
+  } catch (e) {
+    results.push(e.name)
+  }
+}
+console.log(results.join(','))
+" "ok,ok,RangeError"
+
+check_with "a consumed body gives its bytes back" \
+  "--max-memory=8MiB --max-fetch-bytes=16MiB" 0 "
+let total = 0
+for (const _ of [1, 2, 3, 4]) {
+  const buffer = await (await fetch('${BASE}/bytes/3145728')).arrayBuffer()
+  total += buffer.byteLength
+}
+console.log(total)
+" "12582912"
+
+check_with "an uncaught over-limit body ends the run with RangeError" \
+  "--max-memory=8MiB --max-fetch-bytes=16MiB" 1 "
+await fetch('${BASE}/bytes/12582912')
+" "RangeError"
+
+check_with "new Response(body) is charged too" \
+  "--max-memory=8MiB" 0 "
+const text = 'a'.repeat(1258291)
+const held = []
+try {
+  for (const _ of [1, 2, 3, 4, 5, 6, 7, 8]) held.push(new Response(text))
+  console.log('held', held.length)
+} catch (e) {
+  console.log(e.name)
+}
+" "RangeError"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
