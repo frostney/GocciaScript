@@ -30,9 +30,11 @@ type
     // TDZ hole. Whether the read may also take the register as an operand is
     // decided where the operand is compiled; see TryResolveSettledLocalName.
     IsInitialized: Boolean;
-    // True when the block that declares this binding set its TDZ hole on
-    // entry. Until its declaration runs nothing can store to it, so the
-    // declaration does not set the hole again.
+    // True when the binding's declaration need not set its TDZ hole: the
+    // block that declares it set the hole on entry, and until the declaration
+    // runs nothing can store to it, or, for a leading binding of a function
+    // body, nothing can observe the binding before its declaration completes
+    // (LeadingLexicalsWithUnobservableHole).
     HoleAtBlockEntry: Boolean;
     // Above zero while the code being compiled is outside this local's scope
     // although the local is still declared: ResolveLocal skips it then. See

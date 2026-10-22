@@ -196,6 +196,11 @@ uses
 const
   // The first growth step of a compiler scope's locals table.
   MODULE_LOCALS_RESERVE_LIMIT = 8;
+  // LeadingLexicalsWithUnobservableHole checks every earlier initializer for
+  // each binding, so it looks at this many leading bindings at most; the
+  // rest keep their TDZ hole. That keeps a body that opens with thousands of
+  // declarations, as generated code can, from compiling in quadratic time.
+  LEADING_LEXICAL_HOLE_LIMIT = 16;
 
 // The statements whose completion is UpdateEmpty(…, undefined): their value
 // is undefined unless their body leaves one.
@@ -1015,7 +1020,8 @@ end;
 // a body with hoisted function declarations, which exist from its entry and
 // could reach the binding from a call in an initializer. Such a binding needs
 // no hole on entry, because its declaration initializes it before anything
-// can read it.
+// can read it. Only the first LEADING_LEXICAL_HOLE_LIMIT bindings are
+// considered.
 function LeadingLexicalsWithUnobservableHole(
   const ABlock: TGocciaBlockStatement): TArray<string>;
 var
@@ -1037,7 +1043,8 @@ begin
       Break;
     for J := 0 to High(Decl.Variables) do
     begin
-      if Decl.Variables[J].IsPattern or Assigned(Decl.Variables[J].Pattern) then
+      if Decl.Variables[J].IsPattern or Assigned(Decl.Variables[J].Pattern) or
+         (InitCount = LEADING_LEXICAL_HOLE_LIMIT) then
         Exit;
       SetLength(Initializers, InitCount + 1);
       Initializers[InitCount] := Decl.Variables[J].Initializer;
@@ -1108,7 +1115,8 @@ begin
       // Function-body lexical declarations are instantiated before any body
       // statement executes, regardless of whether the body also contains a
       // hoisted function declaration. This establishes the TDZ for earlier
-      // references and assignments.
+      // references and assignments; a leading binding whose TDZ nothing can
+      // observe (LeadingLexicalsWithUnobservableHole) gets no hole.
       PredeclaredLexicalStart := FCurrentScope.LocalCount;
       for I := 0 to Block.Nodes.Count - 1 do
         PredeclareLexicalLocals(Block.Nodes[I], FCurrentScope);
