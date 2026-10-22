@@ -40,9 +40,26 @@ type
     property HasIndexKey: Boolean read FHasIndexKey;
   end;
 
+  { What a few objects hold besides their properties: a RegExp's compiled data,
+    and the private elements (ES2026 §7.3.1 MakeBasicObject's
+    [[PrivateElements]]; each a §6.2.10 PrivateElement) the VM keeps by private
+    storage key. An object points to one only once it needs it, so every
+    other object stays the size it was. Private elements are kept out of the
+    property map so that no property key, whatever its text, names one. }
+  TGocciaObjectInternalSlots = class
+  public
+    RegExpData: TObject;
+    // Nil until the object holds a private element.
+    PrivateElements: TGocciaPropertyMap;
+    destructor Destroy; override;
+  end;
+
   TGocciaObjectValue = class(TGocciaValue)
   private
+    function GetRegExpData: TObject; {$IFDEF FPC}inline;{$ENDIF}
     procedure SetRegExpData(const AValue: TObject);
+    function GetPrivateElements: TGocciaPropertyMap; {$IFDEF FPC}inline;{$ENDIF}
+    function EnsureInternalSlots: TGocciaObjectInternalSlots;
     procedure MaterializeAllLazyStringProperties;
     procedure EnsureSymbolStorage; {$IFDEF FPC}inline;{$ENDIF}
     function StoreLazyPropertyDescriptor(const AName: string;
@@ -54,11 +71,6 @@ type
       const ACurrent, ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
   protected
     FProperties: TGocciaPropertyMap;
-    // The object's [[PrivateElements]] (ES2026 §7.3.1 MakeBasicObject; each a
-    // §6.2.10 PrivateElement) the VM keeps here, by private storage key; nil
-    // until it holds one. Kept out of FProperties so that no property key,
-    // whatever its text, names one.
-    FPrivateElements: TGocciaPropertyMap;
     FSymbolDescriptors: TSymbolDescriptorMap;
     FSymbolInsertionOrder: TList<TGocciaSymbolValue>;
     FPrototype: TGocciaObjectValue;
@@ -69,7 +81,7 @@ type
     FHasErrorData: Boolean;
     FErrorStack: string;
     FHasRegExpData: Boolean;
-    FRegExpData: TObject;
+    FInternalSlots: TGocciaObjectInternalSlots;
     procedure NoteIndexedOwnProperty(const AName: string);
     { Replace ADescriptor, AName's entry in FProperties, by what it
       materializes into when it is a lazy placeholder, and return the entry. }
@@ -245,7 +257,7 @@ type
 
     property Properties: TGocciaPropertyMap read FProperties;
     // Nil while the object holds no private element.
-    property PrivateElements: TGocciaPropertyMap read FPrivateElements;
+    property PrivateElements: TGocciaPropertyMap read GetPrivateElements;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
     property Sealed: Boolean read FSealed;
@@ -255,7 +267,7 @@ type
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
     property ErrorStack: string read FErrorStack write FErrorStack;
     property HasRegExpData: Boolean read FHasRegExpData write FHasRegExpData;
-    property RegExpData: TObject read FRegExpData write SetRegExpData;
+    property RegExpData: TObject read GetRegExpData write SetRegExpData;
   published
     function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1038,14 +1050,52 @@ begin
   ADescriptor.MarkValues;
 end;
 
+{ TGocciaObjectInternalSlots }
+
+destructor TGocciaObjectInternalSlots.Destroy;
+var
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+begin
+  RegExpData.Free;
+  if Assigned(PrivateElements) then
+    for Pair in PrivateElements do
+      Pair.Value.Free;
+  PrivateElements.Free;
+  inherited;
+end;
+
 { TGocciaObjectValue }
+
+function TGocciaObjectValue.EnsureInternalSlots: TGocciaObjectInternalSlots;
+begin
+  if not Assigned(FInternalSlots) then
+    FInternalSlots := TGocciaObjectInternalSlots.Create;
+  Result := FInternalSlots;
+end;
+
+function TGocciaObjectValue.GetRegExpData: TObject;
+begin
+  if Assigned(FInternalSlots) then
+    Result := FInternalSlots.RegExpData
+  else
+    Result := nil;
+end;
 
 procedure TGocciaObjectValue.SetRegExpData(const AValue: TObject);
 begin
-  if FRegExpData = AValue then
+  if GetRegExpData = AValue then
     Exit;
-  FRegExpData.Free;
-  FRegExpData := AValue;
+  EnsureInternalSlots;
+  FInternalSlots.RegExpData.Free;
+  FInternalSlots.RegExpData := AValue;
+end;
+
+function TGocciaObjectValue.GetPrivateElements: TGocciaPropertyMap;
+begin
+  if Assigned(FInternalSlots) then
+    Result := FInternalSlots.PrivateElements
+  else
+    Result := nil;
 end;
 
 threadvar
@@ -1539,11 +1589,6 @@ begin
       Pair.Value.Free;
   FProperties.Free;
 
-  if Assigned(FPrivateElements) then
-    for Pair in FPrivateElements do
-      Pair.Value.Free;
-  FPrivateElements.Free;
-
   if Assigned(FSymbolDescriptors) then
   begin
     for SymPair in FSymbolDescriptors do
@@ -1552,7 +1597,7 @@ begin
   end;
 
   FSymbolInsertionOrder.Free;
-  FRegExpData.Free;
+  FInternalSlots.Free;
   inherited;
 end;
 
@@ -1560,8 +1605,9 @@ function TGocciaObjectValue.TryGetPrivateElement(const AKey: string;
   out ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
   ADescriptor := nil;
-  Result := Assigned(FPrivateElements) and
-    FPrivateElements.TryGetValue(AKey, ADescriptor);
+  Result := Assigned(FInternalSlots) and
+    Assigned(FInternalSlots.PrivateElements) and
+    FInternalSlots.PrivateElements.TryGetValue(AKey, ADescriptor);
 end;
 
 procedure TGocciaObjectValue.SetPrivateElement(const AKey: string;
@@ -1569,15 +1615,16 @@ procedure TGocciaObjectValue.SetPrivateElement(const AKey: string;
 var
   Existing: TGocciaPropertyDescriptor;
 begin
-  if not Assigned(FPrivateElements) then
-    FPrivateElements := TGocciaPropertyMap.Create;
-  if FPrivateElements.TryGetValue(AKey, Existing) then
+  EnsureInternalSlots;
+  if not Assigned(FInternalSlots.PrivateElements) then
+    FInternalSlots.PrivateElements := TGocciaPropertyMap.Create;
+  if FInternalSlots.PrivateElements.TryGetValue(AKey, Existing) then
   begin
     if Existing = ADescriptor then
       Exit;
     Existing.Free;
   end;
-  FPrivateElements.AddOrSetValue(AKey, ADescriptor);
+  FInternalSlots.PrivateElements.AddOrSetValue(AKey, ADescriptor);
 end;
 
 procedure TGocciaObjectValue.ClearOwnPropertiesForRestore;
@@ -1748,8 +1795,9 @@ begin
   for Pair in FProperties do
     Pair.Value.MarkValues;
 
-  if Assigned(FPrivateElements) then
-    for Pair in FPrivateElements do
+  if Assigned(FInternalSlots) and
+     Assigned(FInternalSlots.PrivateElements) then
+    for Pair in FInternalSlots.PrivateElements do
       Pair.Value.MarkValues;
 
   if Assigned(FSymbolDescriptors) then
