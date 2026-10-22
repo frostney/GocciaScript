@@ -123,6 +123,7 @@ uses
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Expressions,
+  Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
@@ -898,6 +899,24 @@ begin
     (Length(ACtx.Scope.NameProbes(AName)) > 0);
 end;
 
+// True when a lexical declaration's initializer may be evaluated straight
+// into the binding's register: nothing it runs can read or write the binding,
+// so no intermediate value it leaves there can stand in for the TDZ hole.
+// The binding must be uncaptured, or a closure created before the declaration
+// could reach it from a call in the initializer.
+function LexicalInitializerMayTargetSlot(const ACtx: TGocciaCompilationContext;
+  const AInfo: TGocciaVariableInfo; const ALocalIdx: Integer): Boolean;
+begin
+  Result := False;
+  if ACtx.OptimizationOptions.PreserveCoverageShape or (ALocalIdx < 0) then
+    Exit;
+  if ACtx.Scope.GetLocal(ALocalIdx).IsCaptured or
+     ACtx.Scope.MutableLocalsMayLeaveRegisters or
+     ShouldTryWithBinding(ACtx.Scope, AInfo.Name) then
+    Exit;
+  Result := InitializerAvoidsOwnBinding(AInfo.Initializer, AInfo.Name);
+end;
+
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
@@ -1165,7 +1184,8 @@ begin
     else if Assigned(Info.Initializer) and
        not (AStmt.IsVar and (not HasInitializer) and IsVarRedeclaration) then
     begin
-      if not AStmt.IsVar then
+      if not AStmt.IsVar and not LexicalInitializerMayTargetSlot(ACtx, Info,
+           DeclaredIdx) then
       begin
         InitSlot := ACtx.Scope.AllocateRegister;
         try

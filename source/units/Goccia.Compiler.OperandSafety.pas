@@ -54,6 +54,13 @@ function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 function ParameterInitializerAvoidsOwnBinding(
   const AParams: TGocciaParameterArray; const AIndex: Integer): Boolean;
 
+// The same proof for the initializer of a lexical declaration of AName: no
+// node of AInitializer can reach the binding, by the rules above. The caller
+// also needs the binding to be uncaptured, so that no closure created before
+// the declaration reaches it either.
+function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
+  const AName: string): Boolean;
+
 implementation
 
 uses
@@ -532,6 +539,19 @@ begin
       Exit(False);
   end;
   Result := True;
+end;
+
+function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
+  const AName: string): Boolean;
+var
+  Scan: TScan;
+begin
+  Scan.RejectLocalWrites := False;
+  Scan.Budget := -1;
+  Scan.AvoidName := AName;
+  if AName = '' then
+    Exit(False);
+  Result := ScanNode(Scan, AInitializer);
 end;
 
 end.

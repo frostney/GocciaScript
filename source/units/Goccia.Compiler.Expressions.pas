@@ -72,6 +72,10 @@ procedure CompileConditional(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaConditionalExpression; const ADest: UInt16);
 function TryEmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
   const ACondition: TGocciaExpression; out AJumpIndex: Integer): Boolean;
+// True when a reference to AName inside a `with` statement has to probe the
+// object environment first.
+function ShouldTryWithBinding(const AScope: TGocciaCompilerScope;
+  const AName: string): Boolean;
 procedure CompileArray(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrayExpression; const ADest: UInt16);
 procedure CompileObject(const ACtx: TGocciaCompilationContext;
