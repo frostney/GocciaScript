@@ -3,35 +3,65 @@
 # Packages one target's downloaded build artifact into a release archive, the
 # way the tagged release (ci.yml) and the nightly prerelease (nightly.yml)
 # publish it: the shipped binaries plus tests/, benchmarks/ and examples/
-# under a single <archive-name>/ directory, archived as
-# <archive-name>.<format>. The archive is then checked with
-# check-release-archive.sh, so a binary that is missing or not executable
-# fails the packaging instead of reaching a release.
+# under a single gocciascript-<label>-<platform>/ directory. The archive is
+# then checked with check-release-archive.sh, so a binary that is missing or
+# not executable fails the packaging instead of reaching a release.
 #
-# Run from the repository root. The caller picks the format per target; the
-# published asset names are .tar.gz for Linux and .zip for macOS and Windows.
+# This script owns the published asset names, so the release and the nightly
+# cannot drift apart: .tar.gz for Linux, .zip for macOS and Windows. Homebrew,
+# the website installers and packaging/apt depend on them.
+#
+#   package-release-archive.sh --targets
+#       Prints the supported targets, one per line.
+#   package-release-archive.sh <target> <artifact-dir> <label>
+#       Writes gocciascript-<label>-<platform>.<ext> to the current directory.
+#
+# Run from the repository root.
 
 set -euo pipefail
 
+targets=(aarch64-darwin x86_64-darwin x86_64-linux aarch64-linux x86_64-win64 i386-win32)
+
 usage() {
-  echo "Usage: $0 <artifact-dir> <archive-name> <tar.gz|zip>" >&2
+  echo "Usage: $0 --targets" >&2
+  echo "       $0 <target> <artifact-dir> <label>" >&2
   exit 1
 }
+
+if [ "$#" -eq 1 ] && [ "$1" = "--targets" ]; then
+  printf '%s\n' "${targets[@]}"
+  exit 0
+fi
 
 if [ "$#" -ne 3 ]; then
   usage
 fi
 
-artifact_dir="$1"
-archive_name="$2"
-format="$3"
-pkg_dir="$archive_name"
+target="$1"
+artifact_dir="$2"
+label="$3"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-case "$format" in
-  tar.gz|zip) ;;
-  *) usage ;;
+case "$target" in
+  aarch64-darwin) platform="macos-arm64"; format="zip" ;;
+  x86_64-darwin)  platform="macos-x64"; format="zip" ;;
+  x86_64-linux)   platform="linux-x64"; format="tar.gz" ;;
+  aarch64-linux)  platform="linux-arm64"; format="tar.gz" ;;
+  x86_64-win64)   platform="windows-x64"; format="zip" ;;
+  i386-win32)     platform="windows-x86"; format="zip" ;;
+  *)
+    echo "::error::Unknown release target: $target"
+    exit 1
+    ;;
 esac
+
+if [ -z "$label" ]; then
+  usage
+fi
+
+archive_name="gocciascript-${label}-${platform}"
+pkg_dir="$archive_name"
+archive="${archive_name}.${format}"
 
 if [ -e "$pkg_dir" ]; then
   echo "::error::Staging directory $pkg_dir already exists"
@@ -46,7 +76,6 @@ cp -r tests/ "$pkg_dir/tests/"
 cp -r benchmarks/ "$pkg_dir/benchmarks/"
 cp -r examples/ "$pkg_dir/examples/"
 
-archive="${archive_name}.${format}"
 rm -f "$archive"
 if [ "$format" = "zip" ]; then
   zip -q -r "$archive" "$pkg_dir/"

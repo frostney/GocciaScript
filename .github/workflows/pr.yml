@@ -960,18 +960,21 @@ jobs:
           name: build-pr
           path: artifacts/build-pr/
 
+      # The PR build has Linux x64 binaries only. Packaging them a second time
+      # as the x86_64-darwin target exercises the macOS .zip path; the archive
+      # check reads modes and paths, not the binary format.
       - name: Package and check the Linux and macOS archive formats
         run: |
-          bash ./.github/scripts/package-release-archive.sh artifacts/build-pr gocciascript-pr-linux-x64 tar.gz
-          bash ./.github/scripts/package-release-archive.sh artifacts/build-pr gocciascript-pr-linux-x64 zip
+          bash ./.github/scripts/package-release-archive.sh x86_64-linux artifacts/build-pr pr
+          bash ./.github/scripts/package-release-archive.sh x86_64-darwin artifacts/build-pr pr
 
       - name: Run the runner from each extracted archive
         run: |
-          mkdir extracted-tar extracted-zip
-          tar -xzf gocciascript-pr-linux-x64.tar.gz -C extracted-tar
-          unzip -q gocciascript-pr-linux-x64.zip -d extracted-zip
-          for dir in extracted-tar extracted-zip; do
-            output="$(printf 'console.log("packaged", 1 + 1);\n' | "$dir/gocciascript-pr-linux-x64/GocciaRunner" -)"
+          mkdir extracted
+          tar -xzf gocciascript-pr-linux-x64.tar.gz -C extracted
+          unzip -q gocciascript-pr-macos-x64.zip -d extracted
+          for dir in extracted/gocciascript-pr-linux-x64 extracted/gocciascript-pr-macos-x64; do
+            output="$(printf 'console.log("packaged", 1 + 1);\n' | "$dir/GocciaRunner" -)"
             echo "$output"
             grep -q '^packaged 2$' <<< "$output"
           done
