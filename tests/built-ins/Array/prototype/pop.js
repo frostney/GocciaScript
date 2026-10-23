@@ -40,3 +40,16 @@ describe("Array.prototype.pop", () => {
     expect(obj.length).toBe(1);
   });
 });
+
+// ES2026 §23.1.3.22 Array.prototype.pop ends with Set(O, "length",
+// newLen, true), ArraySetLength (§10.4.2.4) on an Array.
+describe("pop on an array longer than 2 ** 31 - 1", () => {
+  test("removes the last element and sets the length", () => {
+    const arr = [];
+    arr.length = 2 ** 31 + 2;
+    arr[2 ** 31 + 1] = "z";
+    expect(arr.pop()).toBe("z");
+    expect(arr.length).toBe(2 ** 31 + 1);
+    expect(Object.hasOwn(arr, 2 ** 31 + 1)).toBe(false);
+  });
+});
