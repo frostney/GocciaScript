@@ -40,3 +40,7 @@ Record the resources the worker actually loaded and any missing capability in
 its result. An isolated worker must not assume parent conversation or loaded
 skills are inherited. Keep model-specific settings at the host boundary and
 apply them only to the actual worker when supported by evidence.
+
+Include the shared
+[long-command and lane rules](../../delivery-wait/SKILL.md#long-commands-and-delegated-lanes)
+in each worker's instructions, including the owner that resumes pending probes.

@@ -306,8 +306,8 @@ begin
     Expect<string>(ReadHostText('ro/a.txt')).ToBe('a');
     Expect<string>(ReadHostText('rw/b.txt')).ToBe('B');
     Expect<string>(Report.Text).ToBe(
-      'write-back: /ro/a.txt was copied read-only, skipped (use --copy-rw ' +
-      'to write it back)' + sLineBreak +
+      'write-back: /ro/a.txt was copied without write-back, skipped (use ' +
+      '--copy-rw to write it back)' + sLineBreak +
       'write-back: /scratch.txt was not copied from the host, skipped' +
       sLineBreak +
       'write-back: ' + HostPath('rw/b.txt') + sLineBreak +

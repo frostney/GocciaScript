@@ -6,8 +6,10 @@ spawning any worker.
 ## Policy gate
 
 A valid file is authoritative for repository-owned routing rules, context
-envelopes, token checkpoints, monitoring requirements, and escalation policy.
-It may narrow the [capability tiers](#capability-tiers) but never widen them.
+envelopes, token checkpoints, monitoring requirements, such as an optional
+default-branch staleness bound that `git-workflow`'s
+[default-branch health](../../git-workflow/SKILL.md#declared-staleness-bound)
+gate applies, and escalation policy. It may narrow the [capability tiers](#capability-tiers) but never widen them.
 Unlike the `escalate` usage-limit intervention below, the tier escalation rule
 under Capability tiers is not repository-owned: no repository rule may resume a
 lane that stopped, or raise its tier in place. The file must use host-neutral
@@ -124,4 +126,9 @@ state; use an exact known timestamp for time-based wakes. If the host cannot
 passively await the command under
 [`delivery-wait`'s running rules](../../delivery-wait/SKILL.md#running-a-wait),
 report the capability as unsupported.
-Never substitute repeated model inferences for waiting.
+Apply the shared
+[long-command and lane rules](../../delivery-wait/SKILL.md#long-commands-and-delegated-lanes)
+to every worker packet, including who owns a pending command after its turn
+ends. When only waits remain, checkpoint and end the turn; use the stated
+bounded-check fallback only when the host cannot notify. Never substitute
+repeated model inferences for waiting.

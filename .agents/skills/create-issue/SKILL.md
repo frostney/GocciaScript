@@ -7,9 +7,10 @@ description: >-
   issue, or when the user runs /create-issue.
 license: Unlicense OR MIT
 compatibility: >-
-  Requires the GitHub CLI (gh) 2.99 or newer authenticated to the target
-  repository with permission to create issues (triage access to apply labels,
-  write access to create one), and network access.
+  Requires Python 3.11 or newer, the GitHub CLI (gh) 2.99 or newer
+  authenticated to the target repository with permission to create issues
+  (triage access to apply labels, write access to create one), the internal
+  `template-check` skill, and network access.
 metadata:
   agents-role: entry-point
   agents-text: File a project-aligned GitHub issue from a short description.
@@ -58,7 +59,9 @@ to a full draft review.
 1. Discover the repository's issue templates and existing label conventions.
 2. Investigate the request and resolve any remaining material question using
    the gates above. Ground any progress claim in evidence gathered this run.
-3. Draft against the matching template. Keep only decision-, implementation-,
+3. Draft against the matching template. Keep every template heading verbatim
+   and in order; under a heading with nothing to say, write a one-line `None`
+   or the reason. Within those headings, keep only decision-, implementation-,
    and verification-relevant content:
    - a specific plain-language title;
    - problem, current and expected behavior, scope, constraints, and required
@@ -80,11 +83,18 @@ to a full draft review.
    > [!NOTE]
    > Created on behalf of @username using ModelName.
 
-8. Create the issue with the available GitHub tooling, verify the returned
-   issue's repository and intended content, and return its URL. If the write
-   response is lost or interrupted, search for the issue before retrying.
-   Report an unresolved write as uncertain; a request being accepted or
-   delegated is not proof that the issue was created.
+8. Run [`template-check`](../template-check/SKILL.md#running-a-check) on the
+   draft with `--kind issue --body FILE`, adding `--repo OWNER/REPO` outside
+   the target repository's checkout and `--template-name` when the
+   repository has several templates, and fix every heading problem it
+   reports.
+   Create the issue with the available GitHub tooling, verify the returned
+   issue's repository and intended content, run `template-check` again with
+   `--issue N` on the live body and edit the issue to fix any problem, and
+   return its URL. If the write response is lost or interrupted, search for
+   the issue before retrying. Report an unresolved write as uncertain; a
+   request being accepted or delegated is not proof that the issue was
+   created.
 
 Lead with the outcome. Omit boilerplate, repeated summaries, and a narration of
-the workflow.
+the workflow; template headings and their one-line `None` are not boilerplate.

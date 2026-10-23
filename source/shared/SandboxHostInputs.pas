@@ -8,7 +8,7 @@ unit SandboxHostInputs;
   as an origin, the sandbox path it landed at and the host path it came from,
   so that the host can decide after the run to keep what the run produced
   ([ADR 0119](../../docs/adr/0119-host-applied-sandbox-write-back.md)). An
-  origin copied read-write may be written back; a read-only one never is.
+  origin copied with --copy-rw may be written back; a --copy one never is.
 
   Symbolic links are refused wherever a copy meets one
   ([ADR 0071](../../docs/adr/0071-reject-symlinks-in-sandbox-seed-imports.md)): a
@@ -58,7 +58,7 @@ type
   TSandboxWriteBackAction = (
     { Written to HostPath. }
     swaWrite,
-    { The file came from, or lies in, an input copied read-only. }
+    { The file came from, or lies in, an input copied without write-back. }
     swaSkipReadOnly,
     { Nothing was copied to this sandbox path, so it has no host path. }
     swaSkipNoOrigin,
@@ -859,7 +859,8 @@ begin
       swaSkipReadOnly:
       begin
         AReport.Add(WRITE_BACK_REPORT_PREFIX + APlan[I].SandboxPath +
-          ' was copied read-only, skipped (use --copy-rw to write it back)');
+          ' was copied without write-back, skipped (use --copy-rw to ' +
+          'write it back)');
         Inc(Skipped);
       end;
       swaSkipOutside:

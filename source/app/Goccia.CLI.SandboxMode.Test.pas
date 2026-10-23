@@ -372,7 +372,8 @@ begin
   Expect<Integer>(Length(Merged)).ToBe(2);
   Expect<string>(Merged[0].SandboxPath).ToBe('/src');
   Expect<string>(Merged[1].SandboxPath).ToBe('/out/');
-  { The dry run: the command line's read-only copy replaced copy-rw. }
+  { The dry run: the command line's --copy, which is never written back,
+    replaced copy-rw. }
   Expect<Boolean>(Merged[1].ReadWrite).ToBe(False);
 end;
 
