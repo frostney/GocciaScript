@@ -149,18 +149,10 @@ jobs:
             cpu: x86_64
             os: linux
             runner: ubuntu-latest
-            # Ubuntu 22.04's glibc, pinned by checksum. The asset is replaced
-            # in place upstream, so a new checksum fails the download instead
-            # of changing what the release links against.
-            libs: Linux_AMD64_Ubuntu_2204.zip
-            libs-sha256: 4684a45a073238fdbf02c730ca26f8d2f2f9cc09b021fd1fdf3677948e7882e0
           - target: aarch64-linux
             cpu: aarch64
             os: linux
             runner: ubuntu-latest
-            # Ubuntu 18.04's glibc: linux-arm64 releases need glibc 2.17.
-            libs: Linux_AArch64_Ubuntu_1804.zip
-            libs-sha256: 3f7d776411e3f9023655c5eff900c08922fc4f8c0882624dcffdf14ecc89d158
           - target: x86_64-win64
             cpu: x86_64
             os: win64
@@ -184,20 +176,39 @@ jobs:
 
       # The Linux targets link libc (cthreads, dynlibs) against a pinned older
       # glibc rather than the runner's, which keeps the glibc a release needs
-      # as low as before. -Xd below keeps the linker to these libraries.
+      # as low as before: Ubuntu 22.04's for x86_64 (glibc 2.34) and 18.04's
+      # for aarch64 (glibc 2.17). The assets are replaced in place upstream, so
+      # the checksum pins them: a new one fails the download instead of
+      # changing what the release links against. -Xd below keeps the linker
+      # to these libraries.
+      - name: Select Linux link libraries
+        id: link-libs-asset
+        if: matrix.os == 'linux'
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-linux)
+              echo "name=Linux_AMD64_Ubuntu_2204.zip" >> "$GITHUB_OUTPUT"
+              echo "sha256=4684a45a073238fdbf02c730ca26f8d2f2f9cc09b021fd1fdf3677948e7882e0" >> "$GITHUB_OUTPUT"
+              ;;
+            aarch64-linux)
+              echo "name=Linux_AArch64_Ubuntu_1804.zip" >> "$GITHUB_OUTPUT"
+              echo "sha256=3f7d776411e3f9023655c5eff900c08922fc4f8c0882624dcffdf14ecc89d158" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
       - name: Restore Linux link libraries
         id: link-libs
         if: matrix.os == 'linux'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: link-libs
-          key: link-libs-${{ matrix.target }}-${{ matrix.libs-sha256 }}
+          key: link-libs-${{ matrix.target }}-${{ steps.link-libs-asset.outputs.sha256 }}
 
       - name: Download Linux link libraries
         if: matrix.os == 'linux' && steps.link-libs.outputs.cache-hit != 'true'
         env:
-          LIBS: ${{ matrix.libs }}
-          LIBS_SHA256: ${{ matrix.libs-sha256 }}
+          LIBS: ${{ steps.link-libs-asset.outputs.name }}
+          LIBS_SHA256: ${{ steps.link-libs-asset.outputs.sha256 }}
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 \
