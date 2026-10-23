@@ -208,7 +208,8 @@ type
     FCapture: TCapture;
     FExerciser: THeapSnapshotExerciser;
     FFed: Integer;
-    procedure Exercise(const ARoot: TGCManagedObject);
+    // ARoot is nil when the root is not a value: nothing to exercise.
+    procedure Exercise(const ARoot: TGocciaValue);
   public
     Restored: Integer;
     Refused: Integer;
@@ -216,7 +217,8 @@ type
     // (CollectBeforeEveryReservation). Not while what restored is used:
     // that is the engine's code, not the reader's.
     Stressed: Boolean;
-    // What ACheck returned for the last input that restored.
+    // What ACheck returned for the last input that restored, or
+    // ROOT_NOT_A_VALUE when its root was not a value.
     LastCheck: string;
     // Exercise what restored before ACheck runs, rather than instead, bound
     // by the instruction limit alone: what ACheck counts then does not
@@ -588,7 +590,7 @@ var
   Stream: TBytesStream;
   GC: TGarbageCollector;
   Previous: Int64;
-  Root: TGCManagedObject;
+  Root: TGocciaValue;
   Global: TGocciaObjectValue;
   Stage: TGocciaGlobalEvalStage;
 begin
@@ -621,16 +623,21 @@ begin
     Inc(Restored);
     // A root can be any object a codec writes, a cell among them; what is
     // used is a value.
-    Root := Restore.Roots[0];
+    Root := RootValue(Restore);
     if (ACheck = '') or ExerciseBeforeCheck then
       Exercise(Root);
     if ACheck <> '' then
     begin
-      Global := TGocciaObjectValue(FEngine.Realm.GlobalObject);
-      Global.AssignProperty('restored', TGocciaValue(Root));
-      LastCheck := FEngine.EvaluateGlobalEval(ACheck, TEST_PATH,
-        Stage).ToStringLiteral.Value;
-      Global.DeleteProperty('restored');
+      if not Assigned(Root) then
+        LastCheck := ROOT_NOT_A_VALUE
+      else
+      begin
+        Global := TGocciaObjectValue(FEngine.Realm.GlobalObject);
+        Global.AssignProperty('restored', Root);
+        LastCheck := FEngine.EvaluateGlobalEval(ACheck, TEST_PATH,
+          Stage).ToStringLiteral.Value;
+        Global.DeleteProperty('restored');
+      end;
     end;
   finally
     Restore.Free;
@@ -642,9 +649,9 @@ begin
   end;
 end;
 
-procedure TMutantFeeder.Exercise(const ARoot: TGCManagedObject);
+procedure TMutantFeeder.Exercise(const ARoot: TGocciaValue);
 begin
-  if not (ARoot is TGocciaValue) then
+  if not Assigned(ARoot) then
     Exit;
   if not ExerciseBeforeCheck then
     StartExecutionTimeout(EXERCISE_TIMEOUT_MS);
@@ -653,7 +660,7 @@ begin
     try
       // Each feed uses generators another way (resume, return first,
       // throw first), in turn.
-      FExerciser.Exercise(TGocciaValue(ARoot), FFed);
+      FExerciser.Exercise(ARoot, FFed);
     except
       // The run's own limits are outcomes a run can have, and so is a
       // rejection the run left unhandled (a built-in such as
@@ -1431,7 +1438,7 @@ procedure FeedRandomMutants(const AFeeder: TMutantFeeder; const ASeed: TBytes;
 var
   State: Cardinal;
   Mutant: TBytes;
-  I: Integer;
+  I, Start: Integer;
 
   function NextRandom: Cardinal;
   begin
@@ -1441,14 +1448,22 @@ var
     Result := State;
   end;
 
+  // A position past the build identity, so a build's version and commit
+  // do not move the edits.
+  function At: Integer;
+  begin
+    Result := Start + Integer(NextRandom mod Cardinal(Length(Mutant) - Start));
+  end;
+
 begin
   State := $0DDBA11;
+  Start := BuildIdentityEnd(ASeed);
   for I := 1 to ACount do
   begin
     Mutant := Copy(ASeed);
-    Mutant[NextRandom mod Cardinal(Length(Mutant))] := Byte(NextRandom);
+    Mutant[At] := Byte(NextRandom);
     if NextRandom mod 2 = 0 then
-      Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
+      Mutant[At] :=
         INTERESTING_BYTES[NextRandom mod Cardinal(Length(INTERESTING_BYTES))];
     AFeeder.Feed(Mutant);
   end;

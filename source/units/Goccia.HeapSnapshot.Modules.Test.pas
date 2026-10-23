@@ -345,9 +345,9 @@ begin
     end;
     // Mutations can make a scope or cell the root of a valid snapshot.
     // Only JavaScript values can be exposed to the script that exercises it.
-    Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-    if (Length(Restore.Roots) > 0) and (Restore.Roots[0] is TGocciaValue) then
-      Value := TGocciaValue(Restore.Roots[0]);
+    Value := RootValue(Restore);
+    if not Assigned(Value) then
+      Value := TGocciaUndefinedLiteralValue.UndefinedValue;
     TGocciaObjectValue(ARun.Engine.Realm.GlobalObject).AssignProperty(
       'restored', Value);
   finally
@@ -1678,7 +1678,7 @@ var
   Refusal, Outcome: string;
   Bytes, Mutant: TBytes;
   Seed: Cardinal;
-  I, J, Edits, Restored, Refused: Integer;
+  I, J, Start, Edits, Restored, Refused: Integer;
   Run: TModuleRun;
 
   function NextRandom: Cardinal;
@@ -1690,10 +1690,18 @@ var
     Result := Seed;
   end;
 
+  // A position past the build identity, so a build's version and commit
+  // do not move the edits.
+  function At: Integer;
+  begin
+    Result := Start + Integer(NextRandom mod Cardinal(Length(Mutant) - Start));
+  end;
+
 begin
   DefineGraph;
   Bytes := SnapshotEntry('main.js', Refusal);
   Expect<string>(Refusal).ToBe('');
+  Start := BuildIdentityEnd(Bytes);
   Seed := $0DD5EED5;
   Restored := 0;
   Refused := 0;
@@ -1708,13 +1716,11 @@ begin
       Edits := 1 + Integer(NextRandom mod 4);
       for J := 1 to Edits do
         case NextRandom mod 4 of
-          0: Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
-               Byte(NextRandom);
-          1: Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
-               Mutant[NextRandom mod Cardinal(Length(Mutant))] xor
-               (1 shl (NextRandom mod 8));
-          2: Mutant[NextRandom mod Cardinal(Length(Mutant))] := $FF;
-          3: Mutant[NextRandom mod Cardinal(Length(Mutant))] := 0;
+          0: Mutant[At] := Byte(NextRandom);
+          // A byte with one bit flipped, copied over another.
+          1: Mutant[At] := Mutant[At] xor (1 shl (NextRandom mod 8));
+          2: Mutant[At] := $FF;
+          3: Mutant[At] := 0;
         end;
       // A restore leaves its records in the engine: each mutant gets a fresh
       // one.

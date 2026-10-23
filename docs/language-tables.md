@@ -71,7 +71,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 |----------|-------|--------|
 | [Joint Iteration](https://github.com/tc39/proposal-joint-iteration) | 4 (finished) | Supported — `Iterator.zip` and `Iterator.zipKeyed` |
 | [Import Defer](https://tc39.es/proposal-defer-import-eval/) | 3 | Supported — static `import defer * as ns` and dynamic `import.defer()` create deferred namespace objects |
-| [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) | 3 | Supported — `Iterator.prototype.includes(searchElement, skippedElements?)` with SameValueZero comparison and iterator closing |
+| [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) | 4 (finished) | Supported — `Iterator.prototype.includes(searchElement, skippedElements?)` with SameValueZero comparison and iterator closing |
 | [Decorators](https://github.com/tc39/proposal-decorators) | 2.7 | Supported — class, method, field, getter/setter, auto-accessor decorators with `addInitializer` |
 | [Decorator Metadata](https://github.com/tc39/proposal-decorator-metadata) | 2.7 | Supported — `Symbol.metadata` for decorator-attached class metadata with inheritance |
 | [Import Bytes](https://github.com/tc39/proposal-import-bytes) | 2.7 | Supported — `import x from "./f" with { type: "bytes" }` (static, dynamic, `import.defer`) yields a default-only `Uint8Array` over an immutable `ArrayBuffer` |

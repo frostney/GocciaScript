@@ -187,7 +187,7 @@ export function renderHomeMarkdown(
     list([
       `**Conformance.** test262, the official ECMAScript conformance suite, runs on every pull request and on main, and a regression against main fails the pull request. ${conformanceFigure}[by area on the compatibility dashboard](/compatibility).`,
       "**Tested on every change.** 15,000+ JavaScript tests in 1,800+ files run on every pull request on Linux x64 and on six targets on main, plus differential suites checked against Bun and Vitest.",
-      `**Fuzzing and memory checks.** Every night, AFL++ fuzzes the engine and heap snapshot reader, and the full test suite runs under FreePascal's heap checker (heaptrc) and Valgrind memcheck; see the [nightly workflow](${GITHUB_REPO_URL}/actions/workflows/fuzz.yml). The [weekly GC-stress run](${GITHUB_REPO_URL}/actions/workflows/gc-stress.yml) collects garbage every 8 instructions across the GC-sensitive parts of the test suite and of test262.`,
+      `**Fuzzing and memory checks.** Every night, AFL++ fuzzes the engine and heap snapshot reader, and the full test suite runs under FreePascal's heap checker (heaptrc) and Valgrind memcheck; see the [nightly workflow](${GITHUB_REPO_URL}/actions/workflows/fuzz.yml). The [weekly GC-stress run](${GITHUB_REPO_URL}/actions/workflows/gc-stress.yml) collects garbage every 8 instructions across the whole test suite and the GC-sensitive part of test262.`,
       "**In production.** GocciaScript is the engine behind [Shotcup's hosted sandboxes](https://shotcup.dev), where every run gets a fresh engine with hard limits.",
       "**Prebuilt for six targets.** Every release and nightly provides binaries for macOS and Linux (x64 and arm64) and Windows (x64 and x86). [Install with the one-line installer or Homebrew on macOS](/installation).",
     ]),
@@ -239,7 +239,7 @@ export function renderHomeMarkdown(
     "",
     "## Runtime surface",
     "",
-    "GocciaScript includes structured-data imports and parsers, console output, SemVer helpers, import maps, and a built-in test runner with `test`, `describe`, and `expect`. GocciaRunner's sandbox mode adds import-only `fs` and `goccia` modules backed by a virtual filesystem of copied inputs, sandbox shell commands, nested execution, and explicit diffs.",
+    "GocciaScript includes structured-data imports and parsers, console output, SemVer helpers, import maps, and a built-in test runner with `test`, `describe`, and `expect`. GocciaRunner's sandbox mode adds import-only `fs`, `goccia` and `goccia:search` modules backed by a virtual filesystem of copied inputs, sandbox shell commands, nested execution, file search, and explicit diffs.",
     "",
     NODE_COMPATIBILITY_ANSWER,
     "",

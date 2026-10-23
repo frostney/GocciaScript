@@ -567,7 +567,7 @@ begin
   end;
 end;
 
-{ AInputs with the read-only ones first, then the read-write ones, each group
+{ AInputs with the --copy ones first, then the --copy-rw ones, each group
   keeping its order. }
 function InputsInHashedOrder(
   const AInputs: TGocciaSandboxInputRequests): TGocciaSandboxInputRequests;
