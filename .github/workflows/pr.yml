@@ -23,6 +23,12 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The frostney/fpc-toolchain build that build and build-main both install, so
+  # the benchmark comparison measures the diff, not a compiler change. ci.yml
+  # names the same one.
+  FPC_VERSION: "3.2.4-rc2-b1"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,7 +42,9 @@ jobs:
           persist-credentials: false
 
       - name: Install FPC
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
 
       - name: Check formatting
         run: ./format.pas --check
@@ -76,7 +84,26 @@ jobs:
           persist-credentials: false
 
       - name: Install FPC
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+
+      # A base from before the move to FPC 3.2.4 does not compile on it: its
+      # Generics.Defaults comparers are declared constref, and it sets the
+      # openssl unit's DLLSSLName and DLLUtilName, which 3.2.4 renamed. Port
+      # such a base the way Shared.inc does, so both builds use one compiler.
+      # Remove this step after 0.16.0.
+      - name: Port a pre-3.2.4 base to FPC 3.2.4
+        run: |
+          if grep -q GOCCIA_FPC_CONSTREF_COMPARERS source/shared/Shared.inc; then
+            echo "The base already builds on FPC 3.2.4."
+            exit 0
+          fi
+          grep -rlF '{$IFDEF FPC}constref{$ELSE}const{$ENDIF}' source \
+            | xargs -r sed -i 's/{\$IFDEF FPC}constref{\$ELSE}const{\$ENDIF}/const/'
+          sed -i -e 's/\bDLLSSLName :=/BaseSSLName :=/' -e 's/\bDLLUtilName :=/BaseCryptoName :=/' \
+            source/shared/TransportSecurity.pas
+          git diff --stat
 
       - name: Build benchmark runner and GocciaRunner (main base)
         # The PR base may predate the GocciaScriptLoader -> GocciaRunner rename.

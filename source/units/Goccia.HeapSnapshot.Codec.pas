@@ -2340,7 +2340,7 @@ end;
 // manifest describes named state, so wire order must depend on the name and
 // not on the engine's lazy materialization history.
 function CompareBuiltinPaths(
-  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: string): Integer;
+  {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: string): Integer;
 begin
   CheckNativeWork;
   if A < B then Result := -1
