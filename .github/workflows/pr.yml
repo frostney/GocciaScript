@@ -937,6 +937,48 @@ jobs:
           retention-days: 1
           path: boot-timing.json
 
+  # Runs the release packaging on the PR build without publishing anything. The
+  # tagged release and the nightly only package on tags and schedules, so this
+  # is where a change that breaks the archives, such as binaries that lose
+  # their executable bit (#1898), shows up before a release.
+  release-packaging:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      # No chmod after the download on purpose: the release job gets the
+      # binaries without their executable bit too, and packaging must restore it.
+      - name: Download build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: build-pr
+          path: artifacts/build-pr/
+
+      # The PR build has Linux x64 binaries only. Packaging them a second time
+      # as the x86_64-darwin target exercises the macOS .zip path; the archive
+      # check reads modes and paths, not the binary format.
+      - name: Package and check the Linux and macOS archive formats
+        run: |
+          bash ./.github/scripts/package-release-archive.sh x86_64-linux artifacts/build-pr pr
+          bash ./.github/scripts/package-release-archive.sh x86_64-darwin artifacts/build-pr pr
+
+      - name: Run the runner from each extracted archive
+        run: |
+          mkdir extracted
+          tar -xzf gocciascript-pr-linux-x64.tar.gz -C extracted
+          unzip -q gocciascript-pr-macos-x64.zip -d extracted
+          for dir in extracted/gocciascript-pr-linux-x64 extracted/gocciascript-pr-macos-x64; do
+            output="$(printf 'console.log("packaged", 1 + 1);\n' | "$dir/GocciaRunner" -)"
+            echo "$output"
+            grep -q '^packaged 2$' <<< "$output"
+          done
+
   test262:
     needs: build
     runs-on: ubuntu-latest

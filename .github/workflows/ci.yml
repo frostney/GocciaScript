@@ -1610,19 +1610,13 @@ jobs:
 
       - name: Package releases
         run: |
-          VERSION="${GITHUB_REF_NAME}"
-
-          # Map target names to user-friendly archive names
-          declare -A DISPLAY_NAMES=(
-            ["aarch64-darwin"]="macos-arm64"
-            ["x86_64-darwin"]="macos-x64"
-            ["x86_64-linux"]="linux-x64"
-            ["aarch64-linux"]="linux-arm64"
-            ["x86_64-win64"]="windows-x64"
-            ["i386-win32"]="windows-x86"
-          )
-
-          targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
+          # package-release-archive.sh owns the target list and the asset
+          # names (.tar.gz for Linux, .zip for macOS and Windows), shared with
+          # nightly.yml. It restores the executable bit on the binaries
+          # (artifacts do not keep file modes) and fails if an archive lacks
+          # a binary or records one as not executable.
+          targets_list="$(bash ./.github/scripts/package-release-archive.sh --targets)"
+          mapfile -t targets <<< "$targets_list"
 
           for target in "${targets[@]}"; do
             artifact_dir="artifacts/gocciascript-${target}"
@@ -1631,22 +1625,7 @@ jobs:
               continue
             fi
 
-            display="${DISPLAY_NAMES[$target]}"
-            archive_name="gocciascript-${VERSION}-${display}"
-            pkg_dir="${archive_name}"
-            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
-
-            cp -r tests/ "$pkg_dir/tests/"
-            cp -r benchmarks/ "$pkg_dir/benchmarks/"
-            cp -r examples/ "$pkg_dir/examples/"
-
-            if [[ "$target" == *win* ]]; then
-              zip -r "${archive_name}.zip" "$pkg_dir/"
-            else
-              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
-            fi
-
-            rm -rf "$pkg_dir"
+            bash ./.github/scripts/package-release-archive.sh "$target" "$artifact_dir" "${GITHUB_REF_NAME}"
           done
 
       - name: Generate release notes

@@ -145,16 +145,13 @@ jobs:
       - name: Package nightly builds
         if: steps.check.outputs.skip != 'true'
         run: |
-          declare -A DISPLAY_NAMES=(
-            ["aarch64-darwin"]="macos-arm64"
-            ["x86_64-darwin"]="macos-x64"
-            ["x86_64-linux"]="linux-x64"
-            ["aarch64-linux"]="linux-arm64"
-            ["x86_64-win64"]="windows-x64"
-            ["i386-win32"]="windows-x86"
-          )
-
-          targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
+          # package-release-archive.sh owns the target list and the asset
+          # names, shared with the tagged release in ci.yml. It restores the
+          # executable bit on the binaries (artifacts do not keep file modes)
+          # and fails if an archive lacks a binary or records one as not
+          # executable.
+          targets_list="$(bash ./.github/scripts/package-release-archive.sh --targets)"
+          mapfile -t targets <<< "$targets_list"
 
           # Build artifacts are kept for one day, so a successful run can have
           # lost some of them. A partial set fails here, before the release
@@ -171,28 +168,7 @@ jobs:
           fi
 
           for target in "${targets[@]}"; do
-            artifact_dir="artifacts/gocciascript-${target}"
-            display="${DISPLAY_NAMES[$target]}"
-            archive_name="gocciascript-nightly-${display}"
-            pkg_dir="${archive_name}"
-            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
-            # Artifacts do not keep file modes, so the binaries come out of
-            # download-artifact without the executable bit (ci.yml restores it
-            # with chmod after every download). Restore it before archiving;
-            # tar and zip both record it, and Windows ignores it.
-            find "$pkg_dir" -maxdepth 1 -type f -exec chmod +x {} +
-
-            cp -r tests/ "$pkg_dir/tests/"
-            cp -r benchmarks/ "$pkg_dir/benchmarks/"
-            cp -r examples/ "$pkg_dir/examples/"
-
-            if [[ "$target" == *win* ]]; then
-              zip -r "${archive_name}.zip" "$pkg_dir/"
-            else
-              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
-            fi
-
-            rm -rf "$pkg_dir"
+            bash ./.github/scripts/package-release-archive.sh "$target" "artifacts/gocciascript-${target}" nightly
           done
 
       - name: Update nightly release
@@ -205,10 +181,9 @@ jobs:
           DATE="$(date -u +'%Y-%m-%d')"
 
           # Replace the release only when every target's archive exists.
-          # The packaging step zips every target matching *win*, which
-          # includes the darwin targets, so the macOS archives are .zip;
-          # published asset names, Homebrew and the website installers
-          # depend on that.
+          # package-release-archive.sh zips every non-Linux target, so the
+          # macOS archives are .zip; published asset names, Homebrew and the
+          # website installers depend on that.
           missing=()
           for archive in \
             gocciascript-nightly-macos-arm64.zip \
