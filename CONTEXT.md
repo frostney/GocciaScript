@@ -123,12 +123,16 @@ An explicitly imported snapshot used to initialise a sandbox-visible filesystem.
 _Avoid_: Mount, host filesystem access, import baseline.
 
 **Copy input**:
-A host file or directory the Runner copies into the sandbox filesystem before a sandbox-mode run, named with `--copy`, `--copy-rw`, or the `sandbox` section of the root config. A `--copy` input is read-only; a `--copy-rw` input is also written back to its host path after a successful run. See [Permissions](docs/permissions.md#sandbox-mode).
-_Avoid_: Seed, mount, write-back target.
+A host file or directory the Runner copies into the sandbox filesystem before a sandbox-mode run, named with `--copy`, `--copy-rw`, or the `sandbox` section of the root config. A script may change any copy input inside the sandbox; only a `--copy-rw` input is written back to its host path, after a successful run. See [Permissions](docs/permissions.md#sandbox-mode).
+_Avoid_: Seed, mount, write-back target, read-only input.
 
 **Metadata diff**:
 A sandbox diff dimension that reports timestamp changes independently from content and namespace changes. It compares a path's access, modification, change, and birth timestamps against the seed baseline without turning timestamp-only activity into a content modification. JSON diffs always include it; unified diffs never do.
 _Avoid_: Content diff.
+
+**Read-only path**:
+A sandbox virtual-filesystem path, with everything under it, that an embedder has marked so that every change there fails with `EROFS`; reads are unaffected. See [Embedding](docs/embedding.md#sandbox-filesystem).
+_Avoid_: Read-only mount, `--copy` input.
 
 **Sandbox filesystem error**:
 A JavaScript `Error` reported by a sandbox runtime extension when a virtual filesystem operation fails. It carries a stable error code and operation/path context plus a target-appropriate numeric errno. It is shared by synchronous and promise APIs, and by callback APIs when installed.
@@ -186,6 +190,10 @@ _Avoid_: Immediate unload, delayed close.
 A compositional FFI type descriptor for a structure, union, or fixed-length array. Aggregate types may nest and may appear in native by-value argument and return positions.
 _Avoid_: Buffer layout when the value participates in native ABI marshalling.
 
+**Fetch transport**:
+An embedder-supplied answerer for an engine's `fetch` requests, used in place of the network once `fetch` has made its own URL, capability and method decisions. See [Embedding](docs/embedding.md#fetch-transport).
+_Avoid_: HTTP client, network mock, proxy.
+
 **Shim**:
 A GocciaScript-provided legacy ECMAScript surface layered over a newer native capability so conformance can include old names without making them the recommended path for new code.
 _Avoid_: Polyfill, compatibility flag.
@@ -193,8 +201,16 @@ _Avoid_: Polyfill, compatibility flag.
 ### Execution
 
 **Deterministic execution**:
-An engine profile in which JavaScript-observable time is frozen at the Unix epoch, the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams.
+An engine profile in which JavaScript-observable time is frozen at the Unix epoch (and so are sandbox file timestamps in `GocciaRunner`'s sandbox mode, or when an embedder passes the profile's clock to its sandbox), the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams.
 _Avoid_: Deterministic profiling, frozen timeout clock, seeded sandbox filesystem.
+
+**Heap snapshot**:
+The written state of what a paused run's heap reaches, which a fresh engine of the same build restores to resume the run. Built-ins are named rather than written, and a run whose state a snapshot cannot express refuses it. See [Heap Snapshots](docs/heap-snapshots.md).
+_Avoid_: Core dump, checkpoint file, memory-profiler heap snapshot.
+
+**Pause checkpoint**:
+The point at which a run waits on nothing but host calls, with no frame running and no job queued, so the host may pause it and take a heap snapshot.
+_Avoid_: Breakpoint, suspension point, idle callback.
 
 **Source pipeline**:
 The shared source-processing pipeline that turns source text into an AST before execution. It owns parser policy and exposes purpose-specific parse entry points for full source, module source, dynamic Function parsing, and expression fragments.
@@ -383,7 +399,7 @@ A source-to-source transformation applied before the source pipeline lexes and p
 _Avoid_: JSX flag when referring to the general mechanism.
 
 **Source type**:
-The setting that chooses whether an entry file is evaluated as script source or module source. It may be explicit or inferred from the entry file name.
+The setting that chooses whether an entry file is evaluated as script source or module source. It may be explicit, or inferred from the entry file name and, since 0.15.0, from a top-level `import` or `export` in the entry ([ADR 0140](docs/adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)).
 _Avoid_: Mode, module mode, script mode.
 
 **Script source**:
@@ -403,7 +419,7 @@ The Runner's default mode: source runs against the host filesystem, and what it 
 _Avoid_: Loader mode, normal mode.
 
 **Sandbox mode**:
-The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` config section, in which the entry runs inside an isolated sandbox virtual filesystem initialised from a seed baseline, can import `fs` and `goccia`, and may reach only the `net` capability. It reports a structured run result and, on request, a diff. See [Permissions](docs/permissions.md#sandbox-mode) and [Build System](docs/build-system.md).
+The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` config section, in which the entry runs inside an isolated sandbox virtual filesystem initialised from a seed baseline, can import `fs`, `goccia` and `goccia:search`, and may reach only the `net` capability. It reports a structured run result and, on request, a diff. See [Permissions](docs/permissions.md#sandbox-mode) and [Build System](docs/build-system.md).
 _Avoid_: Sandbox Runner, `GocciaSandboxRunner`.
 
 **Install mode**:
@@ -545,6 +561,9 @@ Use **Runtime** for the host integration layer. Use **runtime value**, **runtime
 
 **Execution mode, executor, tree-walk execution**:
 Retired in 0.15.0, when the tree-walk interpreter, the `--mode` option and the executor were removed. Use them only for releases up to 0.14 and in historical records such as ADRs; say **bytecode execution**, **engine**, or **Goccia VM** for current behavior.
+
+**Read-only path vs copy input**:
+Use **read-only path** only for a virtual-filesystem path whose changes fail with `EROFS`. A `--copy` input is not read-only: the script may change it, and the change is discarded rather than written back.
 
 **Option vs flag**:
 Use **CLI option** as the umbrella term. Use **CLI flag** only for boolean options; call value-taking controls such as `--source-type=module`, `--output=json`, and `--timeout=1000` options.

@@ -10397,7 +10397,7 @@ await section("Runner sandbox mode: a sandbox write does not reach the host with
     if (!readFileSync(entry, "utf-8").includes("fs.writeFileSync"))
       throw new Error("SECURITY: Sandbox mode wrote to the host entry file");
     // Write-back runs only when an input was copied with --copy-rw, so a
-    // read-only run has nothing to report.
+    // run without one has nothing to report.
     if (proc.stderr.toString().includes("write-back:"))
       throw new Error(`Sandbox mode without --copy-rw should print no write-back report, got: ${proc.stderr.toString()}`);
   } finally {
@@ -10449,7 +10449,7 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
       `write-back: ${join(tree, "kept.txt")}`,
       `write-back: ${join(tree, "nested", "added.txt")}`,
       "write-back: /loose.txt was not copied from the host, skipped",
-      "write-back: /ro/ro.txt was copied read-only, skipped (use --copy-rw to write it back)",
+      "write-back: /ro/ro.txt was copied without write-back, skipped (use --copy-rw to write it back)",
       "write-back: 2 file(s) written, 2 skipped",
     ]) {
       if (!containsLine(stderr, expected))
@@ -11979,7 +11979,7 @@ await section("Runner sandbox mode: a trusted sandbox section switches it on..."
       throw new Error("An untrusted sandbox section must not write back");
 
     // A command-line --copy of the same target replaces the config's
-    // copy-rw: a read-only dry run.
+    // copy-rw: a dry run that writes nothing back.
     const dryRun = runSandboxCli(["main.js", "--source-type=module", "-P", "--copy", "out"], { cwd: project });
     if (dryRun.exitCode !== 0 || dryRun.stdout.trim() !== "input" || result() !== "before")
       throw new Error(`--copy out should downgrade the config's copy-rw, got (exit ${dryRun.exitCode}, result ${result()}):\n${dryRun.stdout}${dryRun.stderr}`);
@@ -12132,7 +12132,7 @@ await section("Runner sandbox mode: sandbox section keys are validated...", asyn
       if (refused.exitCode !== 1 || !refused.stderr.includes(`Error: ${needle}`) || refused.stdout !== "")
         throw new Error(`A config ${label} outside its directory should exit 1 with ${JSON.stringify(needle)} on stderr, got (exit ${refused.exitCode}):\n${refused.stdout}${refused.stderr}`);
     }
-    // A read-only copy may come from anywhere.
+    // A --copy input, never written back, may come from anywhere.
     writeFileSync(join(tmp, "elsewhere", "shared.txt"), "shared");
     writeFileSync(join(tmp, "project", "main.js"), [
       'import fs from "fs";',

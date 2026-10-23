@@ -33,7 +33,7 @@ Desktop applications built with FreePascal (Lazarus, command-line tools, game en
 - **Portable code** — Scripts written with GocciaScript's recommended defaults use modern standard JavaScript forms and can be shared with browser code. Hosts can opt into compatibility behavior when they need older ECMAScript semantics.
 - **Single-binary deployment** — GocciaScript compiles into the host application with no external runtime dependencies
 - **Custom globals** — The host injects application-specific APIs through `DefineLexicalBinding` and custom built-in types (see [Embedding](docs/embedding.md) and [Adding Built-in Types](docs/adding-built-in-types.md))
-- **Cross-platform** — Runs on macOS, Linux, Windows, and FreeBSD via FreePascal's cross-compilation
+- **Cross-platform** — Prebuilt and tested on macOS and Linux (x64 and arm64) and Windows (x64 and x86); FreePascal's cross-compilation can reach further targets, such as FreeBSD, that CI does not build or test
 
 ## Toolchain: a Vitest-Compatible Test Runner
 

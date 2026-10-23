@@ -168,6 +168,7 @@ class RecordedGitHub:
                 "head": {"sha": self.head_at(repo, number), "ref": pull["ref"]},
                 "state": "open" if self.is_open(pull) else "closed",
                 "draft": self.is_draft(pull),
+                "user": pull.get("user"),
                 "created_at": pull["createdAt"],
             }
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/commits/([0-9a-f]{40})", endpoint)
@@ -387,13 +388,13 @@ class History:
         ])
         moments = [pushed] + [time for time in self.triggers(pull, whole_line=True) if time >= pushed]
         # In CodeRabbit's order, by time and then status id.
-        statuses = [(at(status["created_at"]), ADAPTER.status_kind(status)) for status in self.statuses(pull["repo"], sha)]
+        statuses = [(at(status["created_at"]), ADAPTER.status_kind(status, pull.get("user"))) for status in self.statuses(pull["repo"], sha)]
         statuses = [(when, kind) for when, kind in statuses if when <= now]
         shared = any(
             other is not pull and sha in other["heads"] and at(other["createdAt"]) <= now and open_at(other, now)
             for other in self.by_repo[pull["repo"]]
         )
-        ending = {"completed", "paused", "draft-skip"} | (set() if shared else {"skipped"})
+        ending = {"completed", "paused", "draft-skip", "bot-skip"} | (set() if shared else {"skipped"})
         pending = [index for index, (_when, kind) in enumerate(statuses) if kind == "in-progress"][-1:]
         moments += [statuses[index][0] for index in pending if not any(kind in ending for _when, kind in statuses[index + 1:])]
         return max(moment for moment in moments if moment <= now)

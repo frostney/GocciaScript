@@ -9,7 +9,7 @@ license: Unlicense OR MIT
 compatibility: >-
   Requires git, Python 3.11 or newer, the GitHub CLI (gh) 2.99 or newer
   authenticated to the target repository with push access, the internal
-  `delivery-wait` skill, and network access.
+  `delivery-wait` and `template-check` skills, and network access.
 metadata:
   agents-role: entry-point
   agents-text: Publish the current change as a pull request and bring it to ready for review.
@@ -23,14 +23,18 @@ gates, relevant commits, PR metadata updates, one ordinary draft pull request or
 the confirmed native stack layers owned by the change, required review and
 behavior testing, in-scope fixes, and transitions to ready for review. This
 includes the project's existing PR preview path when required to test the
-change. Merge and integration delivery remain with an authorized parent such as
-`/deliver`; a standalone publication request does not add those endpoints or
+change. Merge and integration delivery belong to `/deliver`, which a direct
+request continues into under the
+[delivery settings](../deliver/SKILL.md#delivery-settings); the request does not add
 unrelated changes.
 
 A failed check, review or CI run routes to repair, not a stop. Stop only when
-there is nothing to publish, a material unresolved choice or new authority is
-needed, or an external blocker remains after safe alternatives are exhausted.
-A material choice found before publication stops before any push or draft PR.
+there is nothing to publish, a
+[material](../software-engineering-excellence/SKILL.md#blockers-and-decisions)
+unresolved choice or new authority is needed, or an external blocker remains
+after safe alternatives are exhausted.
+A material choice that publication depends on stops before any push or draft
+PR.
 Keep the PR draft while any required evidence or CI is missing, pending or
 failing.
 
@@ -120,11 +124,21 @@ readiness. Recording a walkthrough does not replace behavior testing.
    change; `git-workflow`'s squash merge makes that title the base-branch commit
    subject. Follow
    [../agent-writing/references/pr-descriptions.md](../agent-writing/references/pr-descriptions.md)
-   for the body, preserving explicit project-template requirements. Before
-   writing it, search open and closed issues and recent sibling sessions or
-   adjacent branches when available for related findings and duplicates. Put
-   each closing keyword on its own line as `Closes #N`, and only on the layer
-   that completes that issue.
+   for the body's section order and character limits, preserving explicit
+   project-template requirements. Keep every PR template heading verbatim and
+   in order, and under a heading with nothing to say write a one-line `None`
+   or the reason; this is not boilerplate to omit. Leave the author's
+   verification out of the body's sections; the final handoff reports it, and
+   review results go only in the
+   [review note](../agent-writing/references/pr-descriptions.md#review-and-status-results)
+   at the end of the body. Before writing it, search open and closed issues
+   and recent sibling sessions or adjacent branches when available for related
+   findings and duplicates. Put each closing keyword on its own line as
+   `Closes #N` after the change summary, and only on the layer that completes
+   that issue. Run
+   [`template-check`](../template-check/SKILL.md#running-a-check) on the draft
+   with `--kind pr --body FILE` and fix every heading problem it reports
+   before publishing.
 9. After the publication checks pass, or under the preview-only draft rule
    above, push an ordinary branch normally and set its upstream when needed,
    then open one draft PR against the remote default or the named base.
@@ -137,8 +151,9 @@ readiness. Recording a walkthrough does not replace behavior testing.
    topology and keep each layer draft.
 10. Run the PR-specific phase. Compare the actual PR diff, body, links, metadata,
     committed tests and documentation, supplied completion evidence, and facts
-    that exist only after publication. Correct metadata-only gaps without a
-    commit.
+    that exist only after publication. Run `template-check` on the live body
+    with `--pr N`; a reported heading problem is a metadata-only gap. Correct
+    metadata-only gaps without a commit.
 11. If the PR-specific phase or CI exposes an in-scope repository, behavior,
     fidelity, test, documentation or compatibility gap, repair it through the
     development loop. Revalidate affected requirements, then use `/update-pr`
@@ -159,11 +174,19 @@ readiness. Recording a walkthrough does not replace behavior testing.
     in-scope causes to step 11. If expected PR checks have no run, inspect
     mergeability and resolve an established conflict through `/update-pr`
     before considering a retrigger. An unavailable external dependency remains
-    pending or blocked, never a passed check.
+    pending or blocked, never a passed check. Call CI green only after the
+    wait reports it satisfied for the current head, and then say so in plain
+    words. Call a local check passing from its actual result on the tested
+    content. Treat a failure as flaky or transient only after its failing log
+    shows it is intermittent. Blaming something other than the change, or
+    leaving the failure out of repair, needs its own evidence; a flaky failure
+    the change introduced is in scope.
 13. Once the PR is missing nothing required by the publication and PR-specific
     phases and all applicable CI is observed green for its exact head, mark it
-    ready for review. Return every affected URL, native stack order when
-    applicable, final states, metadata changes, supplied completion evidence,
-    what the publication guard rewrote, and observed readiness and CI evidence.
-    Include incomplete walkthrough requirements and actionable remedies, even
-    when the PR is ready.
+    ready for review. Return every affected URL and linked issue, native stack
+    order when applicable, final states, metadata changes, supplied completion
+    evidence, what the publication guard rewrote, and observed readiness and CI
+    evidence. Include incomplete walkthrough requirements and actionable
+    remedies, even when the PR is ready. Started directly, continue under the
+    [delivery settings](../deliver/SKILL.md#delivery-settings); with
+    `entry-points: deliver`, the ready PR goes on to `/address-feedback`.

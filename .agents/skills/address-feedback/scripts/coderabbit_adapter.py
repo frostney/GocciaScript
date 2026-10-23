@@ -82,6 +82,7 @@ TRIGGERS = {
 STATUS_RATE_LIMITED = re.compile(r"^\s*review rate limited\b", re.IGNORECASE)
 STATUS_COMPLETED = re.compile(r"^\s*review completed\b", re.IGNORECASE)
 STATUS_DRAFT_SKIP = re.compile(r"^\s*review skipped:\s*draft pull request\b", re.IGNORECASE)
+STATUS_BOT_SKIP = re.compile(r"^\s*review skipped:\s*bot user not eligible for review\s*$", re.IGNORECASE)
 STATUS_SKIPPED = re.compile(r"^\s*review skipped\b", re.IGNORECASE)
 STATUS_PAUSED = re.compile(r"^\s*review paused\b", re.IGNORECASE)
 STATUS_LOCK_LOSS = re.compile(r"^\s*review stopped after lock loss\b", re.IGNORECASE)
@@ -178,6 +179,7 @@ HEAD_STATES = frozenset(
         "waiting",
         "rate-limited-unknown-wait",
         "draft",
+        "bot-skip",
         "skipped",
         "paused",
         "blocked-unanswered",
@@ -216,7 +218,7 @@ BLOCKED_STATES = frozenset(
         "closed",
     }
 )
-FINAL_STATES = COMPLETE_STATES | BLOCKED_STATES | {"draft", "invalidated"}
+FINAL_STATES = COMPLETE_STATES | BLOCKED_STATES | {"draft", "bot-skip", "invalidated"}
 
 
 def repo_parts(repo: str) -> tuple[str, str]:
@@ -295,7 +297,7 @@ def coderabbit_statuses(gh: Gh, repo: str, sha: str) -> list[dict[str, Any]]:
     )
 
 
-def status_kind(status: dict[str, Any] | None) -> str:
+def status_kind(status: dict[str, Any] | None, author: dict[str, Any] | None = None) -> str:
     if status is None:
         return "none"
     state = str(status.get("state") or "").lower()
@@ -311,6 +313,11 @@ def status_kind(status: dict[str, Any] | None) -> str:
             return "completed"
         if STATUS_DRAFT_SKIP.search(description):
             return "draft-skip"
+        if STATUS_BOT_SKIP.search(description):
+            author = author or {}
+            login = str(author.get("login") or "").lower()
+            if author.get("type") == "Bot" or login.startswith("app/") or login.endswith("[bot]"):
+                return "bot-skip"
         if STATUS_SKIPPED.search(description):
             return "skipped"
         if STATUS_PAUSED.search(description):
@@ -318,7 +325,7 @@ def status_kind(status: dict[str, Any] | None) -> str:
     return "unrecognized"
 
 
-def status_summary(status: dict[str, Any] | None) -> dict[str, Any] | None:
+def status_summary(status: dict[str, Any] | None, author: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if status is None:
         return None
     return {
@@ -326,7 +333,7 @@ def status_summary(status: dict[str, Any] | None) -> dict[str, Any] | None:
         "state": status.get("state"),
         "description": status.get("description"),
         "createdAt": status.get("created_at"),
-        "kind": status_kind(status),
+        "kind": status_kind(status, author),
     }
 
 
@@ -663,6 +670,7 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
     head = (pull.get("head") or {}).get("sha")
     if not isinstance(head, str) or not head:
         raise WaitError(f"pull request {repo}#{pr} is missing its head SHA")
+    author = pull.get("user")
     statuses = coderabbit_statuses(gh, repo, head)
     newest = statuses[-1] if statuses else None
     commit = gh.rest(f"repos/{repo}/commits/{head}")
@@ -684,10 +692,10 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
     )
     bot_comments = [item for item in comments if is_bot(item)]
     earlier = None
-    if status_kind(newest) == "none" or parse_timestamp(newest["created_at"], "status created_at") < automatic:
+    if status_kind(newest, author) == "none" or parse_timestamp(newest["created_at"], "status created_at") < automatic:
         earlier = earlier_review(gh, [item for item in own if is_bot(item)], automatic)
     rate_limit = None
-    if status_kind(newest) == "rate-limited":
+    if status_kind(newest, author) == "rate-limited":
         at = parse_timestamp(newest["created_at"], "status created_at")
         wait, missing = correlated_wait(gh, bot_comments, at)
         rate_limit = {"statusAt": format_timestamp(at), "wait": wait, "missing": missing}
@@ -704,14 +712,14 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
         "headArrival": {"at": format_timestamp(arrival[0]), "source": arrival[1]},
         "automaticReview": {"from": format_timestamp(automatic), "source": automatic_source},
         "earlierReview": earlier,
-        "status": status_summary(newest),
+        "status": status_summary(newest, author),
         "findingsReview": findings_review(reviews, head),
         "cleanReview": clean_review(bot_comments, covered),
         "triggers": sorted(
             head_triggers(own, arrival[0]), key=lambda trigger: (trigger["at"], int(trigger["id"] or 0))
         ),
         "statusHistory": [
-            {"createdAt": status["created_at"], "kind": status_kind(status), "description": status.get("description")}
+            {"createdAt": status["created_at"], "kind": status_kind(status, author), "description": status.get("description")}
             for status in statuses
         ],
         "rateLimit": rate_limit,
@@ -829,7 +837,7 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
     asked = [trigger["at"] for trigger in evidence["triggers"]]
     # The history is in CodeRabbit's order, by time and then status id: what follows the pending
     # status in it came after it, whatever second each shows.
-    ending = {"completed", "paused", "draft-skip"} | (set() if evidence["sharedWith"] else {"skipped"})
+    ending = {"completed", "paused", "draft-skip", "bot-skip"} | (set() if evidence["sharedWith"] else {"skipped"})
     pending = [index for index, (_when, seen, _description) in enumerate(history) if seen == "in-progress"]
     newer = [
         history[index][0] for index in pending[-1:]
@@ -859,6 +867,8 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
             f"CodeRabbit's summary marks {evidence['cleanReview']['coveredCommitId']} covered "
             "with no actionable comments",
         )
+    if kind == "bot-skip":
+        return result("bot-skip", "CodeRabbit does not review a bot-authored pull request")
     unreviewed = kind in {"none", "draft-skip"}
     if unreviewed and evidence["draft"]:
         return result("draft", "CodeRabbit does not review a draft pull request")
@@ -985,8 +995,8 @@ def aggregate_status(value: dict[str, Any]) -> tuple[str, str]:
     states = [item["state"] for item in value["pullRequests"]]
     if "invalidated" in states:
         return "invalidated", "at least one requested PR head changed"
-    if all(state in COMPLETE_STATES for state in states):
-        return "satisfied", "every requested head has a confirmed CodeRabbit review"
+    if all(state in COMPLETE_STATES | {"bot-skip"} for state in states):
+        return "satisfied", "every requested head has a confirmed CodeRabbit review or a bot-author exemption"
     if any(state in BLOCKED_STATES for state in states):
         return "blocked", "at least one requested head cannot get a CodeRabbit review without a person"
     return "pending", "at least one requested head still awaits a CodeRabbit transition"

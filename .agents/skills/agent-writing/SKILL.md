@@ -8,7 +8,7 @@ description: >-
 license: Unlicense OR MIT
 metadata:
   agents-role: ambient
-  agents-text: Write replies, reports, PR and issue text, and docs that lead with the outcome and keep the evidence.
+  agents-text: Write replies, reports, PR and issue text, and docs that give the answer first, in plain words, define or drop any label the reader has not seen, and keep the evidence; a correction re-runs its check first.
 ---
 
 # Agent writing
@@ -38,13 +38,15 @@ do not follow this guide.
   or evidence.
 - A progress update starts with a result, blocker, decision, or correction. Add
   the next action only when it helps the reader.
-- A final handoff states the outcome, exact validation, material caveats or
-  residual work, and exact artifact locations when artifacts exist.
+- A final handoff states the outcome, exact validation, including any check
+  that failed before it passed and what fixed it, material caveats or residual
+  work, and exact artifact locations when artifacts exist.
 - A review reply or retrospective impact item states the finding or impact and
   its consequence or resolution.
-- A correction states the corrected fact first, then the incorrect claim, the
-  source or process failure, any affected conclusions, and the prevention or
-  next validation step. It does not lead with an apology.
+- A correction first re-runs the check behind the claim when it can. It states
+  the corrected fact first, then the incorrect claim, the source or process
+  failure, each affected conclusion, such as whether the branch is ready, and
+  the prevention or next validation step. It does not lead with an apology.
 - A durable artifact follows its project template and preserves the complete
   decision surface, evidence, and lifecycle state. When drafting or
   substantially revising an issue, PR body, engineering document, report,
@@ -117,6 +119,17 @@ for reader effort.
 - Remove praise before the answer, forced enthusiasm, promotional framing,
   vague attribution, filler, process narration, repeated conclusions, and
   unnecessary implementation detail.
+- Leave out what the reader can already see, such as files they committed.
+- Keep the happy path brief; spend words on what went differently, such as a
+  check that failed before it passed or a source found another way.
+- Do not state a default, such as that a review edited nothing.
+- Leave out specifics the outcome does not depend on, such as a tool's version
+  when only the tool matters.
+- Describe verification by what was checked, in plain terms such as type
+  checking, unit tests or end-to-end tests. A command may follow in brackets,
+  never stand alone.
+- Use the project's own terms and the delivery loop's terms, such as ready to
+  merge, merged, deployed and delivered, not generic or invented labels.
 - State the literal point. When a metaphor, aphorism, dramatic framing, or
   other flourish stands in for a claim, replace it with the mechanism,
   evidence, or consequence it gestures at.
