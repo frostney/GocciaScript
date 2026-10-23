@@ -1417,6 +1417,12 @@ begin
       Results[I] := RunScriptFromFileForJSON(AFiles[I], False);
       if not Results[I].Ok then
         ExitCode := 1;
+      { Reclaim this file's garbage before the next one, as parallel workers
+        do after each file. Without this every freed engine's garbage stayed
+        live until the end: multifile runs never forced a collection, so
+        memory grew about 4 MiB per JSON section. }
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.Collect;
     end;
     MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
   end;
@@ -1458,6 +1464,11 @@ begin
       finally
         SectionSource.Free;
       end;
+      { Reclaim this section's garbage before the next one, as the JSON and
+        parallel paths do after each file. Without this every freed engine's
+        garbage stayed live until the end. }
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.Collect;
     end;
   finally
     Names.Free;
@@ -1512,6 +1523,15 @@ begin
       ExitCode := 1;
     end;
   end;
+
+  { Reclaim this file's garbage before the worker takes the next one, as the
+    sequential path does after each file and as the test runner does. Workers
+    run with automatic collection off, so without this every object a worker
+    allocated stayed live until the worker exited. Collect is serialized by
+    the collector lock, which is what makes it safe on a worker thread (the
+    same path Goccia.gc() takes). }
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.Collect;
 end;
 
 procedure TRunnerApp.RunScriptsParallel(const AFiles: TStringList;
