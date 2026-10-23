@@ -54,10 +54,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags. `-
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, runner, loaderbare, fuzzharness,
-testrunner, test262runner, tomlcompliancerunner, wasmtestrunner,
-benchmarkrunner, bundler, and repl. The default full build does not clean first; pass `--clean` explicitly
-when you need to remove stale build artifacts.
+Builds all components in order: tests, runner, loaderbare, fuzzharness, testrunner, test262runner, tomlcompliancerunner, wasmtestrunner, benchmarkrunner, bundler, and repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
 
 ### Build Specific Components
 
@@ -73,13 +70,16 @@ when you need to remove stale build artifacts.
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bundler (compile to .gbc)
 ./build.pas tests            # Pascal unit tests
+./build.pas tests --test=HashMap --test=OrderedMap --run-tests  # Selected programs
 ```
 
-Multiple components can be specified:
+During development, always name the needed targets and run only the relevant test files or directories; the contribution gate still requires the full JavaScript suite. Multiple components can be specified:
 
 ```bash
 ./build.pas runner repl
 ```
+
+For `tests`, repeatable `--test=<substring>` filters select the union of matching source paths, ignoring case and normalizing path separators. Use a full filename or relative path for a single program; empty filters or an empty selection fail before cleaning or compiling. No filter selects all programs. `--run-tests` executes only the selected binaries, sequentially after all selected compiles succeed, and returns non-zero if a program fails. Both options require the `tests` target. Test compilation defaults to four concurrent jobs, capped by CPU and selected-program counts; `--jobs=<positive integer>` overrides that limit, still capped by CPU count. Each compile and retry has its own unit cache; a failed compile stops new work and waits for active compilers before exiting non-zero.
 
 ### Clean Builds
 
@@ -92,7 +92,7 @@ Multiple components can be specified:
 the replacement: 0.14 renamed `GocciaScriptLoader` to `GocciaRunner` and merged
 `GocciaSandboxRunner` into its [sandbox mode](#gocciarunner-sandbox-mode).
 
-Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean before selected targets.
+Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean only the selected targets' unit caches before building them. For `tests`, filters also scope cleaning. Other targets, the other GC-stress/ordinary cache tree, executable files, and the legacy shared cache are preserved.
 
 FPC 3.2.2 can report stale compiled state as misleading messages such as `Internal error`, `Compilation raised exception internally` or `Error while compiling resources`. When a target's compile fails with one of those, `build.pas` prints `FPC reported a stale-state error for <target>; retrying once from a clean unit directory`, wipes only that target's unit directory and compiles it once more. An ordinary compile error is not retried. If the retry also fails, `build.pas` reports its output and exits non-zero; then run `--clean` explicitly and diagnose the reported source line only if the same target still fails.
 
@@ -654,9 +654,9 @@ It:
 2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`), and `--gc-stress`, which adds the GC-stress flags to a development build and moves its unit caches and binaries.
 3. Parses remaining arguments to determine which components to build.
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
-5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
+5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`). Waits use FPC 3.2.2's `poRunIdle` to sleep when pipes have no output; `RunCommand` strips `poWaitOnExit`, so that option would not fix the wait.
 6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
-7. For the `tests` target, auto-discovers all `*.Test.pas` files under `source/units/`, `source/shared/` and `source/app/` (including `source/app/compliance/`), compiling each program with its own `build/compiled/tests/<test-program>/` unit-output directory.
+7. For the `tests` target, auto-discovers all `*.Test.pas` files under `source/units/`, `source/shared/` and `source/app/` (including `source/app/compliance/`), applying the selected filters, compiling concurrently with a separate `build/compiled/tests/<test-program>/` unit-output directory for each program, and optionally running the selected binaries.
 
 The GitHub Actions cross-compilation workflow (`.github/workflows/toolchain.yml`) uses two reduced cached FPC toolchains rather than a full target-side FCL install: a macOS-hosted one for the Darwin targets and a Linux-hosted one for the Linux and Windows targets. Both start from the same patched FPC 3.2.2 source and build their target units with `.github/scripts/build-fpc-cross-units.sh`. Each prebuilds the RTL, `rtl-objpas`, `rtl-generics`, and `fcl-process`, and also caches the official `fcl-base` sources so cross builds can resolve units such as `Base64` on demand from the shipped FPC packages.
 
