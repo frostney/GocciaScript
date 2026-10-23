@@ -2519,14 +2519,23 @@ function TGocciaSandboxRuntimeExtension.ReaddirValue(
 var
   Entries: TSandboxFsStatArray;
   Arr: TGocciaArrayValue;
+  ArrRoot: TGocciaTempRoot;
   I: Integer;
 begin
   try
     Entries := FContext.Fs.List(APath);
     Arr := TGocciaArrayValue.Create(nil, Length(Entries));
-    for I := 0 to High(Entries) do
-      ArrayCreateDataProperty(Arr, I,
-        TGocciaStringLiteralValue.Create(Entries[I].Name));
+    // Only this frame holds the array while its entries are created, and
+    // creating an element can collect at the growth gate.
+    InitializeTempRoot(ArrRoot);
+    try
+      AddTempRootIfNeeded(ArrRoot, Arr);
+      for I := 0 to High(Entries) do
+        ArrayCreateDataProperty(Arr, I,
+          TGocciaStringLiteralValue.Create(Entries[I].Name));
+    finally
+      RemoveTempRootIfNeeded(ArrRoot);
+    end;
     Result := Arr;
   except
     on E: ESandboxFsError do
