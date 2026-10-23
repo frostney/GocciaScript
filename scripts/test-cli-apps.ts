@@ -8235,6 +8235,37 @@ await section("Bundler: source and precompiled module graphs agree...", verifyAo
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
 
+await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {
+  // The results array is new, so its elements are made with
+  // CreateDataPropertyOrThrow (ES2026 §7.3.6), which never consults an index
+  // setter the benchmark file put on Array.prototype.
+  const tmp = makeTmp();
+  try {
+    const benchFile = join(tmp, "polluted.js");
+    const outFile = join(tmp, "polluted.json");
+    writeFileSync(benchFile, microbenchModule([
+      'Object.defineProperty(Array.prototype, "0", { set() {}, configurable: true });',
+      'group("g", () => { bench("one", () => 1 + 1); bench("two", () => 2 + 2); });',
+    ]));
+    const proc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), benchFile, "--source-type=module", "--no-progress", "--format=json", `--output=${outFile}`],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 120_000,
+      },
+    );
+    if (proc.exitCode !== 0) throw new Error(`exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const file = JSON.parse(readFileSync(outFile, "utf-8")).files[0];
+    const names = (file.benchmarks ?? []).map((b: any) => b?.name);
+    if (file.ok !== true || JSON.stringify(names) !== JSON.stringify(["one", "two"]))
+      throw new Error(`both benchmarks should be reported, got ok=${file.ok} ${JSON.stringify(names)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 {
   const tmp = makeTmp();
   const benchEnv = {
@@ -9439,6 +9470,46 @@ await section("Runner sandbox mode: an unhandled promise rejection fails the run
     ];
     if (JSON.stringify(observed) !== JSON.stringify(expected))
       throw new Error(`Sandbox mode should fail only the child that left a rejection, got: ${lines.join("\n")}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a runScript result array is copied whole under a polluted Array.prototype...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // The copy in the caller's realm is a new array, so its elements are made
+    // with CreateDataPropertyOrThrow (ES2026 §7.3.6), which never consults the
+    // caller's Array.prototype.
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          "let calls = 0;",
+          'const plain = runScript("/child.js").result;',
+          'Object.defineProperty(Array.prototype, "0", { set() { calls++; }, configurable: true });',
+          'Object.defineProperty(Array.prototype, "1", { value: "inherited", writable: false, configurable: true });',
+          'const polluted = runScript("/child.js").result;',
+          "delete Array.prototype[0]; delete Array.prototype[1];",
+          "console.log(JSON.stringify({ calls, plain, polluted, own: [0, 1, 2].map((i) => Object.hasOwn(polluted, i)) }));",
+        ].join("\n"),
+      },
+      { path: "/child.js", text: '["a", "b", ["c"]];' },
+    ]);
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+    );
+    const output = normalizeLineEndings(proc.stdout.toString()).trim();
+    const expected = JSON.stringify({
+      calls: 0,
+      plain: ["a", "b", ["c"]],
+      polluted: ["a", "b", ["c"]],
+      own: [true, true, true],
+    });
+    if (proc.exitCode !== 0 || output !== expected)
+      throw new Error(`A runScript result array should be copied whole, got exit ${proc.exitCode}: ${output}${proc.stderr.toString()}`);
   } finally {
     clean(tmp);
   }

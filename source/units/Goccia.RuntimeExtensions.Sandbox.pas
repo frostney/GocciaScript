@@ -183,6 +183,7 @@ uses
   Goccia.Shims,
   Goccia.UncatchableFault,
   Goccia.Utils,
+  Goccia.Utils.Arrays,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.DataViewValue,
@@ -373,7 +374,8 @@ begin
   try
     AddTempRootIfNeeded(ArrRoot, Arr);
     for Index := 0 to High(APaths) do
-      Arr.SetElement(Index, TGocciaStringLiteralValue.Create(APaths[Index]));
+      ArrayCreateDataProperty(Arr, Index,
+        TGocciaStringLiteralValue.Create(APaths[Index]));
   finally
     RemoveTempRootIfNeeded(ArrRoot);
   end;
@@ -2062,7 +2064,8 @@ begin
   Arr := TGocciaArrayValue.Create(nil, Length(AStrings));
   AObject.SetProperty(AName, Arr);
   for Index := 0 to High(AStrings) do
-    Arr.SetElement(Index, TGocciaStringLiteralValue.Create(AStrings[Index]));
+    ArrayCreateDataProperty(Arr, Index,
+      TGocciaStringLiteralValue.Create(AStrings[Index]));
 end;
 
 function TGocciaSandboxRuntimeExtension.SearchGrep(
@@ -2111,7 +2114,7 @@ begin
     begin
       MatchObj := TGocciaObjectValue.Create(
         TGocciaObjectValue.SharedObjectPrototype, 6);
-      Matches.SetElement(Index, MatchObj);
+      ArrayCreateDataProperty(Matches, Index, MatchObj);
       MatchObj.SetProperty('path',
         TGocciaStringLiteralValue.Create(Found.Matches[Index].Path));
       MatchObj.SetProperty('line',
@@ -2190,7 +2193,7 @@ begin
     begin
       MatchObj := TGocciaObjectValue.Create(
         TGocciaObjectValue.SharedObjectPrototype, 3);
-      Matches.SetElement(Index, MatchObj);
+      ArrayCreateDataProperty(Matches, Index, MatchObj);
       MatchObj.SetProperty('path',
         TGocciaStringLiteralValue.Create(Found[Index].Path));
       MatchObj.SetProperty('score',
@@ -2199,7 +2202,7 @@ begin
         Length(Found[Index].Positions));
       MatchObj.SetProperty('positions', Positions);
       for PositionIndex := 0 to High(Found[Index].Positions) do
-        Positions.SetElement(PositionIndex, TGocciaNumberLiteralValue.Create(
+        ArrayCreateDataProperty(Positions, PositionIndex, TGocciaNumberLiteralValue.Create(
           Found[Index].Positions[PositionIndex]));
     end;
     Result := Obj;
@@ -2516,13 +2519,23 @@ function TGocciaSandboxRuntimeExtension.ReaddirValue(
 var
   Entries: TSandboxFsStatArray;
   Arr: TGocciaArrayValue;
+  ArrRoot: TGocciaTempRoot;
   I: Integer;
 begin
   try
     Entries := FContext.Fs.List(APath);
     Arr := TGocciaArrayValue.Create(nil, Length(Entries));
-    for I := 0 to High(Entries) do
-      Arr.SetElement(I, TGocciaStringLiteralValue.Create(Entries[I].Name));
+    // Only this frame holds the array while its entries are created, and
+    // creating an element can collect at the growth gate.
+    InitializeTempRoot(ArrRoot);
+    try
+      AddTempRootIfNeeded(ArrRoot, Arr);
+      for I := 0 to High(Entries) do
+        ArrayCreateDataProperty(Arr, I,
+          TGocciaStringLiteralValue.Create(Entries[I].Name));
+    finally
+      RemoveTempRootIfNeeded(ArrRoot);
+    end;
     Result := Arr;
   except
     on E: ESandboxFsError do
