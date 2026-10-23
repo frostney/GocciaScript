@@ -39,6 +39,40 @@ class CheckProseTests(unittest.TestCase):
         self.assertIn("banned construction", findings[3])
         self.assertIn("banned closer", findings[4])
 
+    def test_code_block_ends_only_at_its_own_closing_fence(self):
+        code = "seam — inside the code block"
+        for name, block, closed in (
+            ("tilde block", ["~~~", code, "~~~"], True),
+            ("tilde line inside a backtick block", ["```text", "~~~", code, "~~~", "```"], True),
+            ("backtick line inside a tilde block", ["~~~text", "```", code, "```", "~~~"], True),
+            ("backtick in a tilde block's info string", ["~~~ `text`", code, "~~~"], True),
+            ("shorter fence inside a longer one", ["````markdown", "```", code, "```", "````"], True),
+            ("closing fence longer than the opening one", ["```text", code, "````"], True),
+            ("closing fence followed by spaces", ["```text", code, "```  "], True),
+            ("closing fence followed by text", ["```text", "``` not a close", code, "```"], True),
+            ("indented block in a list", ["- item", "", "  ```text", "  " + code, "  ```"], True),
+            ("block left open at the end", ["```text", code], False),
+        ):
+            with self.subTest(name):
+                findings = CHECK_PROSE.check_lines(
+                    Path("sample.md"), [*block, "A banned seam after the block."]
+                )
+                self.assertEqual(
+                    findings,
+                    [f"sample.md:{len(block) + 1}: banned word seam"] if closed else [],
+                )
+
+    def test_line_that_cannot_open_a_code_block_is_checked_as_prose(self):
+        findings = CHECK_PROSE.check_lines(
+            Path("sample.md"),
+            ["```inline``` code, then a banned seam.", "Prose with a banned seam."],
+        )
+
+        self.assertEqual(
+            findings,
+            ["sample.md:1: banned word seam", "sample.md:2: banned word seam"],
+        )
+
     def test_opener_rule_only_applies_at_the_start_of_prose(self):
         findings = CHECK_PROSE.check_lines(
             Path("sample.md"),
@@ -61,7 +95,7 @@ class CheckProseTests(unittest.TestCase):
             root = Path(directory)
             skill_md = root / "sample-skill" / "SKILL.md"
             skill_md.parent.mkdir()
-            skill_md.write_text("# Sample\n")
+            skill_md.write_text("# Sample\n", encoding="utf-8")
 
             self.assertEqual(CHECK_PROSE.markdown_paths(root), [skill_md])
 
@@ -69,10 +103,10 @@ class CheckProseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             readme = root / "README.md"
-            readme.write_text("# Skills\n")
+            readme.write_text("# Skills\n", encoding="utf-8")
             skill_md = root / "sample-skill" / "SKILL.md"
             skill_md.parent.mkdir()
-            skill_md.write_text("# Sample\n")
+            skill_md.write_text("# Sample\n", encoding="utf-8")
 
             self.assertEqual(CHECK_PROSE.markdown_paths(root), [readme, skill_md])
 
@@ -81,14 +115,14 @@ class CheckProseTests(unittest.TestCase):
         root = project / ".agents" / "skills"
         for name in sources:
             (root / name).mkdir(parents=True)
-            (root / name / "SKILL.md").write_text(f"# {name}\n")
+            (root / name / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
         if lock is None:
             lock = {
                 "version": 1,
                 "skills": {name: {"source": source} for name, source in sources.items()},
             }
         (project / "skills-lock.json").write_text(
-            lock if isinstance(lock, str) else json.dumps(lock)
+            lock if isinstance(lock, str) else json.dumps(lock), encoding="utf-8"
         )
         return root
 
@@ -99,7 +133,7 @@ class CheckProseTests(unittest.TestCase):
                 "create-pr": "owner/suite",
                 "improve-codebase-architecture": "someone/else",
             })
-            (root / "README.md").write_text("# Project skills\n")
+            (root / "README.md").write_text("# Project skills\n", encoding="utf-8")
 
             self.assertEqual(
                 CHECK_PROSE.markdown_paths(root),

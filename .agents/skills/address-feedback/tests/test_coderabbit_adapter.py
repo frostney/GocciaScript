@@ -737,6 +737,7 @@ def invented_pull(number: int, opened: int, head: str, branch: str, **fields: An
         "head": head,
         "state": "OPEN",
         "initialDraft": fields.get("draft", False),
+        "user": fields.get("user"),
         "events": fields.get("events", []),
         "heads": {head: fields["commit"]},
         "comments": fields.get("comments", []),
@@ -772,6 +773,76 @@ class Invented(Replay):
     def __init__(self, pulls: dict[str, dict[str, Any]], now: str) -> None:
         REPLAY.RecordedGitHub.__init__(self, list(pulls.values()), now)
         self.refs = {ref: (pull["repo"], pull["number"]) for ref, pull in pulls.items()}
+
+
+class BotSkipTest(unittest.TestCase):
+    """Synthetic PRs using the REST author fields and bot-ineligible status observed on GitHub."""
+
+    HEAD = "1b2c3d4e" * 5
+    DESCRIPTION = "Review skipped: bot user not eligible for review"
+
+    def pull(self, user: dict[str, Any] | None, description: str = DESCRIPTION, **fields: Any) -> dict[str, Any]:
+        return invented_pull(1, 5, self.HEAD, "bot-update", user=user, commit=invented_commit(
+            (10, "pending", "Review queued"), (15, "success", description), branch="bot-update",
+        ), **fields)
+
+    def test_bot_ineligible_skip_is_terminal_without_triggers(self) -> None:
+        for user in ({"login": "automation", "type": "Bot"},
+                     {"login": "github-actions[bot]"}, {"login": "app/github-actions"}):
+            for draft in (False, True):
+                with self.subTest(user=user, draft=draft):
+                    gh = Invented({"bot": self.pull(user, draft=draft)}, now=offset(20))
+                    result = observe(gh, "bot")
+                    self.assertEqual((result["state"], result["status"]["kind"]), ("bot-skip", "bot-skip"))
+                    self.assertEqual(result["statusHistory"][-1]["kind"], "bot-skip")
+                    self.assertIsNone(result["nextMode"])
+                    self.assertEqual(ADAPTER.aggregate_status({"pullRequests": [result]})[0], "satisfied")
+                    self.assertEqual(run(gh, "bot", offset(200))[0], "bot-skip")
+                    self.assertEqual(gh.now, at(offset(20)))
+                    self.assertEqual(gh.posts, [])
+
+    def test_human_or_unknown_author_keeps_bot_ineligible_skip_blocked(self) -> None:
+        for user in ({"login": "maintainer", "type": "User"}, {"login": "robot-maintainer"}, {}, None):
+            with self.subTest(user=user):
+                gh = Invented({"human": self.pull(user)}, now=offset(20))
+                result = observe(gh, "human")
+                self.assertEqual((result["state"], result["status"]["kind"]), ("skipped", "skipped"))
+                self.assertEqual(ADAPTER.aggregate_status({"pullRequests": [result]})[0], "blocked")
+
+    def test_bot_author_does_not_excuse_other_skip_reasons(self) -> None:
+        for description in (SKIPPED_BASE, "Review skipped: bot user not eligible for another reason",
+                            self.DESCRIPTION + " because reviews are disabled"):
+            with self.subTest(description=description):
+                gh = Invented({"bot": self.pull({"login": "github-actions[bot]", "type": "Bot"}, description)}, now=offset(20))
+                self.assertEqual(run(gh, "bot", offset(200))[0], "skipped")
+                self.assertEqual(gh.posts, [])
+
+    def test_shared_head_does_not_exempt_a_human_pr(self) -> None:
+        bot = self.pull({"login": "github-actions[bot]", "type": "Bot"})
+        human = self.pull({"login": "maintainer", "type": "User"}) | {"number": 2}
+        for pull in (bot, human):
+            pull["heads"][self.HEAD]["statuses"] = pull["heads"][self.HEAD]["statuses"][1:]
+        gh = Invented({"bot": bot, "human": human}, now=offset(20))
+        results = [observe(gh, ref) for ref in ("bot", "human")]
+        self.assertEqual([result["state"] for result in results], ["bot-skip", "skipped"])
+        self.assertEqual(ADAPTER.aggregate_status({"pullRequests": results})[0], "blocked")
+
+    def test_shared_head_preserves_a_humans_pending_review(self) -> None:
+        bot = self.pull({"type": "Bot"})
+        human = self.pull({"type": "User"}) | {"number": 2}
+        gh = Invented({"bot": bot, "human": human}, now=offset(20))
+        self.assertEqual(observe(gh, "bot")["state"], "bot-skip")
+        self.assertEqual(observe(gh, "human")["state"], "in-progress")
+
+    def test_new_pending_status_supersedes_bot_skip(self) -> None:
+        gh = Invented({"bot": self.pull({"type": "Bot"})}, now=offset(25))
+        gh.add_status("bot", "Review in progress", offset(24), state="pending")
+        self.assertEqual(observe(gh, "bot")["state"], "in-progress")
+
+    def test_head_and_closed_guards_still_apply(self) -> None:
+        gh = Invented({"bot": self.pull({"type": "Bot"}, events=[{"type": "closed", "at": offset(25)}])}, now=offset(30))
+        self.assertEqual(observe(gh, "bot", head="different")["state"], "invalidated")
+        self.assertEqual(observe(gh, "bot")["state"], "closed")
 
 
 class CommitEvidenceTest(unittest.TestCase):

@@ -1703,7 +1703,8 @@ begin
 end;
 
 { The sandbox path to run. A host entry inside a copied input runs from
-  there; any other host entry is copied read-only to /<basename>. }
+  there; any other host entry is copied, without write-back, to
+  /<basename>. }
 function TRunnerApp.ResolveSandboxEntry(const AHost: TGocciaSandboxHost;
   const ARequest: TGocciaSandboxModeRequest): string;
 var

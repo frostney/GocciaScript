@@ -1082,8 +1082,9 @@ begin
     'is copied to /<name>', SANDBOX_GROUP);
   FSandbox.ConfigIgnored := True;
   FCopy := CreateRepeatable('copy', '<host>[=<sandbox>]',
-    'Copy a host file or directory into the sandbox read-only (default ' +
-    '/<basename>); enables sandbox mode');
+    'Copy a host file or directory into the sandbox (default ' +
+    '/<basename>); the script may change the copy, but it is never ' +
+    'written back; enables sandbox mode');
   FCopyReadWrite := CreateRepeatable('copy-rw', '<host>[=<sandbox>]',
     'Copy like --copy, then write changed files back to the host after a ' +
     'successful run');

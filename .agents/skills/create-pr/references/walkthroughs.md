@@ -90,7 +90,7 @@ reason and the concrete remedy for this OS, such as a supported tool to install,
 a permission to enable or an upload capability to configure. Verify suggested
 setup instructions against current tool documentation. Include local artifact
 paths and completed stages so the user can resume without repeating work.
-Identify missing media briefly in the PR where a comparison or walkthrough was
-expected. Do not silently substitute a silent clip for a narrated, subtitled
+Identify missing media briefly in the PR's Visual walkthrough section where a
+comparison or walkthrough was expected. Do not silently substitute a silent clip for a narrated, subtitled
 video or describe incomplete media as finished. Avoid repeated failed setup
 attempts; unsupported tooling is a reported gap, not a new implementation task.

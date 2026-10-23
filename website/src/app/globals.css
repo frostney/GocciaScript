@@ -4263,14 +4263,6 @@ a.info-term {
 .arch-tok.tok-punctuation .arch-tok-val {
   color: var(--ink-3);
 }
-.arch-tok.tok-newline {
-  background: transparent;
-  border-style: dashed;
-  opacity: 0.6;
-}
-.arch-tok.tok-newline .arch-tok-val {
-  color: var(--ink-3);
-}
 
 .arch-bc {
   padding: 0.6rem 0.5rem;

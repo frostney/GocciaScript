@@ -500,7 +500,7 @@ reach, how inputs are copied in and written back, and the config section.
 # Empty filesystem; the entry is copied to /main.js.
 ./build/GocciaRunner main.js --sandbox
 
-# Copy inputs read-only to /task.txt and /fixtures, then print a JSON diff.
+# Copy inputs to /task.txt and /fixtures (never written back), then print a JSON diff.
 ./build/GocciaRunner main.js --copy task.txt --copy fixtures --diff
 
 # An entry inside a copied directory runs there: /src/main.js.
@@ -520,7 +520,7 @@ reach, how inputs are copied in and written back, and the config section.
 | Option | Effect |
 |---|---|
 | `--sandbox` | Run in sandbox mode with an empty virtual filesystem; the entry file is copied to `/<name>` |
-| `--copy <host>[=<sandbox>]` | Copy a host file or directory into the sandbox read-only (default `/<basename>`); enables sandbox mode. Repeatable |
+| `--copy <host>[=<sandbox>]` | Copy a host file or directory into the sandbox (default `/<basename>`); the script may change the copy, but it is never written back; enables sandbox mode. Repeatable |
 | `--copy-rw <host>[=<sandbox>]` | Copy like `--copy`, then write changed files back to the host after a successful run |
 | `--entry <sandbox-path>` | Run a path inside the sandbox instead of a host file |
 | `--diff[=json\|unified]` | Print sandbox filesystem changes after the run (default: `json`) |
@@ -749,7 +749,7 @@ Runs on the full platform matrix:
 |----|-------------|
 | Ubuntu Latest | x64, ARM64 |
 | macOS Latest | x64, ARM64 |
-| Windows Latest | x86 (i386-win32) |
+| Windows Latest | x64 (x86_64-win64), x86 (i386-win32) |
 
 **`build`** — Installs FPC, compiles the `source/app/*.dpr` programs with `--prod`, stages those binaries plus Pascal test executables, and uploads that staged set as intermediate artifacts.
 

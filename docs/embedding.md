@@ -105,9 +105,9 @@ GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor in
 - **Settings.** Set `GlobalBackedTopLevel` on the engine where 0.14 code set it on the executor. `StrictTypes` and `Compatibility` were already engine properties.
 - **Global scope.** Read `Engine.GlobalScope` where 0.14 code read the global scope through `Engine.Interpreter`. `Engine.Interpreter` and `Engine.Executor` are removed.
 - **Compiled modules.** `CompileModule`, `RetainModule`, `RunModule`, `RunModuleInScope` and `RunModuleForSourceType` take or return `TGocciaBytecodeModule`.
-- **Behavior.** A host that created an interpreter executor now runs bytecode. Where the two executors behaved differently, the bytecode behavior applies.
+- **Behavior.** A host that created an interpreter executor now runs bytecode. Where the two executors behaved differently, the bytecode behavior applies. `SourceType` now defaults to `stDetect`, so an entry with a top-level `import` or `export` runs as module source; set `stScript` to keep Script semantics ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). A promise a run leaves rejected with no handler now raises from the run; set `UnhandledRejections := urIgnore` to keep it on the queue ([ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md)).
 
-CLI users have one change: `--mode` and the `"mode"` config key now exit with status 2 ([Build System — Execution Mode](build-system.md#execution-mode)).
+CLI users see three changes: `--mode` and the `"mode"` config key now exit with status 2 ([Build System — Execution Mode](build-system.md#execution-mode)); an entry with a top-level `import` or `export` runs as a module unless `--source-type=script` is given; and an unhandled promise rejection fails the run with exit 1 ([Errors](errors.md#unhandled-promise-rejections)).
 
 ### Automatic Semicolon Insertion
 

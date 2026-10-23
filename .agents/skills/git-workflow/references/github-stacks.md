@@ -72,14 +72,19 @@ push with force-with-lease. They are allowed only when all of these are true:
   flaked two surfaces. Prefer a new top layer for fixes; after a sync, rerun
   flaked surfaces one at a time.
 
+A stack, like any PR branch, need not be up to date with its trunk: sync it
+onto a moved trunk only under `git-workflow`'s
+[up-to-date rule](../SKILL.md#update-commit-and-push). A squash-merged lower
+layer leaves the layers above it conflicting with the base, so they sync.
+
 Run the narrowest official command that satisfies the need. Stop on a rebase
 conflict, unexpected divergence, changed topology, lease rejection, partial
 push, or remote head that cannot be explained. Use `gh stack rebase --abort`
 when the extension offers restoration; never resolve ambiguity by invoking raw
 rebase or force-push commands.
 
-Ordinary branches never inherit this exception. Update them by merging the
-freshly fetched remote base and pushing normally.
+Ordinary branches never inherit this exception. When that rule calls for an
+update, merge the freshly fetched remote base and push normally.
 
 ## Submit, validate, and merge
 
@@ -120,8 +125,8 @@ freshly fetched remote base and pushing normally.
   stack update. Its Git guard does not constrain later PR metadata writes; do not
   use that combined path to preserve a frozen dependency during top-layer publication.
   Reconcile every
-  PR's title, body, base, draft state, linked requirements, and observed
-  validation after submission. Put a closing keyword only on the layer that
+  PR's title, body, base, draft state and linked requirements after submission,
+  and check each layer's observed validation. Put a closing keyword only on the layer that
   completes the issue.
 - Treat every layer as a real PR. Validate its exact head and review its own
   claim; do not let evidence from one layer stand in for another.
@@ -130,13 +135,26 @@ freshly fetched remote base and pushing normally.
   finding with a later top fix layer. A covered lower layer is not independently
   merge-ready: the required overlay and every layer beneath it form one
   indivisible ready stack.
-- Before merging, re-read native topology and exact remote heads. Use
-  `gh stack merge --squash` for a selected atomic prefix only after every PR in
-  that prefix independently satisfies its current-head checks, review, and
-  readiness gates. When `/address-feedback` supplied whole-stack readiness, select
-  the complete reported stack only after its final membership audit still
-  matches; never merge a prefix beneath its top overlays. Never select
+- Before merging, re-read native topology and exact remote heads. Merge every
+  ready layer in one go with `gh stack merge NUMBER --squash --yes`: NUMBER is
+  the stack number when the whole stack is ready, otherwise the highest PR of
+  the ready prefix. GitHub merges every layer up to it in one all-or-nothing
+  operation, or adds them to the base's merge queue when it has one. gh-stack
+  reads a bare number as a stack number first, so pass a PR number only after
+  `gh api repos/OWNER/REPO/stacks/NUMBER` answers 404, showing that no stack
+  has that number. Never merge ready layers one at a
+  time, and never wait for the base branch's push CI between layers. A prefix
+  is ready only when every PR in it independently satisfies its current-head
+  checks, review, and readiness gates. When `/address-feedback` supplied whole-stack readiness,
+  select the complete reported stack only after its final membership audit
+  still matches; never merge a prefix beneath its top overlays. Never select
   rebase-merge merely because stack maintenance used rebases.
+- Fall back to layers only when `gh stack merge` is unavailable, the prefix's
+  top PR number also names a stack, or GitHub refuses the stack merge for a
+  reason other than a readiness gate. Then squash-merge the bottom ready
+  layer, move the layers above it onto the updated base with the guarded
+  `gh stack sync`, and merge the next layer as soon as its new head is ready;
+  repeat up the prefix. Report the reason for the fallback.
 - After merge, use the official stack cleanup/sync path, remove only clean local
   branches owned by the run, and verify the integrated remote default.
 
