@@ -38,8 +38,38 @@ uses
 
 const
   MUTANTS = 10000;
+  // A run paused inside a generator, with a closure over its cells.
+  VM_STATE_SOURCE = '(() => { let n = 0; const inc = () => { n += 1; ' +
+    'return n; }; const log = []; const source = { *steps(start) { try { ' +
+    'const a = yield start; const b = yield a * 2; return a + b + start; } ' +
+    'finally { log.push(n); } } }; const g = source.steps(1); g.next(); ' +
+    'g.next(10); inc(); capture({ inc, g, log }); })();';
+  // Uses whatever restored, whatever a mutant made of it.
+  VM_STATE_CHECK = '(() => { const out = []; for (const step of [' +
+    '() => restored.inc(), () => restored.g.next(5).value, ' +
+    '() => restored.g.return(7).value, () => restored.g.next().done, ' +
+    '() => restored.log.join()]) { try { out.push(String(step())); } ' +
+    'catch (e) { out.push("threw"); } } return out.join("|"); })()';
+  MUTANT_CHECK_TIMEOUT_MS = 1000;
 
 type
+  { An engine that ran VM_STATE_SOURCE, which restores VM-state snapshots
+    and resumes what they hold. }
+  TVMStateRun = class
+  private
+    FLines: TStringList;
+    FCapture: TCapture;
+    FEngine: TGocciaEngine;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    // '' when ABytes restored, else the refusal. AOutcome is what
+    // VM_STATE_CHECK made of the restored root, or ROOT_NOT_A_VALUE when
+    // the root is not a value and there is nothing to resume.
+    function RestoreAndResume(const ABytes: TBytes;
+      out AOutcome: string): string;
+  end;
+
   { Owns the run's host calls: hostCall() returns a promise it answers with
     42 in its idle pass. }
   THostCallExtension = class(TGocciaEngineExtension)
@@ -123,6 +153,7 @@ type
     procedure TestEveryTruncationRefuses;
     procedure TestMutantsRefuseOrRestore;
     procedure TestVMStateMutantsRefuseOrResume;
+    procedure TestVMStateRootAsEveryObject;
     procedure TestCheckpointPauses;
     procedure TestCheckpointDeclined;
     procedure TestNoCheckpointWhileOtherWorkPending;
@@ -142,6 +173,81 @@ type
   public
     procedure SetupTests; override;
   end;
+
+{ TVMStateRun }
+
+constructor TVMStateRun.Create;
+begin
+  inherited Create;
+  FLines := TStringList.Create;
+  FCapture := TCapture.Create;
+  FLines.Text := VM_STATE_SOURCE;
+  FEngine := TGocciaEngine.Create(TEST_PATH, FLines);
+  FEngine.GlobalScope.DefineLexicalBinding('capture',
+    TGocciaNativeFunctionValue.Create(FCapture.Capture, 'capture', 1),
+    dtConst);
+  FEngine.Execute;
+end;
+
+destructor TVMStateRun.Destroy;
+begin
+  if Assigned(FCapture) and Assigned(FCapture.Value) then
+    TGarbageCollector.Instance.RemoveTempRoot(FCapture.Value);
+  FEngine.Free;
+  FCapture.Free;
+  FLines.Free;
+  inherited;
+end;
+
+function TVMStateRun.RestoreAndResume(const ABytes: TBytes;
+  out AOutcome: string): string;
+var
+  Restore: TGocciaHeapSnapshotRestore;
+  Stream: TBytesStream;
+  Stage: TGocciaGlobalEvalStage;
+  Root: TGocciaValue;
+begin
+  Result := '';
+  AOutcome := '';
+  Restore := nil;
+  Stream := TBytesStream.Create(ABytes);
+  try
+    try
+      Restore := TGocciaHeapSnapshotRestore.Create(FEngine, Stream,
+        TGocciaHeapSnapshotLimits.Defaults);
+    except
+      on E: EGocciaHeapSnapshotInvalid do
+        Exit(E.Message);
+    end;
+    // A root can be any object the snapshot holds, a cell among them; what
+    // is resumed is a value.
+    Root := RootValue(Restore);
+    if not Assigned(Root) then
+    begin
+      AOutcome := ROOT_NOT_A_VALUE;
+      Exit;
+    end;
+    TGocciaObjectValue(FEngine.Realm.GlobalObject).AssignProperty('restored',
+      Root);
+    // A mutant can make the check run long (an array whose length grew
+    // to billions): the run's timeout ends it, as it would any script.
+    StartExecutionTimeout(MUTANT_CHECK_TIMEOUT_MS);
+    try
+      try
+        AOutcome := FEngine.EvaluateGlobalEval(VM_STATE_CHECK, TEST_PATH,
+          Stage).ToStringLiteral.Value;
+      except
+        on E: TGocciaTimeoutError do
+          AOutcome := 'timed out';
+      end;
+    finally
+      ClearExecutionTimeout;
+    end;
+  finally
+    Restore.Free;
+    Stream.Free;
+  end;
+end;
 
 { THostCallExtension }
 
@@ -271,6 +377,8 @@ begin
     TestMutantsRefuseOrRestore);
   Test('Truncations and mutants of VM state refuse, or restore and resume',
     TestVMStateMutantsRefuseOrResume);
+  Test('A VM-state root set to any object restores or refuses, never faults',
+    TestVMStateRootAsEveryObject);
   Test('A run waiting only on host calls pauses at the checkpoint',
     TestCheckpointPauses);
   Test('A declined checkpoint goes on waiting as usual',
@@ -1500,7 +1608,7 @@ var
   Refusal: string;
   Bytes, Mutant: TBytes;
   Seed: Cardinal;
-  I, J, Edits, Restored, Refused: Integer;
+  I, J, Start, Edits, Restored, Refused: Integer;
   Engine: TGocciaEngine;
   Lines: TStringList;
 
@@ -1513,12 +1621,20 @@ var
     Result := Seed;
   end;
 
+  // A position past the build identity, so a build's version and commit
+  // do not move the edits.
+  function At: Integer;
+  begin
+    Result := Start + Integer(NextRandom mod Cardinal(Length(Mutant) - Start));
+  end;
+
 begin
   Bytes := Snapshot('(() => { const shared = { s: "shared" }; ' +
     'const o = { list: [1, , "two", 3n, shared, [shared]], ' +
     '[Symbol("k")]: Symbol.for("r"), m: Math, frozen: Object.freeze({ x: 1 }) }; ' +
     'o.self = o; return o; })()', Refusal);
   Expect<string>(Refusal).ToBe('');
+  Start := BuildIdentityEnd(Bytes);
   Seed := $C0FFEE11;
   Restored := 0;
   Refused := 0;
@@ -1531,14 +1647,12 @@ begin
     Edits := 1 + Integer(NextRandom mod 4);
     for J := 1 to Edits do
       case NextRandom mod 4 of
-        0: Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
-             Byte(NextRandom);
-        1: Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
-             Mutant[NextRandom mod Cardinal(Length(Mutant))] xor
-             (1 shl (NextRandom mod 8));
+        0: Mutant[At] := Byte(NextRandom);
+        // A byte with one bit flipped, copied over another.
+        1: Mutant[At] := Mutant[At] xor (1 shl (NextRandom mod 8));
         // A length or count set to its largest values.
-        2: Mutant[NextRandom mod Cardinal(Length(Mutant))] := $FF;
-        3: Mutant[NextRandom mod Cardinal(Length(Mutant))] := 0;
+        2: Mutant[At] := $FF;
+        3: Mutant[At] := 0;
       end;
     // Every outcome other than a restore or a refusal propagates and fails
     // the test.
@@ -1559,28 +1673,12 @@ begin
 end;
 
 procedure THeapSnapshotTests.TestVMStateMutantsRefuseOrResume;
-const
-  SOURCE = '(() => { let n = 0; const inc = () => { n += 1; return n; }; ' +
-    'const log = []; const source = { *steps(start) { try { ' +
-    'const a = yield start; const b = yield a * 2; return a + b + start; } ' +
-    'finally { log.push(n); } } }; const g = source.steps(1); g.next(); ' +
-    'g.next(10); inc(); capture({ inc, g, log }); })();';
-  MUTANT_CHECK_TIMEOUT_MS = 1000;
-  // Uses whatever restored, whatever a mutant made of it.
-  CHECK = '(() => { const out = []; for (const step of [' +
-    '() => restored.inc(), () => restored.g.next(5).value, ' +
-    '() => restored.g.return(7).value, () => restored.g.next().done, ' +
-    '() => restored.log.join()]) { try { out.push(String(step())); } ' +
-    'catch (e) { out.push("threw"); } } return out.join("|"); })()';
 var
   Refusal, Outcome: string;
   Bytes, Mutant: TBytes;
   Seed: Cardinal;
-  I, J, Len, Edits, Restored, Refused: Integer;
-  Engine: TGocciaEngine;
-  Lines: TStringList;
-  Capture: TCapture;
-  Stage: TGocciaGlobalEvalStage;
+  I, J, Len, Start, Edits, Restored, Refused: Integer;
+  Run: TVMStateRun;
 
   function NextRandom: Cardinal;
   begin
@@ -1590,63 +1688,25 @@ var
     Result := Seed;
   end;
 
-  // '' when ABytes restored and the check ran, else the refusal.
-  function RestoreAndResume(const ABytes: TBytes): string;
-  var
-    Restore: TGocciaHeapSnapshotRestore;
-    Stream: TBytesStream;
+  // A position past the build identity, so a build's version and commit
+  // do not move the edits.
+  function At: Integer;
   begin
-    Result := '';
-    Restore := nil;
-    Stream := TBytesStream.Create(ABytes);
-    try
-      try
-        Restore := TGocciaHeapSnapshotRestore.Create(Engine, Stream,
-          TGocciaHeapSnapshotLimits.Defaults);
-      except
-        on E: EGocciaHeapSnapshotInvalid do
-          Exit(E.Message);
-      end;
-      TGocciaObjectValue(Engine.Realm.GlobalObject).AssignProperty('restored',
-        TGocciaValue(Restore.Roots[0]));
-      // A mutant can make the check run long (an array whose length grew
-      // to billions): the run's timeout ends it, as it would any script.
-      StartExecutionTimeout(MUTANT_CHECK_TIMEOUT_MS);
-      try
-        try
-          Outcome := Engine.EvaluateGlobalEval(CHECK, TEST_PATH,
-            Stage).ToStringLiteral.Value;
-        except
-          on E: TGocciaTimeoutError do
-            Outcome := 'timed out';
-        end;
-      finally
-        ClearExecutionTimeout;
-      end;
-    finally
-      Restore.Free;
-      Stream.Free;
-    end;
+    Result := Start + Integer(NextRandom mod Cardinal(Length(Mutant) - Start));
   end;
 
 begin
-  Bytes := SnapshotModule(SOURCE, Refusal);
+  Bytes := SnapshotModule(VM_STATE_SOURCE, Refusal);
   Expect<string>(Refusal).ToBe('');
-  Lines := TStringList.Create;
-  Capture := TCapture.Create;
-  Engine := nil;
+  Start := BuildIdentityEnd(Bytes);
   Refused := 0;
   Restored := 0;
+  Run := TVMStateRun.Create;
   try
-    Lines.Text := SOURCE;
-    Engine := TGocciaEngine.Create(TEST_PATH, Lines);
-    Engine.GlobalScope.DefineLexicalBinding('capture',
-      TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
-    Engine.Execute;
-    Expect<string>(RestoreAndResume(Bytes)).ToBe('');
+    Expect<string>(Run.RestoreAndResume(Bytes, Outcome)).ToBe('');
     Expect<string>(Outcome).ToBe('2|16|7|true|2');
     for Len := 0 to Length(Bytes) - 1 do
-      if RestoreAndResume(Copy(Bytes, 0, Len)) <> '' then
+      if Run.RestoreAndResume(Copy(Bytes, 0, Len), Outcome) <> '' then
         Inc(Refused);
     Expect<Integer>(Refused).ToBe(Length(Bytes));
     Refused := 0;
@@ -1657,17 +1717,15 @@ begin
       Edits := 1 + Integer(NextRandom mod 4);
       for J := 1 to Edits do
         case NextRandom mod 4 of
-          0: Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
-               Byte(NextRandom);
-          1: Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
-               Mutant[NextRandom mod Cardinal(Length(Mutant))] xor
-               (1 shl (NextRandom mod 8));
-          2: Mutant[NextRandom mod Cardinal(Length(Mutant))] := $FF;
-          3: Mutant[NextRandom mod Cardinal(Length(Mutant))] := 0;
+          0: Mutant[At] := Byte(NextRandom);
+          // A byte with one bit flipped, copied over another.
+          1: Mutant[At] := Mutant[At] xor (1 shl (NextRandom mod 8));
+          2: Mutant[At] := $FF;
+          3: Mutant[At] := 0;
         end;
       // A restore runs the check; anything but a restore or a refusal
       // propagates and fails the test.
-      if RestoreAndResume(Mutant) = '' then
+      if Run.RestoreAndResume(Mutant, Outcome) = '' then
         Inc(Restored)
       else
         Inc(Refused);
@@ -1675,15 +1733,77 @@ begin
         TGarbageCollector.Instance.Collect;
     end;
   finally
-    if Assigned(Capture.Value) then
-      TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
-    Engine.Free;
-    Capture.Free;
-    Lines.Free;
+    Run.Free;
   end;
   Expect<Integer>(Restored + Refused).ToBe(MUTANTS);
   Expect<Boolean>(Refused > 0).ToBe(True);
   Expect<Boolean>(Restored > 0).ToBe(True);
+end;
+
+// The 0.15.0 tag build's sweep met one mutant whose only edit was the
+// root's object index, the snapshot's last four bytes, rewritten from 0 to
+// 4: an object of the VM state that is not a value. The restore took it, as
+// the reader does any object it holds, and the harness then used the root
+// as a value and faulted. Each object as the root restores or is refused,
+// and a root that is not a value is not used as one.
+procedure THeapSnapshotTests.TestVMStateRootAsEveryObject;
+const
+  // The mutant: the index the tag build's sweep wrote. Object 4 is a
+  // closure's cell in the order the writer numbers this snapshot's objects
+  // today; should that order change, point this at another cell.
+  MUTANT_INDEX = 4;
+var
+  Refusal, Outcome: string;
+  Bytes, Mutant: TBytes;
+  IndexAt, Index, NotValues: Integer;
+  Run: TVMStateRun;
+
+  function U32At(const AAt: Integer): Cardinal;
+  begin
+    Move(Bytes[AAt], Result, 4);
+    Result := LEtoN(Result);
+  end;
+
+  function WithRoot(const AIndex: Integer): TBytes;
+  var
+    Value: Cardinal;
+  begin
+    Result := Copy(Bytes);
+    Value := NtoLE(Cardinal(AIndex));
+    Move(Value, Result[IndexAt], 4);
+  end;
+
+begin
+  Bytes := SnapshotModule(VM_STATE_SOURCE, Refusal);
+  Expect<string>(Refusal).ToBe('');
+  // The roots end the snapshot: their count (one), the root's tag (an
+  // object) and its index (the first object, which the root numbered).
+  IndexAt := Length(Bytes) - 4;
+  Expect<Integer>(Integer(U32At(IndexAt - 5))).ToBe(1);
+  Expect<Integer>(Bytes[IndexAt - 1]).ToBe(HSV_OBJECT);
+  Expect<Integer>(Integer(U32At(IndexAt))).ToBe(0);
+  NotValues := 0;
+  Run := TVMStateRun.Create;
+  try
+    Mutant := WithRoot(MUTANT_INDEX);
+    Expect<string>(Run.RestoreAndResume(Mutant, Outcome)).ToBe('');
+    Expect<string>(Outcome).ToBe(ROOT_NOT_A_VALUE);
+    // Every index restores up to the first past the objects, which is
+    // refused; an object entry takes several bytes, so the input's length
+    // bounds the walk.
+    Index := 0;
+    repeat
+      Refusal := Run.RestoreAndResume(WithRoot(Index), Outcome);
+      if (Refusal = '') and (Outcome = ROOT_NOT_A_VALUE) then
+        Inc(NotValues);
+      Inc(Index);
+    until (Refusal <> '') or (Index > Length(Bytes));
+    Expect<Boolean>(Pos('object reference out of range', Refusal) > 0)
+      .ToBe(True);
+  finally
+    Run.Free;
+  end;
+  Expect<Boolean>(NotValues > 0).ToBe(True);
 end;
 {$POP}
 

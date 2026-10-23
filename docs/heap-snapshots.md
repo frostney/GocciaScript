@@ -381,7 +381,12 @@ data, a Date's time value) has no difference yet, and refuses the snapshot.
 `source/units/Goccia.HeapSnapshot.Test.pas` round-trips graphs through two
 engines and checks them by script, and feeds the reader every truncation
 and 10,000 mutants of a real snapshot, and of one holding closures and a
-suspended generator, which it then resumes.
+suspended generator, which it then resumes. It also points that snapshot's
+root at each object it holds in turn, a closure's cell among them, so a root
+that is not a value is checked before use, as an embedder must check it.
+The random mutants of every test edit only the bytes after the build
+identity: the version and commit a build bakes in do not move the edits, so
+a release tag's build runs the same mutants as the pull request before it.
 `source/units/Goccia.HeapSnapshot.Modules.Test.pas` does the same for a run
 that imports modules from files, restoring each mutant in a fresh engine.
 `Goccia.HeapSnapshot.Builtins.Test` round-trips each kind of difference,
