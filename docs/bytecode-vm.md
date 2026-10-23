@@ -72,7 +72,7 @@ In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 213 opcodes, highes
 - core instructions cover hot execution paths such as locals, typed arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup; `99` is unused
 - the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), `OP_SET_CLASS_SOURCE_CONST` (`143`), `OP_CLASS_ADD_METHOD_DYNAMIC` (`144`), and `OP_SET_PRIVATE_CLASS` (`145`); `135` and `146..166` are unused
 - the semantic range starts with module and async orchestration at `167` (`IMPORT`, `EXPORT`, `AWAIT`, `IMPORT_META`), and later additions were appended after it, including hot-path instructions such as `OP_INC_NUMERIC` (`199`), `OP_GET_IMPORT_BINDING` (`213`), `OP_SUB_NUM_IMM` (`227`), `OP_CALL_SELF_NUM` (`229`), and `OP_JUMP_IF_NOT_LT` (`232`); `221`, `222` and `224` are unused
-- `IsValidGocciaOpCode` rejects the unused numbers `99`, `135` and `146..166`
+- `IsValidGocciaOpCode` rejects `99`, `135`, `146..166` and every number above the highest opcode, but not `221`, `222` or `224`: a `.gbc` instruction with one of those passes load validation and fails only when the VM dispatches it
 
 The current encoding helpers are defined in `Goccia.Bytecode.pas`:
 
