@@ -10,7 +10,7 @@
 - **Runtime opt-ins** — Testing, benchmarking, FFI, data-format APIs, and SemVer extend the runtime surface through concrete runtime extension classes
 - **Goccia runtime modules** — Non-standard data-format APIs and SemVer are named-export-only modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`); use namespace imports for `CSV.parse(...)`-style call sites
 - **Node-addressed modules** — `node:async_hooks` provides `AsyncLocalStorage` and `AsyncResource` at Node's own address, with engine-level async-context propagation; see [Async Context](built-ins-async-context.md)
-- **Sandbox modules** — `GocciaRunner`'s sandbox mode installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
+- **Sandbox modules** — `GocciaRunner`'s sandbox mode installs import-only `"fs"`, `"goccia"` and `"goccia:search"` modules for sandbox filesystem, shell/nested-execution access and file search; they are not globals
 - **ECMAScript shims** — Legacy standard names such as global `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `Date`, `__proto__`, and legacy getter/setter helpers are installed through Goccia.shims
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -25,7 +25,7 @@ Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Head
 
 Timers are runner-only. `GocciaTestRunner` installs `TGocciaTimersRuntimeExtension`, which registers the `setTimeout`, `clearTimeout`, `setInterval` and `clearInterval` globals plus the `goccia:timers` control module over a deterministic virtual timer queue — no timer ever waits on wall time. The loader runtime profile does not install it: the timers carry no ambient authority, but a scheduling surface is one a sandboxed script does not otherwise get. See [Fake timers](testing-api.md#fake-timers) and [ADR 0113](adr/0113-deterministic-virtual-timer-queue.md).
 
-In sandbox mode, `GocciaRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
+In sandbox mode, `GocciaRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"`, `"goccia"` and `"goccia:search"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
 FFI is not part of the loader runtime profile. It needs the engine's `ffi` capability; CLI tools grant it and install `TGocciaFFIRuntimeExtension` for `--allow-ffi[=<library>,...]` or `"allow-ffi"` in a config file's `permissions` block once the config is trusted, or accepted for one run with `-P` ([Config trust](permissions.md#config-trust)). See [Permissions](permissions.md).
 
