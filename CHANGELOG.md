@@ -2,7 +2,7 @@
 
 All notable changes to GocciaScript are documented in this file.
 
-## [0.15.0] - 2026-10-22
+## [0.15.0] - 2026-10-23
 
 ### ⚡ Performance
 
@@ -27,6 +27,7 @@ All notable changes to GocciaScript are documented in this file.
 - perf(typed-array): set, slice, copyWithin and the copying constructor move same-type data as one block (#1659)
 - perf(text): TextEncoder.encode and string file writes size their UTF-8 output once, 8-15x faster on large strings (#1691)
 - perf: for-await-of over arrays and async generators runs 2–5x faster in bytecode mode (#1621)
+- Date and the other legacy shims run as bytecode, and an empty script boots in half the instructions (#1633)
 - perf(vm): private fields and private methods run in about half the instructions in bytecode mode, now ahead of the interpreter (#1622)
 - perf: spreading an array into a new array runs faster in bytecode than in the interpreter (#1619)
 - perf(eval): a direct eval that repeats its source reuses its compiled code instead of keeping a new copy per call (#1617)
@@ -50,10 +51,6 @@ All notable changes to GocciaScript are documented in this file.
 - perf(vm): read an upvalue without copying its descriptor (#1316)
 - perf(compiler): use initialized const locals as operands without copying them (#1314)
 
-### ✨ Improved
-
-- Make the console-rendering and config-globals CLI checks pass on Windows and macOS, turning main green (#1594)
-
 ### 🌐 Website
 
 - docs: README and site lead with what GocciaScript is for and the evidence (#1835)
@@ -62,6 +59,7 @@ All notable changes to GocciaScript are documented in this file.
 
 ### 🏗️ Internal
 
+- docs: bring docs, website and glossary in line with 0.15.0 before the release (#1894)
 - test(thread-polls): read the poll states through a pointer, so i386 at -O2 calls the slow path with the right state (#1878)
 - ci(gc-stress): the weekly GC-stress job covers every tests/ file, with large cases sized down under stress (#1865)
 - test(cli): config priority checks fail when TOML loses, and shard merge rejects non-bytecode reports (#1858)
@@ -85,6 +83,7 @@ All notable changes to GocciaScript are documented in this file.
 - ci: cross-compile the Linux and Windows targets on Linux runners, halving full CI's macOS runner time (#1603)
 - test(ffi): stop the callback-slot exhaustion test failing when another FFI test holds a callback at the same time (#1599)
 - docs(workflow): dispatch full CI for test-cli checks that compare output text or reported paths (#1596)
+- Make the console-rendering and config-globals CLI checks pass on Windows and macOS, turning main green (#1594)
 - docs(adr): accept compiling direct eval as a closure of its call site, after completing the bridge's call-site record first (#1577)
 - chore(skills): sync provisioned skills, adding the green default-branch gate to deliver and git-workflow (#1507)
 - chore(skills): sync provisioned skills (#1502)
@@ -205,8 +204,10 @@ All notable changes to GocciaScript are documented in this file.
 - fix(vm): count constructor, async, generator and accessor calls against --max-stack in bytecode, and stop them before the native stack runs out (#1482)
 - fix(cli): stop the test runner leaking its discovered file list, removing the runner's share of the memory-safety heaptrc report (#1593)
 - fix(vm): let a nested class's field initializers read the outer class's private names in bytecode mode (#1591)
+- console.log shows functions, classes and errors, and bytecode errors keep their suggestion and location (#1578)
 - fix(regexp): keep quantifier bounds above 1,000,000 instead of clamping them, and reject counts no program can hold (#1590)
 - fix(runtime): clone typed arrays, DataView, Date, RegExp, primitive wrappers and DOMException as their own kinds in structuredClone (#1576)
+- Name private members as written in bytecode-mode errors, and stop private-method assignment from replacing the method (#1581)
 - fix(vm): run a built-in subclass's own set/add from super(iterable) and give it the built-in's prototype when new.target has none (#1588)
 - fix(bytecode): carry a closure's write to a traditional for loop's let binding into the next iteration (#1585)
 - fix(bytecode): throw ReferenceError when a default parameter initializer reads or assigns its own parameter (#1584)
@@ -285,26 +286,20 @@ All notable changes to GocciaScript are documented in this file.
 - fix(runtime)!: report an unhandled promise rejection and fail the run (#1302)
 - fix(microtasks): keep a caller's pending jobs when a nested run drains or fails (#1299)
 
-### 📖 Other
-
-- Date and the other legacy shims run as bytecode, and an empty script boots in half the instructions (#1633)
-- console.log shows functions, classes and errors, and bytecode errors keep their suggestion and location (#1578)
-- Name private members as written in bytecode-mode errors, and stop private-method assignment from replacing the method (#1581)
-
 ### 🚀 Added
 
 - feat(sandbox): search the virtual filesystem by name, content and fuzzy name (#1875)
 - feat(snapshot): module records, module scopes and namespace objects, restored without running a module body (ADR 0148, ADR 0150) (#1827)
 - feat(test): verify heap snapshot round trips across the suite (#1837)
 - feat(bytecode): load precompiled modules from buffers with profile verification (#1845)
-- feat(snapshot): restore built-in differences atomically
+- feat(snapshot): restore built-in differences atomically (#1829)
 - feat(snapshot): every built-in slot resolves by its name, and shims' internals pass the accounting check without hiding the run's objects (ADR 0148) (#1824)
 - feat(snapshot): functions, closures and suspended generators, named by the bytecode of their module (ADR 0148) (#1807)
 - feat(snapshot): the heap snapshot format, codec registry, writer and reader, built-in naming and the pause checkpoint (ADR 0148) (#1796)
 - feat(fetch): let an embedder answer fetch requests through its own transport (#1784)
 - feat(sandbox): an embedder can mark virtual filesystem paths read-only, and a script's writes there fail with EROFS (#1750)
 - feat(cli)!: every binary runs bytecode only, and --mode or a "mode" config key now exits with status 2 (#1644)
-- feat!: run scripts, tests, benchmarks and the REPL in bytecode mode by default (#1481)
+- feat!: run scripts, tests, benchmarks and the REPL in bytecode mode by default (#1481) — superseded in this release by #1644: bytecode is the only execution mode, and `--mode` or a `"mode"` config key exits with status 2
 - feat(eval): compile sloppy direct eval to bytecode with a hidden variable object per function, and delete the tree-walk eval bridge (bytecode v93) (#1607)
 - feat(eval): compile direct eval at strict call sites to bytecode as a closure of the call site (bytecode v92) (#1604)
 - feat(eval): compile indirect eval and ShadowRealm.prototype.evaluate to bytecode instead of running them on the tree-walk evaluator (#1601)
