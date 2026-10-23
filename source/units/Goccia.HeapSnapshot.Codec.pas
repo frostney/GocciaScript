@@ -616,19 +616,28 @@ type
   // Creates the intrinsic of a realm slot that is filled on first use, in the
   // current realm, as using it would.
   TGocciaSnapshotSlotMaterializer = procedure;
+  // The same, told which slot to fill, so one procedure fills a family of
+  // slots (each default shim's).
+  TGocciaSnapshotNamedSlotMaterializer = procedure(const ASlotName: string);
 
 // A unit whose realm slot, or owned slot, is filled on first use registers
 // how to fill it, under the slot's name, so a restore can build the intrinsic
-// a snapshot names (ADR 0148).
+// a snapshot names (ADR 0148). A materializer builds what fills the slot and
+// nothing else: a lazy member it built would be one the run did not, and a
+// session watching the restore would name it as a built-in the run built.
 procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
   const AMaterializer: TGocciaSnapshotSlotMaterializer);
 function FindSnapshotSlotMaterializer(
   const ASlotName: string): TGocciaSnapshotSlotMaterializer;
+procedure RegisterSnapshotSlotNamedMaterializer(const ASlotName: string;
+  const AMaterializer: TGocciaSnapshotNamedSlotMaterializer);
 // A slot filled when a lazy built-in is first read, instead of by a
 // materializer: AGlobalPath names that built-in from the global object, its
 // own property names separated by '.' ('Temporal.PlainDate',
 // 'Object.prototype.__proto__'), and reading each property's descriptor in
-// turn builds what fills the slot without calling anything.
+// turn builds what fills the slot without calling anything. Only for a slot
+// nothing else fills: one a run can fill without reading that built-in
+// (natively, or through another lazy member) needs a materializer.
 procedure RegisterSnapshotSlotGlobalPath(const ASlotName, AGlobalPath: string);
 function FindSnapshotSlotGlobalPath(const ASlotName: string): string;
 // Fills the slot ASlotName names in the current realm as using it would, by
@@ -728,6 +737,8 @@ type
 var
   GRegistry: TCodecRegistry;
   GSlotMaterializers: TDictionary<string, TGocciaSnapshotSlotMaterializer>;
+  GSlotNamedMaterializers: TDictionary<string,
+    TGocciaSnapshotNamedSlotMaterializer>;
   GSlotGlobalPaths: TDictionary<string, string>;
 
 procedure RegisterSnapshotSlotMaterializer(const ASlotName: string;
@@ -747,6 +758,15 @@ begin
     GSlotMaterializers.TryGetValue(ASlotName, Result);
 end;
 
+procedure RegisterSnapshotSlotNamedMaterializer(const ASlotName: string;
+  const AMaterializer: TGocciaSnapshotNamedSlotMaterializer);
+begin
+  if not Assigned(GSlotNamedMaterializers) then
+    GSlotNamedMaterializers :=
+      TDictionary<string, TGocciaSnapshotNamedSlotMaterializer>.Create;
+  GSlotNamedMaterializers.AddOrSetValue(ASlotName, AMaterializer);
+end;
+
 procedure RegisterSnapshotSlotGlobalPath(const ASlotName, AGlobalPath: string);
 begin
   if not Assigned(GSlotGlobalPaths) then
@@ -764,6 +784,7 @@ end;
 function MaterializeSnapshotSlot(const ASlotName: string): Boolean;
 var
   Materializer: TGocciaSnapshotSlotMaterializer;
+  NamedMaterializer: TGocciaSnapshotNamedSlotMaterializer;
   Path, Name: string;
   Current: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
@@ -773,6 +794,13 @@ begin
   if Assigned(Materializer) then
   begin
     Materializer();
+    Exit(True);
+  end;
+  NamedMaterializer := nil;
+  if Assigned(GSlotNamedMaterializers) and
+     GSlotNamedMaterializers.TryGetValue(ASlotName, NamedMaterializer) then
+  begin
+    NamedMaterializer(ASlotName);
     Exit(True);
   end;
   Path := FindSnapshotSlotGlobalPath(ASlotName);
@@ -3941,6 +3969,7 @@ initialization
 finalization
   FreeAndNil(GRegistry);
   FreeAndNil(GSlotMaterializers);
+  FreeAndNil(GSlotNamedMaterializers);
   FreeAndNil(GSlotGlobalPaths);
 
 end.

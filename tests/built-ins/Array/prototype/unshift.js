@@ -92,3 +92,18 @@ describe("Array.prototype.unshift", () => {
     }
   });
 });
+
+// ES2026 §23.1.3.37 Array.prototype.unshift ends with Set(O, "length",
+// len + argCount, true), ArraySetLength (§10.4.2.4) on an Array.
+describe("unshift on an array longer than 2 ** 31 - 1", () => {
+  test("moves the elements up and sets the length", () => {
+    const arr = [];
+    arr.length = 2 ** 31 + 1;
+    arr[2 ** 31] = "last";
+    expect(arr.unshift("u")).toBe(2 ** 31 + 2);
+    expect(arr.length).toBe(2 ** 31 + 2);
+    expect(arr[0]).toBe("u");
+    expect(arr[2 ** 31 + 1]).toBe("last");
+    expect(Object.hasOwn(arr, 2 ** 31)).toBe(false);
+  });
+});

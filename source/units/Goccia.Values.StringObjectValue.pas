@@ -2587,7 +2587,9 @@ begin
   if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
     Options := ToObject(AArgs.GetElement(2));
 
-  Collator := TGocciaIntlCollatorValue.Create(Locale, Options);
+  // No script reaches this instance: it leaves Intl.Collator's prototype
+  // unbuilt.
+  Collator := TGocciaIntlCollatorValue.Create(Locale, Options, False);
   Result := TGocciaNumberLiteralValue.Create(Collator.CompareStrings(StringValue, ThatString));
 end;
 
