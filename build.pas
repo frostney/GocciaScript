@@ -353,6 +353,7 @@ var
 begin
   LowerOutput := LowerCase(AOutput);
   Result :=
+    (Pos('internal error', LowerOutput) > 0) or
     (Pos('compilation raised exception internally', LowerOutput) > 0) or
     (Pos('error while compiling resources', LowerOutput) > 0) or
     ((Pos('.reslst', LowerOutput) > 0) and
@@ -361,15 +362,62 @@ begin
       (Pos('no such file', LowerOutput) > 0)));
 end;
 
-procedure PrintBuildFailureAndExit(const AOutput, AFailureMessage,
-  ATarget: string);
+{ Deletes the compiled state FPC leaves under ADirectory (units, objects,
+  resources) and returns how many files it removed. Shared by --clean, which
+  passes the whole compiled root, and the stale-state retry, which passes one
+  target's own unit directory. }
+function RemoveCompiledArtifacts(const ADirectory: string): Integer;
+var
+  Files: TStringList;
+  K: Integer;
+begin
+  Files := TStringList.Create;
+  try
+    AddFoundFiles(Files, ADirectory, '.ppu');
+    AddFoundFiles(Files, ADirectory, '.o');
+    AddFoundFiles(Files, ADirectory, '.or');
+    AddFoundFiles(Files, ADirectory, '.res');
+    AddFoundFiles(Files, ADirectory, '.reslst');
+
+    for K := 0 to Files.Count - 1 do
+      DeleteFile(Files[K]);
+
+    Result := Files.Count;
+  finally
+    Files.Free;
+  end;
+end;
+
+{ Runs fpc for ASource into AUnitOutputDirectory. When it fails with a
+  stale-compiled-state symptom, wipes that one unit directory and runs the
+  compile once more, as --clean would for it. A failure without such a symptom
+  (an ordinary compile error) is returned as is, and the retry is never
+  repeated: AOutput holds the output of the last run. ALabel names the thing
+  being built in the message. }
+function CompileWithStaleRetry(const ASource, AUnitOutputDirectory,
+  ALabel: string; out AOutput: string): Boolean;
+begin
+  Result := RunCommand('fpc', FPCArgs(ASource,
+    EnsureUnitOutputDirectory(AUnitOutputDirectory)), AOutput);
+  if Result or not HasStaleArtifactSignature(AOutput) then
+    Exit;
+
+  WriteLn('FPC reported a stale-state error for ', ALabel,
+    '; retrying once from a clean unit directory');
+  RemoveCompiledArtifacts(AUnitOutputDirectory);
+  Result := RunCommand('fpc', FPCArgs(ASource,
+    EnsureUnitOutputDirectory(AUnitOutputDirectory)), AOutput);
+end;
+
+procedure PrintBuildFailureAndExit(const AOutput, AFailureMessage: string);
 begin
   WriteLn(AOutput);
   if HasStaleArtifactSignature(AOutput) then
   begin
     WriteLn('');
-    WriteLn('Hint: stale FPC build artifacts can cause this error.');
-    WriteLn('Retry with: ./build.pas --clean ', ATarget);
+    WriteLn('Hint: this looked like stale FPC build state, but the build ' +
+      'already retried once from a clean unit directory and failed again.');
+    WriteLn('Diagnose the reported source line.');
     WriteLn('');
   end;
   WriteLn(AFailureMessage);
@@ -381,10 +429,9 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaREPL...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaREPL.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('repl'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaREPL build failed', 'repl');
+  if not CompileWithStaleRetry('source/app/GocciaREPL.dpr',
+      TargetUnitOutputDirectory('repl'), 'repl', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaREPL build failed');
   WriteLn(Output);
   WriteLn('GocciaREPL built successfully');
 end;
@@ -395,10 +442,9 @@ var
 begin
   WriteLn('');
   WriteLn('Building GocciaRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaRunner.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('runner'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaRunner build failed', 'runner');
+  if not CompileWithStaleRetry('source/app/GocciaRunner.dpr',
+      TargetUnitOutputDirectory('runner'), 'runner', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaRunner build failed');
   WriteLn(Output);
   WriteLn('GocciaRunner built successfully');
   WriteLn('');
@@ -410,11 +456,9 @@ var
 begin
   WriteLn('');
   WriteLn('Building GocciaScriptLoaderBare...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoaderBare.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('loaderbare'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaScriptLoaderBare build failed',
-      'loaderbare');
+  if not CompileWithStaleRetry('source/app/GocciaScriptLoaderBare.dpr',
+      TargetUnitOutputDirectory('loaderbare'), 'loaderbare', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaScriptLoaderBare build failed');
   WriteLn(Output);
   WriteLn('GocciaScriptLoaderBare built successfully');
   WriteLn('');
@@ -426,11 +470,9 @@ var
 begin
   WriteLn('');
   WriteLn('Building GocciaFuzzHarness...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaFuzzHarness.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('fuzzharness'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaFuzzHarness build failed',
-      'fuzzharness');
+  if not CompileWithStaleRetry('source/app/GocciaFuzzHarness.dpr',
+      TargetUnitOutputDirectory('fuzzharness'), 'fuzzharness', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaFuzzHarness build failed');
   WriteLn(Output);
   WriteLn('GocciaFuzzHarness built successfully');
   WriteLn('');
@@ -462,10 +504,9 @@ begin
     begin
       UnitOutputDirectory := TestUnitOutputDirectory(TestFiles[K]);
 
-      if not RunCommand('fpc', FPCArgs(TestFiles[K],
-          EnsureUnitOutputDirectory(UnitOutputDirectory)), Output) then
-        PrintBuildFailureAndExit(Output, 'Test build failed: ' + TestFiles[K],
-          'tests');
+      if not CompileWithStaleRetry(TestFiles[K], UnitOutputDirectory,
+          TestFiles[K], Output) then
+        PrintBuildFailureAndExit(Output, 'Test build failed: ' + TestFiles[K]);
       WriteLn(Output);
     end;
   finally
@@ -481,11 +522,9 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaTestRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaTestRunner.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('testrunner'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaTestRunner build failed',
-      'testrunner');
+  if not CompileWithStaleRetry('source/app/GocciaTestRunner.dpr',
+      TargetUnitOutputDirectory('testrunner'), 'testrunner', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaTestRunner build failed');
   WriteLn(Output);
   WriteLn('GocciaTestRunner built successfully');
 end;
@@ -495,11 +534,10 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaTest262Runner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaTest262Runner.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('test262runner'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaTest262Runner build failed',
-      'test262runner');
+  if not CompileWithStaleRetry('source/app/GocciaTest262Runner.dpr',
+      TargetUnitOutputDirectory('test262runner'),
+      'test262runner', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaTest262Runner build failed');
   WriteLn(Output);
   WriteLn('GocciaTest262Runner built successfully');
 end;
@@ -509,12 +547,11 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaTOMLComplianceRunner...');
-  if not RunCommand('fpc', FPCArgs(
+  if not CompileWithStaleRetry(
       'source/app/compliance/GocciaTOMLComplianceRunner.dpr',
-      EnsureUnitOutputDirectory(
-        TargetUnitOutputDirectory('tomlcompliancerunner'))), Output) then
-    PrintBuildFailureAndExit(Output,
-      'GocciaTOMLComplianceRunner build failed', 'tomlcompliancerunner');
+      TargetUnitOutputDirectory('tomlcompliancerunner'),
+      'tomlcompliancerunner', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaTOMLComplianceRunner build failed');
   WriteLn(Output);
   WriteLn('GocciaTOMLComplianceRunner built successfully');
 end;
@@ -524,11 +561,10 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaWasmTestRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaWasmTestRunner.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('wasmtestrunner'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaWasmTestRunner build failed',
-      'wasmtestrunner');
+  if not CompileWithStaleRetry('source/app/GocciaWasmTestRunner.dpr',
+      TargetUnitOutputDirectory('wasmtestrunner'),
+      'wasmtestrunner', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaWasmTestRunner build failed');
   WriteLn(Output);
   WriteLn('GocciaWasmTestRunner built successfully');
 end;
@@ -552,11 +588,10 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaBenchmarkRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaBenchmarkRunner.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('benchmarkrunner'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaBenchmarkRunner build failed',
-      'benchmarkrunner');
+  if not CompileWithStaleRetry('source/app/GocciaBenchmarkRunner.dpr',
+      TargetUnitOutputDirectory('benchmarkrunner'),
+      'benchmarkrunner', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaBenchmarkRunner build failed');
   WriteLn(Output);
   WriteLn('GocciaBenchmarkRunner built successfully');
 end;
@@ -566,18 +601,14 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaBundler...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaBundler.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('bundler'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaBundler build failed', 'bundler');
+  if not CompileWithStaleRetry('source/app/GocciaBundler.dpr',
+      TargetUnitOutputDirectory('bundler'), 'bundler', Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaBundler build failed');
   WriteLn(Output);
   WriteLn('GocciaBundler built successfully');
 end;
 
 procedure Clean;
-var
-  Files: TStringList;
-  K: Integer;
 begin
   WriteLn('Cleaning build artifacts...');
   if not DirectoryExists('build/compiled') then
@@ -586,21 +617,7 @@ begin
     Exit;
   end;
 
-  Files := TStringList.Create;
-  try
-    AddFoundFiles(Files, 'build/compiled', '.ppu');
-    AddFoundFiles(Files, 'build/compiled', '.o');
-    AddFoundFiles(Files, 'build/compiled', '.or');
-    AddFoundFiles(Files, 'build/compiled', '.res');
-    AddFoundFiles(Files, 'build/compiled', '.reslst');
-
-    for K := 0 to Files.Count - 1 do
-      DeleteFile(Files[K]);
-
-    WriteLn('Removed ', Files.Count, ' file(s)');
-  finally
-    Files.Free;
-  end;
+  WriteLn('Removed ', RemoveCompiledArtifacts('build/compiled'), ' file(s)');
 end;
 
 procedure Build(const ATrigger: string);

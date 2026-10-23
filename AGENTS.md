@@ -19,10 +19,12 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 - **Search the real source layout**: when prompts, automations, or audits search this repo, target `source/units`, `source/shared`, `source/app`, `tests`, `scripts`, and `website/src` explicitly. Do not assume a generic root `src/` tree; `source/generated` is generated data and should only be inspected or regenerated when the task specifically requires it.
 - **Do source deep-dives before policy claims**: follow the [investigation discipline](.agents/skills/software-engineering-excellence/references/investigation.md). For ECMAScript the normative source is ECMA-262/ECMA-402 (see [TC39 spec lookup](#tc39-spec-lookup)); classify each surface as shim-, parser-, runtime-, or object-model-level by the mechanism it needs.
 - **Cap memory for depth, fuzz and exponential probes**: run them through `scripts/depth-probe.ts`, which caps every probe process's memory and time, or wrap an ad-hoc run as `systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 -- timeout 120 <command>`. Uncapped probes have grown a runner to 27 GB and set off the host's OOM killer. See [Tooling — Depth and Fuzz Probe](docs/contributing/tooling.md#depth-and-fuzz-probe).
-- **Clean first for stale FPC failures**: after a merge, branch switch, PR sync,
-  generated resource change, or unexplained compiler/resource error, retry with
-  `./build.pas --clean <target>` (or `./build.pas --clean`) before diagnosing the
-  reported source line. See [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts).
+- **Stale FPC failures retry clean automatically**: `build.pas` retries a
+  target once from a clean unit directory when FPC reports a stale-state error,
+  so do not run `./build.pas --clean <target>` pre-emptively after a merge,
+  branch switch, PR sync, or generated resource change. Run `--clean` yourself,
+  and diagnose the reported source line, only when the build still fails after
+  that retry. See [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts).
 
 ## TC39 spec lookup
 
