@@ -315,14 +315,25 @@ fills it:
 
 - `RegisterSnapshotSlotMaterializer`, a procedure that builds it in the
   current realm (the iterator prototypes, the function-object intrinsics,
-  Intl's legacy fallback symbol, the segment and module source prototypes,
-  and the `hasOwnProperty` shim, which native code can load although no
-  script installs it);
+  Intl's legacy fallback symbol, the segment and module source prototypes);
+- `RegisterSnapshotSlotNamedMaterializer`, the same told the slot's name,
+  so one procedure fills a family of slots: each shim's slot, and the `Date`
+  shim's own slots, are filled by loading the shim as native code can;
 - or `RegisterSnapshotSlotGlobalPath`, the lazy built-in whose first read
   fills it, by its path from the global object (`Temporal.PlainDate` for
-  Temporal's and Intl's shared prototypes, `DisposableStack`, and for each
-  shim its global or prototype member, `Date` for the `Date` shim's own
-  slots).
+  Temporal's and Intl's shared prototypes, `DisposableStack`).
+
+A restore fills a slot by building only what fills it. A lazy member the
+restore built and the run did not would be named, by a session watching the
+restore, as one the run built, and a snapshot of the restored run would not
+be the run's. So a global path is only for a slot that nothing but that read
+fills. A shim is loaded through any of its members (`Array.prototype` and
+`Number.prototype` share the `toLocaleString` shim) or natively, so its slot
+is filled by loading it; the members the run built are named apart and
+resolve by their own paths. Native code that makes an instance only for one
+operation and drops it (the collator `String.prototype.localeCompare` uses,
+the number format of `BigInt.prototype.toLocaleString`) leaves the shared
+prototype unbuilt, so only its global builds that.
 
 Every slot a run can fill resolves by its name on its own in a fresh engine.
 `Goccia.HeapSnapshot.Builtins.Test` builds everything an engine builds lazily

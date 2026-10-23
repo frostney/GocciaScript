@@ -44,8 +44,15 @@ type
     procedure InitializePrototype;
     procedure ReadOptions(const AOptions: TGocciaObjectValue);
   public
-    constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
-    class function CreateFromArguments(const ALocales, AOptions: TGocciaValue): TGocciaIntlNumberFormatValue; static;
+    // AWithPrototype False: an instance native code makes for one abstract
+    // operation and drops (BigInt.prototype.toLocaleString), which no script
+    // reaches. It leaves the realm's shared prototype unbuilt, so only
+    // Intl.NumberFormat builds that (a heap snapshot restore builds it the
+    // same way, ADR 0148).
+    constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil;
+      const AWithPrototype: Boolean = True);
+    class function CreateFromArguments(const ALocales, AOptions: TGocciaValue;
+      const AWithPrototype: Boolean = True): TGocciaIntlNumberFormatValue; static;
 
     function ToStringTag: string; override;
     procedure TraceReferences; override;
@@ -1520,7 +1527,8 @@ begin
     ['auto', 'never', 'always', 'exceptZero', 'negative'], FSignDisplay);
 end;
 
-constructor TGocciaIntlNumberFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
+constructor TGocciaIntlNumberFormatValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue;
+  const AWithPrototype: Boolean);
 var
   Canonical, CurrSymbol, CurrNarrow, LocaleNumberingSystem: string;
   CurrDigits, MinimumFractionDefault, MaximumFractionDefault: Integer;
@@ -1749,17 +1757,21 @@ begin
     TrailingZeroDisplayStringToEnum(FTrailingZeroDisplay);
   FResolvedOptions.NumberingSystem := FNumberingSystem;
 
-  InitializePrototype;
-  if (GetIntlNumberFormatShared <> nil) then
-    FPrototype := GetIntlNumberFormatShared.Prototype;
+  if AWithPrototype then
+  begin
+    InitializePrototype;
+    if (GetIntlNumberFormatShared <> nil) then
+      FPrototype := GetIntlNumberFormatShared.Prototype;
+  end;
 end;
 
 class function TGocciaIntlNumberFormatValue.CreateFromArguments(
-  const ALocales, AOptions: TGocciaValue): TGocciaIntlNumberFormatValue;
+  const ALocales, AOptions: TGocciaValue;
+  const AWithPrototype: Boolean): TGocciaIntlNumberFormatValue;
 begin
   Result := TGocciaIntlNumberFormatValue.Create(
     NumberFormatLocaleArgumentToLocale(ALocales),
-    NumberFormatOptionsArgumentToObject(AOptions));
+    NumberFormatOptionsArgumentToObject(AOptions), AWithPrototype);
 end;
 
 function TGocciaIntlNumberFormatValue.ToStringTag: string;
