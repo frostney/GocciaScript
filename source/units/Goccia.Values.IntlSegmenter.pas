@@ -14,6 +14,8 @@ uses
   Goccia.Values.Primitives;
 
 type
+  TIntlSegmentList = array of TIntlSegment;
+
   TGocciaIntlSegmenterValue = class(TGocciaObjectValue)
   private
     FLocale: string;
@@ -51,16 +53,12 @@ type
 
   TGocciaIntlSegmentIteratorValue = class(TGocciaObjectValue)
   private
-    FLocale: string;
     FGranularity: string;
     FOriginalText: string;
-    FText: string;
-    FSegments: array of TIntlSegment;
+    FSegments: TIntlSegmentList;
     FIndex: Integer;
 
     procedure InitializePrototype;
-    procedure BuildSegments;
-    procedure BuildSegmentsFallback;
   public
     constructor Create(const ALocale, AGranularity, AText: string);
 
@@ -142,6 +140,14 @@ begin
   else
     Result := isgGrapheme;
 end;
+
+{ The segments of AText for a locale and granularity: what a segment
+  iterator over it yields, and what %IntlSegmentsPrototype%.containing
+  searches. }
+function BuildSegments(const ALocale, AGranularity,
+  AText: string): TIntlSegmentList; forward;
+function BuildSegmentsFallback(const AGranularity,
+  AText: string): TIntlSegmentList; forward;
 
 function CreateSegmentObject(const ASeg: TIntlSegment; const AIsWordGranularity: Boolean;
   const AInput: string): TGocciaObjectValue;
@@ -366,10 +372,8 @@ function TGocciaIntlSegmentsValue.IntlSegmentsContaining(const AArgs: TGocciaArg
 var
   Segs: TGocciaIntlSegmentsValue;
   Idx: Integer;
-  Iter: TGocciaIntlSegmentIteratorValue;
+  Segments: TIntlSegmentList;
   I: Integer;
-  Seg: TIntlSegment;
-  Roots: TGocciaActiveRootFrame;
 begin
   Segs := AsSegments(AThisValue, 'Segments.prototype.containing');
   if AArgs.Length < 1 then
@@ -377,30 +381,17 @@ begin
   else
     Idx := ToIntegerFromArgs(AArgs, 0);
 
-  // Build all segments and find the one containing the index. The iterator
-  // is a managed value this call frees itself, so it is rooted until then: a
-  // collection inside CreateSegmentObject would otherwise sweep it, and the
-  // Free below would free it a second time.
-  Iter := TGocciaIntlSegmentIteratorValue.Create(Segs.FLocale, Segs.FGranularity,
-    Segs.FText);
-  Roots.Initialize;
-  try
-    Roots.Add(Iter);
-    for I := 0 to Length(Iter.FSegments) - 1 do
-    begin
-      Seg := Iter.FSegments[I];
-      if (Idx >= Seg.Index) and
-         (Idx < Seg.Index + UTF16CodeUnitLength(Seg.Segment)) then
-      begin
-        Result := CreateSegmentObject(Seg, Segs.FGranularity = 'word', Segs.FText);
-        Exit;
-      end;
-    end;
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  finally
-    Roots.Clear;
-    Iter.Free;
-  end;
+  // The segments are computed here, not through a segment iterator made for
+  // this call: the realm's first iterator becomes the method host its shared
+  // prototype keeps, so one this call dropped would leave the prototype
+  // holding a freed object.
+  Segments := BuildSegments(Segs.FLocale, Segs.FGranularity, Segs.FText);
+  for I := 0 to Length(Segments) - 1 do
+    if (Idx >= Segments[I].Index) and
+       (Idx < Segments[I].Index + UTF16CodeUnitLength(Segments[I].Segment)) then
+      Exit(CreateSegmentObject(Segments[I], Segs.FGranularity = 'word',
+        Segs.FText));
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function TGocciaIntlSegmentsValue.IntlSegmentsSymbolIterator(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -418,31 +409,27 @@ constructor TGocciaIntlSegmentIteratorValue.Create(const ALocale, AGranularity,
   AText: string);
 begin
   inherited Create;
-  FLocale := ALocale;
   FGranularity := AGranularity;
   FOriginalText := AText;
-  FText := string(AText);
   FIndex := 0;
-  BuildSegments;
+  FSegments := BuildSegments(ALocale, AGranularity, AText);
   InitializePrototype;
   if (GetIntlSegmentIteratorShared <> nil) then
     FPrototype := GetIntlSegmentIteratorShared.Prototype;
 end;
 
-procedure TGocciaIntlSegmentIteratorValue.BuildSegments;
+function BuildSegments(const ALocale, AGranularity,
+  AText: string): TIntlSegmentList;
 var
   Iterator: TIntlBreakIterator;
   PrevPos, CurrPos: Integer;
   Seg: TIntlSegment;
   RuleStatus: Integer;
 begin
-  SetLength(FSegments, 0);
-  if not TryICUCreateBreakIterator(FLocale, GranularityStringToEnum(FGranularity),
-    FText, Iterator) then
-  begin
-    BuildSegmentsFallback;
-    Exit;
-  end;
+  Result := nil;
+  if not TryICUCreateBreakIterator(ALocale, GranularityStringToEnum(AGranularity),
+    AText, Iterator) then
+    Exit(BuildSegmentsFallback(AGranularity, AText));
 
   try
     PrevPos := 0;
@@ -450,17 +437,17 @@ begin
     begin
       if CurrPos > PrevPos then
       begin
-        Seg.Segment := UTF16Substring(FOriginalText, PrevPos, CurrPos - PrevPos);
+        Seg.Segment := UTF16Substring(AText, PrevPos, CurrPos - PrevPos);
         Seg.Index := PrevPos;
-        if FGranularity = 'word' then
+        if AGranularity = 'word' then
         begin
           RuleStatus := TryICUBreakIteratorGetRuleStatus(Iterator);
           Seg.IsWordLike := RuleStatus >= 100;
         end
         else
           Seg.IsWordLike := False;
-        SetLength(FSegments, Length(FSegments) + 1);
-        FSegments[Length(FSegments) - 1] := Seg;
+        SetLength(Result, Length(Result) + 1);
+        Result[Length(Result) - 1] := Seg;
       end;
       PrevPos := CurrPos;
     end;
@@ -483,7 +470,8 @@ begin
   Result := (C = '.') or (C = '!') or (C = '?');
 end;
 
-procedure TGocciaIntlSegmentIteratorValue.BuildSegmentsFallback;
+function BuildSegmentsFallback(const AGranularity,
+  AText: string): TIntlSegmentList;
 var
   Text: string;
   Idx, SeqLen, Utf16Index: Integer;
@@ -492,9 +480,10 @@ var
   SegStart: Integer;
   C: Char;
 begin
-  Text := FOriginalText;
+  Result := nil;
+  Text := AText;
 
-  if FGranularity = 'grapheme' then
+  if AGranularity = 'grapheme' then
   begin
     // Split into individual code points via UTF-8 iteration
     Idx := 1;
@@ -506,8 +495,8 @@ begin
         Seg.Segment := Copy(Text, Idx, SeqLen);
         Seg.Index := Utf16Index;
         Seg.IsWordLike := False;
-        SetLength(FSegments, Length(FSegments) + 1);
-        FSegments[Length(FSegments) - 1] := Seg;
+        SetLength(Result, Length(Result) + 1);
+        Result[Length(Result) - 1] := Seg;
         Inc(Utf16Index, UTF16CodeUnitLength(Seg.Segment));
         Inc(Idx, SeqLen);
       end
@@ -518,7 +507,7 @@ begin
       end;
     end;
   end
-  else if FGranularity = 'word' then
+  else if AGranularity = 'word' then
   begin
     // Split on word boundaries (whitespace/punctuation)
     Idx := 1;
@@ -547,12 +536,12 @@ begin
         Seg.IsWordLike := True;
       end;
 
-      SetLength(FSegments, Length(FSegments) + 1);
-      FSegments[Length(FSegments) - 1] := Seg;
+      SetLength(Result, Length(Result) + 1);
+      Result[Length(Result) - 1] := Seg;
       Inc(Utf16Index, UTF16CodeUnitLength(Seg.Segment));
     end;
   end
-  else if FGranularity = 'sentence' then
+  else if AGranularity = 'sentence' then
   begin
     // Split on sentence endings: .!? followed by whitespace or end of string
     SegStart := 1;
@@ -572,8 +561,8 @@ begin
         Seg.Segment := Copy(Text, SegStart, Idx - SegStart);
         Seg.Index := Utf16Index;
         Seg.IsWordLike := False;
-        SetLength(FSegments, Length(FSegments) + 1);
-        FSegments[Length(FSegments) - 1] := Seg;
+        SetLength(Result, Length(Result) + 1);
+        Result[Length(Result) - 1] := Seg;
         Inc(Utf16Index, UTF16CodeUnitLength(Seg.Segment));
         SegStart := Idx;
       end
@@ -587,8 +576,8 @@ begin
       Seg.Segment := Copy(Text, SegStart, Length(Text) - SegStart + 1);
       Seg.Index := Utf16Index;
       Seg.IsWordLike := False;
-      SetLength(FSegments, Length(FSegments) + 1);
-      FSegments[Length(FSegments) - 1] := Seg;
+      SetLength(Result, Length(Result) + 1);
+      Result[Length(Result) - 1] := Seg;
     end;
   end
   else
@@ -596,10 +585,10 @@ begin
     // Unknown granularity: single segment
     if Length(Text) > 0 then
     begin
-      SetLength(FSegments, 1);
-      FSegments[0].Segment := Text;
-      FSegments[0].Index := 0;
-      FSegments[0].IsWordLike := False;
+      SetLength(Result, 1);
+      Result[0].Segment := Text;
+      Result[0].Index := 0;
+      Result[0].IsWordLike := False;
     end;
   end;
 end;
