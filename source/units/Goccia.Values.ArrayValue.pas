@@ -4139,8 +4139,10 @@ begin
   end;
 end;
 
-// ES2026 §10.1.9 [[Set]]: an array index goes through the array's own
-// lookup, which sees its dense elements; the property map alone does not.
+// ES2026 §10.1.9 [[Set]]: an array index and "length" go through the array's
+// own properties, which the property map does not hold. "length" is an own
+// writable data property, so OrdinarySetWithOwnDescriptor step 2 defines it
+// with { [[Value]]: V }, which is ArraySetLength (§10.4.2.4).
 procedure TGocciaArrayValue.AssignProperty(const AName: string;
   const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
@@ -4148,6 +4150,8 @@ var
 begin
   if ACanCreate and TryParseArrayElementIndex(AName, Index) then
     SetIndexNamed(AName, Index, AValue)
+  else if AName = PROP_LENGTH then
+    SetProperty(AName, AValue)
   else
     inherited AssignProperty(AName, AValue, ACanCreate);
 end;
@@ -4705,13 +4709,16 @@ begin
         end
         else if Int64(ItemCount) > DeleteCount64 then
         begin
-          // Shift right: source [ActualStart, Len - DeleteCount) → dest shifted
-          // by itemCount - deleteCount.  Walk present source keys descending so
+          // Shift right: source [ActualStart + DeleteCount, RawLen) → dest
+          // [ActualStart + ItemCount, NewLen), shifted by itemCount -
+          // deleteCount (ES2026 §23.1.3.31: for k from len - deleteCount down
+          // to actualStart + 1, from = k + deleteCount - 1 and
+          // to = k + itemCount - 1).  Walk present source keys descending so
           // writes never overwrite a value that has not been read yet, then
           // delete originally-present destination keys whose source was a hole.
           Shift := Int64(ItemCount) - DeleteCount64;
           SourceSparse := CollectSparseIndicesInRange(View.Obj,
-            ActualStart64, Len64 - DeleteCount64);
+            ActualStart64 + DeleteCount64, Len64);
           DestSparse := CollectSparseIndicesInRange(View.Obj,
             ActualStart64 + Int64(ItemCount), NewLen64);
           for I := Length(SourceSparse) - 1 downto 0 do

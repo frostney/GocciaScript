@@ -62,3 +62,42 @@ describe("Array.prototype.push", () => {
     expect(huge.length).toBe(4294967290);
   });
 });
+
+// ES2026 §23.1.3.23 Array.prototype.push ends with Set(O, "length", len,
+// true); on an Array that is ArraySetLength (§10.4.2.4), which accepts any
+// length up to 2^32 - 1 and throws RangeError past it.
+describe("push on an array longer than 2 ** 31 - 1", () => {
+  test("appends the items and sets the length", () => {
+    const arr = [];
+    arr.length = 2 ** 31;
+    expect(arr.push("x", "y")).toBe(2 ** 31 + 2);
+    expect(arr.length).toBe(2 ** 31 + 2);
+    expect(arr[2 ** 31]).toBe("x");
+    expect(arr[2 ** 31 + 1]).toBe("y");
+  });
+
+  test("past 2 ** 32 - 1 sets the element, then throws RangeError for the length", () => {
+    const arr = [];
+    arr.length = 2 ** 32 - 1;
+    expect(() => arr.push("x")).toThrow(RangeError);
+    expect(arr.length).toBe(2 ** 32 - 1);
+    expect(arr[2 ** 32 - 1]).toBe("x");
+  });
+
+  test("with a read-only length throws TypeError and adds nothing", () => {
+    const arr = [];
+    arr.length = 2 ** 31;
+    Object.defineProperty(arr, "length", { writable: false });
+    expect(() => arr.push(1)).toThrow(TypeError);
+    expect(arr.length).toBe(2 ** 31);
+    expect(Object.hasOwn(arr, 2 ** 31)).toBe(false);
+  });
+
+  test("on an array-like up to 2 ** 53 - 1 sets the length as a number", () => {
+    const obj = { length: 2 ** 53 - 3 };
+    expect(Array.prototype.push.call(obj, "a", "b")).toBe(2 ** 53 - 1);
+    expect(obj.length).toBe(2 ** 53 - 1);
+    expect(obj[2 ** 53 - 3]).toBe("a");
+    expect(obj[2 ** 53 - 2]).toBe("b");
+  });
+});
