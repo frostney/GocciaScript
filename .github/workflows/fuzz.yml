@@ -26,6 +26,8 @@ permissions:
 
 env:
   FUZZ_SECONDS: ${{ github.event.inputs.fuzz-seconds || '900' }}
+  # The frostney/fpc-toolchain build, as in ci.yml.
+  FPC_VERSION: "3.2.4"
 
 jobs:
   # ── Coverage-guided fuzzing ──────────────────────────────────────────
@@ -48,10 +50,15 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
-      - name: Install FPC and AFL++
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+
+      - name: Install AFL++
         run: |
           sudo apt-get update
-          sudo apt-get install fpc afl++ -qq > /dev/null
+          sudo apt-get install afl++ -qq > /dev/null
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
@@ -214,10 +221,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install FPC, AFL++ and Valgrind
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+
+      - name: Install AFL++ and Valgrind
         run: |
           sudo apt-get update
-          sudo apt-get install fpc afl++ valgrind -qq > /dev/null
+          sudo apt-get install afl++ valgrind -qq > /dev/null
 
       - name: Build fuzz harness
         run: ./build.pas fuzzharness
@@ -402,9 +414,9 @@ jobs:
           persist-credentials: false
 
       - name: Install FPC
-        run: |
-          sudo apt-get update
-          sudo apt-get install fpc -qq > /dev/null
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
 
       - name: Build the hardening tests
         # ./build.pas writes the version include every program reads; each
@@ -477,10 +489,15 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
-      - name: Install FPC and Valgrind
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+
+      - name: Install Valgrind
         run: |
           sudo apt-get update
-          sudo apt-get install fpc valgrind -qq > /dev/null
+          sudo apt-get install valgrind -qq > /dev/null
 
       - name: Build test runner with heaptrc
         # -gh links the heaptrc unit; the trailing summary goes to stderr on
@@ -528,9 +545,10 @@ jobs:
         # job's timeout-minutes.
         run: |
           fpc_version=$(fpc -iV)
-          if [ "$fpc_version" != "3.2.2" ]; then
-            echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's IndexByte and IndexWord; this job runs FPC $fpc_version"
-          fi
+          case "$fpc_version" in
+            3.2.2|3.2.4) ;;
+            *) echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's and 3.2.4's IndexByte and IndexWord; this job runs FPC $fpc_version" ;;
+          esac
           shards=$(nproc)
           # The runner's own file discovery and native per-file times.
           ./build/GocciaTestRunner -P tests --no-progress --silent \

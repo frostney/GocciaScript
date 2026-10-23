@@ -129,7 +129,7 @@ type
   end;
 
   function DefaultCompare(
-    {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: TGocciaValue): Integer;
+    {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: TGocciaValue): Integer;
   function GetSharedArrayPrototypeForRealm(const ARealm: TGocciaRealm): TGocciaObjectValue;
   // %Array.prototype.values% of ARealm: the function Array.prototype.values and
   // Array.prototype[Symbol.iterator] hold when the realm is created, whatever
@@ -533,7 +533,7 @@ begin
 end;
 
 function DefaultCompare(
-  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: TGocciaValue): Integer;
+  {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: TGocciaValue): Integer;
 var
   StrA, StrB: string;
 begin
@@ -609,7 +609,7 @@ begin
 end;
 
 function CompareInt64(
-  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} A, B: Int64): Integer;
+  {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: Int64): Integer;
 begin
   if A < B then Result := -1
   else if A > B then Result := 1
