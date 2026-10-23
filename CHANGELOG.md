@@ -2,6 +2,12 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.15.1] - 2026-10-23
+
+### 🐛 Fixed
+
+- fix(heap-snapshot): mutant tests check a restored root's class and sweep the same bytes whatever version is baked in (#1896)
+
 ## [0.15.0] - 2026-10-23
 
 ### ⚡ Performance
