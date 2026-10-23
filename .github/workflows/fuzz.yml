@@ -27,7 +27,7 @@ permissions:
 env:
   FUZZ_SECONDS: ${{ github.event.inputs.fuzz-seconds || '900' }}
   # The frostney/fpc-toolchain build, as in ci.yml.
-  FPC_VERSION: "3.2.4"
+  FPC_VERSION: "3.2.4-rc2-b1"
 
 jobs:
   # ── Coverage-guided fuzzing ──────────────────────────────────────────

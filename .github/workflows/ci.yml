@@ -12,9 +12,10 @@ permissions:
   contents: read
 
 env:
-  # The frostney/fpc-toolchain build every job installs; pr.yml, fuzz.yml,
-  # gc-stress.yml and timezone-data-bump.yml name the same one.
-  FPC_VERSION: "3.2.4"
+  # The frostney/fpc-toolchain release every job installs, pinned to one build.
+  # pr.yml, fuzz.yml, gc-stress.yml and timezone-data-bump.yml name the same
+  # one; moving to another build (3.2.4 final) changes this line in each.
+  FPC_VERSION: "3.2.4-rc2-b1"
 
 jobs:
   # A newer push to main cancels the CI run of any older main commit as a whole,
