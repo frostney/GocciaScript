@@ -1633,20 +1633,15 @@ jobs:
 
             display="${DISPLAY_NAMES[$target]}"
             archive_name="gocciascript-${VERSION}-${display}"
-            pkg_dir="${archive_name}"
-            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
-
-            cp -r tests/ "$pkg_dir/tests/"
-            cp -r benchmarks/ "$pkg_dir/benchmarks/"
-            cp -r examples/ "$pkg_dir/examples/"
-
-            if [[ "$target" == *win* ]]; then
-              zip -r "${archive_name}.zip" "$pkg_dir/"
-            else
-              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
-            fi
-
-            rm -rf "$pkg_dir"
+            # Published asset names: .tar.gz for Linux, .zip for macOS and
+            # Windows. The script restores the executable bit on the binaries
+            # (artifacts do not keep file modes) and fails if the archive
+            # lacks a binary or records one as not executable.
+            case "$target" in
+              *-linux) format="tar.gz" ;;
+              *) format="zip" ;;
+            esac
+            bash ./.github/scripts/package-release-archive.sh "$artifact_dir" "$archive_name" "$format"
           done
 
       - name: Generate release notes

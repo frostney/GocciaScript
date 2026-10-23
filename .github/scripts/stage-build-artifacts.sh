@@ -42,6 +42,10 @@ for src in "${entrypoints[@]}"; do
   for candidate in "$build_dir/$name" "$build_dir/$name.exe"; do
     if [ -f "$candidate" ]; then
       cp "$candidate" "$artifact_dir/"
+      # upload-artifact does not keep file modes, so a binary copied out of a
+      # downloaded artifact has lost its executable bit. Restore it on every
+      # staged binary so the release archives record it; Windows ignores it.
+      chmod a+x "$artifact_dir/$(basename "$candidate")"
       copied_binary=1
     fi
   done
@@ -58,6 +62,7 @@ if [ -n "$include_tests" ]; then
   for test_bin in "$build_dir"/*.Test "$build_dir"/*.Test.exe; do
     if [ -f "$test_bin" ]; then
       cp "$test_bin" "$artifact_dir/"
+      chmod a+x "$artifact_dir/$(basename "$test_bin")"
       copied_test=1
     fi
   done
