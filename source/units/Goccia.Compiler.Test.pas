@@ -151,6 +151,7 @@ type
     procedure TestCompoundAssignmentWritesRegisterOnlyBindingDirectly;
     procedure TestInitializerReachingItsBindingKeepsCopy;
     procedure TestLexicalHolesSetOnlyWhereObservable;
+    procedure TestCompoundSmallIntegerUsesImmediate;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestObjectRestBytecodeRoundTrip;
@@ -312,6 +313,8 @@ begin
     TestInitializerReachingItsBindingKeepsCopy);
   Test('Lexical TDZ holes are set once, and only where observable',
     TestLexicalHolesSetOnlyWhereObservable);
+  Test('compound += and -= of a small integer use immediates',
+    TestCompoundSmallIntegerUsesImmediate);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -2247,11 +2250,49 @@ begin
   Expect<Integer>(HolesIn(
     'const f = (p) => { const r = () => b; const b = p + 1; return r; };'))
     .ToBe(1);
-  // A block sets its binding's hole on entry, and the declaration does not
-  // set it again.
+  // A block's leading binding that nothing can reach before its declaration
+  // completes gets no hole either, so a loop body sets none per iteration.
   Expect<Integer>(HolesIn(
     'const f = (p) => { if (p) { let c = p + 1; return c; } return 0; };'))
+    .ToBe(0);
+  // A block sets the hole of a binding an earlier initializer's arrow names,
+  // or one declared after another statement, on entry, and the declaration
+  // does not set it again.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { if (p) { const r = () => c; let c = p + 1; return r; } return 0; };'))
     .ToBe(1);
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { if (p) { p.x = 1; let c = p + 1; return c; } return 0; };'))
+    .ToBe(1);
+end;
+
+procedure TTestCompiler.TestCompoundSmallIntegerUsesImmediate;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  // x is a Number no closure can rebind: += 1 and -= 300 add immediates.
+  Module := CompileSource(
+    'const f = (p) => { let x = +p; x += 1; x -= 300; return x; }; f(1);');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_NUM_IMM);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_SUB_NUM_IMM)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_LOAD_INT)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+  // A closure can store a String in x, so += keeps the generic operator.
+  Module := CompileSource(
+    'const f = (p) => { let x = +p; const g = () => { x = "s"; }; g(); x += 1; return x; }; f(1);');
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+  finally
+    Module.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestInitializerReachingItsBindingKeepsCopy;
@@ -3850,7 +3891,9 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_MUL_FLOAT)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_FLOAT)).ToBe(1);
-    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    // `a += 2` adds an immediate, `a + b` adds two registers.
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_MUL)).ToBe(0);
