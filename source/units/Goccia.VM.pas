@@ -18075,8 +18075,9 @@ end;
 
 // A constant-name property read on a receiver the property read caches do
 // not serve. An Array's `length` is an own data property that cannot be
-// deleted or made an accessor (ES2026 §10.4.2), so it is read from the array
-// itself, without a name lookup or a boxed Number.
+// deleted or made an accessor (ES2026 §10.4.2), and a String's is fixed
+// (§10.4.3), so each is read from the value itself, without a name lookup or
+// a boxed Number.
 procedure TGocciaVM.ExecGetUncachedConstProperty(
   const ATemplate: TGocciaFunctionTemplate; const ADest, AObject: Integer;
   const ANameIndex: UInt16);
@@ -18095,6 +18096,17 @@ begin
   begin
     StoredLength :=
       TGocciaArrayValue(FRegisters[AObject].ObjectValue).StoredLength;
+    FRegisters[ADest] := VMNumberRegister(StoredLength);
+    Exit;
+  end
+  else if (FRegisters[AObject].Kind = grkObject) and
+          Assigned(FRegisters[AObject].ObjectValue) and
+          (FRegisters[AObject].ObjectValue.ClassType =
+           TGocciaStringLiteralValue) and
+          (Constant^.StringValue = PROP_LENGTH) then
+  begin
+    StoredLength := UTF16CodeUnitLength(TGocciaStringLiteralValue(
+      FRegisters[AObject].ObjectValue).Value);
     FRegisters[ADest] := VMNumberRegister(StoredLength);
     Exit;
   end
