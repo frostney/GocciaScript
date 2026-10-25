@@ -676,8 +676,13 @@ begin
     FileExists(CryptoBase + '.so' + AVersion);
   if Result then
   begin
+    {$IFDEF GOCCIA_FPC_OPENSSL_DLL_NAMES}
     DLLSSLName := SSLBase;
     DLLUtilName := CryptoBase;
+    {$ELSE}
+    BaseSSLName := SSLBase;
+    BaseCryptoName := CryptoBase;
+    {$ENDIF}
     DLLVersions[Low(DLLVersions)] := AVersion;
   end;
 end;
@@ -715,7 +720,7 @@ end;
 // Result before entering its own critical section, so a thread that waited on
 // that section while another loaded the library exits with Result still False
 // and reports a failed load of a loaded library. ConfigureOpenSSLLoading also
-// rewrites the openssl unit's DLLVersions, DLLSSLName and DLLUtilName globals,
+// rewrites the openssl unit's DLLVersions and library-name globals,
 // shifting DLLVersions on every call. Both therefore run once, under a lock
 // this unit owns, and the result is read from IsSSLloaded rather than from
 // InitSSLInterface's return value. A failed load is remembered too, so every

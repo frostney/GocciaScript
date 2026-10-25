@@ -1,5 +1,5 @@
-# Valgrind memcheck suppressions for the Free Pascal runtime library (FPC 3.2.2,
-# x86_64). Pass with --suppressions=scripts/valgrind/fpc-rtl.supp; the
+# Valgrind memcheck suppressions for the Free Pascal runtime library (FPC 3.2.2
+# and 3.2.4, x86_64). Pass with --suppressions=scripts/valgrind/fpc-rtl.supp; the
 # scheduled memory-safety job in .github/workflows/fuzz.yml does.
 #
 # IndexByte and IndexWord (rtl/x86_64/x86_64.inc) scan with aligned 16-byte
@@ -21,8 +21,8 @@
 # branches on it. Undefined bytes inside the range are reported again only where other
 # code makes a branch, an address or a system call depend on them.
 #
-# The reasoning holds for the FPC 3.2.2 routines; the job warns when it runs
-# another version.
+# The reasoning holds for the FPC 3.2.2 and 3.2.4 routines, whose source is the
+# same; the job warns when it runs another version.
 {
    fpc-rtl-indexbyte-aligned-overread
    Memcheck:Cond

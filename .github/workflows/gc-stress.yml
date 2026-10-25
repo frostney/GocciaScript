@@ -29,6 +29,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # The frostney/fpc-toolchain build, as in ci.yml.
+  FPC_VERSION: "3.2.4-rc2-b1"
+
 jobs:
   gc-stress:
     runs-on: ubuntu-latest
@@ -50,7 +54,9 @@ jobs:
           no-cache: true
 
       - name: Install FPC
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
 
       - name: Read test262 pin
         id: test262-pin

@@ -6,7 +6,7 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
+- **Platform pitfalls** — code that must build on FPC 3.2.2 and 3.2.4, stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
 
 ## Auto-Formatting
@@ -87,6 +87,15 @@ The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not ope
 All four layers enforce the same rules, providing defence in depth. The typical developer experience is: EditorConfig handles whitespace while you type, format-on-save fixes everything else when you save, and the pre-commit hook and CI catch anything that slips through.
 
 ## Platform-Specific Pitfalls
+
+### FPC 3.2.2 and 3.2.4
+
+CI builds with FPC 3.2.4 (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)); the package managers in the [README](../../README.md#build-from-source) install 3.2.2, and the source must keep building on both. Two RTL interfaces differ, and `Shared.inc` defines a symbol for each on 3.2.2 only:
+
+- `GOCCIA_FPC_CONSTREF_COMPARERS` — `Generics.Defaults` comparers take `constref` arguments on 3.2.2 and `const` on 3.2.4 (and Delphi). Declare a comparison function as `{$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: T`.
+- `GOCCIA_FPC_OPENSSL_DLL_NAMES` — the `openssl` unit's `DLLSSLName` and `DLLUtilName` are `BaseSSLName` and `BaseCryptoName` on 3.2.4.
+
+Workarounds for 3.2.2 compiler bugs stay while 3.2.2 is supported, including those 3.2.4 fixes, such as the inlined threadvar accessor ([#1699](https://github.com/frostney/GocciaScript/issues/1699)).
 
 ### Stale FPC Build Artifacts
 

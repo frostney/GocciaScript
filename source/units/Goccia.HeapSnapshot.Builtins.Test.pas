@@ -89,6 +89,7 @@ type
     function RoundTripFailures(const AScript: string;
       const ANativeShim: string = ''): string;
     procedure TestLateBuiltinsRoundTripAsTheRunBuiltThem;
+    procedure TestSegmentLookupLeavesNoFreedHost;
   public
     procedure SetupTests; override;
   end;
@@ -187,6 +188,8 @@ begin
     TestShimLoadOnAMovedVM);
   Test('Built-ins the run built late restore as it built them, and snapshot ' +
     'the same again', TestLateBuiltinsRoundTripAsTheRunBuiltThem);
+  Test('A segment lookup before any segment iterator leaves no freed object ' +
+    'on a shared prototype', TestSegmentLookupLeavesNoFreedHost);
 end;
 
 // Builds everything an engine builds lazily: every own property of every
@@ -1613,6 +1616,18 @@ begin
     '"a".localeCompare("b"); void Intl.Collator; [1, 2]')).ToBe('');
   Expect<string>(RoundTripFailures(
     'void Intl.NumberFormat; (1n).toLocaleString(); [1, 2]')).ToBe('');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestSegmentLookupLeavesNoFreedHost;
+begin
+  // Segments.prototype.containing built the segment iterator prototype
+  // through a throwaway iterator, which became that prototype's method host
+  // and was then freed; the snapshot's table read the freed host.
+  Expect<string>(RoundTripFailures(
+    'new Intl.Segmenter().segment("ab").containing(0)')).ToBe('');
+  Expect<string>(RoundTripFailures(
+    'const data = new Intl.Segmenter().segment("ab").containing(0); ' +
+    '[...new Intl.Segmenter().segment("xy")]; data')).ToBe('');
 end;
 
 begin
