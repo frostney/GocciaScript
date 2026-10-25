@@ -1950,7 +1950,7 @@ begin
 end;
 
 // Stores the Number AValue in ADest^, classified as VMNumberRegister does; the
-// typed arithmetic opcodes write their result here. The range test is false
+// numeric opcodes write their result here. The range test is false
 // for NaN and the infinities, so a finite value is classified with compares
 // and one truncation instead of calls to IsNaN, IsInfinite and Frac. Writing
 // the register in place spares the copy a function result makes through a
@@ -1998,9 +1998,9 @@ function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}in
 var
   IntValue: Int64;
 begin
-  // The same classification as VMStoreNumberRegister. The generic opcodes
-  // build their result through this function: written over the result's
-  // address instead, their code grew (NBody ran about 1% more instructions).
+  // The same classification as VMStoreNumberRegister, for callers that need
+  // the register as a value. Built over that procedure and the result's
+  // address, these callers' code grew.
   if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
   begin
     IntValue := Trunc(AValue);

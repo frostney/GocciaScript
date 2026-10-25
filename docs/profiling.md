@@ -74,7 +74,7 @@ Opcode Pairs (top 20):
 
 ### Scalar Fast-Path Hit Rate (`--profile=opcodes`)
 
-For the generic arithmetic and comparison opcodes (`OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_DIV`, `OP_MOD`, `OP_POW`, `OP_LT`, `OP_GT`, `OP_LTE`, `OP_GTE`), tracks how often the `RegisterIsNumericScalar` fast path hits versus falls through to the slow (boxing/polymorphic) path.
+For the generic arithmetic and comparison opcodes (`OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_DIV`, `OP_MOD`, `OP_POW`, `OP_LT`, `OP_GT`, `OP_LTE`, `OP_GTE`), tracks how often the numeric-scalar fast path (`VMNumericScalarPair`) hits versus falls through to the slow (boxing/polymorphic) path.
 
 ```text
 Scalar Fast-Path:

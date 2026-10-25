@@ -564,7 +564,7 @@ That choice removes:
 - bridge-only GC root management
 - bytecode/runtime disagreement over `undefined`, `null`, and sparse array holes
 
-The trade-off is that arithmetic fast paths are split between scalar register operations (typed opcodes like `OP_ADD_INT` / `OP_ADD_FLOAT`) and generic `TGocciaValue` fallbacks (like `OP_ADD`). A typed opcode reads each operand register once through its address (`VMNumericScalarPair`) and writes its Number result straight into the destination register (`VMStoreNumberRegister`), which saves the dispatch loop the copies a register test followed by a separate read, or a function result, make through temporaries.
+The trade-off is that arithmetic fast paths are split between scalar register operations (typed opcodes like `OP_ADD_INT` / `OP_ADD_FLOAT`) and generic `TGocciaValue` fallbacks (like `OP_ADD`). The numeric fast path of the typed opcodes and of the generic arithmetic and relational ones (`OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_DIV`, `OP_MOD`, `OP_POW`, `OP_LT`, `OP_GT`, `OP_LTE`, `OP_GTE`) reads each operand register once through its address (`VMNumericScalarPair`), and addition, subtraction, multiplication and division write their result straight into the destination register (`VMStoreNumberRegister`), which saves the dispatch loop the copies a register test followed by a separate read, or a function result, make through temporaries.
 
 ### Compiler-Side Desugaring
 
