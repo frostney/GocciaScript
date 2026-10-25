@@ -7817,18 +7817,17 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, RegOld, Slot));
     end;
     RegVal := ACtx.Scope.AllocateRegister;
-    // `x += k` and `x -= k` on a proven Number with k a signed Int16 literal
-    // add the immediate: no instruction loads k. The literal has no effect
-    // to evaluate, and LocalType was sampled with the old value. The proof is
-    // the one ExpressionType gives an identifier: a captured binding keeps
-    // its hint only when no closure can store another value in it.
+    // `x += k` and `x -= k` on a binding that holds only Numbers, with k a
+    // signed Int16 literal, add the immediate: no instruction loads k. The
+    // literal has no effect to evaluate, and LocalType was sampled with the
+    // old value. OP_ADD_NUM_IMM refuses a value that is not a Number, so the
+    // proof is the whole-body one (Goccia.Compiler.NumericBindings), which
+    // covers every store, closures included. A type annotation alone is not
+    // one: `let x: number;` holds undefined until it is assigned.
     ImmediateOp := OP_NOP;
     if not ACtx.Scope.GetLocal(LocalIdx).IsConst and
-       ((IsKnownNumeric(LocalType) and
-         (ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped or
-          not ACtx.Scope.GetLocal(LocalIdx).IsCaptured or
-          ACtx.Scope.GetLocal(LocalIdx).HoldsOnlyNumbers)) or
-        ACtx.Scope.GetLocal(LocalIdx).IsCallProvenNumeric) and
+       IsKnownNumeric(LocalType) and
+       ACtx.Scope.GetLocal(LocalIdx).HoldsOnlyNumbers and
        TrySignedInt16NumberLiteral(AExpr.Value, Immediate) then
     begin
       if AExpr.Operator = gttPlusAssign then

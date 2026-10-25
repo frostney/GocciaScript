@@ -70,3 +70,12 @@ test("a binding updated in a loop counts every step", () => {
   }
   expect(total).toBe(14);
 });
+
+test("an annotated binding that was never assigned gives NaN", () => {
+  let declared: number;
+  declared += 1;
+  expect(Number.isNaN(declared)).toBe(true);
+  let other: number;
+  other -= 1;
+  expect(Number.isNaN(other)).toBe(true);
+});
