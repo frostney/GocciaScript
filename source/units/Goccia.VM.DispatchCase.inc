@@ -2683,7 +2683,9 @@
             begin
               // The arguments are read straight out of the caller's registers:
               // SetupNewFrame copies them into the callee's argument window
-              // before it acquires (and so may move or clear) any register.
+              // before it acquires (and so may move or clear) any register,
+              // or, when the callee never reads one and no arena grows,
+              // straight into the callee's registers.
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -4453,7 +4455,8 @@
           // OP_CALL_SELF is a reserved runtime-only opcode outside
           // TGocciaOpCode (Goccia.Bytecode), so it is dispatched here. The
           // arguments are read straight out of the caller's registers, as in
-          // OP_CALL: SetupNewFrame copies them before it acquires registers.
+          // OP_CALL: SetupNewFrame copies them before it acquires registers,
+          // or straight into them when no arena grows.
           if Op = OP_CALL_SELF then
           begin
             if FThreadPolls^.TimeoutArmed then

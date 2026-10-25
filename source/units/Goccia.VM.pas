@@ -8249,8 +8249,8 @@ end;
   A growth is decided inside call setup, which can neither collect nor throw.
   It cannot collect because the callee, the receiver and the arguments of a
   call made from native code are still held only in Pascal locals there
-  (SetupNewFrame copies them into the argument window before anything can
-  collect). It cannot throw because the caller's frame is already saved and
+  (SetupNewFrame copies them into the argument window, or for a callee that
+  never reads one into its registers, before anything can collect). It cannot throw because the caller's frame is already saved and
   the callee's is not yet set up, and unwinding from between the two would
   tear down a frame that does not exist. So a growth that does not fit takes
   only the entries its frame needs, uncharged, and the next instruction
@@ -16054,8 +16054,10 @@ begin
      (NewArgumentBase < Length(FArgumentStack)) then
   begin
     // Nothing reads this frame's argument window, so it gets an empty one
-    // and the arguments go straight into their registers. No arena grows
-    // here, so AArguments still points at them; it can point into this very
+    // and the arguments go straight into their registers. Neither the
+    // register nor the argument arena grows here, so AArguments still points
+    // at them (the local-cell arena may grow below, after the copy, and
+    // nothing points into it); it can point into this very
     // register arena, at the caller's registers or, on a tail call, at the
     // frame being replaced, whose window starts where this one does. There
     // every argument sits above the register it is copied to, so `this`,
@@ -17029,8 +17031,8 @@ end;
   callback from Array.prototype.map, a getter, a comparator. The arguments are
   converted on the stack, which keeps this procedure free of a managed local
   (and so of an implicit exception frame, an allocation and a release per
-  call); SetupNewFrame copies them into the callee's argument window before
-  anything can collect. A call with more arguments than the buffer holds
+  call); SetupNewFrame copies them into the callee's argument window, or into
+  its registers when it never reads one, before anything can collect. A call with more arguments than the buffer holds
   stages them on the heap. }
 function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection;

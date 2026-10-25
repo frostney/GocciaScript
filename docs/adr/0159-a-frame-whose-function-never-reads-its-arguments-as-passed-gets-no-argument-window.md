@@ -34,19 +34,21 @@ word is read as an instruction, so a word that is not one (an `OP_WIDE` prefix)
 can only make the answer "read". A template with none of the instructions above
 and no `OP_DIRECT_EVAL`, that is neither async nor a generator, is "unread".
 
-**A frame of an unread template gets an empty argument window**, as long as no
-arena has to grow for it: `FArgCount` is 0, so the collector, which marks the
-argument arena up to the current window's end, marks none of it for that frame.
-`SetupNewFrame` then stores `this` and the arguments straight into the new
-register window and clears only the registers above them, before anything can
-collect. When an arena would have to grow, or
-the template reads its window, the frame is set up as before.
+**A frame of an unread template gets an empty argument window**, as long as
+neither the register nor the argument arena has to grow for it; the local-cell
+window is acquired after the copy, and nothing points into that arena.
+`FArgCount` is 0, so the collector, which marks the argument arena up to the
+current window's end, marks none of it for that frame. `SetupNewFrame` then
+stores `this` and the arguments straight into the new register window and
+clears only the registers above them, before anything can collect. When either
+arena would have to grow, or the template reads its window, the frame is set up
+as before.
 
 The direct copy relies on the register arena not moving between the read of an
-argument and its store, which holds because nothing grows in between. The
-arguments can sit in the same arena: in the caller's window, below the new one,
-or, on a proper tail call, in the frame being replaced, whose window the new one
-starts at. There each argument `i` is read from the old frame's register
+argument and its store, which holds because neither arena it uses grows in
+between. The arguments can sit in the same arena: in the caller's window, below
+the new one, or, on a proper tail call, in the frame being replaced, whose
+window the new one starts at. There each argument `i` is read from the old frame's register
 `A + 1 + i` and stored into register `1 + i`, at or below it, so the arguments
 are copied in ascending order and `this`, which no argument overlaps, first.
 
