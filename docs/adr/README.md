@@ -167,3 +167,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0155 — Goccia.build reports a GC-stress build](0155-goccia-build-reports-a-gc-stress-build.md)
 - [0156 — fetch honours the redirect mode, and "manual" answers with the redirect response](0156-fetch-honours-the-redirect-mode.md)
 - [0157 — Sandbox search is native and pinned by shared test vectors](0157-sandbox-search-is-native-and-pinned-by-shared-vectors.md)
+- [0159 — A frame whose function never reads its arguments as passed gets no argument window](0159-a-frame-whose-function-never-reads-its-arguments-as-passed-gets-no-argument-window.md)
