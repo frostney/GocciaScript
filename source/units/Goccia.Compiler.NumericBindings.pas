@@ -1251,10 +1251,12 @@ begin
     Publish(AProofs);
 end;
 
-// True when ANode, outside nested functions, declares a let with an
-// initializer: the only kind of binding whose proof the compiler asks for.
-// Bodies without one skip the scan.
-function DeclaresInitializedLet(const ANode: TGocciaASTNode): Boolean;
+// True when ANode, outside nested functions, declares a let, or a const of a
+// plain name, with an initializer: the bindings whose proof the compiler asks
+// for. Bodies without one skip the scan. A destructuring const does not count,
+// because the compiler never reads a proof for it, and the scan costs more on
+// deeply nested patterns (tests/language/nesting-limit/statements.js).
+function DeclaresInitializedLexical(const ANode: TGocciaASTNode): Boolean;
 var
   I, J: Integer;
   VarDecl: TGocciaVariableDeclaration;
@@ -1265,51 +1267,55 @@ begin
   if not Assigned(ANode) then
     Exit;
   if ANode is TGocciaExportVariableDeclaration then
-    Result := DeclaresInitializedLet(
+    Result := DeclaresInitializedLexical(
       TGocciaExportVariableDeclaration(ANode).Declaration)
   else if ANode is TGocciaVariableDeclaration then
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
-    if not VarDecl.IsVar and not VarDecl.IsConst then
+    // A const of a plain name asks for its proof too.
+    if not VarDecl.IsVar then
       for I := 0 to High(VarDecl.Variables) do
-        if VarDecl.Variables[I].HasInitializer then
+        if VarDecl.Variables[I].HasInitializer and
+           (not VarDecl.IsConst or not (VarDecl.Variables[I].IsPattern or
+             Assigned(VarDecl.Variables[I].Pattern))) then
           Exit(True);
   end
   else if ANode is TGocciaBlockStatement then
   begin
     for I := 0 to TGocciaBlockStatement(ANode).Nodes.Count - 1 do
-      if DeclaresInitializedLet(TGocciaBlockStatement(ANode).Nodes[I]) then
+      if DeclaresInitializedLexical(TGocciaBlockStatement(ANode).Nodes[I]) then
         Exit(True);
   end
   else if ANode is TGocciaIfStatement then
-    Result := DeclaresInitializedLet(TGocciaIfStatement(ANode).Consequent) or
-      DeclaresInitializedLet(TGocciaIfStatement(ANode).Alternate)
+    Result := DeclaresInitializedLexical(
+        TGocciaIfStatement(ANode).Consequent) or
+      DeclaresInitializedLexical(TGocciaIfStatement(ANode).Alternate)
   else if ANode is TGocciaForStatement then
-    Result := DeclaresInitializedLet(TGocciaForStatement(ANode).Init) or
-      DeclaresInitializedLet(TGocciaForStatement(ANode).Body)
+    Result := DeclaresInitializedLexical(TGocciaForStatement(ANode).Init) or
+      DeclaresInitializedLexical(TGocciaForStatement(ANode).Body)
   else if ANode is TGocciaForOfStatement then
-    Result := DeclaresInitializedLet(TGocciaForOfStatement(ANode).Body)
+    Result := DeclaresInitializedLexical(TGocciaForOfStatement(ANode).Body)
   else if ANode is TGocciaForInStatement then
-    Result := DeclaresInitializedLet(TGocciaForInStatement(ANode).Body)
+    Result := DeclaresInitializedLexical(TGocciaForInStatement(ANode).Body)
   else if ANode is TGocciaWhileStatement then
-    Result := DeclaresInitializedLet(TGocciaWhileStatement(ANode).Body)
+    Result := DeclaresInitializedLexical(TGocciaWhileStatement(ANode).Body)
   else if ANode is TGocciaDoWhileStatement then
-    Result := DeclaresInitializedLet(TGocciaDoWhileStatement(ANode).Body)
+    Result := DeclaresInitializedLexical(TGocciaDoWhileStatement(ANode).Body)
   else if ANode is TGocciaWithStatement then
-    Result := DeclaresInitializedLet(TGocciaWithStatement(ANode).Body)
+    Result := DeclaresInitializedLexical(TGocciaWithStatement(ANode).Body)
   else if ANode is TGocciaTryStatement then
   begin
     TryStmt := TGocciaTryStatement(ANode);
-    Result := DeclaresInitializedLet(TryStmt.Block) or
-      DeclaresInitializedLet(TryStmt.CatchBlock) or
-      DeclaresInitializedLet(TryStmt.FinallyBlock);
+    Result := DeclaresInitializedLexical(TryStmt.Block) or
+      DeclaresInitializedLexical(TryStmt.CatchBlock) or
+      DeclaresInitializedLexical(TryStmt.FinallyBlock);
   end
   else if ANode is TGocciaSwitchStatement then
   begin
     Switch := TGocciaSwitchStatement(ANode);
     for I := 0 to Switch.Cases.Count - 1 do
       for J := 0 to Switch.Cases[I].Consequent.Count - 1 do
-        if DeclaresInitializedLet(Switch.Cases[I].Consequent[J]) then
+        if DeclaresInitializedLexical(Switch.Cases[I].Consequent[J]) then
           Exit(True);
   end;
 end;
@@ -1327,7 +1333,7 @@ begin
   if not (ABody is TGocciaBlockStatement) then
     Exit;
   Block := TGocciaBlockStatement(ABody);
-  if not DeclaresInitializedLet(Block) then
+  if not DeclaresInitializedLexical(Block) then
     Exit;
   SetLength(Nodes, Block.Nodes.Count);
   for I := 0 to Block.Nodes.Count - 1 do
@@ -1355,7 +1361,7 @@ begin
   for I := 0 to AProgram.Body.Count - 1 do
   begin
     Nodes[I] := AProgram.Body[I];
-    Found := Found or DeclaresInitializedLet(Nodes[I]);
+    Found := Found or DeclaresInitializedLexical(Nodes[I]);
   end;
   if not Found then
     Exit;

@@ -1181,9 +1181,14 @@ begin
             Reg := FCurrentScope.AllocateRegister;
             DoCompileExpression(TGocciaExpression(Node), Reg);
             FCurrentScope.FreeRegister;
+            StatementAbrupt := False;
           end;
         end;
       end;
+      // Control can reach the end of the body unless its last statement is
+      // abrupt, and then the function returns undefined.
+      if not StatementAbrupt then
+        FCurrentScope.NoteReturnType(sltUntyped);
       Reg := FCurrentScope.AllocateRegister;
       EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
       EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
@@ -1193,11 +1198,15 @@ begin
     begin
       Reg := FCurrentScope.AllocateRegister;
       DoCompileExpression(TGocciaExpression(ABody), Reg);
+      // A concise body returns its expression.
+      FCurrentScope.NoteReturnType(ExpressionType(FCurrentScope,
+        TGocciaExpression(ABody)));
       EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
       FCurrentScope.FreeRegister;
     end
     else
     begin
+      FCurrentScope.NoteReturnType(sltUntyped);
       Reg := FCurrentScope.AllocateRegister;
       EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
       EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));

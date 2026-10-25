@@ -513,6 +513,53 @@ begin
   end;
 end;
 
+// True when a `with` object of this function or of an enclosing one could
+// supply a name before its static binding.
+function WithMayShadowName(const AScope: TGocciaCompilerScope): Boolean;
+var
+  Scope: TGocciaCompilerScope;
+begin
+  Scope := AScope;
+  while Assigned(Scope) do
+  begin
+    if Scope.WithObjectCount > 0 then
+      Exit(True);
+    Scope := Scope.Parent;
+  end;
+  Result := False;
+end;
+
+// The type a call of AName returns, when AName is a const binding (of this
+// function or captured) of a synchronous arrow or function whose every return
+// produced that type (TGocciaCompilerScope.NoteReturnType). A const binding
+// always holds the function it was initialized with, and a call before that
+// throws.
+function CalleeReturnType(const AScope: TGocciaCompilerScope;
+  const AName: string): TGocciaLocalType;
+var
+  LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+  Upvalue: TGocciaCompilerUpvalue;
+begin
+  Result := sltUntyped;
+  if WithMayShadowName(AScope) or AScope.DirectEvalMayShadow(AName) then
+    Exit;
+  LocalIdx := AScope.ResolveLocal(AName);
+  if LocalIdx >= 0 then
+  begin
+    Local := AScope.GetLocal(LocalIdx);
+    if Local.IsConst and not Local.IsGlobalBacked then
+      Result := Local.ReturnTypeHint;
+    Exit;
+  end;
+  LocalIdx := AScope.ResolveUpvalue(AName);
+  if LocalIdx < 0 then
+    Exit;
+  Upvalue := AScope.GetUpvalue(LocalIdx);
+  if Upvalue.IsConst and not Upvalue.IsGlobalBacked then
+    Result := Upvalue.ReturnTypeHint;
+end;
+
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 var
@@ -523,6 +570,8 @@ var
   LeftType, RightType: TGocciaLocalType;
   ObjAnnotation: string;
   Member: TGocciaMemberExpression;
+  Call: TGocciaCallExpression;
+  Unary: TGocciaUnaryExpression;
 begin
   Result := sltUntyped;
   if AExpr is TGocciaLiteralExpression then
@@ -540,7 +589,11 @@ begin
     if LocalIdx >= 0 then
     begin
       Local := AScope.GetLocal(LocalIdx);
-      if Local.IsConst or Local.IsStrictlyTyped or not Local.IsCaptured then
+      // A captured binding that holds only Numbers
+      // (Goccia.Compiler.NumericBindings: no closure assigns it) keeps its
+      // hint as well.
+      if Local.IsConst or Local.IsStrictlyTyped or not Local.IsCaptured or
+         (Local.HoldsOnlyNumbers and IsKnownNumeric(Local.TypeHint)) then
         Result := Local.TypeHint;
     end
     else
@@ -549,7 +602,9 @@ begin
       if (LocalIdx >= 0) and not AScope.DirectEvalMayShadow(
            TGocciaIdentifierExpression(AExpr).Name) then
         if AScope.GetUpvalue(LocalIdx).IsConst or
-           AScope.GetUpvalue(LocalIdx).IsStrictlyTyped then
+           AScope.GetUpvalue(LocalIdx).IsStrictlyTyped or
+           (AScope.GetUpvalue(LocalIdx).HoldsOnlyNumbers and
+            IsKnownNumeric(AScope.GetUpvalue(LocalIdx).TypeHint)) then
           Result := AScope.GetUpvalue(LocalIdx).TypeHint;
     end;
   end
@@ -565,8 +620,64 @@ begin
       if (LeftType = sltInteger) and (RightType = sltInteger) then
         Result := sltInteger
       else if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
-        Result := sltFloat;
+        Result := sltFloat
+      // ES2026 §13.15.3
+      // ApplyStringOrNumericBinaryOperator: apart from +, both operands go
+      // through ToNumeric, and a Number with a BigInt throws a TypeError, so
+      // one Number operand makes the result a Number.
+      else if (Bin.Operator <> gttPlus) and
+              (IsKnownNumeric(LeftType) or IsKnownNumeric(RightType)) then
+        Result := sltFloat
+      // + with a String primitive on either side: ToPrimitive leaves it a
+      // String (step 1.c), so the result is the concatenation (1.d).
+      else if (Bin.Operator = gttPlus) and
+              ((LeftType = sltString) or (RightType = sltString)) then
+        Result := sltString;
+    end
+    // The bitwise operators yield an int32 or a uint32 Number unless both
+    // operands are BigInts (§13.15.3 with Number::bitwiseAND and friends,
+    // §6.1.6.1.9-11); >>> throws for BigInts.
+    else if Bin.Operator = gttUnsignedRightShift then
+      Result := sltInteger
+    else if Bin.Operator in [gttBitwiseAnd, gttBitwiseOr, gttBitwiseXor,
+      gttLeftShift, gttRightShift] then
+    begin
+      if IsKnownNumeric(ExpressionType(AScope, Bin.Left)) or
+         IsKnownNumeric(ExpressionType(AScope, Bin.Right)) then
+        Result := sltInteger;
     end;
+  end
+  // Unary operators (ES2026 §13.5).
+  else if AExpr is TGocciaUnaryExpression then
+  begin
+    Unary := TGocciaUnaryExpression(AExpr);
+    case Unary.Operator of
+      // §13.5.4: ToNumber, which throws for a BigInt.
+      gttPlus:
+        Result := sltFloat;
+      // §13.5.5: ToNumeric keeps a Number a Number (-0 included).
+      gttMinus:
+        if IsKnownNumeric(ExpressionType(AScope, Unary.Operand)) then
+          Result := sltFloat;
+      // §13.5.6: Number::bitwiseNOT of a Number is an int32.
+      gttBitwiseNot:
+        if IsKnownNumeric(ExpressionType(AScope, Unary.Operand)) then
+          Result := sltInteger;
+      // §13.5.7 and §13.5.3: a Boolean and a String.
+      gttNot:
+        Result := sltBoolean;
+      gttTypeof:
+        Result := sltString;
+    end;
+  end
+  // A call of a const-bound local function whose returns all have one type
+  // (CalleeReturnType).
+  else if AExpr is TGocciaCallExpression then
+  begin
+    Call := TGocciaCallExpression(AExpr);
+    if not Call.Optional and (Call.Callee is TGocciaIdentifierExpression) then
+      Result := CalleeReturnType(AScope,
+        TGocciaIdentifierExpression(Call.Callee).Name);
   end
   else if AExpr is TGocciaSequenceExpression then
   begin
@@ -575,10 +686,10 @@ begin
       Result := ExpressionType(AScope,
         Sequence.Expressions[Sequence.Expressions.Count - 1]);
   end
-  // A call expression stays untyped. ES2026 §13.3.6.2 EvaluateCall yields
-  // whatever the callee returns, and a return-type annotation is not checked
-  // in either mode (#1276), so it cannot justify typed opcodes that skip
-  // §13.15.3 ApplyStringOrNumericBinaryOperator's ToPrimitive and String
+  // Any other call expression stays untyped. ES2026 §13.3.6.2 EvaluateCall
+  // yields whatever the callee returns, and a return-type annotation is not
+  // checked in either mode (#1276), so it cannot justify typed opcodes that
+  // skip §13.15.3 ApplyStringOrNumericBinaryOperator's ToPrimitive and String
   // checks, nor a skipped strict-types check on the receiving binding.
   else if AExpr is TGocciaConditionalExpression then
   begin
@@ -938,6 +1049,20 @@ begin
   Result := InitializerAvoidsOwnBinding(AInfo.Initializer, AInfo.Name);
 end;
 
+// The type an initializer is known to produce, for the strict-types check of
+// its binding. A const without an annotation takes its hint from
+// InferredExpressionType, which proves that type, so checking it again could
+// never fail.
+function StrictInitializerType(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaVariableDeclaration;
+  const AInfo: TGocciaVariableInfo): TGocciaLocalType;
+begin
+  if AStmt.IsConst and (AInfo.TypeAnnotation = '') then
+    Result := InferredExpressionType(ACtx.Scope, AInfo.Initializer)
+  else
+    Result := InferLocalType(AInfo.Initializer);
+end;
+
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
@@ -1083,12 +1208,26 @@ begin
     HoldsOnlyNumbers := False;
     if not IsStrict and not AStmt.IsConst then
     begin
+      // A let whose initializer the expression rules above do not type (or,
+      // under strict types, that InferLocalType does not name) is still a
+      // Number binding when the body scan proves every value it can hold a
+      // Number. It is not enforced: nothing else can be stored in it.
+      if (TypeHint = sltUntyped) and HasRealInitializer and
+         (Info.TypeAnnotation = '') and not AStmt.IsVar then
+        TypeHint := sltFloat;
       HoldsOnlyNumbers := IsKnownNumeric(TypeHint) and
         not IsTopLevelGlobalBacked and
         DeclarationHoldsOnlyNumbers(ACtx, AStmt, I);
       if not HoldsOnlyNumbers then
         TypeHint := sltUntyped;
-    end;
+    end
+    // A const whose initializer the body scan proves a Number
+    // (Goccia.Compiler.NumericBindings: one Number operand of -, *, /, %, **,
+    // unary +, Number bindings) holds that Number once initialized.
+    else if AStmt.IsConst and (TypeHint = sltUntyped) and HasRealInitializer and
+      (Info.TypeAnnotation = '') and not IsTopLevelGlobalBacked and
+      DeclarationHoldsOnlyNumbers(ACtx, AStmt, I) then
+      TypeHint := sltFloat;
 
     // The type belongs to the declared binding. For a var that is the
     // depth-0 var local; ResolveLocal could find a same-named catch parameter
@@ -1178,7 +1317,7 @@ begin
         CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
 
         if IsStrict and HasRealInitializer then
-          if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
+          if not TypesAreCompatible(StrictInitializerType(ACtx, AStmt, Info), TypeHint) then
             EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, InitSlot,
               UInt8(Ord(TypeHint)), 0));
 
@@ -1222,8 +1361,17 @@ begin
       else
         CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, Slot);
 
+      // A const bound to a synchronous arrow or function records what a call
+      // of it returns (CalleeReturnType), whichever register the initializer
+      // was compiled into.
+      if AStmt.IsConst and (DeclaredIdx >= 0) and
+         ((Info.Initializer is TGocciaArrowFunctionExpression) or
+          (Info.Initializer is TGocciaFunctionExpression)) then
+        ACtx.Scope.SetLocalReturnTypeHint(DeclaredIdx,
+          ACtx.Scope.LastChildReturnType);
+
       if IsStrict and HasRealInitializer then
-        if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
+        if not TypesAreCompatible(StrictInitializerType(ACtx, AStmt, Info), TypeHint) then
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
             UInt8(Ord(TypeHint)), 0));
     end
@@ -2577,6 +2725,10 @@ var
   Reg: UInt16;
   ReturnNeedsAwait: Boolean;
 begin
+  // The function's return type (NoteReturnType), judged once the value is
+  // compiled, as CompileBinary judges its operands.
+  if not AStmt.HasExpression then
+    ACtx.Scope.NoteReturnType(sltUntyped);
   if AStmt.HasExpression then
   begin
     Reg := ACtx.Scope.AllocateRegister;
@@ -2589,6 +2741,7 @@ begin
         AStmt.Value, Reg)
     else
       ACtx.CompileExpression(AStmt.Value, Reg);
+    ACtx.Scope.NoteReturnType(ExpressionType(ACtx.Scope, AStmt.Value));
     EmitPendingCleanup(ACtx);
     ReturnNeedsAwait := Assigned(ACtx.Template) and ACtx.Template.IsAsync and
       ACtx.Template.IsGenerator;

@@ -197,6 +197,12 @@ type
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
     procedure TestReturnAnnotationDoesNotTypeCallResult;
+    procedure TestOperatorResultsUseTypedArithmetic;
+    procedure TestIntegerTypeIsNotClaimedForNonIntegerResults;
+    procedure TestConstTypeComesFromTheNumberProof;
+    procedure TestCapturedLetHoldingOnlyNumbersKeepsItsType;
+    procedure TestConstFunctionReturnTypeTypesCalls;
+    procedure TestCallResultStaysUntypedWhenReturnTypeIsNotProven;
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
@@ -388,6 +394,18 @@ begin
     TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
   Test('Return annotation does not type call result',
     TestReturnAnnotationDoesNotTypeCallResult);
+  Test('Operator results use typed arithmetic',
+    TestOperatorResultsUseTypedArithmetic);
+  Test('Integer type is not claimed for non-integer results',
+    TestIntegerTypeIsNotClaimedForNonIntegerResults);
+  Test('Const type comes from the number proof',
+    TestConstTypeComesFromTheNumberProof);
+  Test('Captured let holding only Numbers keeps its type',
+    TestCapturedLetHoldingOnlyNumbersKeepsItsType);
+  Test('Const function return type types calls',
+    TestConstFunctionReturnTypeTypesCalls);
+  Test('Call result stays untyped when the return type is not proven',
+    TestCallResultStaysUntypedWhenReturnTypeIsNotProven);
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
@@ -3856,7 +3874,7 @@ begin
   // A return-type annotation is not checked, so neither a direct call nor a
   // call through a captured binding gets typed arithmetic from it.
   Module := CompileSource(
-    'const f = (): number => 1; f() + 1; f() + f();' +
+    'const f = (x): number => x; f() + 1; f() + f();' +
     'const g = () => f() - 1; g();',
     False, False, False, False, False, False);
   try
@@ -3871,7 +3889,7 @@ begin
   // Under strict types a binding initialized from the call is not enforced,
   // and an enforced binding checks a value computed from the call.
   Module := CompileSource(
-    'const f = (): number => 1; const r = f(); r + 1;' +
+    'const f = (x): number => x; const r = f(); r + 1;' +
     'let t: number = 0; t = t + f();',
     True, False, False, False, False, False);
   try
@@ -3882,6 +3900,275 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+procedure TTestCompiler.TestOperatorResultsUseTypedArithmetic;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  // One Number operand makes the result of -, *, /, % and ** a Number
+  // (ES2026 §13.15.3), so the sum of two such results is typed.
+  Module := CompileSource(
+    'const f = (a, b) => { const x = a * 2; const y = b - 1; return x + y; };',
+    False, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_FLOAT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // Unary + is a Number, unary - and ~ of a Number are Numbers, ! is a
+  // Boolean and typeof a String.
+  Module := CompileSource(
+    'const f = (a) => { const p = +a; const n = -p; return p + n; };',
+    False, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_FLOAT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  // A bitwise result is a Number unless both operands are BigInts, so it is
+  // typed only when one operand is a Number.
+  Module := CompileSource(
+    'const f = (a) => { const p = a | 0; const q = a | a; return [p + p, q + q]; };',
+    False, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_INT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_ADD_INT)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(1);
+    end;
+  finally
+    Module.Free;
+  end;
+
+  // - and ~ of an unknown value can be a BigInt, and + with an unknown side
+  // can concatenate.
+  Module := CompileSource(
+    'const f = (a, b) => { const n = -a; const m = ~b; const s = a + b;' +
+    ' return [n + n, m + m, s + s]; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_INT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(4);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestIntegerTypeIsNotClaimedForNonIntegerResults;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I, IntegerLocals: Integer;
+begin
+  // The integer type means a finite Number with no fraction. A bitwise
+  // result is one, and so are the sum and the difference of two. Their
+  // quotient, product, remainder and power are not always: 5 / 2, a product
+  // past 2^1024, 5 % 0 and 2 ** -1.
+  Module := CompileSource(
+    'const f = (x, y) => { const a = x | 0; const b = y | 0;' +
+    ' const s = a + b; const d = a - b; const q = a / b; const m = a * b;' +
+    ' const r = a % b; const e = a ** b; return [s, d, q, m, r, e]; };',
+    False, False, False, False, False, False);
+  try
+    Func := Module.TopLevel.GetFunction(0);
+    IntegerLocals := 0;
+    for I := 0 to Func.LocalTypeCount - 1 do
+      if Func.GetLocalType(I) = sltInteger then
+        Inc(IntegerLocals);
+    Expect<Integer>(IntegerLocals).ToBe(4);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstTypeComesFromTheNumberProof;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  // The proof covers a chain of consts whose initializers each have a
+  // Number operand.
+  Module := CompileSource(
+    'const f = (a) => { const x = a - 1; const y = x * 3; return y + x; };',
+    False, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_FLOAT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  // An initializer that may be any value gives no type, and neither does a
+  // destructuring pattern.
+  Module := CompileSource(
+    'const f = (a, o) => { const x = a; const { y } = o; const z = a + 1;' +
+    ' return [x + x, y + y, z + z]; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(4);
+  finally
+    Module.Free;
+  end;
+
+  // Under strict types the same const is typed without a check on its
+  // initializer, which the proof covers.
+  Module := CompileSource(
+    'const f = (a) => { const x = a - 1; return x + x; };',
+    True, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_FLOAT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCapturedLetHoldingOnlyNumbersKeepsItsType;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // No closure assigns n and every value it holds is a Number, so the
+  // closure reads it typed.
+  Module := CompileSource(
+    'const f = (k) => { let n = k * 2; n = n + 1; return () => n + n; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A closure that assigns it can give it any value.
+  Module := CompileSource(
+    'const f = (k) => { let n = k * 2; const set = () => { n = "z"; };' +
+    ' return () => n + n; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstFunctionReturnTypeTypesCalls;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // Every return of sq is a Number, so a call of it is a Number.
+  Module := CompileSource(
+    'const main = () => {' +
+    ' const sq = (x) => x * x;' +
+    ' const g = (y) => { const r = sq(y); return r + r; }; return g; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // The same holds for a block body, a call made from the declaring
+  // function itself, and a function that returns a typed call.
+  Module := CompileSource(
+    'const f = (a) => {' +
+    ' const n = (x) => { if (x) { return x * 2; } return 0; };' +
+    ' const m = (x) => n(x) - 1;' +
+    ' const r = n(a); const s = m(a); return r + s; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCallResultStaysUntypedWhenReturnTypeIsNotProven;
+
+  // The generic additions in a function that adds two results of f, with f
+  // declared as given and ABody around the call. The compiler types the
+  // result only when it has proven what f returns.
+  function GenericAdditions(const ADeclaration: string;
+    const ANonStrictMode: Boolean = False;
+    const ACaller: string =
+      'const g = () => { const r = f(); return r + r; };'): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+  begin
+    Module := CompileSource(ADeclaration + ACaller,
+      False, False, False, False, False, False, False, ANonStrictMode);
+    try
+      Result := CountOpRecursive(Module.TopLevel, OP_ADD);
+      Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Two return types, an unknown one, and undefined.
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => x ? 1 : "s";')).ToBe(1);
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => { if (x) { return 1; } return "s"; };')).ToBe(1);
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => { return x; };')).ToBe(1);
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => { if (x) { return 1; } };')).ToBe(1);
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => { return; };')).ToBe(1);
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => { switch (x) { case 1: return 1; case 2: break; } };'
+    )).ToBe(1);
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => { try { if (x) { throw x; } return 1; } catch (e) { } };'
+    )).ToBe(1);
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => { try { return 1; } finally { return "s"; } };')).ToBe(1);
+  // A function that returns a call of itself.
+  Expect<Integer>(GenericAdditions(
+    'const f = (x) => x <= 1 ? 1 : x * f(x - 1);')).ToBe(1);
+
+  // An async function returns a promise, not what its return statements
+  // produce.
+  Expect<Integer>(GenericAdditions('const f = async () => 1;')).ToBe(1);
+
+  // A let binding can be reassigned, and a callee that is a parameter or a
+  // shadowing binding is not the const.
+  Expect<Integer>(GenericAdditions('let f = () => 1;')).ToBe(1);
+  Expect<Integer>(GenericAdditions('const f = () => 1;', False,
+    'const g = (f) => { const r = f(); return r + r; };')).ToBe(1);
+  Expect<Integer>(GenericAdditions('const f = () => 1;', False,
+    'const g = () => { const f = () => "s"; const r = f(); return r + r; };'
+    )).ToBe(1);
+
+  // An optional call is not a plain call.
+  Expect<Integer>(GenericAdditions('const f = () => 1;', False,
+    'const g = () => { const r = f?.(); return r + r; };')).ToBe(1);
+
+  // A with object can supply the callee, and a direct eval can declare a
+  // var of the same name.
+  Expect<Integer>(GenericAdditions('const f = () => 1;', True,
+    'const g = (o) => { with (o) { const r = f(); return r + r; } };')).ToBe(1);
+  Expect<Integer>(GenericAdditions('const f = () => 1;', True,
+    'const g = () => { eval("var f = () => 1"); const r = f(); return r + r; };'
+    )).ToBe(1);
 end;
 
 procedure TTestCompiler.TestForOfSkipsHandlerWithoutAbruptClose;
