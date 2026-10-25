@@ -273,9 +273,21 @@ begin
 end;
 
 function GetArrayIteratorLen(const ASource: TGocciaValue): Integer;
+var
+  StoredLength: Int64;
 begin
+  // ES2026 §23.1.5.1 step 2.b.iv: the array's length, which can be past its
+  // stored elements (a length set far ahead, or an element stored far past
+  // the others). The cursor is an Integer, so a length past High(Integer)
+  // ends the iteration there.
   if ASource is TGocciaArrayValue then
-    Result := TGocciaArrayValue(ASource).Elements.Count
+  begin
+    StoredLength := TGocciaArrayValue(ASource).StoredLength;
+    if StoredLength > High(Integer) then
+      Result := High(Integer)
+    else
+      Result := Integer(StoredLength);
+  end
   else if ASource is TGocciaTypedArrayValue then
   begin
     if IsTypedArrayOutOfBounds(TGocciaTypedArrayValue(ASource)) then
