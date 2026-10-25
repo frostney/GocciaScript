@@ -612,7 +612,7 @@ When coverage is enabled, `PreserveCoverageShape` keeps constant branch structur
 
 ### Compiler Type Inference
 
-The compiler gives expressions and bindings a type (`TGocciaLocalType`: an integer or a float Number, a Boolean, a String or a reference) from the code alone. It chooses typed instructions from those types (`OP_ADD_FLOAT`, `OP_LT_INT` and the rest), which do not check their operands, so a type is claimed only where the specification makes it certain. The rules live in `ExpressionType` (`Goccia.Compiler.Statements.pas`) and are tested by `tests/language/type-inference/`, in the default and the `--strict-types` profiles, and by `Goccia.Compiler.Test.pas`.
+The compiler gives expressions and bindings a type (`TGocciaLocalType`: an integer or a float Number, a Boolean, a String or a reference) from the code alone. It chooses typed instructions from those types (`OP_ADD_FLOAT`, `OP_LT_INT` and the rest), which do not check their operands, so a type is claimed only where the specification makes it certain. The rules live in `ExpressionType` (`Goccia.Compiler.Statements.pas`) and are tested in `Goccia.Compiler.Test.pas`, which asserts the types the compiler records for locals and the typed or generic opcodes it emits, in the default and the `--strict-types` profiles. The inference changes no behavior a script can see, so JavaScript tests cannot observe it; the existing suite checks the semantics in both profiles.
 
 | Expression | Inferred type | Why |
 |---|---|---|

@@ -61,5 +61,6 @@ is writable; a return-type annotation, which is not enforced (#1276); a `var`.
   to `Infinity`. The compiler used to give two integers an integer result for
   every arithmetic operator; that rule was dormant while nothing produced an
   integer, and typing bitwise results activated it, so it is removed.
-- `tests/language/type-inference/` runs the cases that would expose a wrong
-  type in the default and the `--strict-types` profiles.
+- `Goccia.Compiler.Test.pas` pins each rule and its negative cases in the
+  default and the `--strict-types` profiles, through the local types and
+  opcodes the compiler emits; no script can observe the inference.
