@@ -54,6 +54,8 @@ is writable; a return-type annotation, which is not enforced (#1276); a `var`.
   opcodes share one fast path, so no speed-up was measured on the benchmarks.
   The value is in the types the bytecode records, for ahead-of-time consumers.
 - A local the compiler could not type before can now carry a type in its
-  function template. Types that were absent are present, none changes.
+  function template; no type that was already recorded changes.
+- The integer type means a finite Number with no fraction. Only bitwise
+  results start it, and two integers keep it under `+` and `-`.
 - `tests/language/type-inference/` runs the cases that would expose a wrong
   type in the default and the `--strict-types` profiles.

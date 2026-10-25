@@ -617,7 +617,12 @@ begin
     begin
       LeftType := ExpressionType(AScope, Bin.Left);
       RightType := ExpressionType(AScope, Bin.Right);
-      if (LeftType = sltInteger) and (RightType = sltInteger) then
+      // The integer type is a finite Number with no fraction. Two integers
+      // keep it under + and -; a quotient, a product past 2^1024, a
+      // remainder by zero (NaN) and a power with a negative exponent can
+      // leave it.
+      if (LeftType = sltInteger) and (RightType = sltInteger) and
+         (Bin.Operator in [gttPlus, gttMinus]) then
         Result := sltInteger
       else if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
         Result := sltFloat

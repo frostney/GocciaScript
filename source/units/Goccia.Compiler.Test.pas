@@ -4073,7 +4073,7 @@ begin
   // Every return of sq is a Number, so a call of it is a Number.
   Module := CompileSource(
     'const main = () => {' +
-    ' const sq = (x) => x * x;' +
+    ' const sq = (x) => x * 2;' +
     ' const g = (y) => { const r = sq(y); return r + r; }; return g; };',
     False, False, False, False, False, False);
   try
