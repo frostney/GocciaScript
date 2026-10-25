@@ -423,10 +423,10 @@ type
     // stack. A `const` record parameter may be passed by reference on some
     // targets (e.g. win64), which would leave the parameter dangling into
     // the freed old block; a value copy taken at the call is immune.
-    // The comparison of an OP_JUMP_IF_NOT_*_IMM instruction for a register
-    // that does not hold a Number scalar. It can run guest code.
-    function CompareRegisterWithImmediate(const ALeftIndex: Integer;
-      const AImmediate: Int16; const AOp: TGocciaOpCode): Boolean;
+    // Whether an OP_JUMP_IF_*_IMM instruction takes its jump. It can run
+    // guest code (a relational ToPrimitive).
+    function ImmediateComparisonJumps(const AOp: TGocciaOpCode;
+      const ALeftIndex: Integer; const AImmediate: Int16): Boolean;
     procedure RecordFusedBranchHit(const ATemplate: TGocciaFunctionTemplate;
       const APC: Integer; const ATaken: Boolean);
     procedure ExecGetComputedProperty(const ADest: Integer;
@@ -9248,68 +9248,6 @@ begin
     Result := AKey.Name;
 end;
 
-// ES2026 §13.10.1 Relational Operators: Evaluation, with a Number immediate
-// as one operand. A boxed Number (NaN, an infinity, -0) compares directly;
-// any other value takes IsLessThan through the same helpers as OP_LT and the
-// other relational opcodes, so ToPrimitive, BigInt and String operands keep
-// their semantics.
-function TGocciaVM.CompareRegisterWithImmediate(const ALeftIndex: Integer;
-  const AImmediate: Int16; const AOp: TGocciaOpCode): Boolean;
-var
-  LeftValue, RightValue: TGocciaValue;
-  LeftNumber: Double;
-begin
-  if VMBoxedNumberRegister(FRegisters[ALeftIndex]) then
-  begin
-    LeftNumber := TGocciaNumberLiteralValue(
-      FRegisters[ALeftIndex].ObjectValue).Value;
-    case AOp of
-      OP_JUMP_IF_NOT_LT_IMM: Result := LeftNumber < AImmediate;
-      OP_JUMP_IF_NOT_GT_IMM: Result := LeftNumber > AImmediate;
-      OP_JUMP_IF_NOT_LTE_IMM: Result := LeftNumber <= AImmediate;
-    else
-      Result := LeftNumber >= AImmediate;
-    end;
-    Exit;
-  end;
-
-  LeftValue := GetRegisterFast(ALeftIndex);
-  RightValue := TGocciaNumberLiteralValue.Create(AImmediate);
-  case AOp of
-    OP_JUMP_IF_NOT_LT_IMM:
-      Result := VMRootedBinaryPredicate(@Goccia.Arithmetic.LessThan,
-        LeftValue, RightValue);
-    OP_JUMP_IF_NOT_GT_IMM:
-      Result := VMRootedBinaryPredicate(@Goccia.Arithmetic.GreaterThan,
-        LeftValue, RightValue);
-    OP_JUMP_IF_NOT_LTE_IMM:
-      Result := VMRootedBinaryPredicate(@Goccia.Arithmetic.LessThanOrEqual,
-        LeftValue, RightValue);
-  else
-    Result := VMRootedBinaryPredicate(@Goccia.Arithmetic.GreaterThanOrEqual,
-      LeftValue, RightValue);
-  end;
-end;
-
-// Coverage for a fused compare-and-jump: branch 0 is the jump, branch 1 the
-// fall-through, as for OP_JUMP_IF_FALSE.
-procedure TGocciaVM.RecordFusedBranchHit(
-  const ATemplate: TGocciaFunctionTemplate; const APC: Integer;
-  const ATaken: Boolean);
-begin
-  if (TGocciaCoverageTracker.Instance = nil) or
-     not Assigned(ATemplate.DebugInfo) then
-    Exit;
-  if ATaken then
-    TGocciaCoverageTracker.Instance.RecordBranchHit(
-      ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
-      ATemplate.DebugInfo.GetColumnForPC(APC), 0)
-  else
-    TGocciaCoverageTracker.Instance.RecordBranchHit(
-      ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
-      ATemplate.DebugInfo.GetColumnForPC(APC), 1);
-end;
-
 procedure TGocciaVM.ExecGetComputedProperty(const ADest: Integer;
   AObjReg, AKeyReg: TGocciaRegister;
   const AOptions: TGocciaComputedAccessOptions);
@@ -18037,6 +17975,97 @@ begin
       end;
     end;
   Literal.FFastLiteralMode := Fast and Literal.Extensible;
+end;
+
+// ES2026 §13.10.1 Relational Operators: Evaluation and §7.2.14
+// IsStrictlyEqual, with a Number immediate as one operand. A relational
+// opcode jumps when its comparison is false, OP_JUMP_IF_NOT_STRICT_EQ_IMM
+// when the values differ and OP_JUMP_IF_STRICT_EQ_IMM when they are equal.
+// A Number, scalar or boxed (NaN, an infinity, -0), compares directly; any
+// other value takes IsLessThan through the helpers OP_LT and the other
+// relational opcodes use, so ToPrimitive, BigInt and String operands keep
+// their semantics, and is never strictly equal to a Number.
+function TGocciaVM.ImmediateComparisonJumps(const AOp: TGocciaOpCode;
+  const ALeftIndex: Integer; const AImmediate: Int16): Boolean;
+var
+  LeftValue, RightValue: TGocciaValue;
+  LeftNumber: Double;
+  IsNumber, Holds: Boolean;
+begin
+  IsNumber := True;
+  case FRegisters[ALeftIndex].Kind of
+    grkInt:
+      LeftNumber := FRegisters[ALeftIndex].IntValue;
+    grkFloat:
+      LeftNumber := FRegisters[ALeftIndex].FloatValue;
+  else
+    IsNumber := VMBoxedNumberRegister(FRegisters[ALeftIndex]);
+    if IsNumber then
+      LeftNumber := TGocciaNumberLiteralValue(
+        FRegisters[ALeftIndex].ObjectValue).Value
+    else
+      LeftNumber := 0;
+  end;
+
+  if IsNumber then
+  begin
+    // Each comparison is stored before it is negated: FPC rewrites
+    // `not (x < k)` as `x >= k`, which is wrong when x is NaN.
+    case AOp of
+      OP_JUMP_IF_NOT_LT_IMM: Holds := LeftNumber < AImmediate;
+      OP_JUMP_IF_NOT_GT_IMM: Holds := LeftNumber > AImmediate;
+      OP_JUMP_IF_NOT_LTE_IMM: Holds := LeftNumber <= AImmediate;
+      OP_JUMP_IF_NOT_GTE_IMM: Holds := LeftNumber >= AImmediate;
+    else
+      Holds := LeftNumber = AImmediate;
+    end;
+    Result := Holds = (AOp = OP_JUMP_IF_STRICT_EQ_IMM);
+    Exit;
+  end;
+
+  case AOp of
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM:
+      Exit(True);
+    OP_JUMP_IF_STRICT_EQ_IMM:
+      Exit(False);
+  end;
+
+  LeftValue := GetRegisterFast(ALeftIndex);
+  RightValue := TGocciaNumberLiteralValue.Create(AImmediate);
+  case AOp of
+    OP_JUMP_IF_NOT_LT_IMM:
+      Holds := VMRootedBinaryPredicate(@Goccia.Arithmetic.LessThan,
+        LeftValue, RightValue);
+    OP_JUMP_IF_NOT_GT_IMM:
+      Holds := VMRootedBinaryPredicate(@Goccia.Arithmetic.GreaterThan,
+        LeftValue, RightValue);
+    OP_JUMP_IF_NOT_LTE_IMM:
+      Holds := VMRootedBinaryPredicate(
+        @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue);
+  else
+    Holds := VMRootedBinaryPredicate(
+      @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue);
+  end;
+  Result := not Holds;
+end;
+
+// Coverage for a fused compare-and-jump: branch 0 is the jump, branch 1 the
+// fall-through, as for OP_JUMP_IF_FALSE.
+procedure TGocciaVM.RecordFusedBranchHit(
+  const ATemplate: TGocciaFunctionTemplate; const APC: Integer;
+  const ATaken: Boolean);
+begin
+  if (TGocciaCoverageTracker.Instance = nil) or
+     not Assigned(ATemplate.DebugInfo) then
+    Exit;
+  if ATaken then
+    TGocciaCoverageTracker.Instance.RecordBranchHit(
+      ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
+      ATemplate.DebugInfo.GetColumnForPC(APC), 0)
+  else
+    TGocciaCoverageTracker.Instance.RecordBranchHit(
+      ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
+      ATemplate.DebugInfo.GetColumnForPC(APC), 1);
 end;
 
 initialization
