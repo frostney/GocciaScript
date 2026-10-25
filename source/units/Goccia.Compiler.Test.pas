@@ -2271,23 +2271,26 @@ var
   Module: TGocciaBytecodeModule;
   Func: TGocciaFunctionTemplate;
 begin
-  // x is a Number no closure can rebind: += 1 and -= 300 add immediates.
+  // x holds only Numbers and no closure can rebind it: += 1 and -= 300 add
+  // immediates.
   Module := CompileSource(
-    'const f = (p) => { let x = +p; x += 1; x -= 300; return x; }; f(1);');
+    'const f = (p) => { let x = 0; if (p) { x = 5; } x += 1; x -= 300; return x; }; f(1);');
   try
     Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_NUM_IMM);
     Expect<Boolean>(Assigned(Func)).ToBe(True);
     if Assigned(Func) then
     begin
+      Expect<Integer>(CountOp(Func, OP_ADD_NUM_IMM)).ToBe(1);
       Expect<Integer>(CountOp(Func, OP_SUB_NUM_IMM)).ToBe(1);
-      Expect<Integer>(CountOp(Func, OP_LOAD_INT)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_ADD) + CountOp(Func, OP_SUB) +
+        CountOp(Func, OP_ADD_FLOAT) + CountOp(Func, OP_SUB_FLOAT)).ToBe(0);
     end;
   finally
     Module.Free;
   end;
   // A closure can store a String in x, so += keeps the generic operator.
   Module := CompileSource(
-    'const f = (p) => { let x = +p; const g = () => { x = "s"; }; g(); x += 1; return x; }; f(1);');
+    'const f = (p) => { let x = 0; const g = () => { x = "s"; }; g(); x += 1; return x; }; f(1);');
   try
     Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
   finally
