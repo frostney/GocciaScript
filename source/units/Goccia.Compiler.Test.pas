@@ -4277,6 +4277,18 @@ begin
     Expect<Integer>(Floats).ToBe(0);
   end;
 
+  // The proof says Number, not integer: an integer initializer that is
+  // assigned a quotient later gives a Number, and so does one never assigned.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a | 0; x = x / 2; return x; };')).ToBe('F');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a | 0; x = x / 2; return x; };', True)).ToBe('F');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a >>> 0; return x; };')).ToBe('F');
+  // A const keeps the exact type of its initializer.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { const x = a | 0; return x; };')).ToBe('I');
+
   // A literal initializer is the one profile difference. By default the let
   // is a Number only if every assignment is; with strict types it is a
   // Number whatever is assigned, and the assignment is checked.

@@ -1222,8 +1222,13 @@ begin
       HoldsOnlyNumbers := IsKnownNumeric(TypeHint) and
         not IsTopLevelGlobalBacked and
         DeclarationHoldsOnlyNumbers(ACtx, AStmt, I);
+      // The proof says every value is a Number, not an integer, and a let
+      // can be assigned a fraction later, so an integer initializer gives a
+      // Number.
       if not HoldsOnlyNumbers then
-        TypeHint := sltUntyped;
+        TypeHint := sltUntyped
+      else if TypeHint = sltInteger then
+        TypeHint := sltFloat;
     end
     // A const whose initializer the body scan proves a Number
     // (Goccia.Compiler.NumericBindings: one Number operand of -, *, /, %, **,
