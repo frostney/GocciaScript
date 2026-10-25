@@ -3966,30 +3966,50 @@ begin
 end;
 
 procedure TTestCompiler.TestIntegerTypeIsNotClaimedForNonIntegerResults;
-var
-  Module: TGocciaBytecodeModule;
-  Func: TGocciaFunctionTemplate;
-  I, IntegerLocals: Integer;
+
+  // The locals of the first function in ASource that the compiler typed as
+  // integers.
+  function IntegerLocals(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+    I: Integer;
+  begin
+    Result := 0;
+    Module := CompileSource(ASource, False, False, False, False, False, False);
+    try
+      Func := Module.TopLevel.GetFunction(0);
+      for I := 0 to Func.LocalTypeCount - 1 do
+        if Func.GetLocalType(I) = sltInteger then
+          Inc(Result);
+    finally
+      Module.Free;
+    end;
+  end;
+
 begin
-  // The integer type means a finite Number with no fraction. A bitwise
-  // result is one, and so are the sum and the difference of two. Their
-  // quotient, product, remainder and power are not always: 5 / 2, a product
-  // past 2^1024, 5 % 0 and 2 ** -1.
-  Module := CompileSource(
+  // The integer type comes only from results that are int32 or uint32 by
+  // specification. Arithmetic on integers is not closed over them: 5 / 2 has
+  // a fraction, 5 % 0 is NaN, 2 ** -1 has a fraction, and a sum, a
+  // difference or a product can pass 2^1024 and become Infinity.
+  Expect<Integer>(IntegerLocals(
     'const f = (x, y) => { const a = x | 0; const b = y | 0;' +
     ' const s = a + b; const d = a - b; const q = a / b; const m = a * b;' +
-    ' const r = a % b; const e = a ** b; return [s, d, q, m, r, e]; };',
-    False, False, False, False, False, False);
-  try
-    Func := Module.TopLevel.GetFunction(0);
-    IntegerLocals := 0;
-    for I := 0 to Func.LocalTypeCount - 1 do
-      if Func.GetLocalType(I) = sltInteger then
-        Inc(IntegerLocals);
-    Expect<Integer>(IntegerLocals).ToBe(4);
-  finally
-    Module.Free;
-  end;
+    ' const r = a % b; const e = a ** b; return [s, d, q, m, r, e]; };'
+    )).ToBe(2);
+
+  // A chain of sums that doubles its value at each step is not integer
+  // typed either: it reaches Infinity, and Infinity - Infinity is NaN.
+  Expect<Integer>(IntegerLocals(
+    'const f = (n) => { const v0 = n | 0; const v1 = v0 + v0;' +
+    ' const v2 = v1 + v1; const v3 = v2 + v2; const w = v3 - v3;' +
+    ' return w; };')).ToBe(1);
+
+  // The other int32 and uint32 producers are integers.
+  Expect<Integer>(IntegerLocals(
+    'const f = (x) => { const a = ~(x * 1); const b = x >>> 0;' +
+    ' const c = x << 1; const d = x >> 1; const e = x & 1; const g = x ^ 1;' +
+    ' return [a, b, c, d, e, g]; };')).ToBe(6);
 end;
 
 procedure TTestCompiler.TestConstTypeComesFromTheNumberProof;

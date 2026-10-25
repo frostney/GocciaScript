@@ -34,6 +34,18 @@ describe("NaN, -0 and integer overflow", () => {
     expect(big53 + 2).toBe(9007199254740992);
   });
 
+  test("a sum of two int32 results passes the int32 range", () => {
+    const a = 2147483647 | 0;
+    const b = 2147483647 | 0;
+    const s = a + b;
+    expect(s).toBe(4294967294);
+    const d = (-2147483648 | 0) - (2147483647 | 0);
+    expect(d).toBe(-4294967295);
+    const m = a * b;
+    expect(m).toBe(4611686014132420609);
+    expect(s + 1).toBe(4294967295);
+  });
+
   test("operations on bitwise results leave the integers", () => {
     const f = (x, y) => {
       const a = x | 0;

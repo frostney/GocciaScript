@@ -617,14 +617,13 @@ begin
     begin
       LeftType := ExpressionType(AScope, Bin.Left);
       RightType := ExpressionType(AScope, Bin.Right);
-      // The integer type is a finite Number with no fraction. Two integers
-      // keep it under + and -; a quotient, a product past 2^1024, a
-      // remainder by zero (NaN) and a power with a negative exponent can
-      // leave it.
-      if (LeftType = sltInteger) and (RightType = sltInteger) and
-         (Bin.Operator in [gttPlus, gttMinus]) then
-        Result := sltInteger
-      else if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
+      // The integer type comes only from results that are int32 or uint32 by
+      // specification (the bitwise operators, ~ and >>>). Arithmetic on
+      // integers is not closed over them: a sum can pass 2^1024 and become
+      // Infinity (and Infinity - Infinity is NaN), a quotient can have a
+      // fraction, and a remainder by zero is NaN. So every arithmetic result
+      // is a Number, whatever its operands.
+      if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
         Result := sltFloat
       // ES2026 §13.15.3
       // ApplyStringOrNumericBinaryOperator: apart from +, both operands go

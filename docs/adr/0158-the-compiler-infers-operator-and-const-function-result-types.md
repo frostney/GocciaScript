@@ -55,7 +55,11 @@ is writable; a return-type annotation, which is not enforced (#1276); a `var`.
   The value is in the types the bytecode records, for ahead-of-time consumers.
 - A local the compiler could not type before can now carry a type in its
   function template; no type that was already recorded changes.
-- The integer type means a finite Number with no fraction. Only bitwise
-  results start it, and two integers keep it under `+` and `-`.
+- The integer type comes only from results that are an int32 or a uint32 by
+  specification: the bitwise operators, `~` and `>>>`. No arithmetic result
+  is an integer, `+` and `-` included, because a sum of integers can overflow
+  to `Infinity`. The compiler used to give two integers an integer result for
+  every arithmetic operator; that rule was dormant while nothing produced an
+  integer, and typing bitwise results activated it, so it is removed.
 - `tests/language/type-inference/` runs the cases that would expose a wrong
   type in the default and the `--strict-types` profiles.
