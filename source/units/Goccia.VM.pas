@@ -1949,25 +1949,54 @@ begin
   Result := True;
 end;
 
-function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+// Stores the Number AValue in ADest^. The result of every arithmetic opcode
+// lands here. The range test is false for NaN and the infinities, so a finite
+// value is classified with compares and one truncation instead of calls to
+// IsNaN, IsInfinite and Frac. Writing the register in place spares the copy a
+// function result makes through a temporary; the caller must not run guest
+// code between taking ADest and this call, since guest code can move the
+// register file.
+procedure VMStoreNumberRegister(const ADest: PGocciaRegister;
+  const AValue: Double); {$IFDEF FPC}inline;{$ENDIF}
 var
   IntValue: Int64;
 begin
-  // The result of every arithmetic opcode lands here. The range test is false
-  // for NaN and the infinities, so a finite value is classified with compares
-  // and one truncation instead of calls to IsNaN, IsInfinite and Frac.
   if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
   begin
     IntValue := Trunc(AValue);
     if IntValue <> AValue then
-      Exit(RegisterFloat(AValue));
-    if (IntValue = 0) and NumberBits.IsNegativeZero(AValue) then
-      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
-    Exit(RegisterInt(IntValue));
+    begin
+      ADest^.Kind := grkFloat;
+      ADest^.FloatValue := AValue;
+    end
+    else if (IntValue = 0) and NumberBits.IsNegativeZero(AValue) then
+    begin
+      ADest^.ObjectValue := TGocciaNumberLiteralValue.NegativeZeroValue;
+      ADest^.Kind := grkObject;
+    end
+    else
+    begin
+      ADest^.Kind := grkInt;
+      ADest^.IntValue := IntValue;
+    end;
+  end
+  else if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
+  begin
+    // The value before the kind: a register the collector can see never
+    // claims an object it does not hold.
+    ADest^.ObjectValue := VMNumberValue(AValue);
+    ADest^.Kind := grkObject;
+  end
+  else
+  begin
+    ADest^.Kind := grkFloat;
+    ADest^.FloatValue := AValue;
   end;
-  if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
-    Exit(RegisterObject(VMNumberValue(AValue)));
-  Result := RegisterFloat(AValue);
+end;
+
+function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  VMStoreNumberRegister(@Result, AValue);
 end;
 
 function VMModuloRegister(const ALeft, ARight: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}

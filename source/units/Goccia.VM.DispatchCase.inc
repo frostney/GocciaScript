@@ -435,7 +435,7 @@
              LeftDouble, RightDouble) then
             RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
               RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
+          VMStoreNumberRegister(@FRegisters[A], LeftDouble + RightDouble);
         end;
 
       OP_ADD_FLOAT:
@@ -444,7 +444,7 @@
            LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-        FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
+        VMStoreNumberRegister(@FRegisters[A], LeftDouble + RightDouble);
       end;
 
       OP_SUB_INT:
@@ -457,7 +457,7 @@
              LeftDouble, RightDouble) then
             RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
               RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
+          VMStoreNumberRegister(@FRegisters[A], LeftDouble - RightDouble);
         end;
 
       OP_SUB_FLOAT:
@@ -466,7 +466,7 @@
            LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-        FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
+        VMStoreNumberRegister(@FRegisters[A], LeftDouble - RightDouble);
       end;
 
       // A proven Number can also arrive boxed: NaN, the infinities and -0
@@ -505,7 +505,7 @@
              LeftDouble, RightDouble) then
             RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
               RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
+          VMStoreNumberRegister(@FRegisters[A], LeftDouble * RightDouble);
         end;
 
       OP_MUL_FLOAT:
@@ -514,7 +514,7 @@
            LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-        FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
+        VMStoreNumberRegister(@FRegisters[A], LeftDouble * RightDouble);
       end;
 
       OP_DIV_INT, OP_DIV_FLOAT:
@@ -523,7 +523,7 @@
            LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-        FRegisters[A] := VMNumberRegister(LeftDouble / RightDouble);
+        VMStoreNumberRegister(@FRegisters[A], LeftDouble / RightDouble);
       end;
 
       OP_MOD_INT, OP_MOD_FLOAT:
