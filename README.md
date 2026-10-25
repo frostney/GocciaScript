@@ -268,11 +268,23 @@ embedded data otherwise.
 
 ### Build from source
 
-Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`):
+Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`),
+version 3.2.2 or 3.2.4. The package managers install 3.2.2:
 
 - macOS: `brew install fpc`
 - Ubuntu/Debian: `sudo apt-get install fpc`
 - Windows: `choco install freepascal`
+
+CI is pinned to the FPC 3.2.4 build `3.2.4-rc2-b1` from
+[fpc-toolchain](https://github.com/frostney/fpc-toolchain). To build with the
+same compiler on Linux or macOS, install it next to any other FPC and put it
+first on `PATH` (Windows: see its README):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/frostney/fpc-toolchain/main/scripts/install.sh
+sh install.sh 3.2.4-rc2-b1
+eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.2.4)"
+```
 
 ```bash
 # Dev build of everything
