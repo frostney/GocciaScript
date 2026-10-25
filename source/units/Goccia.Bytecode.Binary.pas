@@ -397,7 +397,9 @@ begin
           JumpTarget := Int64(PC) + 1 + DecodesBx(Instruction);
           RequireJumpTarget(JumpTarget);
         end;
-      OP_JUMP_IF_NUM_NOT_LTE_IMM, OP_JUMP_IF_NOT_LT:
+      OP_JUMP_IF_NUM_NOT_LTE_IMM, OP_JUMP_IF_NOT_LT, OP_JUMP_IF_NOT_LT_IMM,
+      OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM, OP_JUMP_IF_NOT_GTE_IMM,
+      OP_JUMP_IF_NOT_STRICT_EQ_IMM, OP_JUMP_IF_STRICT_EQ_IMM:
         begin
           JumpTarget := Int64(PC) + 1 + Int16(C);
           RequireJumpTarget(JumpTarget);

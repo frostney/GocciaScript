@@ -311,8 +311,10 @@ begin
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Offset)));
   end
-  else if (TGocciaOpCode(Op) = OP_JUMP_IF_NUM_NOT_LTE_IMM) or
-          (TGocciaOpCode(Op) = OP_JUMP_IF_NOT_LT) then
+  else if TGocciaOpCode(Op) in [OP_JUMP_IF_NUM_NOT_LTE_IMM, OP_JUMP_IF_NOT_LT,
+          OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM,
+          OP_JUMP_IF_NOT_GTE_IMM, OP_JUMP_IF_NOT_STRICT_EQ_IMM,
+          OP_JUMP_IF_STRICT_EQ_IMM] then
   begin
     A := DecodeA(Instruction);
     B := DecodeB(Instruction);

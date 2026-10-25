@@ -204,6 +204,8 @@ type
     procedure TestConstSelfIncrementUsesGenericAssignment;
     procedure TestGlobalBackedCountedForLimitIsNotSnapshotted;
     procedure TestIfAndConditionalLessThanUseJumpIfNotLt;
+    procedure TestConstantOperandComparisonsUseImmediateJumps;
+    procedure TestConstantOperandComparisonsKeepGenericForms;
     procedure TestLessThanValueKeepsGenericCompare;
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
@@ -401,6 +403,10 @@ begin
     TestIfAndConditionalLessThanUseJumpIfNotLt);
   Test('less-than value keeps generic compare',
     TestLessThanValueKeepsGenericCompare);
+  Test('comparisons with an Int16 constant use immediate jumps',
+    TestConstantOperandComparisonsUseImmediateJumps);
+  Test('comparisons outside the immediate forms keep generic compares',
+    TestConstantOperandComparisonsKeepGenericForms);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
@@ -2716,6 +2722,10 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT_IMM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_STRICT_EQ_IMM))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_GT_IMM)).ToBe(False);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_GT_IMM)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CREATE_GLOBAL_IMPORT_BINDING))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CHECK_BINDING_INITIALIZED))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_UNDEFINED_VARIABLE))).ToBe(True);
@@ -4034,6 +4044,74 @@ begin
     Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(0);
   finally
     Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantOperandComparisonsUseImmediateJumps;
+const
+  Cases: array[0..9] of string = (
+    'const f = (a) => { if (a < 50) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a > 500) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a <= -3) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a >= 0) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (5 < a) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => a === 1 ? "y" : "n"; f(1);',
+    'const f = (a) => { if (a !== 32767) { return "y"; } return "n"; }; f(1);',
+    'const K = 4; const f = (a) => { if (a > K) { return "y"; } return "n"; }; f(1);',
+    'const f = (a, b) => { if (a === 1 || b === 2) { return "y"; } return "n"; }; f(1, 2);',
+    'const f = (a, b) => { if (a < 3 && b >= 2) { return "y"; } return "n"; }; f(1, 2);');
+  Expected: array[0..9] of TGocciaOpCode = (
+    OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM,
+    OP_JUMP_IF_NOT_GTE_IMM, OP_JUMP_IF_NOT_GT_IMM,
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM, OP_JUMP_IF_STRICT_EQ_IMM,
+    OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_STRICT_EQ_IMM, OP_JUMP_IF_NOT_LT_IMM);
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  for I := Low(Cases) to High(Cases) do
+  begin
+    Module := CompileSource(Cases[I]);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, Expected[I]);
+      Expect<Boolean>(Assigned(Func)).ToBe(True);
+      if Assigned(Func) then
+      begin
+        // The comparison is one instruction: no Boolean is tested and no
+        // instruction loads the constant.
+        Expect<Integer>(CountOp(Func, OP_JUMP_IF_FALSE) +
+          CountOp(Func, OP_JUMP_IF_TRUE)).ToBe(0);
+        Expect<Integer>(CountOp(Func, OP_LOAD_INT)).ToBe(0);
+      end;
+    finally
+      Module.Free;
+    end;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantOperandComparisonsKeepGenericForms;
+const
+  // A constant outside Int16, a fraction, a relational test jumping on
+  // true inside `||`, and a comparison whose value is kept.
+  Cases: array[0..3] of string = (
+    'const f = (a) => { if (a < 40000) { return 1; } return 0; }; f(1);',
+    'const f = (a) => { if (a < 0.5) { return 1; } return 0; }; f(1);',
+    'const f = (a, b) => { if (a < 3 || b) { return 1; } return 0; }; f(1, 2);',
+    'const f = (a) => { const c = a < 3; return c; }; f(1);');
+var
+  Module: TGocciaBytecodeModule;
+  I: Integer;
+begin
+  for I := Low(Cases) to High(Cases) do
+  begin
+    Module := CompileSource(Cases[I]);
+    try
+      Expect<Integer>(CountOpRecursive(Module.TopLevel,
+        OP_JUMP_IF_NOT_LT_IMM)).ToBe(0);
+    finally
+      Module.Free;
+    end;
   end;
 end;
 

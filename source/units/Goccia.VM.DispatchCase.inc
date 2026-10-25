@@ -374,6 +374,130 @@
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
         end;
 
+      // A register compared with a signed Int16 immediate, jumping when the
+      // comparison is false. A Number scalar compares directly (NaN is
+      // never a scalar register); CompareRegisterWithImmediate does the rest.
+      OP_JUMP_IF_NOT_LT_IMM:
+        begin
+          if FRegisters[A].Kind = grkInt then
+            NumericComparisonResult := FRegisters[A].IntValue < Int16(B)
+          else if FRegisters[A].Kind = grkFloat then
+            NumericComparisonResult := FRegisters[A].FloatValue < Int16(B)
+          else
+            NumericComparisonResult := CompareRegisterWithImmediate(A,
+              Int16(B), OP_JUMP_IF_NOT_LT_IMM);
+          if not NumericComparisonResult then
+          begin
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+          end;
+          if FCoverageEnabled then
+            RecordFusedBranchHit(Template, InstructionStartIP,
+              not NumericComparisonResult);
+        end;
+
+      OP_JUMP_IF_NOT_GT_IMM:
+        begin
+          if FRegisters[A].Kind = grkInt then
+            NumericComparisonResult := FRegisters[A].IntValue > Int16(B)
+          else if FRegisters[A].Kind = grkFloat then
+            NumericComparisonResult := FRegisters[A].FloatValue > Int16(B)
+          else
+            NumericComparisonResult := CompareRegisterWithImmediate(A,
+              Int16(B), OP_JUMP_IF_NOT_GT_IMM);
+          if not NumericComparisonResult then
+          begin
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+          end;
+          if FCoverageEnabled then
+            RecordFusedBranchHit(Template, InstructionStartIP,
+              not NumericComparisonResult);
+        end;
+
+      OP_JUMP_IF_NOT_LTE_IMM:
+        begin
+          if FRegisters[A].Kind = grkInt then
+            NumericComparisonResult := FRegisters[A].IntValue <= Int16(B)
+          else if FRegisters[A].Kind = grkFloat then
+            NumericComparisonResult := FRegisters[A].FloatValue <= Int16(B)
+          else
+            NumericComparisonResult := CompareRegisterWithImmediate(A,
+              Int16(B), OP_JUMP_IF_NOT_LTE_IMM);
+          if not NumericComparisonResult then
+          begin
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+          end;
+          if FCoverageEnabled then
+            RecordFusedBranchHit(Template, InstructionStartIP,
+              not NumericComparisonResult);
+        end;
+
+      OP_JUMP_IF_NOT_GTE_IMM:
+        begin
+          if FRegisters[A].Kind = grkInt then
+            NumericComparisonResult := FRegisters[A].IntValue >= Int16(B)
+          else if FRegisters[A].Kind = grkFloat then
+            NumericComparisonResult := FRegisters[A].FloatValue >= Int16(B)
+          else
+            NumericComparisonResult := CompareRegisterWithImmediate(A,
+              Int16(B), OP_JUMP_IF_NOT_GTE_IMM);
+          if not NumericComparisonResult then
+          begin
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+          end;
+          if FCoverageEnabled then
+            RecordFusedBranchHit(Template, InstructionStartIP,
+              not NumericComparisonResult);
+        end;
+
+      // Strict equality with an immediate Number (ES2026 §7.2.14): only a
+      // Number can match, so nothing is converted. A boxed number register
+      // holds NaN, an infinity or -0, which equals 0.
+      OP_JUMP_IF_NOT_STRICT_EQ_IMM, OP_JUMP_IF_STRICT_EQ_IMM:
+        begin
+          case FRegisters[A].Kind of
+            grkInt:
+              NumericComparisonResult := FRegisters[A].IntValue = Int16(B);
+            grkFloat:
+              NumericComparisonResult := FRegisters[A].FloatValue = Int16(B);
+            grkObject:
+              NumericComparisonResult := VMBoxedNumberRegister(FRegisters[A])
+                and (TGocciaNumberLiteralValue(FRegisters[A].ObjectValue)
+                  .Value = Int16(B));
+          else
+            NumericComparisonResult := False;
+          end;
+          // NumericComparisonResult becomes "take the jump".
+          NumericComparisonResult := NumericComparisonResult =
+            (TGocciaOpCode(Op) = OP_JUMP_IF_STRICT_EQ_IMM);
+          if NumericComparisonResult then
+          begin
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+          end;
+          if FCoverageEnabled then
+            RecordFusedBranchHit(Template, InstructionStartIP,
+              NumericComparisonResult);
+        end;
+
       OP_JUMP_IF_NULLISH:
         if RegisterMatchesNullishKind(FRegisters[A], B) then
         begin
