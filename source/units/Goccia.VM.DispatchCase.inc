@@ -1121,15 +1121,9 @@
           end;
         end
         else
-        begin
-          Constant := Template.GetConstantUnchecked(C);
-          if Constant.Kind = bckPrivateName then
-            SetRegister(A, GetPrivatePropertyValue(GetRegister(B),
-              Constant.StringValue))
-          else
-            SetRegister(A, GetPropertyValue(GetRegister(B),
-              Constant.StringValue));
-        end;
+          // Every other receiver, a primitive or an object the caches do not
+          // serve, out of line so this arm stays small.
+          ExecGetUncachedConstProperty(Template, A, B, C);
       end;
 
       OP_SET_PROP_CONST:

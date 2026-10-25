@@ -427,6 +427,11 @@ type
     // guest code (a relational ToPrimitive).
     function ImmediateComparisonJumps(const AOp: TGocciaOpCode;
       const ALeftIndex: Integer; const AImmediate: Int16): Boolean;
+    // OP_GET_PROP_CONST and OP_GET_LOCAL_PROP_CONST for a receiver the
+    // property read caches do not serve: R[ADest] := R[AObject][K[AName]].
+    procedure ExecGetUncachedConstProperty(
+      const ATemplate: TGocciaFunctionTemplate; const ADest, AObject: Integer;
+      const ANameIndex: UInt16);
     procedure RecordFusedBranchHit(const ATemplate: TGocciaFunctionTemplate;
       const APC: Integer; const ATaken: Boolean);
     procedure ExecGetComputedProperty(const ADest: Integer;
@@ -18066,6 +18071,36 @@ begin
     TGocciaCoverageTracker.Instance.RecordBranchHit(
       ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
       ATemplate.DebugInfo.GetColumnForPC(APC), 1);
+end;
+
+// A constant-name property read on a receiver the property read caches do
+// not serve. An Array's `length` is an own data property that cannot be
+// deleted or made an accessor (ES2026 §10.4.2), so it is read from the array
+// itself, without a name lookup or a boxed Number.
+procedure TGocciaVM.ExecGetUncachedConstProperty(
+  const ATemplate: TGocciaFunctionTemplate; const ADest, AObject: Integer;
+  const ANameIndex: UInt16);
+var
+  Constant: PGocciaBytecodeConstant;
+  StoredLength: Int64;
+  Value: TGocciaValue;
+begin
+  Constant := ATemplate.GetConstantUnchecked(ANameIndex);
+  if Constant^.Kind = bckPrivateName then
+    Value := GetPrivatePropertyValue(GetRegister(AObject), Constant^.StringValue)
+  else if (FRegisters[AObject].Kind = grkObject) and
+          Assigned(FRegisters[AObject].ObjectValue) and
+          (FRegisters[AObject].ObjectValue.ClassType = TGocciaArrayValue) and
+          (Constant^.StringValue = PROP_LENGTH) then
+  begin
+    StoredLength :=
+      TGocciaArrayValue(FRegisters[AObject].ObjectValue).StoredLength;
+    FRegisters[ADest] := VMNumberRegister(StoredLength);
+    Exit;
+  end
+  else
+    Value := GetPropertyValue(GetRegister(AObject), Constant^.StringValue);
+  SetRegister(ADest, Value);
 end;
 
 initialization
