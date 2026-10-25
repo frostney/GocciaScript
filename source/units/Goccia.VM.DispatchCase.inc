@@ -429,59 +429,45 @@
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue +
             FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) +
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
         end;
 
       OP_ADD_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) +
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
-        end;
+        FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
+      end;
 
       OP_SUB_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue -
             FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) -
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
         end;
 
       OP_SUB_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) -
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
-        end;
+        FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
+      end;
 
       // A proven Number can also arrive boxed: NaN, the infinities and -0
       // are kept as number values rather than scalar registers.
@@ -513,230 +499,173 @@
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
             FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) *
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
         end;
 
       OP_MUL_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) *
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
-        end;
+        FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
+      end;
 
       OP_DIV_INT, OP_DIV_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) /
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble / RightDouble);
-        end;
+        FRegisters[A] := VMNumberRegister(LeftDouble / RightDouble);
+      end;
 
       OP_MOD_INT, OP_MOD_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMModuloRegister(
-            NumericScalarToDouble(FRegisters[B]),
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := VMModuloRegister(LeftDouble, RightDouble);
-        end;
+        FRegisters[A] := VMModuloRegister(LeftDouble, RightDouble);
+      end;
 
       OP_EQ_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue = FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) =
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := RegisterBoolean(LeftDouble = RightDouble);
         end;
 
       OP_EQ_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) =
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := RegisterBoolean(LeftDouble = RightDouble);
-        end;
+        FRegisters[A] := RegisterBoolean(LeftDouble = RightDouble);
+      end;
 
       OP_NEQ_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue <> FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) <>
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := RegisterBoolean(LeftDouble <> RightDouble);
         end;
 
       OP_NEQ_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) <>
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := RegisterBoolean(LeftDouble <> RightDouble);
-        end;
+        FRegisters[A] := RegisterBoolean(LeftDouble <> RightDouble);
+      end;
 
       OP_LT_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue < FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) <
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := RegisterBoolean(LeftDouble < RightDouble);
         end;
 
       OP_LT_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) <
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := RegisterBoolean(LeftDouble < RightDouble);
-        end;
+        FRegisters[A] := RegisterBoolean(LeftDouble < RightDouble);
+      end;
 
       OP_GT_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue > FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) >
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := RegisterBoolean(LeftDouble > RightDouble);
         end;
 
       OP_GT_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) >
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := RegisterBoolean(LeftDouble > RightDouble);
-        end;
+        FRegisters[A] := RegisterBoolean(LeftDouble > RightDouble);
+      end;
 
       OP_LTE_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue <= FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) <=
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := RegisterBoolean(LeftDouble <= RightDouble);
         end;
 
       OP_LTE_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) <=
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := RegisterBoolean(LeftDouble <= RightDouble);
-        end;
+        FRegisters[A] := RegisterBoolean(LeftDouble <= RightDouble);
+      end;
 
       OP_GTE_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue >= FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) >=
-            NumericScalarToDouble(FRegisters[C]))
         else
         begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
+          if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+             LeftDouble, RightDouble) then
+            RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+              RightDouble);
           FRegisters[A] := RegisterBoolean(LeftDouble >= RightDouble);
         end;
 
       OP_GTE_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) >=
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
+      begin
+        if not VMNumericScalarPair(@FRegisters[B], @FRegisters[C],
+           LeftDouble, RightDouble) then
           RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
             RightDouble);
-          FRegisters[A] := RegisterBoolean(LeftDouble >= RightDouble);
-        end;
+        FRegisters[A] := RegisterBoolean(LeftDouble >= RightDouble);
+      end;
 
       OP_NEG_INT, OP_NEG_FLOAT:
       begin

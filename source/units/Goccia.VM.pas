@@ -1923,6 +1923,32 @@ begin
     (ARegister.ObjectValue is TGocciaNumberLiteralValue);
 end;
 
+// Reads two numeric scalar operands (grkInt or grkFloat) as Doubles and
+// returns True, or returns False when either is anything else, a boxed Number
+// included. Each register is read once through its address: testing it with
+// RegisterIsNumericScalar and then reading it with NumericScalarToDouble made
+// the compiler load the register twice, each time copying it to a temporary.
+// The caller must not run guest code between taking the addresses and this
+// call, since guest code can move the register file.
+function VMNumericScalarPair(const ALeft, ARight: PGocciaRegister;
+  out ALeftDouble, ARightDouble: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := False;
+  if ALeft^.Kind = grkFloat then
+    ALeftDouble := ALeft^.FloatValue
+  else if ALeft^.Kind = grkInt then
+    ALeftDouble := ALeft^.IntValue
+  else
+    Exit;
+  if ARight^.Kind = grkFloat then
+    ARightDouble := ARight^.FloatValue
+  else if ARight^.Kind = grkInt then
+    ARightDouble := ARight^.IntValue
+  else
+    Exit;
+  Result := True;
+end;
+
 function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 var
   IntValue: Int64;
