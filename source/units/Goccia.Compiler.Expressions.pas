@@ -7583,6 +7583,8 @@ var
   EndJumps: array of Integer;
   PreparedTarget: TPreparedDestructuringTarget;
   OwnsRegOld: Boolean;
+  ImmediateOp: TGocciaOpCode;
+  Immediate: Int16;
 begin
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
   if IsShortCircuitAssignment(AExpr.Operator) then
@@ -7815,7 +7817,27 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, RegOld, Slot));
     end;
     RegVal := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(AExpr.Value, RegVal);
+    // `x += k` and `x -= k` on a proven Number with k a signed Int16 literal
+    // add the immediate: no instruction loads k. The literal has no effect
+    // to evaluate, and LocalType was sampled with the old value. The proof is
+    // the one ExpressionType gives an identifier: a captured binding keeps
+    // its hint only when no closure can store another value in it.
+    ImmediateOp := OP_NOP;
+    if not ACtx.Scope.GetLocal(LocalIdx).IsConst and
+       ((IsKnownNumeric(LocalType) and
+         (ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped or
+          not ACtx.Scope.GetLocal(LocalIdx).IsCaptured or
+          ACtx.Scope.GetLocal(LocalIdx).HoldsOnlyNumbers)) or
+        ACtx.Scope.GetLocal(LocalIdx).IsCallProvenNumeric) and
+       TrySignedInt16NumberLiteral(AExpr.Value, Immediate) then
+    begin
+      if AExpr.Operator = gttPlusAssign then
+        ImmediateOp := OP_ADD_NUM_IMM
+      else if AExpr.Operator = gttMinusAssign then
+        ImmediateOp := OP_SUB_NUM_IMM;
+    end;
+    if ImmediateOp = OP_NOP then
+      ACtx.CompileExpression(AExpr.Value, RegVal);
 
     if ACtx.Scope.GetLocal(LocalIdx).IsConst then
     begin
@@ -7846,7 +7868,11 @@ begin
     // else (see LocalAcceptsDirectRegisterWrite).
     if LocalAcceptsDirectRegisterWrite(ACtx, LocalIdx) then
     begin
-      EmitInstruction(ACtx, EncodeABC(Op, Slot, RegOld, RegVal));
+      if ImmediateOp <> OP_NOP then
+        EmitInstruction(ACtx, EncodeABC(ImmediateOp, Slot, RegOld,
+          UInt16(Immediate)))
+      else
+        EmitInstruction(ACtx, EncodeABC(Op, Slot, RegOld, RegVal));
       ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       if ANeedsResult and (ADest <> Slot) then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
@@ -7856,7 +7882,11 @@ begin
       Exit;
     end;
     RegTemp := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
+    if ImmediateOp <> OP_NOP then
+      EmitInstruction(ACtx, EncodeABC(ImmediateOp, RegTemp, RegOld,
+        UInt16(Immediate)))
+    else
+      EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
     ResultType := sltUntyped;
     if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then
