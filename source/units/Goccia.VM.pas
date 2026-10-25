@@ -1949,13 +1949,13 @@ begin
   Result := True;
 end;
 
-// Stores the Number AValue in ADest^. The result of every arithmetic opcode
-// lands here. The range test is false for NaN and the infinities, so a finite
-// value is classified with compares and one truncation instead of calls to
-// IsNaN, IsInfinite and Frac. Writing the register in place spares the copy a
-// function result makes through a temporary; the caller must not run guest
-// code between taking ADest and this call, since guest code can move the
-// register file.
+// Stores the Number AValue in ADest^, classified as VMNumberRegister does; the
+// typed arithmetic opcodes write their result here. The range test is false
+// for NaN and the infinities, so a finite value is classified with compares
+// and one truncation instead of calls to IsNaN, IsInfinite and Frac. Writing
+// the register in place spares the copy a function result makes through a
+// temporary. The caller must not run guest code between taking ADest and this
+// call, since guest code can move the register file.
 procedure VMStoreNumberRegister(const ADest: PGocciaRegister;
   const AValue: Double); {$IFDEF FPC}inline;{$ENDIF}
 var
@@ -1995,8 +1995,24 @@ begin
 end;
 
 function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+var
+  IntValue: Int64;
 begin
-  VMStoreNumberRegister(@Result, AValue);
+  // The same classification as VMStoreNumberRegister. The generic opcodes
+  // build their result through this function: written over the result's
+  // address instead, their code grew (NBody ran about 1% more instructions).
+  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
+  begin
+    IntValue := Trunc(AValue);
+    if IntValue <> AValue then
+      Exit(RegisterFloat(AValue));
+    if (IntValue = 0) and NumberBits.IsNegativeZero(AValue) then
+      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
+    Exit(RegisterInt(IntValue));
+  end;
+  if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
+    Exit(RegisterObject(VMNumberValue(AValue)));
+  Result := RegisterFloat(AValue);
 end;
 
 function VMModuloRegister(const ALeft, ARight: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
