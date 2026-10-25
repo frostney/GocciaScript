@@ -16020,7 +16020,6 @@ var
   FunctionValue: TGocciaValue;
   HasOwnSourceFile: Boolean;
   Registers: PGocciaRegister;
-  Slot: PInt64;
 begin
   // The collector does not mark the registers of closed numeric frames, which
   // relies on no other frame running above them.
@@ -16062,7 +16061,10 @@ begin
     // every argument sits above the register it is copied to, so `this`,
     // which a tail call's arguments never overlap, is stored first and the
     // arguments in ascending order. The rest of the window is cleared, as
-    // AcquireRegisters clears it, before anything can collect.
+    // AcquireRegisters clears it, before anything can collect. FillChar
+    // clears it: a loop of two Int64 stores per register ran fewer
+    // instructions but made native callbacks (Array.prototype.map) about 3%
+    // slower.
     FArgumentBase := NewArgumentBase;
     FArgCount := 0;
     FArguments := @FArgumentStack[NewArgumentBase];
@@ -16070,16 +16072,9 @@ begin
     Registers[0] := AThisValue;
     for I := 0 to AArgCount - 1 do
       Registers[I + 1] := AArguments[I];
-    {$IF SizeOf(TGocciaRegister) <> 2 * SizeOf(Int64)}
-      {$ERROR SetupNewFrame clears a register as two Int64 words}
-    {$ENDIF}
-    Slot := PInt64(@Registers[AArgCount + 1]);
-    for I := AArgCount + 1 to RegisterWindow - 1 do
-    begin
-      Slot[0] := 0;
-      Slot[1] := 0;
-      Inc(Slot, 2);
-    end;
+    if RegisterWindow > AArgCount + 1 then
+      FillChar(Registers[AArgCount + 1],
+        (RegisterWindow - AArgCount - 1) * SizeOf(TGocciaRegister), 0);
     FRegisterBase := NewRegisterBase;
     FRegisterCount := RegisterWindow;
     FRegisters := Registers;
