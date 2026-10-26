@@ -59,6 +59,7 @@ type
     procedure TestExecuteAddNumberImmediate;
     procedure TestExecuteNumberImmediateBranch;
     procedure TestExecuteJumpIfNotLessThan;
+    procedure TestExecuteCompareImmediateJumps;
     procedure TestExecuteArrayOps;
     procedure TestExecuteArrayPop;
     procedure TestExecuteObjectOps;
@@ -114,6 +115,7 @@ begin
   Test('Execute Number add immediate', TestExecuteAddNumberImmediate);
   Test('Execute Number immediate branch', TestExecuteNumberImmediateBranch);
   Test('Execute jump if not less than', TestExecuteJumpIfNotLessThan);
+  Test('Execute compare-with-immediate jumps', TestExecuteCompareImmediateJumps);
   Test('Execute array ops', TestExecuteArrayOps);
   Test('Execute array pop', TestExecuteArrayPop);
   Test('Execute object ops', TestExecuteObjectOps);
@@ -412,6 +414,81 @@ begin
   finally
     VM.Free;
     Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestExecuteCompareImmediateJumps;
+type
+  TLoadKind = (lkInt, lkConstant, lkUndefined);
+var
+  VM: TGocciaVM;
+
+  // Runs `if (R0 <op> AImmediate) return 99; return 7;` with R0 loaded from
+  // an integer, a constant or undefined, and reports whether the comparison
+  // held. Each run builds its own template, because patching a wide
+  // instruction keeps its prefix's high operand bytes.
+  function Holds(const AKind: TLoadKind; const AInt: Int16;
+    const AConstant: Double; const AString: string; const AOp: TGocciaOpCode;
+    const AImmediate: Int16): Boolean;
+  var
+    Template: TGocciaFunctionTemplate;
+    Index: UInt16;
+  begin
+    Template := TGocciaFunctionTemplate.Create('compare-immediate-jumps');
+    try
+      Template.MaxRegisters := 2;
+      case AKind of
+        lkInt:
+          Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 0, AInt));
+        lkConstant:
+          begin
+            if AString <> '' then
+              Index := Template.AddConstantString(AString)
+            else
+              Index := Template.AddConstantFloat(AConstant);
+            Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, Index));
+          end;
+      else
+        Template.EmitInstruction(EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+      end;
+      Template.EmitInstruction(EncodeABC(AOp, 0, UInt16(AImmediate),
+        UInt16(Int16(2))), True);
+      Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 99));
+      Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+      Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 7));
+      Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+      Result := VM.ExecuteFunction(Template).ToNumberLiteral.Value = 99;
+    finally
+      Template.Free;
+    end;
+  end;
+
+begin
+  VM := TGocciaVM.Create;
+  try
+    Expect<Boolean>(Holds(lkInt, 2, 0, '', OP_JUMP_IF_NOT_LT_IMM, 3)).ToBe(True);
+    Expect<Boolean>(Holds(lkInt, 3, 0, '', OP_JUMP_IF_NOT_LT_IMM, 3)).ToBe(False);
+    Expect<Boolean>(Holds(lkInt, 3, 0, '', OP_JUMP_IF_NOT_LTE_IMM, 3)).ToBe(True);
+    Expect<Boolean>(Holds(lkInt, -301, 0, '', OP_JUMP_IF_NOT_GT_IMM, -300)).ToBe(False);
+    Expect<Boolean>(Holds(lkInt, -300, 0, '', OP_JUMP_IF_NOT_GTE_IMM, -300)).ToBe(True);
+    Expect<Boolean>(Holds(lkConstant, 0, 4.5, '', OP_JUMP_IF_NOT_GT_IMM, 4)).ToBe(True);
+    // NaN, held as a boxed number, satisfies no relation.
+    Expect<Boolean>(Holds(lkConstant, 0, NaN, '', OP_JUMP_IF_NOT_LT_IMM, 3)).ToBe(False);
+    Expect<Boolean>(Holds(lkConstant, 0, NaN, '', OP_JUMP_IF_NOT_GTE_IMM, 3)).ToBe(False);
+    // A String takes the generic comparison: "300" is converted to 300.
+    Expect<Boolean>(Holds(lkConstant, 0, 0, '300', OP_JUMP_IF_NOT_GT_IMM, 299)).ToBe(True);
+    Expect<Boolean>(Holds(lkConstant, 0, 0, '300', OP_JUMP_IF_NOT_LT_IMM, 299)).ToBe(False);
+    Expect<Boolean>(Holds(lkUndefined, 0, 0, '', OP_JUMP_IF_NOT_GTE_IMM, 0)).ToBe(False);
+
+    // NOT_STRICT_EQ jumps on a mismatch, so "holds" means equal; STRICT_EQ
+    // jumps on a match, so "holds" means not equal.
+    Expect<Boolean>(Holds(lkInt, 300, 0, '', OP_JUMP_IF_NOT_STRICT_EQ_IMM, 300)).ToBe(True);
+    Expect<Boolean>(Holds(lkConstant, 0, 0, '300', OP_JUMP_IF_NOT_STRICT_EQ_IMM, 300)).ToBe(False);
+    Expect<Boolean>(Holds(lkConstant, 0, NaN, '', OP_JUMP_IF_STRICT_EQ_IMM, 0)).ToBe(True);
+    Expect<Boolean>(Holds(lkInt, 1, 0, '', OP_JUMP_IF_STRICT_EQ_IMM, 1)).ToBe(False);
+    Expect<Boolean>(Holds(lkUndefined, 0, 0, '', OP_JUMP_IF_STRICT_EQ_IMM, 0)).ToBe(True);
+  finally
+    VM.Free;
   end;
 end;
 

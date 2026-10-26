@@ -311,9 +311,12 @@ begin
     Exit;
   NumberValue := TGocciaNumberLiteralValue(
     TGocciaLiteralExpression(AExpr).Value).Value;
+  // The range is checked before Trunc, which raises EInvalidOp for a value
+  // past Int64 when invalid operations are unmasked: the compiler can run
+  // outside the engine's masked floating-point scope.
   if IsNan(NumberValue) or IsInfinite(NumberValue) or
-     (NumberValue <> Trunc(NumberValue)) or
-     (NumberValue < Low(Int16)) or (NumberValue > High(Int16)) then
+     (NumberValue < Low(Int16)) or (NumberValue > High(Int16)) or
+     (NumberValue <> Trunc(NumberValue)) then
     Exit;
   AImmediate := Int16(Trunc(NumberValue));
   Result := True;
@@ -6098,6 +6101,105 @@ begin
   Result := True;
 end;
 
+// The Number that AExpr evaluates to when it is a signed Int16 integer known
+// at compile time and evaluating it has no effect: a literal, or a constant
+// such as a const binding of one.
+function TryInt16ConstantOperand(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out AImmediate: Int16): Boolean;
+var
+  Value: TGocciaCompileTimeValue;
+begin
+  if TrySignedInt16NumberLiteral(AExpr, AImmediate) then
+    Exit(True);
+  Result := False;
+  if not TryEvaluateConstantExpression(ACtx, AExpr, Value) or
+     (Value.Kind <> ctvkNumber) then
+    Exit;
+  // The range comes before Trunc, as in TrySignedInt16NumberLiteral.
+  if IsNan(Value.NumberValue) or IsInfinite(Value.NumberValue) or
+     (Value.NumberValue < Low(Int16)) or
+     (Value.NumberValue > High(Int16)) or
+     (Value.NumberValue <> Trunc(Value.NumberValue)) then
+    Exit;
+  AImmediate := Int16(Trunc(Value.NumberValue));
+  Result := True;
+end;
+
+// ES2026 §13.10.1 Relational Operators, §7.2.14 IsStrictlyEqual
+// `x < k`, `x > k`, `x <= k`, `x >= k`, `x === k` and `x !== k` with k a
+// signed Int16 Number constant, either way round, as one compare-and-jump on
+// x with k as an immediate: no instruction loads k and none tests a Boolean.
+// A relational operator applies ToPrimitive to both operands, and only x's can
+// run guest code, so `k < x` is `x > k` (and `k <= x` is `x >= k`) whatever
+// the order. Relational tests fuse only when jumping on false, since
+// `!(x < k)` is not `x >= k` for NaN; strict equality fuses either way.
+function TryEmitImmediateComparisonJump(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression; const AJumpWhen: Boolean;
+  out AJumpIndex: Integer): Boolean;
+var
+  Binary: TGocciaBinaryExpression;
+  Operand: TGocciaExpression;
+  Immediate, Unused: Int16;
+  Operator: TGocciaTokenType;
+  OpCode: TGocciaOpCode;
+  OperandReg: UInt16;
+  OwnsOperandReg: Boolean;
+begin
+  Result := False;
+  if not (ACondition is TGocciaBinaryExpression) then
+    Exit;
+  Binary := TGocciaBinaryExpression(ACondition);
+  Operator := Binary.Operator;
+  if not (Operator in [gttLess, gttGreater, gttLessEqual, gttGreaterEqual,
+     gttEqual, gttNotEqual]) then
+    Exit;
+  if (Operator in [gttLess, gttGreater, gttLessEqual, gttGreaterEqual]) and
+     AJumpWhen then
+    Exit;
+
+  if TryInt16ConstantOperand(ACtx, Binary.Right, Immediate) then
+  begin
+    // Both operands constant: leave the comparison to constant folding.
+    if TryInt16ConstantOperand(ACtx, Binary.Left, Unused) then
+      Exit;
+    Operand := Binary.Left;
+  end
+  else if TryInt16ConstantOperand(ACtx, Binary.Left, Immediate) then
+  begin
+    Operand := Binary.Right;
+    case Operator of
+      gttLess: Operator := gttGreater;
+      gttGreater: Operator := gttLess;
+      gttLessEqual: Operator := gttGreaterEqual;
+      gttGreaterEqual: Operator := gttLessEqual;
+    end;
+  end
+  else
+    Exit;
+
+  case Operator of
+    gttLess: OpCode := OP_JUMP_IF_NOT_LT_IMM;
+    gttGreater: OpCode := OP_JUMP_IF_NOT_GT_IMM;
+    gttLessEqual: OpCode := OP_JUMP_IF_NOT_LTE_IMM;
+    gttGreaterEqual: OpCode := OP_JUMP_IF_NOT_GTE_IMM;
+  else
+    // Jump when `x === k` is AJumpWhen: on a match for === jumping on true
+    // or !== jumping on false.
+    if (Operator = gttEqual) = AJumpWhen then
+      OpCode := OP_JUMP_IF_STRICT_EQ_IMM
+    else
+      OpCode := OP_JUMP_IF_NOT_STRICT_EQ_IMM;
+  end;
+
+  EmitLineMapping(ACtx, ACondition.Line, ACondition.Column);
+  OwnsOperandReg := CompileOperand(ACtx, Operand, OperandReg);
+  AJumpIndex := EmitInstruction(ACtx,
+    EncodeABC(OpCode, OperandReg, UInt16(Immediate), 0), True);
+  if OwnsOperandReg then
+    ACtx.Scope.FreeRegister;
+  Result := True;
+end;
+
 procedure AppendJump(var AJumps: TGocciaCompilerJumpArray;
   const AJumpIndex: Integer);
 begin
@@ -6236,6 +6338,13 @@ begin
     EmitLineMapping(ACtx, ACondition.Line, ACondition.Column);
     EmitConditionJumps(ACtx, TGocciaUnaryExpression(ACondition).Operand,
       not AJumpWhen, AJumps);
+    Exit;
+  end;
+
+  if TryEmitImmediateComparisonJump(ACtx, ACondition, AJumpWhen,
+       JumpIndex) then
+  begin
+    AppendJump(AJumps, JumpIndex);
     Exit;
   end;
 
@@ -7489,6 +7598,8 @@ var
   EndJumps: array of Integer;
   PreparedTarget: TPreparedDestructuringTarget;
   OwnsRegOld: Boolean;
+  ImmediateOp: TGocciaOpCode;
+  Immediate: Int16;
 begin
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
   if IsShortCircuitAssignment(AExpr.Operator) then
@@ -7721,7 +7832,26 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, RegOld, Slot));
     end;
     RegVal := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(AExpr.Value, RegVal);
+    // `x += k` and `x -= k` on a binding that holds only Numbers, with k a
+    // signed Int16 literal, add the immediate: no instruction loads k. The
+    // literal has no effect to evaluate, and LocalType was sampled with the
+    // old value. OP_ADD_NUM_IMM refuses a value that is not a Number, so the
+    // proof is the whole-body one (Goccia.Compiler.NumericBindings), which
+    // covers every store, closures included. A type annotation alone is not
+    // one: `let x: number;` holds undefined until it is assigned.
+    ImmediateOp := OP_NOP;
+    if not ACtx.Scope.GetLocal(LocalIdx).IsConst and
+       IsKnownNumeric(LocalType) and
+       ACtx.Scope.GetLocal(LocalIdx).HoldsOnlyNumbers and
+       TrySignedInt16NumberLiteral(AExpr.Value, Immediate) then
+    begin
+      if AExpr.Operator = gttPlusAssign then
+        ImmediateOp := OP_ADD_NUM_IMM
+      else if AExpr.Operator = gttMinusAssign then
+        ImmediateOp := OP_SUB_NUM_IMM;
+    end;
+    if ImmediateOp = OP_NOP then
+      ACtx.CompileExpression(AExpr.Value, RegVal);
 
     if ACtx.Scope.GetLocal(LocalIdx).IsConst then
     begin
@@ -7752,7 +7882,11 @@ begin
     // else (see LocalAcceptsDirectRegisterWrite).
     if LocalAcceptsDirectRegisterWrite(ACtx, LocalIdx) then
     begin
-      EmitInstruction(ACtx, EncodeABC(Op, Slot, RegOld, RegVal));
+      if ImmediateOp <> OP_NOP then
+        EmitInstruction(ACtx, EncodeABC(ImmediateOp, Slot, RegOld,
+          UInt16(Immediate)))
+      else
+        EmitInstruction(ACtx, EncodeABC(Op, Slot, RegOld, RegVal));
       ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       if ANeedsResult and (ADest <> Slot) then
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, Slot, 0));
@@ -7762,7 +7896,11 @@ begin
       Exit;
     end;
     RegTemp := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
+    if ImmediateOp <> OP_NOP then
+      EmitInstruction(ACtx, EncodeABC(ImmediateOp, RegTemp, RegOld,
+        UInt16(Immediate)))
+    else
+      EmitInstruction(ACtx, EncodeABC(Op, RegTemp, RegOld, RegVal));
     ResultType := sltUntyped;
     if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
        IsKnownNumeric(LocalType) and IsKnownNumeric(ValType) then

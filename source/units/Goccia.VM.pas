@@ -423,6 +423,17 @@ type
     // stack. A `const` record parameter may be passed by reference on some
     // targets (e.g. win64), which would leave the parameter dangling into
     // the freed old block; a value copy taken at the call is immune.
+    // Whether an OP_JUMP_IF_*_IMM instruction takes its jump. It can run
+    // guest code (a relational ToPrimitive).
+    function ImmediateComparisonJumps(const AOp: TGocciaOpCode;
+      const ALeftIndex: Integer; const AImmediate: Int16): Boolean;
+    // OP_GET_PROP_CONST and OP_GET_LOCAL_PROP_CONST for a receiver the
+    // property read caches do not serve: R[ADest] := R[AObject][K[AName]].
+    procedure ExecGetUncachedConstProperty(
+      const ATemplate: TGocciaFunctionTemplate; const ADest, AObject: Integer;
+      const ANameIndex: UInt16);
+    procedure RecordFusedBranchHit(const ATemplate: TGocciaFunctionTemplate;
+      const APC: Integer; const ATaken: Boolean);
     procedure ExecGetComputedProperty(const ADest: Integer;
       AObjReg, AKeyReg: TGocciaRegister;
       const AOptions: TGocciaComputedAccessOptions);
@@ -10081,9 +10092,14 @@ begin
   begin
     // With the intrinsic iterator in place, every IteratorStepValue of
     // ArrayAccumulation yields ? Get(array, ToString(index)) while index is
-    // below the array's live length (§23.1.5.2.1), so read those values
-    // directly.  The count is re-read each step because a getter reached
-    // through a hole may grow or shrink the source, as it would mid-iteration.
+    // below the array's length (§23.1.5.2.1), so read those values directly.
+    // The length can be past the stored elements (a length set far ahead, or
+    // an element stored far past the others), so the dense count is only a
+    // capacity hint.  The length is re-read each step because a getter
+    // reached through a hole may grow or shrink the source, as it would
+    // mid-iteration; as for the iterator, a length past High(Integer) ends
+    // there.  The length is never below the dense count, so the dense count
+    // decides while it holds and the length is read only past it.
     SourceArray := TGocciaArrayValue(ASource);
     SourceElements := SourceArray.Elements;
     Needed := Target.Count + SourceElements.Count;
@@ -10091,7 +10107,8 @@ begin
       Target.Capacity := Max(Needed, Target.Capacity * 2);
     I := 0;
     Polls := @GThreadPolls;
-    while I < SourceElements.Count do
+    while (I < SourceElements.Count) or
+          (I < Min(SourceArray.StoredLength, High(Integer))) do
     begin
       if Polls^.Any <> 0 then
         RunArmedPolls(Polls);
@@ -18025,6 +18042,139 @@ begin
       end;
     end;
   Literal.FFastLiteralMode := Fast and Literal.Extensible;
+end;
+
+// ES2026 §13.10.1 Relational Operators: Evaluation and §7.2.14
+// IsStrictlyEqual, with a Number immediate as one operand. A relational
+// opcode jumps when its comparison is false, OP_JUMP_IF_NOT_STRICT_EQ_IMM
+// when the values differ and OP_JUMP_IF_STRICT_EQ_IMM when they are equal.
+// A Number, scalar or boxed (NaN, an infinity, -0), compares directly; any
+// other value takes IsLessThan through the helpers OP_LT and the other
+// relational opcodes use, so ToPrimitive, BigInt and String operands keep
+// their semantics, and is never strictly equal to a Number.
+function TGocciaVM.ImmediateComparisonJumps(const AOp: TGocciaOpCode;
+  const ALeftIndex: Integer; const AImmediate: Int16): Boolean;
+var
+  LeftValue, RightValue: TGocciaValue;
+  LeftNumber: Double;
+  IsNumber, Holds: Boolean;
+begin
+  IsNumber := True;
+  case FRegisters[ALeftIndex].Kind of
+    grkInt:
+      LeftNumber := FRegisters[ALeftIndex].IntValue;
+    grkFloat:
+      LeftNumber := FRegisters[ALeftIndex].FloatValue;
+  else
+    IsNumber := VMBoxedNumberRegister(FRegisters[ALeftIndex]);
+    if IsNumber then
+      LeftNumber := TGocciaNumberLiteralValue(
+        FRegisters[ALeftIndex].ObjectValue).Value
+    else
+      LeftNumber := 0;
+  end;
+
+  if IsNumber then
+  begin
+    // Each comparison is stored before it is negated: FPC rewrites
+    // `not (x < k)` as `x >= k`, which is wrong when x is NaN.
+    case AOp of
+      OP_JUMP_IF_NOT_LT_IMM: Holds := LeftNumber < AImmediate;
+      OP_JUMP_IF_NOT_GT_IMM: Holds := LeftNumber > AImmediate;
+      OP_JUMP_IF_NOT_LTE_IMM: Holds := LeftNumber <= AImmediate;
+      OP_JUMP_IF_NOT_GTE_IMM: Holds := LeftNumber >= AImmediate;
+    else
+      Holds := LeftNumber = AImmediate;
+    end;
+    Result := Holds = (AOp = OP_JUMP_IF_STRICT_EQ_IMM);
+    Exit;
+  end;
+
+  case AOp of
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM:
+      Exit(True);
+    OP_JUMP_IF_STRICT_EQ_IMM:
+      Exit(False);
+  end;
+
+  LeftValue := GetRegisterFast(ALeftIndex);
+  RightValue := TGocciaNumberLiteralValue.Create(AImmediate);
+  case AOp of
+    OP_JUMP_IF_NOT_LT_IMM:
+      Holds := VMRootedBinaryPredicate(@Goccia.Arithmetic.LessThan,
+        LeftValue, RightValue);
+    OP_JUMP_IF_NOT_GT_IMM:
+      Holds := VMRootedBinaryPredicate(@Goccia.Arithmetic.GreaterThan,
+        LeftValue, RightValue);
+    OP_JUMP_IF_NOT_LTE_IMM:
+      Holds := VMRootedBinaryPredicate(
+        @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue);
+  else
+    Holds := VMRootedBinaryPredicate(
+      @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue);
+  end;
+  Result := not Holds;
+end;
+
+// Coverage for a fused compare-and-jump: branch 0 is the jump, branch 1 the
+// fall-through, as for OP_JUMP_IF_FALSE.
+procedure TGocciaVM.RecordFusedBranchHit(
+  const ATemplate: TGocciaFunctionTemplate; const APC: Integer;
+  const ATaken: Boolean);
+begin
+  if (TGocciaCoverageTracker.Instance = nil) or
+     not Assigned(ATemplate.DebugInfo) then
+    Exit;
+  if ATaken then
+    TGocciaCoverageTracker.Instance.RecordBranchHit(
+      ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
+      ATemplate.DebugInfo.GetColumnForPC(APC), 0)
+  else
+    TGocciaCoverageTracker.Instance.RecordBranchHit(
+      ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
+      ATemplate.DebugInfo.GetColumnForPC(APC), 1);
+end;
+
+// A constant-name property read on a receiver the property read caches do
+// not serve. An Array's `length` is an own data property that cannot be
+// deleted or made an accessor (ES2026 §10.4.2), and a String's is fixed
+// (§10.4.3), so each is read from the value itself, without a name lookup or
+// a boxed Number.
+procedure TGocciaVM.ExecGetUncachedConstProperty(
+  const ATemplate: TGocciaFunctionTemplate; const ADest, AObject: Integer;
+  const ANameIndex: UInt16);
+var
+  Constant: PGocciaBytecodeConstant;
+  StoredLength: Int64;
+  Value: TGocciaValue;
+begin
+  Constant := ATemplate.GetConstantUnchecked(ANameIndex);
+  if Constant^.Kind = bckPrivateName then
+    Value := GetPrivatePropertyValue(GetRegister(AObject), Constant^.StringValue)
+  else if (FRegisters[AObject].Kind = grkObject) and
+          Assigned(FRegisters[AObject].ObjectValue) and
+          (FRegisters[AObject].ObjectValue.ClassType = TGocciaArrayValue) and
+          (Constant^.StringValue = PROP_LENGTH) then
+  begin
+    StoredLength :=
+      TGocciaArrayValue(FRegisters[AObject].ObjectValue).StoredLength;
+    FRegisters[ADest] := VMNumberRegister(StoredLength);
+    Exit;
+  end
+  else if (FRegisters[AObject].Kind = grkObject) and
+          Assigned(FRegisters[AObject].ObjectValue) and
+          (FRegisters[AObject].ObjectValue.ClassType =
+           TGocciaStringLiteralValue) and
+          (Constant^.StringValue = PROP_LENGTH) then
+  begin
+    StoredLength := UTF16CodeUnitLength(TGocciaStringLiteralValue(
+      FRegisters[AObject].ObjectValue).Value);
+    FRegisters[ADest] := VMNumberRegister(StoredLength);
+    Exit;
+  end
+  else
+    Value := GetPropertyValue(GetRegister(AObject), Constant^.StringValue);
+  SetRegister(ADest, Value);
 end;
 
 initialization
