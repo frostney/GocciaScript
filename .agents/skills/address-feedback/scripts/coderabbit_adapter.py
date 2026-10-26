@@ -29,8 +29,10 @@ completes, pauses or skips it, in the order of time and status id; on a head
 other open pull requests share, a skip may answer one of them, so the
 pending status stays current. Every
 state that waits on CodeRabbit ends after a fixed bound: the wait for its
-own review becomes a trigger, and an unanswered trigger, a stalled review,
-an unexplained refusal and a second lock loss each become a blocked state.
+own review and a back-off after a refusal without a readable wait each
+become a trigger, and an unanswered trigger, a stalled review, a fourth
+refusal in one review cycle whose wait cannot be read and a second lock
+loss each become a blocked state.
 A refusal whose newest paired notice is CodeRabbit's line saying waiting
 won't change it is blocked at once. A GitHub read that
 fails is an operational error, never missing evidence. Triggers are
@@ -71,6 +73,10 @@ from kgr_github import (  # noqa: E402
     stable_digest,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_wait import validate_policy  # noqa: E402
+
 
 BOT_LOGINS = {"coderabbitai", "coderabbitai[bot]"}
 TRIGGERS = {
@@ -108,9 +114,12 @@ REVIEW_FINDINGS = re.compile(
     r"(?:Outside diff range|Nitpick|Duplicate) comments \(\d+\)", re.IGNORECASE
 )
 
-# The first line of every version of CodeRabbit's summary comment. Its replies
-# to commands start "<!-- This is an auto-generated reply by CodeRabbit -->".
+# The HTML comment that marks every version of CodeRabbit's summary comment, among
+# the HTML comments it opens with. Until about 2026-10-20 it was the first line;
+# since then "<!-- coderabbit-ai-generated:v1 -->" and a blank line come first.
+# Its replies to commands open "<!-- This is an auto-generated reply by CodeRabbit -->".
 SUMMARY_MARKER = "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->"
+LEADING_COMMENT = re.compile(r"\s*(<!--.*?-->)", re.DOTALL)
 
 # The summary comment marks the commit its latest review covered:
 # <!-- final_review_risk_coverage:{"sourceCommitId":..,"coveredCommitId":..,"kind":"reviewed"} -->
@@ -135,8 +144,13 @@ AUTOMATIC_REVIEW_SECONDS = 120
 TRIGGER_ANSWER_SECONDS = 10 * 60
 # The longest recorded pending status lasted 1,805 s.
 IN_PROGRESS_SECONDS = 60 * 60
-# How long a refusal without a paired stated wait holds the head's trigger.
+# A refusal without a paired stated wait holds the head's trigger for a back-off
+# that doubles with each refusal of the head since its review cycle began: 15,
+# 30, then 60 minutes, after which one trigger is permitted. CodeRabbit's limit
+# is time-based and every recorded stated wait was under 60 minutes, so a
+# fourth refusal without a readable wait blocks for a person.
 UNKNOWN_WAIT_SECONDS = 15 * 60
+UNKNOWN_WAIT_RETRIES = 3
 EDIT_HISTORY_PAGES = 10
 
 COMMENT_EDITS_QUERY = """query($id: ID!, $cursor: String) {
@@ -163,6 +177,25 @@ FORCE_PUSH_QUERY = """query($owner: String!, $name: String!, $number: Int!, $cur
   } }
 }"""
 FORCE_PUSH_PAGES = 20
+# Whether the repository uses CodeRabbit, read only when the pull request shows no CodeRabbit
+# activity: a CodeRabbit configuration file at its root and its review policy, both on the
+# default branch, and CodeRabbit's statuses, comments and reviews on its latest closed pull
+# requests. An organization's central configuration repository is not read: it says how
+# CodeRabbit reviews where it is installed, not whether it is installed on this repository.
+POLICY_PATH = ".github/delivery/review-automations.json"
+CLOSED_PULLS = 10
+PRESENCE_QUERY = """query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    policy: object(expression: "HEAD:.github/delivery/review-automations.json") { ... on Blob { text } }
+    root: object(expression: "HEAD:") { ... on Tree { entries { name } } }
+    pullRequests(last: %d, states: [MERGED, CLOSED]) { nodes {
+      first: comments(first: 10) { nodes { author { login } } }
+      last: comments(last: 10) { nodes { author { login } } }
+      reviews(first: 10) { nodes { author { login } } }
+      commits(last: 1) { nodes { commit { status { contexts { context creator { login } } } } } }
+    } }
+  }
+}""" % CLOSED_PULLS
 
 # Every state a command reports, and the commands that report it. `status`
 # reports one state per head and one for the whole set; `run` reports its
@@ -180,6 +213,7 @@ HEAD_STATES = frozenset(
         "rate-limited-unknown-wait",
         "draft",
         "bot-skip",
+        "not-active",
         "skipped",
         "paused",
         "blocked-unanswered",
@@ -218,7 +252,10 @@ BLOCKED_STATES = frozenset(
         "closed",
     }
 )
-FINAL_STATES = COMPLETE_STATES | BLOCKED_STATES | {"draft", "bot-skip", "invalidated"}
+# States that need no CodeRabbit review: a bot-authored pull request, and a repository where
+# nothing shows CodeRabbit is used.
+EXEMPT_STATES = frozenset({"bot-skip", "not-active"})
+FINAL_STATES = COMPLETE_STATES | BLOCKED_STATES | EXEMPT_STATES | {"draft", "invalidated"}
 
 
 def repo_parts(repo: str) -> tuple[str, str]:
@@ -382,8 +419,22 @@ def comment_versions(gh: Gh, item: dict[str, Any], since: float) -> list[tuple[f
     raise WaitError(f"{unreadable} within {EDIT_HISTORY_PAGES} pages")
 
 
+def leading_comments(body: str) -> list[str]:
+    """The HTML comments a body opens with, before its first other content."""
+    found: list[str] = []
+    position = 0
+    while match := LEADING_COMMENT.match(body, position):
+        found.append(match.group(1))
+        position = match.end()
+    return found
+
+
 def is_summary(item: dict[str, Any]) -> bool:
-    return is_bot(item) and str(item.get("body") or "").lstrip().startswith(SUMMARY_MARKER)
+    """Whether a comment is CodeRabbit's summary: its marker is among the HTML comments it opens with.
+
+    A marker CodeRabbit quotes after other content, as a reply might, does not count.
+    """
+    return is_bot(item) and SUMMARY_MARKER in leading_comments(str(item.get("body") or ""))
 
 
 def correlated_wait(
@@ -643,6 +694,66 @@ def head_triggers(comments: list[dict[str, Any]], arrival: float) -> list[dict[s
     return found
 
 
+# --- Presence -------------------------------------------------------------------
+
+
+def presence(
+    gh: Gh, repo: str, statuses: list[dict[str, Any]], bot_comments: list[dict[str, Any]], reviews: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Whether CodeRabbit is in use on the repository, and the evidence that says so.
+
+    CodeRabbit is a review gate only when the repository or the pull request
+    shows it is used: its activity on the pull request, a CodeRabbit
+    configuration file, its activity on the repository's latest closed pull
+    requests, or the repository's review policy naming it. A trigger someone
+    posted is no such evidence: CodeRabbit may never answer it. A review
+    policy that cannot be read is an operational error only when nothing else
+    shows CodeRabbit is used.
+    """
+    if statuses or bot_comments or any(is_bot(review) for review in reviews):
+        return {"active": True, "source": "pull-request"}
+    owner, name = repo_parts(repo)
+    data = gh.graphql(PRESENCE_QUERY, {"owner": owner, "name": name})
+    repository = (data or {}).get("repository")
+    if not isinstance(repository, dict):
+        raise WaitError(f"repository {repo} response is invalid")
+    entries = ((repository.get("root") or {}).get("entries")) or []
+    names = sorted(
+        str(entry.get("name")) for entry in entries
+        if isinstance(entry, dict) and str(entry.get("name") or "").startswith(".coderabbit")
+    )
+    if names:
+        return {"active": True, "source": f"config {names[0]}"}
+    for pull in ((repository.get("pullRequests") or {}).get("nodes")) or []:
+        pull = pull or {}
+        authors = [
+            item or {}
+            for key in ("first", "last", "reviews")
+            for item in ((pull.get(key) or {}).get("nodes") or [])
+        ]
+        contexts = [
+            context or {}
+            for commit in ((pull.get("commits") or {}).get("nodes") or [])
+            for context in ((((commit or {}).get("commit") or {}).get("status") or {}).get("contexts") or [])
+        ]
+        if any(is_bot(item, "author") for item in authors) or any(
+            "coderabbit" in str(context.get("context") or "").lower() and is_bot(context, "creator")
+            for context in contexts
+        ):
+            return {"active": True, "source": "closed-pull-requests"}
+    text = (repository.get("policy") or {}).get("text")
+    if isinstance(text, str):
+        try:
+            policy = validate_policy(json.loads(text), POLICY_PATH)
+        except json.JSONDecodeError as error:
+            raise WaitError(f"cannot read review policy {POLICY_PATH}: {error}") from None
+        for automation in policy["automations"]:
+            actors = {actor.lower() for actor in automation.get("actors", [])}
+            if automation["id"].lower() == "coderabbit" or actors & BOT_LOGINS:
+                return {"active": True, "source": "policy"}
+    return {"active": False, "source": None}
+
+
 # --- Evidence and decision ------------------------------------------------------
 
 
@@ -681,9 +792,12 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
     numbers = [pr, *sharing_pulls(gh, repo, pr, head)]
     own = rest_items(gh, f"repos/{repo}/issues/{pr}/comments?per_page=100")
     comments: list[dict[str, Any]] = []
+    others: list[dict[str, Any]] = []
     reviews: list[dict[str, Any]] = []
     for number in numbers:
-        comments += own if number == pr else rest_items(gh, f"repos/{repo}/issues/{number}/comments?per_page=100")
+        listed = own if number == pr else rest_items(gh, f"repos/{repo}/issues/{number}/comments?per_page=100")
+        comments += listed
+        others += [] if number == pr else listed
         reviews += rest_items(gh, f"repos/{repo}/pulls/{number}/reviews?per_page=100")
     timeline = pull_timeline(gh, repo, pr)
     arrival = head_arrival(gh, repo, pull, head, statuses, pr)
@@ -691,6 +805,7 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
         pull, timeline, (arrival[0], f"head-{arrival[1]}")
     )
     bot_comments = [item for item in comments if is_bot(item)]
+    used = presence(gh, repo, statuses, bot_comments, reviews)
     earlier = None
     if status_kind(newest, author) == "none" or parse_timestamp(newest["created_at"], "status created_at") < automatic:
         earlier = earlier_review(gh, [item for item in own if is_bot(item)], automatic)
@@ -718,11 +833,16 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
         "triggers": sorted(
             head_triggers(own, arrival[0]), key=lambda trigger: (trigger["at"], int(trigger["id"] or 0))
         ),
+        # Triggers on the other open pull requests of the head: CodeRabbit answers them on the commit.
+        "sharedTriggers": sorted(
+            head_triggers(others, arrival[0]), key=lambda trigger: (trigger["at"], int(trigger["id"] or 0))
+        ),
         "statusHistory": [
             {"createdAt": status["created_at"], "kind": status_kind(status, author), "description": status.get("description")}
             for status in statuses
         ],
         "rateLimit": rate_limit,
+        "presence": used,
     }
 
 
@@ -765,17 +885,61 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
         return result(blocked, f"{why} and nothing changed for {seconds // 60} minutes", **timing)
 
     def gate(mode: str) -> dict[str, Any]:
-        """Hold the trigger while the head's own refusal still applies."""
+        """Hold the trigger while the head's own refusal or another pull request's trigger still applies."""
+        held = refused(mode)
+        if held is not None:
+            return held
+        # A trigger on another open pull request of the head is answered on the commit: wait for it.
+        answered_since = status_at if status_at is not None else start
+        shared = [trigger for trigger in evidence.get("sharedTriggers", []) if trigger["at"] >= answered_since]
+        if shared and now < shared[-1]["at"] + TRIGGER_ANSWER_SECONDS:
+            bound = shared[-1]["at"] + TRIGGER_ANSWER_SECONDS
+            return result(
+                "triggered",
+                f"the {shared[-1]['mode']} trigger posted at {shared[-1]['createdAt']} on another open pull "
+                f"request of the head awaits a CodeRabbit status; a trigger is permitted from "
+                f"{format_timestamp(bound)}",
+                since=format_timestamp(shared[-1]["at"]),
+                boundAt=format_timestamp(bound),
+            )
+        return result(f"trigger-{mode}", f"a {mode} review trigger is permitted", mode)
+
+    def refused(mode: str) -> dict[str, Any] | None:
+        """The state while the head's own refusal holds the trigger, or None."""
         refusal = evidence["rateLimit"] if kind == "rate-limited" else None
         if refusal and not refusal["wait"]:
-            return bounded(
-                "rate-limited-unknown-wait",
-                "blocked-unknown-wait",
-                status_at,
-                UNKNOWN_WAIT_SECONDS,
-                f"CodeRabbit rate-limited the head at {refusal['statusAt']} and {refusal['missing']}",
-                mode,
+            # One refusal per attempt: CodeRabbit may post two refusal statuses for one push or
+            # trigger, so the cycle's refusals count once per cycle start or trigger before them.
+            # A refusal from before the cycle began still holds the trigger as the first.
+            asks = [trigger["at"] for trigger in evidence["triggers"] + evidence.get("sharedTriggers", [])]
+            attempts = {
+                max([start, *(asked for asked in asks if asked < when)])
+                for when, seen, _description in history
+                if seen == "rate-limited" and when >= start
+            }
+            refusals = max(1, len(attempts))
+            why = (
+                f"CodeRabbit rate-limited the head at {refusal['statusAt']} and {refusal['missing']}; "
+                f"refusal {refusals} since {automatic['source']} at {automatic['from']}"
             )
+            if refusals > UNKNOWN_WAIT_RETRIES:
+                return result(
+                    "blocked-unknown-wait",
+                    f"{why}, after {UNKNOWN_WAIT_RETRIES} triggers after a back-off",
+                    since=format_timestamp(status_at),
+                    refusals=refusals,
+                )
+            retry = status_at + UNKNOWN_WAIT_SECONDS * 2 ** (refusals - 1)
+            if now < retry:
+                return result(
+                    "rate-limited-unknown-wait",
+                    f"{why}; one {mode} review trigger is permitted from {format_timestamp(retry)}",
+                    mode,
+                    since=format_timestamp(status_at),
+                    retryAt=format_timestamp(retry),
+                    refusals=refusals,
+                )
+            return None
         if refusal and refusal["wait"]["noCapacity"]:
             return result(
                 "blocked-no-capacity",
@@ -789,7 +953,7 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
                 mode,
                 retryAt=refusal["wait"]["retryAt"],
             )
-        return result(f"trigger-{mode}", f"a {mode} review trigger is permitted", mode)
+        return None
 
     def awaiting(since: float, until: float, after: str) -> dict[str, Any]:
         return result(
@@ -867,6 +1031,15 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
             f"CodeRabbit's summary marks {evidence['cleanReview']['coveredCommitId']} covered "
             "with no actionable comments",
         )
+    used = evidence.get("presence") or {"active": True}
+    if not used["active"] and now >= start + AUTOMATIC_REVIEW_SECONDS:
+        return result(
+            "not-active",
+            "nothing shows CodeRabbit is used here: no CodeRabbit status, comment or review on the pull "
+            f"request {AUTOMATIC_REVIEW_SECONDS} s after {automatic['source']} at {automatic['from']} or on "
+            f"the repository's {CLOSED_PULLS} latest closed pull requests, no .coderabbit* configuration "
+            f"file and no automation naming CodeRabbit in {POLICY_PATH}",
+        )
     if kind == "bot-skip":
         return result("bot-skip", "CodeRabbit does not review a bot-authored pull request")
     unreviewed = kind in {"none", "draft-skip"}
@@ -938,9 +1111,10 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
 def public(evidence: dict[str, Any]) -> dict[str, Any]:
     """Evidence without internal epoch fields."""
     value = dict(evidence)
-    value["triggers"] = [
-        {key: item[key] for key in ("id", "mode", "createdAt")} for item in evidence["triggers"]
-    ]
+    for key in ("triggers", "sharedTriggers"):
+        value[key] = [
+            {field: item[field] for field in ("id", "mode", "createdAt")} for item in evidence.get(key, [])
+        ]
     if evidence["rateLimit"] and evidence["rateLimit"]["wait"]:
         wait = evidence["rateLimit"]["wait"]
         value["rateLimit"] = evidence["rateLimit"] | {
@@ -995,8 +1169,11 @@ def aggregate_status(value: dict[str, Any]) -> tuple[str, str]:
     states = [item["state"] for item in value["pullRequests"]]
     if "invalidated" in states:
         return "invalidated", "at least one requested PR head changed"
-    if all(state in COMPLETE_STATES | {"bot-skip"} for state in states):
-        return "satisfied", "every requested head has a confirmed CodeRabbit review or a bot-author exemption"
+    if all(state in COMPLETE_STATES | EXEMPT_STATES for state in states):
+        return "satisfied", (
+            "every requested head has a confirmed CodeRabbit review, a bot-author exemption, or no "
+            "CodeRabbit in use"
+        )
     if any(state in BLOCKED_STATES for state in states):
         return "blocked", "at least one requested head cannot get a CodeRabbit review without a person"
     return "pending", "at least one requested head still awaits a CodeRabbit transition"
