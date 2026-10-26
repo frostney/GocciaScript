@@ -223,6 +223,7 @@ type
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
     procedure TestReturnAnnotationDoesNotTypeCallResult;
+    procedure TestUncheckedStrictBindingDoesNotTypeOperands;
     procedure TestBinaryOperatorResultTypes;
     procedure TestBitwiseOperatorResultTypes;
     procedure TestUnaryOperatorResultTypes;
@@ -432,6 +433,8 @@ begin
     TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
   Test('Return annotation does not type call result',
     TestReturnAnnotationDoesNotTypeCallResult);
+  Test('Unchecked strict binding does not type operands',
+    TestUncheckedStrictBindingDoesNotTypeOperands);
   Test('Binary operator result types', TestBinaryOperatorResultTypes);
   Test('Bitwise operator result types', TestBitwiseOperatorResultTypes);
   Test('Unary operator result types', TestUnaryOperatorResultTypes);
@@ -4041,6 +4044,69 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestUncheckedStrictBindingDoesNotTypeOperands;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // An annotated let declared without an initializer holds undefined, which
+  // no check has seen: its reads, a closure's reads, a const copied from it
+  // and a call returning it stay generic (#1912).
+  Module := CompileSource(
+    'let y: number; y + 1; 1 + y; y - 1; y + y;' +
+    'let z!: number; z + 1;' +
+    'const h = () => y + 1; const c = y; c + 1;' +
+    'const f = () => { let u: number; return u; }; f() + 1;',
+    True);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // The annotation is still enforced on every assignment.
+  Module := CompileSource('let y: number; y = 1; y = "x";', True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  // A rest parameter holds an array whatever its annotation names, so `+=`
+  // can concatenate and its result is checked.
+  Module := CompileSource(
+    'const r = (...xs: number) => xs - 1; const s = (...xs: number) => xs + 1;' +
+    'const t = (...xs: number) => { xs += 1; };',
+    True);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  // A var holds undefined until its declaration runs, initializer or not.
+  Module := CompileSource('var v: number; v + 1; var w: number = 2; w - 1;',
+    True, False, False, True, True, True, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A checked initializer keeps the typed operator.
+  Module := CompileSource('let k: number = 1; k + 1;', True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestReturnAnnotationDoesNotTypeCallResult;
 var
   Module: TGocciaBytecodeModule;
@@ -5037,14 +5103,15 @@ var
 begin
   // `var x;` inside `catch (x)` redeclares the function's var binding, but
   // `x` in the catch block is the catch parameter (ES2026 B.3.4). The var's
-  // enforced Number type stays on the var: the read after the try statement
-  // is typed, the catch parameter read is not.
+  // enforced Number type stays on the var: the assignment after the try
+  // statement is checked, the catch parameter's is not. (Reads of a var are
+  // never typed by its enforced type: it holds undefined until its
+  // declaration runs.)
   Module := CompileSource(
-    'var x = 1; try { throw "s"; } catch (x) { var x; x - 1; } x - 2;',
+    'var x = 1; try { throw "s"; } catch (x) { var x; x = "a"; } x = "b";',
     True, False, False, False, False, False, False, False, True);
   try
-    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
-    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
   finally
     Module.Free;
   end;

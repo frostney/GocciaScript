@@ -289,6 +289,7 @@ begin
       begin
         Local := Scope.GetLocal(LocalIndex);
         Result := IsKnownNumeric(Local.TypeHint) and not Local.IsGlobalBacked and
+          not Local.HoldsUncheckedValue and
           (Local.IsConst or Local.IsStrictlyTyped or Local.HoldsOnlyNumbers);
         Break;
       end;

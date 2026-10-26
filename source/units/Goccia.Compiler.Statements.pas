@@ -597,9 +597,12 @@ begin
       Local := AScope.GetLocal(LocalIdx);
       // A captured binding that holds only Numbers
       // (Goccia.Compiler.NumericBindings: no closure assigns it) keeps its
-      // hint as well.
-      if Local.IsConst or Local.IsStrictlyTyped or not Local.IsCaptured or
-         (Local.HoldsOnlyNumbers and IsKnownNumeric(Local.TypeHint)) then
+      // hint as well. A strictly typed binding that can still hold a value no
+      // check has seen (HoldsUncheckedValue) has an enforced type, not a
+      // known one.
+      if not Local.HoldsUncheckedValue and
+         (Local.IsConst or Local.IsStrictlyTyped or not Local.IsCaptured or
+          (Local.HoldsOnlyNumbers and IsKnownNumeric(Local.TypeHint))) then
         Result := Local.TypeHint;
     end
     else
@@ -607,10 +610,11 @@ begin
       LocalIdx := AScope.ResolveUpvalue(TGocciaIdentifierExpression(AExpr).Name);
       if (LocalIdx >= 0) and not AScope.DirectEvalMayShadow(
            TGocciaIdentifierExpression(AExpr).Name) then
-        if AScope.GetUpvalue(LocalIdx).IsConst or
-           AScope.GetUpvalue(LocalIdx).IsStrictlyTyped or
-           (AScope.GetUpvalue(LocalIdx).HoldsOnlyNumbers and
-            IsKnownNumeric(AScope.GetUpvalue(LocalIdx).TypeHint)) then
+        if not AScope.GetUpvalue(LocalIdx).HoldsUncheckedValue and
+           (AScope.GetUpvalue(LocalIdx).IsConst or
+            AScope.GetUpvalue(LocalIdx).IsStrictlyTyped or
+            (AScope.GetUpvalue(LocalIdx).HoldsOnlyNumbers and
+             IsKnownNumeric(AScope.GetUpvalue(LocalIdx).TypeHint))) then
           Result := AScope.GetUpvalue(LocalIdx).TypeHint;
     end;
   end
@@ -1264,6 +1268,13 @@ begin
         begin
           ACtx.Scope.SetLocalStrictlyTyped(LocalIdx, True);
           ACtx.Template.SetLocalStrictFlag(Slot, True);
+          // Only an initializer's value is checked here. Without one the
+          // binding holds undefined (ES2026 §14.3.1.2, §14.3.2.1), and a var
+          // holds it from its instantiation until its declaration runs
+          // (§10.2.11 steps 29-30, §16.1.7 step 17), so the annotation is
+          // enforced on later stores but no read is typed by it.
+          if not HasRealInitializer or AStmt.IsVar then
+            ACtx.Scope.SetLocalHoldsUncheckedValue(LocalIdx, True);
         end;
       end;
     end;
@@ -1762,6 +1773,8 @@ begin
   ACtx.Scope.SetLocalTypeHint(ATargetIdx, Source.TypeHint);
   ACtx.Scope.SetLocalHoldsOnlyNumbers(ATargetIdx, Source.HoldsOnlyNumbers);
   ACtx.Scope.SetLocalStrictlyTyped(ATargetIdx, Source.IsStrictlyTyped);
+  ACtx.Scope.SetLocalHoldsUncheckedValue(ATargetIdx,
+    Source.HoldsUncheckedValue);
   ACtx.Scope.SetLocalArrayTyped(ATargetIdx, Source.IsArrayTyped);
   ACtx.Scope.SetLocalParamTypeSignature(ATargetIdx,
     Source.ParamTypeSignature);
