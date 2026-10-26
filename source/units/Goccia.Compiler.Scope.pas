@@ -68,6 +68,12 @@ type
     HoldsOnlyNumbers: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
+    // A strictly typed binding that can hold a value no type check has seen:
+    // the undefined of an annotated let or var declared without an
+    // initializer, or the array of an annotated rest parameter. Its TypeHint
+    // is still enforced on every store, but it does not describe what a read
+    // yields, so ExpressionType does not report it.
+    HoldsUncheckedValue: Boolean;
     ParamTypeSignature: string;
     // The type every call of the function this const binding holds returns,
     // or sltUntyped (CalleeReturnType in Goccia.Compiler.Statements).
@@ -104,6 +110,7 @@ type
     IsGlobalBacked: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
+    HoldsUncheckedValue: Boolean;
     ParamTypeSignature: string;
     // Copied from the captured binding: the return type of a const function
     // and whether a let holds only Numbers.
@@ -265,6 +272,8 @@ type
       const ATypeHint: TGocciaLocalType);
     procedure SetLocalStrictlyTyped(const AIndex: Integer;
       const AStrictlyTyped: Boolean);
+    procedure SetLocalHoldsUncheckedValue(const AIndex: Integer;
+      const AHoldsUncheckedValue: Boolean);
     procedure SetLocalArrayTyped(const AIndex: Integer;
       const AArrayTyped: Boolean);
     procedure SetLocalCallProvenNumeric(const AIndex: Integer;
@@ -590,6 +599,7 @@ begin
   FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
+  FLocals[FLocalCount].HoldsUncheckedValue := False;
   FLocals[FLocalCount].ParamTypeSignature := '';
   FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].TypeAnnotation := '';
@@ -658,6 +668,7 @@ begin
   FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
+  FLocals[FLocalCount].HoldsUncheckedValue := False;
   FLocals[FLocalCount].ParamTypeSignature := '';
   FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].TypeAnnotation := '';
@@ -755,6 +766,8 @@ begin
     FUpvalues[Idx].IsGlobalBacked := FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
+    FUpvalues[Idx].HoldsUncheckedValue :=
+      FParent.FLocals[LocalIdx].HoldsUncheckedValue;
     FUpvalues[Idx].ParamTypeSignature := FParent.FLocals[LocalIdx].ParamTypeSignature;
     FUpvalues[Idx].ReturnTypeHint := FParent.FLocals[LocalIdx].ReturnTypeHint;
     FUpvalues[Idx].HoldsOnlyNumbers := FParent.FLocals[LocalIdx].HoldsOnlyNumbers and
@@ -789,6 +802,8 @@ begin
     FUpvalues[Idx].IsGlobalBacked := FParent.FUpvalues[UpvalueIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
+    FUpvalues[Idx].HoldsUncheckedValue :=
+      FParent.FUpvalues[UpvalueIdx].HoldsUncheckedValue;
     FUpvalues[Idx].ParamTypeSignature := FParent.FUpvalues[UpvalueIdx].ParamTypeSignature;
     FUpvalues[Idx].ReturnTypeHint := FParent.FUpvalues[UpvalueIdx].ReturnTypeHint;
     FUpvalues[Idx].HoldsOnlyNumbers := FParent.FUpvalues[UpvalueIdx].HoldsOnlyNumbers;
@@ -827,6 +842,7 @@ begin
   FUpvalues[FUpvalueCount].IsGlobalBacked := False;
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].IsStrictlyTyped := False;
+  FUpvalues[FUpvalueCount].HoldsUncheckedValue := False;
   FUpvalues[FUpvalueCount].ParamTypeSignature := '';
   FUpvalues[FUpvalueCount].ReturnTypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].HoldsOnlyNumbers := False;
@@ -1209,6 +1225,12 @@ procedure TGocciaCompilerScope.SetLocalStrictlyTyped(const AIndex: Integer;
   const AStrictlyTyped: Boolean);
 begin
   FLocals[AIndex].IsStrictlyTyped := AStrictlyTyped;
+end;
+
+procedure TGocciaCompilerScope.SetLocalHoldsUncheckedValue(
+  const AIndex: Integer; const AHoldsUncheckedValue: Boolean);
+begin
+  FLocals[AIndex].HoldsUncheckedValue := AHoldsUncheckedValue;
 end;
 
 procedure TGocciaCompilerScope.SetLocalArrayTyped(const AIndex: Integer;

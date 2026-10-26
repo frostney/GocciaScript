@@ -4877,11 +4877,16 @@ begin
       Continue;
     // Rest parameter: record the type hint so subsequent reassignments are
     // guarded, but EmitParameterTypeChecks skips IsRest so no OP_CHECK_TYPE
-    // fires at function entry against the rest array itself.
+    // fires at function entry against the rest array itself. The binding
+    // holds that unchecked array (ES2026 §10.2.11 step 28, §8.6.3
+    // BindingRestElement's ArrayCreate), so only an object annotation
+    // describes what a read of it yields.
     AScope.SetLocalTypeHint(LocalIdx, AnnotationType);
     ATemplate.SetLocalType(AScope.GetLocal(LocalIdx).Slot, AnnotationType);
     AScope.SetLocalStrictlyTyped(LocalIdx, True);
     ATemplate.SetLocalStrictFlag(AScope.GetLocal(LocalIdx).Slot, True);
+    if AParameters[I].IsRest and (AnnotationType <> sltReference) then
+      AScope.SetLocalHoldsUncheckedValue(LocalIdx, True);
   end;
 end;
 
@@ -7664,6 +7669,10 @@ begin
       EmitGetDeclaredGlobal(ACtx, AExpr.Name, RegResult);
       ACtx.CompileExpression(AExpr.Value, RegVal);
       LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+      // A binding that can hold an unchecked value (HoldsUncheckedValue) may
+      // hold a non-Number, so `+=` can concatenate even onto a Number hint.
+      if ACtx.Scope.GetLocal(LocalIdx).HoldsUncheckedValue then
+        LocalType := sltUntyped;
       ValType := ExpressionType(ACtx.Scope, AExpr.Value);
       ResultType := sltUntyped;
       if IsArithmeticCompoundAssign(AExpr.Operator, ArithOp) and
@@ -7704,6 +7713,10 @@ begin
     // `let x = 'a'; x += ((x = 5), 2)` take the unguarded float path against a
     // string operand.
     LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+    // A binding that can hold an unchecked value (HoldsUncheckedValue) may
+    // hold a non-Number, so `+=` can concatenate even onto a Number hint.
+    if ACtx.Scope.GetLocal(LocalIdx).HoldsUncheckedValue then
+      LocalType := sltUntyped;
     // ES2026 §13.15.2 step 3: GetValue(lRef) runs BEFORE step 4 evaluates the
     // right-hand side, so the old value has to be captured into its own
     // register first. Naming the local's slot as the operator's operand would
@@ -7801,13 +7814,19 @@ begin
         UInt16(UpvalIdx)));
     ACtx.CompileExpression(AExpr.Value, RegVal);
     EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
+    // The value's type describes the result only when the binding's own
+    // value was checked: an array in an annotated rest parameter `+=` a
+    // Number is a String.
+    if Upvalue.HoldsUncheckedValue then
+      ValType := sltUntyped
+    else
+      ValType := InferLocalType(AExpr.Value);
     if ReferenceReg >= 0 then
       EmitPreparedUpvalueAssignment(ACtx, Upvalue, UpvalIdx,
-        UInt16(ReferenceReg), RegResult, RegResult,
-        InferLocalType(AExpr.Value))
+        UInt16(ReferenceReg), RegResult, RegResult, ValType)
     else
       EmitCurrentUpvalueAssignment(ACtx, Upvalue, UpvalIdx, RegResult,
-        RegResult, InferLocalType(AExpr.Value));
+        RegResult, ValType);
     if ANeedsResult and (ADest <> RegResult) then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
     if ReferenceReg >= 0 then
