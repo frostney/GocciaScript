@@ -107,6 +107,12 @@ procedure CollectDestructuringVarBindings(const APattern: TGocciaDestructuringPa
 function SavePendingFinally: TObject;
 procedure RestorePendingFinally(const ASaved: TObject);
 
+// True when a value returned from the code being compiled is in tail position
+// (ES2026 §15.10.1 IsInTailPosition): strict code outside a generator or async
+// function, with no catch handler or cleanup pending.
+function ReturnIsTailPositionEligible(
+  const ACtx: TGocciaCompilationContext): Boolean;
+
 implementation
 
 uses

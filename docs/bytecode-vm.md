@@ -194,7 +194,10 @@ destructured parameter, mixed argument, or unsupported use. Every external
 direct call must supply exactly one numeric literal per parameter, and the
 expression body must establish a Number result recursively. The proof marks
 parameters for the two numeric immediate superinstructions; for one to three
-parameters it also emits `OP_CALL_SELF_NUM` at non-tail direct self-call sites.
+parameters it also emits `OP_CALL_SELF_NUM` at non-tail direct self-call sites,
+unless the body has a self-call in tail position: that proper tail call sets up
+a frame, and no frame may run above a scalar frame
+([ADR 0160](adr/0160-concise-arrow-bodies-make-proper-tail-calls.md)).
 The scalar frame performs no speculative type conversion or deoptimization:
 unsupported shapes retain ordinary `OP_CALL`, and tail calls retain the generic
 proper-tail-call path. The optimization does not turn the function into a

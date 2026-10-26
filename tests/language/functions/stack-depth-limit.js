@@ -3,20 +3,31 @@ description: Infinite recursion throws RangeError when stack depth limit is set
 features: [stack-depth-limit]
 ---*/
 
+// Each recursion below calls from a block body, where the call is not in tail
+// position (ES2026 §15.10.2), so every call keeps its frame. A concise body
+// such as `() => recurse()` would be a proper tail call and never overflow.
 test("infinite recursion throws RangeError", () => {
-  const recurse = () => recurse();
+  const recurse = () => {
+    recurse();
+  };
   expect(() => recurse()).toThrow(RangeError);
 });
 
 test("mutual recursion throws RangeError", () => {
   let ping, pong;
-  ping = () => pong();
-  pong = () => ping();
+  ping = () => {
+    pong();
+  };
+  pong = () => {
+    ping();
+  };
   expect(() => ping()).toThrow(RangeError);
 });
 
 test("error message matches V8 convention", () => {
-  const recurse = () => recurse();
+  const recurse = () => {
+    recurse();
+  };
   let caught;
   try {
     recurse();
@@ -86,7 +97,9 @@ test("try-catch works across nested calls", () => {
 });
 
 test("error has stack trace", () => {
-  const deep = () => deep();
+  const deep = () => {
+    deep();
+  };
   let caught;
   try {
     deep();

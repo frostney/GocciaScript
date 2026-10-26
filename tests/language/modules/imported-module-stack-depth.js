@@ -42,7 +42,13 @@ describe("an imported module's top level allows --max-stack nested calls", () =>
   });
 
   test("a deferred module evaluated four calls deep keeps the rest", () => {
-    const readCalls = (k) => (k ? readCalls(k - 1) : deferred.calls);
+    // The result is bound before it is returned, so the recursive call is not
+    // in tail position (ES2026 §15.10.2) and each of the four calls keeps its
+    // frame.
+    const readCalls = (k) => {
+      const calls = k ? readCalls(k - 1) : deferred.calls;
+      return calls;
+    };
     expect(readCalls(3)).toBe(LIMIT - 4);
     expect(deferred.error).toBeInstanceOf(RangeError);
   });
