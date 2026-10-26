@@ -8,7 +8,12 @@ features: [Date, Error.prototype.stack]
 
 describe("errors thrown by Date methods", () => {
   test("keep the calling function's frame in the stack", () => {
-    const formatInvalidDate = () => new Date(NaN).toISOString();
+    // A block body keeps the call out of tail position (ES2026 §15.10.2), so
+    // the caller's frame stays on the stack.
+    const formatInvalidDate = () => {
+      const text = new Date(NaN).toISOString();
+      return text;
+    };
     let stack = "";
     try {
       formatInvalidDate();

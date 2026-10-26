@@ -206,6 +206,7 @@ type
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
     procedure TestClosedNumericFibonacciUsesSuperinstructions;
+    procedure TestConciseArrowBodyMarksTailCalls;
     procedure TestClosedNumericScalarSelfCallArityLimit;
     procedure TestMixedOrEscapedCallsCancelNumericProof;
     procedure TestKnownNumericLocalUsesSubtractImmediate;
@@ -222,6 +223,7 @@ type
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
     procedure TestReturnAnnotationDoesNotTypeCallResult;
+    procedure TestUncheckedStrictBindingDoesNotTypeOperands;
     procedure TestBinaryOperatorResultTypes;
     procedure TestBitwiseOperatorResultTypes;
     procedure TestUnaryOperatorResultTypes;
@@ -406,6 +408,8 @@ begin
   Test('Annotated parameters use typed arithmetic', TestAnnotatedParametersUseTypedArithmetic);
   Test('Closed numeric Fibonacci uses superinstructions',
     TestClosedNumericFibonacciUsesSuperinstructions);
+  Test('Concise arrow body marks tail calls',
+    TestConciseArrowBodyMarksTailCalls);
   Test('Closed numeric scalar self-call supports only small arities',
     TestClosedNumericScalarSelfCallArityLimit);
   Test('Mixed or escaped calls cancel numeric proof',
@@ -429,6 +433,8 @@ begin
     TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
   Test('Return annotation does not type call result',
     TestReturnAnnotationDoesNotTypeCallResult);
+  Test('Unchecked strict binding does not type operands',
+    TestUncheckedStrictBindingDoesNotTypeOperands);
   Test('Binary operator result types', TestBinaryOperatorResultTypes);
   Test('Bitwise operator result types', TestBitwiseOperatorResultTypes);
   Test('Unary operator result types', TestUnaryOperatorResultTypes);
@@ -3592,6 +3598,77 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestConciseArrowBodyMarksTailCalls;
+
+  function TailCalls(const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+    Instruction: UInt32;
+  begin
+    Result := 0;
+    for I := 0 to ATemplate.CodeCount - 1 do
+    begin
+      Instruction := ATemplate.GetInstruction(I);
+      if (TGocciaOpCode(DecodeOp(Instruction)) in [OP_CALL, OP_CALL_METHOD]) and
+         ((DecodeC(Instruction) and CALL_FLAG_TAIL) <> 0) then
+        Inc(Result);
+    end;
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, TailCalls(ATemplate.GetFunction(I)));
+  end;
+
+  procedure ExpectTailCalls(const ASource: string; const AExpected: Integer;
+    const ANonStrictMode: Boolean = False);
+  var
+    Module: TGocciaBytecodeModule;
+  begin
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, ANonStrictMode);
+    try
+      Expect<Integer>(TailCalls(Module.TopLevel)).ToBe(AExpected);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // ES2026 §15.10.2: the call, each branch of a conditional, the right
+  // operand of &&, || and ??, and the last operand of a comma expression.
+  ExpectTailCalls('const f = (n) => f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n ? f(n - 1) : f(n - 2);', 2);
+  ExpectTailCalls('const f = (n) => n && f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n || f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n ?? f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => (n, f(n - 1));', 1);
+  ExpectTailCalls('const o = { f: (n) => o.f(n - 1) };', 1);
+  // Not in tail position: an operand, an argument, the condition.
+  ExpectTailCalls('const f = (n) => 1 + f(n - 1);', 0);
+  ExpectTailCalls('const f = (n) => [f(n - 1)];', 0);
+  ExpectTailCalls('const f = (n) => f(n - 1) ? 1 : 2;', 0);
+  ExpectTailCalls('const f = (n) => (f(n - 1), 1);', 0);
+  // IsInTailPosition (§15.10.1): never in sloppy code or an async body.
+  ExpectTailCalls('const f = async (n) => f(n - 1);', 0);
+  ExpectTailCalls('const f = (n) => f(n - 1);', 0, True);
+
+  // A closed numeric arrow with a tail self-call keeps ordinary frames: no
+  // frame may run above a closed numeric frame (ADR 0127).
+  Module := CompileSource(
+    'const run = () => {' +
+    '  const h = (n) => n <= 0 ? 0 : (n < 5 ? h(n - 1) : h(n - 1) + 1);' +
+    '  h(10);' +
+    '}; run();', False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CALL_SELF_NUM)).ToBe(0);
+    Expect<Integer>(TailCalls(Module.TopLevel)).ToBe(1);
+    // Its parameter is still a proven Number.
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestClosedNumericFibonacciUsesSuperinstructions;
 var
   Module: TGocciaBytecodeModule;
@@ -3962,6 +4039,69 @@ begin
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_MUL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestUncheckedStrictBindingDoesNotTypeOperands;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // An annotated let declared without an initializer holds undefined, which
+  // no check has seen: its reads, a closure's reads, a const copied from it
+  // and a call returning it stay generic (#1912).
+  Module := CompileSource(
+    'let y: number; y + 1; 1 + y; y - 1; y + y;' +
+    'let z!: number; z + 1;' +
+    'const h = () => y + 1; const c = y; c + 1;' +
+    'const f = () => { let u: number; return u; }; f() + 1;',
+    True);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // The annotation is still enforced on every assignment.
+  Module := CompileSource('let y: number; y = 1; y = "x";', True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  // A rest parameter holds an array whatever its annotation names, so `+=`
+  // can concatenate and its result is checked.
+  Module := CompileSource(
+    'const r = (...xs: number) => xs - 1; const s = (...xs: number) => xs + 1;' +
+    'const t = (...xs: number) => { xs += 1; };',
+    True);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  // A var holds undefined until its declaration runs, initializer or not.
+  Module := CompileSource('var v: number; v + 1; var w: number = 2; w - 1;',
+    True, False, False, True, True, True, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A checked initializer keeps the typed operator.
+  Module := CompileSource('let k: number = 1; k + 1;', True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
   finally
     Module.Free;
   end;
@@ -4963,14 +5103,15 @@ var
 begin
   // `var x;` inside `catch (x)` redeclares the function's var binding, but
   // `x` in the catch block is the catch parameter (ES2026 B.3.4). The var's
-  // enforced Number type stays on the var: the read after the try statement
-  // is typed, the catch parameter read is not.
+  // enforced Number type stays on the var: the assignment after the try
+  // statement is checked, the catch parameter's is not. (Reads of a var are
+  // never typed by its enforced type: it holds undefined until its
+  // declaration runs.)
   Module := CompileSource(
-    'var x = 1; try { throw "s"; } catch (x) { var x; x - 1; } x - 2;',
+    'var x = 1; try { throw "s"; } catch (x) { var x; x = "a"; } x = "b";',
     True, False, False, False, False, False, False, False, True);
   try
-    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
-    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
   finally
     Module.Free;
   end;

@@ -169,3 +169,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0157 — Sandbox search is native and pinned by shared test vectors](0157-sandbox-search-is-native-and-pinned-by-shared-vectors.md)
 - [0158 — The compiler infers operator results, proven consts and const function returns](0158-the-compiler-infers-operator-and-const-function-result-types.md)
 - [0159 — A frame whose function never reads its arguments as passed gets no argument window](0159-a-frame-whose-function-never-reads-its-arguments-as-passed-gets-no-argument-window.md)
+- [0160 — Concise arrow bodies make proper tail calls, and closed numeric frames give way to them](0160-concise-arrow-bodies-make-proper-tail-calls.md)
