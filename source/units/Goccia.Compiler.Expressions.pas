@@ -73,7 +73,8 @@ procedure CompileCall(const ACtx: TGocciaCompilationContext;
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt16);
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaConditionalExpression; const ADest: UInt16);
+  const AExpr: TGocciaConditionalExpression; const ADest: UInt16;
+  const ATail: Boolean = False);
 function TryEmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
   const ACondition: TGocciaExpression; out AJumpIndex: Integer): Boolean;
 // True when a reference to AName inside a `with` statement has to probe the
@@ -4920,6 +4921,50 @@ begin
     ACtx.Template.TypeCheckPreambleSize := UInt16(CheckCount);
 end;
 
+// True when CompileReturnValueTailAware would mark a call of the binding
+// AName in AExpr as a tail call: it follows the same forms.
+function HasSelfCallInTailPosition(const AExpr: TGocciaExpression;
+  const AName: string): Boolean;
+var
+  Binary: TGocciaBinaryExpression;
+  Sequence: TGocciaSequenceExpression;
+  Callee: TGocciaExpression;
+begin
+  Result := False;
+  if AExpr is TGocciaCallExpression then
+  begin
+    Callee := TGocciaCallExpression(AExpr).Callee;
+    Exit(not TGocciaCallExpression(AExpr).Optional and
+      (Callee is TGocciaIdentifierExpression) and
+      (TGocciaIdentifierExpression(Callee).Name = AName));
+  end;
+  if AExpr is TGocciaTaggedTemplateExpression then
+  begin
+    Callee := TGocciaTaggedTemplateExpression(AExpr).Tag;
+    Exit((Callee is TGocciaIdentifierExpression) and
+      (TGocciaIdentifierExpression(Callee).Name = AName));
+  end;
+  if AExpr is TGocciaConditionalExpression then
+    Exit(HasSelfCallInTailPosition(
+      TGocciaConditionalExpression(AExpr).Consequent, AName) or
+      HasSelfCallInTailPosition(
+        TGocciaConditionalExpression(AExpr).Alternate, AName));
+  if AExpr is TGocciaBinaryExpression then
+  begin
+    Binary := TGocciaBinaryExpression(AExpr);
+    if (Binary.Operator = gttAnd) or (Binary.Operator = gttOr) or
+       (Binary.Operator = gttNullishCoalescing) then
+      Exit(HasSelfCallInTailPosition(Binary.Right, AName));
+  end;
+  if AExpr is TGocciaSequenceExpression then
+  begin
+    Sequence := TGocciaSequenceExpression(AExpr);
+    if Sequence.Expressions.Count >= 2 then
+      Exit(HasSelfCallInTailPosition(
+        Sequence.Expressions[Sequence.Expressions.Count - 1], AName));
+  end;
+end;
+
 procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrowFunctionExpression; const ADest: UInt16);
 var
@@ -4971,7 +5016,13 @@ begin
      ACtx.NumericParameterProofs.TryGetValue(AExpr,
        NumericProof) then
   begin
-    if Length(AExpr.Parameters) <= 3 then
+    // A self-call in tail position is a proper tail call, which sets up a
+    // frame, and no frame may run above a closed numeric frame (ADR 0127).
+    // Such a body keeps ordinary frames; its parameters are still Numbers.
+    if (Length(AExpr.Parameters) <= 3) and
+       not (ChildTemplate.StrictCode and (AExpr.Body is TGocciaExpression) and
+         HasSelfCallInTailPosition(TGocciaExpression(AExpr.Body),
+           NumericProof.FunctionName)) then
       ChildTemplate.ClosedNumericSelfName := NumericProof.FunctionName;
     for I := 0 to High(AExpr.Parameters) do
       if (NumericProof.ParameterMask and (UInt64(1) shl I)) <> 0 then
@@ -6376,8 +6427,11 @@ begin
     ACtx.Scope.FreeRegister;
 end;
 
+// ATail: the conditional is in tail position (CompileReturnValueTailAware), and
+// so is each branch (ES2026 §15.10.2).
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaConditionalExpression; const ADest: UInt16);
+  const AExpr: TGocciaConditionalExpression; const ADest: UInt16;
+  const ATail: Boolean);
 var
   ElseJump, EndJump: Integer;
   ElseJumps: TGocciaCompilerJumpArray;
@@ -6385,6 +6439,15 @@ var
   ConditionBinary: TGocciaBinaryExpression;
   Immediate: Int16;
   OwnsConditionReg: Boolean;
+
+  procedure CompileBranch(const ABranch: TGocciaExpression);
+  begin
+    if ATail then
+      CompileReturnValueTailAware(ACtx, ABranch, ADest)
+    else
+      ACtx.CompileExpression(ABranch, ADest);
+  end;
+
 begin
   if AExpr.Condition is TGocciaBinaryExpression then
   begin
@@ -6400,10 +6463,10 @@ begin
           UInt16(Immediate), 0), True);
       if OwnsConditionReg then
         ACtx.Scope.FreeRegister;
-      ACtx.CompileExpression(AExpr.Consequent, ADest);
+      CompileBranch(AExpr.Consequent);
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, ElseJump);
-      ACtx.CompileExpression(AExpr.Alternate, ADest);
+      CompileBranch(AExpr.Alternate);
       PatchJumpTarget(ACtx, EndJump);
       Exit;
     end;
@@ -6411,10 +6474,10 @@ begin
 
   SetLength(ElseJumps, 0);
   EmitConditionJumps(ACtx, AExpr.Condition, False, ElseJumps);
-  ACtx.CompileExpression(AExpr.Consequent, ADest);
+  CompileBranch(AExpr.Consequent);
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
   PatchJumpArray(ACtx, ElseJumps);
-  ACtx.CompileExpression(AExpr.Alternate, ADest);
+  CompileBranch(AExpr.Alternate);
   PatchJumpTarget(ACtx, EndJump);
 end;
 
@@ -7228,11 +7291,10 @@ end;
 procedure CompileReturnValueTailAware(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; const ADest: UInt16);
 var
-  Conditional: TGocciaConditionalExpression;
   Binary: TGocciaBinaryExpression;
   Sequence: TGocciaSequenceExpression;
   TempReg: UInt16;
-  ElseJump, EndJump, ShortCircuitJump, I: Integer;
+  ShortCircuitJump, I: Integer;
 begin
   // CallExpression Arguments / CallExpression TemplateLiteral: the call itself is
   // in tail position.
@@ -7248,17 +7310,12 @@ begin
     Exit;
   end;
 
-  // ConditionalExpression: both branches inherit tail position.
+  // ConditionalExpression: both branches inherit tail position. The condition
+  // takes the same compare-and-jump forms as any conditional.
   if AExpr is TGocciaConditionalExpression then
   begin
-    Conditional := TGocciaConditionalExpression(AExpr);
-    ACtx.CompileExpression(Conditional.Condition, ADest);
-    ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest);
-    CompileReturnValueTailAware(ACtx, Conditional.Consequent, ADest);
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-    PatchJumpTarget(ACtx, ElseJump);
-    CompileReturnValueTailAware(ACtx, Conditional.Alternate, ADest);
-    PatchJumpTarget(ACtx, EndJump);
+    CompileConditional(ACtx, TGocciaConditionalExpression(AExpr), ADest,
+      True);
     Exit;
   end;
 

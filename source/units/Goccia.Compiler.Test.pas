@@ -206,6 +206,7 @@ type
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
     procedure TestClosedNumericFibonacciUsesSuperinstructions;
+    procedure TestConciseArrowBodyMarksTailCalls;
     procedure TestClosedNumericScalarSelfCallArityLimit;
     procedure TestMixedOrEscapedCallsCancelNumericProof;
     procedure TestKnownNumericLocalUsesSubtractImmediate;
@@ -406,6 +407,8 @@ begin
   Test('Annotated parameters use typed arithmetic', TestAnnotatedParametersUseTypedArithmetic);
   Test('Closed numeric Fibonacci uses superinstructions',
     TestClosedNumericFibonacciUsesSuperinstructions);
+  Test('Concise arrow body marks tail calls',
+    TestConciseArrowBodyMarksTailCalls);
   Test('Closed numeric scalar self-call supports only small arities',
     TestClosedNumericScalarSelfCallArityLimit);
   Test('Mixed or escaped calls cancel numeric proof',
@@ -3587,6 +3590,77 @@ begin
       Expect<Integer>(CountOp(Func, OP_ADD_FLOAT)).ToBe(1);
       Expect<Integer>(CountOp(Func, OP_ADD)).ToBe(0);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConciseArrowBodyMarksTailCalls;
+
+  function TailCalls(const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+    Instruction: UInt32;
+  begin
+    Result := 0;
+    for I := 0 to ATemplate.CodeCount - 1 do
+    begin
+      Instruction := ATemplate.GetInstruction(I);
+      if (TGocciaOpCode(DecodeOp(Instruction)) in [OP_CALL, OP_CALL_METHOD]) and
+         ((DecodeC(Instruction) and CALL_FLAG_TAIL) <> 0) then
+        Inc(Result);
+    end;
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, TailCalls(ATemplate.GetFunction(I)));
+  end;
+
+  procedure ExpectTailCalls(const ASource: string; const AExpected: Integer;
+    const ANonStrictMode: Boolean = False);
+  var
+    Module: TGocciaBytecodeModule;
+  begin
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, ANonStrictMode);
+    try
+      Expect<Integer>(TailCalls(Module.TopLevel)).ToBe(AExpected);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // ES2026 §15.10.2: the call, each branch of a conditional, the right
+  // operand of &&, || and ??, and the last operand of a comma expression.
+  ExpectTailCalls('const f = (n) => f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n ? f(n - 1) : f(n - 2);', 2);
+  ExpectTailCalls('const f = (n) => n && f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n || f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n ?? f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => (n, f(n - 1));', 1);
+  ExpectTailCalls('const o = { f: (n) => o.f(n - 1) };', 1);
+  // Not in tail position: an operand, an argument, the condition.
+  ExpectTailCalls('const f = (n) => 1 + f(n - 1);', 0);
+  ExpectTailCalls('const f = (n) => [f(n - 1)];', 0);
+  ExpectTailCalls('const f = (n) => f(n - 1) ? 1 : 2;', 0);
+  ExpectTailCalls('const f = (n) => (f(n - 1), 1);', 0);
+  // IsInTailPosition (§15.10.1): never in sloppy code or an async body.
+  ExpectTailCalls('const f = async (n) => f(n - 1);', 0);
+  ExpectTailCalls('const f = (n) => f(n - 1);', 0, True);
+
+  // A closed numeric arrow with a tail self-call keeps ordinary frames: no
+  // frame may run above a closed numeric frame (ADR 0127).
+  Module := CompileSource(
+    'const run = () => {' +
+    '  const h = (n) => n <= 0 ? 0 : (n < 5 ? h(n - 1) : h(n - 1) + 1);' +
+    '  h(10);' +
+    '}; run();', False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CALL_SELF_NUM)).ToBe(0);
+    Expect<Integer>(TailCalls(Module.TopLevel)).ToBe(1);
+    // Its parameter is still a proven Number.
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(2);
   finally
     Module.Free;
   end;
