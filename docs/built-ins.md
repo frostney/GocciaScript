@@ -871,7 +871,8 @@ as `eval` and the `Function` constructor inherit them. A file that needs
 | `root` | The `Program` node |
 | `comments` | Every comment, in source order |
 
-Every node is `{ kind, start, end, loc, children }`, and every comment is
+Every node is `{ kind, start, end, loc, children }`, plus `typeOnly` on the
+kinds a type-level declaration can have (below), and every comment is
 `{ kind, start, end, loc }` with `kind` either `"Line"` or `"Block"`.
 `start` and `end` are zero-based offsets into `source`, `end` exclusive;
 `loc.start` and `loc.end` are `{ line, column }` with one-based lines.
@@ -882,6 +883,27 @@ through expressions where it has to be, so the block of an arrow function
 assigned to a `const` is a child of that declaration. Three kinds own a
 statement *list*, whose children are siblings of one another: `Program`,
 `BlockStatement`, and `SwitchCase`.
+
+Type-level declarations do nothing at run time ([Type Annotations](type-annotations.md)),
+but the tree still reports each one as what it was written as, covering its
+whole text, wherever it appears:
+
+| Source | `kind` | `typeOnly` |
+|--------|--------|------------|
+| `type T = ...;` | `TypeAliasDeclaration` | `true` |
+| `interface I {}` | `InterfaceDeclaration` | `true` |
+| `export type T = ...;` | `ExportTypeAliasDeclaration` | `true` |
+| `export interface I {}` | `ExportInterfaceDeclaration` | `true` |
+| `import type ... from "...";` | `ImportDeclaration` | `true` |
+| `export type { A };` | `ExportDeclaration` | `true` |
+| `export type { A } from "...";`, `export type * from "...";` | `ReExportDeclaration` | `true` |
+
+`ImportDeclaration`, `ExportDeclaration` and `ReExportDeclaration` carry
+`typeOnly: false` when the statement runs. That includes
+`import { type C, D } from "..."`, where `type` marks one specifier rather than
+the statement. No other kind carries `typeOnly`, and `EmptyStatement` is only
+ever a lone `;`. A type-level node has no children and, like every node,
+withholds its names. See [ADR 0161](adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
 
 A syntax error in the parsed text is a `SyntaxError` naming its position; it
 does not abort the caller's own run unless the caller lets it.

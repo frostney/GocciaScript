@@ -168,3 +168,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0156 — fetch honours the redirect mode, and "manual" answers with the redirect response](0156-fetch-honours-the-redirect-mode.md)
 - [0157 — Sandbox search is native and pinned by shared test vectors](0157-sandbox-search-is-native-and-pinned-by-shared-vectors.md)
 - [0160 — Concise arrow bodies make proper tail calls, and closed numeric frames give way to them](0160-concise-arrow-bodies-make-proper-tail-calls.md)
+- [0161 — goccia:ast reports type-level declarations by kind, with no parse switch](0161-goccia-ast-reports-type-level-declarations-by-kind.md)
