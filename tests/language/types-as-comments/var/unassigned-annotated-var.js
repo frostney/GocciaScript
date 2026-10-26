@@ -1,5 +1,5 @@
 /*---
-description: An annotated var holds undefined until it is assigned, and operators on it give the generic result
+description: A var with an enforced type holds undefined until its declaration runs or it is assigned, and operators on it give the generic result
 features: [types-as-comments, strict-type-enforcement, compat-var]
 ---*/
 
@@ -32,6 +32,19 @@ describe("annotated var declared without an initializer", () => {
           var value: number = 1;
         case 1:
           return value + 1;
+      }
+    };
+
+    expect(run(1)).toBeNaN();
+  });
+
+  test("a var typed from its literal initializer, read before its declaration runs, gives NaN", () => {
+    const run = (start) => {
+      switch (start) {
+        case 0:
+          var value = 1;
+        case 1:
+          return value - 1;
       }
     };
 

@@ -4871,14 +4871,15 @@ var
 begin
   // `var x;` inside `catch (x)` redeclares the function's var binding, but
   // `x` in the catch block is the catch parameter (ES2026 B.3.4). The var's
-  // enforced Number type stays on the var: the read after the try statement
-  // is typed, the catch parameter read is not.
+  // enforced Number type stays on the var: the assignment after the try
+  // statement is checked, the catch parameter's is not. (Reads of a var are
+  // never typed by its enforced type: it holds undefined until its
+  // declaration runs.)
   Module := CompileSource(
-    'var x = 1; try { throw "s"; } catch (x) { var x; x - 1; } x - 2;',
+    'var x = 1; try { throw "s"; } catch (x) { var x; x = "a"; } x = "b";',
     True, False, False, False, False, False, False, False, True);
   try
-    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
-    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
   finally
     Module.Free;
   end;
