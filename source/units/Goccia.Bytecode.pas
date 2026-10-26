@@ -263,7 +263,12 @@ const
   //               keeps private elements out of an object's properties. v96
   //               code would read its private names as ordinary property
   //               keys.
-  GOCCIA_FORMAT_VERSION = 97;
+  //   v97 -> v98: added OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM,
+  //               OP_JUMP_IF_NOT_LTE_IMM, OP_JUMP_IF_NOT_GTE_IMM,
+  //               OP_JUMP_IF_NOT_STRICT_EQ_IMM and OP_JUMP_IF_STRICT_EQ_IMM
+  //               (opcodes 239 to 244), which compare a register with a
+  //               signed Int16 immediate and jump in one dispatch.
+  GOCCIA_FORMAT_VERSION = 98;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -594,7 +599,23 @@ type
     // configurable (ES2026 §9.1.1.4.16 CreateGlobalVarBinding), so deleting
     // the property removes the binding, and GetValue of the now unresolvable
     // reference throws (§6.2.5.5 GetValue step 2).
-    OP_GET_GLOBAL_DECLARED = 238
+    OP_GET_GLOBAL_DECLARED = 238,
+    // A = left register, B = signed Int16 immediate, C = signed Int16 jump
+    // offset taken when the comparison is false. Generic relational
+    // semantics (ES2026 §13.10.1): a Number in A is compared directly; any
+    // other value takes the generic comparison with the immediate as a
+    // Number. The immediate is a primitive, so only A's ToPrimitive can run
+    // guest code, and `imm < x` may be emitted as `x > imm`.
+    OP_JUMP_IF_NOT_LT_IMM = 239,
+    OP_JUMP_IF_NOT_GT_IMM = 240,
+    OP_JUMP_IF_NOT_LTE_IMM = 241,
+    OP_JUMP_IF_NOT_GTE_IMM = 242,
+    // A = register, B = signed Int16 immediate, C = signed Int16 jump
+    // offset. Jumps when A is not (NOT_STRICT_EQ) or is (STRICT_EQ) strictly
+    // equal to the immediate Number (ES2026 §7.2.14 IsStrictlyEqual): only a
+    // Number can be, so no value is converted and no guest code runs.
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM = 243,
+    OP_JUMP_IF_STRICT_EQ_IMM = 244
   );
 
 const
