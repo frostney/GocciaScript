@@ -175,6 +175,7 @@ type
     procedure TestCompoundAssignmentWritesRegisterOnlyBindingDirectly;
     procedure TestInitializerReachingItsBindingKeepsCopy;
     procedure TestLexicalHolesSetOnlyWhereObservable;
+    procedure TestCompoundSmallIntegerUsesImmediate;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestObjectRestBytecodeRoundTrip;
@@ -240,6 +241,9 @@ type
     procedure TestConstSelfIncrementUsesGenericAssignment;
     procedure TestGlobalBackedCountedForLimitIsNotSnapshotted;
     procedure TestIfAndConditionalLessThanUseJumpIfNotLt;
+    procedure TestConstantOperandComparisonsUseImmediateJumps;
+    procedure TestConstantOperandComparisonsKeepGenericForms;
+    procedure TestHugeConstantComparisonCompilesWithInvalidOpUnmasked;
     procedure TestLessThanValueKeepsGenericCompare;
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
@@ -346,6 +350,8 @@ begin
     TestInitializerReachingItsBindingKeepsCopy);
   Test('Lexical TDZ holes are set once, and only where observable',
     TestLexicalHolesSetOnlyWhereObservable);
+  Test('compound += and -= of a small integer use immediates',
+    TestCompoundSmallIntegerUsesImmediate);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -456,6 +462,12 @@ begin
     TestIfAndConditionalLessThanUseJumpIfNotLt);
   Test('less-than value keeps generic compare',
     TestLessThanValueKeepsGenericCompare);
+  Test('comparisons with an Int16 constant use immediate jumps',
+    TestConstantOperandComparisonsUseImmediateJumps);
+  Test('comparisons outside the immediate forms keep generic compares',
+    TestConstantOperandComparisonsKeepGenericForms);
+  Test('a comparison with a constant past Int64 compiles with invalid ' +
+    'operations unmasked', TestHugeConstantComparisonCompilesWithInvalidOpUnmasked);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
@@ -2303,11 +2315,52 @@ begin
   Expect<Integer>(HolesIn(
     'const f = (p) => { const r = () => b; const b = p + 1; return r; };'))
     .ToBe(1);
-  // A block sets its binding's hole on entry, and the declaration does not
-  // set it again.
+  // A block's leading binding that nothing can reach before its declaration
+  // completes gets no hole either, so a loop body sets none per iteration.
   Expect<Integer>(HolesIn(
     'const f = (p) => { if (p) { let c = p + 1; return c; } return 0; };'))
+    .ToBe(0);
+  // A block sets the hole of a binding an earlier initializer's arrow names,
+  // or one declared after another statement, on entry, and the declaration
+  // does not set it again.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { if (p) { const r = () => c; let c = p + 1; return r; } return 0; };'))
     .ToBe(1);
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { if (p) { p.x = 1; let c = p + 1; return c; } return 0; };'))
+    .ToBe(1);
+end;
+
+procedure TTestCompiler.TestCompoundSmallIntegerUsesImmediate;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  // x holds only Numbers and no closure can rebind it: += 1 and -= 300 add
+  // immediates.
+  Module := CompileSource(
+    'const f = (p) => { let x = 0; if (p) { x = 5; } x += 1; x -= 300; return x; }; f(1);');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_NUM_IMM);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_ADD_NUM_IMM)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_SUB_NUM_IMM)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_ADD) + CountOp(Func, OP_SUB) +
+        CountOp(Func, OP_ADD_FLOAT) + CountOp(Func, OP_SUB_FLOAT)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+  // A closure can store a String in x, so += keeps the generic operator.
+  Module := CompileSource(
+    'const f = (p) => { let x = 0; const g = () => { x = "s"; }; g(); x += 1; return x; }; f(1);');
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+  finally
+    Module.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestInitializerReachingItsBindingKeepsCopy;
@@ -2778,6 +2831,10 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT_IMM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_STRICT_EQ_IMM))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_GT_IMM)).ToBe(False);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_GT_IMM)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CREATE_GLOBAL_IMPORT_BINDING))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CHECK_BINDING_INITIALIZED))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_UNDEFINED_VARIABLE))).ToBe(True);
@@ -3973,7 +4030,9 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_MUL_FLOAT)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_FLOAT)).ToBe(1);
-    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    // `a += 2` adds an immediate, `a + b` adds two registers.
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_MUL)).ToBe(0);
@@ -4684,6 +4743,105 @@ begin
     Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(0);
   finally
     Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantOperandComparisonsUseImmediateJumps;
+const
+  Cases: array[0..9] of string = (
+    'const f = (a) => { if (a < 50) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a > 500) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a <= -3) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a >= 0) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (5 < a) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => a === 1 ? "y" : "n"; f(1);',
+    'const f = (a) => { if (a !== 32767) { return "y"; } return "n"; }; f(1);',
+    'const K = 4; const f = (a) => { if (a > K) { return "y"; } return "n"; }; f(1);',
+    'const f = (a, b) => { if (a === 1 || b === 2) { return "y"; } return "n"; }; f(1, 2);',
+    'const f = (a, b) => { if (a < 3 && b >= 2) { return "y"; } return "n"; }; f(1, 2);');
+  Expected: array[0..9] of TGocciaOpCode = (
+    OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM,
+    OP_JUMP_IF_NOT_GTE_IMM, OP_JUMP_IF_NOT_GT_IMM,
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM, OP_JUMP_IF_STRICT_EQ_IMM,
+    OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_STRICT_EQ_IMM, OP_JUMP_IF_NOT_LT_IMM);
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  for I := Low(Cases) to High(Cases) do
+  begin
+    Module := CompileSource(Cases[I]);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, Expected[I]);
+      Expect<Boolean>(Assigned(Func)).ToBe(True);
+      if Assigned(Func) then
+      begin
+        // The comparison is one instruction: no Boolean is tested and no
+        // instruction loads the constant.
+        Expect<Integer>(CountOp(Func, OP_JUMP_IF_FALSE) +
+          CountOp(Func, OP_JUMP_IF_TRUE)).ToBe(0);
+        Expect<Integer>(CountOp(Func, OP_LOAD_INT)).ToBe(0);
+      end;
+    finally
+      Module.Free;
+    end;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantOperandComparisonsKeepGenericForms;
+const
+  // A constant outside Int16, a fraction, a relational test jumping on
+  // true inside `||`, and a comparison whose value is kept.
+  Cases: array[0..3] of string = (
+    'const f = (a) => { if (a < 40000) { return 1; } return 0; }; f(1);',
+    'const f = (a) => { if (a < 0.5) { return 1; } return 0; }; f(1);',
+    'const f = (a, b) => { if (a < 3 || b) { return 1; } return 0; }; f(1, 2);',
+    'const f = (a) => { const c = a < 3; return c; }; f(1);');
+var
+  Module: TGocciaBytecodeModule;
+  I: Integer;
+begin
+  for I := Low(Cases) to High(Cases) do
+  begin
+    Module := CompileSource(Cases[I]);
+    try
+      Expect<Integer>(CountOpRecursive(Module.TopLevel,
+        OP_JUMP_IF_NOT_LT_IMM)).ToBe(0);
+    finally
+      Module.Free;
+    end;
+  end;
+end;
+
+procedure TTestCompiler.TestHugeConstantComparisonCompilesWithInvalidOpUnmasked;
+const
+  // A literal and a const binding past the Int64 range: an embedder can call
+  // the compiler outside the engine's masked floating-point scope, where
+  // truncating such a value raises EInvalidOp.
+  Cases: array[0..1] of string = (
+    'const f = (a) => { if (a < 1e30) { return 1; } return 0; }; f(1);',
+    'const K = -1e300; const f = (a) => { if (a < K) { return 1; } return 0; }; f(1);');
+var
+  Module: TGocciaBytecodeModule;
+  SavedMask: TFPUExceptionMask;
+  I: Integer;
+begin
+  SavedMask := GetExceptionMask;
+  SetExceptionMask(SavedMask - [exInvalidOp]);
+  try
+    for I := Low(Cases) to High(Cases) do
+    begin
+      Module := CompileSource(Cases[I]);
+      try
+        Expect<Integer>(CountOpRecursive(Module.TopLevel,
+          OP_JUMP_IF_NOT_LT_IMM)).ToBe(0);
+      finally
+        Module.Free;
+      end;
+    end;
+  finally
+    SetExceptionMask(SavedMask);
   end;
 end;
 

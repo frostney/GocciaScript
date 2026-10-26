@@ -66,3 +66,11 @@ test("call spread reads a hole through the prototype chain", () => {
   }
   expect(spread).toEqual([1, "inherited", 3]);
 });
+
+test("call spread passes every index up to a length set far past the elements", () => {
+  const farLength = 2000000;
+  const source = [1, 2];
+  source.length = farLength;
+  const countArguments = (...args) => args.length;
+  expect(countArguments(...source)).toBe(farLength);
+});

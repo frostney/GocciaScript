@@ -803,8 +803,9 @@
       begin
         if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+          // The length property, which can be past the stored elements.
           FRegisters[A] := VMNumberRegister(
-            TGocciaArrayValue(FRegisters[B].ObjectValue).GetLength)
+            TGocciaArrayValue(FRegisters[B].ObjectValue).StoredLength)
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
           FRegisters[A] := VMNumberRegister(UTF16CodeUnitLength(
@@ -1121,15 +1122,9 @@
           end;
         end
         else
-        begin
-          Constant := Template.GetConstantUnchecked(C);
-          if Constant.Kind = bckPrivateName then
-            SetRegister(A, GetPrivatePropertyValue(GetRegister(B),
-              Constant.StringValue))
-          else
-            SetRegister(A, GetPropertyValue(GetRegister(B),
-              Constant.StringValue));
-        end;
+          // Every other receiver, a primitive or an object the caches do not
+          // serve, out of line so this arm stays small.
+          ExecGetUncachedConstProperty(Template, A, B, C);
       end;
 
       OP_SET_PROP_CONST:
@@ -4449,6 +4444,28 @@
         SetRegisterRaw(ResultReg, ReturnValue);
         Continue;
       end;
+      // A register compared with a signed Int16 immediate, one arm for the
+      // six opcodes, placed last so the dispatch loop stays small and the arms
+      // before it keep their addresses; the comparison is in
+      // ImmediateComparisonJumps.
+      OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM,
+      OP_JUMP_IF_NOT_GTE_IMM, OP_JUMP_IF_NOT_STRICT_EQ_IMM,
+      OP_JUMP_IF_STRICT_EQ_IMM:
+        begin
+          NumericComparisonResult := ImmediateComparisonJumps(
+            TGocciaOpCode(Op), A, Int16(B));
+          if NumericComparisonResult then
+          begin
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+          end;
+          if FCoverageEnabled then
+            RecordFusedBranchHit(Template, InstructionStartIP,
+              NumericComparisonResult);
+        end;
         else
           // OP_CALL_SELF is a reserved runtime-only opcode outside
           // TGocciaOpCode (Goccia.Bytecode), so it is dispatched here. The
