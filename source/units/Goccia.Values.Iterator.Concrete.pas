@@ -120,8 +120,9 @@ function EnsureArrayIteratorPrototype: TGocciaObjectValue;
 // and %ArrayIteratorPrototype%.next is still the intrinsic.  The checks read
 // own data descriptors only, so they never run a getter or other script.
 // When this holds, the values that iteration yields are exactly
-// ArrayIteratorValueAt(AArray, I) for I from 0 while I is below the live
-// element count, and a caller may read them directly instead of creating
+// ArrayIteratorValueAt(AArray, I) for I from 0 while I is below the array's
+// length (StoredLength, which can be past the stored elements, read again at
+// each step), and a caller may read them directly instead of creating
 // the iterator (ES2026 §23.1.5.1 CreateArrayIterator, §23.1.5.2.1
 // %ArrayIteratorPrototype%.next).
 function ArrayUsesIntrinsicIteration(const AArray: TGocciaValue): Boolean;

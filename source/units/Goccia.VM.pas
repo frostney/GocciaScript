@@ -10078,9 +10078,13 @@ begin
   begin
     // With the intrinsic iterator in place, every IteratorStepValue of
     // ArrayAccumulation yields ? Get(array, ToString(index)) while index is
-    // below the array's live length (§23.1.5.2.1), so read those values
-    // directly.  The count is re-read each step because a getter reached
-    // through a hole may grow or shrink the source, as it would mid-iteration.
+    // below the array's length (§23.1.5.2.1), so read those values directly.
+    // The length can be past the stored elements (a length set far ahead, or
+    // an element stored far past the others), so the dense count is only a
+    // capacity hint.  The length is re-read each step because a getter
+    // reached through a hole may grow or shrink the source, as it would
+    // mid-iteration; as for the iterator, a length past High(Integer) ends
+    // there.
     SourceArray := TGocciaArrayValue(ASource);
     SourceElements := SourceArray.Elements;
     Needed := Target.Count + SourceElements.Count;
@@ -10088,7 +10092,7 @@ begin
       Target.Capacity := Max(Needed, Target.Capacity * 2);
     I := 0;
     Polls := @GThreadPolls;
-    while I < SourceElements.Count do
+    while I < Min(SourceArray.StoredLength, High(Integer)) do
     begin
       if Polls^.Any <> 0 then
         RunArmedPolls(Polls);
