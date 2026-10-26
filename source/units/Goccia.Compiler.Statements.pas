@@ -1796,7 +1796,8 @@ end;
 
 procedure PredeclareBlockVariableLocals(const ACtx: TGocciaCompilationContext;
   const AVarDecl: TGocciaVariableDeclaration;
-  const AEmitInitializers: Boolean = True);
+  const AEmitInitializers: Boolean = True;
+  const AUnobservableHoles: TArray<string> = nil);
 var
   I, J, LocalIdx: Integer;
   Names: TUnicodeStringList;
@@ -1818,7 +1819,10 @@ begin
           Slot := ACtx.Scope.DeclareLocal(Names[J], AVarDecl.IsConst);
           if AEmitInitializers then
           begin
-            EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+            // A binding whose TDZ nothing can observe still counts as set
+            // on entry, so its declaration sets no hole either.
+            if not NameListContains(AUnobservableHoles, Names[J]) then
+              EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
             ACtx.Scope.LocalAt(ACtx.Scope.ResolveLocal(Names[J]))^
               .HoleAtBlockEntry := True;
           end;
@@ -1899,7 +1903,8 @@ end;
 
 procedure PredeclareBlockLexicalLocals(const ANode: TGocciaASTNode;
   const ACtx: TGocciaCompilationContext;
-  const AEmitInitializers: Boolean = True);
+  const AEmitInitializers: Boolean = True;
+  const AUnobservableHoles: TArray<string> = nil);
 var
   VarDecl: TGocciaVariableDeclaration;
 begin
@@ -1907,7 +1912,8 @@ begin
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
     if not VarDecl.IsVar then
-      PredeclareBlockVariableLocals(ACtx, VarDecl, AEmitInitializers);
+      PredeclareBlockVariableLocals(ACtx, VarDecl, AEmitInitializers,
+        AUnobservableHoles);
   end
   else if ANode is TGocciaExportVariableDeclaration then
   begin
@@ -2324,6 +2330,7 @@ function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaBlockStatement): Boolean;
 var
   I: Integer;
+  UnobservableHoles: TArray<string>;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   Node: TGocciaASTNode;
@@ -2358,8 +2365,17 @@ begin
   if not HasUsing then
   begin
     ACtx.Scope.BeginScope;
+    // The leading let and const bindings whose TDZ nothing can observe get
+    // no hole on entry, as in a function body. A loop body is a block that
+    // is entered on every iteration, so this saves an instruction per binding
+    // per iteration.
+    if HasFunctionDecl or ACtx.OptimizationOptions.PreserveCoverageShape then
+      SetLength(UnobservableHoles, 0)
+    else
+      UnobservableHoles := LeadingLexicalsWithUnobservableHole(AStmt);
     for I := 0 to AStmt.Nodes.Count - 1 do
-      PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx);
+      PredeclareBlockLexicalLocals(AStmt.Nodes[I], ACtx, True,
+        UnobservableHoles);
     if HasFunctionDecl then
       for I := 0 to AStmt.Nodes.Count - 1 do
         if GetBlockFunctionDeclaration(AStmt.Nodes[I]) <> nil then
