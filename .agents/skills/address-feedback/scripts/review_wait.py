@@ -43,6 +43,11 @@ def load_policy(path: Path) -> dict[str, Any]:
         policy = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise WaitError(f"cannot read review policy {path}: {error}") from error
+    return validate_policy(policy, path)
+
+
+def validate_policy(policy: Any, path: Path | str) -> dict[str, Any]:
+    """A parsed review policy, checked and normalized; `path` names it in errors."""
     if not isinstance(policy, dict):
         raise WaitError(f"review policy {path} must be an object")
     automations = policy.get("automations")
