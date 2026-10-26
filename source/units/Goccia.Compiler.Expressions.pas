@@ -311,9 +311,12 @@ begin
     Exit;
   NumberValue := TGocciaNumberLiteralValue(
     TGocciaLiteralExpression(AExpr).Value).Value;
+  // The range is checked before Trunc, which raises EInvalidOp for a value
+  // past Int64 when invalid operations are unmasked: the compiler can run
+  // outside the engine's masked floating-point scope.
   if IsNan(NumberValue) or IsInfinite(NumberValue) or
-     (NumberValue <> Trunc(NumberValue)) or
-     (NumberValue < Low(Int16)) or (NumberValue > High(Int16)) then
+     (NumberValue < Low(Int16)) or (NumberValue > High(Int16)) or
+     (NumberValue <> Trunc(NumberValue)) then
     Exit;
   AImmediate := Int16(Trunc(NumberValue));
   Result := True;
@@ -6106,10 +6109,11 @@ begin
   if not TryEvaluateConstantExpression(ACtx, AExpr, Value) or
      (Value.Kind <> ctvkNumber) then
     Exit;
+  // The range comes before Trunc, as in TrySignedInt16NumberLiteral.
   if IsNan(Value.NumberValue) or IsInfinite(Value.NumberValue) or
-     (Value.NumberValue <> Trunc(Value.NumberValue)) or
      (Value.NumberValue < Low(Int16)) or
-     (Value.NumberValue > High(Int16)) then
+     (Value.NumberValue > High(Int16)) or
+     (Value.NumberValue <> Trunc(Value.NumberValue)) then
     Exit;
   AImmediate := Int16(Trunc(Value.NumberValue));
   Result := True;

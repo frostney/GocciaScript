@@ -207,6 +207,7 @@ type
     procedure TestIfAndConditionalLessThanUseJumpIfNotLt;
     procedure TestConstantOperandComparisonsUseImmediateJumps;
     procedure TestConstantOperandComparisonsKeepGenericForms;
+    procedure TestHugeConstantComparisonCompilesWithInvalidOpUnmasked;
     procedure TestLessThanValueKeepsGenericCompare;
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
@@ -410,6 +411,8 @@ begin
     TestConstantOperandComparisonsUseImmediateJumps);
   Test('comparisons outside the immediate forms keep generic compares',
     TestConstantOperandComparisonsKeepGenericForms);
+  Test('a comparison with a constant past Int64 compiles with invalid ' +
+    'operations unmasked', TestHugeConstantComparisonCompilesWithInvalidOpUnmasked);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
@@ -4158,6 +4161,37 @@ begin
     finally
       Module.Free;
     end;
+  end;
+end;
+
+procedure TTestCompiler.TestHugeConstantComparisonCompilesWithInvalidOpUnmasked;
+const
+  // A literal and a const binding past the Int64 range: an embedder can call
+  // the compiler outside the engine's masked floating-point scope, where
+  // truncating such a value raises EInvalidOp.
+  Cases: array[0..1] of string = (
+    'const f = (a) => { if (a < 1e30) { return 1; } return 0; }; f(1);',
+    'const K = -1e300; const f = (a) => { if (a < K) { return 1; } return 0; }; f(1);');
+var
+  Module: TGocciaBytecodeModule;
+  SavedMask: TFPUExceptionMask;
+  I: Integer;
+begin
+  SavedMask := GetExceptionMask;
+  SetExceptionMask(SavedMask - [exInvalidOp]);
+  try
+    for I := Low(Cases) to High(Cases) do
+    begin
+      Module := CompileSource(Cases[I]);
+      try
+        Expect<Integer>(CountOpRecursive(Module.TopLevel,
+          OP_JUMP_IF_NOT_LT_IMM)).ToBe(0);
+      finally
+        Module.Free;
+      end;
+    end;
+  finally
+    SetExceptionMask(SavedMask);
   end;
 end;
 
