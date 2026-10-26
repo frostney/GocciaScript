@@ -94,6 +94,16 @@ class ReplayTest(unittest.TestCase):
         self.assertEqual(sorted(found - pinned), [], "unpinned invariant violations")
         self.assertEqual(sorted(pinned - found), [], "pinned violations that no longer occur")
 
+    def test_without_repository_evidence_only_known_late_first_activity_is_not_active(self) -> None:
+        # GocciaScript#1225: CodeRabbit started its own review about 58 minutes after the pull
+        # request opened. GocciaScript#1237: CodeRabbit first commented 7 days after its push. With
+        # the repository's evidence, its configuration and closed pull requests, neither is.
+        self.assertEqual(self.checked.get("not-active", 0), 0)
+        violations, _checked = REPLAY.replay(self.pulls, repository_evidence=False)
+        self.assertEqual({item["invariant"] for item in violations}, {"not-active"})
+        refs = {" ".join(item["key"].split()[:1]) for item in violations}
+        self.assertEqual(refs, {"frostney/GocciaScript#1225", "frostney/GocciaScript#1237"})
+
 
 if __name__ == "__main__":
     unittest.main()

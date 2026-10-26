@@ -58,6 +58,8 @@ reviews, summaries, suggestions, and nitpicks. A rate-limited, incomplete,
 errored, missing, or head-ambiguous verdict is pending rather than passed.
 CodeRabbit's [`bot-skip` state](pr-readiness.md#coderabbit) exempts a bot-authored
 PR from its review gate; continue handling findings and the remaining gates.
+Its `not-active` state means nothing shows the repository uses CodeRabbit, so
+it is no gate and its adapter posts no trigger.
 
 ## Workflow
 

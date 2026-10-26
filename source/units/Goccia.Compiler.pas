@@ -1127,7 +1127,16 @@ begin
     else if ABody is TGocciaExpression then
     begin
       Reg := FCurrentScope.AllocateRegister;
-      DoCompileExpression(TGocciaExpression(ABody), Reg);
+      // ES2026 §15.10.1 IsInTailPosition: a ConciseBody is a tail-position
+      // body like a FunctionBody, and HasCallInTailPosition (§15.10.2)
+      // reaches its ExpressionBody through the same expression rules a
+      // `return` uses (CompileReturnValueTailAware).
+      if Goccia.Compiler.Statements.ReturnIsTailPositionEligible(
+           BuildContext) then
+        Goccia.Compiler.Expressions.CompileReturnValueTailAware(BuildContext,
+          TGocciaExpression(ABody), Reg)
+      else
+        DoCompileExpression(TGocciaExpression(ABody), Reg);
       // A concise body returns its expression.
       FCurrentScope.NoteReturnType(ExpressionType(FCurrentScope,
         TGocciaExpression(ABody)));

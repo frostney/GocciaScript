@@ -806,7 +806,7 @@ await section("Bare Loader: tail-call optimization stays strict-mode only...", a
   // is bounded by --max-stack and throws RangeError.
   const src =
     "const f = (n) => (n === 0 ? 'done' : f(n - 1)); try { print(f(100000)); } catch (e) { print(e.constructor.name); }\n";
-  const proc = Bun.spawnSync([BARE, "--max-stack=1000"], {
+  const proc = Bun.spawnSync([BARE, "--max-stack=1000", "--compat-non-strict-mode"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
@@ -13629,7 +13629,7 @@ await section("Fuzz Harness: engine-modelled outcomes exit zero...", async () =>
       "script-throw": "null.x;",
       timeout: "while (true) {}",
       "module-denied": 'import { a } from "./nope.js";',
-      "deep-recursion": "const f = () => f(); f();",
+      "deep-recursion": "const f = () => { f(); }; f();",
       // Requests ~800 MB of element storage in one step, past the harness's
       // 256 MB budget. The refusal raises the uncatchable TGocciaMemoryLimitError;
       // the harness must classify it as a bounded outcome (exit 0), not let it
