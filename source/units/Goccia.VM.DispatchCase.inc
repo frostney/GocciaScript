@@ -803,8 +803,9 @@
       begin
         if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+          // The length property, which can be past the stored elements.
           FRegisters[A] := VMNumberRegister(
-            TGocciaArrayValue(FRegisters[B].ObjectValue).GetLength)
+            TGocciaArrayValue(FRegisters[B].ObjectValue).StoredLength)
         else if (FRegisters[B].Kind = grkObject) and
                 (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
           FRegisters[A] := VMNumberRegister(UTF16CodeUnitLength(
