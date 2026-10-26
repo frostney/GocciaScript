@@ -28,7 +28,7 @@ An unannotated `let` takes an inferred type from the syntactic form of its initi
 | Template literal, with or without substitutions | `string` |
 | Object literal, array literal, `new` expression, arrow function, or function expression | `object` (any non-primitive value) |
 
-Every other initializer leaves the binding untyped, whatever the engine could work out about its value: an identifier, a call, an operator expression (including a negated number such as `-1`), a BigInt literal, `null`, or `undefined`.
+Every other initializer leaves the binding untyped, whatever the engine could work out about its value: an identifier, a call, an operator expression (including a negated number such as `-1`), a BigInt literal, `null`, or `undefined`. The bytecode compiler may still infer a Number for such a binding to choose typed instructions, but only when it proves that every value the binding can hold is a Number. An assignment of any other value defeats the proof, so `total = "text"` above stays allowed, and the inference is never enforced ([Compiler Type Inference](bytecode-vm.md#compiler-type-inference)).
 
 ```javascript
 const base = 16;
