@@ -73,7 +73,7 @@ Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs
 
 **Full standard compliance** — all standard constants and methods are available.
 
-**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` with one implementation, `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl). A finite result is within 0.54 ULP of the exact value, a result that is exactly representable, such as `10 ** 22` or `2 ** -1074`, comes out exact, and every platform returns the same bits. As in V8, `x ** 2` is `x * x` and `x ** 0.5` is `Math.sqrt(x)`.
+**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` with one implementation, `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl). A finite result is within 0.54 ULP of the exact value. A result that is exactly representable, such as `10 ** 22` or `2 ** -1074`, comes out exact, and every platform returns the same bits. As in V8, `x ** 2` is `x * x` and `x ** 0.5` is `Math.sqrt(x)`.
 
 **Extras:**
 
