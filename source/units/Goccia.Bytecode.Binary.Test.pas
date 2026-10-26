@@ -882,7 +882,7 @@ end;
 procedure TBytecodeBinaryTests.TestConstantPoolStopsAtWhatTheFormatCounts;
 
   // Whether adding one more constant of kind AKind fails with the constant
-  // pool's overflow error.
+  // pool's bytecode limit.
   function Overflows(const ATemplate: TGocciaFunctionTemplate;
     const AKind: Integer): Boolean;
   begin
@@ -895,8 +895,8 @@ procedure TBytecodeBinaryTests.TestConstantPoolStopsAtWhatTheFormatCounts;
         3: ATemplate.AddConstantBigInt('42');
       end;
     except
-      on E: Exception do
-        Result := Pos('Constant pool overflow', E.Message) > 0;
+      on E: EGocciaBytecodeLimit do
+        Result := Pos('Too many constants', E.Message) > 0;
     end;
   end;
 

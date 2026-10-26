@@ -4446,7 +4446,7 @@ begin
             EmitInstruction(ACtx, EncodeABC(OP_ARRAY_PUSH, RestReg, ValueReg,
               0));
             EmitInstruction(ACtx, EncodeAx(OP_JUMP,
-              RestLoop - CurrentCodePosition(ACtx) - 1));
+              SignedJumpOffset24(RestLoop - CurrentCodePosition(ACtx) - 1)));
             PatchJumpTarget(ACtx, SkipNextJump);
             PatchJumpTarget(ACtx, RestDoneJump);
             EmitDestructuringWithPreparedTarget(ACtx, APattern.Elements[I],
@@ -4691,44 +4691,21 @@ begin
     // or nested pattern instead steps the iterator one element at a time and
     // closes it once, after the whole pattern (ES2026 §8.6.2
     // BindingInitialization, BindingPattern : ArrayBindingPattern, steps 2-3).
-    if AAssignmentMode or ArrayBindingPatternRunsCodePerElement(ArrPat) then
+    // Draining needs the bound in operand C and the rest start in OP_UNPACK's
+    // 8-bit operand, so a pattern too long for them steps the iterator too:
+    // with only holes and identifiers the two orders bind the same values.
+    if AAssignmentMode or ArrayBindingPatternRunsCodePerElement(ArrPat) or
+       (HasRest and (RestIndex > High(UInt8))) or
+       ((not HasRest) and
+        (ArrPat.Elements.Count >= ITERABLE_LIMIT_UNBOUNDED)) then
     begin
       EmitStreamingArrayDestructuring(ACtx, ArrPat, ASrcReg, AAssignmentMode);
       Exit;
     end;
-    // Only HasRest collapses to the unbounded sentinel.  A fixed-size
-    // pattern with >= 255 elements would otherwise silently change
-    // semantics from "consume exactly N then close" to "drain the whole
-    // iterator", because the operand-C encoding can't represent N.
-    // Refuse to compile rather than miscompile — patterns this large are
-    // pathological in practice (no real codebase array-destructures 255
-    // bindings at once), and a clear compile-time error is better than
-    // a silent infinite-iteration trap.
     if HasRest then
-    begin
-      // OP_UNPACK encodes the rest start offset in a UInt8 operand
-      // (`EncodeABC(OP_UNPACK, DestSlot, ASrcReg, UInt8(I))` below), so
-      // rest patterns whose start exceeds 255 elements would be
-      // miscompiled — the truncated index points at the wrong slice
-      // start.  Reject those at compile time too, paralleling the
-      // fixed-pattern guard.  When the operand width is widened, this
-      // limit can be relaxed.
-      if RestIndex > High(UInt8) then
-        raise Exception.CreateFmt(
-          'Array destructuring rest pattern starts past the encodable '
-          + 'offset (%d; max %d)',
-          [RestIndex, High(UInt8)]);
-      Limit := ITERABLE_LIMIT_UNBOUNDED;
-    end
+      Limit := ITERABLE_LIMIT_UNBOUNDED
     else
-    begin
-      if ArrPat.Elements.Count >= ITERABLE_LIMIT_UNBOUNDED then
-        raise Exception.CreateFmt(
-          'Array destructuring pattern is too large to encode exactly '
-          + '(%d elements; max %d without a rest element)',
-          [ArrPat.Elements.Count, ITERABLE_LIMIT_UNBOUNDED - 1]);
       Limit := ArrPat.Elements.Count;
-    end;
 
     EmitInstruction(ACtx, EncodeABC(OP_VALIDATE_VALUE, ASrcReg,
       VALIDATE_OP_REQUIRE_ITERABLE, UInt8(Limit)));
@@ -5076,7 +5053,8 @@ begin
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AExpr.Parameters, AExpr.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
-      raise Exception.Create('Parameter preamble is too large to encode');
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+        [High(UInt16)]);
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
     MarkParametersInitialized(ChildScope, AExpr.Parameters, False);
 
@@ -5346,7 +5324,8 @@ begin
 
   ArgCount := AExpr.Arguments.Count;
   if ArgCount > High(UInt16) then
-    raise Exception.Create('Compiler error: too many arguments (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeArgumentLimit,
+      [High(UInt16)]);
   UseSpread := HasSpreadArgument(AExpr);
 
   if AExpr.Callee is TGocciaIdentifierExpression then
@@ -5619,7 +5598,8 @@ begin
   AResultReg := ADest;
   ArgCount := AExpr.Arguments.Count;
   if ArgCount > High(UInt16) then
-    raise Exception.Create('Compiler error: too many arguments (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeArgumentLimit,
+      [High(UInt16)]);
   UseSpread := HasSpreadArgument(AExpr);
 
   // A closed-world numeric proof establishes both the callee identity and the
@@ -6709,7 +6689,8 @@ begin
     EmitParameterTypeChecks(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
-      raise Exception.Create('Parameter preamble is too large to encode');
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+        [High(UInt16)]);
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
     ACtx.CompileFunctionBody(ASetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -6874,7 +6855,8 @@ begin
     EmitParameterTypeChecks(ChildCtx, SetterParams);
     EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
-      raise Exception.Create('Parameter preamble is too large to encode');
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+        [High(UInt16)]);
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
     ACtx.CompileFunctionBody(ASetter.Body);
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -6919,7 +6901,9 @@ var
   GetterExpr: TGocciaGetterExpression;
   SetterExpr: TGocciaSetterExpression;
 begin
-  EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, ADest, AExpr.Properties.Count));
+  // Bx is only a capacity hint, clamped as OP_NEW_ARRAY's is.
+  EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, ADest,
+    UInt16(Min(AExpr.Properties.Count, High(UInt16)))));
 
   Order := AExpr.PropertySourceOrder;
   if Length(Order) > 0 then
@@ -7243,7 +7227,8 @@ var
 begin
   ArgCount := 1 + AExpr.Expressions.Count; // template object + substitution values
   if ArgCount > High(UInt16) then
-    raise Exception.Create('Compiler error: too many tagged template substitutions (>65534)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeSubstitutionLimit,
+      [High(UInt16) - 1]);
 
   if ATail then
     TailFlag := CALL_FLAG_TAIL
@@ -7405,7 +7390,8 @@ begin
   begin
     ArgCount := AExpr.Arguments.Count;
     if ArgCount > High(UInt16) then
-      raise Exception.Create('Compiler error: too many constructor arguments (>65535)');
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeArgumentLimit,
+        [High(UInt16)]);
     for I := 0 to ArgCount - 1 do
       ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
     RecordCallSite(ACtx, AExpr, AExpr.Callee);
@@ -7553,7 +7539,8 @@ begin
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
     EmitBodyVarEnvironment(ChildCtx, AExpr.Parameters, AExpr.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
-      raise Exception.Create('Parameter preamble is too large to encode');
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+        [High(UInt16)]);
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
     MarkParametersInitialized(ChildScope, AExpr.Parameters,
       ArgumentsSlot >= 0);

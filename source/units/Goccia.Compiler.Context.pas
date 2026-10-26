@@ -124,6 +124,11 @@ function EmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
   const ALeftReg, ARightReg: UInt16): Integer;
 procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
+{ The offset of a jump with a signed 16-bit (sBx or C) or 24-bit (Ax)
+  operand. An offset that does not fit raises EGocciaBytecodeLimit, so a
+  jump is never written to the wrong place. }
+function SignedJumpOffset16(const AOffset: Integer): Int16;
+function SignedJumpOffset24(const AOffset: Integer): Int32;
 function CurrentCodePosition(const ACtx: TGocciaCompilationContext): Integer;
 
 function TokenTypeToRuntimeOp(
@@ -138,7 +143,32 @@ function ShortCircuitJumpOp(
 implementation
 
 uses
-  TextSemantics;
+  TextSemantics,
+
+  Goccia.Error.Messages;
+
+const
+  // EncodeAx biases its signed 24-bit operand by 2^23 - 1.
+  AX_JUMP_OFFSET_LIMIT = 8388607;
+
+procedure RaiseJumpLimit(const ALimit: Integer);
+begin
+  raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeJumpLimit, [ALimit]);
+end;
+
+function SignedJumpOffset16(const AOffset: Integer): Int16;
+begin
+  if (AOffset < Low(Int16)) or (AOffset > High(Int16)) then
+    RaiseJumpLimit(High(Int16));
+  Result := Int16(AOffset);
+end;
+
+function SignedJumpOffset24(const AOffset: Integer): Int32;
+begin
+  if (AOffset < -AX_JUMP_OFFSET_LIMIT) or (AOffset > AX_JUMP_OFFSET_LIMIT) then
+    RaiseJumpLimit(AX_JUMP_OFFSET_LIMIT);
+  Result := AOffset;
+end;
 
 // ES2026 §15.7.14 ClassDefinitionEvaluation runs the class body with the
 // class's PrivateEnvironment, so a function or class created by code in the
@@ -279,7 +309,8 @@ begin
   Op := DecodeOp(Instruction);
 
   if TGocciaOpCode(Op) = OP_JUMP then
-    ACtx.Template.PatchInstruction(AIndex, EncodeAx(OP_JUMP, Offset))
+    ACtx.Template.PatchInstruction(AIndex,
+      EncodeAx(OP_JUMP, SignedJumpOffset24(Offset)))
   else if (TGocciaOpCode(Op) = OP_PUSH_HANDLER) or
           (TGocciaOpCode(Op) = OP_PUSH_FINALLY_HANDLER) then
   begin
@@ -289,7 +320,7 @@ begin
       A := A or (UInt16(DecodeA(
         ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
     if (Offset < 0) or (Offset > High(UInt16)) then
-      raise Exception.Create('Handler jump offset exceeds 16-bit range');
+      RaiseJumpLimit(High(UInt16));
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABx(TGocciaOpCode(Op), A, UInt16(Offset)));
   end
@@ -307,7 +338,7 @@ begin
         ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
     end;
     if (Offset < 0) or (Offset > High(UInt16)) then
-      raise Exception.Create('Nullish jump offset exceeds 16-bit range');
+      RaiseJumpLimit(High(UInt16));
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Offset)));
   end
@@ -326,10 +357,8 @@ begin
       B := B or (UInt16(DecodeB(
         ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
     end;
-    if (Offset < Low(Int16)) or (Offset > High(Int16)) then
-      raise Exception.Create('Numeric immediate jump offset exceeds 16-bit range');
     ACtx.Template.PatchInstruction(AIndex,
-      EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Int16(Offset))));
+      EncodeABC(TGocciaOpCode(Op), A, B, UInt16(SignedJumpOffset16(Offset))));
   end
   else
   begin
@@ -339,7 +368,7 @@ begin
       A := A or (UInt16(DecodeA(
         ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
     ACtx.Template.PatchInstruction(AIndex,
-      EncodeAsBx(TGocciaOpCode(Op), A, Int16(Offset)));
+      EncodeAsBx(TGocciaOpCode(Op), A, SignedJumpOffset16(Offset)));
   end;
 end;
 

@@ -64,8 +64,14 @@ type
     // Expressions and statements open in the walk over the tree; see
     // EnterNesting.
     FNestingDepth: Integer;
+    // The innermost expression or statement being compiled, where a
+    // bytecode limit is reported (RaiseBytecodeLimit).
+    FCurrentNode: TGocciaASTNode;
     procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
+    procedure RaiseBytecodeLimit(const AError: EGocciaBytecodeLimit;
+      const AProgram: TGocciaProgram);
+    function CompileProgram(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt16);
     procedure CompileExpressionNode(const AExpr: TGocciaExpression;
@@ -362,18 +368,46 @@ end;
 
 procedure TGocciaCompiler.DoCompileExpression(
   const AExpr: TGocciaExpression; const ADest: UInt16);
+var
+  OuterNode: TGocciaASTNode;
 begin
   EnterNesting(AExpr);
+  OuterNode := FCurrentNode;
+  FCurrentNode := AExpr;
   CompileExpressionNode(AExpr, ADest);
+  FCurrentNode := OuterNode;
   Dec(FNestingDepth);
 end;
 
 function TGocciaCompiler.DoCompileStatement(
   const AStmt: TGocciaStatement): Boolean;
+var
+  OuterNode: TGocciaASTNode;
 begin
   EnterNesting(AStmt);
+  OuterNode := FCurrentNode;
+  FCurrentNode := AStmt;
   Result := CompileStatementNode(AStmt);
+  FCurrentNode := OuterNode;
   Dec(FNestingDepth);
+end;
+
+// A bytecode limit is an implementation limit of the program's source, so it
+// is reported as the parser reports the nesting limit: a SyntaxError at the
+// expression or statement that reached it, which new Function, eval,
+// ShadowRealm.prototype.evaluate and dynamic import throw as a catchable
+// error. The node is the innermost one open when the limit was hit, since a
+// raise skips the restores above.
+procedure TGocciaCompiler.RaiseBytecodeLimit(
+  const AError: EGocciaBytecodeLimit; const AProgram: TGocciaProgram);
+var
+  Node: TGocciaASTNode;
+begin
+  Node := FCurrentNode;
+  if not Assigned(Node) then
+    Node := AProgram;
+  raise TGocciaSyntaxError.Create(AError.Message, Node.Line, Node.Column,
+    FSourcePath, nil, SSuggestBytecodeLimit);
 end;
 
 procedure TGocciaCompiler.CompileExpressionNode(
@@ -1960,6 +1994,18 @@ begin
 end;
 
 function TGocciaCompiler.Compile(
+  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+begin
+  FCurrentNode := nil;
+  try
+    Result := CompileProgram(AProgram);
+  except
+    on E: EGocciaBytecodeLimit do
+      RaiseBytecodeLimit(E, AProgram);
+  end;
+end;
+
+function TGocciaCompiler.CompileProgram(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
   I: Integer;

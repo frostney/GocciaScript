@@ -1,0 +1,5 @@
+{
+  "compat-while-loops": true,
+  "unsafe-function-constructor": true,
+  "unsafe-shadowrealm": true
+}

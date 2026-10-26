@@ -134,6 +134,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
+  Goccia.Error.Messages,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
   Goccia.PrivateNames,
@@ -3223,7 +3224,7 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
-    EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     PatchJumpTarget(ACtx, ExitJump);
 
@@ -3418,7 +3419,7 @@ begin
     end;
 
     EmitInstruction(ACtx, EncodeAx(OP_JUMP,
-      LoopStart - CurrentCodePosition(ACtx) - 1));
+      SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     if NeedsIteratorClose then
     begin
@@ -3504,7 +3505,7 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_ENUM_ENTRY, KeyReg, ValidReg, EntryReg));
     EmitInstruction(ACtx,
       EncodeAsBx(OP_JUMP_IF_FALSE, ValidReg,
-        LoopStart - CurrentCodePosition(ACtx) - 1));
+        SignedJumpOffset16(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
@@ -3542,7 +3543,7 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     EmitInstruction(ACtx,
-      EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+      EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     PatchJumpTarget(ACtx, ExitJump);
     PatchJumpList(ACtx, LoopControl.BreakJumps);
@@ -3665,7 +3666,7 @@ begin
       GPendingFinally.Delete(GPendingFinally.Count - 1);
     end;
 
-    EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     if NeedsIteratorClose then
     begin
@@ -4048,7 +4049,7 @@ begin
 
     EmitInstruction(ACtx, EncodeABC(StepOpcode, OuterSlot, OuterSlot, OneReg));
     EmitInstruction(ACtx, EncodeAx(OP_JUMP,
-      LoopStart - CurrentCodePosition(ACtx) - 1));
+      SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     PatchJumpTarget(ACtx, ExitJump);
 
@@ -4653,7 +4654,7 @@ begin
         // emitted after that body snapshots it before a fresh update scope.
 
         EmitInstruction(ACtx,
-          EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+          EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
         PatchJumpArray(ACtx, ExitJumps);
 
@@ -4688,7 +4689,7 @@ begin
           CompileDiscardedExpression(ACtx, AStmt.Update);
 
         EmitInstruction(ACtx,
-          EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+          EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
         PatchJumpArray(ACtx, ExitJumps);
 
@@ -4771,7 +4772,7 @@ begin
     PatchLabeledContinueJumps(ACtx, AStmt);
 
     EmitInstruction(ACtx,
-      EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+      EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     PatchJumpArray(ACtx, ExitJumps);
 
@@ -4804,7 +4805,7 @@ begin
       ACtx.CompileExpression(AStmt.Condition, CondReg);
       EmitInstruction(ACtx,
         EncodeAsBx(OP_JUMP_IF_TRUE, CondReg,
-          LoopStart - CurrentCodePosition(ACtx) - 1));
+          SignedJumpOffset16(LoopStart - CurrentCodePosition(ACtx) - 1)));
     finally
       ACtx.Scope.FreeRegister;
     end;
@@ -5783,7 +5784,8 @@ begin
   EmitParameterInitialization(ChildCtx, AMethod.Parameters);
   EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
-    raise Exception.Create('Parameter preamble is too large to encode');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+      [High(UInt16)]);
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
   MarkParametersInitialized(ChildScope, AMethod.Parameters,
     ArgumentsSlot >= 0);
@@ -5957,7 +5959,8 @@ begin
   EmitParameterInitialization(ChildCtx, SetterParams);
   EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
-    raise Exception.Create('Parameter preamble is too large to encode');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+      [High(UInt16)]);
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
   ACtx.CompileFunctionBody(ASetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -6133,7 +6136,8 @@ begin
   EmitParameterInitialization(ChildCtx, SetterParams);
   EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
-    raise Exception.Create('Parameter preamble is too large to encode');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+      [High(UInt16)]);
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
   ACtx.CompileFunctionBody(ASetter.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -6238,7 +6242,8 @@ begin
   EmitParameterInitialization(ChildCtx, AMethod.Parameters);
   EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
-    raise Exception.Create('Parameter preamble is too large to encode');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+      [High(UInt16)]);
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
   MarkParametersInitialized(ChildScope, AMethod.Parameters,
     ArgumentsSlot >= 0);
@@ -8003,8 +8008,12 @@ begin
     if LocalIdx >= 0 then
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
   end;
-  EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, EnumSlot,
-    Length(AStmt.Members)));
+  // Bx is only a capacity hint.
+  if Length(AStmt.Members) > High(UInt16) then
+    EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, EnumSlot, High(UInt16)))
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, EnumSlot,
+      Length(AStmt.Members)));
 
   ACtx.Scope.BeginScope;
 

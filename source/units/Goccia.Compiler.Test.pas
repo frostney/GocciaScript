@@ -187,6 +187,7 @@ type
     procedure TestBinaryRoundTripKeepsBothZeros;
     procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
+    procedure TestBytecodeLimitRaisesSyntaxErrorAtSource;
     procedure TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
@@ -378,6 +379,8 @@ begin
   Test('Binary loader rejects malformed artifacts',
     TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
+  Test('A bytecode limit raises a SyntaxError at the source that reached it',
+    TestBytecodeLimitRaisesSyntaxErrorAtSource);
   Test('A compile after compiles that raised starts at nesting depth 0',
     TestCompileAfterRaisedCompileStartsAtNestingDepthZero);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
@@ -3039,6 +3042,58 @@ begin
 
   Expect<Boolean>(Raised).ToBe(True);
   Expect<Boolean>(ContainsMessage).ToBe(True);
+end;
+
+procedure TTestCompiler.TestBytecodeLimitRaisesSyntaxErrorAtSource;
+
+  // The SyntaxError compiling ASource raises: its message, line and column.
+  procedure ExpectLimit(const ASource, AMessage: string;
+    const ALine, AColumn: Integer);
+  var
+    Raised: Boolean;
+    Message: string;
+    Line, Column: Integer;
+  begin
+    Raised := False;
+    Line := 0;
+    Column := 0;
+    try
+      CompileSource(ASource).Free;
+    except
+      on E: TGocciaSyntaxError do
+      begin
+        Raised := True;
+        Message := E.Message;
+        Line := E.Line;
+        Column := E.Column;
+      end;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Boolean>(Pos(AMessage, Message) > 0).ToBe(True);
+    Expect<Integer>(Line).ToBe(ALine);
+    Expect<Integer>(Column).ToBe(AColumn);
+  end;
+
+var
+  Body, Keys: string;
+  I: Integer;
+begin
+  Body := '';
+  for I := 1 to 40000 do
+    Body := Body + 'r = r + 1; ';
+  // The branch's jump is patched once its body is compiled, so the error
+  // names the if statement.
+  ExpectLimit('const g = (k) => {' + #10 + '  let r = 0;' + #10 +
+    '  if (k) { ' + Body + '}' + #10 + '  return r;' + #10 + '};',
+    'A branch jumps over more than 32767 instructions', 3, 3);
+
+  Keys := '';
+  for I := 0 to 69999 do
+    Keys := Keys + 'p' + IntToStr(I) + ': 0, ';
+  // A key's constant is added after its value is compiled, so the error
+  // names the object literal.
+  ExpectLimit('const o = {' + #10 + Keys + '};',
+    'Too many constants in one function: more than 65535', 1, 11);
 end;
 
 procedure TTestCompiler.TestConstantFoldsNestedArithmetic;
