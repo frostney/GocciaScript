@@ -135,6 +135,8 @@ type
       const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
+    procedure TestTopLevelCallsCompileInLinearTime;
+    procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
     procedure TestFloatConstantsArePooledByBitPattern;
@@ -279,6 +281,10 @@ begin
     TestScriptTopLevelDeclarationsCompileInLinearTime);
   Test('Module top-level declarations compile in linear time',
     TestModuleTopLevelDeclarationsCompileInLinearTime);
+  Test('Top-level calls among many bindings compile in linear time',
+    TestTopLevelCallsCompileInLinearTime);
+  Test('SlotHoldsLocal follows the declared and dropped locals',
+    TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
     TestEndingABlockRestoresTheBindingItShadowed);
   Test('Var and slot lookups find the oldest local of a name',
@@ -1031,6 +1037,91 @@ begin
   ExpectTopLevelCompileLinear(Baseline, 'var a%0:d = %0:d;', False);
   ExpectTopLevelCompileLinear(Baseline, 'function a%0:d() {}', False);
   ExpectTopLevelCompileLinear(Baseline, 'class A%0:d {}', False);
+end;
+
+{ A call compiled at a function's top level asks whether its destination
+  register holds a local. Answering by visiting every local made each call
+  cost time linear in the bindings before it, so a top-level call per
+  binding compiled in quadratic time (about 12 s here for 15,000). Each
+  shape is timed against the same declarations without the calls. }
+procedure TTestCompiler.TestTopLevelCallsCompileInLinearTime;
+
+  procedure ExpectCallsCompileLinear(const ADeclarations, ACall: string;
+    const AGlobalBackedTopLevel: Boolean);
+  var
+    Baseline, Elapsed: Int64;
+  begin
+    Baseline := CompileNanoseconds(ADeclarations, AGlobalBackedTopLevel);
+    Elapsed := CompileNanoseconds(ADeclarations + ' ' + ACall,
+      AGlobalBackedTopLevel);
+    if Elapsed > LINEAR_COMPILE_RATIO * Baseline +
+       LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d lines "%s %s" took %d ms to compile against %d ms ' +
+        'without the call', [LINEAR_DECLARATION_COUNT, ADeclarations, ACall,
+        Elapsed div 1000000, Baseline div 1000000]));
+    Expect<Boolean>(Elapsed <=
+      LINEAR_COMPILE_RATIO * Baseline + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f(a%0:d);', False);
+  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f(a%0:d);', True);
+  // Functions that write a module-scope binding, each called at top level.
+  ExpectCallsCompileLinear(
+    'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d();', False);
+end;
+
+procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
+var
+  Scope: TGocciaCompilerScope;
+  Closed: TArray<UInt16>;
+  ClosedCount: Integer;
+  FirstSlot, VarSlot, BlockSlot, TempSlot: UInt16;
+begin
+  Scope := TGocciaCompilerScope.Create(nil, 0);
+  try
+    FirstSlot := Scope.DeclareLocal('a', False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(FirstSlot)).ToBe(True);
+    TempSlot := Scope.AllocateRegister;
+    // A register allocated for a value is not a local's.
+    Expect<Boolean>(Scope.SlotHoldsLocal(TempSlot)).ToBe(False);
+    Scope.FreeRegister;
+    Expect<Boolean>(Scope.SlotHoldsLocal(1000)).ToBe(False);
+
+    Scope.BeginScope;
+    BlockSlot := Scope.DeclareLocal('b', False);
+    VarSlot := Scope.DeclareVarLocal('v');
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(VarSlot)).ToBe(True);
+    // The var, declared at depth 0, keeps the block's local from being
+    // dropped, and both keep their registers.
+    Scope.EndScope(Closed, ClosedCount);
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(VarSlot)).ToBe(True);
+  finally
+    Scope.Free;
+  end;
+
+  Scope := TGocciaCompilerScope.Create(nil, 0);
+  try
+    Scope.DeclareLocal('a', False);
+    Scope.BeginScope;
+    BlockSlot := Scope.DeclareLocal('b', False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Scope.EndScope(Closed, ClosedCount);
+    // The block's local is dropped with its block, and the register it had
+    // is free for a value again.
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(False);
+    Expect<Integer>(Scope.AllocateRegister).ToBe(BlockSlot);
+    Scope.FreeRegister;
+
+    // A caller's local rebuilt for a direct eval names its register.
+    Scope.DeclareCallerLocal('c', 40, False, False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(40)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(39)).ToBe(False);
+  finally
+    Scope.Free;
+  end;
 end;
 
 { Each a distinct number outside the immediate range, so each takes its own
