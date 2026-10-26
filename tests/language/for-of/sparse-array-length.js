@@ -4,7 +4,7 @@ features: [for-of, Array]
 ---*/
 
 // An array iterator reads the array's length at every step
-// (ES2026 §23.1.5.1 %ArrayIteratorPrototype%.next), so elements past the
+// (ES2026 §23.1.5.2.1 %ArrayIteratorPrototype%.next), so elements past the
 // last stored one are visited as undefined.
 
 const farLength = 2000000;

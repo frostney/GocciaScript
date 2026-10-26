@@ -10084,7 +10084,8 @@ begin
     // capacity hint.  The length is re-read each step because a getter
     // reached through a hole may grow or shrink the source, as it would
     // mid-iteration; as for the iterator, a length past High(Integer) ends
-    // there.
+    // there.  The length is never below the dense count, so the dense count
+    // decides while it holds and the length is read only past it.
     SourceArray := TGocciaArrayValue(ASource);
     SourceElements := SourceArray.Elements;
     Needed := Target.Count + SourceElements.Count;
@@ -10092,7 +10093,8 @@ begin
       Target.Capacity := Max(Needed, Target.Capacity * 2);
     I := 0;
     Polls := @GThreadPolls;
-    while I < Min(SourceArray.StoredLength, High(Integer)) do
+    while (I < SourceElements.Count) or
+          (I < Min(SourceArray.StoredLength, High(Integer))) do
     begin
       if Polls^.Any <> 0 then
         RunArmedPolls(Polls);
