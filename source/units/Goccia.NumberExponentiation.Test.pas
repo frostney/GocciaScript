@@ -8,8 +8,8 @@ uses
   NumberBits,
   TestingPascalLibrary,
 
-  Goccia.FloatingPoint,
-  Goccia.NumberExponentiation;
+  Goccia.NumberExponentiation,
+  Goccia.TestSetup;
 
 type
   TNumberExponentiationTests = class(TTestSuite)
@@ -117,29 +117,24 @@ begin
   Expect<Double>(NumberExponentiation(-1.0, 1e300)).ToBe(1.0);
 end;
 
-// Under the engine's floating-point environment, where an overflow gives
-// infinity instead of raising.
 procedure TNumberExponentiationTests.TestSubnormalAndOverflowingResults;
-var
-  FloatingPointState: TGocciaFloatingPointState;
 begin
-  EnterGocciaFloatingPointScope(FloatingPointState);
-  try
-    Expect<UInt64>(DoubleToBits(NumberExponentiation(2.0, -1074.0))).ToBe(1);
-    Expect<UInt64>(DoubleToBits(NumberExponentiation(0.5, 1075.0))).ToBe(0);
-    Expect<UInt64>(DoubleToBits(NumberExponentiation(-2.0, -1075.0))).ToBe(
-      UInt64(1) shl 63);
-    Expect<Double>(NumberExponentiation(10.0, 309.0)).ToBe(Infinity);
-    Expect<Double>(NumberExponentiation(-10.0, 309.0)).ToBe(NegInfinity);
-  finally
-    LeaveGocciaFloatingPointScope(FloatingPointState);
-  end;
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(2.0, -1074.0))).ToBe(1);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(0.5, 1075.0))).ToBe(0);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(-2.0, -1075.0))).ToBe(
+    UInt64(1) shl 63);
+  // Rounded once into the subnormal range; rounding the normal result again
+  // there would give $000FFFFFFFFFFFE0.
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(288.0,
+    BitsToDouble(UInt64($C05F45F2DA703D6F))))).ToBe($000FFFFFFFFFFFDF);
+  Expect<Double>(NumberExponentiation(10.0, 309.0)).ToBe(Infinity);
+  Expect<Double>(NumberExponentiation(-10.0, 309.0)).ToBe(NegInfinity);
 end;
 
 begin
   TestRunnerProgram.AddSuite(
     TNumberExponentiationTests.Create('Goccia.NumberExponentiation'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

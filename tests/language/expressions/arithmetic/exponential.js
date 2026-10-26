@@ -191,6 +191,10 @@ describe("exponentiation of finite operands", () => {
     expect(Object.is(power(-2, -1075), -0)).toBe(true);
     expect(Object.is(power(-10, -400), 0)).toBe(true);
   });
+
+  test("a subnormal result is rounded once", () => {
+    expect(power(288, -125.09294758759437)).toBe(2.225073858507185e-308);
+  });
 });
 
 describe("exponentiation with a negative base", () => {
