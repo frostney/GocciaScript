@@ -1043,32 +1043,38 @@ end;
   register holds a local. Answering by visiting every local made each call
   cost time linear in the bindings before it, so a top-level call per
   binding compiled in quadratic time (about 12 s here for 15,000). Each
-  shape is timed against the same declarations without the calls. }
+  shape is timed against the same declarations followed by a property read
+  of about the call's cost, which compiles no call. }
 procedure TTestCompiler.TestTopLevelCallsCompileInLinearTime;
 
-  procedure ExpectCallsCompileLinear(const ADeclarations, ACall: string;
-    const AGlobalBackedTopLevel: Boolean);
+  procedure ExpectCallsCompileLinear(const ADeclarations, ARead,
+    ACall: string; const AGlobalBackedTopLevel: Boolean);
   var
     Baseline, Elapsed: Int64;
   begin
-    Baseline := CompileNanoseconds(ADeclarations, AGlobalBackedTopLevel);
+    Baseline := CompileNanoseconds(ADeclarations + ' ' + ARead,
+      AGlobalBackedTopLevel);
     Elapsed := CompileNanoseconds(ADeclarations + ' ' + ACall,
       AGlobalBackedTopLevel);
     if Elapsed > LINEAR_COMPILE_RATIO * Baseline +
        LINEAR_SLACK_NANOSECONDS then
       Fail(Format('%d lines "%s %s" took %d ms to compile against %d ms ' +
-        'without the call', [LINEAR_DECLARATION_COUNT, ADeclarations, ACall,
-        Elapsed div 1000000, Baseline div 1000000]));
+        'with "%s" in place of the call', [LINEAR_DECLARATION_COUNT,
+        ADeclarations, ACall, Elapsed div 1000000, Baseline div 1000000,
+        ARead]));
     Expect<Boolean>(Elapsed <=
       LINEAR_COMPILE_RATIO * Baseline + LINEAR_SLACK_NANOSECONDS).ToBe(True);
   end;
 
 begin
-  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f(a%0:d);', False);
-  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f(a%0:d);', True);
+  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f.a%0:d;', 'f(a%0:d);',
+    False);
+  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f.a%0:d;', 'f(a%0:d);',
+    True);
   // Functions that write a module-scope binding, each called at top level.
   ExpectCallsCompileLinear(
-    'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d();', False);
+    'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d.a;',
+    'w%0:d();', False);
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
