@@ -60,7 +60,10 @@ type
       const AEnableDeadBranchElimination: Boolean = True;
       const ATraditionalForLoops: Boolean = False;
       const ANonStrictMode: Boolean = False;
-      const AVarDeclarations: Boolean = False): TGocciaBytecodeModule;
+      const AVarDeclarations: Boolean = False;
+      const AFunctionKeyword: Boolean = False;
+      const ALabels: Boolean = False;
+      const AWhileLoops: Boolean = False): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -94,6 +97,27 @@ type
     function HasBigIntConstant(const ATemplate: TGocciaFunctionTemplate;
       const AExpected: string): Boolean;
     function NegativeZero: Double;
+    // The compiler's recorded type of every typed local of the first
+    // function in ASource, in slot order: I integer, F float, B boolean,
+    // S string, R reference. A local the compiler left untyped adds nothing.
+    function RecordedLocalTypes(const ASource: string;
+      const AStrictTypes: Boolean = False;
+      const ANonStrictMode: Boolean = False): string;
+    // The recorded types of `const r = AInitializer;` in a function whose
+    // parameters a, b and o are untyped, after the declarations in APrelude.
+    function InitializerTypes(const APrelude, AInitializer: string;
+      const AStrictTypes: Boolean): string;
+    // Checks InitializerTypes in the default and the strict-types profile.
+    procedure ExpectInitializerType(const APrelude, AInitializer,
+      AExpected: string);
+    // True when `f()` in g is typed as a Number: g adds two results of the
+    // call and the sum uses OP_ADD_FLOAT. ADeclaration declares f inside the
+    // function that declares g, so f is a local, not a global.
+    function CallResultIsTyped(const ADeclaration: string;
+      const AStrictTypes: Boolean = False;
+      const ANonStrictMode: Boolean = False;
+      const ACaller: string =
+        'const g = () => { const r = f(); return r + r; };'): Boolean;
 
     procedure TestCompileLiteral;
     procedure TestASTSpansUseUTF16CodeUnitOffsets;
@@ -197,6 +221,17 @@ type
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
     procedure TestReturnAnnotationDoesNotTypeCallResult;
+    procedure TestBinaryOperatorResultTypes;
+    procedure TestBitwiseOperatorResultTypes;
+    procedure TestUnaryOperatorResultTypes;
+    procedure TestIntegerTypeComesOnlyFromInt32Results;
+    procedure TestMathCallsAreNotTrusted;
+    procedure TestConstTypeComesFromTheNumberProof;
+    procedure TestLetKeepsItsTypeOnlyWhenEveryValueIsANumber;
+    procedure TestCapturedConstKeepsItsType;
+    procedure TestConstFunctionReturnTypeTypesCalls;
+    procedure TestCallResultStaysUntypedWhenReturnTypeIsNotProven;
+    procedure TestFallThroughMakesTheReturnTypeUntyped;
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
@@ -388,6 +423,23 @@ begin
     TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
   Test('Return annotation does not type call result',
     TestReturnAnnotationDoesNotTypeCallResult);
+  Test('Binary operator result types', TestBinaryOperatorResultTypes);
+  Test('Bitwise operator result types', TestBitwiseOperatorResultTypes);
+  Test('Unary operator result types', TestUnaryOperatorResultTypes);
+  Test('Integer type comes only from int32 and uint32 results',
+    TestIntegerTypeComesOnlyFromInt32Results);
+  Test('Math calls are not trusted', TestMathCallsAreNotTrusted);
+  Test('Const type comes from the number proof',
+    TestConstTypeComesFromTheNumberProof);
+  Test('Let keeps its type only when every value is a Number',
+    TestLetKeepsItsTypeOnlyWhenEveryValueIsANumber);
+  Test('Captured const keeps its type', TestCapturedConstKeepsItsType);
+  Test('Const function return type types calls',
+    TestConstFunctionReturnTypeTypesCalls);
+  Test('Call result stays untyped when the return type is not proven',
+    TestCallResultStaysUntypedWhenReturnTypeIsNotProven);
+  Test('Fall-through makes the return type untyped',
+    TestFallThroughMakesTheReturnTypeUntyped);
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
@@ -488,7 +540,10 @@ function TTestCompiler.CompileSource(
   const AEnableDeadBranchElimination: Boolean;
   const ATraditionalForLoops: Boolean;
   const ANonStrictMode: Boolean;
-  const AVarDeclarations: Boolean): TGocciaBytecodeModule;
+  const AVarDeclarations: Boolean;
+  const AFunctionKeyword: Boolean;
+  const ALabels: Boolean;
+  const AWhileLoops: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -502,9 +557,13 @@ begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   SourceLines := CreateTextLines(ASource);
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
-  if ATraditionalForLoops or AVarDeclarations or ANonStrictMode then
+  if ATraditionalForLoops or AVarDeclarations or ANonStrictMode or
+     AFunctionKeyword or ALabels or AWhileLoops then
   begin
     ParserOptions := Parser.Options;
+    ParserOptions.FunctionDeclarationsEnabled := AFunctionKeyword;
+    ParserOptions.LabelStatementsEnabled := ALabels;
+    ParserOptions.WhileLoopsEnabled := AWhileLoops;
     ParserOptions.TraditionalForLoopsEnabled := ATraditionalForLoops;
     ParserOptions.VarDeclarationsEnabled := AVarDeclarations;
     // The parser marks a function that contains a sloppy direct eval; the
@@ -3856,7 +3915,7 @@ begin
   // A return-type annotation is not checked, so neither a direct call nor a
   // call through a captured binding gets typed arithmetic from it.
   Module := CompileSource(
-    'const f = (): number => 1; f() + 1; f() + f();' +
+    'const f = (x): number => x; f() + 1; f() + f();' +
     'const g = () => f() - 1; g();',
     False, False, False, False, False, False);
   try
@@ -3871,7 +3930,7 @@ begin
   // Under strict types a binding initialized from the call is not enforced,
   // and an enforced binding checks a value computed from the call.
   Module := CompileSource(
-    'const f = (): number => 1; const r = f(); r + 1;' +
+    'const f = (x): number => x; const r = f(); r + 1;' +
     'let t: number = 0; t = t + f();',
     True, False, False, False, False, False);
   try
@@ -3882,6 +3941,523 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+function TTestCompiler.RecordedLocalTypes(const ASource: string;
+  const AStrictTypes: Boolean; const ANonStrictMode: Boolean): string;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Result := '';
+  Module := CompileSource(ASource, AStrictTypes, False, False, False, False,
+    False, False, ANonStrictMode);
+  try
+    Func := Module.TopLevel.GetFunction(0);
+    for I := 0 to Func.LocalTypeCount - 1 do
+      case Func.GetLocalType(I) of
+        sltInteger: Result := Result + 'I';
+        sltFloat: Result := Result + 'F';
+        sltBoolean: Result := Result + 'B';
+        sltString: Result := Result + 'S';
+        sltReference: Result := Result + 'R';
+      end;
+  finally
+    Module.Free;
+  end;
+end;
+
+function TTestCompiler.InitializerTypes(const APrelude, AInitializer: string;
+  const AStrictTypes: Boolean): string;
+begin
+  Result := RecordedLocalTypes('const f = (a, b, o) => { ' + APrelude +
+    ' const r = ' + AInitializer + '; return r; };', AStrictTypes);
+end;
+
+procedure TTestCompiler.ExpectInitializerType(const APrelude, AInitializer,
+  AExpected: string);
+begin
+  Expect<string>(InitializerTypes(APrelude, AInitializer, False)).ToBe(AExpected);
+  Expect<string>(InitializerTypes(APrelude, AInitializer, True)).ToBe(AExpected);
+end;
+
+function TTestCompiler.CallResultIsTyped(const ADeclaration: string;
+  const AStrictTypes: Boolean; const ANonStrictMode: Boolean;
+  const ACaller: string): Boolean;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const main = () => { ' + ADeclaration + ' ' +
+    ACaller + ' return g; };', AStrictTypes, False, False, False, False,
+    False, False, ANonStrictMode, False, True, True, True);
+  try
+    // g adds two results of f. Nothing else in the source adds.
+    Result := (CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT) = 1) and
+      (CountOpRecursive(Module.TopLevel, OP_ADD) = 0);
+    if not Result then
+      Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestBinaryOperatorResultTypes;
+const
+  Operators: array[0..4] of string = ('-', '*', '/', '%', '**');
+var
+  Op: string;
+begin
+  for Op in Operators do
+  begin
+    // One proven Number operand makes the result a Number: ToNumeric runs on
+    // both operands and a Number with a BigInt throws (ES2026 §13.15.3).
+    ExpectInitializerType('', 'a ' + Op + ' 2', 'F');
+    ExpectInitializerType('', '2 ' + Op + ' a', 'F');
+    ExpectInitializerType('', '"7" ' + Op + ' 2', 'F');
+    ExpectInitializerType('', '({ valueOf: () => 5 }) ' + Op + ' 2', 'F');
+    ExpectInitializerType('const big = 1n;', 'big ' + Op + ' 2', 'F');
+    ExpectInitializerType('', '(a ' + Op + ' 2) ' + Op + ' b', 'F');
+    // No operand is a proven Number: the operands may be BigInts, and then
+    // so is the result.
+    ExpectInitializerType('', 'a ' + Op + ' b', '');
+    ExpectInitializerType('const big = 1n;', 'big ' + Op + ' big', '');
+    ExpectInitializerType('', '"7" ' + Op + ' "2"', '');
+  end;
+
+  // + adds only when both operands are Numbers, and concatenates when either
+  // is a String; with an unknown operand it can do either or add BigInts.
+  ExpectInitializerType('', '1 + 2', 'F');
+  ExpectInitializerType('', 'a + 1', '');
+  ExpectInitializerType('', '1 + a', '');
+  ExpectInitializerType('', 'a + b', '');
+  ExpectInitializerType('', '(a * 2) + b', '');
+  ExpectInitializerType('const big = 1n;', 'big + 1', '');
+  ExpectInitializerType('', 'a + "s"', 'S');
+  ExpectInitializerType('', '"s" + a', 'S');
+  ExpectInitializerType('', '"4" + 1', 'S');
+  ExpectInitializerType('', '1 + "4"', 'S');
+  ExpectInitializerType('', '`t${a}` + 2', 'S');
+  ExpectInitializerType('const big = 1n;', 'big + "s"', 'S');
+  ExpectInitializerType('', '(a * 2) + (b * 3)', 'F');
+
+  // Comparisons are Booleans.
+  ExpectInitializerType('', 'a < b', 'B');
+  ExpectInitializerType('', 'a === b', 'B');
+end;
+
+procedure TTestCompiler.TestBitwiseOperatorResultTypes;
+const
+  Operators: array[0..4] of string = ('&', '|', '^', '<<', '>>');
+var
+  Op: string;
+begin
+  for Op in Operators do
+  begin
+    // The result is an int32 unless both operands are BigInts, in which
+    // case it is a BigInt (ES2026 §6.1.6.1.9 to §6.1.6.1.11); a Number with
+    // a BigInt throws.
+    ExpectInitializerType('', 'a ' + Op + ' 0', 'I');
+    ExpectInitializerType('', '0 ' + Op + ' a', 'I');
+    ExpectInitializerType('', '(a * 1) ' + Op + ' b', 'I');
+    ExpectInitializerType('const big = 1n;', 'big ' + Op + ' 1', 'I');
+    ExpectInitializerType('', 'a ' + Op + ' b', '');
+    ExpectInitializerType('const big = 1n;', 'big ' + Op + ' big', '');
+  end;
+
+  // >>> is a uint32 for every pair of operands: two BigInts throw.
+  ExpectInitializerType('', 'a >>> b', 'I');
+  ExpectInitializerType('', 'a >>> 0', 'I');
+  ExpectInitializerType('const big = 1n;', 'big >>> 0n', 'I');
+end;
+
+procedure TTestCompiler.TestUnaryOperatorResultTypes;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // Unary + is ToNumber, which throws for a BigInt.
+  ExpectInitializerType('', '+a', 'F');
+  ExpectInitializerType('const big = 1n;', '+big', 'F');
+  ExpectInitializerType('', '+({ valueOf: () => "4" })', 'F');
+  // Unary - and ~ keep a Number a Number and turn a BigInt into a BigInt.
+  ExpectInitializerType('', '-(a * 1)', 'F');
+  ExpectInitializerType('', '-(-(a * 1))', 'F');
+  ExpectInitializerType('', '-(a | 0)', 'F');
+  ExpectInitializerType('', '-a', '');
+  ExpectInitializerType('const big = 1n;', '-big', '');
+  ExpectInitializerType('', '~(a * 1)', 'I');
+  ExpectInitializerType('', '~a', '');
+  ExpectInitializerType('const big = 1n;', '~big', '');
+  // A typed instruction takes those results as operands.
+  Module := CompileSource(
+    'const f = (a, b) => { return (+a) + (+b); };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+  // ! is a Boolean, typeof a String, and void and delete stay untyped.
+  ExpectInitializerType('', '!a', 'B');
+  ExpectInitializerType('', '!0', 'B');
+  ExpectInitializerType('', 'typeof a', 'S');
+  ExpectInitializerType('', 'void a', '');
+  ExpectInitializerType('', 'delete o.x', '');
+end;
+
+procedure TTestCompiler.TestIntegerTypeComesOnlyFromInt32Results;
+const
+  Operators: array[0..5] of string = ('+', '-', '*', '/', '%', '**');
+var
+  Op, Source: string;
+  I: Integer;
+begin
+  // Arithmetic is not closed over the integers: 5 / 2 has a fraction, 5 % 0
+  // is NaN, 2 ** -1 has a fraction, and a sum, a difference or a product can
+  // pass 2^1024 and become Infinity. Every arithmetic result is a Number.
+  for Op in Operators do
+    ExpectInitializerType('const x = a | 0; const y = b | 0;',
+      'x ' + Op + ' y', 'IIF');
+  ExpectInitializerType('', '(2147483647 | 0) + (2147483647 | 0)', 'F');
+  ExpectInitializerType('', '(-2147483648 | 0) - (2147483647 | 0)', 'F');
+  ExpectInitializerType('', '(a >>> 0) + (b >>> 0)', 'F');
+
+  // A conditional of integers is an integer, and of an integer and a Number
+  // a Number.
+  ExpectInitializerType('', 'a ? (a | 0) : (b | 0)', 'I');
+  ExpectInitializerType('', 'a ? (a | 0) : 1', 'F');
+  ExpectInitializerType('', 'a ? 1 : 2', 'F');
+  ExpectInitializerType('', 'a ? 1 : "s"', '');
+
+  // A chain of 1,100 constants that each double the one before reaches
+  // Infinity at the 1,025th, and Infinity - Infinity is NaN. Only the first
+  // one, a bitwise result, is an integer.
+  Source := 'const f = (n) => { const v0 = n | 0;';
+  for I := 1 to 1099 do
+    Source := Source + ' const v' + IntToStr(I) + ' = v' + IntToStr(I - 1) +
+      ' + v' + IntToStr(I - 1) + ';';
+  Source := Source + ' const w = v1099 - v1099; return w; };';
+  Expect<string>(RecordedLocalTypes(Source)).ToBe('I' + StringOfChar('F', 1100));
+  Expect<string>(RecordedLocalTypes(Source, True)).ToBe(
+    'I' + StringOfChar('F', 1100));
+end;
+
+procedure TTestCompiler.TestMathCallsAreNotTrusted;
+begin
+  // Math is a writable global binding, so no call on it has a known type.
+  ExpectInitializerType('', 'Math.round(a)', '');
+  ExpectInitializerType('', 'Math.min(a, b) + 1', '');
+  ExpectInitializerType('', 'Math.round(a) + 0.5', '');
+  ExpectInitializerType('', 'globalThis.Math.round(2) + 0.5', '');
+  ExpectInitializerType('', 'Math.round(a) + Math.round(b)', '');
+  // A member of Math is a read, not a call: 3 * Math.PI is a Number only
+  // because * with a Number operand is.
+  ExpectInitializerType('', '3 * Math.PI', 'F');
+  // A shadowing binding or a parameter named Math changes nothing.
+  ExpectInitializerType('const Math = { round: () => "r" };',
+    'Math.round(2) + 0.5', 'R');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (Math) => { const r = Math.max(1, 2) + 0.5; return r; };'
+    )).ToBe('');
+end;
+
+procedure TTestCompiler.TestConstTypeComesFromTheNumberProof;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // The scan proves a const a Number where the expression rules cannot: the
+  // old value of a Number binding, and an assignment to it.
+  ExpectInitializerType('let n = 1;', 'n++', 'FF');
+  ExpectInitializerType('let n = 1;', '(n -= 2)', 'FF');
+  ExpectInitializerType('let n = 1;', '(n = 5)', 'FF');
+  // Logical operators yield one of their operands: a Number only when both
+  // are. Only the proof knows, and it runs for a body that has only consts.
+  ExpectInitializerType('const k = 1;', 'k && 2', 'FF');
+  ExpectInitializerType('const k = 1;', 'k || 2', 'FF');
+  ExpectInitializerType('const k = 1;', 'k ?? 2', 'FF');
+  ExpectInitializerType('const k = 1;', 'k && a', 'F');
+  ExpectInitializerType('const k = 1;', 'a && k', 'F');
+  // A chain of consts whose initializers each have a Number operand.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { const x = a - 1; const y = x * 3; return y; };'
+    )).ToBe('FF');
+  // The binding the initializer reads is not a Number, so neither is it.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let n = 1; n = "s"; const r = n++; return r; };'
+    )).ToBe('');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let n = 1; n = "s"; const r = n++; return r; };',
+    True)).ToBe('F');
+  // Other initializers, and a destructuring pattern, give no type.
+  ExpectInitializerType('', 'a', '');
+  ExpectInitializerType('', 'o.x', '');
+  ExpectInitializerType('const { y } = o;', 'a', '');
+  ExpectInitializerType('const [z] = o;', 'a', '');
+  ExpectInitializerType('const { y } = o; const { w } = y;', 'a - 1', 'F');
+
+  // An initializer the expression rules type is not checked either.
+  Module := CompileSource(
+    'const f = (a) => { const x = a - 1; return x; };',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+  // The initializer is covered by the proof, so strict types do not check it.
+  Module := CompileSource(
+    'const f = (a) => { let n = 1; const r = n++; return r; };',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLetKeepsItsTypeOnlyWhenEveryValueIsANumber;
+
+  function Additions(const ASource: string; const AStrictTypes: Boolean;
+    out AFloatAdditions: Integer): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+  begin
+    Module := CompileSource(ASource, AStrictTypes, False, False, False, False,
+      False);
+    try
+      AFloatAdditions := CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT);
+      Result := CountOpRecursive(Module.TopLevel, OP_ADD);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  Module: TGocciaBytecodeModule;
+  Floats, Generics: Integer;
+  Strict: Boolean;
+begin
+  for Strict in [False, True] do
+  begin
+    // Every assignment gives a Number: the let is a Number.
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a * 2; x = x - 1; return x; };', Strict
+      )).ToBe('F');
+    // One assignment of another type, directly or from a closure (the R is
+    // the closure's own binding), and it is not. Under strict types it is not enforced either: the initializer is
+    // not a literal form, so x stays free to hold the string.
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a * 2; x = "t"; return x; };', Strict
+      )).ToBe('');
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a * 2; const set = () => { x = "z"; };' +
+      ' return x; };', Strict)).ToBe('R');
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a; return x; };', Strict)).ToBe('');
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a * 2; if (a) { x = a; } return x; };',
+      Strict)).ToBe('');
+
+    // A closure reads a captured let that holds only Numbers typed, and one
+    // that a closure assigns untyped.
+    Generics := Additions(
+      'const f = (k) => { let n = k * 2; n = n - 1; return () => n + n; };',
+      Strict, Floats);
+    Expect<Integer>(Floats).ToBe(1);
+    Expect<Integer>(Generics).ToBe(0);
+    Generics := Additions(
+      'const f = (k) => { let n = k * 2; const set = () => { n = "z"; };' +
+      ' return () => n + n; };', Strict, Floats);
+    Expect<Integer>(Floats).ToBe(0);
+    Expect<Integer>(Generics).ToBe(1);
+    Generics := Additions(
+      'const f = (k) => { let n = k * 2; const bump = () => { n = n + 1; };' +
+      ' return () => n + n; };', Strict, Floats);
+    Expect<Integer>(Floats).ToBe(0);
+  end;
+
+  // The proof says Number, not integer: an integer initializer that is
+  // assigned a quotient later gives a Number, and so does one never assigned.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a | 0; x = x / 2; return x; };')).ToBe('F');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a | 0; x = x / 2; return x; };', True)).ToBe('F');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a >>> 0; return x; };')).ToBe('F');
+  // A const keeps the exact type of its initializer.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { const x = a | 0; return x; };')).ToBe('I');
+
+  // A literal initializer is the one profile difference. By default the let
+  // is a Number only if every assignment is; with strict types it is a
+  // Number whatever is assigned, and the assignment is checked.
+  Expect<string>(RecordedLocalTypes(
+    'const f = () => { let x = 1; x = "s"; return x; };')).ToBe('');
+  Expect<string>(RecordedLocalTypes(
+    'const f = () => { let x = 1; x = "s"; return x; };', True)).ToBe('F');
+  Expect<string>(RecordedLocalTypes(
+    'const f = () => { let x = 1; x = x + 1; return x; };')).ToBe('F');
+  Module := CompileSource('const f = () => { let x = 1; x = "s"; return x; };',
+    True, False, False, False, False, False);
+  try
+    Expect<Boolean>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+  Module := CompileSource(
+    'const f = (a) => { let x = a * 2; x = x - 1; return x; };',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCapturedConstKeepsItsType;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // A closure reads a captured const typed.
+  Module := CompileSource(
+    'const f = (k) => { const c = k * 3; return () => c + c; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A closure compiled before the const is initialized cannot rely on it:
+  // the call throws a ReferenceError.
+  Module := CompileSource(
+    'const f = (k) => { const g = () => c + c; const c = k * 3; return g; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstFunctionReturnTypeTypesCalls;
+var
+  Strict: Boolean;
+begin
+  for Strict in [False, True] do
+  begin
+    // Every return is a Number.
+    Expect<Boolean>(CallResultIsTyped('const f = (x) => x * 2;', Strict)).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = (x) => { if (x) { return x * 2; } return 0; };', Strict
+      )).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = (x) => { if (x) { return 1; } else { return 2; } };', Strict
+      )).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = (x) => { for (const i of x) { return i * 2; } return 0; };',
+      Strict)).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = function (x) { return x * 2; };', Strict)).ToBe(True);
+    // A function that returns a typed call, and a call from a closure.
+    Expect<Boolean>(CallResultIsTyped(
+      'const h = (x) => x * 2; const f = (x) => h(x) - 1;', Strict)).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped('const f = (x) => x * 2;', Strict, False,
+      'const g = () => { const k = () => { const r = f(); return r + r; };' +
+      ' return k; };')).ToBe(True);
+    // A recursive call is untyped, but multiplying it by a Number is not.
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = (x) => x <= 1 ? 1 : f(x - 1) * 2;', Strict)).ToBe(True);
+    // The call is a Number whatever the arguments are.
+    Expect<Boolean>(CallResultIsTyped('const f = (x) => x * 2;', Strict, False,
+      'const g = () => { const r = f("3"); return r + r; };')).ToBe(True);
+  end;
+end;
+
+procedure TTestCompiler.TestCallResultStaysUntypedWhenReturnTypeIsNotProven;
+
+  procedure ExpectUntyped(const ADeclaration: string;
+    const ANonStrictMode: Boolean = False;
+    const ACaller: string =
+      'const g = () => { const r = f(); return r + r; };');
+  var
+    Strict: Boolean;
+  begin
+    for Strict in [False, True] do
+      Expect<Boolean>(CallResultIsTyped(ADeclaration, Strict, ANonStrictMode,
+        ACaller)).ToBe(False);
+  end;
+
+begin
+  // Two return types, an unknown one, and a return without a value.
+  ExpectUntyped('const f = (x) => x ? 1 : "s";');
+  ExpectUntyped('const f = (x) => { if (x) { return 1; } return "s"; };');
+  ExpectUntyped('const f = (x) => { return x; };');
+  ExpectUntyped('const f = (x) => { if (x) { return 1; } return; };');
+  ExpectUntyped('const f = (x) => { return; };');
+  ExpectUntyped('const f = (x) => { throw x; };');
+  ExpectUntyped('const f = (x) => 5n;');
+  ExpectUntyped('const f = (x) => ({});');
+  ExpectUntyped('const f = (x) => { try { return 1; } finally { return "s"; } };');
+  // A Number and a BigInt: the sum of the two results must stay generic.
+  ExpectUntyped('const f = (x) => x ? 1 : 5n;');
+  // A function that calls itself is untyped inside its own body.
+  ExpectUntyped('const f = (x) => x <= 1 ? 1 : x * f(x - 1);');
+  // An async arrow returns a promise, and so does an async function. A
+  // generator function returns a generator.
+  ExpectUntyped('const f = async () => 1;');
+  ExpectUntyped('const f = async function () { return 1; };');
+  ExpectUntyped('const f = function* () { return 1; };');
+  // A let binding can be reassigned, and a parameter or an inner const of
+  // the same name is another function.
+  ExpectUntyped('let f = () => 1;');
+  ExpectUntyped('let f = () => 1; f = () => "s";');
+  ExpectUntyped('const f = () => 1;', False,
+    'const g = (f) => { const r = f(); return r + r; };');
+  ExpectUntyped('const f = () => 1;', False,
+    'const g = () => { const f = () => "s"; const r = f(); return r + r; };');
+  // An optional call is not a plain call, and neither is a call of a member.
+  ExpectUntyped('const f = () => 1;', False,
+    'const g = () => { const r = f?.(); return r + r; };');
+  ExpectUntyped('const f = () => 1; const o = { f };', False,
+    'const g = () => { const r = o.f(); return r + r; };');
+  // A with object can supply the callee, and a sloppy direct eval can
+  // declare a var of the same name.
+  ExpectUntyped('const f = () => 1;', True,
+    'const g = (o) => { with (o) { const r = f(); return r + r; } };');
+  ExpectUntyped('const f = () => 1;', True,
+    'const g = () => { eval("var f = () => 1"); const r = f(); return r + r; };');
+end;
+
+procedure TTestCompiler.TestFallThroughMakesTheReturnTypeUntyped;
+
+  procedure ExpectUntypedReturn(const ADeclaration: string);
+  var
+    Strict: Boolean;
+  begin
+    for Strict in [False, True] do
+      Expect<Boolean>(CallResultIsTyped(ADeclaration, Strict)).ToBe(False);
+  end;
+
+begin
+  // A function that can reach the end of its body returns undefined there.
+  ExpectUntypedReturn('const f = (x) => { if (x) { return 1; } };');
+  ExpectUntypedReturn(
+    'const f = (x) => { if (x) { return 1; } else { if (x === 2) { return 2; } } };');
+  ExpectUntypedReturn(
+    'const f = (x) => { switch (x) { case 1: return 1; case 2: break; } };');
+  ExpectUntypedReturn(
+    'const f = (x) => { try { if (x) { throw x; } return 1; } catch (e) { } };');
+  ExpectUntypedReturn(
+    'const f = (x) => { for (const i of x) { return i * 2; } };');
+  ExpectUntypedReturn('const f = (x) => { x * 2; };');
+  // A try statement is never known to end abruptly, so one that returns in
+  // every path still counts as one that can fall through.
+  ExpectUntypedReturn(
+    'const f = (x) => { try { return x * 1; } finally { x = 0; } };');
 end;
 
 procedure TTestCompiler.TestForOfSkipsHandlerWithoutAbruptClose;

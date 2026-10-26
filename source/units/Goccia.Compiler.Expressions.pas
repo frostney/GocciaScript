@@ -5022,6 +5022,12 @@ begin
     MarkParametersInitialized(ChildScope, AExpr.Parameters, False);
 
     ACtx.CompileFunctionBody(AExpr.Body);
+    // What a call of this arrow returns, for the const declaration that binds
+    // it (CalleeReturnType).
+    if AExpr.IsAsync then
+      OldScope.LastChildReturnType := sltUntyped
+    else
+      OldScope.LastChildReturnType := ChildScope.InferredReturnType;
 
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
@@ -7382,6 +7388,11 @@ begin
       ArgumentsSlot >= 0);
 
     ACtx.CompileFunctionBody(AExpr.Body);
+    // See CompileArrowFunction.
+    if ChildTemplate.IsAsync or ChildTemplate.IsGenerator then
+      OldScope.LastChildReturnType := sltUntyped
+    else
+      OldScope.LastChildReturnType := ChildScope.InferredReturnType;
 
     ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 

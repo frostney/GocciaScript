@@ -69,6 +69,9 @@ type
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
     ParamTypeSignature: string;
+    // The type every call of the function this const binding holds returns,
+    // or sltUntyped (CalleeReturnType in Goccia.Compiler.Statements).
+    ReturnTypeHint: TGocciaLocalType;
     TypeAnnotation: string;
     ElementTypeAnnotation: string;
     HasConstantValue: Boolean;
@@ -102,6 +105,10 @@ type
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
     ParamTypeSignature: string;
+    // Copied from the captured binding: the return type of a const function
+    // and whether a let holds only Numbers.
+    ReturnTypeHint: TGocciaLocalType;
+    HoldsOnlyNumbers: Boolean;
     IsImportBinding: Boolean;
     ImportPhase: TGocciaImportCallPhase;
     ImportModulePath: string;
@@ -162,6 +169,13 @@ type
     FParameterNames: array of string;
     FTemplate: TGocciaFunctionTemplate;
     FUpvaluesSeeded: Boolean;
+    // The join of the types this function returns (zeroed by InitInstance:
+    // nothing seen yet), and the result for the last function compiled as a
+    // child of this scope.
+    FReturnType: TGocciaLocalType;
+    FReturnSeen: Boolean;
+    FReturnConflict: Boolean;
+    FLastChildReturnType: TGocciaLocalType;
     procedure EnsureLocalIndex;
     function NewestLocalNamed(const AName: string): Integer;
     procedure RecordDebugLocal(const AIndex: Integer);
@@ -259,6 +273,15 @@ type
       const AHoldsOnlyNumbers: Boolean);
     procedure SetLocalParamTypeSignature(const AIndex: Integer;
       const ASignature: string);
+    procedure SetLocalReturnTypeHint(const AIndex: Integer;
+      const AType: TGocciaLocalType);
+    // Records that one return of this function yields a value of AType
+    // (sltUntyped: unknown, or undefined).
+    procedure NoteReturnType(const AType: TGocciaLocalType);
+    // The type every return of this function yields, or sltUntyped.
+    function InferredReturnType: TGocciaLocalType;
+    property LastChildReturnType: TGocciaLocalType read FLastChildReturnType
+      write FLastChildReturnType;
     procedure SetLocalTypeAnnotation(const AIndex: Integer;
       const AAnnotation: string);
     procedure SetLocalElementTypeAnnotation(const AIndex: Integer;
@@ -568,6 +591,7 @@ begin
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ParamTypeSignature := '';
+  FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
@@ -635,6 +659,7 @@ begin
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ParamTypeSignature := '';
+  FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
@@ -731,6 +756,9 @@ begin
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
     FUpvalues[Idx].ParamTypeSignature := FParent.FLocals[LocalIdx].ParamTypeSignature;
+    FUpvalues[Idx].ReturnTypeHint := FParent.FLocals[LocalIdx].ReturnTypeHint;
+    FUpvalues[Idx].HoldsOnlyNumbers := FParent.FLocals[LocalIdx].HoldsOnlyNumbers and
+      not FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].IsImportBinding := FParent.FLocals[LocalIdx].IsImportBinding;
     FUpvalues[Idx].ImportPhase := FParent.FLocals[LocalIdx].ImportPhase;
     FUpvalues[Idx].ImportModulePath := FParent.FLocals[LocalIdx].ImportModulePath;
@@ -762,6 +790,8 @@ begin
     FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
     FUpvalues[Idx].ParamTypeSignature := FParent.FUpvalues[UpvalueIdx].ParamTypeSignature;
+    FUpvalues[Idx].ReturnTypeHint := FParent.FUpvalues[UpvalueIdx].ReturnTypeHint;
+    FUpvalues[Idx].HoldsOnlyNumbers := FParent.FUpvalues[UpvalueIdx].HoldsOnlyNumbers;
     FUpvalues[Idx].IsImportBinding := FParent.FUpvalues[UpvalueIdx].IsImportBinding;
     FUpvalues[Idx].ImportPhase := FParent.FUpvalues[UpvalueIdx].ImportPhase;
     FUpvalues[Idx].ImportModulePath := FParent.FUpvalues[UpvalueIdx].ImportModulePath;
@@ -798,6 +828,8 @@ begin
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].IsStrictlyTyped := False;
   FUpvalues[FUpvalueCount].ParamTypeSignature := '';
+  FUpvalues[FUpvalueCount].ReturnTypeHint := sltUntyped;
+  FUpvalues[FUpvalueCount].HoldsOnlyNumbers := False;
   FUpvalues[FUpvalueCount].IsImportBinding := False;
   FUpvalues[FUpvalueCount].ImportPhase := icpEvaluation;
   FUpvalues[FUpvalueCount].ImportModulePath := '';
@@ -1133,6 +1165,44 @@ procedure TGocciaCompilerScope.SetLocalParamTypeSignature(const AIndex: Integer;
   const ASignature: string);
 begin
   FLocals[AIndex].ParamTypeSignature := ASignature;
+end;
+
+procedure TGocciaCompilerScope.SetLocalReturnTypeHint(const AIndex: Integer;
+  const AType: TGocciaLocalType);
+begin
+  FLocals[AIndex].ReturnTypeHint := AType;
+end;
+
+procedure TGocciaCompilerScope.NoteReturnType(const AType: TGocciaLocalType);
+begin
+  if FReturnConflict then
+    Exit;
+  if (AType = sltUntyped) or (AType = sltReference) then
+  begin
+    FReturnConflict := True;
+    Exit;
+  end;
+  if not FReturnSeen then
+  begin
+    FReturnSeen := True;
+    FReturnType := AType;
+  end
+  else if FReturnType <> AType then
+  begin
+    if (FReturnType in [sltInteger, sltFloat]) and
+       (AType in [sltInteger, sltFloat]) then
+      FReturnType := sltFloat
+    else
+      FReturnConflict := True;
+  end;
+end;
+
+function TGocciaCompilerScope.InferredReturnType: TGocciaLocalType;
+begin
+  if FReturnSeen and not FReturnConflict then
+    Result := FReturnType
+  else
+    Result := sltUntyped;
 end;
 
 procedure TGocciaCompilerScope.SetLocalStrictlyTyped(const AIndex: Integer;
