@@ -5236,6 +5236,7 @@ var
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   HasFunctionDecl, NeedsPrelude, StatementAbrupt, HasUsing: Boolean;
+  CaseClausesOpen: Boolean;
   SavedResourceBase, ResourceCount: Integer;
   CatchReg, ErrorReg: UInt16;
   HandlerJump, DisposalEndJump, NullishJump: Integer;
@@ -5331,6 +5332,7 @@ begin
     GBreakFinallyBase := GPendingFinally.Count
   else
     GBreakFinallyBase := 0;
+  CaseClausesOpen := False;
   try
     HasFunctionDecl := False;
     NeedsPrelude := False;
@@ -5352,6 +5354,8 @@ begin
 
     ACtx.Scope.BeginScope;
     GBreakScopeDepth := ACtx.Scope.Depth;
+    ACtx.Scope.BeginCaseClauses;
+    CaseClausesOpen := True;
 
     if NeedsPrelude then
     begin
@@ -5417,8 +5421,7 @@ begin
       // clause must therefore observe the TDZ: it may neither use the
       // register of such a declaration directly nor be replaced by a constant
       // tracked for it.
-      ACtx.Scope.ClearInitializedAtDepth(ACtx.Scope.Depth);
-      ACtx.Scope.ClearConstantValuesAtDepth(ACtx.Scope.Depth);
+      ACtx.Scope.ForgetCaseClauseFacts(ACtx.Scope.Depth);
 
       if I = DefaultIndex then
       begin
@@ -5502,10 +5505,14 @@ begin
     for I := 0 to BreakJumps.Count - 1 do
       PatchJumpTarget(ACtx, BreakJumps[I]);
 
+    CaseClausesOpen := False;
+    ACtx.Scope.EndCaseClauses;
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for J := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[J])));
   finally
+    if CaseClausesOpen then
+      ACtx.Scope.EndCaseClauses;
     if Assigned(PreallocatedUsingDisposeSlots) then
     begin
       if GPreallocatedUsingDisposeSlots = PreallocatedUsingDisposeSlots then

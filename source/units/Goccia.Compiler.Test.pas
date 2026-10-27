@@ -140,7 +140,8 @@ type
     procedure TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
     function CompileNanoseconds(const ALinePattern: string;
       const AGlobalBackedTopLevel: Boolean;
-      const ACount: Integer = LINEAR_DECLARATION_COUNT): Int64;
+      const ACount: Integer = LINEAR_DECLARATION_COUNT;
+      const APrefix: string = ''; const ASuffix: string = ''): Int64;
     procedure ExpectTopLevelCompileLinear(const ABaseline: Int64;
       const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
@@ -150,6 +151,7 @@ type
       const ACount: Integer = NAME_LIST_COUNT);
     procedure TestParameterListsParseAndCompileInLinearTime;
     procedure TestDestructuringPatternsCompileInLinearTime;
+    procedure TestSwitchCaseDeclarationsCompileInLinearTime;
     procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
@@ -303,6 +305,8 @@ begin
     TestParameterListsParseAndCompileInLinearTime);
   Test('Destructuring patterns compile in linear time',
     TestDestructuringPatternsCompileInLinearTime);
+  Test('A switch with a declaration in each case clause compiles in linear time',
+    TestSwitchCaseDeclarationsCompileInLinearTime);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
@@ -968,10 +972,12 @@ begin
   end;
 end;
 
-{ The fastest of LINEAR_TRIALS compiles of ACount top-level declarations,
-  each ALinePattern formatted with its index; the parse is not timed. }
+{ The fastest of LINEAR_TRIALS compiles of ACount lines, each ALinePattern
+  formatted with its index, between the lines APrefix and ASuffix; the parse
+  is not timed. }
 function TTestCompiler.CompileNanoseconds(const ALinePattern: string;
-  const AGlobalBackedTopLevel: Boolean; const ACount: Integer): Int64;
+  const AGlobalBackedTopLevel: Boolean; const ACount: Integer;
+  const APrefix, ASuffix: string): Int64;
 var
   Source: TStringBuffer;
   Lexer: TGocciaLexer;
@@ -986,8 +992,12 @@ var
   I, Trial: Integer;
 begin
   Source := TStringBuffer.Create;
+  if APrefix <> '' then
+    Source.Append(APrefix + LineEnding);
   for I := 0 to ACount - 1 do
     Source.Append(Format(ALinePattern, [I]) + LineEnding);
+  if ASuffix <> '' then
+    Source.Append(ASuffix + LineEnding);
   SourceText := Source.ToString;
 
   Result := High(Int64);
@@ -1243,6 +1253,57 @@ begin
     'const g = (o) => { const { %s } = o; return b0; };', 'k%0:d: [b%0:d = %0:d]');
   ExpectNameListLinear('class C { static { const { %s } = {}; } }', 'b%d');
   ExpectNameListLinear('for (let { %s } = {}; false;) {}', 'b%d');
+end;
+
+{ The case clauses of a switch share one scope, so the compiler forgets
+  before each clause which of their bindings the clauses before it
+  initialized or gave a constant. Doing that by visiting every local of the
+  function made a switch with a `let` or `const` in each clause compile in
+  time quadratic in its clauses (about 0.45 s here for 4,000, 31 ms for
+  1,000). Each shape compiles 4,000 clauses in at most 8 times the time of
+  1,000, about 2.8 times per doubling where linear growth gives 2 and
+  quadratic 4, and within a few times the same clauses with their bodies in
+  braces, whose bindings live in a block of each clause. Both sizes stay
+  below about 5,400 clauses, past which the switch's first jump needs the
+  long form and the whole program is compiled a second time. }
+procedure TTestCompiler.TestSwitchCaseDeclarationsCompileInLinearTime;
+const
+  SMALL_CLAUSES = 1000;
+  LARGE_CLAUSES = 4000;
+  GROWTH_RATIO = 8;
+  FLAT_CLAUSE = 'case %0:d: const s%0:d = %0:d; break;';
+  BRACED_CLAUSE = 'case %0:d: { const s%0:d = %0:d; break; }';
+
+  procedure ExpectSwitchCompilesLinear(const APrefix, ASuffix: string;
+    const AGlobalBackedTopLevel: Boolean);
+  var
+    Small, Large, Braced: Int64;
+  begin
+    Small := CompileNanoseconds(FLAT_CLAUSE, AGlobalBackedTopLevel,
+      SMALL_CLAUSES, APrefix, ASuffix);
+    Large := CompileNanoseconds(FLAT_CLAUSE, AGlobalBackedTopLevel,
+      LARGE_CLAUSES, APrefix, ASuffix);
+    Braced := CompileNanoseconds(BRACED_CLAUSE, AGlobalBackedTopLevel,
+      LARGE_CLAUSES, APrefix, ASuffix);
+    if Large > GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d clauses "%s" in "%s" took %d ms to compile against ' +
+        '%d ms for %d', [LARGE_CLAUSES, FLAT_CLAUSE, APrefix,
+        Large div 1000000, Small div 1000000, SMALL_CLAUSES]));
+    Expect<Boolean>(Large <=
+      GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+    if Large > LINEAR_COMPILE_RATIO * Braced + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d clauses "%s" in "%s" took %d ms to compile against ' +
+        '%d ms with braces', [LARGE_CLAUSES, FLAT_CLAUSE, APrefix,
+        Large div 1000000, Braced div 1000000]));
+    Expect<Boolean>(Large <=
+      LINEAR_COMPILE_RATIO * Braced + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', False);
+  ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', True);
+  ExpectSwitchCompilesLinear(
+    'const d = 1; const g = () => { switch (d) {', '} };', False);
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
