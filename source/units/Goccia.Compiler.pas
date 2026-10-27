@@ -2271,7 +2271,9 @@ begin
     for I := 0 to FEnteredTemplates.Count - 1 do
     begin
       Template := FEnteredTemplates[I];
-      if not Template.Attached and (Unattached.IndexOf(Template) < 0) then
+      // Once the module holds the top level it frees it.
+      if not Template.Attached and (Template <> FModule.TopLevel) and
+         (Unattached.IndexOf(Template) < 0) then
         Unattached.Add(Template);
     end;
     for I := 0 to Unattached.Count - 1 do

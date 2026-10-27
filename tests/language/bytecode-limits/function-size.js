@@ -47,6 +47,16 @@ describe("function size limits", () => {
       "Too many local bindings in one function: more than 65535");
   });
 
+  test("a limit inside a class method, getter or field is a SyntaxError", () => {
+    const lets = list(70000, (i) => `let v${i} = 0;`);
+    const keys = list(70000, (i) => `p${i}: 0`, ", ");
+    const message = "Too many local bindings in one function: more than 65535";
+    expectLimit(`typeof (class { m() { ${lets} } })`, message);
+    expectLimit(`typeof (class { get g() { ${lets} return 1; } })`, message);
+    expectLimit(`typeof (class { f = (() => ({ ${keys} }))(); })`,
+      "Too many constants in one function: more than 65535");
+  });
+
   test("60,000 local bindings in one function evaluate", () => {
     expect(realm.evaluate(`(() => { ${list(60000, (i) => `let v${i} = ${i % 10};`)} return v59999; })()`)).toBe(9);
   });
