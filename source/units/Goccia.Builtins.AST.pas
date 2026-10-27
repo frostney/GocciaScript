@@ -68,6 +68,8 @@ const
   KIND_BLOCK = 'BlockStatement';
   KIND_SWITCH_CASE = 'SwitchCase';
   KIND_PARENTHESIZED = 'ParenthesizedExpression';
+  TYPE_ASSERTION_KINDS: array[TGocciaTypeAssertionKind] of string = (
+    'TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression');
   KIND_PROPERTY = 'Property';
   KIND_PARAMETER = 'Parameter';
 
@@ -741,20 +743,50 @@ procedure TASTFlattener.VisitNode(const ANode: TGocciaASTNode);
 var
   Kind: string;
   Fixed, Parenthesized: Boolean;
-  Index: Integer;
+  Index, Wrappers, I: Integer;
   Saved: TGocciaASTNode;
+  Expression: TGocciaExpression;
+  Assertion: TGocciaTypeAssertion;
+
+  procedure PushParentheses;
+  begin
+    PushFrame(NewNode(KIND_PARENTHESIZED), Expression.ParenStartOffset,
+      Expression.ParenEndOffset, True, False);
+    Inc(Wrappers);
+    Parenthesized := False;
+  end;
+
 begin
   Kind := ReportedKind(ANode, Fixed);
 
-  { The parser keeps no node for parentheses, only where they were. They are
-    reported as a node of their own around the expression, so that a rule
-    can tell `(a + b) * c` from `a + b * c` by its tree. }
-  Parenthesized := FExpressions and (ANode is TGocciaExpression) and
-    TGocciaExpression(ANode).HasParenRange;
-  if Parenthesized then
-    PushFrame(NewNode(KIND_PARENTHESIZED),
-      TGocciaExpression(ANode).ParenStartOffset,
-      TGocciaExpression(ANode).ParenEndOffset, True, False);
+  { The parser keeps no node for parentheses or for a TypeScript assertion
+    (`as T`, `satisfies T`, `x!`), only where they were. Each is reported as
+    a node of its own around the expression, so that a rule can tell
+    `(a + b) * c` from `a + b * c` by its tree, and so that the expression
+    an assertion applies to ends where its text does. Each wrapper ends
+    after the one inside it, so they are opened outermost first: by the
+    offset they end at, latest first. An assertion's range covers what it
+    wraps, so its frame is widened by its children rather than fixed. }
+  Wrappers := 0;
+  Expression := nil;
+  Parenthesized := False;
+  if FExpressions and (ANode is TGocciaExpression) then
+  begin
+    Expression := TGocciaExpression(ANode);
+    Parenthesized := Expression.HasParenRange;
+    for I := Expression.TypeAssertionCount - 1 downto 0 do
+    begin
+      Assertion := Expression.TypeAssertions[I];
+      if Parenthesized and
+         (Expression.ParenEndOffset > Assertion.EndOffset) then
+        PushParentheses;
+      PushFrame(NewNode(TYPE_ASSERTION_KINDS[Assertion.Kind]),
+        Assertion.StartOffset, Assertion.EndOffset, False, False);
+      Inc(Wrappers);
+    end;
+    if Parenthesized then
+      PushParentheses;
+  end;
 
   { The JSX transformer turns an element into a call it writes itself. The
     call's edges are anchored to the element's, so it survives FinishNode;
@@ -784,7 +816,7 @@ begin
   end;
 
   PopFrame;
-  if Parenthesized then
+  for I := 1 to Wrappers do
     PopFrame;
 end;
 

@@ -271,6 +271,56 @@ describe("ast.parse with expressions", () => {
     expect(kinds(parenthesized)).toEqual(["Identifier"]);
   });
 
+  test("a TypeScript assertion covers its type, around the expression it asserts", () => {
+    const source =
+      "sendParcel(\n  box.parcelId as ParcelId,\n  shapeOf(\n    box\n  ) as Record<string, string>,\n  box as Tally & {\n    extra: boolean;\n  },\n  box.tally satisfies Tally,\n  box.tally!,\n  'p-1' as const\n);\n";
+    const result = parseExpressions(source, { fileName: "parcels.ts" });
+    const call = find(result.root, "CallExpression");
+    const args = call.children.slice(1);
+
+    expect(kinds(call).slice(1)).toEqual([
+      "TSAsExpression",
+      "TSAsExpression",
+      "TSAsExpression",
+      "TSSatisfiesExpression",
+      "TSNonNullExpression",
+      "TSAsExpression",
+    ]);
+    expect(args.map((arg) => text(result, arg))).toEqual([
+      "box.parcelId as ParcelId",
+      "shapeOf(\n    box\n  ) as Record<string, string>",
+      "box as Tally & {\n    extra: boolean;\n  }",
+      "box.tally satisfies Tally",
+      "box.tally!",
+      "'p-1' as const",
+    ]);
+    expect(text(result, args[0].children[0])).toBe("box.parcelId");
+    expect(args[5].children[0].kind).toBe("StringLiteral");
+    expect(text(result, args[5].children[0])).toBe("'p-1'");
+  });
+
+  test("assertions and parentheses nest in the order they are written", () => {
+    const source = "f((x as A)!, (x) as A, ((x) as A), x as A as B, a.b!.c);\n";
+    const result = parseExpressions(source, { fileName: "nesting.ts" });
+    const args = find(result.root, "CallExpression").children.slice(1);
+    const shape = (node) =>
+      `${node.kind}(${text(result, node)})${node.children.length > 0 ? ` > ${shape(node.children[0])}` : ""}`;
+
+    expect(args.map(shape)).toEqual([
+      "TSNonNullExpression((x as A)!) > ParenthesizedExpression((x as A)) > TSAsExpression(x as A) > Identifier(x)",
+      "TSAsExpression((x) as A) > ParenthesizedExpression((x)) > Identifier(x)",
+      "ParenthesizedExpression(((x) as A)) > TSAsExpression((x) as A) > Identifier(x)",
+      "TSAsExpression(x as A as B) > TSAsExpression(x as A) > Identifier(x)",
+      "MemberExpression(a.b!.c) > TSNonNullExpression(a.b!) > MemberExpression(a.b) > Identifier(a)",
+    ]);
+  });
+
+  test("an assertion is not reported without expressions", () => {
+    const result = parse("f(x as T);\n", { fileName: "plain.ts" });
+
+    expect(findAll(result.root, "TSAsExpression")).toEqual([]);
+  });
+
   test("parentheses around an optional chain are reported", () => {
     const result = parseExpressions("x = (a?.b).c;\n");
     const parenthesized = find(result.root, "ParenthesizedExpression");

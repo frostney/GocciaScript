@@ -248,6 +248,9 @@ type
     procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
     function ConsumeModuleSpecifier(const AMessage: string): string;
     procedure RecordModuleSpecifier(const ADeclaration: TGocciaStatement);
+    procedure RecordTypeAssertion(const AExpression: TGocciaExpression;
+      const AKind: TGocciaTypeAssertionKind; const AStartOffset,
+      AEndOffset: Integer);
     procedure ConsumeDoWhileSemicolonOrASI(
       const AMessage, ASuggestion: string);
     function CheckSemicolonOrASI: Boolean;
@@ -1539,6 +1542,23 @@ begin
   Result := Token.Lexeme;
 end;
 
+{ An assertion is erased, so the expression it applies to would end before
+  its text. When the expression was already parenthesized, the assertion
+  starts at the parenthesis: `((x) as T)` keeps only its outer pair, and the
+  assertion has to cover the inner one. }
+procedure TGocciaParser.RecordTypeAssertion(
+  const AExpression: TGocciaExpression;
+  const AKind: TGocciaTypeAssertionKind; const AStartOffset,
+  AEndOffset: Integer);
+begin
+  if AExpression.HasParenRange and
+     (AExpression.ParenEndOffset <= AStartOffset) then
+    AExpression.AddTypeAssertion(AKind, AExpression.ParenStartOffset,
+      AEndOffset)
+  else
+    AExpression.AddTypeAssertion(AKind, AStartOffset, AEndOffset);
+end;
+
 procedure TGocciaParser.RecordModuleSpecifier(
   const ADeclaration: TGocciaStatement);
 begin
@@ -2250,6 +2270,7 @@ var
   PrivateToken: TGocciaToken;
   PrivateName: string;
   PrivateNameSpan: TGocciaSourceSpan;
+  AssertionStart: Integer;
 
   procedure ParseIsExpressions;
   begin
@@ -2304,7 +2325,7 @@ begin
   begin
     if CheckWithLexicalGoal(gttAs, glgInputElementDiv) then
     begin
-      Advance;
+      AssertionStart := Advance.Span.StartOffset;
       if Check(gttConst) then
         Advance
       else
@@ -2314,16 +2335,21 @@ begin
           raise TGocciaSyntaxError.Create('Expected type annotation after "as"',
             Peek.Line, Peek.Column, FFileName, FSourceLines);
       end;
+      RecordTypeAssertion(Result, takAs, AssertionStart,
+        Previous.Span.EndOffset);
     end
     else if not HasLineTerminatorBeforePeek and
       MatchContextualKeywordWithLexicalGoal(KEYWORD_SATISFIES,
         glgInputElementDiv) then
     begin
+      AssertionStart := Previous.Span.StartOffset;
       TypeAnnotation := CollectExpressionTypeAnnotation;
       if TypeAnnotation = '' then
         raise TGocciaSyntaxError.Create(
           'Expected type annotation after "satisfies"',
           Peek.Line, Peek.Column, FFileName, FSourceLines);
+      RecordTypeAssertion(Result, takSatisfies, AssertionStart,
+        Previous.Span.EndOffset);
     end
     else
       Break;
@@ -2683,7 +2709,9 @@ begin
           if HasLineTerminatorBeforePeek then
             Break;
 
-          Advance;
+          Token := Advance;
+          RecordTypeAssertion(Result, takNonNull, Token.Span.StartOffset,
+            Token.Span.EndOffset);
         end;
       gttIncrement, gttDecrement:
         begin

@@ -83,9 +83,12 @@ Kinds follow ESTree, with Babel's literal kinds: `Identifier`,
 `ImportExpression`, `AwaitExpression`, `YieldExpression`,
 `ParenthesizedExpression`, `ArrayPattern`, `ObjectPattern`, `RestElement`,
 `AssignmentPattern`, `Parameter`, `MethodDefinition`, `PropertyDefinition`,
-`AccessorProperty`, `StaticBlock`, `JSXElement`, `IsExpression`, and
-`MatchExpression`. An import's or re-export's module path is a
-`StringLiteral` child of its declaration.
+`AccessorProperty`, `StaticBlock`, `JSXElement`, `IsExpression`,
+`MatchExpression`, and TypeScript's `TSAsExpression` (`x as T`, `x as const`),
+`TSSatisfiesExpression` and `TSNonNullExpression` (`x!`). An import's or
+re-export's module path is a `StringLiteral` child of its declaration. An
+assertion wraps the expression it asserts and covers its type, so in
+`f(a as T)` the argument ends after `T`; the type itself is not a node.
 
 A node carries the flags its kind is laid out by, and no others:
 

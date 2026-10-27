@@ -123,12 +123,34 @@ type
     property Column: Integer read GetColumn;
   end;
 
+  { A TypeScript assertion erased from the tree: `x as T` (and `as const`),
+    `x satisfies T`, `x!`. }
+  TGocciaTypeAssertionKind = (takAs, takSatisfies, takNonNull);
+
+  { Where an erased assertion's text is, as offsets into the parsed text:
+    the `as`, `satisfies` or `!` and the type after it, or from the opening
+    parenthesis when the expression was parenthesized before it. }
+  TGocciaTypeAssertion = record
+    Kind: TGocciaTypeAssertionKind;
+    StartOffset: Integer;
+    EndOffset: Integer;
+  end;
+
   TGocciaExpression = class(TGocciaASTNode)
   private
     FParenthesized: Boolean;
     FParenStartOffset: Integer;
     FParenEndOffset: Integer;
+    FTypeAssertions: array of TGocciaTypeAssertion;
+    function GetTypeAssertionCount: Integer;
+    function GetTypeAssertion(const AIndex: Integer): TGocciaTypeAssertion;
   public
+    { Records an assertion applied to this expression. The parser leaves the
+      expression itself in the tree and drops the assertion, so this is the
+      only place its extent survives. Recorded in source order, so each one
+      ends after the one before it. }
+    procedure AddTypeAssertion(const AKind: TGocciaTypeAssertionKind;
+      const AStartOffset, AEndOffset: Integer);
     { Records the outermost pair of parentheses around this expression, as
       offsets into the parsed text. The parser drops the parentheses from the
       tree, so this is the only place their extent survives. }
@@ -140,6 +162,9 @@ type
     property Parenthesized: Boolean read FParenthesized write FParenthesized;
     property ParenStartOffset: Integer read FParenStartOffset;
     property ParenEndOffset: Integer read FParenEndOffset;
+    property TypeAssertionCount: Integer read GetTypeAssertionCount;
+    property TypeAssertions[const AIndex: Integer]: TGocciaTypeAssertion
+      read GetTypeAssertion;
   end;
 
   TGocciaStatement = class(TGocciaASTNode)
@@ -334,6 +359,30 @@ end;
 function TGocciaExpression.HasParenRange: Boolean;
 begin
   Result := FParenEndOffset > FParenStartOffset;
+end;
+
+procedure TGocciaExpression.AddTypeAssertion(
+  const AKind: TGocciaTypeAssertionKind; const AStartOffset,
+  AEndOffset: Integer);
+var
+  Index: Integer;
+begin
+  Index := Length(FTypeAssertions);
+  SetLength(FTypeAssertions, Index + 1);
+  FTypeAssertions[Index].Kind := AKind;
+  FTypeAssertions[Index].StartOffset := AStartOffset;
+  FTypeAssertions[Index].EndOffset := AEndOffset;
+end;
+
+function TGocciaExpression.GetTypeAssertionCount: Integer;
+begin
+  Result := Length(FTypeAssertions);
+end;
+
+function TGocciaExpression.GetTypeAssertion(
+  const AIndex: Integer): TGocciaTypeAssertion;
+begin
+  Result := FTypeAssertions[AIndex];
 end;
 
 function TGocciaASTNode.GetLine: Integer;

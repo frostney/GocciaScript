@@ -77,6 +77,7 @@ The parser records what covering cannot recover, and nothing else:
 | Recorded | Because |
 |---|---|
 | The outermost parentheses around an expression | They are dropped from the tree; `(a + b) * c` and `a + b * c` would otherwise be the same tree |
+| Each TypeScript assertion's extent: `as T`, `satisfies T`, a postfix `!` | It is erased, so the expression it asserts would end before its text and a comma placed after that expression would land before the type |
 | Each parameter's extent, type annotation and default included | A simple parameter is a name in a record |
 | Each object member's extent | Members live in maps; a static key has no node |
 | Each class member's extent, from its first decorator | Its key and its modifiers (`static`, `async`, `get`) have no node |
@@ -113,7 +114,9 @@ forms, because a layout rule dispatches on `kind` and a string literal is
 treated differently from a number: `StringLiteral` and `NumericLiteral`
 rather than one `Literal`. Syntax with no ESTree node of its own takes the
 nearest name — a parameter is a `Parameter`, a class field a
-`PropertyDefinition`, an element of a `.tsx` file a `JSXElement`. The full
+`PropertyDefinition`, an element of a `.tsx` file a `JSXElement`. A
+TypeScript assertion takes the name typescript-estree and Babel give it
+(`TSAsExpression`, `TSSatisfiesExpression`, `TSNonNullExpression`). The full
 list is in [AST Built-ins](../built-ins-ast.md#the-expression-view).
 
 A node carries the flags its kind dispatches on, and only those: `operator`
