@@ -47,6 +47,18 @@ const
     module-level `const`; the slack absorbs a busy machine. }
   LINEAR_COMPILE_RATIO = 4;
   LINEAR_SLACK_NANOSECONDS = 20 * 1000 * 1000;
+  { The operator-chain test compiles CHAIN_OPERATORS binary operators as
+    chains of CHAIN_SHORT_TERMS terms and as chains CHAIN_LENGTH_FACTOR
+    times as long. Work quadratic in a chain's length makes the long chains
+    cost about CHAIN_LENGTH_FACTOR times as much (over 3 s here); a linear
+    compile costs about the same for both, and the bound allows
+    CHAIN_COMPILE_RATIO times. }
+  CHAIN_SHORT_TERMS = 25;
+  CHAIN_LENGTH_FACTOR = 16;
+  CHAIN_OPERATORS = 16000;
+  CHAIN_COMPILE_RATIO = 3;
+  // The bindings each closure of the captured shape reads, in turn.
+  CHAIN_CAPTURED_BINDINGS = 25;
 
 type
   TTestCompiler = class(TTestSuite)
@@ -131,11 +143,15 @@ type
     function CompileNanoseconds(const ALinePattern: string;
       const AGlobalBackedTopLevel: Boolean;
       const ACount: Integer = LINEAR_DECLARATION_COUNT): Int64;
+    function SourceCompileNanoseconds(const ASourceText: string;
+      const AGlobalBackedTopLevel: Boolean;
+      const AStrictTypes: Boolean = False): Int64;
     procedure ExpectTopLevelCompileLinear(const ABaseline: Int64;
       const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
     procedure TestTopLevelCallsCompileInLinearTime;
+    procedure TestOperatorChainsCompileInLinearTime;
     procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
@@ -285,6 +301,8 @@ begin
     TestModuleTopLevelDeclarationsCompileInLinearTime);
   Test('Top-level calls among many bindings compile in linear time',
     TestTopLevelCallsCompileInLinearTime);
+  Test('Chains of binary operators compile in time linear in their length',
+    TestOperatorChainsCompileInLinearTime);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
@@ -956,27 +974,34 @@ function TTestCompiler.CompileNanoseconds(const ALinePattern: string;
   const AGlobalBackedTopLevel: Boolean; const ACount: Integer): Int64;
 var
   Source: TStringBuffer;
+  I: Integer;
+begin
+  Source := TStringBuffer.Create;
+  for I := 0 to ACount - 1 do
+    Source.Append(Format(ALinePattern, [I]) + LineEnding);
+  Result := SourceCompileNanoseconds(Source.ToString, AGlobalBackedTopLevel);
+end;
+
+{ The fastest of LINEAR_TRIALS compiles of ASourceText; the parse is not
+  timed. }
+function TTestCompiler.SourceCompileNanoseconds(const ASourceText: string;
+  const AGlobalBackedTopLevel: Boolean; const AStrictTypes: Boolean): Int64;
+var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   ParserOptions: TGocciaParserOptions;
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
   Module: TGocciaBytecodeModule;
-  SourceText: string;
   SourceLines: TStringList;
   Start, Elapsed: Int64;
-  I, Trial: Integer;
+  Trial: Integer;
 begin
-  Source := TStringBuffer.Create;
-  for I := 0 to ACount - 1 do
-    Source.Append(Format(ALinePattern, [I]) + LineEnding);
-  SourceText := Source.ToString;
-
   Result := High(Int64);
   for Trial := 1 to LINEAR_TRIALS do
   begin
-    Lexer := TGocciaLexer.Create(SourceText, '<test>');
-    SourceLines := CreateTextLines(SourceText);
+    Lexer := TGocciaLexer.Create(ASourceText, '<test>');
+    SourceLines := CreateTextLines(ASourceText);
     Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
     Compiler := TGocciaCompiler.Create('<test>');
     ProgramNode := nil;
@@ -988,6 +1013,7 @@ begin
       Parser.ApplyOptions(ParserOptions);
       ProgramNode := Parser.Parse;
       Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
+      Compiler.StrictTypes := AStrictTypes;
       Start := GetNanoseconds;
       Module := Compiler.Compile(ProgramNode);
       Elapsed := GetNanoseconds - Start;
@@ -1081,6 +1107,83 @@ begin
   ExpectCallsCompileLinear(
     'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d.a;',
     'w%0:d();', False);
+end;
+
+{ An operator compiled as the operand of another used to work out its type
+  and try its constant value again from its whole subtree, so a chain of k
+  binary operators compiled in time quadratic in k: a function with 250
+  closures each summing 120 captured bindings took 3 s, and twice the terms
+  four times as long. Each shape compiles the same number of operators as
+  short chains and as long ones; their compile times must stay close. }
+procedure TTestCompiler.TestOperatorChainsCompileInLinearTime;
+
+  // Chains of ATerms terms, CHAIN_OPERATORS operators in all: AFirst, then
+  // AOperator and ATerm (formatted with the term's index modulo
+  // CHAIN_CAPTURED_BINDINGS) for each further term. Each chain is the body
+  // of an arrow function of p, or, with ACaptured, of a closure over that
+  // many `let` bindings of the function around it.
+  function ChainsSource(const AFirst, AOperator, ATerm: string;
+    const ATerms: Integer; const ACaptured: Boolean): string;
+  var
+    Source: TStringBuffer;
+    Chain, Index, Term: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    if ACaptured then
+    begin
+      Source.Append('const outer = (p) => {' + LineEnding);
+      for Index := 0 to CHAIN_CAPTURED_BINDINGS - 1 do
+        Source.Append(Format('let x%d = p + %d;', [Index, Index]) +
+          LineEnding);
+    end;
+    for Chain := 0 to CHAIN_OPERATORS div (ATerms - 1) - 1 do
+    begin
+      if ACaptured then
+        Source.Append(Format('const h%d = () => ', [Chain]))
+      else
+        Source.Append(Format('const f%d = (p) => ', [Chain]));
+      Source.Append(AFirst);
+      for Term := 1 to ATerms - 1 do
+        Source.Append(' ' + AOperator + ' ' +
+          Format(ATerm, [Term mod CHAIN_CAPTURED_BINDINGS]));
+      Source.Append(';' + LineEnding);
+    end;
+    if ACaptured then
+      Source.Append('return p; };' + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  procedure ExpectChainsCompileLinear(const AFirst, AOperator,
+    ATerm: string; const ACaptured: Boolean;
+    const AStrictTypes: Boolean = False);
+  var
+    Short, Long: Int64;
+  begin
+    Short := SourceCompileNanoseconds(ChainsSource(AFirst, AOperator, ATerm,
+      CHAIN_SHORT_TERMS, ACaptured), False, AStrictTypes);
+    Long := SourceCompileNanoseconds(ChainsSource(AFirst, AOperator, ATerm,
+      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, ACaptured), False,
+      AStrictTypes);
+    if Long > CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d operators "%s %s %s" in chains of %d terms took %d ms ' +
+        'to compile against %d ms in chains of %d', [CHAIN_OPERATORS,
+        AFirst, AOperator, ATerm, CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR,
+        Long div 1000000, Short div 1000000, CHAIN_SHORT_TERMS]));
+    Expect<Boolean>(Long <=
+      CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  // A parameter: the operand types and the constant tries.
+  ExpectChainsCompileLinear('p', '+', 'p', False);
+  // An Int16 immediate on the right of every `+`.
+  ExpectChainsCompileLinear('p', '+', '1', False);
+  // A comparison's type needs no walk; only the constant tries remain.
+  ExpectChainsCompileLinear('p', '<', 'p', False);
+  // Closures summing captured bindings, the shape the slowdown was seen in.
+  ExpectChainsCompileLinear('x0', '+', 'x%d', True);
+  // Strict types try to simplify every operator by its operand types.
+  ExpectChainsCompileLinear('p', '+', 'p', False, True);
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
