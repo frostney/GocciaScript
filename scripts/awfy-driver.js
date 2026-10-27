@@ -35,12 +35,21 @@ function usage() {
     '',
     'Measurement:',
     '  --repetitions <n>             Raw samples per engine/target (default: 3)',
+    '  --warmup <n>                  Unrecorded repetitions before them (default: 0)',
     '  --inner-iterations <n>        Override target inner iterations',
     '  --timeout-ms <n>              Per-sample process timeout (default: 120000)',
     '  --profile <mode>              Add Goccia --profile=opcodes|functions|all for diagnostic runs',
     '  --profile-dir <path>          Directory for Goccia profile outputs',
     '  --output <path>               Write normalized JSON report',
     '  --keep-temp                   Keep generated portable JS bundles',
+    '',
+    'Work and placement (see docs/benchmarks.md, "Judging a change by work and placement"):',
+    '  --counters                    Record perf_event counters per Goccia sample: instructions,',
+    '                                cycles, branch, L1i and iTLB misses (Linux; skipped elsewhere)',
+    '  --cpu <n>                     Pin every sample to CPU n with taskset (Linux)',
+    '  --fresh-copies                Run each repetition from a fresh copy of each Goccia binary,',
+    '                                so that its pages land somewhere new in memory',
+    '  --alternate-order             Reverse the engine order on every other repetition',
   ].join('\n');
 }
 
@@ -65,6 +74,11 @@ function parseArgs(argv) {
     profileDir: '',
     keepTemp: false,
     list: false,
+    counters: false,
+    cpu: null,
+    freshCopies: false,
+    alternateOrder: false,
+    warmup: 0,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -82,6 +96,16 @@ function parseArgs(argv) {
       options.list = true;
     } else if (arg === '--keep-temp') {
       options.keepTemp = true;
+    } else if (arg === '--counters') {
+      options.counters = true;
+    } else if (arg === '--fresh-copies') {
+      options.freshCopies = true;
+    } else if (arg === '--alternate-order') {
+      options.alternateOrder = true;
+    } else if (arg === '--cpu' || arg.startsWith('--cpu=')) {
+      options.cpu = parseNonNegativeInteger(nextValue(), '--cpu');
+    } else if (arg === '--warmup' || arg.startsWith('--warmup=')) {
+      options.warmup = parseNonNegativeInteger(nextValue(), '--warmup');
     } else if (arg === '--manifest' || arg.startsWith('--manifest=')) {
       options.manifestPath = nextValue();
     } else if (arg === '--awfy-dir' || arg.startsWith('--awfy-dir=')) {
@@ -128,6 +152,14 @@ function parsePositiveInteger(value, optionName) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 1) {
     throw new Error(`${optionName} must be a positive integer, got ${value}`);
+  }
+  return parsed;
+}
+
+function parseNonNegativeInteger(value, optionName) {
+  const parsed = Number.parseInt(value, 10);
+  if (!/^[0-9]+$/.test(String(value)) || !Number.isFinite(parsed)) {
+    throw new Error(`${optionName} must be a non-negative integer, got ${value}`);
   }
   return parsed;
 }
@@ -347,6 +379,22 @@ function buildGeomeanRatios(targetReports) {
   return crossEngine.buildGeomeanRatios(targetReports);
 }
 
+// A fresh copy of each Goccia binary for the next repetition. The kernel
+// places a file's pages when it reads or writes them, and one copy's placement
+// can make it run several percent slower or faster than another copy of the
+// same bytes (#1917); a new copy per repetition samples placements instead of
+// measuring one.
+function refreshBinaryCopies(engines, tempDir, round) {
+  for (const engine of engines) {
+    if (engine.kind !== 'goccia') continue;
+    if (engine.sampleCommand) fs.rmSync(engine.sampleCommand, { force: true });
+    const copy = path.join(tempDir, `${engine.name}-${round}${path.extname(engine.command)}`);
+    fs.copyFileSync(engine.command, copy);
+    fs.chmodSync(copy, 0o755);
+    engine.sampleCommand = copy;
+  }
+}
+
 function collectMetadata(options, manifest, engines) {
   return {
     driver: {
@@ -375,8 +423,19 @@ function collectMetadata(options, manifest, engines) {
       command: engine.command,
       version: engineVersion(engine),
     })),
+    counters: options.counterSetup
+      ? {
+        available: options.counterSetup.available,
+        reason: options.counterSetup.reason,
+        events: options.counterSetup.events.map((entry) => entry.event),
+      }
+      : null,
     options: {
       repetitions: options.repetitions,
+      warmup: options.warmup,
+      cpu: options.cpu,
+      freshCopies: options.freshCopies,
+      alternateOrder: options.alternateOrder,
       timeoutMs: options.timeoutMs,
       profile: options.profile || null,
       profileDir: options.profileDir || null,
@@ -430,6 +489,12 @@ function main(argv = process.argv.slice(2)) {
   }
 
   const engines = resolveEngines(options);
+  if (options.counters) {
+    options.counterSetup = crossEngine.probeCounters();
+    if (!options.counterSetup.available) {
+      console.error(`counters unavailable: ${options.counterSetup.reason}`);
+    }
+  }
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goccia-awfy-'));
   const targetReports = [];
 
@@ -449,8 +514,13 @@ function main(argv = process.argv.slice(2)) {
       const bundleFile = writeBundle(tempDir, target, bundle);
       const samples = [];
 
-      for (let repetition = 0; repetition < options.repetitions; repetition += 1) {
-        for (const engine of engines) {
+      const total = options.warmup + options.repetitions;
+      for (let round = 0; round < total; round += 1) {
+        const warmup = round < options.warmup;
+        const repetition = round - options.warmup;
+        if (options.freshCopies) refreshBinaryCopies(engines, tempDir, round);
+        const order = options.alternateOrder && round % 2 === 1 ? [...engines].reverse() : engines;
+        for (const engine of order) {
           if (!engineAllowedForTarget(engine, target)) continue;
           const sample = runEngineSample({
             engine,
@@ -459,8 +529,9 @@ function main(argv = process.argv.slice(2)) {
             repetition,
             options,
           });
-          samples.push(sample);
-          console.error(`${target.name} ${engine.name} rep ${repetition + 1}/${options.repetitions}: ${sample.outcome}${sample.durationMicros ? ` ${sample.durationMicros}us` : ''}`);
+          const label = warmup ? `warm-up ${round + 1}/${options.warmup}` : `rep ${repetition + 1}/${options.repetitions}`;
+          console.error(`${target.name} ${engine.name} ${label}: ${sample.outcome}${sample.durationMicros ? ` ${sample.durationMicros}us` : ''}${sample.counters ? ` ${sample.counters.instructions} instructions` : ''}`);
+          if (!warmup) samples.push(sample);
         }
       }
 
@@ -523,5 +594,6 @@ module.exports = {
   median,
   parseArgs,
   parseResult,
+  refreshBinaryCopies,
   summarizeSamples,
 };

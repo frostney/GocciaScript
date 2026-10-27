@@ -10,6 +10,7 @@
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
 - **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the benchmark-runner corpus
+- **Work and placement** — `--counters` records instructions retired and instruction-cache, iTLB and branch misses per Goccia sample through Linux `perf_event`, and `--fresh-copies` samples page placements, so an A/B tells work from code layout
 - **JetStream 3 reference lane** — `scripts/jetstream-driver.js` runs a frozen, shell-portable subset of the pinned JetStream 3 corpus under the same three engines while preserving upstream workload source
 - **Performance Barometer** — Main-branch AWFY and JetStream reports feed the unified `/performance` dashboard with version-bounded history and visible failed-run gaps
 - **Web Tooling Goccia lane** — `scripts/web-tooling-driver.js` runs every pinned V8 Web Tooling workload under GocciaScript only and publishes retained JSON artifacts
@@ -470,6 +471,61 @@ shape, not sequential baseline-then-candidate batches.
 Profiler-backed runs stay separate from timing. For selected Goccia outliers or
 diagnostic probes, add `--profile=opcodes|functions|all --profile-dir=<dir>` and
 run a dedicated diagnostic pass; do not mix profiled timings into ratio claims.
+
+### Judging a change by work and placement
+
+The time of a Goccia binary depends on where its code sits in memory as well as
+on what it executes ([#1917](https://github.com/frostney/GocciaScript/issues/1917)).
+A change can move unrelated code and change its instruction-cache and
+branch-predictor behaviour, and two byte-identical copies of one binary can run
+a few percent apart depending on where the kernel puts the file's pages. A
+time delta of a few percent from one binary per side does not show that the
+change did more or less work. Four driver options separate the two:
+
+- `--counters` records Linux `perf_event` counters for every Goccia sample, in
+  user space: instructions retired, cycles, branch misses, L1 instruction-cache
+  misses and iTLB misses. The report keeps them per sample and summarizes them
+  per engine (`engineStats.<engine>.counters`, median/min/max) and as
+  candidate/baseline ratios (`summary.counterRatios`). Instructions retired do
+  not depend on placement: they repeat to within a few thousand per run, so
+  their delta is the change in work. A time delta with no instruction delta
+  and a moved L1i miss count is placement. Where `perf` is missing, the
+  platform is not Linux, or `perf_event_paranoid` forbids user-space counting,
+  the run goes on without counters and `metadata.counters.reason` says why.
+  Five events fit in the hardware counters at once; a count perf had to
+  multiplex is flagged `multiplexed`, since it is scaled rather than exact.
+- `--fresh-copies` runs every repetition from a new copy of each Goccia
+  binary, so that each repetition samples a new page placement instead of
+  measuring one.
+- `--cpu <n>` pins every sample to one CPU with `taskset`; pick one whose SMT
+  sibling is idle, since the sibling shares the instruction cache.
+- `--alternate-order` reverses the engine order on every other repetition, and
+  `--warmup <n>` runs unrecorded repetitions first.
+
+`scripts/awfy-comment.js` turns such a report into the PR comment's table, with
+`Instructions` and `L1i misses` columns next to the time delta when both
+Goccia binaries were counted.
+
+```bash
+node scripts/awfy-driver.js \
+  --awfy-dir /path/to/are-we-fast-yet/benchmarks/JavaScript \
+  --engines goccia \
+  --goccia-baseline build-main/GocciaRunner \
+  --goccia-candidate build/GocciaRunner \
+  --benchmark Richards:10 --benchmark Bounce:200 --benchmark Mandelbrot:500 \
+  --repetitions 12 --warmup 1 \
+  --counters --fresh-copies --alternate-order --cpu 2 \
+  --output tmp/ab.json
+node scripts/awfy-comment.js tmp/ab.json
+```
+
+Read the instruction delta first. A per-opcode change that removes work shows
+fewer instructions in the benchmarks that run the opcode and none elsewhere;
+its time deltas elsewhere are placement. To see how large placement deltas are
+on the machine at hand, run the same comparison between `build/GocciaRunner`
+and the layout probe, `./build.pas --prod --layout-probe runner`
+(`build/layout-probe/GocciaRunner`): the two execute the same instructions, so
+every time delta between them is placement ([Dispatch layout](bytecode-vm.md#dispatch-layout)).
 
 ### Issue Acceptance Criteria
 
