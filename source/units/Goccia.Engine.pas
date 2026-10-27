@@ -5564,8 +5564,10 @@ begin
       ProfileSource := ProfileSource + ',';
     ProfileSource := ProfileSource + AParamsSources[I];
   end;
-  ProfileSource := IntToStr(Ord(AKind)) + #0 + ProfileSource + #0 +
-    ABodySource;
+  // The parameters are length-prefixed: no character they or the body may
+  // hold can move text from one field to the other.
+  ProfileSource := IntToStr(Ord(AKind)) + ':' +
+    IntToStr(Length(ProfileSource)) + ':' + ProfileSource + ABodySource;
   CompileProfile.BeginUnit('<Function>', ProfileSource);
   try
     Result := CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind);

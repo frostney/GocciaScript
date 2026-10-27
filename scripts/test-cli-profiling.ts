@@ -165,7 +165,9 @@ export function verifyCompileProfiles(): void {
       'const c = new Function("return 1;");',
       'const d = new Function("x", "0;");',
       'const e = new Function("x,0;");',
-      "console.log(a() + b() + c(), d(1), e);",
+      'const f = new Function("x//", "//\\0return 1;");',
+      'const g = new Function("x//\\0//", "return 1;");',
+      "console.log(a() + b() + c(), d(1), e, f, g);",
     ].join("\n"));
     const dyn = Bun.spawnSync([resolve(RUNNER), dynamic, "--unsafe-function-constructor",
       "--profile=compile", `--profile-output=${dynamicOutput}`],
@@ -173,7 +175,7 @@ export function verifyCompileProfiles(): void {
     if (dyn.exitCode !== 0) throw new Error(`dynamic profiling exited ${dyn.exitCode}: ${dyn.stderr.toString()}`);
     const units: string[] = JSON.parse(readFileSync(dynamicOutput, "utf-8")).compile.files
       .map((file: { sourceFile: string }) => file.sourceFile).filter((name: string) => name.startsWith("<Function>#"));
-    if (units.length !== 4)
+    if (units.length !== 6)
       throw new Error(`each Function-constructor source must be its own unit: ${JSON.stringify(units)}`);
 
     // `all` stays opcodes and functions: the compile section is present and empty.
