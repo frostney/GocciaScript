@@ -196,22 +196,34 @@ console.log("Names a long pattern binds are checked against later declarations..
 {
   const names = Array.from({ length: 5000 }, (_, i) => `b${i}`).join(", ");
   const cases = [
-    { desc: "top-level const naming a pattern's last binding again", source: `const { ${names} } = {};\nconst b4999 = 1;\n`, args: [] },
-    { desc: "top-level let naming a pattern's first binding again", source: `let [${names}] = [];\nlet b0;\n`, args: [] },
+    {
+      desc: "top-level const naming a pattern's last binding again",
+      source: `const { ${names} } = {};\nconst b4999 = 1;\n`,
+      args: [],
+      message: "has already been declared",
+    },
+    {
+      desc: "top-level let naming a pattern's first binding again",
+      source: `let [${names}] = [];\nlet b0;\n`,
+      args: [],
+      message: "has already been declared",
+    },
     {
       desc: "static block let naming a pattern's binding again",
       source: `class C { static { const { ${names} } = {}; let b4999; } }\n`,
       args: [],
+      message: "has already been declared",
     },
     {
       desc: "for statement let naming a pattern's binding again",
       source: `for (let { ${names} } = {}, b0 = 1; false; ) {}\n`,
       args: ["--compat-traditional-for-loop"],
+      message: "Duplicate lexical binding",
     },
   ] as const;
 
-  for (const { desc, source, args } of cases) {
-    assertSyntaxError(source, desc, [...args]);
+  for (const { desc, source, args, message } of cases) {
+    assertSyntaxError(source, desc, [...args], { messageIncludes: message });
   }
 }
 
