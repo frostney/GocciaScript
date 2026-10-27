@@ -157,10 +157,61 @@ console.log("Function parameter-list early errors...");
       source: `function f(${names}, a0) { "use strict"; }\n`,
       args: ["--compat-function", "--compat-non-strict-mode"],
     },
+    { desc: "long async arrow list repeating a name", source: `const f = async (${names}, a1) => 0;\n`, args: [] },
+    {
+      desc: "long non-strict function list repeating a name in a rest parameter",
+      source: `function f(${names}, ...a0) {}\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "long non-strict function list repeating a name in a pattern",
+      source: `function f(${names}, [a4999]) {}\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "long non-strict function pattern repeating a name inside it",
+      source: `function f({ x: a0, y: [${names}] }) {}\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
   ] as const;
 
   for (const { desc, source, args } of longCases) {
     assertSyntaxError(source, desc, [...args], { messageIncludes: "Duplicate parameter name" });
+  }
+
+  // Lists without a repeated name are accepted in every form.
+  for (const [source, args] of [
+    [`const f = (${names}) => 0;\n`, []],
+    [`class C { m(${names}, ...rest) {} }\n`, []],
+    [`function f({ ${names} }, [b0], b1 = 1) { "use strict"; }\n`, ["--compat-function"]],
+    [`function f(${names}, a0) { return a0; }\n`, ["--compat-function", "--compat-non-strict-mode"]],
+  ] as const) {
+    const { exitCode, json } = runLoaderJson(source, [...args]);
+    if (exitCode !== 0 || json.ok !== true)
+      throw new Error(`A long parameter list should be accepted, got exit ${exitCode}: ${JSON.stringify(json.error)}`);
+  }
+}
+
+console.log("Names a long pattern binds are checked against later declarations...");
+{
+  const names = Array.from({ length: 5000 }, (_, i) => `b${i}`).join(", ");
+  const cases = [
+    { desc: "top-level const naming a pattern's last binding again", source: `const { ${names} } = {};\nconst b4999 = 1;\n`, args: [] },
+    { desc: "top-level let naming a pattern's first binding again", source: `let [${names}] = [];\nlet b0;\n`, args: [] },
+    {
+      desc: "static block let naming a pattern's binding again",
+      source: `class C { static { const { ${names} } = {}; let b4999; } }\n`,
+      args: [],
+    },
+    {
+      desc: "for statement let naming a pattern's binding again",
+      source: `for (let { ${names} } = {}, b0 = 1; false; ) {}\n`,
+      args: ["--compat-traditional-for-loop"],
+    },
+  ] as const;
+
+  for (const { desc, source, args } of cases) {
+    assertSyntaxError(source, desc, [...args]);
   }
 }
 

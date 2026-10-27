@@ -52,22 +52,12 @@ describe("a pattern with thousands of bindings", () => {
     expect(loop(source)).toEqual([0, COUNT - 1]);
   });
 
-  test("a name a static block or for statement's let declares twice is a SyntaxError", () => {
-    expect(() => new Function(`return class { static { const { ${list} } = {}; let ${last}; } };`)).toThrow(SyntaxError);
-    expect(() => new Function(`for (let { ${list} } = {}, b0 = 1; ; ) {}`)).toThrow(SyntaxError);
-  });
-
   test("a top-level pattern of a script binds every name", () => {
     const realm = new ShadowRealm();
     const sum = realm.evaluate(
       `const { ${list} } = { b0: 1, ${last}: 2 }; let [c0, ...cs] = [3, 4]; var { v0, ...vs } = {}; b0 + ${last} + c0 + cs[0];`,
     );
     expect(sum).toBe(10);
-  });
-
-  test("a later declaration of a top-level pattern's name is a SyntaxError", () => {
-    expect(() => new ShadowRealm().evaluate(`const { ${list} } = {}; const ${last} = 1;`)).toThrow(SyntaxError);
-    expect(() => new ShadowRealm().evaluate(`let [${list}] = []; let b0;`)).toThrow(SyntaxError);
   });
 
   test("a var pattern may bind a name twice, and the later binding wins", () => {
