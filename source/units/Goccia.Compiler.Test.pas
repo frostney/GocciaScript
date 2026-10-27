@@ -1195,8 +1195,10 @@ begin
   ExpectChainsCompileLinear('p', '<', 'p', False);
   // Closures summing captured bindings, the shape the slowdown was seen in.
   ExpectChainsCompileLinear('x0', '+', 'x%d', True);
-  // Strict types try to simplify every operator by its operand types.
+  // Strict types try to simplify every operator by its operand types, and
+  // `x + ""` to x once x is a String.
   ExpectChainsCompileLinear('p', '+', 'p', False, True);
+  ExpectChainsCompileLinear('p', '+', '""', False, True);
 end;
 
 { CompileExpressionNode skips the constant tries of the left operands a

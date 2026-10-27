@@ -571,6 +571,15 @@ begin
     Result := Upvalue.ReturnTypeHint;
 end;
 
+// A string literal or a template without substitutions: its type needs no
+// name resolved.
+function IsStringLiteralOperand(const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := ((AExpr is TGocciaLiteralExpression) and
+    (TGocciaLiteralExpression(AExpr).Value is TGocciaStringLiteralValue)) or
+    (AExpr is TGocciaTemplateLiteralExpression);
+end;
+
 function BinaryTypeDependsOnOperands(
   const AOperator: TGocciaTokenType): Boolean;
 begin
@@ -678,6 +687,14 @@ begin
     Bin := TGocciaBinaryExpression(AExpr);
     LeftType := sltUntyped;
     RightType := sltUntyped;
+    // + with a String literal on either side yields a String whatever the
+    // other operand is (§13.15.3 step 1.c-d), so the other one is not
+    // walked: under strict types a chain such as `s + "" + ""` asks this of
+    // every prefix of the chain.
+    if (Bin.Operator = gttPlus) and
+       (IsStringLiteralOperand(Bin.Left) or
+        IsStringLiteralOperand(Bin.Right)) then
+      Exit(sltString);
     if BinaryTypeDependsOnOperands(Bin.Operator) then
     begin
       LeftType := ExpressionType(AScope, Bin.Left);
