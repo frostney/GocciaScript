@@ -190,7 +190,15 @@ type
     // of the value its instruction produces (see NoteBinaryResultType).
     FLastBinaryExpression: TGocciaExpression;
     FLastBinaryResultType: TGocciaLocalType;
+    // While the case clauses of a switch statement are compiled, the locals
+    // marked initialized or given a constant value, in that order, and where
+    // each open switch's next clause starts reading them (BeginCaseClauses).
+    FSettledLocals: array of Integer;
+    FSettledLocalCount: Integer;
+    FCaseClauseMarks: array of Integer;
+    FCaseClauseMarkCount: Integer;
     procedure EnsureLocalIndex;
+    procedure NoteSettledLocal(const AIndex: Integer);
     procedure CountLocalSlot(const ASlot: UInt16);
     function NewestLocalNamed(const AName: string): Integer;
     procedure RecordDebugLocal(const AIndex: Integer);
@@ -273,7 +281,22 @@ type
     // function body reads them before it is compiled.
     procedure AddParameterName(const AName: string);
     function HasParameterName(const AName: string): Boolean;
-    procedure ClearInitializedAtDepth(const ADepth: Integer);
+    { The case clauses of a switch statement share one block scope, and a
+      clause can be entered without running the declarations of the clauses
+      before it. So a read in a clause must neither use the register of an
+      earlier clause's binding directly nor be replaced by a constant tracked
+      for it. BeginCaseClauses is called after the switch's BeginScope and
+      before its lexical prelude; from then on the scope notes every local
+      marked initialized or given a constant value. Before each clause,
+      ForgetCaseClauseFacts(Depth) clears both for the switch's own locals
+      (those at ADepth) noted since the previous clause, and keeps the notes
+      on other live locals for an enclosing switch. Every local at ADepth
+      that is initialized or holds a constant was noted, so this visits only
+      what the previous clause settled, not every local of the function.
+      EndCaseClauses closes the innermost switch. }
+    procedure BeginCaseClauses;
+    procedure ForgetCaseClauseFacts(const ADepth: Integer);
+    procedure EndCaseClauses;
     procedure EnterLoop(const AMayCreateClosure: Boolean);
     procedure LeaveLoop;
     procedure MarkDirectEvalSeen;
@@ -326,7 +349,6 @@ type
     procedure SetLocalConstantValue(const AIndex: Integer;
       const AValue: TGocciaCompileTimeValue);
     procedure ClearLocalConstantValue(const AIndex: Integer);
-    procedure ClearConstantValuesAtDepth(const ADepth: Integer);
     procedure MarkImportBinding(const AIndex: Integer;
       const APhase: TGocciaImportCallPhase; const AModulePath,
       AExportName: string);
@@ -592,6 +614,8 @@ begin
   FUpvaluesSeeded := False;
   FTemplate := nil;
   FLastBinaryExpression := nil;
+  FSettledLocalCount := 0;
+  FCaseClauseMarkCount := 0;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
   begin
     FWithBindingCount := AParent.FWithBindingCount;
@@ -1054,6 +1078,7 @@ end;
 procedure TGocciaCompilerScope.MarkLocalInitialized(const AIndex: Integer);
 begin
   FLocals[AIndex].IsInitialized := True;
+  NoteSettledLocal(AIndex);
 end;
 
 procedure TGocciaCompilerScope.AddParameterName(const AName: string);
@@ -1074,16 +1099,57 @@ begin
   Result := False;
 end;
 
-procedure TGocciaCompilerScope.ClearInitializedAtDepth(const ADepth: Integer);
-var
-  I: Integer;
+procedure TGocciaCompilerScope.NoteSettledLocal(const AIndex: Integer);
 begin
-  // The locals of ADepth are not always the tail of FLocals: a `var` that was
-  // not hoisted (one in a class static block) is declared at depth 0 after
-  // them. Scan every local instead of stopping at the first shallower one.
-  for I := 0 to FLocalCount - 1 do
-    if FLocals[I].Depth = ADepth then
-      FLocals[I].IsInitialized := False;
+  if FCaseClauseMarkCount = 0 then
+    Exit;
+  if FSettledLocalCount >= Length(FSettledLocals) then
+    SetLength(FSettledLocals, FSettledLocalCount * 2 + 16);
+  FSettledLocals[FSettledLocalCount] := AIndex;
+  Inc(FSettledLocalCount);
+end;
+
+procedure TGocciaCompilerScope.BeginCaseClauses;
+begin
+  if FCaseClauseMarkCount >= Length(FCaseClauseMarks) then
+    SetLength(FCaseClauseMarks, FCaseClauseMarkCount * 2 + 4);
+  FCaseClauseMarks[FCaseClauseMarkCount] := FSettledLocalCount;
+  Inc(FCaseClauseMarkCount);
+end;
+
+procedure TGocciaCompilerScope.ForgetCaseClauseFacts(const ADepth: Integer);
+var
+  I, Kept, Index: Integer;
+begin
+  // Only the innermost open switch reaches a clause boundary: a switch
+  // nested in a clause has ended before the next clause of its own begins.
+  Kept := FCaseClauseMarks[FCaseClauseMarkCount - 1];
+  for I := Kept to FSettledLocalCount - 1 do
+  begin
+    Index := FSettledLocals[I];
+    // A local of a block that has ended is dropped: its index may hold a
+    // newer local by now, which is noted again when it is settled.
+    if Index >= FLocalCount then
+      Continue;
+    if FLocals[Index].Depth = ADepth then
+    begin
+      FLocals[Index].IsInitialized := False;
+      if FLocals[Index].HasConstantValue then
+        ClearLocalConstantValue(Index);
+      Continue;
+    end;
+    FSettledLocals[Kept] := Index;
+    Inc(Kept);
+  end;
+  FSettledLocalCount := Kept;
+  FCaseClauseMarks[FCaseClauseMarkCount - 1] := Kept;
+end;
+
+procedure TGocciaCompilerScope.EndCaseClauses;
+begin
+  Dec(FCaseClauseMarkCount);
+  if FCaseClauseMarkCount = 0 then
+    FSettledLocalCount := 0;
 end;
 
 // AMayCreateClosure describes the subtree of the loop being entered. A loop
@@ -1350,23 +1416,13 @@ procedure TGocciaCompilerScope.SetLocalConstantValue(const AIndex: Integer;
 begin
   FLocals[AIndex].HasConstantValue := True;
   FLocals[AIndex].ConstantValue := AValue;
+  NoteSettledLocal(AIndex);
 end;
 
 procedure TGocciaCompilerScope.ClearLocalConstantValue(const AIndex: Integer);
 begin
   FLocals[AIndex].HasConstantValue := False;
   ResetCompileTimeValue(FLocals[AIndex].ConstantValue, ctvkUnknown);
-end;
-
-procedure TGocciaCompilerScope.ClearConstantValuesAtDepth(
-  const ADepth: Integer);
-var
-  I: Integer;
-begin
-  // See ClearInitializedAtDepth: the locals of ADepth need not be the tail.
-  for I := 0 to FLocalCount - 1 do
-    if FLocals[I].Depth = ADepth then
-      ClearLocalConstantValue(I);
 end;
 
 procedure TGocciaCompilerScope.MarkImportBinding(const AIndex: Integer;
