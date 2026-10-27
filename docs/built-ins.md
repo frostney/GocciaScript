@@ -1,6 +1,6 @@
 # Built-in Objects
 
-<!-- doc-length-limit: 1050 -->
+<!-- doc-length-limit: 1100 -->
 
 *For contributors adding or modifying built-in objects, and for script authors looking up available APIs.*
 
@@ -857,19 +857,21 @@ const { source, root, comments } = parse(text, { jsx: true, fileName: "App.tsx" 
 | `jsx` | Run the JSX preprocessor before parsing (default `false`) |
 | `module` | Parse as module source rather than script source (default `true`) |
 | `fileName` | File name the parser sees; its extension decides JSX handling, so a `.ts` name skips the JSX preprocessor (default `<source>`). A syntax error reports only `(line:column)`, not the file name ([#1277](https://github.com/frostney/GocciaScript/issues/1277)) |
+| `tokens` | Also return `tokens`, every token and comment of the file (default `false`). Without it no token work is done |
 
 The *language* is the host's, not a second one configured here: the
 compatibility flags in force for the run are the ones `parse` accepts, exactly
 as `eval` and the `Function` constructor inherit them. A file that needs
 `--compat-asi` to parse needs the host to have been given `--compat-asi`.
 
-`parse` returns `{ source, root, comments }`:
+`parse` returns `{ source, root, comments }`, and `tokens` when asked for:
 
 | Property | Description |
 |----------|-------------|
-| `source` | The text that was passed, returned unchanged. Every offset and position in the result indexes it |
+| `source` | The text that was passed, with each CRLF and lone CR normalized to LF and otherwise unchanged. Every offset and position in the result indexes it |
 | `root` | The `Program` node |
 | `comments` | Every comment, in source order |
+| `tokens` | Only with `tokens: true`: every token and comment, in source order |
 
 Every node is `{ kind, start, end, loc, children }`, plus `typeOnly` on the kinds a type-level declaration can have (below), and every comment is
 `{ kind, start, end, loc }` with `kind` either `"Line"` or `"Block"`.
@@ -897,10 +899,60 @@ own text. Comments the transformer removes — one between JSX attributes, or a
 child container holding nothing else — are not in `comments`, because the
 parser never sees them.
 
+#### Tokens
+
+With `tokens: true`, `tokens` is every token and comment of the file as
+`{ type, start, end }`, in source order, with no gaps but whitespace and no
+overlaps. They are the tokens the parse consumed, so whether a `/` divides or
+opens a regular expression, and where a template's text ends and its code
+begins, is the parser's own answer. Blanking every literal, template and
+comment range leaves exactly the code, at the same offsets:
+
+```javascript
+const CODE = ["Identifier", "PrivateIdentifier", "Keyword", "Punctuator",
+  "NumericLiteral", "JSXIdentifier"];
+
+const { source, tokens } = parse(text, { tokens: true });
+const code = tokens
+  .filter((token) => !CODE.includes(token.type))
+  .reduce((blanked, { start, end }) =>
+    blanked.slice(0, start) + " ".repeat(end - start) + blanked.slice(end), source);
+```
+
+| `type` | The range covers |
+|--------|------------------|
+| `Identifier` | A name that is not a reserved word, including contextual words such as `let`, `async`, `of` and `type`, and a reserved word spelled with an escape |
+| `PrivateIdentifier` | `#name` |
+| `Keyword` | A reserved word (ES2026 §12.7.2), by spelling: `x.default` has a `Keyword` token |
+| `Punctuator` | An operator or punctuator. `>>` closing two type-argument lists is one token |
+| `NumericLiteral` | A number, BigInts included |
+| `StringLiteral` | A string with its quotes, or a JSX attribute string |
+| `RegularExpressionLiteral` | A regular expression with its slashes and flags |
+| `NoSubstitutionTemplate` | A template with no `${`, backticks included |
+| `TemplateHead` | `` `text${ `` |
+| `TemplateMiddle` | `}text${` |
+| `TemplateTail` | `` }text` `` |
+| `LineComment`, `BlockComment` | A comment with its delimiters |
+| `HashbangComment` | A leading `#!` line. It is not in `comments` |
+| `JSXIdentifier` | A JSX tag or attribute name |
+| `JSXText` | The text between JSX tags, whitespace included |
+
+A template's parts hold its text and delimiters only; the code inside each
+`${...}` is tokenized as code, nested templates included. Values are withheld
+as everywhere else in the result, and tokens have no `loc`: slice `source`.
+Like every offset in the result, they index `source`, so in a CRLF file they
+count one LF for each CRLF.
+
+With `jsx` on, a token the JSX transformer synthesized is not reported, and
+JSX's own names, punctuation, strings and text are, measured in the file.
+The comments the transformer drops, which are missing from `comments`, are
+in `tokens`.
+
 See [ADR 0117](adr/0117-javascript-visible-ast-module.md) for what the module
-exposes, what it withholds, and why, and
+exposes, what it withholds, and why,
 [ADR 0118](adr/0118-original-file-source-ranges.md) for the one coordinate
-system.
+system, and [ADR 0163](adr/0163-goccia-ast-reports-the-committed-token-stream.md)
+for the token stream.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 

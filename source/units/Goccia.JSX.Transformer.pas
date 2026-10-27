@@ -16,7 +16,27 @@ uses
   Goccia.OriginMap,
   Goccia.SourceMap;
 
+const
+  DEFAULT_JSX_FACTORY_NAME = 'createElement';
+  DEFAULT_JSX_FRAGMENT_NAME = 'Fragment';
+
 type
+  { The lexical pieces of JSX itself, which never reach the lexer: an element
+    is rewritten whole, so its tag names, attribute names, punctuation, text
+    and attribute strings exist only in the input. Recorded only when a caller
+    opts in, as the lexer records comments. The code inside an expression
+    container is copied, so the lexer tokenizes it and none of it is here. }
+  TGocciaJSXTokenKind = (jtkPunctuator, jtkJSXIdentifier, jtkIdentifier,
+    jtkJSXText, jtkString, jtkLineComment, jtkBlockComment);
+
+  TGocciaJSXToken = record
+    Kind: TGocciaJSXTokenKind;
+    StartOffset: Integer;  // 0-based into the input, inclusive
+    EndOffset: Integer;    // 0-based into the input, exclusive
+  end;
+
+  TGocciaJSXTokenArray = array of TGocciaJSXToken;
+
   TGocciaJSXTransformResult = record
     Source: string;
     SourceMap: TGocciaSourceMap;
@@ -24,6 +44,9 @@ type
       answers the debugger's question; this answers the editor's. See
       [ADR 0118](../../docs/adr/0118-original-file-source-ranges.md). }
     OriginMap: TGocciaOriginMap;
+    { In source order, and empty unless tokens were asked for. See
+      [ADR 0163](../../docs/adr/0163-goccia-ast-reports-the-committed-token-stream.md). }
+    Tokens: TGocciaJSXTokenArray;
   end;
 
 procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
@@ -59,6 +82,9 @@ type
     FHasJSX: Boolean;
     FFileName: string;
     FJSXDepth: Integer;
+    FCollectTokens: Boolean;
+    FTokens: TGocciaJSXTokenArray;
+    FTokenCount: Integer;
 
     function Peek: Char; {$IFDEF FPC}inline;{$ENDIF}
     function PeekAt(const AOffset: Integer): Char; {$IFDEF FPC}inline;{$ENDIF}
@@ -80,6 +106,12 @@ type
     procedure EmitSourceChar; {$IFDEF FPC}inline;{$ENDIF}
     procedure AddIdentityMapping;
     procedure AnchorOrigin; {$IFDEF FPC}inline;{$ENDIF}
+    { AStart and AEnd are 1-based input positions, AEnd exclusive, which is
+      how every scan loop here holds them. }
+    procedure NoteToken(const AKind: TGocciaJSXTokenKind;
+      const AStart, AEnd: Integer);
+    procedure NoteNestedTokens(const ATokens: TGocciaJSXTokenArray;
+      const AOriginalShift: Integer);
 
     procedure CopyChar;
     procedure CopyString(const AQuote: Char);
@@ -108,7 +140,8 @@ type
       out AHadAttributes: Boolean);
     procedure EmitJSXChildren(const ATagName: string);
     function CollectJSXText: string;
-    function IsCommentOnlyJSXExpression(out AClosingBrace: Integer): Boolean;
+    function IsCommentOnlyJSXExpression(out AClosingBrace: Integer;
+      var AComments: TGocciaJSXTokenArray): Boolean;
     procedure CopyJSXExpression;
     procedure ExpectJSXClosingTag(const ATagName: string);
     function TrimJSXWhitespace(const AText: string): string;
@@ -122,8 +155,9 @@ type
   public
     class function Transform(const ASource: string;
       const AFileName: string = '';
-      const AFactoryName: string = 'createElement';
-      const AFragmentName: string = 'Fragment'): TGocciaJSXTransformResult;
+      const AFactoryName: string = DEFAULT_JSX_FACTORY_NAME;
+      const AFragmentName: string = DEFAULT_JSX_FRAGMENT_NAME;
+      const ACollectTokens: Boolean = False): TGocciaJSXTransformResult;
   end;
 
 implementation
@@ -134,6 +168,8 @@ uses
   Goccia.FileExtensions;
 
 const
+  INITIAL_TOKEN_CAPACITY = 64;
+
   // Defence-in-depth bound on JSX nesting recursion. Real JSX rarely nests
   // beyond a few dozen levels; this fires when the transformer's open-tag
   // detection runs away on non-JSX input (e.g. regex content the transformer
@@ -164,7 +200,8 @@ end;
 class function TGocciaJSXTransformer.Transform(const ASource: string;
   const AFileName: string;
   const AFactoryName: string;
-  const AFragmentName: string): TGocciaJSXTransformResult;
+  const AFragmentName: string;
+  const ACollectTokens: Boolean): TGocciaJSXTransformResult;
 var
   Transformer: TGocciaJSXTransformer;
 begin
@@ -182,6 +219,8 @@ begin
     Transformer.FLastTokenKind := ltkNone;
     Transformer.FHasJSX := False;
     Transformer.FJSXDepth := 0;
+    Transformer.FCollectTokens := ACollectTokens;
+    Transformer.FTokenCount := 0;
     Transformer.FOutput := TStringBuffer.Create(Length(ASource));
     Transformer.FSourceMap := TGocciaSourceMap.Create('');
     Transformer.FSourceMap.AddSource('');
@@ -198,6 +237,8 @@ begin
         Transformer.FSourceMap := nil;
         Result.OriginMap := TGocciaOriginMap.Create(Transformer.FOriginRuns,
           Length(ASource));
+        SetLength(Transformer.FTokens, Transformer.FTokenCount);
+        Result.Tokens := Transformer.FTokens;
       end
       else
       begin
@@ -206,6 +247,7 @@ begin
         Result.Source := ASource;
         Result.SourceMap := nil;
         Result.OriginMap := nil;
+        Result.Tokens := nil;
       end;
     finally
       Transformer.FSourceMap.Free;
@@ -422,6 +464,35 @@ end;
 procedure TGocciaJSXTransformer.AnchorOrigin;
 begin
   FOriginRuns.NoteAnchor(FOutput.Length, FPos - 1);
+end;
+
+procedure TGocciaJSXTransformer.NoteToken(const AKind: TGocciaJSXTokenKind;
+  const AStart, AEnd: Integer);
+begin
+  if not FCollectTokens or (AEnd <= AStart) then
+    Exit;
+  if FTokenCount = Length(FTokens) then
+    if FTokenCount = 0 then
+      SetLength(FTokens, INITIAL_TOKEN_CAPACITY)
+    else
+      SetLength(FTokens, FTokenCount * 2);
+  FTokens[FTokenCount].Kind := AKind;
+  FTokens[FTokenCount].StartOffset := AStart - 1;
+  FTokens[FTokenCount].EndOffset := AEnd - 1;
+  Inc(FTokenCount);
+end;
+
+{ Records tokens measured elsewhere: an attribute expression's, which was
+  transformed on its own and is shifted by the same amount as its origin
+  runs, or a comment-only container's, already in this input (no shift). }
+procedure TGocciaJSXTransformer.NoteNestedTokens(
+  const ATokens: TGocciaJSXTokenArray; const AOriginalShift: Integer);
+var
+  I: Integer;
+begin
+  for I := 0 to High(ATokens) do
+    NoteToken(ATokens[I].Kind, ATokens[I].StartOffset + AOriginalShift + 1,
+      ATokens[I].EndOffset + AOriginalShift + 1);
 end;
 
 procedure TGocciaJSXTransformer.CopyChar;
@@ -836,6 +907,8 @@ end;
 // whitespace around it reaches the output: an attribute list is collapsed
 // into one object literal, so this region carries no positions of its own.
 procedure TGocciaJSXTransformer.SkipJSXAttributeTrivia;
+var
+  CommentStart: Integer;
 begin
   while not IsAtEnd do
   begin
@@ -843,10 +916,12 @@ begin
     if IsAtEnd or (CurrentChar <> '/') then
       Exit;
 
+    CommentStart := FPos;
     if PeekAt(1) = '/' then
     begin
       while not IsAtEnd and (CurrentChar <> #10) do
         AdvanceInput;
+      NoteToken(jtkLineComment, CommentStart, FPos);
     end
     else if PeekAt(1) = '*' then
     begin
@@ -859,6 +934,7 @@ begin
       begin
         AdvanceInput;
         AdvanceInput;
+        NoteToken(jtkBlockComment, CommentStart, FPos);
       end;
     end
     else
@@ -871,22 +947,28 @@ end;
 function TGocciaJSXTransformer.ReadJSXTagName: string;
 var
   SB: TStringBuffer;
+  SegmentStart: Integer;
 begin
   SB := TStringBuffer.Create;
+  SegmentStart := FPos;
   while not IsAtEnd and IsIdentifierPart(CurrentChar) do
   begin
     SB.AppendChar(CurrentChar);
     AdvanceInput;
   end;
+  NoteToken(jtkJSXIdentifier, SegmentStart, FPos);
   while not IsAtEnd and (CurrentChar = '.') do
   begin
     SB.AppendChar('.');
+    NoteToken(jtkPunctuator, FPos, FPos + 1);
     AdvanceInput;
+    SegmentStart := FPos;
     while not IsAtEnd and IsIdentifierPart(CurrentChar) do
     begin
       SB.AppendChar(CurrentChar);
       AdvanceInput;
     end;
+    NoteToken(jtkJSXIdentifier, SegmentStart, FPos);
   end;
   Result := SB.ToString;
 end;
@@ -1001,12 +1083,14 @@ begin
     StartColumn := FColumn;
     StartOffset := FPos;
 
+    NoteToken(jtkPunctuator, FPos, FPos + 1);
     AdvanceInput;
 
     if CurrentChar = '>' then
     begin
       IsFragment := True;
       TagName := '';
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
       AdvanceInput;
     end
     else
@@ -1050,6 +1134,8 @@ begin
     if not IsAtEnd and (CurrentChar = '/') and (PeekAt(1) = '>') then
     begin
       IsSelfClosing := True;
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
+      NoteToken(jtkPunctuator, FPos + 1, FPos + 2);
       AdvanceInput;
       AdvanceInput;
       Emit(', null)');
@@ -1060,6 +1146,7 @@ begin
 
     if not IsAtEnd and (CurrentChar = '>') then
     begin
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
       AdvanceInput;
       Emit(', null');
       EmitJSXChildren(TagName);
@@ -1075,6 +1162,8 @@ begin
     SkipWhitespace;
     if not IsAtEnd and (CurrentChar = '/') and (PeekAt(1) = '>') then
     begin
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
+      NoteToken(jtkPunctuator, FPos + 1, FPos + 2);
       AdvanceInput;
       AdvanceInput;
       if not HadAttributes then
@@ -1087,6 +1176,7 @@ begin
 
     if not IsAtEnd and (CurrentChar = '>') then
     begin
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
       AdvanceInput;
       if not HadAttributes then
         Emit('null');
@@ -1136,6 +1226,7 @@ var
   PendingNewlines, TriviaLine: Integer;
   ValuePrefix, RawExpr, RawSlice: string;
   SubResult: TGocciaJSXTransformResult;
+  NameStart, QuoteStart, ValueShift: Integer;
 
   { Line terminators the trivia scan consumed are replayed into the object
     literal the attribute list becomes. Without them the whole list collapses
@@ -1225,6 +1316,8 @@ begin
       FlushObjectAttrs;
       PendingNewlines := 0;
 
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
+      NoteToken(jtkPunctuator, FPos + 1, FPos + 4);
       AdvanceInput;
       AdvanceInput;
       AdvanceInput;
@@ -1251,21 +1344,30 @@ begin
         ValueStart - 1 + (Length(RawSlice) - Length(TrimLeft(RawSlice))),
         Length(Segments[SegmentCount - 1].Content));
       if not IsAtEnd then
+      begin
+        NoteToken(jtkPunctuator, FPos, FPos + 1);
         AdvanceInput;
+      end;
       Continue;
     end;
 
     if (CurrentChar = '{') and (PeekAt(1) <> '.') then
     begin
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
       AdvanceInput;
       AttrName := '';
+      NameStart := FPos;
       while not IsAtEnd and IsIdentifierPart(CurrentChar) do
       begin
         AttrName := AttrName + CurrentChar;
         AdvanceInput;
       end;
+      NoteToken(jtkIdentifier, NameStart, FPos);
       if not IsAtEnd and (CurrentChar = '}') then
+      begin
+        NoteToken(jtkPunctuator, FPos, FPos + 1);
         AdvanceInput;
+      end;
       AppendAttributeSeparator;
       CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + AttrName);
       Inc(AttrCount);
@@ -1273,6 +1375,7 @@ begin
     end;
 
     AttrName := '';
+    NameStart := FPos;
     while not IsAtEnd and IsIdentifierPart(CurrentChar) do
     begin
       AttrName := AttrName + CurrentChar;
@@ -1288,6 +1391,7 @@ begin
         AdvanceInput;
       end;
     end;
+    NoteToken(jtkJSXIdentifier, NameStart, FPos);
 
     AppendAttributeSeparator;
 
@@ -1295,9 +1399,11 @@ begin
 
     if not IsAtEnd and (CurrentChar = '=') then
     begin
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
       AdvanceInput;
       SkipWhitespace;
 
+      QuoteStart := FPos;
       if not IsAtEnd and (CurrentChar = '"') then
       begin
         AdvanceInput;
@@ -1312,6 +1418,7 @@ begin
         CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': "' + EscapeJSString(Copy(FSource, ValueStart, FPos - ValueStart)) + '"');
         if not IsAtEnd then
           AdvanceInput;
+        NoteToken(jtkString, QuoteStart, FPos);
       end
       else if not IsAtEnd and (CurrentChar = '''') then
       begin
@@ -1327,9 +1434,11 @@ begin
         CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': "' + EscapeJSString(Copy(FSource, ValueStart, FPos - ValueStart)) + '"');
         if not IsAtEnd then
           AdvanceInput;
+        NoteToken(jtkString, QuoteStart, FPos);
       end
       else if not IsAtEnd and (CurrentChar = '{') then
       begin
+        NoteToken(jtkPunctuator, FPos, FPos + 1);
         AdvanceInput;
         Depth := 1;
         ValueStart := FPos;
@@ -1348,7 +1457,7 @@ begin
         RawExpr := Trim(RawSlice);
         try
           SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFileName,
-            FFactoryName, FFragmentName);
+            FFactoryName, FFragmentName, FCollectTokens);
         except
           on E: TGocciaError do
           begin
@@ -1358,16 +1467,21 @@ begin
         end;
         try
           ValuePrefix := ' ' + FormatPropertyKey(AttrName) + ': ';
+          ValueShift := ValueStart - 1 +
+            (Length(RawSlice) - Length(TrimLeft(RawSlice)));
           NoteAttributeValue(CurrentObjAttrs.Length + Length(ValuePrefix),
-            ValueStart - 1 + (Length(RawSlice) - Length(TrimLeft(RawSlice))),
-            SubResult);
+            ValueShift, SubResult);
+          NoteNestedTokens(SubResult.Tokens, ValueShift);
           CurrentObjAttrs.Append(ValuePrefix + SubResult.Source);
         finally
           SubResult.SourceMap.Free;
           SubResult.OriginMap.Free;
         end;
         if not IsAtEnd then
+        begin
+          NoteToken(jtkPunctuator, FPos, FPos + 1);
           AdvanceInput;
+        end;
       end;
     end
     else
@@ -1408,6 +1522,8 @@ var
   ChildStartLine, ChildStartColumn: Integer;
   ContainerEnd: Integer;
   GuardPosition: Integer;
+  TextStart: Integer;
+  ContainerComments: TGocciaJSXTokenArray;
 begin
   GuardPosition := 0;
   while not IsAtEnd do
@@ -1419,10 +1535,15 @@ begin
       begin
         if ATagName = '' then
         begin
+          NoteToken(jtkPunctuator, FPos, FPos + 1);
+          NoteToken(jtkPunctuator, FPos + 1, FPos + 2);
           AdvanceInput;
           AdvanceInput;
           if not IsAtEnd and (CurrentChar = '>') then
+          begin
+            NoteToken(jtkPunctuator, FPos, FPos + 1);
             AdvanceInput;
+          end;
         end
         else
           ExpectJSXClosingTag(ATagName);
@@ -1440,13 +1561,17 @@ begin
     begin
       ChildStartLine := FLine;
       ChildStartColumn := FColumn;
+      NoteToken(jtkPunctuator, FPos, FPos + 1);
       AdvanceInput;
       // A container holding nothing but comments is how JSX writes a comment
       // between children. It has no child, so it contributes no argument: an
       // emitted `, ` would leave an elision (`createElement("div", null, , x)`)
       // that fails to parse.
-      if IsCommentOnlyJSXExpression(ContainerEnd) then
+      ContainerComments := nil;
+      if IsCommentOnlyJSXExpression(ContainerEnd, ContainerComments) then
       begin
+        NoteNestedTokens(ContainerComments, 0);
+        NoteToken(jtkPunctuator, ContainerEnd, ContainerEnd + 1);
         while FPos <= ContainerEnd do
           AdvanceInput;
         Continue;
@@ -1456,11 +1581,16 @@ begin
         ChildStartLine - 1, ChildStartColumn - 1);
       CopyJSXExpression;
       if not IsAtEnd and (CurrentChar = '}') then
+      begin
+        NoteToken(jtkPunctuator, FPos, FPos + 1);
         AdvanceInput;
+      end;
     end
     else
     begin
+      TextStart := FPos;
       Text := CollectJSXText;
+      NoteToken(jtkJSXText, TextStart, FPos);
       Text := TrimJSXWhitespace(Text);
       if Text <> '' then
       begin
@@ -1494,15 +1624,30 @@ end;
 // container that turns out to hold an expression must still be copied from its
 // first character, comments included.
 function TGocciaJSXTransformer.IsCommentOnlyJSXExpression(
-  out AClosingBrace: Integer): Boolean;
+  out AClosingBrace: Integer; var AComments: TGocciaJSXTokenArray): Boolean;
 var
-  Scan: Integer;
+  Scan, CommentStart: Integer;
+
+  { The comments are dropped with the container, so the lexer never sees
+    them; they are kept here for the caller to record once the container is
+    known to hold nothing else. }
+  procedure KeepComment(const AKind: TGocciaJSXTokenKind);
+  begin
+    if not FCollectTokens then
+      Exit;
+    SetLength(AComments, Length(AComments) + 1);
+    AComments[High(AComments)].Kind := AKind;
+    AComments[High(AComments)].StartOffset := CommentStart - 1;
+    AComments[High(AComments)].EndOffset := Scan - 1;
+  end;
+
 begin
   Result := False;
   AClosingBrace := 0;
   Scan := FPos;
   while Scan <= Length(FSource) do
   begin
+    CommentStart := Scan;
     if FSource[Scan] <= ' ' then
       Inc(Scan)
     else if (FSource[Scan] = '/') and (Scan < Length(FSource)) and
@@ -1510,6 +1655,7 @@ begin
     begin
       while (Scan <= Length(FSource)) and (FSource[Scan] <> #10) do
         Inc(Scan);
+      KeepComment(jtkLineComment);
     end
     else if (FSource[Scan] = '/') and (Scan < Length(FSource)) and
             (FSource[Scan + 1] = '*') then
@@ -1523,6 +1669,7 @@ begin
       if Scan >= Length(FSource) then
         Exit;
       Inc(Scan, 2);
+      KeepComment(jtkBlockComment);
     end
     else
     begin
@@ -1752,13 +1899,18 @@ procedure TGocciaJSXTransformer.ExpectJSXClosingTag(const ATagName: string);
 var
   ClosingTag: string;
 begin
+  NoteToken(jtkPunctuator, FPos, FPos + 1);
+  NoteToken(jtkPunctuator, FPos + 1, FPos + 2);
   AdvanceInput;
   AdvanceInput;
   SkipWhitespace;
   ClosingTag := ReadJSXTagName;
   SkipWhitespace;
   if not IsAtEnd and (CurrentChar = '>') then
+  begin
+    NoteToken(jtkPunctuator, FPos, FPos + 1);
     AdvanceInput;
+  end;
   if ClosingTag <> ATagName then
     RaiseJSXError(Format('JSX: Expected closing tag </%s> but found </%s>',
       [ATagName, ClosingTag]));

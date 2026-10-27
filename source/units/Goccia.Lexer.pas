@@ -20,8 +20,10 @@ type
     deciding where a blank line belongs, a doc extractor — would otherwise
     have to re-scan the source and re-derive regex-versus-division for
     itself. Recording here keeps that classification in the one place that
-    already makes it. }
-  TGocciaCommentKind = (gckLine, gckBlock);
+    already makes it. A hashbang is a comment too (ES2026 §12.5), recorded
+    under its own kind because it is legal only at the very start of the
+    source. }
+  TGocciaCommentKind = (gckLine, gckBlock, gckHashbang);
 
   TGocciaCommentSpan = record
     Kind: TGocciaCommentKind;
@@ -643,6 +645,9 @@ begin
     Exit;
 
   SkipUntilLineTerminator;
+
+  if FCollectComments then
+    RecordComment(gckHashbang, 0, FCurrent - 1);
 end;
 
 // ES2026 §12.4 SingleLineComment :: // SingleLineCommentCharsₒₚₜ

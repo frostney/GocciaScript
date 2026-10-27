@@ -27,6 +27,10 @@ type
     procedure TestAppendShiftedRebases;
     procedure TestEmptyMapMapsNothing;
     procedure TestResetDetachesStorage;
+    procedure TestVerbatimInsideOneRun;
+    procedure TestVerbatimAcrossAGapIsNot;
+    procedure TestVerbatimInAGapIsNot;
+    procedure TestVerbatimSkipsAnchors;
   public
     procedure SetupTests; override;
   end;
@@ -53,6 +57,13 @@ begin
   Test('An empty map maps nothing', TestEmptyMapMapsNothing);
   Test('Reset detaches storage rather than emptying it',
     TestResetDetachesStorage);
+  Test('A range inside one run is a verbatim copy', TestVerbatimInsideOneRun);
+  Test('A range across a gap is not a verbatim copy',
+    TestVerbatimAcrossAGapIsNot);
+  Test('A range inside a gap is not a verbatim copy',
+    TestVerbatimInAGapIsNot);
+  Test('A verbatim range is told apart from a rewritten construct''s anchors',
+    TestVerbatimSkipsAnchors);
 end;
 
 // Generated `ab__cd` from original `abcd`: two copies with a synthesized gap.
@@ -286,6 +297,83 @@ begin
   Expect<Integer>(Held.Count).ToBe(1);
   Expect<Integer>(Held.Items[0].OriginalStart).ToBe(100);
   Expect<Integer>(Building.Items[0].OriginalStart).ToBe(200);
+end;
+
+procedure TOriginMapTests.TestVerbatimInsideOneRun;
+var
+  Map: TGocciaOriginMap;
+  Original: Integer;
+begin
+  Map := TwoRunsWithAGap;
+  try
+    Expect<Boolean>(Map.MapVerbatim(0, 2, Original)).ToBe(True);
+    Expect<Integer>(Original).ToBe(0);
+    Expect<Boolean>(Map.MapVerbatim(4, 6, Original)).ToBe(True);
+    Expect<Integer>(Original).ToBe(2);
+    Expect<Boolean>(Map.MapVerbatim(5, 6, Original)).ToBe(True);
+    Expect<Integer>(Original).ToBe(3);
+  finally
+    Map.Free;
+  end;
+end;
+
+// Both edges of `b__c` map exactly, but the synthesized `__` between them
+// has no original, so the range is not a copy of anything.
+procedure TOriginMapTests.TestVerbatimAcrossAGapIsNot;
+var
+  Map: TGocciaOriginMap;
+  Original: Integer;
+begin
+  Map := TwoRunsWithAGap;
+  try
+    Expect<Boolean>(Map.MapVerbatim(1, 5, Original)).ToBe(False);
+    Expect<Boolean>(Map.MapVerbatim(0, 3, Original)).ToBe(False);
+  finally
+    Map.Free;
+  end;
+end;
+
+procedure TOriginMapTests.TestVerbatimInAGapIsNot;
+var
+  Map: TGocciaOriginMap;
+  Original: Integer;
+begin
+  Map := TwoRunsWithAGap;
+  try
+    Expect<Boolean>(Map.MapVerbatim(2, 4, Original)).ToBe(False);
+    Expect<Boolean>(Map.MapVerbatim(3, 4, Original)).ToBe(False);
+  finally
+    Map.Free;
+  end;
+end;
+
+// Generated `abc` + synthesized `__` + `de`, where an element was rewritten
+// between the two copies: anchors mark both of its edges. A range ending at
+// the first anchor is the copy before it; one starting at the second anchor
+// is the copy that resumes there; one starting in the synthesized text is
+// nothing.
+procedure TOriginMapTests.TestVerbatimSkipsAnchors;
+var
+  Runs: TGocciaOriginRuns;
+  Map: TGocciaOriginMap;
+  Original: Integer;
+begin
+  Runs.Reset;
+  Runs.NoteCopy(0, 0, 3);
+  Runs.NoteAnchor(3, 3);
+  Runs.NoteAnchor(5, 10);
+  Runs.NoteCopy(5, 10, 2);
+  Map := TGocciaOriginMap.Create(Runs, 12);
+  try
+    Expect<Boolean>(Map.MapVerbatim(1, 3, Original)).ToBe(True);
+    Expect<Integer>(Original).ToBe(1);
+    Expect<Boolean>(Map.MapVerbatim(5, 7, Original)).ToBe(True);
+    Expect<Integer>(Original).ToBe(10);
+    Expect<Boolean>(Map.MapVerbatim(3, 5, Original)).ToBe(False);
+    Expect<Boolean>(Map.MapVerbatim(4, 6, Original)).ToBe(False);
+  finally
+    Map.Free;
+  end;
 end;
 
 begin

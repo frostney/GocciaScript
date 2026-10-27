@@ -12,6 +12,10 @@ unit Goccia.Builtins.AST;
   literal values — a rule that needs those has the offsets and the source
   text the result carries.
 
+  With `tokens: true` the result also carries the committed token stream,
+  comments included, as typed ranges; see
+  [ADR 0163](../../docs/adr/0163-goccia-ast-reports-the-committed-token-stream.md).
+
   Expressions are still *walked*, because that is the only way to reach the
   block of an arrow function assigned to a `const`. They are walked without
   being emitted. }
@@ -39,16 +43,21 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Error,
   Goccia.GarbageCollector,
+  Goccia.JSX.Transformer,
+  Goccia.Keywords.Contextual,
+  Goccia.Keywords.Reserved,
   Goccia.Lexer,
   Goccia.ObjectModel,
   Goccia.OriginMap,
   Goccia.SourcePipeline,
   Goccia.SourceSpan,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Token,
   Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.Primitives;
 
 const
@@ -851,6 +860,385 @@ begin
   end;
 end;
 
+{ Tokens }
+
+type
+  { What a consumer dispatches on. The names are the lexical grammar's own
+    (ES2026 §12.4-§12.9, and the JSX specification for the two JSX kinds), so
+    a reader can look each one up; the lexer's finer distinctions — which
+    operator, which keyword — are in the text the range selects. }
+  TASTTokenType = (
+    atIdentifier, atPrivateIdentifier, atKeyword, atPunctuator,
+    atNumericLiteral, atStringLiteral, atRegularExpressionLiteral,
+    atNoSubstitutionTemplate, atTemplateHead, atTemplateMiddle,
+    atTemplateTail, atLineComment, atBlockComment, atHashbangComment,
+    atJSXIdentifier, atJSXText
+  );
+
+  TASTFlatToken = record
+    TokenType: TASTTokenType;
+    StartOffset: Integer;
+    EndOffset: Integer;
+  end;
+
+  TASTFlatTokenArray = array of TASTFlatToken;
+
+const
+  TOKEN_TYPE_NAMES: array[TASTTokenType] of string = (
+    'Identifier', 'PrivateIdentifier', 'Keyword', 'Punctuator',
+    'NumericLiteral', 'StringLiteral', 'RegularExpressionLiteral',
+    'NoSubstitutionTemplate', 'TemplateHead', 'TemplateMiddle',
+    'TemplateTail', 'LineComment', 'BlockComment', 'HashbangComment',
+    'JSXIdentifier', 'JSXText'
+  );
+
+  OPTION_TOKENS = 'tokens';
+  PROP_TOKENS = 'tokens';
+  INITIAL_TOKEN_CAPACITY = 256;
+  TOKEN_PROPERTY_COUNT = 3;
+  PROP_TOKEN_TYPE = 'type';
+  PROP_TOKEN_START = 'start';
+  PROP_TOKEN_END = 'end';
+
+  // ES2026 §12.7.2 ReservedWord. The engine's own reserved-word list answers
+  // a different question — which names a binding may not use in this
+  // language profile — so it is not the one a token is classified by.
+  RESERVED_WORDS: array[0..37] of string = (
+    KEYWORD_AWAIT, KEYWORD_BREAK, KEYWORD_CASE, KEYWORD_CATCH, KEYWORD_CLASS,
+    KEYWORD_CONST, KEYWORD_CONTINUE, KEYWORD_DEBUGGER, KEYWORD_DEFAULT,
+    KEYWORD_DELETE, KEYWORD_DO, KEYWORD_ELSE, KEYWORD_ENUM, KEYWORD_EXPORT,
+    KEYWORD_EXTENDS, KEYWORD_FALSE, KEYWORD_FINALLY, KEYWORD_FOR,
+    KEYWORD_FUNCTION, KEYWORD_IF, KEYWORD_IMPORT, KEYWORD_IN,
+    KEYWORD_INSTANCEOF, KEYWORD_NEW, KEYWORD_NULL, KEYWORD_RETURN,
+    KEYWORD_SUPER, KEYWORD_SWITCH, KEYWORD_THIS, KEYWORD_THROW, KEYWORD_TRUE,
+    KEYWORD_TRY, KEYWORD_TYPEOF, KEYWORD_VAR, KEYWORD_VOID, KEYWORD_WHILE,
+    KEYWORD_WITH, KEYWORD_YIELD
+  );
+
+function IsReservedWordSpelling(const AText: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := Low(RESERVED_WORDS) to High(RESERVED_WORDS) do
+    if AText = RESERVED_WORDS[I] then
+      Exit(True);
+  Result := False;
+end;
+
+{ Every token the lexer produces for an IdentifierName, whichever keyword
+  token type it chose: the lexer promotes some contextual words (`let`,
+  `static`, `as`, `from`) and not others, so its token type is not what a
+  token is classified by. }
+function IsIdentifierNameToken(const ATokenType: TGocciaTokenType): Boolean;
+begin
+  case ATokenType of
+    gttIdentifier, gttTrue, gttFalse, gttNull, gttConst..gttFunction,
+    gttTypeof, gttVoid, gttInstanceof, gttIn, gttDelete:
+      Result := True;
+  else
+    Result := False;
+  end;
+end;
+
+function LexerTokenType(const AToken: TGocciaSourceToken): TASTTokenType;
+begin
+  case AToken.TokenType of
+    gttNumber, gttBigInt:
+      Result := atNumericLiteral;
+    gttString:
+      Result := atStringLiteral;
+    gttRegex:
+      Result := atRegularExpressionLiteral;
+    gttTemplate:
+      Result := atNoSubstitutionTemplate;
+    gttTemplateHead:
+      Result := atTemplateHead;
+    gttTemplateMiddle:
+      Result := atTemplateMiddle;
+    gttTemplateTail:
+      Result := atTemplateTail;
+  else
+    if not IsIdentifierNameToken(AToken.TokenType) then
+      Result := atPunctuator
+    // ES2026 §12.7.2 Note 1: a keyword cannot be spelled with an escape.
+    else if (not AToken.ContainsEscape) and
+            IsReservedWordSpelling(AToken.Lexeme) then
+      Result := atKeyword
+    else
+      Result := atIdentifier;
+  end;
+end;
+
+function CommentTokenType(const AKind: TGocciaCommentKind): TASTTokenType;
+begin
+  case AKind of
+    gckLine:
+      Result := atLineComment;
+    gckBlock:
+      Result := atBlockComment;
+  else
+    Result := atHashbangComment;
+  end;
+end;
+
+function JSXTokenType(const AKind: TGocciaJSXTokenKind): TASTTokenType;
+begin
+  case AKind of
+    jtkPunctuator:
+      Result := atPunctuator;
+    jtkJSXIdentifier:
+      Result := atJSXIdentifier;
+    jtkIdentifier:
+      Result := atIdentifier;
+    jtkJSXText:
+      Result := atJSXText;
+    jtkString:
+      Result := atStringLiteral;
+    jtkLineComment:
+      Result := atLineComment;
+  else
+    Result := atBlockComment;
+  end;
+end;
+
+{ Collects the file's tokens from the three places they are decided, in the
+  file's offsets: the lexer's committed stream (the goals the parser chose
+  settle regex versus division and every template part), the lexer's comment
+  trivia, and — when the JSX transformer rewrote the text — the JSX the lexer
+  never saw. Allocates no managed value. }
+type
+  TASTTokenCollector = class
+  private
+    FTokens: TASTFlatTokenArray;
+    FCount: Integer;
+    procedure Add(const ATokenType: TASTTokenType;
+      const AStartOffset, AEndOffset: Integer);
+    procedure AddLexerTokens(const APipelineResult: TGocciaSourcePipelineResult);
+    procedure AddComments(const APipelineResult: TGocciaSourcePipelineResult);
+    procedure AddJSXTokens(const APipelineResult: TGocciaSourcePipelineResult);
+    procedure SortByStart;
+  public
+    function Collect(
+      const APipelineResult: TGocciaSourcePipelineResult): TASTFlatTokenArray;
+  end;
+
+procedure TASTTokenCollector.Add(const ATokenType: TASTTokenType;
+  const AStartOffset, AEndOffset: Integer);
+begin
+  if FCount = Length(FTokens) then
+    if FCount = 0 then
+      SetLength(FTokens, INITIAL_TOKEN_CAPACITY)
+    else
+      SetLength(FTokens, FCount * 2);
+  FTokens[FCount].TokenType := ATokenType;
+  FTokens[FCount].StartOffset := AStartOffset;
+  FTokens[FCount].EndOffset := AEndOffset;
+  Inc(FCount);
+end;
+
+procedure TASTTokenCollector.AddLexerTokens(
+  const APipelineResult: TGocciaSourcePipelineResult);
+var
+  Tokens: TGocciaSourceTokenArray;
+  OriginMap: TGocciaOriginMap;
+  TokenType: TASTTokenType;
+  StartOffset, EndOffset, OriginalStart, I: Integer;
+begin
+  Tokens := APipelineResult.Tokens;
+  OriginMap := APipelineResult.OriginMap;
+  I := 0;
+  while I <= High(Tokens) do
+  begin
+    if Tokens[I].TokenType = gttEOF then
+    begin
+      Inc(I);
+      Continue;
+    end;
+
+    TokenType := LexerTokenType(Tokens[I]);
+    StartOffset := Tokens[I].StartOffset;
+    EndOffset := Tokens[I].EndOffset;
+
+    // The lexer reads the brace that closes a substitution as a token of its
+    // own and starts the continuation after it. In the grammar that brace
+    // begins the continuation (ES2026 §12.9.6 TemplateMiddle, TemplateTail),
+    // and keeping it there means a template's parts and its substitutions'
+    // code never share a range. The continuation is scanned from the
+    // character after the brace, so the two always touch.
+    if (Tokens[I].TokenType = gttRightBrace) and (I < High(Tokens)) and
+       (Tokens[I + 1].TokenType in [gttTemplateMiddle, gttTemplateTail]) and
+       (Tokens[I + 1].StartOffset = EndOffset) then
+    begin
+      Inc(I);
+      TokenType := LexerTokenType(Tokens[I]);
+      EndOffset := Tokens[I].EndOffset;
+    end
+    // ES2026 §12.7 PrivateIdentifier :: # IdentifierName — one token, which
+    // the lexer scans as two.
+    else if (Tokens[I].TokenType = gttHash) and (I < High(Tokens)) and
+            IsIdentifierNameToken(Tokens[I + 1].TokenType) and
+            (Tokens[I + 1].StartOffset = EndOffset) then
+    begin
+      Inc(I);
+      TokenType := atPrivateIdentifier;
+      EndOffset := Tokens[I].EndOffset;
+    end;
+    Inc(I);
+
+    { A preprocessor's output holds text the file does not, so a token is
+      reported only when every character of it is a copy of the file's. What
+      the JSX transformer synthesized — a `createElement`, the string a text
+      child became — is dropped here, and the transformer reports the JSX it
+      replaced. }
+    if Assigned(OriginMap) then
+    begin
+      if not OriginMap.MapVerbatim(StartOffset, EndOffset, OriginalStart) then
+        Continue;
+      EndOffset := OriginalStart + (EndOffset - StartOffset);
+      StartOffset := OriginalStart;
+    end;
+    Add(TokenType, StartOffset, EndOffset);
+  end;
+end;
+
+procedure TASTTokenCollector.AddComments(
+  const APipelineResult: TGocciaSourcePipelineResult);
+var
+  Comments: TGocciaCommentSpanArray;
+  I: Integer;
+begin
+  Comments := APipelineResult.Comments;
+  for I := 0 to High(Comments) do
+    Add(CommentTokenType(Comments[I].Kind),
+      MappedOffset(APipelineResult.OriginMap, Comments[I].StartOffset, obStart),
+      MappedOffset(APipelineResult.OriginMap, Comments[I].EndOffset, obEnd));
+end;
+
+procedure TASTTokenCollector.AddJSXTokens(
+  const APipelineResult: TGocciaSourcePipelineResult);
+var
+  JSXTokens: TGocciaJSXTokenArray;
+  I: Integer;
+begin
+  JSXTokens := APipelineResult.JSXTokens;
+  for I := 0 to High(JSXTokens) do
+    Add(JSXTokenType(JSXTokens[I].Kind), JSXTokens[I].StartOffset,
+      JSXTokens[I].EndOffset);
+end;
+
+{ Each of the three sources is in source order on its own; together they
+  interleave. A stable bottom-up merge sort keeps that cheap whatever the
+  interleaving, where an insertion sort would be quadratic on a file that is
+  mostly JSX. }
+procedure TASTTokenCollector.SortByStart;
+var
+  Source, Target, Swap: TASTFlatTokenArray;
+  Width, Left, Middle, Right, I, J, K: Integer;
+begin
+  if FCount < 2 then
+    Exit;
+  Source := FTokens;
+  SetLength(Target, FCount);
+  Width := 1;
+  while Width < FCount do
+  begin
+    Left := 0;
+    while Left < FCount do
+    begin
+      Middle := Left + Width;
+      if Middle > FCount then
+        Middle := FCount;
+      Right := Left + 2 * Width;
+      if Right > FCount then
+        Right := FCount;
+      I := Left;
+      J := Middle;
+      K := Left;
+      while (I < Middle) and (J < Right) do
+      begin
+        if Source[J].StartOffset < Source[I].StartOffset then
+        begin
+          Target[K] := Source[J];
+          Inc(J);
+        end
+        else
+        begin
+          Target[K] := Source[I];
+          Inc(I);
+        end;
+        Inc(K);
+      end;
+      while I < Middle do
+      begin
+        Target[K] := Source[I];
+        Inc(I);
+        Inc(K);
+      end;
+      while J < Right do
+      begin
+        Target[K] := Source[J];
+        Inc(J);
+        Inc(K);
+      end;
+      Inc(Left, 2 * Width);
+    end;
+    Swap := Source;
+    Source := Target;
+    Target := Swap;
+    Width := Width * 2;
+  end;
+  FTokens := Source;
+end;
+
+function TASTTokenCollector.Collect(
+  const APipelineResult: TGocciaSourcePipelineResult): TASTFlatTokenArray;
+begin
+  FCount := 0;
+  AddLexerTokens(APipelineResult);
+  AddComments(APipelineResult);
+  AddJSXTokens(APipelineResult);
+  SetLength(FTokens, FCount);
+  SortByStart;
+  Result := FTokens;
+end;
+
+{ One object per token, attached to the array before its properties are made
+  so each is rooted through the result while they allocate. The type strings
+  are immutable and shared: a file has tens of thousands of tokens and
+  sixteen types. }
+procedure MaterializeTokens(const ATarget: TGocciaArrayValue;
+  const ATokens: TASTFlatTokenArray);
+var
+  TypeValues: array[TASTTokenType] of TGocciaStringLiteralValue;
+  TokenType: TASTTokenType;
+  TokenObject: TGocciaObjectValue;
+  I: Integer;
+begin
+  for TokenType := Low(TASTTokenType) to High(TASTTokenType) do
+    TypeValues[TokenType] := nil;
+
+  for I := 0 to High(ATokens) do
+  begin
+    TokenObject := TGocciaObjectValue.Create(
+      TGocciaObjectValue.SharedObjectPrototype, TOKEN_PROPERTY_COUNT);
+    ArrayCreateDataProperty(ATarget, I, TokenObject);
+    TokenType := ATokens[I].TokenType;
+    if TypeValues[TokenType] = nil then
+      TypeValues[TokenType] :=
+        TGocciaStringLiteralValue.Create(TOKEN_TYPE_NAMES[TokenType]);
+    // The object was made just above, so each key is a fresh data property
+    // and needs none of the checks an assignment makes.
+    TokenObject.DefineFreshDataProperty(PROP_TOKEN_TYPE, TypeValues[TokenType],
+      [pfEnumerable, pfConfigurable, pfWritable]);
+    TokenObject.DefineFreshDataProperty(PROP_TOKEN_START,
+      TGocciaNumberLiteralValue.Create(ATokens[I].StartOffset),
+      [pfEnumerable, pfConfigurable, pfWritable]);
+    TokenObject.DefineFreshDataProperty(PROP_TOKEN_END,
+      TGocciaNumberLiteralValue.Create(ATokens[I].EndOffset),
+      [pfEnumerable, pfConfigurable, pfWritable]);
+  end;
+end;
+
 type
   TGocciaASTNamespaceHost = class
   published
@@ -918,7 +1306,11 @@ var
   StartOffset, EndOffset: Integer;
   StartLine, StartColumn, EndLine, EndColumn: Integer;
   ResultRoot: TGocciaTempRoot;
-  I: Integer;
+  I, CommentIndex: Integer;
+  WantTokens: Boolean;
+  TokenCollector: TASTTokenCollector;
+  FlatTokens: TASTFlatTokenArray;
+  Tokens: TGocciaArrayValue;
 begin
   { Normalized up front so the text handed back is the text the offsets index:
     the pipeline normalizes line terminators before it lexes, and a CRLF file
@@ -948,6 +1340,10 @@ begin
     Options.SourceType := stModule
   else
     Options.SourceType := stScript;
+  { Opt-in, so a caller that wants only the tree pays nothing for tokens:
+    the pipeline copies none and the JSX transformer records none. }
+  WantTokens := ReadBooleanOption(AArgs.GetElement(1), OPTION_TOKENS, False);
+  Options.CollectTokens := WantTokens;
 
   { CreateTextLines keeps the exact text alongside the split lines, so the
     string the pipeline parses is character for character the one returned as
@@ -994,10 +1390,16 @@ begin
     end;
 
     CommentSpans := PipelineResult.Comments;
+    CommentIndex := 0;
     for I := 0 to High(CommentSpans) do
     begin
+      // A hashbang is reported as a token only; `comments` keeps the two
+      // kinds it has always had.
+      if CommentSpans[I].Kind = gckHashbang then
+        Continue;
       CommentObject := TGocciaObjectValue.Create;
-      ArrayCreateDataProperty(Comments, I, CommentObject);
+      ArrayCreateDataProperty(Comments, CommentIndex, CommentObject);
+      Inc(CommentIndex);
       StartOffset := MappedOffset(PipelineResult.OriginMap,
         CommentSpans[I].StartOffset, obStart);
       EndOffset := MappedOffset(PipelineResult.OriginMap,
@@ -1012,6 +1414,19 @@ begin
         TGocciaNumberLiteralValue.Create(EndOffset));
       CommentObject.AssignProperty('loc',
         CreateLocObject(StartLine, StartColumn, EndLine, EndColumn));
+    end;
+
+    if WantTokens then
+    begin
+      TokenCollector := TASTTokenCollector.Create;
+      try
+        FlatTokens := TokenCollector.Collect(PipelineResult);
+      finally
+        TokenCollector.Free;
+      end;
+      Tokens := TGocciaArrayValue.Create;
+      ResultObject.AssignProperty(PROP_TOKENS, Tokens);
+      MaterializeTokens(Tokens, FlatTokens);
     end;
 
     Result := ResultObject;

@@ -105,6 +105,13 @@ type
     function Map(const AGeneratedOffset: Integer;
       const ABias: TGocciaOriginBias; out AOriginalOffset: Integer): Boolean;
 
+    { The original offset of a generated range that is a verbatim copy:
+      True only when the whole range lies inside one run, so the original
+      text is the generated text character for character. A range that
+      touches anything synthesized has no such answer, and is False. }
+    function MapVerbatim(const AGeneratedStart, AGeneratedEnd: Integer;
+      out AOriginalStart: Integer): Boolean;
+
     property Runs: TGocciaOriginRuns read FRuns;
     property OriginalLength: Integer read FOriginalLength;
   end;
@@ -272,6 +279,31 @@ begin
     AOriginalOffset := FRuns.Items[Index + 1].OriginalStart
   else
     AOriginalOffset := FOriginalLength;
+end;
+
+function TGocciaOriginMap.MapVerbatim(const AGeneratedStart,
+  AGeneratedEnd: Integer; out AOriginalStart: Integer): Boolean;
+var
+  Index: Integer;
+  Run: TGocciaOriginRun;
+begin
+  AOriginalStart := 0;
+  Result := False;
+  Index := FindRun(AGeneratedStart);
+
+  { An anchor is noted at the end of the output so far, and a copy noted
+    after it starts a new run, so no copy spans an anchor: a range whose
+    start finds an anchor begins where nothing was copied. }
+  if (Index < 0) or (FRuns.Items[Index].Length = 0) then
+    Exit;
+
+  Run := FRuns.Items[Index];
+  if (AGeneratedStart >= Run.GeneratedStart) and
+     (AGeneratedEnd <= Run.GeneratedStart + Run.Length) then
+  begin
+    AOriginalStart := Run.OriginalStart + (AGeneratedStart - Run.GeneratedStart);
+    Result := True;
+  end;
 end;
 
 end.

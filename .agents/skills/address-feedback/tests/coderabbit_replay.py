@@ -31,6 +31,8 @@ the recorded history:
   within 60 s before the head's latest refusal states one;
 - `not-active`: CodeRabbit is never reported not active on a pull request
   where it posted a status, comment or review at any recorded time;
+- `answered-trigger`: a trigger is never reported unanswered when CodeRabbit
+  posted a status or check run on the head after it, by `now`;
 - `error`: the adapter never fails on recorded data.
 
 Exits 1 when it finds a violation that `fixtures/coderabbit_replay_pinned.json`
@@ -53,7 +55,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 sys.dont_write_bytecode = True
 
@@ -71,6 +73,12 @@ PINNED = FIXTURES / "coderabbit_replay_pinned.json"
 TRIGGER_STATES = {"trigger-incremental", "trigger-full"}
 UNKNOWN_WAIT_STATES = {"rate-limited-unknown-wait", "blocked-unknown-wait"}
 REVIEW_COMMANDS = {"@coderabbitai review", "@coderabbitai full review"}
+
+
+def head_statuses(head: dict[str, Any]) -> list[dict[str, Any]]:
+    """A recorded head's CodeRabbit statuses and its check runs as statuses, in their final state."""
+    runs = [status for run in head.get("checkRuns", []) for status in ADAPTER.check_run_statuses(run, None, False)]
+    return head["statuses"] + runs
 
 
 def at(value: str) -> float:
@@ -139,6 +147,25 @@ class RecordedGitHub:
         }
         return sorted(found.values(), key=lambda item: (item["created_at"], item["id"]), reverse=True)
 
+    def check_runs(self, repo: str, sha: str) -> list[dict[str, Any]]:
+        """CodeRabbit's check runs on the commit as they stood at `now`.
+
+        A run is recorded in its final state; before its completion it is shown
+        in progress, and before its start not at all.
+        """
+        found = {}
+        for pull in self.pulls.values():
+            if pull["repo"] != repo or sha not in pull["heads"]:
+                continue
+            for run in pull["heads"][sha].get("checkRuns", []):
+                if at(run["started_at"]) > self.now:
+                    continue
+                if run.get("completed_at") and at(run["completed_at"]) > self.now:
+                    run = run | {"status": "in_progress", "conclusion": None, "completed_at": None,
+                                 "output": {"title": "Review in progress", "summary": ""}}
+                found[run["id"]] = run
+        return list(found.values())
+
     def suites(self, repo: str, sha: str) -> list[dict[str, Any]]:
         found = {
             (suite["created_at"], suite["head_branch"]): suite
@@ -203,6 +230,19 @@ class RecordedGitHub:
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/statuses", path)
         if match:
             return [self.statuses(*match.groups())]
+        match = re.fullmatch(r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/check-runs", path)
+        if match:
+            # GitHub's defaults: every check name, and only the latest run of each.
+            query = parse_qs(urlparse(endpoint).query)
+            runs = self.check_runs(*match.groups())
+            if "check_name" in query:
+                runs = [run for run in runs if run["name"] == query["check_name"][0]]
+            if query.get("filter", ["latest"])[0] != "all":
+                latest: dict[str, dict[str, Any]] = {}
+                for run in sorted(runs, key=lambda item: (item["started_at"], item["id"])):
+                    latest[run["name"]] = run
+                runs = list(latest.values())
+            return [{"check_runs": runs}]
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/check-suites", path)
         if match:
             return [{"check_suites": self.suites(*match.groups())}]
@@ -297,7 +337,7 @@ def head_timeline(pull: dict[str, Any]) -> list[tuple[float, str]]:
     arrivals = []
     for sha, head in pull["heads"].items():
         suites = [at(suite["created_at"]) for suite in head["checkSuites"] if suite["head_branch"] == pull["ref"]]
-        statuses = [at(status["created_at"]) for status in head["statuses"]]
+        statuses = sorted(at(status["created_at"]) for status in head_statuses(head))
         if suites or (statuses and sha != pull["head"]):
             arrivals.append((min(suites or statuses), sha))
     arrivals.sort()
@@ -360,7 +400,7 @@ def stated_wait(pulls: list[dict[str, Any]], status: dict[str, Any], now: float)
 def coderabbit_seen(pull: dict[str, Any]) -> bool:
     """Whether CodeRabbit posted a status, comment or review on the pull request at any recorded time."""
     return (
-        any(head["statuses"] for head in pull["heads"].values())
+        any(head_statuses(head) for head in pull["heads"].values())
         or any(item["user"]["login"].lower() in ADAPTER.BOT_LOGINS for item in pull["comments"])
         or any(review["user"]["login"].lower() in ADAPTER.BOT_LOGINS for review in pull["reviews"])
     )
@@ -380,7 +420,7 @@ class History:
             status["id"]: status
             for pull in self.by_repo[repo]
             if sha in pull["heads"]
-            for status in pull["heads"][sha]["statuses"]
+            for status in head_statuses(pull["heads"][sha])
         }
         return sorted(found.values(), key=lambda item: (item["created_at"], item["id"]))
 
@@ -470,6 +510,9 @@ class History:
             found.append("unread-wait")
         if state == "not-active" and any(coderabbit_seen(other) for other in sharing):
             found.append("not-active")
+        asked = [trigger for trigger in self.triggers(pull, whole_line=True) if trigger <= now]
+        if state == "blocked-unanswered" and asked and any(asked[-1] < at(status["created_at"]) for status in before):
+            found.append("answered-trigger")
         if state not in TRIGGER_STATES:
             return found
         triggers = self.triggers(pull)
@@ -502,7 +545,7 @@ class History:
 def event_times(pull: dict[str, Any], start: float, end: float) -> list[float]:
     times = {start}
     for head in pull["heads"].values():
-        times |= {at(status["created_at"]) for status in head["statuses"]}
+        times |= {at(status["created_at"]) for status in head_statuses(head)}
     for item in pull["comments"]:
         times |= {at(version[0]) for version in item["versions"]}
     times |= {at(review["submitted_at"]) for review in pull["reviews"]}
