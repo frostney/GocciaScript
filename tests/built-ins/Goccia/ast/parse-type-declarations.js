@@ -67,6 +67,31 @@ describe("ast.parse type-level declarations", () => {
     ]);
   });
 
+  test("import type with a default binding named type is a value import, the type-only forms are not", () => {
+    // Each value form binds `type`, so each is parsed alone: one program
+    // cannot declare it twice.
+    const valueLines = [
+      'import type from "./a.ts";',
+      'import type, { y } from "./a.ts";',
+      'import type, * as ns from "./a.ts";',
+    ];
+    const typeOnlyLines = [
+      'import type from from "./a.ts";',
+      'import type T from "./a.ts";',
+      'import type { T } from "./a.ts";',
+      'import type * as T from "./a.ts";',
+    ];
+
+    for (const line of valueLines) {
+      expect(topLevel(line + "\n")).toEqual([
+        { kind: "ImportDeclaration", typeOnly: false, text: line },
+      ]);
+    }
+    expect(topLevel(typeOnlyLines.join("\n") + "\n")).toEqual(
+      typeOnlyLines.map((line) => ({ kind: "ImportDeclaration", typeOnly: true, text: line })),
+    );
+  });
+
   test("empty lists, import attributes and comments between tokens do not change the kind", () => {
     const lines = [
       "export type {};",
