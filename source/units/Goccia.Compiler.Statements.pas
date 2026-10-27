@@ -134,6 +134,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Constants.TypeNames,
   Goccia.Error,
+  Goccia.Error.Messages,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
   Goccia.PrivateNames,
@@ -3223,7 +3224,7 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
-    EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     PatchJumpTarget(ACtx, ExitJump);
 
@@ -3418,7 +3419,7 @@ begin
     end;
 
     EmitInstruction(ACtx, EncodeAx(OP_JUMP,
-      LoopStart - CurrentCodePosition(ACtx) - 1));
+      SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     if NeedsIteratorClose then
     begin
@@ -3502,9 +3503,7 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, EntryReg, EntriesReg, IdxReg));
     EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
     EmitInstruction(ACtx, EncodeABC(OP_ENUM_ENTRY, KeyReg, ValidReg, EntryReg));
-    EmitInstruction(ACtx,
-      EncodeAsBx(OP_JUMP_IF_FALSE, ValidReg,
-        LoopStart - CurrentCodePosition(ACtx) - 1));
+    EmitBackwardConditionalJump(ACtx, OP_JUMP_IF_FALSE, ValidReg, LoopStart);
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
@@ -3542,7 +3541,7 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
 
     EmitInstruction(ACtx,
-      EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+      EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     PatchJumpTarget(ACtx, ExitJump);
     PatchJumpList(ACtx, LoopControl.BreakJumps);
@@ -3665,7 +3664,7 @@ begin
       GPendingFinally.Delete(GPendingFinally.Count - 1);
     end;
 
-    EmitInstruction(ACtx, EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+    EmitInstruction(ACtx, EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     if NeedsIteratorClose then
     begin
@@ -4048,7 +4047,7 @@ begin
 
     EmitInstruction(ACtx, EncodeABC(StepOpcode, OuterSlot, OuterSlot, OneReg));
     EmitInstruction(ACtx, EncodeAx(OP_JUMP,
-      LoopStart - CurrentCodePosition(ACtx) - 1));
+      SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     PatchJumpTarget(ACtx, ExitJump);
 
@@ -4653,7 +4652,7 @@ begin
         // emitted after that body snapshots it before a fresh update scope.
 
         EmitInstruction(ACtx,
-          EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+          EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
         PatchJumpArray(ACtx, ExitJumps);
 
@@ -4688,7 +4687,7 @@ begin
           CompileDiscardedExpression(ACtx, AStmt.Update);
 
         EmitInstruction(ACtx,
-          EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+          EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
         PatchJumpArray(ACtx, ExitJumps);
 
@@ -4771,7 +4770,7 @@ begin
     PatchLabeledContinueJumps(ACtx, AStmt);
 
     EmitInstruction(ACtx,
-      EncodeAx(OP_JUMP, LoopStart - CurrentCodePosition(ACtx) - 1));
+      EncodeAx(OP_JUMP, SignedJumpOffset24(LoopStart - CurrentCodePosition(ACtx) - 1)));
 
     PatchJumpArray(ACtx, ExitJumps);
 
@@ -4802,9 +4801,7 @@ begin
     CondReg := ACtx.Scope.AllocateRegister;
     try
       ACtx.CompileExpression(AStmt.Condition, CondReg);
-      EmitInstruction(ACtx,
-        EncodeAsBx(OP_JUMP_IF_TRUE, CondReg,
-          LoopStart - CurrentCodePosition(ACtx) - 1));
+      EmitBackwardConditionalJump(ACtx, OP_JUMP_IF_TRUE, CondReg, LoopStart);
     finally
       ACtx.Scope.FreeRegister;
     end;
@@ -5761,46 +5758,50 @@ begin
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  if Assigned(ACtx.SetDerivedConstructorThisGuard) then
-    ACtx.SetDerivedConstructorThisGuard(AGuardDerivedThis);
-  EmitLineMapping(ACtx, AMethod.Line, AMethod.Column);
+  try
+    if Assigned(ACtx.SetDerivedConstructorThisGuard) then
+      ACtx.SetDerivedConstructorThisGuard(AGuardDerivedThis);
+    EmitLineMapping(ACtx, AMethod.Line, AMethod.Column);
 
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
-    not ChildTemplate.StrictCode;
-  ChildCtx.DerivedConstructorThisGuard := AGuardDerivedThis;
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := AGuardDerivedThis;
 
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
-    ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
-    Length(AMethod.Parameters));
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
+      Length(AMethod.Parameters));
 
-  if AGuardDerivedThis then
-    EmitInstruction(ChildCtx, EncodeABC(OP_LOAD_FALSE,
-      UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
+    if AGuardDerivedThis then
+      EmitInstruction(ChildCtx, EncodeABC(OP_LOAD_FALSE,
+        UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
-  EmitParameterInitialization(ChildCtx, AMethod.Parameters);
-  EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
-  if ChildTemplate.CodeCount > High(UInt16) then
-    raise Exception.Create('Parameter preamble is too large to encode');
-  ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
-  MarkParametersInitialized(ChildScope, AMethod.Parameters,
-    ArgumentsSlot >= 0);
+    EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+    EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
+    if ChildTemplate.CodeCount > High(UInt16) then
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+        [High(UInt16)]);
+    ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+    MarkParametersInitialized(ChildScope, AMethod.Parameters,
+      ArgumentsSlot >= 0);
 
-  ACtx.CompileFunctionBody(AMethod.Body);
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+    ACtx.CompileFunctionBody(AMethod.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
 
-  if Assigned(ACtx.SetDerivedConstructorThisGuard) then
-    ACtx.SetDerivedConstructorThisGuard(OldDerivedGuard);
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+    if Assigned(ACtx.SetDerivedConstructorThisGuard) then
+      ACtx.SetDerivedConstructorThisGuard(OldDerivedGuard);
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   MethodReg := ACtx.Scope.AllocateRegister;
@@ -5849,27 +5850,30 @@ begin
     ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
-    not ChildTemplate.StrictCode;
-  ChildCtx.DerivedConstructorThisGuard := False;
-  EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
-    ChildCtx.NonStrictMode and ParameterListIsSimple(EmptyParams),
-    Length(EmptyParams));
-  ACtx.CompileFunctionBody(AGetter.Body);
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+  try
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
+    EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(EmptyParams),
+      Length(EmptyParams));
+    ACtx.CompileFunctionBody(AGetter.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
 
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
@@ -5944,32 +5948,36 @@ begin
     ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
-    not ChildTemplate.StrictCode;
-  ChildCtx.DerivedConstructorThisGuard := False;
-  EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
-    ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
-    Length(SetterParams));
-  EmitParameterInitialization(ChildCtx, SetterParams);
-  EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
-  if ChildTemplate.CodeCount > High(UInt16) then
-    raise Exception.Create('Parameter preamble is too large to encode');
-  ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
-  ACtx.CompileFunctionBody(ASetter.Body);
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+  try
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
+    EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
+      Length(SetterParams));
+    EmitParameterInitialization(ChildCtx, SetterParams);
+    EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
+    if ChildTemplate.CodeCount > High(UInt16) then
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+        [High(UInt16)]);
+    ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+    ACtx.CompileFunctionBody(ASetter.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
 
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
@@ -6024,27 +6032,30 @@ begin
     ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
-    not ChildTemplate.StrictCode;
-  ChildCtx.DerivedConstructorThisGuard := False;
-  EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
-    ChildCtx.NonStrictMode and ParameterListIsSimple(EmptyParams),
-    Length(EmptyParams));
-  ACtx.CompileFunctionBody(AGetter.Body);
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+  try
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
+    EmitLineMapping(ChildCtx, AGetter.Line, AGetter.Column);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(EmptyParams),
+      Length(EmptyParams));
+    ACtx.CompileFunctionBody(AGetter.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
 
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
@@ -6120,32 +6131,36 @@ begin
     ChildTemplate.SourceText);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
-    not ChildTemplate.StrictCode;
-  ChildCtx.DerivedConstructorThisGuard := False;
-  EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
-    ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
-    Length(SetterParams));
-  EmitParameterInitialization(ChildCtx, SetterParams);
-  EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
-  if ChildTemplate.CodeCount > High(UInt16) then
-    raise Exception.Create('Parameter preamble is too large to encode');
-  ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
-  ACtx.CompileFunctionBody(ASetter.Body);
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+  try
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
+    EmitLineMapping(ChildCtx, ASetter.Line, ASetter.Column);
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
+      Length(SetterParams));
+    EmitParameterInitialization(ChildCtx, SetterParams);
+    EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
+    if ChildTemplate.CodeCount > High(UInt16) then
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+        [High(UInt16)]);
+    ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+    ACtx.CompileFunctionBody(ASetter.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
 
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
@@ -6222,38 +6237,42 @@ begin
     ACtx.FormalParameterCounts.AddOrSetValue(ChildTemplate, FormalCount);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-  EmitLineMapping(ACtx, AMethod.Line, AMethod.Column);
+  try
+    EmitLineMapping(ACtx, AMethod.Line, AMethod.Column);
 
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
-    not ChildTemplate.StrictCode;
-  ChildCtx.DerivedConstructorThisGuard := False;
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
 
-  EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
-    ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
-    Length(AMethod.Parameters));
+    EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
+      ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
+      Length(AMethod.Parameters));
 
-  EmitParameterInitialization(ChildCtx, AMethod.Parameters);
-  EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
-  if ChildTemplate.CodeCount > High(UInt16) then
-    raise Exception.Create('Parameter preamble is too large to encode');
-  ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
-  MarkParametersInitialized(ChildScope, AMethod.Parameters,
-    ArgumentsSlot >= 0);
+    EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+    EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
+    if ChildTemplate.CodeCount > High(UInt16) then
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
+        [High(UInt16)]);
+    ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+    MarkParametersInitialized(ChildScope, AMethod.Parameters,
+      ArgumentsSlot >= 0);
 
-  ACtx.CompileFunctionBody(AMethod.Body);
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+    ACtx.CompileFunctionBody(AMethod.Body);
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
 
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
@@ -6848,49 +6867,52 @@ begin
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
-
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := False;
-  ChildCtx.CompatibilityNonStrictMode := False;
-  ChildCtx.DerivedConstructorThisGuard := False;
-  { Nested functions read the compiler-wide flag, not the context copy. }
-  if Assigned(ACtx.SetNonStrictMode) then
-    ACtx.SetNonStrictMode(False);
   try
-    ValReg := ChildScope.AllocateRegister;
-    if AComputedKeyLocal <> '' then
-    begin
-      { The key was evaluated with the class's other computed keys; the
-        initializer names an anonymous function or class from it. }
-      KeyReg := ChildScope.AllocateRegister;
-      UpvalueIdx := ChildScope.ResolveUpvalue(AComputedKeyLocal);
-      if UpvalueIdx < 0 then
-        raise Exception.Create('Compiler error: computed static field key was not captured');
-      EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
-        UInt16(UpvalueIdx)));
-      CompileValueWithComputedName(ChildCtx, AExpression, ValReg, KeyReg);
-    end
-    else
-      CompileFieldValueWithInferredName(ChildCtx, AExpression, ValReg,
-        AInferredName);
-    EmitInstruction(ChildCtx, EncodeABC(OP_RETURN, ValReg, 0, 0));
-  finally
+
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := False;
+    ChildCtx.CompatibilityNonStrictMode := False;
+    ChildCtx.DerivedConstructorThisGuard := False;
+    { Nested functions read the compiler-wide flag, not the context copy. }
     if Assigned(ACtx.SetNonStrictMode) then
-      ACtx.SetNonStrictMode(ACtx.NonStrictCodeEnabled);
+      ACtx.SetNonStrictMode(False);
+    try
+      ValReg := ChildScope.AllocateRegister;
+      if AComputedKeyLocal <> '' then
+      begin
+        { The key was evaluated with the class's other computed keys; the
+          initializer names an anonymous function or class from it. }
+        KeyReg := ChildScope.AllocateRegister;
+        UpvalueIdx := ChildScope.ResolveUpvalue(AComputedKeyLocal);
+        if UpvalueIdx < 0 then
+          raise Exception.Create('Compiler error: computed static field key was not captured');
+        EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
+          UInt16(UpvalueIdx)));
+        CompileValueWithComputedName(ChildCtx, AExpression, ValReg, KeyReg);
+      end
+      else
+        CompileFieldValueWithInferredName(ChildCtx, AExpression, ValReg,
+          AInferredName);
+      EmitInstruction(ChildCtx, EncodeABC(OP_RETURN, ValReg, 0, 0));
+    finally
+      if Assigned(ACtx.SetNonStrictMode) then
+        ACtx.SetNonStrictMode(ACtx.NonStrictCodeEnabled);
+    end;
+
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
+
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
   end;
-
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
-
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
-
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, ADest, FuncIdx));
@@ -6980,112 +7002,115 @@ begin
   ThisReg := ChildScope.DeclareLocal(KEYWORD_THIS, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  try
 
-  ChildCtx := ACtx;
-  ChildCtx.Template := ChildTemplate;
-  ChildCtx.Scope := ChildScope;
-  ChildCtx.NonStrictMode := ACtx.NonStrictMode and
-    not ChildTemplate.StrictCode;
-  ChildCtx.DerivedConstructorThisGuard := False;
+    ChildCtx := ACtx;
+    ChildCtx.Template := ChildTemplate;
+    ChildCtx.Scope := ChildScope;
+    ChildCtx.NonStrictMode := ACtx.NonStrictMode and
+      not ChildTemplate.StrictCode;
+    ChildCtx.DerivedConstructorThisGuard := False;
 
-  if Length(AClassDef.FFieldOrder) > 0 then
-  begin
-    for I := 0 to High(AClassDef.FFieldOrder) do
+    if Length(AClassDef.FFieldOrder) > 0 then
     begin
-      ValReg := ChildScope.AllocateRegister;
-      if AClassDef.FFieldOrder[I].IsComputed then
+      for I := 0 to High(AClassDef.FFieldOrder) do
       begin
-        KeyReg := ChildScope.AllocateRegister;
-        ComputedKeyName := FindComputedFieldKeyLocalName(
-          AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
-        UpvalueIdx := ChildScope.ResolveUpvalue(ComputedKeyName);
-        if UpvalueIdx < 0 then
-          raise Exception.Create('Compiler error: computed class field key was not captured');
-        EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
-          UInt16(UpvalueIdx)));
-        CompileValueWithComputedName(ChildCtx,
-          AClassDef.FFieldOrder[I].FieldInitializer, ValReg, KeyReg);
-        EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC, ThisReg,
-          KeyReg, ValReg));
-        ChildScope.FreeRegister;
-        ChildScope.FreeRegister;
-        Continue;
-      end
-      else if AClassDef.FFieldOrder[I].IsAutoAccessorStorage then
-      begin
-        { An auto-accessor's initializer is named after the accessor
-          ([[ClassFieldInitializerName]]), not after its storage. }
-        Elem := AClassDef.FElements[AClassDef.FFieldOrder[I].ElementIndex];
-        if Elem.IsComputed then
+        ValReg := ChildScope.AllocateRegister;
+        if AClassDef.FFieldOrder[I].IsComputed then
         begin
           KeyReg := ChildScope.AllocateRegister;
           ComputedKeyName := FindComputedFieldKeyLocalName(
             AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
           UpvalueIdx := ChildScope.ResolveUpvalue(ComputedKeyName);
           if UpvalueIdx < 0 then
-            raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
+            raise Exception.Create('Compiler error: computed class field key was not captured');
           EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
             UInt16(UpvalueIdx)));
           CompileValueWithComputedName(ChildCtx,
             AClassDef.FFieldOrder[I].FieldInitializer, ValReg, KeyReg);
+          EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC, ThisReg,
+            KeyReg, ValReg));
           ChildScope.FreeRegister;
+          ChildScope.FreeRegister;
+          Continue;
         end
-        else
+        else if AClassDef.FFieldOrder[I].IsAutoAccessorStorage then
+        begin
+          { An auto-accessor's initializer is named after the accessor
+            ([[ClassFieldInitializerName]]), not after its storage. }
+          Elem := AClassDef.FElements[AClassDef.FFieldOrder[I].ElementIndex];
+          if Elem.IsComputed then
+          begin
+            KeyReg := ChildScope.AllocateRegister;
+            ComputedKeyName := FindComputedFieldKeyLocalName(
+              AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
+            UpvalueIdx := ChildScope.ResolveUpvalue(ComputedKeyName);
+            if UpvalueIdx < 0 then
+              raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
+            EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
+              UInt16(UpvalueIdx)));
+            CompileValueWithComputedName(ChildCtx,
+              AClassDef.FFieldOrder[I].FieldInitializer, ValReg, KeyReg);
+            ChildScope.FreeRegister;
+          end
+          else
+            CompileFieldValueWithInferredName(ChildCtx,
+              AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
+              ClassFieldInferredName(Elem));
+          EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+            PrivateStorageKey(ChildScope.ResolvePrivatePrefix, AClassDef.FFieldOrder[I].Name), True);
+        end
+        else if AClassDef.FFieldOrder[I].IsPrivate then
+        begin
           CompileFieldValueWithInferredName(ChildCtx,
             AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
-            ClassFieldInferredName(Elem));
-        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-          PrivateStorageKey(ChildScope.ResolvePrivatePrefix, AClassDef.FFieldOrder[I].Name), True);
-      end
-      else if AClassDef.FFieldOrder[I].IsPrivate then
-      begin
-        CompileFieldValueWithInferredName(ChildCtx,
-          AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
-          '#' + AClassDef.FFieldOrder[I].Name);
-        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-          PrivateStorageKey(ChildScope.ResolvePrivatePrefix, AClassDef.FFieldOrder[I].Name), True);
-      end
-      else
-      begin
-        CompileFieldValueWithInferredName(ChildCtx,
-          AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
-          AClassDef.FFieldOrder[I].Name);
-        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-          AClassDef.FFieldOrder[I].Name);
+            '#' + AClassDef.FFieldOrder[I].Name);
+          EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+            PrivateStorageKey(ChildScope.ResolvePrivatePrefix, AClassDef.FFieldOrder[I].Name), True);
+        end
+        else
+        begin
+          CompileFieldValueWithInferredName(ChildCtx,
+            AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
+            AClassDef.FFieldOrder[I].Name);
+          EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+            AClassDef.FFieldOrder[I].Name);
+        end;
+        ChildScope.FreeRegister;
       end;
-      ChildScope.FreeRegister;
-    end;
-  end
-  else
-  begin
-    for Entry in AClassDef.InstanceProperties do
+    end
+    else
     begin
-      ValReg := ChildScope.AllocateRegister;
-      ACtx.CompileExpression(Entry.Value, ValReg);
-      EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg, Entry.Key);
-      ChildScope.FreeRegister;
+      for Entry in AClassDef.InstanceProperties do
+      begin
+        ValReg := ChildScope.AllocateRegister;
+        ACtx.CompileExpression(Entry.Value, ValReg);
+        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg, Entry.Key);
+        ChildScope.FreeRegister;
+      end;
+
+      for Entry in AClassDef.PrivateInstanceProperties do
+      begin
+        ValReg := ChildScope.AllocateRegister;
+        ACtx.CompileExpression(Entry.Value, ValReg);
+        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+          PrivateStorageKey(ChildScope.ResolvePrivatePrefix, Entry.Key), True);
+        ChildScope.FreeRegister;
+      end;
     end;
 
-    for Entry in AClassDef.PrivateInstanceProperties do
-    begin
-      ValReg := ChildScope.AllocateRegister;
-      ACtx.CompileExpression(Entry.Value, ValReg);
-      EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-        PrivateStorageKey(ChildScope.ResolvePrivatePrefix, Entry.Key), True);
-      ChildScope.FreeRegister;
-    end;
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
+
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
   end;
-
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
-
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
-
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
@@ -7126,19 +7151,22 @@ begin
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
+  try
 
-  ACtx.CompileFunctionBody(ABody);
+    ACtx.CompileFunctionBody(ABody);
 
-  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+    ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
 
-  for I := 0 to ChildScope.UpvalueCount - 1 do
-    ChildTemplate.AddUpvalueDescriptor(
-      ChildScope.GetUpvalue(I).IsLocal,
-      ChildScope.GetUpvalue(I).Index,
-      ChildScope.GetUpvalue(I).Name);
+    for I := 0 to ChildScope.UpvalueCount - 1 do
+      ChildTemplate.AddUpvalueDescriptor(
+        ChildScope.GetUpvalue(I).IsLocal,
+        ChildScope.GetUpvalue(I).Index,
+        ChildScope.GetUpvalue(I).Name);
 
-  ACtx.SwapState(OldTemplate, OldScope);
-  ChildScope.Free;
+  finally
+    ACtx.SwapState(OldTemplate, OldScope);
+    ChildScope.Free;
+  end;
 
   FuncIdx := OldTemplate.AddFunction(ChildTemplate);
   FnReg := ACtx.Scope.AllocateRegister;
@@ -8003,8 +8031,12 @@ begin
     if LocalIdx >= 0 then
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
   end;
-  EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, EnumSlot,
-    Length(AStmt.Members)));
+  // Bx is only a capacity hint.
+  if Length(AStmt.Members) > High(UInt16) then
+    EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, EnumSlot, High(UInt16)))
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_NEW_OBJECT, EnumSlot,
+      Length(AStmt.Members)));
 
   ACtx.Scope.BeginScope;
 

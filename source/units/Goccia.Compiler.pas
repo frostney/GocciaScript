@@ -64,8 +64,25 @@ type
     // Expressions and statements open in the walk over the tree; see
     // EnterNesting.
     FNestingDepth: Integer;
+    // The innermost expression or statement being compiled, where a
+    // bytecode limit is reported (RaiseBytecodeLimit).
+    FCurrentNode: TGocciaASTNode;
+    // Every template the compile has switched to, with repeats: a compile
+    // that raises frees those no other template owns yet
+    // (FreeUnattachedTemplates).
+    FEnteredTemplates: TList<TGocciaFunctionTemplate>;
+    // Functions whose conditional jumps take their long form, by
+    // FarBranchKey (see Compile).
+    FFarBranchFunctions: TDictionary<string, Boolean>;
+    procedure EnterFarBranchFunction(const ATemplate: TGocciaFunctionTemplate);
+    procedure CollectFarBranchFunctions(
+      const ATemplate: TGocciaFunctionTemplate; var AFound: Boolean);
     procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
+    procedure RaiseBytecodeLimit(const AError: EGocciaBytecodeLimit;
+      const AProgram: TGocciaProgram);
+    function CompileProgram(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    procedure FreeUnattachedTemplates(const ATopLevel: TGocciaFunctionTemplate);
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt16);
     procedure CompileExpressionNode(const AExpr: TGocciaExpression;
@@ -220,6 +237,8 @@ begin
   // so compiling a script with no functions skips both dictionaries.
   FNumberBindingProofs := TNumberBindingProofMap.Create;
   FBlockFunctionVarBindings := TBlockFunctionVarBindingSet.Create;
+  FEnteredTemplates := TList<TGocciaFunctionTemplate>.Create;
+  FFarBranchFunctions := TDictionary<string, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
   FModule := nil;
   FCurrentTemplate := nil;
@@ -231,6 +250,8 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FEnteredTemplates.Free;
+  FFarBranchFunctions.Free;
   FBlockFunctionVarBindings.Free;
   FNumberBindingProofs.Free;
   FNumericParameterProofs.Free;
@@ -327,6 +348,11 @@ begin
       FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if Assigned(ATemplate) and not ATemplate.Attached then
+  begin
+    FEnteredTemplates.Add(ATemplate);
+    EnterFarBranchFunction(ATemplate);
+  end;
   if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
     FCurrentScope.AttachTemplate(FCurrentTemplate);
   if not Assigned(FCurrentTemplate) or
@@ -362,18 +388,46 @@ end;
 
 procedure TGocciaCompiler.DoCompileExpression(
   const AExpr: TGocciaExpression; const ADest: UInt16);
+var
+  OuterNode: TGocciaASTNode;
 begin
   EnterNesting(AExpr);
+  OuterNode := FCurrentNode;
+  FCurrentNode := AExpr;
   CompileExpressionNode(AExpr, ADest);
+  FCurrentNode := OuterNode;
   Dec(FNestingDepth);
 end;
 
 function TGocciaCompiler.DoCompileStatement(
   const AStmt: TGocciaStatement): Boolean;
+var
+  OuterNode: TGocciaASTNode;
 begin
   EnterNesting(AStmt);
+  OuterNode := FCurrentNode;
+  FCurrentNode := AStmt;
   Result := CompileStatementNode(AStmt);
+  FCurrentNode := OuterNode;
   Dec(FNestingDepth);
+end;
+
+// A bytecode limit is an implementation limit of the program's source, so it
+// is reported as the parser reports the nesting limit: a SyntaxError at the
+// expression or statement that reached it, which new Function, eval,
+// ShadowRealm.prototype.evaluate and dynamic import throw as a catchable
+// error. The node is the innermost one open when the limit was hit, since a
+// raise skips the restores above.
+procedure TGocciaCompiler.RaiseBytecodeLimit(
+  const AError: EGocciaBytecodeLimit; const AProgram: TGocciaProgram);
+var
+  Node: TGocciaASTNode;
+begin
+  Node := FCurrentNode;
+  if not Assigned(Node) then
+    Node := AProgram;
+  raise TGocciaSyntaxError.Create(AError.Message, Node.Line, Node.Column,
+    FSourcePath, nil, SSuggestBytecodeLimit);
 end;
 
 procedure TGocciaCompiler.CompileExpressionNode(
@@ -1962,6 +2016,76 @@ end;
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
+  NeedsSecondPass: Boolean;
+begin
+  FCurrentNode := nil;
+  FFarBranchFunctions.Clear;
+  try
+    Result := CompileProgram(AProgram);
+    NeedsSecondPass := False;
+    CollectFarBranchFunctions(Result.TopLevel, NeedsSecondPass);
+    if NeedsSecondPass then
+    begin
+      // A conditional jump of these functions spans more than its 16-bit
+      // offset holds, and was written as a placeholder. Compile again with
+      // their conditional jumps in the long form; every other function
+      // compiles to the same bytecode as in the first pass.
+      FreeAndNil(Result);
+      FCurrentNode := nil;
+      Result := CompileProgram(AProgram);
+      // A function marked only now would keep a placeholder jump; the passes
+      // agree on every function, so this does not happen, but never run one.
+      NeedsSecondPass := False;
+      CollectFarBranchFunctions(Result.TopLevel, NeedsSecondPass);
+      if NeedsSecondPass then
+      begin
+        FreeAndNil(Result);
+        raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeJumpLimit,
+          [High(Int16)]);
+      end;
+    end;
+  except
+    on E: EGocciaBytecodeLimit do
+      RaiseBytecodeLimit(E, AProgram);
+  end;
+end;
+
+// The key of a function the first time the compile enters it, while its name
+// is still the one it was created with, and whether it takes the long form.
+procedure TGocciaCompiler.EnterFarBranchFunction(
+  const ATemplate: TGocciaFunctionTemplate);
+begin
+  if ATemplate.FarBranchKey <> '' then
+    Exit;
+  if Assigned(ATemplate.DebugInfo) then
+    ATemplate.FarBranchKey := ATemplate.Name + '@' +
+      IntToStr(ATemplate.DebugInfo.DeclarationLine) + ':' +
+      IntToStr(ATemplate.DebugInfo.DeclarationColumn)
+  else
+    ATemplate.FarBranchKey := ATemplate.Name + '@';
+  ATemplate.FarBranches :=
+    FFarBranchFunctions.ContainsKey(ATemplate.FarBranchKey);
+end;
+
+procedure TGocciaCompiler.CollectFarBranchFunctions(
+  const ATemplate: TGocciaFunctionTemplate; var AFound: Boolean);
+var
+  I: Integer;
+begin
+  if not Assigned(ATemplate) then
+    Exit;
+  if ATemplate.NeedsFarBranches then
+  begin
+    FFarBranchFunctions.AddOrSetValue(ATemplate.FarBranchKey, True);
+    AFound := True;
+  end;
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    CollectFarBranchFunctions(ATemplate.GetFunction(I), AFound);
+end;
+
+function TGocciaCompiler.CompileProgram(
+  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+var
   I: Integer;
   RetReg: UInt16;
   Ctx: TGocciaCompilationContext;
@@ -1977,6 +2101,10 @@ begin
     FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
   FBlockFunctionVarBindings.Clear;
+  // Keyed by template: a compile that raised freed its templates, and a new
+  // one may reuse an address.
+  if Assigned(FTemplateDerivedConstructorThisGuards) then
+    FTemplateDerivedConstructorThisGuards.Clear;
   if not FEvalCode then
     FCompatibilityNonStrictMode := FNonStrictMode;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
@@ -1994,6 +2122,7 @@ begin
     FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
   FCurrentTemplate.DebugInfo := TGocciaDebugInfo.Create(FSourcePath);
+  EnterFarBranchFunction(FCurrentTemplate);
   FCurrentTemplate.IsAsync := FAsyncTopLevel;
   FCurrentTemplate.StrictCode := (not FNonStrictMode) or
     HasUseStrictDirective(AProgram);
@@ -2184,12 +2313,48 @@ begin
     Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
     FCompletionRegister := -1;
     FreeAndNil(FCurrentScope);
-    FTopLevelTemplate := nil;
     if Assigned(FModule) then
     begin
-      FreeAndNil(FCurrentTemplate);
+      FreeUnattachedTemplates(FTopLevelTemplate);
+      FCurrentTemplate := nil;
       FreeAndNil(FModule);
     end;
+    FTopLevelTemplate := nil;
+    FEnteredTemplates.Clear;
+  end;
+end;
+
+// A compile that raised: the top level and every function template whose
+// compile had started but that was not added to its parent yet belong to no
+// one else. A template that was added is freed with the template that owns
+// it.
+procedure TGocciaCompiler.FreeUnattachedTemplates(
+  const ATopLevel: TGocciaFunctionTemplate);
+var
+  Unattached: TList<TGocciaFunctionTemplate>;
+  Template: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Unattached := TList<TGocciaFunctionTemplate>.Create;
+  try
+    if Assigned(FCurrentTemplate) then
+      FEnteredTemplates.Add(FCurrentTemplate);
+    if Assigned(ATopLevel) then
+      FEnteredTemplates.Add(ATopLevel);
+    // Read every flag before freeing any template.
+    for I := 0 to FEnteredTemplates.Count - 1 do
+    begin
+      Template := FEnteredTemplates[I];
+      // Once the module holds the top level it frees it.
+      if not Template.Attached and (Template <> FModule.TopLevel) and
+         (Unattached.IndexOf(Template) < 0) then
+        Unattached.Add(Template);
+    end;
+    for I := 0 to Unattached.Count - 1 do
+      Unattached[I].Free;
+  finally
+    Unattached.Free;
+    FEnteredTemplates.Clear;
   end;
 end;
 

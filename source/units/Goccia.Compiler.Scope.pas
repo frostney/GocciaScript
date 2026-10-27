@@ -440,7 +440,9 @@ procedure ReserveEvalVarObjectName(const AName: string);
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.Error.Messages;
 
 const
   COMPILER_LOCAL_INDEX_THRESHOLD = 64;
@@ -598,7 +600,8 @@ function TGocciaCompilerScope.DeclareLocal(const AName: string;
   const AIsConst: Boolean): UInt16;
 begin
   if FNextSlot >= High(UInt16) then
-    raise Exception.Create('Compiler error: local variable slot overflow (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeLocalLimit,
+      [High(UInt16)]);
   if FLocalCount >= Length(FLocals) then
     SetLength(FLocals, FLocalCount * 2 + 8);
   FLocals[FLocalCount].Name := AName;
@@ -668,7 +671,8 @@ begin
 
   // Declare at depth 0 so EndScope never pops it
   if FNextSlot >= High(UInt16) then
-    raise Exception.Create('Compiler error: local variable slot overflow (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeLocalLimit,
+      [High(UInt16)]);
   if FLocalCount >= Length(FLocals) then
     SetLength(FLocals, FLocalCount * 2 + 8);
   FLocals[FLocalCount].Name := AName;
@@ -817,7 +821,8 @@ begin
   if UpvalueIdx >= 0 then
   begin
     if UpvalueIdx > High(UInt16) then
-      raise Exception.Create('Compiler error: upvalue index overflow (>65535)');
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
+        [High(UInt16)]);
     Idx := AddUpvalue(AName, UInt16(UpvalueIdx), False,
       FParent.FUpvalues[UpvalueIdx].IsConst,
       FParent.FUpvalues[UpvalueIdx].IsVar);
@@ -854,7 +859,8 @@ begin
       Exit(I);
 
   if FUpvalueCount >= High(UInt16) then
-    raise Exception.Create('Compiler error: upvalue count overflow (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
+      [High(UInt16)]);
   if FUpvalueCount >= Length(FUpvalues) then
     SetLength(FUpvalues, FUpvalueCount * 2 + 4);
   FUpvalues[FUpvalueCount].Name := AName;
@@ -943,7 +949,8 @@ end;
 function TGocciaCompilerScope.AllocateRegister: UInt16;
 begin
   if FNextSlot >= High(UInt16) then
-    raise Exception.Create('Compiler error: register slot overflow (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeRegisterLimit,
+      [High(UInt16)]);
   Result := UInt16(FNextSlot);
   Inc(FNextSlot);
   if FNextSlot > FMaxSlot then
