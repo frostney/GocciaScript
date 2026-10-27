@@ -52,9 +52,9 @@ saw. Names are read from the finished templates, since a function named by
 its binding gets that name after its body compiled.
 
 Code compiled at run time is a unit of its own per source: the parse and
-compile of an `eval` are recorded under `<eval>#` and those of the
-`Function` constructor under `<Function>#`, each followed by a hash of the
-source, not under the caller's file, where its positions, which count from
+compile of an `eval` are recorded under `<eval>#N` and those of the
+`Function` constructor under `<Function>#N`, numbered by the distinct source
+text (compared whole, so two sources never share a unit), not under the caller's file, where its positions, which count from
 the start of the eval source, would merge with the file's functions. A
 direct eval's rebuilt caller scopes take the profile too, so lookups that
 climb into them count.

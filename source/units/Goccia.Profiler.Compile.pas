@@ -122,6 +122,8 @@ type
     // parsed and compiled (BeginUnit).
     FUnitNames: array of string;
     FUnitCount: Integer;
+    // Each distinct run-time source (kind and text), by its ordinal.
+    FUnitIdentities: TOrderedStringMap<Integer>;
     FGeneration: Integer;
     function FunctionFor(const AFile: string; const ALine,
       AColumn: Integer): Integer;
@@ -164,10 +166,10 @@ type
       const AName: string; const AInstructions: Integer);
 
     // Code compiled at run time (eval, the Function constructor) is parsed
-    // and compiled as a file of its own, AKind followed by a hash of
-    // ASource, instead of the file of its caller: its functions do not
-    // merge with that file's, nor with another source's, and the same
-    // source compiled again adds to its own records.
+    // and compiled as a file of its own, AKind followed by the ordinal of
+    // ASource among the distinct sources seen, instead of the file of its
+    // caller: its functions do not merge with that file's, nor with another
+    // source's, and the same source compiled again adds to its own records.
     procedure BeginUnit(const AKind, ASource: string);
     // Ends the units begun since UnitDepth read ADepth; a second call ends
     // none.
@@ -263,6 +265,7 @@ begin
   inherited Create;
   FFunctionIndex := TOrderedStringMap<Integer>.Create;
   FExcludedFiles := TOrderedStringMap<Boolean>.Create;
+  FUnitIdentities := TOrderedStringMap<Integer>.Create;
   FNodeKindIndex := THashMap<TClass, Integer>.Create;
   FFunctionCount := 0;
   FNodeKindCount := 0;
@@ -276,6 +279,7 @@ end;
 destructor TGocciaCompileProfiler.Destroy;
 begin
   FNodeKindIndex.Free;
+  FUnitIdentities.Free;
   FExcludedFiles.Free;
   FFunctionIndex.Free;
   inherited;
@@ -469,18 +473,19 @@ end;
 
 procedure TGocciaCompileProfiler.BeginUnit(const AKind, ASource: string);
 var
-  Hash: Cardinal;
-  I: Integer;
+  Identity: string;
+  Ordinal: Integer;
 begin
-  // FNV-1a over the source's characters.
-  Hash := 2166136261;
-  // Multiplied in 64 bits and masked, so a checked build does not overflow.
-  for I := 1 to Length(ASource) do
-    Hash := Cardinal(((UInt64(Hash) xor UInt64(Ord(ASource[I]))) *
-      16777619) and $FFFFFFFF);
+  // The whole text is the identity, so two sources never share a unit.
+  Identity := AKind + #0 + ASource;
+  if not FUnitIdentities.TryGetValue(Identity, Ordinal) then
+  begin
+    Ordinal := FUnitIdentities.Count + 1;
+    FUnitIdentities.Add(Identity, Ordinal);
+  end;
   if FUnitCount >= Length(FUnitNames) then
     SetLength(FUnitNames, FUnitCount * 2 + 4);
-  FUnitNames[FUnitCount] := AKind + '#' + IntToHex(Hash, 8);
+  FUnitNames[FUnitCount] := AKind + '#' + IntToStr(Ordinal);
   Inc(FUnitCount);
 end;
 

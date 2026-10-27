@@ -5555,9 +5555,17 @@ begin
   if not Assigned(CompileProfile) then
     Exit(CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind));
   UnitDepth := CompileProfile.UnitDepth;
-  ProfileSource := ABodySource;
+  // The kind, the parameters as the wrapper joins them, and the body: the
+  // same function source is the same unit, whatever its arguments' split.
+  ProfileSource := '';
   for I := 0 to High(AParamsSources) do
-    ProfileSource := AParamsSources[I] + ',' + ProfileSource;
+  begin
+    if I > 0 then
+      ProfileSource := ProfileSource + ',';
+    ProfileSource := ProfileSource + AParamsSources[I];
+  end;
+  ProfileSource := IntToStr(Ord(AKind)) + #0 + ProfileSource + #0 +
+    ABodySource;
   CompileProfile.BeginUnit('<Function>', ProfileSource);
   try
     Result := CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind);
