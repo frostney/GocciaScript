@@ -42,6 +42,8 @@ const TOP_LEVEL_KINDS = [
   "ExportFunctionDeclaration",
   "ExportClassDeclaration",
   "ExportEnumDeclaration",
+  "ExportTypeAliasDeclaration",
+  "ExportInterfaceDeclaration",
   "ReExportDeclaration",
 ];
 

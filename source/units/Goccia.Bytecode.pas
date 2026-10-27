@@ -320,14 +320,13 @@ const
   //   255    = unbounded — emitted *only* for rest-pattern destructuring
   //            (`[a, b, ...rest] = iter`) where the iterator must drain
   //            completely.
-  // Oversized fixed patterns (Count >= 255 without a rest element) are
-  // rejected at compile time by EmitDestructuring in
-  // Goccia.Compiler.Expressions.pas rather than collapsed to this
-  // sentinel — that would silently switch "consume exactly N" to "drain
-  // entirely" and hang on infinite iterators.  Likewise, rest patterns
-  // whose start index would not fit in OP_UNPACK's UInt8 operand are
-  // rejected there too.  This sentinel therefore only ever appears when
-  // the caller actually wants the full-drain semantics.
+  // Oversized fixed patterns (Count >= 255 without a rest element) step the
+  // iterator instead (EmitDestructuring in Goccia.Compiler.Expressions.pas)
+  // rather than collapse to this sentinel — that would silently switch
+  // "consume exactly N" to "drain entirely" and hang on infinite iterators.
+  // Likewise, rest patterns whose start index would not fit in OP_UNPACK's
+  // UInt8 operand step the iterator too.  This sentinel therefore only ever
+  // appears when the caller actually wants the full-drain semantics.
   ITERABLE_LIMIT_UNBOUNDED = 255;
 
   MIN_SBX: Int16 = -32768;

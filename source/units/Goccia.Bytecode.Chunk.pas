@@ -6,6 +6,7 @@ interface
 
 uses
   Generics.Collections,
+  SysUtils,
 
   CriticalSections,
   HashMap,
@@ -32,6 +33,12 @@ const
   PARAMETER_EVAL_VAR_OBJECT_LOCAL = '`#eval-parameter-var-object`:';
 
 type
+  { A function needs more of something than an operand of the bytecode
+    format can encode (constants, functions, registers, locals, upvalues,
+    arguments, jump offsets). The compiler reports it as a SyntaxError at the
+    source it was compiling (TGocciaCompiler.Compile). }
+  EGocciaBytecodeLimit = class(Exception);
+
   TGocciaBytecodeConstantKind = (
     bckNil,
     bckTrue,
@@ -293,6 +300,12 @@ type
     Recorded: Boolean;
   end;
 
+  // Whether a frame of a template reads its argument window (the arguments
+  // as passed, apart from the registers they are copied into): found by
+  // scanning the code on the first call, since only the instructions that
+  // read the window and the kinds of function that keep it do.
+  TGocciaArgumentWindowUse = (awuUnknown, awuRead, awuUnread);
+
   TGocciaFunctionTemplate = class
   private
     FName: string;
@@ -301,6 +314,12 @@ type
     FConstants: array of TGocciaBytecodeConstant;
     FConstantCount: Integer;
     FFunctions: TObjectList<TGocciaFunctionTemplate>;
+    // Set once another template owns this one (AddFunction).
+    FAttached: Boolean;
+    // Compile-time only, never serialized: see the properties.
+    FFarBranches: Boolean;
+    FNeedsFarBranches: Boolean;
+    FFarBranchKey: string;
     FUpvalueDescriptors: array of TGocciaUpvalueDescriptor;
     FDirectEvalEnvironments: array of TGocciaDirectEvalEnvironment;
     FDirectEvalEnvironmentCount: Integer;
@@ -389,6 +408,10 @@ type
     // Phase 4). A TGocciaDirectEvalCodeCache, typed as TObject to keep the VM
     // out of this unit; owned here. Not serialised to .gbc.
     FDirectEvalCodeCaches: array of TObject;
+    // Runtime-only: what ArgumentWindowUnread found. Reset whenever the code
+    // changes. Not serialised to .gbc.
+    FArgumentWindowUse: TGocciaArgumentWindowUse;
+    function ScanArgumentWindowUse: TGocciaArgumentWindowUse;
     function PropertyReadSlot(const AConstIndex: Integer): Integer;
     function PropertyWriteSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
@@ -399,6 +422,12 @@ type
     function EmitInstruction(const AInstruction: UInt64;
       const AForceWide: Boolean = False): Integer;
     procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt64);
+    { True when no frame of this template reads its argument window: the code
+      has no instruction that reads it (OP_ARG_COUNT, OP_LOAD_ARGUMENT,
+      OP_PACK_ARGS, OP_CREATE_ARGUMENTS) and no direct eval, and the function
+      is neither async nor a generator, whose continuations keep the window.
+      Such a frame's arguments live only in its registers. }
+    function ArgumentWindowUnread: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     { Records the callee of the call/construct instruction that starts at APC.
       APC must be the value CodeCount had immediately before the instruction
       was emitted, which is what the VM sees as the instruction's start IP
@@ -516,6 +545,18 @@ type
     // function itself.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
+    { Whether another template owns this one: a function template the
+      compiler created and has not added to its parent yet is the compiler's
+      to free when the compile raises. }
+    property Attached: Boolean read FAttached;
+    { Compile time: the function's forward conditional jumps take their long
+      form, and a conditional jump of it did not fit its offset without it. }
+    property FarBranches: Boolean read FFarBranches write FFarBranches;
+    property NeedsFarBranches: Boolean read FNeedsFarBranches
+      write FNeedsFarBranches;
+    { Compile time: names the function across the two passes of a compile
+      (its first name and source position). }
+    property FarBranchKey: string read FFarBranchKey write FFarBranchKey;
     property TypeCheckPreambleSize: UInt16 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property DerivedThisInitializedSlot: Integer read FDerivedThisInitializedSlot write FDerivedThisInitializedSlot;
@@ -554,11 +595,10 @@ function IsBodyEvalVarObjectName(const AName: string): Boolean;
 implementation
 
 uses
-  SysUtils,
-
   NumberBits,
 
   Goccia.Bytecode,
+  Goccia.Error.Messages,
   Goccia.GarbageCollector;
 
 function IsEvalVarObjectName(const AName: string): Boolean;
@@ -707,6 +747,7 @@ begin
   FCode[FCodeCount] := UInt32(AInstruction and $FFFFFFFF);
   Result := FCodeCount;
   Inc(FCodeCount);
+  FArgumentWindowUse := awuUnknown;
 end;
 
 procedure TGocciaFunctionTemplate.AddCallSite(const APC: UInt32;
@@ -792,6 +833,32 @@ begin
       (((HighOperands shr 16) and $FF) shl 24);
   end;
   FCode[AIndex] := UInt32(AInstruction and $FFFFFFFF);
+  FArgumentWindowUse := awuUnknown;
+end;
+
+function TGocciaFunctionTemplate.ArgumentWindowUnread: Boolean;
+begin
+  if FArgumentWindowUse = awuUnknown then
+    FArgumentWindowUse := ScanArgumentWindowUse;
+  Result := FArgumentWindowUse = awuUnread;
+end;
+
+{ Every word is read as an instruction, an OP_WIDE prefix included, so a
+  word that is not one can only make the answer awuRead, never hide a read. }
+function TGocciaFunctionTemplate.ScanArgumentWindowUse: TGocciaArgumentWindowUse;
+var
+  I: Integer;
+begin
+  Result := awuRead;
+  if FIsAsync or FIsGenerator then
+    Exit;
+  for I := 0 to FCodeCount - 1 do
+    case DecodeOp(FCode[I]) of
+      Ord(OP_ARG_COUNT), Ord(OP_LOAD_ARGUMENT), Ord(OP_PACK_ARGS),
+      Ord(OP_CREATE_ARGUMENTS), Ord(OP_DIRECT_EVAL):
+        Exit;
+    end;
+  Result := awuUnread;
 end;
 
 function TGocciaFunctionTemplate.AddConstantNil: UInt16;
@@ -803,7 +870,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckNil;
@@ -827,7 +895,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := Target;
@@ -845,7 +914,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckInteger;
@@ -869,7 +939,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckFloat;
@@ -886,7 +957,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckString;
@@ -903,7 +975,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckPrivateName;
@@ -926,7 +999,8 @@ function TGocciaFunctionTemplate.AddConstantBigInt(
   const AValue: string): UInt16;
 begin
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckBigInt;
@@ -946,7 +1020,8 @@ begin
     raise Exception.Create(
       'Template payload length mismatch: cooked vs raw');
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckTemplateObject;
@@ -975,7 +1050,8 @@ function TGocciaFunctionTemplate.AddConstantRegExpLiteral(
   const APattern, AFlags: string): UInt16;
 begin
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckRegExpLiteral;
@@ -1146,16 +1222,19 @@ function TGocciaFunctionTemplate.AddFunction(
   const AFunction: TGocciaFunctionTemplate): UInt16;
 begin
   if FFunctions.Count > High(UInt16) then
-    raise Exception.Create('Function pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeFunctionLimit,
+      [High(UInt16) + 1]);
   Result := UInt16(FFunctions.Count);
   FFunctions.Add(AFunction);
+  AFunction.FAttached := True;
 end;
 
 procedure TGocciaFunctionTemplate.AddUpvalueDescriptor(
   const AIsLocal: Boolean; const AIndex: UInt16; const AName: string);
 begin
   if FUpvalueCount >= High(UInt16) then
-    raise Exception.Create('Upvalue descriptor overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
+      [High(UInt16)]);
   if FUpvalueCount >= Length(FUpvalueDescriptors) then
     SetLength(FUpvalueDescriptors, FUpvalueCount * 2 + 4);
   FUpvalueDescriptors[FUpvalueCount].Name := AName;
@@ -1175,7 +1254,8 @@ var
   I: Integer;
 begin
   if FDirectEvalEnvironmentCount >= High(UInt16) then
-    raise Exception.Create('Direct eval environment overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeDirectEvalLimit,
+      [High(UInt16)]);
   if FDirectEvalEnvironmentCount >= Length(FDirectEvalEnvironments) then
     SetLength(FDirectEvalEnvironments, FDirectEvalEnvironmentCount * 2 + 4);
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PC := APC;

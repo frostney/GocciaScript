@@ -39,6 +39,18 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.Token;
 
+// Loads a count or index of a list pattern: OP_LOAD_INT holds a signed 16-bit
+// immediate, so a larger one is a constant.
+procedure EmitLoadCount(const ACtx: TGocciaCompilationContext;
+  const ADest: UInt16; const AValue: Integer);
+begin
+  if AValue <= MAX_SBX then
+    EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, ADest, Int16(AValue)))
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ADest,
+      ACtx.Template.AddConstantInteger(AValue)));
+end;
+
 procedure EmitBoolean(const ACtx: TGocciaCompilationContext; const ADest: UInt16;
   const AValue: Boolean);
 begin
@@ -342,8 +354,7 @@ begin
       GOCCIA_NULLISH_MATCH_UNDEFINED));
 
     EmitInstruction(ACtx, EncodeABC(OP_GET_LENGTH, LenReg, ItemsReg, 0));
-    EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, ExpectedReg,
-      AElements.Count));
+    EmitLoadCount(ACtx, ExpectedReg, AElements.Count);
     if Assigned(ARestPattern) or AHasRestWildcard then
       EmitInstruction(ACtx, EncodeABC(OP_GTE, ADest, LenReg, ExpectedReg))
     else
@@ -354,7 +365,7 @@ begin
     begin
       if not Assigned(AElements[I]) then
         Continue;
-      EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, IndexReg, I));
+      EmitLoadCount(ACtx, IndexReg, I);
       EmitInstruction(ACtx, EncodeABC(OP_GET_INDEX, ValueReg, ItemsReg, IndexReg));
       CompilePatternTest(ACtx, ValueReg, AElements[I], ADest);
       FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));
@@ -376,8 +387,7 @@ begin
       else
         EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TailMethodReg,
           ItemsReg, UInt16(SliceIdx)));
-      EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, TailStartReg,
-        AElements.Count));
+      EmitLoadCount(ACtx, TailStartReg, AElements.Count);
       EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, TailMethodReg, 1, 0));
       CompilePatternTest(ACtx, TailMethodReg, ARestPattern, ADest);
       FailJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest));

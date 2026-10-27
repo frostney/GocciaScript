@@ -109,6 +109,8 @@ class Box<T> implements Container {
 try { throw new Error("oops"); } catch (e: Error) { }
 ```
 
+A type-level statement erased this way still has a kind of its own in [`goccia:ast`](built-ins-ast.md#the-statement-view), so a tool reading the source can tell it from an empty statement.
+
 ## Angle Brackets and JSX
 
 A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension — modeled on TypeScript's `.ts`/`.mts` versus `.tsx` rule, with GocciaScript-specific extensions: JSX is also recognized (with a warning) in `.js` and `.mjs` sources.

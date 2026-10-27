@@ -650,3 +650,61 @@ describe("ast.parse with expressions", () => {
     expect(findAll(result.root, "Identifier").length).toBe(301);
   });
 });
+
+describe("ast.parse with expressions beside type-level declarations and tokens", () => {
+  const lines = [
+    'import type { A } from "./a.ts";',
+    'import { type C, D } from "./c.ts";',
+    "export type { A };",
+    'export type * from "./star.ts";',
+    "export type T = string | number;",
+    "export interface I { x: number }",
+    "type U = { a: 1 };",
+    "interface J { y: string }",
+    "const sum = (a: number) => a + 1;",
+  ];
+  const source = lines.join("\n") + "\n";
+
+  test("the statements keep the kinds and typeOnly the statement view gives them, with no children of their own", () => {
+    const statements = parseExpressions(source, { fileName: "types.ts" }).root
+      .children;
+
+    expect(
+      statements.map((node) => [node.kind, node.typeOnly, node.children.length]),
+    ).toEqual([
+      ["ImportDeclaration", true, 0],
+      ["ImportDeclaration", false, 1],
+      ["ExportDeclaration", true, 0],
+      ["ReExportDeclaration", true, 0],
+      ["ExportTypeAliasDeclaration", true, 0],
+      ["ExportInterfaceDeclaration", true, 0],
+      ["TypeAliasDeclaration", true, 0],
+      ["InterfaceDeclaration", true, 0],
+      ["VariableDeclaration", undefined, 1],
+    ]);
+    statements.slice(0, 8).forEach((node, index) => {
+      expect(text({ source }, node)).toBe(lines[index]);
+    });
+  });
+
+  test("expression nodes carry no typeOnly", () => {
+    const result = parseExpressions(source, { fileName: "types.ts" });
+    const expressionKinds = findAll(result.root, "ArrowFunctionExpression");
+
+    expect(expressionKinds.length).toBe(1);
+    expect(expressionKinds[0].typeOnly).toBeUndefined();
+  });
+
+  test("tokens come back with the expression view, and are the same without it", () => {
+    const withExpressions = parseExpressions(source, {
+      fileName: "types.ts",
+      tokens: true,
+    });
+    const statementsOnly = parse(source, { fileName: "types.ts", tokens: true });
+
+    expect(withExpressions.tokens.length).toBeGreaterThan(0);
+    expect(withExpressions.tokens).toEqual(statementsOnly.tokens);
+    expect(parseExpressions(source, { fileName: "types.ts" }).tokens)
+      .toBeUndefined();
+  });
+});

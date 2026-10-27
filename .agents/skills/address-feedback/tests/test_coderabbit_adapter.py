@@ -102,6 +102,13 @@ class Replay(REPLAY.RecordedGitHub):
         case["reviews"] = [item for item in case["reviews"] if item["submitted_at"] <= after]
         for head in case["heads"].values():
             head["statuses"] = [item for item in head["statuses"] if item["created_at"] <= after]
+            runs = [run for run in head.get("checkRuns", []) if run["started_at"] <= after]
+            head["checkRuns"] = [
+                run if (run.get("completed_at") or "") <= after
+                else run | {"status": "in_progress", "conclusion": None, "completed_at": None,
+                            "output": {"title": "Review in progress", "summary": ""}}
+                for run in runs
+            ]
 
     def remove_comment(self, ref: str, identifier: int) -> None:
         self.case(ref)["comments"].remove(self.comment(ref, identifier))
@@ -1450,6 +1457,130 @@ class UnknownWaitBackoffTest(unittest.TestCase):
                          ("rate-limited-unknown-wait", 2, offset(965 + 30 * 60)))
 
 
+class CheckRunTest(unittest.TestCase):
+    """CodeRabbit's check runs count as its commit statuses.
+
+    Since about 2026-10-27T01:00Z CodeRabbit reports on GocciaScript through a
+    check run named CodeRabbit, one per attempt, updated in place, instead of
+    commit statuses. GocciaScript#1911: on 2e8467f9 a "Review skipped" run at
+    01:02:14 while a draft, marked ready at 01:02:40, a "Review rate limited" run
+    at 01:02:53, the trigger at 01:11:59 refused by a run at 01:12:16, and the
+    summary edited at 01:12:15 to "Next included review available in 49 minutes."
+    Reading statuses alone, the adapter reported the trigger blocked-unanswered.
+    GocciaScript#1922: 8d202749's statuses until 00:07:42, then a run from
+    01:02:06 to "Finished" at 01:07:07.
+    """
+
+    def test_a_refused_trigger_waits_out_the_stated_wait_then_triggers_once(self) -> None:
+        result = state("GocciaScript#1911", "2026-10-27T01:21:59Z")
+        self.assertEqual(result["status"]["description"], "Review rate limited")
+        self.assertEqual(result["status"]["createdAt"], "2026-10-27T01:12:16Z")
+        self.assertEqual(result["rateLimit"]["wait"]["editedAt"], "2026-10-27T01:12:15Z")
+        self.assertEqual((result["state"], result["retryAt"]), ("waiting", "2026-10-27T02:02:15Z"))
+        self.assertEqual(state("GocciaScript#1911", "2026-10-27T02:02:14Z")["state"], "waiting")
+        self.assertEqual(state("GocciaScript#1911", "2026-10-27T02:02:15Z")["state"], "trigger-incremental")
+
+    def test_a_run_triggers_once_when_the_wait_ends(self) -> None:
+        ref = "GocciaScript#1911"
+        gh = Replay(ref, now="2026-10-27T01:30:00Z")
+        gh.truncate(ref, "2026-10-27T01:30:00Z")
+        head = gh.case(ref)["heads"][gh.head(ref)]
+
+        def answer(posted: float) -> None:
+            head["checkRuns"].append({"id": 1, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed",
+                                      "conclusion": "success", "started_at": iso(posted + 5), "completed_at": iso(posted + 3600),
+                                      "output": {"title": "Finished", "summary": "Result: Success - Review completed"}})
+
+        answering(gh, ref, answer)
+        final, _reason, _value = run(gh, ref, "2026-10-27T02:10:00Z")
+        self.assertEqual(posts(gh), [("@coderabbitai review", "2026-10-27T02:02:15Z")])
+        self.assertEqual(final, "in-progress")
+
+    def test_a_bare_skip_from_a_draft_is_the_draft_skip(self) -> None:
+        result = state("GocciaScript#1911", "2026-10-27T01:02:30Z")
+        self.assertEqual((result["state"], result["status"]["kind"]), ("draft", "draft-skip"))
+        later = state("GocciaScript#1911", "2026-10-27T01:05:00Z")
+        self.assertEqual([item["kind"] for item in later["statusHistory"]], ["draft-skip", "rate-limited"])
+
+    def test_a_running_check_run_is_in_progress_and_its_completion_completes_the_head(self) -> None:
+        running = state("GocciaScript#1922", "2026-10-27T01:04:00Z")
+        self.assertEqual((running["state"], running["status"]["description"]), ("in-progress", "Review in progress"))
+        self.assertEqual(state("GocciaScript#1922", "2026-10-27T01:08:00Z")["state"], "clean-complete")
+
+    def test_a_check_run_stands_for_the_statuses_it_replaced(self) -> None:
+        def check(**fields: Any) -> dict[str, Any]:
+            return {"id": 5, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed",
+                    "conclusion": "neutral", "started_at": "2026-10-27T01:00:00Z", "completed_at": "2026-10-27T01:00:00Z",
+                    "output": {"title": "Review rate limited", "summary": "Result: Rate limited - Review rate limited\nRun ID: x"}} | fields
+
+        def shown(run: dict[str, Any], draft: bool = False) -> list[tuple[str, str, str]]:
+            return [(item["state"], item["description"], ADAPTER.status_kind(item))
+                    for item in ADAPTER.check_run_statuses(run, None, draft)]
+
+        self.assertEqual(shown(check()), [("success", "Review rate limited", "rate-limited")])
+        self.assertEqual(shown(check(status="in_progress", conclusion=None, completed_at=None,
+                                     output={"title": "Reviewing", "summary": ""})),
+                         [("pending", "Reviewing", "in-progress")])
+        self.assertEqual(shown(check(conclusion="success", completed_at="2026-10-27T01:05:00Z",
+                                     output={"title": "Finished", "summary": "Result: Success - Review completed"})),
+                         [("pending", "Review in progress", "in-progress"), ("success", "Review completed", "completed")])
+        self.assertEqual(shown(check(conclusion="failure", output={"title": "Review stopped after lock loss", "summary": ""})),
+                         [("failure", "Review stopped after lock loss", "lock-loss")])
+        skipped = check(conclusion="skipped", output={"title": "Review skipped", "summary": "Result: Skipped - Review skipped"})
+        self.assertEqual(shown(skipped), [("success", "Review skipped", "skipped")])
+        self.assertEqual(shown(skipped, draft=True), [("success", "Review skipped: draft pull request", "draft-skip")])
+        self.assertFalse(ADAPTER.is_coderabbit_run(check(app={"slug": "github-actions"})))
+        self.assertFalse(ADAPTER.is_coderabbit_run(check(name="build")))
+
+    def test_a_bare_skip_on_a_bot_authored_pull_request_is_the_bot_skip_its_summary_states(self) -> None:
+        # Synthetic, after homebrew-tap#24 (2026-08): CodeRabbit wrote "Review skipped / Bot user
+        # detected." into its summary a second before its bot-skip status. Here the skip is a bare
+        # check run, as CodeRabbit reports since 2026-10-27.
+        notice = (f"{ADAPTER.SUMMARY_MARKER}\n<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n"
+                  "> [!IMPORTANT]\n> ## Review skipped\n>\n> Bot user detected.\n"
+                  "<!-- end of auto-generated comment: skip review by coderabbit.ai -->")
+        plain = f"{ADAPTER.SUMMARY_MARKER}\n<!-- walkthrough_start -->"
+        run_ = {"id": 4242, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed", "conclusion": "skipped",
+                "started_at": offset(15), "completed_at": offset(15),
+                "output": {"title": "Review skipped", "summary": "Result: Skipped - Review skipped"}}
+
+        def observed(user: dict[str, Any], summary: str, edited: int = 14) -> tuple[Invented, dict[str, Any]]:
+            commit = invented_commit(branch="deps") | {"checkRuns": [run_]}
+            versions = [(edited, summary)] if edited <= 14 else [(14, plain), (edited, summary)]
+            pull = invented_pull(7, 5, "8e9f0a1b" * 5, "deps", user=user, commit=commit,
+                                 comments=[summary_comment(9707, *versions)])
+            gh = Invented({"B": pull}, now=offset(20))
+            return gh, observe(gh, "B")
+
+        reduced = recorder_module().reduce_body(notice)
+        self.assertRegex(reduced, ADAPTER.BOT_SKIP_NOTICE)
+        bot = {"login": "renovate[bot]", "type": "Bot"}
+        gh, result = observed(bot, notice)
+        self.assertEqual((result["state"], result["status"]["shown"]), ("bot-skip", "Review skipped"))
+        self.assertEqual(ADAPTER.aggregate_status({"pullRequests": [result]})[0], "satisfied")
+        self.assertEqual((run(gh, "B", offset(300))[0], gh.posts), ("bot-skip", []))
+        self.assertEqual(observed(bot, notice, 15 - 60)[1]["state"], "bot-skip")
+        # A notice from more than 60 s before the skip, or set after it, explains another skip.
+        for user, summary, edited in ((bot, plain, 14), ({"login": "frostney", "type": "User"}, notice, 14),
+                                      (bot, notice, 15 - 61), (bot, notice, 16)):
+            with self.subTest(user=user["login"], notice=summary == notice, edited=edited):
+                self.assertEqual(observed(user, summary, edited)[1]["state"], "skipped")
+
+    def test_a_check_run_reports_its_own_id_and_source(self) -> None:
+        result = state("GocciaScript#1911", "2026-10-27T01:21:59Z")
+        self.assertEqual((result["status"]["source"], result["status"]["checkRunId"]), ("check-run", 121948923139))
+        self.assertEqual([item["checkRunId"] for item in result["statusHistory"]], [121945527953, 121945744063, 121948923139])
+        older = state("GocciaScript#1162", "2026-08-15T17:00:00Z")
+        self.assertEqual({item["source"] for item in older["statusHistory"]}, {"status"})
+
+    def test_the_replay_flags_an_answered_trigger_reported_unanswered(self) -> None:
+        pull = Replay("GocciaScript#1911", now="2026-10-27T01:21:59Z").case("GocciaScript#1911")
+        sha = head(pull, "2e8467f9")
+        history, now = REPLAY.History([pull]), at("2026-10-27T01:21:59Z")
+        decision = {"state": "blocked-unanswered", "boundAt": "2026-10-27T01:21:59Z"}
+        self.assertEqual(history.violations(pull, sha, now, decision), ["answered-trigger"])
+
+
 class NotActiveTest(unittest.TestCase):
     """CodeRabbit is not triggered on a repository where nothing shows it is used.
 
@@ -1514,12 +1645,20 @@ class NotActiveTest(unittest.TestCase):
             return {"nodes": [{"first": nodes(["vercel", *comments]), "last": nodes(late), "reviews": nodes(reviews),
                                "commits": {"nodes": [{"commit": {"status": {"contexts": contexts}}}]}}]}
 
+        def suites(runs: int) -> dict[str, Any]:
+            nodes = [{"app": {"slug": "github-actions"}, "checkRuns": {"totalCount": 3}},
+                     {"app": {"slug": "coderabbitai"}, "checkRuns": {"totalCount": runs}}]
+            return {"nodes": [{"commits": {"nodes": [{"commit": {"status": None, "checkSuites": {"nodes": nodes}}}]}}]}
+
         cases = (
             ({"root": {"entries": [{"name": ".coderabbit.yml"}]}}, "config .coderabbit.yml"),
             ({"pullRequests": closed(comments=["coderabbitai"])}, "closed-pull-requests"),
             ({"pullRequests": closed(late=["coderabbitai"])}, "closed-pull-requests"),
             ({"pullRequests": closed(reviews=["coderabbitai"])}, "closed-pull-requests"),
             ({"pullRequests": closed(statuses=[("CodeRabbit", "coderabbitai")])}, "closed-pull-requests"),
+            ({"pullRequests": suites(1)}, "closed-pull-requests"),
+            # CodeRabbit's app installed on the repository leaves an empty check suite on every commit.
+            ({"pullRequests": suites(0)}, None),
             ({"policy": policy(id="CodeRabbit")}, "policy"),
             ({"policy": policy(actors=["coderabbitai[bot]"])}, "policy"),
             # A broken policy waits for nothing when other evidence shows CodeRabbit.
@@ -1548,7 +1687,13 @@ class NotActiveTest(unittest.TestCase):
         def comment(gh: Invented) -> None:
             gh.case("Q")["comments"].append(summary_comment(9281, (20, SKIP_SUMMARY)))
 
-        for add in (status, review, comment):
+        def check_run(gh: Invented) -> None:
+            gh.case("Q")["heads"][self.HEAD]["checkRuns"] = [
+                {"id": 6281, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed",
+                 "conclusion": "skipped", "started_at": offset(20), "completed_at": offset(20),
+                 "output": {"title": "Review skipped", "summary": "Result: Skipped - Review skipped"}}]
+
+        for add in (status, check_run, review, comment):
             with self.subTest(activity=add.__name__):
                 gh = self.quiet()
                 add(gh)

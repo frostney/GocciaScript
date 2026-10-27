@@ -143,10 +143,17 @@ CodeRabbit command or work out a CodeRabbit wait yourself.
 reports its head's state. A pending head state from `run` means its deadline
 came first.
 
+CodeRabbit reports on a head through commit statuses or, since about
+2026-10-27, through a check run named `CodeRabbit`, and a head can carry
+both. The adapter reads each check run as the statuses it replaced: in
+progress while it runs, then its summary's `Result:` description, such as
+"Review rate limited", from its completion. A bare "Review skipped" from a
+draft is the draft skip.
+
 `not-active` means nothing shows the repository uses CodeRabbit: the PR has
-no CodeRabbit status, comment or review once CodeRabbit's own review would
+no CodeRabbit status, check run, comment or review once CodeRabbit's own review would
 have started; no `.coderabbit*` configuration file sits at the repository
-root; the 10 latest closed PRs carry no CodeRabbit status on their last commit
+root; the 10 latest closed PRs carry no CodeRabbit status or check run on their last commit
 and no CodeRabbit review or comment among their first 10 reviews and their
 first and last 10 comments; and `.github/delivery/review-automations.json`
 names no CodeRabbit automation. The adapter then posts no trigger: a trigger
@@ -154,7 +161,7 @@ is not evidence that CodeRabbit is in use, and it may never answer one. An
 organization's central CodeRabbit configuration does not count, because it
 applies only where CodeRabbit is installed. A repository where CodeRabbit was
 newly installed, with its setup only in central or web settings, has no such
-evidence until its first reviewed PRs close; if CodeRabbit's first status on a
+evidence until its first reviewed PRs close; if CodeRabbit's first status or check run on a
 PR comes more than 120 s after the push, open or ready event, the adapter
 reports `not-active`, so name CodeRabbit in its policy file. A policy file
 that cannot be read is an operational error only when nothing else shows

@@ -135,6 +135,8 @@ type
       const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
+    procedure TestTopLevelCallsCompileInLinearTime;
+    procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
     procedure TestFloatConstantsArePooledByBitPattern;
@@ -187,6 +189,8 @@ type
     procedure TestBinaryRoundTripKeepsBothZeros;
     procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
+    procedure TestBytecodeLimitRaisesSyntaxErrorAtSource;
+    procedure TestLongBranchTakesLongFormInItsFunctionOnly;
     procedure TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
@@ -279,6 +283,10 @@ begin
     TestScriptTopLevelDeclarationsCompileInLinearTime);
   Test('Module top-level declarations compile in linear time',
     TestModuleTopLevelDeclarationsCompileInLinearTime);
+  Test('Top-level calls among many bindings compile in linear time',
+    TestTopLevelCallsCompileInLinearTime);
+  Test('SlotHoldsLocal follows the declared and dropped locals',
+    TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
     TestEndingABlockRestoresTheBindingItShadowed);
   Test('Var and slot lookups find the oldest local of a name',
@@ -378,6 +386,10 @@ begin
   Test('Binary loader rejects malformed artifacts',
     TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
+  Test('A bytecode limit raises a SyntaxError at the source that reached it',
+    TestBytecodeLimitRaisesSyntaxErrorAtSource);
+  Test('A long branch takes the long jump form in its own function only',
+    TestLongBranchTakesLongFormInItsFunctionOnly);
   Test('A compile after compiles that raised starts at nesting depth 0',
     TestCompileAfterRaisedCompileStartsAtNestingDepthZero);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
@@ -1031,6 +1043,97 @@ begin
   ExpectTopLevelCompileLinear(Baseline, 'var a%0:d = %0:d;', False);
   ExpectTopLevelCompileLinear(Baseline, 'function a%0:d() {}', False);
   ExpectTopLevelCompileLinear(Baseline, 'class A%0:d {}', False);
+end;
+
+{ A call compiled at a function's top level asks whether its destination
+  register holds a local. Answering by visiting every local made each call
+  cost time linear in the bindings before it, so a top-level call per
+  binding compiled in quadratic time (about 12 s here for 15,000). Each
+  shape is timed against the same declarations followed by a property read
+  of about the call's cost, which compiles no call. }
+procedure TTestCompiler.TestTopLevelCallsCompileInLinearTime;
+
+  procedure ExpectCallsCompileLinear(const ADeclarations, ARead,
+    ACall: string; const AGlobalBackedTopLevel: Boolean);
+  var
+    Baseline, Elapsed: Int64;
+  begin
+    Baseline := CompileNanoseconds(ADeclarations + ' ' + ARead,
+      AGlobalBackedTopLevel);
+    Elapsed := CompileNanoseconds(ADeclarations + ' ' + ACall,
+      AGlobalBackedTopLevel);
+    if Elapsed > LINEAR_COMPILE_RATIO * Baseline +
+       LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d lines "%s %s" took %d ms to compile against %d ms ' +
+        'with "%s" in place of the call', [LINEAR_DECLARATION_COUNT,
+        ADeclarations, ACall, Elapsed div 1000000, Baseline div 1000000,
+        ARead]));
+    Expect<Boolean>(Elapsed <=
+      LINEAR_COMPILE_RATIO * Baseline + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f.a%0:d;', 'f(a%0:d);',
+    False);
+  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f.a%0:d;', 'f(a%0:d);',
+    True);
+  // Functions that write a module-scope binding, each called at top level.
+  ExpectCallsCompileLinear(
+    'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d.a;',
+    'w%0:d();', False);
+end;
+
+procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
+var
+  Scope: TGocciaCompilerScope;
+  Closed: TArray<UInt16>;
+  ClosedCount: Integer;
+  FirstSlot, VarSlot, BlockSlot, TempSlot: UInt16;
+begin
+  Scope := TGocciaCompilerScope.Create(nil, 0);
+  try
+    FirstSlot := Scope.DeclareLocal('a', False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(FirstSlot)).ToBe(True);
+    TempSlot := Scope.AllocateRegister;
+    // A register allocated for a value is not a local's.
+    Expect<Boolean>(Scope.SlotHoldsLocal(TempSlot)).ToBe(False);
+    Scope.FreeRegister;
+    Expect<Boolean>(Scope.SlotHoldsLocal(1000)).ToBe(False);
+
+    Scope.BeginScope;
+    BlockSlot := Scope.DeclareLocal('b', False);
+    VarSlot := Scope.DeclareVarLocal('v');
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(VarSlot)).ToBe(True);
+    // The var, declared at depth 0, keeps the block's local from being
+    // dropped, and both keep their registers.
+    Scope.EndScope(Closed, ClosedCount);
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(VarSlot)).ToBe(True);
+  finally
+    Scope.Free;
+  end;
+
+  Scope := TGocciaCompilerScope.Create(nil, 0);
+  try
+    Scope.DeclareLocal('a', False);
+    Scope.BeginScope;
+    BlockSlot := Scope.DeclareLocal('b', False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Scope.EndScope(Closed, ClosedCount);
+    // The block's local is dropped with its block, and the register it had
+    // is free for a value again.
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(False);
+    Expect<Integer>(Scope.AllocateRegister).ToBe(BlockSlot);
+    Scope.FreeRegister;
+
+    // A caller's local rebuilt for a direct eval names its register.
+    Scope.DeclareCallerLocal('c', 40, False, False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(40)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(39)).ToBe(False);
+  finally
+    Scope.Free;
+  end;
 end;
 
 { Each a distinct number outside the immediate range, so each takes its own
@@ -3039,6 +3142,83 @@ begin
 
   Expect<Boolean>(Raised).ToBe(True);
   Expect<Boolean>(ContainsMessage).ToBe(True);
+end;
+
+procedure TTestCompiler.TestBytecodeLimitRaisesSyntaxErrorAtSource;
+
+  // The SyntaxError compiling ASource raises: its message, line and column.
+  procedure ExpectLimit(const ASource, AMessage: string;
+    const ALine, AColumn: Integer);
+  var
+    Raised: Boolean;
+    Message: string;
+    Line, Column: Integer;
+  begin
+    Raised := False;
+    Line := 0;
+    Column := 0;
+    try
+      CompileSource(ASource).Free;
+    except
+      on E: TGocciaSyntaxError do
+      begin
+        Raised := True;
+        Message := E.Message;
+        Line := E.Line;
+        Column := E.Column;
+      end;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Boolean>(Pos(AMessage, Message) > 0).ToBe(True);
+    Expect<Integer>(Line).ToBe(ALine);
+    Expect<Integer>(Column).ToBe(AColumn);
+  end;
+
+var
+  Args, Keys: string;
+  I: Integer;
+begin
+  Args := '';
+  for I := 1 to 70000 do
+    Args := Args + '0, ';
+  // The call's argument count is checked once its arguments are parsed, so
+  // the error names the call.
+  ExpectLimit('const f = (...a) => a.length;' + #10 + '  ' + #10 +
+    '  f(' + Args + '0);', 'Too many arguments in one call: more than 65535',
+    3, 3);
+
+  Keys := '';
+  for I := 0 to 69999 do
+    Keys := Keys + 'p' + IntToStr(I) + ': 0, ';
+  // A key's constant is added after its value is compiled, so the error
+  // names the object literal.
+  ExpectLimit('const o = {' + #10 + Keys + '};',
+    'Too many constants in one function: more than 65535', 1, 11);
+end;
+
+procedure TTestCompiler.TestLongBranchTakesLongFormInItsFunctionOnly;
+var
+  Body: string;
+  I: Integer;
+  Module: TGocciaBytecodeModule;
+  Small, Long: TGocciaFunctionTemplate;
+begin
+  Body := '';
+  for I := 1 to 40000 do
+    Body := Body + 'r = r + 1; ';
+  Module := CompileSource('const small = (k) => k ? 1 : 2;' + #10 +
+    'const long = (k) => { let r = 0; if (k) { ' + Body + '} return r; };');
+  try
+    Small := Module.TopLevel.GetFunction(0);
+    Long := Module.TopLevel.GetFunction(1);
+    Expect<Boolean>(Module.TopLevel.FarBranches).ToBe(False);
+    Expect<Boolean>(Small.FarBranches).ToBe(False);
+    Expect<Boolean>(Long.FarBranches).ToBe(True);
+    // The short function's conditional jump keeps its one instruction.
+    Expect<Integer>(CountOp(Small, OP_JUMP)).ToBe(1);
+  finally
+    Module.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestConstantFoldsNestedArithmetic;
