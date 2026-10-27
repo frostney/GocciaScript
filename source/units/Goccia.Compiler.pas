@@ -2033,6 +2033,16 @@ begin
       FreeAndNil(Result);
       FCurrentNode := nil;
       Result := CompileProgram(AProgram);
+      // A function marked only now would keep a placeholder jump; the passes
+      // agree on every function, so this does not happen, but never run one.
+      NeedsSecondPass := False;
+      CollectFarBranchFunctions(Result.TopLevel, NeedsSecondPass);
+      if NeedsSecondPass then
+      begin
+        FreeAndNil(Result);
+        raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeJumpLimit,
+          [High(Int16)]);
+      end;
     end;
   except
     on E: EGocciaBytecodeLimit do
