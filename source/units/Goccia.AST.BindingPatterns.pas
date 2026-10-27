@@ -11,7 +11,8 @@ uses
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.AST.Statements;
+  Goccia.AST.Statements,
+  Goccia.Profiler.Compile;
 
 type
   TGocciaVarBindingNameCollectionMode = (
@@ -26,18 +27,24 @@ function VarBindingNameCollectionMode(
   const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
   TGocciaVarBindingNameCollectionMode;
 
+{ AProfile, the compile profile when one is on, counts the lookups that keep
+  the names unique (Goccia.Profiler.Compile). }
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
-  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean = False;
+  const AProfile: TGocciaCompileProfiler = nil);
 procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
-  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean = False;
+  const AProfile: TGocciaCompileProfiler = nil);
 procedure CollectVariableDeclarationBindingNames(
   const ADeclaration: TGocciaVariableDeclaration;
   const ANames: TUnicodeStringList;
-  const AUnique: Boolean = False);
+  const AUnique: Boolean = False;
+  const AProfile: TGocciaCompileProfiler = nil);
 function ParameterListBindsName(const AParameters: TGocciaParameterArray;
   const AName: string): Boolean;
 function ParameterListHasDuplicateBindingNames(
-  const AParameters: TGocciaParameterArray): Boolean;
+  const AParameters: TGocciaParameterArray;
+  const AProfile: TGocciaCompileProfiler = nil): Boolean;
 function ParameterListIsSimple(
   const AParameters: TGocciaParameterArray): Boolean;
 function ParameterListContainsExpressionClass(
@@ -76,18 +83,40 @@ begin
     Result := vbnStandard;
 end;
 
+// The names a lookup of the list examined: up to the match, or all of them.
+procedure CountBindingNameLookup(const AProfile: TGocciaCompileProfiler;
+  const ANames: TUnicodeStringList; const AFound: Integer);
+begin
+  if AFound >= 0 then
+    AProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes, AFound + 1)
+  else
+    AProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes,
+      ANames.Count);
+end;
+
 procedure AddBindingName(const ANames: TUnicodeStringList;
   const AName: string;
-  const AUnique: Boolean);
+  const AUnique: Boolean; const AProfile: TGocciaCompileProfiler = nil);
+var
+  Found: Integer;
 begin
   if AName = '' then
     Exit;
-  if (not AUnique) or (ANames.IndexOf(AName) < 0) then
+  if not AUnique then
+  begin
+    ANames.Add(AName);
+    Exit;
+  end;
+  Found := ANames.IndexOf(AName);
+  if Assigned(AProfile) then
+    CountBindingNameLookup(AProfile, ANames, Found);
+  if Found < 0 then
     ANames.Add(AName);
 end;
 
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
-  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean;
+  const AProfile: TGocciaCompileProfiler);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
@@ -98,46 +127,52 @@ begin
 
   if APattern is TGocciaIdentifierDestructuringPattern then
     AddBindingName(ANames,
-      TGocciaIdentifierDestructuringPattern(APattern).Name, AUnique)
+      TGocciaIdentifierDestructuringPattern(APattern).Name, AUnique, AProfile)
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
-      CollectPatternBindingNames(ObjPat.Properties[I].Pattern, ANames, AUnique);
+      CollectPatternBindingNames(ObjPat.Properties[I].Pattern, ANames, AUnique,
+        AProfile);
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
     for I := 0 to ArrPat.Elements.Count - 1 do
-      CollectPatternBindingNames(ArrPat.Elements[I], ANames, AUnique);
+      CollectPatternBindingNames(ArrPat.Elements[I], ANames, AUnique,
+        AProfile);
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
     CollectPatternBindingNames(
-      TGocciaAssignmentDestructuringPattern(APattern).Left, ANames, AUnique)
+      TGocciaAssignmentDestructuringPattern(APattern).Left, ANames, AUnique,
+      AProfile)
   else if APattern is TGocciaRestDestructuringPattern then
     CollectPatternBindingNames(
-      TGocciaRestDestructuringPattern(APattern).Argument, ANames, AUnique);
+      TGocciaRestDestructuringPattern(APattern).Argument, ANames, AUnique,
+      AProfile);
 end;
 
 procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
-  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean;
+  const AProfile: TGocciaCompileProfiler);
 begin
   if AInfo.IsPattern or Assigned(AInfo.Pattern) then
-    CollectPatternBindingNames(AInfo.Pattern, ANames, AUnique)
+    CollectPatternBindingNames(AInfo.Pattern, ANames, AUnique, AProfile)
   else
-    AddBindingName(ANames, AInfo.Name, AUnique);
+    AddBindingName(ANames, AInfo.Name, AUnique, AProfile);
 end;
 
 procedure CollectVariableDeclarationBindingNames(
   const ADeclaration: TGocciaVariableDeclaration;
   const ANames: TUnicodeStringList;
-  const AUnique: Boolean = False);
+  const AUnique: Boolean;
+  const AProfile: TGocciaCompileProfiler);
 var
   I: Integer;
 begin
   for I := 0 to High(ADeclaration.Variables) do
     CollectVariableInfoBindingNames(ADeclaration.Variables[I], ANames,
-      AUnique);
+      AUnique, AProfile);
 end;
 
 function ParameterListBindsName(const AParameters: TGocciaParameterArray;
@@ -167,16 +202,22 @@ begin
 end;
 
 function ParameterListHasDuplicateBindingNames(
-  const AParameters: TGocciaParameterArray): Boolean;
+  const AParameters: TGocciaParameterArray;
+  const AProfile: TGocciaCompileProfiler): Boolean;
 var
   I, J: Integer;
   Names, PatternNames: TUnicodeStringList;
 
   function AddBindingName(const AName: string): Boolean;
+  var
+    Found: Integer;
   begin
     if AName = '' then
       Exit(False);
-    if Names.IndexOf(AName) >= 0 then
+    Found := Names.IndexOf(AName);
+    if Assigned(AProfile) then
+      CountBindingNameLookup(AProfile, Names, Found);
+    if Found >= 0 then
       Exit(True);
     Names.Add(AName);
     Result := False;

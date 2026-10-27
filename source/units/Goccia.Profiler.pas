@@ -14,7 +14,7 @@ const
   INITIAL_TIMING_STACK_CAPACITY = 32;
 
 type
-  TGocciaProfileModeItem = (pmOpcodes, pmFunctions);
+  TGocciaProfileModeItem = (pmOpcodes, pmFunctions, pmCompile);
   TGocciaProfileMode = set of TGocciaProfileModeItem;
 
   TGocciaFunctionProfile = record

@@ -722,6 +722,7 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Platform,
   Goccia.Profiler,
+  Goccia.Profiler.Compile,
   Goccia.Scope.Declarations,
   Goccia.Scope.Redeclaration,
   Goccia.Spec,
@@ -2920,6 +2921,8 @@ var
 begin
   if TGocciaCoverageTracker.Instance <> nil then
     TGocciaCoverageTracker.Instance.ExcludeFile(AFileName);
+  if TGocciaCompileProfiler.Instance <> nil then
+    TGocciaCompileProfiler.Instance.ExcludeFile(AFileName);
   Compiler := TGocciaCompiler.Create(AFileName);
   try
     Compiler.GlobalBackedTopLevel := True;

@@ -138,6 +138,7 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.Modules,
   Goccia.PrivateNames,
+  Goccia.Profiler.Compile,
   Goccia.ThreadCleanupRegistry,
   Goccia.Token,
   Goccia.Types.Enforcement,
@@ -580,6 +581,8 @@ var
   Call: TGocciaCallExpression;
   Unary: TGocciaUnaryExpression;
 begin
+  if Assigned(AScope.CompileProfile) then
+    AScope.CompileProfile.Count(ccExpressionTypeVisits);
   Result := sltUntyped;
   if AExpr is TGocciaLiteralExpression then
   begin
@@ -832,7 +835,8 @@ begin
     begin
       Names := TUnicodeStringList.Create;
       try
-        CollectPatternBindingNames(Info.Pattern, Names, True);
+        CollectPatternBindingNames(Info.Pattern, Names, True,
+          ACtx.Scope.CompileProfile);
         for J := 0 to Names.Count - 1 do
         begin
           LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
@@ -1814,7 +1818,8 @@ begin
   begin
     Names := TUnicodeStringList.Create;
     try
-      CollectVariableInfoBindingNames(AVarDecl.Variables[I], Names, True);
+      CollectVariableInfoBindingNames(AVarDecl.Variables[I], Names, True,
+        ACtx.Scope.CompileProfile);
       for J := 0 to Names.Count - 1 do
       begin
         LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
@@ -1851,7 +1856,8 @@ var
 begin
   Names := TUnicodeStringList.Create;
   try
-    CollectPatternBindingNames(APattern, Names, True);
+    CollectPatternBindingNames(APattern, Names, True,
+      ACtx.Scope.CompileProfile);
     for I := 0 to Names.Count - 1 do
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Names[I]);
@@ -1986,7 +1992,8 @@ var
 begin
   Names := TUnicodeStringList.Create;
   try
-    CollectPatternBindingNames(APattern, Names, True);
+    CollectPatternBindingNames(APattern, Names, True,
+      ACtx.Scope.CompileProfile);
     for I := 0 to Names.Count - 1 do
       EmitBlockLexicalHoleInitializer(ACtx, Names[I]);
   finally
@@ -2011,7 +2018,8 @@ begin
     begin
       Names := TUnicodeStringList.Create;
       try
-        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True,
+          ACtx.Scope.CompileProfile);
         for J := 0 to Names.Count - 1 do
           EmitBlockLexicalHoleInitializer(ACtx, Names[J]);
       finally
@@ -2028,7 +2036,8 @@ begin
     begin
       Names := TUnicodeStringList.Create;
       try
-        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+        CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True,
+          ACtx.Scope.CompileProfile);
         for J := 0 to Names.Count - 1 do
           EmitBlockLexicalHoleInitializer(ACtx, Names[J]);
       finally
@@ -3073,7 +3082,8 @@ begin
   Names := TUnicodeStringList.Create;
   try
     if Assigned(ABindingPattern) then
-      CollectPatternBindingNames(ABindingPattern, Names, True)
+      CollectPatternBindingNames(ABindingPattern, Names, True,
+        ACtx.Scope.CompileProfile)
     else if ABindingName <> '' then
       Names.Add(ABindingName);
 
@@ -4465,7 +4475,8 @@ begin
       VarDecl := TGocciaVariableDeclaration(AStmt.Init);
       PerIterIsConst := VarDecl.IsConst;
       PerIterNames := TUnicodeStringList.Create;
-      CollectVariableDeclarationBindingNames(VarDecl, PerIterNames, True);
+      CollectVariableDeclarationBindingNames(VarDecl, PerIterNames, True,
+        ACtx.Scope.CompileProfile);
     end
     else if (AStmt.Init is TGocciaDestructuringDeclaration)
             and not TGocciaDestructuringDeclaration(AStmt.Init).IsVar then
@@ -4474,7 +4485,8 @@ begin
       DestructDecl := TGocciaDestructuringDeclaration(AStmt.Init);
       PerIterIsConst := DestructDecl.IsConst;
       PerIterNames := TUnicodeStringList.Create;
-      CollectPatternBindingNames(DestructDecl.Pattern, PerIterNames, True);
+      CollectPatternBindingNames(DestructDecl.Pattern, PerIterNames, True,
+        ACtx.Scope.CompileProfile);
     end
     else if HasUsingInit then
     begin
@@ -5111,7 +5123,8 @@ begin
     begin
       VarInfo := AStmt.Declaration.Variables[I];
       Names.Clear;
-      CollectVariableInfoBindingNames(VarInfo, Names, True);
+      CollectVariableInfoBindingNames(VarInfo, Names, True,
+        ACtx.Scope.CompileProfile);
       for J := 0 to Names.Count - 1 do
       begin
         LocalIdx := ACtx.Scope.ResolveLocal(Names[J]);
@@ -5142,7 +5155,8 @@ begin
 
   Names := TUnicodeStringList.Create;
   try
-    CollectPatternBindingNames(AStmt.Declaration.Pattern, Names, True);
+    CollectPatternBindingNames(AStmt.Declaration.Pattern, Names, True,
+      ACtx.Scope.CompileProfile);
     for Name in Names do
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Name);
