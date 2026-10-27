@@ -13,6 +13,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Constants,
+  Goccia.JSX.Transformer,
   Goccia.Lexer,
   Goccia.OriginMap,
   Goccia.SourceMap,
@@ -49,14 +50,20 @@ type
     CollectComments: Boolean;
     { Opt-in copy of the committed token stream, lexed with the goals the
       parser chose. The provider package crawl reads literal import
-      specifiers from it. Off by default. }
+      specifiers from it, and `goccia:ast` reports it. With the JSX
+      preprocessor on, it also asks the transformer for the JSX tokens the
+      lexer never sees. Off by default. }
     CollectTokens: Boolean;
   end;
 
-  { One token of TGocciaSourcePipelineResult.Tokens. }
+  { One token of TGocciaSourcePipelineResult.Tokens. Offsets index the text
+    the lexer read, which is the preprocessed text when a preprocessor ran. }
   TGocciaSourceToken = record
     TokenType: TGocciaTokenType;
     Lexeme: string;
+    StartOffset: Integer;  // 0-based, inclusive
+    EndOffset: Integer;    // 0-based, exclusive
+    ContainsEscape: Boolean;
   end;
 
   TGocciaSourceTokenArray = array of TGocciaSourceToken;
@@ -85,6 +92,7 @@ type
     FParseTimeNanoseconds: Int64;
     FComments: TGocciaCommentSpanArray;
     FTokens: TGocciaSourceTokenArray;
+    FJSXTokens: TGocciaJSXTokenArray;
     FSourceType: TGocciaSourceType;
     FWarnings: array of TGocciaSourcePipelineWarning;
     FWarningCount: Integer;
@@ -110,6 +118,9 @@ type
     property Comments: TGocciaCommentSpanArray read FComments;
     { Empty unless the run asked for tokens. In source order, EOF last. }
     property Tokens: TGocciaSourceTokenArray read FTokens;
+    { Empty unless the run asked for tokens and the JSX preprocessor rewrote
+      the text. In source order, and measured in the original text. }
+    property JSXTokens: TGocciaJSXTokenArray read FJSXTokens;
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
     { The goal the source was parsed with: the options' SourceType, or for
@@ -188,7 +199,6 @@ uses
   Goccia.AST.Statements,
   Goccia.Error,
   Goccia.FileExtensions,
-  Goccia.JSX.Transformer,
   Goccia.Parser;
 
 threadvar
@@ -212,13 +222,15 @@ end;
 function ApplyPreprocessors(const ASource, AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions;
   out ASourceMap: TGocciaSourceMap;
-  out AOriginMap: TGocciaOriginMap): string;
+  out AOriginMap: TGocciaOriginMap;
+  out AJSXTokens: TGocciaJSXTokenArray): string;
 var
   JSXResult: TGocciaJSXTransformResult;
 begin
   Result := ASource;
   ASourceMap := nil;
   AOriginMap := nil;
+  AJSXTokens := nil;
 
   // '.ts' sources never contain JSX, so '<' stays type syntax there: running
   // the transformer would rewrite generic annotations such as
@@ -228,10 +240,13 @@ begin
   if (ppJSX in AOptions.Preprocessors) and
      not IsJSXExcludedExtension(ExtractFileExt(AFileName)) then
   begin
-    JSXResult := TGocciaJSXTransformer.Transform(Result, AFileName);
+    JSXResult := TGocciaJSXTransformer.Transform(Result, AFileName,
+      DEFAULT_JSX_FACTORY_NAME, DEFAULT_JSX_FRAGMENT_NAME,
+      AOptions.CollectTokens);
     Result := JSXResult.Source;
     ASourceMap := JSXResult.SourceMap;
     AOriginMap := JSXResult.OriginMap;
+    AJSXTokens := JSXResult.Tokens;
   end;
 end;
 
@@ -621,6 +636,7 @@ var
   ParserWarning: TGocciaParserWarning;
   PreprocessorSourceMap: TGocciaSourceMap;
   PreprocessorOriginMap: TGocciaOriginMap;
+  PreprocessorJSXTokens: TGocciaJSXTokenArray;
   StartTime, ParseStart, ParseEnd, ParsePhaseTime: Int64;
   OrigLine, OrigCol, I: Integer;
 begin
@@ -636,7 +652,7 @@ begin
 
     try
       SourceText := ApplyPreprocessors(SourceText, AFileName, AOptions,
-        PreprocessorSourceMap, PreprocessorOriginMap);
+        PreprocessorSourceMap, PreprocessorOriginMap, PreprocessorJSXTokens);
     except
       on E: TGocciaError do
       begin
@@ -649,6 +665,7 @@ begin
     end;
     Result.FSourceMap := PreprocessorSourceMap;
     Result.FOriginMap := PreprocessorOriginMap;
+    Result.FJSXTokens := PreprocessorJSXTokens;
     if Assigned(Result.FSourceMap) then
     begin
       Result.FSourceMap.SetSourceContent(0, OriginalSourceText);
@@ -707,6 +724,11 @@ begin
             begin
               Result.FTokens[I].TokenType := Lexer.Tokens[I].TokenType;
               Result.FTokens[I].Lexeme := Lexer.Tokens[I].Lexeme;
+              Result.FTokens[I].StartOffset :=
+                Lexer.Tokens[I].Span.StartOffset;
+              Result.FTokens[I].EndOffset := Lexer.Tokens[I].Span.EndOffset;
+              Result.FTokens[I].ContainsEscape :=
+                Lexer.Tokens[I].ContainsEscape;
             end;
           end;
 
@@ -879,6 +901,7 @@ var
   OriginalSourceLines: TStringList;
   SourceMap: TGocciaSourceMap;
   OriginMap: TGocciaOriginMap;
+  JSXTokens: TGocciaJSXTokenArray;
   OrigLine, OrigCol: Integer;
 begin
   Source := DynamicFunctionWrapperSource(AParametersSource, ABodySource, AKind);
@@ -887,7 +910,7 @@ begin
   try
     try
       Source := ApplyPreprocessors(Source, AFileName, AOptions, SourceMap,
-        OriginMap);
+        OriginMap, JSXTokens);
     except
       on E: TGocciaError do
       begin
