@@ -71,6 +71,8 @@ type
     // that raises frees those no other template owns yet
     // (FreeUnattachedTemplates).
     FEnteredTemplates: TList<TGocciaFunctionTemplate>;
+    // Every forward conditional jump takes its long form (see Compile).
+    FFarBranches: Boolean;
     procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
     procedure RaiseBytecodeLimit(const AError: EGocciaBytecodeLimit;
@@ -283,6 +285,7 @@ begin
   Result.HideSourceText := FHideSourceText;
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
+  Result.FarBranches := FFarBranches;
   Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
@@ -2006,8 +2009,22 @@ function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 begin
   FCurrentNode := nil;
+  FFarBranches := False;
   try
-    Result := CompileProgram(AProgram);
+    try
+      Result := CompileProgram(AProgram);
+    except
+      on EGocciaFarBranchRetry do
+      begin
+        // A conditional jump spans more than its 16-bit offset holds. The
+        // compile that raised freed what it built; compile again with every
+        // such jump in its long form, so programs without one keep their
+        // bytecode.
+        FFarBranches := True;
+        FCurrentNode := nil;
+        Result := CompileProgram(AProgram);
+      end;
+    end;
   except
     on E: EGocciaBytecodeLimit do
       RaiseBytecodeLimit(E, AProgram);
@@ -2032,6 +2049,10 @@ begin
     FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
   FBlockFunctionVarBindings.Clear;
+  // Keyed by template: a compile that raised freed its templates, and a new
+  // one may reuse an address.
+  if Assigned(FTemplateDerivedConstructorThisGuards) then
+    FTemplateDerivedConstructorThisGuards.Clear;
   if not FEvalCode then
     FCompatibilityNonStrictMode := FNonStrictMode;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);

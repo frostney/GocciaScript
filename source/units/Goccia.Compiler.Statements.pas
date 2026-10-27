@@ -3503,9 +3503,7 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, EntryReg, EntriesReg, IdxReg));
     EmitInstruction(ACtx, EncodeABC(OP_ADD_INT, IdxReg, IdxReg, OneReg));
     EmitInstruction(ACtx, EncodeABC(OP_ENUM_ENTRY, KeyReg, ValidReg, EntryReg));
-    EmitInstruction(ACtx,
-      EncodeAsBx(OP_JUMP_IF_FALSE, ValidReg,
-        SignedJumpOffset16(LoopStart - CurrentCodePosition(ACtx) - 1)));
+    EmitBackwardConditionalJump(ACtx, OP_JUMP_IF_FALSE, ValidReg, LoopStart);
 
     ACtx.Scope.BeginScope;
     SetLoopContinueScopeDepth(ACtx);
@@ -4803,9 +4801,7 @@ begin
     CondReg := ACtx.Scope.AllocateRegister;
     try
       ACtx.CompileExpression(AStmt.Condition, CondReg);
-      EmitInstruction(ACtx,
-        EncodeAsBx(OP_JUMP_IF_TRUE, CondReg,
-          SignedJumpOffset16(LoopStart - CurrentCodePosition(ACtx) - 1)));
+      EmitBackwardConditionalJump(ACtx, OP_JUMP_IF_TRUE, CondReg, LoopStart);
     finally
       ACtx.Scope.FreeRegister;
     end;

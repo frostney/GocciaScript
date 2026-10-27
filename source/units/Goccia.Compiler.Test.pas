@@ -3172,17 +3172,17 @@ procedure TTestCompiler.TestBytecodeLimitRaisesSyntaxErrorAtSource;
   end;
 
 var
-  Body, Keys: string;
+  Args, Keys: string;
   I: Integer;
 begin
-  Body := '';
-  for I := 1 to 40000 do
-    Body := Body + 'r = r + 1; ';
-  // The branch's jump is patched once its body is compiled, so the error
-  // names the if statement.
-  ExpectLimit('const g = (k) => {' + #10 + '  let r = 0;' + #10 +
-    '  if (k) { ' + Body + '}' + #10 + '  return r;' + #10 + '};',
-    'A branch jumps over more than 32767 instructions', 3, 3);
+  Args := '';
+  for I := 1 to 70000 do
+    Args := Args + '0, ';
+  // The call's argument count is checked once its arguments are parsed, so
+  // the error names the call.
+  ExpectLimit('const f = (...a) => a.length;' + #10 + '  ' + #10 +
+    '  f(' + Args + '0);', 'Too many arguments in one call: more than 65535',
+    3, 3);
 
   Keys := '';
   for I := 0 to 69999 do

@@ -6218,8 +6218,8 @@ begin
 
   EmitLineMapping(ACtx, ACondition.Line, ACondition.Column);
   OwnsOperandReg := CompileOperand(ACtx, Operand, OperandReg);
-  AJumpIndex := EmitInstruction(ACtx,
-    EncodeABC(OpCode, OperandReg, UInt16(Immediate), 0), True);
+  AJumpIndex := FinishConditionalJump(ACtx, EmitInstruction(ACtx,
+    EncodeABC(OpCode, OperandReg, UInt16(Immediate), 0), True));
   if OwnsOperandReg then
     ACtx.Scope.FreeRegister;
   Result := True;
@@ -6432,9 +6432,9 @@ begin
     begin
       OwnsConditionReg := CompileOperand(ACtx, ConditionBinary.Left,
         ConditionReg);
-      ElseJump := EmitInstruction(ACtx,
+      ElseJump := FinishConditionalJump(ACtx, EmitInstruction(ACtx,
         EncodeABC(OP_JUMP_IF_NUM_NOT_LTE_IMM, ConditionReg,
-          UInt16(Immediate), 0), True);
+          UInt16(Immediate), 0), True));
       if OwnsConditionReg then
         ACtx.Scope.FreeRegister;
       CompileBranch(AExpr.Consequent);
