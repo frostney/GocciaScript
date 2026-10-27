@@ -170,3 +170,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0158 — The compiler infers operator results, proven consts and const function returns](0158-the-compiler-infers-operator-and-const-function-result-types.md)
 - [0159 — A frame whose function never reads its arguments as passed gets no argument window](0159-a-frame-whose-function-never-reads-its-arguments-as-passed-gets-no-argument-window.md)
 - [0160 — Concise arrow bodies make proper tail calls, and closed numeric frames give way to them](0160-concise-arrow-bodies-make-proper-tail-calls.md)
+- [0163 — goccia:ast reports the committed token stream, as typed ranges, on request](0163-goccia-ast-reports-the-committed-token-stream.md)
