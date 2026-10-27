@@ -383,15 +383,26 @@ function buildGeomeanRatios(targetReports) {
 // places a file's pages when it reads or writes them, and one copy's placement
 // can make it run several percent slower or faster than another copy of the
 // same bytes (#1917); a new copy per repetition samples placements instead of
-// measuring one.
+// measuring one. The copies of a target stay until it is done
+// (releaseBinaryCopies): a copy written over the pages of one just deleted
+// would often take the same pages, and the repetitions would alternate between
+// two placements.
 function refreshBinaryCopies(engines, tempDir, round) {
   for (const engine of engines) {
     if (engine.kind !== 'goccia') continue;
-    if (engine.sampleCommand) fs.rmSync(engine.sampleCommand, { force: true });
     const copy = path.join(tempDir, `${engine.name}-${round}${path.extname(engine.command)}`);
     fs.copyFileSync(engine.command, copy);
     fs.chmodSync(copy, 0o755);
+    engine.copies = (engine.copies || []).concat(copy);
     engine.sampleCommand = copy;
+  }
+}
+
+function releaseBinaryCopies(engines) {
+  for (const engine of engines) {
+    for (const copy of engine.copies || []) fs.rmSync(copy, { force: true });
+    engine.copies = [];
+    engine.sampleCommand = null;
   }
 }
 
@@ -537,6 +548,7 @@ function main(argv = process.argv.slice(2)) {
         }
       }
 
+      if (options.freshCopies) releaseBinaryCopies(engines);
       targetReports.push({
         kind: target.kind,
         name: target.name,
@@ -597,5 +609,6 @@ module.exports = {
   parseArgs,
   parseResult,
   refreshBinaryCopies,
+  releaseBinaryCopies,
   summarizeSamples,
 };

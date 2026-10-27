@@ -38,8 +38,12 @@ function reportHasGocciaComparison(report) {
   });
 }
 
+// The comment's engine columns: those the report ran, when its metadata says,
+// so a local A/B of two Goccia binaries has no empty reference columns.
 function commentEngines(report) {
-  return reportHasGocciaComparison(report) ? COMPARISON_COMMENT_ENGINES : DEFAULT_COMMENT_ENGINES;
+  const engines = reportHasGocciaComparison(report) ? COMPARISON_COMMENT_ENGINES : DEFAULT_COMMENT_ENGINES;
+  const ran = new Set((report?.metadata?.engines || []).map((engine) => engine.name));
+  return ran.size > 0 ? engines.filter((engine) => ran.has(engine)) : engines;
 }
 
 function targetStatus(target, engines = DEFAULT_COMMENT_ENGINES) {

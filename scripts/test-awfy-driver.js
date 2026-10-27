@@ -15,6 +15,7 @@ const {
   parseArgs,
   parseResult,
   refreshBinaryCopies,
+  releaseBinaryCopies,
   summarizeSamples,
 } = require('./awfy-driver.js');
 const { MARKER, buildAwfyReportComment, counterDeltaCell, formatMicros } = require('./awfy-comment.js');
@@ -391,7 +392,8 @@ console.log('awfy-driver: hardware counters...');
     targets: [{ name: 'Richards', kind: 'awfy', summary: { ...summary, ratios: { 'goccia-candidate_over_goccia-baseline': 1.02 } } }],
     geomeanRatios: {},
   });
-  assert(counterComment.includes('| Δ PR vs main | Instructions | L1i misses |'), 'comment adds counter columns when both Goccia binaries were counted');
+  assert(counterComment.includes('| Target | Status | Goccia main | Goccia PR | Δ PR vs main | Instructions | L1i misses |'),
+    'comment adds counter columns when both Goccia binaries were counted, and shows only the engines that ran');
   assert(counterComment.includes('| -10.00% | +27.27% |'), 'comment renders instruction and L1i miss deltas');
   assert(counterComment.includes('Instructions do not depend on code placement'), 'comment explains how to read the counters');
   assert(counterComment.includes('negative is fewer'), 'comment states the sign of the counter columns');
@@ -424,8 +426,12 @@ console.log('awfy-driver: hardware counters...');
     const first = engines[0].sampleCommand;
     assert(first && first !== binary && fs.readFileSync(first, 'utf8') === 'binary bytes', 'a fresh copy holds the same bytes');
     refreshBinaryCopies(engines, copyDir, 1);
-    assert(engines[0].sampleCommand !== first && !fs.existsSync(first), 'the next repetition replaces the previous copy');
+    assert(engines[0].sampleCommand !== first && fs.existsSync(first), 'the next repetition runs a new copy, beside the previous one');
     assertEqual(engines[1].sampleCommand, undefined, 'reference engines are not copied');
+    const second = engines[0].sampleCommand;
+    releaseBinaryCopies(engines);
+    assert(!fs.existsSync(first) && !fs.existsSync(second), 'a finished target releases its copies');
+    assertEqual(engines[0].sampleCommand, null, 'after release the engine runs its own binary');
   } finally {
     fs.rmSync(copyDir, { recursive: true, force: true });
   }
