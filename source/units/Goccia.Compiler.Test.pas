@@ -47,6 +47,18 @@ const
     module-level `const`; the slack absorbs a busy machine. }
   LINEAR_COMPILE_RATIO = 4;
   LINEAR_SLACK_NANOSECONDS = 20 * 1000 * 1000;
+  { The operator-chain test compiles CHAIN_OPERATORS binary operators as
+    chains of CHAIN_SHORT_TERMS terms and as chains CHAIN_LENGTH_FACTOR
+    times as long. Work quadratic in a chain's length makes the long chains
+    cost about CHAIN_LENGTH_FACTOR times as much (over 3 s here); a linear
+    compile costs about the same for both, and the bound allows
+    CHAIN_COMPILE_RATIO times. }
+  CHAIN_SHORT_TERMS = 25;
+  CHAIN_LENGTH_FACTOR = 16;
+  CHAIN_OPERATORS = 16000;
+  CHAIN_COMPILE_RATIO = 3;
+  // The bindings each closure of the captured shape reads, in turn.
+  CHAIN_CAPTURED_BINDINGS = 25;
 
 type
   TTestCompiler = class(TTestSuite)
@@ -130,12 +142,19 @@ type
     procedure TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
     function CompileNanoseconds(const ALinePattern: string;
       const AGlobalBackedTopLevel: Boolean;
-      const ACount: Integer = LINEAR_DECLARATION_COUNT): Int64;
+      const ACount: Integer = LINEAR_DECLARATION_COUNT;
+      const APrefix: string = ''; const ASuffix: string = ''): Int64;
+    function SourceCompileNanoseconds(const ASourceText: string;
+      const AGlobalBackedTopLevel: Boolean;
+      const AStrictTypes: Boolean = False): Int64;
     procedure ExpectTopLevelCompileLinear(const ABaseline: Int64;
       const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
     procedure TestTopLevelCallsCompileInLinearTime;
+    procedure TestOperatorChainsCompileInLinearTime;
+    procedure TestOperatorChainsFoldTheirConstantStart;
+    procedure TestSwitchCaseDeclarationsCompileInLinearTime;
     procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
@@ -285,6 +304,12 @@ begin
     TestModuleTopLevelDeclarationsCompileInLinearTime);
   Test('Top-level calls among many bindings compile in linear time',
     TestTopLevelCallsCompileInLinearTime);
+  Test('Chains of binary operators compile in time linear in their length',
+    TestOperatorChainsCompileInLinearTime);
+  Test('Chains of binary operators fold the constants they start with',
+    TestOperatorChainsFoldTheirConstantStart);
+  Test('A switch with a declaration in each case clause compiles in linear time',
+    TestSwitchCaseDeclarationsCompileInLinearTime);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
@@ -950,33 +975,46 @@ begin
   end;
 end;
 
-{ The fastest of LINEAR_TRIALS compiles of ACount top-level declarations,
-  each ALinePattern formatted with its index; the parse is not timed. }
+{ The fastest of LINEAR_TRIALS compiles of ACount lines, each ALinePattern
+  formatted with its index, between the lines APrefix and ASuffix; the parse
+  is not timed. }
 function TTestCompiler.CompileNanoseconds(const ALinePattern: string;
-  const AGlobalBackedTopLevel: Boolean; const ACount: Integer): Int64;
+  const AGlobalBackedTopLevel: Boolean; const ACount: Integer;
+  const APrefix, ASuffix: string): Int64;
 var
   Source: TStringBuffer;
+  I: Integer;
+begin
+  Source := TStringBuffer.Create;
+  if APrefix <> '' then
+    Source.Append(APrefix + LineEnding);
+  for I := 0 to ACount - 1 do
+    Source.Append(Format(ALinePattern, [I]) + LineEnding);
+  if ASuffix <> '' then
+    Source.Append(ASuffix + LineEnding);
+  Result := SourceCompileNanoseconds(Source.ToString, AGlobalBackedTopLevel);
+end;
+
+{ The fastest of LINEAR_TRIALS compiles of ASourceText; the parse is not
+  timed. }
+function TTestCompiler.SourceCompileNanoseconds(const ASourceText: string;
+  const AGlobalBackedTopLevel: Boolean; const AStrictTypes: Boolean): Int64;
+var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   ParserOptions: TGocciaParserOptions;
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
   Module: TGocciaBytecodeModule;
-  SourceText: string;
   SourceLines: TStringList;
   Start, Elapsed: Int64;
-  I, Trial: Integer;
+  Trial: Integer;
 begin
-  Source := TStringBuffer.Create;
-  for I := 0 to ACount - 1 do
-    Source.Append(Format(ALinePattern, [I]) + LineEnding);
-  SourceText := Source.ToString;
-
   Result := High(Int64);
   for Trial := 1 to LINEAR_TRIALS do
   begin
-    Lexer := TGocciaLexer.Create(SourceText, '<test>');
-    SourceLines := CreateTextLines(SourceText);
+    Lexer := TGocciaLexer.Create(ASourceText, '<test>');
+    SourceLines := CreateTextLines(ASourceText);
     Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
     Compiler := TGocciaCompiler.Create('<test>');
     ProgramNode := nil;
@@ -988,6 +1026,7 @@ begin
       Parser.ApplyOptions(ParserOptions);
       ProgramNode := Parser.Parse;
       Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
+      Compiler.StrictTypes := AStrictTypes;
       Start := GetNanoseconds;
       Module := Compiler.Compile(ProgramNode);
       Elapsed := GetNanoseconds - Start;
@@ -1081,6 +1120,165 @@ begin
   ExpectCallsCompileLinear(
     'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d.a;',
     'w%0:d();', False);
+end;
+
+{ An operator compiled as the operand of another used to work out its type
+  and try its constant value again from its whole subtree, so a chain of k
+  binary operators compiled in time quadratic in k: a function with 250
+  closures each summing 120 captured bindings took 3 s, and twice the terms
+  four times as long. Each shape compiles the same number of operators as
+  short chains and as long ones; their compile times must stay close. }
+procedure TTestCompiler.TestOperatorChainsCompileInLinearTime;
+
+  // Chains of ATerms terms, CHAIN_OPERATORS operators in all: AFirst, then
+  // AOperator and ATerm (formatted with the term's index modulo
+  // CHAIN_CAPTURED_BINDINGS) for each further term. Each chain is the body
+  // of an arrow function of p, or, with ACaptured, of a closure over that
+  // many `let` bindings of the function around it.
+  function ChainsSource(const AFirst, AOperator, ATerm: string;
+    const ATerms: Integer; const ACaptured: Boolean): string;
+  var
+    Source: TStringBuffer;
+    Chain, Index, Term: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    if ACaptured then
+    begin
+      Source.Append('const outer = (p) => {' + LineEnding);
+      for Index := 0 to CHAIN_CAPTURED_BINDINGS - 1 do
+        Source.Append(Format('let x%d = p + %d;', [Index, Index]) +
+          LineEnding);
+    end;
+    for Chain := 0 to CHAIN_OPERATORS div (ATerms - 1) - 1 do
+    begin
+      if ACaptured then
+        Source.Append(Format('const h%d = () => ', [Chain]))
+      else
+        Source.Append(Format('const f%d = (p) => ', [Chain]));
+      Source.Append(AFirst);
+      for Term := 1 to ATerms - 1 do
+        Source.Append(' ' + AOperator + ' ' +
+          Format(ATerm, [Term mod CHAIN_CAPTURED_BINDINGS]));
+      Source.Append(';' + LineEnding);
+    end;
+    if ACaptured then
+      Source.Append('return p; };' + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  procedure ExpectChainsCompileLinear(const AFirst, AOperator,
+    ATerm: string; const ACaptured: Boolean;
+    const AStrictTypes: Boolean = False);
+  var
+    Short, Long: Int64;
+  begin
+    Short := SourceCompileNanoseconds(ChainsSource(AFirst, AOperator, ATerm,
+      CHAIN_SHORT_TERMS, ACaptured), False, AStrictTypes);
+    Long := SourceCompileNanoseconds(ChainsSource(AFirst, AOperator, ATerm,
+      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, ACaptured), False,
+      AStrictTypes);
+    if Long > CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d operators "%s %s %s" in chains of %d terms took %d ms ' +
+        'to compile against %d ms in chains of %d', [CHAIN_OPERATORS,
+        AFirst, AOperator, ATerm, CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR,
+        Long div 1000000, Short div 1000000, CHAIN_SHORT_TERMS]));
+    Expect<Boolean>(Long <=
+      CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  // A parameter: the operand types and the constant tries.
+  ExpectChainsCompileLinear('p', '+', 'p', False);
+  // An Int16 immediate on the right of every `+`.
+  ExpectChainsCompileLinear('p', '+', '1', False);
+  // A comparison's type needs no walk; only the constant tries remain.
+  ExpectChainsCompileLinear('p', '<', 'p', False);
+  // Closures summing captured bindings, the shape the slowdown was seen in.
+  ExpectChainsCompileLinear('x0', '+', 'x%d', True);
+  // Strict types try to simplify every operator by its operand types, and
+  // `x + ""` to x once x is a String.
+  ExpectChainsCompileLinear('p', '+', 'p', False, True);
+  ExpectChainsCompileLinear('p', '+', '""', False, True);
+end;
+
+{ CompileExpressionNode skips the constant tries of the left operands a
+  failed try already found not constant. The constant part at the start of a
+  chain is still a left operand of every operator above it, and must still
+  be folded when its turn comes. }
+procedure TTestCompiler.TestOperatorChainsFoldTheirConstantStart;
+
+  procedure ExpectFolded(const ASource: string; const AFolded: Int16;
+    const AOperators: Integer);
+  var
+    Module: TGocciaBytecodeModule;
+    Chain: TGocciaFunctionTemplate;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Chain := Module.TopLevel.GetFunction(0);
+      Expect<Boolean>(HasLoadInt(Chain, AFolded)).ToBe(True);
+      Expect<Integer>(CountArithmeticOps(Chain)).ToBe(AOperators);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // `k * 2 + k` is 12; the operators with p and the last k remain.
+  ExpectFolded('const k = 4; const f = (p) => k * 2 + k + p + k;', 12, 2);
+  ExpectFolded('const f = (p) => 1 + 2 + p + 3 + 4;', 3, 3);
+  ExpectFolded('const f = (p) => 2 * 3 * 4 + p + p + p + p;', 24, 4);
+end;
+
+{ The case clauses of a switch share one scope, so the compiler forgets
+  before each clause which of their bindings the clauses before it
+  initialized or gave a constant. Doing that by visiting every local of the
+  function made a switch with a `let` or `const` in each clause compile in
+  time quadratic in its clauses (about 0.45 s here for 4,000, 31 ms for
+  1,000). Each shape compiles 4,000 clauses in at most 8 times the time of
+  1,000, about 2.8 times per doubling where linear growth gives 2 and
+  quadratic 4, and within a few times the same clauses with their bodies in
+  braces, whose bindings live in a block of each clause. Both sizes stay
+  below about 5,400 clauses, past which the switch's first jump needs the
+  long form and the whole program is compiled a second time. }
+procedure TTestCompiler.TestSwitchCaseDeclarationsCompileInLinearTime;
+const
+  SMALL_CLAUSES = 1000;
+  LARGE_CLAUSES = 4000;
+  GROWTH_RATIO = 8;
+  FLAT_CLAUSE = 'case %0:d: const s%0:d = %0:d; break;';
+  BRACED_CLAUSE = 'case %0:d: { const s%0:d = %0:d; break; }';
+
+  procedure ExpectSwitchCompilesLinear(const APrefix, ASuffix: string;
+    const AGlobalBackedTopLevel: Boolean);
+  var
+    Small, Large, Braced: Int64;
+  begin
+    Small := CompileNanoseconds(FLAT_CLAUSE, AGlobalBackedTopLevel,
+      SMALL_CLAUSES, APrefix, ASuffix);
+    Large := CompileNanoseconds(FLAT_CLAUSE, AGlobalBackedTopLevel,
+      LARGE_CLAUSES, APrefix, ASuffix);
+    Braced := CompileNanoseconds(BRACED_CLAUSE, AGlobalBackedTopLevel,
+      LARGE_CLAUSES, APrefix, ASuffix);
+    if Large > GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d clauses "%s" in "%s" took %d ms to compile against ' +
+        '%d ms for %d', [LARGE_CLAUSES, FLAT_CLAUSE, APrefix,
+        Large div 1000000, Small div 1000000, SMALL_CLAUSES]));
+    Expect<Boolean>(Large <=
+      GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+    if Large > LINEAR_COMPILE_RATIO * Braced + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d clauses "%s" in "%s" took %d ms to compile against ' +
+        '%d ms with braces', [LARGE_CLAUSES, FLAT_CLAUSE, APrefix,
+        Large div 1000000, Braced div 1000000]));
+    Expect<Boolean>(Large <=
+      LINEAR_COMPILE_RATIO * Braced + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', False);
+  ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', True);
+  ExpectSwitchCompilesLinear(
+    'const d = 1; const g = () => { switch (d) {', '} };', False);
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
