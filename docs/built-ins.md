@@ -1,6 +1,6 @@
 # Built-in Objects
 
-<!-- doc-length-limit: 1050 -->
+<!-- doc-length-limit: 1100 -->
 
 *For contributors adding or modifying built-in objects, and for script authors looking up available APIs.*
 
