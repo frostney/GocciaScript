@@ -71,8 +71,12 @@ type
     // that raises frees those no other template owns yet
     // (FreeUnattachedTemplates).
     FEnteredTemplates: TList<TGocciaFunctionTemplate>;
-    // Every forward conditional jump takes its long form (see Compile).
-    FFarBranches: Boolean;
+    // Functions whose conditional jumps take their long form, by
+    // FarBranchKey (see Compile).
+    FFarBranchFunctions: TDictionary<string, Boolean>;
+    procedure EnterFarBranchFunction(const ATemplate: TGocciaFunctionTemplate);
+    procedure CollectFarBranchFunctions(
+      const ATemplate: TGocciaFunctionTemplate; var AFound: Boolean);
     procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
     procedure RaiseBytecodeLimit(const AError: EGocciaBytecodeLimit;
@@ -234,6 +238,7 @@ begin
   FNumberBindingProofs := TNumberBindingProofMap.Create;
   FBlockFunctionVarBindings := TBlockFunctionVarBindingSet.Create;
   FEnteredTemplates := TList<TGocciaFunctionTemplate>.Create;
+  FFarBranchFunctions := TDictionary<string, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
   FModule := nil;
   FCurrentTemplate := nil;
@@ -246,6 +251,7 @@ end;
 destructor TGocciaCompiler.Destroy;
 begin
   FEnteredTemplates.Free;
+  FFarBranchFunctions.Free;
   FBlockFunctionVarBindings.Free;
   FNumberBindingProofs.Free;
   FNumericParameterProofs.Free;
@@ -285,7 +291,6 @@ begin
   Result.HideSourceText := FHideSourceText;
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
-  Result.FarBranches := FFarBranches;
   Result.OptimizationOptions := FOptimizationOptions;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
@@ -344,7 +349,10 @@ begin
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
   if Assigned(ATemplate) and not ATemplate.Attached then
+  begin
     FEnteredTemplates.Add(ATemplate);
+    EnterFarBranchFunction(ATemplate);
+  end;
   if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
     FCurrentScope.AttachTemplate(FCurrentTemplate);
   if not Assigned(FCurrentTemplate) or
@@ -2007,28 +2015,62 @@ end;
 
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+var
+  NeedsSecondPass: Boolean;
 begin
   FCurrentNode := nil;
-  FFarBranches := False;
+  FFarBranchFunctions.Clear;
   try
-    try
+    Result := CompileProgram(AProgram);
+    NeedsSecondPass := False;
+    CollectFarBranchFunctions(Result.TopLevel, NeedsSecondPass);
+    if NeedsSecondPass then
+    begin
+      // A conditional jump of these functions spans more than its 16-bit
+      // offset holds, and was written as a placeholder. Compile again with
+      // their conditional jumps in the long form; every other function
+      // compiles to the same bytecode as in the first pass.
+      FreeAndNil(Result);
+      FCurrentNode := nil;
       Result := CompileProgram(AProgram);
-    except
-      on EGocciaFarBranchRetry do
-      begin
-        // A conditional jump spans more than its 16-bit offset holds. The
-        // compile that raised freed what it built; compile again with every
-        // such jump in its long form, so programs without one keep their
-        // bytecode.
-        FFarBranches := True;
-        FCurrentNode := nil;
-        Result := CompileProgram(AProgram);
-      end;
     end;
   except
     on E: EGocciaBytecodeLimit do
       RaiseBytecodeLimit(E, AProgram);
   end;
+end;
+
+// The key of a function the first time the compile enters it, while its name
+// is still the one it was created with, and whether it takes the long form.
+procedure TGocciaCompiler.EnterFarBranchFunction(
+  const ATemplate: TGocciaFunctionTemplate);
+begin
+  if ATemplate.FarBranchKey <> '' then
+    Exit;
+  if Assigned(ATemplate.DebugInfo) then
+    ATemplate.FarBranchKey := ATemplate.Name + '@' +
+      IntToStr(ATemplate.DebugInfo.DeclarationLine) + ':' +
+      IntToStr(ATemplate.DebugInfo.DeclarationColumn)
+  else
+    ATemplate.FarBranchKey := ATemplate.Name + '@';
+  ATemplate.FarBranches :=
+    FFarBranchFunctions.ContainsKey(ATemplate.FarBranchKey);
+end;
+
+procedure TGocciaCompiler.CollectFarBranchFunctions(
+  const ATemplate: TGocciaFunctionTemplate; var AFound: Boolean);
+var
+  I: Integer;
+begin
+  if not Assigned(ATemplate) then
+    Exit;
+  if ATemplate.NeedsFarBranches then
+  begin
+    FFarBranchFunctions.AddOrSetValue(ATemplate.FarBranchKey, True);
+    AFound := True;
+  end;
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    CollectFarBranchFunctions(ATemplate.GetFunction(I), AFound);
 end;
 
 function TGocciaCompiler.CompileProgram(
@@ -2070,6 +2112,7 @@ begin
     FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
   FCurrentTemplate.DebugInfo := TGocciaDebugInfo.Create(FSourcePath);
+  EnterFarBranchFunction(FCurrentTemplate);
   FCurrentTemplate.IsAsync := FAsyncTopLevel;
   FCurrentTemplate.StrictCode := (not FNonStrictMode) or
     HasUseStrictDirective(AProgram);

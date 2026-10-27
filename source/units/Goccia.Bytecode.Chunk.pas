@@ -310,6 +310,10 @@ type
     FFunctions: TObjectList<TGocciaFunctionTemplate>;
     // Set once another template owns this one (AddFunction).
     FAttached: Boolean;
+    // Compile-time only, never serialized: see the properties.
+    FFarBranches: Boolean;
+    FNeedsFarBranches: Boolean;
+    FFarBranchKey: string;
     FUpvalueDescriptors: array of TGocciaUpvalueDescriptor;
     FDirectEvalEnvironments: array of TGocciaDirectEvalEnvironment;
     FDirectEvalEnvironmentCount: Integer;
@@ -529,6 +533,14 @@ type
       compiler created and has not added to its parent yet is the compiler's
       to free when the compile raises. }
     property Attached: Boolean read FAttached;
+    { Compile time: the function's forward conditional jumps take their long
+      form, and a conditional jump of it did not fit its offset without it. }
+    property FarBranches: Boolean read FFarBranches write FFarBranches;
+    property NeedsFarBranches: Boolean read FNeedsFarBranches
+      write FNeedsFarBranches;
+    { Compile time: names the function across the two passes of a compile
+      (its first name and source position). }
+    property FarBranchKey: string read FFarBranchKey write FFarBranchKey;
     property TypeCheckPreambleSize: UInt16 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property DerivedThisInitializedSlot: Integer read FDerivedThisInitializedSlot write FDerivedThisInitializedSlot;

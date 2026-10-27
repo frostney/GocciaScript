@@ -190,6 +190,7 @@ type
     procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
     procedure TestBytecodeLimitRaisesSyntaxErrorAtSource;
+    procedure TestLongBranchTakesLongFormInItsFunctionOnly;
     procedure TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
@@ -387,6 +388,8 @@ begin
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
   Test('A bytecode limit raises a SyntaxError at the source that reached it',
     TestBytecodeLimitRaisesSyntaxErrorAtSource);
+  Test('A long branch takes the long jump form in its own function only',
+    TestLongBranchTakesLongFormInItsFunctionOnly);
   Test('A compile after compiles that raised starts at nesting depth 0',
     TestCompileAfterRaisedCompileStartsAtNestingDepthZero);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
@@ -3191,6 +3194,31 @@ begin
   // names the object literal.
   ExpectLimit('const o = {' + #10 + Keys + '};',
     'Too many constants in one function: more than 65535', 1, 11);
+end;
+
+procedure TTestCompiler.TestLongBranchTakesLongFormInItsFunctionOnly;
+var
+  Body: string;
+  I: Integer;
+  Module: TGocciaBytecodeModule;
+  Small, Long: TGocciaFunctionTemplate;
+begin
+  Body := '';
+  for I := 1 to 40000 do
+    Body := Body + 'r = r + 1; ';
+  Module := CompileSource('const small = (k) => k ? 1 : 2;' + #10 +
+    'const long = (k) => { let r = 0; if (k) { ' + Body + '} return r; };');
+  try
+    Small := Module.TopLevel.GetFunction(0);
+    Long := Module.TopLevel.GetFunction(1);
+    Expect<Boolean>(Module.TopLevel.FarBranches).ToBe(False);
+    Expect<Boolean>(Small.FarBranches).ToBe(False);
+    Expect<Boolean>(Long.FarBranches).ToBe(True);
+    // The short function's conditional jump keeps its one instruction.
+    Expect<Integer>(CountOp(Small, OP_JUMP)).ToBe(1);
+  finally
+    Module.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestConstantFoldsNestedArithmetic;
