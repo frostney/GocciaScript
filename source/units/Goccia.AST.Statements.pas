@@ -1273,10 +1273,25 @@ var
   ElementIndex, FieldIndex, I: Integer;
   Flags: TGocciaASTPartFlags;
 
+  { A decorated instance field is in both lists, the field order not
+    naming the element it duplicates; the element is the one reported. }
+  function IsElementField(const AInitializer: TGocciaExpression): Boolean;
+  var
+    J: Integer;
+  begin
+    Result := False;
+    if not Assigned(AInitializer) then
+      Exit;
+    for J := 0 to High(ADefinition.FElements) do
+      if ADefinition.FElements[J].FieldInitializer = AInitializer then
+        Exit(True);
+  end;
+
   procedure NextField;
   begin
     while (FieldIndex <= High(ADefinition.FFieldOrder)) and
-          (ADefinition.FFieldOrder[FieldIndex].ElementIndex >= 0) do
+          ((ADefinition.FFieldOrder[FieldIndex].ElementIndex >= 0) or
+           IsElementField(ADefinition.FFieldOrder[FieldIndex].FieldInitializer)) do
       Inc(FieldIndex);
   end;
 
@@ -1331,8 +1346,13 @@ begin
           AVisitor.VisitChild(Decorators[I]);
         AVisitor.VisitChild(ComputedKeyExpression);
         AVisitor.VisitChild(MethodNode);
-        AVisitor.VisitChild(GetterNode);
-        AVisitor.VisitChild(SetterNode);
+        { An auto-accessor's getter and setter are written by the parser,
+          not the source; its initializer is the field's. }
+        if Kind <> cekAccessor then
+        begin
+          AVisitor.VisitChild(GetterNode);
+          AVisitor.VisitChild(SetterNode);
+        end;
         AVisitor.VisitChild(FieldInitializer);
         AVisitor.VisitChild(StaticBlockBody);
         AVisitor.LeavePart;

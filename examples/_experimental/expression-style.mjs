@@ -208,14 +208,21 @@ const commaEdits = (source, commentEnds, nodes) =>
 
 const indentOf = (line) => line.slice(0, line.length - line.trimStart().length);
 
-const wrapEdits = (source, lineStarts, nodes) => {
+const wrapEdits = (source, comments, lineStarts, nodes) => {
+  // A comment among the arguments has no node to carry it to its new line,
+  // so a call holding one is left for a person to wrap.
+  const holdsComment = (call) =>
+    comments.some(
+      (comment) => comment.start >= call.children[1].start && comment.end <= call.end,
+    );
   const calls = nodes.filter(
     (node) =>
       CALL_KINDS.includes(node.kind) &&
       node.children.length > 1 &&
       source[node.end - 1] === ")" &&
       node.loc.start.line === node.loc.end.line &&
-      lineText(source, lineStarts, node.loc.start.line).length > WIDTH,
+      lineText(source, lineStarts, node.loc.start.line).length > WIDTH &&
+      !holdsComment(node),
   );
 
   // Only the outermost call on a line: wrapping it shortens the line, and a
@@ -287,7 +294,7 @@ const editsIn = (file, source) => {
   const lineStarts = lineStartsOf(source);
 
   return [
-    ...wrapEdits(source, lineStarts, nodes),
+    ...wrapEdits(source, comments, lineStarts, nodes),
     ...quoteEdits(source, nodes),
     ...commaEdits(source, commentEnds, nodes),
   ];

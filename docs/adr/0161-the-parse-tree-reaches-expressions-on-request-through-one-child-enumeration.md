@@ -83,11 +83,21 @@ The parser records what covering cannot recover, and nothing else:
 | The target of an assignment, as the node built before `=` was seen | `x = 1` is decomposed into a name and a value |
 | An import's or re-export's module path | It is kept as a string |
 
-Two spans were wrong as well as narrow and are corrected: a template literal
-with substitutions spanned only its first segment, and an object literal
-containing a spread took its position from the spread. An async arrow
-function's span now starts at `async`; the parameter diagnostics it reports
-still point where they did.
+Some spans were wrong as well as narrow and are corrected, each keeping its
+start where a diagnostic reads it unless the start itself was wrong:
+
+- A template literal with substitutions spanned only its first segment;
+  `import.meta`, `new.target` and `import(...)` spanned only their keyword.
+- An object literal containing a spread took its position from the spread.
+- An async arrow function started at its `(`; it starts at `async`, on the
+  same line, so only the column its debug position records moves. Its
+  parameter diagnostics still point at the `(`.
+- A decorated class started at `class`; it starts at its first decorator, its
+  first token, as ADR 0118 has it for every statement. Its source text, which
+  `toString` returns, still starts at `class`.
+- A destructuring assignment's default, `[a = 1] = x`, built its target at
+  the `=`; the pattern now reuses the node the parser built for the target, so
+  it is located at the name.
 
 A statement keeps the range the parser records for it
 ([ADR 0118](0118-original-file-source-ranges.md)), and a part the parser
@@ -161,12 +171,15 @@ reported as usual.
   checks both views with the four claims of ADR 0118, re-parsing each
   expression, property, parameter and class member from the text its range
   selects.
-- **The statement view changes in two places, both toward the source.** A
+- **The statement view changes in a few places, all toward the source.** A
   decorator's expression is walked, so a block inside one (`@((v) => { ... })`)
-  is now in the tree, and a block nested in a `case` test is a child of that
-  `SwitchCase` rather than of the `switch`. Over 1,016 files (the repository's
-  `website/src`, `scripts` and `tests/language`) the statement trees are
-  otherwise identical to the ones before this decision.
+  is now in the tree; a block nested in a `case` test is a child of that
+  `SwitchCase` rather than of the `switch`; the blocks of the getter and setter
+  the parser writes for an `accessor` field are no longer reported, since the
+  source has no such blocks; and a decorated class statement starts at its
+  decorator. Over 1,016 files (the repository's `website/src`, `scripts` and
+  `tests/language`) the statement trees are otherwise identical to the ones
+  before this decision.
 - **The walk is deeper.** It now reaches every expression, so it recurses as
   deep as the tree is tall; its limit is the parser's own height limit,
   rather than the 512 levels that were enough for statements.

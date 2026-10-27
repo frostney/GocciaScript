@@ -426,7 +426,7 @@ type
     function AssignmentNoIn: TGocciaExpression;
     function ExpressionAllowIn: TGocciaExpression;
     function ExpressionNoIn: TGocciaExpression;
-    function ClassExpression: TGocciaExpression;
+    function ClassExpression(const AStart: TGocciaToken = nil): TGocciaExpression;
 
     // Statement parsing
     // These return the base TGocciaStatement type; narrowing to specific subtypes
@@ -464,7 +464,8 @@ type
     function TryStatement: TGocciaStatement;
     function ClassMethod(const AIsStatic: Boolean = False; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaClassMethod;
     function ClassDeclaration: TGocciaStatement;
-    function DecoratedClassDeclaration(const ADecorators: TGocciaDecoratorList): TGocciaStatement;
+    function DecoratedClassDeclaration(const ADecorators: TGocciaDecoratorList;
+      const AStart: TGocciaToken): TGocciaStatement;
     function ParseDecorators: TGocciaDecoratorList;
     function ParseDecoratorExpression: TGocciaExpression;
     function EnumDeclaration: TGocciaStatement;
@@ -2993,7 +2994,7 @@ begin
   Consume(gttRightParen, 'Expected ")" after import() specifier',
     SSuggestDynamicImportSyntax);
   Result := TGocciaImportCallExpression.Create(Specifier, Options, APhase,
-    AToken.Span);
+    SourceSpanFromToken(AToken));
 end;
 
 function ExpressionContainsOptionalChain(const AExpr: TGocciaExpression): Boolean;
@@ -3201,7 +3202,7 @@ begin
             else if not FImportMetaAllowed then
               RaiseImportMetaOutsideModuleError(Token.Line, Token.Column);
             Advance;
-            Result := TGocciaImportMetaExpression.Create(Token.Span);
+            Result := TGocciaImportMetaExpression.Create(SourceSpanFromToken(Token));
           end
           else if CheckUnescapedIdentifierKeyword(KEYWORD_SOURCE) then
           begin
@@ -3229,10 +3230,11 @@ begin
       end;
     gttAt:
       begin
+        Token := Peek;
         Decorators := ParseDecorators;
         Consume(gttClass, 'Decorators can only be applied to class expressions',
           SSuggestDecoratorsOnlyClasses);
-        Result := ClassExpression;
+        Result := ClassExpression(Token);
         TGocciaClassExpression(Result).ClassDefinition.FDecorators :=
           Decorators;
       end;
@@ -3252,7 +3254,7 @@ begin
               FFileName, FSourceLines);
           Advance; // consume '.'
           Advance; // consume 'target'
-          Result := TGocciaNewTargetExpression.Create(Token.Span);
+          Result := TGocciaNewTargetExpression.Create(SourceSpanFromToken(Token));
           Exit;
         end;
         // Parse the callee: class name with optional member access (e.g. new a.B.C())
@@ -5392,7 +5394,9 @@ begin
     Result := Left;
 end;
 
-function TGocciaParser.ClassExpression: TGocciaExpression;
+{ AStart is the first decorator of a decorated class expression, which is
+  where its span starts; the class's source text still starts at `class`. }
+function TGocciaParser.ClassExpression(const AStart: TGocciaToken): TGocciaExpression;
 var
   Name: string;
   ClassDef: TGocciaClassDefinition;
@@ -5409,7 +5413,10 @@ begin
 
   ClassDef := ParseClassBody(Name);
   ClassDef.SourceText := ExtractSourceRange(Line, Column);
-  Result := TGocciaClassExpression.Create(ClassDef, SourceSpanAtPosition(Line, Column));
+  if Assigned(AStart) then
+    Result := TGocciaClassExpression.Create(ClassDef, SourceSpanFromToken(AStart))
+  else
+    Result := TGocciaClassExpression.Create(ClassDef, SourceSpanAtPosition(Line, Column));
 end;
 
 function TGocciaParser.Statement: TGocciaStatement;
@@ -5422,6 +5429,7 @@ end;
 function TGocciaParser.UnguardedStatement: TGocciaStatement;
 var
   Line, Column: Integer;
+  DecoratorStart: TGocciaToken;
   function FindMatchingToken(const AStart: Integer; const AOpen,
     AClose: TGocciaTokenType): Integer;
   var
@@ -5531,7 +5539,8 @@ begin
     Result := VarStatement
   else if Check(gttAt) then
   begin
-    Result := DecoratedClassDeclaration(ParseDecorators);
+    DecoratorStart := Peek;
+    Result := DecoratedClassDeclaration(ParseDecorators, DecoratorStart);
   end
   else if Match(gttClass) then
     Result := ClassDeclaration
@@ -7607,7 +7616,11 @@ begin
   end;
 end;
 
-function TGocciaParser.DecoratedClassDeclaration(const ADecorators: TGocciaDecoratorList): TGocciaStatement;
+{ A decorated class statement starts at its first decorator, its first token
+  (ADR 0118); the class's own source text still starts at `class`. }
+function TGocciaParser.DecoratedClassDeclaration(
+  const ADecorators: TGocciaDecoratorList;
+  const AStart: TGocciaToken): TGocciaStatement;
 var
   Name: string;
   ClassDef: TGocciaClassDefinition;
@@ -7623,7 +7636,7 @@ begin
   ClassDef := ParseClassBody(Name);
   ClassDef.SourceText := ExtractSourceRange(Line, Column);
   ClassDef.FDecorators := ADecorators;
-  Result := TGocciaClassDeclaration.Create(ClassDef, SourceSpanAtPosition(Line, Column));
+  Result := TGocciaClassDeclaration.Create(ClassDef, SourceSpanFromToken(AStart));
 end;
 
 // TC39 proposal-enum
@@ -10581,6 +10594,8 @@ var
   Prop: TGocciaDestructuringProperty;
   SourceEntry: TGocciaPropertySourceOrder;
   ValueExpr: TGocciaExpression;
+  TargetSpan: TGocciaSourceSpan;
+  Target: TGocciaExpression;
 begin
   if Assigned(AExpr) and AExpr.Parenthesized and
      ((AExpr is TGocciaArrayExpression) or
@@ -10602,8 +10617,14 @@ begin
   begin
     // Handle assignment expressions (for default values)
     AssignmentExpr := TGocciaAssignmentExpression(AExpr);
+    { The target's own span when the parser kept the target, so the
+      pattern's name is located at the name rather than at the `=`. }
+    if Assigned(AssignmentExpr.Target) then
+      TargetSpan := AssignmentExpr.Target.Span
+    else
+      TargetSpan := AExpr.Span;
     Result := TGocciaAssignmentDestructuringPattern.Create(
-      TGocciaIdentifierDestructuringPattern.Create(AssignmentExpr.Name, AExpr.Span),
+      TGocciaIdentifierDestructuringPattern.Create(AssignmentExpr.Name, TargetSpan),
       AssignmentExpr.Value,
       AExpr.Span
     );
@@ -10746,27 +10767,34 @@ begin
   end
   else if AExpr is TGocciaPropertyAssignmentExpression then
   begin
-    // obj.prop = default  ->  member expression pattern with default value
+    // obj.prop = default  ->  member expression pattern with default value.
+    // The member the parser built for the left-hand side is that pattern.
+    Target := TGocciaPropertyAssignmentExpression(AExpr).Target;
+    if not (Target is TGocciaMemberExpression) then
+      Target := TGocciaMemberExpression.Create(
+        TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr,
+        TGocciaPropertyAssignmentExpression(AExpr).PropertyName,
+        False, AExpr.Span);
     Result := TGocciaAssignmentDestructuringPattern.Create(
       TGocciaMemberExpressionDestructuringPattern.Create(
-        TGocciaMemberExpression.Create(
-          TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr,
-          TGocciaPropertyAssignmentExpression(AExpr).PropertyName,
-          False, AExpr.Span),
-        AExpr.Span),
+        TGocciaMemberExpression(Target), Target.Span),
       TGocciaPropertyAssignmentExpression(AExpr).Value,
       AExpr.Span);
   end
   else if AExpr is TGocciaComputedPropertyAssignmentExpression then
   begin
-    // obj[key] = default  ->  computed member expression pattern with default value
+    // obj[key] = default  ->  computed member expression pattern with default
+    // value. The member the parser built for the left-hand side is that
+    // pattern.
+    Target := TGocciaComputedPropertyAssignmentExpression(AExpr).Target;
+    if not (Target is TGocciaMemberExpression) then
+      Target := TGocciaMemberExpression.Create(
+        TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr,
+        TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression,
+        AExpr.Span);
     Result := TGocciaAssignmentDestructuringPattern.Create(
       TGocciaMemberExpressionDestructuringPattern.Create(
-        TGocciaMemberExpression.Create(
-          TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr,
-          TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression,
-          AExpr.Span),
-        AExpr.Span),
+        TGocciaMemberExpression(Target), Target.Span),
       TGocciaComputedPropertyAssignmentExpression(AExpr).Value,
       AExpr.Span);
   end

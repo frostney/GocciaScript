@@ -420,6 +420,73 @@ describe("ast.parse with expressions", () => {
     expect(kinds(method)).toEqual(["Identifier", "BlockStatement"]);
   });
 
+  test("a decorated field is reported once", () => {
+    const result = parseExpressions(
+      "const keep = (v) => v;\nclass K {\n  @keep x = 1;\n  @keep #y = 2;\n}\n",
+    );
+    const fields = findAll(result.root, "PropertyDefinition");
+
+    expect(fields.map((field) => text(result, field))).toEqual([
+      "@keep x = 1;",
+      "@keep #y = 2;",
+    ]);
+    expect(fields.map((field) => kinds(field))).toEqual([
+      ["Identifier", "NumericLiteral"],
+      ["Identifier", "NumericLiteral"],
+    ]);
+  });
+
+  test("an accessor field reports only what the source holds", () => {
+    const result = parseExpressions("class A {\n  accessor z = 1;\n}\n");
+    const accessor = find(result.root, "AccessorProperty");
+
+    expect(text(result, accessor)).toBe("accessor z = 1;");
+    expect(kinds(accessor)).toEqual(["NumericLiteral"]);
+    expect(findAll(result.root, "BlockStatement")).toEqual([]);
+  });
+
+  test("a decorated class starts at its decorator and holds it", () => {
+    const result = parseExpressions(
+      "const d = (v) => v;\n@d class C {}\nconst e = @d class {};\n",
+    );
+    const declaration = result.root.children[1];
+    const expression = find(result.root.children[2], "ClassExpression");
+
+    expect(declaration.kind).toBe("ClassDeclaration");
+    expect(text(result, declaration)).toBe("@d class C {}");
+    expect(kinds(declaration)).toEqual(["Identifier"]);
+    expect(text(result, expression)).toBe("@d class {}");
+  });
+
+  test("a destructuring assignment's defaults are located at their targets", () => {
+    const result = parseExpressions("[a = 1, o.b = 2] = [];\n({ c = 3 } = {});\n");
+    const defaults = findAll(result.root, "AssignmentPattern");
+
+    expect(defaults.map((pattern) => text(result, pattern))).toEqual([
+      "a = 1",
+      "o.b = 2",
+      "c = 3",
+    ]);
+    expect(defaults.map((pattern) => kinds(pattern))).toEqual([
+      ["Identifier", "NumericLiteral"],
+      ["MemberExpression", "NumericLiteral"],
+      ["Identifier", "NumericLiteral"],
+    ]);
+    expect(text(result, defaults[0].children[0])).toBe("a");
+    expect(text(result, defaults[1].children[0])).toBe("o.b");
+  });
+
+  test("meta properties and import() cover their whole text", () => {
+    const result = parseExpressions(
+      "const u = import.meta.url;\nconst m = import('./m.js');\n",
+    );
+
+    expect(text(result, find(result.root, "MetaProperty"))).toBe("import.meta");
+    expect(text(result, find(result.root, "ImportExpression"))).toBe(
+      "import('./m.js')",
+    );
+  });
+
   test("a static block is reported", () => {
     const result = parseExpressions("class K {\n  static { init(); }\n}\n");
     const block = find(result.root, "StaticBlock");

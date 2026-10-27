@@ -10562,6 +10562,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       '  ...tail',
       ') => head;',
       'report("a message long enough to push this line past eighty columns", first, second);',
+      'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
       '',
     ].join("\n");
     const expected = [
@@ -10584,6 +10585,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       '  first,',
       '  second,',
       ');',
+      'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
       '',
     ].join("\n");
     writeFileSync(join(tree, "sample.js"), original);

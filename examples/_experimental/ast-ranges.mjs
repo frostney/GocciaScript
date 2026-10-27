@@ -78,6 +78,13 @@ const EXPRESSION_SUFFIX = ");\n}\n}\n";
 const SUPER_PREFIX = "class __Probe extends Object {\nconstructor() {\n(";
 const SUPER_SUFFIX = ");\n}\n}\n";
 
+const CLASS_MEMBER_KINDS = [
+  "MethodDefinition",
+  "PropertyDefinition",
+  "AccessorProperty",
+  "StaticBlock",
+];
+
 const expressionWrapperFor = (kind, slice) => {
   if (kind === "Property") {
     return { prefix: `${EXPRESSION_PREFIX}{`, suffix: `}${EXPRESSION_SUFFIX}` };
@@ -91,8 +98,13 @@ const expressionWrapperFor = (kind, slice) => {
     return { prefix: "const __probe = (", suffix: ") => 0;\n" };
   }
 
-  if (kind === "MethodDefinition") {
+  if (CLASS_MEMBER_KINDS.includes(kind)) {
     return { prefix: "class __Probe {\n", suffix: "\n}\n" };
+  }
+
+  // In parentheses of its own, the outer pair would be the one reported.
+  if (kind === "ParenthesizedExpression") {
+    return { prefix: EXPRESSION_PREFIX.slice(0, -1), suffix: `;${EXPRESSION_SUFFIX.slice(2)}` };
   }
 
   if (slice.startsWith("super(")) {
